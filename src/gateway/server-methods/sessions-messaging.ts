@@ -15,6 +15,7 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { resolveSessionWorkStartError, type SessionEntry } from "../../config/sessions.js";
+import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-accessor.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
@@ -341,14 +342,33 @@ async function handleSessionSend(params: {
     interruptedActiveRun = interruptResult.interrupted;
   }
 
-  const messageSeq =
-    (await readSessionMessageCountAsync({
-      agentId: requestedAgentId,
-      sessionEntry: entry,
-      sessionId: entry.sessionId,
-      sessionKey: canonicalKey,
-      storePath,
-    })) + 1;
+  let messageSeq: number;
+  try {
+    messageSeq =
+      (await readSessionMessageCountAsync({
+        agentId: requestedAgentId,
+        sessionEntry: entry,
+        sessionId: entry.sessionId,
+        sessionKey: canonicalKey,
+        storePath,
+      })) + 1;
+  } catch (error) {
+    if (!isSessionTranscriptProjectionUnavailableError(error)) {
+      throw error;
+    }
+    // Projection rebuilds are transient and happen before dispatch, so callers
+    // can safely retry the same idempotency key without duplicating a turn.
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, "session transcript is rebuilding; retry shortly", {
+        details: { method: params.method },
+        retryable: true,
+        retryAfterMs: 250,
+      }),
+    );
+    return;
+  }
   let sendAcked = false;
   let sendPayload: unknown;
   let sendCached = false;

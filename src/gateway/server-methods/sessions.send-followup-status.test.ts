@@ -4,6 +4,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-accessor.js";
 import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -142,6 +143,51 @@ describe("sessions.send completed subagent follow-up status", () => {
       childSessionKey,
       task: "follow-up",
     });
+  });
+
+  it("returns retryable unavailable before dispatch while transcript projection rebuilds", async () => {
+    const sessionKey = "agent:main:main";
+    loadSessionEntryMock.mockReturnValue({
+      cfg: {},
+      canonicalKey: sessionKey,
+      storePath: "/tmp/sessions.json",
+      entry: { sessionId: "sess-rebuilding" },
+    });
+    readSessionMessageCountAsyncMock.mockRejectedValue(
+      new SessionTranscriptProjectionUnavailableError("sess-rebuilding"),
+    );
+
+    const respondMock = vi.fn();
+    await expectDefined(
+      sessionsHandlers["sessions.send"],
+      'sessionsHandlers["sessions.send"] test invariant',
+    )({
+      req: { id: "req-rebuilding" } as never,
+      params: {
+        key: sessionKey,
+        message: "follow-up",
+        idempotencyKey: "retry-safe-send",
+      },
+      respond: respondMock as unknown as RespondFn,
+      context: {
+        chatAbortControllers: new Map(),
+        getRuntimeConfig: () => ({}),
+      } as unknown as GatewayRequestContext,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respondMock).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        details: { method: "sessions.send" },
+        retryable: true,
+        retryAfterMs: 250,
+      }),
+    );
+    expect(chatSendMock).not.toHaveBeenCalled();
   });
 
   for (const method of ["sessions.send", "sessions.steer"] as const) {
