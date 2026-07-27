@@ -97,6 +97,7 @@ const {
   resolveExecApprovalSpy,
   sendMessageSpy,
   setMyCommandsSpy,
+  telegramBotInfoForTest,
   telegramBotDepsForTest,
   wasSentByBot,
 } = await import("./bot.create-telegram-bot.test-harness.js");
@@ -120,7 +121,6 @@ const FIRE_EMOJI = "\u{1F525}";
 const PARTY_EMOJI = "\u{1F389}";
 const EYES_EMOJI = "\u{1F440}";
 const HEART_EMOJI = "\u{2764}\u{FE0F}";
-
 async function withTelegramSpooledReplayUpdate<T>(
   update: object,
   fn: () => Promise<T>,
@@ -633,6 +633,7 @@ describe("createTelegramBot", () => {
     });
     createTelegramBot = (opts) =>
       createTelegramBotBase({
+        botInfo: telegramBotInfoForTest,
         ...opts,
         telegramDeps: telegramBotDepsForTest,
       });
@@ -4764,7 +4765,7 @@ describe("createTelegramBot", () => {
         chat: { id: 7, type: "private" },
         text: "hey",
         date: 1736380800,
-        from: { id: 999, first_name: "Eve" },
+        from: { id: 123, first_name: "Eve" },
         reply_to_message: {
           message_id: 9001,
           photo: [{ file_id: "reply-photo-1" }],
@@ -5980,21 +5981,21 @@ describe("createTelegramBot", () => {
     {
       name: "keeps unconfigured dm topic commands on the flat dm session",
       messageThreadId: 99,
-      me: undefined,
+      me: { id: 999, has_topics_enabled: false },
       expectedSessionKey: "agent:main:main",
       assertAuthorized: false,
     },
     {
       name: "uses bot topic capability for native dm topic command target sessions",
       messageThreadId: 99,
-      me: { has_topics_enabled: true },
+      me: { id: 999, has_topics_enabled: true },
       expectedSessionKey: "agent:main:main:thread:12345:99",
       assertAuthorized: false,
     },
     {
       name: "allows native DM commands for paired users",
       messageThreadId: undefined,
-      me: undefined,
+      me: { id: 999, has_topics_enabled: false },
       expectedSessionKey: undefined,
       assertAuthorized: true,
     },

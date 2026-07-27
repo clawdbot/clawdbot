@@ -65,6 +65,7 @@ const {
   setSessionStoreEntriesForTest,
   setMessageReactionSpy,
   setMyCommandsSpy,
+  telegramBotInfoForTest,
   telegramBotDepsForTest,
   throttlerSpy,
   useSpy,
@@ -435,6 +436,7 @@ describe("createTelegramBot", () => {
     throttlerSpy.mockReset();
     createTelegramBot = (opts) =>
       createTelegramBotBase({
+        botInfo: telegramBotInfoForTest,
         ...opts,
         telegramDeps: telegramBotDepsForTest,
       });

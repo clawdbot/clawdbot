@@ -43,8 +43,14 @@ vi.mock("./sticker-cache.js", () => ({
 }));
 
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
-const { getLoadConfigMock, getOnHandler, replySpy, sendMessageSpy, telegramBotDepsForTest } =
-  harness;
+const {
+  getLoadConfigMock,
+  getOnHandler,
+  replySpy,
+  sendMessageSpy,
+  telegramBotDepsForTest,
+  telegramBotInfoForTest,
+} = harness;
 const { createTelegramBotCore: createTelegramBotBase } = await import("./bot-core.js");
 const { MediaFetchError } = await import("./telegram-media.runtime.js");
 
@@ -167,6 +173,7 @@ describe("createTelegramBot media-group skip warning (#55216)", () => {
   beforeAll(() => {
     createTelegramBot = (opts) =>
       createTelegramBotBase({
+        botInfo: telegramBotInfoForTest,
         ...opts,
         telegramDeps: telegramBotDepsForTest,
       });

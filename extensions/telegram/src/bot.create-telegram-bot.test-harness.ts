@@ -7,6 +7,7 @@ import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
+import type { TelegramBotInfo } from "./bot-info.js";
 import { runTelegramChannelInboundEventWithHarness } from "./bot.test-helpers.js";
 
 type AnyMock = ReturnType<typeof vi.fn>;
@@ -30,6 +31,8 @@ type DispatchReplyWithBufferedBlockDispatcherFn =
 type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
   ReturnType<DispatchReplyWithBufferedBlockDispatcherFn>
 >;
+type DispatchChannelInboundTurnFn =
+  typeof import("openclaw/plugin-sdk/channel-inbound").dispatchChannelInboundTurn;
 type DispatchReplyHarnessParams = Parameters<DispatchReplyWithBufferedBlockDispatcherFn>[0];
 type ReplyPayloadLike = {
   text?: string;
@@ -39,6 +42,22 @@ type ReplyPayloadLike = {
 };
 type ReplySpyResult = ReplyPayloadLike | ReplyPayloadLike[] | undefined;
 type ReplySpy = (ctx: MsgContext, opts?: GetReplyOptions) => Promise<ReplySpyResult>;
+
+export const telegramBotInfoForTest = {
+  id: 9_876_543_210,
+  is_bot: true,
+  first_name: "OpenClaw",
+  username: "openclaw_bot",
+  can_join_groups: true,
+  can_read_all_group_messages: false,
+  can_manage_bots: false,
+  supports_inline_queries: false,
+  supports_join_request_queries: false,
+  can_connect_to_business: false,
+  has_main_web_app: false,
+  has_topics_enabled: false,
+  allows_users_to_create_topics: false,
+} satisfies TelegramBotInfo;
 
 const { sessionStorePath } = vi.hoisted(() => {
   const tempRoot =
@@ -205,6 +224,28 @@ const dispatchReplyHoisted = vi.hoisted(() => ({
 }));
 export const dispatchReplyWithBufferedBlockDispatcher =
   dispatchReplyHoisted.dispatchReplyWithBufferedBlockDispatcher;
+const dispatchChannelInboundTurnForTest: DispatchChannelInboundTurnFn = async (plan) => {
+  const dispatchResult = await dispatchReplyWithBufferedBlockDispatcher({
+    ctx: plan.ctxPayload,
+    cfg: plan.cfg,
+    dispatcherOptions: {
+      ...plan.dispatcherOptions,
+      deliver:
+        "deliverWithProviderMessageSending" in plan.delivery
+          ? plan.delivery.deliverWithProviderMessageSending
+          : plan.delivery.deliver,
+      onError: plan.delivery.onError,
+    },
+    replyOptions: plan.replyOptions,
+  });
+  return {
+    admission: { kind: "dispatch" },
+    dispatched: true,
+    ctxPayload: plan.ctxPayload,
+    routeSessionKey: plan.route.sessionKey,
+    dispatchResult,
+  };
+};
 vi.mock("../../../src/auto-reply/reply/provider-dispatcher.js", () => ({
   dispatchReplyWithBufferedBlockDispatcher:
     dispatchReplyHoisted.dispatchReplyWithBufferedBlockDispatcher,
@@ -505,7 +546,9 @@ const telegramBotRuntimeForTest = {
       runnerHoisted.throttlerSpy as unknown as () => unknown
     )()) as unknown as TelegramBotRuntimeForTest["apiThrottler"],
 };
-export const telegramBotDepsForTest: TelegramBotDeps = {
+export const telegramBotDepsForTest: TelegramBotDeps & {
+  dispatchChannelInboundTurn: DispatchChannelInboundTurnFn;
+} = {
   getRuntimeConfig,
   getSessionEntry: getSessionEntryMock,
   listSessionEntries: listSessionEntriesMock,
@@ -523,6 +566,7 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
     upsertChannelPairingRequest as TelegramBotDeps["upsertChannelPairingRequest"],
   enqueueSystemEvent: enqueueSystemEventSpy as TelegramBotDeps["enqueueSystemEvent"],
   dispatchReplyWithBufferedBlockDispatcher,
+  dispatchChannelInboundTurn: dispatchChannelInboundTurnForTest,
   loadWebMedia: loadWebMedia as TelegramBotDeps["loadWebMedia"],
   buildModelsProviderData: buildModelsProviderData as TelegramBotDeps["buildModelsProviderData"],
   listSkillCommandsForAgents:
