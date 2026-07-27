@@ -345,10 +345,24 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (evt.state === "aborted") {
       forgetLocalBtwRunId?.(evt.runId);
       const wasActiveRun = state.activeChatRunId === evt.runId;
+      // Determine content from the message and stream, not the user-visible
+      // empty placeholder: "(no output)" is also valid assistant text.
+      const hasDisplayableAbortedText =
+        Boolean(
+          extractTextFromMessage(evt.message, { includeThinking: state.showThinking }).trim(),
+        ) || streamAssembler.hasDisplayText(evt.runId);
+      // Abort envelopes carry the complete buffered reply, including text
+      // suppressed by Gateway delta throttling; finalize it before run cleanup.
+      const abortedText = streamAssembler.finalize(evt.runId, evt.message, state.showThinking);
+      if (hasDisplayableAbortedText) {
+        chatLog.finalizeAssistant(abortedText, evt.runId);
+      }
       const diagnostic = formatAbortDiagnostic(evt.errorMessage);
       chatLog.addSystem(diagnostic ? `run aborted: ${diagnostic}` : "run aborted");
       terminateRun({ runId: evt.runId, wasActiveRun, status: "aborted" });
-      maybeRefreshHistoryForRun(evt.runId);
+      maybeRefreshHistoryForRun(evt.runId, {
+        hasDisplayableFinal: hasDisplayableAbortedText,
+      });
     }
     if (evt.state === "error") {
       forgetLocalBtwRunId?.(evt.runId);
