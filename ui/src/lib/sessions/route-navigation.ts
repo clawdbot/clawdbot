@@ -43,6 +43,22 @@ type SessionNavigationTarget = {
   options: ApplicationNavigationOptions & { pathname: string };
 };
 
+export function resolveSessionPreferredFace(
+  row: Pick<GatewaySessionRow, "boardFace"> | null | undefined,
+): BoardFace {
+  return row?.boardFace === "dashboard" ? "dashboard" : "chat";
+}
+
+export function resolveSessionPreferredFaceForKey<TRouteId extends string>(
+  context: Pick<ApplicationContext<TRouteId>, "sessions">,
+  sessionKey: string,
+): BoardFace {
+  const row = context.sessions.state.result?.sessions.find((candidate) =>
+    areUiSessionKeysEquivalent(candidate.key, sessionKey),
+  );
+  return resolveSessionPreferredFace(row);
+}
+
 export function resolveSessionNavigationAgentId<TRouteId extends string>(
   context: Pick<ApplicationContext<TRouteId>, "agents" | "agentSelection" | "gateway">,
   agentId?: string | null,

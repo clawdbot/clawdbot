@@ -1,21 +1,11 @@
 // Slack plugin module implements shared behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
-import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
-import {
-  adaptScopedAccountAccessor,
-  createScopedChannelConfigAdapter,
-} from "openclaw/plugin-sdk/channel-config-helpers";
+import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
 import { isSlackPluginAccountConfigured } from "./account-configured.js";
 import { inspectSlackAccount } from "./account-inspect.js";
-import {
-  listSlackAccountIds,
-  resolveSlackConfigAccessorAccount,
-  resolveDefaultSlackAccountId,
-  resolveSlackAccount,
-  type SlackConfigAccessorAccount,
-  type ResolvedSlackAccount,
-} from "./accounts.js";
+import type { ResolvedSlackAccount } from "./accounts.js";
 import { getChatChannelMeta, type ChannelPlugin } from "./channel-api.js";
+import { slackBaseConfigAdapter } from "./config-adapter.js";
 import { SlackChannelConfigSchema } from "./config-schema.js";
 import { slackDoctor } from "./doctor.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
@@ -27,21 +17,10 @@ export { SLACK_CHANNEL } from "./setup-shared.js";
 
 export { isSlackPluginAccountConfigured };
 
-export const slackConfigAdapter = createScopedChannelConfigAdapter<
-  ResolvedSlackAccount,
-  SlackConfigAccessorAccount
->({
-  sectionKey: SLACK_CHANNEL,
-  listAccountIds: listSlackAccountIds,
-  resolveAccount: adaptScopedAccountAccessor(resolveSlackAccount),
-  resolveAccessorAccount: resolveSlackConfigAccessorAccount,
+export const slackConfigAdapter = {
+  ...slackBaseConfigAdapter,
   inspectAccount: adaptScopedAccountAccessor(inspectSlackAccount),
-  defaultAccountId: resolveDefaultSlackAccountId,
-  clearBaseFields: ["botToken", "appToken", "userToken", "signingSecret", "name"],
-  resolveAllowFrom: (account) => account.allowFrom,
-  formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
-  resolveDefaultTo: (account) => account.defaultTo,
-});
+};
 
 export function createSlackPluginBase(params: {
   setupWizard: NonNullable<ChannelPlugin<ResolvedSlackAccount>["setupWizard"]>;

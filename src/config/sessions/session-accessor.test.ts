@@ -43,6 +43,7 @@ import {
   SessionInitializationAgentScopeMismatchError,
   resolveSessionEntryAccessTarget,
   resolveSessionEntryCandidateTarget,
+  resolveSessionEntrySelection,
   resolveSessionTranscriptReadTarget,
   resolveSessionTranscriptRuntimeReadTarget,
   resolveSessionTranscriptRuntimeTarget,
@@ -922,6 +923,54 @@ describe("session accessor seam", () => {
       sessionKey: "agent:main:current",
     });
     expect(fs.existsSync(storePath)).toBe(false);
+  });
+
+  it("resolves canonical candidate and transcript rows without parsing unrelated sessions", async () => {
+    const sessionKey = "agent:main:focused-session";
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      { sessionId: "focused-session", updatedAt: 42 },
+    );
+    const databasePath = expectDefined(
+      resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+      "focused session database path",
+    );
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    const unrelatedEntryJson = "{ unrelated, intentionally invalid JSON";
+    database.db
+      .prepare(
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+      )
+      .run("agent:main:unrelated-session", "unrelated-session", unrelatedEntryJson, 1);
+
+    const parse = vi.spyOn(JSON, "parse");
+    try {
+      expect(
+        resolveSessionEntrySelection({ agentId: "main", sessionKey, storePath }),
+      ).toMatchObject({
+        existing: { sessionId: "focused-session" },
+        legacyKeys: [],
+        normalizedKey: sessionKey,
+      });
+      expect(
+        resolveSessionEntryCandidateTarget({
+          agentId: "main",
+          candidateKeys: [sessionKey],
+          cfg: { session: { store: storePath } },
+        }),
+      ).toMatchObject({ sessionKey, entry: { sessionId: "focused-session" }, persisted: true });
+      expect(
+        resolveSessionTranscriptReadTarget({
+          agentId: "main",
+          sessionId: "focused-session",
+          sessionKey,
+          storePath,
+        }),
+      ).toMatchObject({ agentId: "main", sessionId: "focused-session", sessionKey });
+      expect(parse).not.toHaveBeenCalledWith(unrelatedEntryJson);
+    } finally {
+      parse.mockRestore();
+    }
   });
 
   it("resolves non-main candidate entries from custom agent store templates", async () => {

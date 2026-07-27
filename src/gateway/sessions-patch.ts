@@ -264,6 +264,10 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
+  if ("boardFace" in patch && patch.boardFace !== undefined) {
+    next.boardFace = patch.boardFace;
+  }
+
   if ("icon" in patch) {
     const raw = patch.icon;
     if (raw === null) {

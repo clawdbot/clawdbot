@@ -23,6 +23,11 @@ const mocks = vi.hoisted(() => ({
   runDoctorHealthRepairs: vi.fn(),
   maybeRepairLegacyFlatAuthProfileStores: vi.fn().mockResolvedValue(undefined),
   maybeRepairCanonicalApiKeyFieldAlias: vi.fn().mockResolvedValue(undefined),
+  maybeMigrateLegacyPluginModelCatalogs: vi.fn().mockResolvedValue({
+    detected: 0,
+    migrated: 0,
+    warnings: [],
+  }),
   maybeRepairGatewayDaemon: vi.fn().mockResolvedValue(undefined),
   maybeRepairLegacyOAuthProfileIds: vi.fn(async (cfg: unknown) => cfg),
   maybeRepairLegacyOAuthSidecarProfiles: vi.fn().mockResolvedValue(undefined),
@@ -205,6 +210,10 @@ vi.mock("../commands/doctor-gateway-services.js", () => ({
 vi.mock("../commands/doctor-auth-flat-profiles.js", () => ({
   maybeRepairLegacyFlatAuthProfileStores: mocks.maybeRepairLegacyFlatAuthProfileStores,
   maybeRepairCanonicalApiKeyFieldAlias: mocks.maybeRepairCanonicalApiKeyFieldAlias,
+}));
+
+vi.mock("../commands/doctor-plugin-model-catalog.js", () => ({
+  maybeMigrateLegacyPluginModelCatalogs: mocks.maybeMigrateLegacyPluginModelCatalogs,
 }));
 
 vi.mock("../commands/doctor-gateway-daemon-flow.js", () => ({
@@ -540,6 +549,12 @@ describe("doctor health contributions", () => {
     mocks.maybeRepairLegacyFlatAuthProfileStores.mockResolvedValue(undefined);
     mocks.maybeRepairCanonicalApiKeyFieldAlias.mockClear();
     mocks.maybeRepairCanonicalApiKeyFieldAlias.mockResolvedValue(undefined);
+    mocks.maybeMigrateLegacyPluginModelCatalogs.mockClear();
+    mocks.maybeMigrateLegacyPluginModelCatalogs.mockResolvedValue({
+      detected: 0,
+      migrated: 0,
+      warnings: [],
+    });
     mocks.maybeRepairGatewayDaemon.mockClear();
     mocks.maybeRepairGatewayDaemon.mockResolvedValue(undefined);
     mocks.maybeRepairLegacyOAuthProfileIds.mockClear();
@@ -1714,6 +1729,11 @@ describe("doctor health contributions", () => {
     expect(mocks.maybeRepairCanonicalApiKeyFieldAlias).toHaveBeenCalledWith({
       cfg: ctx.cfg,
       prompter: ctx.prompter,
+    });
+    expect(mocks.maybeMigrateLegacyPluginModelCatalogs).toHaveBeenCalledWith({
+      cfg: ctx.cfg,
+      prompter: ctx.prompter,
+      runtime: ctx.runtime,
     });
   });
 

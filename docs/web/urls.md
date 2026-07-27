@@ -112,6 +112,7 @@ no route-specific URL parameters.
 | ------------------- | --------------------------- | ------------------------- | ------------------------------------------------ |
 | Chat                | `/chat`                     | -                         | Key-backed session forms above; `?draft=<text>`  |
 | Dashboard           | `/dashboard`                | -                         | Key-backed session forms above; `?draft=<text>`  |
+| Dashboards          | `/dashboards`               | -                         | -                                                |
 | Ask OpenClaw        | `/custodian`                | -                         | `?intent=new-agent`, `?onboarding=1`             |
 | New session         | `/new`                      | -                         | `?agent=<agentId>`, `?catalog=<catalogId>`       |
 | Activity            | `/activity`                 | -                         | -                                                |

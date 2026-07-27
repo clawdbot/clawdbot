@@ -501,11 +501,14 @@ export function normalizeCronJobInput(
     }
     if (!next.sessionTarget && isRecord(next.payload)) {
       const kind = typeof next.payload.kind === "string" ? next.payload.kind : "";
-      // Keep create-time defaults explicit: system events join main, while agent
-      // turns isolate by default to avoid unbounded token accumulation.
+      // Agent turns bind to the creating conversation by default: the run carries
+      // that chat's context and announces its result there. Callers without session
+      // context are downgraded to isolated by resolveCronCurrentSessionTarget.
       if (kind === "systemEvent" || kind === "heartbeat") {
         next.sessionTarget = "main";
-      } else if (kind === "agentTurn" || kind === "command" || kind === "script") {
+      } else if (kind === "agentTurn") {
+        next.sessionTarget = "current";
+      } else if (kind === "command" || kind === "script") {
         next.sessionTarget = "isolated";
       }
     }
@@ -555,8 +558,8 @@ export function normalizeCronJobInput(
     const payload = isRecord(next.payload) ? next.payload : null;
     const payloadKind = payload && typeof payload.kind === "string" ? payload.kind : "";
     const sessionTarget = typeof next.sessionTarget === "string" ? next.sessionTarget : "";
-    // Omitted output targets were canonicalized to "isolated" above. Resolved
-    // "current" and custom session ids share those announce semantics.
+    // Agent turns resolve to current with context and isolated without it.
+    // Current and custom session ids share isolated announce semantics.
     const hasDelivery = "delivery" in next && next.delivery !== undefined;
     if (!hasDelivery && shouldDefaultCronDeliveryToAnnounce({ payloadKind, sessionTarget })) {
       next.delivery = { mode: "announce" };

@@ -4,8 +4,6 @@ import {
   ErrorCodes,
   errorShape,
   type SessionCatalog,
-  type SessionCatalogHost,
-  type SessionCatalogSession,
   type SessionsCatalogArchiveParams,
   type SessionsCatalogContinueParams,
   type SessionsCatalogListParams,
@@ -24,8 +22,8 @@ import { bindPluginSessionConversation } from "../../plugins/session-conversatio
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { recordSessionStateEvent } from "../../sessions/session-state-events.js";
 import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
-import { loadGatewaySessionRow } from "../session-utils.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
+import { createSessionCatalogRequestEntrySnapshot } from "./session-catalog-entry-snapshot.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -158,35 +156,9 @@ function catalogResult(
   return result;
 }
 
-function projectCatalogHostCreatedActors(
-  host: SessionCatalogHost,
-  agentId: string,
-  actorBySessionKey: Map<string, SessionCatalogSession["createdActor"]>,
-): SessionCatalogHost {
-  return {
-    ...host,
-    sessions: host.sessions.map(({ createdActor: _providerCreatedActor, ...session }) => {
-      // Catalog providers do not own creator identity; the persisted session entry does.
-      const sessionKey = session.sessionKey;
-      let createdActor: SessionCatalogSession["createdActor"];
-      if (sessionKey && actorBySessionKey.has(sessionKey)) {
-        createdActor = actorBySessionKey.get(sessionKey);
-      } else {
-        createdActor = sessionKey
-          ? loadGatewaySessionRow(sessionKey, { agentId })?.createdActor
-          : undefined;
-        if (sessionKey) {
-          actorBySessionKey.set(sessionKey, createdActor);
-        }
-      }
-      return createdActor ? { ...session, createdActor: { ...createdActor } } : session;
-    }),
-  };
-}
-
 type PendingCatalogList = {
-  promise: Promise<SessionCatalogHost[]>;
-  onHosts: Set<(host: SessionCatalogHost) => void>;
+  promise: Promise<SessionCatalog["hosts"]>;
+  onHosts: Set<(host: SessionCatalog["hosts"][number]) => void>;
 };
 
 const pendingCatalogLists = new Map<string, PendingCatalogList>();
@@ -221,9 +193,10 @@ async function listProviderHosts(
   request: SessionsCatalogListParams,
   options: {
     search: string | undefined;
-    onHost?: (host: SessionCatalogHost) => void;
+    sessionEntries: ReturnType<typeof createSessionCatalogRequestEntrySnapshot>["sessionEntries"];
+    onHost?: (host: SessionCatalog["hosts"][number]) => void;
   },
-): Promise<SessionCatalogHost[]> {
+): Promise<SessionCatalog["hosts"]> {
   const key = catalogListKey(provider, request);
   const pending = pendingCatalogLists.get(key);
   if (pending) {
@@ -241,6 +214,7 @@ async function listProviderHosts(
     limitPerHost: request.limitPerHost,
     hostIds: request.hostIds,
     ...(request.cursors !== undefined ? { cursors: request.cursors } : {}),
+    sessionEntries: options.sessionEntries,
     onHost: (host) => {
       for (const callback of onHosts) {
         try {
@@ -261,7 +235,6 @@ async function listProviderHosts(
     }
   }
 }
-
 export const sessionCatalogHandlers: GatewayRequestHandlers = {
   "sessions.catalog.list": async ({ params, respond, context, client }) => {
     if (
@@ -306,7 +279,10 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     const search = normalizeSessionCatalogSearch(request.search);
     const progressId = request.progressId;
     const progressConnId = progressId && client?.connId ? client.connId : undefined;
-    const actorBySessionKey = new Map<string, SessionCatalogSession["createdActor"]>();
+    const requestEntries = createSessionCatalogRequestEntrySnapshot({
+      cfg: config,
+      fallbackAgentId: resolvedAgent.agentId,
+    });
     const catalogList = await Promise.all(
       selected.map(async (provider): Promise<SessionCatalog> => {
         const createTarget = resolveProviderCreateTarget(provider, resolvedAgent.agentId);
@@ -322,13 +298,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
                   agentId: resolvedAgent.agentId,
                   catalog: catalogResult(
                     provider,
-                    [
-                      projectCatalogHostCreatedActors(
-                        host,
-                        resolvedAgent.agentId,
-                        actorBySessionKey,
-                      ),
-                    ],
+                    [requestEntries.projectHostCreatedActors(host)],
                     undefined,
                     createSession,
                   ),
@@ -339,12 +309,14 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
             }
           : undefined;
         try {
-          const hosts = await listProviderHosts(provider, request, { search, onHost });
+          const hosts = await listProviderHosts(provider, request, {
+            search,
+            sessionEntries: requestEntries.sessionEntries,
+            onHost,
+          });
           return catalogResult(
             provider,
-            hosts.map((host) =>
-              projectCatalogHostCreatedActors(host, resolvedAgent.agentId, actorBySessionKey),
-            ),
+            hosts.map(requestEntries.projectHostCreatedActors),
             undefined,
             createSession,
           );

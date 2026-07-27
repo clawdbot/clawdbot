@@ -41,6 +41,12 @@ import type { FastModeAutoProgressState } from "../fast-mode.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 
+type CliSessionRetryParams = {
+  provider: string;
+  reason: FailoverReason;
+  sessionId: string;
+};
+
 /** Input contract for one CLI-backed agent run. */
 export type RunCliAgentParams = {
   sessionId: string;
@@ -121,12 +127,16 @@ export type RunCliAgentParams = {
   cliSessionBinding?: CliSessionBinding;
   /** Consume the backend fork argument on this resume invocation only. */
   forkCliSessionOnResume?: boolean;
+  /** Bound a resumed fork at this previously observed assistant checkpoint. */
+  cliSessionResumeAt?: string;
   /** Atomically claim the persisted one-shot marker after the CLI queue admits this turn. */
   claimCliSessionFork?: () => Promise<boolean>;
   /** Re-arm a claimed marker when the CLI turn fails before producing a successor session. */
   restoreCliSessionFork?: () => Promise<void>;
   /** Persist the successor ID as soon as the CLI reports the forked session. */
   persistCliSessionForkSuccessor?: (sessionId: string) => Promise<void>;
+  /** Atomically arm a cache-preserving fork before retrying a stalled resumed session. */
+  onBeforeForkedCliSessionRetry?: (params: CliSessionRetryParams) => boolean | Promise<boolean>;
   authProfileId?: string;
   /** Private seam: report the credential/runtime owner only after a successful real turn. */
   onSuccessfulAuthBinding?: (binding: {
@@ -139,11 +149,7 @@ export type RunCliAgentParams = {
     runtimeArtifactId?: string;
     skipLocalCredential?: true;
   }) => void;
-  onBeforeFreshCliSessionRetry?: (params: {
-    provider: string;
-    reason: FailoverReason;
-    sessionId: string;
-  }) => boolean | Promise<boolean>;
+  onBeforeFreshCliSessionRetry?: (params: CliSessionRetryParams) => boolean | Promise<boolean>;
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
   bootstrapContextMode?: BootstrapContextMode;

@@ -163,7 +163,10 @@ jobs:
     name: Build unsigned macOS test bundles
     if: ${{ inputs['desktop-test-bundles'] }}
     needs: validate_release
-    runs-on: macos-14
+    # macos-15, not macos-14: tauri-plugin-notifications' Swift sources use
+    # typed throws (`throws(FFIResult)`), which needs Swift 6. The macos-14
+    # image still ships Swift 5.x, so this job could not build the plugin.
+    runs-on: macos-15
     timeout-minutes: 45
     steps:
       - name: Checkout selected tag

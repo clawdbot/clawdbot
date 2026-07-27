@@ -7,9 +7,11 @@ import type {
   OpenClawPluginNodeInvokePolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import type {
-  SessionCatalogHost,
-  SessionCatalogProvider,
+import {
+  listSessionCatalogEntries,
+  type SessionCatalogEntrySnapshot,
+  type SessionCatalogHost,
+  type SessionCatalogProvider,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
@@ -372,6 +374,7 @@ async function listGatewayHost(params: {
   control: CodexSessionCatalogControl;
   query: CodexSessionCatalogParams;
   runtime: PluginRuntime;
+  sessionEntries?: SessionCatalogEntrySnapshot;
 }): Promise<CodexSessionCatalogHost> {
   try {
     const page = parseCatalogPage(
@@ -387,6 +390,7 @@ async function listGatewayHost(params: {
       bindingStore: params.bindingStore,
       config: params.config,
       runtime: params.runtime,
+      sessionEntries: params.sessionEntries,
     });
     return {
       hostId: CODEX_LOCAL_SESSION_HOST_ID,
@@ -419,6 +423,7 @@ async function listCodexSessionCatalog(params: {
   control: CodexSessionCatalogControl;
   query?: CodexSessionCatalogParams;
   onHost?: (host: CodexSessionCatalogHost) => void;
+  sessionEntries?: SessionCatalogEntrySnapshot;
 }): Promise<CodexSessionCatalogResult> {
   const query = readGatewayParams(params.query);
   const requestedHostIds = query.hostIds ? new Set(query.hostIds) : undefined;
@@ -431,6 +436,7 @@ async function listCodexSessionCatalog(params: {
             control: params.control,
             query,
             runtime: params.runtime,
+            sessionEntries: params.sessionEntries,
           }),
         ]
       : [];
@@ -470,6 +476,7 @@ async function listCodexSessionCatalog(params: {
   const adoptedNodeSessions = listNodeAdoptedSessionEntries({
     config: params.config,
     runtime: params.runtime,
+    sessionEntries: params.sessionEntries,
   });
   const nodeHosts = nodes.toSorted(compareNodeLabels).map(async (node) => {
     const host = await listPairedNode({
@@ -672,44 +679,44 @@ async function listAdoptedSessionEntries(params: {
   bindingStore: CodexAppServerBindingStore;
   config?: OpenClawConfig;
   runtime: PluginRuntime;
+  sessionEntries?: SessionCatalogEntrySnapshot;
 }): Promise<Map<string, AdoptedSessionEntry>> {
   const adopted = new Map<string, AdoptedSessionEntry>();
-  for (const agentId of listSupervisionAgentIds(params.config ?? {})) {
-    for (const { entry, sessionKey } of params.runtime.agent.session.listSessionEntries({
-      agentId,
-      readOnly: true,
-    })) {
-      const sessionKeyRest = adoptionSessionKeyRest(sessionKey);
-      if (
-        !sessionKeyRest.startsWith(CODEX_SUPERVISION_SESSION_KEY_PREFIX) ||
-        entry.initializationPending === true ||
-        entry.agentHarnessId !== "codex" ||
-        entry.modelSelectionLocked !== true
-      ) {
-        continue;
-      }
-      const sessionId = entry.sessionId?.trim();
-      if (!sessionId) {
-        continue;
-      }
-      const binding = await params.bindingStore.read(
-        sessionBindingIdentity({ sessionId, sessionKey, config: params.config }),
-      );
-      const sourceThreadId = binding?.supervisionSourceThreadId?.trim();
-      const boundThreadId = binding?.threadId.trim();
-      if (
-        binding?.connectionScope !== "supervision" ||
-        !sourceThreadId ||
-        !boundThreadId ||
-        sessionKeyRest !== adoptionSessionKey(sourceThreadId)
-      ) {
-        continue;
-      }
-      if (adopted.has(sourceThreadId)) {
-        throw new Error(`multiple OpenClaw sessions adopt Codex thread ${sourceThreadId}`);
-      }
-      adopted.set(sourceThreadId, { key: sessionKey, sessionId, agentId, boundThreadId });
+  for (const { agentId, entry, sessionKey } of listSessionCatalogEntries({
+    config: params.config ?? {},
+    runtime: params.runtime,
+    sessionEntries: params.sessionEntries,
+  })) {
+    const sessionKeyRest = adoptionSessionKeyRest(sessionKey);
+    if (
+      !sessionKeyRest.startsWith(CODEX_SUPERVISION_SESSION_KEY_PREFIX) ||
+      entry.initializationPending === true ||
+      entry.agentHarnessId !== "codex" ||
+      entry.modelSelectionLocked !== true
+    ) {
+      continue;
     }
+    const sessionId = entry.sessionId?.trim();
+    if (!sessionId) {
+      continue;
+    }
+    const binding = await params.bindingStore.read(
+      sessionBindingIdentity({ sessionId, sessionKey, config: params.config }),
+    );
+    const sourceThreadId = binding?.supervisionSourceThreadId?.trim();
+    const boundThreadId = binding?.threadId.trim();
+    if (
+      binding?.connectionScope !== "supervision" ||
+      !sourceThreadId ||
+      !boundThreadId ||
+      sessionKeyRest !== adoptionSessionKey(sourceThreadId)
+    ) {
+      continue;
+    }
+    if (adopted.has(sourceThreadId)) {
+      throw new Error(`multiple OpenClaw sessions adopt Codex thread ${sourceThreadId}`);
+    }
+    adopted.set(sourceThreadId, { key: sessionKey, sessionId, agentId, boundThreadId });
   }
   return adopted;
 }
@@ -1266,7 +1273,7 @@ function registerCodexSessionCatalog(params: {
       ),
     list: async (query) => {
       const localTerminalAvailable = resolveLocalCodexTerminalExecutable() !== undefined;
-      const { onHost, ...gatewayQuery } = query;
+      const { onHost, sessionEntries, ...gatewayQuery } = query;
       const mapHost = (host: CodexSessionCatalogHost) =>
         toGenericCatalogHost(host, localTerminalAvailable);
       return (
@@ -1276,6 +1283,7 @@ function registerCodexSessionCatalog(params: {
           runtime: params.api.runtime,
           control: params.control,
           query: gatewayQuery,
+          sessionEntries,
           ...(onHost ? { onHost: (host) => onHost(mapHost(host)) } : {}),
         })
       ).hosts.map(mapHost);

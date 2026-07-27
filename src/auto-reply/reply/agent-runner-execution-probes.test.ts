@@ -65,6 +65,7 @@ describe("runAgentTurnWithFallback: primary probe routing", () => {
     ).toMatchObject({
       provider: "google",
       model: "gemini-3.1-pro-preview",
+      requestedRouteResolution: "resolved",
       authProfileId: "google:fallback",
       authProfileIdSource: "auto",
       autoFallbackPrimaryProbe: undefined,
@@ -100,6 +101,7 @@ describe("runAgentTurnWithFallback: primary probe routing", () => {
     ).toMatchObject({
       provider: "openai",
       model: "gpt-5.4",
+      requestedRouteResolution: "raw",
       authProfileId: "openai:work",
       authProfileIdSource: "user",
       modelOverrideSource: "user",

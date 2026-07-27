@@ -20,6 +20,7 @@ import { pages as configPages } from "./pages/config/route.ts";
 import { page as connectionPage } from "./pages/connection/route.ts";
 import { page as cronPage } from "./pages/cron/route.ts";
 import { page as custodianPage } from "./pages/custodian/route.ts";
+import { page as dashboardsPage } from "./pages/dashboards/route.ts";
 import { page as debugPage } from "./pages/debug/route.ts";
 import { page as labsPage } from "./pages/labs/route.ts";
 import { page as logsPage } from "./pages/logs/route.ts";
@@ -56,6 +57,7 @@ const APP_ROUTE_TREE = [
   custodianPage,
   newSessionPage,
   activityPage,
+  dashboardsPage,
   appsPage,
   agentsPage,
   approvalsPage,

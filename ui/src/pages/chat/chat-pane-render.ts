@@ -29,6 +29,7 @@ import {
   renderChat,
   renderChatControls,
   resolveActiveRunOutputTokens,
+  resolveChatProjectionRunId,
   resolveAssistantAttachmentAuthToken,
   resolveChatAgentId,
   resolveChatAvatarUrl,
@@ -230,6 +231,11 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       usageByRun: state.chatRunUsageById,
     });
     const loadSidebarFullMessage = createSidebarFullMessageLoader(state, Boolean(catalogKey));
+    const projectionRunId = resolveChatProjectionRunId({
+      localRunId: state.chatRunId,
+      activeRunIds: selectedSession?.activeRunIds,
+      queue: state.chatQueue,
+    });
     const props: ChatProps = {
       transcript: this.transcript,
       paneId: this.paneId,
@@ -296,6 +302,7 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       streamSegments: catalogKey ? [] : state.chatStreamSegments,
       stream: catalogKey ? null : state.chatStream,
       streamStartedAt: catalogKey ? null : state.chatStreamStartedAt,
+      runId: catalogKey ? null : projectionRunId,
       runOutputTokens: catalogKey ? null : runOutputTokens,
       assistantAvatarUrl: resolveChatAvatarUrl(state),
       sendShortcut: state.settings.chatSendShortcut,

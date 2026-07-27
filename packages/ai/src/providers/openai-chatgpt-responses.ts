@@ -36,6 +36,8 @@ import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.j
 import { parseRetryAfterHttpDateMs } from "../internal/retry-after.js";
 import { sleepWithAbort } from "../internal/retry-sleep.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
+import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
+import { transportAbortError } from "../transports/transport-stream-shared.js";
 import type {
   Api,
   AssistantMessage,
@@ -67,7 +69,6 @@ import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
 import {
   convertResponsesMessages,
   convertResponsesToolPayload,
-  processResponsesStream,
   resolveResponsesReasoningEffort,
 } from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
@@ -341,7 +342,7 @@ export const streamOpenAICodexResponses: StreamFunction<
             );
 
             if (activeSignal?.aborted) {
-              throw new Error("Request was aborted");
+              throw transportAbortError(activeSignal);
             }
             stream.push({
               type: "done",
@@ -398,7 +399,7 @@ export const streamOpenAICodexResponses: StreamFunction<
 
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
         if (activeSignal?.aborted) {
-          throw new Error("Request was aborted");
+          throw transportAbortError(activeSignal);
         }
 
         let attemptResponse: Response;
@@ -480,7 +481,7 @@ export const streamOpenAICodexResponses: StreamFunction<
       await processStream(response, output, stream, model, options, firstEventAbort.abort);
 
       if (activeSignal?.aborted) {
-        throw new Error("Request was aborted");
+        throw transportAbortError(activeSignal);
       }
 
       stream.push({
@@ -680,6 +681,7 @@ async function processStream(
     firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options),
     abortFirstEventStream,
     onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
+    signal: options?.signal,
     resolveServiceTier: resolveCodexServiceTier,
     applyServiceTierPricing: (usage, serviceTier) =>
       applyServiceTierPricing(usage, serviceTier, model),
@@ -1349,7 +1351,7 @@ async function* parseWebSocket(
   try {
     while (true) {
       if (signal?.aborted) {
-        throw new Error("Request was aborted");
+        throw transportAbortError(signal);
       }
       const next = queue.shift();
       if (next !== undefined) {
@@ -1482,7 +1484,7 @@ async function processWebSocketStream(
     useCachedContext && entry ? buildCachedWebSocketRequestBody(entry, fullBody) : fullBody;
   try {
     if (options?.signal?.aborted) {
-      throw new Error("Request was aborted");
+      throw transportAbortError(options.signal);
     }
     socket.send(JSON.stringify({ type: "response.create", ...requestBody }));
     await processResponsesStream(
@@ -1500,6 +1502,7 @@ async function processWebSocketStream(
         firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options),
         abortFirstEventStream,
         onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
+        signal: options?.signal,
         resolveServiceTier: resolveCodexServiceTier,
         applyServiceTierPricing: (usage, serviceTier) =>
           applyServiceTierPricing(usage, serviceTier, model),

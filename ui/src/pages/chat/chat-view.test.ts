@@ -2222,6 +2222,54 @@ describe("chat loading skeleton", () => {
     expect(replyCall?.[1].activeContinuation).toBeUndefined();
   });
 
+  it("keeps the live token counter current when only run usage changes", () => {
+    // Run usage arrives on its own patches, so the transcript items, the
+    // shared render context, and this row's own identity all stay put while
+    // the counter ticks.
+    const readingIndicator = { kind: "reading-indicator", key: "reading:test", startedAt: 1 };
+    const reply = {
+      kind: "group",
+      key: "group:assistant:reply",
+      role: "assistant",
+      messages: [
+        {
+          key: "message:assistant:reply",
+          message: { role: "assistant", content: "Interim answer", timestamp: 1 },
+        },
+      ],
+      timestamp: 1,
+      isStreaming: false,
+    };
+    const renderWithUsage = (container: HTMLElement, runOutputTokens: number) => {
+      render(
+        renderChat(createChatProps({ canAbort: true, runOutputTokens, stream: null })),
+        container,
+      );
+    };
+
+    const streamGroupSpy = vi.fn(renderStreamGroupMock);
+    vi.spyOn(chatMessage, "renderStreamGroup").mockImplementation(streamGroupSpy);
+    vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([readingIndicator] as ReturnType<
+      typeof chatThread.buildCachedChatItems
+    >);
+    const standalone = document.createElement("div");
+    renderWithUsage(standalone, 5_500);
+    renderWithUsage(standalone, 7_200);
+    expect(streamGroupSpy.mock.calls.at(-1)?.[1]?.runOutputTokens).toBe(7_200);
+
+    vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([
+      reply,
+      readingIndicator,
+    ] as ReturnType<typeof chatThread.buildCachedChatItems>);
+    const embedded = document.createElement("div");
+    renderWithUsage(embedded, 5_500);
+    renderMessageGroupMock.mockClear();
+    renderWithUsage(embedded, 7_200);
+    expect(
+      renderMessageGroupMock.mock.calls.at(-1)?.[1].activeContinuation?.options.runOutputTokens,
+    ).toBe(7_200);
+  });
+
   it("releases the embedded recap when a later reply becomes the settled turn", () => {
     const firstReply = {
       kind: "group",
