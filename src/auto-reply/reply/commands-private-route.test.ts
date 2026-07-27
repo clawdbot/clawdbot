@@ -20,16 +20,12 @@ function createApprovalChannelPlugin(params: {
   id: "discord" | "feishu" | "telegram" | "whatsapp";
   targets: Array<{ to: string; threadId?: string | number | null }>;
   enabled?: boolean;
-  normalizeTarget?: (raw: string) => string | undefined;
 }): ChannelPlugin {
   return {
     ...createChannelTestPluginBase({
       id: params.id,
       label: params.id,
     }),
-    ...(params.normalizeTarget
-      ? { messaging: { normalizeTarget: params.normalizeTarget } }
-      : {}),
     approvalCapability: {
       native: {
         describeDeliveryCapabilities: vi.fn(() => ({
@@ -272,12 +268,11 @@ describe("resolvePrivateCommandRouteTargets", () => {
     ]);
   });
 
-  it("matches typed private targets through the channel target normalizer", async () => {
+  it("matches typed private targets to the same native owner id", async () => {
     registerApprovalChannelPlugins([
       createApprovalChannelPlugin({
         id: "feishu",
         targets: [{ to: "user:ou_owner" }],
-        normalizeTarget: (raw) => raw.replace(/^user:/, ""),
       }),
     ]);
 
