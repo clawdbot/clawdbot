@@ -162,6 +162,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "claudeCliSessionId",
   "label",
   "category",
+  "boardFace",
   "displayName",
   "delivery",
   "groupId",

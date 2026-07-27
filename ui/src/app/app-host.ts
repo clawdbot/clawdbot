@@ -58,7 +58,10 @@ import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
-import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
+import {
+  resolveSessionPreferredFaceForKey,
+  sessionNavigationTarget,
+} from "../lib/sessions/route-navigation.ts";
 import {
   isUiGlobalSessionKey,
   normalizeAgentId,
@@ -813,12 +816,10 @@ class OpenClawShell extends OpenClawLightDomElement {
             sessions: context.sessions.state.result?.sessions ?? [],
             onOpen: (sessionKey) => {
               context.gateway.setSessionKey(sessionKey);
+              const face = resolveSessionPreferredFaceForKey(context, sessionKey);
               // Ambiguous one-segment keys intentionally fall back to /chat;
               // the removed query deep-link format is not a compatibility path.
-              this.navigate(
-                "chat",
-                sessionNavigationTarget({ context, face: "chat", sessionKey }).options,
-              );
+              this.navigate(face, sessionNavigationTarget({ context, face, sessionKey }).options);
             },
           }),
         );
@@ -877,9 +878,10 @@ class OpenClawShell extends OpenClawLightDomElement {
       return;
     }
     context.gateway.setSessionKey(command.sessionKey);
+    const face = resolveSessionPreferredFaceForKey(context, command.sessionKey);
     this.navigate(
-      "chat",
-      sessionNavigationTarget({ context, face: "chat", sessionKey: command.sessionKey }).options,
+      face,
+      sessionNavigationTarget({ context, face, sessionKey: command.sessionKey }).options,
     );
   };
 
@@ -1729,10 +1731,8 @@ class OpenClawShell extends OpenClawLightDomElement {
             .onNavigate=${(routeId: RouteId) => this.navigate(routeId)}
             .onSelectSession=${(sessionKey: string) => {
               context.gateway.setSessionKey(sessionKey);
-              this.navigate(
-                "chat",
-                sessionNavigationTarget({ context, face: "chat", sessionKey }).options,
-              );
+              const face = resolveSessionPreferredFaceForKey(context, sessionKey);
+              this.navigate(face, sessionNavigationTarget({ context, face, sessionKey }).options);
             }}
             .onSlashCommand=${this.handleCommandPaletteSlashCommand}
           ></openclaw-command-palette>`

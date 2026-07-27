@@ -13,7 +13,10 @@ import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
-import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
+import {
+  resolveSessionPreferredFace,
+  sessionNavigationTarget,
+} from "../lib/sessions/route-navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   normalizeAgentId,
@@ -136,7 +139,7 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
   return html`
     <a
       href=${sessionNavigationTarget({
-        face: "chat",
+        face: resolveSessionPreferredFace(mainRow),
         sessionKey: mainKey,
         fallbackAgentId: agentId,
         basePath: host.basePath,

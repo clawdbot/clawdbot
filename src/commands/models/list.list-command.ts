@@ -139,7 +139,7 @@ export async function modelsListCommand(
         metadataSnapshot,
       })
     : undefined;
-  const shouldLoadRegistry = sourcePlan?.requiresInitialRegistry ?? false;
+  const shouldLoadRegistry = sourcePlan?.kind === "registry";
   const loadRegistryState = async (optsLocal?: {
     normalizeModels?: boolean;
     loadAvailability?: boolean;
@@ -202,7 +202,11 @@ export async function modelsListCommand(
     if (!sourcePlan || !sourcePlanModule) {
       throw new Error("models list source plan was not initialized");
     }
-    let rowContext = buildRowContext(sourcePlan.skipRuntimeModelSuppression);
+    let rowContext = buildRowContext(
+      sourcePlan.kind === "manifest" ||
+        sourcePlan.kind === "provider-index" ||
+        sourcePlan.kind === "provider-runtime-static",
+    );
     const initialAppend = await appendAllModelRowSources({
       rows,
       entries,

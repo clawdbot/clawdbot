@@ -17,9 +17,6 @@ export type ModelListSourcePlan = {
   kind: ModelListSourcePlanKind;
   manifestCatalogRows: readonly NormalizedModelCatalogRow[];
   providerIndexCatalogRows: readonly NormalizedModelCatalogRow[];
-  requiresInitialRegistry: boolean;
-  skipRuntimeModelSuppression: boolean;
-  fallbackToRegistryWhenEmpty: boolean;
 };
 
 type ProviderIndexCatalogModule = typeof import("./list.provider-index-catalog.js");
@@ -44,26 +41,17 @@ function createSourcePlan(params: {
   kind: ModelListSourcePlanKind;
   manifestCatalogRows?: readonly NormalizedModelCatalogRow[];
   providerIndexCatalogRows?: readonly NormalizedModelCatalogRow[];
-  requiresInitialRegistry?: boolean;
-  skipRuntimeModelSuppression?: boolean;
-  fallbackToRegistryWhenEmpty?: boolean;
 }): ModelListSourcePlan {
   return {
     kind: params.kind,
     manifestCatalogRows: params.manifestCatalogRows ?? [],
     providerIndexCatalogRows: params.providerIndexCatalogRows ?? [],
-    requiresInitialRegistry: params.requiresInitialRegistry ?? false,
-    skipRuntimeModelSuppression: params.skipRuntimeModelSuppression ?? false,
-    fallbackToRegistryWhenEmpty: params.fallbackToRegistryWhenEmpty ?? false,
   };
 }
 
 /** Creates the baseline plan that loads the runtime model registry. */
 export function createRegistryModelListSourcePlan(): ModelListSourcePlan {
-  return createSourcePlan({
-    kind: "registry",
-    requiresInitialRegistry: true,
-  });
+  return createSourcePlan({ kind: "registry" });
 }
 
 /** Plans source precedence for all/provider-filtered model-list output. */
@@ -103,7 +91,6 @@ export async function planAllModelListSources(params: {
       providerIndexCatalogRows: loadProviderIndexCatalogRowsForList({
         cfg: params.cfg,
       }),
-      requiresInitialRegistry: true,
     });
   }
 
@@ -124,7 +111,6 @@ export async function planAllModelListSources(params: {
     return createSourcePlan({
       kind: "manifest",
       manifestCatalogRows: staticManifestCatalogRows,
-      skipRuntimeModelSuppression: true,
     });
   }
 
@@ -143,7 +129,6 @@ export async function planAllModelListSources(params: {
         providerFilter: params.providerFilter,
         metadataSnapshot: params.metadataSnapshot,
       }),
-      fallbackToRegistryWhenEmpty: true,
     });
   }
 
@@ -159,7 +144,6 @@ export async function planAllModelListSources(params: {
     return createSourcePlan({
       kind: "registry",
       manifestCatalogRows,
-      requiresInitialRegistry: true,
     });
   }
 
@@ -175,7 +159,6 @@ export async function planAllModelListSources(params: {
     return createSourcePlan({
       kind: "provider-index",
       providerIndexCatalogRows,
-      skipRuntimeModelSuppression: true,
     });
   }
 
@@ -187,15 +170,8 @@ export async function planAllModelListSources(params: {
     metadataSnapshot: params.metadataSnapshot,
   });
   if (hasProviderStaticCatalog) {
-    return createSourcePlan({
-      kind: "provider-runtime-static",
-      skipRuntimeModelSuppression: true,
-      fallbackToRegistryWhenEmpty: true,
-    });
+    return createSourcePlan({ kind: "provider-runtime-static" });
   }
 
-  return createSourcePlan({
-    kind: "provider-runtime-scoped",
-    fallbackToRegistryWhenEmpty: true,
-  });
+  return createSourcePlan({ kind: "provider-runtime-scoped" });
 }
