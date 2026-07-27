@@ -64,16 +64,6 @@ export function trimCredentialToUndefined(value: unknown): string | undefined {
   return trimmed;
 }
 
-/** True when the process env supplies a nonempty Gateway token candidate. */
-export function hasGatewayTokenEnvCandidate(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN));
-}
-
-/** True when the process env supplies a nonempty Gateway password candidate. */
-export function hasGatewayPasswordEnvCandidate(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD));
-}
-
 /** Classify one configured credential input without resolving secret refs. */
 function resolveConfiguredGatewayCredentialInput(params: {
   value: unknown;

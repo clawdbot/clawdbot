@@ -7,11 +7,7 @@ import {
   trimCredentialToUndefined,
   trimToUndefined,
 } from "./credential-planner.js";
-export {
-  hasGatewayPasswordEnvCandidate,
-  hasGatewayTokenEnvCandidate,
-  trimToUndefined,
-} from "./credential-planner.js";
+export { trimToUndefined } from "./credential-planner.js";
 
 export type ExplicitGatewayAuth = {
   token?: string;
