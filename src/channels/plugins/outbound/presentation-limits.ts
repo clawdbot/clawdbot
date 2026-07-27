@@ -148,7 +148,7 @@ function buttonFallbackLabel(
   if (button.disabled) {
     return label;
   }
-  const action = resolveMessagePresentationButtonAction(button, { modelPicker: true });
+  const action = resolveMessagePresentationButtonAction(button);
   return action?.type === "url" || (action?.type === "web-app" && action.url)
     ? `${label}: ${action.url}`
     : label;
@@ -253,7 +253,7 @@ function adaptButton(
   limits: ActionLimits | undefined,
 ): MessagePresentationButton | undefined {
   const hasExplicitAction = button.action !== undefined;
-  const action = resolveMessagePresentationButtonAction(button, { modelPicker: true });
+  const action = resolveMessagePresentationButtonAction(button);
   if (!action) {
     return undefined;
   }
@@ -352,7 +352,7 @@ function adaptOption(
   limits: SelectLimits | undefined,
 ): MessagePresentationOption | undefined {
   const hasExplicitAction = option.action !== undefined;
-  const action = resolveMessagePresentationOptionAction(option, { modelPicker: true });
+  const action = resolveMessagePresentationOptionAction(option);
   if (!action) {
     return undefined;
   }
