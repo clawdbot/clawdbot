@@ -21,7 +21,7 @@ export const NATIVE_HOOK_RELAY_EVENTS = [
   "before_agent_finalize",
 ] as const;
 
-export const NATIVE_HOOK_RELAY_PROVIDERS = ["codex"] as const;
+const NATIVE_HOOK_RELAY_PROVIDERS = ["codex"] as const;
 
 export type NativeHookRelayEvent = (typeof NATIVE_HOOK_RELAY_EVENTS)[number];
 export type NativeHookRelayProvider = (typeof NATIVE_HOOK_RELAY_PROVIDERS)[number];
@@ -117,7 +117,7 @@ type NativeHookRelayCommandOptions = {
   timeoutMs?: number;
 };
 
-export type NativeHookRelayCommandForEventOptions = {
+type NativeHookRelayCommandForEventOptions = {
   timeoutMs?: number;
 };
 

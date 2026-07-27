@@ -261,10 +261,12 @@ export function resolveSessionKeyForRequest(opts: {
     ...(loadOptions ? { clone: false } : {}),
   });
 
-  // Supported CLI, gateway, and embedded entry points migrate orphan aliases before runtime reads.
   const ctx: MsgContext | undefined = opts.to?.trim() ? { From: opts.to } : undefined;
   let sessionKey: string | undefined =
     explicitSessionKey ?? (ctx ? resolveSessionKey(scope, ctx, mainKey, storeAgentId) : undefined);
+
+  // Entrypoint migration owners canonicalize legacy state before runtime reads. A missing target
+  // row is not evidence that another agent's main session belongs to the configured default agent.
 
   // If a session id was provided, prefer to re-use its existing entry (by id) even when no key was
   // derived. When duplicates exist across agent stores, pick the same deterministic best match used
