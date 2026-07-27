@@ -8,6 +8,7 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   clearNativeRequireJavaScriptModuleCache,
   isJavaScriptModulePath,
+  isNativeRequireSourceTransformFallbackError,
   tryNativeRequireJavaScriptModule,
 } from "./native-module-require.js";
 
@@ -54,6 +55,15 @@ describe("tryNativeRequireJavaScriptModule", () => {
     expect(tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true })).toEqual({
       ok: false,
     });
+  });
+
+  it("classifies an in-flight ESM require race for source-transform fallback", () => {
+    const modulePath = "/plugins/discord/dist/index.js";
+    const error = Object.assign(new Error("ESM is still loading"), {
+      code: "ERR_REQUIRE_ESM_RACE_CONDITION",
+    });
+
+    expect(isNativeRequireSourceTransformFallbackError(error, modulePath)).toBe(true);
   });
 
   it("declines missing target modules so callers can try source fallback", () => {
