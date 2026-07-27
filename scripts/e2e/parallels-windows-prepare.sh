@@ -509,8 +509,8 @@ winget_download() {
   version="${manifest_fact%%|*}"
   WINGET_EXPECTED_HASH="${manifest_fact#*|}"
   local download_dir="${GUEST_PROFILE//\//\\}\\Downloads\\OpenClawPrereqs"
-  guest_user_ps "Remove-Item -LiteralPath '${GUEST_PROFILE_PS}/Downloads/OpenClawPrereqs' -Recurse -Force -ErrorAction SilentlyContinue"
-  guest_user_cmd "if not exist \"${download_dir}\" mkdir \"${download_dir}\" & winget.exe download --id ${package_id} -e --version \"${version}\" --scope machine --download-directory \"${download_dir}\" --accept-source-agreements --accept-package-agreements --disable-interactivity"
+  guest_user_ps "if (Test-Path -LiteralPath '${GUEST_PROFILE_PS}/Downloads/OpenClawPrereqs') { Remove-Item -LiteralPath '${GUEST_PROFILE_PS}/Downloads/OpenClawPrereqs' -Recurse -Force }"
+  guest_user_cmd "if not exist \"${download_dir}\" mkdir \"${download_dir}\" & winget.exe download --source winget --id ${package_id} -e --version \"${version}\" --scope machine --download-directory \"${download_dir}\" --accept-source-agreements --accept-package-agreements --disable-interactivity"
 }
 
 downloaded_installer() {

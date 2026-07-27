@@ -22,6 +22,7 @@ import { recoverEmbeddedRunOverflow } from "./overflow-context-recovery.js";
 import { handleEmbeddedPromptFailure } from "./prompt-failure.js";
 import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
+import { isEmbeddedRunTerminalInterrupted } from "./terminal-outcome.js";
 import { recoverEmbeddedRunTimeout } from "./timeout-context-recovery.js";
 
 type PreparedRuntime = Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
@@ -86,21 +87,10 @@ export async function recoverEmbeddedRunAttempt(input: {
   const runtime = preparedRuntime.snapshot();
   const {
     attempt,
-    terminalProjection: {
-      aborted,
-      externalAbort,
-      promptError,
-      promptErrorSource,
-      timedOut,
-      timedOutDuringCompaction,
-      timedOutDuringToolExecution,
-      timedOutByRunBudget,
-    },
     sessionIdUsed,
     attemptAssistant,
     currentAttemptCompletedAssistant,
-    terminalInterrupted,
-    signalOwnedInterruption,
+    terminalState,
     setTerminalLifecycleMeta,
     attemptCompactionCount,
     activeErrorContext,
@@ -108,6 +98,18 @@ export async function recoverEmbeddedRunAttempt(input: {
     assistantErrorText,
     canRestartForLiveSwitch,
   } = normalizedAttempt;
+  const {
+    aborted,
+    externalAbort,
+    promptError,
+    promptErrorSource,
+    timedOut,
+    timedOutDuringCompaction,
+    timedOutDuringToolExecution,
+    timedOutByRunBudget,
+  } = projectAgentRunAttemptTerminal(attempt.terminal);
+  const terminalInterrupted = isEmbeddedRunTerminalInterrupted(terminalState.outcome);
+  const { signalOwnedInterruption } = terminalState;
   const assistantOverflowCandidate =
     currentAttemptCompletedAssistant !== undefined
       ? currentAttemptCompletedAssistant.stopReason === "error" ||

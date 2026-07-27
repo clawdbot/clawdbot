@@ -347,11 +347,9 @@ export abstract class ChatPaneLifecycle extends ChatPaneReset {
         ? this.sessionKey
         : resolveSessionKey(this.sessionKey, this.context.gateway.snapshot.hello);
       if (nextSessionKey) {
+        // Availability belongs to one activation. The replacement probe starts
+        // after its transcript commit in deferSessionHydrationUntilTranscript.
         this.sessionDiscussionStates.delete(nextSessionKey);
-        // Resolve availability before the action renders: the methods are
-        // advertised even without a provider, so an unprobed session would
-        // otherwise show a dead Discussion button on provider-less installs.
-        void this.probeSessionDiscussion(nextSessionKey);
       }
       if (nextSessionKey && nextSessionKey !== this.state.sessionKey) {
         this.switchPaneSession(nextSessionKey);
@@ -402,9 +400,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneReset {
       session: selectedSessionRow,
       digest: null,
     });
-    if (this.state?.sessionKey) {
-      this.hydrateSessionCompanion(this.state.sessionKey);
-    }
     if (this.state?.observerDigest || selectedSessionRow?.observerDigest || observerRunId) {
       this.ensureSessionRail();
     }
@@ -417,6 +412,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneReset {
     this.paneResizeObserver?.disconnect();
     this.paneResizeObserver = null;
     this.connectionGeneration += 1;
+    this.deferredSessionHydrationRequestVersion += 1;
     this.sessionDiscussionPanels.clear();
     this.sessionCompanionHydrationKey = "";
     this.taskSuggestionsRequestVersion += 1;

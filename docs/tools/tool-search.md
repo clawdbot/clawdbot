@@ -120,7 +120,25 @@ client-provided app tools.
 
 `openclaw.tools.search(query, options?)`
 
-Searches the effective catalog for the current run. Results are compact and safe
+Searches the effective catalog for the current run.
+
+Queries must be written in English. Ranking is lexical (Okapi BM25 over tool
+names, descriptions, and first-party parameter names and descriptions), with
+light English stemming so `scheduling` reaches a tool described as `Schedule a
+recurring task`, and a small intent expansion so `look up the price` reaches one
+described as `Search the web`. Tool names and descriptions are written in English,
+so a query in another language will usually match nothing. It is not rejected —
+a catalog may legitimately describe a tool in another script — but it is also no
+longer answered with an arbitrary slice of the catalog presented as if it were
+ranked, which is what the previous scorer did whenever a query produced no
+usable terms. Both `tool_search` and the code-mode bridge state this
+requirement in their model-facing descriptions.
+
+Untrusted parameter schemas are never indexed. MCP and client tools are matched
+on name and description only, which is the same boundary that defers their input
+signatures as `input: "unknown"`.
+
+Results are compact and safe
 to put back into prompt context. Each hit includes a bounded TypeScript-style
 `input` signature, such as `{ id: string; mode?: "drip" | "flood" }`, so the
 model can skip `describe` when that signature is sufficient. A trusted

@@ -78,6 +78,7 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
       entry.model = model;
       entry.modelOverride = model;
       entry.modelOverrideSource = patch.modelOverrideSource === "auto" ? "auto" : "user";
+      entry.modelOverrideRouteResolution = "resolved";
       const fallbackOriginProvider = normalizeOptionalString(
         patch.modelOverrideFallbackOriginProvider,
       );

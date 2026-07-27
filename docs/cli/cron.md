@@ -56,6 +56,8 @@ openclaw cron create "*/15 * * * *" \
 
 `--session` accepts `main`, `isolated`, `current`, or `session:<id>`.
 
+Agent-turn jobs default to the creating conversation when session context is available. Without a session key, including ordinary CLI calls and API calls that omit one, the target falls back to `isolated`.
+
 <AccordionGroup>
   <Accordion title="Session keys">
     - `main` binds to the agent's main session.

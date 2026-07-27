@@ -34,9 +34,14 @@ export type BoardWidgetMcpAppDocument = {
   interactive: boolean;
 };
 export type BoardWidgetDocument = BoardWidgetHtmlDocument | BoardWidgetMcpAppDocument;
+export type BoardSnapshotWithHtmlDocuments = {
+  snapshot: BoardSnapshot;
+  htmlDocuments: ReadonlyMap<string, BoardWidgetHtmlDocument>;
+};
 
 export interface BoardStore {
   getSnapshot(sessionKey: string): BoardSnapshot;
+  getSnapshotWithHtmlDocuments(sessionKey: string): BoardSnapshotWithHtmlDocuments;
   applyOps(sessionKey: string, ops: readonly BoardOp[]): BoardSnapshot;
   putWidget(params: BoardWidgetMaterializedPutParams): BoardSnapshot;
   grant(
@@ -86,6 +91,22 @@ export function cloneBoardSnapshot(snapshot: BoardSnapshot): BoardSnapshot {
           }
         : {}),
     })),
+  };
+}
+
+function cloneBoardWidgetHtmlDocument(document: BoardWidgetHtmlDocument): BoardWidgetHtmlDocument {
+  return {
+    ...document,
+    ...(document.declared
+      ? {
+          declared: {
+            ...(document.declared.netOrigins
+              ? { netOrigins: [...document.declared.netOrigins] }
+              : {}),
+            ...(document.declared.tools ? { tools: [...document.declared.tools] } : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -333,6 +354,20 @@ export class InMemoryBoardStore implements BoardStore {
     );
   }
 
+  getSnapshotWithHtmlDocuments(sessionKey: string): BoardSnapshotWithHtmlDocuments {
+    const stored = this.boards.get(sessionKey);
+    const htmlDocuments = new Map<string, BoardWidgetHtmlDocument>();
+    for (const [name, document] of stored?.documents ?? []) {
+      if ("html" in document) {
+        htmlDocuments.set(name, cloneBoardWidgetHtmlDocument(document));
+      }
+    }
+    return {
+      snapshot: cloneBoardSnapshot(stored?.snapshot ?? emptyBoardSnapshot(sessionKey)),
+      htmlDocuments,
+    };
+  }
+
   applyOps(sessionKey: string, ops: readonly BoardOp[]): BoardSnapshot {
     const current = this.boards.get(sessionKey);
     const snapshot = current?.snapshot ?? emptyBoardSnapshot(sessionKey);
@@ -430,21 +465,7 @@ export class InMemoryBoardStore implements BoardStore {
     if (!document) {
       return undefined;
     }
-    return "html" in document
-      ? {
-          ...document,
-          ...(document.declared
-            ? {
-                declared: {
-                  ...(document.declared.netOrigins
-                    ? { netOrigins: [...document.declared.netOrigins] }
-                    : {}),
-                  ...(document.declared.tools ? { tools: [...document.declared.tools] } : {}),
-                },
-              }
-            : {}),
-        }
-      : undefined;
+    return "html" in document ? cloneBoardWidgetHtmlDocument(document) : undefined;
   }
 
   readWidgetMcpApp(sessionKey: string, name: string): BoardWidgetMcpAppDocument | undefined {

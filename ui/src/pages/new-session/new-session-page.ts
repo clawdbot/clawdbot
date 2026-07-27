@@ -13,7 +13,7 @@ import "../../components/tooltip.ts";
 import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
-import { searchForSession } from "../../lib/sessions/index.ts";
+import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -28,7 +28,11 @@ import * as catalog from "./catalog-target.ts";
 import { CloudProfileDiscovery, selectProfiles } from "./cloud-profile-discovery.ts";
 import { PendingCloudRecoveryState, resolveScope } from "./cloud-recovery-state.ts";
 import { advanceCloudDraftSession } from "./cloud-submit.ts";
-import { renderDraftError, renderNewSessionDraftComposer } from "./composer.ts";
+import {
+  NewSessionComposerTextareaController,
+  renderDraftError,
+  renderNewSessionDraftComposer,
+} from "./composer.ts";
 import {
   buildDraftSessionCreateParams,
   canStartSessionAsDraft,
@@ -42,11 +46,17 @@ import {
   type DraftRepositoryState,
   readDraftNodes,
 } from "./discovery.ts";
+import { isMissingRestoredFolderError } from "./folder-validation.ts";
 import { GatewayNameDiscovery } from "./gateway-name-discovery.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 import { isAbsolutePath } from "./path.ts";
 import { renderPlaceSelect } from "./place-picker.ts";
+import {
+  loadNewSessionPreference,
+  patchNewSessionPreference,
+  type NewSessionPreference,
+} from "./preferences.ts";
 import { retainRejectedInitialTurn } from "./rejected-initial-turn.ts";
 import { renderAgentSelect } from "./target-controls.ts";
 
@@ -84,6 +94,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   @state() private placePopoverHiding = false;
   // Live head input; absolute paths stay applicable even without fs.listDir.
   @state() private browserPathDraft = "";
+  @state() private restoredFolderValidation: "none" | "checking" | "failed" = "none";
 
   private openedFor: string | null = null;
   private agentsHydrated = false;
@@ -91,6 +102,8 @@ class NewSessionPage extends OpenClawLightDomElement {
   // Discovery retry provenance separates user choices from Gateway-derived defaults.
   private agentSelectedByUser = false;
   private folderSelectedByUser = false;
+  private preferredWorktreeRestore = false;
+  private worktreeSelectedByUser = false;
   private submitRequestToken = 0;
   private nodesRequestToken = 0;
   private readonly gatewayNameDiscovery = new GatewayNameDiscovery(
@@ -126,8 +139,13 @@ class NewSessionPage extends OpenClawLightDomElement {
   private branchesRequestToken = 0;
   private baseRefEditGeneration = 0;
   private browserRequestToken = 0;
+  private restoredFolderValidationToken = 0;
   private readonly attachmentDraft = new NewSessionAttachmentDraft(() => this.requestUpdate());
-  private readonly modelControl = new NewSessionModelControl(() => this.requestUpdate());
+  private readonly composerTextarea = new NewSessionComposerTextareaController();
+  private readonly modelControl = new NewSessionModelControl(
+    () => this.requestUpdate(),
+    (selection) => this.persistPreference(selection),
+  );
   private gatewaySource: ApplicationContext["gateway"] | null = null;
   private gatewayClient: ApplicationContext["gateway"]["snapshot"]["client"] = null;
   private gatewayUrl = "";
@@ -225,6 +243,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.modelControl.invalidate(resetHostSelection);
     this.attachmentDraft.abortReads();
     this.closeBrowser();
+    this.cancelRestoredFolderValidation();
     this.invalidateSubmission(true); // Transport loss makes an in-flight create outcome unknowable.
     if (!resetHostSelection) {
       return;
@@ -240,6 +259,8 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.agentSelectedByUser = false;
     this.folder = "";
     this.folderSelectedByUser = false;
+    this.preferredWorktreeRestore = false;
+    this.worktreeSelectedByUser = false;
     this.worktree = false;
     this.visibility = "normal";
     this.worktreeName = "";
@@ -346,6 +367,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     globalThis.clearTimeout(this.catalogRetryTimer);
     this.catalogRetryTimer = undefined;
     this.attachmentDraft.reset({ release: true });
+    this.composerTextarea.disconnect();
     this.cloudProfileDiscovery.stop();
     super.disconnectedCallback();
   }
@@ -435,6 +457,78 @@ class NewSessionPage extends OpenClawLightDomElement {
     return Boolean(folder) && folder !== this.workspacePath();
   }
 
+  private preference(): NewSessionPreference | null {
+    if (catalog.isTarget(this.data) || this.pendingCloud.sessionKey) {
+      return null;
+    }
+    return loadNewSessionPreference(this.gatewayUrl, this.agentId);
+  }
+
+  private persistPreference(patch: NewSessionPreference) {
+    if (catalog.isTarget(this.data) || this.pendingCloud.sessionKey) {
+      return;
+    }
+    patchNewSessionPreference(this.gatewayUrl, this.agentId, {
+      workspace: this.workspacePath(),
+      ...patch,
+    });
+  }
+
+  private cancelRestoredFolderValidation() {
+    this.restoredFolderValidationToken += 1;
+    this.restoredFolderValidation = "none";
+  }
+
+  private validateRestoredFolder(folder: string) {
+    const snapshot = this.context?.gateway.snapshot;
+    const client = snapshot?.client;
+    if (snapshot?.phase !== "connected" || !client || !this.isAdmin()) {
+      this.restoredFolderValidation = "checking";
+      return;
+    }
+    const requestId = ++this.restoredFolderValidationToken;
+    this.restoredFolderValidation = "checking";
+    void client
+      .request<FsListDirResult>("fs.listDir", { path: folder })
+      .then(() => {
+        if (
+          requestId !== this.restoredFolderValidationToken ||
+          this.folderSelectedByUser ||
+          this.folder !== folder
+        ) {
+          return;
+        }
+        this.restoredFolderValidation = "none";
+        if (this.error === t("newSession.browserLoadFailed")) {
+          this.error = null;
+        }
+        this.maybeLoadBranches();
+      })
+      .catch((error: unknown) => {
+        if (
+          requestId !== this.restoredFolderValidationToken ||
+          this.folderSelectedByUser ||
+          this.folder !== folder
+        ) {
+          return;
+        }
+        if (isMissingRestoredFolderError(error)) {
+          this.restoredFolderValidation = "none";
+          if (this.error === t("newSession.browserLoadFailed")) {
+            this.error = null;
+          }
+          this.folder = this.workspacePath();
+          this.worktree = false;
+          this.preferredWorktreeRestore = false;
+          this.persistPreference({ folder: this.folder, worktree: false });
+          this.maybeLoadBranches();
+          return;
+        }
+        this.restoredFolderValidation = "failed";
+        this.error = t("newSession.browserLoadFailed");
+      });
+  }
+
   private adoptAgentDefaults(
     options: { preserveSelectedAgent?: boolean; preserveSelectedFolder?: boolean } = {},
   ) {
@@ -449,16 +543,54 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.agentId = catalog.resolveAgentId(this.data, agents, fallback);
       this.agentSelectedByUser = false;
     }
+    const preference = this.preference();
     const keepSelectedFolder = options.preserveSelectedFolder && this.folderSelectedByUser;
     // A node cwd belongs to node discovery, and a locked cloud-recovery draft
     // shows its staged repo; neither may be replaced by a workspace refresh.
     if (!this.execNode && !keepSelectedFolder && !this.pendingCloud.sessionKey) {
-      this.folder = this.workspacePath();
+      const workspace = this.workspacePath();
+      const storedFolder = preference?.folder ?? "";
+      // An old agent workspace path is not a custom folder. If the configured
+      // workspace moved, use the current value instead of reviving the stale path.
+      const storedWorkspaceMoved =
+        Boolean(storedFolder) &&
+        storedFolder === preference?.workspace &&
+        preference.workspace !== workspace;
+      // Only an admin can browse outside the workspace, so any other stored
+      // folder is unreachable for this viewer.
+      const storedFolderUsable =
+        Boolean(storedFolder) &&
+        !storedWorkspaceMoved &&
+        (storedFolder === workspace || this.isAdmin());
+      this.folder = storedFolderUsable ? storedFolder : workspace;
       this.folderSelectedByUser = false;
+      this.preferredWorktreeRestore = preference?.worktree === true;
+      this.worktreeSelectedByUser = false;
+      if (storedWorkspaceMoved) {
+        this.persistPreference({ folder: workspace });
+      }
+    }
+    if (keepSelectedFolder && !this.execNode && !this.pendingCloud.sessionKey && this.agentId) {
+      // A folder picked before agents.list resolves has no stable preference
+      // owner. Persist it only after the final agent id is known.
+      this.persistPreference({ folder: this.folder, worktree: this.worktree });
     }
     void this.loadNodes();
-    this.modelControl.load(this.context, this.agentId, !catalog.isTarget(this.data));
-    this.maybeLoadBranches();
+    this.modelControl.load(this.context, this.agentId, !catalog.isTarget(this.data), {
+      agent: this.selectedAgent(),
+      preference,
+    });
+    if (
+      !this.folderSelectedByUser &&
+      this.folder !== this.workspacePath() &&
+      !this.execNode &&
+      !this.pendingCloud.sessionKey
+    ) {
+      this.validateRestoredFolder(this.folder);
+    } else {
+      this.cancelRestoredFolderValidation();
+      this.maybeLoadBranches();
+    }
   }
 
   private resetDraft() {
@@ -468,6 +600,9 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.agentSelectedByUser = false;
     this.folder = "";
     this.folderSelectedByUser = false;
+    this.cancelRestoredFolderValidation();
+    this.preferredWorktreeRestore = false;
+    this.worktreeSelectedByUser = false;
     this.worktree = false;
     this.visibility = "normal";
     this.worktreeName = "";
@@ -584,28 +719,37 @@ class NewSessionPage extends OpenClawLightDomElement {
     // Repository capability and branch data belong to one Gateway folder.
     // Reset them together so a previous checkout can never leak into create params.
     const requestId = ++this.branchesRequestToken;
+    const restoreWorktree = this.preferredWorktreeRestore && !this.worktreeSelectedByUser;
     const baseRefEditGeneration = this.baseRefEditGeneration;
     this.repository = { kind: "idle" };
     this.baseRef = "";
     if (this.execNode) {
+      this.preferredWorktreeRestore = false;
       return;
     }
     const repoRoot = this.folder.trim() || this.workspacePath();
     const agent = this.selectedAgent();
     const usesWorkspace = repoRoot === this.workspacePath();
     if (!repoRoot) {
+      this.preferredWorktreeRestore = false;
       return;
     }
     if (usesWorkspace && agent?.workspaceGit !== true) {
       this.repository = { kind: "direct", repoRoot };
+      const rejectedWorktree = !this.cloudProfileId && (this.worktree || restoreWorktree);
       if (!this.cloudProfileId) {
         this.worktree = false;
+      }
+      this.preferredWorktreeRestore = false;
+      if (rejectedWorktree) {
+        this.persistPreference({ worktree: false });
       }
       return;
     }
     const snapshot = this.context?.gateway.snapshot;
     const client = snapshot?.client;
     if (snapshot?.phase !== "connected" || !client) {
+      this.preferredWorktreeRestore = false;
       return;
     }
     this.repository = { kind: "checking", repoRoot };
@@ -623,9 +767,22 @@ class NewSessionPage extends OpenClawLightDomElement {
             kind: result?.repositoryStatus === "not_git" ? "direct" : "unavailable",
             repoRoot,
           };
-          if (result?.repositoryStatus === "not_git" && !this.cloudProfileId) {
-            this.worktree = false;
+          if (result?.repositoryStatus === "not_git") {
+            const rejectedWorktree = !this.cloudProfileId && (this.worktree || restoreWorktree);
+            if (!this.cloudProfileId) {
+              this.worktree = false;
+            }
+            if (rejectedWorktree) {
+              this.persistPreference({ worktree: false });
+            }
+          } else if (restoreWorktree && !this.worktreeSelectedByUser && this.worktreeAvailable()) {
+            // An inconclusive lookup cannot disprove a stored worktree choice, but
+            // it may only be restored while the toggle stays usable: an unavailable
+            // repository disables that control, and a box the user cannot clear
+            // would strand the draft behind a permanently disabled submit.
+            this.worktree = true;
           }
+          this.preferredWorktreeRestore = false;
           return;
         }
         this.repository = {
@@ -635,6 +792,10 @@ class NewSessionPage extends OpenClawLightDomElement {
           ...(result.defaultBranch ? { defaultBranch: result.defaultBranch } : {}),
           ...(result.headBranch ? { headBranch: result.headBranch } : {}),
         };
+        if (restoreWorktree && !this.worktreeSelectedByUser && !this.execNode) {
+          this.worktree = true;
+        }
+        this.preferredWorktreeRestore = false;
         // Discovery supplies a default only while the field is untouched;
         // a user edit made during the request remains authoritative.
         if (baseRefEditGeneration === this.baseRefEditGeneration) {
@@ -646,6 +807,10 @@ class NewSessionPage extends OpenClawLightDomElement {
           return;
         }
         this.repository = { kind: "unavailable", repoRoot };
+        if (restoreWorktree && !this.worktreeSelectedByUser && this.worktreeAvailable()) {
+          this.worktree = true;
+        }
+        this.preferredWorktreeRestore = false;
       });
   }
 
@@ -707,6 +872,15 @@ class NewSessionPage extends OpenClawLightDomElement {
       gateway?.snapshot.phase !== "connected" ||
       !gateway.snapshot.client
     ) {
+      return false;
+    }
+    if (this.restoredFolderValidation !== "none") {
+      return false;
+    }
+    // Stored model and worktree choices are provisional until their current
+    // Gateway metadata confirms they still exist. Do not let a fast submit
+    // silently replace either preference with the server default.
+    if (this.modelControl.isRestoringPreference() || this.preferredWorktreeRestore) {
       return false;
     }
     if (pendingCloud) {
@@ -1008,7 +1182,15 @@ class NewSessionPage extends OpenClawLightDomElement {
         return;
       }
       context.gateway.setSessionKey(result.key);
-      context.navigate("chat", { search: searchForSession(result.key) });
+      context.navigate(
+        "chat",
+        sessionNavigationTarget({
+          context,
+          face: "chat",
+          sessionKey: result.key,
+          agentId: this.agentId,
+        }).options,
+      );
     } finally {
       if (requestId === this.submitRequestToken) {
         this.submitting = false;
@@ -1026,17 +1208,23 @@ class NewSessionPage extends OpenClawLightDomElement {
       return;
     }
     this.agentId = normalizeAgentId(agentId);
+    this.cancelRestoredFolderValidation();
     this.modelControl.reset();
     this.error = null;
     this.agentSelectedByUser = true;
-    this.folder = this.execNode ? "" : this.workspacePath();
     this.folderSelectedByUser = false;
+    this.preferredWorktreeRestore = false;
+    this.worktreeSelectedByUser = false;
     this.cloudProfileId = "";
     this.worktree = false;
     this.worktreeName = "";
     this.closeBrowser();
-    this.modelControl.load(this.context, this.agentId, true);
-    this.maybeLoadBranches();
+    if (this.execNode) {
+      // Node cwd choices are agent-scoped draft state; switching agents must
+      // not carry the previous agent's remote path into the next session.
+      this.folder = "";
+    }
+    this.adoptAgentDefaults({ preserveSelectedAgent: true });
   }
 
   /**
@@ -1057,6 +1245,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       return;
     }
     this.execNode = execNode;
+    this.cancelRestoredFolderValidation();
     if (execNode) {
       // Node sessions run on that device; a cloud worker cannot sync a node path.
       this.cloudProfileId = "";
@@ -1064,6 +1253,8 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.error = null;
     this.folder = folder.trim();
     this.folderSelectedByUser = true;
+    this.preferredWorktreeRestore = false;
+    this.worktreeSelectedByUser = true;
     if (this.execNode) {
       this.worktree = false;
     } else if (!this.cloudProfileId) {
@@ -1072,6 +1263,9 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.worktree = false;
     }
     this.worktreeName = "";
+    if (!this.execNode && this.agentsHydrated) {
+      this.persistPreference({ folder: this.folder, worktree: this.worktree });
+    }
     this.maybeLoadBranches();
   }
 
@@ -1085,6 +1279,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     // Turning a cloud selection back into a plain Gateway session keeps the
     // picked repo; only a host change retires the folder path.
     const keepGatewayFolder = !execNode && !this.execNode;
+    this.cancelRestoredFolderValidation();
     const keepWorktree = keepGatewayFolder && this.worktree && this.worktreeAvailable();
     this.execNode = execNode;
     this.cloudProfileId = "";
@@ -1342,6 +1537,12 @@ class NewSessionPage extends OpenClawLightDomElement {
           return;
         }
         this.worktree = !this.worktree;
+        this.preferredWorktreeRestore = false;
+        this.worktreeSelectedByUser = true;
+        this.persistPreference({
+          folder: this.folder.trim() || this.workspacePath(),
+          worktree: this.worktree,
+        });
         if (this.worktree) {
           this.maybeLoadBranches();
         }
@@ -1395,6 +1596,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           modelControl: this.modelControl,
           requiresModifier: loadSettings().chatSendShortcut === "modifier-enter",
           submitting: this.submitting,
+          textareaController: this.composerTextarea,
           messageLocked: Boolean(this.pendingCloud.sessionKey),
           onInput: (message) => {
             if (!this.submitting && !this.pendingCloud.sessionKey) {
@@ -1443,8 +1645,19 @@ class NewSessionPage extends OpenClawLightDomElement {
         if (this.submitting || this.pendingCloud.sessionKey) {
           return;
         }
-        this.context?.gateway.setSessionKey(sessionKey);
-        this.context?.navigate("chat", { search: searchForSession(sessionKey) });
+        const context = this.context;
+        if (!context) {
+          return;
+        }
+        context.gateway.setSessionKey(sessionKey);
+        context.navigate(
+          "chat",
+          sessionNavigationTarget({
+            context,
+            face: "chat",
+            sessionKey,
+          }).options,
+        );
       },
     });
   }

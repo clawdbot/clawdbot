@@ -43,8 +43,6 @@ describe("planAllModelListSources", () => {
     });
 
     expect(plan.kind).toBe("manifest");
-    expect(plan.requiresInitialRegistry).toBe(false);
-    expect(plan.skipRuntimeModelSuppression).toBe(true);
     expect(plan.manifestCatalogRows).toEqual([catalogRow]);
     expect(mocks.loadStaticManifestCatalogRowsForList).toHaveBeenCalledWith({
       cfg: {},
@@ -56,7 +54,7 @@ describe("planAllModelListSources", () => {
     expect(mocks.hasProviderStaticCatalogForFilter).not.toHaveBeenCalled();
   });
 
-  it("uses runtime catalog plans before supplemental manifest rows for live providers", async () => {
+  it("retains refreshed manifest supplements for runtime-backed providers", async () => {
     const { planAllModelListSources } = await import("./list.source-plan.js");
     mocks.hasProviderRuntimeCatalogForFilter.mockResolvedValueOnce(true);
     mocks.loadSupplementalManifestCatalogRowsForList.mockReturnValueOnce([catalogRow]);
@@ -69,13 +67,16 @@ describe("planAllModelListSources", () => {
     });
 
     expect(plan.kind).toBe("provider-runtime-scoped");
-    expect(plan.requiresInitialRegistry).toBe(false);
-    expect(plan.fallbackToRegistryWhenEmpty).toBe(true);
+    expect(plan.manifestCatalogRows).toEqual([catalogRow]);
     expect(mocks.loadStaticManifestCatalogRowsForList).toHaveBeenCalledWith({
       cfg: {},
       providerFilter: "openai",
     });
-    expect(mocks.loadSupplementalManifestCatalogRowsForList).not.toHaveBeenCalled();
+    expect(mocks.loadSupplementalManifestCatalogRowsForList).toHaveBeenCalledWith({
+      cfg: {},
+      providerFilter: "openai",
+      metadataSnapshot: undefined,
+    });
     expect(mocks.hasProviderStaticCatalogForFilter).not.toHaveBeenCalled();
   });
 
@@ -92,8 +93,6 @@ describe("planAllModelListSources", () => {
     });
 
     expect(plan.kind).toBe("provider-index");
-    expect(plan.requiresInitialRegistry).toBe(false);
-    expect(plan.skipRuntimeModelSuppression).toBe(true);
     expect(plan.providerIndexCatalogRows).toEqual([providerIndexRow]);
     expect(mocks.hasProviderStaticCatalogForFilter).not.toHaveBeenCalled();
   });
@@ -110,8 +109,6 @@ describe("planAllModelListSources", () => {
     });
 
     expect(plan.kind).toBe("registry");
-    expect(plan.requiresInitialRegistry).toBe(true);
-    expect(plan.skipRuntimeModelSuppression).toBe(false);
     expect(plan.manifestCatalogRows).toEqual([catalogRow]);
     expect(mocks.loadStaticManifestCatalogRowsForList).toHaveBeenCalledWith({
       cfg: {},
@@ -134,9 +131,6 @@ describe("planAllModelListSources", () => {
       dependencies: mocks,
     });
     expect(plan.kind).toBe("provider-runtime-scoped");
-    expect(plan.requiresInitialRegistry).toBe(false);
-    expect(plan.skipRuntimeModelSuppression).toBe(false);
-    expect(plan.fallbackToRegistryWhenEmpty).toBe(true);
   });
 
   it("keeps broad all-model lists on the registry path with cheap catalog supplements", async () => {
@@ -152,8 +146,6 @@ describe("planAllModelListSources", () => {
     });
 
     expect(plan.kind).toBe("registry");
-    expect(plan.requiresInitialRegistry).toBe(true);
-    expect(plan.skipRuntimeModelSuppression).toBe(false);
     expect(plan.manifestCatalogRows).toEqual([catalogRow]);
     expect(plan.providerIndexCatalogRows).toEqual([providerIndexRow]);
     expect(mocks.loadSupplementalManifestCatalogRowsForList).toHaveBeenCalledWith({
@@ -174,9 +166,6 @@ describe("planAllModelListSources", () => {
       dependencies: mocks,
     });
     expect(plan.kind).toBe("provider-runtime-static");
-    expect(plan.requiresInitialRegistry).toBe(false);
-    expect(plan.skipRuntimeModelSuppression).toBe(true);
-    expect(plan.fallbackToRegistryWhenEmpty).toBe(true);
   });
 
   it("uses runtime-scoped plans for providers with live and static catalog hooks", async () => {
@@ -191,9 +180,6 @@ describe("planAllModelListSources", () => {
       dependencies: mocks,
     });
     expect(plan.kind).toBe("provider-runtime-scoped");
-    expect(plan.requiresInitialRegistry).toBe(false);
-    expect(plan.skipRuntimeModelSuppression).toBe(false);
-    expect(plan.fallbackToRegistryWhenEmpty).toBe(true);
     expect(mocks.hasProviderStaticCatalogForFilter).not.toHaveBeenCalled();
   });
 });

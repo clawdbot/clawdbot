@@ -280,6 +280,7 @@ export type ClawHubSkillSearchResult = {
   ownerHandle?: string | null;
   displayName: string;
   summary?: string;
+  icon?: string | null;
   version?: string;
   updatedAt?: number;
 };
@@ -289,6 +290,7 @@ export type ClawHubSkillDetail = {
     slug: string;
     displayName: string;
     summary?: string;
+    icon?: string | null;
     tags?: Record<string, string>;
     channel?: string | null;
     isOfficial?: boolean | null;
@@ -476,6 +478,30 @@ function normalizeBaseUrl(baseUrl?: string): string {
     DEFAULT_CLAWHUB_URL;
   const value = (normalizeOptionalString(baseUrl) || envValue).replace(/\/+$/, "");
   return value || DEFAULT_CLAWHUB_URL;
+}
+
+function resolveClawHubImageUrl(value: string | null | undefined, baseUrl?: string) {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized) {
+    return undefined;
+  }
+  try {
+    const registryUrl = new URL(`${normalizeBaseUrl(baseUrl)}/`);
+    const url = new URL(normalized, registryUrl);
+    if (
+      url.origin !== registryUrl.origin ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      !/^\/api\/v1\/skill-icons\/[a-f\d]{64}$/u.test(url.pathname)
+    ) {
+      return undefined;
+    }
+    return url.toString();
+  } catch {
+    return undefined;
+  }
 }
 
 function normalizeGitHubCodeloadBaseUrl(): string {
@@ -1219,7 +1245,11 @@ export async function searchClawHubSkills(params: {
       limit: params.limit ? String(params.limit) : undefined,
     },
   });
-  return result.results ?? [];
+  const results = result.results ?? [];
+  for (const entry of results) {
+    entry.icon = resolveClawHubImageUrl(entry.icon, params.baseUrl);
+  }
+  return results;
 }
 
 export async function fetchClawHubSkillDetail(params: {
@@ -1230,7 +1260,7 @@ export async function fetchClawHubSkillDetail(params: {
   timeoutMs?: number;
   fetchImpl?: FetchLike;
 }): Promise<ClawHubSkillDetail> {
-  return await fetchJson<ClawHubSkillDetail>({
+  const detail = await fetchJson<ClawHubSkillDetail>({
     baseUrl: params.baseUrl,
     path: `/api/v1/skills/${encodeURIComponent(params.slug)}`,
     token: params.token,
@@ -1238,6 +1268,15 @@ export async function fetchClawHubSkillDetail(params: {
     fetchImpl: params.fetchImpl,
     search: params.ownerHandle ? { ownerHandle: params.ownerHandle } : undefined,
   });
+  return {
+    ...detail,
+    skill: detail.skill
+      ? {
+          ...detail.skill,
+          icon: resolveClawHubImageUrl(detail.skill.icon, params.baseUrl),
+        }
+      : null,
+  };
 }
 
 export async function fetchClawHubSkillInstallResolution(params: {

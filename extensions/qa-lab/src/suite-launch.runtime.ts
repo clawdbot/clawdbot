@@ -32,6 +32,7 @@ import {
   resolveQaSuiteWorkerStartStaggerMs,
   scenarioRequiresIsolatedQaSuiteWorker,
 } from "./suite-planning.js";
+import { createQaSuiteProgressController } from "./suite-progress.js";
 import {
   buildQaSuiteSummaryJson,
   type QaSuiteResult,
@@ -604,6 +605,14 @@ async function runUnifiedQaSuite(params: {
   const startedAt = new Date();
   const repoRoot = path.resolve(params.runParams?.repoRoot ?? process.cwd());
   const outputDir = await resolveQaSuiteOutputDir(repoRoot, params.runParams?.outputDir);
+  const progress = params.runParams?.lab
+    ? createQaSuiteProgressController({
+        lab: params.runParams.lab,
+        scenarios: params.plan.scenarios,
+        startedAt: startedAt.toISOString(),
+      })
+    : undefined;
+  progress?.start();
   const providerMode = normalizeQaProviderMode(
     params.runParams?.providerMode ?? DEFAULT_QA_PROVIDER_MODE,
   );
@@ -774,6 +783,13 @@ async function runUnifiedQaSuite(params: {
             }
             const result = await runFlowSuite({
               ...params.runParams,
+              ...(progress
+                ? {
+                    lab: progress.createPartitionLab(
+                      partition.scenarios.map((scenario) => scenario.id),
+                    ),
+                  }
+                : {}),
               outputDir: partitionName
                 ? flowSuitePartitionOutputDir(outputDir, partitionName)
                 : suitePartitionOutputDir(outputDir, "flow"),
@@ -852,6 +868,11 @@ async function runUnifiedQaSuite(params: {
         const testFileScenarioResults: QaUnifiedPartitionResult["scenarioResults"] = [];
         const testFileStartedScenarioIds: string[] = [];
         for (const [kind, testFileScenarios] of scenariosByKind) {
+          progress?.markRunning(
+            (failFast ? testFileScenarios.slice(0, 1) : testFileScenarios).map(
+              (scenario) => scenario.id,
+            ),
+          );
           const result = await runQaTestFileSuiteFromRuntime({
             runParams: {
               ...params.runParams,
@@ -869,12 +890,12 @@ async function runUnifiedQaSuite(params: {
               repoRoot,
             }),
           );
-          testFileScenarioResults.push(
-            ...result.results.map((scenarioResult) => ({
-              scenarioId: scenarioResult.scenario.id,
-              result: testFileScenarioResultToSuiteScenario(scenarioResult, repoRoot),
-            })),
-          );
+          const scenarioResults = result.results.map((scenarioResult) => ({
+            scenarioId: scenarioResult.scenario.id,
+            result: testFileScenarioResultToSuiteScenario(scenarioResult, repoRoot),
+          }));
+          testFileScenarioResults.push(...scenarioResults);
+          progress?.recordResults(scenarioResults);
           const resultsByScenarioId = new Map(
             result.results.map((scenarioResult) => [scenarioResult.scenario.id, scenarioResult]),
           );
@@ -1049,7 +1070,7 @@ async function runUnifiedQaSuite(params: {
       } satisfies QaSuiteScenarioResult,
     ];
   });
-  return await writeUnifiedQaSuiteArtifacts({
+  const unifiedResult = await writeUnifiedQaSuiteArtifacts({
     alternateModel,
     channelDriver: params.runParams?.channelDriver,
     concurrency,
@@ -1064,6 +1085,33 @@ async function runUnifiedQaSuite(params: {
     scenarios,
     startedAt,
   });
+  const progressResults = params.plan.scenarios.flatMap((scenario) => {
+    const result = scenarioResultsById.get(scenario.id);
+    if (result) {
+      return [{ scenarioId: scenario.id, result }];
+    }
+    if (failFast && !startedScenarioIds.has(scenario.id)) {
+      return [];
+    }
+    return [
+      {
+        scenarioId: scenario.id,
+        result: {
+          name: scenario.title,
+          status: "fail" as const,
+          details: "suite partition returned no scenario result",
+          steps: [],
+        },
+      },
+    ];
+  });
+  progress?.complete(progressResults, finishedAt.toISOString());
+  params.runParams?.lab?.setLatestReport({
+    outputPath: unifiedResult.reportPath,
+    markdown: unifiedResult.report,
+    generatedAt: finishedAt.toISOString(),
+  });
+  return unifiedResult;
 }
 
 export async function runQaSuite(...args: [QaSuiteRunParams?]): Promise<QaSuiteRuntimeResult> {

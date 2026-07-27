@@ -265,11 +265,17 @@ describe("openai transport stream", () => {
             summary: [{ type: "summary_text", text: "Need a tool." }],
           },
         },
+        { type: "response.completed", response: { id: "resp_123", status: "completed" } },
       ]),
       output,
       { push: vi.fn() },
       model,
-      { authProfileId: "openai:oauth", sessionId: "session-123" },
+      {
+        reasoningReplayMetadata: testing.buildOpenAIResponsesReasoningReplayMetadata(model, {
+          authProfileId: "openai:oauth",
+          sessionId: "session-123",
+        }),
+      },
     );
 
     const expectedReplayMetadata = testing.buildOpenAIResponsesReasoningReplayMetadata(model, {
@@ -873,7 +879,6 @@ describe("openai transport stream", () => {
         id: "call_123|fc_123",
         name: "session_status",
         arguments: { sessionKey: "current" },
-        partialJson: '{"sessionKey":"current"}',
       },
     ]);
   });

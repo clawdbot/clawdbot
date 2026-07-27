@@ -6,7 +6,7 @@ import {
 import { buildCohereCatalogModels, COHERE_BASE_URL } from "./models.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-export const COHERE_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(manifest, "cohere")!;
+const COHERE_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(manifest, "cohere")!;
 
 const coherePresetAppliers = createModelCatalogPresetAppliers({
   primaryModelRef: COHERE_DEFAULT_MODEL_REF,

@@ -624,6 +624,233 @@ describe("runCliAgent reliability", () => {
     expect(clearBeforeRetry).not.toHaveBeenCalled();
   });
 
+  it("keeps cold transcript reseed for stalled sessions without a checkpoint", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock
+      .mockResolvedValueOnce(
+        createManagedRun({
+          reason: "no-output-timeout",
+          exitCode: null,
+          exitSignal: "SIGKILL",
+          durationMs: 200,
+          stdout: "",
+          stderr: "",
+          timedOut: true,
+          noOutputTimedOut: true,
+        }),
+      )
+      .mockResolvedValueOnce(
+        createManagedRun({
+          reason: "exit",
+          exitCode: 0,
+          exitSignal: null,
+          durationMs: 50,
+          stdout: "fresh fallback",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        }),
+      );
+    const prepareForkRetry = vi.fn(async () => true);
+    const clearBeforeRetry = vi.fn(async () => true);
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:no-checkpoint",
+      runId: "run-no-checkpoint",
+      cliSessionId: "legacy-session",
+      provider: "claude-cli",
+      model: "opus",
+      openClawHistoryPrompt: CLI_RESEED_PROMPT,
+    });
+    context.preparedBackend.backend = {
+      ...context.preparedBackend.backend,
+      resumeArgs: ["--resume", "{sessionId}"],
+      forkArg: "--fork-session",
+      resumeAtArg: "--resume-session-at",
+    };
+
+    const result = await runPreparedCliAgent({
+      ...context,
+      params: {
+        ...context.params,
+        onBeforeForkedCliSessionRetry: prepareForkRetry,
+        onBeforeFreshCliSessionRetry: clearBeforeRetry,
+      },
+    });
+
+    expect(result.payloads).toEqual([{ text: "fresh fallback" }]);
+    expect(prepareForkRetry).not.toHaveBeenCalled();
+    expect(clearBeforeRetry).toHaveBeenCalledOnce();
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+    const freshArgv = requireArray(
+      requireRecord(
+        callArg(supervisorSpawnMock, 1, 0, "fresh fallback spawn"),
+        "fresh fallback spawn",
+      ).argv,
+      "fresh fallback argv",
+    );
+    expect(freshArgv).not.toContain("--fork-session");
+    expect(freshArgv).not.toContain("--resume-session-at");
+  });
+
+  it("falls back to cold reseed when Claude lacks the checkpoint flag", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock
+      .mockResolvedValueOnce(
+        createManagedRun({
+          reason: "no-output-timeout",
+          exitCode: null,
+          exitSignal: "SIGKILL",
+          durationMs: 200,
+          stdout: "",
+          stderr: "",
+          timedOut: true,
+          noOutputTimedOut: true,
+        }),
+      )
+      .mockResolvedValueOnce(
+        createManagedRun({
+          reason: "exit",
+          exitCode: 1,
+          exitSignal: null,
+          durationMs: 25,
+          stdout: "",
+          stderr: "error: unknown option '--resume-session-at'",
+          timedOut: false,
+          noOutputTimedOut: false,
+        }),
+      )
+      .mockResolvedValueOnce(
+        createManagedRun({
+          reason: "exit",
+          exitCode: 0,
+          exitSignal: null,
+          durationMs: 50,
+          stdout: "fresh fallback",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        }),
+      );
+    const prepareForkRetry = vi.fn(async () => true);
+    const claimFork = vi.fn(async () => true);
+    const restoreFork = vi.fn(async () => {});
+    const clearBeforeRetry = vi.fn(async () => true);
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:old-claude",
+      runId: "run-old-claude",
+      cliSessionId: "old-claude-session",
+      provider: "claude-cli",
+      model: "opus",
+      openClawHistoryPrompt: CLI_RESEED_PROMPT,
+    });
+    context.preparedBackend.backend = {
+      ...context.preparedBackend.backend,
+      resumeArgs: ["--resume", "{sessionId}"],
+      forkArg: "--fork-session",
+      resumeAtArg: "--resume-session-at",
+    };
+    context.params.cliSessionBinding = {
+      sessionId: "old-claude-session",
+      resumeCheckpointId: "assistant-before-stall",
+    };
+
+    const result = await runPreparedCliAgent({
+      ...context,
+      params: {
+        ...context.params,
+        onBeforeForkedCliSessionRetry: prepareForkRetry,
+        claimCliSessionFork: claimFork,
+        restoreCliSessionFork: restoreFork,
+        persistCliSessionForkSuccessor: vi.fn(async () => {}),
+        onBeforeFreshCliSessionRetry: clearBeforeRetry,
+      },
+    });
+
+    expect(result.payloads).toEqual([{ text: "fresh fallback" }]);
+    expect(prepareForkRetry).toHaveBeenCalledOnce();
+    expect(claimFork).toHaveBeenCalledOnce();
+    expect(restoreFork).toHaveBeenCalledOnce();
+    expect(clearBeforeRetry).toHaveBeenCalledWith({
+      provider: "claude-cli",
+      reason: "timeout",
+      sessionId: "old-claude-session",
+    });
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("cold reseeds an initially armed checkpoint after a Claude downgrade", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock
+      .mockResolvedValueOnce(
+        createManagedRun({
+          reason: "exit",
+          exitCode: 1,
+          exitSignal: null,
+          durationMs: 25,
+          stdout: "",
+          stderr: "error: unknown option '--resume-session-at'",
+          timedOut: false,
+          noOutputTimedOut: false,
+        }),
+      )
+      .mockResolvedValueOnce(
+        createManagedRun({
+          reason: "exit",
+          exitCode: 0,
+          exitSignal: null,
+          durationMs: 50,
+          stdout: "fresh fallback",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        }),
+      );
+    const claimFork = vi.fn(async () => true);
+    const restoreFork = vi.fn(async () => {});
+    const clearBeforeRetry = vi.fn(async () => true);
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:downgraded-claude",
+      runId: "run-downgraded-claude",
+      cliSessionId: "downgraded-session",
+      provider: "claude-cli",
+      model: "opus",
+      openClawHistoryPrompt: CLI_RESEED_PROMPT,
+    });
+    context.preparedBackend.backend = {
+      ...context.preparedBackend.backend,
+      resumeArgs: ["--resume", "{sessionId}"],
+      forkArg: "--fork-session",
+      resumeAtArg: "--resume-session-at",
+    };
+    context.params.cliSessionBinding = {
+      sessionId: "downgraded-session",
+      resumeCheckpointId: "assistant-before-stall",
+      forkNextResume: true,
+    };
+
+    const result = await runPreparedCliAgent({
+      ...context,
+      params: {
+        ...context.params,
+        forkCliSessionOnResume: true,
+        claimCliSessionFork: claimFork,
+        restoreCliSessionFork: restoreFork,
+        persistCliSessionForkSuccessor: vi.fn(async () => {}),
+        onBeforeFreshCliSessionRetry: clearBeforeRetry,
+      },
+    });
+
+    expect(result.payloads).toEqual([{ text: "fresh fallback" }]);
+    expect(claimFork).toHaveBeenCalledOnce();
+    expect(restoreFork).toHaveBeenCalledOnce();
+    expect(clearBeforeRetry).toHaveBeenCalledWith({
+      provider: "claude-cli",
+      reason: "session_expired",
+      sessionId: "downgraded-session",
+    });
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+  });
+
   it("preserves fresh retry for direct CLI callers without a pre-clear hook", async () => {
     supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockResolvedValueOnce(
@@ -1768,7 +1995,7 @@ describe("runCliAgent reliability", () => {
     expect(clearBeforeRetry).not.toHaveBeenCalled();
   });
 
-  it("keeps non-capture live-session artifacts through fresh recovery retry", async () => {
+  it("forks a synthetic-stalled resume without rebuilding its cached conversation", async () => {
     vi.useFakeTimers();
     supervisorSpawnMock.mockClear();
     const transcriptProbe = vi.fn(async () => false);
@@ -1796,12 +2023,14 @@ describe("runCliAgent reliability", () => {
       notifyFirstSpawn = resolve;
     });
     let spawnCount = 0;
+    const spawnedArgv: string[][] = [];
     supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
       spawnCount += 1;
       const input = args[0] as {
         argv?: string[];
         onStdout?: (chunk: string) => void;
       };
+      spawnedArgv.push(input.argv ?? []);
       expect(resolveArg(input.argv, "--mcp-config")).toBe(mcpConfigPath);
       expect(resolveArg(input.argv, "--skills-plugin-dir")).toBe(skillsDir);
       expect(fs.existsSync(mcpConfigPath)).toBe(true);
@@ -1809,6 +2038,7 @@ describe("runCliAgent reliability", () => {
 
       if (spawnCount === 1) {
         notifyFirstSpawn?.();
+        const stdoutListener = input.onStdout;
         let resolveExit: ((value: RunExit) => void) | undefined;
         const exited = new Promise<RunExit>((resolve) => {
           resolveExit = resolve;
@@ -1818,7 +2048,27 @@ describe("runCliAgent reliability", () => {
           pid: 3301,
           startedAtMs: Date.now(),
           stdin: {
-            write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => cb?.()),
+            write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
+              stdoutListener?.(
+                [
+                  JSON.stringify({
+                    type: "system",
+                    subtype: "init",
+                    session_id: "stale-live",
+                  }),
+                  JSON.stringify({
+                    type: "assistant",
+                    session_id: "stale-live",
+                    message: {
+                      model: "<synthetic>",
+                      role: "assistant",
+                      content: [{ type: "text", text: "No response requested." }],
+                    },
+                  }),
+                ].join("\n") + "\n",
+              );
+              cb?.();
+            }),
             end: vi.fn(),
           },
           wait: vi.fn(() => exited),
@@ -1839,15 +2089,25 @@ describe("runCliAgent reliability", () => {
 
       const stdoutListener = input.onStdout;
       return {
-        runId: "live-retry-fresh",
+        runId: "live-retry-fork",
         pid: 3302,
         startedAtMs: Date.now(),
         stdin: {
           write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
             stdoutListener?.(
               [
-                JSON.stringify({ type: "system", subtype: "init", session_id: "fresh-live" }),
-                JSON.stringify({ type: "result", session_id: "fresh-live", result: "fresh ok" }),
+                JSON.stringify({ type: "system", subtype: "init", session_id: "forked-live" }),
+                JSON.stringify({
+                  type: "assistant",
+                  uuid: "assistant-after-recovery",
+                  session_id: "forked-live",
+                  message: {
+                    model: "claude-fable-5",
+                    role: "assistant",
+                    content: [{ type: "text", text: "fork ok" }],
+                  },
+                }),
+                JSON.stringify({ type: "result", session_id: "forked-live", result: "fork ok" }),
               ].join("\n") + "\n",
             );
             cb?.();
@@ -1881,6 +2141,8 @@ describe("runCliAgent reliability", () => {
         "--skills-plugin-dir",
         skillsDir,
       ],
+      forkArg: "--fork-session",
+      resumeAtArg: "--resume-session-at",
       output: "jsonl" as const,
       input: "stdin" as const,
       modelArg: "--model",
@@ -1898,6 +2160,10 @@ describe("runCliAgent reliability", () => {
     const cleanup = vi.fn(async () => {
       fs.rmSync(artifactDir, { recursive: true, force: true });
     });
+    const prepareForkRetry = vi.fn(async () => true);
+    const claimFork = vi.fn(async () => true);
+    const persistForkSuccessor = vi.fn(async () => {});
+    const restoreFork = vi.fn(async () => {});
     const clearBeforeRetry = vi.fn(async () => true);
     const context = buildPreparedContext({
       sessionKey: "agent:main:live-artifacts",
@@ -1910,12 +2176,20 @@ describe("runCliAgent reliability", () => {
     context.preparedBackend.backend = liveBackend;
     context.preparedBackend.cleanup = cleanup;
     context.backendResolved.config = liveBackend;
+    context.params.cliSessionBinding = {
+      sessionId: "stale-live",
+      resumeCheckpointId: "assistant-before-stall",
+    };
 
     const resultPromise = runPreparedCliAgent({
       ...context,
       params: {
         ...context.params,
         timeoutMs: 5_000,
+        onBeforeForkedCliSessionRetry: prepareForkRetry,
+        claimCliSessionFork: claimFork,
+        persistCliSessionForkSuccessor: persistForkSuccessor,
+        restoreCliSessionFork: restoreFork,
         onBeforeFreshCliSessionRetry: clearBeforeRetry,
       },
     });
@@ -1923,18 +2197,346 @@ describe("runCliAgent reliability", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     const result = await resultPromise;
 
-    expect(result.payloads).toEqual([{ text: "fresh ok" }]);
-    expect(result.meta.finalPromptText).toContain("User: earlier context");
-    expect(result.meta.agentMeta?.cliSessionBinding?.sessionId).toBe("fresh-live");
+    expect(result.payloads).toEqual([{ text: "fork ok" }]);
+    expect(result.meta.finalPromptText).not.toContain("User: earlier context");
+    expect(result.meta.agentMeta?.cliSessionBinding?.sessionId).toBe("forked-live");
+    expect(result.meta.agentMeta?.cliSessionBinding?.resumeCheckpointId).toBe(
+      "assistant-after-recovery",
+    );
     expect(transcriptProbe).not.toHaveBeenCalled();
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
-    expect(clearBeforeRetry).toHaveBeenCalledWith({
+    expect(spawnedArgv[0]).not.toContain("--fork-session");
+    expect(spawnedArgv[1]).toEqual(
+      expect.arrayContaining([
+        "--resume",
+        "stale-live",
+        "--fork-session",
+        "--resume-session-at",
+        "assistant-before-stall",
+      ]),
+    );
+    expect(prepareForkRetry).toHaveBeenCalledWith({
       provider: "claude-cli",
       reason: "timeout",
       sessionId: "stale-live",
     });
+    expect(claimFork).toHaveBeenCalledOnce();
+    expect(persistForkSuccessor).toHaveBeenCalledWith("forked-live");
+    expect(restoreFork).not.toHaveBeenCalled();
+    expect(clearBeforeRetry).not.toHaveBeenCalled();
     expect(cleanup).toHaveBeenCalledOnce();
     expect(fs.existsSync(artifactDir)).toBe(false);
+  });
+
+  it("falls back to transcript reseeding when the cache-preserving fork also stalls", async () => {
+    vi.useFakeTimers();
+    supervisorSpawnMock.mockClear();
+    const spawnedArgv: string[][] = [];
+    let notifyFirstSpawn: (() => void) | undefined;
+    const firstSpawned = new Promise<void>((resolve) => {
+      notifyFirstSpawn = resolve;
+    });
+    let notifySecondSpawn: (() => void) | undefined;
+    const secondSpawned = new Promise<void>((resolve) => {
+      notifySecondSpawn = resolve;
+    });
+    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
+      const input = args[0] as {
+        argv?: string[];
+        onStdout?: (chunk: string) => void;
+      };
+      spawnedArgv.push(input.argv ?? []);
+      const spawnIndex = spawnedArgv.length;
+      if (spawnIndex === 1) {
+        notifyFirstSpawn?.();
+      } else if (spawnIndex === 2) {
+        notifySecondSpawn?.();
+      }
+      let resolveExit: ((value: RunExit) => void) | undefined;
+      const exited = new Promise<RunExit>((resolve) => {
+        resolveExit = resolve;
+      });
+      return {
+        runId: `live-fork-fallback-${spawnIndex}`,
+        pid: 3400 + spawnIndex,
+        startedAtMs: Date.now(),
+        stdin: {
+          write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
+            const sessionId =
+              spawnIndex === 1
+                ? "stalled-source"
+                : spawnIndex === 2
+                  ? "forked-before-stall"
+                  : "fresh-after-fork-stall";
+            input.onStdout?.(
+              [
+                JSON.stringify({ type: "system", subtype: "init", session_id: sessionId }),
+                ...(spawnIndex < 3
+                  ? [
+                      JSON.stringify({
+                        type: "assistant",
+                        session_id: sessionId,
+                        message: {
+                          model: "<synthetic>",
+                          role: "assistant",
+                          content: [{ type: "text", text: "No response requested." }],
+                        },
+                      }),
+                    ]
+                  : [
+                      JSON.stringify({
+                        type: "result",
+                        session_id: sessionId,
+                        result: "fresh fallback ok",
+                      }),
+                    ]),
+              ].join("\n") + "\n",
+            );
+            cb?.();
+          }),
+          end: vi.fn(),
+        },
+        wait: vi.fn(() => exited),
+        cancel: vi.fn(() =>
+          resolveExit?.({
+            reason: "manual-cancel",
+            exitCode: null,
+            exitSignal: null,
+            durationMs: 1,
+            stdout: "",
+            stderr: "",
+            timedOut: false,
+            noOutputTimedOut: false,
+          }),
+        ),
+      };
+    });
+
+    const backend = {
+      command: "claude",
+      args: ["-p", "--output-format", "stream-json"],
+      resumeArgs: ["-p", "--resume", "{sessionId}", "--output-format", "stream-json"],
+      forkArg: "--fork-session",
+      resumeAtArg: "--resume-session-at",
+      output: "jsonl" as const,
+      input: "stdin" as const,
+      modelArg: "--model",
+      sessionArgs: ["--session-id", "{sessionId}"],
+      sessionMode: "always" as const,
+      liveSession: "claude-stdio" as const,
+      reliability: {
+        watchdog: {
+          resume: { noOutputTimeoutMs: 1_000, minMs: 1_000, maxMs: 1_000 },
+          fresh: { noOutputTimeoutMs: 1_000, minMs: 1_000, maxMs: 1_000 },
+        },
+      },
+      serialize: true,
+    };
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:fork-then-fresh",
+      runId: "run-fork-then-fresh",
+      cliSessionId: "stalled-source",
+      provider: "claude-cli",
+      model: "opus",
+      openClawHistoryPrompt: CLI_RESEED_PROMPT,
+    });
+    context.preparedBackend.backend = backend;
+    context.backendResolved.config = backend;
+    context.params.cliSessionBinding = {
+      sessionId: "stalled-source",
+      resumeCheckpointId: "assistant-before-stall",
+    };
+    const prepareForkRetry = vi.fn(async () => true);
+    const claimFork = vi.fn(async () => true);
+    const persistForkSuccessor = vi.fn(async () => {});
+    const restoreFork = vi.fn(async () => {});
+    const clearBeforeRetry = vi.fn(async () => true);
+
+    const resultPromise = runPreparedCliAgent({
+      ...context,
+      params: {
+        ...context.params,
+        timeoutMs: 5_000,
+        onBeforeForkedCliSessionRetry: prepareForkRetry,
+        claimCliSessionFork: claimFork,
+        persistCliSessionForkSuccessor: persistForkSuccessor,
+        restoreCliSessionFork: restoreFork,
+        onBeforeFreshCliSessionRetry: clearBeforeRetry,
+      },
+    });
+    await firstSpawned;
+    await vi.advanceTimersByTimeAsync(1_000);
+    await secondSpawned;
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await resultPromise;
+
+    expect(result.payloads).toEqual([{ text: "fresh fallback ok" }]);
+    expect(result.meta.finalPromptText).toContain("User: earlier context");
+    expect(spawnedArgv).toHaveLength(3);
+    expect(spawnedArgv[1]).toEqual(
+      expect.arrayContaining([
+        "--resume",
+        "stalled-source",
+        "--fork-session",
+        "--resume-session-at",
+        "assistant-before-stall",
+      ]),
+    );
+    expect(spawnedArgv[2]).not.toContain("--resume");
+    expect(spawnedArgv[2]).not.toContain("--fork-session");
+    expect(prepareForkRetry).toHaveBeenCalledOnce();
+    expect(claimFork).toHaveBeenCalledOnce();
+    expect(persistForkSuccessor).toHaveBeenCalledWith("forked-before-stall");
+    expect(restoreFork).not.toHaveBeenCalled();
+    expect(clearBeforeRetry).toHaveBeenCalledWith({
+      provider: "claude-cli",
+      reason: "timeout",
+      sessionId: "forked-before-stall",
+    });
+  });
+
+  it("tracks and clears a successor when the initial attempt is already a fork", async () => {
+    vi.useFakeTimers();
+    supervisorSpawnMock.mockClear();
+    const spawnedArgv: string[][] = [];
+    let notifyFirstSpawn: (() => void) | undefined;
+    const firstSpawned = new Promise<void>((resolve) => {
+      notifyFirstSpawn = resolve;
+    });
+    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
+      const input = args[0] as {
+        argv?: string[];
+        onStdout?: (chunk: string) => void;
+      };
+      spawnedArgv.push(input.argv ?? []);
+      const spawnIndex = spawnedArgv.length;
+      if (spawnIndex === 1) {
+        notifyFirstSpawn?.();
+      }
+      let resolveExit: ((value: RunExit) => void) | undefined;
+      const exited = new Promise<RunExit>((resolve) => {
+        resolveExit = resolve;
+      });
+      return {
+        runId: `initial-fork-fallback-${spawnIndex}`,
+        pid: 3500 + spawnIndex,
+        startedAtMs: Date.now(),
+        stdin: {
+          write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
+            const sessionId =
+              spawnIndex === 1 ? "initial-fork-successor" : "fresh-after-initial-fork-stall";
+            input.onStdout?.(
+              [
+                JSON.stringify({ type: "system", subtype: "init", session_id: sessionId }),
+                ...(spawnIndex === 1
+                  ? []
+                  : [
+                      JSON.stringify({
+                        type: "result",
+                        session_id: sessionId,
+                        result: "initial fork fallback ok",
+                      }),
+                    ]),
+              ].join("\n") + "\n",
+            );
+            cb?.();
+          }),
+          end: vi.fn(),
+        },
+        wait: vi.fn(() => exited),
+        cancel: vi.fn(() =>
+          resolveExit?.({
+            reason: "manual-cancel",
+            exitCode: null,
+            exitSignal: null,
+            durationMs: 1,
+            stdout: "",
+            stderr: "",
+            timedOut: false,
+            noOutputTimedOut: false,
+          }),
+        ),
+      };
+    });
+
+    const backend = {
+      command: "claude",
+      args: ["-p", "--output-format", "stream-json"],
+      resumeArgs: ["-p", "--resume", "{sessionId}", "--output-format", "stream-json"],
+      forkArg: "--fork-session",
+      resumeAtArg: "--resume-session-at",
+      output: "jsonl" as const,
+      input: "stdin" as const,
+      modelArg: "--model",
+      sessionArgs: ["--session-id", "{sessionId}"],
+      sessionMode: "always" as const,
+      liveSession: "claude-stdio" as const,
+      reliability: {
+        watchdog: {
+          resume: { noOutputTimeoutMs: 1_000, minMs: 1_000, maxMs: 1_000 },
+          fresh: { noOutputTimeoutMs: 1_000, minMs: 1_000, maxMs: 1_000 },
+        },
+      },
+      serialize: true,
+    };
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:initial-fork-fallback",
+      runId: "run-initial-fork-fallback",
+      cliSessionId: "initial-fork-parent",
+      provider: "claude-cli",
+      model: "opus",
+      openClawHistoryPrompt: CLI_RESEED_PROMPT,
+    });
+    context.preparedBackend.backend = backend;
+    context.backendResolved.config = backend;
+    context.params.cliSessionBinding = {
+      sessionId: "initial-fork-parent",
+      resumeCheckpointId: "assistant-before-initial-fork",
+      forkNextResume: true,
+    };
+    const claimFork = vi.fn(async () => true);
+    const persistForkSuccessor = vi.fn(async () => {});
+    const restoreFork = vi.fn(async () => {});
+    const clearBeforeRetry = vi.fn(async () => true);
+
+    const resultPromise = runPreparedCliAgent({
+      ...context,
+      params: {
+        ...context.params,
+        timeoutMs: 5_000,
+        forkCliSessionOnResume: true,
+        claimCliSessionFork: claimFork,
+        persistCliSessionForkSuccessor: persistForkSuccessor,
+        restoreCliSessionFork: restoreFork,
+        onBeforeFreshCliSessionRetry: clearBeforeRetry,
+      },
+    });
+    await firstSpawned;
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await resultPromise;
+
+    expect(result.payloads).toEqual([{ text: "initial fork fallback ok" }]);
+    expect(result.meta.finalPromptText).toContain("User: earlier context");
+    expect(spawnedArgv).toHaveLength(2);
+    expect(spawnedArgv[0]).toEqual(
+      expect.arrayContaining([
+        "--resume",
+        "initial-fork-parent",
+        "--fork-session",
+        "--resume-session-at",
+        "assistant-before-initial-fork",
+      ]),
+    );
+    expect(spawnedArgv[1]).not.toContain("--resume");
+    expect(spawnedArgv[1]).not.toContain("--fork-session");
+    expect(claimFork).toHaveBeenCalledOnce();
+    expect(persistForkSuccessor).toHaveBeenCalledWith("initial-fork-successor");
+    expect(restoreFork).not.toHaveBeenCalled();
+    expect(clearBeforeRetry).toHaveBeenCalledWith({
+      provider: "claude-cli",
+      reason: "timeout",
+      sessionId: "initial-fork-successor",
+    });
   });
 
   it("does not fresh retry a no-output timeout after CLI diagnostic output", async () => {
