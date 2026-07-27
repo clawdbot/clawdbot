@@ -242,7 +242,14 @@ async function handleTranscriptUpdateBroadcast(
     // current transcript line count for cursor-compatible live history.
     const updateStorePath = targetStorePath ?? compatibleLegacyMarker?.storePath;
     const fallbackTarget = updateStorePath
-      ? undefined
+      ? {
+          entry: loadAccessorSessionEntryReadOnly({
+            agentId: storageAgentId ?? routingAgentId,
+            sessionKey,
+            storePath: updateStorePath,
+          }),
+          storePath: updateStorePath,
+        }
       : loadSessionEntryReadOnly(sessionKey, { agentId: routingAgentId });
     const entry = fallbackTarget?.entry;
     const messageSessionId =
