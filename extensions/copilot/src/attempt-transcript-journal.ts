@@ -235,7 +235,7 @@ export function createAttemptTranscriptJournal(params: {
 
   const barrier = async (boundary: string) => {
     await drainQueue();
-    if (!firstFailure && !pendingTools) {
+    if (!firstFailure) {
       // Give an already-delivered SDK event one microtask turn to reach the
       // bridge, then re-drain without another yield before returning.
       await Promise.resolve();

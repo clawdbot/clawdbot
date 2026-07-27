@@ -179,6 +179,37 @@ describe("Copilot attempt transcript journal", () => {
     ]);
   });
 
+  it("gives a queued tool completion one grace turn before failing the barrier", async () => {
+    const { journal, session } = await createFixture();
+    await journal.persistInitialUser();
+    session.emit(event("user.message", "initial-user", { content: "inspect" }));
+    session.emit(
+      event("assistant.message", "assistant-tools", {
+        content: "checking",
+        messageId: "assistant-tools",
+        toolRequests: [{ arguments: {}, name: "read", toolCallId: "call-1" }],
+      }),
+    );
+
+    const waiting = journal.barrier("queued tool result");
+    queueMicrotask(() => {
+      session.emit(
+        event("tool.execution_complete", "tool-result", {
+          result: { content: "done" },
+          success: true,
+          toolCallId: "call-1",
+        }),
+      );
+    });
+    await waiting;
+
+    expect(journal.snapshot().messagesSnapshot.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+    ]);
+  });
+
   it("replaces the originally staged user when async resolution changes it", async () => {
     const { journal, recorder } = await createFixture();
     recorder.resolveMessage.mockResolvedValue({

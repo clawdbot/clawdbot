@@ -607,6 +607,7 @@ export async function runCopilotExecution(context: {
     input,
     lastToolError,
     messages,
+    nativeSessionHistoryUnvalidated: !nativeSessionCreatedFresh,
     transcriptJournal,
     modelRef,
     now,

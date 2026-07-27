@@ -793,6 +793,7 @@ describe("runCopilotAttempt", () => {
     );
 
     expect(result.terminal).toEqual({ kind: "ok" });
+    expect(result.replayMetadata.replaySafe).toBe(false);
     await vi.advanceTimersByTimeAsync(180_000);
 
     expect(sdk.sessions[0]?.disconnect).toHaveBeenCalledTimes(1);
