@@ -210,7 +210,7 @@ const BROWSER_WEBSOCKET_SECURITY_ERROR_CODE = "BROWSER_WEBSOCKET_SECURITY_ERROR"
 const SESSION_PULL_REQUESTS_RETRY_BASE_MS = 30_000;
 const SESSION_PULL_REQUESTS_RETRY_MAX_MS = 5 * 60_000;
 
-export type GatewaySessionPullRequestsParams = {
+type GatewaySessionPullRequestsParams = {
   sessionKey: string;
   agentId?: string;
   refresh?: boolean;

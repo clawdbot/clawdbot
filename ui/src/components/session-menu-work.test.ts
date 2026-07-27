@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ControlUiSessionPullRequest } from "../../../src/gateway/control-ui-contract.js";
+import type {
+  ControlUiSessionPullRequest,
+  ControlUiSessionPullRequests,
+} from "../../../src/gateway/control-ui-contract.js";
 import {
   fetchSessionMenuWork,
   fetchSessionPullRequestIndicatorState,
@@ -18,14 +21,18 @@ function pullRequest(overrides: Partial<ControlUiSessionPullRequest>): ControlUi
   };
 }
 
-function sessionMenuClient(request: ReturnType<typeof vi.fn>) {
+function sessionMenuClient(request: (method: string, params: unknown) => Promise<unknown>) {
   return {
     request: request as never,
     requestSessionPullRequests: (params: {
       sessionKey: string;
       agentId?: string;
       refresh?: boolean;
-    }) => request("controlUi.sessionPullRequests", params),
+    }) =>
+      request(
+        "controlUi.sessionPullRequests",
+        params,
+      ) as Promise<ControlUiSessionPullRequests | null>,
   };
 }
 

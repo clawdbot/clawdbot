@@ -34,7 +34,7 @@ describe("SessionPullRequestIndicatorsController", () => {
     } as SidebarRecentSession;
     let state: "open" | "merged" = "open";
     let rateLimited = false;
-    const request = vi.fn(() =>
+    const request = vi.fn((_method: string, _params: unknown) =>
       Promise.resolve({
         pullRequests: rateLimited
           ? []
