@@ -207,13 +207,11 @@ describe("legacy MCP server config migrate", () => {
       command: "example-mcp",
       cwd: "/node-legacy",
     });
-    expect(res.changes).toEqual(
-      expect.arrayContaining([
-        "Canonicalized legacy aliases in mcp.servers.legacy.",
-        "Canonicalized legacy aliases in mcp.servers.canonical.",
-        "Canonicalized legacy aliases in nodeHost.mcp.servers.legacy.",
-      ]),
-    );
+    expect(res.changes).toEqual([
+      "Canonicalized legacy aliases in mcp.servers.legacy.",
+      "Canonicalized legacy aliases in mcp.servers.canonical.",
+      "Canonicalized legacy aliases in nodeHost.mcp.servers.legacy.",
+    ]);
     expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
   });
 });

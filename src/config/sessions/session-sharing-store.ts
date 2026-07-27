@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -11,7 +10,6 @@ import {
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
-import { ensureOpenClawAgentSessionSharingSchemaInTransaction } from "../../state/openclaw-agent-session-sharing-schema.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 
@@ -23,23 +21,10 @@ type SessionMember = {
   addedAt: number;
 };
 
-const ensuredDatabases = new WeakSet<DatabaseSync>();
 const SESSION_MEMBERSHIP_QUERY_CHUNK_SIZE = 400;
 
 function resolveDatabaseOptions(scope: SessionAccessScope): OpenClawAgentDatabaseOptions {
   return toDatabaseOptions(resolveSqliteScope(scope));
-}
-
-function ensureSessionSharingSchema(options: OpenClawAgentDatabaseOptions): OpenClawAgentDatabase {
-  const database = openOpenClawAgentDatabase(options);
-  if (ensuredDatabases.has(database.db)) {
-    return database;
-  }
-  runOpenClawAgentWriteTransaction((transactionDatabase) => {
-    ensureOpenClawAgentSessionSharingSchemaInTransaction(transactionDatabase.db);
-  }, options);
-  ensuredDatabases.add(database.db);
-  return database;
 }
 
 function getSessionMemberKysely(database: OpenClawAgentDatabase) {
@@ -47,7 +32,7 @@ function getSessionMemberKysely(database: OpenClawAgentDatabase) {
 }
 
 export function listSessionMembers(scope: SessionAccessScope): SessionMember[] {
-  const database = ensureSessionSharingSchema(resolveDatabaseOptions(scope));
+  const database = openOpenClawAgentDatabase(resolveDatabaseOptions(scope));
   const db = getSessionMemberKysely(database);
   return executeSqliteQuerySync(
     database.db,
@@ -73,7 +58,7 @@ export function listSessionMembershipKeys(
   if (!normalizedIdentityId || normalizedSessionKeys.length === 0) {
     return new Set();
   }
-  const database = ensureSessionSharingSchema(resolveDatabaseOptions(scope));
+  const database = openOpenClawAgentDatabase(resolveDatabaseOptions(scope));
   const db = getSessionMemberKysely(database);
   const memberships = new Set<string>();
   for (
@@ -102,7 +87,7 @@ export function isSessionMember(scope: SessionAccessScope, identityId: string): 
   if (!normalizedIdentityId) {
     return false;
   }
-  const database = ensureSessionSharingSchema(resolveDatabaseOptions(scope));
+  const database = openOpenClawAgentDatabase(resolveDatabaseOptions(scope));
   const db = getSessionMemberKysely(database);
   return Boolean(
     executeSqliteQueryTakeFirstSync(
@@ -160,7 +145,6 @@ export function addSessionMember(
     throw new Error("session member identity and actor are required");
   }
   const options = resolveDatabaseOptions(scope);
-  ensureSessionSharingSchema(options);
   const addedAt = params.addedAt ?? Date.now();
   const inserted = runOpenClawAgentWriteTransaction((database) => {
     assertAuthorizedSessionInstance(
@@ -197,7 +181,6 @@ export function removeSessionMember(
     return null;
   }
   const options = resolveDatabaseOptions(scope);
-  ensureSessionSharingSchema(options);
   return runOpenClawAgentWriteTransaction((database) => {
     assertAuthorizedSessionInstance(
       database,

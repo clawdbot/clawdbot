@@ -83,6 +83,9 @@ function preserveNonAutoModelOverride(target: SessionEntry, entry: SessionEntry)
     if (entry.modelOverrideSource !== undefined) {
       target.modelOverrideSource = entry.modelOverrideSource;
     }
+    if (entry.modelOverrideRouteResolution !== undefined) {
+      target.modelOverrideRouteResolution = entry.modelOverrideRouteResolution;
+    }
     // Runtime overrides qualify an explicit model selection; carrying one alone
     // would pin a fresh cron session to a stale engine after its model resets.
     if (preservedModelSelection && entry.agentRuntimeOverride !== undefined) {
@@ -151,7 +154,10 @@ export function resolveCronSession(params: {
   const store =
     params.store ??
     Object.fromEntries(
-      listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+      listSessionEntries({ agentId: params.agentId, storePath }).map(({ sessionKey, entry }) => [
+        sessionKey,
+        entry,
+      ]),
     );
   const sourceSessionKey = params.sourceSessionKey?.trim();
   const sourceSessionDiffers = Boolean(sourceSessionKey && sourceSessionKey !== params.sessionKey);

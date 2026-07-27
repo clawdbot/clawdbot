@@ -1,5 +1,5 @@
 // Tlon tests cover channel runtime behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authenticate } from "./urbit/auth.js";
 import { urbitFetch } from "./urbit/fetch.js";
 
@@ -34,6 +34,10 @@ function responseWithCancelableBody(
 }
 
 describe("probeTlonAccount", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
     vi.mocked(authenticate).mockReset();
     vi.mocked(urbitFetch).mockReset();
@@ -58,7 +62,10 @@ describe("probeTlonAccount", () => {
       refreshTimeout: vi.fn(),
     });
 
-    await expect(probeTlonAccount(account)).resolves.toEqual(expected);
+    await expect(probeTlonAccount(account)).resolves.toEqual({
+      ...expected,
+      elapsedMs: expect.any(Number),
+    });
 
     expect(cancelBody).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
@@ -82,9 +89,22 @@ describe("probeTlonAccount", () => {
       refreshTimeout: vi.fn(),
     });
 
-    await expect(probeTlonAccount(account)).resolves.toEqual({ ok: true });
+    await expect(probeTlonAccount(account)).resolves.toEqual({
+      ok: true,
+      elapsedMs: expect.any(Number),
+    });
     expect(cancel).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
     expect(events).toEqual(["cancel", "release"]);
+  });
+
+  it("honors the status adapter timeout", async () => {
+    vi.useFakeTimers();
+    vi.mocked(authenticate).mockReturnValueOnce(new Promise(() => {}));
+
+    const pending = probeTlonAccount(account, 50);
+    await vi.advanceTimersByTimeAsync(50);
+
+    await expect(pending).resolves.toEqual({ ok: false, error: "timeout", elapsedMs: 50 });
   });
 });

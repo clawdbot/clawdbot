@@ -6,7 +6,6 @@ import {
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateChatHistoryParams,
   validateChatMetadataParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -17,6 +16,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { modelCatalogBrowseRequiresFullDiscovery } from "../../agents/model-catalog-browse.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import { resolveSwarmConfig } from "../../agents/swarm-config.js";
 import { hashRuntimeConfigValue } from "../../config/runtime-snapshot.js";
 import {
   isSessionTranscriptProjectionUnavailableError,
@@ -69,12 +69,14 @@ import type {
   GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
 } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 type ChatHistoryMethod = "chat.history" | "chat.startup";
 
 type ChatMetadataResult = {
   commands?: unknown[];
   models?: unknown[];
+  swarmEnabled: boolean;
 };
 
 function runtimeConfigsMatch(left: OpenClawConfig, right: OpenClawConfig): boolean {
@@ -93,15 +95,7 @@ async function handleChatMetadataRequest({
   respond,
   context,
 }: GatewayRequestHandlerOptions): Promise<void> {
-  if (!validateChatMetadataParams(params)) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `invalid chat.metadata params: ${formatValidationErrors(validateChatMetadataParams.errors)}`,
-      ),
-    );
+  if (!assertValidParams(params, validateChatMetadataParams, "chat.metadata", respond)) {
     return;
   }
   const metadataParams = params;
@@ -156,7 +150,11 @@ async function buildChatMetadataResult(params: {
       }),
     ),
   ]);
-  return { ...models, ...commands };
+  return {
+    ...models,
+    ...commands,
+    swarmEnabled: resolveSwarmConfig(params.cfg, params.agentId).enabled,
+  };
 }
 
 async function buildChatStartupMetadataResult(params: {
@@ -183,7 +181,7 @@ async function buildChatStartupMetadataResult(params: {
     ) {
       return undefined;
     }
-    return await buildModelsListResult({
+    const models = await buildModelsListResult({
       context: params.context,
       agentId: params.agentId,
       params: { view: "configured" },
@@ -195,6 +193,10 @@ async function buildChatStartupMetadataResult(params: {
       preloadedOnly: true,
       ...(params.catalogProjector ? { catalogProjector: params.catalogProjector } : {}),
     });
+    return {
+      ...models,
+      swarmEnabled: resolveSwarmConfig(params.cfg, params.agentId).enabled,
+    };
   } catch (err) {
     params.context.logGateway.debug(
       `chat.startup continuing without metadata: ${formatErrorMessage(err)}`,
@@ -323,15 +325,7 @@ async function handleChatHistoryRequest({
   includeAgentsList?: boolean;
   includeMetadata?: boolean;
 }) {
-  if (!validateChatHistoryParams(params)) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `invalid ${method} params: ${formatValidationErrors(validateChatHistoryParams.errors)}`,
-      ),
-    );
+  if (!assertValidParams(params, validateChatHistoryParams, method, respond)) {
     return;
   }
   const {

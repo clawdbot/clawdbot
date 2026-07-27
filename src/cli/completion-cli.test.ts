@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { describe, expect, it } from "vitest";
-import { getCompletionScript } from "./completion-cli.js";
+import { getCompletionScript, registerCompletionCli } from "./completion-cli.js";
 
 function createCompletionProgram(): Command {
   const program = new Command();
@@ -32,6 +32,38 @@ function createCompletionProgram(): Command {
   sessions.command("cleanup").description("Clean sessions").option("--dry-run", "Preview cleanup");
 
   return program;
+}
+
+function createDocumentedCompletionProgram(): Command {
+  const program = createCompletionProgram();
+  registerCompletionCli(program);
+  return program;
+}
+
+function runGeneratedBashCompletion(program: Command, words: readonly string[]): string[] {
+  const script = getCompletionScript("bash", program);
+  const result = spawnSync(
+    "bash",
+    [
+      "--noprofile",
+      "--norc",
+      "-c",
+      `${script}
+COMP_WORDS=(${words.map((word) => JSON.stringify(word)).join(" ")})
+COMP_CWORD=${words.length - 1}
+_openclaw_completion
+printf '%s\\n' "\${COMPREPLY[@]}"
+`,
+    ],
+    { encoding: "utf8" },
+  );
+
+  if (result.error) {
+    throw result.error;
+  }
+  expect(result.stderr).toBe("");
+  expect(result.status).toBe(0);
+  return result.stdout.split("\n").filter(Boolean);
 }
 
 describe("completion-cli", () => {
@@ -185,6 +217,82 @@ describe("completion-cli", () => {
 
     expect(script).toContain("--token");
     expect(script).not.toContain("-t,");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "completes both root short flags and their long aliases in real Bash",
+    () => {
+      const completions = runGeneratedBashCompletion(createDocumentedCompletionProgram(), [
+        "openclaw",
+        "-",
+      ]);
+
+      expect(completions).toEqual(expect.arrayContaining(["-v", "--verbose", "--status-json"]));
+      expect(completions.some((flag) => flag.endsWith(","))).toBe(false);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "completes every documented completion short flag in real Bash",
+    () => {
+      const completions = runGeneratedBashCompletion(createDocumentedCompletionProgram(), [
+        "openclaw",
+        "completion",
+        "-",
+      ]);
+
+      expect(completions).toEqual(
+        expect.arrayContaining([
+          "-s",
+          "--shell",
+          "-i",
+          "--install",
+          "-y",
+          "--yes",
+          "--write-state",
+        ]),
+      );
+      expect(completions.some((flag) => flag.endsWith(","))).toBe(false);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "completes both nested value-taking flag aliases in real Bash",
+    () => {
+      const completions = runGeneratedBashCompletion(createDocumentedCompletionProgram(), [
+        "openclaw",
+        "gateway",
+        "-",
+      ]);
+
+      expect(completions).toEqual(expect.arrayContaining(["-t", "--token", "--force"]));
+      expect(completions.some((flag) => flag.endsWith(","))).toBe(false);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "filters short and long aliases independently in real Bash",
+    () => {
+      const program = createDocumentedCompletionProgram();
+
+      expect(runGeneratedBashCompletion(program, ["openclaw", "completion", "-s"])).toEqual(["-s"]);
+      expect(runGeneratedBashCompletion(program, ["openclaw", "completion", "--s"])).toEqual([
+        "--shell",
+      ]);
+    },
+  );
+
+  it("preserves documented short and long completion flags in Fish and Zsh", () => {
+    const program = createDocumentedCompletionProgram();
+    const fishScript = getCompletionScript("fish", program);
+    const zshScript = getCompletionScript("zsh", program);
+
+    expect(fishScript).toContain(" -s s -l shell ");
+    expect(fishScript).toContain(" -s i -l install ");
+    expect(fishScript).toContain(" -s y -l yes ");
+    expect(zshScript).toContain("{--shell,-s}");
+    expect(zshScript).toContain("{--install,-i}");
+    expect(zshScript).toContain("{--yes,-y}");
   });
 
   it("generates valid Bash completion without subcommands", () => {

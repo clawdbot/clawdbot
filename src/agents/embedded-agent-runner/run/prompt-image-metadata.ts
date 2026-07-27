@@ -1,4 +1,3 @@
-import { readPersistedMediaFacts, type MediaFact } from "../../../media/media-facts.js";
 import type { AgentMessage } from "../../runtime/index.js";
 
 export type ImageFactIndex = number | null;
@@ -64,10 +63,6 @@ export function readPersistedImageBlockFactIndexes(
   return value.map((entry) =>
     typeof entry === "number" && Number.isSafeInteger(entry) && entry >= 0 ? entry : null,
   );
-}
-
-export function readPersistedPromptMediaFacts(message: AgentMessage): MediaFact[] | undefined {
-  return readPersistedMediaFacts(message);
 }
 
 export function readPersistedMediaImageLayout(message: AgentMessage): MediaImageLayout | undefined {

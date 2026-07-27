@@ -9,7 +9,7 @@ import {
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
-import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
+import { isBenignCompactionSkipResult } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
@@ -220,18 +220,6 @@ function resolveEffectivePromptTokens(
   return base + output + estimate;
 }
 
-function isPreflightCompactionSkipReason(reason?: string): boolean {
-  const classification = classifyCompactionReason(reason);
-  // Preflight compaction is a guardrail, not a hard dependency. These classes
-  // mean the context engine found nothing useful to compact, so the reply should
-  // continue instead of surfacing a generic user-facing failure.
-  return (
-    classification === "below_threshold" ||
-    classification === "no_compactable_entries" ||
-    classification === "already_compacted_recently"
-  );
-}
-
 function resolveMemoryFlushModelFallbackOptions(
   run: FollowupRun["run"],
   model?: string,
@@ -253,6 +241,7 @@ function resolveMemoryFlushModelFallbackOptions(
         ...options,
         provider: overrideProvider,
         model: overrideModel,
+        requestedRouteResolution: "raw" as const,
         fallbacksOverride: [],
       };
     }
@@ -260,6 +249,7 @@ function resolveMemoryFlushModelFallbackOptions(
   return {
     ...options,
     model: override,
+    requestedRouteResolution: "raw" as const,
     fallbacksOverride: [],
   };
 }
@@ -410,7 +400,7 @@ function resolveSessionLogPath(
   sessionId?: string,
   sessionEntry?: SessionEntry,
   sessionKey?: string,
-  opts?: { storePath?: string },
+  opts?: { agentId?: string; storePath?: string },
 ): string | undefined {
   if (!sessionId) {
     return undefined;
@@ -424,7 +414,9 @@ function resolveSessionLogPath(
     if (parseSqliteSessionFileMarker(sessionFile)) {
       return sessionFile;
     }
-    const agentId = resolveAgentIdFromSessionKey(sessionKey);
+    const agentId =
+      opts?.agentId ??
+      (sessionKey?.startsWith("agent:") ? resolveAgentIdFromSessionKey(sessionKey) : undefined);
     if (!sessionFile && agentId && opts?.storePath) {
       return formatSqliteSessionFileMarker({
         agentId,
@@ -511,7 +503,7 @@ async function readSessionLogSnapshot(params: {
   sessionId?: string;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
-  opts?: { storePath?: string };
+  opts?: { agentId?: string; storePath?: string };
   includeByteSize: boolean;
   includeUsage: boolean;
 }): Promise<SessionLogSnapshot> {
@@ -652,6 +644,7 @@ type TranscriptTokenEstimate = {
 };
 
 async function estimatePromptTokensFromSessionTranscript(params: {
+  agentId?: string;
   sessionId?: string;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
@@ -666,7 +659,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
       sessionId,
       sessionEntry: params.sessionEntry,
       sessionKey: params.sessionKey,
-      opts: { storePath: params.storePath },
+      opts: { agentId: params.agentId, storePath: params.storePath },
       includeByteSize: true,
       includeUsage: true,
     });
@@ -840,6 +833,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     typeof freshPersistedTokens === "number" && !freshNeedsOutputRead
       ? undefined
       : await estimatePromptTokensFromSessionTranscript({
+          agentId: params.followupRun.run.agentId,
           sessionId: entry.sessionId,
           sessionEntry: entry,
           sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
@@ -851,7 +845,7 @@ export async function runPreflightCompactionIfNeeded(params: {
           sessionId: entry.sessionId,
           sessionEntry: entry,
           sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
-          opts: { storePath: params.storePath },
+          opts: { agentId: params.followupRun.run.agentId, storePath: params.storePath },
           includeByteSize: true,
           includeUsage: false,
         })
@@ -954,7 +948,7 @@ export async function runPreflightCompactionIfNeeded(params: {
       entry.sessionId,
       entry,
       params.sessionKey ?? params.followupRun.run.sessionKey,
-      { storePath: params.storePath },
+      { agentId: params.followupRun.run.agentId, storePath: params.storePath },
     );
     if (!sessionFile) {
       await notifyTerminalCompaction("skipped");
@@ -1008,7 +1002,7 @@ export async function runPreflightCompactionIfNeeded(params: {
 
     if (!result?.ok) {
       const reason = result?.reason ?? "not_compacted";
-      if (isPreflightCompactionSkipReason(reason)) {
+      if (result && isBenignCompactionSkipResult(result)) {
         await notifyTerminalCompaction("skipped");
         logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
         return entry ?? params.sessionEntry;
@@ -1020,7 +1014,7 @@ export async function runPreflightCompactionIfNeeded(params: {
 
     if (!result.compacted) {
       const reason = normalizeOptionalString(result.reason) ?? "not_compacted";
-      if (isPreflightCompactionSkipReason(reason)) {
+      if (isBenignCompactionSkipResult(result)) {
         await notifyTerminalCompaction("skipped");
         logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
         return entry ?? params.sessionEntry;
@@ -1191,7 +1185,7 @@ export async function runMemoryFlushIfNeeded(params: {
         sessionId: params.followupRun.run.sessionId,
         sessionEntry: entry,
         sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
-        opts: { storePath: params.storePath },
+        opts: { agentId: params.followupRun.run.agentId, storePath: params.storePath },
         includeByteSize: shouldCheckTranscriptSizeForForcedFlush,
         includeUsage: shouldReadTranscript,
       })
@@ -1353,6 +1347,7 @@ export async function runMemoryFlushIfNeeded(params: {
         cfg: selection.cfg,
         provider: selection.provider,
         model: selection.model,
+        requestedRouteResolution: selection.requestedRouteResolution,
         agentDir: selection.agentDir,
         fallbacksOverride: selection.fallbacksOverride,
       },

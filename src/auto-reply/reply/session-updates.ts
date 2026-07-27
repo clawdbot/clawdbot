@@ -1,7 +1,7 @@
 /** Session update helpers for skill snapshots, compaction, and lifecycle hooks. */
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveDefaultAgentId, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   type ExecPolicyOverrides,
   resolveNodeExecEligibility,
@@ -341,6 +341,7 @@ export async function incrementCompactionCount(params: {
         entry,
         sessionKey,
         storePath,
+        ...(cfg ? { defaultAgentId: resolveDefaultAgentId(cfg) } : {}),
         newSessionId,
       });
     updates.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;

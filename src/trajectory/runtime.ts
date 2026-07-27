@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactSecrets } from "../logging/redact.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
+import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import {
   TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES,
   TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
@@ -42,6 +43,7 @@ const TRAJECTORY_RUNTIME_DATA_STRING_MAX_CHARS = 32_768;
 const TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS = 64;
 const TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS = 64;
 const TRAJECTORY_RUNTIME_DATA_MAX_DEPTH = 6;
+const TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES = 4 * 1024;
 const TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS = ["usage", "promptCache"] as const;
 
 type TrajectoryRuntimeWriterDiagnostics = QueuedFileWriterDiagnostics;
@@ -182,10 +184,29 @@ function limitTrajectoryPayloadValue(
 }
 
 function sanitizeTrajectoryPayload(data: Record<string, unknown>): Record<string, unknown> {
-  return redactSecrets(sanitizeDiagnosticPayload(limitTrajectoryPayloadValue(data))) as Record<
-    string,
-    unknown
-  >;
+  const finalPromptText = data.finalPromptText;
+  const redactedFinalPromptText =
+    typeof finalPromptText === "string" ? (redactSecrets(finalPromptText) as string) : undefined;
+  const boundedData =
+    typeof finalPromptText === "string" &&
+    typeof redactedFinalPromptText === "string" &&
+    (Buffer.byteLength(finalPromptText, "utf8") > TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES ||
+      Buffer.byteLength(redactedFinalPromptText, "utf8") >
+        TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES)
+      ? {
+          ...data,
+          finalPromptText: truncateUtf8Prefix(
+            redactedFinalPromptText,
+            TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES,
+          ),
+          finalPromptTextOriginalLength: finalPromptText.length,
+        }
+      : typeof redactedFinalPromptText === "string"
+        ? { ...data, finalPromptText: redactedFinalPromptText }
+        : data;
+  return redactSecrets(
+    sanitizeDiagnosticPayload(limitTrajectoryPayloadValue(boundedData)),
+  ) as Record<string, unknown>;
 }
 
 function describeTrajectoryWriterFlushState(writer: TrajectoryRuntimeWriter): string | undefined {

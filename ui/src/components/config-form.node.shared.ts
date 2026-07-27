@@ -157,11 +157,14 @@ export function wrapSensitiveControl(
 }
 
 export function renderTags(tags: string[]): TemplateResult | typeof nothing {
-  if (tags.length === 0) {
+  const visibleTags = tags.filter((tag) => tag !== "advanced");
+  if (visibleTags.length === 0) {
     return nothing;
   }
   return html`
-    <div class="cfg-tags">${tags.map((tag) => html`<span class="cfg-tag">${tag}</span>`)}</div>
+    <div class="cfg-tags">
+      ${visibleTags.map((tag) => html`<span class="cfg-tag">${tag}</span>`)}
+    </div>
   `;
 }
 

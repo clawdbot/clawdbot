@@ -4,6 +4,7 @@ import { chromium, type Browser, type BrowserContext } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -81,7 +82,7 @@ describeControlUiE2e("session discussion toggle", () => {
       sessionKey,
     });
 
-    await page.goto(`${server.baseUrl}chat?session=${encodeURIComponent(sessionKey)}`);
+    await page.goto(controlUiSessionUrl(server.baseUrl, sessionKey));
     await gateway.waitForRequest("session.discussion.info");
 
     const showDiscussion = page.getByRole("button", { name: "Show discussion" });

@@ -13,7 +13,29 @@ import {
 } from "./backup-archive-publication.js";
 import { writeArchiveStreamToFile, type PreparedBackupArchive } from "./backup-create-stream.js";
 
+const { durabilityTestState } = vi.hoisted(() => ({
+  durabilityTestState: {
+    syncOutcome: undefined as
+      | { status: "synced" }
+      | { status: "unsupported"; code?: string }
+      | undefined,
+  },
+}));
+
+vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/fs-safe/durability")>();
+  return {
+    ...actual,
+    syncDirectory: async (...args: Parameters<typeof actual.syncDirectory>) =>
+      durabilityTestState.syncOutcome ?? (await actual.syncDirectory(...args)),
+  };
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+afterEach(() => {
+  durabilityTestState.syncOutcome = undefined;
+});
 
 async function createPublication(
   prefix: string,
@@ -184,6 +206,7 @@ describe("backup archive publication", () => {
         if (path.resolve(String(target)) === path.resolve(plan.canonicalParentPath)) {
           return {
             close: vi.fn().mockResolvedValue(undefined),
+            stat: vi.fn().mockResolvedValue(plan.parentReceipt.identity),
             sync: vi.fn().mockRejectedValue(Object.assign(new Error("sync failed"), { code })),
           } as unknown as FileHandle;
         }
@@ -198,6 +221,22 @@ describe("backup archive publication", () => {
       } finally {
         openSpy.mockRestore();
       }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "fails closed when the commit directory cannot be synchronized",
+    async () => {
+      const { outputPath, plan } = await createPublication("openclaw-backup-sync-unsupported-");
+      const prepared = await prepareArchive(plan);
+      const log = vi.fn();
+      durabilityTestState.syncOutcome = { status: "unsupported", code: "ENOTSUP" };
+
+      await expect(publishPreparedBackupArchive({ plan, prepared, log })).rejects.toThrow(
+        /does not support crash-durable directory synchronization \(ENOTSUP\)/iu,
+      );
+      await expect(fs.readFile(outputPath, "utf8")).resolves.toBe("complete archive");
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("concurrent replacement"));
     },
   );
 

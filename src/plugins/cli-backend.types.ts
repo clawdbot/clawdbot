@@ -34,6 +34,8 @@ export type CliBackendConfig = {
   resumeArgs?: string[];
   /** Argument appended to one explicitly forked resume invocation. */
   forkArg?: string;
+  /** Argument followed by an assistant checkpoint id to bound one resumed fork. */
+  resumeAtArg?: string;
   /** When to pass session ids. */
   sessionMode?: "always" | "existing" | "none";
   /** JSON fields to read session id from (in order). */

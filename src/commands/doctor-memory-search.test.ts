@@ -41,7 +41,7 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
 
 vi.mock("../agents/agent-scope.js", () => ({
   listAgentIds,
-  resolveDefaultAgentId,
+  tryResolveDefaultAgentId: resolveDefaultAgentId,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
 }));

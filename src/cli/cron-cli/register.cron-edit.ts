@@ -10,7 +10,13 @@ import { danger } from "../../globals.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
-import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
+import {
+  addGatewayClientOptions,
+  callGatewayFromCli,
+  type GatewayRpcOpts,
+} from "../gateway-rpc.js";
+import { parseDurationMs } from "../parse-duration.js";
+import { isUnknownCronGetMethodError, listCronJobsFromGateway } from "./list-jobs.js";
 import { resolveCronEditPayloadDeliveryPatch } from "./register.cron-edit-options.js";
 import {
   applyExistingCronSchedulePatch,
@@ -18,53 +24,11 @@ import {
   resolveCronEditScheduleRequest,
   validateStreamScheduleMetadata,
 } from "./schedule-options.js";
-import {
-  getCronChannelOptions,
-  parsePositiveCronDurationMs,
-  warnIfCronSchedulerDisabled,
-} from "./shared.js";
+import { getCronChannelOptions, warnIfCronSchedulerDisabled } from "./shared.js";
 import { normalizeCronSessionTargetOption } from "./thread-id-shared.js";
 import { readCronTriggerScript } from "./trigger-options.js";
 
-const CRON_EDIT_LOOKUP_PAGE_SIZE = 200;
-const CRON_EDIT_LOOKUP_MAX_PAGES = 50;
-
-function isUnknownCronGetMethodError(error: unknown): error is Error {
-  return (
-    error instanceof Error &&
-    error.name === "GatewayClientRequestError" &&
-    (error as Error & { gatewayCode?: unknown }).gatewayCode === "INVALID_REQUEST" &&
-    error.message.includes("unknown method: cron.get")
-  );
-}
-
-async function loadCronJobForEditViaList(
-  opts: Record<string, unknown>,
-  id: string,
-): Promise<CronJob | undefined> {
-  let offset = 0;
-  for (let page = 0; page < CRON_EDIT_LOOKUP_MAX_PAGES; page += 1) {
-    const listed = (await callGatewayFromCli("cron.list", opts, {
-      includeDisabled: true,
-      limit: CRON_EDIT_LOOKUP_PAGE_SIZE,
-      offset,
-    })) as { jobs?: CronJob[]; hasMore?: boolean; nextOffset?: number | null } | null;
-    const existing = (listed?.jobs ?? []).find((job) => job.id === id);
-    if (existing) {
-      return existing;
-    }
-    if (!listed?.hasMore || typeof listed.nextOffset !== "number") {
-      return undefined;
-    }
-    if (listed.nextOffset <= offset) {
-      throw new Error("cron.list pagination did not advance while looking up cron job");
-    }
-    offset = listed.nextOffset;
-  }
-  throw new Error("cron.list pagination exceeded maximum pages while looking up cron job");
-}
-
-async function readCronJobForEdit(opts: Record<string, unknown>, id: string): Promise<CronJob> {
+async function readCronJobForEdit(opts: GatewayRpcOpts, id: string): Promise<CronJob> {
   try {
     return (await callGatewayFromCli("cron.get", opts, { id })) as CronJob;
   } catch (error) {
@@ -73,7 +37,12 @@ async function readCronJobForEdit(opts: Record<string, unknown>, id: string): Pr
     }
     // Protocol-v4 gateways shipped before cron.get; keep remote edits working
     // without paying the paginated lookup cost on current gateways.
-    const existing = await loadCronJobForEditViaList(opts, id);
+    const inventory = await listCronJobsFromGateway(
+      opts,
+      { includeDisabled: true },
+      { allowLegacyUnversionedPagination: true },
+    );
+    const existing = inventory.jobs.find((job) => job.id === id);
     if (!existing) {
       throw new Error(`unknown cron job id: ${id}`, { cause: error });
     }
@@ -450,8 +419,10 @@ export function registerCronEditCommand(cron: Command) {
               failureAlert.to = to ? to : undefined;
             }
             if (hasFailureAlertCooldown) {
-              const cooldownMs = parsePositiveCronDurationMs(String(opts.failureAlertCooldown));
-              if (!cooldownMs && cooldownMs !== 0) {
+              let cooldownMs: number;
+              try {
+                cooldownMs = parseDurationMs(String(opts.failureAlertCooldown));
+              } catch {
                 throw new Error("Invalid --failure-alert-cooldown.");
               }
               failureAlert.cooldownMs = cooldownMs;

@@ -169,6 +169,7 @@ export async function applySqliteSessionEntryReplacements<T>(params: {
             activeSessionKey: params.activeSessionKey ?? "",
             archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
             skipMaintenance: params.skipMaintenance ?? true,
+            storePath: params.storePath,
           }),
         );
       },
@@ -269,6 +270,7 @@ export async function applySqliteSessionStoreProjection<T>(params: {
             activeSessionKey: params.activeSessionKey ?? "",
             archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
             skipMaintenance: params.skipMaintenance,
+            storePath: params.storePath,
           }),
         );
       },
@@ -451,6 +453,7 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
             ? { ...resolveMaintenanceConfig(), ...params.maintenanceOverride }
             : undefined,
           skipMaintenance: params.skipMaintenance,
+          storePath: params.storePath,
         }),
       );
     }, toDatabaseOptions(resolved));
@@ -550,6 +553,7 @@ export async function purgeSqliteDeletedAgentSessionEntries(
         applySqliteSessionEntryMaintenance(transactionDb, {
           activeSessionKey: "",
           archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
+          storePath: params.storePath,
         }),
       );
     }, toDatabaseOptions(resolved));

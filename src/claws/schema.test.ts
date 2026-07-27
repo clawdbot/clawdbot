@@ -741,6 +741,7 @@ describe("buildClawAddPlan", () => {
 
   it("plans one new agent, workspace, packages, MCP servers, and agent-pinned cron jobs", async () => {
     const { source, workspace } = await createPlanSource();
+    const canonicalWorkspace = join(await realpath(source.packageRoot), "new-workspace");
     const plan = await buildClawAddPlan({
       manifest: requireManifest(),
       openClawProfile: baseOpenClawProfile,
@@ -755,7 +756,11 @@ describe("buildClawAddPlan", () => {
       dryRun: true,
       mutationAllowed: false,
       planIntegrity: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
-      agent: { requestedId: "github-triage", finalId: "github-triage", workspace },
+      agent: {
+        requestedId: "github-triage",
+        finalId: "github-triage",
+        workspace: canonicalWorkspace,
+      },
       readiness: {
         ready: false,
         requirements: [{ kind: "environment", mcpServer: "github", name: "GITHUB_TOKEN" }],
@@ -922,7 +927,7 @@ describe("buildClawAddPlan", () => {
         context: { workspace: join(aliasParent, "workspace-canonical-agent") },
       });
 
-      const canonicalWorkspace = join(realParent, "workspace-canonical-agent");
+      const canonicalWorkspace = join(await realpath(realParent), "workspace-canonical-agent");
       expect(plan.agent.workspace).toBe(canonicalWorkspace);
       expect(plan.agent.config.workspace).toBe(canonicalWorkspace);
       expect(plan.actions.find((action) => action.kind === "workspace")?.target).toBe(

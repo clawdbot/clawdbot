@@ -9,6 +9,7 @@ import {
 } from "./accounts.js";
 import { msTeamsApprovalAuth } from "./approval-auth.js";
 import { msteamsPlugin } from "./channel.js";
+import { msteamsSetupPlugin } from "./channel.setup.js";
 
 const probeMSTeamsMock = vi.hoisted(() => vi.fn());
 
@@ -37,6 +38,23 @@ function createConfiguredMSTeamsCfg(): OpenClawConfig {
 describe("msteamsPlugin", () => {
   afterEach(() => {
     probeMSTeamsMock.mockReset();
+  });
+
+  it("shares account and metadata contracts with the lightweight setup plugin", () => {
+    expect(msteamsSetupPlugin.meta).toEqual(msteamsPlugin.meta);
+
+    for (const key of [
+      "listAccountIds",
+      "resolveAccount",
+      "defaultAccountId",
+      "setAccountEnabled",
+      "deleteAccount",
+      "resolveAllowFrom",
+      "formatAllowFrom",
+      "resolveDefaultTo",
+    ] as const) {
+      expect(msteamsSetupPlugin.config[key]).toBe(msteamsPlugin.config[key]);
+    }
   });
 
   it("exposes approval auth through approvalCapability", () => {

@@ -86,7 +86,7 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.controlUi.allowedOrigins": "https://control.example.com",
   "gateway.push.apns.relay.baseUrl": "https://ios-push-relay.openclaw.ai",
   "channels.mattermost.baseUrl": "https://chat.example.com",
-  "agents.list[].identity.avatar": "avatars/openclaw.png",
+  "agents.entries.*.identity.avatar": "avatars/openclaw.png",
 };
 
 const CHANNEL_NAMESPACE_PREFIX = "channels.";
@@ -201,7 +201,9 @@ export function collectMatchingSchemaPaths(
     paths.add(path);
   }
 
-  if (currentSchema instanceof z.ZodObject) {
+  if (currentSchema instanceof z.ZodPipe) {
+    collectMatchingSchemaPaths(currentSchema.out as unknown as z.ZodType, path, matchesPath, paths);
+  } else if (currentSchema instanceof z.ZodObject) {
     const shape = currentSchema.shape;
     for (const key in shape) {
       const nextPath = path ? `${path}.${key}` : key;
@@ -282,7 +284,9 @@ function mapSensitivePathsMut(schema: z.ZodType, path: string, hints: ConfigUiHi
     hints[path] = { ...hints[path], sensitive: true };
   }
 
-  if (currentSchema instanceof z.ZodObject) {
+  if (currentSchema instanceof z.ZodPipe) {
+    mapSensitivePathsMut(currentSchema.out as unknown as z.ZodType, path, hints);
+  } else if (currentSchema instanceof z.ZodObject) {
     const shape = currentSchema.shape;
     for (const key in shape) {
       const nextPath = path ? `${path}.${key}` : key;

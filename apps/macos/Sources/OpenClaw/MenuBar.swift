@@ -121,6 +121,7 @@ struct OpenClawApp: App {
                 }
                 .keyboardShortcut(",", modifiers: .command)
             }
+            DashboardGatewayCommands(dashboardManager: DashboardManager.shared)
             SidebarCommands()
             CommandMenu("Navigate") {
                 Button("Back") {
@@ -511,6 +512,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     func applicationDidFinishLaunching(_: Notification) {
+        #if DEBUG
+        if CommandLine.arguments.contains("--swarm-chat-fixture") {
+            AppActivationPolicy.apply(showDockIcon: true)
+            WebChatManager.shared.showSwarmFixture()
+            return
+        }
+        #endif
         let environment = ProcessInfo.processInfo.environment
         let launchPolicy = AppLaunchPresentationPolicy.current
         let hasReplacementHandoff = ApplicationRelocator.hasReplacementHandoffMetadata(

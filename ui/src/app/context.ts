@@ -69,6 +69,7 @@ export type ApplicationInitialUserMessage = {
 
 type InitialUserMessageHandoff = {
   message: ApplicationInitialUserMessage;
+  /** Logical Gateway client; per-transport hello objects rotate on reconnect. */
   owner: object;
   sessionKey: string;
 };

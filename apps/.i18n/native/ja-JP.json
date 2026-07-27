@@ -21479,6 +21479,16 @@
       "translated": "次へ"
     },
     {
+      "id": "native.apple.3db546546fbaf38e",
+      "source": "OpenClaw is preparing a local model.",
+      "translated": "OpenClaw はローカルモデルを準備しています。"
+    },
+    {
+      "id": "native.apple.c5992a23c991f948",
+      "source": "OpenClaw is completing provider sign-in.",
+      "translated": "OpenClaw はプロバイダーのサインインを完了しています。"
+    },
+    {
       "id": "native.apple.0f3c1c6f0672bed7",
       "source": "The Gateway setup request failed.",
       "translated": "Gatewayのセットアップリクエストが失敗しました。"
@@ -21614,6 +21624,21 @@
       "translated": "再確認"
     },
     {
+      "id": "native.apple.82148c7c60e4fb74",
+      "source": "Set up a local model",
+      "translated": "ローカルモデルをセットアップ"
+    },
+    {
+      "id": "native.apple.506a932536c642c2",
+      "source": "Download or prepare a local model on this Gateway.",
+      "translated": "この Gateway でローカルモデルをダウンロードまたは準備します。"
+    },
+    {
+      "id": "native.apple.d31411a9f3c68c33",
+      "source": "Set up / Download model",
+      "translated": "モデルのセットアップ / ダウンロード"
+    },
+    {
       "id": "native.apple.7fc409b6aaa6d3b9",
       "source": "Sign in with a provider",
       "translated": "プロバイダーでサインイン"
@@ -21644,6 +21669,11 @@
       "translated": "サインイン"
     },
     {
+      "id": "native.apple.b62dfd708d5cfb14",
+      "source": "The model is downloaded and prepared on this Gateway.",
+      "translated": "モデルはこの Gateway でダウンロードされ、準備されています。"
+    },
+    {
       "id": "native.apple.869fe436119bb8a6",
       "source": "Credentials stay on this Gateway and are saved only after the live test succeeds.",
       "translated": "認証情報はこの Gateway 上に留まり、ライブテストが成功した後にのみ保存されます。"
@@ -21654,9 +21684,19 @@
       "translated": "サインインページを開く…"
     },
     {
+      "id": "native.apple.91cd595c858a6ea7",
+      "source": "Starting local model setup…",
+      "translated": "ローカルモデルのセットアップを開始しています…"
+    },
+    {
       "id": "native.apple.bb3352787887c424",
       "source": "Starting secure sign-in…",
       "translated": "安全なサインインを開始しています…"
+    },
+    {
+      "id": "native.apple.ba9a46f1e6c4d477",
+      "source": "Model setup didn’t complete",
+      "translated": "モデルのセットアップが完了しませんでした"
     },
     {
       "id": "native.apple.d7519516740bfc93",

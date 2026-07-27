@@ -39,7 +39,11 @@ import {
   type ResolvedMSTeamsAccount,
 } from "./accounts.js";
 import { msTeamsApprovalAuth } from "./approval-auth.js";
-import { collectMSTeamsSecurityWarnings, msteamsRuntimeConfigAdapter } from "./channel-config.js";
+import {
+  collectMSTeamsSecurityWarnings,
+  msteamsConfigAdapter,
+  msteamsMeta,
+} from "./channel-config.js";
 import { describeMSTeamsMessageTool } from "./channel-message-tool.js";
 import { MSTeamsChannelConfigSchema } from "./config-schema.js";
 import { collectMSTeamsMutableAllowlistWarnings } from "./doctor.js";
@@ -64,17 +68,6 @@ import { resolveMSTeamsOutboundSessionRoute } from "./session-route.js";
 import { msteamsSetupAdapter, msteamsSetupContract } from "./setup-core.js";
 import { msteamsSetupWizard } from "./setup-surface.js";
 import { resolveMSTeamsCredentials } from "./token.js";
-
-const meta = {
-  id: "msteams",
-  label: "Microsoft Teams",
-  selectionLabel: "Microsoft Teams (Bot Framework)",
-  docsPath: "/channels/msteams",
-  docsLabel: "msteams",
-  blurb: "Teams SDK; enterprise support.",
-  aliases: ["teams"],
-  order: 60,
-} as const;
 
 const TEAMS_GRAPH_PERMISSION_HINTS: Record<string, string> = {
   "ChannelMessage.Read.All": "channel history",
@@ -437,8 +430,8 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
     base: {
       id: "msteams",
       meta: {
-        ...meta,
-        aliases: [...meta.aliases],
+        ...msteamsMeta,
+        aliases: [...msteamsMeta.aliases],
       },
       setupWizard: msteamsSetupWizard,
       capabilities: {
@@ -462,7 +455,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
       reload: { configPrefixes: ["channels.msteams"] },
       configSchema: MSTeamsChannelConfigSchema,
       config: {
-        ...msteamsRuntimeConfigAdapter,
+        ...msteamsConfigAdapter,
         isConfigured: (account) => account.configured,
         describeAccount: (account) =>
           describeAccountSnapshot({

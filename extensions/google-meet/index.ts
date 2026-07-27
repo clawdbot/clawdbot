@@ -7,6 +7,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
 import { createMeetingTranscriptSourceProvider } from "openclaw/plugin-sdk/transcripts";
 import { buildGoogleMeetCalendarDayWindow, listGoogleMeetCalendarEvents } from "./src/calendar.js";
+import { GOOGLE_MEET_CLI_DESCRIPTOR } from "./src/cli-output-mode.js";
 import {
   buildGoogleMeetPreflightReport,
   endGoogleMeetActiveConference,
@@ -628,13 +629,7 @@ export default definePluginEntry({
       },
       {
         commands: ["googlemeet"],
-        descriptors: [
-          {
-            name: "googlemeet",
-            description: "Join and manage Google Meet calls",
-            hasSubcommands: true,
-          },
-        ],
+        descriptors: [GOOGLE_MEET_CLI_DESCRIPTOR],
       },
     );
   },

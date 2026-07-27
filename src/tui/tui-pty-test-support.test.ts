@@ -16,6 +16,60 @@ describe("TUI PTY test support", () => {
     nodePtyMocks.spawn.mockReset();
   });
 
+  it("applies fixture-specific terminal dimensions", () => {
+    nodePtyMocks.spawn.mockReturnValue({
+      onData: vi.fn(() => ({ dispose: vi.fn() })),
+      onExit: vi.fn(() => ({ dispose: vi.fn() })),
+      write: vi.fn(),
+    } as unknown as IPty);
+
+    startPty("node", [], {
+      cwd: process.cwd(),
+      env: {
+        OPENCLAW_TUI_PTY_COLS: "72",
+        OPENCLAW_TUI_PTY_ROWS: "20",
+      },
+      exitTimeoutMs: 1_000,
+      outputTimeoutMs: 1_000,
+    });
+
+    expect(nodePtyMocks.spawn).toHaveBeenCalledWith(
+      "node",
+      [],
+      expect.objectContaining({
+        cols: 72,
+        rows: 20,
+      }),
+    );
+  });
+
+  it("falls back when fixture-specific terminal dimensions are invalid", () => {
+    nodePtyMocks.spawn.mockReturnValue({
+      onData: vi.fn(() => ({ dispose: vi.fn() })),
+      onExit: vi.fn(() => ({ dispose: vi.fn() })),
+      write: vi.fn(),
+    } as unknown as IPty);
+
+    startPty("node", [], {
+      cwd: process.cwd(),
+      env: {
+        OPENCLAW_TUI_PTY_COLS: "0",
+        OPENCLAW_TUI_PTY_ROWS: "not-a-number",
+      },
+      exitTimeoutMs: 1_000,
+      outputTimeoutMs: 1_000,
+    });
+
+    expect(nodePtyMocks.spawn).toHaveBeenCalledWith(
+      "node",
+      [],
+      expect.objectContaining({
+        cols: 100,
+        rows: 30,
+      }),
+    );
+  });
+
   it("waits for PTY exit before completing idempotent disposal", async () => {
     const order: string[] = [];
     let exitListener: ((event: { exitCode: number; signal?: number }) => void) | undefined;

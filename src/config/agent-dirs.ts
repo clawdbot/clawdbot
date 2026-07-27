@@ -2,8 +2,9 @@
 import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { listAgentEntries, resolveAgentConfig } from "../agents/agent-scope-config.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveStateDir } from "./paths.js";
 import type { OpenClawConfig } from "./types.js";
@@ -36,10 +37,11 @@ function canonicalizeAgentDir(agentDir: string): string {
 function collectReferencedAgentIds(cfg: OpenClawConfig): string[] {
   const ids = new Set<string>();
 
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents?.list : [];
-  const defaultAgentId =
-    agents.find((agent) => agent?.default)?.id ?? agents[0]?.id ?? DEFAULT_AGENT_ID;
-  ids.add(normalizeAgentId(defaultAgentId));
+  const agents = listAgentEntries(cfg);
+  const defaultAgentId = agents.find((agent) => agent?.default)?.id;
+  if (defaultAgentId) {
+    ids.add(normalizeAgentId(defaultAgentId));
+  }
 
   for (const entry of agents) {
     if (entry?.id) {
@@ -66,9 +68,7 @@ function resolveEffectiveAgentDir(
   deps?: { env?: NodeJS.ProcessEnv; homedir?: () => string },
 ): string {
   const id = normalizeAgentId(agentId);
-  const configured = Array.isArray(cfg.agents?.list)
-    ? cfg.agents?.list.find((agent) => normalizeAgentId(agent.id) === id)?.agentDir
-    : undefined;
+  const configured = resolveAgentConfig(cfg, id)?.agentDir;
   const trimmed = configured?.trim();
   if (trimmed) {
     return resolveUserPath(trimmed);

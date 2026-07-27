@@ -413,7 +413,6 @@ const cachedBundledPluginPublicSurfaceAliasMaps = new PluginLruCache<Record<stri
   MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
 );
 const PLUGIN_SDK_PACKAGE_NAMES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
-const CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH = "codex-native-task-runtime";
 const CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH = "codex-mcp-projection";
 const OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH = "ssrf-runtime-internal";
 const PRIVATE_QA_ONLY_PLUGIN_SDK_SUBPATHS = new Set([
@@ -452,10 +451,7 @@ const PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS: readonly PrivatePluginSdkSubpathOwner[]
     bundledPluginId: "codex",
     officialInstalledPackageName: "@openclaw/codex",
     allowPrivateQaCli: true,
-    subpaths: [
-      CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH,
-      CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
-    ],
+    subpaths: [CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH],
   },
   {
     bundledPluginId: "ollama",
@@ -1105,7 +1101,6 @@ function readPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
   );
   return [
     ...new Set([
-      CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH,
       CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
       OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH,
       ...(Array.isArray(parsed)

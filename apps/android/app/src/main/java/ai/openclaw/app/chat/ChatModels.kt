@@ -41,6 +41,18 @@ data class SessionBranch(
 
 data class SessionRewindResult(
   val editorText: String?,
+  val editorAttachments: List<SessionEditorAttachment>,
+)
+
+data class SessionForkResult(
+  val sessionKey: String,
+  val editorText: String?,
+  val editorAttachments: List<SessionEditorAttachment>,
+)
+
+data class SessionEditorAttachment(
+  val mimeType: String,
+  val data: String,
 )
 
 data class ChatTranscriptAnchorState(
@@ -171,6 +183,7 @@ data class ChatSessionEntry(
   val updatedAtMs: Long?,
   val ownerAgentId: String? = null,
   val displayName: String? = null,
+  val derivedTitle: String? = null,
   val label: String? = null,
   val category: String? = null,
   val pinned: Boolean? = null,
@@ -194,6 +207,14 @@ data class ChatSessionEntry(
   val hasActiveRun: Boolean? = null,
   val activeRunIds: List<String>? = null,
   val hasActiveRunMetadata: Boolean = hasActiveRun != null || activeRunIds != null,
+  val parentSessionKey: String? = null,
+  val spawnedBy: String? = null,
+  val hasActiveSubagentRun: Boolean? = null,
+  val subagentRunState: String? = null,
+  val swarmGroupId: String? = null,
+  val swarmPhase: String? = null,
+  val swarmPhaseRank: Int? = null,
+  val swarmLog: String? = null,
   val status: String? = null,
   val lastRunError: String? = null,
   val startedAt: Long? = null,

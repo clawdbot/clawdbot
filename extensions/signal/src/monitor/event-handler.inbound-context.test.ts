@@ -523,7 +523,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.BodyForCommands).toBe("summarize the release notes");
     expect(context.Body).toContain("summarize the release notes");
     expect(context.Body).not.toBe(context.BodyForAgent);
-    expect(context.UntrustedContext).toBeUndefined();
+    expect(context.ChannelPromptContext).toBeUndefined();
   });
 
   it("runs Telegram-parity Signal status reactions when explicitly enabled", async () => {

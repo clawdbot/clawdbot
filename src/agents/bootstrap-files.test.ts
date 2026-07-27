@@ -187,7 +187,6 @@ describe("resolveBootstrapFilesForRun", () => {
     expect(files.map((file) => path.relative(workspaceDir, file.path))).toEqual([
       "AGENTS.md",
       "SOUL.md",
-      "TOOLS.md",
       "IDENTITY.md",
       "USER.md",
       "BOOTSTRAP.md",
@@ -302,12 +301,11 @@ describe("resolveBootstrapFilesForRun", () => {
     expect(files.map((file) => file.path)).not.toContain(path.join(workspaceDir, "BOOTSTRAP.md"));
   });
 
-  it("keeps subagent sessions to project and tool bootstrap files", async () => {
+  it("keeps subagent sessions to AGENTS.md", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-subagent-");
     await Promise.all(
       [
         ["AGENTS.md", "project rules"],
-        ["TOOLS.md", "tool rules"],
         ["SOUL.md", "persona"],
         ["IDENTITY.md", "identity"],
         ["USER.md", "user profile"],
@@ -328,7 +326,7 @@ describe("resolveBootstrapFilesForRun", () => {
       sessionKey: "agent:main:subagent:worker",
     });
 
-    expect(files.map((file) => file.name)).toStrictEqual(["AGENTS.md", "TOOLS.md"]);
+    expect(files.map((file) => file.name)).toStrictEqual(["AGENTS.md"]);
   });
 
   it("keeps cron sessions on their existing minimal bootstrap files", async () => {
@@ -336,7 +334,6 @@ describe("resolveBootstrapFilesForRun", () => {
     await Promise.all(
       [
         ["AGENTS.md", "project rules"],
-        ["TOOLS.md", "tool rules"],
         ["SOUL.md", "persona"],
         ["IDENTITY.md", "identity"],
         ["USER.md", "user profile"],
@@ -360,7 +357,6 @@ describe("resolveBootstrapFilesForRun", () => {
     expect(files.map((file) => file.name)).toStrictEqual([
       "AGENTS.md",
       "SOUL.md",
-      "TOOLS.md",
       "IDENTITY.md",
       "USER.md",
     ]);

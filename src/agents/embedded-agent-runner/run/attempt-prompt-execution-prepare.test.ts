@@ -14,7 +14,8 @@ const hoisted = vi.hoisted(() => ({
 
 vi.mock("@openclaw/media-core/constants", () => ({
   MAX_IMAGE_BYTES: 1_234,
-  mediaKindFromMime: (mime: string) => (mime.startsWith("image/") ? "image" : "unknown"),
+  mediaKindFromMime: (mime?: string) =>
+    mime ? (mime.startsWith("image/") ? "image" : "unknown") : undefined,
 }));
 vi.mock("../../image-sanitization.js", () => ({
   resolveImageSanitizationLimits: hoisted.resolveImageSanitizationLimits,
@@ -181,12 +182,80 @@ describe("prepareEmbeddedAttemptPromptExecution", () => {
     expect(input.attempt.media).toBe(media);
   });
 
+  it.each([
+    {
+      name: "facts-only",
+      message: { __openclaw: { media: [{ path: "/tmp/fact.png", contentType: "image/png" }] } },
+      expectedPath: "/tmp/fact.png",
+    },
+    {
+      name: "both-equal",
+      message: {
+        MediaPath: "/tmp/equal.png",
+        __openclaw: { media: [{ path: "/tmp/equal.png", contentType: "image/png" }] },
+      },
+      expectedPath: "/tmp/equal.png",
+    },
+    {
+      name: "both-conflict",
+      message: {
+        MediaPath: "/tmp/legacy-conflict.png",
+        __openclaw: { media: [{ path: "/tmp/canonical.png", contentType: "image/png" }] },
+      },
+      expectedPath: "/tmp/canonical.png",
+    },
+    {
+      name: "sparse",
+      message: {
+        __openclaw: { media: [{}, { path: "/tmp/sparse.png", contentType: "image/png" }] },
+      },
+      expectedPath: "/tmp/sparse.png",
+      expectedIndex: 1,
+    },
+    {
+      name: "type-only",
+      message: { __openclaw: { media: [{ contentType: "image/png" }] } },
+      expectedPath: undefined,
+    },
+    {
+      name: "media-only",
+      message: {
+        role: "user",
+        content: "",
+        __openclaw: { media: [{ path: "/tmp/media-only.png", kind: "image" }] },
+      },
+      expectedPath: "/tmp/media-only.png",
+    },
+  ])("hydrates $name persisted rows through canonical media", async (testCase) => {
+    const base = createInput();
+    const persistedMessage = {
+      role: "user" as const,
+      content: "inspect",
+      ...testCase.message,
+    };
+    const input = createInput({
+      attempt: {
+        ...base.attempt,
+        userTurnTranscriptRecorder: {
+          message: persistedMessage,
+          resolveMessage: vi.fn(async () => persistedMessage),
+        } as unknown as NonNullable<PromptExecutionInput["attempt"]["userTurnTranscriptRecorder"]>,
+      },
+    });
+
+    await prepareEmbeddedAttemptPromptExecution(input);
+
+    const call = hoisted.detectAndLoadPromptImages.mock.calls.at(-1)?.[0];
+    const expectedIndex = "expectedIndex" in testCase ? (testCase.expectedIndex ?? 0) : 0;
+    expect(call?.media?.[expectedIndex]?.path).toBe(testCase.expectedPath);
+  });
+
   it("uses persisted facts and layout as the current-turn provenance authority", async () => {
     const base = createInput();
     const persistedMessage = {
       role: "user" as const,
       content: "compare",
-      MediaPaths: ["/tmp/inline.png", "/tmp/offloaded.png"],
+      MediaPaths: ["/tmp/legacy-inline.png", "/tmp/legacy-offloaded.png"],
       MediaTypes: ["image/png", "image/png"],
       __openclaw: {
         media: [

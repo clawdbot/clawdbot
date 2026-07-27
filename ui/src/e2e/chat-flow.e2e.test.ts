@@ -7,6 +7,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { SESSION_DRAG_MIME } from "../lib/sessions/drag.ts";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionPath,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -421,8 +423,8 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await unrelatedTarget.dispatchEvent("drop", unrelatedDrag);
       await expect.poll(() => panes.count()).toBe(2);
       await expect
-        .poll(() => new URL(page.url()).searchParams.get("session"))
-        .toBe("agent:main:session-a");
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath("agent:main:session-a"));
 
       // Start with no retained pane preview and target the visible header.
       const targetBox = await targetHeader.boundingBox();
@@ -450,8 +452,8 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         )
         .toContain("Session B");
       await expect
-        .poll(() => new URL(page.url()).searchParams.get("session"))
-        .toBe("agent:main:session-b");
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath("agent:main:session-b"));
     } finally {
       await closeBrowserContext(context);
     }
@@ -503,6 +505,84 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       const commandRequests = await waitForRequests(gateway, "chat.send", 2);
       const commandParams = requireRecord(commandRequests[1]?.params);
       expect(commandParams.message).toBe(spacedPairCommand);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("keeps a browser-local prompt before a clock-skewed Gateway reply", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, { historyMessages: [] });
+    const prompt = "verify clock-skewed chat order";
+    const partial = "The Gateway is replying from an earlier clock.";
+    const reply = "The Gateway reply stayed below its prompt.";
+    const appearsBefore = (lowerSelector: string, lowerText: string) =>
+      page.locator(".chat-thread-inner").evaluate(
+        (thread: Element, texts: { lowerSelector: string; lowerText: string; prompt: string }) => {
+          const findByText = (selector: string, text: string) =>
+            Array.from(thread.querySelectorAll(selector)).find((row) =>
+              (row.textContent ?? "").includes(text),
+            );
+          const promptRow = findByText(".chat-group.user", texts.prompt);
+          const lowerRow = findByText(texts.lowerSelector, texts.lowerText);
+          if (!promptRow || !lowerRow) {
+            return false;
+          }
+          return promptRow.getBoundingClientRect().top < lowerRow.getBoundingClientRect().top;
+        },
+        { lowerSelector, lowerText, prompt },
+      );
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await gateway.deferNext("chat.send");
+      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const runId = requireString(
+        requireRecord(sendRequest.params).idempotencyKey,
+        "chat send idempotency key",
+      );
+      const browserTimestamp = await page.evaluate(() => Date.now());
+      const gatewayTimestamp = browserTimestamp - 60_000;
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: partial,
+        message: {
+          content: [{ text: partial, type: "text" }],
+          role: "assistant",
+          timestamp: gatewayTimestamp,
+        },
+        runId,
+        sessionKey: "main",
+        state: "delta",
+      });
+      await page.locator(".chat-bubble.streaming", { hasText: partial }).waitFor({
+        timeout: 10_000,
+      });
+      expect(await appearsBefore(".chat-bubble.streaming", partial)).toBe(true);
+
+      await gateway.emitGatewayEvent("chat", {
+        message: {
+          content: [{ text: reply, type: "text" }],
+          role: "assistant",
+          timestamp: gatewayTimestamp,
+        },
+        runId,
+        sessionKey: "main",
+        state: "final",
+      });
+      await page.locator(".chat-group.assistant .chat-text", { hasText: reply }).waitFor({
+        timeout: 10_000,
+      });
+      expect(await appearsBefore(".chat-group.assistant", reply)).toBe(true);
+      await gateway.resolveDeferred("chat.send", { runId, status: "started" });
+      expect(await appearsBefore(".chat-group.assistant", reply)).toBe(true);
     } finally {
       await closeBrowserContext(context);
     }
@@ -624,7 +704,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}chat?session=main`);
+      await page.goto(controlUiSessionUrl(server.baseUrl, "main"));
       await page.getByText(historyText).waitFor({ timeout: 10_000 });
       await gateway.waitForRequest("chat.startup");
 
@@ -950,6 +1030,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
   });
 
   it("renders a canonical inbound image through the ticketed media route", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -989,8 +1070,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           id: "user-inbound-media-ref",
           role: "user",
           content: [{ type: "text", text: "🖼️ Attached image" }],
-          MediaPath: "media://inbound/telegram-photo.png",
-          MediaType: "image/png",
+          __openclaw: {
+            media: [{ path: "media://inbound/telegram-photo.png", contentType: "image/png" }],
+          },
           timestamp: Date.now(),
         },
       ],
@@ -999,7 +1081,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}chat`);
       await expect.poll(() => requestedMediaUrls.length, { timeout: 10_000 }).toBe(2);
-      const image = page.getByAltText("Attached image");
+      const image = page.locator("img.chat-message-image");
       await image.waitFor({ state: "visible", timeout: 10_000 });
       await expect
         .poll(() =>
@@ -1008,6 +1090,13 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           ),
         )
         .toBe(1);
+      if (artifactDir) {
+        await mkdir(artifactDir, { recursive: true });
+        await page.screenshot({
+          fullPage: true,
+          path: `${artifactDir}/canonical-inbound-image.png`,
+        });
+      }
     } finally {
       await closeBrowserContext(context);
     }
@@ -2158,7 +2247,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
       expect(await gateway.getRequests("agents.list")).toHaveLength(0);
-      expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
+      expect(await gateway.getRequests("chat.metadata")).toHaveLength(1);
       expect(await gateway.getRequests("commands.list")).toHaveLength(0);
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
 

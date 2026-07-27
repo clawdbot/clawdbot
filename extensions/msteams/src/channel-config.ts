@@ -15,6 +15,19 @@ import {
   type ResolvedMSTeamsAccount,
 } from "./accounts.js";
 
+export type { ResolvedMSTeamsAccount } from "./accounts.js";
+
+export const msteamsMeta = {
+  id: "msteams",
+  label: "Microsoft Teams",
+  selectionLabel: "Microsoft Teams (Bot Framework)",
+  docsPath: "/channels/msteams",
+  docsLabel: "msteams",
+  blurb: "Teams SDK; enterprise support.",
+  aliases: ["teams"],
+  order: 60,
+} as const;
+
 export const collectMSTeamsSecurityWarnings = createAllowlistProviderGroupPolicyWarningCollector<{
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -72,7 +85,7 @@ function deleteMSTeamsDefaultAccountIdentity(cfg: OpenClawConfig): OpenClawConfi
   };
 }
 
-const msteamsConfigAdapter = createHybridChannelConfigAdapter<
+const msteamsBaseConfigAdapter = createHybridChannelConfigAdapter<
   ResolvedMSTeamsAccount,
   ReturnType<typeof resolveMSTeamsAccountConfig>
 >({
@@ -89,10 +102,10 @@ const msteamsConfigAdapter = createHybridChannelConfigAdapter<
   resolveDefaultTo: (account) => account.defaultTo,
 });
 
-export const msteamsRuntimeConfigAdapter = {
-  ...msteamsConfigAdapter,
+export const msteamsConfigAdapter = {
+  ...msteamsBaseConfigAdapter,
   deleteAccount: (params: { cfg: OpenClawConfig; accountId: string }) =>
     params.accountId === DEFAULT_ACCOUNT_ID
       ? deleteMSTeamsDefaultAccountIdentity(params.cfg)
-      : msteamsConfigAdapter.deleteAccount!(params),
+      : msteamsBaseConfigAdapter.deleteAccount!(params),
 };
