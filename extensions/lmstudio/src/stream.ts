@@ -78,7 +78,6 @@ function isPreloadCoolingDown(preloadKey: string, now: number): PreloadCooldownE
     return undefined;
   }
   if (entry.untilMs <= now) {
-    preloadCooldown.delete(preloadKey);
     return undefined;
   }
   return entry;
