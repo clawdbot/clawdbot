@@ -11,13 +11,13 @@ import {
 } from "./reply-dispatcher.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
-export type LedgerQueuedSend = {
+type LedgerQueuedSend = {
   queued: boolean;
   /** Present only when the core dispatcher exposes this payload's settlement. */
   outcome?: Promise<ReplyDispatchDeliveryOutcome>;
 };
 
-export type ReplyTurnLedger = {
+type ReplyTurnLedger = {
   /** Enqueue on the dispatcher and record the payload's settled visibility. */
   sendQueued: (kind: ReplyDispatchKind, payload: ReplyPayload) => LedgerQueuedSend;
   /** Record a routed transport result; routed sends settle at their call site. */
