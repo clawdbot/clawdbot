@@ -20,6 +20,9 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { DEDUPE_TTL_MS } from "../server-constants.js";
+import { startGatewayMaintenanceTimers } from "../server-maintenance.js";
+import { createGatewayMaintenanceStateForTest } from "../test-helpers.maintenance-state.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ResolveOutboundTarget = typeof import("../../infra/outbound/targets.js").resolveOutboundTarget;
@@ -1234,6 +1237,72 @@ describe("gateway send mirroring", () => {
     expect(firstRespondCall(firstRespond)?.[0]).toBe(true);
     expect(firstRespondCall(retryRespond)?.[0]).toBe(true);
     expect(firstRespondCall(retryRespond)?.[3]?.cached).toBe(true);
+  });
+
+  it("keeps a pending message.action route bound through maintenance and default changes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-26T00:00:00Z"));
+    let defaultAccountId = "primary";
+    mockMutableMessageRouteAccounts(() => defaultAccountId);
+    const context = makeContext();
+    const maintenance = startGatewayMaintenanceTimers({
+      ...createGatewayMaintenanceStateForTest(),
+      dedupe: context.dedupe,
+      runWorktreeGc: vi.fn(async () => undefined),
+    });
+    const actionDeferred = createDeferred<{ details: { action: string } }>();
+    mocks.dispatchChannelMessageAction.mockReturnValueOnce(actionDeferred.promise);
+    const invoke = (respond: ReturnType<typeof vi.fn>) =>
+      invokeGatewayMessageMethod({
+        method: "message.action",
+        request: {
+          channel: "slack",
+          action: "send",
+          params: { target: "channel:current", message: "hi" },
+          idempotencyKey: "idem-action-pending-maintenance",
+        },
+        respond,
+        context,
+      });
+
+    try {
+      const firstRespond = vi.fn();
+      const firstRequest = invoke(firstRespond);
+      await vi.waitFor(() => {
+        expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
+      });
+      const activeBinding = [...context.dedupe.entries()].find(([key]) =>
+        key.includes(":route-binding:"),
+      );
+      expect(activeBinding?.[1].retainUntilSettled).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(DEDUPE_TTL_MS + 60_000);
+      defaultAccountId = "secondary";
+      const retryRespond = vi.fn();
+      const retryRequest = invoke(retryRespond);
+      await vi.waitFor(() => {
+        expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
+      });
+
+      actionDeferred.resolve({ details: { action: "handled" } });
+      await Promise.all([firstRequest, retryRequest]);
+
+      expect(firstRespondCall(firstRespond)?.[0]).toBe(true);
+      expect(firstRespondCall(retryRespond)?.[0]).toBe(true);
+      expect(firstRespondCall(retryRespond)?.[3]?.cached).toBe(true);
+      expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
+      expect(context.dedupe.get(activeBinding?.[0] ?? "")?.retainUntilSettled).toBe(false);
+    } finally {
+      clearInterval(maintenance.tickInterval);
+      clearInterval(maintenance.healthInterval);
+      clearInterval(maintenance.dedupeCleanup);
+      clearInterval(maintenance.worktreeCleanup);
+      if (maintenance.mediaCleanup) {
+        clearInterval(maintenance.mediaCleanup);
+      }
+      maintenance.skillCuratorCleanup();
+      vi.useRealTimers();
+    }
   });
 
   it("keeps an agent runtime delegated even with a direct-operator marker", async () => {

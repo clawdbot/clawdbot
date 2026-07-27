@@ -688,6 +688,40 @@ describe("startGatewayMaintenanceTimers", () => {
     stopMaintenanceTimers(timers);
   });
 
+  it("keeps retained in-flight entries through ttl and overflow until settlement", async () => {
+    const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
+    seedStableDedupeEntries(deps, now);
+    deps.dedupe.set("message.action:route-binding:active", {
+      ts: now - DEDUPE_TTL_MS - 1,
+      ok: true,
+      requestIdentity: '["slack","primary"]',
+      retainUntilSettled: true,
+    });
+    deps.dedupe.set("overflow-newest", { ts: now, ok: true });
+    const timers = startGatewayMaintenanceTimers(deps);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(deps.dedupe.size).toBe(DEDUPE_MAX);
+    expect(deps.dedupe.has("message.action:route-binding:active")).toBe(true);
+    expect(deps.dedupe.has("stable-0")).toBe(false);
+    expect(deps.dedupe.has("stable-1")).toBe(false);
+
+    const retained = deps.dedupe.get("message.action:route-binding:active");
+    if (!retained) {
+      throw new Error("Expected retained route binding");
+    }
+    deps.dedupe.set("message.action:route-binding:active", {
+      ...retained,
+      ts: Date.now(),
+      retainUntilSettled: false,
+    });
+    await vi.advanceTimersByTimeAsync(DEDUPE_TTL_MS + 60_000);
+
+    expect(deps.dedupe.has("message.action:route-binding:active")).toBe(false);
+    stopMaintenanceTimers(timers);
+  });
+
   it("evicts dedupe overflow by oldest timestamp even after reinsertion", async () => {
     const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
 

@@ -218,8 +218,13 @@ export function startGatewayMaintenanceTimers(params: {
       }
       return Boolean(isChatKey && runId && params.chatQueuedTurns.has(runId));
     };
+    const isRetainedDedupeEntry = (entry: DedupeEntry) => entry.retainUntilSettled === true;
     for (const [k, v] of params.dedupe) {
-      if (isActiveRunDedupeKey(k, v) || isPendingAcceptedRunDedupeKey(k, v)) {
+      if (
+        isRetainedDedupeEntry(v) ||
+        isActiveRunDedupeKey(k, v) ||
+        isPendingAcceptedRunDedupeKey(k, v)
+      ) {
         continue;
       }
       if (now - v.ts > DEDUPE_TTL_MS) {
@@ -231,7 +236,9 @@ export function startGatewayMaintenanceTimers(params: {
       const oldestKeys = [...params.dedupe.entries()]
         .filter(
           ([key, entry]) =>
-            !isActiveRunDedupeKey(key, entry) && !isPendingAcceptedRunDedupeKey(key, entry),
+            !isRetainedDedupeEntry(entry) &&
+            !isActiveRunDedupeKey(key, entry) &&
+            !isPendingAcceptedRunDedupeKey(key, entry),
         )
         .toSorted(([, left], [, right]) => left.ts - right.ts)
         .slice(0, excess)
