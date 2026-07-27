@@ -349,6 +349,19 @@ describe("WorkboardStore", () => {
           cardId: card.id,
           eventKinds: ["status_changed"],
         });
+        await store.list();
+        const beforeFeatureUse = new DatabaseSync(dbPath, { readOnly: true });
+        try {
+          expect(
+            beforeFeatureUse
+              .prepare(
+                "SELECT 1 AS found FROM pragma_table_list WHERE name = 'workboard_card_status_transitions'",
+              )
+              .get(),
+          ).toBeUndefined();
+        } finally {
+          beforeFeatureUse.close();
+        }
         await store.update(card.id, { status: "ready" });
         const { events } = await store.notificationEvents({ subscriptionId: sub.id });
         expect(events).toHaveLength(1);
