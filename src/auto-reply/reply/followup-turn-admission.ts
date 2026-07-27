@@ -92,6 +92,7 @@ class FollowupSessionGenerationInvalidatedError extends Error {}
 function createFollowupSessionOwner(params: {
   admittedSessionId: string;
   entry?: SessionEntry;
+  expectedStoreEntry?: SessionEntry;
   key?: string;
   store?: Record<string, SessionEntry>;
   storePath?: string;
@@ -159,8 +160,10 @@ function createFollowupSessionOwner(params: {
     currentEntry &&
     params.key &&
     params.store?.[params.key] &&
-    matchesGeneration(params.store[params.key]) &&
-    currentEntry.updatedAt >= params.store[params.key]!.updatedAt
+    ((params.store[params.key] === params.expectedStoreEntry &&
+      !matchesGeneration(params.store[params.key])) ||
+      (matchesGeneration(params.store[params.key]) &&
+        currentEntry.updatedAt >= params.store[params.key]!.updatedAt))
   ) {
     params.store[params.key] = currentEntry;
   }
@@ -174,6 +177,18 @@ function resolveFollowupCurrentMessageId(queued: FollowupRun): string | undefine
     queued.run.inputProvenance.sourceTool === "restart-sentinel"
     ? queued.originatingReplyToId
     : queued.messageId;
+}
+
+function isSameSessionGeneration(
+  left: SessionEntry | undefined,
+  right: SessionEntry | undefined,
+): boolean {
+  return Boolean(
+    left &&
+    right &&
+    left.sessionId === right.sessionId &&
+    left.lifecycleRevision === right.lifecycleRevision,
+  );
 }
 
 function createFollowupSessionStoreView(params: {
@@ -208,8 +223,11 @@ export async function admitFollowupTurn(params: {
   });
   const config = resolveQueuedReplyRuntimeConfig(resolvedConfig);
   const replySessionKey = params.queued.run.sessionKey ?? params.defaults.sessionKey;
+  const initialStoredEntry = replySessionKey
+    ? params.defaults.sessionStore?.[replySessionKey]
+    : undefined;
   const initialEntry =
-    (replySessionKey ? params.defaults.sessionStore?.[replySessionKey] : undefined) ??
+    initialStoredEntry ??
     (replySessionKey === params.defaults.sessionKey ? params.defaults.sessionEntry : undefined);
   let run = { ...params.queued.run, config };
   const admission = await admitReplyTurn({
@@ -330,6 +348,7 @@ export async function admitFollowupTurn(params: {
     const session = createFollowupSessionOwner({
       admittedSessionId: operation.sessionId,
       entry: activeEntry,
+      expectedStoreEntry: initialStoredEntry,
       key: replySessionKey,
       store: params.defaults.sessionStore,
       storePath: params.defaults.storePath,
@@ -419,14 +438,40 @@ export async function admitFollowupTurn(params: {
         onCompactionNotice: notifyPreflightCompaction,
       });
       const previousEntry = session.current();
+      if (replySessionKey && params.defaults.storePath) {
+        const persistedEntry = loadSessionEntry({
+          storePath: params.defaults.storePath,
+          sessionKey: replySessionKey,
+        });
+        if (
+          (!persistedEntry && previousEntry) ||
+          (persistedEntry &&
+            !isSameSessionGeneration(persistedEntry, previousEntry) &&
+            !isSameSessionGeneration(persistedEntry, activeEntry))
+        ) {
+          throw new FollowupSessionGenerationInvalidatedError(
+            "Follow-up session generation changed during preflight",
+          );
+        }
+        if (
+          persistedEntry &&
+          (!activeEntry ||
+            (isSameSessionGeneration(persistedEntry, activeEntry) &&
+              persistedEntry.updatedAt >= activeEntry.updatedAt))
+        ) {
+          activeEntry = persistedEntry;
+        }
+      }
       const generationRotated = Boolean(
         activeEntry &&
         (activeEntry.sessionId !== previousEntry?.sessionId ||
           activeEntry.lifecycleRevision !== previousEntry?.lifecycleRevision),
       );
-      if (activeEntry && generationRotated) {
+      if (activeEntry) {
         session.adopt(activeEntry);
         activeEntry = session.current() ?? activeEntry;
+      }
+      if (activeEntry && generationRotated) {
         operation.updateSessionId(activeEntry.sessionId);
         turn.queued = {
           ...turn.queued,
@@ -445,27 +490,25 @@ export async function admitFollowupTurn(params: {
             modelSelectionLocked: activeEntry.modelSelectionLocked === true,
           },
         };
-        sendPolicy = resolveSendPolicy({
-          cfg: config,
-          entry: activeEntry,
-          sessionKey: turn.queued.run.runtimePolicySessionKey ?? replySessionKey,
-          channel:
-            turn.queued.originatingChannel ??
-            turn.queued.run.messageProvider ??
-            sessionDeliveryChannel(activeEntry),
-          chatType:
-            turn.queued.originatingChatType ?? turn.queued.run.chatType ?? activeEntry.chatType,
-        });
-        currentInboundContext =
-          params.defaults.opts?.isHeartbeat === true
-            ? params.queued.currentInboundContext
-            : refreshActiveGoalContext(params.queued.currentInboundContext, activeEntry);
-        turn.sendPolicy = sendPolicy;
-        turn.currentInboundContext = currentInboundContext;
-        turn.queued = { ...turn.queued, currentInboundContext };
-      } else {
-        session.publish(activeEntry);
       }
+      sendPolicy = resolveSendPolicy({
+        cfg: config,
+        entry: activeEntry,
+        sessionKey: turn.queued.run.runtimePolicySessionKey ?? replySessionKey,
+        channel:
+          turn.queued.originatingChannel ??
+          turn.queued.run.messageProvider ??
+          sessionDeliveryChannel(activeEntry),
+        chatType:
+          turn.queued.originatingChatType ?? turn.queued.run.chatType ?? activeEntry?.chatType,
+      });
+      currentInboundContext =
+        params.defaults.opts?.isHeartbeat === true
+          ? params.queued.currentInboundContext
+          : refreshActiveGoalContext(params.queued.currentInboundContext, activeEntry);
+      turn.sendPolicy = sendPolicy;
+      turn.currentInboundContext = currentInboundContext;
+      turn.queued = { ...turn.queued, currentInboundContext };
       turn.preflightCompactionApplied =
         generationRotated || (activeEntry?.compactionCount ?? 0) > previousCompactionCount;
     } catch (error) {

@@ -533,6 +533,35 @@ describe("admitFollowupTurn", () => {
     expect(state.buildPreflightFailureText).not.toHaveBeenCalled();
   });
 
+  it("restores the item when a no-op preflight observes a replacement generation", async () => {
+    const operation = createOperation();
+    const initialEntry: SessionEntry = {
+      sessionId: "queued-session",
+      lifecycleRevision: "initial",
+      updatedAt: 1,
+    };
+    const replacementEntry: SessionEntry = {
+      sessionId: "replacement-session",
+      lifecycleRevision: "replacement",
+      updatedAt: 2,
+    };
+    const sessionStore = { main: initialEntry };
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
+    state.loadEntry.mockReturnValue(initialEntry);
+    state.preflight.mockImplementation(async () => {
+      sessionStore.main = replacementEntry;
+      return initialEntry;
+    });
+
+    await expect(
+      admitFollowupTurn({
+        queued: createRun(),
+        defaults: createDefaults({ sessionStore, sessionEntry: initialEntry }),
+      }),
+    ).rejects.toThrow("Follow-up session generation was replaced during admission");
+    expect(operation.complete).toHaveBeenCalledOnce();
+  });
+
   it("refreshes send policy and goal context after preflight rotates the generation", async () => {
     const operation = createOperation();
     const initialEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
@@ -584,6 +613,9 @@ describe("admitFollowupTurn", () => {
     });
 
     expect(onCompactionNoticePayload).not.toHaveBeenCalled();
+    expect(state.resolveSendPolicy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ entry: deniedEntry }),
+    );
   });
 
   it("restores the item when generation changes before a compaction notice", async () => {
