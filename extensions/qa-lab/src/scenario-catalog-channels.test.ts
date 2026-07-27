@@ -20,7 +20,6 @@ function requireFlowScenario(scenario: CatalogScenario): FlowCatalogScenario {
 
 describe("qa scenario catalog channel contracts", () => {
   const agentRuntime = "agent-runtime";
-  const memory = "session-memory";
 
   it("routes native command session targeting through Crabline Telegram", () => {
     const scenario = readQaScenarioById("native-command-session-target");
@@ -79,34 +78,6 @@ describe("qa scenario catalog channel contracts", () => {
     expect(completionWait).toBeGreaterThan(-1);
     expect(storeReads).toHaveLength(2);
     expect(completionWait).toBeLessThan(storeReads[0] ?? -1);
-  });
-
-  it("adds a dreaming shadow trial report scenario", () => {
-    const scenario = readQaScenarioById("dreaming-shadow-trial-report");
-    const config = readQaScenarioExecutionConfig("dreaming-shadow-trial-report") as
-      | {
-          prompt?: string;
-          reportName?: string;
-          expectedReportAll?: string[];
-          forbiddenReplyNeedles?: string[];
-          seededMemory?: string;
-        }
-      | undefined;
-    const flow = JSON.stringify(scenario.execution.flow);
-
-    expect(scenario.coverage?.primary).toEqual([`${memory}.memory-files-dreaming`]);
-    expect(scenario.coverage?.secondary).toEqual([
-      `${memory}.memory-files-promotion`,
-      `${memory}.memory-files-artifact-safety`,
-    ]);
-    expect(config?.expectedReportAll).toContain("verdict: helpful");
-    expect(config?.expectedReportAll).toContain("exact verification commands and remaining risk");
-    expect(config?.expectedReportAll).toContain("omits the exact command and remaining risk");
-    expect(config?.expectedReportAll).toContain("calls out the remaining review risk");
-    expect(config?.forbiddenReplyNeedles).toContain("candidate was promoted to MEMORY.md");
-    expect(flow).toContain("plannedToolName === 'write'");
-    expect(flow).toContain("readIndices[1] < firstWrite");
-    expect(flow).toContain("String(memoryAfter) === config.seededMemory");
   });
 
   it("keeps channel streaming evidence portable across QA Channel and Crabline Telegram", () => {

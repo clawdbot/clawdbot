@@ -2499,7 +2499,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Session transcript ingestion
   - H2: Dream Diary
   - H2: Deep ranking signals
-  - H3: QA shadow trial report coverage
   - H2: Scheduling
   - H2: Quick start
   - H2: Slash command
@@ -5722,6 +5721,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Request
   - H2: Storage and visibility
   - H2: Security boundary
+  - H2: Mirroring
   - H2: Troubleshooting
   - H2: Related
 

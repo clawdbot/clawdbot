@@ -4,6 +4,7 @@ import {
   removeCardAndReferences,
   replaceCard,
   resetDraftState,
+  selectedWorkboardBoardParams,
 } from "./card-state.ts";
 import { clearPendingStatusTransition, recordPendingStatusTransition } from "./lifecycle.ts";
 import { formatError, isRecord } from "./normalization-utils.ts";
@@ -18,14 +19,7 @@ import {
   type WorkboardHost,
 } from "./runtime.ts";
 import { applyTaskSummariesToState, listWorkboardTasks } from "./task-links.ts";
-import type { WorkboardDispatchSummary, WorkboardStatus, WorkboardUiState } from "./types.ts";
-
-function selectedBoardParams(state: Pick<WorkboardUiState, "boards" | "boardFilter">): {
-  boardId?: string;
-} {
-  const boardId = state.boards.find((board) => board.id === state.boardFilter)?.id;
-  return boardId ? { boardId } : {};
-}
+import type { WorkboardDispatchSummary, WorkboardStatus } from "./types.ts";
 
 function normalizeDispatchSummary(value: unknown): WorkboardDispatchSummary {
   const countArray = (key: string) =>
@@ -63,7 +57,7 @@ async function createWorkboardCard(params: {
   try {
     const payload = await params.client.request("workboard.cards.create", {
       ...draftPayload(state),
-      ...selectedBoardParams(state),
+      ...selectedWorkboardBoardParams(state),
     });
     replaceCard(state, normalizeCardPayload(payload));
     resetDraftState(state);
@@ -299,7 +293,7 @@ export async function dispatchWorkboard(params: {
   try {
     const dispatchResult = await params.client.request(
       "workboard.cards.dispatch",
-      selectedBoardParams(state),
+      selectedWorkboardBoardParams(state),
     );
     const payload = await params.client.request("workboard.cards.list", {});
     const normalized = normalizeCardsPayload(payload);
