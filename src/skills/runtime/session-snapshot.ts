@@ -11,6 +11,8 @@ import { getSkillsSnapshotVersion, shouldRefreshSnapshotForVersion } from "./ref
 import { ensureSkillsWatcher } from "./refresh.js";
 import { hydrateResolvedSkills } from "./snapshot-hydration.js";
 
+// Skill mutation owners must bump refresh-state after changing visible skills.
+// The versioned key then rebuilds new-session snapshots without hot-path polling.
 const resolvedSkillsCache = new Map<string, SkillSnapshot["resolvedSkills"]>();
 const RESOLVED_SKILLS_CACHE_MAX = 10;
 
