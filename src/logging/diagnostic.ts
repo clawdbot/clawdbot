@@ -29,6 +29,7 @@ import {
 import {
   diagnosticLogger as diag,
   getLastDiagnosticActivityAt,
+  logMessageQueuedWithBacklogPolicy,
   markDiagnosticActivity as markActivity,
   resetDiagnosticActivityForTest,
 } from "./diagnostic-runtime.js";
@@ -670,36 +671,8 @@ export function logMessageQueued(params: {
   sessionKey?: string;
   channel?: string;
   source: string;
-  /** False when an active run consumes the message without creating a queued turn. */
-  countsTowardBacklog?: boolean;
 }) {
-  if (!areDiagnosticsEnabledForProcess()) {
-    return;
-  }
-  const state = getDiagnosticSessionState(params);
-  if (params.countsTowardBacklog !== false) {
-    state.queueDepth += 1;
-  }
-  state.lastActivity = Date.now();
-  state.generation = (state.generation ?? 0) + 1;
-  state.lastStuckWarnAgeMs = undefined;
-  state.lastLongRunningWarnAgeMs = undefined;
-  if (diag.isEnabled("debug")) {
-    diag.debug(
-      `message queued: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
-        state.sessionKey ?? "unknown"
-      } source=${params.source} queueDepth=${state.queueDepth} sessionState=${state.state}`,
-    );
-  }
-  emitDiagnosticEvent({
-    type: "message.queued",
-    sessionId: state.sessionId,
-    sessionKey: state.sessionKey,
-    channel: params.channel,
-    source: params.source,
-    queueDepth: state.queueDepth,
-  });
-  markActivity();
+  logMessageQueuedWithBacklogPolicy(params, true);
 }
 
 export function logMessageReceived(params: {

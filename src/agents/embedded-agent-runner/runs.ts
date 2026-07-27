@@ -33,9 +33,9 @@ import {
   markDiagnosticEmbeddedRunStarted,
   resolveRunStaleThresholdMs,
 } from "../../logging/diagnostic-run-activity.js";
+import { logMessageQueuedWithBacklogPolicy } from "../../logging/diagnostic-runtime.js";
 import {
   diagnosticLogger as diag,
-  logMessageQueued,
   logSessionStateChange,
   updateDiagnosticSessionFile,
 } from "../../logging/diagnostic.js";
@@ -348,11 +348,13 @@ function formatQueueError(err: unknown): string {
 function logActiveRunMessageAccepted(sessionId: string): void {
   // Active-run steering is consumed by the current turn, not queued as another
   // turn for the single idle transition to drain. Keep the event and activity.
-  logMessageQueued({
-    sessionId,
-    source: "embedded-agent-runner",
-    countsTowardBacklog: false,
-  });
+  logMessageQueuedWithBacklogPolicy(
+    {
+      sessionId,
+      source: "embedded-agent-runner",
+    },
+    false,
+  );
 }
 
 function isEmbeddedQueueHandleMessageInjectable(
