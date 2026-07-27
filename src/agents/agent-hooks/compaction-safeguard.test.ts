@@ -1657,7 +1657,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(call?.reserveTokens).toBe(128_000);
   });
 
-  it("adds Copilot IDE headers to built-in compaction summarization", async () => {
+  it("preserves provider-prepared Copilot headers in built-in compaction summarization", async () => {
     mockSummarizeInStages.mockReset();
     mockSummarizeInStages.mockResolvedValue(summaryResult("mock summary"));
 
@@ -1674,7 +1674,13 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const getApiKeyAndHeadersMock = vi.fn().mockResolvedValue({
       ok: true,
       apiKey: "github-token",
-      headers: { "X-Test": "1" },
+      headers: {
+        "Copilot-Integration-Id": "copilot-developer-cli",
+        "Editor-Plugin-Version": "copilot-chat/0.35.0",
+        "Openai-Organization": "github-copilot",
+        "User-Agent": "GitHubCopilotChat/0.35.0",
+        "X-Test": "1",
+      },
     });
     const mockContext = createCompactionContext({
       sessionManager,

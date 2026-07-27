@@ -213,6 +213,16 @@ describe("github-copilot plugin", () => {
     expect(prepared).toEqual({
       apiKey: "github-source-token",
       baseUrl: "https://api.individual.githubcopilot.com",
+      request: {
+        headers: {
+          "Accept-Encoding": "identity",
+          "Copilot-Integration-Id": "copilot-developer-cli",
+          "Editor-Plugin-Version": "copilot-chat/0.35.0",
+          "Editor-Version": "vscode/1.107.0",
+          "Openai-Organization": "github-copilot",
+          "User-Agent": "GitHubCopilotChat/0.35.0",
+        },
+      },
     });
   });
 

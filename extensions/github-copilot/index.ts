@@ -28,6 +28,7 @@ import {
   buildGithubCopilotReplayPolicy,
   sanitizeGithubCopilotReplayHistory,
 } from "./replay-policy.js";
+import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
 import { wrapCopilotProviderStream } from "./stream.js";
 
 const COPILOT_ENV_VARS: [string, string, string] = [
@@ -627,6 +628,7 @@ export default definePluginEntry({
         return {
           apiKey: auth.apiKey,
           baseUrl: auth.baseUrl,
+          request: { headers: buildCopilotRuntimeHeaders() },
         };
       },
       resolveUsageAuth: async (ctx) => await ctx.resolveOAuthToken(),
