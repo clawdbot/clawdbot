@@ -127,6 +127,16 @@ describe.runIf(process.platform !== "win32")("exec auto-review shell stress", ()
     ["PowerShell encoded flag", ["pwsh", "-EncodedCommand", "ZQBjAGgAbwA="], true],
     ["PowerShell encoded abbreviation", ["pwsh", "/ec", "ZQBjAGgAbwA="], true],
     ["PowerShell encoded prefix", ["pwsh", "-en", "ZQBjAGgAbwA="], true],
+    [
+      "PowerShell encoded-arguments alias",
+      ["pwsh", "-NoProfile", "-ea", "ZQBjAGgAbwA=", "-Command", "Get-Date"],
+      true,
+    ],
+    [
+      "PowerShell slash-prefixed encoded-arguments alias",
+      ["pwsh", "/NoProfile", "/ea", "ZQBjAGgAbwA=", "/Command", "Get-Date"],
+      true,
+    ],
     ["PowerShell default-profile command", ["pwsh", "-Command", "Write-Output safe"], true],
     ["PowerShell implicit script profile", ["pwsh", "./safe.ps1"], true],
     ["PowerShell interactive default profile", ["pwsh"], true],
@@ -328,6 +338,18 @@ describe.runIf(process.platform !== "win32")("exec auto-review shell stress", ()
     [
       "PowerShell opaque encoded arguments",
       "pwsh -NoProfile -EncodedArguments ZQBjAGgAbwA= -Command 'Write-Output safe'",
+    ],
+    [
+      "PowerShell encoded-arguments alias",
+      "pwsh -NoProfile -ea ZQBjAGgAbwA= -Command 'Write-Output safe'",
+    ],
+    [
+      "PowerShell slash-prefixed encoded-arguments alias",
+      "pwsh /NoProfile /ea ZQBjAGgAbwA= /Command 'Write-Output safe'",
+    ],
+    [
+      "PowerShell encoded-arguments alias inside transparent carrier",
+      "env -- pwsh -NoProfile -ea ZQBjAGgAbwA= -Command 'Write-Output safe'",
     ],
     [
       "PowerShell remoting server despite disabled profiles",

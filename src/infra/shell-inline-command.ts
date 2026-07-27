@@ -45,6 +45,7 @@ const POWERSHELL_UNREVIEWED_STARTUP_FLAGS = new Set([
   ...expandPowerShellSwitchPrefixForms("configurationname", "config"),
   ...expandPowerShellSwitchPrefixForms("custompipename", "cus"),
   ...expandPowerShellSwitchPrefixForms("encodedarguments", "encodeda"),
+  ...expandPowerShellSwitchForms(["ea"]),
   ...expandPowerShellSwitchPrefixForms("interactive", "i"),
   ...expandPowerShellSwitchPrefixForms("login", "l"),
   ...expandPowerShellSwitchPrefixForms("namedpipeservermode", "nam"),
