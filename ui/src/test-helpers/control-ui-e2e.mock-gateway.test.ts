@@ -210,6 +210,73 @@ describe("mock gateway stateful sessions", () => {
     socket.close();
   });
 
+  it("publishes a catalog adoption only after its deferred response succeeds", async () => {
+    const sessionKey = "agent:main:deferred-catalog-adoption";
+    const script = createControlUiMockGatewayInitScript({
+      deferredMethods: ["sessions.catalog.continue"],
+      methodResponses: {
+        "sessions.catalog.continue": { sessionKey },
+      },
+    });
+    window.sessionStorage.clear();
+    // oxlint-disable-next-line typescript/no-implied-eval -- Exercises the serialized Gateway initialization exactly as the browser does.
+    new Function(script)();
+
+    const socket = new WebSocket("ws://mock-gateway");
+    const frames: ResponseFrame[] = [];
+    socket.addEventListener("message", (event) => {
+      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    });
+    await flushMockTimers();
+
+    socket.send(
+      JSON.stringify({
+        type: "req",
+        id: "deferred-adoption",
+        method: "sessions.catalog.continue",
+        params: { catalogId: "codex", hostId: "gateway:local", threadId: "thread-1" },
+      }),
+    );
+    await flushMockTimers();
+    expect(frames.find((frame) => frame.id === "deferred-adoption")).toBeUndefined();
+
+    const gateway = (
+      window as unknown as {
+        openclawControlUiE2eGateway?: {
+          resolveDeferred: (method: string, payload?: unknown) => void;
+        };
+      }
+    ).openclawControlUiE2eGateway;
+    if (!gateway) {
+      throw new Error("Mock Gateway was not installed");
+    }
+    gateway.resolveDeferred("sessions.catalog.continue", { sessionKey });
+    await flushMockTimers();
+    expect(frames.find((frame) => frame.id === "deferred-adoption")?.payload).toEqual({
+      sessionKey,
+    });
+
+    socket.send(
+      JSON.stringify({
+        type: "req",
+        id: "list-after-deferred-adoption",
+        method: "sessions.list",
+        params: { agentId: "main", search: "deferred-catalog-adoption" },
+      }),
+    );
+    await flushMockTimers();
+    expect(
+      frames.find((frame) => frame.id === "list-after-deferred-adoption")?.payload,
+    ).toMatchObject({
+      count: 2,
+      sessions: [
+        expect.objectContaining({ key: "main" }),
+        expect.objectContaining({ key: sessionKey }),
+      ],
+    });
+    socket.close();
+  });
+
   it("does not publish a rejected catalog adoption to sessions.list", async () => {
     const sessionKey = "agent:main:rejected-adoption";
     const script = createControlUiMockGatewayInitScript({

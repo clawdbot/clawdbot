@@ -1407,8 +1407,11 @@ function installControlUiMockGateway(input: {
         throw new Error(`Deferred mock Gateway response disappeared for ${method}`);
       }
       const resolvedPayload = payload ?? buildResponse(response.method, response.params);
-      if (response.method === "sessions.create") {
-        recordCreatedSession(response.params, resolvedPayload);
+      if (
+        response.method === "sessions.create" ||
+        response.method === "sessions.catalog.continue"
+      ) {
+        recordMaterializedSession(response.params, resolvedPayload);
       }
       response.socket.deliver({
         id: response.id,

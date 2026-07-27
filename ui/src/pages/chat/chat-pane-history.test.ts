@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type {
   SessionCatalogSession,
@@ -590,10 +591,22 @@ describe("chat pane catalog continuation lifecycle", () => {
     await pane.continueCatalogSession(key);
 
     expect(request).toHaveBeenCalledWith("sessions.catalog.continue", key);
-    expect(pane.onPaneSessionChange).toHaveBeenCalledWith("single", "agent:main:continued");
+    const onPaneSessionChange = expectDefined(
+      pane.onPaneSessionChange,
+      "catalog continuation navigation callback",
+    );
+    expect(onPaneSessionChange).toHaveBeenCalledWith("single", "agent:main:continued");
     expect(pane.switchPaneSession).toHaveBeenCalledWith("agent:main:continued");
-    expect(vi.mocked(pane.switchPaneSession).mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(pane.onPaneSessionChange!).mock.invocationCallOrder[0],
+    expect(
+      expectDefined(
+        vi.mocked(pane.switchPaneSession).mock.invocationCallOrder[0],
+        "catalog continuation session switch order",
+      ),
+    ).toBeLessThan(
+      expectDefined(
+        vi.mocked(onPaneSessionChange).mock.invocationCallOrder[0],
+        "catalog continuation navigation order",
+      ),
     );
     expect(state.handleChatDraftChange).toHaveBeenCalledWith(
       "Continue the original catalog conversation",
