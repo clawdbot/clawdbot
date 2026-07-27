@@ -59,7 +59,36 @@ describe("settleLitElement", () => {
     await expect(settleLitElement(element)).rejects.toThrow("render loop");
   });
 
-  it("returns without waiting on an already-settled element", async () => {
+  it("drains a deep promise chain that only schedules a render at its end", async () => {
+    // The shape the settled check alone cannot see: four inert microtask turns, then work
+    // that marks the element dirty. A pump that stopped at the first settled rounds would
+    // return before it.
+    let pendingRender = false;
+    let rendered = false;
+    const element = {
+      get updateComplete(): Promise<boolean> {
+        if (pendingRender) {
+          pendingRender = false;
+          rendered = true;
+          return Promise.resolve(false);
+        }
+        return Promise.resolve(true);
+      },
+    };
+    let chain = Promise.resolve();
+    for (let turn = 0; turn < 4; turn += 1) {
+      chain = chain.then(() => undefined);
+    }
+    void chain.then(() => {
+      pendingRender = true;
+    });
+
+    await settleLitElement(element);
+
+    expect(rendered).toBe(true);
+  });
+
+  it("keeps an unconditional floor of drain rounds for in-flight chains", async () => {
     const updateComplete = vi.fn(() => Promise.resolve(true));
     const element = {
       get updateComplete() {
@@ -69,7 +98,7 @@ describe("settleLitElement", () => {
 
     await settleLitElement(element);
 
-    // Two settled rounds prove nothing new was scheduled; more would just be waste.
-    expect(updateComplete).toHaveBeenCalledTimes(2);
+    // Never drains less than the fixed pump this helper replaced.
+    expect(updateComplete).toHaveBeenCalledTimes(5);
   });
 });
