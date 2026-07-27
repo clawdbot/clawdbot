@@ -151,6 +151,87 @@ describe("Tool Search", () => {
     expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["fake_lookup"]);
   });
 
+  it("keeps core coding tools visible while still cataloging them", () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const compacted = applyToolSearchCatalog({
+      tools: [
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
+        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
+        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
+        fakeTool("read", "Read files"),
+        fakeTool("edit", "Edit files"),
+        fakeTool("exec", "Run shell"),
+        pluginTool("fake_lookup", "Look up a record"),
+      ],
+      config: { tools: { toolSearch: { enabled: true, mode: "tools" } } } as never,
+      catalogRef,
+    });
+
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([
+      TOOL_SEARCH_RAW_TOOL_NAME,
+      TOOL_DESCRIBE_RAW_TOOL_NAME,
+      TOOL_CALL_RAW_TOOL_NAME,
+      "read",
+      "edit",
+      "exec",
+    ]);
+    // Core tools stay searchable alongside deferred tools (catalog order is deterministic).
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual([
+      "edit",
+      "exec",
+      "read",
+      "fake_lookup",
+    ]);
+  });
+
+  it("defers plugin tools that reuse a core coding tool name", () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const compacted = applyToolSearchCatalog({
+      tools: [
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
+        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
+        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
+        pluginTool("read", "Plugin tool shadowing a core name"),
+      ],
+      config: { tools: { toolSearch: { enabled: true, mode: "tools" } } } as never,
+      catalogRef,
+    });
+
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([
+      TOOL_SEARCH_RAW_TOOL_NAME,
+      TOOL_DESCRIBE_RAW_TOOL_NAME,
+      TOOL_CALL_RAW_TOOL_NAME,
+    ]);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["read"]);
+  });
+
+  it("keeps core coding tools visible in schema-directory mode without hydration", () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const compacted = applyToolSchemaDirectoryCatalog({
+      tools: [
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
+        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
+        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
+        fakeTool("write", "Write files"),
+        pluginTool("fake_lookup", "Look up a record"),
+      ],
+      config: { tools: { toolSearch: { enabled: true, mode: "directory" } } } as never,
+      catalogRef,
+      hydrateToolNames: [],
+    });
+
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([
+      TOOL_SEARCH_RAW_TOOL_NAME,
+      TOOL_DESCRIBE_RAW_TOOL_NAME,
+      TOOL_CALL_RAW_TOOL_NAME,
+      "write",
+    ]);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual([
+      "write",
+      "fake_lookup",
+    ]);
+  });
+
   it("keeps direct-only tools visible in schema-directory mode", () => {
     const catalogRef = createToolSearchCatalogRef();
     const compacted = applyToolSchemaDirectoryCatalog({

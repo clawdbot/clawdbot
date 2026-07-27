@@ -3,6 +3,7 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { isCoreCodingSurfaceToolName } from "./core-tool-factory-descriptors.js";
 import {
   applyToolCatalogCompaction,
   classifyTool,
@@ -78,8 +79,12 @@ export function applyToolSchemaDirectoryCatalog(params: {
     ...params,
     enabled: config.enabled,
     isVisibleControlTool: (tool) => TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES.has(tool.name),
+    // Core file/shell primitives keep full schemas visible alongside hydrated
+    // picks; the unique-name gate defers any cross-source name collision.
     isVisibleCatalogTool: (tool) =>
-      hydrateToolNames.has(tool.name) && uniqueCatalogToolNames.has(tool.name),
+      (hydrateToolNames.has(tool.name) ||
+        (isCoreCodingSurfaceToolName(tool.name) && classifyTool(tool).sourceName === "core")) &&
+      uniqueCatalogToolNames.has(tool.name),
   });
 }
 
