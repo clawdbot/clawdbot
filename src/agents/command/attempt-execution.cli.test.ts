@@ -259,6 +259,8 @@ describe("CLI attempt execution", () => {
     userTurnTranscriptRecorder?: RunAgentAttemptParams["userTurnTranscriptRecorder"];
     sessionEntry?: Partial<SessionEntry>;
     configuredAuthProfileId?: string;
+    timeoutMs?: number;
+    runTimeoutOverrideMs?: number;
   }) {
     const runId = overrides?.runId ?? "run-embedded-live-stream-gate";
     const sessionKey = `agent:main:direct:${runId}`;
@@ -291,7 +293,8 @@ describe("CLI attempt execution", () => {
       isFallbackRetry: overrides?.isFallbackRetry ?? false,
       fallbackRuntimeState: overrides?.fallbackRuntimeState,
       resolvedThinkLevel: "medium",
-      timeoutMs: 1_000,
+      timeoutMs: overrides?.timeoutMs ?? 1_000,
+      runTimeoutOverrideMs: overrides?.runTimeoutOverrideMs,
       runId,
       opts: {
         message: "stream gate",
@@ -346,6 +349,25 @@ describe("CLI attempt execution", () => {
     homeEnvSnapshot = undefined;
     closeOpenClawAgentDatabasesForTest();
     await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("forwards explicit local-agent timeouts while preserving the default when omitted", async () => {
+    const explicitTimeoutMs = 21_600_000;
+    const explicit = await runOpenClawEmbeddedAttemptForTest({
+      runId: "explicit-local-timeout",
+      timeoutMs: explicitTimeoutMs,
+      runTimeoutOverrideMs: explicitTimeoutMs,
+    });
+    expect(explicit.timeoutMs).toBe(explicitTimeoutMs);
+    expect(explicit.runTimeoutOverrideMs).toBe(explicitTimeoutMs);
+
+    const configuredDefaultMs = 600_000;
+    const inherited = await runOpenClawEmbeddedAttemptForTest({
+      runId: "inherited-local-timeout",
+      timeoutMs: configuredDefaultMs,
+    });
+    expect(inherited.timeoutMs).toBe(configuredDefaultMs);
+    expect(inherited.runTimeoutOverrideMs).toBeUndefined();
   });
 
   async function runClaudeCliAttempt(params: {
