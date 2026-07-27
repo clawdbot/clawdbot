@@ -14,7 +14,7 @@ import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 
 /** Retry and stale-recovery policy for acquiring a filesystem lock. */
 export type FileLockOptions = {
-  /** Retry policy used while waiting for another process or re-entrant holder to release. */
+  /** Retry policy used while waiting for another process or logical holder to release. */
   retries: {
     retries: number;
     factor: number;
@@ -26,6 +26,11 @@ export type FileLockOptions = {
   stale: number;
   /** Fail closed for security-sensitive state; generic locks retain shipped stale recovery. */
   staleRecovery?: "fail-closed" | "remove-if-unchanged";
+  /**
+   * Logical operation identity for intentional nested acquisition.
+   * Reuse one key only within that call chain; omit it for ordinary contention.
+   */
+  reentrantOwner?: string;
 };
 
 /** Live file-lock handle returned after successful acquisition. */
@@ -145,7 +150,7 @@ export async function drainFileLockStateForTest(): Promise<void> {
   await drainFileLockManagerForTest(FILE_LOCK_MANAGER_KEY, FILE_LOCK_MANAGER_KEY);
 }
 
-/** Acquire a re-entrant process-local file lock backed by a `.lock` sidecar file. */
+/** Acquire an owner-scoped process-local file lock backed by a `.lock` sidecar file. */
 export async function acquireFileLock(
   filePath: string,
   options: FileLockOptions,
@@ -157,7 +162,7 @@ export async function acquireFileLock(
       staleMs: options.stale,
       retry: options.retries,
       staleRecovery,
-      allowReentrant: true,
+      reentrantOwner: options.reentrantOwner,
       payload: createCurrentProcessLockPayload,
       shouldReclaim: (params) =>
         staleRecovery === "fail-closed"
