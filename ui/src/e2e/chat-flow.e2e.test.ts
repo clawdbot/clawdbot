@@ -1635,13 +1635,36 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       const scrollTopBefore = await thread.evaluate((element) =>
         Math.round((element as HTMLElement).scrollTop),
       );
-      await copyButton.click();
-
-      await expect
-        .poll(() => copyButton.evaluate((el) => el.classList.contains("copied")), {
-          timeout: 10_000,
-        })
-        .toBe(true);
+      // The copied class clears after 1500ms, so click and read it in one browser step.
+      const copied = await copyButton.evaluate(async (element) => {
+        const button = element as HTMLButtonElement;
+        const owner = element.closest("openclaw-chat-pane") as
+          | (HTMLElement & {
+              updateComplete: Promise<unknown>;
+            })
+          | null;
+        if (!owner) {
+          throw new Error("Chat pane owner is unavailable");
+        }
+        let copyObserver: MutationObserver | undefined;
+        const copySettled = new Promise<void>((resolve) => {
+          copyObserver = new MutationObserver(() => {
+            if (button.classList.contains("copied")) {
+              copyObserver?.disconnect();
+              resolve();
+            }
+          });
+          copyObserver.observe(button, { attributeFilter: ["class"], attributes: true });
+        });
+        button.click();
+        await owner.updateComplete;
+        if (!button.classList.contains("copied")) {
+          await copySettled;
+        }
+        copyObserver?.disconnect();
+        return button.classList.contains("copied");
+      });
+      expect(copied).toBe(true);
       expect(await copiedViaExec(page)).toContain(code);
       await expect
         .poll(() => thread.evaluate((element) => Math.round((element as HTMLElement).scrollTop)))
