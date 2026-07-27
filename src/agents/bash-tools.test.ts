@@ -1195,4 +1195,59 @@ describe("exec abort edge cases", () => {
     },
     isWin ? 15_000 : 5_000,
   );
+
+  it(
+    "ordinary foreground completion resolves normally without abort",
+    async () => {
+      const result = await execTool.execute(
+        nextCallId(),
+        { command: shellEcho("foreground-ok") },
+        undefined,
+        vi.fn(),
+      );
+      const output = readNormalizedTextContent(result.content);
+      expect(output).toContain("foreground-ok");
+      expect(readProcessStatus(result.details)).toBe(PROCESS_STATUS_COMPLETED);
+    },
+    isWin ? 5_000 : 3_000,
+  );
+
+  it(
+    "yield window backgrounds and completes without abort interference",
+    async () => {
+      const tool = createTestExecTool({ allowBackground: true, backgroundMs: 0 });
+      const onUpdateSpy = vi.fn();
+      const command = joinCommands([
+        shellEcho("yield-start"),
+        shortDelayCmd,
+        shellEcho("yield-done"),
+      ]);
+
+      const result = await tool.execute(
+        nextCallId(),
+        { command, background: true },
+        undefined,
+        onUpdateSpy,
+      );
+
+      const sessionId = requireSessionId(result.details as { sessionId?: string });
+      expect(readProcessStatus(result.details)).toBe(PROCESS_STATUS_RUNNING);
+
+      await expect
+        .poll(() => {
+          const finished = getFinishedSession(sessionId);
+          return Boolean(finished);
+        }, BACKGROUND_POLL_OPTIONS)
+        .toBe(true);
+
+      const poll = await executeProcessTool(processTool, {
+        action: "log",
+        sessionId,
+      });
+      const output = readNormalizedTextContent(poll.content);
+      expect(output).toContain("yield-start");
+      expect(output).toContain("yield-done");
+    },
+    isWin ? 15_000 : 5_000,
+  );
 });
