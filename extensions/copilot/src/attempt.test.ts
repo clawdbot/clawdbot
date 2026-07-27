@@ -111,6 +111,13 @@ const transcriptRuntimeMock = vi.hoisted(() => ({
         }
       : undefined;
   }),
+  appendBatch: vi.fn(async (params: { messages: Array<Record<string, unknown>> }) =>
+    params.messages.map((message) => ({
+      appended: true,
+      message: message.message,
+      messageId: (message.eventId as string | undefined) ?? "transcript-message",
+    })),
+  ),
   publish: vi.fn(async () => undefined),
 }));
 vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => {
@@ -119,6 +126,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal)
   return {
     ...actual,
     appendSessionTranscriptMessageByIdentity: transcriptRuntimeMock.append,
+    appendSessionTranscriptMessagesByIdentity: transcriptRuntimeMock.appendBatch,
     publishSessionTranscriptUpdateByIdentity: transcriptRuntimeMock.publish,
   };
 });
@@ -2876,6 +2884,7 @@ describe("runCopilotAttempt", () => {
   describe("canonical transcript journal", () => {
     afterEach(() => {
       transcriptRuntimeMock.append.mockClear();
+      transcriptRuntimeMock.appendBatch.mockClear();
       transcriptRuntimeMock.publish.mockClear();
     });
 
@@ -2926,7 +2935,7 @@ describe("runCopilotAttempt", () => {
       expect(requireSession(sdk).sendAndWait).not.toHaveBeenCalled();
       expect(result.replayMetadata.replaySafe).toBe(false);
       expect(sdk.client.deleteSession).not.toHaveBeenCalled();
-      expect(result.messagesSnapshot.at(-1)).toMatchObject({ display: false });
+      expect(result.messagesSnapshot.at(-1)).toMatchObject({ role: "user" });
     });
 
     it("fails closed, aborts once, and invalidates replay after an append rejection", async () => {
@@ -2970,10 +2979,8 @@ describe("runCopilotAttempt", () => {
 
     it("fails closed when an ordered tool-result append rejects", async () => {
       const appendError = new Error("tool append failed");
-      transcriptRuntimeMock.append
-        .mockImplementationOnce(appendPreparedTranscriptMessage)
-        .mockImplementationOnce(appendPreparedTranscriptMessage)
-        .mockRejectedValueOnce(appendError);
+      transcriptRuntimeMock.append.mockImplementationOnce(appendPreparedTranscriptMessage);
+      transcriptRuntimeMock.appendBatch.mockRejectedValueOnce(appendError);
       const sdk = makeFakeSdk({
         onCreateSession: (session) => {
           session.sendAndWait.mockImplementationOnce(async () => {
@@ -3008,7 +3015,8 @@ describe("runCopilotAttempt", () => {
         cause: appendError,
       });
       expect(requireSession(sdk).abort).toHaveBeenCalledTimes(1);
-      expect(transcriptRuntimeMock.append).toHaveBeenCalledTimes(3);
+      expect(transcriptRuntimeMock.append).toHaveBeenCalledOnce();
+      expect(transcriptRuntimeMock.appendBatch).toHaveBeenCalledOnce();
       expect(result.assistantTranscriptOwned).toBeUndefined();
       expect(result.replayMetadata.replaySafe).toBe(false);
     });

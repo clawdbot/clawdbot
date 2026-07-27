@@ -2,10 +2,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { runAgentHarnessLlmOutputHook } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { finalizeCopilotAttempt } from "./attempt-cleanup.js";
 import { createResult } from "./attempt-config.js";
-import {
-  projectCopilotAttemptMessagesForVisibility,
-  type AttemptTranscriptJournal,
-} from "./attempt-transcript-journal.js";
+import type { AttemptTranscriptJournal } from "./attempt-transcript-journal.js";
 import { withPromptFailure } from "./attempt-types.js";
 import type {
   AgentHarnessAttemptResult,
@@ -74,8 +71,9 @@ export async function completeCopilotAttempt(params: {
   const assistantTexts = bridge?.finalizeAssistantTexts() ?? [];
   const lastAssistant = bridge?.buildAssistantMessage({ modelRef, now });
   const transcript = transcriptJournal?.snapshot();
-  const messagesSnapshot =
-    transcript?.messagesSnapshot ?? projectCopilotAttemptMessagesForVisibility(input, messages);
+  // Pre-journal failures keep the prepared input snapshot. Reconstructing a
+  // user/assistant mirror here would restore the deleted dual-write owner.
+  const messagesSnapshot = transcript?.messagesSnapshot ?? messages;
   const result = createResult(input, {
     aborted,
     assistantTexts,

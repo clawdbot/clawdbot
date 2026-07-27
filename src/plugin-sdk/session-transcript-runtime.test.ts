@@ -13,6 +13,7 @@ import * as transcriptEvents from "../sessions/transcript-events.js";
 import {
   appendAssistantMirrorMessageByIdentity,
   appendSessionTranscriptMessageByIdentity,
+  appendSessionTranscriptMessagesByIdentity,
   formatSessionTranscriptMemoryHitKey,
   parseSessionTranscriptMemoryHitKey,
   publishSessionTranscriptUpdateByIdentity,
@@ -79,6 +80,42 @@ describe("session transcript runtime SDK", () => {
     });
     await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([]);
     expect(loadSessionEntry(scope)?.sessionFile).toBeUndefined();
+  });
+
+  it("atomically appends and idempotently replays an ordered message group", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "batch-session",
+      sessionKey: "agent:main:batch",
+      storePath,
+    };
+    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    const messages = [
+      {
+        eventId: "batch-assistant",
+        idempotencyLookup: "scan" as const,
+        message: { role: "assistant", content: "checking", idempotencyKey: "batch:assistant" },
+        now: 1_000,
+      },
+      {
+        eventId: "batch-result",
+        idempotencyLookup: "scan" as const,
+        message: { role: "toolResult", content: "done", idempotencyKey: "batch:result" },
+        now: 2_000,
+      },
+    ];
+
+    const appended = await appendSessionTranscriptMessagesByIdentity({ ...scope, messages });
+    const replayed = await appendSessionTranscriptMessagesByIdentity({ ...scope, messages });
+
+    expect(appended.map((result) => result.appended)).toEqual([true, true]);
+    expect(replayed.map((result) => result.appended)).toEqual([false, false]);
+    const events = await readSessionTranscriptEvents(scope);
+    expect(events).toHaveLength(3);
+    expect(events.slice(1)).toMatchObject([
+      { id: "batch-assistant", parentId: null },
+      { id: "batch-result", parentId: "batch-assistant" },
+    ]);
   });
 
   it("pages raw events across appends and resets after replacement", async () => {

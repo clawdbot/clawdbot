@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { redactTranscriptMessage } from "../agents/transcript-redact.js";
 import {
   appendTranscriptMessage,
+  appendTranscriptMessages,
   isSessionTranscriptProjectionUnavailableError,
   loadSessionEntry,
   loadTranscriptEvents,
@@ -127,6 +128,15 @@ export type SessionTranscriptTarget = SessionTranscriptIdentity & {
 
 export type SessionTranscriptAppendMessageParams<TMessage> = SessionTranscriptTargetParams &
   TranscriptMessageAppendOptions<TMessage>;
+
+export type SessionTranscriptAppendMessagesParams<TMessage> = SessionTranscriptTargetParams & {
+  config?: TranscriptMessageAppendOptions<TMessage>["config"];
+  cwd?: string;
+  messages: readonly Omit<
+    TranscriptMessageAppendOptions<TMessage>,
+    "config" | "cwd" | "parentId" | "prepareMessageAfterIdempotencyCheck" | "useRawWhenLinear"
+  >[];
+};
 
 export type SessionTranscriptAssistantMirrorAppendParams = SessionTranscriptReadParams & {
   config?: OpenClawConfig;
@@ -343,6 +353,16 @@ export async function appendSessionTranscriptMessageByIdentity<TMessage>(
   params: SessionTranscriptAppendMessageParams<TMessage>,
 ): Promise<TranscriptMessageAppendResult<TMessage> | undefined> {
   return await appendTranscriptMessage(params, params);
+}
+
+/**
+ * Atomically appends one ordered, already-hooked message group. Preparation and
+ * redaction finish before SQLite begins; this is the canonical future harness seam.
+ */
+export async function appendSessionTranscriptMessagesByIdentity<TMessage>(
+  params: SessionTranscriptAppendMessagesParams<TMessage>,
+): Promise<TranscriptMessageAppendResult<TMessage>[]> {
+  return await appendTranscriptMessages(params, params);
 }
 
 /**

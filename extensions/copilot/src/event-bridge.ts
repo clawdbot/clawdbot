@@ -1,25 +1,24 @@
 // Copilot plugin module implements event bridge behavior.
-import type {
-  Attachment,
-  MessageOptions,
-  SessionEvent,
-  SessionEventType,
-} from "@github/copilot-sdk";
+import type { MessageOptions, SessionEvent, SessionEventType } from "@github/copilot-sdk";
 import type {
   AgentHarnessAttemptResult,
   AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { sanitizeToolResult } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AttemptTranscriptJournal } from "./attempt-transcript-journal.js";
 import {
-  buildCopilotAssistantUsage,
-  normalizeCopilotUsage,
-  type CopilotUsageSnapshot,
-} from "./usage-bridge.js";
+  buildAssistantMessage,
+  hasOwnKeys,
+  projectSdkUserMetadata,
+  projectToolResultDetails,
+  resolveAssistantUsage,
+  resolveEventTimestamp,
+  sanitizeToolDetailText,
+  type AssistantMessage,
+  type AssistantUsageSnapshot,
+} from "./event-bridge-transcript.js";
+import { normalizeCopilotUsage } from "./usage-bridge.js";
 
-export type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
-
-export type AssistantUsageSnapshot = CopilotUsageSnapshot;
+export type { AssistantMessage, AssistantUsageSnapshot } from "./event-bridge-transcript.js";
 
 export interface OnAssistantDeltaPayload {
   delta: string;
@@ -415,7 +414,6 @@ export function attachEventBridge(
       return;
     }
     observedSessionIdle = true;
-    options.transcriptProjection?.journal.failIfPendingTools("session.idle");
     resolveSessionIdle?.();
     resolveSessionIdle = undefined;
   });
@@ -610,55 +608,6 @@ export function attachEventBridge(
   }
 }
 
-function buildAssistantMessage(params: {
-  assistantTexts: string[];
-  event?: Extract<SessionEvent, { type: "assistant.message" }>;
-  modelRef: { api?: string; id: string; provider: string };
-  now: () => number;
-  reasoningText?: string;
-  usage?: AssistantUsageSnapshot;
-}): AssistantMessage | undefined {
-  const event = params.event;
-  const text = event
-    ? event.data.content || params.assistantTexts[params.assistantTexts.length - 1] || ""
-    : "";
-  const reasoningText = event?.data.reasoningText ?? params.reasoningText;
-  const toolRequests = event?.data.toolRequests ?? [];
-  if (!text && !reasoningText && toolRequests.length === 0) {
-    return undefined;
-  }
-
-  const content: AssistantMessage["content"] = [];
-  if (reasoningText) {
-    content.push({ thinking: reasoningText, type: "thinking" });
-  }
-  if (text) {
-    content.push({ text, type: "text" });
-  }
-  for (const request of toolRequests) {
-    content.push({
-      arguments: request.arguments ?? {},
-      id: request.toolCallId,
-      name: request.name,
-      type: "toolCall",
-    });
-  }
-
-  return {
-    api: params.modelRef.api ?? "openai-responses",
-    content,
-    model: event?.data.model ?? params.modelRef.id,
-    provider: params.modelRef.provider,
-    role: "assistant",
-    stopReason: toolRequests.length > 0 ? "toolUse" : "stop",
-    timestamp: params.now(),
-    usage: buildCopilotAssistantUsage({
-      fallbackOutputTokens: event?.data.outputTokens,
-      usage: params.usage,
-    }),
-  };
-}
-
 function createPromptError(code: string, message: string, cause?: unknown): PromptErrorWithCode {
   const error = new Error(message) as PromptErrorWithCode;
   error.code = code;
@@ -713,95 +662,6 @@ function isRootCompactionEvent(event: { agentId?: string }): boolean {
   // SDK session events include subagent compaction; only root compaction
   // affects the pooled root session's cleanup and reuse lifecycle.
   return isRootSessionEvent(event);
-}
-
-function resolveAssistantUsage(
-  event: Extract<SessionEvent, { type: "assistant.message" }> | undefined,
-  latest: AssistantUsageSnapshot | undefined,
-  byApiCallId: Map<string, AssistantUsageSnapshot>,
-): AssistantUsageSnapshot | undefined {
-  const apiCallId = readString(event?.data.apiCallId);
-  return apiCallId ? (byApiCallId.get(apiCallId) ?? latest) : latest;
-}
-
-function resolveEventTimestamp(timestamp: string, now: () => number): number {
-  const parsed = Date.parse(timestamp);
-  return Number.isFinite(parsed) ? parsed : now();
-}
-
-function hasOwnKeys(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && Object.keys(value).length > 0);
-}
-
-function projectSdkUserMetadata(
-  attachments: Attachment[] | undefined,
-  source: string | undefined,
-): Record<string, unknown> | undefined {
-  const summaries = (attachments ?? []).map((attachment) => {
-    const summary = { ...attachment } as Record<string, unknown>;
-    delete summary.data;
-    delete summary.text;
-    delete summary.payload;
-    return summary;
-  });
-  const media = (attachments ?? []).flatMap((attachment) => {
-    if (attachment.type === "file") {
-      return [
-        {
-          path: attachment.path,
-          ...(attachment.mimeType ? { contentType: attachment.mimeType } : {}),
-        },
-      ];
-    }
-    if (attachment.type === "selection") {
-      return [{ path: attachment.filePath, kind: "document" }];
-    }
-    return [];
-  });
-  if (!source && summaries.length === 0) {
-    return undefined;
-  }
-  return {
-    ...(source ? { copilotSource: source } : {}),
-    ...(summaries.length > 0 ? { copilotAttachments: summaries } : {}),
-    ...(media.length > 0 ? { media } : {}),
-  };
-}
-
-function projectToolResultDetails(
-  data: Extract<SessionEvent, { type: "tool.execution_complete" }>["data"],
-): unknown {
-  const result = data.result;
-  const sanitizedContents = result?.contents
-    ? (sanitizeToolResult({ content: result.contents }) as { content?: unknown }).content
-    : undefined;
-  const binaryResultsForLlm = result?.binaryResultsForLlm?.map((entry) => {
-    const descriptor = { ...entry } as Record<string, unknown>;
-    delete descriptor.data;
-    return descriptor;
-  });
-  const citableSources = result?.citableSources?.map((source) => ({
-    ...source,
-    content: sanitizeToolDetailText(source.content),
-  }));
-  return sanitizeToolResult({
-    ...(result?.detailedContent
-      ? { content: [{ type: "text", text: result.detailedContent }] }
-      : {}),
-    ...(result?.structuredContent ? { structuredContent: result.structuredContent } : {}),
-    ...(sanitizedContents ? { contents: sanitizedContents } : {}),
-    ...(binaryResultsForLlm?.length ? { binaryResultsForLlm } : {}),
-    ...(citableSources?.length ? { citableSources } : {}),
-    ...(data.mcpMeta || result?.mcpMeta ? { mcpMeta: data.mcpMeta ?? result?.mcpMeta } : {}),
-  });
-}
-
-function sanitizeToolDetailText(text: string): string {
-  const sanitized = sanitizeToolResult({ content: [{ type: "text", text }] }) as {
-    content?: Array<{ text?: unknown }>;
-  };
-  const value = sanitized.content?.[0]?.text;
-  return typeof value === "string" ? value : "";
 }
 
 function joinReasoning(order: string[], reasoningById: Map<string, string>): string {
