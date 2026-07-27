@@ -313,12 +313,22 @@ describe("createTelegramDraftStream", () => {
 
   it("disables link previews on the streamed send and on every edit", async () => {
     const api = createMockDraftApi();
-    const stream = createDraftStream(api, { linkPreview: false });
+    const stream = createDraftStream(api, {
+      linkPreview: false,
+      thread: { id: 42, scope: "dm" },
+      replyToMessageId: 411,
+      replyToMode: "all",
+    });
 
     stream.update("see https://example.com");
     await stream.flush();
 
     expect(api.sendMessage).toHaveBeenCalledWith(123, "see https://example.com", {
+      message_thread_id: 42,
+      reply_parameters: {
+        message_id: 411,
+        allow_sending_without_reply: true,
+      },
       link_preview_options: { is_disabled: true },
     });
 
