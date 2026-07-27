@@ -239,6 +239,15 @@
   justify-content: flex-start;
 }
 
+/* Trailing action rows hold only a button cluster: give it the full row
+   (definite width, see the wrap note on .settings-row__control) so nowrap
+   button labels wrap as whole buttons instead of squeezing into 60%. */
+.settings-row--actions .settings-row__control {
+  width: 100%;
+  max-width: none;
+  flex-wrap: wrap;
+}
+
 /* Label-wrapped toggle row: whole row toggles the switch. */
 .settings-row--toggle {
   cursor: pointer;

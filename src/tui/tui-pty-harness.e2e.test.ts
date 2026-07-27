@@ -564,15 +564,15 @@ describe.sequential("TUI PTY harness", () => {
   }, STARTUP_TEST_TIMEOUT_MS);
 
   it("renders local ready on startup", () => {
-    expect(fixture.run.output()).toContain("local ready");
-    expect(fixture.run.output()).not.toContain("host local");
+    expect(fixture.run.visibleOutput()).toContain("local ready");
+    expect(fixture.run.visibleOutput()).not.toContain("host local");
   });
 
   it(
     "renders a compact model and active thinking level in the footer",
     async () => {
       await compactFooterFixture.run.waitForOutput("gpt-5.6-sol high", STARTUP_TIMEOUT_MS);
-      expect(compactFooterFixture.run.output()).not.toContain("openai:setup-64cddea3");
+      expect(compactFooterFixture.run.visibleOutput()).not.toContain("openai:setup-64cddea3");
     },
     STARTUP_TEST_TIMEOUT_MS,
   );
@@ -597,7 +597,7 @@ describe.sequential("TUI PTY harness", () => {
         (entry) =>
           entry.method === "patchSession" && objectFieldEquals(entry, "thinkingLevel", "low"),
       );
-      const sessionChangeOutputOffset = thinkingOverrideFixture.run.output().length;
+      const sessionChangeOutputOffset = thinkingOverrideFixture.run.visibleOutput().length;
       await thinkingOverrideFixture.run.write("second thinking override proof\r");
       await thinkingOverrideFixture.run.waitForOutput(
         "PTY_RESPONSE: second thinking override proof",
@@ -610,7 +610,7 @@ describe.sequential("TUI PTY harness", () => {
           objectFieldEquals(entry, "thinking", "high"),
       );
       const outputAfterSessionChange = thinkingOverrideFixture.run
-        .output()
+        .visibleOutput()
         .slice(sessionChangeOutputOffset);
       expect(outputAfterSessionChange).toContain(footerNeedle);
       expect(outputAfterSessionChange).not.toContain("fixture-provider/fixture-model low | tokens");
@@ -707,13 +707,16 @@ describe.sequential("TUI PTY harness", () => {
     TEST_TIMEOUT_MS,
   );
 
-  it(
-    "presents and resolves workspace skill approval in a compact terminal",
-    async () => {
+  it.each([
+    { cols: 64, rows: 18 },
+    { cols: 72, rows: 20 },
+  ])(
+    "presents and resolves workspace skill approval in a $cols×$rows terminal",
+    async ({ cols, rows }) => {
       const compactFixture = await startTuiFixture({
         env: {
-          OPENCLAW_TUI_PTY_COLS: "72",
-          OPENCLAW_TUI_PTY_ROWS: "20",
+          OPENCLAW_TUI_PTY_COLS: String(cols),
+          OPENCLAW_TUI_PTY_ROWS: String(rows),
         },
       });
 
@@ -809,7 +812,7 @@ describe.sequential("TUI PTY harness", () => {
     async () => {
       await fixture.run.write("xai limit proof\r");
       await fixture.run.waitForOutput("monthly spending limit");
-      expect(fixture.run.output()).not.toContain("Run /auth");
+      expect(fixture.run.visibleOutput()).not.toContain("Run /auth");
       await fixture.waitForLogEntry(
         (entry) =>
           entry.method === "sendChat" && objectFieldEquals(entry, "message", "xai limit proof"),
@@ -965,12 +968,12 @@ describe.sequential("TUI PTY harness", () => {
           entry.method === "loadHistory" && objectFieldEquals(entry, "sessionKey", sessionKey),
       );
 
-      const outputOffset = fixture.run.output().length;
+      const outputOffset = fixture.run.visibleOutput().length;
       await fixture.run.write(`${message}\r`, { delay: false });
       await fixture.waitForLogEntry((entry) => entry.method === "foreignSessionEvent");
       await fixture.run.waitForOutput(`PTY_RESPONSE: ${message}`);
 
-      const sessionOutput = fixture.run.output().slice(outputOffset);
+      const sessionOutput = fixture.run.visibleOutput().slice(outputOffset);
       expect(sessionOutput).toContain(`PTY_RESPONSE: ${message}`);
       expect(sessionOutput).not.toContain("PTY_FOREIGN_OPAQUE_SESSION_MESSAGE");
     },
@@ -1063,7 +1066,7 @@ describe.sequential("TUI PTY harness", () => {
           entry.method === "sendChat" && objectFieldEquals(entry, "message", "after switch"),
       );
       expect(sent.payload).toMatchObject({ sessionKey: "agent:main:switch-b" });
-      expect(fixture.run.output()).not.toContain("A_HISTORY_MARKER");
+      expect(fixture.run.visibleOutput()).not.toContain("A_HISTORY_MARKER");
     },
     TEST_TIMEOUT_MS,
   );

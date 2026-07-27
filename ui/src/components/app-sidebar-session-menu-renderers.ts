@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
+import type { ActorIdentityUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
@@ -96,6 +97,7 @@ export function renderSidebarCatalogViewMenu(params: {
   grouping: CatalogProjectGrouping;
   creators: readonly SessionCreatorOption[];
   creatorFilterId: string | null;
+  resolveCreatorUser: (creatorId: string) => ActorIdentityUser | undefined;
   onGroupingChange: (grouping: CatalogProjectGrouping) => void;
   onCreatorFilterChange: (creatorId: string | null) => void;
   onClose: (restoreFocus: boolean) => void;
@@ -192,7 +194,12 @@ export function renderSidebarCatalogViewMenu(params: {
                       <span slot="details" class="session-menu__check" aria-hidden="true"
                         >${params.creatorFilterId === creator.id ? icons.check : nothing}</span
                       >
-                      ${renderSessionOwnerChip(creator, "row")}
+                      ${renderSessionOwnerChip(
+                        creator,
+                        "row",
+                        "created",
+                        params.resolveCreatorUser(creator.id),
+                      )}
                       <span class="session-menu__text">${creator.label ?? creator.id}</span>
                     </wa-dropdown-item>
                   `,
@@ -214,6 +221,7 @@ export function renderSidebarSessionSortMenu(params: {
   showCron: boolean;
   creators: readonly SessionCreatorOption[];
   creatorFilterId: string | null;
+  resolveCreatorUser: (creatorId: string) => ActorIdentityUser | undefined;
   onGroupingChange: (grouping: SidebarSessionsGrouping) => void;
   onSortModeChange: (mode: SidebarSessionSortMode) => void;
   onStatusFilterChange: (statusFilter: SidebarSessionStatusFilter) => void;
@@ -364,7 +372,12 @@ export function renderSidebarSessionSortMenu(params: {
                       <span slot="details" class="session-menu__check" aria-hidden="true"
                         >${params.creatorFilterId === creator.id ? icons.check : nothing}</span
                       >
-                      ${renderSessionOwnerChip(creator, "row")}
+                      ${renderSessionOwnerChip(
+                        creator,
+                        "row",
+                        "created",
+                        params.resolveCreatorUser(creator.id),
+                      )}
                       <span class="session-menu__text">${creator.label ?? creator.id}</span>
                     </wa-dropdown-item>
                   `,

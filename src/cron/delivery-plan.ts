@@ -180,9 +180,19 @@ export function resolveFailureDestination(
     const hasJobModeField = "mode" in jobFailureDest;
 
     const jobToExplicitValue = hasJobToField && jobTo !== undefined;
+    const globalChannel = resolveAnnounceChannel({ channel, to });
 
     if (hasJobChannelField) {
       channel = jobChannel;
+      if (jobChannel && jobChannel !== globalChannel) {
+        // Targets and accounts belong to the channel that supplied them.
+        if (!hasJobToField) {
+          to = undefined;
+        }
+        if (!hasJobAccountIdField) {
+          accountId = undefined;
+        }
+      }
     }
     if (hasJobToField) {
       to = jobTo;
@@ -197,9 +207,14 @@ export function resolveFailureDestination(
       const effectiveJobMode = jobImpliesAnnounce ? "announce" : jobMode;
       const globalMode = mode ?? "announce";
       const resolvedJobMode = effectiveJobMode ?? "announce";
-      if (!jobToExplicitValue && globalMode !== resolvedJobMode) {
-        // Do not carry an inherited target across modes; an announce chat is not a webhook URL.
-        to = undefined;
+      if (globalMode !== resolvedJobMode) {
+        // Chat targets and accounts cannot be reused as webhook routing, or vice versa.
+        if (!jobToExplicitValue) {
+          to = undefined;
+        }
+        if (!hasJobAccountIdField) {
+          accountId = undefined;
+        }
       }
       mode = effectiveJobMode;
     }

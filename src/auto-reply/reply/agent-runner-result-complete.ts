@@ -9,6 +9,7 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import {
   buildInlinePluginStatusPayload,
@@ -62,6 +63,7 @@ export async function completeReplyAgentRun(input: {
     activeIsNewSession,
     activeSessionStore,
     cfg,
+    execution,
     followupRun,
     isHeartbeat,
     opts,
@@ -147,6 +149,9 @@ export async function completeReplyAgentRun(input: {
       const suffix = typeof count === "number" ? ` (count ${count})` : "";
       prefixNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
     }
+  }
+  if (execution.abortReason) {
+    return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
   }
   const prefixPayloads = [...prefixNotices];
   const isHookBlockedRun = runResult.meta?.error?.kind === "hook_block";

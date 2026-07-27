@@ -1,9 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { completeFollowupRunLifecycle, markFollowupRunEnqueued } from "./queue/types.js";
-import {
-  buildStrandedReplyRetryFollowupRun,
-  resolveStrandedReplyRecovery,
-} from "./stranded-reply-recovery.js";
+import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 import { createMockFollowupRun } from "./test-helpers.js";
 
 const STRANDED_REPLY_RETRY_MARKER = "stranded-reply-retry";
@@ -24,10 +21,21 @@ describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
       onReplyAdmissionWaitChange: vi.fn(),
     });
 
-    const retry = buildStrandedReplyRetryFollowupRun(parent, {
-      finalText: "A substantive stranded final that must be re-delivered via message(action=send).",
+    const recovery = resolveStrandedReplyRecovery({
+      base: parent,
+      finalText:
+        "A substantive stranded final must be re-delivered via message(action=send). It includes enough user-facing detail to require the one-shot recovery path.",
       sourceReplyDeliveryMode: "message_tool_only",
+      sendPolicyDenied: false,
+      successfulSourceReplyDelivery: false,
+      isHeartbeat: false,
+      isRoomEvent: false,
     });
+    expect(recovery.kind).toBe("retry");
+    if (recovery.kind !== "retry") {
+      throw new Error("expected retry recovery");
+    }
+    const retry = recovery.run;
 
     expect(retry.turnAdoptionLifecycle).toBeUndefined();
     expect(retry.strandedReplyRetry).toBe(true);

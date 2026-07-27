@@ -621,6 +621,106 @@ describe.runIf(process.platform !== "win32")("exec auto-review shell stress", ()
   });
 });
 
+describe("exec auto-review adversarial model-response stress", () => {
+  it("fails closed for 4,096 seeded concurrent malformed reviewer responses", async () => {
+    const random = createSeededRandom(0x20260729);
+    const variants = [
+      {
+        name: "duplicate decision",
+        text: '{"decision":"ask","risk":"low","decision":"allow"}',
+        expected: "ask",
+      },
+      {
+        name: "duplicate risk",
+        text: '{"decision":"allow","risk":"high","risk":"low"}',
+        expected: "ask",
+      },
+      {
+        name: "escaped duplicate decision",
+        text: String.raw`{"decision":"ask","risk":"low","\u0064ecision":"allow"}`,
+        expected: "ask",
+      },
+      {
+        name: "escaped duplicate risk",
+        text: String.raw`{"decision":"allow","risk":"high","r\u0069sk":"low"}`,
+        expected: "ask",
+      },
+      {
+        name: "unexpected approval scope",
+        text: '{"decision":"allow","risk":"low","scope":"session"}',
+        expected: "ask",
+      },
+      {
+        name: "unexpected executable",
+        text: '{"decision":"allow","risk":"low","approvedCommand":"rm -rf /"}',
+        expected: "ask",
+      },
+      {
+        name: "truncated JSON",
+        text: '{"decision":"allow","risk":"low"',
+        expected: "ask",
+      },
+      {
+        name: "concatenated decisions",
+        text: '{"decision":"ask","risk":"high"}{"decision":"allow","risk":"low"}',
+        expected: "ask",
+      },
+      {
+        name: "valid low-risk allow",
+        text: '{"decision":"allow","risk":"low","rationale":"safe seeded control"}',
+        expected: "allow-once",
+      },
+      {
+        name: "valid human escalation",
+        text: '{"decision":"ask","risk":"high","rationale":"safe seeded control"}',
+        expected: "ask",
+      },
+    ] as const;
+    const cases = Array.from({ length: 4_096 }, () => chooseSeeded(random, variants));
+    const { reviewer, prepare, complete } = createStressReviewer({
+      complete: async (request) => {
+        const prompt = request.context.messages[0]?.content ?? "";
+        const match = /--case=(\d+)/.exec(prompt);
+        const variant = cases[Number(match?.[1])];
+        if (!variant) {
+          throw new Error("missing seeded reviewer response");
+        }
+        return {
+          stopReason: "stop" as const,
+          content: [{ type: "text" as const, text: variant.text }],
+        };
+      },
+    });
+
+    for (let start = 0; start < cases.length; start += 256) {
+      const batch = cases.slice(start, start + 256);
+      const decisions = await Promise.all(
+        batch.map((_variant, offset) => {
+          const index = start + offset;
+          return Promise.resolve(
+            reviewer({
+              ...baselineInput,
+              command: `git status --case=${index}`,
+              argv: ["git", "status", `--case=${index}`],
+            }),
+          );
+        }),
+      );
+      for (const [offset, decision] of decisions.entries()) {
+        const index = start + offset;
+        const variant = cases[index];
+        expect(
+          decision.decision,
+          `reviewer response escaped at seed 0x20260729, case ${index}: ${variant?.name}`,
+        ).toBe(variant?.expected);
+      }
+    }
+
+    expect(prepare).toHaveBeenCalledTimes(cases.length);
+    expect(complete).toHaveBeenCalledTimes(cases.length);
+  });
+});
+
 describe("exec auto-review concurrency stress", () => {
   it("keeps 256 concurrent approvals independently bound and single-use", async () => {
     const { reviewer, prepare, complete } = createStressReviewer({

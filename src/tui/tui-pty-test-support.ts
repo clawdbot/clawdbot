@@ -2,6 +2,7 @@
 import { appendFileSync } from "node:fs";
 import * as nodePty from "@lydell/node-pty";
 import type { IPty } from "@lydell/node-pty";
+import { AnsiSequenceStripper } from "../../packages/terminal-core/src/ansi-sequences.js";
 import { toErrorObject } from "../infra/errors.js";
 
 // Shared PTY harness utilities for fake-backend and local TUI smoke tests.
@@ -10,6 +11,7 @@ type PtyExitEvent = Parameters<Parameters<IPty["onExit"]>[0]>[0];
 /** Handle returned by PTY tests for input, output waits, and cleanup. */
 export type PtyRun = {
   output: () => string;
+  visibleOutput: () => string;
   write: (data: string, opts?: { delay?: boolean }) => Promise<void>;
   waitForOutput: (needle: string, timeoutMs?: number) => Promise<string>;
   waitForExit: (timeoutMs?: number) => Promise<PtyExitEvent>;
@@ -105,7 +107,9 @@ export function startPty(
   },
 ) {
   let output = "";
+  let visibleOutput = "";
   let exitEvent: PtyExitEvent | null = null;
+  const ansiStripper = new AnsiSequenceStripper();
   const ptyEnv = {
     ...process.env,
     ...opts.env,
@@ -121,6 +125,12 @@ export function startPty(
 
   const dataSubscription = pty.onData((data) => {
     output += data;
+    // PTY line wrapping and ANSI chunks must not hide visible text from behavior checks.
+    const visibleChunk = ansiStripper.write(data).replace(/\s+/gu, " ");
+    visibleOutput +=
+      visibleOutput.endsWith(" ") && visibleChunk.startsWith(" ")
+        ? visibleChunk.slice(1)
+        : visibleChunk;
     mirrorPtyOutput(data);
   });
   const exitSubscription = pty.onExit((event) => {
@@ -138,12 +148,13 @@ export function startPty(
 
   const run: PtyRun = {
     output: () => output,
+    visibleOutput: () => visibleOutput,
     write: async (data, writeOpts) => await writePtyInput(pty, data, writeOpts),
     waitForOutput: async (needle, timeoutMs = opts.outputTimeoutMs) =>
       await waitFor({
         timeoutMs,
         read: () => {
-          if (output.includes(needle)) {
+          if (visibleOutput.includes(needle.replace(/\s+/gu, " "))) {
             return output;
           }
           if (exitEvent) {

@@ -8,11 +8,17 @@ import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
+import { normalizeVerboseLevel } from "../thinking.js";
+import type { ReplyPayload } from "../types.js";
 import { resolveConfiguredFallbackModel } from "./agent-runner-core.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
+import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
+import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
+import { refreshQueuedFollowupSession } from "./queue.js";
 import { buildReplyUsageState, recordReplyUsageState } from "./reply-usage-state.js";
 import { persistRunSessionUsage } from "./session-run-accounting.js";
+import { incrementRunCompactionCount } from "./session-run-accounting.js";
 
 type AgentTurnAccountingContext = Pick<
   FinalizeReplyAgentRunInput,
@@ -27,7 +33,8 @@ type AgentTurnAccountingContext = Pick<
   | "pendingToolTasks"
   | "preflightCompactionApplied"
   | "resolvedVerboseLevel"
-  | "runOutcome"
+  | "execution"
+  | "runId"
   | "runStartedAt"
   | "sessionCtx"
   | "sessionKey"
@@ -47,7 +54,8 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     pendingToolTasks,
     preflightCompactionApplied,
     resolvedVerboseLevel,
-    runOutcome,
+    execution,
+    runId,
     runStartedAt,
     sessionKey,
     sessionCtx,
@@ -56,19 +64,15 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   } = context;
   let { activeSessionEntry } = context;
 
-  const {
-    runId,
-    runResult,
-    fallbackProvider,
-    fallbackModel,
-    fallbackExhausted,
-    fallbackAttempts,
-    directlySentBlockKeys,
-    directlySentBlockPayloads,
-    terminalFailurePayload,
-  } = runOutcome;
-  const { autoCompactionCount } = runOutcome;
-  const { didLogHeartbeatStrip } = runOutcome;
+  const runResult = execution.result;
+  const fallbackProvider = execution.resolved.provider;
+  const fallbackModel = execution.resolved.model;
+  const fallbackExhausted = execution.fallback.exhausted;
+  const fallbackAttempts = execution.fallback.attempts;
+  const directlySentBlockKeys = execution.directlySentBlockKeys;
+  const directlySentBlockPayloads = execution.directlySentBlockPayloads;
+  const terminalFailurePayload = execution.terminalFailurePayload;
+  const { autoCompactionCount, didLogHeartbeatStrip } = execution;
 
   if (
     shouldInjectGroupIntro &&
@@ -299,4 +303,95 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     usage,
     verboseEnabled,
   };
+}
+
+export type AccountedAgentTurn = Awaited<ReturnType<typeof accountAgentTurn>>;
+
+/** Applies common accounting plus the queue/session projection owned by follow-up turns. */
+export async function accountFollowupTurn(params: {
+  turn: AdmittedFollowupTurn;
+  defaults: FollowupRunnerParams;
+  execution: FollowupExecutionResult;
+}) {
+  const settled = params.execution.execution.outcome;
+  if (settled.kind !== "settled") {
+    return undefined;
+  }
+  const { turn, defaults, execution } = params;
+  const sessionKey = turn.session.kind === "session" ? turn.session.key : undefined;
+  const accounting = await accountAgentTurn({
+    activeSessionEntry: turn.session.current(),
+    activeSessionStore: turn.sessionStore,
+    agentCfgContextTokens: defaults.agentCfgContextTokens,
+    blockReplyPipeline: null,
+    cfg: turn.config,
+    defaultModel: defaults.defaultModel,
+    followupRun: turn.queued,
+    isHeartbeat: defaults.opts?.isHeartbeat === true,
+    pendingToolTasks: execution.pendingToolTasks,
+    preflightCompactionApplied: turn.preflightCompactionApplied,
+    resolvedVerboseLevel:
+      normalizeVerboseLevel(turn.session.current()?.verboseLevel ?? turn.queued.run.verboseLevel) ??
+      "off",
+    execution: settled,
+    runId: execution.execution.runId,
+    runStartedAt: execution.runStartedAt,
+    sessionCtx: execution.sessionCtx,
+    sessionKey,
+    shouldInjectGroupIntro: false,
+    storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
+  });
+  turn.session.publish(accounting.activeSessionEntry);
+  const queueKey = turn.queued.run.sessionKey ?? defaults.sessionKey ?? sessionKey;
+  if (
+    queueKey &&
+    accounting.fallbackTransition.stateChanged &&
+    !accounting.fallbackExhausted &&
+    !accounting.preserveUserFacingSessionState
+  ) {
+    const entry = turn.session.current();
+    refreshQueuedFollowupSession({
+      key: queueKey,
+      previousSessionId: turn.queued.run.sessionId,
+      nextSessionId: entry?.sessionId ?? turn.queued.run.sessionId,
+      nextSessionFile: entry?.sessionFile,
+      nextProvider: accounting.providerUsed,
+      nextModel: accounting.modelUsed,
+      nextModelOverrideSource: entry?.modelOverrideSource,
+      nextAuthProfileId: entry?.authProfileOverride,
+      nextAuthProfileIdSource: entry?.authProfileOverrideSource,
+    });
+  }
+  let compactionNotice: ReplyPayload | undefined;
+  if (accounting.autoCompactionCount > 0) {
+    const previousSessionId = turn.queued.run.sessionId;
+    const count = await incrementRunCompactionCount({
+      cfg: turn.config,
+      sessionEntry: turn.session.current(),
+      sessionStore: turn.sessionStore,
+      sessionKey,
+      storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
+      amount: accounting.autoCompactionCount,
+      compactionTokensAfter: accounting.runResult.meta?.agentMeta?.compactionTokensAfter,
+      lastCallUsage: accounting.runResult.meta?.agentMeta?.lastCallUsage,
+      contextTokensUsed: accounting.contextTokensUsed,
+      newSessionId: accounting.runResult.meta?.agentMeta?.sessionId,
+      newSessionFile: accounting.runResult.meta?.agentMeta?.sessionFile,
+    });
+    const refreshed = turn.session.current();
+    if (refreshed) {
+      turn.session.publish(refreshed);
+      refreshQueuedFollowupSession({
+        key: queueKey ?? "",
+        previousSessionId,
+        nextSessionId: refreshed.sessionId,
+        nextSessionFile: refreshed.sessionFile,
+      });
+    }
+    if (accounting.verboseEnabled) {
+      const suffix = typeof count === "number" ? ` (count ${count})` : "";
+      compactionNotice = { text: `🧹 Auto-compaction complete${suffix}.` };
+    }
+  }
+  return { ...accounting, compactionNotice };
 }

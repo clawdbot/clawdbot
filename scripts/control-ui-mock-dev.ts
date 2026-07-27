@@ -848,6 +848,11 @@ async function createChatPickerScenario(
     margin: 2,
     width: 360,
   });
+  const whatsappLoginQrDataUrl = await qrcode.toDataURL("mock-whatsapp-login", {
+    errorCorrectionLevel: "M",
+    margin: 2,
+    width: 360,
+  });
   const workspaceFiles = [
     {
       missing: false,
@@ -1471,6 +1476,17 @@ async function createChatPickerScenario(
       },
       "plugins.list": buildPluginCatalogMock(),
       "channels.status": buildChannelsStatusMock(baseTime),
+      "channels.pairing.list": {
+        accounts: [],
+        requests: [],
+        commandOwnerConfigured: true,
+        limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+      },
+      "web.login.start": {
+        message: "Scan the QR code with WhatsApp to link this device.",
+        qrDataUrl: whatsappLoginQrDataUrl,
+      },
+      "web.login.wait": { message: "Linked.", connected: true },
       "wizard.start": channelWizard.start,
       "wizard.next": channelWizard.next,
       "wizard.cancel": { status: "cancelled" },
