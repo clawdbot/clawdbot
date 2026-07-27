@@ -14,6 +14,7 @@ type DetailPanel = HTMLElement & {
 describe.runIf(browserMode)("chat sidebar layout", () => {
   it("keeps long markdown scrollable inside a bounded sidebar", async () => {
     const container = document.createElement("div");
+    container.className = "sidebar-column__panel";
     container.style.cssText = "display:flex;width:480px;height:320px;";
 
     const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
@@ -44,6 +45,7 @@ describe.runIf(browserMode)("chat sidebar layout", () => {
 
   it("keeps long files scrollable inside CodeMirror", async () => {
     const container = document.createElement("div");
+    container.className = "sidebar-column__panel";
     container.style.cssText = "display:flex;width:480px;height:320px;";
 
     const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
