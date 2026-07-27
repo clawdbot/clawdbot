@@ -1,4 +1,4 @@
-// Keeps the fake-terminal fixture's log and opaque-session helpers independently bounded.
+// Keeps fake-terminal test-only logs and opaque-session fixtures independently bounded.
 import { readFile } from "node:fs/promises";
 import { sleep } from "./tui-pty-test-support.js";
 

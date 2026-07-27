@@ -393,12 +393,15 @@ export function createEventHandlers(context: EventHandlerContext) {
       return;
     }
 
-    if (evt.runId && (evt.phase === "end" || evt.phase === "error")) {
-      runCoordinator.notePersistedRun(evt.runId);
-      if (pendingNewSessionRunIds.delete(evt.runId)) {
+    const persistedRunId = evt.clientRunId || evt.runId;
+    if (persistedRunId && (evt.phase === "end" || evt.phase === "error")) {
+      runCoordinator.notePersistedRun(persistedRunId);
+      if (pendingNewSessionRunIds.delete(persistedRunId)) {
         if (evt.phase === "end") {
-          const displayedRunIds = finalizedRunsWithDisplay.has(evt.runId) ? [evt.runId] : [];
-          queueHistoryReload([evt.runId], [evt.runId], displayedRunIds);
+          const displayedRunIds = finalizedRunsWithDisplay.has(persistedRunId)
+            ? [persistedRunId]
+            : [];
+          queueHistoryReload([persistedRunId], [persistedRunId], displayedRunIds);
         } else {
           void refreshSessionInfo?.();
         }

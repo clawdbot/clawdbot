@@ -2474,6 +2474,45 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       expect(loadHistory).toHaveBeenCalledTimes(1);
     });
 
+    it.each(["end", "error"] as const)(
+      "releases a displayed client run when its internal agent reports %s",
+      (phase) => {
+        const {
+          state,
+          chatLog,
+          loadHistory,
+          handleChatEvent,
+          handleSessionsChangedEvent,
+          handleSessionMessageEvent,
+        } = createHandlersHarness({ state: { activeChatRunId: "run-client-visible" } });
+
+        handleSessionMessageEvent({
+          sessionKey: state.currentSessionKey,
+        } satisfies SessionMessageEvent);
+        handleChatEvent({
+          runId: "run-client-visible",
+          sessionKey: state.currentSessionKey,
+          state: "final",
+          message: { content: [{ type: "text", text: "keep the aliased reply visible" }] },
+        } satisfies ChatEvent);
+
+        expect(chatLog.finalizeAssistant).toHaveBeenCalledWith(
+          "keep the aliased reply visible",
+          "run-client-visible",
+        );
+        expect(loadHistory).not.toHaveBeenCalled();
+
+        handleSessionsChangedEvent({
+          sessionKey: state.currentSessionKey,
+          runId: "run-internal-agent",
+          clientRunId: "run-client-visible",
+          phase,
+        } satisfies SessionChangedEvent);
+
+        expect(loadHistory).toHaveBeenCalledTimes(1);
+      },
+    );
+
     it("refreshes after a local final when terminal persistence arrives first", () => {
       const {
         state,

@@ -10,7 +10,7 @@ import {
   readFixtureLog,
   waitForFixtureLogEntry,
   type FixtureLogEntry,
-} from "./tui-pty-harness-fixture-support.js";
+} from "./tui-pty-harness-fixture-test-support.js";
 import { sleep, startPty, type PtyRun } from "./tui-pty-test-support.js";
 
 const activeRuns: PtyRun[] = [];

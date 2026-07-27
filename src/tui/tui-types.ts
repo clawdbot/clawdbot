@@ -62,6 +62,7 @@ export type SessionChangedEvent = {
   reason?: string;
   phase?: string;
   runId?: string;
+  clientRunId?: string;
   sessionId?: string;
   updatedAt?: number | null;
 };
