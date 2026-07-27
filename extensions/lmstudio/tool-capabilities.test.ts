@@ -145,15 +145,19 @@ describe("LM Studio configured model tool capabilities", () => {
     },
   ])(
     "preserves $label through the registered provider catalog",
-    ({ configuredCompat, expectedOverride }) => {
-      const entries = augmentConfiguredLmstudioCompat(configuredCompat);
+    async ({ configuredCompat, expectedOverride }) => {
+      const entries = await augmentConfiguredLmstudioCompat(configuredCompat);
+
+      if (!Array.isArray(entries)) {
+        throw new Error("Expected LM Studio provider catalog augmentation to return model entries");
+      }
 
       expect(entries).toHaveLength(1);
-      expect(entries?.[0]).toMatchObject({
+      expect(entries[0]).toMatchObject({
         provider: "lmstudio",
         id: "qwen3-8b-instruct",
       });
-      expect(entries?.[0]?.compat).toEqual({ ...configuredCompat, ...expectedOverride });
+      expect(entries[0]?.compat).toEqual({ ...configuredCompat, ...expectedOverride });
     },
   );
 });
