@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { registerModelsCli } from "./models-cli.js";
+import { isCommandJsonOutputMode } from "./program/json-mode.js";
 
 const mocks = vi.hoisted(() => ({
   modelsStatusCommand: vi.fn().mockResolvedValue(undefined),
@@ -131,6 +132,24 @@ describe("models cli", () => {
       throw new Error("expected command context");
     }
   }
+
+  it("declares --status-json as machine output", async () => {
+    const program = createProgram();
+    let detected = false;
+    program.hook("preAction", (_command, actionCommand) => {
+      detected = isCommandJsonOutputMode(actionCommand, process.argv);
+    });
+
+    const originalArgv = process.argv;
+    process.argv = ["node", "openclaw", "models", "--status-json"];
+    try {
+      await program.parseAsync(["models", "--status-json"], { from: "user" });
+    } finally {
+      process.argv = originalArgv;
+    }
+
+    expect(detected).toBe(true);
+  });
 
   it("registers github-copilot login command", async () => {
     const program = createProgram();

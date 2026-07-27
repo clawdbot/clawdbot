@@ -540,11 +540,14 @@ describe("routeIdFromPath", () => {
       agentId: "main",
       shortId: "12345678",
     });
+    // The slug is captured so it can settle a tie between ids sharing this prefix, but it
+    // never changes the parsed id: a wrong agent and a wrong slug both stay decorative.
     expect(sessionRefFromPath("/chat/wrong/wrong-slug-1234567890ab")).toEqual({
       namespace: "chat",
       kind: "short",
       agentId: "wrong",
       shortId: "1234567890ab",
+      slugHint: "wrong-slug",
     });
     expect(sessionRefFromPath("/chat/main/telegram/12345")).toEqual({
       namespace: "chat",

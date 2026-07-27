@@ -153,6 +153,75 @@ describe("sessions.files touched-file folds", () => {
     });
   });
 
+  it("yields between SQLite pages and shares one concurrent fold per session", async () => {
+    useSqliteSession(hoisted.loadSessionEntry, workspaceRoot, "sess-touched-singleflight");
+    let otherWorkRan = false;
+    setImmediate(() => {
+      otherWorkRan = true;
+    });
+    hoisted.readSessionTranscriptVisibleMessageDelta.mockImplementation((_scope, limits) => {
+      if (limits.cursor !== undefined) {
+        expect(limits.cursor).toBe("singleflight-page-1");
+        expect(otherWorkRan).toBe(true);
+      }
+      return {
+        kind: "page",
+        cursor: limits.cursor === undefined ? "singleflight-page-1" : "singleflight-final",
+        events: [],
+        hasMore: limits.cursor === undefined,
+        serializedBytes: 100,
+      };
+    });
+
+    const params = { sessionKey: "agent:main:main" };
+    const first = invokeSessionFilesHandler("sessions.files.list", params);
+    const second = invokeSessionFilesHandler("sessions.files.list", params);
+
+    expect(hoisted.readSessionTranscriptVisibleMessageDelta).toHaveBeenCalledTimes(1);
+    for (const result of await Promise.all([first, second])) {
+      expectOkPayload(result);
+    }
+    expect(hoisted.readSessionTranscriptVisibleMessageDelta).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets a different session finish while a multi-page fold is yielded", async () => {
+    hoisted.resolveAgentWorkspaceDir.mockReturnValue(undefined);
+    hoisted.loadSessionEntry.mockImplementation((sessionKey: string) => {
+      const sessionId = sessionKey.endsWith(":slow") ? "sess-touched-slow" : "sess-touched-fast";
+      const storePath = path.join(workspaceRoot, `${sessionId}.sqlite`);
+      return {
+        canonicalKey: sessionKey,
+        cfg: {},
+        storePath,
+        entry: { sessionId, sessionFile: `sqlite:main:${sessionId}:${storePath}` },
+      };
+    });
+    hoisted.readSessionTranscriptVisibleMessageDelta.mockImplementation((scope, limits) => {
+      const isSlow = scope.sessionId === "sess-touched-slow";
+      return {
+        kind: "page",
+        cursor: isSlow ? "slow-final" : "fast-final",
+        events: [],
+        hasMore: isSlow && limits.cursor === undefined,
+        serializedBytes: 100,
+      };
+    });
+
+    let slowFinished = false;
+    const slow = invokeSessionFilesHandler("sessions.files.list", {
+      sessionKey: "agent:main:slow",
+    }).then((result) => {
+      slowFinished = true;
+      return result;
+    });
+    expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", { sessionKey: "agent:main:fast" }),
+    );
+
+    expect(slowFinished).toBe(false);
+    expectOkPayload(await slow);
+  });
+
   it("isolates touched-file folds for the same session across stores", async () => {
     const sessionId = "sess-touched-multi-store";
     const firstStorePath = path.join(workspaceRoot, "store-a.sqlite");

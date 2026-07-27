@@ -104,6 +104,22 @@ function cacheChatMessages(
   });
 }
 
+function createQueuedLocalCommand(
+  id: string,
+  text: string,
+  options: { createdAt?: number; sessionKey?: string } = {},
+) {
+  const [name, ...args] = text.slice(1).split(" ");
+  return {
+    id,
+    text,
+    createdAt: options.createdAt ?? 1,
+    localCommandArgs: args.join(" "),
+    localCommandName: name ?? "",
+    sessionKey: options.sessionKey ?? "agent:main",
+  };
+}
+
 const executeSlashCommandMock = vi.fn();
 const executeSlashCommandActual = chatCommandExecutor.executeSlashCommand;
 
@@ -3409,14 +3425,7 @@ describe("handleSendChat", () => {
   });
 
   it("reconciles a restored undefined-state command before destructive execution", async () => {
-    const item = {
-      id: "restored-undefined-clear",
-      text: "/clear",
-      createdAt: 1,
-      localCommandArgs: "",
-      localCommandName: "clear",
-      sessionKey: "agent:main",
-    };
+    const item = createQueuedLocalCommand("restored-undefined-clear", "/clear");
     const host = makeHost({
       requestHandlers: {
         "chat.history": {
@@ -3478,14 +3487,7 @@ describe("handleSendChat", () => {
       "chat.history": () => idleChatHistory(),
     });
     const client = clientWithRequest(request);
-    const item = {
-      id: "shared-local-command",
-      text: "/think high",
-      createdAt: 1,
-      localCommandArgs: "high",
-      localCommandName: "think",
-      sessionKey: "agent:main",
-    };
+    const item = createQueuedLocalCommand("shared-local-command", "/think high");
     const firstHost = makeHost({ client, chatQueue: [item] });
     const secondHost = makeHost({ client, chatQueue: [{ ...item }] });
     expect(admitQueuedMessageForSession(firstHost, firstHost.sessionKey, item)).toBe(true);
@@ -3510,22 +3512,13 @@ describe("handleSendChat", () => {
     const client = clientWithRequest(request);
     const sessionKey = "agent:main:visible";
     const items = [
-      {
-        id: "first-shared-local-command",
-        text: "/think high",
-        createdAt: 1,
-        localCommandArgs: "high",
-        localCommandName: "think",
+      createQueuedLocalCommand("first-shared-local-command", "/think high", {
         sessionKey,
-      },
-      {
-        id: "second-shared-local-command",
-        text: "/think low",
+      }),
+      createQueuedLocalCommand("second-shared-local-command", "/think low", {
         createdAt: 2,
-        localCommandArgs: "low",
-        localCommandName: "think",
         sessionKey,
-      },
+      }),
     ];
     const visibleHost = makeHost({ client, chatQueue: items, sessionKey });
     const inactiveHost = makeHost({ client, chatQueue: [], sessionKey: "agent:main:inactive" });
@@ -3547,14 +3540,7 @@ describe("handleSendChat", () => {
     const request = makeRequestMock({
       "chat.history": () => idleChatHistory(),
     });
-    const item = {
-      id: "slow-local-command",
-      text: "/compact",
-      createdAt: 1,
-      localCommandArgs: "",
-      localCommandName: "compact",
-      sessionKey: "agent:main",
-    };
+    const item = createQueuedLocalCommand("slow-local-command", "/compact");
     const client = clientWithRequest(request);
     const host = makeHost({
       client,
@@ -3605,14 +3591,7 @@ describe("handleSendChat", () => {
   it("returns a confirmed clear to waiting-idle when a run starts during the dialog", async () => {
     const confirmation = createDeferred<boolean>();
 
-    const item = {
-      id: "clear-confirmation-race",
-      text: "/clear",
-      createdAt: 1,
-      localCommandArgs: "",
-      localCommandName: "clear",
-      sessionKey: "agent:main",
-    };
+    const item = createQueuedLocalCommand("clear-confirmation-race", "/clear");
     const host = makeHost({
       requestHandlers: {
         "chat.history": () => idleChatHistory(),
@@ -3634,14 +3613,7 @@ describe("handleSendChat", () => {
   });
 
   it("cancels a queued reset when dashboard reset confirmation is rejected", async () => {
-    const item = {
-      id: "queued-reset-cancelled",
-      text: "/reset",
-      createdAt: 1,
-      localCommandArgs: "",
-      localCommandName: "reset",
-      sessionKey: "agent:main",
-    };
+    const item = createQueuedLocalCommand("queued-reset-cancelled", "/reset");
     const confirmConversationReset = vi.fn(async () => false);
     const host = makeHost({
       requestHandlers: {
@@ -3663,14 +3635,7 @@ describe("handleSendChat", () => {
     const confirmation = createDeferred<boolean>();
     const sendPayloads: Array<Record<string, unknown>> = [];
 
-    const item = {
-      id: "queued-reset-approved-before-run",
-      text: "/reset",
-      createdAt: 1,
-      localCommandArgs: "",
-      localCommandName: "reset",
-      sessionKey: "agent:main",
-    };
+    const item = createQueuedLocalCommand("queued-reset-approved-before-run", "/reset");
     const confirmConversationReset = vi.fn(async () => await confirmation.promise);
     const host = makeHost({
       requestHandlers: {
@@ -3713,14 +3678,9 @@ describe("handleSendChat", () => {
   it("keeps a queued reset when its session changes during confirmation", async () => {
     const confirmation = createDeferred<boolean>();
 
-    const item = {
-      id: "queued-reset-route-switch",
-      text: "/reset",
-      createdAt: 1,
-      localCommandArgs: "",
-      localCommandName: "reset",
+    const item = createQueuedLocalCommand("queued-reset-route-switch", "/reset", {
       sessionKey: "agent:main:first",
-    };
+    });
     const confirmConversationReset = vi.fn(async () => await confirmation.promise);
     const host = makeHost({
       requestHandlers: {
@@ -3751,14 +3711,9 @@ describe("handleSendChat", () => {
     const command = createDeferred<Awaited<ReturnType<ExecuteSlashCommand>>>();
     executeSlashCommandMock.mockImplementationOnce(() => command.promise);
 
-    const item = {
-      id: "route-switched-local-command",
-      text: "/model gpt-5-mini",
-      createdAt: 1,
-      localCommandArgs: "gpt-5-mini",
-      localCommandName: "model",
+    const item = createQueuedLocalCommand("route-switched-local-command", "/model gpt-5-mini", {
       sessionKey: "agent:main:first",
-    };
+    });
     const refreshCurrentSessionTools = vi.fn(async () => undefined);
     const refreshCurrentChat = vi.fn(async () => undefined);
     const host = makeHost({
@@ -3810,14 +3765,9 @@ describe("handleSendChat", () => {
         "chat.history": () => idleChatHistory("agent:main:first"),
       }),
     );
-    const item = {
-      id: "reconnected-local-command",
-      text: "/model unavailable",
-      createdAt: 1,
-      localCommandArgs: "unavailable",
-      localCommandName: "model",
+    const item = createQueuedLocalCommand("reconnected-local-command", "/model unavailable", {
       sessionKey: "agent:main:first",
-    };
+    });
     const host = makeHost({
       client: firstClient,
       connectionEpoch: 1,
@@ -4059,22 +4009,8 @@ describe("handleSendChat", () => {
     const sendPayloads: Array<Record<string, unknown>> = [];
 
     const items = [
-      {
-        id: "queued-think-before-reset",
-        text: "/think high",
-        createdAt: 1,
-        localCommandArgs: "high",
-        localCommandName: "think",
-        sessionKey: "agent:main",
-      },
-      {
-        id: "queued-reset-after-think",
-        text: "/reset",
-        createdAt: 2,
-        localCommandArgs: "",
-        localCommandName: "reset",
-        sessionKey: "agent:main",
-      },
+      createQueuedLocalCommand("queued-think-before-reset", "/think high"),
+      createQueuedLocalCommand("queued-reset-after-think", "/reset", { createdAt: 2 }),
       {
         id: "queued-prompt-after-reset",
         text: "run only after reset",
@@ -4149,14 +4085,7 @@ describe("handleSendChat", () => {
     const write = storage.setItem.bind(storage);
     executeSlashCommandMock.mockResolvedValue({ content: "Thinking level set." });
 
-    const item = {
-      id: "local-command-claim-failure",
-      text: "/think high",
-      createdAt: 1,
-      localCommandArgs: "high",
-      localCommandName: "think",
-      sessionKey: "agent:main",
-    };
+    const item = createQueuedLocalCommand("local-command-claim-failure", "/think high");
     const host = makeHost({
       requestHandlers: {
         "chat.history": () => idleChatHistory(),
@@ -4195,14 +4124,7 @@ describe("handleSendChat", () => {
         return { content: "Thinking level set." };
       });
 
-    const item = {
-      id: "retry-local-command-after-disconnect",
-      text: "/think high",
-      createdAt: 1,
-      localCommandArgs: "high",
-      localCommandName: "think",
-      sessionKey: "agent:main",
-    };
+    const item = createQueuedLocalCommand("retry-local-command-after-disconnect", "/think high");
     const following = {
       id: "prompt-after-retried-command",
       text: "use the new thinking level",
@@ -4249,14 +4171,7 @@ describe("handleSendChat", () => {
   it("retires a rejected clear, drops its optimistic history, and parks its successor", async () => {
     const sentMessages: string[] = [];
 
-    const clear = {
-      id: "uncertain-clear",
-      text: "/clear",
-      createdAt: 1,
-      localCommandArgs: "",
-      localCommandName: "clear",
-      sessionKey: "agent:main",
-    };
+    const clear = createQueuedLocalCommand("uncertain-clear", "/clear");
     const successor = {
       id: "prompt-after-uncertain-clear",
       text: "send only after review",
@@ -4338,14 +4253,7 @@ describe("handleSendChat", () => {
     let resetIssued = false;
     let failedBarrierWrites = 0;
 
-    const clear = {
-      id: "uncertain-clear-storage-barrier",
-      text: "/clear",
-      createdAt: 1,
-      localCommandArgs: "",
-      localCommandName: "clear",
-      sessionKey: "agent:main",
-    };
+    const clear = createQueuedLocalCommand("uncertain-clear-storage-barrier", "/clear");
     const successor = {
       id: "successor-storage-barrier",
       text: "must stay parked",

@@ -101,7 +101,13 @@ import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 // Derived from the canonical workspace list so retiring a bootstrap file cannot
 // leave the Control UI advertising a file the runtime no longer reads.
-const CORE_FILE_NAMES = WORKSPACE_BOOTSTRAP_FILENAMES;
+// IDENTITY.md is excluded: it is a parsed record that `agents.update` rewrites via
+// mergeIdentityMarkdownContent, so a second freeform editor would clobber fields
+// (Creature/Vibe, unfilled placeholders) that the identity form round-trips.
+// It stays writable through agents.files.set for clients that want raw access.
+const CORE_FILE_NAMES = WORKSPACE_BOOTSTRAP_FILENAMES.filter(
+  (name) => name !== DEFAULT_IDENTITY_FILENAME,
+);
 const CORE_FILE_NAMES_POST_ONBOARDING = CORE_FILE_NAMES.filter(
   (name) => name !== DEFAULT_BOOTSTRAP_FILENAME,
 );
@@ -131,8 +137,10 @@ export const testing = {
   },
 };
 
-// Gateway file mutations are intentionally capped to the workspace files the UI owns.
-const ALLOWED_FILE_NAMES = new Set<string>(CORE_FILE_NAMES);
+// Writes stay capped to canonical workspace files, and deliberately remain wider
+// than the listed core files: IDENTITY.md is not offered as an editor tab but is
+// still writable for clients that manage it directly.
+const ALLOWED_FILE_NAMES = new Set<string>(WORKSPACE_BOOTSTRAP_FILENAMES);
 
 function resolveAgentWorkspaceFileOrRespondError(
   params: Record<string, unknown>,

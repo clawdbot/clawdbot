@@ -23,8 +23,10 @@ import { addGatewayServiceCommands } from "../daemon-cli/register-service-comman
 import { parseGatewayPortOption } from "../gateway-port-option.js";
 import { formatHelpExamples } from "../help-format.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
+import { setCommandJsonMode } from "../program/json-mode.js";
 import type { GatewayRpcOpts } from "./call.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
+import { isGatewayMachineOutput } from "./output-mode.js";
 import { addGatewayRestartHandoffCommands } from "./register-restart-handoff.js";
 import { addGatewayRunCommand } from "./run-command.js";
 
@@ -583,6 +585,7 @@ export function registerGatewayCli(program: Command) {
     statusDescription: "Show gateway service status + probe connectivity/capability",
   });
   addGatewayRestartHandoffCommands(gateway);
+  setCommandJsonMode(gateway, "output", ({ argv }) => isGatewayMachineOutput(argv));
 
   gatewayCallOpts(
     gateway

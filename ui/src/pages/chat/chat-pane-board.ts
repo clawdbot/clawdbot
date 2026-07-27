@@ -10,6 +10,7 @@ import {
   isGatewayMethodAdvertised,
   isWorkboardEnabledInConfigSnapshot,
   loadSettings,
+  normalizeAgentId,
   normalizeSessionKeyForUiComparison,
   patchSettings,
   SIDEBAR_NARROW_BREAKPOINT_PX,
@@ -20,6 +21,7 @@ import {
   resizeColumn,
   renderChatResizableDivider,
   resolveAgentIdFromSessionKey,
+  resolveUiGlobalAliasAgentId,
   resolveSessionKey,
   t,
   updateBoardSessionView,
@@ -252,6 +254,27 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     return normalized === "main" ? buildAgentMainSessionKey({ agentId: "main" }) : normalized;
   }
 
+  protected resolveObserverDigestHistoryKey(snapshotSessionKey = "", agentId?: string): string {
+    const sessionKey = this.resolveBoardSessionKey(snapshotSessionKey);
+    const globalAliasAgentId = resolveUiGlobalAliasAgentId(
+      {
+        agentsList: this.context?.agents?.state.agentsList,
+        hello: this.context?.gateway.snapshot.hello,
+      },
+      sessionKey,
+    );
+    if (sessionKey !== "global" && !globalAliasAgentId) {
+      return sessionKey;
+    }
+    const owner = normalizeAgentId(
+      agentId ??
+        globalAliasAgentId ??
+        this.context?.agentSelection?.state.selectedId ??
+        this.state?.assistantAgentId,
+    );
+    return `agent:${owner}:global`;
+  }
+
   protected refreshSwarmRoster(): void {
     const state = this.state;
     if (!state) {
@@ -311,7 +334,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
         return;
       }
       const base = this.resolveBoardProvider().snapshot$.value;
-      const sessionKey = this.resolveBoardSessionKey(base.sessionKey);
+      const sessionKey = this.resolveObserverDigestHistoryKey(base.sessionKey);
       this.builtinBoardSnapshotBase = base;
       this.builtinBoardSnapshot = withBuiltinDashboardWidgets(
         base,
@@ -322,7 +345,13 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
   }
 
   protected recordObserverDigest(digest: SessionObserverDigest): void {
-    const sessionKey = this.resolveBoardSessionKey(digest.sessionKey);
+    if (
+      normalizeSessionKeyForUiComparison(digest.sessionKey) === "global" &&
+      !digest.agentId?.trim()
+    ) {
+      return;
+    }
+    const sessionKey = this.resolveObserverDigestHistoryKey(digest.sessionKey, digest.agentId);
     if (this.observerDigestHistory.record({ ...digest, sessionKey })) {
       this.refreshBuiltinBoardSnapshot();
     }

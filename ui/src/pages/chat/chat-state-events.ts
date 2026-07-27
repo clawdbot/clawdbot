@@ -34,7 +34,7 @@ import { recordChatSendServerTiming } from "./chat-send-timing.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
-import { resolveChatAgentId } from "./chat-state-route.ts";
+import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { handleBackgroundTasksEvent } from "./components/chat-background-tasks.ts";
 import {
   reconcileChatRunFromCurrentSessionRow,
@@ -335,9 +335,7 @@ function observerDigestMatchesAuthoritativeRun(
   if (state.chatRunId) {
     return digest.runId === state.chatRunId;
   }
-  const session = state.sessionsResult?.sessions.find((row) =>
-    areUiSessionKeysEquivalent(row.key, state.sessionKey),
-  );
+  const session = selectedChatSessionRow(state);
   return Boolean(
     session?.hasActiveRun && digest.runId && session.activeRunIds?.includes(digest.runId),
   );
@@ -392,7 +390,7 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
     const payload = event.payload as SessionObserverDigest | undefined;
     if (
       !payload ||
-      !chatScopedEventSessionMatches(state, payload.sessionKey) ||
+      !chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId) ||
       !observerDigestMatchesAuthoritativeRun(state, payload)
     ) {
       return;

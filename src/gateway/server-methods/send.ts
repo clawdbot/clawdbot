@@ -8,7 +8,6 @@ import {
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateMessageActionParams,
   validatePollParams,
   validateSendParams,
@@ -76,6 +75,7 @@ import {
   type GatewayInflightResult as InflightResult,
 } from "./inflight.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 type MessageActionToolContext = Omit<ChannelThreadingToolContext, "currentChatType">;
 
@@ -465,15 +465,7 @@ function scheduleDeliveredSourceReplyTranscriptMirror(params: {
 export const sendHandlers: GatewayRequestHandlers = {
   "message.action": async ({ params, respond, context, client }) => {
     const p = params;
-    if (!validateMessageActionParams(p)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid message.action params: ${formatValidationErrors(validateMessageActionParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(p, validateMessageActionParams, "message.action", respond)) {
       return;
     }
     const request = p as {
@@ -639,15 +631,7 @@ export const sendHandlers: GatewayRequestHandlers = {
   },
   send: async ({ params, respond, context, client }) => {
     const p = params;
-    if (!validateSendParams(p)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid send params: ${formatValidationErrors(validateSendParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(p, validateSendParams, "send", respond)) {
       return;
     }
     const request = p as {
@@ -900,15 +884,7 @@ export const sendHandlers: GatewayRequestHandlers = {
   },
   poll: async ({ params, respond, context, client }) => {
     const p = params;
-    if (!validatePollParams(p)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid poll params: ${formatValidationErrors(validatePollParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(p, validatePollParams, "poll", respond)) {
       return;
     }
     const request = p as {

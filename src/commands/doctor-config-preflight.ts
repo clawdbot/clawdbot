@@ -68,9 +68,9 @@ async function measureStartupPreflightStep<T>(name: string, run: () => T | Promi
   } finally {
     const durationMs = performance.now() - startedAt;
     const totalMs = performance.now() - startupPreflightTraceStartedAt;
-    process.stderr.write(
-      `[gateway] startup trace: cli.bootstrap.${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms\n`,
-    );
+    const { formatConsoleDiagnosticLine } = await import("../logging/json-console-line.js");
+    const message = `[gateway] startup trace: cli.bootstrap.${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms`;
+    process.stderr.write(`${formatConsoleDiagnosticLine({ level: "info", message })}\n`);
   }
 }
 

@@ -487,7 +487,9 @@ describe("OpenClaw shell route session commits", () => {
 
   it("adopts a resolved chat session after path navigation from Tasks", () => {
     vi.stubGlobal("localStorage", createStorageMock());
-    const setSessionKey = vi.fn();
+    const calls: string[] = [];
+    const setAgent = vi.fn((agentId: string | null) => calls.push(`agent:${agentId}`));
+    const setSessionKey = vi.fn((sessionKey: string) => calls.push(`session:${sessionKey}`));
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellRouteCommitState;
     shell.runtime = {
       context: {
@@ -495,6 +497,7 @@ describe("OpenClaw shell route session commits", () => {
           snapshot: { phase: "stopped", client: null, sessionKey: "agent:main:session-a" },
           setSessionKey,
         },
+        agentSelection: { set: setAgent },
       } as unknown as ApplicationContext,
     };
     shell.activeSessionKey = "agent:main:session-a";
@@ -512,6 +515,7 @@ describe("OpenClaw shell route session commits", () => {
 
     expect(shell.activeSessionKey).toBe("agent:main:session-b");
     expect(setSessionKey).toHaveBeenCalledExactlyOnceWith("agent:main:session-b");
+    expect(calls).toEqual(["agent:main", "session:agent:main:session-b"]);
   });
 });
 
@@ -847,6 +851,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
   it("routes UI commands to navigation, panels, and chat fallback", () => {
     const update = vi.fn();
     const setSessionKey = vi.fn();
+    const setAgent = vi.fn();
     const navigate = vi.fn();
     const panelEvent = vi.fn();
     const uiCommandEvent = vi.fn();
@@ -859,7 +864,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
         navigation: { update },
         gateway: { setSessionKey, snapshot: { hello: null } },
         agents: { state: { agentsList: { mainKey: "main" } } },
-        agentSelection: { state: { selectedId: "main" } },
+        agentSelection: { state: { selectedId: "main" }, set: setAgent },
         sessions: { state: { result: null } },
         navigate,
       } as unknown as ApplicationContext,
@@ -910,6 +915,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     );
     // The pushed command names a session the UI has not cached, so its face is a guess
     // and the navigation is marked for the chat loader to re-derive from the gateway.
+    expect(setAgent).toHaveBeenCalledWith("main");
     expect(navigate).toHaveBeenCalledWith("chat", {
       pathname: "/chat/main/12345678",
       search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,

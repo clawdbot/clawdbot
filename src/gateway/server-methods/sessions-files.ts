@@ -96,6 +96,8 @@ const SEARCH_SKIP_DIRS = new Set([
 // Request latency must not scale with transcript size: delta resets rebuild the
 // fold, while this process-local LRU cap bounds retained session state.
 const touchedFilesCache = new Map<string, TouchedFilesCacheEntry>();
+// Page yields let other requests interleave, so singleflight keeps one cache-mutating fold per key.
+const touchedFilesFolds = new Map<string, Promise<Map<string, TouchedFile>>>();
 
 function readTouchedFilesCache(key: string): TouchedFilesCacheEntry | undefined {
   const cached = touchedFilesCache.get(key);
@@ -230,10 +232,10 @@ function collectTouchedFilesFromMessage(message: unknown, files: Map<string, Tou
   }
 }
 
-function loadSqliteTouchedFiles(
+async function foldSqliteTouchedFiles(
   scope: SessionTranscriptReadScope,
   cacheKey: string,
-): Map<string, TouchedFile> {
+): Promise<Map<string, TouchedFile>> {
   let cached = readTouchedFilesCache(cacheKey);
   let cursor = cached?.cursor;
   let files = cached?.files ?? new Map<string, TouchedFile>();
@@ -271,6 +273,26 @@ function loadSqliteTouchedFiles(
     if (delta.requiredBytes !== undefined) {
       maxBytes = delta.requiredBytes;
     }
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+  }
+}
+
+async function loadSqliteTouchedFiles(
+  scope: SessionTranscriptReadScope,
+  cacheKey: string,
+): Promise<Map<string, TouchedFile>> {
+  const inFlight = touchedFilesFolds.get(cacheKey);
+  if (inFlight) {
+    return inFlight;
+  }
+  const fold = foldSqliteTouchedFiles(scope, cacheKey);
+  touchedFilesFolds.set(cacheKey, fold);
+  try {
+    return await fold;
+  } finally {
+    touchedFilesFolds.delete(cacheKey);
   }
 }
 
@@ -624,7 +646,7 @@ async function loadSessionFiles(params: {
   const target = resolveTranscriptReadTarget(scope);
   // Entry-scoped reads without an explicit sessionFile always resolve to a canonical SQLite marker.
   // Legacy transcript files are doctor-owned migration debt, not a runtime read path.
-  const files = loadSqliteTouchedFiles(
+  const files = await loadSqliteTouchedFiles(
     toTranscriptReadScope(target),
     `${agentId}\0${entry.sessionId}\0${target.storePath ?? ""}`,
   );

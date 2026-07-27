@@ -6,6 +6,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import {
   resolveSessionPreferredFaceForKey,
+  SESSION_FACE_PREFERENCE_PARAM,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import { loadChatRoute } from "./route-loader.ts";
@@ -39,7 +40,11 @@ function result(
 }
 
 function contextFor(
-  listResult: (options: { search?: string; offset?: number }) => SessionsListResult | null,
+  listResult: (options: {
+    search?: string;
+    offset?: number;
+    agentId?: string;
+  }) => SessionsListResult | null,
   cachedSessions: GatewaySessionRow[] = [],
 ) {
   const client = {};
@@ -66,6 +71,51 @@ function targetLocation(target: ReturnType<typeof sessionNavigationTarget>) {
 }
 
 describe("gateway-backed session route resolution", () => {
+  it("resolves a non-default agent's canonical global face from its scoped row", async () => {
+    const globalRow = row({ key: "global", kind: "global", boardFace: "dashboard" });
+    const { context, list } = contextFor(({ agentId, search }) =>
+      agentId === "research" && search === "global" ? result([globalRow]) : result([]),
+    );
+    context.agents.state.agentsList = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "global",
+      agents: [],
+    };
+    context.gateway.snapshot.hello = {
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "main",
+          mainKey: "main",
+          mainSessionKey: "global",
+        },
+      },
+    } as ApplicationContext["gateway"]["snapshot"]["hello"];
+
+    await expect(
+      loadChatRoute(
+        context,
+        {
+          pathname: "/chat/research",
+          search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
+          hash: "",
+        },
+        "chat",
+        new AbortController().signal,
+      ),
+    ).resolves.toEqual({
+      kind: "session",
+      sessionKey: "global",
+      agentId: "research",
+      draft: undefined,
+      face: "dashboard",
+      canonicalLocation: { pathname: "/dashboard/research", search: "", hash: "" },
+    });
+    expect(list).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "research", search: "global" }),
+    );
+  });
+
   it("applies an uncached stored face to a preference-derived open", async () => {
     const dashboardRow = row({ boardFace: "dashboard" });
     const { context } = contextFor(() => result([dashboardRow]));
@@ -338,6 +388,70 @@ describe("gateway-backed session route resolution", () => {
       "/chat/roboclaw/default-mode-with-rare-surprises-123456780a",
       "/chat/research/default-mode-with-rare-surprises-123456780b",
     ]);
+  });
+
+  it("settles a shared short-id prefix with the slug the link carries", async () => {
+    const rows = [
+      row({ key: "agent:roboclaw:thread:12345678-0aaa-4000-8000-000000000001" }),
+      row({
+        key: "agent:roboclaw:thread:12345678-0bbb-4000-8000-000000000002",
+        displayName: "Deploy monitor",
+      }),
+    ];
+    const { context } = contextFor(() => result(rows));
+    const loaded = await loadChatRoute(
+      context,
+      { pathname: "/chat/roboclaw/deploy-monitor-12345678", search: "", hash: "" },
+      "chat",
+      new AbortController().signal,
+    );
+
+    // Both ids start with 12345678; the slug says which one, so the short link still
+    // resolves instead of bouncing to the chooser.
+    expect(loaded).toMatchObject({ kind: "session", sessionKey: rows[1]?.key });
+  });
+
+  it("keeps the chooser when the slug matches neither or both tied sessions", async () => {
+    const rows = [
+      row({ key: "agent:roboclaw:thread:12345678-0aaa-4000-8000-000000000001" }),
+      row({ key: "agent:roboclaw:thread:12345678-0bbb-4000-8000-000000000002" }),
+    ];
+    const { context } = contextFor(() => result(rows));
+    for (const pathname of [
+      // Stale slug: the session was renamed since the link was made.
+      "/chat/roboclaw/an-old-name-12345678",
+      // Both tied sessions share the slug, so it cannot decide.
+      "/chat/roboclaw/default-mode-with-rare-surprises-12345678",
+    ]) {
+      const loaded = await loadChatRoute(
+        context,
+        { pathname, search: "", hash: "" },
+        "chat",
+        new AbortController().signal,
+      );
+
+      expect(loaded).toMatchObject({ kind: "ambiguous", shortId: "12345678" });
+    }
+  });
+
+  it("does not settle a slug tie while the bounded search is incomplete", async () => {
+    // Only one loaded row carries the slug, but pagination stopped early: an unexamined
+    // page could hold the same prefix under the same name, so the chooser has to stand.
+    const storedRow = row({
+      key: "agent:roboclaw:thread:12345678-0aaa-4000-8000-000000000001",
+      displayName: "Deploy monitor",
+    });
+    const { context } = contextFor(({ offset = 0 }) =>
+      result(offset === 0 ? [storedRow] : [], { hasMore: true, nextOffset: offset + 20, offset }),
+    );
+    const loaded = await loadChatRoute(
+      context,
+      { pathname: "/chat/roboclaw/deploy-monitor-12345678", search: "", hash: "" },
+      "chat",
+      new AbortController().signal,
+    );
+
+    expect(loaded).toMatchObject({ kind: "ambiguous", shortId: "12345678", truncated: true });
   });
 
   it("prefers an exact literal key over slug matches", async () => {

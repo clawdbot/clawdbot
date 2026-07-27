@@ -1819,7 +1819,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2517,
+      "line": 2522,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Chat failed before the run started; try again.",
       "surface": "android",
@@ -1827,7 +1827,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 4211,
+      "line": 4220,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Could not stage an attachment for sending.",
       "surface": "android",
@@ -1835,7 +1835,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 4244,
+      "line": 4253,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Offline queue is full ($OUTBOX_MAX_QUEUED messages); delete queued items first.",
       "surface": "android",
@@ -1843,7 +1843,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 4250,
+      "line": 4259,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Attachments are too large to queue for one message; remove some and try again.",
       "surface": "android",
@@ -1851,7 +1851,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 4256,
+      "line": 4265,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Offline attachment storage is full; delete queued items first.",
       "surface": "android",
@@ -1859,7 +1859,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 4261,
+      "line": 4270,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Gateway health not OK; cannot send",
       "surface": "android",
@@ -1867,7 +1867,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 4268,
+      "line": 4277,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Could not queue message for later delivery.",
       "surface": "android",
@@ -1875,7 +1875,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5171,
+      "line": 5180,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Chat failed",
       "surface": "android",
@@ -1883,7 +1883,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5397,
+      "line": 5413,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Event stream interrupted; try refreshing.",
       "surface": "android",
@@ -1891,7 +1891,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5534,
+      "line": 5550,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Timed out waiting for a reply; try again or refresh.",
       "surface": "android",
@@ -1899,7 +1899,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5744,
+      "line": 5760,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Timed out confirming the sent message; refresh to check delivery.",
       "surface": "android",
@@ -41587,7 +41587,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1226,
+      "line": 1231,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel.swift",
       "source": "Remove attachments or wait for delivery to resolve before switching chats.",
       "surface": "apple",
@@ -42259,7 +42259,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 506,
+      "line": 509,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/Swarm.swift",
       "source": "Swarm",
       "surface": "apple",
@@ -42267,7 +42267,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 521,
+      "line": 524,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/Swarm.swift",
       "source": "%1$lld Running · %2$lld Done · %3$lld Failed",
       "surface": "apple",
@@ -42275,7 +42275,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 538,
+      "line": 541,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/Swarm.swift",
       "source": "Unphased",
       "surface": "apple",
@@ -42283,7 +42283,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 557,
+      "line": 560,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/Swarm.swift",
       "source": "1 more worker",
       "surface": "apple",
@@ -42291,7 +42291,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 559,
+      "line": 562,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/Swarm.swift",
       "source": "%1$lld more workers",
       "surface": "apple",

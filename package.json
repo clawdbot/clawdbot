@@ -692,6 +692,10 @@
       "types": "./dist/plugin-sdk/gateway-runtime.d.ts",
       "default": "./dist/plugin-sdk/gateway-runtime.js"
     },
+    "./plugin-sdk/cli-argv": {
+      "types": "./dist/plugin-sdk/cli-argv.d.ts",
+      "default": "./dist/plugin-sdk/cli-argv.js"
+    },
     "./plugin-sdk/cli-runtime": {
       "default": "./dist/plugin-sdk/cli-runtime.js"
     },

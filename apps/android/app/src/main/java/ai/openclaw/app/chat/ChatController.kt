@@ -2162,6 +2162,11 @@ class ChatController internal constructor(
     }
     _sessionKey.value = key
     _sessionOwnerAgentId.value = owner
+    _sessions.value =
+      clearForeignGlobalObserverDigest(
+        _sessions.value,
+        activeAgentId = owner ?: resolveAgentIdForSessionKey(key),
+      )
     applyThinkingMetadata(_sessions.value.firstOrNull { it.key == key })
     _selectedModelRef.value = null
     lastHandledTerminalRunId = null
@@ -3720,7 +3725,11 @@ class ChatController internal constructor(
           requestCacheScope == currentCacheScope() &&
           requestOwnerIsCurrent()
         ) {
-          _sessions.value = cachedSessions.map { session -> session.copy(ownerAgentId = requestAgentId) }
+          _sessions.value =
+            reconcileGlobalObserverDigestOwner(
+              cachedSessions.map { session -> session.copy(ownerAgentId = requestAgentId) },
+              activeAgentId = requestAgentId,
+            )
         }
       }
     }
@@ -5255,7 +5264,13 @@ class ChatController internal constructor(
 
   private fun handleSessionObserverEvent(payloadJson: String) {
     val digest = runCatching { json.decodeFromString<SessionObserverDigest>(payloadJson) }.getOrNull() ?: return
-    _sessions.value = applySessionObserverDigest(_sessions.value, digest)
+    val selectedAgentId = _sessionOwnerAgentId.value ?: resolveAgentIdForSessionKey(_sessionKey.value)
+    _sessions.value =
+      applySessionObserverDigest(
+        _sessions.value,
+        digest,
+        activeAgentId = selectedAgentId,
+      )
   }
 
   private fun scheduleSessionsChangedBranchReconciliation(
@@ -5323,8 +5338,9 @@ class ChatController internal constructor(
       return
     }
     if (eventOwner != visibleOwner) return
+    val ownedEntry = reconcileSessionObserverProjectionOwner(entry, eventOwner)
     upsertSessionEntry(
-      entry = if (entry.ownerAgentId == eventOwner) entry else entry.copy(ownerAgentId = eventOwner),
+      entry = if (ownedEntry.ownerAgentId == eventOwner) ownedEntry else ownedEntry.copy(ownerAgentId = eventOwner),
       clearedFields = parseExplicitSessionClears(eventObject),
     )
   }
@@ -6793,18 +6809,107 @@ internal fun mergeChatSessionEntry(
 internal fun applySessionObserverDigest(
   sessions: List<ChatSessionEntry>,
   digest: SessionObserverDigest,
+  activeAgentId: String? = null,
 ): List<ChatSessionEntry> {
-  val index = sessions.indexOfFirst { it.key == digest.sessionKey }
-  if (index < 0) return sessions
-  val session = sessions[index]
-  val runId = digest.runId?.trim()?.takeIf { it.isNotEmpty() } ?: return sessions
+  val digestAgentId =
+    digest.agentId
+      ?.trim()
+      ?.lowercase()
+      ?.takeIf { it.isNotEmpty() }
+  val selectedAgentId =
+    activeAgentId
+      ?.trim()
+      ?.lowercase()
+      ?.takeIf { it.isNotEmpty() }
+  val scopedSessions = clearForeignGlobalObserverDigest(sessions, selectedAgentId)
+  if (
+    digest.sessionKey == "global" &&
+    (selectedAgentId == null || digestAgentId == null || selectedAgentId != digestAgentId)
+  ) {
+    return scopedSessions
+  }
+  val index = scopedSessions.indexOfFirst { it.key == digest.sessionKey }
+  if (index < 0) return scopedSessions
+  val session = scopedSessions[index]
+  val runId = digest.runId?.trim()?.takeIf { it.isNotEmpty() } ?: return scopedSessions
   val isRunning = session.hasActiveRun == true || session.status?.trim()?.lowercase() == "running"
   val matchesActiveRun = session.activeRunIds.orEmpty().any { it.trim() == runId }
-  if (!isRunning || !matchesActiveRun) return sessions
+  if (!isRunning || !matchesActiveRun) return scopedSessions
   val previous = session.observerDigest
-  if (previous?.runId == runId && !observerDigestIsNewer(digest, previous)) return sessions
-  return sessions.toMutableList().also {
+  if (previous?.runId == runId && !observerDigestIsNewer(digest, previous)) return scopedSessions
+  return scopedSessions.toMutableList().also {
     it[index] = session.copy(observerDigest = digest, hasObserverDigestMetadata = true)
+  }
+}
+
+internal fun reconcileGlobalObserverDigestOwner(
+  sessions: List<ChatSessionEntry>,
+  activeAgentId: String?,
+): List<ChatSessionEntry> = reconcileGlobalObserverDigestOwner(sessions, activeAgentId, adoptOwnerless = true)
+
+internal fun clearForeignGlobalObserverDigest(
+  sessions: List<ChatSessionEntry>,
+  activeAgentId: String?,
+): List<ChatSessionEntry> = reconcileGlobalObserverDigestOwner(sessions, activeAgentId, adoptOwnerless = false)
+
+private fun reconcileGlobalObserverDigestOwner(
+  sessions: List<ChatSessionEntry>,
+  activeAgentId: String?,
+  adoptOwnerless: Boolean,
+): List<ChatSessionEntry> {
+  // A missing owner is transient disconnect state, not a selection change.
+  // Callers retain the last verified offline projection until hello supplies an owner.
+  val selectedAgentId =
+    activeAgentId
+      ?.trim()
+      ?.lowercase()
+      ?.takeIf { it.isNotEmpty() }
+      ?: return sessions
+  val index = sessions.indexOfFirst { it.key == "global" }
+  if (index < 0) return sessions
+  val session = sessions[index]
+  val digestAgentId =
+    session.observerDigest
+      ?.agentId
+      ?.trim()
+      ?.lowercase()
+      ?.takeIf { it.isNotEmpty() }
+  if (digestAgentId == selectedAgentId) return sessions
+  return sessions.toMutableList().also {
+    it[index] =
+      session.copy(
+        observerDigest =
+          if (digestAgentId == null && adoptOwnerless) {
+            session.observerDigest?.copy(agentId = selectedAgentId)
+          } else {
+            null
+          },
+        hasObserverDigestMetadata = true,
+      )
+  }
+}
+
+internal fun reconcileSessionObserverProjectionOwner(
+  session: ChatSessionEntry,
+  ownerAgentId: String?,
+): ChatSessionEntry {
+  val digest = session.observerDigest
+  if (session.key != "global" || digest == null) return session
+  val owner =
+    ownerAgentId
+      ?.trim()
+      ?.lowercase()
+      ?.takeIf { it.isNotEmpty() }
+      ?: return session.copy(observerDigest = null, hasObserverDigestMetadata = false)
+  val digestOwner =
+    digest.agentId
+      ?.trim()
+      ?.lowercase()
+      ?.takeIf { it.isNotEmpty() }
+  return when (digestOwner) {
+    null -> session.copy(observerDigest = digest.copy(agentId = owner))
+    owner -> session
+    else -> session.copy(observerDigest = null, hasObserverDigestMetadata = false)
   }
 }
 
