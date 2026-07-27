@@ -264,4 +264,33 @@ describe("recordPluginInstall", () => {
     expect(next.plugins?.load?.paths).toEqual([customPath, nextInstallPath, adjacentPath]);
     expect(next.plugins?.installs?.beta).toBe(existing.plugins.installs.beta);
   });
+
+  it("preserves an existing replacement path position while removing stale managed paths", () => {
+    const previousInstallPath = "/tmp/openclaw/npm/projects/alpha-v1/node_modules/alpha";
+    const nextInstallPath = "/tmp/openclaw/npm/projects/alpha-v2/node_modules/alpha";
+    const adjacentPath = "/tmp/openclaw/npm/projects/beta/node_modules/beta";
+    const existing = {
+      plugins: {
+        load: {
+          paths: [nextInstallPath, adjacentPath, previousInstallPath, nextInstallPath],
+        },
+        installs: {
+          alpha: {
+            source: "npm" as const,
+            spec: "alpha@1.0.0",
+            installPath: previousInstallPath,
+          },
+        },
+      },
+    };
+
+    const next = recordPluginInstall(existing, {
+      pluginId: "alpha",
+      source: "npm",
+      spec: "alpha@1.0.0",
+      installPath: nextInstallPath,
+    });
+
+    expect(next.plugins?.load?.paths).toEqual([nextInstallPath, adjacentPath]);
+  });
 });

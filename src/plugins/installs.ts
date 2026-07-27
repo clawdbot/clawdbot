@@ -55,15 +55,27 @@ export function reconcileNpmPluginLoadPath(params: {
   if (replaceAt < 0) {
     return params.config;
   }
+  const existingNextAt = existing.findIndex(
+    (entry) => resolveUserPath(entry, params.env) === nextResolved,
+  );
 
   // An explicit reference to the prior managed root carries precedence intent.
-  // Move that exact reference with the record; broader path matches are user-owned.
+  // Preserve an existing target slot; otherwise move the prior slot with the record.
   const paths = existing.flatMap((entry, index) => {
     const resolved = resolveUserPath(entry, params.env);
+    if (existingNextAt >= 0) {
+      if (
+        resolved === previousResolved ||
+        (resolved === nextResolved && index !== existingNextAt)
+      ) {
+        return [];
+      }
+      return [entry];
+    }
     if (index === replaceAt) {
       return [nextPath];
     }
-    return resolved === previousResolved || resolved === nextResolved ? [] : [entry];
+    return resolved === previousResolved ? [] : [entry];
   });
   return {
     ...params.config,
