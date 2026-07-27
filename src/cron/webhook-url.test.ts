@@ -3,6 +3,7 @@ import {
   isCronWebhookTokenHostAllowed,
   isCronWebhookTokenHostEntry,
   normalizeHttpWebhookUrl,
+  resolveCronWebhookTokenHosts,
 } from "./webhook-url.js";
 
 describe("normalizeHttpWebhookUrl", () => {
@@ -118,5 +119,53 @@ describe("isCronWebhookTokenHostEntry", () => {
     ]) {
       expect(isCronWebhookTokenHostEntry(entry), entry).toBe(false);
     }
+  });
+});
+
+describe("resolveCronWebhookTokenHosts", () => {
+  it("returns the configured allowlist when no config webhook destination exists", () => {
+    expect(resolveCronWebhookTokenHosts(undefined)).toEqual([]);
+    expect(resolveCronWebhookTokenHosts({ webhookTokenHosts: ["Hooks.Example.Invalid."] })).toEqual(
+      ["hooks.example.invalid"],
+    );
+    expect(
+      resolveCronWebhookTokenHosts({
+        failureAlert: { mode: "announce", to: "https://alerts.example.invalid/cron" },
+      }),
+    ).toEqual([]);
+  });
+
+  it("trusts a webhook destination the operator declared in cron.failureAlert", () => {
+    const hosts = resolveCronWebhookTokenHosts({
+      failureAlert: { mode: "webhook", to: "https://Alerts.example.invalid:8443/hook" },
+    });
+
+    expect(hosts).toEqual(["alerts.example.invalid"]);
+    expect(isCronWebhookTokenHostAllowed("https://alerts.example.invalid/hook", hosts)).toBe(true);
+    expect(isCronWebhookTokenHostAllowed("https://attacker.example.invalid/hook", hosts)).toBe(
+      false,
+    );
+  });
+
+  it("merges the config destination with the configured allowlist without duplicates", () => {
+    expect(
+      resolveCronWebhookTokenHosts({
+        webhookTokenHosts: ["hooks.example.invalid"],
+        failureAlert: { mode: "webhook", to: "https://alerts.example.invalid/hook" },
+      }),
+    ).toEqual(["hooks.example.invalid", "alerts.example.invalid"]);
+    expect(
+      resolveCronWebhookTokenHosts({
+        webhookTokenHosts: ["alerts.example.invalid"],
+        failureAlert: { mode: "webhook", to: "https://alerts.example.invalid/hook" },
+      }),
+    ).toEqual(["alerts.example.invalid"]);
+  });
+
+  it("ignores a config destination that is not a usable http(s) URL", () => {
+    expect(
+      resolveCronWebhookTokenHosts({ failureAlert: { mode: "webhook", to: "not a url" } }),
+    ).toEqual([]);
+    expect(resolveCronWebhookTokenHosts({ failureAlert: { mode: "webhook" } })).toEqual([]);
   });
 });

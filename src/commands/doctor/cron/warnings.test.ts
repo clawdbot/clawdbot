@@ -210,7 +210,47 @@ describe("collectCronWebhookTokenHostsAdvisory", () => {
       cfg: { cron: { webhookToken: "operator-secret", webhookTokenHosts: ["  "] } } as never,
       jobs: [],
     });
-    expect(advisory).toContain("not bound to any destination host");
+    expect(advisory).toContain("not bound to every destination host");
+  });
+
+  it("returns null when a config failure-alert webhook covers every stored destination", () => {
+    expect(
+      collectCronWebhookTokenHostsAdvisory({
+        cfg: {
+          cron: {
+            webhookToken: "operator-secret",
+            failureAlert: { mode: "webhook", to: "https://alerts.example.invalid/hook" },
+          },
+        } as never,
+        jobs: [job({ delivery: { mode: "webhook", to: "https://alerts.example.invalid/hook" } })],
+      }),
+    ).toBeNull();
+  });
+
+  it("reports only the destinations the allowlist does not cover", () => {
+    const advisory = collectCronWebhookTokenHostsAdvisory({
+      cfg: {
+        cron: { webhookToken: "operator-secret", webhookTokenHosts: ["receiver.example.invalid"] },
+      } as never,
+      jobs: [
+        job({ delivery: { mode: "webhook", to: "https://receiver.example.invalid/cron" } }),
+        job({ delivery: { mode: "webhook", to: "https://attacker.example.invalid/collect" } }),
+      ],
+    });
+    expect(advisory).toContain("covers receiver.example.invalid");
+    expect(advisory).toContain(
+      "Unlisted destinations currently in the store: attacker.example.invalid",
+    );
+    expect(advisory).not.toContain("receiver.example.invalid/cron");
+  });
+
+  it("returns null under a wildcard allowlist", () => {
+    expect(
+      collectCronWebhookTokenHostsAdvisory({
+        cfg: { cron: { webhookToken: "operator-secret", webhookTokenHosts: ["*"] } } as never,
+        jobs: [job({ delivery: { mode: "webhook", to: "https://any.example.invalid/cron" } })],
+      }),
+    ).toBeNull();
   });
 
   it("enumerates stored webhook destinations as candidates", () => {
@@ -231,7 +271,7 @@ describe("collectCronWebhookTokenHostsAdvisory", () => {
       ],
     });
     expect(advisory).toContain(
-      "Destinations currently in the store: alerts.example.invalid, done.example.invalid, receiver.example.invalid",
+      "Unlisted destinations currently in the store: alerts.example.invalid, done.example.invalid, receiver.example.invalid",
     );
     expect(advisory).toContain("Add only the hosts you own and recognize");
   });

@@ -1,4 +1,5 @@
 import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
+import type { CronConfig } from "../config/types.cron.js";
 
 /** Normalizes cron webhook URLs while rejecting empty, malformed, and non-HTTP(S) values. */
 export function normalizeHttpWebhookUrl(value: unknown): string | null {
@@ -54,6 +55,24 @@ function normalizeWebhookTokenHosts(hosts: unknown): string[] {
   return normalized;
 }
 
+function webhookUrlHost(url: string): string | null {
+  try {
+    return normalizeWebhookTokenHost(new URL(url).hostname) || null;
+  } catch {
+    return null;
+  }
+}
+
+export function resolveCronWebhookTokenHosts(cron: CronConfig | undefined): string[] {
+  const hosts = normalizeWebhookTokenHosts(cron?.webhookTokenHosts);
+  if (cron?.failureAlert?.mode !== "webhook") {
+    return hosts;
+  }
+  const url = normalizeHttpWebhookUrl(cron.failureAlert.to);
+  const host = url ? webhookUrlHost(url) : null;
+  return host && !hosts.includes(host) ? [...hosts, host] : hosts;
+}
+
 export function isCronWebhookTokenHostAllowed(url: string, allowedHosts: unknown): boolean {
   const entries = normalizeWebhookTokenHosts(allowedHosts);
   if (entries.length === 0) {
@@ -62,9 +81,6 @@ export function isCronWebhookTokenHostAllowed(url: string, allowedHosts: unknown
   if (entries.includes("*")) {
     return true;
   }
-  try {
-    return entries.includes(normalizeWebhookTokenHost(new URL(url).hostname));
-  } catch {
-    return false;
-  }
+  const host = webhookUrlHost(url);
+  return host !== null && entries.includes(host);
 }

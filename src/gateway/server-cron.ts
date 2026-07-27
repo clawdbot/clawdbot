@@ -49,6 +49,7 @@ import type {
   CronRunErrorClassification,
   CronTriggerFailureCode,
 } from "../cron/types.js";
+import { resolveCronWebhookTokenHosts } from "../cron/webhook-url.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
@@ -988,7 +989,7 @@ export function buildGatewayCronService(params: {
         logger: cronLogger,
         resolveCronAgent,
         webhookToken: params.cfg.cron?.webhookToken,
-        webhookTokenHosts: params.cfg.cron?.webhookTokenHosts,
+        webhookTokenHosts: resolveCronWebhookTokenHosts(params.cfg.cron),
         job,
         text,
         channel,
@@ -1088,7 +1089,7 @@ export function buildGatewayCronService(params: {
           logger: cronLogger,
           resolveCronAgent,
           webhookToken: params.cfg.cron?.webhookToken,
-          webhookTokenHosts: params.cfg.cron?.webhookTokenHosts,
+          webhookTokenHosts: resolveCronWebhookTokenHosts(params.cfg.cron),
           globalFailureDestination: params.cfg.cron?.failureAlert,
         });
       }

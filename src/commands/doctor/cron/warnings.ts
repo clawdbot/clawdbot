@@ -8,7 +8,10 @@ import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveCronDeliveryPlan } from "../../../cron/delivery-plan.js";
 import type { CronJob } from "../../../cron/types.js";
-import { normalizeHttpWebhookUrl } from "../../../cron/webhook-url.js";
+import {
+  normalizeHttpWebhookUrl,
+  resolveCronWebhookTokenHosts,
+} from "../../../cron/webhook-url.js";
 import { runExec } from "../../../process/exec.js";
 import { shortenHomePath } from "../../../utils.js";
 
@@ -282,20 +285,27 @@ function collectCronWebhookTokenHostsAdvisory(params: {
   if (!params.cfg.cron?.webhookToken) {
     return null;
   }
-  const configured = params.cfg.cron?.webhookTokenHosts;
-  if (Array.isArray(configured) && configured.some((host) => normalizeOptionalString(host))) {
+  const allowed = resolveCronWebhookTokenHosts(params.cfg.cron);
+  if (allowed.includes("*")) {
+    return null;
+  }
+  const hosts = listCronWebhookDestinationHosts(params.jobs).filter(
+    (host) => !allowed.includes(host),
+  );
+  if (allowed.length > 0 && hosts.length === 0) {
     return null;
   }
 
-  const hosts = listCronWebhookDestinationHosts(params.jobs);
   const lines = [
-    "Cron webhook bearer token is not bound to any destination host.",
-    "- `cron.webhookToken` is set but `cron.webhookTokenHosts` is empty, so cron webhook POSTs are delivered without an `Authorization` header",
+    "Cron webhook bearer token is not bound to every destination host.",
+    allowed.length === 0
+      ? "- `cron.webhookToken` is set but `cron.webhookTokenHosts` is empty, so cron webhook POSTs are delivered without an `Authorization` header"
+      : `- \`cron.webhookTokenHosts\` covers ${allowed.join(", ")}, so POSTs to any other destination are delivered without an \`Authorization\` header`,
     "- Webhook destinations come from job records, which an agent turn can create or edit, so the token now travels only to hosts you name",
   ];
   if (hosts.length > 0) {
     lines.push(
-      `- Destinations currently in the store: ${hosts.join(", ")}`,
+      `- Unlisted destinations currently in the store: ${hosts.join(", ")}`,
       "- Add only the hosts you own and recognize; a destination you do not recognize should be removed from its job instead",
     );
   } else {

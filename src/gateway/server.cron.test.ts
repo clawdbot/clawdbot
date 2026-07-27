@@ -1695,7 +1695,7 @@ describe("gateway server cron", () => {
     await writeCronConfig({
       cron: {
         webhookToken: "cron-webhook-token",
-        webhookTokenHosts: ["example.invalid"],
+        failureAlert: { mode: "webhook", to: "https://example.invalid/alert" },
       },
     });
 
