@@ -604,6 +604,18 @@ describe("createEmbeddedAttemptSessionLockController", () => {
     }
   });
 
+  it("settles a released prompt when reacquire arrives after disposal", async () => {
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release: async () => undefined })),
+      lockOptions: { sessionFile: "agent:main:main" },
+    });
+    await controller.releaseForPrompt();
+    const disposal = controller.dispose();
+
+    await controller.reacquireAfterPrompt();
+    await expect(disposal).resolves.toBeUndefined();
+  });
+
   it("keeps a queued next prompt settlement after the prior reacquire finishes", async () => {
     vi.useFakeTimers();
     try {

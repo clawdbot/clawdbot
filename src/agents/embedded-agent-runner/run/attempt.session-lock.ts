@@ -295,6 +295,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     refreshAfterOwnedSessionWrite: () => {},
     reacquireAfterPrompt: async () => {
       if (disposed) {
+        settlePromptRelease();
         return;
       }
       await serializeLifecycle(async () => {

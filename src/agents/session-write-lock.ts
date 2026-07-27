@@ -147,6 +147,8 @@ function runSessionKeyLeaseWrite<T>(
 }
 
 function readSessionKeyWriteLease(sessionKey: string): SessionKeyWriteLeaseRow | undefined {
+  // Canonical runtime targets and transcript databases are state-root scoped;
+  // a different state root is a different transcript store.
   const database = openOpenClawStateDatabase();
   const kysely = getNodeSqliteKysely<StateLeaseDatabase>(database.db);
   return executeSqliteQueryTakeFirstSync(
@@ -178,6 +180,8 @@ function canReclaimSessionKeyWriteLease(current: SessionKeyWriteLeaseRow): boole
     ownerStarttime !== undefined &&
     observedStarttime !== null &&
     ownerStarttime !== observedStarttime;
+  // Never time-take over a demonstrably live owner without atomic fencing.
+  // Cross-platform start-time identity handles PID reuse on supported hosts.
   return (
     ownerAlive === false || ownerReused || (!ownerPid && Number(current.expires_at) <= Date.now())
   );
