@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import type { ConnectionOptions } from "node:tls";
+import { matchesNoProxy, resolveEnvHttpProxyUrl } from "openclaw/plugin-sdk/fetch-runtime";
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import {
@@ -46,6 +47,11 @@ const GOOGLE_AUTH_TOKEN_URI = "https://oauth2.googleapis.com/token";
 const GOOGLE_AUTH_UNIVERSE_DOMAIN = "googleapis.com";
 const GOOGLE_CLIENT_CERTS_URL_PREFIX = "https://www.googleapis.com/robot/v1/metadata/x509/";
 const MAX_GOOGLE_AUTH_RESPONSE_BYTES = 1024 * 1024;
+// Keep Gaxios from materializing its uppercase-first ambient proxy agent before
+// our fetch adapter applies OpenClaw's canonical proxy and NO_PROXY semantics.
+const DEFER_GOOGLE_AUTH_PROXY_AGENT = (() => undefined) as unknown as NonNullable<
+  GoogleAuthTransportOptions["agent"]
+>;
 let googleAuthRuntimePromise: Promise<GoogleAuthRuntime> | null = null;
 
 function normalizeGoogleAuthPreparedRequestHeaders<T extends RequestInit & { headers?: unknown }>(
@@ -125,41 +131,8 @@ function resolveGoogleAuthTlsOptions(init: GoogleAuthTransportOptions, url: URL)
   return {};
 }
 
-function normalizeGoogleAuthProxyEnvValue(value: string | undefined): string | null | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
-function resolveGoogleAuthEnvProxyUrl(protocol: "http" | "https"): string | undefined {
-  const httpProxy =
-    normalizeGoogleAuthProxyEnvValue(process.env.HTTP_PROXY) ??
-    normalizeGoogleAuthProxyEnvValue(process.env.http_proxy);
-  const httpsProxy =
-    normalizeGoogleAuthProxyEnvValue(process.env.HTTPS_PROXY) ??
-    normalizeGoogleAuthProxyEnvValue(process.env.https_proxy);
-  if (protocol === "https") {
-    return httpsProxy ?? httpProxy ?? undefined;
-  }
-  return httpProxy ?? undefined;
-}
-
-function collectGoogleAuthNoProxyRules(noProxy: ProxyRule[] = []): ProxyRule[] {
-  const rules = [...noProxy];
-  const envRules = (process.env.NO_PROXY ?? process.env.no_proxy)?.split(",") ?? [];
-  for (const rule of envRules) {
-    const trimmed = rule.trim();
-    if (trimmed.length > 0) {
-      rules.push(trimmed);
-    }
-  }
-  return rules;
-}
-
-function shouldBypassGoogleAuthProxy(url: URL, noProxy: ProxyRule[] = []): boolean {
-  for (const rule of collectGoogleAuthNoProxyRules(noProxy)) {
+function matchesGoogleAuthExplicitNoProxyRule(url: URL, noProxy: ProxyRule[] = []): boolean {
+  for (const rule of noProxy) {
     if (rule instanceof RegExp) {
       if (rule.test(url.toString())) {
         return true;
@@ -363,10 +336,12 @@ function resolveGoogleAuthDispatcherPolicy(
   const nextInit = sanitizeGoogleAuthInit(init);
   const googleAuthInit = (init ?? {}) as GoogleAuthTransportInit;
   const tlsOptions = resolveGoogleAuthTlsOptions(googleAuthInit, requestUrl);
-  const proxyBypassed = shouldBypassGoogleAuthProxy(
-    requestUrl,
-    Array.isArray(googleAuthInit.noProxy) ? (googleAuthInit.noProxy as ProxyRule[]) : [],
-  );
+  const proxyBypassed =
+    matchesNoProxy(requestUrl.toString()) ||
+    matchesGoogleAuthExplicitNoProxyRule(
+      requestUrl,
+      Array.isArray(googleAuthInit.noProxy) ? (googleAuthInit.noProxy as ProxyRule[]) : [],
+    );
   const agent = resolveGoogleAuthAgent(googleAuthInit, requestUrl);
   const explicitProxy =
     readGoogleAuthProxyUrl(googleAuthInit.proxy) ??
@@ -386,7 +361,7 @@ function resolveGoogleAuthDispatcherPolicy(
 
   const envProxyUrl = proxyBypassed
     ? undefined
-    : resolveGoogleAuthEnvProxyUrl(requestUrl.protocol === "http:" ? "http" : "https");
+    : resolveEnvHttpProxyUrl(requestUrl.protocol === "http:" ? "http" : "https");
   if (envProxyUrl) {
     return {
       dispatcherPolicy: {
@@ -501,6 +476,7 @@ export async function getGoogleAuthTransport(): Promise<GoogleAuthTransport> {
   const { gaxios } = await loadGoogleAuthRuntime();
   return installGoogleAuthHeaderCompatibilityInterceptor(
     new gaxios.Gaxios({
+      agent: DEFER_GOOGLE_AUTH_PROXY_AGENT,
       fetchImplementation: createGoogleAuthFetch(),
     }),
   );

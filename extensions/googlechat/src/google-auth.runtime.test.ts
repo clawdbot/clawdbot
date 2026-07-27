@@ -86,6 +86,14 @@ async function createGoogleAuthTransportFetch(): Promise<GoogleAuthFetch> {
   return fetchImplementation;
 }
 
+async function createRealGoogleAuthTransport() {
+  await getGoogleAuthTransport();
+  const defaults = mockCallArg(mocks.gaxiosCtor) as Record<string, unknown>;
+  const { gaxios } =
+    await vi.importActual<typeof import("google-auth-library")>("google-auth-library");
+  return new gaxios.Gaxios(defaults);
+}
+
 describe("googlechat google auth runtime", () => {
   it("routes Google auth fetches through the SSRF guard and preserves explicit proxy mTLS", async () => {
     const release = vi.fn();
@@ -245,6 +253,151 @@ describe("googlechat google auth runtime", () => {
       url: "https://oauth2.googleapis.com/token",
     });
     await expect(response.text()).resolves.toBe("ok");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("bypasses env proxy for whitespace-separated NO_PROXY hosts", async () => {
+    const release = vi.fn();
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response("ok", { status: 200 }),
+      release,
+    });
+    vi.stubEnv("HTTPS_PROXY", "http://env-proxy.example:8080");
+    vi.stubEnv("https_proxy", "http://env-proxy.example:8080");
+    vi.stubEnv("HTTP_PROXY", "");
+    vi.stubEnv("http_proxy", "");
+    vi.stubEnv("NO_PROXY", "accounts.google.com oauth2.googleapis.com");
+    vi.stubEnv("no_proxy", undefined);
+
+    const guardedFetch = await createGoogleAuthTransportFetch();
+    await guardedFetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+    } as RequestInit);
+
+    expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({ dispatcherPolicy: undefined }),
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("uses lowercase no_proxy when uppercase NO_PROXY is blank", async () => {
+    const release = vi.fn();
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response("ok", { status: 200 }),
+      release,
+    });
+    vi.stubEnv("HTTPS_PROXY", "http://env-proxy.example:8080");
+    vi.stubEnv("https_proxy", "http://env-proxy.example:8080");
+    vi.stubEnv("HTTP_PROXY", "");
+    vi.stubEnv("http_proxy", "");
+    vi.stubEnv("NO_PROXY", "   ");
+    vi.stubEnv("no_proxy", "oauth2.googleapis.com");
+
+    const guardedFetch = await createGoogleAuthTransportFetch();
+    await guardedFetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+    } as RequestInit);
+
+    expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({ dispatcherPolicy: undefined }),
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("lets blank lowercase no_proxy shadow uppercase NO_PROXY", async () => {
+    const release = vi.fn();
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response("ok", { status: 200 }),
+      release,
+    });
+    vi.stubEnv("HTTPS_PROXY", "http://env-proxy.example:8080");
+    vi.stubEnv("https_proxy", "http://env-proxy.example:8080");
+    vi.stubEnv("NO_PROXY", "oauth2.googleapis.com");
+    vi.stubEnv("no_proxy", "");
+
+    const guardedFetch = await createGoogleAuthTransportFetch();
+    await guardedFetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+    } as RequestInit);
+
+    expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dispatcherPolicy: expect.objectContaining({ mode: "env-proxy" }),
+      }),
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("matches bare NO_PROXY domains against subdomains", async () => {
+    const release = vi.fn();
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response("ok", { status: 200 }),
+      release,
+    });
+    vi.stubEnv("HTTPS_PROXY", "http://env-proxy.example:8080");
+    vi.stubEnv("https_proxy", "http://env-proxy.example:8080");
+    vi.stubEnv("NO_PROXY", "googleapis.com");
+    vi.stubEnv("no_proxy", undefined);
+
+    const guardedFetch = await createGoogleAuthTransportFetch();
+    await guardedFetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+    } as RequestInit);
+
+    expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({ dispatcherPolicy: undefined }),
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("defers conflicting proxy env precedence to the canonical resolver", async () => {
+    const release = vi.fn();
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response("ok", { status: 200 }),
+      release,
+    });
+    vi.stubEnv("HTTPS_PROXY", "http://upper-proxy.example:8080");
+    vi.stubEnv("https_proxy", "http://lower-proxy.example:8080");
+    vi.stubEnv("NO_PROXY", undefined);
+    vi.stubEnv("no_proxy", undefined);
+
+    const transport = await createRealGoogleAuthTransport();
+    await transport.request({
+      method: "POST",
+      responseType: "text",
+      url: "https://oauth2.googleapis.com/token",
+    });
+
+    expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dispatcherPolicy: expect.objectContaining({ mode: "env-proxy" }),
+        init: expect.not.objectContaining({ agent: expect.anything() }),
+      }),
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("lets blank lowercase proxy env shadow uppercase through real Gaxios", async () => {
+    const release = vi.fn();
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response("ok", { status: 200 }),
+      release,
+    });
+    vi.stubEnv("HTTPS_PROXY", "http://upper-proxy.example:8080");
+    vi.stubEnv("https_proxy", "");
+    vi.stubEnv("NO_PROXY", undefined);
+    vi.stubEnv("no_proxy", undefined);
+
+    const transport = await createRealGoogleAuthTransport();
+    await transport.request({
+      method: "POST",
+      responseType: "text",
+      url: "https://oauth2.googleapis.com/token",
+    });
+
+    expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({ dispatcherPolicy: undefined }),
+    );
     expect(release).toHaveBeenCalledOnce();
   });
 
