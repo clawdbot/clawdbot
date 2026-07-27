@@ -194,11 +194,15 @@ async function listProviderHosts(
   request: SessionsCatalogListParams,
   options: {
     search: string | undefined;
+    sessionEntryCacheKey: ReturnType<typeof createSessionCatalogRequestEntrySnapshot>["cacheKey"];
     sessionEntries: ReturnType<typeof createSessionCatalogRequestEntrySnapshot>["sessionEntries"];
     onHost?: (host: SessionCatalog["hosts"][number]) => void;
   },
 ): Promise<SessionCatalog["hosts"]> {
-  const key = catalogListKey(provider, request);
+  const key = stableJson({
+    catalogList: catalogListKey(provider, request),
+    sessionEntries: options.sessionEntryCacheKey,
+  });
   const pending = pendingCatalogLists.get(key);
   if (pending) {
     if (options.onHost) {
@@ -322,6 +326,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
         try {
           const hosts = await listProviderHosts(provider, request, {
             search,
+            sessionEntryCacheKey: requestEntries.cacheKey,
             sessionEntries: requestEntries.sessionEntries,
             onHost,
           });

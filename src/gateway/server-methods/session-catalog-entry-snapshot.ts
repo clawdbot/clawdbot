@@ -2,6 +2,7 @@ import type {
   SessionCatalogHost,
   SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   listSessionEntriesReadOnly,
@@ -14,9 +15,25 @@ import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { projectSessionActor } from "../session-utils-row.js";
 
 type SessionCatalogRequestEntrySnapshot = {
+  cacheKey: string;
   sessionEntries: SessionCatalogEntrySnapshot;
   projectHostCreatedActors: (host: SessionCatalogHost) => SessionCatalogHost;
 };
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableJson).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .toSorted()
+      .filter((key) => record[key] !== undefined)
+      .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
 
 export function createSessionCatalogRequestEntrySnapshot(params: {
   cfg: OpenClawConfig;
@@ -71,7 +88,20 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
     return actor;
   };
 
+  const defaultAgentId = resolveDefaultAgentId(params.cfg);
+  const cacheAgentIds = [
+    defaultAgentId,
+    ...listAgentIds(params.cfg).filter((agentId) => agentId !== defaultAgentId),
+  ];
+  const cacheKey = stableJson(
+    cacheAgentIds.map((agentId) => ({
+      agentId,
+      entries: entriesForAgent(agentId).map(({ sessionKey, entry }) => ({ sessionKey, entry })),
+    })),
+  );
+
   return {
+    cacheKey,
     sessionEntries: { entriesForAgent },
     projectHostCreatedActors: (host) => ({
       ...host,

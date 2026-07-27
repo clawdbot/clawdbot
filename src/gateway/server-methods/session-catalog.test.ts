@@ -293,6 +293,51 @@ describe("session catalog Gateway methods", () => {
     expect(catalog.provider.list).toHaveBeenCalledTimes(2);
   });
 
+  it("does not coalesce identical list parameters across different session entry snapshots", async () => {
+    const host = {
+      hostId: "node:isolated",
+      label: "Isolated node",
+      kind: "node" as const,
+      connected: true,
+      nodeId: "isolated",
+      sessions: [],
+    };
+    const resolveList: Array<(value: Awaited<ReturnType<SessionCatalogProvider["list"]>>) => void> =
+      [];
+    const list = vi.fn(
+      () =>
+        new Promise<Awaited<ReturnType<SessionCatalogProvider["list"]>>>((resolve) => {
+          resolveList.push(resolve);
+        }),
+    );
+    let snapshotOrdinal = 0;
+    hoisted.listSessionEntriesReadOnly.mockImplementation(({ agentId }) => {
+      snapshotOrdinal += 1;
+      return [
+        {
+          sessionKey: `agent:${agentId ?? "main"}:snapshot-${snapshotOrdinal}`,
+          entry: {
+            sessionId: `snapshot-${snapshotOrdinal}`,
+            updatedAt: snapshotOrdinal,
+          },
+        },
+      ];
+    });
+    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("codex", { list }) }];
+
+    const first = call("sessions.catalog.list", { catalogId: "codex", limitPerHost: 5 });
+    await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(1));
+
+    const second = call("sessions.catalog.list", { catalogId: "codex", limitPerHost: 5 });
+    await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+
+    resolveList[0]?.([host]);
+    resolveList[1]?.([host]);
+    await Promise.all([first, second]);
+
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+
   it("projects authoritative creator ownership onto streamed and final catalog rows", async () => {
     const broadcastToConnIds = vi.fn();
     const host = {
