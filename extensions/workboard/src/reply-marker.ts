@@ -5,13 +5,23 @@ import { WorkboardStore } from "./store.js";
 
 const WORKBOARD_MARKER_PREFIX = "Workboard: ";
 
+// Marker state is deliberately plugin-local and non-serialized. Never infer
+// idempotence by rewriting user-visible text.
+const workboardMarkerSuppressedPayloads = new WeakSet<object>();
+const workboardMarkedPayloads = new WeakSet<object>();
+
 export type WorkboardMarkerPayload = {
   text?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
   isReasoning?: boolean;
-  workboardMarker?: "omit";
 };
+
+/** Marks a Workboard-owned payload as an exact-format reply. */
+export function omitWorkboardMarker<T extends WorkboardMarkerPayload>(payload: T): T {
+  workboardMarkerSuppressedPayloads.add(payload);
+  return payload;
+}
 
 function hasVisibleContent(payload: WorkboardMarkerPayload): boolean {
   return Boolean(
@@ -51,10 +61,6 @@ export function selectPrimaryWorkboardCard(
     })[0];
 }
 
-function stripLeadingWorkboardMarker(text: string): string {
-  return text.replace(/^Workboard: [^\n]*\n?/, "");
-}
-
 /** Adds a privacy-safe current-card ID marker once at the final user-visible reply boundary. */
 export function addWorkboardMarker<T extends WorkboardMarkerPayload>(
   payload: T,
@@ -62,21 +68,24 @@ export function addWorkboardMarker<T extends WorkboardMarkerPayload>(
 ): T {
   if (
     !card ||
-    payload.workboardMarker === "omit" ||
+    workboardMarkerSuppressedPayloads.has(payload) ||
+    workboardMarkedPayloads.has(payload) ||
     payload.isReasoning ||
     !hasVisibleContent(payload)
   ) {
     return payload;
   }
   const marker = `${WORKBOARD_MARKER_PREFIX}${card.id}`;
-  const text = payload.text?.trim() ?? "";
+  const text = payload.text ?? "";
   if (isSilentText(text)) {
     return payload;
   }
-  return {
+  const markedPayload = {
     ...payload,
-    text: text ? `${marker}\n${stripLeadingWorkboardMarker(text)}` : marker,
+    text: text ? `${marker}\n${text}` : marker,
   };
+  workboardMarkedPayloads.add(markedPayload);
+  return markedPayload;
 }
 
 export function registerWorkboardReplyMarker(params: {

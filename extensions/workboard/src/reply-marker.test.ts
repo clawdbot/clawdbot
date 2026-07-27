@@ -2,6 +2,7 @@ import type { WorkboardCard } from "@openclaw/workboard-contract";
 import { describe, expect, it, vi } from "vitest";
 import {
   addWorkboardMarker,
+  omitWorkboardMarker,
   registerWorkboardReplyMarker,
   selectPrimaryWorkboardCard,
 } from "./reply-marker.js";
@@ -52,13 +53,23 @@ describe("Workboard reply marker", () => {
     ).toBeUndefined();
   });
 
-  it("honors silent and strict-format bypasses", () => {
+  it("honors silent and plugin-local strict-format bypasses", () => {
     const active = card();
     expect(addWorkboardMarker({ text: "NO_REPLY" }, active)).toEqual({ text: "NO_REPLY" });
-    expect(addWorkboardMarker({ text: '{"ok":true}', workboardMarker: "omit" }, active)).toEqual({
-      text: '{"ok":true}',
-      workboardMarker: "omit",
+
+    const payload = omitWorkboardMarker({ text: '{"ok":true}' });
+    expect(addWorkboardMarker(payload, active)).toBe(payload);
+  });
+
+  it("preserves user text beginning with Workboard and is idempotent", () => {
+    const active = card();
+    const payload = { text: "Workboard: this is user content\nResult" };
+    const marked = addWorkboardMarker(payload, active);
+
+    expect(marked).toEqual({
+      text: "Workboard: c8808a63-a412-4fc7-acdb-662dec762799\nWorkboard: this is user content\nResult",
     });
+    expect(addWorkboardMarker(marked, active)).toBe(marked);
   });
 
   it("registers the marker at the reply payload boundary", async () => {
