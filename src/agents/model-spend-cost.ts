@@ -15,10 +15,9 @@ type ResolvedModelSpendCost = {
   trackingComplete: boolean;
 };
 
-function splitUsdCost(value: number): Pick<
-  ResolvedModelSpendCost,
-  "costMicroUsd" | "costNanoUsdRemainder"
-> {
+function splitUsdCost(
+  value: number,
+): Pick<ResolvedModelSpendCost, "costMicroUsd" | "costNanoUsdRemainder"> {
   const scaledMicroUsd = value * MICRO_USD_PER_USD;
   let costMicroUsd = Math.floor(scaledMicroUsd);
   let costNanoUsdRemainder = Math.round((scaledMicroUsd - costMicroUsd) * 1_000);
