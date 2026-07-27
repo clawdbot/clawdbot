@@ -67,24 +67,50 @@ export async function persistQueuedPreSendState(params: {
 export async function persistQueuedPostSendState(params: {
   queueId: string;
   queuePolicy: OutboundDeliveryQueuePolicy;
+  stateDir?: string;
+  producerClaimId?: string;
 }): Promise<QueuedPostSendState> {
   try {
-    await markDeliveryPlatformOutcomeUnknown(params.queueId);
+    await markDeliveryPlatformOutcomeUnknown(
+      params.queueId,
+      params.stateDir,
+      params.producerClaimId,
+    );
     return "marked";
   } catch (markErr: unknown) {
+    if (params.producerClaimId) {
+      // A bounded batch may still contain identityless later payloads. Its
+      // intermediate state must never become a premature success receipt.
+      await failDeliveryAfterPlatformSend(
+        params.queueId,
+        `post-send state persistence failed: ${formatErrorMessage(markErr)}`,
+        params.stateDir,
+        params.producerClaimId,
+      );
+      return "failed";
+    }
     log.warn(
       `failed to mark queued delivery ${params.queueId} as platform-outcome-unknown; falling back to direct ack (${params.queuePolicy}): ${formatErrorMessage(markErr)}`,
     );
     try {
       // The platform already returned a result. If state marking is unavailable,
       // deleting the intent is safer than leaving it replayable.
-      await ackDelivery(params.queueId);
+      await ackDelivery(params.queueId, params.stateDir, {
+        ...(params.producerClaimId
+          ? { expectedPlatformSendAttemptId: params.producerClaimId }
+          : {}),
+      });
       return "acked";
     } catch (ackErr: unknown) {
       const error = `post-send state persistence failed: marker=${formatErrorMessage(markErr)}; ack=${formatErrorMessage(ackErr)}`;
       // Keep the evidence in the same canonical row if both primary state
       // transitions fail; a generic failure update would make it replayable.
-      await failDeliveryAfterPlatformSend(params.queueId, error);
+      await failDeliveryAfterPlatformSend(
+        params.queueId,
+        error,
+        params.stateDir,
+        params.producerClaimId,
+      );
       return "failed";
     }
   }

@@ -11,6 +11,7 @@ import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 export {
   claimDeliveryQueueEntryPlatformSend,
   promoteDeliveryQueueEntryPlatformSend,
+  transitionOwnedDeliveryQueueEntry,
 } from "./delivery-queue-sqlite-claim.js";
 
 // Generic durable delivery queue storage shared by session and outbound queues.
@@ -631,6 +632,7 @@ export function reserveDeliveryQueueEntryAttempt(params: {
   id: string;
   maxAttempts: number;
   stateDir?: string;
+  expectedPlatformSendAttemptId?: string;
 }): ReserveDeliveryQueueAttemptResult {
   if (!Number.isInteger(params.maxAttempts) || params.maxAttempts <= 0) {
     throw new Error(`Invalid delivery attempt budget: ${params.maxAttempts}`);
@@ -642,6 +644,13 @@ export function reserveDeliveryQueueEntryAttempt(params: {
       const current = loadDeliveryQueueEntry(params.queueName, params.id, params.stateDir);
       if (!current) {
         throw enoent(params.queueName, params.id);
+      }
+      if (
+        params.expectedPlatformSendAttemptId &&
+        current.platformSendAttemptId !== params.expectedPlatformSendAttemptId &&
+        current.producerClaimId !== params.expectedPlatformSendAttemptId
+      ) {
+        throw new Error(`Stable delivery platform claim was lost: ${params.id}`);
       }
       const persistedAttemptCount =
         typeof current.attemptCount === "number" &&

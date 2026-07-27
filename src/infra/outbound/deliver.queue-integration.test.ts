@@ -235,6 +235,46 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     ).not.toBe("completed");
   });
 
+  it("never completes recovered Matrix batches when any platform send lacks an identity", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const deliveryIntentId = "cron-direct-delivery:v1:recovered-matrix-partial-no-identity";
+    await enqueueDeliveryOnce(
+      {
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "confirmed recipient message" }, { text: "ambiguous message" }],
+        queuePolicy: "required",
+        completionRetention: boundedCronCompletionRetention,
+      },
+      deliveryIntentId,
+      tmpDir,
+    );
+    const sendMatrix = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "confirmed-recovered-message" })
+      .mockResolvedValueOnce({});
+    const deliver = vi.fn<DeliverFn>(async (params) =>
+      deliverOutboundPayloads({ ...params, deps: { matrix: sendMatrix } }),
+    );
+
+    await drainMatrixReconnect({ deliver, stateDir: tmpDir });
+
+    expect(sendMatrix).toHaveBeenCalledTimes(2);
+    expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
+      id: deliveryIntentId,
+      recoveryState: "unknown_after_send",
+    });
+    expect(
+      getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
+    ).toBe("pending");
+
+    await drainMatrixReconnect({ deliver, stateDir: tmpDir });
+    expect(sendMatrix).toHaveBeenCalledTimes(2);
+    expect(
+      getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
+    ).not.toBe("completed");
+  });
+
   it("replays the immutable queue-owned payload instead of regenerated producer input", async () => {
     process.env.OPENCLAW_STATE_DIR = tmpDir;
     const deliveryIntentId = "cron-direct-delivery:v1:immutable-queue-custody";
@@ -519,6 +559,46 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
       `Stable delivery intent is already queued: ${deliveryIntentId}`,
     );
     expect(sendMatrix).toHaveBeenCalledOnce();
+  });
+
+  it("never completes live Matrix batches when any platform send lacks an identity", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const sendMatrix = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "confirmed-live-message" })
+      .mockResolvedValueOnce({});
+    const deliveryIntentId = "cron-direct-delivery:v1:live-matrix-partial-no-identity";
+    const params = {
+      cfg: {} as OpenClawConfig,
+      channel: "matrix" as const,
+      to: "!room:example",
+      payloads: [{ text: "confirmed recipient message" }, { text: "ambiguous message" }],
+      deps: { matrix: sendMatrix },
+      queuePolicy: "required" as const,
+      deliveryIntentId,
+      completionRetention: boundedCronCompletionRetention,
+      reusePendingDeliveryIntent: true,
+    };
+
+    await expect(deliverOutboundPayloads(params)).rejects.toThrow(
+      "platform send returned no delivery identity for part of the delivery batch",
+    );
+    expect(sendMatrix).toHaveBeenCalledTimes(2);
+    expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
+      id: deliveryIntentId,
+      recoveryState: "unknown_after_send",
+    });
+    expect(
+      getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
+    ).toBe("pending");
+
+    await expect(deliverOutboundPayloads(params)).rejects.toThrow(
+      `Stable delivery intent is already queued: ${deliveryIntentId}`,
+    );
+    expect(sendMatrix).toHaveBeenCalledTimes(2);
+    expect(
+      getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
+    ).not.toBe("completed");
   });
 
   it("retries a stable delivery intent only after a proven pre-dispatch failure", async () => {

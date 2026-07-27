@@ -15,6 +15,40 @@ type PlatformClaimParams = {
   reconciledPlatformSendStartedAt?: number;
 };
 
+/** Runs an existing queue mutation only while its exact platform owner survives. */
+export function transitionOwnedDeliveryQueueEntry(
+  params: {
+    queueName: string;
+    id: string;
+    stateDir?: string;
+    platformSendAttemptId: string;
+  },
+  transition: (entry: DeliveryQueueEntryState) => void,
+): boolean {
+  const database = openOpenClawStateDatabase({
+    env: params.stateDir ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } : process.env,
+  });
+  return runSqliteImmediateTransactionSync(
+    database.db,
+    () => {
+      const entry = loadDeliveryQueueEntry(params.queueName, params.id, params.stateDir);
+      if (
+        !entry ||
+        (entry.platformSendAttemptId !== params.platformSendAttemptId &&
+          entry.producerClaimId !== params.platformSendAttemptId)
+      ) {
+        return false;
+      }
+      transition(entry);
+      return true;
+    },
+    {
+      databaseLabel: "openclaw-state",
+      operationLabel: `mutate owned ${params.queueName} delivery platform send`,
+    },
+  );
+}
+
 function transitionUnsentDeliveryQueueEntry(
   params: PlatformClaimParams,
   operation: "claim" | "promote",

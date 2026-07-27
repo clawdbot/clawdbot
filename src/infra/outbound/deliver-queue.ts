@@ -375,6 +375,11 @@ async function deliverOutboundPayloadsWithQueueCleanup(
     ownsAuditTerminal && hasTrustedMessageAuditListeners()
       ? ([] as OutboundPayloadDeliveryOutcome[])
       : undefined;
+  // Recipient custody must observe ambiguous adapter outcomes even when no
+  // audit listener is installed; audit subscriptions are not delivery proof.
+  const stablePayloadOutcomes = producerClaimId
+    ? ([] as OutboundPayloadDeliveryOutcome[])
+    : undefined;
   const queuePolicy = params.queuePolicy ?? "best_effort";
   const platformQueueId = queueId ?? params.deliveryQueueId;
   const platformQueuePolicy = queueId ? queuePolicy : (params.queuePolicy ?? "required");
@@ -386,6 +391,40 @@ async function deliverOutboundPayloadsWithQueueCleanup(
   let platformSendRoute: PlatformSendRoute | undefined;
   let deliveredResults: OutboundDeliveryResult[] = [];
   let commitHooksRun = false;
+  const ackOwnedQueue = (options?: { suppressCompletionReceipt?: boolean }) => {
+    if (!queueId) {
+      throw new Error("Queued delivery acknowledgement requires a queue id");
+    }
+    return producerClaimId
+      ? ackDelivery(queueId, undefined, {
+          ...options,
+          expectedPlatformSendAttemptId: producerClaimId,
+        })
+      : options
+        ? ackDelivery(queueId, undefined, options)
+        : ackDelivery(queueId);
+  };
+  const recordOwnedQueueFailure = (
+    record: typeof failDelivery | typeof failDeliveryAfterPlatformSend,
+    error: string,
+  ) => {
+    if (!queueId) {
+      throw new Error("Queued delivery failure requires a queue id");
+    }
+    return producerClaimId
+      ? record(queueId, error, undefined, producerClaimId)
+      : record(queueId, error);
+  };
+  const persistOwnedPostSendState = () => {
+    if (!queueId) {
+      throw new Error("Queued delivery post-send state requires a queue id");
+    }
+    return persistQueuedPostSendState({
+      queueId,
+      queuePolicy,
+      ...(producerClaimId ? { producerClaimId } : {}),
+    });
+  };
   const emitTerminals = (
     terminals: Parameters<typeof emitOutboundAuditTerminals>[0]["terminals"],
   ): void => {
@@ -441,14 +480,23 @@ async function deliverOutboundPayloadsWithQueueCleanup(
     onPlatformSendDispatch: async () => {
       if (platformQueueId && queuedPreSendState !== "acked") {
         try {
-          await markDeliveryPlatformSendDispatched(
-            platformQueueId,
-            platformQueueStateDir,
-            platformSendRoute,
-          );
+          if (producerClaimId) {
+            await markDeliveryPlatformSendDispatched(
+              platformQueueId,
+              platformQueueStateDir,
+              platformSendRoute,
+              producerClaimId,
+            );
+          } else {
+            await markDeliveryPlatformSendDispatched(
+              platformQueueId,
+              platformQueueStateDir,
+              platformSendRoute,
+            );
+          }
           queuedPreSendState ??= "marked";
         } catch (dispatchMarkError) {
-          if (exactReconciliationRequired) {
+          if (exactReconciliationRequired || producerClaimId) {
             throw dispatchMarkError;
           }
           log.warn(
@@ -464,10 +512,11 @@ async function deliverOutboundPayloadsWithQueueCleanup(
       partialFailuresAreProvenNotSent &&= isProvenDeliveryNotSentError(err);
       params.onError?.(err, payload);
     },
-    ...(auditPayloadOutcomes
+    ...(auditPayloadOutcomes || stablePayloadOutcomes
       ? {
           onPayloadDeliveryOutcome: (outcome: OutboundPayloadDeliveryOutcome) => {
-            auditPayloadOutcomes.push(outcome);
+            auditPayloadOutcomes?.push(outcome);
+            stablePayloadOutcomes?.push(outcome);
             params.onPayloadDeliveryOutcome?.(outcome);
           },
         }
@@ -475,7 +524,7 @@ async function deliverOutboundPayloadsWithQueueCleanup(
     onDeliveryResult: async (result) => {
       deliveredResults.push(result);
       if (queueId && queuedPostSendState === undefined) {
-        queuedPostSendState = await persistQueuedPostSendState({ queueId, queuePolicy });
+        queuedPostSendState = await persistOwnedPostSendState();
       }
       await params.onDeliveryResult?.(result);
     },
@@ -487,6 +536,24 @@ async function deliverOutboundPayloadsWithQueueCleanup(
     // Core reconciles adapter progress objects with hook-bearing final results.
     deliveredResults = results;
     platformResultsReturned = true;
+    if (
+      queueId &&
+      results.length > 0 &&
+      stablePayloadOutcomes?.some(
+        (outcome) =>
+          outcome.status === "suppressed" && outcome.reason === "adapter_returned_no_identity",
+      )
+    ) {
+      const error = "platform send returned no delivery identity for part of the delivery batch";
+      await recordOwnedQueueFailure(failDeliveryAfterPlatformSend, error);
+      queuedPostSendState = "failed";
+      throw new OutboundDeliveryError(error, {
+        cause: new Error(error),
+        results,
+        payloadOutcomes: stablePayloadOutcomes,
+        stage: "platform_send",
+      });
+    }
     if (!queueId) {
       if (params.deliveryCompletion) {
         if (results.length > 0) {
@@ -521,16 +588,14 @@ async function deliverOutboundPayloadsWithQueueCleanup(
           (lastPayloadError instanceof OutboundDeliveryError && lastPayloadError.sentBeforeError);
         const postSendState =
           queuedPostSendState ??
-          (partialSendEvidence
-            ? await persistQueuedPostSendState({ queueId, queuePolicy })
-            : undefined);
+          (partialSendEvidence ? await persistOwnedPostSendState() : undefined);
         const error = "partial delivery failure (bestEffort)";
         if (postSendState === undefined || postSendState === "marked") {
           const recordFailure =
             !partialSendEvidence && partialFailuresAreProvenNotSent
               ? failDeliveryBeforePlatformSend
               : failDelivery;
-          await recordFailure(queueId, error).catch((err: unknown) => {
+          await recordOwnedQueueFailure(recordFailure, error).catch((err: unknown) => {
             log.warn(
               `failed to mark queued delivery ${queueId} as failed after partial failure; continuing best-effort delivery: ${formatErrorMessage(err)}`,
             );
@@ -559,15 +624,15 @@ async function deliverOutboundPayloadsWithQueueCleanup(
         const postSendState =
           queuedPostSendState ??
           (results.length > 0 || queuedPreSendState === "marked"
-            ? await persistQueuedPostSendState({ queueId, queuePolicy })
+            ? await persistOwnedPostSendState()
             : queuedPreSendState === "acked"
               ? "acked"
               : undefined);
         if (results.length === 0 && postSendState === "marked") {
           // The provider was invoked but returned no recipient-visible identity;
           // never convert that ambiguous platform outcome into a success receipt.
-          await failDeliveryAfterPlatformSend(
-            queueId,
+          await recordOwnedQueueFailure(
+            failDeliveryAfterPlatformSend,
             "platform send returned no delivery identity",
           );
           queuedPostSendState = "failed";
@@ -586,8 +651,8 @@ async function deliverOutboundPayloadsWithQueueCleanup(
               ? false
               : await (
                   results.length === 0 && params.completionRetention
-                    ? ackDelivery(queueId, undefined, { suppressCompletionReceipt: true })
-                    : ackDelivery(queueId)
+                    ? ackOwnedQueue({ suppressCompletionReceipt: true })
+                    : ackOwnedQueue()
                 )
                   .then(() => true)
                   .catch(async (err: unknown) => {
@@ -595,14 +660,14 @@ async function deliverOutboundPayloadsWithQueueCleanup(
                       deliveredResults.length > 0 || queuedPreSendState !== undefined;
                     try {
                       if (hasSendEvidence) {
-                        await failDeliveryAfterPlatformSend(
-                          queueId,
+                        await recordOwnedQueueFailure(
+                          failDeliveryAfterPlatformSend,
                           `failed to ack sent delivery: ${formatErrorMessage(err)}`,
                         );
                         queuedPostSendState = "failed";
                       } else {
-                        await failDelivery(
-                          queueId,
+                        await recordOwnedQueueFailure(
+                          failDelivery,
                           `failed to ack unsent delivery: ${formatErrorMessage(err)}`,
                         );
                       }
@@ -641,7 +706,7 @@ async function deliverOutboundPayloadsWithQueueCleanup(
     }
     if (queueId) {
       if (isDeliveryAbortError(err)) {
-        const acked = await ackDelivery(queueId)
+        const acked = await ackOwnedQueue()
           .then(() => true)
           .catch(() => false);
         if (acked) {
@@ -660,12 +725,9 @@ async function deliverOutboundPayloadsWithQueueCleanup(
           (err instanceof OutboundDeliveryError && err.sentBeforeError);
         if (sendEvidence) {
           try {
-            queuedPostSendState ??= await persistQueuedPostSendState({
-              queueId,
-              queuePolicy,
-            });
+            queuedPostSendState ??= await persistOwnedPostSendState();
             if (queuedPostSendState === "marked") {
-              await failDeliveryAfterPlatformSend(queueId, formatErrorMessage(err));
+              await recordOwnedQueueFailure(failDeliveryAfterPlatformSend, formatErrorMessage(err));
               queuedPostSendState = "failed";
             }
           } catch (persistErr: unknown) {
@@ -708,7 +770,7 @@ async function deliverOutboundPayloadsWithQueueCleanup(
                 rejectDurableDelivery(params.deliveryCompletion, permanentRejection.message);
                 ownerRejected = true;
               }
-              await ackDelivery(queueId);
+              await ackOwnedQueue();
               queueAcked = true;
             } catch (rejectionError) {
               log.warn(
@@ -731,11 +793,13 @@ async function deliverOutboundPayloadsWithQueueCleanup(
             const recordFailure = isProvenDeliveryNotSentError(err)
               ? failDeliveryBeforePlatformSend
               : failDelivery;
-            await recordFailure(queueId, formatErrorMessage(err)).catch((failErr: unknown) => {
-              log.warn(
-                `failed to mark queued delivery ${queueId} as failed: ${formatErrorMessage(failErr)}`,
-              );
-            });
+            await recordOwnedQueueFailure(recordFailure, formatErrorMessage(err)).catch(
+              (failErr: unknown) => {
+                log.warn(
+                  `failed to mark queued delivery ${queueId} as failed: ${formatErrorMessage(failErr)}`,
+                );
+              },
+            );
           }
         }
       }

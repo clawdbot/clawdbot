@@ -402,11 +402,60 @@ async function moveEntryToFailedWithLogging(
 ): Promise<boolean> {
   markDurableDeliveryFailedBestEffort(entry, log);
   try {
-    await moveToFailed(entry.id, stateDir);
+    const attemptId = entry.completionRetention
+      ? (entry.platformSendAttemptId ?? entry.producerClaimId)
+      : undefined;
+    await (attemptId
+      ? moveToFailed(entry.id, stateDir, attemptId)
+      : moveToFailed(entry.id, stateDir));
     return true;
   } catch (err) {
     log.error(`Failed to move entry ${entry.id} to failed/: ${String(err)}`);
     return false;
+  }
+}
+
+function recoveryPlatformAttemptId(
+  entry: QueuedDelivery,
+  claimedAttemptId?: string,
+): string | undefined {
+  return (
+    claimedAttemptId ??
+    (entry.completionRetention ? (entry.platformSendAttemptId ?? entry.producerClaimId) : undefined)
+  );
+}
+
+async function ackRecoveredDelivery(
+  entry: QueuedDelivery,
+  stateDir?: string,
+  options?: { retainSpoolArtifacts?: boolean; suppressCompletionReceipt?: boolean },
+  claimedAttemptId?: string,
+): Promise<void> {
+  const attemptId = recoveryPlatformAttemptId(entry, claimedAttemptId);
+  if (attemptId) {
+    await ackDelivery(entry.id, stateDir, {
+      ...options,
+      expectedPlatformSendAttemptId: attemptId,
+    });
+  } else if (options) {
+    await ackDelivery(entry.id, stateDir, options);
+  } else {
+    await ackDelivery(entry.id, stateDir);
+  }
+}
+
+async function recordRecoveredFailure(
+  record: typeof failDelivery | typeof failDeliveryAfterPlatformSend,
+  entry: QueuedDelivery,
+  error: string,
+  stateDir?: string,
+  claimedAttemptId?: string,
+): Promise<void> {
+  const attemptId = recoveryPlatformAttemptId(entry, claimedAttemptId);
+  if (attemptId) {
+    await record(entry.id, error, stateDir, attemptId);
+  } else {
+    await record(entry.id, error, stateDir);
   }
 }
 
@@ -441,14 +490,16 @@ async function resolveCompletedOwnerBeforeRecovery(opts: {
     operation = markDurableDeliveryQueued(completion, opts.entry.id);
   } catch (error) {
     const errMsg = `delivery owner state unavailable: ${formatErrorMessage(error)}`;
-    await failDelivery(opts.entry.id, errMsg, opts.stateDir).catch(() => undefined);
+    await recordRecoveredFailure(failDelivery, opts.entry, errMsg, opts.stateDir).catch(
+      () => undefined,
+    );
     opts.onFailed?.(opts.entry, errMsg);
     opts.log.warn(`Delivery entry ${opts.entry.id} ${errMsg}`);
     return "failed";
   }
   if (operation.status === "sent" || operation.status === "replied") {
     try {
-      await ackDelivery(opts.entry.id, opts.stateDir);
+      await ackRecoveredDelivery(opts.entry, opts.stateDir);
     } catch (error) {
       const errMsg = `failed to ack owner-completed delivery: ${formatErrorMessage(error)}`;
       opts.onFailed?.(opts.entry, errMsg);
@@ -472,7 +523,7 @@ async function resolveCompletedOwnerBeforeRecovery(opts: {
   }
   if (operation.status === "suppressed") {
     try {
-      await ackDelivery(opts.entry.id, opts.stateDir);
+      await ackRecoveredDelivery(opts.entry, opts.stateDir);
     } catch (error) {
       const errMsg = `failed to ack owner-suppressed delivery: ${formatErrorMessage(error)}`;
       opts.onFailed?.(opts.entry, errMsg);
@@ -484,7 +535,7 @@ async function resolveCompletedOwnerBeforeRecovery(opts: {
   }
   if (operation.status === "rejected") {
     try {
-      await ackDelivery(opts.entry.id, opts.stateDir);
+      await ackRecoveredDelivery(opts.entry, opts.stateDir);
     } catch (error) {
       const errMsg = `failed to ack owner-rejected delivery: ${formatErrorMessage(error)}`;
       opts.onFailed?.(opts.entry, errMsg);
@@ -520,22 +571,49 @@ async function persistRecoveredPostSendState(opts: {
   entry: QueuedDelivery;
   log: RecoveryLogger;
   stateDir?: string;
+  producerClaimId?: string;
 }): Promise<"marked" | "acked" | "failed"> {
   try {
-    await markDeliveryPlatformOutcomeUnknown(opts.entry.id, opts.stateDir);
+    const attemptId = recoveryPlatformAttemptId(opts.entry, opts.producerClaimId);
+    if (attemptId) {
+      await markDeliveryPlatformOutcomeUnknown(opts.entry.id, opts.stateDir, attemptId);
+    } else {
+      await markDeliveryPlatformOutcomeUnknown(opts.entry.id, opts.stateDir);
+    }
     return "marked";
   } catch (markErr) {
+    if (opts.producerClaimId) {
+      await recordRecoveredFailure(
+        failDeliveryAfterPlatformSend,
+        opts.entry,
+        `post-send state persistence failed: ${formatErrorMessage(markErr)}`,
+        opts.stateDir,
+        opts.producerClaimId,
+      );
+      return "failed";
+    }
     // A result proves at least one send completed. If the intermediate marker
     // is unavailable, direct ack still removes the replayable intent.
     opts.log.warn(
       `Delivery entry ${opts.entry.id} failed to persist post-send state; falling back to direct ack: ${formatErrorMessage(markErr)}`,
     );
     try {
-      await ackDelivery(opts.entry.id, opts.stateDir, { retainSpoolArtifacts: true });
+      await ackRecoveredDelivery(
+        opts.entry,
+        opts.stateDir,
+        { retainSpoolArtifacts: true },
+        opts.producerClaimId,
+      );
       return "acked";
     } catch (ackErr) {
       const error = `post-send state persistence failed: marker=${formatErrorMessage(markErr)}; ack=${formatErrorMessage(ackErr)}`;
-      await failDeliveryAfterPlatformSend(opts.entry.id, error, opts.stateDir);
+      await recordRecoveredFailure(
+        failDeliveryAfterPlatformSend,
+        opts.entry,
+        error,
+        opts.stateDir,
+        opts.producerClaimId,
+      );
       return "failed";
     }
   }
@@ -573,7 +651,7 @@ async function drainQueuedEntry(opts: {
         if (entry.deliveryCompletion) {
           completeDurableDelivery(entry.deliveryCompletion, result);
         }
-        await ackDelivery(entry.id, opts.stateDir);
+        await ackRecoveredDelivery(entry, opts.stateDir);
         await runReconciledSentCommitHooks({
           entry,
           cfg: opts.cfg,
@@ -598,7 +676,7 @@ async function drainQueuedEntry(opts: {
         opts.log.warn(`Delivery entry ${entry.id} ${errMsg}`);
         opts.onFailed?.(entry, errMsg);
         try {
-          await failDelivery(entry.id, errMsg, opts.stateDir);
+          await recordRecoveredFailure(failDelivery, entry, errMsg, opts.stateDir);
           return "failed";
         } catch (failErr) {
           if (getErrnoCode(failErr) === "ENOENT") {
@@ -631,7 +709,7 @@ async function drainQueuedEntry(opts: {
         !attemptBudgetExhausted
       ) {
         try {
-          await failDelivery(entry.id, errMsg, opts.stateDir);
+          await recordRecoveredFailure(failDelivery, entry, errMsg, opts.stateDir);
           return "failed";
         } catch (failErr) {
           if (getErrnoCode(failErr) === "ENOENT") {
@@ -642,7 +720,10 @@ async function drainQueuedEntry(opts: {
       }
       try {
         markDurableDeliveryFailedBestEffort(entry, opts.log);
-        await moveToFailed(entry.id, opts.stateDir);
+        const attemptId = recoveryPlatformAttemptId(entry);
+        await (attemptId
+          ? moveToFailed(entry.id, opts.stateDir, attemptId)
+          : moveToFailed(entry.id, opts.stateDir));
         emitQueuedAuditTerminals(entry, () => queuedUnknownAuditTerminals(entry));
         return "moved-to-failed";
       } catch (moveErr) {
@@ -692,12 +773,16 @@ async function drainQueuedEntry(opts: {
     opts.log.info(`Recovery skipped for delivery ${entry.id}: producer ownership already claimed`);
     return "already-gone";
   }
-  const reservation = await reserveDeliveryAttempt(entry.id, maxRetries, opts.stateDir);
+  const reservation = producerClaimId
+    ? await reserveDeliveryAttempt(entry.id, maxRetries, opts.stateDir, producerClaimId)
+    : await reserveDeliveryAttempt(entry.id, maxRetries, opts.stateDir);
   if (reservation.status === "exhausted") {
     const errMsg = `delivery retry budget exhausted (${reservation.attemptCount}/${maxRetries})`;
     markDurableDeliveryFailedBestEffort(entry, opts.log);
     try {
-      await moveToFailed(entry.id, opts.stateDir);
+      await (producerClaimId
+        ? moveToFailed(entry.id, opts.stateDir, producerClaimId)
+        : moveToFailed(entry.id, opts.stateDir));
     } catch (moveErr) {
       if (getErrnoCode(moveErr) === "ENOENT") {
         return "already-gone";
@@ -726,12 +811,12 @@ async function drainQueuedEntry(opts: {
           entry,
           log: opts.log,
           stateDir: opts.stateDir,
+          ...(producerClaimId ? { producerClaimId } : {}),
         });
       },
     });
     const results = isOutboundDeliveryResultArray(result) ? result : [];
     if (
-      results.length === 0 &&
       entry.completionRetention &&
       payloadOutcomes.some(
         (outcome) =>
@@ -739,7 +824,13 @@ async function drainQueuedEntry(opts: {
       )
     ) {
       const error = "recovered platform send returned no delivery identity";
-      await failDeliveryAfterPlatformSend(entry.id, error, opts.stateDir);
+      await recordRecoveredFailure(
+        failDeliveryAfterPlatformSend,
+        entry,
+        error,
+        opts.stateDir,
+        producerClaimId,
+      );
       opts.onFailed?.(entry, error);
       opts.log.warn(`Delivery entry ${entry.id} ${error}; preserving unknown_after_send`);
       emitQueuedAuditTerminals(entry, () => queuedUnknownAuditTerminals(entry));
@@ -763,6 +854,7 @@ async function drainQueuedEntry(opts: {
           entry,
           log: opts.log,
           stateDir: opts.stateDir,
+          ...(producerClaimId ? { producerClaimId } : {}),
         });
         opts.log.warn(
           `Delivery entry ${entry.id} partially sent before best-effort recovery failed; preserving unknown_after_send`,
@@ -784,13 +876,18 @@ async function drainQueuedEntry(opts: {
         )
           ? failDeliveryBeforePlatformSend
           : failDelivery;
-        await recordFailure(entry.id, errMsg, opts.stateDir);
+        await recordRecoveredFailure(recordFailure, entry, errMsg, opts.stateDir, producerClaimId);
       }
       return "failed";
     }
     postSendState ??=
       results.length > 0
-        ? await persistRecoveredPostSendState({ entry, log: opts.log, stateDir: opts.stateDir })
+        ? await persistRecoveredPostSendState({
+            entry,
+            log: opts.log,
+            stateDir: opts.stateDir,
+            ...(producerClaimId ? { producerClaimId } : {}),
+          })
         : undefined;
     if (postSendState === "failed") {
       const errMsg = "recovered send completed but queue finalization failed";
@@ -801,16 +898,33 @@ async function drainQueuedEntry(opts: {
     if (postSendState !== "acked") {
       try {
         await (results.length === 0 && entry.completionRetention
-          ? ackDelivery(entry.id, opts.stateDir, { suppressCompletionReceipt: true })
-          : ackDelivery(entry.id, opts.stateDir));
+          ? ackRecoveredDelivery(
+              entry,
+              opts.stateDir,
+              { suppressCompletionReceipt: true },
+              producerClaimId,
+            )
+          : ackRecoveredDelivery(entry, opts.stateDir, undefined, producerClaimId));
         postSendState = "acked";
       } catch (ackErr) {
         const ackError = `failed to ack recovered delivery: ${formatErrorMessage(ackErr)}`;
         if (results.length > 0) {
-          await failDeliveryAfterPlatformSend(entry.id, ackError, opts.stateDir);
+          await recordRecoveredFailure(
+            failDeliveryAfterPlatformSend,
+            entry,
+            ackError,
+            opts.stateDir,
+            producerClaimId,
+          );
           postSendState = "failed";
         } else {
-          await failDelivery(entry.id, ackError, opts.stateDir);
+          await recordRecoveredFailure(
+            failDelivery,
+            entry,
+            ackError,
+            opts.stateDir,
+            producerClaimId,
+          );
         }
         opts.onFailed?.(entry, ackError);
         opts.log.warn(`Delivery entry ${entry.id} ${ackError}`);
@@ -845,6 +959,7 @@ async function drainQueuedEntry(opts: {
           entry,
           log: opts.log,
           stateDir: opts.stateDir,
+          ...(producerClaimId ? { producerClaimId } : {}),
         });
       } catch (persistErr) {
         // Never overwrite concrete send evidence with a generic retry state.
@@ -889,7 +1004,9 @@ async function drainQueuedEntry(opts: {
         } else {
           markDurableDeliveryFailedBestEffort(entry, opts.log);
         }
-        await moveToFailed(entry.id, opts.stateDir);
+        await (producerClaimId
+          ? moveToFailed(entry.id, opts.stateDir, producerClaimId)
+          : moveToFailed(entry.id, opts.stateDir));
         emitQueuedAuditTerminals(entry, () =>
           failedOutboundAuditTerminals({
             payloadCount: entry.payloads.length,
@@ -909,7 +1026,7 @@ async function drainQueuedEntry(opts: {
         const recordFailure = isProvenDeliveryNotSentError(err)
           ? failDeliveryBeforePlatformSend
           : failDelivery;
-        await recordFailure(entry.id, errMsg, opts.stateDir);
+        await recordRecoveredFailure(recordFailure, entry, errMsg, opts.stateDir, producerClaimId);
         return "failed";
       } catch (failErr) {
         if (getErrnoCode(failErr) === "ENOENT") {
@@ -977,7 +1094,10 @@ export async function drainPendingDeliveries(opts: {
         ) {
           try {
             markDurableDeliveryFailedBestEffort(currentEntry, opts.log);
-            await moveToFailed(currentEntry.id, opts.stateDir);
+            const attemptId = recoveryPlatformAttemptId(currentEntry);
+            await (attemptId
+              ? moveToFailed(currentEntry.id, opts.stateDir, attemptId)
+              : moveToFailed(currentEntry.id, opts.stateDir));
           } catch (err) {
             if (getErrnoCode(err) === "ENOENT") {
               opts.log.info(`${opts.logLabel}: entry ${currentEntry.id} already gone, skipping`);
