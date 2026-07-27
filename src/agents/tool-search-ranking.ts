@@ -126,6 +126,30 @@ function stem(token: string): string {
   return current;
 }
 
+/**
+ * Words ending in `s` that are not plurals. Stripping it changes the meaning and
+ * collides with an unrelated root: "news" would become "new" and then literal-
+ * match every "Create a new ..." tool, outranking the search tool the query
+ * meant. Several are ordinary tool vocabulary here ("status", "canvas", "alias").
+ */
+const NON_PLURAL_S_WORDS = new Set([
+  "news",
+  "status",
+  "alias",
+  "canvas",
+  "focus",
+  "bonus",
+  "virus",
+  "atlas",
+  "lens",
+  "axis",
+  "basis",
+  "analysis",
+  "gas",
+  "bus",
+  "plus",
+]);
+
 /** Suffixes whose stripping can expose a consonant doubled only by inflection. */
 const UNDOUBLING_SUFFIXES = new Set(["ing", "ed", "er"]);
 /** Doubles that belong to the root ("call", "process", "off", "buzz"). */
@@ -152,7 +176,7 @@ function undoubleFinalConsonant(token: string): string {
 }
 
 function stripOneSuffix(token: string): string {
-  if (token.length <= 3) {
+  if (token.length <= 3 || NON_PLURAL_S_WORDS.has(token)) {
     return token;
   }
   for (const suffix of ["ies", "ing", "ed", "ly", "es", "er", "s", "e"]) {
@@ -174,9 +198,13 @@ function stripOneSuffix(token: string): string {
   return token;
 }
 
+/** camelCase and PascalCase boundaries, applied before lowercasing. */
+const CASE_BOUNDARY = /(?<=[\p{Ll}\p{N}])(?=\p{Lu})|(?<=\p{Lu})(?=\p{Lu}\p{Ll})/u;
+
 /**
  * Splits on anything that is not a word character, which keeps `_`-joined tool
- * names addressable as whole tokens while still emitting their parts.
+ * names addressable as whole tokens while still emitting their parts, including
+ * camelCase components that MCP catalogs commonly use.
  *
  * Unicode letters survive rather than being rejected: a catalog is allowed to
  * name or describe tools in another script, and dropping those would make them
@@ -184,8 +212,6 @@ function stripOneSuffix(token: string): string {
  * is that catalogs are written in English, which is why `tool_search` asks the
  * model to query in English rather than this function refusing the input.
  */
-const CASE_BOUNDARY = /(?<=[\p{Ll}\p{N}])(?=\p{Lu})|(?<=\p{Lu})(?=\p{Lu}\p{Ll})/u;
-
 function splitWords(input: string): string[] {
   const words: string[] = [];
   for (const raw of input.split(/[^\p{L}\p{N}_]+/u)) {

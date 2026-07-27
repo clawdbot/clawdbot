@@ -117,6 +117,15 @@ describe("tokenizeQuery", () => {
     }
   });
 
+  it.each(["news", "status", "canvas", "alias"])(
+    "keeps %s distinct from the word left by stripping its s",
+    (word) => {
+      // "news" -> "new" would literal-match every "Create a new ..." tool, and
+      // literal matches are ranked ahead of the web tool the query meant.
+      expect(tokenizeDocument(word)).toEqual([word]);
+    },
+  );
+
   it("does not let a singular/plural collision invent an intent", () => {
     // "news" must not normalize to "new", or "open a new issue" acquires a
     // web-search intent it never asked for.
