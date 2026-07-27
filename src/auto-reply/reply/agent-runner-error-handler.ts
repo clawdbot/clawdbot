@@ -195,7 +195,10 @@ export async function handleAgentExecutionError(params: {
     defaultRuntime.error(
       `Embedded agent hit a session write lock before reply; suppressing user-facing failure while the owning turn can finish: ${message}`,
     );
-    takePendingLifecycleTerminal()?.emit("error", err);
+    const lifecycleTerminal = takePendingLifecycleTerminal();
+    if (lifecycleTerminal) {
+      lifecycleTerminal.emit("error", err);
+    }
     turn.replyOperation?.fail("run_failed", err);
     await params.modelPatch.fail(err);
     return { kind: "final", payload: { text: SILENT_REPLY_TOKEN } };
