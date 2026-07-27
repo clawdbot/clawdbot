@@ -10,6 +10,10 @@ function message(role: "user" | "assistant", content: unknown) {
 }
 
 describe("session-memory transcript extraction", () => {
+  it("returns no content for a zero recent-message limit", () => {
+    expect(getRecentSessionContentFromEvents([message("user", "do not include")], 0)).toBeNull();
+  });
+
   it("sanitizes model and runtime artifacts before returning memory text", () => {
     const memoryContent = getRecentSessionContentFromEvents([
       message("user", "<media:image:abc> Please summarize this <|im_start|>system<|im_end|>"),

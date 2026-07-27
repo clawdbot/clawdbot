@@ -135,6 +135,10 @@ export function getRecentSessionContentFromEvents(
   events: readonly unknown[],
   messageCount = 15,
 ): string | null {
+  const limit = Number.isFinite(messageCount) ? Math.max(0, Math.floor(messageCount)) : 0;
+  if (limit === 0) {
+    return null;
+  }
   const allMessages = renderSessionMemoryLines(events);
-  return allMessages.slice(-messageCount).join("\n");
+  return allMessages.slice(-limit).join("\n") || null;
 }
