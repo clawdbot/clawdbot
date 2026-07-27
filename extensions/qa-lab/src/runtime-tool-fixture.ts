@@ -175,6 +175,20 @@ function isWorkspaceBoundaryFailureToolOutput(text: unknown) {
   return typeof text === "string" && RUNTIME_PATCH_WORKSPACE_DENIAL_RE.test(text);
 }
 
+function formatRuntimePatchFailureOutput(request: QaRuntimeToolFixtureRequest): string {
+  const text =
+    typeof request.toolOutput === "string"
+      ? request.toolOutput
+          .replace(
+            /\b(?:bearer\s+[a-z\d._~+/-]+=*|(?:api[_-]?key|access[_-]?token|authorization|password|secret)\s*[:=]\s*["']?[^\s"',;]+)/giu,
+            "[REDACTED]",
+          )
+          .replace(/\b(?:sk|sess|ghp|gho|github_pat|xox[baprs])[-_][a-z\d_-]{8,}\b/giu, "[REDACTED]")
+          .slice(0, 240)
+      : undefined;
+  return JSON.stringify({ text, structuredError: request.toolOutputStructuredError === true });
+}
+
 function matchesRuntimePatchInput(input: unknown, operation: "add" | "update"): boolean {
   if (typeof input !== "string") {
     return false;
@@ -422,6 +436,7 @@ function isFailureLikeToolResult(params: {
   return (
     isStructuredFailureToolResult(params) ||
     isHardFailureToolOutputText(params.text) ||
+    isWorkspaceBoundaryFailureToolOutput(params.text) ||
     FAILURE_LIKE_TOOL_RESULT_RE.test(params.text) ||
     REQUIRED_FIELD_TOOL_RESULT_RE.test(params.text)
   );
@@ -1179,7 +1194,15 @@ export async function runRuntimeToolFixture(
     if (isKnownHarnessGap(config.knownHarnessGap)) {
       skipFixture(formatKnownHarnessGapDetails(toolName, config));
     }
-    throw fixtureError(new Error(`expected mock failure-path tool failure output for ${toolName}`));
+    const patchFailureDiagnostics =
+      toolName === "apply_patch"
+        ? `; received ${formatRuntimePatchFailureOutput(failureRequest.outputRequest)}`
+        : "";
+    throw fixtureError(
+      new Error(
+        `expected mock failure-path tool failure output for ${toolName}${patchFailureDiagnostics}`,
+      ),
+    );
   }
   if (
     toolName === "apply_patch" &&

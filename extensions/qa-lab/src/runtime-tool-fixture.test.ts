@@ -1118,6 +1118,28 @@ describe("runtime tool fixture", () => {
     ).rejects.toThrow();
   });
 
+  it.each([
+    "Operation not permitted",
+    "Operation not permitted (os error 1)",
+    "EPERM: sandbox denied the requested patch",
+  ])("accepts native sandbox denial as a mock patch failure: %s", async (failureOutput) => {
+    await expect(
+      runMockRuntimeToolFixtureWithOutputs({
+        toolName: "apply_patch",
+        happyArgs: {
+          input:
+            "*** Begin Patch\n*** Add File: runtime-tool-fixture-patch.txt\n+runtime patch\n*** End Patch\n",
+        },
+        failureArgs: {
+          input:
+            "*** Begin Patch\n*** Update File: ../runtime-tool-fixture-denied.txt\n@@\n-runtime-tool-fixture-denied-original\n+runtime patch outside the workspace\n*** End Patch\n",
+        },
+        happyOutput: "Successfully applied patch",
+        failureOutput,
+      }),
+    ).resolves.toContain("apply_patch mock provider failure planned args");
+  });
+
   it("rejects mock patch failures that only report missing patch context", async () => {
     await expect(
       runMockRuntimeToolFixtureWithOutputs({
