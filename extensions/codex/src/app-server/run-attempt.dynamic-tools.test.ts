@@ -1,6 +1,10 @@
 // Codex tests cover run attemptynamic tools plugin behavior.
 import path from "node:path";
-import { onAgentEvent, type AgentEventPayload } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  onAgentEvent,
+  type AgentEventPayload,
+  type EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   emitTrustedDiagnosticEvent,
   onInternalDiagnosticEvent,
@@ -87,6 +91,15 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       path.join(tempDir, "workspace"),
     );
     params.disableTools = false;
+    params.model = {
+      ...params.model,
+      compat: {
+        ...(params.model.compat && typeof params.model.compat === "object"
+          ? params.model.compat
+          : {}),
+        supportsTools: true,
+      },
+    } as EmbeddedRunAttemptParams["model"] & { compat: { supportsTools: boolean } };
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.onAgentToolResult = onAgentToolResult;
 
