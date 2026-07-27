@@ -1,6 +1,7 @@
 import {
   clearActiveEmbeddedRun,
   embeddedAgentLog,
+  resolveAgentRunAbortLifecycleFields,
   runAgentCleanupStep,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isIncognitoSessionKey } from "../incognito-session.js";
@@ -14,6 +15,7 @@ import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-co
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
+import { normalizeCodexTrajectoryAbortReason } from "./trajectory.js";
 
 export async function cleanupCodexAttempt(
   resources: CodexAttemptResources,
@@ -41,6 +43,9 @@ export async function cleanupCodexAttempt(
   } = lifecycle;
   const { codexModelCallDiagnostics } = requestRuntime;
   const { activeTurnId, abortListener, handle, freezeRunTerminalOutcome } = activeTurn;
+  const effectiveTimedOut =
+    state.timedOut ||
+    resolveAgentRunAbortLifecycleFields(runAbortController.signal).stopReason === "timeout";
   if (params.isFinalFallbackAttempt !== false) {
     await maybeEmitFastModeAutoResetBestEffort();
   }
@@ -52,19 +57,20 @@ export async function cleanupCodexAttempt(
     error: "codex app-server run completed without lifecycle terminal event",
     ...buildLifecycleTerminalMeta({
       aborted: runAbortController.signal.aborted && !state.clientClosedAbort,
-      timedOut: state.timedOut,
+      timedOut: effectiveTimedOut,
     }),
   });
   if (trajectoryRecorder && !resourceState.trajectoryEndRecorded) {
     trajectoryRecorder.recordEvent("session.ended", {
       status:
-        state.timedOut || (runAbortController.signal.aborted && !state.clientClosedAbort)
+        effectiveTimedOut || (runAbortController.signal.aborted && !state.clientClosedAbort)
           ? "interrupted"
           : "cleanup",
       threadId: resourceState.thread.threadId,
       turnId: activeTurnId,
-      timedOut: state.timedOut,
+      timedOut: effectiveTimedOut,
       aborted: runAbortController.signal.aborted && !state.clientClosedAbort,
+      abortReason: normalizeCodexTrajectoryAbortReason(runAbortController.signal.reason),
     });
   }
   await runAgentCleanupStep({
@@ -74,7 +80,7 @@ export async function cleanupCodexAttempt(
     log: embeddedAgentLog,
     cleanup: async () => trajectoryRecorder?.flush(),
   });
-  if (!state.timedOut && !runAbortController.signal.aborted) {
+  if (!effectiveTimedOut && !runAbortController.signal.aborted) {
     await steeringQueueRef.current?.flushPending();
   }
   const retainLiveIncognitoThread =
@@ -87,7 +93,7 @@ export async function cleanupCodexAttempt(
         })
       : true;
   // Successful incognito turns retain the live subscription for cross-turn continuity.
-  if (!state.timedOut && !retainLiveIncognitoThread) {
+  if (!effectiveTimedOut && !retainLiveIncognitoThread) {
     // Clear first: if a newer owner won the binding, its live subscription must remain intact.
     if (bindingReleased) {
       await unsubscribeCodexThreadBestEffort(resourceState.client, {

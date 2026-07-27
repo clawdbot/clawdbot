@@ -319,3 +319,18 @@ export function normalizeCodexTrajectoryError(value: unknown): string | null {
     return "Unknown error";
   }
 }
+
+/** Converts an AbortSignal reason into a stable trajectory classification. */
+export function normalizeCodexTrajectoryAbortReason(value: unknown): string | null {
+  if (!value) {
+    return null;
+  }
+  if (value instanceof Error) {
+    const code = "code" in value && typeof value.code === "string" ? value.code.trim() : "";
+    return code || value.name || value.message || "Error";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  return normalizeCodexTrajectoryError(value);
+}

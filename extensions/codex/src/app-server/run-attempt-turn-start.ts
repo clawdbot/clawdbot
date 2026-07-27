@@ -1,6 +1,7 @@
 import {
   embeddedAgentLog,
   formatErrorMessage,
+  resolveAgentRunAbortLifecycleFields,
   runAgentCleanupStep,
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
@@ -28,6 +29,7 @@ import {
 } from "./run-attempt-state.js";
 import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
+import { normalizeCodexTrajectoryAbortReason } from "./trajectory.js";
 import { buildCodexUserPromptMessage } from "./transcript-mirror.js";
 import {
   createCodexUsageLimitPromptError,
@@ -180,11 +182,15 @@ export async function startCodexAttemptTurn(
         stream: "codex_app_server.lifecycle",
         data: { phase: "turn_start_failed", error: message },
       });
+      const effectiveTimedOut =
+        state.timedOut ||
+        resolveAgentRunAbortLifecycleFields(runAbortController.signal).stopReason === "timeout";
       trajectoryRecorder?.recordEvent("session.ended", {
-        status: "error",
+        status: effectiveTimedOut ? "interrupted" : "error",
         threadId: resourceState.thread.threadId,
-        timedOut: state.timedOut,
+        timedOut: effectiveTimedOut,
         aborted: runAbortController.signal.aborted,
+        abortReason: normalizeCodexTrajectoryAbortReason(runAbortController.signal.reason),
         promptError: message,
       });
       markTrajectoryEndRecorded();

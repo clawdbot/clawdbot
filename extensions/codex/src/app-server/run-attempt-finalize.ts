@@ -4,6 +4,7 @@ import {
   embeddedAgentLog,
   finalizeHarnessContextEngineTurn,
   formatErrorMessage,
+  resolveAgentRunAbortLifecycleFields,
   resolveContextEngineOwnerPluginId,
   runAgentHarnessLlmOutputHook,
   runHarnessContextEngineMaintenance,
@@ -37,7 +38,11 @@ import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { captureCodexSettledTurnFinalizationContext } from "./settled-turn-context.js";
 import { settleCodexSourceReplyFinality } from "./source-reply-finality.js";
-import { normalizeCodexTrajectoryError, recordCodexTrajectoryCompletion } from "./trajectory.js";
+import {
+  normalizeCodexTrajectoryAbortReason,
+  normalizeCodexTrajectoryError,
+  recordCodexTrajectoryCompletion,
+} from "./trajectory.js";
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
 import {
   createCodexUsageLimitPromptError,
@@ -147,7 +152,10 @@ export async function finalizeCodexAttempt(
     yieldDetected: toolState.yieldDetected,
   });
   const projectedTerminal = attemptTerminal.project(result.terminal);
-  const effectiveTimedOut = state.timedOut && !recoveredTurnWatchTimeout;
+  const effectiveTimedOut =
+    (state.timedOut ||
+      resolveAgentRunAbortLifecycleFields(runAbortController.signal).stopReason === "timeout") &&
+    !recoveredTurnWatchTimeout;
   const effectiveTurnCompletionIdleTimedOut =
     state.turnCompletionIdleTimedOut && !recoveredTurnWatchTimeout;
   const isFinalAborted = () =>
@@ -475,15 +483,18 @@ export async function finalizeCodexAttempt(
     yieldDetected: toolState.yieldDetected,
   });
   trajectoryRecorder?.recordEvent("session.ended", {
-    status: finalPromptError
-      ? "error"
-      : finalAborted || effectiveTimedOut
-        ? "interrupted"
-        : "success",
+    status: effectiveTimedOut
+      ? "interrupted"
+      : finalPromptError
+        ? "error"
+        : finalAborted
+          ? "interrupted"
+          : "success",
     threadId: resourceState.thread.threadId,
     turnId: activeTurnId,
     timedOut: effectiveTimedOut,
     yieldDetected: toolState.yieldDetected,
+    abortReason: normalizeCodexTrajectoryAbortReason(runAbortController.signal.reason),
     promptError: normalizeCodexTrajectoryError(finalPromptError),
   });
   markTrajectoryEndRecorded();

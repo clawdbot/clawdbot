@@ -3676,29 +3676,52 @@ describe("runCodexAppServerAttempt turn watches", () => {
     const abortController = new AbortController();
     const onRunAgentEvent = vi.fn();
     const params = createTestParams();
+    const trajectoryEvents: Array<{ type: string; data?: Record<string, unknown> }> = [];
+    vi.stubEnv("OPENCLAW_TRAJECTORY", "1");
     params.abortSignal = abortController.signal;
     params.onAgentEvent = onRunAgentEvent;
+    Object.assign(params, {
+      trajectorySessionFile: `sqlite:main:${params.sessionId}:${path.join(tempDir, "openclaw-agent.sqlite")}`,
+      trajectoryRecorder: {
+        recordEvent: (type: string, data?: Record<string, unknown>) => {
+          trajectoryEvents.push({ type, data });
+        },
+        flush: async () => undefined,
+      },
+    });
     const run = runCodexAppServerAttempt(params, { turnTerminalIdleTimeoutMs: 60_000 });
 
     await harness.waitForMethod("turn/start");
-    const timeoutError = new Error("cron watchdog timeout");
-    timeoutError.name = "TimeoutError";
+    const timeoutError = Object.assign(new Error("Telegram ingress handler timed out"), {
+      name: "TimeoutError",
+      code: "telegram_spool_handler_timeout",
+    });
     abortController.abort(timeoutError);
     await harness.notify(turnCompleted({ id: "turn-1", status: "interrupted" }));
 
     const result = await run;
     expect(readAttemptTerminal(result).aborted).toBe(true);
-    expect(readAttemptTerminal(result).promptError).toBeNull();
+    expect(readAttemptTerminal(result).timedOut).toBe(true);
+    expect(readAttemptTerminal(result).promptError).toBe("codex app-server attempt timed out");
     expect(
       onRunAgentEvent.mock.calls
         .map(([event]) => event)
-        .find((event) => event.stream === "lifecycle" && event.data.phase === "end")?.data,
+        .find(
+          (event) =>
+            event.stream === "lifecycle" &&
+            (event.data.phase === "end" || event.data.phase === "error"),
+        )?.data,
     ).toMatchObject({
       aborted: true,
       status: "timed_out",
       stopReason: "timeout",
       timeoutPhase: "provider",
       providerStarted: true,
+    });
+    expect(trajectoryEvents.find((event) => event.type === "session.ended")?.data).toMatchObject({
+      status: "interrupted",
+      timedOut: true,
+      abortReason: "telegram_spool_handler_timeout",
     });
   });
 

@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type CodexHostTrajectoryRecorder,
   createCodexTrajectoryRecorder,
+  normalizeCodexTrajectoryAbortReason,
   recordCodexTrajectoryCompletion,
   recordCodexTrajectoryContext,
 } from "./trajectory.js";
@@ -115,6 +116,15 @@ function createSqliteHostTrajectoryRecorder(params: {
 }
 
 describe("Codex trajectory recorder", () => {
+  it("prefers a stable abort code over an Error name or message", () => {
+    const error = Object.assign(new Error("Telegram ingress handler timed out"), {
+      name: "TimeoutError",
+      code: "telegram_spool_handler_timeout",
+    });
+
+    expect(normalizeCodexTrajectoryAbortReason(error)).toBe("telegram_spool_handler_timeout");
+  });
+
   it("rejects file-backed trajectory targets without creating sidecars", () => {
     const tmpDir = makeTempDir();
     const warn = vi.fn();

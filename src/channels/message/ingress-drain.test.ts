@@ -327,11 +327,20 @@ describe("channel ingress drain", () => {
       });
       await queue.enqueue("evt-stall", { text: "x" }, { laneKey: "l1" });
 
+      let timeoutReason: unknown;
       const drain = createChannelIngressDrain<Payload>({
         queue,
         now: () => clock,
         adoptionStallTimeoutMs: 5_000,
-        dispatchClaimedEvent: async () => {
+        adoptionStallAbortReason: "telegram_spool_handler_timeout",
+        dispatchClaimedEvent: async (_event, lifecycle) => {
+          lifecycle.abortSignal.addEventListener(
+            "abort",
+            () => {
+              timeoutReason = lifecycle.abortSignal.reason;
+            },
+            { once: true },
+          );
           // Never adopt, never return — stall until watchdog.
           await new Promise(() => {});
         },
@@ -348,6 +357,10 @@ describe("channel ingress drain", () => {
       if (reenqueue.kind === "failed") {
         expect(reenqueue.record.reason).toBe("handler-timeout");
       }
+      expect(timeoutReason).toMatchObject({
+        name: "TimeoutError",
+        code: "telegram_spool_handler_timeout",
+      });
       drain.dispose();
     });
   });
@@ -419,8 +432,8 @@ describe("channel ingress drain", () => {
       await vi.waitFor(async () => {
         expect(await queue.listClaims()).toEqual([]);
       });
-      clock += 60_000;
-      await vi.advanceTimersByTimeAsync(60_000);
+      clock += 26 * 60_000;
+      await vi.advanceTimersByTimeAsync(26 * 60_000);
       // Still only completed — not failed by watchdog.
       const status = await queue.enqueue("evt-long", { text: "x" });
       expect(status.kind).toBe("completed");

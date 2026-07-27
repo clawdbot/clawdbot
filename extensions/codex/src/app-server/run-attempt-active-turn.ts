@@ -2,6 +2,7 @@ import {
   cancelPendingAgentQuestionForSession,
   claimPendingAgentQuestionAnswer,
   embeddedAgentLog,
+  resolveAgentRunAbortLifecycleFields,
   setActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -218,6 +219,11 @@ export async function activateCodexAttemptTurn(
     upstreamUserText: turnState.codexTurnPromptText,
   });
   const abortListener = () => {
+    if (
+      resolveAgentRunAbortLifecycleFields(runAbortController.signal).stopReason === "timeout"
+    ) {
+      state.timedOut = true;
+    }
     if (state.timedOut) {
       void (async () => {
         // Supervised sessions stay native; clearing scope would silently move the next attempt.

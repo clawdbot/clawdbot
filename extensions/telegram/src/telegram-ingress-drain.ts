@@ -206,6 +206,7 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
       failedMaxEntries: TELEGRAM_SPOOLED_UPDATE_FAILED_MAX_ENTRIES,
     },
     drain: {
+      adoptionStallAbortReason: "telegram_spool_handler_timeout",
       adoptionStallTimeoutMs: params.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS,
       orderBy: "id",
       scanLimit: TELEGRAM_SPOOLED_DRAIN_SCAN_LIMIT,

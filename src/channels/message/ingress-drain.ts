@@ -54,6 +54,17 @@ export function isIngressAdoptionLostError(error: unknown): error is IngressAdop
   return error instanceof IngressAdoptionLostError;
 }
 
+/** Typed abort reason for a claim that never reached durable adoption. */
+export class IngressHandlerTimeoutError extends Error {
+  readonly code: string;
+
+  constructor(message: string, code = "channel_ingress_handler_timeout") {
+    super(message);
+    this.name = "TimeoutError";
+    this.code = code;
+  }
+}
+
 /** Full pre-adoption → adoption ownership lifecycle for one claimed event. */
 type ChannelIngressDispatchLifecycle = {
   /** Pre-adoption only. After adopt the drain treats this signal as inert. */
@@ -112,6 +123,8 @@ export type CreateChannelIngressDrainOptions<
   deriveLaneKey?: (record: ChannelIngressQueueRecord<TPayload, TMetadata>) => string | undefined;
   ownerId?: string;
   adoptionStallTimeoutMs?: number;
+  /** Stable machine-readable abort reason for pre-adoption watchdog expiry. */
+  adoptionStallAbortReason?: string;
   claimLeaseMs?: number;
   retryPolicy?: IngressRetryPolicyConfig;
   now?: () => number;
@@ -473,7 +486,9 @@ export function createChannelIngressDrain<
       clearStallTimer(state);
       log(message);
       try {
-        state.abortController.abort(new Error(message));
+        state.abortController.abort(
+          new IngressHandlerTimeoutError(message, options.adoptionStallAbortReason),
+        );
       } catch {
         // AbortController.abort is not fallible in practice.
       }

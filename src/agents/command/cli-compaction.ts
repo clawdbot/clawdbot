@@ -557,14 +557,10 @@ async function compactNativeHarnessCliTranscript(params: {
       return { compacted: false };
     }
     if (isIntentionalNativeAutoCompactionSkip(result)) {
-      if (params.sessionEntry.modelSelectionLocked === true) {
-        return { compacted: false };
-      }
-      return {
-        compacted: false,
-        fallbackToContextEngine: true,
-        failureReason: CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON,
-      };
+      log.info(
+        `CLI native harness compaction deferred to ${params.provider}/${params.model}: ${reason}`,
+      );
+      return { compacted: false };
     }
     const recoverableBindingFailure = isRecoverableNativeHarnessBindingFailure(result);
     const fallbackToContextEngine =
