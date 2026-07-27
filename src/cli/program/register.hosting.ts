@@ -4,6 +4,7 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatHelpExamples } from "../help-format.js";
+import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 
 /** Register read-only hosting contract discovery commands. */
 export function registerHostingCommands(program: Command): void {
@@ -58,6 +59,39 @@ export function registerHostingCommands(program: Command): void {
         const { hostingProfilesInspectCommand } =
           await import("../../commands/hosting-profiles.js");
         hostingProfilesInspectCommand(String(id), { json: Boolean(opts.json) }, defaultRuntime);
+      });
+    });
+
+  profiles
+    .command("validate [id]")
+    .description("Validate the active profile through canonical Gateway readiness")
+    .option("--json", "Output JSON", false)
+    .option("--timeout <ms>", "Connection timeout in milliseconds", "10000")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["openclaw hosting profiles validate", "Validate the active profile."],
+          [
+            "openclaw hosting profiles validate container --json",
+            "Require container profile and output conformance evidence.",
+          ],
+        ])}`,
+    )
+    .action(async (id, opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { hostingProfilesValidateCommand } =
+          await import("../../commands/hosting-profiles.js");
+        await hostingProfilesValidateCommand(
+          id === undefined ? undefined : String(id),
+          {
+            json: Boolean(opts.json),
+            timeoutMs: parseTimeoutMsWithFallback(opts.timeout, 10_000, {
+              invalidType: "error",
+            }),
+          },
+          defaultRuntime,
+        );
       });
     });
 }

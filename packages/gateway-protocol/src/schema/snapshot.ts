@@ -104,7 +104,7 @@ const ReadinessSubjectSchema = closedObject({
   parentRef: Type.Optional(ReadinessRefSchema),
 });
 
-const CanonicalReadinessResultSchema = closedObject({
+export const CanonicalReadinessResultSchema = closedObject({
   contractVersion: Type.Literal(1),
   evaluatedAtMs: Type.Integer({ minimum: 0 }),
   identity: closedObject({
