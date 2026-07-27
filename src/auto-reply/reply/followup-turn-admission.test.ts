@@ -13,6 +13,7 @@ const state = vi.hoisted(() => ({
   resolveConfig: vi.fn(),
   resolveSendPolicy: vi.fn(),
   sendPolicy: "allow" as "allow" | "deny",
+  shouldNotifyCompaction: false,
 }));
 
 vi.mock("./agent-runner-auto-fallback.js", () => ({
@@ -54,7 +55,7 @@ vi.mock("./inbound-meta.js", () => ({
 
 vi.mock("./compaction-notice.js", () => ({
   createCompactionNoticePayload: ({ phase }: { phase: string }) => ({ text: phase }),
-  shouldNotifyUserAboutCompaction: () => false,
+  shouldNotifyUserAboutCompaction: () => state.shouldNotifyCompaction,
 }));
 
 vi.mock("./agent-runner-failure-reply.js", () => ({
@@ -108,6 +109,7 @@ function createDefaults(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   state.sendPolicy = "allow";
+  state.shouldNotifyCompaction = false;
   state.resolveSendPolicy.mockImplementation(() => state.sendPolicy);
   state.resolveConfig.mockImplementation(async (config) => config);
   state.buildPreflightFailureText.mockReturnValue("preflight failed");
@@ -265,6 +267,39 @@ describe("admitFollowupTurn", () => {
     };
     expect(preflightParams.sessionStore?.main).toBeUndefined();
     expect(state.refreshGoal).toHaveBeenCalledWith(undefined, undefined);
+  });
+
+  it("restores the item when persisted state changes generation after admission", async () => {
+    const operation = createOperation();
+    const initialEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
+    const replacementEntry: SessionEntry = { sessionId: "replacement-session", updatedAt: 2 };
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
+    state.loadEntry.mockReturnValue(replacementEntry);
+
+    await expect(
+      admitFollowupTurn({
+        queued: createRun(),
+        defaults: createDefaults({ sessionEntry: initialEntry, storePath: "/tmp/sessions.json" }),
+      }),
+    ).rejects.toThrow("Follow-up session generation changed after reply admission");
+    expect(operation.complete).toHaveBeenCalledOnce();
+    expect(state.preflight).not.toHaveBeenCalled();
+  });
+
+  it("restores the item when the admitted persisted generation disappears", async () => {
+    const operation = createOperation();
+    const initialEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
+    state.loadEntry.mockReturnValue(undefined);
+
+    await expect(
+      admitFollowupTurn({
+        queued: createRun(),
+        defaults: createDefaults({ sessionEntry: initialEntry, storePath: "/tmp/sessions.json" }),
+      }),
+    ).rejects.toThrow("Follow-up session generation changed after reply admission");
+    expect(operation.complete).toHaveBeenCalledOnce();
+    expect(state.preflight).not.toHaveBeenCalled();
   });
 
   it("advances the owned lifecycle generation only through explicit adoption", async () => {
@@ -524,6 +559,55 @@ describe("admitFollowupTurn", () => {
         queued: { currentInboundContext: { text: "compacted-session" } },
       },
     });
+  });
+
+  it("rechecks send policy before an in-preflight compaction notice", async () => {
+    const operation = createOperation();
+    const initialEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
+    const deniedEntry: SessionEntry = { ...initialEntry, updatedAt: 2 };
+    const onCompactionNoticePayload = vi.fn(async () => {});
+    state.shouldNotifyCompaction = true;
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
+    state.loadEntry.mockReturnValueOnce(initialEntry).mockReturnValue(deniedEntry);
+    state.resolveSendPolicy.mockImplementation(({ entry }) =>
+      entry === deniedEntry ? "deny" : "allow",
+    );
+    state.preflight.mockImplementation(async ({ onCompactionNotice }) => {
+      await onCompactionNotice?.("end");
+      return deniedEntry;
+    });
+
+    await admitFollowupTurn({
+      queued: createRun(),
+      defaults: createDefaults({ sessionEntry: initialEntry, storePath: "/tmp/sessions.json" }),
+      onCompactionNoticePayload,
+    });
+
+    expect(onCompactionNoticePayload).not.toHaveBeenCalled();
+  });
+
+  it("restores the item when generation changes before a compaction notice", async () => {
+    const operation = createOperation();
+    const initialEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
+    const replacementEntry: SessionEntry = { sessionId: "replacement-session", updatedAt: 2 };
+    const onCompactionNoticePayload = vi.fn(async () => {});
+    state.shouldNotifyCompaction = true;
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
+    state.loadEntry.mockReturnValueOnce(initialEntry).mockReturnValue(replacementEntry);
+    state.preflight.mockImplementation(async ({ onCompactionNotice }) => {
+      await onCompactionNotice?.("end");
+      return initialEntry;
+    });
+
+    await expect(
+      admitFollowupTurn({
+        queued: createRun(),
+        defaults: createDefaults({ sessionEntry: initialEntry, storePath: "/tmp/sessions.json" }),
+        onCompactionNoticePayload,
+      }),
+    ).rejects.toThrow("Follow-up session generation changed after reply admission");
+    expect(onCompactionNoticePayload).not.toHaveBeenCalled();
+    expect(operation.complete).toHaveBeenCalledOnce();
   });
 
   it("returns a source-suppression-deliverable preflight failure", async () => {

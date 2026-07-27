@@ -259,6 +259,23 @@ export async function admitFollowupTurn(params: {
         ? loadSessionEntry({ storePath: params.defaults.storePath, sessionKey: replySessionKey })
         : params.defaults.sessionStore?.[replySessionKey]
       : undefined;
+    const expectedPersistedEntry =
+      admission.sessionEntry?.sessionId === operation.sessionId
+        ? admission.sessionEntry
+        : initialEntry?.sessionId === operation.sessionId
+          ? initialEntry
+          : undefined;
+    const assertPersistedGeneration = (entry: SessionEntry | undefined) => {
+      if (
+        params.defaults.storePath &&
+        ((entry && entry.sessionId !== operation.sessionId) || (!entry && expectedPersistedEntry))
+      ) {
+        throw new FollowupSessionGenerationInvalidatedError(
+          "Follow-up session generation changed after reply admission",
+        );
+      }
+    };
+    assertPersistedGeneration(admittedEntry);
     const admissionEntry =
       admission.sessionEntry?.sessionId === operation.sessionId
         ? admission.sessionEntry
@@ -353,6 +370,30 @@ export async function admitFollowupTurn(params: {
       queued.currentInboundEventKind !== "room_event" &&
       shouldNotifyUserAboutCompaction(config)
         ? async (phase: CompactionNoticePhase) => {
+            const noticeEntry =
+              replySessionKey && params.defaults.storePath
+                ? loadSessionEntry({
+                    storePath: params.defaults.storePath,
+                    sessionKey: replySessionKey,
+                  })
+                : session.current();
+            assertPersistedGeneration(noticeEntry);
+            const noticeSendPolicy = resolveSendPolicy({
+              cfg: config,
+              entry: noticeEntry,
+              sessionKey: turn.queued.run.runtimePolicySessionKey ?? replySessionKey,
+              channel:
+                turn.queued.originatingChannel ??
+                turn.queued.run.messageProvider ??
+                sessionDeliveryChannel(noticeEntry),
+              chatType:
+                turn.queued.originatingChatType ??
+                turn.queued.run.chatType ??
+                noticeEntry?.chatType,
+            });
+            if (noticeSendPolicy === "deny") {
+              return;
+            }
             await params.onCompactionNoticePayload?.(
               createCompactionNoticePayload({
                 phase,
