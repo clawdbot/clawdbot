@@ -64,6 +64,7 @@ import {
   parseSqliteSessionEntryJson as parseSessionEntryRow,
   readSqliteSessionEntriesByStatus,
 } from "./session-accessor.sqlite-status.js";
+import type { SessionEntryListScope } from "./session-accessor.types.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
@@ -160,12 +161,10 @@ export function resolveSqliteSessionKeyBySessionId(
 }
 
 /** Lists session entries from the additive SQLite session store. */
-export function listSqliteSessionEntries(
-  scope: Partial<Omit<SessionAccessScope, "sessionKey">> = {},
-): SessionEntrySummary[] {
+export function listSqliteSessionEntries(scope: SessionEntryListScope = {}): SessionEntrySummary[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  return listSqliteSessionEntriesFromDatabase(database);
+  return listSqliteSessionEntriesFromDatabase(database, scope.projection);
 }
 
 /**
@@ -174,25 +173,41 @@ export function listSqliteSessionEntries(
  * acceptable degradation (health snapshots) or hides real state (migration detection).
  */
 export function listSqliteSessionEntriesReadOnly(
-  scope: Partial<Omit<SessionAccessScope, "sessionKey">> = {},
+  scope: SessionEntryListScope = {},
 ): SessionEntrySummary[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const result = withOpenClawAgentDatabaseReadOnly(
-    (database) => listSqliteSessionEntriesFromDatabase(database),
+    (database) => listSqliteSessionEntriesFromDatabase(database, scope.projection),
     toDatabaseOptions(resolved),
   );
   return result.found ? result.value : [];
 }
 
-function listSqliteSessionEntriesFromDatabase(database: { db: DatabaseSync }) {
+function listSqliteSessionEntriesFromDatabase(
+  database: { db: DatabaseSync },
+  projection: SessionEntryListScope["projection"] = "full",
+) {
   const db = getSessionKysely(database.db);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("session_nodes")
-      .select(["session_key", "entry_json", "current_session_id", "updated_at"])
-      .orderBy("session_key", "asc"),
-  ).rows;
+  const baseQuery = db.selectFrom("session_nodes").select("session_key");
+  const query =
+    projection === "list"
+      ? baseQuery.select((eb) =>
+          eb
+            .case()
+            .when(eb.fn<number>("json_valid", [eb.ref("entry_json")]), "=", 1)
+            .then(
+              eb.fn<string>("json_remove", [
+                eb.ref("entry_json"),
+                eb.val("$.systemPromptReport"),
+                eb.val("$.skillsSnapshot"),
+              ]),
+            )
+            .else(eb.ref("entry_json"))
+            .end()
+            .as("entry_json"),
+        )
+      : baseQuery.select("entry_json");
+  const rows = executeSqliteQuerySync(database.db, query.orderBy("session_key", "asc")).rows;
   return rows
     .map((row) => {
       if (isInternalSessionEffectsKey(row.session_key)) {

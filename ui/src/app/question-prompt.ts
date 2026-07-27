@@ -23,6 +23,7 @@ export type QuestionPrompt = {
   questions: Question[];
   agentId?: string;
   sessionKey?: string;
+  runId?: string;
   createdAtMs: number;
   expiresAtMs: number;
   status: QuestionPromptStatus;
@@ -193,9 +194,11 @@ function parseQuestionRecord(payload: unknown): QuestionRecord | null {
   const agentId = payload.agentId === undefined ? undefined : readNonEmptyString(payload.agentId);
   const sessionKey =
     payload.sessionKey === undefined ? undefined : readNonEmptyString(payload.sessionKey);
+  const runId = payload.runId === undefined ? undefined : readNonEmptyString(payload.runId);
   if (
     (payload.agentId !== undefined && !agentId) ||
-    (payload.sessionKey !== undefined && !sessionKey)
+    (payload.sessionKey !== undefined && !sessionKey) ||
+    (payload.runId !== undefined && !runId)
   ) {
     return null;
   }
@@ -204,6 +207,7 @@ function parseQuestionRecord(payload: unknown): QuestionRecord | null {
     questions: questions as Question[],
     ...(agentId ? { agentId } : {}),
     ...(sessionKey ? { sessionKey } : {}),
+    ...(runId ? { runId } : {}),
     createdAtMs,
     expiresAtMs,
   };
@@ -294,6 +298,7 @@ function promptFromRecord(
     questions: record.questions,
     ...(record.agentId ? { agentId: record.agentId } : {}),
     ...(record.sessionKey ? { sessionKey: record.sessionKey } : {}),
+    ...(record.runId ? { runId: record.runId } : {}),
     createdAtMs: record.createdAtMs,
     expiresAtMs: record.expiresAtMs,
     status: record.status,
