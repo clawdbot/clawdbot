@@ -373,7 +373,11 @@ export async function dispatchAndStartWorkboardCards(params: {
     try {
       const claimed = await params.store.claim(
         card.id,
-        { ownerId, ttlSeconds: card.metadata?.automation?.maxRuntimeSeconds },
+        {
+          ownerId,
+          ttlSeconds: card.metadata?.automation?.maxRuntimeSeconds,
+          sessionKey,
+        },
         {
           expectedAuthority: {
             agentId: card.agentId,

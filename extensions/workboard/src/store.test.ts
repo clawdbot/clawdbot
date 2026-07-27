@@ -1438,7 +1438,11 @@ describe("WorkboardStore", () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({ title: "Coordinate worker", status: "todo" });
 
-    const claimed = await store.claim(card.id, { ownerId: "main", ttlSeconds: 60 });
+    const claimed = await store.claim(card.id, {
+      ownerId: "main",
+      ttlSeconds: 60,
+      sessionKey: "agent:main:chat",
+    });
 
     expect(claimed.token).toBeTruthy();
     expect(claimed.card.status).toBe("running");

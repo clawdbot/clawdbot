@@ -84,6 +84,7 @@ export type WorkboardClaimInput = {
   ownerId?: unknown;
   token?: unknown;
   ttlSeconds?: unknown;
+  sessionKey?: unknown;
 };
 export type WorkboardClaimOptions = {
   /** Trusted dispatcher guard; never accepted from public tool or gateway input. */
