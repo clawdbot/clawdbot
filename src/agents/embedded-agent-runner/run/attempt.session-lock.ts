@@ -69,6 +69,8 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   ) => Promise<PromptReleasedSessionMergeResult | void> | PromptReleasedSessionMergeResult | void;
   reloadPromptReleasedSessionFile?: () => Promise<void> | void;
 }): Promise<EmbeddedAttemptSessionLockController> {
+  // The runtime caller supplies resolveSessionWriteLockTargetKey(sessionTarget),
+  // so aliases for one session incarnation converge before lease acquisition.
   const noOpLock = await params.acquireSessionWriteLock({
     ...params.lockOptions,
     targetKind: "session-key",

@@ -148,6 +148,22 @@ describe("worker turn launcher", () => {
     return SessionManager.open(sessionTarget);
   }
 
+  it("rejects a transcript target after its session key is rebound", async () => {
+    await upsertSessionEntry(sessionTarget, {
+      sessionId: "replacement-session",
+      updatedAt: Date.now() + 1,
+    });
+
+    expect(() =>
+      resolveWorkerTurnTranscriptTarget({
+        agentId: "main",
+        sessionId: SESSION_ID,
+        sessionKey: SESSION_KEY,
+        sessionTarget,
+      }),
+    ).toThrow("transcript identity is no longer current");
+  });
+
   function seedActivePlacement(): void {
     let placement = placements.startDispatch({
       sessionId: SESSION_ID,

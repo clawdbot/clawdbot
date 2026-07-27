@@ -342,6 +342,48 @@ describe("acquireSessionWriteLock", () => {
     );
   });
 
+  it("uses one lease key for legacy and SQLite locators of the same store", () => {
+    const base = {
+      agentId: "main",
+      sessionId: "shared-session",
+      sessionKey: "agent:main:main",
+    };
+
+    expect(
+      resolveSessionWriteLockTargetKey({ ...base, storePath: "/tmp/main/sessions.json" }),
+    ).toBe(
+      resolveSessionWriteLockTargetKey({
+        ...base,
+        storePath: "/tmp/main/openclaw-agent.sqlite",
+      }),
+    );
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "keeps a lease key stable when a directory appears beneath a symlink",
+    async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-key-symlink-"));
+      try {
+        const realRoot = path.join(root, "real");
+        const linkedRoot = path.join(root, "linked");
+        await fs.mkdir(realRoot);
+        await fs.symlink(realRoot, linkedRoot);
+        const target = {
+          agentId: "main",
+          sessionId: "shared-session",
+          sessionKey: "agent:main:main",
+          storePath: path.join(linkedRoot, "new-agent", "sessions.json"),
+        };
+
+        const beforeCreation = resolveSessionWriteLockTargetKey(target);
+        await fs.mkdir(path.join(linkedRoot, "new-agent"));
+        expect(resolveSessionWriteLockTargetKey(target)).toBe(beforeCreation);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("reference-counts reentrant session-key leases", async () => {
     const sessionKey = `agent:main:write-lock-reentrant-${Date.now()}`;
     const first = await acquireSessionWriteLock({

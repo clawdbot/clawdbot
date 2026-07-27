@@ -1,4 +1,5 @@
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 
 export function resolveWorkerTurnTranscriptTarget(
@@ -22,6 +23,14 @@ export function resolveWorkerTurnTranscriptTarget(
     (targetKeyAgentId && targetKeyAgentId !== turn.sessionTarget.agentId)
   ) {
     throw new Error("Cloud worker transcript identity does not match the active turn");
+  }
+  const currentEntry = loadSessionEntry({
+    agentId: turn.sessionTarget.agentId,
+    sessionKey: turn.sessionTarget.sessionKey,
+    storePath: turn.sessionTarget.storePath,
+  });
+  if (currentEntry?.sessionId !== turn.sessionId) {
+    throw new Error("Cloud worker transcript identity is no longer current");
   }
   return {
     agentId: turn.sessionTarget.agentId,

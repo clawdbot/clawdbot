@@ -5,7 +5,7 @@
  */
 import "../infra/fs-safe-defaults.js";
 import { randomUUID } from "node:crypto";
-import type fsSync from "node:fs";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
@@ -136,7 +136,29 @@ function sessionKeyLeasePath(sessionKey: string): string {
 }
 
 export function resolveSessionWriteLockTargetKey(target: SessionTranscriptRuntimeTarget): string {
-  return JSON.stringify([target.agentId, path.resolve(target.storePath), target.sessionId]);
+  const databaseTarget = resolveSqliteTargetFromSessionStorePath(target.storePath, {
+    agentId: target.agentId,
+  });
+  const canonicalPath = canonicalizeSessionWriteLeaseDatabasePath(databaseTarget.path);
+  return JSON.stringify([target.agentId, canonicalPath, target.sessionId]);
+}
+
+function canonicalizeSessionWriteLeaseDatabasePath(databasePath: string): string {
+  const resolvedPath = path.resolve(databasePath);
+  const missingSegments: string[] = [];
+  let candidate = resolvedPath;
+  while (true) {
+    try {
+      return path.join(fsSync.realpathSync(candidate), ...missingSegments.toReversed());
+    } catch {
+      const parent = path.dirname(candidate);
+      if (parent === candidate) {
+        return resolvedPath;
+      }
+      missingSegments.push(path.basename(candidate));
+      candidate = parent;
+    }
+  }
 }
 
 function resolveSessionKeyLeaseDatabaseOptions(sessionKey: string): OpenClawAgentDatabaseOptions {

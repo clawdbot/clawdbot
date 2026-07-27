@@ -172,6 +172,7 @@ function normalizeSessionFileRegistryKey(sessionFile: string | undefined): strin
   try {
     // Canonicalize only the parent so a registry key stays stable when the
     // transcript file itself is created or removed during the active run.
+    // Artifact-file symlinks are not runtime session identity after SQLite migration.
     return path.join(fs.realpathSync(parent), path.basename(resolved));
   } catch {
     return resolved;
