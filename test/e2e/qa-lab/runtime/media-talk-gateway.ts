@@ -544,6 +544,8 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
     });
     assertControlResult(cancel, { mode: "cancel", active: true, aborted: true });
     await consultRequest;
+    client.stop();
+    client = undefined;
     diagnosticsClient = await connectGatewayClient({
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       mode: GATEWAY_CLIENT_MODES.CLI,
