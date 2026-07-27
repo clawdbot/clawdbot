@@ -94,10 +94,6 @@ export type OpenAIResponsesStreamEvent =
     })
   | AzureResponsesTextDeltaEvent;
 
-export type ResponsesAssistantOutput = AssistantMessage & {
-  usage: Usage & { reasoningTokens?: number };
-};
-
 type ResponsesStreamOptions = FirstStreamEventInternalOptions & {
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
   resolveServiceTier?: (

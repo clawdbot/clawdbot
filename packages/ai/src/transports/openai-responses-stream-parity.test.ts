@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   processResponsesStream as processTransportStream,
   type OpenAIResponsesStreamEvent,
-  type ResponsesAssistantOutput,
 } from "./openai-responses-stream-internal.js";
 
 type ProjectedEvent = {
@@ -51,7 +50,7 @@ const model = {
   maxTokens: 8192,
 } satisfies Model<"openai-responses">;
 
-function createOutput(): ResponsesAssistantOutput {
+function createOutput(): AssistantMessage {
   return {
     role: "assistant",
     content: [],

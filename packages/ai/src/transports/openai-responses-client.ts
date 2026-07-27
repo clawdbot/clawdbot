@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Context, Model, StreamFn } from "@openclaw/llm-core";
+import type { AssistantMessage, Context, Model, StreamFn } from "@openclaw/llm-core";
 import OpenAI, { AzureOpenAI } from "openai";
 import { getAiTransportHost } from "../host.js";
 import {
@@ -39,7 +39,6 @@ import {
 import {
   processResponsesStream,
   ResponsesStreamFailure,
-  type ResponsesAssistantOutput,
 } from "./openai-responses-stream-internal.js";
 import { observeResponsesStream } from "./openai-responses-stream-observer-internal.js";
 import {
@@ -112,7 +111,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
     const eventStream = createAssistantMessageEventStream();
     const stream = eventStream as unknown as { push(event: unknown): void; end(): void };
     void (async () => {
-      const output: ResponsesAssistantOutput = {
+      const output: AssistantMessage = {
         role: "assistant" as const,
         content: [],
         api: model.api,
@@ -245,7 +244,7 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
     const eventStream = createAssistantMessageEventStream();
     const stream = eventStream as unknown as { push(event: unknown): void; end(): void };
     void (async () => {
-      const output: ResponsesAssistantOutput = {
+      const output: AssistantMessage = {
         role: "assistant" as const,
         content: [],
         api: "azure-openai-responses",
