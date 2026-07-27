@@ -441,6 +441,79 @@ const fixtures: ParityFixture[] = [
     },
   },
   {
+    name: "deferred text materializes before an unindexed tool boundary",
+    events: [
+      {
+        type: "response.output_item.done",
+        item: {
+          id: "msg_before_tool",
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text: "Hello", annotations: [] }],
+        },
+      },
+      {
+        type: "response.output_item.added",
+        item: {
+          id: "msg_after_tool",
+          type: "message",
+          role: "assistant",
+          status: "in_progress",
+          content: [],
+        },
+      },
+      { type: "response.output_text.delta", item_id: "msg_after_tool", delta: "Hello again" },
+      {
+        type: "response.output_item.done",
+        item: {
+          id: "fc_boundary",
+          call_id: "call_boundary",
+          type: "function_call",
+          name: "lookup",
+          arguments: "{}",
+          status: "completed",
+        },
+      },
+      {
+        type: "response.output_item.done",
+        item: {
+          id: "msg_after_tool",
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text: "Hello again", annotations: [] }],
+        },
+      },
+      completed("resp_tool_boundary"),
+    ],
+    canonical: {
+      events: [
+        { type: "text_start", contentIndex: 0 },
+        { type: "text_end", contentIndex: 0, content: "Hello" },
+        { type: "text_start", contentIndex: 1 },
+        { type: "text_delta", contentIndex: 1, delta: "Hello again" },
+        { type: "toolcall_start", contentIndex: 2 },
+        { type: "toolcall_end", contentIndex: 2 },
+        { type: "text_end", contentIndex: 1, content: "Hello again" },
+      ],
+      content: [
+        { type: "text", text: "Hello" },
+        { type: "text", text: "Hello again" },
+        {
+          type: "toolCall",
+          id: "call_boundary|fc_boundary",
+          name: "lookup",
+          arguments: {},
+          partialJson: false,
+        },
+      ],
+      responseId: "resp_tool_boundary",
+      stopReason: "toolUse",
+      error: null,
+    },
+  },
+  {
     name: "normal output text lifecycle",
     events: [
       {

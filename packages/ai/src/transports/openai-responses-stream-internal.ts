@@ -219,7 +219,7 @@ export async function processResponsesStream<TApi extends Api>(
     if (item.type === "message") {
       return outputSlots.resolve(event, "text");
     }
-    return outputSlots.get(event);
+    return readResponsesOutputIndex(event) === undefined ? undefined : outputSlots.get(event);
   };
   const getOrCreateOutputSlot = (
     event: object,
