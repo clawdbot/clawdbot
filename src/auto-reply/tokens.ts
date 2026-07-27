@@ -232,7 +232,21 @@ export function isSilentReplyPayloadText(
  * If the result is empty, the entire message should be treated as silent.
  */
 export function stripSilentToken(text: string, token: string = SILENT_REPLY_TOKEN): string {
-  return text.replace(getSilentTrailingRegex(token), "").trim();
+  const trimmed = text.trim();
+  const delimitedStripped = text.replace(getSilentTrailingRegex(token), "").trim();
+  if (delimitedStripped !== trimmed) {
+    return delimitedStripped;
+  }
+
+  const trimmedEnd = text.trimEnd();
+  if (!trimmedEnd.toLowerCase().endsWith(token.toLowerCase())) {
+    return trimmed;
+  }
+  const prefix = trimmedEnd.slice(0, -token.length);
+  if (!/[.!?]$/.test(prefix) || !/\s/.test(prefix.slice(0, -1))) {
+    return trimmed;
+  }
+  return prefix.trim();
 }
 
 const silentLeadingRegexByToken = new Map<string, RegExp>();

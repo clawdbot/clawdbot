@@ -219,6 +219,24 @@ describe("stripSilentToken", () => {
     expect(stripSilentToken("interject.NO_REPLY")).toBe("interject.NO_REPLY");
   });
 
+  it("strips trailing token glued after sentence-final punctuation", () => {
+    expect(stripSilentToken("Done as requested.NO_REPLY")).toBe("Done as requested.");
+    expect(stripSilentToken("Done as requested!NO_REPLY")).toBe("Done as requested!");
+    expect(stripSilentToken("Done as requested?NO_REPLY")).toBe("Done as requested?");
+  });
+
+  it("keeps ordinary NO_REPLY mentions around punctuation", () => {
+    expect(stripSilentToken("The token is NO_REPLY.")).toBe("The token is NO_REPLY.");
+    expect(stripSilentToken("NO_REPLY: explanation")).toBe("NO_REPLY: explanation");
+    expect(stripSilentToken("interject.NO_REPLY")).toBe("interject.NO_REPLY");
+  });
+
+  it("keeps long attached trailing token text without qualifying sentence punctuation", () => {
+    const longMultiwordReply = `${Array.from({ length: 5000 }, (_, index) => `word${index}`).join(" ")}NO_REPLY`;
+
+    expect(stripSilentToken(longMultiwordReply)).toBe(longMultiwordReply);
+  });
+
   it("strips only trailing occurrence", () => {
     expect(stripSilentToken("NO_REPLY ok NO_REPLY")).toBe("NO_REPLY ok");
   });

@@ -200,6 +200,25 @@ describe("normalizeReplyPayload", () => {
     expect(reply.text).not.toContain("NO_REPLY");
   });
 
+  it("strips trailing NO_REPLY glued after sentence-final punctuation", () => {
+    const result = normalizeReplyPayload({
+      text: "Done as requested.NO_REPLY",
+    });
+    expect(expectNormalizedReply(result).text).toBe("Done as requested.");
+  });
+
+  it("keeps ordinary NO_REPLY mentions around punctuation", () => {
+    expect(
+      expectNormalizedReply(normalizeReplyPayload({ text: "The token is NO_REPLY." })).text,
+    ).toBe("The token is NO_REPLY.");
+    expect(
+      expectNormalizedReply(normalizeReplyPayload({ text: "NO_REPLY: explanation" })).text,
+    ).toBe("NO_REPLY: explanation");
+    expect(expectNormalizedReply(normalizeReplyPayload({ text: "interject.NO_REPLY" })).text).toBe(
+      "interject.NO_REPLY",
+    );
+  });
+
   it("strips glued leading NO_REPLY text without leaking the token", () => {
     const result = normalizeReplyPayload({
       text: "NO_REPLYThe user is saying hello",
