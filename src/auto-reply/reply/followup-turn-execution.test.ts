@@ -524,7 +524,7 @@ describe("executeFollowupTurn", () => {
       operation: {
         abortSignal: new AbortController().signal,
         updateSessionId,
-      } as AdmittedFollowupTurn["operation"],
+      } as unknown as AdmittedFollowupTurn["operation"],
     });
     state.reset.mockImplementation(async (params) => {
       params.onActiveSessionEntry({ sessionId: "reset-session", updatedAt: 2 });
