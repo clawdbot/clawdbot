@@ -2,16 +2,9 @@
 // command scopes, and gateway enforcement around node client identity.
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import {
-  approveDevicePairing,
-  getPairedDevice,
-  listDevicePairing,
-  requestDevicePairing,
-} from "../infra/device-pairing.js";
+import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import { approveNodePairing, listNodePairing, requestNodePairing } from "../infra/node-pairing.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -24,6 +17,10 @@ import {
   openTrackedWs,
   pairDeviceIdentity,
 } from "./device-authz.test-helpers.js";
+import {
+  createNodePairingTestState,
+  describeWithGatewayServer,
+} from "./server.node-pairing.test-support.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 import {
   connectOk,
@@ -34,20 +31,12 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
-const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-node-pair-authz-" });
-
-async function makeNodePairingStateDir(): Promise<string> {
-  return await tempDirs.make("case");
-}
-
-// Node surfaces attach to paired devices, so tests seed device pairing first.
-async function seedNodeDevice(nodeId: string, baseDir?: string): Promise<void> {
-  const request = await requestDevicePairing(
-    { deviceId: nodeId, publicKey: `pk-${nodeId}`, role: "node", roles: ["node"], scopes: [] },
-    baseDir,
-  );
-  await approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir);
-}
+const {
+  cleanup: cleanupNodePairingTestState,
+  makeStateDir: makeNodePairingStateDir,
+  seedNodeDevice,
+  setup: setupNodePairingTestState,
+} = createNodePairingTestState("openclaw-node-pair-authz-");
 
 async function findPairedNode(nodeId: string, baseDir?: string) {
   const pairing = await listNodePairing(baseDir);
@@ -242,39 +231,13 @@ async function expectRpcNodePairingApprovalRejected(params: {
   }
 }
 
-function describeWithGatewayServer(
-  name: string,
-  defineTests: (getStarted: () => Awaited<ReturnType<typeof startServerWithClient>>) => void,
-): void {
-  describe(name, () => {
-    let started: Awaited<ReturnType<typeof startServerWithClient>> | undefined;
-
-    beforeAll(async () => {
-      started = await startServerWithClient("secret");
-    });
-
-    afterAll(async () => {
-      started?.ws.close();
-      await started?.server.close();
-      started?.envSnapshot.restore();
-    });
-
-    defineTests(() => {
-      if (!started) {
-        throw new Error("gateway test server was not started");
-      }
-      return started;
-    });
-  });
-}
-
 describe("gateway node pairing authorization", () => {
   beforeAll(async () => {
-    await tempDirs.setup();
+    await setupNodePairingTestState();
   });
 
   afterAll(async () => {
-    await tempDirs.cleanup();
+    await cleanupNodePairingTestState();
   });
 
   describe("approval scopes", () => {
@@ -662,75 +625,6 @@ describe("gateway node pairing authorization", () => {
   });
 
   describeWithGatewayServer("pending diagnostics scopes", (getStarted) => {
-    test("scans pairing tables once across two node.list dispatches", async () => {
-      const ws = await openTrackedWs(getStarted().port);
-      try {
-        await connectOk(ws, {
-          token: "secret",
-          scopes: ["operator.read", "operator.pairing"],
-          deviceIdentityPath: `${await makeNodePairingStateDir()}/scan-count.sqlite`,
-        });
-        await seedNodeDevice("node-list-scan-count");
-        const database = openOpenClawStateDatabase();
-        const originalPrepare = database.db.prepare.bind(database.db);
-        const tableSelects = { paired: 0, pending: 0 };
-        const prepareSpy = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
-          if (sql.includes('from "device_pairing_pending"')) {
-            tableSelects.pending += 1;
-          }
-          if (sql.includes('from "device_pairing_paired"')) {
-            tableSelects.paired += 1;
-          }
-          return originalPrepare(sql);
-        });
-        try {
-          expect((await rpcReq(ws, "node.list", {})).ok).toBe(true);
-          expect((await rpcReq(ws, "node.list", {})).ok).toBe(true);
-          expect(tableSelects).toEqual({ paired: 1, pending: 1 });
-        } finally {
-          prepareSpy.mockRestore();
-        }
-      } finally {
-        ws.close();
-      }
-    });
-
-    test("reflects a pairing mutation on the next node.list dispatch", async () => {
-      const nodeId = "node-list-cache-mutation";
-      await seedNodeDevice(nodeId);
-      const ws = await openTrackedWs(getStarted().port);
-      try {
-        await connectOk(ws, {
-          token: "secret",
-          scopes: ["operator.read", "operator.pairing"],
-          deviceIdentityPath: `${await makeNodePairingStateDir()}/mutation.sqlite`,
-        });
-        const before = await rpcReq<{
-          nodes?: Array<{ nodeId: string; pendingRequestId?: string }>;
-        }>(ws, "node.list", {});
-        expect(before.payload?.nodes?.find((node) => node.nodeId === nodeId)).not.toHaveProperty(
-          "pendingRequestId",
-        );
-
-        const pending = await requestNodePairing({
-          nodeId,
-          platform: "macos",
-          commands: ["system.run"],
-        });
-        const after = await rpcReq<{
-          nodes?: Array<{ nodeId: string; pendingRequestId?: string }>;
-        }>(ws, "node.list", {});
-        expect(after.payload?.nodes).toContainEqual(
-          expect.objectContaining({
-            nodeId,
-            pendingRequestId: pending.request.requestId,
-          }),
-        );
-      } finally {
-        ws.close();
-      }
-    });
-
     test("shows pending pairing records to direct-local backend shared-auth callers", async () => {
       const pendingOnlyNodeId = "node-local-backend-pending";
       await seedNodeDevice(pendingOnlyNodeId);
