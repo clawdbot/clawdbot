@@ -5,7 +5,7 @@ type ToolResultTextBudgetOptions = {
   minimumRawWeight?: number;
 };
 
-const ASCII_RUN_OR_NON_ASCII_CODE_POINT_RE = /[\u0000-\u007f]+|[^\u0000-\u007f]/gu;
+const ASCII_RUN_OR_NON_ASCII_CODE_POINT_RE = /[\p{ASCII}]+|[^\p{ASCII}]/gu;
 
 /**
  * Returns provider-independent character-budget units for tool-result text.
