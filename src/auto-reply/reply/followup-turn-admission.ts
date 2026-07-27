@@ -53,7 +53,6 @@ type FollowupSessionOwner =
   | {
       kind: "detached";
       current(): SessionEntry | undefined;
-      clear(): void;
       publish(entry: SessionEntry | undefined): void;
       adopt(entry: SessionEntry): void;
     }
@@ -62,10 +61,13 @@ type FollowupSessionOwner =
       key: string;
       storePath?: string;
       current(): SessionEntry | undefined;
-      clear(): void;
       publish(entry: SessionEntry | undefined): void;
       adopt(entry: SessionEntry): void;
     };
+
+type FollowupSessionStoreOwner = FollowupSessionOwner & {
+  clear(): void;
+};
 
 export type AdmittedFollowupTurn = {
   runId: string;
@@ -99,7 +101,7 @@ function createFollowupSessionOwner(params: {
   key?: string;
   store?: Record<string, SessionEntry>;
   storePath?: string;
-}): FollowupSessionOwner {
+}): FollowupSessionStoreOwner {
   let ownedSessionId = params.admittedSessionId;
   let ownedLifecycleRevision =
     params.entry?.sessionId === ownedSessionId ? params.entry.lifecycleRevision : undefined;
@@ -218,7 +220,7 @@ function isSameSessionGeneration(
 
 function createFollowupSessionStoreView(params: {
   key?: string;
-  owner: FollowupSessionOwner;
+  owner: FollowupSessionStoreOwner;
   store?: Record<string, SessionEntry>;
 }): Record<string, SessionEntry> | undefined {
   if (!params.key) {
