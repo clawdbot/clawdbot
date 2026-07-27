@@ -708,16 +708,18 @@ describe("createFollowupRunner reply-lane admission", () => {
     // Regression: the queued path built runEmbeddedAgent params inline and
     // dropped run.clientCaps, so capability-gated tools vanished after drain.
     runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
-    const storePath = "/tmp/openclaw-followup-client-caps.json";
-    const sessionEntry: SessionEntry = { sessionId: "session-client-caps", updatedAt: 1 };
-    registerFollowupTestSessionStore(storePath, { main: sessionEntry });
+    admitReplyTurnMock.mockResolvedValueOnce({
+      status: "admitted",
+      operation: createReplyOperationForTest({
+        sessionKey: "main",
+        sessionId: "session-client-caps",
+        resetTriggered: false,
+      }),
+    });
     const runner = createFollowupRunner({
       typing: createMockTypingController(),
       typingMode: "instant",
-      sessionEntry,
-      sessionStore: { main: sessionEntry },
       sessionKey: "main",
-      storePath,
       defaultModel: "anthropic/claude",
     });
 
@@ -735,7 +737,8 @@ describe("createFollowupRunner reply-lane admission", () => {
 
     const call = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
     expect(call.clientCaps).toEqual(["tool-events", "inline-widgets"]);
-  });
+    // Constrained CI workers charge this file's cold module-reset pause to its first test.
+  }, 300_000);
 
   it("adopts a matching admission-time model lock for queued execution", async () => {
     const storePath = "/tmp/openclaw-followup-admission-model-lock.json";
