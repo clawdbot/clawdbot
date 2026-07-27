@@ -1095,7 +1095,9 @@ class TalkModeManagerTest {
         assertTrue(readPrivateField(manager, "realtimeCapturePause") != null)
 
         finalizer.cancel()
+        finalizerDispatcher.scheduler.runCurrent()
 
+        assertTrue(finalizer.isCancelled)
         assertNull(manager.finishingPushToTalkCaptureId)
         assertNull(readPrivateField(manager, "realtimeCapturePause"))
         assertNull(readPrivateField(manager, "activePttCaptureId"))
