@@ -1119,7 +1119,12 @@ export function buildOpenAIProvider(): ProviderPlugin {
         (normalizeProviderId(ctx.provider) === PROVIDER_ID &&
           (!providerConfig?.baseUrl || isOpenAIHttpsApiBaseUrl(providerConfig.baseUrl)) &&
           resolveConfiguredProviderAuthTransport(providerConfig) === "codex");
-      return (useCodexTransport ? codexResponsesHooks : responsesHooks).prepareExtraParams?.(ctx);
+      const prepared = (
+        useCodexTransport ? codexResponsesHooks : responsesHooks
+      ).prepareExtraParams?.(ctx);
+      return useCodexTransport && resolveOpenAICodexProxyBaseUrl(ctx.config)
+        ? { ...prepared, transport: "sse" }
+        : prepared;
     },
     resolveUsageAuth: codexHooks.resolveUsageAuth,
     fetchUsageSnapshot: codexHooks.fetchUsageSnapshot,

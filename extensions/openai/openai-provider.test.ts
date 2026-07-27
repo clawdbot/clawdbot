@@ -1801,6 +1801,16 @@ describe("buildOpenAIProvider", () => {
         config,
       } as never),
     ).toEqual({ api: "openai-chatgpt-responses", baseUrl: proxyBaseUrl });
+
+    expect(
+      provider.prepareExtraParams?.({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        model: dynamic,
+        extraParams: { effort: "xhigh", transport: "auto" },
+        config,
+      } as never),
+    ).toMatchObject({ effort: "xhigh", transport: "sse" });
   });
 
   it("keeps HTTP Platform routes out of Codex transport gates", () => {
