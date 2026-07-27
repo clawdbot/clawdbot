@@ -21,7 +21,7 @@ type WorkflowStep = {
   name?: string;
   run?: string;
   uses?: string;
-  with?: Record<string, string>;
+  with?: Record<string, boolean | string>;
 };
 
 type WorkflowJob = {
@@ -92,6 +92,19 @@ describe("Mantis Telegram Desktop proof workflow", () => {
 
     expect(workflow.env?.PNPM_VERSION).toBeUndefined();
     expect(liveWorkflow.env?.PNPM_VERSION).toBeUndefined();
+  });
+
+  it("pins every harness checkout to the dispatched workflow revision", () => {
+    const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
+    const checkouts = Object.values(workflow.jobs ?? {}).flatMap((job) =>
+      (job.steps ?? []).filter((step) => step.name === "Checkout harness ref"),
+    );
+
+    expect(checkouts).toHaveLength(3);
+    for (const checkout of checkouts) {
+      expect(checkout.with?.ref).toBe("${{ github.workflow_sha }}");
+      expect(checkout.with?.["persist-credentials"]).toBe(false);
+    }
   });
 
   it("serializes all Mantis Telegram account runs without workflow concurrency cancellation", () => {
