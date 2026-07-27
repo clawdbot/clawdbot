@@ -98,7 +98,7 @@ export type ResponsesAssistantOutput = AssistantMessage & {
   usage: Usage & { reasoningTokens?: number };
 };
 
-export type ResponsesStreamOptions = FirstStreamEventInternalOptions & {
+type ResponsesStreamOptions = FirstStreamEventInternalOptions & {
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
   resolveServiceTier?: (
     responseServiceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
