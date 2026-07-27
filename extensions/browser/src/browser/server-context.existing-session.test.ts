@@ -126,7 +126,7 @@ afterEach(() => {
 });
 
 describe("browser server-context existing-session profile", () => {
-  it("fails closed for explicit Chrome MCP cdpUrl under the default CDP policy", async () => {
+  it("preserves explicit Chrome MCP cdpUrl under the default CDP policy", async () => {
     fs.mkdirSync("/tmp/brave-profile", { recursive: true });
     const state = makeState();
     state.resolved.ssrfPolicy = {};
@@ -136,8 +136,36 @@ describe("browser server-context existing-session profile", () => {
     };
     const live = createBrowserRouteContext({ getState: () => state }).forProfile("chrome-live");
 
+    await expect(live.listTabs()).resolves.toEqual([
+      expect.objectContaining({
+        targetId: "7",
+        title: "",
+        url: "https://example.com",
+        type: "page",
+      }),
+    ]);
+    await expect(live.openTab("https://example.com")).resolves.toEqual(
+      expect.objectContaining({ targetId: "8", url: "about:blank" }),
+    );
+    await expect(live.ensureBrowserAvailable()).resolves.toBeUndefined();
+
+    expect(chromeMcp.listChromeMcpTabs).toHaveBeenCalled();
+    expect(chromeMcp.openChromeMcpTab).toHaveBeenCalledTimes(1);
+    expect(chromeMcp.ensureChromeMcpAvailable).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed for explicit Chrome MCP cdpUrl under explicit restrictive CDP policy", async () => {
+    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
+    const state = makeState();
+    state.resolved.ssrfPolicy = { dangerouslyAllowPrivateNetwork: false };
+    state.resolved.profiles["chrome-live"] = {
+      ...state.resolved.profiles["chrome-live"],
+      cdpUrl: "http://127.0.0.1:9222",
+    };
+    const live = createBrowserRouteContext({ getState: () => state }).forProfile("chrome-live");
+
     await expect(live.listTabs()).rejects.toThrow(/Chrome MCP cannot carry that pinned transport/);
-    await expect(live.openTab("https://example.com")).rejects.toThrow(
+    await expect(live.openTab("https://93.184.216.34")).rejects.toThrow(
       /Use driver "openclaw" for guarded CDP endpoints/,
     );
     await expect(live.ensureBrowserAvailable()).rejects.toThrow(
