@@ -40,6 +40,7 @@ import {
   type ExecAutoReviewInput,
 } from "../infra/exec-auto-review.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
+import { isBlockedShellWrapperCommand } from "../infra/exec-wrapper-resolution.js";
 import {
   GatewayDrainingError,
   runWithGatewayIndependentRootWorkAdmission,
@@ -78,6 +79,7 @@ import type {
   ExecApprovalFollowupOutcome,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
+import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
 /** Full input bundle for gateway-host allowlist and approval processing. */
@@ -428,12 +430,15 @@ function shouldAwaitGatewayApprovalInline(params: {
 }
 
 function buildGatewayExecApprovalDeniedToolResult(params: {
-  approvalId: string;
+  approvalId?: string;
   deniedReason: string;
   command: string;
   cwd: string;
 }): AgentToolResult<ExecToolDetails> {
-  const text = `Exec denied (gateway id=${params.approvalId}, ${params.deniedReason}): ${params.command}`;
+  const denialContext = params.approvalId
+    ? `gateway id=${params.approvalId}, ${params.deniedReason}`
+    : params.deniedReason;
+  const text = `Exec denied (${denialContext}): ${params.command}`;
   return {
     content: [{ type: "text", text }],
     details: {
@@ -689,6 +694,35 @@ export async function processGatewayAllowlist(
       `Warning: allowlist auto-execution is unavailable on ${process.platform}; reviewer or explicit approval is required.`,
     );
   }
+  const shouldDenyUnpromptedShellExpansion =
+    requiresAllowlistPlanApproval &&
+    allowlistPlanUnavailableReason === "shell expansion in enforced arguments" &&
+    hostAsk === "off" &&
+    askFallback === "deny";
+  if (shouldDenyUnpromptedShellExpansion) {
+    const deniedReason = "ask-fallback-deny: execution-plan-miss";
+    // The allowlist matched, but the gateway cannot bind an enforceable command.
+    // With prompting disabled, apply the fail-closed fallback before registration.
+    emitGatewayExecApprovalSecurityEvent({
+      action: "exec.approval.denied",
+      outcome: "denied",
+      severity: "medium",
+      agentId: params.agentId,
+      reason: deniedReason,
+      hostSecurity,
+      hostAsk,
+      host: "gateway",
+      segmentCount: allowlistEval.segments.length,
+      trigger: params.trigger,
+    });
+    return {
+      deniedResult: buildGatewayExecApprovalDeniedToolResult({
+        deniedReason,
+        command: params.command,
+        cwd: params.workdir,
+      }),
+    };
+  }
   const effectiveAllowAlwaysPersistence = resolveGatewayEffectiveAllowAlwaysPersistence({
     command: params.command,
     allowAlwaysPersistence,
@@ -732,9 +766,13 @@ export async function processGatewayAllowlist(
     const [autoReviewSegment] = allowlistEval.segments;
     const autoReviewArgv =
       allowlistEval.segments.length === 1 &&
-      (autoReviewSegment?.raw === undefined ||
+      autoReviewSegment !== undefined &&
+      autoReviewSegment.resolution?.policyBlocked !== true &&
+      // Shell startup can execute unreviewed profile code before its bound payload.
+      !isBlockedShellWrapperCommand(autoReviewSegment.argv) &&
+      (autoReviewSegment.raw === undefined ||
         autoReviewSegment.raw.trim() === params.command.trim())
-        ? autoReviewSegment?.argv
+        ? autoReviewSegment.argv
         : undefined;
     const autoReviewHasBoundCommand = analysisOk && autoReviewArgv !== undefined;
     // A model approval is valid only for the executable resolved during review;
@@ -760,34 +798,40 @@ export async function processGatewayAllowlist(
       requiresSecurityAuditSuppressionApproval;
     if (canAutoReviewApprovalMiss) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;
-      const decision = await reviewer({
-        command: params.command,
-        argv: autoReviewArgv,
-        resolvedPath: autoReviewResolvedPath,
-        cwd: params.workdir,
-        envKeys: Object.keys(params.requestedEnv ?? {}).toSorted(),
-        host: "gateway",
-        reason: resolveGatewayAutoReviewReason({
-          requiresInlineEvalApproval,
-          requiresHeredocApproval,
-          requiresAllowlistPlanApproval,
-          hostSecurity,
-          analysisOk,
-          allowlistSatisfied,
-          durableApprovalSatisfied,
+      const pendingDecision = Promise.resolve(
+        reviewer({
+          command: params.command,
+          argv: autoReviewArgv,
+          resolvedPath: autoReviewResolvedPath,
+          cwd: params.workdir,
+          envKeys: Object.keys(params.requestedEnv ?? {}).toSorted(),
+          host: "gateway",
+          reason: resolveGatewayAutoReviewReason({
+            requiresInlineEvalApproval,
+            requiresHeredocApproval,
+            requiresAllowlistPlanApproval,
+            hostSecurity,
+            analysisOk,
+            allowlistSatisfied,
+            durableApprovalSatisfied,
+          }),
+          analysis: {
+            parsed: analysisOk,
+            allowlistMatched: allowlistSatisfied,
+            durableApprovalMatched: durableApprovalSatisfied,
+            inlineEval: requiresInlineEvalApproval,
+            heredoc: requiresHeredocApproval,
+          },
+          agent: {
+            id: params.agentId,
+            sessionKey: params.sessionKey,
+          },
         }),
-        analysis: {
-          parsed: analysisOk,
-          allowlistMatched: allowlistSatisfied,
-          durableApprovalMatched: durableApprovalSatisfied,
-          inlineEval: requiresInlineEvalApproval,
-          heredoc: requiresHeredocApproval,
-        },
-        agent: {
-          id: params.agentId,
-          sessionKey: params.sessionKey,
-        },
-      });
+      );
+      // Custom reviewers may never settle; cancellation must not retain approval authority.
+      const decision = params.signal
+        ? await abortable(params.signal, pendingDecision)
+        : await pendingDecision;
       params.signal?.throwIfAborted();
       if (
         decision.decision === "allow-once" &&

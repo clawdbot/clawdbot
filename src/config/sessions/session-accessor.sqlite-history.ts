@@ -16,7 +16,7 @@ export function listSqliteTranscriptInstancesFromDatabase(params: {
   const rows = executeSqliteQuerySync(
     params.database.db,
     db
-      .selectFrom("sessions")
+      .selectFrom("session_windows")
       .select([
         "session_id",
         "session_key",

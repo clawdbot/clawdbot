@@ -51,7 +51,6 @@ type GatewayTestHoistedState = {
   runBtwSideQuestion: Mock<RunBtwSideQuestionFn>;
   dispatchInboundMessage: Mock<DispatchInboundMessageFn>;
   testIsNixMode: { value: boolean };
-  sessionStoreSaveDelayMs: { value: number };
   embeddedRunMock: {
     activeIds: Set<string>;
     abortCalls: string[];
@@ -104,7 +103,6 @@ const gatewayTestHoisted = vi.hoisted(() => {
     runBtwSideQuestion: vi.fn().mockResolvedValue(undefined),
     dispatchInboundMessage: vi.fn(),
     testIsNixMode: { value: false },
-    sessionStoreSaveDelayMs: { value: 0 },
     embeddedRunMock: {
       activeIds: new Set<string>(),
       abortCalls: [],
@@ -169,7 +167,6 @@ export const mockGetReplyFromConfigOnce = (impl: GetReplyFromConfigFn) => {
 export const sendWhatsAppMock = gatewayTestHoisted.sendWhatsAppMock;
 export const testState = gatewayTestHoisted.testState;
 export const testIsNixMode = gatewayTestHoisted.testIsNixMode;
-export const sessionStoreSaveDelayMs = gatewayTestHoisted.sessionStoreSaveDelayMs;
 export const embeddedRunMock = gatewayTestHoisted.embeddedRunMock;
 
 export const testConfigRoot = resolveGlobalSingleton(GATEWAY_TEST_CONFIG_ROOT_KEY, () => ({

@@ -7,6 +7,14 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AgentMessage } from "../runtime/index.js";
 
 const THREAD_SUFFIX_REGEX = /^(.*)(?::(?:thread|topic):\d+)$/i;
+const SESSION_HISTORY_PRELUDE = Symbol.for("openclaw.sessionHistoryPrelude");
+
+function isSessionHistoryPrelude(message: AgentMessage | undefined): boolean {
+  return Boolean(
+    message &&
+    (message as AgentMessage & { [SESSION_HISTORY_PRELUDE]?: true })[SESSION_HISTORY_PRELUDE],
+  );
+}
 
 function stripThreadSuffix(value: string): string {
   const match = value.match(THREAD_SUFFIX_REGEX);
@@ -33,6 +41,10 @@ export function limitHistoryTurns(
   // that buildSessionContext places at index 0 to carry pre-compaction context.
   let conversationStart = 0;
   while (conversationStart < messages.length) {
+    if (isSessionHistoryPrelude(messages[conversationStart])) {
+      conversationStart++;
+      continue;
+    }
     const role = messages.at(conversationStart)?.role;
     if (role === "user" || role === "assistant") {
       break;

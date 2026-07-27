@@ -81,7 +81,7 @@ interface EmbeddedGatewayRuntime {
   }) => Promise<SessionsListResult>;
   loadCombinedSessionStoreForGateway: (
     cfg: OpenClawConfig,
-    opts?: { agentId?: string },
+    opts?: { agentId?: string; projection?: "full" | "list" },
   ) => {
     storePath: string;
     store: unknown;
@@ -200,6 +200,7 @@ async function handleSessionsList(params: Record<string, unknown>) {
   const opts = params as SessionsListParams;
   const { storePath, store } = rt.loadCombinedSessionStoreForGateway(cfg, {
     agentId: opts.agentId,
+    projection: "list",
   });
   return rt.listSessionsFromStoreAsync({
     cfg,

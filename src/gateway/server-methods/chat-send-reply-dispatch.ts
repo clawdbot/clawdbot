@@ -20,6 +20,7 @@ import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
   buildAssistantDisplayContentFromReplyPayloads,
+  combineNonStreamingReplyParts,
   extractAssistantDisplayTextFromContent,
   hasAssistantDisplayMediaContent,
   isMediaBearingPayload,
@@ -28,7 +29,12 @@ import {
 import { isSourceReplyTranscriptMirrorPayload } from "./chat-broadcast.js";
 import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
-import { appendAssistantTranscriptMessage } from "./chat-transcript-persistence.js";
+import {
+  appendAssistantTranscriptMessage,
+  assistantTranscriptScope,
+  publishAssistantTranscriptRewrite,
+  rewriteAssistantTranscriptMessageByIdempotencyKey,
+} from "./chat-transcript-persistence.js";
 import {
   buildTtsSupplementTranscriptMarker,
   stripVisibleTextFromTtsSupplement,
@@ -60,10 +66,8 @@ export function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
       } else if (payload.replyToCurrent || parsedText?.replyToCurrent) {
         lines.push("[[reply_to_current]]");
       }
-      const text = payload.text
-        ? stripInlineDirectiveTagsForDelivery(payload.text).text.trim()
-        : "";
-      if (text && !isSuppressedControlReplyText(text)) {
+      const text = payload.text ? stripInlineDirectiveTagsForDelivery(payload.text).text : "";
+      if (text.trim() && !isSuppressedControlReplyText(text)) {
         lines.push(text);
       }
       for (const mediaUrl of parts.mediaUrls) {
@@ -81,10 +85,10 @@ export function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
       ) {
         lines.push("[[audio_as_voice]]");
       }
-      return lines.join("\n").trim();
+      return lines.join("\n");
     })
     .filter(Boolean);
-  return chunks.join("\n\n").trim();
+  return combineNonStreamingReplyParts(chunks);
 }
 
 /** Build the live reply dispatcher and capture payloads for post-dispatch projection. */
@@ -170,6 +174,44 @@ export function createChatSendReplyDispatch(params: {
     if (!transcriptReply && !persistedAssistantContent?.length && !assistantContent?.length) {
       return;
     }
+    const payloadMetadata = getReplyPayloadMetadata(payload);
+    const ownedTranscriptIdempotencyKey =
+      payloadMetadata?.assistantTranscriptOwned === true
+        ? payloadMetadata.assistantTranscriptIdempotencyKey?.trim()
+        : undefined;
+    const transcriptScope = assistantTranscriptScope({
+      sessionKey,
+      sessionId,
+      storePath: latestStorePath,
+      agentId,
+    });
+    if (ownedTranscriptIdempotencyKey && transcriptScope) {
+      // The harness row is the canonical final assistant. Replace that exact
+      // identity so media materialization cannot append a parallel reply.
+      const rewritten = await rewriteAssistantTranscriptMessageByIdempotencyKey({
+        content: persistedContentForAppend,
+        idempotencyKey: ownedTranscriptIdempotencyKey,
+        scope: transcriptScope,
+      });
+      if (rewritten) {
+        await publishAssistantTranscriptRewrite({
+          scope: transcriptScope,
+          rewritten: [rewritten],
+        });
+        if (assistantContent?.length) {
+          await attachManagedOutgoingImagesToMessage({
+            messageId: rewritten.messageId,
+            blocks: assistantContent,
+          });
+        }
+        appendedWebchatAgentMedia = true;
+        return;
+      }
+      logGateway.warn(
+        "webchat runtime-owned assistant media rewrite skipped: transcript identity not found",
+      );
+      return;
+    }
     const appended = await appendAssistantTranscriptMessage({
       sessionKey,
       message: transcriptReply,
@@ -203,7 +245,11 @@ export function createChatSendReplyDispatch(params: {
       logGateway.warn(`webchat dispatch failed: ${formatForLog(err)}`);
     },
     deliver: async (payload, info) => {
-      if (getReplyPayloadMetadata(payload)?.beforeAgentRunBlocked === true) {
+      const payloadMetadata = getReplyPayloadMetadata(payload);
+      if (
+        payloadMetadata?.beforeAgentRunBlocked === true ||
+        payloadMetadata?.sourceReplyTranscriptMirror?.transcriptWriteBlocked === true
+      ) {
         userTurnRecorder.markBlocked();
       }
       switch (info.kind) {

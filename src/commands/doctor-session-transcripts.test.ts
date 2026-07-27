@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 
 const note = vi.hoisted(() => vi.fn());
+const repairReservedIncognitoSessionKeys = vi.hoisted(() => vi.fn());
+const repairCanonicalSessionDeliveryStates = vi.hoisted(() => vi.fn());
 const runDoctorSessionSqlite = vi.hoisted(() => vi.fn());
 const withDoctorSqliteMaintenanceLock = vi.hoisted(() => vi.fn());
 
@@ -16,6 +18,14 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
 
 vi.mock("./doctor-session-sqlite.js", () => ({
   runDoctorSessionSqlite,
+}));
+
+vi.mock("./doctor-session-incognito-key-repair.js", () => ({
+  repairReservedIncognitoSessionKeys,
+}));
+
+vi.mock("./doctor-session-delivery-state.js", () => ({
+  repairCanonicalSessionDeliveryStates,
 }));
 
 vi.mock("./doctor-sqlite-maintenance-lock.js", async (importOriginal) => {
@@ -94,6 +104,10 @@ describe("doctor session transcript repair", () => {
 
   beforeEach(async () => {
     note.mockClear();
+    repairReservedIncognitoSessionKeys.mockReset().mockReturnValue({ found: 0, repaired: 0 });
+    repairCanonicalSessionDeliveryStates
+      .mockReset()
+      .mockReturnValue({ found: 0, repaired: 0, scannedStores: 0 });
     runDoctorSessionSqlite.mockReset();
     withDoctorSqliteMaintenanceLock
       .mockReset()
@@ -279,6 +293,15 @@ describe("doctor session transcript repair", () => {
       env,
       mode: "import",
     });
+    expect(repairReservedIncognitoSessionKeys).toHaveBeenCalledWith({ apply: true, cfg, env });
+    expect(
+      expectDefined(runDoctorSessionSqlite.mock.invocationCallOrder[0], "SQLite import call order"),
+    ).toBeLessThan(
+      expectDefined(
+        repairReservedIncognitoSessionKeys.mock.invocationCallOrder[0],
+        "reserved key repair call order",
+      ),
+    );
     expect(withDoctorSqliteMaintenanceLock).toHaveBeenCalledWith({
       env,
       operation: "session SQLite import",

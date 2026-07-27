@@ -54,7 +54,6 @@ type WebChannelHeavyRuntimeModule = {
   monitorWebInbox: (...args: unknown[]) => Promise<unknown>;
   startWebLoginWithQr: (...args: unknown[]) => Promise<unknown>;
   waitForWebLogin: (...args: unknown[]) => Promise<unknown>;
-  extractMediaPlaceholder: (...args: unknown[]) => unknown;
   extractText: (...args: unknown[]) => unknown;
 };
 
@@ -285,11 +284,6 @@ export async function waitForWebLogin(
 ): ReturnType<WebChannelHeavyRuntimeModule["waitForWebLogin"]> {
   return (await getHeavyExport("waitForWebLogin"))(...args);
 }
-
-/** Extracts media placeholders through the heavy runtime API. */
-export const extractMediaPlaceholder = (
-  ...args: Parameters<WebChannelHeavyRuntimeModule["extractMediaPlaceholder"]>
-) => loadCurrentHeavyModuleSync().extractMediaPlaceholder(...args);
 
 /** Extracts text through the heavy runtime API. */
 export const extractText = (...args: Parameters<WebChannelHeavyRuntimeModule["extractText"]>) =>

@@ -12,9 +12,9 @@ import org.robolectric.RuntimeEnvironment
 
 @RunWith(RobolectricTestRunner::class)
 class RoomChatTranscriptCacheTest {
-  private val database: ChatCacheDatabase =
+  private val database: GatewayCacheDatabase =
     Room
-      .inMemoryDatabaseBuilder(RuntimeEnvironment.getApplication(), ChatCacheDatabase::class.java)
+      .inMemoryDatabaseBuilder(RuntimeEnvironment.getApplication(), GatewayCacheDatabase::class.java)
       .build()
 
   @After
@@ -146,6 +146,37 @@ class RoomChatTranscriptCacheTest {
       assertEquals("Session 0", sessions.first().displayName)
       assertEquals(listOf("kept"), store.loadTranscript("gateway-a", "main", "session-10").map { it.content.single().text })
       assertEquals(emptyList<ChatMessage>(), store.loadTranscript("gateway-a", "main", "session-55"))
+    }
+
+  @Test
+  fun sessionRoundTripKeepsRunMetadata() =
+    runTest {
+      val store = cache()
+      store.saveSessions(
+        gatewayId = "gateway-a",
+        agentId = "main",
+        sessions =
+          listOf(
+            ChatSessionEntry(
+              key = "main",
+              updatedAtMs = 20L,
+              status = "done",
+              startedAt = 1_000L,
+              endedAt = 5_000L,
+              runtimeMs = 4_000L,
+              outputTokens = 485L,
+            ),
+          ),
+      )
+
+      val loaded = store.loadSessions("gateway-a", "main").single()
+
+      assertEquals("done", loaded.status)
+      assertEquals(1_000L, loaded.startedAt)
+      assertEquals(5_000L, loaded.endedAt)
+      assertEquals(4_000L, loaded.runtimeMs)
+      assertEquals(485L, loaded.outputTokens)
+      assertTrue(loaded.hasRunMetadata)
     }
 
   @Test

@@ -65,13 +65,13 @@ export class UsageRefreshRuntime {
 
   applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot, resetForSourceBind = false): void {
     const clientChanged = resetForSourceBind || snapshot.client !== this.currentClient;
-    const becameConnected = snapshot.connected && !this.currentConnected;
+    const becameConnected = snapshot.phase === "connected" && !this.currentConnected;
     this.adoptGatewaySnapshot(snapshot);
 
     if (clientChanged) {
       this.options.resetForClientChange();
     }
-    if (!snapshot.connected || !snapshot.client) {
+    if (snapshot.phase !== "connected" || !snapshot.client) {
       this.reloadPending ||= this.options.isLoading();
       this.options.invalidateRequests();
       return;
@@ -85,7 +85,7 @@ export class UsageRefreshRuntime {
 
   adoptGatewaySnapshot(snapshot: ApplicationGatewaySnapshot): void {
     this.currentClient = snapshot.client;
-    this.currentConnected = snapshot.connected;
+    this.currentConnected = snapshot.phase === "connected";
   }
 
   setLastLoadedAtMs(value: number | null): void {

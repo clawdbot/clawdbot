@@ -104,7 +104,7 @@ export async function runTelegramDispatchTurn(params: {
           textForCommands: context.ctxPayload.CommandBody,
           raw: context,
         }),
-        resolveTurn: () => ({
+        resolveTurn: (): ChannelInboundTurnPlan<"provider_message_sending"> => ({
           cfg: params.cfg,
           channel: "telegram",
           accountId: context.route.accountId,
@@ -115,10 +115,9 @@ export async function runTelegramDispatchTurn(params: {
           ctxPayload: context.ctxPayload,
           record: context.turn.record,
           delivery: {
-            deliver: async (payload, info) =>
-              (await params.reply.deliver(payload, info)) as Awaited<
-                ReturnType<ChannelInboundTurnPlan["delivery"]["deliver"]>
-              >,
+            deliverWithProviderMessageSending: async (payload, info) => {
+              return await params.reply.deliver(payload, info);
+            },
             // The shipped SDK declaration stays void; core still awaits the runtime promise.
             onError: handleDeliveryError as NonNullable<
               ChannelInboundTurnPlan["delivery"]["onError"]

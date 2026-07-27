@@ -2,9 +2,11 @@
 export {
   listSqliteSessionEntries,
   listSqliteSessionEntriesReadOnly,
+  listSqliteSessionEntryKeysReadOnly,
   listSqliteSessionEntriesByStatus,
   listSqliteSessionTranscriptInstances,
   loadExactSqliteSessionEntry,
+  loadExactSqliteSessionEntryReadOnly,
   loadSqliteSessionEntry,
   loadSqliteSessionEntryReadOnly,
   patchSqliteSessionEntry,
@@ -13,6 +15,7 @@ export {
   recordSqliteInboundSessionMeta,
   replaceSqliteSessionEntry,
   replaceSqliteSessionEntrySync,
+  resolveSqliteSessionEntry,
   resolveSqliteSessionKeyBySessionId,
   updateSqliteSessionLastRoute,
   upsertSqliteSessionEntry,
@@ -42,6 +45,7 @@ export {
 export {
   forkSqliteSessionAtMessage,
   listSqliteSessionBranches,
+  resolveSessionTranscriptActiveLeafEntryId,
   rewindSqliteSessionToMessage,
   switchSqliteSessionBranch,
 } from "./session-accessor.sqlite-message-cut.js";
@@ -54,6 +58,7 @@ export {
   importSqliteSessionRows,
   replaceSqliteTranscriptEvents,
   replaceSqliteTranscriptEventsSync,
+  trimSqliteTranscriptForManualCompact,
   withSqliteTranscriptWriteLock,
   withSqliteTranscriptWriteTransaction,
 } from "./session-accessor.sqlite-transcript-write.js";

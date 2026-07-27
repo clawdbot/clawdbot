@@ -8,6 +8,7 @@ export type { AgentHarness } from "../agents/harness/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
 export type {
   CliBackendAuthEpochMode,
+  CliBackendConfig,
   CliBackendExecutionMode,
   CliBackendNormalizeConfigContext,
   CliBackendNativeToolMode,
@@ -17,6 +18,8 @@ export type {
   CliBackendResolveExecutionArgs,
   CliBackendResolveExecutionArgsContext,
   CliBackendSideQuestionToolMode,
+  CliBackendToolAvailability,
+  CliBackendToolAvailabilityEnforcement,
   CliBackendThinkingLevel,
   CliBundleMcpMode,
   PluginTextTransforms,
@@ -138,6 +141,7 @@ export type {
 } from "./capability-provider.types.js";
 export type {
   MigrationApplyResult,
+  MigrationConfigRuntime,
   MigrationDetection,
   MigrationItem,
   MigrationPlan,
@@ -234,8 +238,9 @@ export type {
   VideoGenerationProviderPlugin,
 } from "./capability-provider.types.js";
 export type {
-  OpenClawPluginCliCommandDescriptor,
+  OpenClawPluginCliRegistrationOptions,
   OpenClawPluginCliRegistrar,
+  OpenClawPluginCliRootCommandDescriptor,
   OpenClawPluginGatewayRuntimeScopeSurface,
   OpenClawPluginHostedMediaResolver,
   OpenClawPluginHttpRouteAuth,

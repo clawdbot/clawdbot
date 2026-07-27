@@ -580,6 +580,9 @@ describe("subagent registry persistence", () => {
       structuredOutput: { invalidAttempts: 1, schemaError: "answer is required" },
       queuedLaunch: {
         request: { sessionKey: "agent:worker:subagent:swarm-in-flight" },
+        authorization: {
+          modelOverride: { provider: "openai", model: "gpt-5.4" },
+        },
         timeoutMs: 1_000,
         schedulerGroupKey: '["agent:main:main","logical-group"]',
         maxConcurrent: 8,

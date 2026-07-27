@@ -57,7 +57,7 @@ function errorMessage(error: unknown): string {
 
 export async function loadModelProvidersData(
   client: GatewayBrowserClient,
-  opts?: { refresh?: boolean },
+  opts?: { refresh?: boolean; agentId?: string },
 ): Promise<ModelProvidersData> {
   const [authStatus, models, catalogModels, config, providerUsage, costByProvider] =
     await Promise.all([

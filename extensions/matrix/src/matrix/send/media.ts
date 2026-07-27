@@ -1,5 +1,6 @@
 // Matrix plugin module implements media behavior.
 import { parseBuffer, type IFileInfo } from "music-metadata";
+import type { MediaKind } from "openclaw/plugin-sdk/media-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import type {
   DimensionalFileInfo,
@@ -14,7 +15,6 @@ import type {
   MatrixMediaInfo,
   MatrixMediaMsgType,
   MatrixRelation,
-  MediaKind,
 } from "./types.js";
 
 const getCore = () => getMatrixRuntime();
@@ -162,7 +162,7 @@ export async function resolveMediaDurationMs(params: {
   buffer: Buffer;
   contentType?: string;
   fileName?: string;
-  kind: MediaKind;
+  kind: Exclude<MediaKind, "sticker">;
 }): Promise<number | undefined> {
   if (params.kind !== "audio" && params.kind !== "video") {
     return undefined;

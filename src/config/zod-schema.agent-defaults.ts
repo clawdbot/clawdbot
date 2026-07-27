@@ -9,12 +9,10 @@ import {
   AgentModelPolicySchema,
   AgentModelSchema,
   AgentToolModelSchema,
-  MemorySearchSchema,
 } from "./zod-schema.agent-runtime.js";
 import {
   BlockStreamingChunkSchema,
   BlockStreamingCoalesceSchema,
-  CliBackendSchema,
   HumanDelaySchema,
   TypingModeSchema,
 } from "./zod-schema.core.js";
@@ -68,13 +66,17 @@ export const AgentDefaultsSchema = z
     model: AgentModelSchema.optional(),
     utilityModel: z.string().optional(),
     imageModel: AgentToolModelSchema.optional(),
-    imageGenerationModel: AgentToolModelSchema.optional(),
-    videoGenerationModel: AgentToolModelSchema.optional(),
-    musicGenerationModel: AgentToolModelSchema.optional(),
+    mediaModels: z
+      .object({
+        image: AgentToolModelSchema.optional(),
+        video: AgentToolModelSchema.optional(),
+        music: AgentToolModelSchema.optional(),
+      })
+      .strict()
+      .optional(),
     voiceModel: AgentToolModelSchema.optional(),
-    mediaGenerationAutoProviderFallback: z.boolean().optional(),
     pdfModel: AgentToolModelSchema.optional(),
-    pdfMaxBytesMb: z.number().positive().optional(),
+    pdfMaxMb: z.number().positive().optional(),
     pdfMaxPages: z.number().int().positive().optional(),
     models: z.record(z.string(), AgentModelRuntimeEntrySchema).optional(),
     modelPolicy: AgentModelPolicySchema.optional(),
@@ -82,19 +84,6 @@ export const AgentDefaultsSchema = z
     skills: z.array(z.string()).optional(),
     silentReply: SilentReplyPolicyConfigSchema.optional(),
     repoRoot: z.string().optional(),
-    promptOverlays: z
-      .object({
-        gpt5: z
-          .object({
-            personality: z
-              .union([z.literal("friendly"), z.literal("on"), z.literal("off")])
-              .optional(),
-          })
-          .strict()
-          .optional(),
-      })
-      .strict()
-      .optional(),
     skipBootstrap: z.boolean().optional(),
     skipOptionalBootstrapFiles: z.array(OptionalBootstrapFileNameSchema).optional(),
     contextInjection: z
@@ -107,9 +96,6 @@ export const AgentDefaultsSchema = z
         localModelLean: z.boolean().optional(),
       })
       .strict()
-      .optional(),
-    bootstrapPromptTruncationWarning: z
-      .union([z.literal("off"), z.literal("once"), z.literal("always")])
       .optional(),
     userTimezone: z.string().optional(),
     startupContext: z
@@ -129,13 +115,7 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     contextLimits: AgentContextLimitsSchema,
-    timeFormat: z.union([z.literal("auto"), z.literal("12"), z.literal("24")]).optional(),
-    envelopeTimezone: z.string().optional(),
-    envelopeTimestamp: z.union([z.literal("on"), z.literal("off")]).optional(),
-    envelopeElapsed: z.union([z.literal("on"), z.literal("off")]).optional(),
     contextTokens: z.number().int().positive().optional(),
-    cliBackends: z.record(z.string(), CliBackendSchema).optional(),
-    memorySearch: MemorySearchSchema,
     contextPruning: z
       .object({
         mode: z.union([z.literal("off"), z.literal("cache-ttl")]).optional(),
@@ -159,15 +139,12 @@ export const AgentDefaultsSchema = z
       .optional(),
     compaction: z
       .object({
+        enabled: z.boolean().optional(),
         mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
         provider: z.string().optional(),
         thinkingLevel: AgentThinkingLevelSchema.optional(),
         keepRecentTokens: z.number().int().positive().optional(),
-        customInstructions: z.string().optional(),
-        identifierPolicy: z
-          .union([z.literal("strict"), z.literal("off"), z.literal("custom")])
-          .optional(),
-        identifierInstructions: z.string().optional(),
+        identifierPolicy: z.union([z.literal("strict"), z.literal("off")]).optional(),
         recentTurnsPreserve: z.number().int().min(0).max(12).optional(),
         qualityGuard: z
           .object({
@@ -192,8 +169,6 @@ export const AgentDefaultsSchema = z
             model: z.string().optional(),
             softThresholdTokens: z.number().int().nonnegative().optional(),
             forceFlushTranscriptBytes: NonNegativeByteSizeSchema.optional(),
-            prompt: z.string().optional(),
-            systemPrompt: z.string().optional(),
           })
           .strict()
           .optional(),
@@ -205,6 +180,7 @@ export const AgentDefaultsSchema = z
       .optional(),
     embeddedAgent: EmbeddedAgentConfigSchema.optional(),
     thinkingDefault: AgentThinkingLevelSchema.optional(),
+    fastModeDefault: z.union([z.boolean(), z.literal("auto")]).optional(),
     verboseDefault: z.union([z.literal("off"), z.literal("on"), z.literal("full")]).optional(),
     toolProgressDetail: z.union([z.literal("explain"), z.literal("raw")]).optional(),
     reasoningDefault: z.union([z.literal("off"), z.literal("on"), z.literal("stream")]).optional(),
@@ -223,7 +199,15 @@ export const AgentDefaultsSchema = z
     imageQuality: z.enum(["auto", "efficient", "balanced", "high"]).optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
     typingMode: TypingModeSchema.optional(),
-    heartbeat: HeartbeatSchema,
+    heartbeat: HeartbeatSchema.unwrap()
+      .safeExtend({ agentId: z.string().trim().min(1).optional() })
+      .optional(),
+    systemAgent: z
+      .object({
+        agentId: z.string().trim().min(1).optional(),
+      })
+      .strict()
+      .optional(),
     maxConcurrent: z.number().int().positive().optional(),
     subagents: z
       .object({

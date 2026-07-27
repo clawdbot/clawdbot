@@ -22,7 +22,10 @@ import {
   resolveEffectiveCompactionMode,
 } from "../agent-settings.js";
 import { resolveCliBackendConfig as resolveCliBackendConfigImpl } from "../cli-backends.js";
-import { classifyCompactionReason } from "../embedded-agent-runner/compact-reasons.js";
+import {
+  isBenignCompactionSkipReason,
+  isBenignCompactionSkipResult,
+} from "../embedded-agent-runner/compact-reasons.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../embedded-agent-runner/compaction-runtime-context.js";
 import {
   compactContextEngineWithSafetyTimeout,
@@ -206,11 +209,6 @@ function isUnsupportedNativeHarnessCompaction(
   return result?.ok === false && result.failure?.reason === "unsupported_harness_compaction";
 }
 
-function isBenignCliCompactionNoopReason(reason: string | undefined): boolean {
-  const classification = classifyCompactionReason(reason);
-  return classification === "below_threshold" || classification === "already_compacted_recently";
-}
-
 function isIntentionalNativeAutoCompactionSkip(
   result: EmbeddedAgentCompactResult | undefined,
 ): boolean {
@@ -385,7 +383,7 @@ async function compactCliTranscript(params: {
     );
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    if (isBenignCliCompactionNoopReason(reason)) {
+    if (isBenignCompactionSkipReason(reason)) {
       log.info(
         `CLI transcript compaction skipped for ${params.provider}/${params.model}: ${reason}`,
       );
@@ -398,16 +396,16 @@ async function compactCliTranscript(params: {
     };
   }
 
-  if (!compactResult.compacted) {
-    const reason = compactResult.reason ?? "nothing to compact";
-    if (isBenignCliCompactionNoopReason(reason)) {
+  if (!compactResult.ok || !compactResult.compacted) {
+    const reason = compactResult.reason;
+    if (isBenignCompactionSkipResult(compactResult)) {
       log.info(
         `CLI transcript compaction skipped for ${params.provider}/${params.model}: ${reason}`,
       );
       return { compacted: false };
     }
     log.warn(
-      `CLI transcript compaction did not reduce context for ${params.provider}/${params.model}: ${reason}`,
+      `CLI transcript compaction did not reduce context for ${params.provider}/${params.model}: ${reason ?? "compaction did not reduce context"}`,
     );
     return {
       compacted: false,
@@ -548,9 +546,9 @@ async function compactNativeHarnessCliTranscript(params: {
     };
   }
 
-  if (!result?.compacted) {
-    const reason = result?.reason ?? "nothing to compact";
-    if (isBenignCliCompactionNoopReason(reason)) {
+  if (!result?.ok || !result.compacted) {
+    const reason = result?.reason;
+    if (result && isBenignCompactionSkipResult(result)) {
       log.info(
         `CLI native harness compaction skipped for ${params.provider}/${params.model}: ${reason}`,
       );
@@ -629,8 +627,6 @@ export async function runCliTurnCompactionLifecycle(params: {
     reserveTokens: settingsManager.getCompactionReserveTokens(),
     toolResultMaxChars: cliCompactionDeps.resolveLiveToolResultMaxChars({
       contextWindowTokens: contextTokenBudget,
-      cfg: params.cfg,
-      agentId: params.sessionAgentId,
     }),
   });
   const tokenSnapshot = resolveSessionTokenSnapshot(params.sessionEntry);

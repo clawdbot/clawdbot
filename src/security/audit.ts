@@ -1,19 +1,16 @@
 // Orchestrates security audit collection and report formatting.
 import path from "node:path";
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { hasAgentRosterProperty, listAgentEntries } from "../agents/agent-scope-config.js";
+import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
-import type { CliBackendConfig } from "../config/types.agent-defaults.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { SecurityAuditSuppression } from "../config/types.openclaw.js";
 import {
@@ -25,9 +22,7 @@ import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
 import {
   type ExecApprovalsFile,
   loadExecApprovals,
-  maxAsk,
-  minSecurity,
-  resolveExecApprovalsFromFile,
+  resolveExecModePolicy,
 } from "../infra/exec-approvals.js";
 import {
   normalizeConfiguredSafeBins,
@@ -38,8 +33,9 @@ import {
   resolveMergedSafeBinProfileFixtures,
 } from "../infra/exec-safe-bin-runtime-policy.js";
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
-import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { readControlUiDeviceAuthMigrationState } from "../state/control-ui-device-auth-migration.js";
+import { resolveUserPath } from "../utils.js";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
 import {
@@ -70,10 +66,6 @@ type SecurityAuditExplicitGatewayAuth = {
   password?: string;
 };
 type SecurityAuditGatewayAuthOverride = Pick<GatewayAuthConfig, "mode" | "token" | "password">;
-type ClaudePermissionModeHit = {
-  argSet: "args" | "resumeArgs";
-  mode: string;
-};
 type McpServerSourceSummary = {
   label: string;
   names: string[];
@@ -85,6 +77,9 @@ type AgentSkillMcpBoundaryScope = {
   execSecurity: string;
   execAsk: string;
 };
+type AgentSkillMcpBoundaryCandidate =
+  | { kind: "defaults"; id: "agents.defaults"; skillSource: string }
+  | { kind: "agent"; id: string; skillSource: string; agentId: string };
 
 export type { SecurityAuditReport } from "./audit.types.js";
 
@@ -253,8 +248,10 @@ async function materializeAuditGatewayAuthRefs(params: {
     cfg: params.cfg,
     env: params.env,
     mode: params.cfg.gateway?.auth?.mode,
-    hasTokenCandidate: Boolean(normalizeOptionalString(params.env.OPENCLAW_GATEWAY_TOKEN)),
-    hasPasswordCandidate: Boolean(normalizeOptionalString(params.env.OPENCLAW_GATEWAY_PASSWORD)),
+    hasTokenOverride: false,
+    hasPasswordOverride: false,
+    hasTokenFallback: Boolean(normalizeOptionalString(params.env.OPENCLAW_GATEWAY_TOKEN)),
+    hasPasswordFallback: Boolean(normalizeOptionalString(params.env.OPENCLAW_GATEWAY_PASSWORD)),
   };
   if (!canMaterializeGatewayAuthSecretRefsWithoutExec(materializeParams)) {
     return params.cfg;
@@ -481,6 +478,30 @@ function collectGatewayConfigFindings(
   });
 }
 
+function collectControlUiDeviceAuthMigrationFindings(params: {
+  env: NodeJS.ProcessEnv;
+  stateDir: string;
+}): SecurityAuditFinding[] {
+  const migration = readControlUiDeviceAuthMigrationState({
+    env: { ...params.env, OPENCLAW_STATE_DIR: params.stateDir },
+  });
+  if (migration?.status !== "pending") {
+    return [];
+  }
+  return [
+    {
+      checkId: "gateway.control_ui.device_auth_disabled",
+      severity: "critical",
+      title: "Control UI device-auth migration is pending",
+      detail:
+        "The retired device-auth bypass was imported into pending migration state. " +
+        "Device-less Control UI sessions with valid shared auth can still connect for remediation until an operator browser completes pairing.",
+      remediation:
+        "Reopen the Control UI over HTTPS or localhost and click Secure this browser to complete pairing and end the compatibility window.",
+    },
+  ];
+}
+
 async function collectPluginSecurityAuditFindings(
   context: AuditExecutionContext,
 ): Promise<SecurityAuditFinding[]> {
@@ -573,22 +594,6 @@ async function collectPluginSecurityAuditFindings(
   return collectorResults.flat();
 }
 
-function collectLoggingFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
-  const redact = cfg.logging?.redactSensitive;
-  if (redact !== "off") {
-    return [];
-  }
-  return [
-    {
-      checkId: "logging.redact_off",
-      severity: "warn",
-      title: "Tool summary redaction is disabled",
-      detail: `logging.redactSensitive="off" can leak secrets into logs and status output.`,
-      remediation: `Set logging.redactSensitive="tools".`,
-    },
-  ];
-}
-
 function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const enabled = cfg.tools?.elevated?.enabled;
@@ -624,121 +629,6 @@ function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   return findings;
 }
 
-const CLAUDE_PERMISSION_MODE_FLAG = "--permission-mode";
-const CLAUDE_BYPASS_PERMISSION_MODE = "bypassPermissions";
-
-function extractClaudePermissionMode(args: readonly string[] | undefined): string | undefined {
-  if (!Array.isArray(args)) {
-    return undefined;
-  }
-  for (let i = args.length - 1; i >= 0; i -= 1) {
-    const arg = args[i] ?? "";
-    if (arg === CLAUDE_PERMISSION_MODE_FLAG) {
-      const value = args[i + 1];
-      if (typeof value === "string" && value.trim().length > 0 && !value.startsWith("-")) {
-        return value.trim();
-      }
-      continue;
-    }
-    if (arg.startsWith(`${CLAUDE_PERMISSION_MODE_FLAG}=`)) {
-      const value = arg.slice(`${CLAUDE_PERMISSION_MODE_FLAG}=`.length).trim();
-      if (value.length > 0 && !value.startsWith("-")) {
-        return value;
-      }
-    }
-  }
-  return undefined;
-}
-
-function collectRestrictiveClaudePermissionModeHits(
-  backend: CliBackendConfig | undefined,
-): ClaudePermissionModeHit[] {
-  if (!isManagedClaudeLiveBackendConfig(backend)) {
-    return [];
-  }
-  const hits: ClaudePermissionModeHit[] = [];
-  const argsMode = extractClaudePermissionMode(backend.args);
-  if (argsMode && argsMode !== CLAUDE_BYPASS_PERMISSION_MODE) {
-    hits.push({ argSet: "args", mode: argsMode });
-  }
-  const resumeArgsMode = extractClaudePermissionMode(backend.resumeArgs);
-  if (resumeArgsMode && resumeArgsMode !== CLAUDE_BYPASS_PERMISSION_MODE) {
-    hits.push({ argSet: "resumeArgs", mode: resumeArgsMode });
-  }
-  return hits;
-}
-
-function isManagedClaudeLiveBackendConfig(
-  backend: CliBackendConfig | undefined,
-): backend is CliBackendConfig {
-  if (!backend) {
-    return false;
-  }
-  const output = backend.output ?? "jsonl";
-  const input = backend.input ?? "stdin";
-  const liveSession =
-    backend.liveSession ?? (output === "jsonl" && input === "stdin" ? "claude-stdio" : undefined);
-  return liveSession === "claude-stdio" && output === "jsonl" && input === "stdin";
-}
-
-function findClaudeCliBackendConfig(
-  backends: Record<string, CliBackendConfig> | undefined,
-): CliBackendConfig | undefined {
-  if (!backends) {
-    return undefined;
-  }
-  const directKey = Object.keys(backends).find(
-    (key) => normalizeOptionalLowercaseString(key) === "claude-cli",
-  );
-  if (directKey) {
-    return backends[directKey];
-  }
-  for (const [key, backend] of Object.entries(backends)) {
-    const normalizedKey = normalizeProviderId(key);
-    const command = normalizeOptionalLowercaseString(backend.command);
-    if (
-      normalizedKey === "claude-cli" ||
-      normalizedKey === "anthropic-cli" ||
-      command === "claude"
-    ) {
-      return backend;
-    }
-  }
-  return undefined;
-}
-
-function collectYoloExecScopeIds(cfg: OpenClawConfig, approvals: ExecApprovalsFile): string[] {
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  return [
-    { id: DEFAULT_AGENT_ID },
-    ...agents
-      .filter(
-        (entry): entry is NonNullable<(typeof agents)[number]> =>
-          Boolean(entry) && typeof entry === "object" && typeof entry.id === "string",
-      )
-      .map((entry) => ({ id: entry.id })),
-  ]
-    .filter((entry) => {
-      const execDefaults = resolveExecDefaults({
-        cfg,
-        agentId: entry.id === DEFAULT_AGENT_ID ? undefined : entry.id,
-      });
-      const resolvedApprovals = resolveExecApprovalsFromFile({
-        file: approvals,
-        agentId: entry.id === DEFAULT_AGENT_ID ? undefined : entry.id,
-        overrides: {
-          security: execDefaults.security,
-          ask: execDefaults.ask,
-        },
-      });
-      return (
-        minSecurity(execDefaults.security, resolvedApprovals.agent.security) === "full" &&
-        maxAsk(execDefaults.ask, resolvedApprovals.agent.ask) === "off"
-      );
-    })
-    .map((entry) => entry.id);
-}
-
 function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const globalExecHost = cfg.tools?.exec?.host;
@@ -746,11 +636,6 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
   const defaultSandboxMode = resolveSandboxConfigForAgent(cfg).mode;
   const defaultHostIsExplicitSandbox = globalExecHost === "sandbox";
   const approvals = loadExecApprovals();
-  const claudePermissionModeHits = collectRestrictiveClaudePermissionModeHits(
-    findClaudeCliBackendConfig(cfg.agents?.defaults?.cliBackends),
-  );
-  const yoloExecScopeIds =
-    claudePermissionModeHits.length > 0 ? collectYoloExecScopeIds(cfg, approvals) : [];
 
   if (defaultHostIsExplicitSandbox && defaultSandboxMode === "off") {
     findings.push({
@@ -765,7 +650,8 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
     });
   }
 
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  const agents = listAgentEntries(cfg);
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const riskyAgents = agents
     .filter(
       (entry) =>
@@ -784,10 +670,10 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
       severity: "warn",
       title: "Agent exec host uses sandbox while sandbox mode is off",
       detail:
-        `agents.list.*.tools.exec.host is set to sandbox for: ${riskyAgents.join(", ")}. ` +
+        `agents.entries.*.tools.exec.host is set to sandbox for: ${riskyAgents.join(", ")}. ` +
         "With sandbox mode off, exec fails closed for those agents.",
       remediation:
-        'Enable sandbox mode for these agents (`agents.list[].sandbox.mode`) or set their tools.exec.host to "gateway".',
+        'Enable sandbox mode for these agents (`agents.entries.*.sandbox.mode`) or set their tools.exec.host to "gateway".',
     });
   }
 
@@ -795,8 +681,12 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
     new Map(
       [
         {
-          id: DEFAULT_AGENT_ID,
-          security: cfg.tools?.exec?.security ?? "deny",
+          id: defaultAgentId ?? "global",
+          security: resolveExecModePolicy({
+            mode: cfg.tools?.exec?.mode,
+            security: cfg.tools?.exec?.security ?? "deny",
+            ask: cfg.tools?.exec?.ask ?? "off",
+          }).security,
           host: cfg.tools?.exec?.host ?? "auto",
         },
         ...agents
@@ -804,11 +694,22 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
             (entry): entry is NonNullable<(typeof agents)[number]> =>
               Boolean(entry) && typeof entry === "object" && typeof entry.id === "string",
           )
-          .map((entry) => ({
-            id: entry.id,
-            security: entry.tools?.exec?.security ?? cfg.tools?.exec?.security ?? "deny",
-            host: entry.tools?.exec?.host ?? cfg.tools?.exec?.host ?? "auto",
-          })),
+          .map((entry) => {
+            const inherited = resolveExecModePolicy({
+              mode: cfg.tools?.exec?.mode,
+              security: cfg.tools?.exec?.security ?? "deny",
+              ask: cfg.tools?.exec?.ask ?? "off",
+            });
+            return {
+              id: entry.id,
+              security: resolveExecModePolicy({
+                mode: entry.tools?.exec?.mode,
+                security: entry.tools?.exec?.security ?? inherited.security,
+                ask: entry.tools?.exec?.ask ?? inherited.ask,
+              }).security,
+              host: entry.tools?.exec?.host ?? cfg.tools?.exec?.host ?? "auto",
+            };
+          }),
       ].map((entry) => [entry.id, entry] as const),
     ).values(),
   );
@@ -827,18 +728,7 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
           ? ` Open channel access was also detected at:\n${openExecSurfacePaths.map((entry) => `- ${entry}`).join("\n")}`
           : ""),
       remediation:
-        'Prefer tools.exec.security="allowlist" with ask prompts, and reserve "full" for tightly scoped break-glass agents only.',
-    });
-  }
-
-  if (claudePermissionModeHits.length > 0 && yoloExecScopeIds.length > 0) {
-    findings.push({
-      checkId: "agents.claude_cli.permission_mode_overridden_by_yolo",
-      severity: "warn",
-      title: "Claude permission mode is ignored under YOLO exec",
-      detail: `claude-cli sets ${claudePermissionModeHits.map((hit) => `${hit.argSet}=${hit.mode}`).join(", ")}, but OpenClaw exec is YOLO for: ${yoloExecScopeIds.join(", ")}. Managed Claude live sessions use --permission-mode bypassPermissions.`,
-      remediation:
-        "Restrict OpenClaw tools.exec.security/tools.exec.ask, or remove the Claude --permission-mode override.",
+        'Prefer tools.exec.mode="ask" or "allowlist", and reserve "full" for tightly scoped break-glass agents only.',
     });
   }
 
@@ -886,11 +776,11 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
   const interpreterAllowlistHits = collectInterpreterAllowlistHits({
     approvals,
     strictInlineEvalForAgentId: (agentId) => {
-      if (!agentId || agentId === "*" || agentId === DEFAULT_AGENT_ID) {
+      if (!agentId || agentId === "*") {
         return globalStrictInlineEval;
       }
       const agent = agents.find((entry) => entry?.id === agentId);
-      return agent?.tools?.exec?.strictInlineEval === true || globalStrictInlineEval;
+      return agent?.tools?.exec?.strictInlineEval ?? globalStrictInlineEval;
     },
   });
   if (interpreterAllowlistHits.length > 0) {
@@ -961,7 +851,7 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
       continue;
     }
     collectRiskyTrustedDirHits(
-      `agents.list.${entry.id}.tools.exec`,
+      `agents.entries.${entry.id}.tools.exec`,
       entry.tools?.exec?.safeBinTrustedDirs,
     );
   }
@@ -998,17 +888,17 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
     if (interpreters.length === 0) {
       for (const hit of listRiskyConfiguredSafeBins(agentSafeBins)) {
         riskySemanticSafeBinHits.push(
-          `- agents.list.${entry.id}.tools.exec.safeBins: ${hit.bin} (${hit.warning})`,
+          `- agents.entries.${entry.id}.tools.exec.safeBins: ${hit.bin} (${hit.warning})`,
         );
       }
       continue;
     }
     interpreterHits.push(
-      `- agents.list.${entry.id}.tools.exec.safeBins: ${interpreters.join(", ")}`,
+      `- agents.entries.${entry.id}.tools.exec.safeBins: ${interpreters.join(", ")}`,
     );
     for (const hit of listRiskyConfiguredSafeBins(agentSafeBins)) {
       riskySemanticSafeBinHits.push(
-        `- agents.list.${entry.id}.tools.exec.safeBins: ${hit.bin} (${hit.warning})`,
+        `- agents.entries.${entry.id}.tools.exec.safeBins: ${hit.bin} (${hit.warning})`,
       );
     }
   }
@@ -1055,6 +945,28 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
   }
 
   return findings;
+}
+
+function collectAgentRosterFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+  const agents = listAgentEntries(cfg);
+  // A missing roster is the supported pre-roster compatibility state and is
+  // materialized by config loading. An explicitly authored empty roster is invalid.
+  if (agents.length === 0 && !hasAgentRosterProperty(cfg)) {
+    return [];
+  }
+  const defaultCount = agents.filter((agent) => agent?.default === true).length;
+  if (defaultCount === 1) {
+    return [];
+  }
+  return [
+    {
+      checkId: "config.agent_roster.invalid_default_count",
+      severity: "warn",
+      title: "Agent roster has an invalid default selection",
+      detail: `Expected exactly one agents.entries default=true entry, found ${defaultCount}.`,
+      remediation: "Run `openclaw doctor --fix` to repair the authored agent roster.",
+    },
+  ];
 }
 
 function formatNamesPreview(names: readonly string[]): string {
@@ -1120,15 +1032,15 @@ function hasOwnSkillsAllowlist(entry: object | undefined): boolean {
 }
 
 function collectAgentSkillMcpBoundaryScopes(cfg: OpenClawConfig): AgentSkillMcpBoundaryScope[] {
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  const agents = listAgentEntries(cfg);
   const defaultsHaveSkillAllowlist = hasOwnSkillsAllowlist(cfg.agents?.defaults);
-  const candidates = [
+  const candidates: AgentSkillMcpBoundaryCandidate[] = [
     ...(defaultsHaveSkillAllowlist
       ? [
           {
-            id: DEFAULT_AGENT_ID,
+            kind: "defaults" as const,
+            id: "agents.defaults" as const,
             skillSource: "agents.defaults.skills",
-            agentId: undefined,
           },
         ]
       : []),
@@ -1139,11 +1051,19 @@ function collectAgentSkillMcpBoundaryScopes(cfg: OpenClawConfig): AgentSkillMcpB
       )
       .flatMap((entry) => {
         if (hasOwnSkillsAllowlist(entry)) {
-          return [{ id: entry.id, skillSource: "agents.list[].skills", agentId: entry.id }];
+          return [
+            {
+              kind: "agent" as const,
+              id: entry.id,
+              skillSource: "agents.entries.*.skills",
+              agentId: entry.id,
+            },
+          ];
         }
         if (defaultsHaveSkillAllowlist) {
           return [
             {
+              kind: "agent" as const,
               id: entry.id,
               skillSource: "agents.defaults.skills (inherited)",
               agentId: entry.id,
@@ -1155,10 +1075,11 @@ function collectAgentSkillMcpBoundaryScopes(cfg: OpenClawConfig): AgentSkillMcpB
   ];
 
   return candidates.flatMap((candidate) => {
-    const sandboxMode = resolveSandboxConfigForAgent(cfg, candidate.agentId).mode;
+    const agentId = candidate.kind === "agent" ? candidate.agentId : undefined;
+    const sandboxMode = resolveSandboxConfigForAgent(cfg, agentId).mode;
     const exec = resolveExecDefaults({
       cfg,
-      agentId: candidate.agentId,
+      ...(candidate.kind === "defaults" ? { scope: { kind: "defaults" as const } } : { agentId }),
       sandboxAvailable: sandboxMode !== "off",
     });
     if (exec.security === "deny" || exec.effectiveHost === "sandbox") {
@@ -1370,8 +1291,15 @@ async function createAuditExecutionContext(
   const deepTimeoutMs = Math.max(250, opts.deepTimeoutMs ?? 5000);
   const stateDir = opts.stateDir ?? resolveStateDir(env);
   const configPath = opts.configPath ?? resolveConfigPath(env, stateDir);
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
+  const configuredDefaultWorkspace = cfg.agents?.defaults?.workspace?.trim();
   const workspaceDir =
-    opts.workspaceDir ?? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+    opts.workspaceDir ??
+    (defaultAgentId
+      ? resolveAgentWorkspaceDir(cfg, defaultAgentId)
+      : configuredDefaultWorkspace
+        ? resolveUserPath(configuredDefaultWorkspace, env)
+        : resolveDefaultAgentWorkspaceDir(env));
   const { readConfigSnapshotForAudit } = await loadAuditNonDeepModule();
   const configSnapshot = includeFilesystem
     ? opts.configSnapshot !== undefined
@@ -1409,6 +1337,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   const auditNonDeep = await loadAuditNonDeepModule();
 
   findings.push(...auditNonDeep.collectAttackSurfaceSummaryFindings(cfg));
+  findings.push(...collectAgentRosterFindings(context.sourceConfig));
   findings.push(...auditNonDeep.collectSyncedFolderFindings({ stateDir, configPath }));
 
   findings.push(
@@ -1416,8 +1345,8 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
       gatewayAuthOverride: context.auditGatewayAuthOverride,
     }),
   );
+  findings.push(...collectControlUiDeviceAuthMigrationFindings({ env, stateDir }));
   findings.push(...(await collectPluginSecurityAuditFindings(context)));
-  findings.push(...collectLoggingFindings(cfg));
   findings.push(...collectElevatedFindings(cfg));
   findings.push(...collectExecRuntimeFindings(cfg));
   findings.push(...(await collectAgentSkillMcpBoundaryFindings({ cfg, stateDir })));
@@ -1478,7 +1407,12 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
         execIcacls: context.execIcacls,
       })),
     );
-    findings.push(...(await auditNonDeep.collectWorkspaceSkillSymlinkEscapeFindings({ cfg })));
+    findings.push(
+      ...(await auditNonDeep.collectWorkspaceSkillSymlinkEscapeFindings({
+        cfg,
+        workspaceDir: context.workspaceDir,
+      })),
+    );
     findings.push(
       ...(await auditNonDeep.collectSandboxBrowserHashLabelFindings({
         execDockerRawFn: context.execDockerRawFn,
@@ -1491,6 +1425,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
         cfg,
         stateDir,
         deep: context.deep,
+        workspaceDir: context.workspaceDir,
         summaryCache: context.codeSafetySummaryCache,
       })),
     );

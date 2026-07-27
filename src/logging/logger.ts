@@ -21,13 +21,17 @@ import { expandHomePrefix } from "../infra/home-dir.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { appendRegularFileSync } from "../infra/regular-file.js";
 import {
-  POSIX_OPENCLAW_TMP_DIR,
+  DEFAULT_POSIX_TMP_ROOT,
   resolvePreferredOpenClawTmpDir,
 } from "../infra/tmp-openclaw-dir.js";
 import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
+import { formatConsoleDiagnosticLine } from "./json-console-line.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
+import { isLegacyRollingLogFilePath, resolveRollingLogFilePathForDate } from "./log-file-path.js";
+import { resolveDefaultRollingLogFile } from "./log-file-path.js";
 import { canUseNodeFs, formatLocalDate, LOG_PREFIX, LOG_SUFFIX } from "./log-file-shared.js";
+import { setLoggerFileTargetResolver } from "./logger-settings-internal.js";
 import { redactSecrets, redactSensitiveText } from "./redact.js";
 import { loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";
@@ -35,13 +39,13 @@ import type { LoggerSettings } from "./types.js";
 export type { LoggerSettings } from "./types.js";
 
 function resolveDefaultLogDir(): string {
-  return canUseNodeFs() ? resolvePreferredOpenClawTmpDir() : POSIX_OPENCLAW_TMP_DIR;
+  return canUseNodeFs() ? resolvePreferredOpenClawTmpDir() : DEFAULT_POSIX_TMP_ROOT;
 }
 
 function resolveDefaultLogFile(defaultLogDir: string): string {
   return canUseNodeFs()
     ? path.join(defaultLogDir, "openclaw.log")
-    : `${POSIX_OPENCLAW_TMP_DIR}/openclaw.log`;
+    : `${DEFAULT_POSIX_TMP_ROOT}/openclaw.log`;
 }
 
 export const DEFAULT_LOG_DIR = resolveDefaultLogDir();
@@ -58,6 +62,7 @@ type ResolvedSettings = {
   file: string;
   maxFileBytes: number;
 };
+type ResolvedRuntimeSettings = ResolvedSettings & { rolling: boolean };
 export type LoggerResolvedSettings = ResolvedSettings;
 type TsLogRecord = Record<string, unknown>;
 type LoggerConfigLoader = () => OpenClawConfig["logging"] | undefined;
@@ -472,12 +477,8 @@ function buildDiagnosticLogRecord(logObj: TsLogRecord) {
   };
 }
 
-function isLogRedactionDisabled(): boolean {
-  return readLoggingConfig()?.redactSensitive === "off";
-}
-
 function redactLogRecordForTransport<T extends LogObj>(record: T): T {
-  return isLogRedactionDisabled() ? record : redactSecrets(record);
+  return redactSecrets(record);
 }
 
 function attachDiagnosticEventTransport(logger: TsLogger<LogObj>): void {
@@ -512,15 +513,16 @@ function resolveDefaultActiveLogFile(): string {
       `${LOG_PREFIX}-vitest-${process.pid}-${formatLocalDate(new Date())}${LOG_SUFFIX}`,
     );
   }
-  return defaultRollingPathForToday();
+  return resolveDefaultRollingLogFile({ logDir: DEFAULT_LOG_DIR });
 }
 
-function resolveSettings(): ResolvedSettings {
+function resolveSettings(): ResolvedRuntimeSettings {
   if (!canUseNodeFs()) {
     return {
       level: "silent",
       file: DEFAULT_LOG_FILE,
       maxFileBytes: DEFAULT_MAX_LOG_FILE_BYTES,
+      rolling: false,
     };
   }
 
@@ -530,12 +532,13 @@ function resolveSettings(): ResolvedSettings {
   if (canUseSilentVitestFileLogFastPath(envLevel)) {
     return {
       level: "silent",
-      file: defaultRollingPathForToday(),
+      file: resolveDefaultRollingLogFile({ logDir: DEFAULT_LOG_DIR }),
       maxFileBytes: DEFAULT_MAX_LOG_FILE_BYTES,
+      rolling: true,
     };
   }
 
-  const cfg: OpenClawConfig["logging"] | undefined =
+  const cfg: OpenClawConfig["logging"] | LoggerSettings | undefined =
     (loggingState.overrideSettings as LoggerSettings | null) ?? loadLoggerConfig();
   const defaultLevel =
     process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG !== "1" ? "silent" : "info";
@@ -543,18 +546,30 @@ function resolveSettings(): ResolvedSettings {
   const level = envLevel ?? fromConfig;
   const file = cfg?.file ?? resolveDefaultActiveLogFile();
   const maxFileBytes = resolveMaxLogFileBytes(cfg?.maxFileBytes);
-  return { level, file, maxFileBytes };
+  const rolling = cfg?.file ? isLegacyRollingLogFilePath(cfg.file) : true;
+  return { level, file, maxFileBytes, rolling };
 }
 
-function settingsChanged(a: ResolvedSettings | null, b: ResolvedSettings) {
+setLoggerFileTargetResolver(() => {
+  const { file, rolling } = resolveSettings();
+  return { file, rolling };
+});
+
+function settingsChanged(a: ResolvedRuntimeSettings | null, b: ResolvedRuntimeSettings) {
   if (!a) {
     return true;
   }
-  return a.level !== b.level || a.file !== b.file || a.maxFileBytes !== b.maxFileBytes;
+  return (
+    a.level !== b.level ||
+    a.file !== b.file ||
+    a.maxFileBytes !== b.maxFileBytes ||
+    a.rolling !== b.rolling
+  );
 }
 
 export function isFileLogLevelEnabled(level: LogLevel): boolean {
-  const settings = (loggingState.cachedSettings as ResolvedSettings | null) ?? resolveSettings();
+  const settings =
+    (loggingState.cachedSettings as ResolvedRuntimeSettings | null) ?? resolveSettings();
   if (!loggingState.cachedSettings) {
     loggingState.cachedSettings = settings;
   }
@@ -567,23 +582,26 @@ export function isFileLogLevelEnabled(level: LogLevel): boolean {
   return levelToMinLevel(level) >= levelToMinLevel(settings.level);
 }
 
-function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
+function buildLogger(settings: ResolvedRuntimeSettings): TsLogger<LogObj> {
+  const silent = settings.level === "silent";
   const logger = new TsLogger<LogObj>({
     name: "openclaw",
-    // Custom structured redaction runs at each transport boundary; avoid tslog pre-masking divergent records.
     maskValuesOfKeys: [],
-    minLevel: levelToMinLevel(settings.level),
+    // tslog reports Infinity as an out-of-range setting even though its runtime filter supports it.
+    minLevel: levelToMinLevel(silent ? "fatal" : settings.level),
     type: "hidden", // no ansi formatting
   });
 
-  // Silent logging does not write files; skip all filesystem setup in this path.
-  if (settings.level === "silent") {
+  // Restore the silent threshold after constructor validation. Keep the diagnostic transport
+  // attached exactly as before; tslog filters every level before transport dispatch.
+  if (silent) {
+    logger.settings.minLevel = levelToMinLevel("silent");
     attachDiagnosticEventTransport(logger);
     return logger;
   }
 
-  const rollingFile = isRollingPath(settings.file);
-  let activeFile = resolveActiveLogFile(settings.file);
+  const rollingFile = settings.rolling;
+  let activeFile = resolveActiveLogFileWithMode(settings.file, rollingFile);
   fs.mkdirSync(path.dirname(activeFile), { recursive: true });
   // Clean up stale rolling logs when using a dated log filename.
   if (rollingFile) {
@@ -594,7 +612,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
 
   logger.attachTransport((logObj: LogObj) => {
     try {
-      const nextActiveFile = resolveActiveLogFile(settings.file);
+      const nextActiveFile = resolveActiveLogFileWithMode(settings.file, rollingFile);
       if (nextActiveFile !== activeFile) {
         activeFile = nextActiveFile;
         fs.mkdirSync(path.dirname(activeFile), { recursive: true });
@@ -626,9 +644,8 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
           warnedAboutRotationFailure = false;
         } else if (!warnedAboutRotationFailure) {
           warnedAboutRotationFailure = true;
-          process.stderr.write(
-            `[openclaw] log file rotation failed; continuing writes file=${activeFile} maxFileBytes=${settings.maxFileBytes}\n`,
-          );
+          const message = `[openclaw] log file rotation failed; continuing writes file=${activeFile} maxFileBytes=${settings.maxFileBytes}`;
+          process.stderr.write(`${formatConsoleDiagnosticLine({ level: "warn", message })}\n`);
         }
       }
       if (appendLogLine(activeFile, payload)) {
@@ -670,12 +687,30 @@ function appendLogLine(file: string, line: string): boolean {
 export function getLogger(): TsLogger<LogObj> {
   const settings = resolveSettings();
   const cachedLogger = loggingState.cachedLogger as TsLogger<LogObj> | null;
-  const cachedSettings = loggingState.cachedSettings as ResolvedSettings | null;
+  const cachedSettings = loggingState.cachedSettings as ResolvedRuntimeSettings | null;
   if (!cachedLogger || settingsChanged(cachedSettings, settings)) {
     loggingState.cachedLogger = buildLogger(settings);
     loggingState.cachedSettings = settings;
   }
   return loggingState.cachedLogger as TsLogger<LogObj>;
+}
+
+type SubLoggerSettings = NonNullable<Parameters<TsLogger<LogObj>["getSubLogger"]>[0]>;
+
+function getSubLoggerWithResolvedMinLevel(
+  logger: TsLogger<LogObj>,
+  settings: SubLoggerSettings,
+  minLevel: number,
+): TsLogger<LogObj> {
+  const silent = minLevel === levelToMinLevel("silent");
+  const child = logger.getSubLogger({
+    ...settings,
+    minLevel: silent ? levelToMinLevel("fatal") : minLevel,
+  });
+  if (silent) {
+    child.settings.minLevel = minLevel;
+  }
+  return child;
 }
 
 export function getChildLogger(
@@ -685,21 +720,25 @@ export function getChildLogger(
   const base = getLogger();
   const minLevel = opts?.level ? levelToMinLevel(opts.level) : base.settings.minLevel;
   const name = bindings ? JSON.stringify(bindings) : undefined;
-  return base.getSubLogger({
-    name,
+  return getSubLoggerWithResolvedMinLevel(
+    base,
+    {
+      name,
+      prefix: bindings ? [name ?? ""] : [],
+    },
     minLevel,
-    prefix: bindings ? [name ?? ""] : [],
-  });
+  );
 }
 
 // Baileys expects a pino-like logger shape. Provide a lightweight adapter.
 export function toPinoLikeLogger(logger: TsLogger<LogObj>, level: LogLevel): PinoLikeLogger {
   const buildChild = (bindings?: Record<string, unknown>) =>
     toPinoLikeLogger(
-      logger.getSubLogger({
-        name: bindings ? JSON.stringify(bindings) : undefined,
-        minLevel: logger.settings.minLevel,
-      }),
+      getSubLoggerWithResolvedMinLevel(
+        logger,
+        { name: bindings ? JSON.stringify(bindings) : undefined },
+        logger.settings.minLevel,
+      ),
       level,
     );
 
@@ -727,7 +766,8 @@ export type PinoLikeLogger = {
 };
 
 export function getResolvedLoggerSettings(): LoggerResolvedSettings {
-  return resolveSettings();
+  const { rolling: _rolling, ...settings } = resolveSettings();
+  return settings;
 }
 
 // Test helpers
@@ -758,30 +798,13 @@ export const testApi = {
 };
 export { testApi as __test__ };
 
-function defaultRollingPathForToday(): string {
-  return rollingPathForDate(DEFAULT_LOG_DIR, new Date());
-}
-
-function rollingPathForDate(dir: string, date: Date): string {
-  const today = formatLocalDate(date);
-  return path.join(dir, `${LOG_PREFIX}-${today}${LOG_SUFFIX}`);
-}
-
 function resolveActiveLogFile(file: string): string {
-  const expandedFile = expandHomePrefix(file);
-  if (!isRollingPath(expandedFile)) {
-    return expandedFile;
-  }
-  return rollingPathForDate(path.dirname(expandedFile), new Date());
+  return resolveActiveLogFileWithMode(file, isLegacyRollingLogFilePath(file));
 }
 
-function isRollingPath(file: string): boolean {
-  const base = path.basename(file);
-  return (
-    base.startsWith(`${LOG_PREFIX}-`) &&
-    base.endsWith(LOG_SUFFIX) &&
-    base.length === `${LOG_PREFIX}-YYYY-MM-DD${LOG_SUFFIX}`.length
-  );
+function resolveActiveLogFileWithMode(file: string, rolling: boolean): string {
+  const expandedFile = expandHomePrefix(file);
+  return rolling ? resolveRollingLogFilePathForDate(expandedFile, new Date()) : expandedFile;
 }
 
 function pruneOldRollingLogs(dir: string): void {

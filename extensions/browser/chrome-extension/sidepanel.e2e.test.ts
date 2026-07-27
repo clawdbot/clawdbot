@@ -2,22 +2,23 @@ import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import {
-  chromium,
-  type BrowserContext,
-  type CDPSession,
-  type Page,
-  type Worker,
-} from "playwright-core";
+import { chromium, type CDPSession, type Page, type Worker } from "playwright-core";
 import { afterEach, describe, expect, it } from "vitest";
-import { WebSocketServer, type RawData, type WebSocket } from "ws";
+import { WebSocketServer, type WebSocket } from "ws";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { useAutoCleanupTempDirTracker } from "../test-support.js";
+import {
+  assertCopilotStaleRunIsolation,
+  copyCopilotSidepanelExtension,
+  isSidePanelTarget,
+  rawDataText,
+  resolveChromiumExecutable,
+  textValue,
+} from "./sidepanel.e2e-support.js";
 
 declare const chrome: {
   runtime: {
@@ -41,7 +42,6 @@ declare const chrome: {
 };
 
 const runE2E = process.env.OPENCLAW_BROWSER_COPILOT_E2E === "1";
-const extensionDir = path.dirname(fileURLToPath(import.meta.url));
 
 type RequestFrame = {
   id: string;
@@ -59,6 +59,7 @@ type GatewayHarness = {
   requests: RequestFrame[];
   close: () => Promise<void>;
   disconnectClients: () => void;
+  emitEvent: (event: string, payload: Record<string, unknown>) => void;
   failNextAbort: () => void;
   holdNextSubscription: () => () => void;
 };
@@ -79,31 +80,17 @@ type PanelTarget = {
   disabled: (selector: string) => Promise<boolean>;
   fill: (selector: string, value: string) => Promise<void>;
   hidden: (selector: string) => Promise<boolean>;
+  pressEnter: (
+    selector: string,
+    isComposing: boolean,
+  ) => Promise<{
+    defaultPrevented: boolean;
+    value: string;
+  }>;
   screenshot: (targetPath: string) => Promise<void>;
   text: (selector: string) => Promise<string>;
   wakeBackground: () => Promise<void>;
 };
-
-function isSidePanelTarget(target: TargetInfo): boolean {
-  try {
-    return new URL(target.url).pathname.endsWith("/sidepanel.html");
-  } catch {
-    return false;
-  }
-}
-
-function textValue(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-function rawDataText(data: RawData): string {
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  return data instanceof ArrayBuffer
-    ? Buffer.from(new Uint8Array(data)).toString("utf8")
-    : data.toString("utf8");
-}
 
 const cleanups: Array<() => Promise<void>> = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -325,6 +312,11 @@ async function createGatewayHarness(): Promise<GatewayHarness> {
         client.terminate();
       }
     },
+    emitEvent: (event, payload) => {
+      for (const client of wss.clients) {
+        client.send(JSON.stringify({ type: "event", event, payload }));
+      }
+    },
     failNextAbort: () => {
       rejectNextAbort = true;
     },
@@ -365,55 +357,6 @@ async function createFixtureServer(): Promise<{ baseUrl: string; close: () => Pr
         server.close(() => resolve());
       }),
   };
-}
-
-async function copyExtension(): Promise<string> {
-  const target = tempDirs.make("openclaw-copilot-extension-");
-  await fs.cp(extensionDir, target, {
-    recursive: true,
-    filter: (source) => !source.endsWith(".test.ts"),
-  });
-  await fs.writeFile(
-    path.join(target, "e2e-launcher.html"),
-    '<!doctype html><button id="open">Open tab panel</button><script type="module" src="e2e-launcher.js"></script>',
-  );
-  await fs.writeFile(
-    path.join(target, "e2e-launcher.js"),
-    `const tab = await chrome.tabs.getCurrent();
-    const panel = await chrome.runtime.sendMessage({ type: "prepareCopilotPanel", tabId: tab.id });
-    if (!panel?.ok) throw new Error(panel?.error ?? "panel prepare failed");
-    document.body.dataset.ready = "true";
-    document.querySelector("#open").addEventListener("click", async () => {
-      try {
-        await chrome.sidePanel.setOptions({ tabId: tab.id, path: panel.path, enabled: true });
-        await chrome.sidePanel.open({ tabId: tab.id });
-        document.body.dataset.opened = "true";
-      } catch (error) {
-        document.body.dataset.error = error instanceof Error ? error.message : String(error);
-      }
-    });\n`,
-  );
-  return target;
-}
-
-async function resolveChromiumExecutable(): Promise<string | undefined> {
-  const override = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?.trim();
-  const candidates = [override, "/usr/bin/chromium-browser", "/usr/bin/chromium"].filter(
-    (candidate): candidate is string => Boolean(candidate),
-  );
-  for (const candidate of candidates) {
-    try {
-      await fs.access(candidate);
-      return candidate;
-    } catch {
-      // Continue to Playwright's managed Chromium.
-    }
-  }
-  return undefined;
-}
-
-async function waitForServiceWorker(context: BrowserContext): Promise<Worker> {
-  return context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
 }
 
 async function restartServiceWorker(
@@ -520,6 +463,15 @@ function createPanelTarget(root: CDPSession, sessionId: string): PanelTarget {
       await evaluate<boolean>(
         `document.querySelector(${selectorExpression(selector)})?.classList.contains("hidden") === true`,
       ),
+    pressEnter: async (selector, isComposing) =>
+      await evaluate<{ defaultPrevented: boolean; value: string }>(`(() => {
+        const input = document.querySelector(${selectorExpression(selector)});
+        const event = new KeyboardEvent("keydown", {
+          key: "Enter", bubbles: true, cancelable: true, isComposing: ${isComposing},
+        });
+        input.dispatchEvent(event);
+        return { defaultPrevented: event.defaultPrevented, value: input.value };
+      })()`),
     screenshot: async (targetPath) => {
       await send("Page.enable");
       const result = await send("Page.captureScreenshot", { format: "png", fromSurface: true });
@@ -613,6 +565,61 @@ async function unshareTab(worker: Worker, tabId: number): Promise<void> {
 }
 
 describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
+  it("returns one error response when a panel's tab disappears", async () => {
+    const unpackedExtension = await copyCopilotSidepanelExtension(tempDirs);
+    const userDataDir = tempDirs.make("openclaw-copilot-missing-tab-profile-");
+    const executablePath = await resolveChromiumExecutable();
+    const context = await chromium.launchPersistentContext(userDataDir, {
+      ...(executablePath ? { executablePath } : { channel: "chromium" }),
+      headless: true,
+      args: [
+        `--disable-extensions-except=${unpackedExtension}`,
+        `--load-extension=${unpackedExtension}`,
+      ],
+    });
+    cleanups.push(async () => await context.close());
+    const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
+    const extensionId = new URL(worker.url()).hostname;
+    const popup = context.pages()[0] ?? (await context.newPage());
+    await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+
+    const outcome = await popup.evaluate(async () => {
+      const currentTab = await chrome.tabs.getCurrent();
+      if (typeof currentTab?.id !== "number") {
+        throw new Error("Chrome did not expose the extension tab");
+      }
+      const valid = await chrome.runtime.sendMessage({
+        type: "prepareCopilotPanel",
+        tabId: currentTab.id,
+      });
+      const missing = await Promise.race([
+        chrome.runtime.sendMessage({ type: "prepareCopilotPanel", tabId: 2_147_483_000 }).then(
+          (response) => ({ kind: "response", response }),
+          (error: unknown) => ({
+            kind: "rejection",
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        ),
+        new Promise((resolve) => {
+          setTimeout(() => resolve({ kind: "timeout" }), 1_200);
+        }),
+      ]);
+      return { valid, missing };
+    });
+
+    expect(outcome.valid).toEqual({
+      ok: true,
+      path: expect.stringMatching(/^sidepanel\.html\?binding=/),
+    });
+    expect(outcome.missing).toEqual({
+      kind: "response",
+      response: {
+        ok: false,
+        error: expect.stringMatching(/No tab with id: 2147483000/),
+      },
+    });
+  });
+
   it("isolates two tab sessions, enforces bindings, denies unshared use, and archives on close", async () => {
     const gateway = await createGatewayHarness();
     cleanups.push(gateway.close);
@@ -620,7 +627,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
     cleanups.push(relay.close);
     const fixture = await createFixtureServer();
     cleanups.push(fixture.close);
-    const unpackedExtension = await copyExtension();
+    const unpackedExtension = await copyCopilotSidepanelExtension(tempDirs);
     const userDataDir = tempDirs.make("openclaw-copilot-profile-");
     const executablePath = await resolveChromiumExecutable();
     const context = await chromium.launchPersistentContext(userDataDir, {
@@ -637,7 +644,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
       throw new Error("Chromium browser connection unavailable");
     }
     const browserCdp = await browser.newBrowserCDPSession();
-    const worker = await waitForServiceWorker(context);
+    const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
     const extensionId = new URL(worker.url()).hostname;
     const alphaTab = context.pages()[0] ?? (await context.newPage());
     await alphaTab.goto(`chrome-extension://${extensionId}/e2e-launcher.html`);
@@ -708,9 +715,19 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
         timeout: 15_000,
       })
       .toBe(true);
+    await alphaPanel.fill("#message-input", "にほん");
+    expect(await alphaPanel.pressEnter("#message-input", true)).toEqual({
+      defaultPrevented: false,
+      value: "にほん",
+    });
+    expect(gateway.chatSends).toHaveLength(0);
+    expect(await alphaPanel.allText(".message.user")).toEqual([]);
     await alphaPanel.fill("#message-input", "alpha marker");
     await expect.poll(async () => !(await alphaPanel.disabled("#send-button"))).toBe(true);
-    await alphaPanel.click("#send-button");
+    expect(await alphaPanel.pressEnter("#message-input", false)).toEqual({
+      defaultPrevented: true,
+      value: "",
+    });
     await expect
       .poll(
         async () => ({
@@ -1016,5 +1033,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
         timeout: 15_000,
       })
       .toBe(true);
-  }, 75_000);
+
+    await assertCopilotStaleRunIsolation({ expect, gateway, panel: reopenedBetaPanel });
+  }, 120_000);
 });

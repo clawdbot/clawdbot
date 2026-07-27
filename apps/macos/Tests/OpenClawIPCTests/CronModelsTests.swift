@@ -72,6 +72,36 @@ struct CronModelsTests {
         #expect(decoded == payload)
     }
 
+    @Test func `payload command encodes and decodes`() throws {
+        let payload = CronPayload.command(
+            argv: ["printf", "done"],
+            cwd: "/tmp",
+            env: ["MODE": "safe"],
+            input: "stdin",
+            timeoutSeconds: 30,
+            noOutputTimeoutSeconds: 10,
+            outputMaxBytes: 4096,
+            toolsAllow: ["exec"],
+            toolsAllowIsDefault: false)
+        let data = try JSONEncoder().encode(payload)
+        let decoded = try JSONDecoder().decode(CronPayload.self, from: data)
+        #expect(decoded == payload)
+        #expect(decoded.isEditableInMacApp == false)
+    }
+
+    @Test func `payload script encodes and decodes`() throws {
+        let payload = CronPayload.script(
+            script: "const result = await agent('check status')",
+            timeoutSeconds: 90,
+            toolBudget: 4,
+            toolsAllow: ["web_search"],
+            toolsAllowIsDefault: true)
+        let data = try JSONEncoder().encode(payload)
+        let decoded = try JSONDecoder().decode(CronPayload.self, from: data)
+        #expect(decoded == payload)
+        #expect(decoded.isEditableInMacApp == false)
+    }
+
     @Test func `job encodes and decodes delete after run`() throws {
         let job = CronJob(
             id: "job-1",
@@ -174,6 +204,43 @@ struct CronModelsTests {
 
         #expect(jobs.count == 1)
         #expect(jobs.first?.id == "good")
+    }
+
+    @Test func `decode cron list response keeps command and script jobs`() throws {
+        let json = """
+        {
+          "jobs": [
+            {
+              "id": "command",
+              "name": "Command job",
+              "enabled": true,
+              "createdAtMs": 1,
+              "updatedAtMs": 2,
+              "schedule": { "kind": "every", "everyMs": 60000 },
+              "sessionTarget": "isolated",
+              "wakeMode": "now",
+              "payload": { "kind": "command", "argv": ["printf", "done"] },
+              "state": {}
+            },
+            {
+              "id": "script",
+              "name": "Script job",
+              "enabled": true,
+              "createdAtMs": 1,
+              "updatedAtMs": 2,
+              "schedule": { "kind": "every", "everyMs": 60000 },
+              "sessionTarget": "isolated",
+              "wakeMode": "now",
+              "payload": { "kind": "script", "script": "await agent('check status')", "toolBudget": 4 },
+              "state": {}
+            }
+          ]
+        }
+        """
+
+        let jobs = try GatewayConnection.decodeCronListResponse(Data(json.utf8))
+
+        #expect(jobs.map(\.id) == ["command", "script"])
     }
 
     @Test func `decode cron runs response skips malformed entries`() throws {

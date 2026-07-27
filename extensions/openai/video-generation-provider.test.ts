@@ -3,6 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  saveAuthProfileStore,
+} from "openclaw/plugin-sdk/agent-runtime";
+import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
@@ -130,9 +134,8 @@ describe("openai video generation provider", () => {
     const previousOpenAIKey = process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_KEY;
     try {
-      fs.writeFileSync(
-        path.join(agentDir, "auth-profiles.json"),
-        JSON.stringify({
+      saveAuthProfileStore(
+        {
           version: 1,
           profiles: {
             "openai:chatgpt": {
@@ -143,11 +146,14 @@ describe("openai video generation provider", () => {
               expires: Date.now() + 60_000,
             },
           },
-        }),
+        },
+        agentDir,
+        { filterExternalAuthProfiles: false, syncExternalCli: false },
       );
 
       expect(buildOpenAIVideoGenerationProvider().isConfigured?.({ agentDir })).toBe(false);
     } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
       if (previousOpenAIKey === undefined) {
         delete process.env.OPENAI_API_KEY;
       } else {

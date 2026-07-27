@@ -1,5 +1,6 @@
 // Signal plugin module tracks native-reply quote authors for durable sends.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -13,7 +14,7 @@ const PERSISTENT_MAX_ENTRIES = 5000;
 const DEFAULT_REPLY_AUTHOR_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 type SignalPersistedReplyContext =
-  | { author: string; body?: string; ambiguous?: never }
+  | { author: string; body?: string; media?: MediaPlaceholderTextFact[]; ambiguous?: never }
   | { ambiguous: true; author?: never; body?: never };
 
 const { memoryReplyContexts } = signalReplyAuthorState;
@@ -83,9 +84,11 @@ function resolveReplyContext(
     return undefined;
   }
   const body = normalizeOptionalString(record.body);
+  const media = record.media;
   return {
     author,
     ...(body ? { body } : {}),
+    ...(media?.length ? { media } : {}),
   };
 }
 
@@ -104,7 +107,7 @@ function mergeReplyContext(
     return current;
   }
   if (current.author !== next.author) {
-    const { author: _author, body: _body, ...identity } = next;
+    const { author: _author, body: _body, media: _media, ...identity } = next;
     return { ...identity, kind: "ambiguous" };
   }
   return next.sourceTimestamp >= current.sourceTimestamp ? next : current;
@@ -116,12 +119,17 @@ export async function registerSignalReplyContext(params: {
   replyToId?: string | null;
   author?: string | null;
   body?: string | null;
+  media?: readonly MediaPlaceholderTextFact[] | null;
   sourceTimestamp?: number | null;
 }): Promise<void> {
   const store = openSignalReplyAuthorStore();
   const key = buildSignalReplyAuthorStoreKey(params);
   const author = normalizeOptionalString(params.author);
   const body = normalizeOptionalString(params.body);
+  const media = params.media?.map((entry) => ({
+    contentType: normalizeOptionalString(entry.contentType),
+    kind: entry.kind ?? undefined,
+  }));
   const conversationKey = normalizeSignalMessagingTarget(params.to);
   const replyToId = normalizeOptionalString(params.replyToId);
   const accountKey = normalizeLowercaseStringOrEmpty(
@@ -136,6 +144,7 @@ export async function registerSignalReplyContext(params: {
     kind: "resolved" as const,
     author,
     ...(body ? { body } : {}),
+    ...(media?.length ? { media } : {}),
     accountId: accountKey,
     conversationKey,
     replyToId,

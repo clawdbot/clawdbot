@@ -29,6 +29,7 @@ import {
   type GatewayMessageChannel,
   INTERNAL_MESSAGE_CHANNEL,
 } from "../../utils/message-channel.js";
+import { resolveDefaultAgentId } from "../agent-scope-config.js";
 import { listAgentIds } from "../agent-scope.js";
 import {
   type EmbeddedAgentQueueMessageOptions,
@@ -50,6 +51,10 @@ import {
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNonNegativeIntegerParam, readStringParam } from "./common.js";
+import {
+  callInProcessGatewayToolWithCreation,
+  hasInProcessGatewayToolContext,
+} from "./in-process-gateway.js";
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 import {
   createSessionVisibilityGuard,
@@ -173,7 +178,10 @@ function isConfiguredAgentMainSessionKey(params: {
   sessionKey: string;
   mainKey: string;
 }): boolean {
-  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  const agentId = resolveAgentIdFromSessionKey(
+    params.sessionKey,
+    resolveDefaultAgentId(params.cfg),
+  );
   return (
     params.sessionKey ===
     resolveConfiguredAgentMainSessionKey({
@@ -189,6 +197,8 @@ async function ensureConfiguredAgentMainSession(params: {
   callGateway: GatewayCaller;
   sessionKey: string;
   mainKey: string;
+  requesterSessionKey?: string;
+  useTrustedInProcessCreation: boolean;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   if (
     !isConfiguredAgentMainSessionKey({
@@ -209,14 +219,26 @@ async function ensureConfiguredAgentMainSession(params: {
     return { ok: true };
   } catch {
     try {
-      await params.callGateway({
-        method: "sessions.create",
-        params: {
-          key: params.sessionKey,
-          agentId: resolveAgentIdFromSessionKey(params.sessionKey),
-        },
-        timeoutMs: 10_000,
-      });
+      const createParams = {
+        key: params.sessionKey,
+        agentId: resolveAgentIdFromSessionKey(params.sessionKey, resolveDefaultAgentId(params.cfg)),
+      };
+      if (
+        params.useTrustedInProcessCreation &&
+        params.requesterSessionKey &&
+        hasInProcessGatewayToolContext()
+      ) {
+        await callInProcessGatewayToolWithCreation("sessions.create", createParams, {
+          via: "internal",
+          actor: { type: "agent", id: params.requesterSessionKey },
+        });
+      } else {
+        await params.callGateway({
+          method: "sessions.create",
+          params: createParams,
+          timeoutMs: 10_000,
+        });
+      }
       return { ok: true };
     } catch (err) {
       return { ok: false, error: formatErrorMessage(err) };
@@ -451,7 +473,10 @@ export function createSessionsSendTool(opts?: {
         sessionKey = agentMainKey;
       }
       if (!sessionKey && labelParam) {
-        const requesterAgentId = resolveAgentIdFromSessionKey(effectiveRequesterKey);
+        const requesterAgentId = resolveAgentIdFromSessionKey(
+          effectiveRequesterKey,
+          resolveDefaultAgentId(cfg),
+        );
         const requestedAgentId = labelAgentIdParam
           ? normalizeAgentId(labelAgentIdParam)
           : undefined;
@@ -597,6 +622,7 @@ export function createSessionsSendTool(opts?: {
       }
       const visibilityGuard = await createSessionVisibilityGuard({
         action: "send",
+        defaultAgentId: resolveDefaultAgentId(cfg),
         requesterSessionKey: effectiveRequesterKey,
         visibility: sessionVisibility,
         a2aPolicy,
@@ -621,6 +647,8 @@ export function createSessionsSendTool(opts?: {
             callGateway: gatewayCall,
             sessionKey: resolvedKey,
             mainKey,
+            requesterSessionKey,
+            useTrustedInProcessCreation: opts?.callGateway === undefined,
           });
           if (!ensuredSession.ok) {
             return jsonResult({

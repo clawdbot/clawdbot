@@ -43,7 +43,9 @@ export type ApplicationNavigationPreferences = {
   subscribe: (listener: (snapshot: ApplicationNavigationPreferencesSnapshot) => void) => () => void;
 };
 
-export type ApplicationNavigationOptions = Partial<Pick<RouteLocation, "search" | "hash">>;
+export type ApplicationNavigationOptions = Partial<
+  Pick<RouteLocation, "pathname" | "search" | "hash">
+>;
 
 type SkillWorkshopRevisionHandoff = {
   sessionKey: string;
@@ -56,6 +58,26 @@ export type ApplicationSkillWorkshopRevisionHandoff = {
   prepare: (handoff: SkillWorkshopRevisionHandoff) => void;
   consume: (sessionKey: string) => SkillWorkshopRevisionHandoff | null;
   clear: () => void;
+};
+
+export type ApplicationInitialUserMessage = {
+  role: "user";
+  content: unknown[];
+  timestamp: number;
+  __openclaw?: { idempotencyKey?: string; seq?: number };
+};
+
+type InitialUserMessageHandoff = {
+  message: ApplicationInitialUserMessage;
+  /** Logical Gateway client; per-transport hello objects rotate on reconnect. */
+  owner: object;
+  sessionKey: string;
+};
+
+export type ApplicationInitialUserMessageHandoff = {
+  prepare: (handoff: InitialUserMessageHandoff) => void;
+  read: (sessionKey: string, owner: object | null) => ApplicationInitialUserMessage | null;
+  clear: (sessionKey?: string) => void;
 };
 
 export type ApplicationContext<TRouteId extends string = string> = {
@@ -76,6 +98,7 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly nativeNotifications: NativeNotificationsCapability | null;
   readonly webPush: WebPushCapability;
   readonly skillWorkshopRevision: ApplicationSkillWorkshopRevisionHandoff;
+  readonly initialUserMessage: ApplicationInitialUserMessageHandoff;
   readonly navigate: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;
   readonly replace: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;
   readonly revalidate: (routeId?: TRouteId) => Promise<void>;

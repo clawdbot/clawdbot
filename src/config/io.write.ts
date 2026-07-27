@@ -1,9 +1,11 @@
 import type fs from "node:fs";
 import path from "node:path";
 import { isVerbose } from "../global-state.js";
+import { isVitestRuntimeEnv } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
+import { collectChangedPaths } from "./config-change-paths.js";
 import {
   configSnapshotAuditRecordMatchesPath,
   fingerprintConfigSnapshotAuthoredConfig,
@@ -11,8 +13,16 @@ import {
   restoreConfigSnapshotAuditRecord,
   upsertConfigSnapshotAuditRecord,
 } from "./config-journal-snapshot.js";
-import { EnvRefArrayMutationError, restoreEnvVarRefs } from "./env-preserve.js";
-import { readConfigIncludeFileWithGuards, resolveConfigIncludes } from "./includes.js";
+import {
+  applyUnsetPathsForWrite,
+  resolveManagedUnsetPathsForWrite,
+} from "./config-path-mutation.js";
+import {
+  EnvRefArrayMutationError,
+  restoreEnvRefsFromMap,
+  restoreEnvVarRefs,
+} from "./env-preserve.js";
+import { INCLUDE_KEY, readConfigIncludeFileWithGuards, resolveConfigIncludes } from "./includes.js";
 import {
   appendConfigAuditRecord,
   capConfigAuditIssues,
@@ -24,6 +34,7 @@ import {
 } from "./io.audit.js";
 import type { ConfigIoContext } from "./io.context.js";
 import { resolveModelIdNormalizationPolicies } from "./io.context.js";
+import { recordConfigWriteMetadata } from "./io.meta.js";
 import {
   collectEnvRefPaths,
   containsConfigIncludeDirective,
@@ -42,14 +53,10 @@ import type {
 } from "./io.types.js";
 import { ConfigRuntimeRefreshError, configWritePostCommitRollback } from "./io.types.js";
 import { logConfigWarningsOnce } from "./io.warnings.js";
+import { formatConfigValidationFailure } from "./io.write-errors.js";
 import {
-  applyUnsetPathsForWrite,
-  collectChangedPaths,
-  formatConfigValidationFailure,
   preserveIncludeOwnedConfigForWrite,
-  resolveManagedUnsetPathsForWrite,
   resolvePersistCandidateForWrite,
-  restoreEnvRefsFromMap,
 } from "./io.write-prepare.js";
 import {
   assertBaseSnapshotStillCurrent,
@@ -69,6 +76,27 @@ import { resolveIncludeRoots } from "./paths.js";
 import { preflightRuntimeSnapshotWrite } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObjectRawWithPlugins } from "./validation.js";
+
+function hasOwnIncludeDirective(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && Object.hasOwn(value, INCLUDE_KEY);
+}
+
+function hasIncludedGatewayModeOwner(value: unknown): boolean {
+  if (hasOwnIncludeDirective(value)) {
+    return true;
+  }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const gateway = (value as Record<string, unknown>).gateway;
+  if (hasOwnIncludeDirective(gateway)) {
+    return true;
+  }
+  if (gateway === null || typeof gateway !== "object" || Array.isArray(gateway)) {
+    return false;
+  }
+  return hasOwnIncludeDirective((gateway as Record<string, unknown>).mode);
+}
 
 export async function writeConfigFileFromContext(
   context: ConfigIoContext,
@@ -104,15 +132,21 @@ export async function writeConfigFileFromContext(
   const hasAuthoredIncludes = containsConfigIncludeDirective(snapshot.parsed);
   const hasResolvedAuthoredIncludes =
     hasAuthoredIncludes && !containsConfigIncludeDirective(snapshot.sourceConfig);
-  if (snapshot.valid && snapshot.exists) {
+  // Missing snapshots still need runtime-to-authored projection. Callers authoring an
+  // exact bootstrap roster mark that intent through explicitSetPaths.
+  if (snapshot.valid) {
     persistCandidate = resolvePersistCandidateForWrite({
       runtimeConfig: snapshot.config,
       sourceConfig: snapshot.resolved,
+      sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
       nextConfig: cfg,
       rootAuthoredConfig: snapshot.parsed,
+      agentRosterIncludeOwned: snapshot.agentRosterIncludeOwned,
       unsetPaths,
       explicitSetPaths: options.explicitSetPaths,
       explicitSetValueSource: options.explicitSetValueSource,
+      allowedAgentRosterRemovals: options.allowedAgentRosterRemovals,
+      allowIncludeAncestorExplicitSetPaths: options.allowIncludeAncestorExplicitSetPaths,
       modelIdNormalizationPolicies: resolveModelIdNormalizationPolicies(
         snapshotRead.pluginMetadataSnapshot,
       ),
@@ -243,7 +277,29 @@ export async function writeConfigFileFromContext(
   const hasMetaBefore = hasConfigMeta(snapshot.parsed);
   const hasMetaAfter = hasConfigMeta(stampedOutputConfig);
   const gatewayModeBefore = resolveGatewayMode(snapshot.resolved);
-  const gatewayModeAfter = resolveGatewayMode(stampedOutputConfig);
+  const authoredGateway = (snapshot.parsed as { gateway?: unknown }).gateway;
+  const authoredGatewayMode =
+    authoredGateway !== null &&
+    typeof authoredGateway === "object" &&
+    !Array.isArray(authoredGateway)
+      ? (authoredGateway as Record<string, unknown>).mode
+      : undefined;
+  const gatewayModeAuthoredLocally =
+    authoredGateway !== null &&
+    typeof authoredGateway === "object" &&
+    !Array.isArray(authoredGateway) &&
+    Object.hasOwn(authoredGateway, "mode") &&
+    !hasOwnIncludeDirective(authoredGatewayMode);
+  const preservesIncludedGatewayMode =
+    options.allowIncludeAncestorExplicitSetPaths === true &&
+    gatewayModeBefore != null &&
+    !gatewayModeAuthoredLocally &&
+    hasIncludedGatewayModeOwner(stampedOutputConfig) &&
+    !options.explicitSetPaths?.some((explicitPath) => explicitPath[0] === "gateway");
+  const gatewayModeAfter =
+    resolveGatewayMode(stampedOutputConfig) ??
+    (preservesIncludedGatewayMode ? gatewayModeBefore : null) ??
+    null;
   const suspiciousReasons = resolveConfigWriteSuspiciousReasons({
     existsBefore: snapshot.exists,
     unreadableBefore: snapshot.readError != null,
@@ -254,16 +310,16 @@ export async function writeConfigFileFromContext(
     gatewayModeAfter,
   });
 
-  const shouldLogInVitest = (name: string) => deps.env.VITEST !== "true" || deps.env[name] === "1";
+  const readTestLogFlag = (name: string) => isVitestRuntimeEnv(deps.env) && deps.env[name] === "1";
   const logConfigOverwrite = () => {
     if (
       !snapshot.exists ||
       options.skipOutputLogs ||
-      !shouldLogInVitest("OPENCLAW_TEST_CONFIG_OVERWRITE_LOG")
+      (isVitestRuntimeEnv(deps.env) && !readTestLogFlag("OPENCLAW_TEST_CONFIG_WRITE_LOG"))
     ) {
       return;
     }
-    const testLog = deps.env.OPENCLAW_TEST_CONFIG_OVERWRITE_LOG === "1";
+    const testLog = readTestLogFlag("OPENCLAW_TEST_CONFIG_WRITE_LOG");
     if (!isVerbose() && deps.env.OPENCLAW_CONFIG_OVERWRITE_LOG !== "1" && !testLog) {
       return;
     }
@@ -277,14 +333,14 @@ export async function writeConfigFileFromContext(
     );
   };
   const logConfigWriteAnomalies = () => {
+    const testLog = readTestLogFlag("OPENCLAW_TEST_CONFIG_WRITE_LOG");
     if (
       suspiciousReasons.length === 0 ||
       options.skipOutputLogs ||
-      !shouldLogInVitest("OPENCLAW_TEST_CONFIG_WRITE_ANOMALY_LOG")
+      (isVitestRuntimeEnv(deps.env) && !testLog)
     ) {
       return;
     }
-    const testLog = deps.env.OPENCLAW_TEST_CONFIG_WRITE_ANOMALY_LOG === "1";
     const showMissingMeta =
       isVerbose() || deps.env.OPENCLAW_CONFIG_WRITE_ANOMALY_LOG === "1" || testLog;
     const visibleReasons = showMissingMeta
@@ -410,6 +466,11 @@ export async function writeConfigFileFromContext(
         );
       }
       throw error;
+    }
+    try {
+      recordConfigWriteMetadata(new Date().toISOString(), options.lastTouchedVersionOverride);
+    } catch (error) {
+      deps.logger.warn(`Config metadata state update failed: ${formatErrorMessage(error)}`);
     }
     logConfigOverwrite();
     logConfigWriteAnomalies();

@@ -6,7 +6,7 @@ read_when:
   - You want to enable OpenClaw code mode for an agent run
   - You need to explain why Code Mode is different from Codex Code Mode
   - You are reviewing the compact tool contract, QuickJS-WASI sandbox, TypeScript transform, or hidden tool-catalog bridge
-  - You are adding or reviewing an internal code-mode namespace registry integration
+  - You are reviewing the MCP namespace bridge or virtual API declarations
 ---
 
 Code mode is an experimental, opt-in OpenClaw agent-runtime feature. When
@@ -24,13 +24,19 @@ separate implementations:
   prefixed by a `// @exec: {...}` pragma line for execution options), executed
   in Codex's in-process V8 Code Mode runtime.
 - OpenClaw code mode runs in the generic OpenClaw agent runtime and is
-  disabled unless `tools.codeMode.enabled: true` is configured. Its `exec`
+  disabled unless `tools.codeMode.enabled` is `true` or `"auto"`. Its `exec`
   tool takes a JSON `{ code, language }` payload, executed in a QuickJS-WASI
   worker.
 
 Both are JavaScript execution surfaces, not shell-command surfaces. Treat them
 as independent, differently-implemented features that happen to expose
 identically-named `exec`/`wait` tools.
+
+In OpenClaw code mode, `command` is a JavaScript or TypeScript alias for
+`code`, not a shell command. For shell or file operations, call the appropriate
+catalog tool from guest JavaScript with `tools.callValue`. Recognizable shell
+commands are rejected before the QuickJS worker starts with actionable
+`invalid_input` guidance.
 
 ## What it does
 
@@ -106,7 +112,21 @@ Shorthand:
 ```
 
 Code mode stays off when `tools.codeMode` is omitted, `false`, or an object
-without `enabled: true`.
+without `enabled: true` or `enabled: "auto"`.
+
+To engage code mode only for models whose catalog marks them as strong code-mode
+performers, use the `"auto"` tier instead of `true`:
+
+```json5
+{
+  tools: {
+    codeMode: "auto",
+  },
+}
+```
+
+See [Automatic per-model activation](#automatic-per-model-activation) for the
+exact semantics and the shipped model list.
 
 If you use sandboxed agents with configured MCP servers, also allow the
 bundled MCP plugin in the sandbox tool policy, for example
@@ -232,7 +252,7 @@ enable the feature on its own.
 
 | Field                 | Default                        | Clamp                                           |
 | --------------------- | ------------------------------ | ----------------------------------------------- |
-| `enabled`             | `false`                        | boolean; only `true` enables code mode          |
+| `enabled`             | `false`                        | `false`, `true`, or `"auto"` (per-model)        |
 | `runtime`             | `"quickjs-wasi"`               | only supported value                            |
 | `mode`                | `"only"`                       | exposes control/direct tools, catalogs the rest |
 | `languages`           | `["javascript", "typescript"]` | any subset of the two                           |
@@ -246,7 +266,75 @@ enable the feature on its own.
 | `maxSearchLimit`      | `50`                           | `1`-`50`                                        |
 
 If code mode is enabled but QuickJS-WASI cannot load, OpenClaw fails closed
-for that run; it does not silently expose normal tools as a fallback.
+for that run; it does not silently expose normal tools as a fallback. This
+holds for `true` and for `"auto"` runs where the model resolves as preferred:
+an engaged run never silently falls back to broad direct tool exposure.
+
+## Automatic per-model activation
+
+`tools.codeMode.enabled` accepts three values:
+
+- `false` (default): code mode is off for every run.
+- `true`: code mode engages for every tool-capable run, regardless of model.
+- `"auto"`: code mode engages only when the run's model is flagged as a
+  preferred code-mode performer in its provider catalog.
+
+`false` and `true` behave exactly as before the `"auto"` tier existed; `"auto"`
+is purely additive.
+
+### The `compat.codeMode` catalog flag
+
+Provider catalogs can tier a model with `compat.codeMode` on its model entry,
+next to flags like `compat.supportsTools`:
+
+- `"preferred"`: the model reliably writes short orchestration programs and
+  benefits from the compact code-mode surface; `"auto"` engages code mode.
+- `"capable"` (or absent): the model can run code mode when forced with
+  `enabled: true`, but `"auto"` keeps normal tool exposure.
+
+Models without tool support cannot use code mode at all; there is no separate
+"unsupported" tier. The flag is capability metadata owned by the provider
+plugin's catalog; core only reads the generic compat field.
+
+### Shipped preferred models
+
+Bundled provider catalogs currently flag these models as `"preferred"`:
+
+| Provider  | Models                                                                                                                                       |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| anthropic | `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-mythos-5`, `claude-opus-4-8`, `claude-haiku-4-5`                               |
+| deepseek  | `deepseek-v4-pro`, `deepseek-v4-flash`                                                                                                       |
+| google    | `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.6-flash` |
+| minimax   | `MiniMax-M3`                                                                                                                                 |
+| moonshot  | `kimi-k3`                                                                                                                                    |
+| openai    | `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.5-pro`                                                          |
+| xiaomi    | `mimo-v2.5`                                                                                                                                  |
+| zai       | `glm-5.2`, `glm-5.1`                                                                                                                         |
+
+Everything else, including all Ollama-served local models, stays unflagged and
+keeps normal tool exposure under `"auto"`.
+
+For OpenAI models, the flag matters only when the run resolves to the OpenClaw
+embedded agent runtime. Default OpenAI routing uses the Codex-style harness
+surface, where OpenClaw code mode does not apply; the catalog flag never
+changes that routing decision.
+
+### Choosing when to enable
+
+In A/B evaluations on the preferred models above, code mode reduced total
+token usage by roughly 30-50% at equal-or-better task pass rates, mostly by
+replacing many full tool schemas and per-tool round trips with one compact
+program surface. Models below the preferred tier showed no consistent win and
+sometimes regressed, which is why `"auto"` leaves them on direct tools.
+
+Use `"auto"` when agents switch between models: strong models get the compact
+surface, weaker or local ones keep the exposure they handle best. Use `true`
+when you have verified a specific unflagged model performs well with code
+mode; global force-on is most predictable for single-model deployments. For
+open-weight or uncached serving where every prompt token is billed or
+recomputed, prefer enabling per model (via `"auto"` or a per-agent override)
+rather than globally, since the token savings depend on the model actually
+using the program surface well.
 
 ## Activation
 
@@ -258,7 +346,8 @@ final model request is assembled:
 2. Build the effective OpenClaw tool list, adding eligible plugin, MCP, and
    client tools.
 3. Apply allow/deny policy.
-4. If `tools.codeMode.enabled` is false, continue with normal tool exposure.
+4. If `tools.codeMode.enabled` is `false`, or is `"auto"` and the run's model
+   is not catalog-preferred, continue with normal tool exposure.
 5. If enabled and tools are active for the run, retain required direct-only
    tools and register every catalog-eligible effective tool in the code-mode
    catalog.
@@ -657,193 +746,6 @@ single-tool schema response inside the program.
 The guest runtime never sees host objects directly. Inputs and outputs cross
 the bridge as JSON-compatible values with explicit size caps.
 
-## Internal namespaces
-
-Internal namespaces give code mode a concise domain API without adding more
-model-visible tools. A loader-owned integration registers a namespace such as
-`Issues` or `Calendar`; guest code then calls that namespace inside the
-QuickJS program while the model still sees the compact control/direct surface.
-
-Namespaces are internal for now. There is no public plugin SDK namespace API:
-external plugin namespaces need a loader-owned contract so plugin identity,
-installed manifests, auth state, and cached catalog descriptors cannot drift
-from the plugin tools that back the namespace. Core code mode owns only the
-sandbox, serialization, catalog gating, and bridge dispatch.
-
-Guest code can use either the direct global or the `namespaces` map:
-
-```javascript
-const open = await Issues.list({ state: "open" });
-const alsoOpen = await namespaces.Issues.list({ state: "open" });
-return { count: open.length, alsoCount: alsoOpen.length };
-```
-
-### Registry lifecycle
-
-The namespace registry is process-local and keyed by namespace id:
-
-1. A trusted loader calls `registerCodeModeNamespaceForPlugin(pluginId, registration)`.
-2. Code mode creates the hidden `ToolSearchRuntime` for the run and reads its
-   run-scoped catalog.
-3. `createCodeModeNamespaceRuntime(ctx, catalog)` keeps only registrations
-   whose `requiredToolNames` are all visible and owned by the same `pluginId`.
-4. Each visible namespace calls `createScope(ctx)` for the current run,
-   receiving run context such as `agentId`, `sessionKey`, `sessionId`,
-   `runId`, config, and abort state.
-5. Scope data is serialized into a plain descriptor and injected into QuickJS
-   as direct globals and `namespaces.<globalName>`.
-6. Guest calls suspend through the worker bridge, resolve the namespace path
-   on the host, map the call to a declared plugin-owned catalog tool, and
-   execute that tool through `ToolSearchRuntime.callExactId`.
-7. Ready namespace bridge calls are auto-drained inside the active
-   `exec`/`wait` call; if namespace work is still pending at the timeout or
-   the guest yields explicitly, `wait` resumes the same namespace runtime
-   later.
-8. Plugin rollback or uninstall calls
-   `clearCodeModeNamespacesForPlugin(pluginId)` so stale globals do not
-   survive a failed plugin load.
-
-Namespace calls are catalog tool calls: they use the same policy hooks,
-approvals, abort handling, telemetry, transcript projection, and
-suspend/resume behavior as `tools.call(...)`.
-
-### Registration shape
-
-Register namespaces from the integration that owns the backing tools. Keep
-the scope small and only expose domain verbs that map to declared catalog
-tools.
-
-```typescript
-import {
-  createCodeModeNamespaceTool,
-  registerCodeModeNamespaceForPlugin,
-} from "../agents/code-mode-namespaces.js";
-
-const pluginId = "github";
-
-registerCodeModeNamespaceForPlugin(pluginId, {
-  id: "github-issues",
-  globalName: "Issues",
-  description: "GitHub issue helpers for the current repository.",
-  requiredToolNames: ["github_list_issues", "github_update_issue"],
-  prompt: "Use Issues.list(params) and Issues.update(number, patch).",
-  createScope: (ctx) => ({
-    repository: ctx.config,
-    list: createCodeModeNamespaceTool("github_list_issues", ([params]) => params ?? {}),
-    update: createCodeModeNamespaceTool("github_update_issue", ([number, patch]) => ({
-      number,
-      patch,
-    })),
-  }),
-});
-```
-
-`createCodeModeNamespaceTool(toolName, inputMapper)` marks a scope member as a
-callable namespace function. The optional `inputMapper` receives the guest
-arguments and returns the input object for the backing catalog tool; without
-one, the first guest argument is used, or `{}` when omitted.
-
-Raw host functions are rejected before guest code runs:
-
-```typescript
-createScope: () => ({
-  // Wrong: this bypasses the catalog tool lifecycle and will be rejected.
-  list: async () => githubClient.listIssues(),
-});
-```
-
-### Ownership and visibility
-
-Namespace ownership is bound to the registration caller's `pluginId`.
-`requiredToolNames` is both a visibility gate and an ownership check:
-
-- every required tool must exist in the run catalog
-- every required tool must have `sourceName === pluginId`
-- the namespace is hidden when any required tool is absent or owned by
-  another plugin
-- each callable path may target only a tool named in `requiredToolNames`
-
-This prevents another plugin from exposing a namespace by registering a
-same-named tool, and keeps namespaces aligned with ordinary agent policy: if
-the run cannot see the backing tools, it cannot see the namespace.
-
-For example, a GitHub namespace should live behind a GitHub-owned plugin that
-owns GitHub auth, REST/GraphQL clients, rate limits, write approvals, and
-tests. Core code mode should not embed GitHub-specific APIs, token handling,
-or provider policy.
-
-### Scope serialization rules
-
-`createScope(ctx)` may return a plain object containing JSON-compatible
-values, arrays, nested objects, and `createCodeModeNamespaceTool(...)` call
-markers. Host objects never enter QuickJS directly.
-
-The serializer rejects:
-
-- raw functions
-- circular object graphs
-- unsafe path segments: `__proto__`, `constructor`, `prototype`, empty keys,
-  or keys containing the internal path separator
-- `globalName` values that are not JavaScript identifiers
-- `globalName` collisions with built-in code-mode globals such as `tools`,
-  `namespaces`, `text`, `json`, `yield_control`, `MCP`, `API`, `ALL_TOOLS`, or
-  `__openclaw*`
-
-Values that cannot be JSON-serialized are converted to JSON-safe fallback
-values before crossing the bridge. Binary data, handles, sockets, clients, and
-class instances should stay behind ordinary catalog tools.
-
-### Prompts
-
-The namespace `description` and optional `prompt` are appended to the model
-visible `exec` schema only when the namespace is visible for that run. Use
-them to teach the smallest useful surface:
-
-```typescript
-{
-  description: "Fiction production service helpers.",
-  prompt:
-    "Use Fictions.riskAudit(), Fictions.promoteIfReady(id, status), and Fictions.unpaidOver(amount).",
-}
-```
-
-Keep prompts about the namespace contract, not auth setup, implementation
-history, or unrelated plugin behavior.
-
-### Cleanup
-
-Namespaces are process-local registrations. Remove them when the owning
-plugin is disabled, uninstalled, or rolled back:
-
-```typescript
-clearCodeModeNamespacesForPlugin(pluginId);
-```
-
-Code-mode cleanup is plugin-owned; clear the plugin's namespace registrations
-when its lifecycle ends instead of keeping per-namespace teardown handles.
-Tests can call `clearCodeModeNamespacesForTest()` to avoid leaking
-registrations across cases.
-
-### Test checklist
-
-Namespace changes should cover the security boundary and the guest behavior:
-
-- namespace prompt text appears only when backing tools are visible
-- same-named tools from another `sourceName` do not expose the namespace
-- raw scope functions are rejected
-- forged namespace ids and forged paths are rejected
-- callable paths cannot target undeclared tools
-- nested objects and shared references serialize correctly
-- namespace calls execute through catalog tools and return JSON-safe details
-- failures can be caught by guest code
-- suspended namespace calls resume through `wait`
-- plugin rollback clears the owning namespace registrations
-
-Namespaces complement the generic `tools.search`/`tools.call` catalog: use the
-catalog for arbitrary enabled OpenClaw, plugin, and client tools; use `MCP`
-for MCP tools; use other namespaces for plugin-owned, documented domain APIs
-where concise code is more reliable than repeated schema lookups.
-
 ## Output API
 
 - `text(value)` appends human-readable output to the `output` array.
@@ -965,7 +867,7 @@ session.`.
   `completed` or `failed`, or is dropped on Gateway shutdown (nothing
   survives a restart: this is transient runtime state).
 - For read-only work, `exec` can set `restartSafe: true`. OpenClaw then rejects
-  side-effecting catalog calls and plugin namespaces before execution and
+  side-effecting catalog and namespace tool calls before execution and
   marks suspended results as replay-safe. If a restart interrupts `wait`,
   [restart recovery](/gateway/restart-recovery) reconstructs the turn from the
   transcript instead of restoring the process-local snapshot. The recovery

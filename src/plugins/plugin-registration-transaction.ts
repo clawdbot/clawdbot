@@ -93,7 +93,7 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistry {
         return [key, [...value]];
       }
       if (value instanceof Map) {
-        return [key, new Map(value)];
+        return [key, new Map(value as ReadonlyMap<unknown, unknown>)];
       }
       if (value && typeof value === "object") {
         return [key, { ...value }];

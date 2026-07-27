@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@openclaw/agent-core";
 /**
  * Transcript repair helpers for tool-call replay.
  *
@@ -9,7 +10,6 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
-import type { AgentMessage } from "./runtime/index.js";
 import { isThinkingLikeBlock } from "./thinking-block.js";
 import {
   extractToolCallsFromAssistant,

@@ -4,17 +4,25 @@ import type {
   SessionDiscussionInfo,
   SessionDiscussionState,
 } from "../../../../../packages/gateway-protocol/src/index.js";
-import { icons } from "../../../components/icons.ts";
-import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 
-export type SessionDiscussionInfoLoader = (sessionKey: string) => Promise<SessionDiscussionInfo>;
-export type SessionDiscussionOpener = (sessionKey: string) => Promise<SessionDiscussionInfo>;
-export type SessionDiscussionStateListener = (
+type SessionDiscussionInfoLoader = (sessionKey: string) => Promise<SessionDiscussionInfo>;
+type SessionDiscussionOpener = (sessionKey: string) => Promise<SessionDiscussionInfo>;
+type SessionDiscussionStateListener = (
   sessionKey: string,
   discussionState: SessionDiscussionState,
+  openUrl: string | null,
 ) => void;
+
+export type SessionDiscussionPanelConfig = {
+  sessionKey: string;
+  canOpen: boolean;
+  openUrl: string | null;
+  loadInfo: SessionDiscussionInfoLoader;
+  openDiscussion: SessionDiscussionOpener;
+  onStateChange: SessionDiscussionStateListener;
+};
 
 function resolveDiscussionUrl(value: string | undefined): string | null {
   if (!value?.trim()) {
@@ -46,6 +54,7 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) openDiscussion: SessionDiscussionOpener | null = null;
   @property({ attribute: false }) onStateChange: SessionDiscussionStateListener | null = null;
   @property({ type: Boolean }) canOpen = true;
+  @property({ type: Number }) sourceGeneration = 0;
 
   @state() private info: SessionDiscussionInfo | null = null;
   @state() private loading = false;
@@ -59,7 +68,7 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
   }
 
   protected override updated(changed: Map<string, unknown>) {
-    if (changed.has("sessionKey") || changed.has("loadInfo")) {
+    if (changed.has("sessionKey") || changed.has("loadInfo") || changed.has("sourceGeneration")) {
       void this.refresh();
       return;
     }
@@ -79,7 +88,7 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
       return;
     }
     this.info = info;
-    this.onStateChange?.(requestKey, info.state);
+    this.onStateChange?.(requestKey, info.state, resolveDiscussionUrl(info.openUrl));
   }
 
   private async refresh(): Promise<void> {
@@ -145,24 +154,6 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
     const openUrl = resolveDiscussionUrl(info.openUrl);
     return html`
       <div class="session-discussion__open">
-        <div class="session-discussion__header">
-          <span>${t("chat.sessionDiscussion.opened")}</span>
-          ${openUrl
-            ? html`
-                <openclaw-tooltip .content=${t("chat.sessionDiscussion.openExternal")}>
-                  <a
-                    class="btn btn--ghost btn--icon session-discussion__external"
-                    href=${openUrl}
-                    target="_blank"
-                    rel="noopener"
-                    aria-label=${t("chat.sessionDiscussion.openExternal")}
-                  >
-                    ${icons.externalLink}
-                  </a>
-                </openclaw-tooltip>
-              `
-            : nothing}
-        </div>
         ${embedUrl
           ? html`
               <iframe
@@ -173,7 +164,12 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
               ></iframe>
             `
           : html`<div class="session-discussion__empty">
-              ${t("chat.sessionDiscussion.unavailable")}
+              <span>${t("chat.sessionDiscussion.unavailable")}</span>
+              ${openUrl
+                ? html`<a class="session-link" href=${openUrl} target="_blank" rel="noopener">
+                    ${t("chat.sessionDiscussion.openExternal")}
+                  </a>`
+                : nothing}
             </div>`}
       </div>
     `;

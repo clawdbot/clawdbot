@@ -150,6 +150,7 @@ export function createTelegramDeliveryController(params: {
       ...(record.text ? { text: record.text } : {}),
       ...(record.projection ? { promptContextProjection: record.projection } : {}),
       ...(params.threadSpec.id !== undefined ? { messageThreadId: params.threadSpec.id } : {}),
+      successfulSendThread: params.threadSpec,
     });
   const createPromptContextSequence = (source?: TelegramPromptContextSource) =>
     createTelegramPromptContextProjectionSequence({

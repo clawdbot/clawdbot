@@ -1,5 +1,6 @@
 // Telegram plugin module implements draft stream behavior.
 import type { Bot } from "grammy";
+import type { Message } from "grammy/types";
 import {
   createFinalizableDraftStreamControlsForState,
   takeMessageIdAfterStop,
@@ -240,6 +241,8 @@ export function createTelegramDraftStream(params: {
   renderText?: (text: string) => TelegramDraftPreview;
   /** Called when a completed page remains visible after the stream advances. */
   onRetainedPage?: (page: RetainedTelegramDraftPage) => void;
+  /** Called with Telegram's response after a new preview message becomes durable. */
+  onProviderMessage?: (message: Message) => Promise<void> | void;
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }): TelegramDraftStream {
@@ -295,6 +298,8 @@ export function createTelegramDraftStream(params: {
   let consecutivePreviewFailures = 0;
   let streamMessageId: number | undefined;
   let streamMessageSnapshot: TelegramDraftMessageSnapshot | undefined;
+  let streamProviderMessage: Message | undefined;
+  const pendingProviderObservations = new Set<Promise<void>>();
   let streamVisibleSinceMs: number | undefined;
   let lastSentPreviewKey = "";
   let lastDeliveredText = "";
@@ -312,6 +317,36 @@ export function createTelegramDraftStream(params: {
     sourceText: escapeTelegramHtml(plainText),
     sourceTextMode: "html",
   });
+  const scheduleProviderMessageObservation = (message: Message | undefined) => {
+    if (!message) {
+      return;
+    }
+    const observation = (async () => {
+      try {
+        await params.onProviderMessage?.(message);
+      } catch (err) {
+        // Observation follows an accepted Telegram send. Never turn a cache
+        // failure into a transport retry that could duplicate the message.
+        try {
+          params.warn?.(`telegram stream preview observation failed: ${formatErrorMessage(err)}`);
+        } catch {
+          // Diagnostics must not make the observation task reject.
+        }
+      }
+    })();
+    pendingProviderObservations.add(observation);
+    void observation.then(() => {
+      pendingProviderObservations.delete(observation);
+    });
+  };
+  const observeCurrentProviderMessage = () => {
+    const message = streamProviderMessage;
+    streamProviderMessage = undefined;
+    scheduleProviderMessageObservation(message);
+  };
+  const drainProviderMessageObservations = async () => {
+    await Promise.all(pendingProviderObservations);
+  };
   const sendPlannedMessage = async (
     page: PlannedTelegramDraftPage,
     sendMessageParams: ReturnType<typeof reserveReplyTargetForSend>,
@@ -466,11 +501,13 @@ export function createTelegramDraftStream(params: {
         textSnapshot: sent.snapshot.text,
         visibleSinceMs,
       });
+      scheduleProviderMessageObservation(sent.message);
       return true;
     }
     const visibleSinceMs = Date.now();
     streamMessageId = normalizedMessageId;
     streamMessageSnapshot = sent.snapshot;
+    streamProviderMessage = sent.message;
     streamVisibleSinceMs = visibleSinceMs;
     return true;
   };
@@ -550,6 +587,7 @@ export function createTelegramDraftStream(params: {
       textSnapshot: streamMessageSnapshot.text,
       visibleSinceMs: streamVisibleSinceMs,
     });
+    observeCurrentProviderMessage();
   };
 
   const resolveExactRemainingPage = (plan: {
@@ -714,6 +752,8 @@ export function createTelegramDraftStream(params: {
       }
     }
     streamState.final = true;
+    observeCurrentProviderMessage();
+    await drainProviderMessageObservations();
   };
 
   const remainingFinalContent = (): TelegramDraftMessageSnapshot | undefined => {
@@ -740,7 +780,13 @@ export function createTelegramDraftStream(params: {
     };
   };
 
-  const resetStreamToNewMessage = (continueFinalPagination = false) => {
+  const resetStreamToNewMessage = (
+    continueFinalPagination = false,
+    retainCurrentProviderMessage = false,
+  ) => {
+    if (retainCurrentProviderMessage) {
+      observeCurrentProviderMessage();
+    }
     streamState.stopped = false;
     streamState.final = continueFinalPagination;
     if (!continueFinalPagination) {
@@ -749,6 +795,7 @@ export function createTelegramDraftStream(params: {
     messageSendAttempted = false;
     streamMessageId = undefined;
     streamMessageSnapshot = undefined;
+    streamProviderMessage = undefined;
     streamVisibleSinceMs = undefined;
     lastSentPreviewKey = "";
     if (!continueFinalPagination) {
@@ -809,6 +856,7 @@ export function createTelegramDraftStream(params: {
       clearMessageId: () => {
         streamMessageId = undefined;
         streamMessageSnapshot = undefined;
+        streamProviderMessage = undefined;
       },
     });
     if (typeof messageId === "number" && Number.isFinite(messageId)) {
@@ -816,6 +864,7 @@ export function createTelegramDraftStream(params: {
       // first appeared, then delete.
       scheduleDetachedDelete(messageId, visibleSince);
     }
+    await drainProviderMessageObservations();
   };
 
   // Reposition the window: rewind so the NEXT update creates a fresh message
@@ -897,6 +946,8 @@ export function createTelegramDraftStream(params: {
       return undefined;
     }
     streamState.stopped = true;
+    observeCurrentProviderMessage();
+    await drainProviderMessageObservations();
     return edited ? streamMessageId : undefined;
   };
 
@@ -911,11 +962,15 @@ export function createTelegramDraftStream(params: {
     currentMessageSnapshot: () => streamMessageSnapshot,
     clear,
     stop,
-    discard: stopForClear,
+    discard: async () => {
+      await stopForClear();
+      observeCurrentProviderMessage();
+      await drainProviderMessageObservations();
+    },
     remainingFinalContent,
     hasConsumedReplyTarget: () => replyTargetState.kind !== "available",
     finalizeToPreview,
-    forceNewMessage: () => resetStreamToNewMessage(),
+    forceNewMessage: () => resetStreamToNewMessage(false, true),
     rotateToNewMessageDeferringDelete,
     sendMayHaveLanded: () => messageSendAttempted && typeof streamMessageId !== "number",
   };

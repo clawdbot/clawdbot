@@ -27,8 +27,13 @@ const SCREEN_COMMANDS = ["screen.snapshot"];
 const SCREEN_DANGEROUS_COMMANDS = ["screen.record"];
 
 // Desktop computer use (pointer/keyboard injection). Declarable at pairing on
-// macOS but invocable only with explicit allowCommands opt-in (arming).
+// desktop platforms (macOS/Windows/Linux) but invocable only with explicit
+// commands.allow opt-in (arming).
 const COMPUTER_DANGEROUS_COMMANDS = ["computer.act"];
+
+// Android accessibility tree reads and UI actions expose or control sensitive
+// on-screen content. Keep both declarable, but require explicit arming.
+const MOBILE_UI_DANGEROUS_COMMANDS = ["mobile.ui.observe", "mobile.ui.act"];
 
 const ANDROID_DEVICE_COMMANDS = [
   ...MOBILE_NODE_COMMANDS.device,
@@ -95,11 +100,12 @@ const UNKNOWN_PLATFORM_COMMANDS = [
 ];
 
 // "High risk" node commands. These can be enabled by explicitly adding them to
-// `gateway.nodes.allowCommands` (and ensuring they're not blocked by denyCommands).
+// `gateway.nodes.commands.allow` (and ensuring they're not blocked by commands.deny).
 export const DEFAULT_DANGEROUS_NODE_COMMANDS = [
   ...CAMERA_DANGEROUS_COMMANDS,
   ...SCREEN_DANGEROUS_COMMANDS,
   ...COMPUTER_DANGEROUS_COMMANDS,
+  ...MOBILE_UI_DANGEROUS_COMMANDS,
   ...CONTACTS_DANGEROUS_COMMANDS,
   ...CALENDAR_DANGEROUS_COMMANDS,
   ...REMINDERS_DANGEROUS_COMMANDS,
@@ -132,6 +138,9 @@ export const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...REMINDERS_COMMANDS,
     ...PHOTOS_COMMANDS,
     ...MOTION_COMMANDS,
+    // Dangerous: pairing may approve the advertised surface, while runtime
+    // policy strips it until gateway.nodes.commands.allow explicitly arms it.
+    ...MOBILE_UI_DANGEROUS_COMMANDS,
   ],
   macos: [
     ...CAMERA_COMMANDS,
@@ -150,13 +159,24 @@ export const PLATFORM_DEFAULTS: Record<string, string[]> = {
     // resolveNodeCommandAllowlistInternal).
     ...COMPUTER_DANGEROUS_COMMANDS,
   ],
-  linux: [...SYSTEM_COMMANDS],
+  linux: [
+    ...SYSTEM_COMMANDS,
+    ...SCREEN_COMMANDS,
+    // Dangerous: declarable at pairing so the surface gets approved once, but
+    // excluded from the runtime allowlist until explicitly armed (see
+    // resolveNodeCommandAllowlistInternal).
+    ...COMPUTER_DANGEROUS_COMMANDS,
+  ],
   windows: [
     ...CAMERA_COMMANDS,
     ...MOBILE_NODE_COMMANDS.location,
     ...MOBILE_NODE_COMMANDS.device,
     ...SYSTEM_COMMANDS,
     ...SCREEN_COMMANDS,
+    // Dangerous: declarable at pairing so the surface gets approved once, but
+    // excluded from the runtime allowlist until explicitly armed (see
+    // resolveNodeCommandAllowlistInternal).
+    ...COMPUTER_DANGEROUS_COMMANDS,
   ],
   // Fail-safe: unknown metadata should not receive host exec defaults.
   unknown: [...UNKNOWN_PLATFORM_COMMANDS],
@@ -398,10 +418,10 @@ function resolveNodeCommandAllowlistInternal(
     platformId,
     commands: node?.approvedCommands ?? (isLiveNodeSession(node) ? (node?.commands ?? []) : []),
   });
-  const extra = cfg.gateway?.nodes?.allowCommands ?? [];
-  const deny = new Set(cfg.gateway?.nodes?.denyCommands ?? []);
+  const extra = cfg.gateway?.nodes?.commands?.allow ?? [];
+  const deny = new Set(cfg.gateway?.nodes?.commands?.deny ?? []);
   const dangerousPluginCommands = new Set(listDangerousPluginNodeCommands());
-  // Dangerous built-ins in PLATFORM_DEFAULTS (e.g. computer.act on macOS) stay
+  // Dangerous built-ins in PLATFORM_DEFAULTS (e.g. computer.act on desktop nodes) stay
   // declarable/approvable at pairing but never enter the runtime allowlist by
   // default; the pairing variant opts in via includeDangerousDefaults.
   const dangerousBuiltinCommands =
@@ -409,7 +429,7 @@ function resolveNodeCommandAllowlistInternal(
       ? new Set<string>()
       : new Set(DEFAULT_DANGEROUS_NODE_COMMANDS);
   // Dangerous plugin commands are excluded from plugin defaults. Explicit
-  // gateway.nodes.allowCommands below can still opt them in for operators.
+  // gateway.nodes.commands.allow below can still opt them in for operators.
   const allow = new Set(
     [...base, ...watchRelayCommands, ...talkCommands, ...pluginDefaults, ...approved, ...extra]
       .map((cmd) => cmd.trim())
@@ -428,9 +448,9 @@ function resolveNodeCommandAllowlistInternal(
   }
   // In pairing mode, denylisted dangerous defaults stay declarable so a node
   // retains the surface it can later be armed for: arming removes them from
-  // denyCommands and adds them to allowCommands. Fresh setup seeds denyCommands
+  // commands.deny and adds them to commands.allow. Fresh setup seeds commands.deny
   // with DEFAULT_DANGEROUS_NODE_COMMANDS, so without this exemption a declarable
-  // dangerous default (e.g. computer.act on macOS) would be stripped from the
+  // dangerous default (e.g. computer.act on desktop nodes) would be stripped from the
   // pairing surface and stay uninvocable even after arming, because the live
   // node session never retained the command. Invoke-time policy still gates
   // every call on the runtime allowlist, which honors deny in full.

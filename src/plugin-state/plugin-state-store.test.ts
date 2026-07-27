@@ -200,6 +200,29 @@ describe("plugin state keyed store", () => {
     });
   });
 
+  it("refreshes the default TTL when register upserts an existing key", async () => {
+    await withPluginStateTestState(async () => {
+      vi.useFakeTimers();
+      const store = createPluginStateKeyedStore<{ version: number }>("beam", {
+        namespace: "sessions",
+        maxEntries: 10,
+        defaultTtlMs: 1_000,
+      });
+      vi.setSystemTime(1_000);
+      await store.register("session", { version: 1 });
+      vi.setSystemTime(1_500);
+      await store.register("session", { version: 2 });
+
+      await expect(store.entries()).resolves.toEqual([
+        { key: "session", value: { version: 2 }, createdAt: 1_500, expiresAt: 2_500 },
+      ]);
+      vi.setSystemTime(2_100);
+      await expect(store.lookup("session")).resolves.toEqual({ version: 2 });
+      vi.setSystemTime(2_501);
+      await expect(store.lookup("session")).resolves.toBeUndefined();
+    });
+  });
+
   it("registerIfAbsent inserts the first value and preserves live duplicates", async () => {
     await withPluginStateTestState(async () => {
       vi.useFakeTimers();

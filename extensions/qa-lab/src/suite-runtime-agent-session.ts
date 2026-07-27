@@ -48,6 +48,7 @@ const SESSION_STORE_FTS_SETTLE_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000] a
 type QaSessionTranscriptSummary = {
   assistantMirrors?: Array<{ identity: string; text: string }>;
   assistantToolCallCounts: Record<string, number>;
+  completedToolCallCounts: Record<string, number>;
   eventCursor: number;
   successfulToolCallCounts: Record<string, number>;
   finalText: string;
@@ -117,8 +118,10 @@ function summarizeSessionTranscriptEvents(
   const scanner = createDirectReplyTranscriptSentinelScanner();
   const assistantMirrors: Array<{ identity: string; text: string }> = [];
   const assistantToolCallCounts: Record<string, number> = {};
+  const completedToolCallCounts: Record<string, number> = {};
   const successfulToolCallCounts: Record<string, number> = {};
   const assistantToolNamesByCallId = new Map<string, string>();
+  const completedToolCallIds = new Set<string>();
   const successfulToolCallIds = new Set<string>();
   let finalText = "";
   let lastAssistantContentTypes: string[] = [];
@@ -136,6 +139,15 @@ function summarizeSessionTranscriptEvents(
     if (message.role === "toolResult") {
       const toolCallId = readNonEmptyString(message.toolCallId);
       const toolName = readNonEmptyString(message.toolName);
+      if (
+        toolCallId &&
+        toolName &&
+        assistantToolNamesByCallId.get(toolCallId) === toolName &&
+        !completedToolCallIds.has(toolCallId)
+      ) {
+        completedToolCallIds.add(toolCallId);
+        completedToolCallCounts[toolName] = (completedToolCallCounts[toolName] ?? 0) + 1;
+      }
       if (
         toolCallId &&
         toolName &&
@@ -186,6 +198,7 @@ function summarizeSessionTranscriptEvents(
   return {
     ...(assistantMirrors.length > 0 ? { assistantMirrors } : {}),
     assistantToolCallCounts,
+    completedToolCallCounts,
     eventCursor,
     successfulToolCallCounts,
     finalText,
@@ -201,6 +214,7 @@ function summarizeSessionTranscriptEvents(
 function emptySessionTranscriptSummary(eventCursor: number): QaSessionTranscriptSummary {
   return {
     assistantToolCallCounts: {},
+    completedToolCallCounts: {},
     eventCursor,
     successfulToolCallCounts: {},
     finalText: "",
@@ -351,19 +365,21 @@ async function seedQaSessionTranscript(
 }
 
 async function readRawQaSessionStore(
-  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  env: { gateway: Pick<QaSuiteRuntimeEnv["gateway"], "tempRoot"> },
   options: {
+    agentId?: string;
     readEntries?: typeof listSessionEntries;
     retryDelaysMs?: readonly number[];
   } = {},
 ) {
   const runtimeEnv = qaSessionRuntimeEnv(env.gateway.tempRoot);
+  const agentId = readNonEmptyString(options.agentId) ?? "qa";
   const readEntries = options.readEntries ?? listSessionEntries;
   const retryDelaysMs = options.retryDelaysMs ?? SESSION_STORE_FTS_SETTLE_RETRY_DELAYS_MS;
   for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
     try {
       return Object.fromEntries(
-        readEntries({ agentId: "qa", env: runtimeEnv }).map(({ sessionKey, entry }) => [
+        readEntries({ agentId, env: runtimeEnv }).map(({ sessionKey, entry }) => [
           sessionKey,
           entry as QaRawSessionStoreEntry,
         ]),

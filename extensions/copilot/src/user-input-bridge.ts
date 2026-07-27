@@ -12,7 +12,7 @@ type CopilotUserInputHandler = NonNullable<SessionConfig["onUserInputRequest"]>;
 type CopilotUserInputRequest = Parameters<CopilotUserInputHandler>[0];
 type CopilotUserInputResponse = Awaited<ReturnType<CopilotUserInputHandler>>;
 
-type CopilotUserInputBridge = {
+export type CopilotUserInputBridge = {
   onUserInputRequest: CopilotUserInputHandler;
   cancelPending: () => void;
 };
@@ -44,6 +44,7 @@ export function createCopilotUserInputBridge(params: {
           questions: [question],
           sessionKey: params.paramsForRun.sessionKey ?? params.paramsForRun.sessionId,
           agentId: params.paramsForRun.agentId,
+          runId: params.paramsForRun.runId,
           timeoutMs: params.paramsForRun.timeoutMs ?? DEFAULT_USER_INPUT_TIMEOUT_MS,
           gatewayCall,
           delivery: params.paramsForRun,

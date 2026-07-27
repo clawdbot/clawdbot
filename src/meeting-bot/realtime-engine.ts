@@ -381,6 +381,7 @@ export async function startMeetingRealtimeEngine(params: {
       stopAfterFailure("audio output");
     });
   };
+  let outputGenerationActive = false;
   const startHumanBargeInMonitor = () => {
     if (!params.transport.startBargeInMonitor) {
       return;
@@ -498,11 +499,16 @@ export async function startMeetingRealtimeEngine(params: {
       audioSink: {
         isOpen: () => !stopped,
         sendAudio: (audio) => {
+          if (!outputGenerationActive) {
+            params.transport.beginOutput?.();
+            outputGenerationActive = true;
+          }
           harness.outputActivity.markPlaybackStarted();
           harness.recordOutputAudio(audio);
           writeOutputAudio(audio);
         },
         clearAudio: () => {
+          outputGenerationActive = false;
           harness.flushOutput(clearOutputPlayback);
           harness.finishOutputAudio("clear");
         },
@@ -570,6 +576,7 @@ export async function startMeetingRealtimeEngine(params: {
             final: true,
           });
         } else if (event.type === "response.done") {
+          outputGenerationActive = false;
           harness.finishOutputAudio("response.done");
           harness.endTurn("response.done");
         } else if (event.type === "error") {
@@ -625,6 +632,7 @@ export async function startMeetingRealtimeEngine(params: {
         stopAfterFailure("voice bridge");
       },
       onClose: (reason) => {
+        outputGenerationActive = false;
         realtimeReady = false;
         harness.finishOutputAudio(reason);
         harness.emit({

@@ -1,8 +1,10 @@
 // Low-level CLI argv helpers for root options, help/version detection, and command paths.
+import { isExperimentalClawsEnabled } from "../claws/experimental.js";
 import { isBunRuntime, isNodeRuntime } from "../daemon/runtime-binary.js";
 import {
   consumeRootOptionToken,
   FLAG_TERMINATOR,
+  getRootOptionAwareCommandPath,
   isValueToken,
 } from "../infra/cli-root-options.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
@@ -12,7 +14,12 @@ import { SUB_CLI_DESCRIPTORS } from "./program/subcli-descriptors.js";
 const HELP_FLAGS = new Set(["-h", "--help"]);
 const VERSION_FLAGS = new Set(["-V", "--version"]);
 const ROOT_VERSION_ALIAS_FLAG = "-v";
-const ROOT_COMMAND_DESCRIPTORS = [...CORE_CLI_COMMAND_DESCRIPTORS, ...SUB_CLI_DESCRIPTORS];
+const ROOT_COMMAND_DESCRIPTORS = [
+  ...CORE_CLI_COMMAND_DESCRIPTORS.filter(
+    (descriptor) => descriptor.name !== "claws" || isExperimentalClawsEnabled(),
+  ),
+  ...SUB_CLI_DESCRIPTORS,
+];
 const KNOWN_ROOT_COMMANDS: ReadonlySet<string> = new Set(
   ROOT_COMMAND_DESCRIPTORS.map((descriptor) => descriptor.name),
 );
@@ -458,40 +465,7 @@ export function getPositiveIntFlagValue(argv: string[], name: string): number | 
 }
 
 export function getCommandPathWithRootOptions(argv: string[], depth = 2): string[] {
-  return getCommandPathInternal(argv, depth, { skipRootOptions: true });
-}
-
-function getCommandPathInternal(
-  argv: string[],
-  depth: number,
-  opts: { skipRootOptions: boolean },
-): string[] {
-  const args = argv.slice(2);
-  const path: string[] = [];
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
-    if (!arg) {
-      continue;
-    }
-    if (arg === "--") {
-      break;
-    }
-    if (opts.skipRootOptions) {
-      const consumed = consumeRootOptionToken(args, i);
-      if (consumed > 0) {
-        i += consumed - 1;
-        continue;
-      }
-    }
-    if (arg.startsWith("-")) {
-      continue;
-    }
-    path.push(arg);
-    if (path.length >= depth) {
-      break;
-    }
-  }
-  return path;
+  return getRootOptionAwareCommandPath(argv, depth);
 }
 
 export function getPrimaryCommand(argv: string[]): string | null {

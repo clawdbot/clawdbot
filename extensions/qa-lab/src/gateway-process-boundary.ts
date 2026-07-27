@@ -4,6 +4,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 
 const PROCESS_BOUNDARY_VERSION = 1;
 const PROCESS_BOUNDARY_START_TIMEOUT_MS = 30_000;
@@ -259,25 +260,16 @@ async function assertRegularFile(params: {
 }
 
 async function writeAtomicFile(pathName: string, contents: Buffer | string, mode: number) {
-  const temporaryPath = `${pathName}.tmp-${process.pid}-${randomUUID()}`;
-  const handle = await fs.open(
-    temporaryPath,
-    fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY,
+  const dirMode = (await fs.stat(path.dirname(pathName))).mode & 0o7777;
+  await replaceFileAtomic({
+    filePath: pathName,
+    content: contents,
+    dirMode,
     mode,
-  );
-  let closed = false;
-  try {
-    await handle.writeFile(contents);
-    await handle.sync();
-    await handle.close();
-    closed = true;
-    await fs.rename(temporaryPath, pathName);
-  } finally {
-    if (!closed) {
-      await handle.close().catch(() => {});
-    }
-    await fs.rm(temporaryPath, { force: true }).catch(() => {});
-  }
+    tempPrefix: `${path.basename(pathName)}.qa-boundary`,
+    syncParentDir: true,
+    syncTempFile: true,
+  });
 }
 
 async function readJsonFile(pathName: string) {

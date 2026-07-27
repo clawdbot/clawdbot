@@ -1,3 +1,4 @@
+import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { HookContext } from "../agent-tools.before-tool-call.js";
 import { getActiveAgentRingZeroTools } from "../agent-tools.ring-zero-context.js";
@@ -6,15 +7,15 @@ import {
   CODE_MODE_WAIT_TOOL_NAME,
   applyCodeModeCatalog,
   createCodeModeTools,
+  isCodeModeEngagedForModel,
   resolveCodeModeConfig,
 } from "../code-mode.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import {
   filterLocalModelLeanTools,
-  isLocalModelLeanEnabled,
   resolveLocalModelLeanPreserveToolNames,
-  shouldCatalogToolForLocalModelLean,
 } from "../local-model-lean.js";
+import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../tool-schema-projection.js";
 import { resolveAgentToolSearchRuntimeConfig } from "../tool-search-runtime-config.js";
 import {
@@ -22,7 +23,6 @@ import {
   applyToolSearchCatalog,
   clearToolSearchCatalog,
   createToolSearchCatalogRef,
-  estimateToolSchemaDirectoryToolNames,
   resolveToolSearchConfig,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
@@ -66,6 +66,8 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
   executeTool: ToolSearchCatalogToolExecutor;
   forceMessageTool?: boolean;
   isRawModelRun?: boolean;
+  /** Prepared model row carrying catalog compat; required for `"auto"` code-mode resolution. */
+  model?: { compat?: unknown };
   modelId?: string;
   modelProvider?: string;
   modelToolsEnabled: boolean;
@@ -74,16 +76,11 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
   runtimeToolAllowlist?: readonly string[];
   sessionId?: string;
   sessionKey?: string;
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
   sourceReplyDeliveryMode?: string;
   toolsAllow?: readonly string[];
 }): AgentHarnessToolSurfaceRuntime {
-  const forceDirectMessageTool =
-    params.forceMessageTool === true || params.sourceReplyDeliveryMode === "message_tool_only";
-  const localModelLeanEnabled = isLocalModelLeanEnabled({
-    config: params.config,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
+  const forceDirectMessageTool = messageToolOwnsVisibleReply(params);
   const codeModeConfig = resolveCodeModeConfig(params.config, params.agentId);
   const toolSearchRuntimeConfig = resolveAgentToolSearchRuntimeConfig({
     config: params.config,
@@ -98,7 +95,8 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
     params.isRawModelRun !== true &&
     params.toolsAllow?.length !== 0;
   const ringZeroToolRun = getActiveAgentRingZeroTools().length > 0;
-  const codeModeControlsEnabled = toolsAvailable && !ringZeroToolRun && codeModeConfig.enabled;
+  const codeModeControlsEnabled =
+    toolsAvailable && !ringZeroToolRun && isCodeModeEngagedForModel(codeModeConfig, params.model);
   const toolSearchControlsEnabled =
     toolsAvailable && !ringZeroToolRun && !codeModeControlsEnabled && toolSearchConfig.enabled;
   const toolSearchCatalogRef =
@@ -124,6 +122,7 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
     modelProvider: params.modelProvider,
     modelId: params.modelId,
     runtimeToolAllowlist,
+    scheduledToolPolicy: params.scheduledToolPolicy,
   });
   const preserveToolNames = resolveLocalModelLeanPreserveToolNames({
     toolNames: capabilityProfile.policy.explicitToolOverrideAllowlist,
@@ -160,22 +159,9 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
           executeTool: params.executeTool,
         })
       : [];
-    const directoryRequiredToolNames = forceDirectMessageTool ? ["message"] : [];
-    const directoryHydratedToolNames =
-      toolSearchControlsEnabled && toolSearchConfig.mode === "directory"
-        ? (() => {
-            try {
-              return estimateToolSchemaDirectoryToolNames({
-                tools: effectiveTools,
-                query: params.prompt ?? "",
-                maxTools: 4,
-                requiredToolNames: directoryRequiredToolNames,
-              });
-            } catch {
-              return directoryRequiredToolNames;
-            }
-          })()
-        : [];
+    // When the message tool is the only reply path it must stay directly visible
+    // in every search mode; a hidden delivery tool can leave the run mute.
+    const requiredDirectToolNames = forceDirectMessageTool ? ["message"] : [];
     const compacted = codeModeControlsEnabled
       ? applyCodeModeCatalog({
           tools: [...codeModeTools, ...effectiveTools],
@@ -197,7 +183,7 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
             runId: params.runId,
             catalogRef: toolSearchCatalogRef,
             toolHookContext: options.hookContext,
-            hydrateToolNames: directoryHydratedToolNames,
+            directToolNames: requiredDirectToolNames,
           })
         : applyToolSearchCatalog({
             tools: effectiveTools,
@@ -208,10 +194,7 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
             runId: params.runId,
             catalogRef: toolSearchCatalogRef,
             toolHookContext: options.hookContext,
-            shouldCatalogTool:
-              localModelLeanEnabled && toolSearchConfig.mode === "tools"
-                ? shouldCatalogToolForLocalModelLean
-                : undefined,
+            directToolNames: requiredDirectToolNames,
           });
     const projectedCompactedTools = options.localModelLeanApplied
       ? compacted.tools

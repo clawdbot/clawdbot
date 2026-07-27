@@ -15,6 +15,7 @@ import {
   buildStatusMessage as buildStatusMessageRaw,
   type buildStatusMessage as BuildStatusMessage,
 } from "../status/status-message.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { createSuccessfulImageMediaDecision } from "./media-understanding.test-fixtures.js";
 import { buildCommandsMessage, buildCommandsMessagePaginated, buildHelpMessage } from "./status.js";
 
@@ -390,17 +391,15 @@ describe("buildStatusMessage", () => {
     await withTempHome(async () => {
       const text = buildStatusMessage({
         config: {
-          messages: {
-            tts: {
-              auto: "always",
-              provider: "openai",
-              providers: {
-                openai: {
-                  displayName: "NeuTTS local",
-                  baseUrl: "http://user:secret@127.0.0.1:18801/v1?token=hidden#fragment",
-                  model: "neutts-nano",
-                  voice: "clara",
-                },
+          tts: {
+            auto: "always",
+            provider: "openai",
+            providers: {
+              openai: {
+                displayName: "NeuTTS local",
+                baseUrl: "http://username@127.0.0.1:18801/v1?token=hidden#fragment",
+                model: "neutts-nano",
+                voice: "clara",
               },
             },
           },
@@ -413,7 +412,7 @@ describe("buildStatusMessage", () => {
       expect(normalized).toContain(
         "Voice: always · provider=openai · name=NeuTTS local · model=neutts-nano · voice=clara · endpoint=custom(http://127.0.0.1:18801/v1)",
       );
-      expect(normalized).not.toContain("secret");
+      expect(normalized).not.toContain("username");
       expect(normalized).not.toContain("token=hidden");
       expect(normalized).not.toContain("fragment");
     });
@@ -423,11 +422,7 @@ describe("buildStatusMessage", () => {
     const text = buildStatusMessage({
       config: {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": {},
-            },
-          },
+          defaults: {},
         },
       } as unknown as OpenClawConfig,
       agent: {
@@ -450,11 +445,7 @@ describe("buildStatusMessage", () => {
     const text = buildStatusMessage({
       config: {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": {},
-            },
-          },
+          defaults: {},
         },
       } as unknown as OpenClawConfig,
       agent: {
@@ -844,7 +835,7 @@ describe("buildStatusMessage", () => {
       sessionEntry: {
         sessionId: "abc",
         updatedAt: 0,
-        channel: "discord",
+        delivery: normalizeSessionDeliveryState({ context: { channel: "discord" } }),
         groupId: "123",
       },
       sessionKey: "agent:main:main",
@@ -885,7 +876,7 @@ describe("buildStatusMessage", () => {
       sessionEntry: {
         sessionId: "channel-context-window",
         updatedAt: 0,
-        channel: "discord",
+        delivery: normalizeSessionDeliveryState({ context: { channel: "discord" } }),
         groupId: "123",
         totalTokens: 49_000,
         totalTokensFresh: true,

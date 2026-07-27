@@ -1,7 +1,7 @@
 /** Session update helpers for skill snapshots, compaction, and lifecycle hooks. */
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveDefaultAgentId, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   type ExecPolicyOverrides,
   resolveNodeExecEligibility,
@@ -15,6 +15,7 @@ import {
 } from "../../gateway/active-sessions-shutdown-tracker.js";
 import { resolveStableSessionEndTranscript } from "../../gateway/session-transcript-files.fs.js";
 import { logVerbose } from "../../globals.js";
+import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -156,7 +157,7 @@ export async function ensureSkillSnapshot(params: {
   skillsSnapshot?: SessionEntry["skillsSnapshot"];
   systemSent: boolean;
 }> {
-  if (process.env.OPENCLAW_TEST_FAST === "1") {
+  if (isFastTestRuntimeEnv()) {
     // In fast unit-test runs we skip filesystem scanning, watchers, and session-store writes.
     // Dedicated skills tests cover snapshot generation behavior.
     return {
@@ -340,6 +341,7 @@ export async function incrementCompactionCount(params: {
         entry,
         sessionKey,
         storePath,
+        ...(cfg ? { defaultAgentId: resolveDefaultAgentId(cfg) } : {}),
         newSessionId,
       });
     updates.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;
