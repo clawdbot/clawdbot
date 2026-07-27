@@ -171,6 +171,20 @@ describe("stripInternalRuntimeScaffolding", () => {
     ).toBe("before\nafter");
   });
 
+  it("removes indented runtime context delimiters without leaving marker fragments", () => {
+    expect(
+      stripInternalRuntimeScaffolding(
+        [
+          "before",
+          "  <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "internal",
+          "\t<<<END_OPENCLAW_INTERNAL_CONTEXT>>>  ",
+          "after",
+        ].join("\n"),
+      ),
+    ).toBe("before\nafter");
+  });
+
   it("unwraps standalone untrusted child-result marker lines", () => {
     expect(
       stripInternalRuntimeScaffolding(

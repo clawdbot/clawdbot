@@ -39,21 +39,29 @@ export function escapeInternalRuntimeContextDelimiters(value: string): string {
     .replaceAll(INTERNAL_RUNTIME_CONTEXT_END, ESCAPED_INTERNAL_RUNTIME_CONTEXT_END);
 }
 
+function delimitedTokenLinePattern(token: string): string {
+  return `(?:^|\\r?\\n)[ \\t]*${escapeRegExp(token)}[ \\t]*(?=\\r?\\n|$)`;
+}
+
 function findDelimitedTokenIndex(text: string, token: string, from: number): number {
-  const tokenRe = new RegExp(`(?:^|\\r?\\n)${escapeRegExp(token)}(?=\\r?\\n|$)`, "g");
+  const tokenRe = new RegExp(delimitedTokenLinePattern(token), "g");
   tokenRe.lastIndex = Math.max(0, from);
   const match = tokenRe.exec(text);
   if (!match) {
     return -1;
   }
-  const prefixLength = match[0].length - token.length;
-  return match.index + prefixLength;
+  return match.index + match[0].indexOf(token);
+}
+
+function stripStandaloneDelimitedTokenLines(text: string, token: string): string {
+  return text.replace(new RegExp(delimitedTokenLinePattern(token), "g"), "");
 }
 
 function extractDelimitedBlocks(
   text: string,
   begin: string,
   end: string,
+  separator = "\n\n",
 ): { text: string; blocks: string[] } {
   let next = text;
   const blocks: string[] = [];
@@ -86,15 +94,18 @@ function extractDelimitedBlocks(
     if (finish === -1 || depth !== 0) {
       return { text: before, blocks };
     }
-    const blockEnd = finish + end.length;
+    let blockEnd = finish + end.length;
+    while (next[blockEnd] === " " || next[blockEnd] === "\t") {
+      blockEnd += 1;
+    }
     blocks.push(next.slice(start, blockEnd).trim());
     const after = next.slice(blockEnd).trimStart();
-    next = before && after ? `${before}\n\n${after}` : `${before}${after}`;
+    next = before && after ? `${before}${separator}${after}` : `${before}${after}`;
   }
 }
 
-function stripDelimitedBlock(text: string, begin: string, end: string): string {
-  return extractDelimitedBlocks(text, begin, end).text;
+function stripDelimitedBlock(text: string, begin: string, end: string, separator?: string): string {
+  return extractDelimitedBlocks(text, begin, end, separator).text;
 }
 
 function findLegacyInternalEventEnd(text: string, start: number): number | null {
@@ -215,13 +226,20 @@ function stripRuntimeContextPromptPreface(text: string): string {
 }
 
 /** Remove protected and legacy runtime-context blocks from text. */
-export function stripInternalRuntimeContext(text: string): string {
+export function stripInternalRuntimeContext(
+  text: string,
+  options: { separator?: string } = {},
+): string {
   if (!text) {
     return text;
   }
-  const withoutDelimitedBlocks = stripDelimitedBlock(
-    text,
-    INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  const withoutDelimitedBlocks = stripStandaloneDelimitedTokenLines(
+    stripDelimitedBlock(
+      text,
+      INTERNAL_RUNTIME_CONTEXT_BEGIN,
+      INTERNAL_RUNTIME_CONTEXT_END,
+      options.separator,
+    ),
     INTERNAL_RUNTIME_CONTEXT_END,
   );
   return stripRuntimeContextPromptPreface(
