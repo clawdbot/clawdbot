@@ -130,15 +130,16 @@ function withLmstudioUsageCompat(model: StreamModel): StreamModel {
           (keyword): keyword is string => typeof keyword === "string",
         )
       : [];
+  const normalizedCompat = {
+    ...compat,
+    supportsUsageInStreaming: true,
+    // LM Studio's GGUF grammar rejects regex constraints; the shared transport
+    // removes this keyword recursively while preserving native tool calling.
+    unsupportedToolSchemaKeywords: uniqueStrings([...unsupportedToolSchemaKeywords, "pattern"]),
+  };
   return {
     ...model,
-    compat: {
-      ...compat,
-      supportsUsageInStreaming: true,
-      // LM Studio's GGUF grammar rejects regex constraints; the shared transport
-      // removes this keyword recursively while preserving native tool calling.
-      unsupportedToolSchemaKeywords: uniqueStrings([...unsupportedToolSchemaKeywords, "pattern"]),
-    },
+    compat: normalizedCompat,
   };
 }
 
