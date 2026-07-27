@@ -1,4 +1,5 @@
 // Zalo tests cover actions plugin behavior.
+import http from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { zaloMessageActions } from "./actions.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -37,48 +38,89 @@ describe("zaloMessageActions.describeMessageTool", () => {
 describe("zaloMessageActions.handleAction", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
-  it("sends text to the Bot API when the message tool supplies whitespace-only media", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      Response.json({
-        ok: true,
-        result: { message_id: "z-msg-with-blank-media" },
-      }),
-    );
+  it("sends whitespace-only media as text over the real Bot API HTTP transport", async () => {
     const handleAction = zaloMessageActions.handleAction;
     if (!handleAction) {
       throw new Error("Expected Zalo message action handler");
     }
 
-    await handleAction({
-      channel: "zalo",
-      action: "send",
-      params: {
-        to: "dm-chat-blank-media",
-        message: "hello there",
-        media: "   ",
-      },
-      cfg: {
-        channels: {
-          zalo: {
-            enabled: true,
-            botToken: "test-zalo-token",
+    const requests: Array<{
+      method: string | undefined;
+      path: string | undefined;
+      contentType: string | undefined;
+      body: string;
+    }> = [];
+    const server = http.createServer((request, response) => {
+      let body = "";
+      request.setEncoding("utf8");
+      request.on("data", (chunk: string) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        requests.push({
+          method: request.method,
+          path: request.url,
+          contentType: request.headers["content-type"],
+          body,
+        });
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            ok: true,
+            result: { message_id: "z-msg-with-blank-media" },
+          }),
+        );
+      });
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const { port } = server.address() as { port: number };
+    vi.stubEnv("ZALO_API_URL", `http://127.0.0.1:${port}/zalo/`);
+
+    try {
+      const result = await handleAction({
+        channel: "zalo",
+        action: "send",
+        params: {
+          to: "dm-chat-blank-media",
+          message: "hello there",
+          media: "   ",
+        },
+        cfg: {
+          channels: {
+            zalo: {
+              enabled: true,
+              botToken: "test-zalo-token",
+            },
           },
         },
-      },
-      accountId: "default",
-    });
+        accountId: "default",
+      });
 
-    expect(fetchMock).toHaveBeenCalledOnce();
-    const [url, request] = fetchMock.mock.calls[0] ?? [];
-    expect(url).toBe("https://bot-api.zaloplatforms.com/bottest-zalo-token/sendMessage");
-    expect(request?.method).toBe("POST");
-    expect(request?.body).toBe(
-      JSON.stringify({
-        chat_id: "dm-chat-blank-media",
-        text: "hello there",
-      }),
-    );
+      expect(result.details).toEqual({
+        ok: true,
+        to: "dm-chat-blank-media",
+        messageId: "z-msg-with-blank-media",
+      });
+      expect(requests).toEqual([
+        {
+          method: "POST",
+          path: "/zalo/bottest-zalo-token/sendMessage",
+          contentType: "application/json",
+          body: JSON.stringify({
+            chat_id: "dm-chat-blank-media",
+            text: "hello there",
+          }),
+        },
+      ]);
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
   });
 });
