@@ -15,6 +15,21 @@ import {
 import { resolveGoogleMeetProbeGatewayTimeoutMs } from "./config.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 
+// The Gateway handler and the tool schema both take timeoutMs as a positive
+// integer, so parse it that way here instead of letting a fractional value reach
+// the RPC and fail there. Mirrors Zoom's probe option parser. `test-listen`
+// still uses the looser parsePositiveNumber and is left as a follow-up.
+function parseProbeTimeoutOption(value: string | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = parseStrictNonNegativeInteger(value);
+  if (parsed === undefined || parsed === 0) {
+    throw new Error("timeout-ms must be a positive integer");
+  }
+  return parsed;
+}
+
 export function registerGoogleMeetProbeCommands(context: GoogleMeetCliCommandContext): void {
   const params = context;
   const { root, callGateway, operationTimeoutMs, resolveMeetingInput } = context;
@@ -71,7 +86,7 @@ export function registerGoogleMeetProbeCommands(context: GoogleMeetCliCommandCon
         transport: options.transport,
         mode: options.mode,
         message: options.message,
-        timeoutMs: parsePositiveNumber(options.timeoutMs, "timeout-ms"),
+        timeoutMs: parseProbeTimeoutOption(options.timeoutMs),
       };
       const delegated = await callGoogleMeetGateway({
         callGateway,

@@ -1,4 +1,4 @@
-export const GOOGLE_MEET_MAX_PROBE_TIMEOUT_MS = 120_000;
+const GOOGLE_MEET_MAX_PROBE_TIMEOUT_MS = 120_000;
 
 export function resolveGoogleMeetProbeTimeoutMs(
   input: number | undefined,

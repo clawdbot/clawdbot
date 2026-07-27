@@ -396,17 +396,26 @@ describe("google-meet CLI", () => {
     expect(ensureRuntime).not.toHaveBeenCalled();
   });
 
-  it("rejects a non-positive test-speech --timeout-ms before the gateway call", async () => {
-    const callGatewayFromCli = vi.fn(async () => ({}));
+  it.each(["0", "1.5"])(
+    "rejects a test-speech --timeout-ms of %s before the gateway call",
+    async (value) => {
+      const callGatewayFromCli = vi.fn(async () => ({}));
 
-    await expect(
-      setupCli({ callGatewayFromCli }).parseAsync(
-        ["googlemeet", "test-speech", "https://meet.google.com/abc-defg-hij", "--timeout-ms", "0"],
-        { from: "user" },
-      ),
-    ).rejects.toThrow("timeout-ms must be a positive number");
-    expect(callGatewayFromCli).not.toHaveBeenCalled();
-  });
+      await expect(
+        setupCli({ callGatewayFromCli }).parseAsync(
+          [
+            "googlemeet",
+            "test-speech",
+            "https://meet.google.com/abc-defg-hij",
+            "--timeout-ms",
+            value,
+          ],
+          { from: "user" },
+        ),
+      ).rejects.toThrow("timeout-ms must be a positive integer");
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    },
+  );
 
   it("runs a listen-first health probe", async () => {
     const testListen = vi.fn(async () => ({
