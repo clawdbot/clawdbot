@@ -1,3 +1,4 @@
+import { isProxy } from "node:util/types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -14,6 +15,7 @@ import {
 } from "./manifest-registry-installed.js";
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import { buildPluginMetadataProviderFacts } from "./plugin-metadata-provider-facts.js";
 import type {
   LoadPluginMetadataSnapshotParams,
@@ -67,45 +69,84 @@ function throwReadonlyPluginMetadataMutation(): never {
   throw new TypeError("Plugin metadata snapshots are immutable");
 }
 
-function freezeSnapshotValue<T>(value: T, seen = new WeakSet<object>()): T {
+let deeplyFrozenSnapshotValues = new WeakSet<object>();
+
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  deeplyFrozenSnapshotValues = new WeakSet<object>();
+});
+
+function freezeSnapshotValue(
+  value: unknown,
+  seen: WeakSet<object>,
+  completed: object[],
+  completedSafe: WeakSet<object>,
+): boolean {
   if (!value || typeof value !== "object") {
-    return value;
+    return true;
+  }
+  if (deeplyFrozenSnapshotValues.has(value)) {
+    return true;
   }
   if (seen.has(value)) {
-    return value;
+    return completedSafe.has(value);
   }
   seen.add(value);
   if (value instanceof Map) {
     for (const [key, entry] of value) {
-      freezeSnapshotValue(key, seen);
-      freezeSnapshotValue(entry, seen);
+      freezeSnapshotValue(key, seen, completed, completedSafe);
+      freezeSnapshotValue(entry, seen, completed, completedSafe);
     }
     Object.defineProperties(value, {
       clear: { value: throwReadonlyPluginMetadataMutation },
       delete: { value: throwReadonlyPluginMetadataMutation },
       set: { value: throwReadonlyPluginMetadataMutation },
     });
-    return Object.freeze(value);
+    Object.freeze(value);
+    return false;
   }
   if (value instanceof Set) {
     for (const entry of value) {
-      freezeSnapshotValue(entry, seen);
+      freezeSnapshotValue(entry, seen, completed, completedSafe);
     }
     Object.defineProperties(value, {
       add: { value: throwReadonlyPluginMetadataMutation },
       clear: { value: throwReadonlyPluginMetadataMutation },
       delete: { value: throwReadonlyPluginMetadataMutation },
     });
-    return Object.freeze(value);
+    Object.freeze(value);
+    return false;
   }
-  for (const entry of Object.values(value)) {
-    freezeSnapshotValue(entry, seen);
+  const prototype = Object.getPrototypeOf(value);
+  let cacheable =
+    !isProxy(value) &&
+    (Array.isArray(value) || prototype === Object.prototype || prototype === null);
+  for (const key of Object.keys(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !Object.hasOwn(descriptor, "value")) {
+      cacheable = false;
+    }
+    if (
+      !freezeSnapshotValue((value as Record<string, unknown>)[key], seen, completed, completedSafe)
+    ) {
+      cacheable = false;
+    }
   }
-  return Object.freeze(value);
+  Object.freeze(value);
+  if (cacheable) {
+    completed.push(value);
+    completedSafe.add(value);
+  }
+  return cacheable;
 }
 
 function freezePluginMetadataSnapshot(snapshot: PluginMetadataSnapshot): PluginMetadataSnapshot {
-  return freezeSnapshotValue(snapshot);
+  const completed: object[] = [];
+  freezeSnapshotValue(snapshot, new WeakSet<object>(), completed, new WeakSet<object>());
+  // Publish identities only after the entire graph and Map/Set mutation traps are frozen.
+  for (const value of completed) {
+    deeplyFrozenSnapshotValues.add(value);
+  }
+  return snapshot;
 }
 
 function resolvePluginMetadataControlPlaneFingerprint(
@@ -299,20 +340,31 @@ export function loadPluginMetadataSnapshot(
   params: LoadPluginMetadataSnapshotParams,
 ): PluginMetadataSnapshot {
   const activeTimelineSpan = getActiveDiagnosticsTimelineSpan();
-  return freezePluginMetadataSnapshot(
-    measureDiagnosticsTimelineSpanSync(
-      "plugins.metadata.scan",
-      () => loadPluginMetadataSnapshotImpl(params),
-      {
-        phase: activeTimelineSpan?.phase ?? "startup",
-        config: params.config,
-        env: params.env,
-        attributes: {
-          hasWorkspaceDir: params.workspaceDir !== undefined,
-          hasInstalledIndex: params.index !== undefined,
-        },
+  const snapshot = measureDiagnosticsTimelineSpanSync(
+    "plugins.metadata.scan",
+    () => loadPluginMetadataSnapshotImpl(params),
+    {
+      phase: activeTimelineSpan?.phase ?? "startup",
+      config: params.config,
+      env: params.env,
+      attributes: {
+        hasWorkspaceDir: params.workspaceDir !== undefined,
+        hasInstalledIndex: params.index !== undefined,
       },
-    ),
+    },
+  );
+  return measureDiagnosticsTimelineSpanSync(
+    "plugins.metadata.freeze",
+    () => freezePluginMetadataSnapshot(snapshot),
+    {
+      phase: activeTimelineSpan?.phase ?? "startup",
+      config: params.config,
+      env: params.env,
+      attributes: {
+        indexPluginCount: snapshot.index.plugins.length,
+        manifestPluginCount: snapshot.plugins.length,
+      },
+    },
   );
 }
 
