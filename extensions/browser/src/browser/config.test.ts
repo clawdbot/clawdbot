@@ -154,6 +154,27 @@ describe("browser config", () => {
     expect(resolveProfile(resolved, "chrome")?.cdpPort).toBe(relayDefaultPort - 1);
   });
 
+  it("exhausts extension relay ports before reaching the browser control port", () => {
+    const extensionProfiles = (count: number) =>
+      Object.fromEntries(
+        Array.from({ length: count }, (_, index) => [
+          `relay-${index}`,
+          { driver: "extension" as const },
+        ]),
+      );
+
+    const resolved = resolveBrowserConfig({ profiles: extensionProfiles(7) });
+    const relayPorts = Object.values(resolved.extensionRelayPorts);
+
+    expect(relayPorts).toHaveLength(8);
+    expect(new Set(relayPorts).size).toBe(8);
+    expect(Math.min(...relayPorts)).toBe(resolved.controlPort + 1);
+    expect(Math.max(...relayPorts)).toBe(resolved.extensionRelayDefaultPort);
+    expect(() => resolveBrowserConfig({ profiles: extensionProfiles(8) })).toThrow(
+      "Too many implicit browser extension profiles for the available relay port range; set an explicit cdpPort.",
+    );
+  });
+
   it("embeds the host-local relay secret as Basic auth in the extension cdpUrl", () => {
     const token = "a".repeat(64);
     writeRelaySecret(token);

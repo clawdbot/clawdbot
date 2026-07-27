@@ -35,7 +35,12 @@ function firstExtensionProfile(): { name: string; relayPort: number } | null {
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   for (const [name, profile] of Object.entries(resolved.profiles)) {
     if (profile.driver === "extension") {
-      return { name, relayPort: profile.cdpPort ?? resolved.extensionRelayDefaultPort };
+      // An explicit profile can occupy the default, so pair with the assigned relay.
+      return {
+        name,
+        relayPort:
+          profile.cdpPort ?? resolved.extensionRelayPorts[name] ?? resolved.extensionRelayDefaultPort,
+      };
     }
   }
   return null;
