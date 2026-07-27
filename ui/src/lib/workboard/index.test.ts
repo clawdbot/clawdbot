@@ -2908,6 +2908,49 @@ describe("workboard controller", () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 
+  it("reuses an active captured session before an older archived match", async () => {
+    const archived = {
+      ...sampleCard,
+      id: "archived-session-card",
+      sessionKey: sampleSession.key,
+      metadata: { archivedAt: 10 },
+    } satisfies WorkboardCard;
+    const active = {
+      ...sampleCard,
+      id: "active-session-card",
+      sessionKey: sampleSession.key,
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [archived, active];
+    const client = createClient({});
+
+    await expect(captureSession(client, sampleSession)).resolves.toBe(active);
+    expect(client.request).not.toHaveBeenCalled();
+    expect(state.cards).toEqual([archived, active]);
+  });
+
+  it("returns the active captured session while a duplicate capture is in flight", async () => {
+    const archived = {
+      ...sampleCard,
+      id: "archived-inflight-session-card",
+      sessionKey: sampleSession.key,
+      metadata: { archivedAt: 10 },
+    } satisfies WorkboardCard;
+    const active = {
+      ...sampleCard,
+      id: "active-inflight-session-card",
+      sessionKey: sampleSession.key,
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [archived, active];
+    state.capturingSessionKeys.add(sampleSession.key);
+    const client = createClient({});
+
+    await expect(captureSession(client, sampleSession)).resolves.toBe(active);
+    expect(client.request).not.toHaveBeenCalled();
+    expect(state.cards).toEqual([archived, active]);
+  });
+
   it("restores archived captured sessions instead of leaving them hidden", async () => {
     const archived = {
       ...sampleCard,

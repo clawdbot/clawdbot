@@ -1068,6 +1068,41 @@ describe("cron cli", () => {
     expect(params?.payload?.toolsAllow).toEqual(["exec", "read", "write"]);
   });
 
+  it.each([
+    {
+      kind: "systemEvent",
+      args: ["--system-event", "tick"],
+      tools: "read,write",
+    },
+    {
+      kind: "command",
+      args: ["--command", "echo ok"],
+      tools: "read write",
+    },
+    {
+      kind: "command",
+      args: ["--command-argv", '["echo","ok"]'],
+      tools: "read,write",
+    },
+    {
+      kind: "agentTurn",
+      args: ["--message", "hello"],
+      tools: "read write",
+    },
+  ])(
+    "preserves the requested tool allowlist for $kind cron jobs",
+    async ({ kind, args, tools }) => {
+      const params = await runCronAddAndGetParams(
+        namedCronAddArgs(`Restricted ${kind}`, ...args, "--tools", tools),
+      );
+
+      expect(params?.payload).toMatchObject({
+        kind,
+        toolsAllow: ["read", "write"],
+      });
+    },
+  );
+
   it("sets fallback models on cron add", async () => {
     const params = await runCronAddAndGetParams(
       namedCronAddArgs(

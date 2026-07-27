@@ -270,7 +270,7 @@ export class WorkboardCoreStore {
       if (card.metadata?.archivedAt) {
         archived += 1;
       }
-      if (card.status === "ready") {
+      if (card.status === "ready" && !card.metadata?.archivedAt) {
         oldestReadyAt = Math.min(oldestReadyAt ?? card.updatedAt, card.updatedAt);
       }
       updatedAt = Math.max(updatedAt ?? 0, card.updatedAt);

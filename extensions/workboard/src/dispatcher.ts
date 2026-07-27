@@ -272,7 +272,9 @@ function selectStartableCards(
     if (!consumesOwnerSlot || cardIsArchived(card)) {
       continue;
     }
-    const owner = resolveDispatchOwner(card, now);
+    // A grace-protected running claim still occupies its actual worker, even
+    // after the lease expires and the card's assigned agent differs.
+    const owner = claim?.ownerId ?? resolveDispatchOwner(card, now);
     runningByOwner.set(owner, (runningByOwner.get(owner) ?? 0) + 1);
   }
   const selected: WorkboardCard[] = [];
@@ -351,7 +353,6 @@ async function runWorkboardDispatch(
     if (startedOwners.has(ownerId)) {
       continue;
     }
-    attemptedStarts += 1;
     const sessionKey = buildSessionKey(card);
     let claimValue = "";
     let materializedWorkspace: WorkboardWorkspace | undefined;
@@ -441,6 +442,8 @@ async function runWorkboardDispatch(
         continue;
       }
     }
+    // Invalid workspace preflights must not spend the provider outage budget.
+    attemptedStarts += 1;
     try {
       const claimed = await params.store.claim(
         card.id,
