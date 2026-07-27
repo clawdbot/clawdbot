@@ -23,7 +23,6 @@ import {
   applyToolSearchCatalog,
   clearToolSearchCatalog,
   createToolSearchCatalogRef,
-  estimateToolSchemaDirectoryToolNames,
   resolveToolSearchConfig,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
@@ -163,22 +162,7 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
           executeTool: params.executeTool,
         })
       : [];
-    const directoryRequiredToolNames = forceDirectMessageTool ? ["message"] : [];
-    const directoryHydratedToolNames =
-      toolSearchControlsEnabled && toolSearchConfig.mode === "directory"
-        ? (() => {
-            try {
-              return estimateToolSchemaDirectoryToolNames({
-                tools: effectiveTools,
-                query: params.prompt ?? "",
-                maxTools: 4,
-                requiredToolNames: directoryRequiredToolNames,
-              });
-            } catch {
-              return directoryRequiredToolNames;
-            }
-          })()
-        : [];
+    const directoryDirectToolNames = forceDirectMessageTool ? ["message"] : [];
     const compacted = codeModeControlsEnabled
       ? applyCodeModeCatalog({
           tools: [...codeModeTools, ...effectiveTools],
@@ -200,7 +184,7 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
             runId: params.runId,
             catalogRef: toolSearchCatalogRef,
             toolHookContext: options.hookContext,
-            hydrateToolNames: directoryHydratedToolNames,
+            directToolNames: directoryDirectToolNames,
           })
         : applyToolSearchCatalog({
             tools: effectiveTools,

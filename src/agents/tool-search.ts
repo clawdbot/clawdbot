@@ -57,7 +57,6 @@ export {
 export { resolveToolSearchConfig } from "./tool-search-config.js";
 export {
   buildToolSchemaDirectoryPrompt,
-  estimateToolSchemaDirectoryToolNames,
   resolveToolSearchCatalogTool,
 } from "./tool-search-directory.js";
 export { ToolSearchRuntime } from "./tool-search-runtime.js";
