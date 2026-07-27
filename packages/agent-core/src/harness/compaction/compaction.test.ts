@@ -7,6 +7,7 @@ import {
   calculateContextTokens,
   compact,
   estimateContextTokens,
+  estimateTokens,
   findCutPoint,
   generateSummary,
   getLastAssistantUsage,
@@ -196,6 +197,32 @@ describe("calculateContextTokens", () => {
 });
 
 describe("session-entry compaction budgeting", () => {
+  it("weights CJK text as roughly one token per character", () => {
+    const extensionGText = String.fromCodePoint(0x30000).repeat(4);
+
+    expect(estimateTokens({ role: "user", content: "hello world", timestamp: 1 })).toBe(3);
+    expect(estimateTokens({ role: "user", content: "你好世界", timestamp: 1 })).toBe(4);
+    expect(estimateTokens({ role: "user", content: "こんにちは", timestamp: 1 })).toBe(5);
+    expect(estimateTokens({ role: "user", content: "ｺﾝﾆﾁﾊ", timestamp: 1 })).toBe(5);
+    expect(estimateTokens({ role: "user", content: extensionGText, timestamp: 1 })).toBe(4);
+  });
+
+  it("uses CJK-aware token estimates when choosing the retained tail", () => {
+    const entries: SessionTreeEntry[] = [
+      createMessageEntry({ role: "user", content: "start", timestamp: 1 }, 0),
+      createMessageEntry(createAssistant("ok", createUsage(2), 2), 1),
+      createMessageEntry({ role: "user", content: "早上好", timestamp: 3 }, 2),
+      createMessageEntry(createAssistant("ok", createUsage(2), 4), 3),
+      createMessageEntry({ role: "user", content: "你好世界", timestamp: 5 }, 4),
+    ];
+
+    expect(findCutPoint(entries, 0, entries.length, 4)).toEqual({
+      firstKeptEntryIndex: 4,
+      turnStartIndex: -1,
+      isSplitTurn: false,
+    });
+  });
+
   it.each(["custom_message", "branch_summary"] as const)(
     "counts a %s entry that projects into model context",
     (entryType) => {
