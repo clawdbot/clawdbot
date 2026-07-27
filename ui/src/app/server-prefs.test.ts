@@ -295,6 +295,8 @@ describe("pushServerUiPrefs", () => {
   };
   const pendingKey = (scope: string) => `openclaw.control.serverPrefs.pending.v1:${scope}`;
   const lastSeenKey = (scope: string) => `openclaw.control.serverPrefs.v1:${scope}`;
+  const readPending = (scope: string) =>
+    JSON.parse(localStorage.getItem(pendingKey(scope)) ?? "{}") as Record<string, unknown>;
   const createClient = (request: RequestMock, gatewayUrl = "ws://gw", connected = true) =>
     ({ request, gatewayUrl, connected }) as unknown as Parameters<typeof pushServerUiPrefs>[0];
 
@@ -315,6 +317,67 @@ describe("pushServerUiPrefs", () => {
     expect(JSON.parse(localStorage.getItem(lastSeenKey("ws://gw")) ?? "{}")).toEqual({
       themeMode: "dark",
     });
+  });
+
+  it("merges this tab's edit with sibling persisted pending keys", () => {
+    const scope = "ws://gw";
+    const flight = deferred();
+    const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(
+      () => flight.promise,
+    );
+    const client = createClient(request, scope);
+    flushServerUiPrefs(client);
+    localStorage.setItem(pendingKey(scope), JSON.stringify({ locale: "fr" }));
+
+    pushServerUiPrefs(client, { theme: "knot" });
+
+    expect(readPending(scope)).toEqual({ locale: "fr", theme: "knot" });
+  });
+
+  it("settles only this tab's acknowledged keys from sibling persisted pending", async () => {
+    const scope = "ws://gw";
+    const flight = deferred();
+    const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(
+      () => flight.promise,
+    );
+    const client = createClient(request, scope);
+    flushServerUiPrefs(client);
+    localStorage.setItem(pendingKey(scope), JSON.stringify({ locale: "fr" }));
+    pushServerUiPrefs(client, { theme: "knot" });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+
+    flight.resolve({});
+
+    await vi.waitFor(() => expect(readPending(scope)).toEqual({ locale: "fr" }));
+  });
+
+  it("drops only this tab's validation-rejected keys from persisted pending", async () => {
+    const scope = "ws://gw";
+    const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(async () => {
+      throw new Error("invalid config");
+    });
+    const client = createClient(request, scope);
+    flushServerUiPrefs(client);
+    localStorage.setItem(pendingKey(scope), JSON.stringify({ locale: "fr" }));
+
+    pushServerUiPrefs(client, { theme: "knot" });
+
+    await vi.waitFor(() => expect(readPending(scope)).toEqual({ locale: "fr" }));
+  });
+
+  it("overwrites only a same-key sibling value when this tab persists later", () => {
+    const scope = "ws://gw";
+    const flight = deferred();
+    const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(
+      () => flight.promise,
+    );
+    const client = createClient(request, scope);
+    flushServerUiPrefs(client);
+    localStorage.setItem(pendingKey(scope), JSON.stringify({ locale: "fr", themeMode: "light" }));
+
+    pushServerUiPrefs(client, { themeMode: "dark" });
+
+    expect(readPending(scope)).toEqual({ locale: "fr", themeMode: "dark" });
   });
 
   it("preserves a newer same-key edit across the older batch ack", async () => {

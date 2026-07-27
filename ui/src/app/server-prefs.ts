@@ -229,9 +229,26 @@ function adoptPendingScope(scope: string, force = false): void {
   pendingScope = scope;
   pendingPrefs = parseStoredPrefs(readStorage(PENDING_KEY, scope));
 }
-function persistPendingPrefs(): void {
-  const value = pendingPrefs ? JSON.stringify(pendingPrefs) : null;
-  writeStorage(PENDING_KEY, pendingScope, value);
+function writePendingStorage(prefs: ServerUiPrefs | null): void {
+  writeStorage(PENDING_KEY, pendingScope, prefs ? JSON.stringify(prefs) : null);
+}
+// localStorage pending is a cross-tab merged pool per gateway. Per-key read-merge-write prevents
+// one tab from clobbering sibling offline intent; its ms-scale race is accepted because storage has
+// no CAS and the drain converges through server-side LWW.
+function mergePendingIntoStorage(): void {
+  const stored = parseStoredPrefs(readStorage(PENDING_KEY, pendingScope)) ?? {};
+  const merged = { ...stored, ...pendingPrefs };
+  writePendingStorage(Object.keys(merged).length ? merged : null);
+}
+function settlePendingStorage(ackedBatch: ServerUiPrefs): void {
+  const stored = { ...parseStoredPrefs(readStorage(PENDING_KEY, pendingScope)) };
+  for (const key of Object.keys(ackedBatch) as SyncedPrefKey[]) {
+    if (prefValuesEqual(stored[key], ackedBatch[key])) {
+      delete stored[key];
+    }
+  }
+  const merged = { ...stored, ...pendingPrefs };
+  writePendingStorage(Object.keys(merged).length ? merged : null);
 }
 export function resetServerUiPrefsSync() {
   clearConflictRedrain();
@@ -371,7 +388,7 @@ async function drainPendingPrefs(client: GatewayBrowserClient, epoch: number): P
         removeBatch(batch);
         const lastSeen = parseStoredPrefs(readStorage(LAST_SEEN_KEY, pendingScope)) ?? {};
         writeStorage(LAST_SEEN_KEY, pendingScope, JSON.stringify({ ...lastSeen, ...batch }));
-        persistPendingPrefs();
+        settlePendingStorage(batch);
         clearConflictRedrain();
         break;
       } catch (error) {
@@ -395,7 +412,7 @@ async function drainPendingPrefs(client: GatewayBrowserClient, epoch: number): P
         // Connected viewer-scope or validation failures degrade silently to device-local state;
         // connection loss and CAS conflicts retain pending intent for replay.
         removeBatch(batch);
-        persistPendingPrefs();
+        settlePendingStorage(batch);
         return;
       }
     }
@@ -432,7 +449,7 @@ export function pushServerUiPrefs(
   clearConflictRedrain();
   pendingPrefs = { ...pendingPrefs, ...prefs };
   pushAfterCommit = hooks.afterCommit;
-  persistPendingPrefs();
+  mergePendingIntoStorage();
   startPendingDrain(client);
 }
 export function flushServerUiPrefs(
