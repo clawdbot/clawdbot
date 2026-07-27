@@ -2109,9 +2109,27 @@ describe("delegationFailedBeforeRunning", () => {
   });
 
   it("does not mistake an infrastructure error kind for a command verdict", () => {
-    const output =
-      '{"provider":"blacksmith-testbox","runStatus":"failed","errorKind":"lease-timeout","exitCode":1}';
+    const output = [
+      "failed to acquire lease for testbox",
+      '{"provider":"blacksmith-testbox","runStatus":"failed","errorKind":"lease-timeout","exitCode":1}',
+    ].join("\n");
 
     expect(delegationFailedBeforeRunning(output)).toBe(true);
+  });
+
+  // A crash after dispatch produces no summary either, so absence of one cannot
+  // be read as "never ran" — that is how an unknown Linux result would go green.
+  it("fails closed when the wrapper dies without saying why", () => {
+    expect(delegationFailedBeforeRunning("node: killed\n")).toBe(false);
+    expect(delegationFailedBeforeRunning("")).toBe(false);
+  });
+
+  it("keeps a command verdict authoritative even alongside network noise", () => {
+    const output = [
+      'request failed: Get "https://backend.blacksmith.sh/api/testbox/list": context deadline exceeded',
+      '{"provider":"blacksmith-testbox","runStatus":"failed","errorKind":"command-exit","exitCode":1}',
+    ].join("\n");
+
+    expect(delegationFailedBeforeRunning(output)).toBe(false);
   });
 });

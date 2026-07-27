@@ -358,21 +358,34 @@ export function createNpmLockGuardCommand(paths) {
 const DELEGATION_OUTPUT_TAIL_LIMIT = 64 * 1024;
 
 /**
- * Whether a failed delegation means the remote never ran our command.
+ * Signatures of a failure that happened before the remote command was dispatched:
+ * the broker or its API was unreachable, or no lease was ever obtained.
+ */
+const BACKEND_UNAVAILABLE_SIGNATURES = [
+  /request failed: \w+ "https?:\/\/[^"]*blacksmith[^"]*"/iu,
+  /context deadline exceeded/iu,
+  /(?:no such host|dial tcp|connection refused|network is unreachable)/iu,
+  /failed to (?:acquire|create|warm|start)\b[^\n]*\b(?:lease|testbox)/iu,
+];
+
+/**
+ * Whether a failed delegation provably never ran our command.
  *
- * The wrapper only emits a run summary once the command reached the box, so a
- * failure carrying `command-exit` is a real check failure. Anything else — a
- * lease, broker, DNS, or network error — never produced a verdict, which is the
- * case AGENTS.md says falls back to local execution.
+ * Fails closed on purpose. A missing final summary alone cannot prove the remote
+ * never started — a wrapper that crashes or loses its output transport after
+ * dispatch looks identical — so this requires a positive pre-dispatch signature
+ * and treats everything else as a real failure. Getting this backwards is the
+ * dangerous direction: some lanes (prompt snapshots) are Linux-only truth, so a
+ * local rerun on macOS could turn an unknown or failing gate green.
  *
- * This has to stay a positive test for `command-exit` rather than a blocklist of
- * infrastructure errors: guessing wrong toward "infrastructure" only re-runs the
- * checks locally, while guessing wrong toward "real failure" would block on an
- * outage. Never widen it to fall back on any non-zero exit — some lanes (prompt
- * snapshots) are Linux-only truth and would pass locally on macOS.
+ * `command-exit` vetoes regardless: it only appears once the command reached the
+ * box, so it is proof a verdict exists and must be propagated as-is.
  */
 export function delegationFailedBeforeRunning(output) {
-  return !/"errorKind"\s*:\s*"command-exit"/u.test(output);
+  if (/"errorKind"\s*:\s*"command-exit"/u.test(output)) {
+    return false;
+  }
+  return BACKEND_UNAVAILABLE_SIGNATURES.some((signature) => signature.test(output));
 }
 
 async function runChangedCheckViaCrabbox(argv = [], env = process.env) {
@@ -386,8 +399,14 @@ async function runChangedCheckViaCrabbox(argv = [], env = process.env) {
     onReady: (child) => {
       for (const stream of [child.stdout, child.stderr]) {
         stream?.on("data", (chunk) => {
-          process.stderr.write(chunk);
           tail = (tail + chunk).slice(-DELEGATION_OUTPUT_TAIL_LIMIT);
+          // Inherited stdio used to get OS backpressure for free. Piping means we
+          // have to reapply it, or a verbose delegated run buffers its whole
+          // output in this process when stderr is an async pipe (typical in CI).
+          if (!process.stderr.write(chunk)) {
+            stream.pause();
+            process.stderr.once("drain", () => stream.resume());
+          }
         });
       }
     },
