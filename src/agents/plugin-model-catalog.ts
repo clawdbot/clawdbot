@@ -131,7 +131,9 @@ function repairPersistedPluginModelCatalogs(params: {
       `Repaired generated model catalog for plugin ${repair.pluginId}: removed ${repair.removedModelCount} model row(s) without provider or model api metadata.`,
     );
   }
-  return applied.length > 0;
+  // A concurrent refresh can win the compare-and-set. The caller still needs
+  // to reread so this stale pre-transaction snapshot never reaches consumers.
+  return true;
 }
 
 function readPersistedPluginModelCatalogMigrationPayloads(

@@ -171,6 +171,59 @@ describe("SQLite-backed plugin model catalogs", () => {
     expect(readCatalogCacheRow(agentDir, "nvidia")).toEqual(repairedRow);
   });
 
+  it("re-reads a concurrent refresh that wins the repair compare-and-set", () => {
+    const agentDir = createAgentDir();
+    const relativePath = encodePluginModelCatalogRelativePath("nvidia");
+    const refreshed = catalogContents("nvidia", "concurrently-refreshed-provider-test-key");
+    replacePersistedPluginModelCatalogs({
+      agentDir,
+      pluginCatalogWrites: { [relativePath]: refreshed },
+    });
+    const malformed = JSON.stringify({
+      generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+      providers: {
+        nvidia: {
+          baseUrl: "https://integrate.api.nvidia.com/v1",
+          apiKey: "NVIDIA_API_KEY",
+          models: [{ id: "meta-llama/llama-3.3-70b-instruct" }],
+        },
+      },
+    });
+    const database = new DatabaseSync(join(agentDir, "openclaw-agent.sqlite"));
+    try {
+      database
+        .prepare(
+          "UPDATE cache_entries SET value_json = ?, updated_at = 42 WHERE scope = ? AND key = ?",
+        )
+        .run(malformed, "plugin-model-catalog-v1", "nvidia");
+      database.exec("CREATE TABLE catalog_repair_refresh (value_json TEXT NOT NULL)");
+      database.prepare("INSERT INTO catalog_repair_refresh (value_json) VALUES (?)").run(refreshed);
+      database.exec(`
+        CREATE TRIGGER refresh_catalog_before_repair
+        BEFORE UPDATE OF value_json ON cache_entries
+        WHEN OLD.scope = 'plugin-model-catalog-v1'
+          AND OLD.key = 'nvidia'
+          AND NEW.value_json != (SELECT value_json FROM catalog_repair_refresh)
+        BEGIN
+          UPDATE cache_entries
+          SET value_json = (SELECT value_json FROM catalog_repair_refresh), updated_at = 99
+          WHERE scope = OLD.scope AND key = OLD.key;
+          SELECT RAISE(IGNORE);
+        END
+      `);
+    } finally {
+      database.close();
+    }
+
+    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
+      { pluginId: "nvidia", contents: refreshed },
+    ]);
+    expect(readCatalogCacheRow(agentDir, "nvidia")).toEqual({
+      value_json: refreshed,
+      updated_at: 99,
+    });
+  });
+
   it("does not create an agent database for a read-only cache miss", () => {
     const agentDir = createAgentDir();
 
