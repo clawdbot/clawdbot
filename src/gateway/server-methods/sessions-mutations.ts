@@ -45,6 +45,7 @@ import { resolveOperatorSessionCreation } from "./session-creation-provenance.js
 import {
   isAgentMainSessionKey,
   loadSessionsRuntimeModule,
+  rejectPluginRuntimeSessionOwnershipMismatch,
   requireSessionKey,
   resolveGatewaySessionTargetFromKey,
   resolveSessionWorkerPlacementPatchError,
@@ -76,6 +77,17 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     });
     const canonicalKey = target.canonicalKey ?? key;
     const lifecycleEntry = loadSessionEntry(key, { agentId: requestedAgentId }).entry;
+    if (
+      rejectPluginRuntimeSessionOwnershipMismatch({
+        action: "patch",
+        client,
+        key: canonicalKey,
+        entry: lifecycleEntry,
+        respond,
+      })
+    ) {
+      return;
+    }
     const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
       canonicalKey,
       lifecycleEntry,
@@ -126,6 +138,19 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     };
     const applyPatch = async () => {
       const currentLifecycleEntry = loadSessionEntry(key, { agentId: requestedAgentId }).entry;
+      // Recheck inside the lifecycle lock so a replaced row cannot switch
+      // plugin ownership between authorization and the committed patch.
+      if (
+        rejectPluginRuntimeSessionOwnershipMismatch({
+          action: "patch",
+          client,
+          key: canonicalKey,
+          entry: currentLifecycleEntry,
+          respond,
+        })
+      ) {
+        return null;
+      }
       // A reset queued ahead of archive can rotate the row before this mutation starts.
       // Never apply stale destructive intent to the replacement session identity.
       const lifecycleEntryRemoved =
@@ -450,6 +475,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       reason,
       commandSource: "gateway:sessions.reset",
       creation: resolveOperatorSessionCreation(client),
+      authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
       assertAuthorizedInstance: sessionMutationAuthorization?.assertCurrent,
     });
     if (!result.ok) {
