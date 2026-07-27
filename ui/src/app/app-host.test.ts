@@ -14,6 +14,7 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
   UI_COMMAND_EVENT,
 } from "../components/panel-toggle-contract.ts";
+import { i18n } from "../i18n/index.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
 import { resetAppHostTestGlobals, type ShellKeyboardState } from "./app-host.test-support.ts";
@@ -46,6 +47,11 @@ type ShellInitializationState = {
     snapshot: ApplicationGatewaySnapshot,
     runtimeConfig: ApplicationContext["runtimeConfig"],
   ) => void;
+};
+
+type ShellGatewaySynchronizationState = {
+  outboxStoreImport: { load: () => Promise<unknown> };
+  synchronizeGateway: (snapshot: ApplicationGatewaySnapshot) => void;
 };
 
 type ShellServerPreferencesState = {
@@ -264,6 +270,32 @@ describe("OpenClaw app lifecycle", () => {
 });
 
 describe("OpenClaw shell source initialization", () => {
+  it("retries a pending locale once when the Gateway becomes connected", () => {
+    const retryPendingLocale = vi.spyOn(i18n, "retryPendingLocale").mockImplementation(() => {});
+    const shell = document.createElement(
+      "openclaw-app-shell",
+    ) as unknown as ShellGatewaySynchronizationState;
+    shell.outboxStoreImport = { load: vi.fn(async () => undefined) };
+    const reconnecting = {
+      client: null,
+      phase: "reconnecting",
+      sessionKey: "",
+    } as ApplicationGatewaySnapshot;
+    const connected = {
+      client: {} as GatewayBrowserClient,
+      phase: "connected",
+      sessionKey: "",
+    } as ApplicationGatewaySnapshot;
+
+    shell.synchronizeGateway(reconnecting);
+    shell.synchronizeGateway(connected);
+    shell.synchronizeGateway({ ...connected });
+    shell.synchronizeGateway({ ...connected });
+
+    expect(retryPendingLocale).toHaveBeenCalledOnce();
+    retryPendingLocale.mockRestore();
+  });
+
   it("clears retained presentation and source ownership when its context epoch ends", () => {
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellEpochState;
     const client = {} as GatewayBrowserClient;
