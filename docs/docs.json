@@ -1359,7 +1359,13 @@
                   "automation/tasks",
                   "automation/taskflow",
                   "automation/standing-orders",
-                  "automation/hooks"
+                  "automation/hooks",
+                  "automation/troubleshooting",
+                  "automation/webhook",
+                  "automation/gmail-pubsub",
+                  "automation/poll",
+                  "automation/auth-monitoring",
+                  "automation/spend-guardrail"
                 ]
               },
               {

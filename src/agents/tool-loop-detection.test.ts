@@ -308,7 +308,12 @@ describe("tool-loop-detection", () => {
   });
 
   describe("detectToolCallLoop", () => {
-    it("is disabled by default", () => {
+    // Regression guard: this used to be disabled by default, which meant a
+    // stuck agent (e.g. an always-on OpenClaw gateway heartbeat) could repeat
+    // expensive tool calls indefinitely with nothing stopping it. Flipped to
+    // enabled-by-default so a fresh deploy is protected without operator
+    // config; explicitly pass `{ enabled: false }` to opt a session out.
+    it("is enabled by default and flags a repeated identical call", () => {
       const state = createState();
 
       for (let i = 0; i < 20; i += 1) {
@@ -316,6 +321,22 @@ describe("tool-loop-detection", () => {
       }
 
       const loopResult = detectToolCallLoop(state, "read", { path: "/same.txt" });
+      expect(loopResult.stuck).toBe(true);
+    });
+
+    it("can still be explicitly disabled per-session", () => {
+      const state = createState();
+
+      for (let i = 0; i < 20; i += 1) {
+        recordToolCall(state, "read", { path: "/same.txt" }, `disabled-${i}`);
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "read",
+        { path: "/same.txt" },
+        { enabled: false },
+      );
       expect(loopResult.stuck).toBe(false);
     });
 

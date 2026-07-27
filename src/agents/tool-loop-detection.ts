@@ -36,13 +36,18 @@ type LoopDetectionResult =
       warningKey?: string;
     };
 
-const TOOL_CALL_HISTORY_SIZE = 30;
-const WARNING_THRESHOLD = 10;
+export const TOOL_CALL_HISTORY_SIZE = 30;
+export const WARNING_THRESHOLD = 10;
 export const UNKNOWN_TOOL_THRESHOLD = 10;
-const CRITICAL_THRESHOLD = 20;
-const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
+export const CRITICAL_THRESHOLD = 20;
+export const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
+// Enabled by default — this was previously off, meaning nothing stopped a
+// stuck agent from repeating expensive tool calls indefinitely on every
+// heartbeat. Thresholds below are unchanged and already sane
+// (warn at 10, block at 20/30). Set tools.loopDetection.enabled=false in
+// config to opt out for a specific deployment.
 const DEFAULT_LOOP_DETECTION_CONFIG = {
-  enabled: false,
+  enabled: true,
   historySize: TOOL_CALL_HISTORY_SIZE,
   warningThreshold: WARNING_THRESHOLD,
   unknownToolThreshold: UNKNOWN_TOOL_THRESHOLD,
