@@ -80,7 +80,7 @@ describe("qa scenario packs", () => {
 
   it("rejects unknown scenario packs", () => {
     expect(() => resolveQaScenarioPackScenarioIds({ pack: "personal-admin" })).toThrow(
-      '--pack must be one of personal-agent, observability, smoke-ci, got "personal-admin"',
+      '--pack must be one of personal-agent, observability, got "personal-admin"',
     );
   });
 

@@ -66,6 +66,7 @@ on:
         description: Optional comma-separated Slack scenario ids
         required: false
         type: string
+
 permissions:
   contents: read
   pull-requests: read
@@ -386,6 +387,31 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
+      - name: Validate Matrix QA sharding contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          selector="extensions/qa-lab/src/live-transports/matrix/scenario-selection.ts"
+          if [[ ! -f "${selector}" ]] || \
+            ! grep -Fq 'OPENCLAW_QA_MATRIX_SHARD_INDEX' "${selector}" || \
+            ! grep -Fq 'OPENCLAW_QA_MATRIX_SHARD_COUNT' "${selector}"; then
+            echo "Selected checkout does not support catalog-derived Matrix QA sharding." >&2
+            exit 1
+          fi
+
+      - name: Validate required QA credential env
+        env:
+          MATRIX_PROVIDER_MODE: ${{ inputs.expected_sha != '' && 'mock-openai' || github.event_name == 'workflow_dispatch' && 'mock-openai' || 'live-frontier' }}
+          OPENAI_API_KEY: ${{ inputs.expected_sha == '' && github.event_name != 'workflow_dispatch' && secrets.OPENAI_API_KEY || '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${MATRIX_PROVIDER_MODE}" == "live-frontier" && -z "${OPENAI_API_KEY:-}" ]]; then
+            echo "Missing required OPENAI_API_KEY." >&2
+            exit 1
+          fi
+
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=12288
@@ -396,6 +422,10 @@ jobs:
         continue-on-error: true
         shell: bash
         env:
+          MATRIX_ALTERNATE_MODEL: ${{ inputs.expected_sha != '' && 'mock-openai/gpt-5.6-luna-alt' || github.event_name == 'workflow_dispatch' && 'mock-openai/gpt-5.6-luna-alt' || env.OPENCLAW_CI_OPENAI_FALLBACK_MODEL }}
+          MATRIX_PRIMARY_MODEL: ${{ inputs.expected_sha != '' && 'mock-openai/gpt-5.6-luna' || github.event_name == 'workflow_dispatch' && 'mock-openai/gpt-5.6-luna' || env.OPENCLAW_CI_OPENAI_MODEL }}
+          MATRIX_PROVIDER_MODE: ${{ inputs.expected_sha != '' && 'mock-openai' || github.event_name == 'workflow_dispatch' && 'mock-openai' || 'live-frontier' }}
+          OPENAI_API_KEY: ${{ inputs.expected_sha == '' && github.event_name != 'workflow_dispatch' && secrets.OPENAI_API_KEY || '' }}
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
         run: |
           set -euo pipefail
@@ -403,26 +433,23 @@ jobs:
           output_dir=".artifacts/qa-e2e/matrix-live-shard-${{ matrix.shard }}-of-5-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir -p "${output_dir}"
 
-          matrix_help="$(pnpm openclaw qa matrix --help 2>&1)"
-          if ! grep -Fq -- "--shard <index/total>" <<<"${matrix_help}"; then
-            echo "Selected target predates profile-free Matrix catalog sharding; update the target revision." >&2
-            exit 1
-          fi
-
           for attempt in 1 2; do
             attempt_output_dir="${output_dir}/attempt-${attempt}"
-            if pnpm openclaw qa matrix \
-              --repo-root . \
-              --output-dir "${attempt_output_dir}" \
-              --provider-mode mock-openai \
-              --shard "${{ matrix.shard }}/5" \
-              --fast; then
+            if OPENCLAW_QA_MATRIX_SHARD_INDEX="${{ matrix.shard }}" \
+              OPENCLAW_QA_MATRIX_SHARD_COUNT="5" \
+              pnpm openclaw qa matrix \
+                --repo-root . \
+                --output-dir "${attempt_output_dir}" \
+                --provider-mode "${MATRIX_PROVIDER_MODE}" \
+                --model "${MATRIX_PRIMARY_MODEL}" \
+                --alt-model "${MATRIX_ALTERNATE_MODEL}" \
+                --fast; then
               exit 0
             fi
             if [[ "${attempt}" == "2" ]]; then
               exit 1
             fi
-            echo "Matrix live lane failed on attempt ${attempt}; retrying..." >&2
+            echo "Matrix shard ${{ matrix.shard }}/5 failed on attempt ${attempt}; retrying..." >&2
             sleep 10
           done
 

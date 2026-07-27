@@ -598,10 +598,19 @@ jobs:
             typeof changedNodeTestPlan.hasPromptSnapshotAffectingChange !== "function" ||
             changedNodeTestPlan.hasPromptSnapshotAffectingChange(changedPaths);
           const runBuildArtifacts = runNodeFull && changedScopeHasBuildImpact;
+          const qaSmokePlanPath = "extensions/qa-lab/src/ci-smoke-plan.ts";
+          const supportsQaSmokeShards =
+            existsSync(qaSmokePlanPath) &&
+            readFileSync(qaSmokePlanPath, "utf8").includes("createQaSmokeCiShard");
+          if (frozenTarget && existsSync(qaSmokePlanPath) && !supportsQaSmokeShards) {
+            console.warn(
+              "Frozen target does not support taxonomy-derived QA smoke sharding; skipping QA smoke CI.",
+            );
+          }
           const runQaSmokeCi =
             runNodeFull &&
             changedScopeHasQaImpact &&
-            (!frozenTarget || existsSync("extensions/qa-lab/src/ci-smoke-plan.ts"));
+            (!frozenTarget || supportsQaSmokeShards);
           const rawNodeTestShards = runNodeFull
             ? changedNodeTestShards
               ? changedNodeTestShards
@@ -1666,7 +1675,7 @@ jobs:
               ;;
           esac
 
-  qa-smoke-ci-profile:
+  qa-smoke-ci:
     permissions:
       contents: read
     name: QA Smoke CI (${{ matrix.name }})
@@ -1679,19 +1688,19 @@ jobs:
       max-parallel: 4
       matrix:
         include:
-          - name: profile 1/4
-            lane: profile-1
-            slug: profile-1-of-4
-          - name: profile 2/4
-            lane: profile-2
-            slug: profile-2-of-4
+          - name: shard 1/4
+            lane: shard-1
+            slug: shard-1-of-4
+          - name: shard 2/4
+            lane: shard-2
+            slug: shard-2-of-4
             docker_cache: true
-          - name: profile 3/4
-            lane: profile-3
-            slug: profile-3-of-4
-          - name: profile 4/4
-            lane: profile-4
-            slug: profile-4-of-4
+          - name: shard 3/4
+            lane: shard-3
+            slug: shard-3-of-4
+          - name: shard 4/4
+            lane: shard-4
+            slug: shard-4-of-4
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
@@ -1726,15 +1735,15 @@ jobs:
           node scripts/build-all.mjs qaRuntime
           pnpm ui:build
 
-      - name: Run smoke profile part
+      - name: Run QA smoke shard
         env:
-          PROFILE_PART: ${{ matrix.lane }}
-          PROFILE_PART_SLUG: ${{ matrix.slug }}
+          SMOKE_SHARD: ${{ matrix.lane }}
+          SMOKE_SHARD_SLUG: ${{ matrix.slug }}
           OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && '0' || '1500' }}
         shell: bash
         run: |
           set -euo pipefail
-          output_dir=".artifacts/qa-e2e/smoke-ci-profile-${PROFILE_PART_SLUG}"
+          output_dir=".artifacts/qa-e2e/smoke-ci-shard-${SMOKE_SHARD_SLUG}"
           export OPENCLAW_BUILD_PRIVATE_QA=1
           export OPENCLAW_ENABLE_PRIVATE_QA_CLI=1
           export OPENCLAW_DISABLE_BUNDLED_PLUGINS=0
@@ -1742,86 +1751,22 @@ jobs:
           export OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS=180000
           export NODE_OPTIONS=--max-old-space-size=16384
           export OPENCLAW_CURRENT_PACKAGE_TGZ="$PWD/.artifacts/qa-e2e/smoke-ci-package/openclaw-current.tgz"
-          PROFILE_RUNS_TSV="$(
+          SHARD_RUNS_TSV="$(
             node --import tsx --input-type=module <<'EOF'
           const smokePlan = await import("./extensions/qa-lab/src/ci-smoke-plan.ts");
-          const partId = process.env.PROFILE_PART ?? "";
-          let runs;
-          if (typeof smokePlan.createQaSmokeCiPart === "function") {
-            try {
-              runs = smokePlan.createQaSmokeCiPart(partId).runs;
-            } catch (error) {
-              // Frozen/compat targets ship older planners that declare fewer
-              // profile parts; the declared parts still cover every scenario.
-              if (/unknown QA smoke CI profile part/.test(String(error)) && partId !== "profile-1") {
-                // stdout is the TSV contract consumed below. Keep diagnostics on stderr
-                // so an empty compatibility shard remains empty instead of becoming a run.
-                console.error(`[skip] ${partId} is not declared by this checkout's smoke plan`);
-                process.exit(0);
-              }
-              throw error;
-            }
-          } else if (typeof smokePlan.createQaSmokeCiMatrix === "function") {
-            // Legacy planners select the entire profile and can mix long-lived
-            // execution kinds. Reuse the current bounded smoke contract and
-            // isolate each scenario so one invocation cannot pin a profile part.
-            const compatibilityScenarioIds = new Set([
-              "control-ui-chat-flow-playwright",
-              "system-agent-ring-zero-setup",
-              "gateway-smoke",
-              "group-visible-reply-tool",
-              "long-running-release-audit",
-              "luna-thinking-visibility-switch",
-              "matrix-restart-resume",
-              "personal-task-followthrough-status",
-              "plugin-lifecycle-hot-reload",
-              "subagent-completion-direct-fallback",
-              "telegram-commands-command",
-            ]);
-            const partIndex = partId === "profile-1" ? 0 : partId === "profile-2" ? 1 : -1;
-            if (partIndex < 0) {
-              throw new Error(`unknown QA smoke CI profile part: ${partId}`);
-            }
-            const scenarioCatalog = await import("./extensions/qa-lab/src/scenario-catalog.ts");
-            const scenarioKindById = new Map(
-              scenarioCatalog
-                .readQaScenarioPack()
-                .scenarios.map((scenario) => [scenario.id, scenario.execution.kind]),
+          if (typeof smokePlan.createQaSmokeCiShard !== "function") {
+            throw new Error(
+              "Selected checkout does not support taxonomy-derived QA smoke sharding.",
             );
-            const legacyRuns = smokePlan
-              .createQaSmokeCiMatrix()
-              .include.filter((_, index) => index % 2 === partIndex);
-            runs = legacyRuns.flatMap((run) =>
-              run.scenario_ids.flatMap((scenarioId) => {
-                if (!compatibilityScenarioIds.has(scenarioId)) {
-                  return [];
-                }
-                const kind = scenarioKindById.get(scenarioId);
-                if (!kind) {
-                  throw new Error(`legacy QA smoke scenario not found: ${scenarioId}`);
-                }
-                return [
-                  {
-                    ...run,
-                    slug: `${run.slug}-${kind}-${scenarioId}`,
-                    scenario_ids: [scenarioId],
-                  },
-                ];
-              }),
-            );
-          } else {
-            throw new Error("QA smoke plan does not expose a supported CI planner.");
           }
+          const shardId = process.env.SMOKE_SHARD ?? "";
+          const runs = smokePlan.createQaSmokeCiShard(shardId).runs;
           for (const run of runs) {
             const scenarioIds = Buffer.from(JSON.stringify(run.scenario_ids)).toString("base64");
             process.stdout.write(`${run.slug}\t${scenarioIds}\n`);
           }
           EOF
           )"
-          if [[ -z "${PROFILE_RUNS_TSV//[[:space:]]/}" ]]; then
-            echo "No QA smoke runs assigned to ${PROFILE_PART}; skipping this compatibility shard."
-            exit 0
-          fi
           qa_exit_code=0
           while IFS=$'\t' read -r run_slug scenario_ids_base64; do
             export SCENARIO_IDS_BASE64="$scenario_ids_base64"
@@ -1838,19 +1783,19 @@ jobs:
               --concurrency 10 \
               --output-dir "$output_dir/$run_slug" \
               "${scenario_args[@]}" || qa_exit_code=$?
-          done <<< "$PROFILE_RUNS_TSV"
-          echo "QA smoke profile evidence: \`${output_dir}\`" >> "$GITHUB_STEP_SUMMARY"
+          done <<< "$SHARD_RUNS_TSV"
+          echo "QA smoke shard evidence: \`${output_dir}\`" >> "$GITHUB_STEP_SUMMARY"
           if [ "$qa_exit_code" -ne 0 ]; then
-            echo "::error title=QA smoke profile failed::smoke-ci profile part ${PROFILE_PART_SLUG} exited ${qa_exit_code}; evidence upload will still run"
+            echo "::error title=QA smoke shard failed::smoke-ci shard ${SMOKE_SHARD_SLUG} exited ${qa_exit_code}; evidence upload will still run"
             exit "$qa_exit_code"
           fi
 
-      - name: Upload QA smoke profile evidence
+      - name: Upload QA smoke shard evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: qa-smoke-profile-${{ matrix.slug }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .artifacts/qa-e2e/smoke-ci-profile-${{ matrix.slug }}/
+          name: qa-smoke-shard-${{ matrix.slug }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/qa-e2e/smoke-ci-shard-${{ matrix.slug }}/
           if-no-files-found: warn
           retention-days: 7
 
@@ -3529,7 +3474,7 @@ jobs:
       - checks-ui-e2e
       - control-ui-i18n
       - checks-fast-core
-      - qa-smoke-ci-profile
+      - qa-smoke-ci
       - checks-fast-plugin-contracts-shard
       - checks-fast-channel-contracts-shard
       - checks-node-compat
@@ -3561,7 +3506,7 @@ jobs:
             checks-ui-e2e=${{ needs.checks-ui-e2e.result }}
             control-ui-i18n=${{ needs.control-ui-i18n.result }}
             checks-fast-core=${{ needs.checks-fast-core.result }}
-            qa-smoke-ci-profile=${{ needs.qa-smoke-ci-profile.result }}
+            qa-smoke-ci=${{ needs.qa-smoke-ci.result }}
             checks-fast-plugin-contracts-shard=${{ needs.checks-fast-plugin-contracts-shard.result }}
             checks-fast-channel-contracts-shard=${{ needs.checks-fast-channel-contracts-shard.result }}
             checks-node-compat=${{ needs.checks-node-compat.result }}

@@ -6,6 +6,8 @@ scenario:
   coverage:
     primary:
       - control-ui.gateway-hosted-ui-control
+    representative:
+      - control-ui.gateway-hosted-ui-control
   objective: Smoke-test a Control UI chat turn through the hosted browser surface.
   successCriteria:
     - Playwright sends a chat turn and renders the final Gateway event.

@@ -41,6 +41,7 @@ const qaScorecardProfileSchema = z.object({
   includeAllCategories: z.boolean().default(false),
   channelDriver: qaScorecardChannelDriverSchema.default("qa-channel"),
   categoryIds: z.array(qaScorecardIdSchema).default([]),
+  coverageIds: z.array(qaCoverageIdSchema).default([]),
 });
 
 function maturityScoreLabelForScore(score: number) {
@@ -248,10 +249,21 @@ const qaMaturityTaxonomySchema = z
         }
         seenProfileCategoryIds.add(categoryId);
       }
+      const seenProfileCoverageIds = new Set<string>();
+      for (const [coverageIndex, coverageId] of profile.coverageIds.entries()) {
+        if (seenProfileCoverageIds.has(coverageId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["profiles", profileIndex, "coverageIds", coverageIndex],
+            message: `duplicate coverage id in profile ${profile.id}: ${coverageId}`,
+          });
+        }
+        seenProfileCoverageIds.add(coverageId);
+      }
     }
 
     const categoryIds = new Set<string>();
-    const coverageIdOwners = new Map<string, { key: string; label: string }>();
+    const coverageIdOwners = new Map<string, { categoryId: string; key: string; label: string }>();
     const surfaceIds = new Set<string>();
     for (const [surfaceIndex, surface] of taxonomy.surfaces.entries()) {
       if (surfaceIds.has(surface.id)) {
@@ -277,6 +289,7 @@ const qaMaturityTaxonomySchema = z
 
         for (const [featureIndex, feature] of category.features.entries()) {
           const featureOwner = {
+            categoryId: `${surface.id}.${category.id}`,
             key: `${surfaceIndex}.${categoryIndex}.${featureIndex}`,
             label: `${surface.id}.${category.id} feature ${feature.name}`,
           };
@@ -328,6 +341,19 @@ const qaMaturityTaxonomySchema = z
             code: z.ZodIssueCode.custom,
             path: ["profiles", profileIndex, "categoryIds", categoryIndex],
             message: `profile ${profile.id} references missing category ${categoryId}`,
+          });
+        }
+      }
+      const selectedCategoryIds = profile.includeAllCategories
+        ? categoryIds
+        : new Set(profile.categoryIds);
+      for (const [coverageIndex, coverageId] of profile.coverageIds.entries()) {
+        const owner = coverageIdOwners.get(coverageId);
+        if (!owner || !selectedCategoryIds.has(owner.categoryId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["profiles", profileIndex, "coverageIds", coverageIndex],
+            message: `profile ${profile.id} coverage ID ${coverageId} must belong to one of its selected categories`,
           });
         }
       }
@@ -404,6 +430,7 @@ type QaScorecardProfileReport = {
   evidenceMode: QaScorecardEvidenceMode;
   channelDriver: QaScorecardChannelDriver;
   categoryIds: string[];
+  coverageIds: string[];
 };
 
 export type QaScorecardTaxonomyReport = {
@@ -536,6 +563,46 @@ function pathExists(repoRoot: string | undefined, relativePath: string) {
 
 function scenarioCoverageIds(scenario: QaSeedScenarioWithSource) {
   return [...(scenario.coverage?.primary ?? []), ...(scenario.coverage?.secondary ?? [])];
+}
+
+export function selectQaScorecardProfileScenarios(params: {
+  coverageIds: readonly string[];
+  profileId: string;
+  scenarios: readonly QaSeedScenarioWithSource[];
+}) {
+  if (params.coverageIds.length === 0) {
+    return [...params.scenarios];
+  }
+  const selected: QaSeedScenarioWithSource[] = [];
+  const selectedIds = new Set<string>();
+  for (const coverageId of params.coverageIds) {
+    const candidates = params.scenarios.filter((scenario) =>
+      scenarioCoverageIds(scenario).includes(coverageId),
+    );
+    const representatives = candidates.filter((scenario) =>
+      scenario.coverage?.representative?.includes(coverageId),
+    );
+    const representative =
+      representatives.length === 1
+        ? representatives[0]
+        : representatives.length === 0 && candidates.length === 1
+          ? candidates[0]
+          : undefined;
+    if (!representative) {
+      const detail =
+        candidates.length === 0
+          ? "no eligible scenario"
+          : representatives.length > 1
+            ? `multiple representatives: ${representatives.map((scenario) => scenario.id).join(", ")}`
+            : `multiple eligible scenarios without a representative: ${candidates.map((scenario) => scenario.id).join(", ")}`;
+      throw new Error(`${params.profileId} profile coverage ${coverageId} has ${detail}.`);
+    }
+    if (!selectedIds.has(representative.id)) {
+      selectedIds.add(representative.id);
+      selected.push(representative);
+    }
+  }
+  return selected;
 }
 
 type ScenarioInventoryRef = {
@@ -981,6 +1048,7 @@ function buildQaScorecardTaxonomyReport(params: {
         evidenceMode: profile.evidenceMode ?? "full",
         channelDriver: profile.channelDriver,
         categoryIds: validCategoryIds,
+        coverageIds: profile.coverageIds,
       };
     }) ?? [];
 

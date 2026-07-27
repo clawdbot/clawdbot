@@ -53,6 +53,7 @@ function testMaturityTaxonomy(params?: {
         includeAllCategories: false,
         channelDriver: "crabline" as const,
         categoryIds: [categoryId],
+        coverageIds: [],
       },
       {
         id: "release",
@@ -60,6 +61,7 @@ function testMaturityTaxonomy(params?: {
         includeAllCategories: params?.includeAllCategories ?? false,
         channelDriver: "qa-channel" as const,
         categoryIds: params?.includeAllCategories ? [] : [categoryId],
+        coverageIds: [],
       },
     ],
     surfaces: [
@@ -239,7 +241,6 @@ describe("qa coverage report", () => {
     expect(inventory.scenarioPacks.map((pack) => pack.id)).toEqual([
       "observability",
       "personal-agent",
-      "smoke-ci",
     ]);
     const personalPack = inventory.scenarioPacks.find((pack) => pack.id === "personal-agent");
     const observabilityPack = inventory.scenarioPacks.find((pack) => pack.id === "observability");
@@ -622,6 +623,7 @@ describe("qa coverage report", () => {
           includeAllCategories: false,
           channelDriver: "qa-channel",
           categoryIds: ["agent-runtime.agent-turn-execution"],
+          coverageIds: [],
         },
       ],
       surfaces: [

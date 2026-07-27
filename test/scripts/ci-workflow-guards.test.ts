@@ -180,7 +180,10 @@ function runCiManifestFixture(options: {
     if (options.qaSmokePlan ?? options.bundledPlanner) {
       const smokePlan = path.join(root, "extensions", "qa-lab", "src", "ci-smoke-plan.ts");
       mkdirSync(path.dirname(smokePlan), { recursive: true });
-      writeFileSync(smokePlan, "export {};\n");
+      writeFileSync(
+        smokePlan,
+        options.bundledPlanner ? "export const createQaSmokeCiShard = () => {};\n" : "export {};\n",
+      );
     }
     if (iosCapabilities) {
       for (const name of [
@@ -2073,7 +2076,7 @@ describe("ci workflow guards", () => {
       "checks-ui-e2e",
       "control-ui-i18n",
       "native-i18n",
-      "qa-smoke-ci-profile",
+      "qa-smoke-ci",
     ]);
     for (const { jobName, stepWith } of stickyConsumers) {
       const stickyCondition = stepWith["sticky-disk"];
@@ -4203,7 +4206,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(releaseCandidateStep.if).toBe("inputs.release_candidate_ref != ''");
     expect(releaseCandidateStep.run).toContain('git ls-remote --heads "$remote"');
     expect(releaseCandidateStep.run).toContain('[[ "$branch_sha" != "$EXPECTED_SHA" ]]');
-    expect(workflow.jobs["qa-smoke-ci-profile"].if).toBe(
+    expect(workflow.jobs["qa-smoke-ci"].if).toBe(
       "needs.preflight.outputs.run_qa_smoke_ci == 'true'",
     );
     expect(workflow.jobs["checks-fast-channel-contracts-shard"].if).toBe(
@@ -4586,7 +4589,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "checks-ui-e2e",
       "control-ui-i18n",
       "checks-fast-core",
-      "qa-smoke-ci-profile",
+      "qa-smoke-ci",
       "checks-fast-plugin-contracts-shard",
       "checks-fast-channel-contracts-shard",
       "checks-node-compat",
@@ -5185,24 +5188,28 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const runStep = fastCoreJob.steps.find(
       (step: WorkflowStep) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
     );
-    const smokeProfileJob = workflow.jobs["qa-smoke-ci-profile"];
-    const smokeBuildStep = smokeProfileJob.steps.find(
+    const smokeJob = workflow.jobs["qa-smoke-ci"];
+    const smokeBuildStep = smokeJob.steps.find(
       (step: WorkflowStep) => step.name === "Build QA smoke runtime",
     );
-    const smokeDockerCacheStep = smokeProfileJob.steps.find(
+    const smokeDockerCacheStep = smokeJob.steps.find(
       (step: WorkflowStep) => step.name === "Set up Blacksmith Docker layer cache",
     );
-    const smokeRunStep = smokeProfileJob.steps.find(
-      (step: WorkflowStep) => step.name === "Run smoke profile part",
+    const smokeRunStep = smokeJob.steps.find(
+      (step: WorkflowStep) => step.name === "Run QA smoke shard",
     );
-    const smokeUploadStep = smokeProfileJob.steps.find(
-      (step: WorkflowStep) => step.name === "Upload QA smoke profile evidence",
+    const smokeUploadStep = smokeJob.steps.find(
+      (step: WorkflowStep) => step.name === "Upload QA smoke shard evidence",
     );
 
     const ciWorkflowText = readFileSync(".github/workflows/ci.yml", "utf8");
 
     expect(preflightStep.run).not.toContain("qa-smoke-profile");
     expect(preflightStep.run).not.toContain("qa_category");
+    expect(preflightStep.run).toContain("supportsQaSmokeShards");
+    expect(preflightStep.run).toContain(
+      "Frozen target does not support taxonomy-derived QA smoke sharding",
+    );
     expect(taxonomyCategoryIds.length).toBeGreaterThan(0);
     for (const categoryId of taxonomyCategoryIds) {
       expect(ciWorkflowText).not.toContain(`"${categoryId}"`);
@@ -5212,7 +5219,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(runStep.run).toContain("contracts-plugins-ci-routing)");
     expect(runStep.run).toContain("ci-routing)");
     expect(fastCoreJob["runs-on"]).toContain("matrix.runner");
-    expect(smokeProfileJob.name).toBe("QA Smoke CI (${{ matrix.name }})");
+    expect(smokeJob.name).toBe("QA Smoke CI (${{ matrix.name }})");
     expect(smokeBuildStep.run).toContain("node scripts/build-all.mjs qaRuntime");
     expect(smokeBuildStep.run).toContain("pnpm ui:build");
     expect(smokeBuildStep.env.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
@@ -5224,24 +5231,26 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       smokeBuildStep.run.indexOf("node scripts/build-all.mjs qaRuntime"),
     );
     expect(workflow.jobs["qa-smoke-ci-artifacts"]).toBeUndefined();
-    expect(workflow.jobs["qa-smoke-ci"]).toBeUndefined();
-    expect(smokeProfileJob.needs).toEqual(["preflight"]);
-    expect(smokeProfileJob.strategy["max-parallel"]).toBe(4);
+    expect(smokeJob.needs).toEqual(["preflight"]);
+    expect(smokeJob.strategy["max-parallel"]).toBe(4);
+    expect(smokeJob.strategy.matrix.include.map((entry: { slug: string }) => entry.slug)).toEqual([
+      "shard-1-of-4",
+      "shard-2-of-4",
+      "shard-3-of-4",
+      "shard-4-of-4",
+    ]);
     expect(
-      smokeProfileJob.strategy.matrix.include.map((entry: { slug: string }) => entry.slug),
-    ).toEqual(["profile-1-of-4", "profile-2-of-4", "profile-3-of-4", "profile-4-of-4"]);
-    expect(
-      smokeProfileJob.strategy.matrix.include.filter(
+      smokeJob.strategy.matrix.include.filter(
         (entry: { docker_cache?: boolean }) => entry.docker_cache,
       ),
     ).toEqual([
       expect.objectContaining({
-        lane: "profile-2",
-        slug: "profile-2-of-4",
+        lane: "shard-2",
+        slug: "shard-2-of-4",
         docker_cache: true,
       }),
     ]);
-    expect(smokeProfileJob["runs-on"]).toContain("blacksmith-16vcpu-ubuntu-2404");
+    expect(smokeJob["runs-on"]).toContain("blacksmith-16vcpu-ubuntu-2404");
     expect(smokeDockerCacheStep.uses).toBe(
       "useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0",
     );
@@ -5252,27 +5261,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "github.event.pull_request.head.repo.full_name == 'openclaw/openclaw'",
     );
     expect(smokeDockerCacheStep.with["max-cache-size-mb"]).toBe(800000);
-    expect(smokeRunStep.run).toContain("createQaSmokeCiPart");
-    expect(smokeRunStep.run).toContain("createQaSmokeCiMatrix");
-    expect(smokeRunStep.run).toContain("readQaScenarioPack");
-    expect(smokeRunStep.run).toContain("isolate each scenario");
-    expect(smokeRunStep.run).toContain("scenario_ids: [scenarioId]");
-    expect(smokeRunStep.run).not.toContain("scenarioIdsByKind");
-    const compatibilityScenarioBlock = smokeRunStep.run.match(
-      /const compatibilityScenarioIds = new Set\(\[([\s\S]*?)\]\);/u,
-    )?.[1];
-    expect(compatibilityScenarioBlock?.match(/^\s+"[^"]+",$/gmu)).toHaveLength(11);
-    expect(compatibilityScenarioBlock).not.toContain('"dreaming-shadow-trial-report"');
-    expect(compatibilityScenarioBlock).toContain('"control-ui-chat-flow-playwright"');
-    expect(compatibilityScenarioBlock).toContain('"gateway-smoke"');
-    expect(compatibilityScenarioBlock).toContain('"matrix-restart-resume"');
+    expect(smokeRunStep.run).toContain("createQaSmokeCiShard");
     expect(smokeRunStep.run).toContain(
-      "console.error(`[skip] ${partId} is not declared by this checkout's smoke plan`)",
+      "Selected checkout does not support taxonomy-derived QA smoke sharding",
     );
-    expect(smokeRunStep.run).not.toContain(
-      "console.log(`[skip] ${partId} is not declared by this checkout's smoke plan`)",
-    );
-    expect(smokeRunStep.run).toContain("No QA smoke runs assigned");
+    expect(smokeRunStep.run).not.toContain("createQaSmokeCiMatrix");
+    expect(smokeRunStep.run).not.toContain("compatibilityScenarioIds");
     expect(smokeRunStep.run).toContain("node openclaw.mjs qa run");
     expect(smokeRunStep.run).not.toContain("pnpm openclaw qa run");
     expect(smokeRunStep.run).toContain(
@@ -5289,7 +5283,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(smokeRunStep.env.OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS).toContain("'0'");
     expect(smokeRunStep.env.OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS).toContain("'1500'");
     expect(smokeRunStep.run).toContain('scenario_args+=(--scenario "$scenario_id")');
-    expect(smokeRunStep.run).toContain('done <<< "$PROFILE_RUNS_TSV"');
+    expect(smokeRunStep.run).toContain('done <<< "$SHARD_RUNS_TSV"');
     expect(smokeRunStep.run).not.toContain('pids+=("$!")');
     expect(smokeRunStep.run).not.toContain('wait "${pids[$index]}"');
     expect(smokeRunStep.run).not.toContain("--category");
@@ -5302,7 +5296,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(smokeRunStep.run).not.toContain("OPENAI_API_KEY");
     expect(smokeUploadStep.if).toBe("always()");
     expect(smokeUploadStep.with).toMatchObject({
-      path: ".artifacts/qa-e2e/smoke-ci-profile-${{ matrix.slug }}/",
+      path: ".artifacts/qa-e2e/smoke-ci-shard-${{ matrix.slug }}/",
       "if-no-files-found": "warn",
     });
     expect(runStep.run.match(/test\/scripts\/ci-workflow-guards\.test\.ts/g)?.length).toBe(2);
