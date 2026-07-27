@@ -132,6 +132,11 @@ export function createFollowupRunner(
     } catch (error) {
       if (error instanceof FollowupRunDeferredError) {
         disposition = { kind: "deferred", reason: error.message };
+      } else if (
+        operation?.result?.kind === "aborted" &&
+        operation.result.code === "aborted_by_user"
+      ) {
+        disposition = { kind: "consumed" };
       } else if (executionStarted) {
         // There is no durable post-execution resume record yet. Requeueing the prompt
         // here can duplicate persisted turns and external tool side effects. Preserve

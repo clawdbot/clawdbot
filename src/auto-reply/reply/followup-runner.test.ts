@@ -84,8 +84,12 @@ function createTypingController() {
   };
 }
 
-function createTurn(order: string[] = []) {
+function createTurn(
+  order: string[] = [],
+  result: AdmittedFollowupTurn["operation"]["result"] = null,
+) {
   const operation = {
+    result,
     complete: vi.fn(() => order.push("operation-complete")),
     fail: vi.fn(() => order.push("operation-failed")),
   };
@@ -193,6 +197,21 @@ describe("createFollowupRunner", () => {
     expect(order).toEqual(["operation-complete"]);
     expect(typing.markRunComplete).toHaveBeenCalledOnce();
     expect(typing.markDispatchIdle).toHaveBeenCalledOnce();
+  });
+
+  it("consumes a user abort before execution starts", async () => {
+    const typing = createTypingController();
+    const turn = createTurn([], { kind: "aborted", code: "aborted_by_user" });
+    state.admit.mockResolvedValue({ kind: "admitted", turn });
+    state.execute.mockRejectedValue(new Error("aborted before execution start"));
+
+    await createFollowupRunner({ typing, typingMode: "instant", defaultModel: "claude" })(
+      turn.queued,
+    );
+
+    expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
+    expect(state.clearRunContext).toHaveBeenCalledWith("run-1");
+    expect(turn.operation.fail).not.toHaveBeenCalled();
   });
 
   it("consumes a turn that fails after canonical execution starts", async () => {
