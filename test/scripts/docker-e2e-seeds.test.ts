@@ -16,6 +16,12 @@ describe("Docker E2E seed scripts", () => {
     expect(source).toContain('aliases: [{ modelRef: DOCKER_OPENAI_MODEL_REF, alias: "GPT" }]');
     expect(source).toContain("primaryModelRef: DOCKER_OPENAI_MODEL_REF");
     expect(source).toContain("openAiProvider.apiKey = apiKey");
+    expect(source).toContain("writeDockerOpenAiProviderConfigFile");
+    expect(source).toContain("process.env.OPENCLAW_CONFIG_PATH?.trim()");
+    expect(source).toContain(
+      "await fs.writeFile(configPath, `${JSON.stringify(seededConfig, null, 2)}\\n`",
+    );
+    expect(source).toContain("pathToFileURL(path.resolve(process.argv[1]");
   });
 
   it("keeps MCP channels config wired to seeded transcript artifacts", () => {
