@@ -818,10 +818,17 @@ describe("admitFollowupTurn", () => {
     });
 
     expect(result).toMatchObject({ kind: "admitted", turn: { preflightFailurePayload: {} } });
-    expect(onCompactionNoticePayload.mock.calls.map(([payload]) => payload)).toEqual([
+    expect(onCompactionNoticePayload).toHaveBeenCalledTimes(2);
+    expect(onCompactionNoticePayload).toHaveBeenNthCalledWith(
+      1,
       { text: "start" },
+      expect.anything(),
+    );
+    expect(onCompactionNoticePayload).toHaveBeenNthCalledWith(
+      2,
       { text: "incomplete" },
-    ]);
+      expect.anything(),
+    );
   });
 
   it("restores the item when generation changes before a compaction notice", async () => {
