@@ -14,6 +14,7 @@ import "../components/github-link-hovercard-registration.ts";
 import "../components/login-gate.ts";
 import "../components/macos-titlebar-controls.ts";
 import "../components/onboarding-memory-import.ts";
+import "../components/openclaw-mascot.ts";
 import "../components/resizable-divider.ts";
 import "../components/sidebar-update-card.ts";
 import "../components/tooltip.ts";
@@ -215,16 +216,10 @@ function resolveTerminalThemeMode(): "dark" | "light" {
   return document.documentElement.dataset.themeMode === "light" ? "light" : "dark";
 }
 
-// The mascot SVG animates via SMIL, so it must load through <img src> —
-// inlining the markup would freeze it (see ui/public/favicon.svg).
-function renderConnectingSplash(basePath: string) {
+function renderConnectingSplash() {
   return html`
     <main class="connect-splash" role="status" aria-live="polite" aria-label=${t("common.loading")}>
-      <img
-        class="connect-splash__logo"
-        src=${controlUiPublicAssetPath("favicon.svg", basePath)}
-        alt=""
-      />
+      <openclaw-mascot mood="thinking" .size=${120}></openclaw-mascot>
     </main>
   `;
 }
@@ -416,7 +411,7 @@ class OpenClawApp extends OpenClawLightDomElement {
           fullscreen
         ></openclaw-terminal-panel>
         ${!isOptionalElementDefined(TERMINAL_PANEL_ELEMENT) && terminalAvailable
-          ? renderConnectingSplash(context.basePath)
+          ? renderConnectingSplash()
           : nothing}
         ${!terminalAvailable && (gatewayConnected || gatewaySnapshot.lastError)
           ? html`<div class="terminal-view-unavailable">${t("terminal.unavailable")}</div>`
@@ -439,7 +434,7 @@ class OpenClawApp extends OpenClawLightDomElement {
     if (initialConnectPending) {
       return html`
         <openclaw-tooltip-provider>
-          ${renderConnectingSplash(context.basePath)} ${gatewayUrlConfirmation}
+          ${renderConnectingSplash()} ${gatewayUrlConfirmation}
         </openclaw-tooltip-provider>
       `;
     }
