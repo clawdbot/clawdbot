@@ -4084,6 +4084,11 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   it.each([
     new Error("no rollout found for thread id codex-session-missing"),
     Object.assign(new Error("Resource not found: session"), { code: -32002 }),
+    Object.assign(new Error("Internal error"), {
+      name: "RequestError",
+      code: -32603,
+      data: "Failed to start session: Session not found: kiro-session-missing",
+    }),
     Object.assign(new Error("Invalid params"), {
       code: -32602,
       data: { message: 'Session "claude-session-missing" not found' },
