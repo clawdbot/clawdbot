@@ -1116,6 +1116,7 @@ function parseGatewayQuery(value: unknown): {
 async function listClaudeSessionCatalog(params: {
   runtime: PluginRuntime;
   query?: unknown;
+  listNodes?: Parameters<SessionCatalogProvider["list"]>[0]["listNodes"];
   onHost?: (host: ClaudeSessionCatalogHost) => void;
 }): Promise<ClaudeSessionCatalogResult> {
   const query = parseGatewayQuery(params.query);
@@ -1165,7 +1166,7 @@ async function listClaudeSessionCatalog(params: {
   }
   let nodes: Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"];
   try {
-    nodes = (await params.runtime.nodes.list()).nodes;
+    nodes = (await (params.listNodes?.() ?? params.runtime.nodes.list())).nodes;
   } catch (error) {
     const registryHost: ClaudeSessionCatalogHost = {
       hostId: "node:registry",
@@ -1598,12 +1599,13 @@ export function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
     list: async (query) => {
       const adopted = listBoundClaudeSessions(api, query.sessionEntries);
       const localCliAvailable = catalogTerminal.isClaudeCliAvailable();
-      const { onHost, sessionEntries: _sessionEntries, ...gatewayQuery } = query;
+      const { listNodes, onHost, sessionEntries: _sessionEntries, ...gatewayQuery } = query;
       const mapHost = (host: ClaudeSessionCatalogHost) =>
         toGenericClaudeHost(host, adopted, localCliAvailable);
       const result = await listClaudeSessionCatalog({
         runtime: api.runtime,
         query: gatewayQuery,
+        listNodes,
         ...(onHost ? { onHost: (host) => onHost(mapHost(host)) } : {}),
       });
       return result.hosts.map(mapHost);

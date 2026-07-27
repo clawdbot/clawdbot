@@ -18,6 +18,7 @@ import {
   emitSkillUsedDiagnostic,
   emitToolBlockedSecurityEvent,
   findSkillUsageMatch,
+  reconcileLoopCallExecutionParams,
   recordLoopOutcome,
   rememberPendingTerminalPresentation,
   resolveToolDiagnosticIdentity,
@@ -430,6 +431,12 @@ export function wrapToolWithBeforeToolCallHook(
         // Hooks can repair or rewrite arguments; only the final execution
         // shape is safe to validate, after vetoes but before side effects.
         await validateToolExecutionParams(toolCallId, executeParams);
+        await reconcileLoopCallExecutionParams({
+          ctx,
+          toolName: normalizedToolName,
+          toolParams: executeParams,
+          toolCallId,
+        });
       } catch (error) {
         recordPreExecutionError(error, outcome.params ?? hookParams, "tool_preparation");
         throw tagBeforeToolCallFailure(error, signal);

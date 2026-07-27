@@ -497,7 +497,7 @@ export async function listSessionsFromStoreAsync(params: {
           storePath,
         });
         if (includeDerivedTitles) {
-          row.derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
+          row.derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage, row.displayName);
         }
         if (includeLastMessage && fields.lastMessagePreview) {
           row.lastMessagePreview = fields.lastMessagePreview;

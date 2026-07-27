@@ -25,6 +25,7 @@ export type ToolCallRecord = {
   toolCallId?: string;
   runId?: string;
   resultHash?: string;
+  noProgress?: true;
   unknownToolName?: string;
   timestamp: number;
 };

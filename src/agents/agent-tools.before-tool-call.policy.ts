@@ -78,11 +78,17 @@ export async function runBeforeToolCallHook(args: {
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
+  let releaseArgumentChurnPolicyWait: (() => void) | undefined;
 
   try {
     if (args.ctx?.sessionKey) {
-      const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop, recordToolCall } =
-        await loadBeforeToolCallRuntime();
+      const {
+        markDiagnosticArgumentChurnObservation,
+        getDiagnosticSessionState,
+        logToolLoopAction,
+        detectToolCallLoop,
+        recordToolCall,
+      } = await loadBeforeToolCallRuntime();
       const sessionState = getDiagnosticSessionState({
         sessionKey: args.ctx.sessionKey,
         sessionId: args.ctx.sessionId,
@@ -96,6 +102,27 @@ export async function runBeforeToolCallHook(args: {
         args.ctx.loopDetection,
         loopScope,
       );
+
+      if (args.ctx.loopDetection?.enabled === true) {
+        // Each concurrent policy/approval wait owns a token. Releasing one call
+        // must not expose the churn clock while a sibling is still pending.
+        const policyWaitToken = Symbol("before-tool-call-policy-wait");
+        const policyWaitRef = {
+          sessionKey: args.ctx.sessionKey,
+          sessionId: args.ctx.sessionId,
+          runId: args.ctx.runId,
+          policyWaitToken,
+        };
+        markDiagnosticArgumentChurnObservation({
+          ...policyWaitRef,
+          policyWait: "enter",
+        });
+        releaseArgumentChurnPolicyWait = () =>
+          markDiagnosticArgumentChurnObservation({
+            ...policyWaitRef,
+            policyWait: "exit",
+          });
+      }
 
       if (loopResult.stuck) {
         if (loopResult.level === "critical") {
@@ -400,5 +427,13 @@ export async function runBeforeToolCallHook(args: {
       reason: BEFORE_TOOL_CALL_HOOK_FAILURE_REASON,
       params,
     };
+  } finally {
+    try {
+      releaseArgumentChurnPolicyWait?.();
+    } catch (err) {
+      log.warn(
+        `before_tool_call policy-wait release failed: tool=${toolName} error=${String(err)}`,
+      );
+    }
   }
 }
