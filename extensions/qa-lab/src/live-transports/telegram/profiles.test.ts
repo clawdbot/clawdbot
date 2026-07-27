@@ -2,19 +2,24 @@ import { describe, expect, it } from "vitest";
 import { listTelegramQaScenarios, resolveTelegramQaScenarioIds } from "./profiles.js";
 
 describe("Telegram QA profiles", () => {
-  it("keeps release focused and adds the scripted long-final check for mock runs", () => {
+  it("derives release membership from taxonomy and provider eligibility", () => {
     const live = resolveTelegramQaScenarioIds({ providerMode: "live-frontier" });
     const mock = resolveTelegramQaScenarioIds({ providerMode: "mock-openai" });
 
     expect(live).toContain("telegram-other-bot-command-gating");
     expect(live).not.toContain("telegram-long-final-reuses-preview");
-    expect(mock).toEqual([...live, "telegram-long-final-reuses-preview"]);
+    expect(mock).toContain("telegram-long-final-reuses-preview");
+    expect(mock).toContain("telegram-assistant-transcript-role-boundary");
   });
 
-  it("selects every migrated Telegram scenario through all", () => {
-    expect(
-      resolveTelegramQaScenarioIds({ providerMode: "mock-openai", profile: "all" }),
-    ).toHaveLength(16);
+  it("selects every taxonomy-owned executable Telegram scenario through all", () => {
+    const scenarioIds = resolveTelegramQaScenarioIds({
+      providerMode: "mock-openai",
+      profile: "all",
+    });
+
+    expect(scenarioIds).toContain("channel-message-flows");
+    expect(scenarioIds).toContain("native-command-session-target");
   });
 
   it("lets explicit scenarios override profile selection", () => {
@@ -22,21 +27,21 @@ describe("Telegram QA profiles", () => {
       resolveTelegramQaScenarioIds({
         profile: "release",
         providerMode: "live-frontier",
-        scenarioIds: ["thread-follow-up"],
+        scenarioIds: ["telegram-help-command"],
       }),
-    ).toEqual(["thread-follow-up"]);
+    ).toEqual(["telegram-help-command"]);
   });
 
-  it("rejects unknown profiles and leaves explicit scenario validation to the suite catalog", () => {
+  it("rejects unknown profiles and channel-ineligible explicit scenarios", () => {
     expect(() =>
       resolveTelegramQaScenarioIds({ providerMode: "live-frontier", profile: "transport" }),
-    ).toThrow('Unknown QA Lab Telegram profile "transport"');
-    expect(
+    ).toThrow("QA taxonomy profile must be one of");
+    expect(() =>
       resolveTelegramQaScenarioIds({
         providerMode: "live-frontier",
         scenarioIds: ["channel-chat-baseline"],
       }),
-    ).toEqual(["channel-chat-baseline"]);
+    ).toThrow("cannot run ineligible scenario(s)");
   });
 
   it("lists the YAML catalog with provider-specific release defaults", () => {
@@ -50,6 +55,6 @@ describe("Telegram QA profiles", () => {
     ).toBe(true);
     expect(
       scenarios.find(({ id }) => id === "telegram-long-final-three-chunks")?.defaultEnabled,
-    ).toBe(false);
+    ).toBe(true);
   });
 });

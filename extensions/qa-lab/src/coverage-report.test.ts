@@ -166,7 +166,7 @@ describe("qa coverage report", () => {
     expect(inventory.secondaryCoverageIdCount).toBeGreaterThan(0);
     expect(inventory.overlappingCoverage.length).toBeGreaterThan(0);
     expect(inventory.missingCoverage).toStrictEqual([]);
-    expect(inventory.scorecardTaxonomy.profileCount).toBe(3);
+    expect(inventory.scorecardTaxonomy.profileCount).toBe(5);
     expect(
       inventory.scorecardTaxonomy.profiles.find((profile) => profile.id === "smoke-ci"),
     ).toMatchObject({
@@ -238,18 +238,6 @@ describe("qa coverage report", () => {
       role: "primary",
       scenarioRefs: ["qa/scenarios/ui/control-ui-chat-flow-playwright.yaml"],
     });
-    expect(inventory.scenarioPacks.map((pack) => pack.id)).toEqual([
-      "observability",
-      "personal-agent",
-    ]);
-    const personalPack = inventory.scenarioPacks.find((pack) => pack.id === "personal-agent");
-    const observabilityPack = inventory.scenarioPacks.find((pack) => pack.id === "observability");
-    expect(personalPack?.missingScenarioIds).toStrictEqual([]);
-    expect(personalPack?.scenarioIds).toContain("personal-share-safe-diagnostics-artifact");
-    expect(personalPack?.coverageIds).toContain("security.redaction-personal-redaction");
-    expect(observabilityPack?.missingScenarioIds).toStrictEqual([]);
-    expect(observabilityPack?.scenarioIds).toEqual(["otel-trace-smoke", "docker-prometheus-smoke"]);
-    expect(observabilityPack?.coverageIds).toContain("observability.prometheus");
     expect(
       expectDefined(inventory.byTheme.memory, "memory QA theme").map((coverage) => coverage.id),
     ).toContain("session-memory.memory-recall");
@@ -372,14 +360,6 @@ describe("qa coverage report", () => {
     expect(report).toContain("session-memory.embedding-search-recall");
     expect(report).toContain("primary: memory-recall (qa/scenarios/memory/memory-recall.yaml)");
     expect(report).toContain("secondary: active-memory-preprompt-recall");
-    expect(report).toContain("## Scenario Packs");
-    expect(report).toContain(
-      "- personal-agent (Personal Agent Benchmark Pack): 10 scenarios; coverage IDs:",
-    );
-    expect(report).toContain(
-      "- observability (Observability Smoke Pack): 2 scenarios; coverage IDs:",
-    );
-    expect(report).toContain("otel-trace-smoke, docker-prometheus-smoke");
     expect(report).toContain("personal-share-safe-diagnostics-artifact");
     expect(report).toContain("## Scorecard Taxonomy");
     expect(report).toContain("- Taxonomy: taxonomy.yaml");

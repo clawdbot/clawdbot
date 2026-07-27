@@ -1,9 +1,14 @@
-const DISCORD_QA_DEFAULT_SCENARIO_IDS = [
-  "discord-canary",
-  "discord-mention-gating",
-  "discord-native-help-command-registration",
-] as const;
+import type { QaProviderModeInput } from "../../model-selection.js";
+import { resolveLiveTransportQaScenarioIds } from "../shared/scenario-selection.js";
 
-export function resolveDiscordQaScenarioIds({ scenarioIds }: { scenarioIds?: readonly string[] }) {
-  return scenarioIds?.length ? [...scenarioIds] : [...DISCORD_QA_DEFAULT_SCENARIO_IDS];
+export function resolveDiscordQaScenarioIds(params: {
+  profile?: string;
+  providerMode?: QaProviderModeInput;
+  scenarioIds?: readonly string[];
+}) {
+  return resolveLiveTransportQaScenarioIds({
+    channelId: "discord",
+    ...params,
+    providerMode: params.providerMode ?? "live-frontier",
+  });
 }

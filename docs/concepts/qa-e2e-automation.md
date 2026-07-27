@@ -48,7 +48,7 @@ script aliases; both forms work.
 | `qa mock-openai`                                    | Start only the scenario-aware `mock-openai` provider server.                                                                                                                                                                                                        |
 | `qa credentials doctor` / `add` / `list` / `remove` | Manage the shared Convex credential pool.                                                                                                                                                                                                                           |
 | `qa discord`                                        | Live transport lane against a real private Discord guild channel.                                                                                                                                                                                                   |
-| `qa matrix`                                         | Catalog-selected Matrix QA against a disposable Tuwunel homeserver. See [Matrix live lane](#matrix-live-lane).                                                                                                                                                      |
+| `qa matrix`                                         | QA Lab Matrix catalog scenarios against a disposable Tuwunel homeserver. See [Matrix live lane](#matrix-live-lane).                                                                                                                                                 |
 | `qa slack`                                          | Live transport lane against a real private Slack channel.                                                                                                                                                                                                           |
 | `qa telegram`                                       | Live transport lane against a real private Telegram group.                                                                                                                                                                                                          |
 | `qa whatsapp`                                       | Live transport lane against real WhatsApp Web accounts.                                                                                                                                                                                                             |
@@ -69,12 +69,6 @@ ID is exactly `taxonomy-surface.feature`, using the short surface ID from
 label (for example, `channel` or `runtime-tool`); it does not define taxonomy
 ownership.
 
-The bounded `smoke-ci` profile declares coverage anchors under its taxonomy
-categories. Each anchor resolves one lane-eligible representative scenario;
-scenario coverage marks a representative only when multiple scenarios prove
-the same feature. CI partitions that resolved set afterward, so shard layout
-does not own eligibility.
-
 Slim evidence omits per-entry `execution` and sets `evidenceMode: "slim"`;
 `smoke-ci` defaults to slim, and `--evidence-mode full` restores full entries:
 
@@ -83,7 +77,7 @@ pnpm openclaw qa run \
   --qa-profile smoke-ci \
   --category channels.conversation-routing-and-delivery \
   --provider-mode mock-openai \
-  --output-dir .artifacts/qa-e2e/smoke-ci-dispatch
+  --output-dir .artifacts/qa-e2e/smoke-ci-profile-dispatch
 ```
 
 Use `smoke-ci` for deterministic profile proof with mock model providers and
@@ -202,15 +196,17 @@ OPENCLAW_LIVE_OPENAI_KEY="${OPENAI_API_KEY}" \
   pnpm openclaw qa matrix --provider-mode live-frontier
 ```
 
-Plain `pnpm openclaw qa matrix` continues after scenario failures and selects
-every flow scenario in the catalog that matches the Matrix channel plus the
-requested provider/model constraints. Repeat `--scenario <id>` for the only
-user-facing subset override; explicit IDs are validated against that same lane
-contract. Use `--fail-fast` for a shorter feedback loop.
+Plain `pnpm openclaw qa matrix` runs every flow scenario that explicitly
+declares Matrix eligibility through `execution.channel` or
+`execution.channels`, and it continues after scenario failures. Use
+`--fail-fast` for a shorter feedback loop or repeat `--scenario <id>` for an
+explicit subset, including portable scenarios with no channel restriction.
 
-Declarative scenarios own channel and capability requirements. Matrix chooses
-the live adapter implementation at run time; using the Crabline implementation
-with the same channel/provider inputs resolves the same membership.
+Declarative scenario metadata is the only default-membership source. The
+Matrix runner has no named profiles or scenario-id allowlists. The run chooses
+the channel driver; deterministic `--shard <index>/<total>` partitioning only
+distributes the selected catalog and does not define semantic membership or
+execution priority.
 Their live implementations live under
 `extensions/qa-lab/src/live-transports/matrix/scenarios/`.
 
@@ -226,6 +222,7 @@ Common options:
 | Flag                     | Default           | Purpose                                                                              |
 | ------------------------ | ----------------- | ------------------------------------------------------------------------------------ |
 | `--scenario <id>`        | -                 | Select one scenario; repeatable.                                                     |
+| `--shard <index/total>`  | -                 | Run one deterministic, balanced partition of the selected Matrix catalog.            |
 | `--fail-fast`            | off               | Stop after the first failed check or scenario.                                       |
 | `--allow-failures`       | off               | Write artifacts without returning a failing exit code for scenario failures.         |
 | `--provider-mode <mode>` | `live-frontier`   | Use `mock-openai` for deterministic dispatch or `live-frontier` for a live provider. |
@@ -264,9 +261,8 @@ gateway replies.
 
 CI uses the same command surface in
 `.github/workflows/qa-live-transports-convex.yml`. Scheduled, release, and
-manual runs first resolve the same catalog-derived set, then divide it into
-five deterministic execution shards. Those internal shards do not define
-scenario membership.
+manual runs fan the catalog-derived selection across five deterministic shards
+so membership stays scenario-owned while each job remains within its timeout.
 
 ### Discord Mantis scenarios
 
@@ -407,10 +403,11 @@ when the maintainer secret is present.
 
 The root `taxonomy.yaml` defines semantic coverage IDs. Scenario YAML files
 under `qa/scenarios/` map each scenario to those IDs and own execution
-metadata; `channel` is the only channel requirement. Named scenario packs and
-transport runners own curated run membership. The channel driver is an
-interchangeable run-level implementation choice. Runners query scenario
-execution and coverage facts from the catalog without duplicating them.
+metadata; `channel` is the only channel requirement. Taxonomy profiles select
+coverage IDs or whole categories, and the catalog resolves their primary
+scenario owners. Transport runners apply channel and provider eligibility to
+that result instead of keeping scenario-ID allowlists. The channel driver is
+an interchangeable run-level implementation choice.
 
 Static `qa coverage` output reports the taxonomy-to-scenario mapping. Actual
 proof comes from `qa-evidence.json`, which records the executed scenario,
@@ -433,13 +430,10 @@ Host and Multipass suite runs execute multiple selected scenarios in
 parallel with isolated gateway workers by default. `qa-channel` defaults to
 concurrency 4, capped by the selected scenario count. Use `--concurrency
 <count>` to tune the worker count, or `--concurrency 1` for serial execution.
-Use `--pack personal-agent` to run the personal assistant benchmark pack (10
-scenarios). The pack selector is additive with repeated `--scenario` flags:
-explicit scenarios run first, then pack scenarios run in pack order with
-duplicates removed. Use `--pack observability` to select the
-`otel-trace-smoke` and `docker-prometheus-smoke` scenarios together when a
-custom QA runner already supplies the OpenTelemetry collector setup. The
-bounded CI set comes from the taxonomy-owned `smoke-ci` coverage anchors.
+Use `qa run --qa-profile personal-agent --provider-mode mock-openai` for the
+personal assistant benchmark, or `--qa-profile observability` for the source
+checkout telemetry checks. CI uses the same profile resolver for `smoke-ci`;
+none of these selectors maintains a second scenario-ID list.
 
 The command exits non-zero when any scenario fails. Use `--allow-failures`
 when you want artifacts without a failing exit code.
