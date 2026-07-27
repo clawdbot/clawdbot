@@ -793,6 +793,132 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.updateAssistant).toHaveBeenCalledWith("hello", "run-alias");
   });
 
+  it("protects concurrent lifecycle-confirmed streams from an orphan delta flood", () => {
+    const { state, chatLog, handleAgentEvent, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    handleChatEvent({
+      runId: "run-first",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: [{ type: "text", text: "first live response" }] },
+    } satisfies ChatEvent);
+    handleAgentEvent({
+      runId: "run-second",
+      sessionKey: state.currentSessionKey,
+      stream: "lifecycle",
+      data: { phase: "start" },
+    } satisfies AgentEvent);
+    handleChatEvent({
+      runId: "run-second",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: [{ type: "text", text: "second live response" }] },
+    } satisfies ChatEvent);
+
+    for (let index = 0; index < 500; index += 1) {
+      handleChatEvent({
+        runId: `run-orphan-${index}`,
+        sessionKey: state.currentSessionKey,
+        state: "delta",
+        message: { content: [{ type: "text", text: `orphan ${index}` }] },
+      } satisfies ChatEvent);
+    }
+
+    expect(state.activeChatRunId).toBe("run-first");
+    handleChatEvent({
+      runId: "run-second",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { role: "assistant", content: [] },
+    } satisfies ChatEvent);
+    handleChatEvent({
+      runId: "run-first",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { role: "assistant", content: [] },
+    } satisfies ChatEvent);
+
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("second live response", "run-second");
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("first live response", "run-first");
+  });
+
+  it.each([
+    {
+      provider: "Matrix",
+      selectedSessionKey: "agent:main:matrix:channel:!MixedRoom:example.org",
+      otherSessionKey: "agent:main:matrix:channel:!mixedroom:example.org",
+    },
+    {
+      provider: "Signal",
+      selectedSessionKey: "agent:main:signal:group:AbC123=",
+      otherSessionKey: "agent:main:signal:group:abc123=",
+    },
+  ])(
+    "isolates case-distinct $provider session events across every TUI event surface",
+    ({ selectedSessionKey, otherSessionKey }) => {
+      const {
+        state,
+        chatLog,
+        btw,
+        loadHistory,
+        handleChatEvent,
+        handleAgentEvent,
+        handleBtwEvent,
+        handleSessionsChangedEvent,
+        handleSessionMessageEvent,
+      } = createHandlersHarness({
+        state: {
+          activeChatRunId: null,
+          currentSessionKey: selectedSessionKey,
+          currentSessionId: "selected-session",
+          sessionInfo: { verboseLevel: "on", updatedAt: 100 },
+        },
+      });
+
+      handleChatEvent({
+        runId: "run-other-session",
+        sessionKey: otherSessionKey,
+        state: "delta",
+        message: { content: "message from another conversation" },
+      } satisfies ChatEvent);
+      handleAgentEvent({
+        runId: "run-other-lifecycle",
+        sessionKey: otherSessionKey,
+        stream: "lifecycle",
+        data: { phase: "start" },
+      } satisfies AgentEvent);
+      handleBtwEvent({
+        kind: "btw",
+        runId: "run-other-btw",
+        sessionKey: otherSessionKey,
+        question: "other conversation?",
+        text: "private answer",
+      } satisfies BtwEvent);
+      handleSessionsChangedEvent({
+        sessionKey: otherSessionKey,
+        reason: "reset",
+        sessionId: "other-session",
+        updatedAt: 200,
+      } satisfies SessionChangedEvent);
+      handleSessionMessageEvent({
+        sessionKey: otherSessionKey,
+        agentId: "main",
+        sessionId: "other-session",
+        updatedAt: 200,
+      } satisfies SessionMessageEvent);
+
+      expect(chatLog.updateAssistant).not.toHaveBeenCalled();
+      expect(btw.showResult).not.toHaveBeenCalled();
+      expect(loadHistory).not.toHaveBeenCalled();
+      expect(state.activeChatRunId).toBeNull();
+      expect(state.currentSessionKey).toBe(selectedSessionKey);
+      expect(state.currentSessionId).toBe("selected-session");
+      expect(state.sessionInfo.updatedAt).toBe(100);
+    },
+  );
+
   it("renders BTW results separately without disturbing the active run", () => {
     const { state, btw, setActivityStatus, loadHistory, tui, handleBtwEvent } =
       createHandlersHarness({
@@ -2202,6 +2328,95 @@ describe("tui-event-handlers: handleAgentEvent", () => {
         phase: "end",
       } satisfies SessionChangedEvent);
 
+      expect(loadHistory).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      { firstPersistedRunId: "run-first", secondPersistedRunId: "run-second" },
+      { firstPersistedRunId: "run-second", secondPersistedRunId: "run-first" },
+    ])(
+      "waits for both visible finals when $firstPersistedRunId persists first",
+      ({ firstPersistedRunId, secondPersistedRunId }) => {
+        const {
+          state,
+          chatLog,
+          loadHistory,
+          handleChatEvent,
+          handleSessionsChangedEvent,
+          handleSessionMessageEvent,
+        } = createHandlersHarness({ state: { activeChatRunId: null } });
+
+        for (const runId of ["run-first", "run-second"]) {
+          handleChatEvent({
+            runId,
+            sessionKey: state.currentSessionKey,
+            state: "final",
+            message: { content: [{ type: "text", text: `${runId} visible response` }] },
+          } satisfies ChatEvent);
+        }
+
+        expect(chatLog.finalizeAssistant).toHaveBeenCalledTimes(2);
+        handleSessionMessageEvent({
+          sessionKey: state.currentSessionKey,
+          updatedAt: 200,
+        } satisfies SessionMessageEvent);
+        expect(loadHistory).not.toHaveBeenCalled();
+
+        handleSessionsChangedEvent({
+          sessionKey: state.currentSessionKey,
+          runId: firstPersistedRunId,
+          phase: "end",
+        } satisfies SessionChangedEvent);
+        expect(loadHistory).not.toHaveBeenCalled();
+
+        handleSessionsChangedEvent({
+          sessionKey: state.currentSessionKey,
+          runId: secondPersistedRunId,
+          phase: "end",
+        } satisfies SessionChangedEvent);
+        expect(loadHistory).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it("coalesces external updates until every concurrently displayed final is persisted", () => {
+      const {
+        state,
+        loadHistory,
+        handleChatEvent,
+        handleSessionsChangedEvent,
+        handleSessionMessageEvent,
+      } = createHandlersHarness({ state: { activeChatRunId: null } });
+
+      for (const runId of ["run-first", "run-second", "run-third"]) {
+        handleChatEvent({
+          runId,
+          sessionKey: state.currentSessionKey,
+          state: "final",
+          message: { content: [{ type: "text", text: `${runId} visible response` }] },
+        } satisfies ChatEvent);
+      }
+
+      for (let index = 0; index < 250; index += 1) {
+        handleSessionMessageEvent({
+          sessionKey: state.currentSessionKey,
+          updatedAt: index,
+        } satisfies SessionMessageEvent);
+      }
+
+      for (const runId of ["run-third", "run-first"]) {
+        handleSessionsChangedEvent({
+          sessionKey: state.currentSessionKey,
+          runId,
+          phase: "end",
+        } satisfies SessionChangedEvent);
+        expect(loadHistory).not.toHaveBeenCalled();
+      }
+
+      handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        runId: "run-second",
+        phase: "end",
+      } satisfies SessionChangedEvent);
       expect(loadHistory).toHaveBeenCalledTimes(1);
     });
 

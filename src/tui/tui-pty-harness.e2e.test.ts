@@ -237,6 +237,36 @@ async function writeTuiPtyFixtureScript(dir: string) {
             });
             return { runId };
           }
+          if (opts.message.startsWith("opaque session isolation proof: ")) {
+            const otherSessionKey = opts.sessionKey.includes(":matrix:")
+              ? opts.sessionKey.replace("!MixedRoomAbCdEf", "!mixedroomabcdef")
+              : opts.sessionKey.replace("AbC123=", "abc123=");
+            const marker = "PTY_FOREIGN_OPAQUE_SESSION_MESSAGE";
+            queueMicrotask(() => {
+              record("foreignSessionEvent", { sessionKey: otherSessionKey, marker });
+              this.onEvent?.({
+                event: "chat",
+                payload: {
+                  runId: "run-foreign-opaque-session",
+                  sessionKey: otherSessionKey,
+                  state: "delta",
+                  message: {
+                    role: "assistant",
+                    content: [{ type: "text", text: marker }],
+                  },
+                },
+              });
+              this.onEvent?.({
+                event: "session.message",
+                payload: {
+                  agentId: "main",
+                  sessionKey: otherSessionKey,
+                  sessionId: "foreign-opaque-session",
+                  updatedAt: Date.now(),
+                },
+              });
+            });
+          }
           const responseDelayMs =
             opts.message === "slow prompt" ||
             opts.message === "slow reset proof" ||
@@ -978,6 +1008,38 @@ describe.sequential("TUI PTY harness", () => {
       await fixture.waitForLogEntry(
         (entry) => entry.method === "patchSession" && objectFieldEquals(entry, field, level),
       );
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it.each([
+    {
+      provider: "Matrix",
+      sessionKey: "agent:main:matrix:channel:!MixedRoomAbCdEf:example.org",
+      message: "opaque session isolation proof: Matrix",
+    },
+    {
+      provider: "Signal",
+      sessionKey: "agent:main:signal:group:AbC123=",
+      message: "opaque session isolation proof: Signal",
+    },
+  ])(
+    "keeps case-distinct $provider conversations out of the visible terminal",
+    async ({ sessionKey, message }) => {
+      await fixture.run.write(`/session ${sessionKey}\r`, { delay: false });
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "loadHistory" && objectFieldEquals(entry, "sessionKey", sessionKey),
+      );
+
+      const outputOffset = fixture.run.output().length;
+      await fixture.run.write(`${message}\r`, { delay: false });
+      await fixture.waitForLogEntry((entry) => entry.method === "foreignSessionEvent");
+      await fixture.run.waitForOutput(`PTY_RESPONSE: ${message}`);
+
+      const sessionOutput = fixture.run.output().slice(outputOffset);
+      expect(sessionOutput).toContain(`PTY_RESPONSE: ${message}`);
+      expect(sessionOutput).not.toContain("PTY_FOREIGN_OPAQUE_SESSION_MESSAGE");
     },
     TEST_TIMEOUT_MS,
   );

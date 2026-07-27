@@ -1,5 +1,4 @@
 // Assembles streamed backend events into TUI-visible messages.
-import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
   composeThinkingAndContent,
   extractContentFromMessage,
@@ -110,7 +109,9 @@ function shouldPreserveBoundaryDroppedText(params: {
 
 /** Assembles assistant stream deltas and final messages into stable TUI display text. */
 export class TuiStreamAssembler {
-  private runs = new Map<string, RunStreamState>();
+  private readonly runs = new Map<string, RunStreamState>();
+
+  constructor(private readonly isProtectedRun?: (runId: string) => boolean) {}
 
   private createRunState(): RunStreamState {
     return {
@@ -133,7 +134,18 @@ export class TuiStreamAssembler {
 
     const state = this.createRunState();
     this.runs.set(runId, state);
-    pruneMapToMaxSize(this.runs, MAX_TRACKED_STREAM_RUNS);
+    if (this.runs.size > MAX_TRACKED_STREAM_RUNS) {
+      // A run can pause while a tool executes; unrelated deltas must not evict
+      // the partial reply that its eventual empty final still needs to render.
+      for (const trackedRunId of this.runs.keys()) {
+        if (this.runs.size <= MAX_TRACKED_STREAM_RUNS) {
+          break;
+        }
+        if (!this.isProtectedRun?.(trackedRunId)) {
+          this.runs.delete(trackedRunId);
+        }
+      }
+    }
     return state;
   }
 
@@ -224,5 +236,10 @@ export class TuiStreamAssembler {
   /** Drops stored stream state for an aborted or discarded run. */
   drop(runId: string) {
     this.runs.delete(runId);
+  }
+
+  /** Clears stream fragments when the selected conversation changes. */
+  clear() {
+    this.runs.clear();
   }
 }

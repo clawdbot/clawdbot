@@ -1236,6 +1236,17 @@ describe("TUI PTY real backends", () => {
         await fixture.run.waitForOutput("FOLLOWUP_RUN_COMPLETE", LOCAL_OUTPUT_TIMEOUT_MS);
         const followupOffset = fixture.run.output().lastIndexOf("FOLLOWUP_RUN_COMPLETE");
         await waitForOutputAfter(fixture.run, "| idle", followupOffset);
+        console.info(
+          "[behavior-evidence] tui-real-gateway-cross-client",
+          JSON.stringify({
+            transport: "real Gateway WebSocket",
+            terminal: "real PTY",
+            externalMessage: marker,
+            externalMessageRendered: fixture.run.output().includes(marker),
+            followupRendered: fixture.run.output().includes("FOLLOWUP_RUN_COMPLETE"),
+            returnedToIdle: fixture.run.output().slice(followupOffset).includes("| idle"),
+          }),
+        );
         await fixture.run.write("/exit\r", { delay: false });
         expect((await fixture.run.waitForExit()).exitCode).toBe(0);
       } finally {
