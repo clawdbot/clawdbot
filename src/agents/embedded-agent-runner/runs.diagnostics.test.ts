@@ -103,8 +103,9 @@ describe("active run injection diagnostics", () => {
       unsubscribe();
     }
 
-    expect(getDiagnosticSessionState({ sessionId: "session-reply-steer-diagnostics" }).queueDepth)
-      .toBe(0);
+    expect(
+      getDiagnosticSessionState({ sessionId: "session-reply-steer-diagnostics" }).queueDepth,
+    ).toBe(0);
     expect(queuedDepths).toEqual([1, 1]);
   });
 });
