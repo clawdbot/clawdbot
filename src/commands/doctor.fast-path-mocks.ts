@@ -55,6 +55,10 @@ vi.mock("./doctor-usage-cost-cache.js", () => ({
 
 vi.mock("./doctor/cron/index.js", () => ({
   maybeRepairLegacyCronStore: vi.fn().mockResolvedValue(undefined),
+  collectCronCodexRuntimePolicyTargetsReadOnly: vi.fn().mockResolvedValue({
+    targets: [],
+    warnings: [],
+  }),
   noteLegacyWhatsAppCrontabHealthCheck: vi.fn().mockResolvedValue(undefined),
 }));
 
