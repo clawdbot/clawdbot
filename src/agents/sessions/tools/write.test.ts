@@ -178,7 +178,11 @@ describe("write tool", () => {
     await fs.writeFile(filePath, oldContent, "utf-8");
     const tool = createWriteTool(tmpDir);
 
-    const result = await tool.execute("call-1", { path: "different.txt", content }, undefined);
+    const result = await tool.execute(
+      "call-1",
+      { path: "different.txt", content, overwrite: true },
+      undefined,
+    );
     const diffResult = generateDiffString(oldContent, content);
 
     expect(result.content[0]).toEqual({
@@ -202,7 +206,7 @@ describe("write tool", () => {
 
     const result = await tool.execute(
       "call-1",
-      { path: "binary.bin", content: "text now\n" },
+      { path: "binary.bin", content: "text now\n", overwrite: true },
       undefined,
     );
 
@@ -220,6 +224,7 @@ describe("write tool", () => {
       {
         path: "distinct-lines.txt",
         content: Array.from({ length: 10_000 }, (_, i) => `new-${i}`).join("\n"),
+        overwrite: true,
       },
       undefined,
     );
@@ -247,7 +252,7 @@ describe("write tool", () => {
 
     const result = await tool.execute(
       "call-1",
-      { path: "many-lines.txt", content: "b\n".repeat(15_000) },
+      { path: "many-lines.txt", content: "b\n".repeat(15_000), overwrite: true },
       undefined,
     );
 
@@ -261,7 +266,7 @@ describe("write tool", () => {
 
     const result = await tool.execute(
       "call-1",
-      { path: "combined.txt", content: "b".repeat(600 * 1024) },
+      { path: "combined.txt", content: "b".repeat(600 * 1024), overwrite: true },
       undefined,
     );
 
@@ -283,7 +288,7 @@ describe("write tool", () => {
 
     const result = await tool.execute(
       "call-1",
-      { path: "large.txt", content: "replacement\n" },
+      { path: "large.txt", content: "replacement\n", overwrite: true },
       undefined,
     );
 
@@ -299,11 +304,39 @@ describe("write tool", () => {
 
     const result = await tool.execute(
       "call-1",
-      { path: "large-replacement.txt", content },
+      { path: "large-replacement.txt", content, overwrite: true },
       undefined,
     );
 
     expect(result.details).toEqual({ changed: true, created: false });
+  });
+
+  it("refuses to overwrite a pre-existing differing file without overwrite: true", async () => {
+    // Guards benchmark-observed data loss: models blind-writing to a path that
+    // already holds unrelated user content must opt in explicitly.
+    const filePath = await createTempPath("precious.md");
+    await fs.writeFile(filePath, "original notes\n", "utf-8");
+    const tool = createWriteTool(tmpDir);
+
+    await expect(
+      tool.execute("call-1", { path: "precious.md", content: "brand new\n" }, undefined),
+    ).rejects.toThrow(/overwrite: true/);
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("original notes\n");
+  });
+
+  it("rewrites files it created in the same session without the overwrite flag", async () => {
+    await createTempPath("iterate.txt");
+    const tool = createWriteTool(tmpDir);
+
+    await tool.execute("call-1", { path: "iterate.txt", content: "v1\n" }, undefined);
+    const result = await tool.execute(
+      "call-2",
+      { path: "iterate.txt", content: "v2\n" },
+      undefined,
+    );
+
+    expect(result.content[0]?.type).toBe("text");
+    await expect(fs.readFile(path.join(tmpDir, "iterate.txt"), "utf-8")).resolves.toBe("v2\n");
   });
 
   it("does not guess creation status when the pre-write stat is unavailable", async () => {

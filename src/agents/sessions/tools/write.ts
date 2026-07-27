@@ -36,6 +36,11 @@ const writeSchema = Type.Object({
     description: "File path; relative/absolute.",
   }),
   content: Type.String({ description: "File content." }),
+  overwrite: Type.Optional(
+    Type.Boolean({
+      description: "Set true to replace an existing file this session has not written.",
+    }),
+  ),
 });
 
 const WriteToolOutputSchema = Type.Union([
@@ -531,17 +536,21 @@ export function createWriteToolDefinition(
   options?: WriteToolOptions,
 ): ToolDefinition<typeof writeSchema, WriteToolDetails> {
   const ops = options?.operations ?? defaultWriteOperations;
+  // Paths this tool instance already wrote: rewriting your own output stays
+  // friction-free while pre-existing files keep the explicit-overwrite gate.
+  const sessionWrittenPaths = new Set<string>();
   return {
     name: "write",
     label: "write",
-    description: "Write/overwrite file; creates parent directories.",
+    description:
+      "Write file; creates parent directories. Replacing an existing file needs overwrite:true.",
     promptSnippet: "Create/overwrite files",
     promptGuidelines: ["Use only new files/complete rewrites."],
     parameters: writeSchema,
     outputSchema: WriteToolOutputSchema,
     async execute(
       toolCallId,
-      { path, content }: { path: string; content: string },
+      { path, content, overwrite }: { path: string; content: string; overwrite?: boolean },
       signal?: AbortSignal,
       onUpdate?,
       ctx?,
@@ -555,6 +564,20 @@ export function createWriteToolDefinition(
         const precheck = await readOriginalWriteState(absolutePath, content, ops);
         if (signal?.aborted) {
           throw new Error("Operation aborted");
+        }
+        // Guard silent data loss: a differing file that predates this tool
+        // instance is only replaced when the model explicitly opts in.
+        if (
+          precheck.state !== "same" &&
+          precheck.beforeStat?.type === "file" &&
+          overwrite !== true &&
+          !sessionWrittenPaths.has(absolutePath)
+        ) {
+          throw new Error(
+            `File already exists: ${path} (${precheck.beforeStat.size} bytes) and its content differs. ` +
+              `To replace it, call write again with overwrite: true. ` +
+              `If the existing content matters, read it first or choose a different path.`,
+          );
         }
         // Terminal no-op: file already has identical content.
         if (precheck.state === "same") {
@@ -575,6 +598,7 @@ export function createWriteToolDefinition(
           if (signal?.aborted) {
             throw new Error("Operation aborted");
           }
+          sessionWrittenPaths.add(absolutePath);
           return successfulWriteResult(path, content, details);
         } catch (error: unknown) {
           const recovered = await recoverSuccessfulWrite({
@@ -588,6 +612,7 @@ export function createWriteToolDefinition(
             signal,
           });
           if (recovered) {
+            sessionWrittenPaths.add(absolutePath);
             return recovered;
           }
           throw error;
