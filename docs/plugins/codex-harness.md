@@ -143,6 +143,13 @@ transport. It uses `$CODEX_HOME` when set and `~/.codex` otherwise, including
 that home's native Codex auth, config, plugins, and thread store. OpenClaw does
 not inject an OpenClaw auth profile into this app-server.
 
+Because user-home mode refuses a prepared OpenClaw auth profile outright
+(`Prepared Codex auth requires an isolated app-server home.`), a stored OpenAI
+profile plus `homeScope: "user"` stops the agent from starting. Check with
+`openclaw models auth list --provider openai` and remove the stored profile with
+`openclaw models auth logout <profileId> --yes`, or switch back to
+`homeScope: "agent"` if you want OpenClaw to keep managing that credential.
+
 Owner turns gain the `codex_threads` tool: list, search, read, fork, rename,
 archive, and restore native threads. Fork a thread to continue it in
 OpenClaw; the fork attaches to the current OpenClaw session and stays
