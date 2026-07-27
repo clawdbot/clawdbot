@@ -13,7 +13,8 @@ import { registerSubCliByName } from "./program/register.subclis.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const CHILD_PROCESS_TIMEOUT_MS = 30_000;
+// Fork CI uses shared hosted runners where cold TSX startup can exceed 30 seconds.
+const CHILD_PROCESS_TIMEOUT_MS = 45_000;
 const LAZY_GROUP_HELP_CASES = [
   { group: "backup", usageCommand: "backup", registry: "core" },
   { group: "capability", usageCommand: "infer|capability", registry: "subcli" },
