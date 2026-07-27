@@ -376,26 +376,12 @@ export async function runPreparedEmbeddedLoop(
       accumulatedReplayState = normalizedAttempt.replayState;
       const {
         attempt,
-        terminalProjection: {
-          aborted,
-          externalAbort,
-          promptError,
-          timedOut,
-          idleTimedOut,
-          timedOutDuringCompaction,
-          timedOutDuringToolExecution,
-          timedOutByRunBudget,
-        },
         sessionIdUsed,
         sessionFileUsed,
         currentAttemptAssistant,
         currentAttemptCompletedAssistant,
         attemptAssistant,
-        terminalOutcome,
-        terminalAborted,
-        terminalTimedOut,
-        terminalInterrupted,
-        signalOwnedInterruption,
+        terminalState,
         setTerminalLifecycleMeta,
         attemptCompactionCount,
         activeErrorContext,
@@ -445,9 +431,7 @@ export async function runPreparedEmbeddedLoop(
         attempt,
         attemptAssistant,
         currentAttemptAssistant,
-        terminalProviderStarted: terminalOutcome.providerStarted === true,
-        terminalInterrupted,
-        promptError,
+        terminalState,
         activeErrorContext,
         provider,
         modelId,
@@ -455,14 +439,6 @@ export async function runPreparedEmbeddedLoop(
         thinkLevel,
         getThinkLevel: () => preparedRuntime.snapshot().thinkLevel,
         attemptedThinking,
-        timedOut,
-        idleTimedOut,
-        timedOutDuringCompaction,
-        timedOutDuringToolExecution,
-        timedOutByRunBudget,
-        signalOwnedInterruption,
-        externalAbort,
-        aborted,
         fallbackConfigured,
         pluginHarnessOwnsTransport,
         canRestartForLiveSwitch,
@@ -506,22 +482,15 @@ export async function runPreparedEmbeddedLoop(
       }
       let assistantProfileFailureReason = assistantFailureOutcome.assistantProfileFailureReason;
       const terminalToolPresentation = readAttemptTerminalToolPresentation();
-      const terminalState = await prepareTerminalWithSettledTurnFinalization({
+      const finalizedTerminal = await prepareTerminalWithSettledTurnFinalization({
         initial: {
           attempt,
           attemptAssistant,
           currentAttemptCompletedAssistant,
           sessionIdUsed,
           sessionFileUsed,
-          terminalAborted,
-          terminalTimedOut,
-          terminalInterrupted,
-          externalAbort,
-          signalOwnedInterruption,
-          promptError,
+          terminalState,
           attemptCompactionCount,
-          timedOutDuringCompaction,
-          timedOutDuringToolExecution,
         },
         terminalBase: {
           runParams: params,
@@ -549,19 +518,14 @@ export async function runPreparedEmbeddedLoop(
       const {
         attempt: terminalAttempt,
         attemptAssistant: terminalAttemptAssistant,
-        terminalAborted: terminalAbortedState,
-        terminalTimedOut: terminalTimedOutState,
-        terminalInterrupted: terminalInterruptedState,
-        externalAbort: terminalExternalAbort,
-        signalOwnedInterruption: terminalSignalOwnedInterruption,
-        promptError: terminalPromptError,
+        terminalState: resolvedTerminalState,
         attemptCompactionCount: terminalAttemptCompactionCount,
         prepared: terminalPrepared,
         finalizationAttempted: settledTurnFinalizationAttempted,
-      } = terminalState;
-      lastRunPromptUsage = terminalState.lastRunPromptUsage;
-      lastTurnTotal = terminalState.lastTurnTotal;
-      if (terminalState.finalizationSucceeded) {
+      } = finalizedTerminal;
+      lastRunPromptUsage = finalizedTerminal.lastRunPromptUsage;
+      lastTurnTotal = finalizedTerminal.lastTurnTotal;
+      if (finalizedTerminal.finalizationSucceeded) {
         assistantProfileFailureReason = null;
       }
 
@@ -584,14 +548,11 @@ export async function runPreparedEmbeddedLoop(
         timedOutDuringPrompt,
         hasSuccessfulFinalAssistantAfterPromptTimeout,
         shouldSurfaceCodexCompletionTimeout,
-        idleTimedOut,
         attempt: terminalAttempt,
         hasPartialAssistantTextAfterPromptTimeout,
         payloads,
         payloadsWithToolMedia,
-        terminalAborted: terminalAbortedState,
-        terminalTimedOut: terminalTimedOutState,
-        terminalOutcome,
+        terminalState: resolvedTerminalState,
         resolveReplayInvalid: resolveReplayInvalidForAttempt,
         setTerminalLifecycleMeta,
         startedAtMs: started,
@@ -613,12 +574,7 @@ export async function runPreparedEmbeddedLoop(
         activeErrorContext,
         modelApi: effectiveModel.api,
         executionContract,
-        terminalAborted: terminalAbortedState,
-        terminalTimedOut: terminalTimedOutState,
-        terminalInterrupted: terminalInterruptedState,
-        externalAbort: terminalExternalAbort,
-        signalOwnedInterruption: terminalSignalOwnedInterruption,
-        promptError: terminalPromptError,
+        terminalState: resolvedTerminalState,
         payloadsWithToolMedia,
         recoveredFinalAssistantPayloadsAfterPromptTimeout,
         finalAssistantVisibleText,

@@ -36,7 +36,7 @@ import {
   isEmbeddedRunTerminalAbort,
   isEmbeddedRunTerminalInterrupted,
   isEmbeddedRunTerminalTimeout,
-  resolveEmbeddedRunAttemptTerminalOutcome,
+  resolveEmbeddedRunAttemptTerminalState,
 } from "./terminal-outcome.js";
 
 type PreparedRuntime = Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
@@ -74,7 +74,6 @@ export async function normalizeEmbeddedRunAttempt(input: {
       lastTurnTotal: number | undefined;
       replayState: ReplayState;
       attempt: ReturnType<typeof normalizeEmbeddedRunAttemptResult>;
-      terminalProjection: ReturnType<typeof projectAgentRunAttemptTerminal>;
       sessionIdUsed: string;
       sessionFileUsed: string | undefined;
       currentAttemptAssistant: ReturnType<
@@ -86,11 +85,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
       attemptAssistant: ReturnType<
         typeof normalizeEmbeddedRunAttemptResult
       >["currentAttemptAssistant"];
-      terminalOutcome: ReturnType<typeof resolveEmbeddedRunAttemptTerminalOutcome>;
-      terminalAborted: boolean;
-      terminalTimedOut: boolean;
-      terminalInterrupted: boolean;
-      signalOwnedInterruption: boolean;
+      terminalState: ReturnType<typeof resolveEmbeddedRunAttemptTerminalState>;
       setTerminalLifecycleMeta: NonNullable<
         ReturnType<typeof normalizeEmbeddedRunAttemptResult>["setTerminalLifecycleMeta"]
       >;
@@ -121,8 +116,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
     currentAttemptAssistant,
     currentAttemptCompletedAssistant,
   } = attempt;
-  const terminalProjection = projectAgentRunAttemptTerminal(terminal);
-  const { idleTimedOut } = terminalProjection;
+  const { idleTimedOut } = projectAgentRunAttemptTerminal(terminal);
   const sessionAssistantForCandidate =
     !currentAttemptAssistant &&
     !isAssistantForModelRef(sessionLastAssistant, {
@@ -132,15 +126,15 @@ export async function normalizeEmbeddedRunAttempt(input: {
       ? undefined
       : sessionLastAssistant;
   const attemptAssistant = currentAttemptAssistant ?? sessionAssistantForCandidate;
-  const terminalOutcome = resolveEmbeddedRunAttemptTerminalOutcome({
+  const terminalState = resolveEmbeddedRunAttemptTerminalState({
     attempt,
     assistant: currentAttemptAssistant,
     abortSignal: params.abortSignal,
   });
+  const { outcome: terminalOutcome, signalOwnedInterruption } = terminalState;
   const terminalAborted = isEmbeddedRunTerminalAbort(terminalOutcome);
   const terminalTimedOut = isEmbeddedRunTerminalTimeout(terminalOutcome);
   const terminalInterrupted = isEmbeddedRunTerminalInterrupted(terminalOutcome);
-  const signalOwnedInterruption = terminalInterrupted && params.abortSignal?.aborted === true;
   const setTerminalLifecycleMeta: NonNullable<typeof attempt.setTerminalLifecycleMeta> = (meta) => {
     const { stopReason, ...remainingMeta } = meta;
     const terminalStopReason = terminalInterrupted ? terminalOutcome.stopReason : stopReason;
@@ -299,17 +293,12 @@ export async function normalizeEmbeddedRunAttempt(input: {
     lastTurnTotal,
     replayState,
     attempt,
-    terminalProjection,
     sessionIdUsed,
     sessionFileUsed,
     currentAttemptAssistant,
     currentAttemptCompletedAssistant,
     attemptAssistant,
-    terminalOutcome,
-    terminalAborted,
-    terminalTimedOut,
-    terminalInterrupted,
-    signalOwnedInterruption,
+    terminalState,
     setTerminalLifecycleMeta,
     attemptCompactionCount,
     activeErrorContext,

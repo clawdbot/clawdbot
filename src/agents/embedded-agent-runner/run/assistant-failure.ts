@@ -1,5 +1,6 @@
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
 import {
   classifyAssistantFailoverReason,
@@ -24,6 +25,10 @@ import { createFailoverDecisionLogger } from "./failover-observation.js";
 import { resolveRunFailoverDecision } from "./failover-policy.js";
 import { shouldRetrySilentErrorAssistantTurn } from "./incomplete-turn.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
+import {
+  isEmbeddedRunTerminalInterrupted,
+  type EmbeddedRunTerminalState,
+} from "./terminal-outcome.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 const MAX_EMPTY_ERROR_RETRIES = 3;
@@ -46,9 +51,7 @@ export async function handleEmbeddedAssistantFailure(input: {
   attempt: EmbeddedRunAttemptResult;
   attemptAssistant?: AssistantMessage;
   currentAttemptAssistant?: AssistantMessage;
-  terminalProviderStarted: boolean;
-  terminalInterrupted: boolean;
-  promptError: unknown;
+  terminalState: EmbeddedRunTerminalState;
   activeErrorContext: { provider: string; model: string };
   provider: string;
   modelId: string;
@@ -57,14 +60,6 @@ export async function handleEmbeddedAssistantFailure(input: {
   // Profile rotation resets thinking inside the runtime; read it after advancing.
   getThinkLevel: () => ThinkLevel;
   attemptedThinking: Set<ThinkLevel>;
-  timedOut: boolean;
-  idleTimedOut: boolean;
-  timedOutDuringCompaction: boolean;
-  timedOutDuringToolExecution: boolean;
-  timedOutByRunBudget: boolean;
-  signalOwnedInterruption: boolean;
-  externalAbort: boolean;
-  aborted: boolean;
   fallbackConfigured: boolean;
   pluginHarnessOwnsTransport: boolean;
   canRestartForLiveSwitch: boolean;
@@ -100,11 +95,23 @@ export async function handleEmbeddedAssistantFailure(input: {
   agentDir: string;
   isProbeSession: boolean;
 }): Promise<EmbeddedRunAssistantFailureOutcome> {
+  const {
+    aborted,
+    externalAbort,
+    idleTimedOut,
+    promptError,
+    timedOut,
+    timedOutByRunBudget,
+    timedOutDuringCompaction,
+    timedOutDuringToolExecution,
+  } = projectAgentRunAttemptTerminal(input.attempt.terminal);
+  const terminalInterrupted = isEmbeddedRunTerminalInterrupted(input.terminalState.outcome);
+  const { signalOwnedInterruption } = input.terminalState;
   const fallbackThinking = pickFallbackThinkingLevel({
     message: input.attemptAssistant?.errorMessage,
     attempted: input.attemptedThinking,
   });
-  if (fallbackThinking && !input.terminalInterrupted) {
+  if (fallbackThinking && !terminalInterrupted) {
     log.warn(
       `unsupported thinking level for ${input.provider}/${input.modelId}; retrying with ${fallbackThinking}`,
     );
@@ -122,10 +129,11 @@ export async function handleEmbeddedAssistantFailure(input: {
   const failoverFailure = isFailoverAssistantError(input.attemptAssistant);
   const assistantFailoverReason = classifyAssistantFailoverReason(input.attemptAssistant);
   const assistantProviderStarted =
-    Boolean(input.currentAttemptAssistant?.provider) || input.terminalProviderStarted;
+    Boolean(input.currentAttemptAssistant?.provider) ||
+    input.terminalState.outcome.providerStarted === true;
   const assistantProfileFailoverReason =
     assistantFailoverReason ??
-    (assistantProviderStarted && (input.timedOut || input.idleTimedOut) ? "timeout" : null);
+    (assistantProviderStarted && (timedOut || idleTimedOut) ? "timeout" : null);
   const assistantProfileFailureReason = input.resolveAuthProfileFailureReason(
     assistantProfileFailoverReason,
     {
@@ -154,8 +162,8 @@ export async function handleEmbeddedAssistantFailure(input: {
     !billingFailure &&
     !cloudCodeAssistFormatError &&
     !imageDimensionError &&
-    !input.terminalInterrupted &&
-    !input.promptError &&
+    !terminalInterrupted &&
+    !promptError &&
     silentErrorRetryReason &&
     shouldRetrySilentErrorAssistantTurn({
       attempt: input.attempt,
@@ -192,11 +200,11 @@ export async function handleEmbeddedAssistantFailure(input: {
     sourceModel: input.attemptAssistant?.model ?? input.modelId,
     profileId: failedProfileId,
     fallbackConfigured: input.fallbackConfigured,
-    timedOut: input.timedOut,
-    aborted: input.aborted,
+    timedOut,
+    aborted,
   });
   if (
-    !input.signalOwnedInterruption &&
+    !signalOwnedInterruption &&
     authFailure &&
     (await input.maybeRefreshRuntimeAuthForAuthError(
       input.attemptAssistant?.errorMessage ?? "",
@@ -232,35 +240,35 @@ export async function handleEmbeddedAssistantFailure(input: {
   const initialDecision = resolveRunFailoverDecision({
     stage: "assistant",
     allowFormatRetry: cloudCodeAssistFormatError,
-    aborted: input.aborted,
-    externalAbort: input.externalAbort || input.signalOwnedInterruption,
+    aborted,
+    externalAbort: externalAbort || signalOwnedInterruption,
     fallbackConfigured: input.fallbackConfigured,
     failoverFailure,
     failoverReason: assistantFailoverReason,
-    timedOut: input.timedOut,
-    idleTimedOut: input.idleTimedOut,
-    timedOutDuringCompaction: input.timedOutDuringCompaction,
-    timedOutDuringToolExecution: input.timedOutDuringToolExecution,
+    timedOut,
+    idleTimedOut,
+    timedOutDuringCompaction,
+    timedOutDuringToolExecution,
     harnessOwnsTransport: input.pluginHarnessOwnsTransport,
-    timedOutByRunBudget: input.timedOutByRunBudget,
+    timedOutByRunBudget,
     profileRotated: false,
   });
   const outcome = await handleAssistantFailover({
     initialDecision,
-    aborted: input.aborted,
-    externalAbort: input.externalAbort || input.signalOwnedInterruption,
+    aborted,
+    externalAbort: externalAbort || signalOwnedInterruption,
     fallbackConfigured: input.fallbackConfigured,
     failoverFailure,
     failoverReason: assistantFailoverReason,
-    timedOut: input.timedOut,
-    idleTimedOut: input.idleTimedOut,
-    timedOutDuringCompaction: input.timedOutDuringCompaction,
-    timedOutDuringToolExecution: input.timedOutDuringToolExecution,
-    timedOutByRunBudget: input.timedOutByRunBudget,
+    timedOut,
+    idleTimedOut,
+    timedOutDuringCompaction,
+    timedOutDuringToolExecution,
+    timedOutByRunBudget,
     allowSameModelIdleTimeoutRetry:
-      input.timedOut &&
-      input.idleTimedOut &&
-      !input.timedOutDuringCompaction &&
+      timedOut &&
+      idleTimedOut &&
+      !timedOutDuringCompaction &&
       !input.fallbackConfigured &&
       input.canRestartForLiveSwitch &&
       input.sameModelIdleTimeoutRetries < MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES,
