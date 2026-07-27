@@ -164,6 +164,10 @@ function getApiKeyEnvVars(provider: string): readonly string[] | undefined {
     return ["KIMI_API_KEY", "KIMICODE_API_KEY"];
   }
 
+  if (provider === "zai") {
+    return ["ZAI_API_KEY", "Z_AI_API_KEY"];
+  }
+
   const envMap: Record<string, string> = {
     openai: "OPENAI_API_KEY",
     meta: "MODEL_API_KEY",
@@ -176,7 +180,6 @@ function getApiKeyEnvVars(provider: string): readonly string[] | undefined {
     xai: "XAI_API_KEY",
     openrouter: "OPENROUTER_API_KEY",
     "vercel-ai-gateway": "AI_GATEWAY_API_KEY",
-    zai: "ZAI_API_KEY",
     mistral: "MISTRAL_API_KEY",
     minimax: "MINIMAX_API_KEY",
     "minimax-cn": "MINIMAX_CN_API_KEY",
