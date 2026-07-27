@@ -1,4 +1,5 @@
 import remend, { type RemendOptions } from "remend";
+import { findMarkdownCodeSpans } from "../../../packages/markdown-core/src/reasoning-tags.js";
 import {
   markdownDisclosureTagKind,
   MAX_MARKDOWN_DETAILS_DEPTH,
@@ -10,26 +11,29 @@ const FENCE_CONTAINER_PREFIX_RE = /^[ \t]{0,3}(?:(?:>\s?)|(?:(?:[-+*]|\d{1,9}[.)
 
 type DetailsFrame = { hasSummary: boolean };
 type FenceMarker = { length: number; marker: "`" | "~" };
+type StrippedMarkdownLine = { content: string; offset: number };
 
-function stripMarkdownContainerPrefixes(line: string): string {
+function stripMarkdownContainerPrefixes(line: string): StrippedMarkdownLine {
   let current = line;
+  let offset = 0;
   for (let index = 0; index < 8; index += 1) {
-    const next = current.replace(FENCE_CONTAINER_PREFIX_RE, "");
-    if (next === current) {
-      return current;
+    const match = FENCE_CONTAINER_PREFIX_RE.exec(current)?.[0];
+    if (!match) {
+      return { content: current, offset };
     }
-    current = next;
+    current = current.slice(match.length);
+    offset += match.length;
   }
-  return current;
+  return { content: current, offset };
 }
 
 function getFenceMarker(line: string): FenceMarker | null {
-  const fence = FENCE_OPEN_RE.exec(stripMarkdownContainerPrefixes(line))?.[1];
+  const fence = FENCE_OPEN_RE.exec(stripMarkdownContainerPrefixes(line).content)?.[1];
   return fence ? { length: fence.length, marker: fence.charAt(0) as FenceMarker["marker"] } : null;
 }
 
 function isFenceClose(line: string, fence: FenceMarker): boolean {
-  const trimmed = stripMarkdownContainerPrefixes(line).trimEnd();
+  const trimmed = stripMarkdownContainerPrefixes(line).content.trimEnd();
   const match = FENCE_OPEN_RE.exec(trimmed);
   const marker = match?.[1];
   if (!match || !marker) {
@@ -46,8 +50,15 @@ function updateDetailsStack(
   line: string,
   stack: DetailsFrame[],
   allowPendingSummary: boolean,
+  codeSpans: ReadonlyArray<readonly [number, number]>,
+  lineOffset: number,
 ): boolean {
-  const tags = scanMarkdownDisclosureLine(stripMarkdownContainerPrefixes(line));
+  const stripped = stripMarkdownContainerPrefixes(line);
+  const tags = scanMarkdownDisclosureLine(
+    stripped.content,
+    codeSpans,
+    lineOffset + stripped.offset,
+  );
   if (!tags) {
     return false;
   }
@@ -98,6 +109,7 @@ export function splitStableStreamingMarkdown(markdownLocal: string): StreamingMa
   let index = 0;
   let openFence: FenceMarker | null = null;
   const detailsStack: DetailsFrame[] = [];
+  const codeSpans = findMarkdownCodeSpans(markdownLocal);
   let lastFenceOffset = 0;
 
   while (index < markdownLocal.length) {
@@ -125,7 +137,7 @@ export function splitStableStreamingMarkdown(markdownLocal: string): StreamingMa
       continue;
     }
 
-    updateDetailsStack(line, detailsStack, false);
+    updateDetailsStack(line, detailsStack, false, codeSpans, index);
     if (line.trim() === "" && detailsStack.length === 0) {
       boundary = lineEnd;
     }
@@ -147,6 +159,7 @@ export function repairStreamingMarkdownTail(tail: string, repairStart = 0): stri
   const repaired =
     tail.slice(0, repairStart) + remend(tail.slice(repairStart), streamingRemendOptions);
   const detailsStack: DetailsFrame[] = [];
+  const codeSpans = findMarkdownCodeSpans(repaired);
   let openFence: FenceMarker | null = null;
   let pendingSummary = false;
   let index = 0;
@@ -161,7 +174,13 @@ export function repairStreamingMarkdownTail(tail: string, repairStart = 0): stri
     } else {
       openFence = getFenceMarker(line);
       if (!openFence) {
-        pendingSummary = updateDetailsStack(line, detailsStack, lineEnd === repaired.length);
+        pendingSummary = updateDetailsStack(
+          line,
+          detailsStack,
+          lineEnd === repaired.length,
+          codeSpans,
+          index,
+        );
       }
     }
     index = lineEnd;

@@ -92,7 +92,19 @@ describe("flattenMarkdownDetails", () => {
   });
 
   it("leaves literal details examples inside code unchanged", () => {
-    const markdown = "`<details>inline</details>`\n\n```html\n<details>block</details>\n```";
+    const markdown = [
+      "`<details>inline</details>`",
+      "",
+      "```html",
+      "<details>block</details>",
+      "```",
+      "",
+      "    <details>indented</details>",
+      "",
+      "- item",
+      "",
+      "      <details>list-indented</details>",
+    ].join("\n");
     expect(flattenMarkdownDetails(markdown)).toBe(markdown);
   });
 

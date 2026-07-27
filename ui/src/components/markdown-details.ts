@@ -1,5 +1,6 @@
 import type MarkdownIt from "markdown-it";
 import type StateBlock from "markdown-it/lib/rules_block/state_block.mjs";
+import { findMarkdownCodeSpans } from "../../../packages/markdown-core/src/reasoning-tags.js";
 
 export const MAX_MARKDOWN_DETAILS_DEPTH = 32;
 const DISCLOSURE_TAG_RE = /<\/?(?:details|summary)(?=[\s>])[^>]*>/gi;
@@ -25,6 +26,21 @@ type MarkdownDisclosureTagKind =
   | "summary_open"
   | "summary_close";
 
+function isEscapedMarkdownCharacter(text: string, index: number): boolean {
+  let backslashes = 0;
+  for (let cursor = index - 1; cursor >= 0 && text.charAt(cursor) === "\\"; cursor -= 1) {
+    backslashes += 1;
+  }
+  return backslashes % 2 === 1;
+}
+
+function isInsideMarkdownCode(
+  index: number,
+  codeSpans: ReadonlyArray<readonly [number, number]>,
+): boolean {
+  return codeSpans.some(([start, end]) => index >= start && index < end);
+}
+
 export function markdownDisclosureTagKind(raw: string): MarkdownDisclosureTagKind | null {
   const detailsOpen = DETAILS_OPEN_RE.exec(raw);
   if (detailsOpen) {
@@ -40,7 +56,11 @@ export function markdownDisclosureTagKind(raw: string): MarkdownDisclosureTagKin
 }
 
 /** Disclosure markup is structural only when it starts the current Markdown block line. */
-export function scanMarkdownDisclosureLine(line: string): MarkdownDisclosureTag[] | null {
+export function scanMarkdownDisclosureLine(
+  line: string,
+  codeSpans: ReadonlyArray<readonly [number, number]> = findMarkdownCodeSpans(line),
+  lineOffset = 0,
+): MarkdownDisclosureTag[] | null {
   const first = /^[ \t]*<\/?(?:details|summary)(?=[\s>])/i.exec(line);
   if (!first) {
     return null;
@@ -48,9 +68,15 @@ export function scanMarkdownDisclosureLine(line: string): MarkdownDisclosureTag[
   const tags: MarkdownDisclosureTag[] = [];
   for (const match of line.matchAll(DISCLOSURE_TAG_RE)) {
     const start = match.index ?? 0;
+    if (
+      isEscapedMarkdownCharacter(line, start) ||
+      isInsideMarkdownCode(lineOffset + start, codeSpans)
+    ) {
+      continue;
+    }
     tags.push({ end: start + match[0].length, raw: match[0], start });
   }
-  return tags;
+  return tags.length > 0 ? tags : null;
 }
 
 function pushInlineParagraph(state: StateBlock, content: string, line: number): void {

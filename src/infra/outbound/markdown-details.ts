@@ -150,8 +150,8 @@ export function flattenMarkdownDetails(text: string): string {
 
   const root: DetailsNode[] = [];
   const stack: Array<Extract<DetailsNode, { type: "details" | "summary" }>> = [];
-  // Accepted tradeoff: four-space-indented literal tags may flatten as details.
-  // Fenced and inline code stay protected; models normally author code fences.
+  // CommonMark code ownership protects fenced, inline, and indented examples,
+  // including indentation relative to list containers.
   const codeRegions = findCodeRegions(text);
   let cursor = 0;
   for (const match of text.matchAll(DETAILS_TAG_RE)) {

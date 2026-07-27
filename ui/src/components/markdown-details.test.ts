@@ -329,6 +329,37 @@ describe("details line-start contract", () => {
     expect([...fragment.children]).toHaveLength(1);
   });
 
+  it("keeps disclosure-shaped inline code on a structural line literal", () => {
+    const html = toSanitizedMarkdownHtml(
+      "<details><summary>A</summary>`literal </details>` still inside</details>",
+    );
+    const fragment = htmlFragment(html);
+    const details = fragment.querySelector("details");
+
+    expect(details?.querySelector("code")?.textContent).toBe("literal </details>");
+    expect(details?.textContent).toContain("still inside");
+    expect(fragment.querySelectorAll("details")).toHaveLength(1);
+  });
+
+  it("keeps escaped disclosure tags on a structural line literal", () => {
+    const html = toSanitizedMarkdownHtml(
+      "<details><summary>A</summary>\\</details> still inside</details>",
+    );
+    const fragment = htmlFragment(html);
+    const details = fragment.querySelector("details");
+
+    expect(details?.textContent).toContain("</details> still inside");
+    expect(fragment.querySelectorAll("details")).toHaveLength(1);
+  });
+
+  it("does not repair disclosure-shaped indented code while streaming", () => {
+    const html = toStreamingMarkdownHtml("before\n\n    <details>\n    <summary>literal");
+    const code = htmlFragment(html).querySelector("code");
+
+    expect(code?.textContent).toBe("<details>\n<summary>literal\n");
+    expect(code?.textContent).not.toContain("</summary>");
+  });
+
   it("keeps streaming details intact across an inline prose close tag", () => {
     const html = toStreamingMarkdownHtml(
       "<details>\n<summary>A</summary>\nliteral </details> text\n\nstill inside",
