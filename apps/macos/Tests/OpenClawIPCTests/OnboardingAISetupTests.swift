@@ -713,7 +713,10 @@ struct OnboardingAISetupTests {
         await model.detectAndAutoConnect()
         let option = try #require(model.prepareOptions.first { $0.id == "llama-cpp" })
         model.startProviderPrepare(option)
-        await completion.waitUntilStarted()
+        // Bounded wait, not `completion.waitUntilStarted()`: a client that stops
+        // polling never reaches the gated frame, and this must fail rather than
+        // hang. Once five requests are recorded the third `wizard.next` is held
+        // at the gate, so the sheet deterministically shows the second frame.
         let requests = await waitForAISetupRequests(recorder, count: 5)
 
         #expect(Array(requests.methods.prefix(5)) == [
