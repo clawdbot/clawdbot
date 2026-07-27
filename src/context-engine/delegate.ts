@@ -28,17 +28,17 @@ const loadCompactRuntime = createLazyRuntimeModule(
 function buildCompactionResultSessionTarget(params: {
   agentId?: string;
   callerSessionId?: string;
+  callerSessionTarget?: ContextEngineSessionTarget;
   sessionFile?: string;
   sessionId?: string;
   sessionKey?: string;
-  sessionTarget?: ContextEngineSessionTarget;
 }): ContextEngineSessionTarget | undefined {
   const sessionFile = normalizeOptionalString(params.sessionFile);
   const marker = parseSqliteSessionFileMarker(sessionFile);
-  const targetAgentId = normalizeOptionalString(params.sessionTarget?.agentId);
-  const targetSessionId = normalizeOptionalString(params.sessionTarget?.sessionId);
-  const targetSessionKey = normalizeOptionalString(params.sessionTarget?.sessionKey);
-  const targetStorePath = normalizeOptionalString(params.sessionTarget?.storePath);
+  const targetAgentId = normalizeOptionalString(params.callerSessionTarget?.agentId);
+  const targetSessionId = normalizeOptionalString(params.callerSessionTarget?.sessionId);
+  const targetSessionKey = normalizeOptionalString(params.callerSessionTarget?.sessionKey);
+  const targetStorePath = normalizeOptionalString(params.callerSessionTarget?.storePath);
   const requestedAgentId = normalizeOptionalString(params.agentId);
   const callerSessionId = normalizeOptionalString(params.callerSessionId);
   const requestedSessionKey = normalizeOptionalString(params.sessionKey);
@@ -137,8 +137,8 @@ function buildCompactionResultSessionTarget(params: {
     sessionId,
     ...(sessionKey ? { sessionKey } : {}),
     ...(storePath ? { storePath } : {}),
-    ...(params.sessionTarget?.threadId !== undefined
-      ? { threadId: params.sessionTarget.threadId }
+    ...(params.callerSessionTarget?.threadId !== undefined
+      ? { threadId: params.callerSessionTarget.threadId }
       : {}),
   };
 }
@@ -199,10 +199,10 @@ export async function delegateCompactionToRuntime(
     ? buildCompactionResultSessionTarget({
         agentId,
         callerSessionId: params.sessionId,
+        callerSessionTarget: sessionTarget,
         sessionFile: result.result.sessionFile,
         sessionId: result.result.sessionId,
         sessionKey,
-        sessionTarget,
       })
     : undefined;
 
