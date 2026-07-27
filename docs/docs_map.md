@@ -2594,6 +2594,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Chunking rules
   - H2: Link policy
   - H2: Spoilers
+  - H2: Collapsible details
   - H2: Adding or updating a channel formatter
   - H2: Common gotchas
   - H2: Related
