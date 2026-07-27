@@ -21,6 +21,7 @@ import type {
 import type { SessionDataController } from "../components/session-data-controller.ts";
 import type { SessionOrganizerController } from "../components/session-organizer-controller.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
+import { reconcileSessionHistory } from "../lib/sessions/reconcile.ts";
 import { createApplicationContextProvider } from "./application-context.ts";
 import { createStorageMock } from "./storage.ts";
 
@@ -81,6 +82,7 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
     client,
     phase: "connected",
     offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: "main",
     sessionKey: "agent:main:main",
@@ -154,6 +156,7 @@ export function createSessionState(agentId: string, keys: string[]): SessionStat
     error: null,
     deletedSessions: [],
     groups: [],
+    sectionOrder: [],
   };
 }
 
@@ -210,6 +213,17 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   const list = vi.fn((_options?: Parameters<SessionCapability["list"]>[0]) =>
     Promise.resolve<SessionsListResult | null>(null),
   );
+  const reconcile = vi.fn<SessionCapability["reconcile"]>((row, defaults, options) => {
+    const result = reconcileSessionHistory(state.result, row, defaults, options);
+    if (result === state.result) {
+      return false;
+    }
+    state = { ...state, result };
+    for (const listener of listeners) {
+      listener(state);
+    }
+    return true;
+  });
   const sessions = {
     get state() {
       return state;
@@ -222,6 +236,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       return () => listeners.delete(listener);
     },
     subscribeCreated: () => () => undefined,
+    isPreparedWorkSession: () => false,
     pullRequestSummary: (key: string) => pullRequestSummaries.get(key),
     setPullRequestSummary(key: string, summary: SessionCatalogPullRequestSummary | undefined) {
       if (summary) {
@@ -242,6 +257,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     delete: deleteSession,
     deleteMany,
     list,
+    reconcile,
     setCreatorFilter,
     refresh,
     refreshReplacement,
@@ -264,6 +280,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     deleteSession,
     deleteMany,
     list,
+    reconcile,
     setCreatorFilter,
     refresh,
     refreshReplacement,
@@ -328,11 +345,14 @@ export async function mountSidebar(
   provider.append(sidebar);
   document.body.append(provider);
   await sidebar.updateComplete;
-  await (
-    sidebar as unknown as {
-      sidebarMenus: { preloadMenuRenderer: () => Promise<unknown> };
-    }
-  ).sidebarMenus.preloadMenuRenderer();
+  const sidebarWithPreloads = sidebar as unknown as {
+    preloadCatalogRenderer: () => Promise<unknown>;
+    sidebarMenus: { preloadMenuRenderer: () => Promise<unknown> };
+  };
+  await Promise.all([
+    sidebarWithPreloads.preloadCatalogRenderer(),
+    sidebarWithPreloads.sidebarMenus.preloadMenuRenderer(),
+  ]);
   await sidebar.updateComplete;
   return { provider, sidebar, context };
 }

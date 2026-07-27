@@ -154,6 +154,24 @@ export function assertSupportedAgentSchemaVersion(db: DatabaseSync, pathname: st
   }
 }
 
+/** Refuse steady-state reads until Doctor has completed the v16 media cutover. */
+export function assertCanonicalAgentMediaPersistenceVersion(
+  db: DatabaseSync,
+  pathname: string,
+): void {
+  const userVersion = readSqliteUserVersion(db);
+  const hasApplicationSchema = db
+    .prepare("SELECT 1 FROM sqlite_master WHERE substr(name, 1, 7) <> 'sqlite_' LIMIT 1")
+    .get();
+  const isNewUnownedDatabase =
+    userVersion === 0 && readExistingAgentSchemaMeta(db) === null && !hasApplicationSchema;
+  if (userVersion < OPENCLAW_AGENT_SCHEMA_VERSION && !isNewUnownedDatabase) {
+    throw new Error(
+      `OpenClaw agent database ${pathname} uses schema version ${userVersion}; run openclaw doctor --fix to migrate persisted media before using it.`,
+    );
+  }
+}
+
 export function readExistingAgentSchemaMeta(db: DatabaseSync): ExistingAgentSchemaMeta | null {
   const schemaMetaTable = db
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_meta'")

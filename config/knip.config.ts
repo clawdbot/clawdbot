@@ -167,7 +167,8 @@ const rootEntries = [
   bundledPluginFile("telegram", "src/token.ts", "!"),
   "src/hooks/bundled/*/handler.ts!",
   "src/hooks/llm-slug-generator.ts!",
-  "src/plugin-sdk/*.ts!",
+  // Local-only test-state consumers are modeled by the full-tree test scan.
+  "src/plugin-sdk/!(test-state).ts!",
 ] as const;
 
 const bundledPluginEntries = [
@@ -398,6 +399,8 @@ const config = {
       ],
       // Platform tools and shell builtins used by package scripts and process-boundary tests.
       ignoreBinaries: ["mint", "open", "sleep", "xcrun"],
+      // The stylelint config lives under config/, not a root default path.
+      stylelint: { config: ["config/stylelint.config.mjs"] },
       project: [
         ".github/actions/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "apps/**/*.{js,mjs,cjs,ts,mts,cts}!",
@@ -484,6 +487,21 @@ const config = {
         "src/schema.ts!",
         "src/startup-unavailable.ts!",
         "src/version.ts!",
+      ],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/model-catalog-core": {
+      // Mirror the published export map so package-owned runtime dependencies
+      // are traced from the TypeScript sources instead of the JS fallback.
+      entry: [
+        "src/index.ts!",
+        "src/configured-model-refs.ts!",
+        "src/model-catalog-normalize.ts!",
+        "src/model-catalog-refs.ts!",
+        "src/model-catalog-types.ts!",
+        "src/provider-id.ts!",
+        "src/provider-model-id-normalization.ts!",
+        "src/provider-model-id-normalize.ts!",
       ],
       project: ["src/**/*.ts!"],
     },

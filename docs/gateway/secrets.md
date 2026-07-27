@@ -15,7 +15,7 @@ Plaintext still works. SecretRefs are opt-in per credential.
 </Note>
 
 <Warning>
-Plaintext credentials remain agent-readable if they sit in files the agent can inspect, including `openclaw.json`, `auth-profiles.json`, `.env`, or generated `agents/*/agent/models.json` files. SecretRefs only reduce that local blast radius once every supported credential is migrated and `openclaw secrets audit --check` reports no plaintext residue.
+Plaintext credentials remain agent-readable when they sit in files the agent can inspect, including `openclaw.json`, `.env`, retired auth-profile JSON archives, or generated `agents/*/agent/models.json` files. SecretRefs reduce that local blast radius once every supported credential is migrated and `openclaw secrets audit --check` reports no plaintext residue.
 </Warning>
 
 ## Runtime model
@@ -52,7 +52,7 @@ SecretRefs stop credentials from being persisted in config and generated model f
 For production deployments where agent-accessible files are in scope, treat migration as complete only when all of these hold:
 
 - Supported credentials use SecretRefs instead of plaintext values.
-- Legacy plaintext residue is scrubbed from `openclaw.json`, `auth-profiles.json`, `.env`, and generated `models.json` files.
+- Legacy plaintext residue is scrubbed from `openclaw.json`, the SQLite auth-profile store, `.env`, and generated `models.json` files. Retired auth JSON is doctor-owned migration input and is never rewritten by `secrets apply`.
 - `openclaw secrets audit --check` is clean after migration.
 - Any remaining unsupported or rotating credentials are protected by OS isolation, container isolation, or an external credential proxy.
 
@@ -586,7 +586,7 @@ Runtime-minted or rotating credentials and OAuth refresh material are intentiona
 Warning and audit signals:
 
 - `SECRETS_REF_OVERRIDES_PLAINTEXT` (runtime warning)
-- `REF_SHADOWED` (audit finding when `auth-profiles.json` credentials take precedence over `openclaw.json` refs)
+- `REF_SHADOWED` (audit finding when SQLite auth-profile credentials take precedence over `openclaw.json` refs)
 
 Google Chat `serviceAccount` accepts inline JSON or a SecretRef. Doctor moves the retired sibling `serviceAccountRef` into this canonical field when it is unset.
 
@@ -682,11 +682,10 @@ If you save a plan instead of applying during `configure`, apply that saved plan
   <Accordion title="secrets audit">
     Findings include:
 
-    - Plaintext values at rest (`openclaw.json`, `auth-profiles.json`, `.env`, and generated `agents/*/agent/models.json`).
+    - Plaintext values at rest (`openclaw.json`, SQLite auth-profile rows, `.env`, and generated `agents/*/agent/models.json`).
     - Plaintext sensitive provider header residues in generated `models.json` entries.
     - Unresolved refs.
-    - Precedence shadowing (`auth-profiles.json` taking priority over `openclaw.json` refs).
-    - Legacy residues (`auth.json`, OAuth reminders).
+    - Precedence shadowing (SQLite auth profiles taking priority over `openclaw.json` refs).
 
     Exec note: by default, audit skips exec SecretRef resolvability checks to avoid command side effects. Use `openclaw secrets audit --allow-exec` to execute exec providers during audit.
 
@@ -697,8 +696,8 @@ If you save a plan instead of applying during `configure`, apply that saved plan
     Interactive helper that:
 
     - Configures `secrets.providers` first (`env`/`file`/`exec`, add/edit/remove).
-    - Lets you select supported secret-bearing fields in `openclaw.json` plus `auth-profiles.json` for one agent scope.
-    - Can create a new `auth-profiles.json` mapping directly in the target picker.
+    - Lets you select supported secret-bearing fields in `openclaw.json` plus the SQLite auth-profile store for one agent scope.
+    - Can create a new auth-profile mapping directly in the target picker.
     - Captures SecretRef details (`source`, `provider`, `id`).
     - Runs preflight resolution and can apply immediately.
 
@@ -712,8 +711,8 @@ If you save a plan instead of applying during `configure`, apply that saved plan
 
     `configure` apply defaults:
 
-    - Scrub matching static credentials from `auth-profiles.json` for targeted providers.
-    - Scrub legacy static `api_key` entries from `auth.json`.
+    - Scrub matching static credentials from SQLite auth-profile rows for targeted providers.
+    - Leave retired `auth.json` untouched; run `openclaw doctor --fix` to migrate and archive it.
     - Scrub matching known secret lines from the effective state and active-config `.env` files (deduplicated when both paths match).
 
   </Accordion>

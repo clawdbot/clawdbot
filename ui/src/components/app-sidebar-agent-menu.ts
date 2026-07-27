@@ -53,7 +53,7 @@ type AgentMenuAgent = {
 };
 
 type SidebarAgentMenuParams = {
-  position: { x: number; bottom: number } | null;
+  position: { x: number; top: number } | null;
   activeId: string;
   activeName: string;
   agents: readonly AgentMenuAgent[];
@@ -234,7 +234,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
       <wa-dropdown
         class="sidebar-customize-menu sidebar-agent-menu"
         .open=${true}
-        placement="top-start"
+        placement="bottom-start"
         .distance=${0}
         aria-label=${t("agentChip.menuLabel")}
         @wa-select=${(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
@@ -283,7 +283,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
           tabindex="-1"
           aria-hidden="true"
           aria-label=${t("agentChip.menuLabel")}
-          style="position: fixed; left: ${position.x}px; bottom: ${position.bottom}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
+          style="position: fixed; left: ${position.x}px; top: ${position.top}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
         ></button>
         ${agents.length > 1
           ? html`

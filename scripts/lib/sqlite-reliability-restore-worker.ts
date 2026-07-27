@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { canonicalPathWithExistingParent } from "./sqlite-reliability-worker-paths.js";
 
 type RestoreCrashPoint = "after-publish" | "before-publish";
 
@@ -27,7 +28,7 @@ async function main(argv: string[]): Promise<void> {
     throw new Error("invalid SQLite restore interruption worker arguments");
   }
   const crashPoint = parseCrashPoint(crashPointValue);
-  const resolvedTargetPath = path.resolve(targetPath);
+  const resolvedTargetPath = canonicalPathWithExistingParent(targetPath);
 
   if (crashPoint === "before-publish") {
     const originalLink = fs.link.bind(fs);
@@ -37,7 +38,7 @@ async function main(argv: string[]): Promise<void> {
       value: async (sourcePath: string, publishedPath: string) => {
         const resolvedSourcePath = path.resolve(sourcePath);
         if (
-          path.resolve(publishedPath) === resolvedTargetPath &&
+          canonicalPathWithExistingParent(publishedPath) === resolvedTargetPath &&
           path.basename(resolvedSourcePath) === "database.sqlite" &&
           path.basename(path.dirname(resolvedSourcePath)).startsWith(".sqlite-publish-")
         ) {
@@ -49,12 +50,12 @@ async function main(argv: string[]): Promise<void> {
     });
   } else {
     const originalRmdir = fs.rmdir.bind(fs);
-    const restoreParentPath = path.resolve(path.dirname(targetPath));
+    const restoreParentPath = path.dirname(resolvedTargetPath);
     Object.defineProperty(fs, "rmdir", {
       configurable: true,
       enumerable: true,
       value: async (directoryPath: string) => {
-        const resolvedDirectoryPath = path.resolve(directoryPath);
+        const resolvedDirectoryPath = canonicalPathWithExistingParent(directoryPath);
         if (
           path.dirname(resolvedDirectoryPath) === restoreParentPath &&
           path.basename(resolvedDirectoryPath).startsWith(".tmp-restore-")
@@ -74,7 +75,7 @@ async function main(argv: string[]): Promise<void> {
     validationRootPath,
   });
   process.send?.({ kind: "ready" });
-  await provider.restoreFresh({ path: snapshotPath }, targetPath);
+  await provider.restoreFresh({ path: snapshotPath }, resolvedTargetPath);
   throw new Error(`SQLite restore worker passed ${crashPoint} without being terminated.`);
 }
 

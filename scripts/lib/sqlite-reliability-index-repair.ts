@@ -5,7 +5,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { requireNodeSqlite } from "../../src/infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../../src/infra/node-sqlite.js";
 import { repairCanonicalSqliteIndexes } from "../../src/infra/sqlite-index-schema.js";
 import { assertSqliteIntegrity } from "../../src/infra/sqlite-integrity.js";
 import {
@@ -71,8 +71,7 @@ function prepareIndexRepairDatabase(
   databasePath: string,
   journalMode: IndexRepairJournalMode,
 ): IndexRepairState {
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath);
+  const database = openNodeSqliteDatabase(databasePath);
   try {
     database.exec(`
       PRAGMA synchronous = FULL;
@@ -237,8 +236,7 @@ function assertForcedExit(exit: WorkerExit): void {
 }
 
 function recoverAndRepair(databasePath: string, expectedState: IndexRepairState): string[] {
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath);
+  const database = openNodeSqliteDatabase(databasePath);
   try {
     assertSqliteIntegrity(database, databasePath);
     assertSameState(readIndexRepairState(database), expectedState);

@@ -935,6 +935,8 @@ describe("install.ps1 failure handling", () => {
     expect(gitInstallBody).toContain(
       "$env:NODE_OPTIONS = Resolve-NodeOptionsWithMinOldSpace -NodeOptions $prevNodeOptions -MinOldSpaceMb 8192",
     );
+    expect(gitInstallBody).toMatch(/& \$pnpmCommand ui:build\s+if \(\$LASTEXITCODE -ne 0\)/);
+    expect(gitInstallBody).not.toContain("if (-not (& $pnpmCommand ui:build))");
     expect(nodeOptionsBody).toContain("--max-old-space-size=$MinOldSpaceMb");
     expect(nodeOptionsBody).toContain("[Math]::Max");
     expect(gitInstallBody).toContain("& $pnpmCommand build");

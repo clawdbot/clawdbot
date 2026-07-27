@@ -44,6 +44,11 @@ class FakeGatewayClient {
     this.stopped += 1;
   }
 
+  request = vi.fn(
+    (_method: string, _params: unknown): Promise<unknown> =>
+      Promise.reject(new Error("unexpected gateway request")),
+  );
+
   addEventListener() {
     return () => {};
   }
@@ -114,6 +119,59 @@ describe("createApplicationGateway connection phase", () => {
 
     current().opts.onClose?.({ code: 4008, reason: "connect failed", willRetry: false });
     expect(gateway.snapshot.phase).toBe("offline");
+  });
+
+  it("publishes the hello canvas URL synchronously and clears it on disconnect", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().opts.onHello?.({
+      ...HELLO,
+      pluginSurfaceUrls: {
+        canvas: "https://canvas.test/__openclaw__/cap/hello",
+      },
+    });
+
+    expect(gateway.snapshot.canvasPluginSurfaceUrl).toBe(
+      "https://canvas.test/__openclaw__/cap/hello",
+    );
+
+    current().opts.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
+    expect(gateway.snapshot.canvasPluginSurfaceUrl).toBeNull();
+  });
+
+  it("does not let a superseded canvas refresh publish into the current snapshot", async () => {
+    let resolveRefresh: (value: unknown) => void = () => {};
+    const firstRefresh = new Promise<unknown>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    const { gateway, current } = createStore();
+    gateway.start();
+    const first = current();
+    first.request.mockReturnValueOnce(firstRefresh);
+    first.opts.onHello?.({
+      ...HELLO,
+      pluginSurfaceUrls: { canvas: "https://canvas.test/__openclaw__/cap/first" },
+    });
+    await vi.waitFor(() => expect(first.request).toHaveBeenCalledOnce());
+
+    gateway.connect();
+    current().opts.onHello?.({
+      ...HELLO,
+      pluginSurfaceUrls: { canvas: "https://canvas.test/__openclaw__/cap/current" },
+    });
+    resolveRefresh({
+      surface: "canvas",
+      pluginSurfaceUrls: { canvas: "https://canvas.test/__openclaw__/cap/stale-refresh" },
+      expiresAtMs: Date.now() + 60_000,
+    });
+    await new Promise<void>((resolve) => {
+      globalThis.setTimeout(resolve, 0);
+    });
+
+    expect(gateway.snapshot.canvasPluginSurfaceUrl).toBe(
+      "https://canvas.test/__openclaw__/cap/current",
+    );
+    gateway.stop();
   });
 
   it("stays on the gate when the first connect fails, even with auto-retry pending", () => {

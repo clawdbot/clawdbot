@@ -700,6 +700,7 @@ describe("GatewayChatClient", () => {
         clientName: "openclaw-tui",
         caps: ["agent-kind", "plugin-approvals", "task-suggestions", "tool-events"],
         mode: "ui",
+        scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals"],
         preauthHandshakeTimeoutMs: 30_000,
         tlsFingerprint: "sha256:11:22:33:44",
         deviceIdentity: null,

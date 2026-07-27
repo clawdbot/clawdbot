@@ -31,6 +31,7 @@ const MANAGED_NPM_PROJECT_QUARANTINE_DIR = "_openclaw-quarantined-npm-projects";
 const MANAGED_NPM_PROJECT_REBUILD_ARTIFACTS = [
   "node_modules",
   "package-lock.json",
+  // Pre-migration projects may retain a root shrinkwrap that npm 11 prefers.
   "npm-shrinkwrap.json",
 ] as const;
 

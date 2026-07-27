@@ -9,7 +9,7 @@ import {
 describe("initial user message handoff", () => {
   it("reprojects an accepted first prompt across state replacement until history owns it", () => {
     const sessionKey = "agent:main:new-session";
-    const hello = {};
+    const client = {};
     const handoff = createInitialUserMessageHandoff();
     prepareInitialUserMessageHandoff(
       handoff,
@@ -18,14 +18,14 @@ describe("initial user message handoff", () => {
         text: "show this while the run is active",
         createdAt: 123,
       },
-      hello,
+      client,
     );
 
-    const otherSession = { chatMessages: [] as unknown[], hello };
+    const otherSession = { chatMessages: [] as unknown[], client };
     expect(admitInitialUserMessageHandoff(handoff, otherSession, "agent:main:other")).toBe(false);
     expect(otherSession.chatMessages).toEqual([]);
 
-    const createdSession = { chatMessages: [] as unknown[], hello };
+    const createdSession = { chatMessages: [] as unknown[], client };
     expect(admitInitialUserMessageHandoff(handoff, createdSession, sessionKey)).toBe(true);
     expect(createdSession.chatMessages).toEqual([
       {
@@ -44,9 +44,9 @@ describe("initial user message handoff", () => {
         text: "keep the other active prompt too",
         createdAt: 124,
       },
-      hello,
+      client,
     );
-    const secondActiveSession = { chatMessages: [] as unknown[], hello };
+    const secondActiveSession = { chatMessages: [] as unknown[], client };
     expect(admitInitialUserMessageHandoff(handoff, secondActiveSession, secondSessionKey)).toBe(
       true,
     );
@@ -55,7 +55,7 @@ describe("initial user message handoff", () => {
       role: "assistant",
       content: [{ type: "text", text: "already working" }],
     };
-    const remountedSession = { chatMessages: [assistantOutput] as unknown[], hello };
+    const remountedSession = { chatMessages: [assistantOutput] as unknown[], client };
     expect(admitInitialUserMessageHandoff(handoff, remountedSession, sessionKey)).toBe(true);
     expect(remountedSession.chatMessages).toEqual([
       ...createdSession.chatMessages,
@@ -71,13 +71,13 @@ describe("initial user message handoff", () => {
     expect(
       reconcileInitialUserMessageHandoff(handoff, remountedSession, sessionKey, [persisted], true),
     ).toBe(false);
-    const activeRunReset = { chatMessages: [] as unknown[], hello };
+    const activeRunReset = { chatMessages: [] as unknown[], client };
     expect(admitInitialUserMessageHandoff(handoff, activeRunReset, sessionKey)).toBe(true);
     activeRunReset.chatMessages = [persisted];
     expect(
       reconcileInitialUserMessageHandoff(handoff, activeRunReset, sessionKey, [persisted], false),
     ).toBe(false);
-    expect(admitInitialUserMessageHandoff(handoff, { chatMessages: [], hello }, sessionKey)).toBe(
+    expect(admitInitialUserMessageHandoff(handoff, { chatMessages: [], client }, sessionKey)).toBe(
       false,
     );
   });
@@ -85,7 +85,7 @@ describe("initial user message handoff", () => {
   it("does not duplicate a first prompt that history already loaded", () => {
     const sessionKey = "agent:main:main";
     const routeSessionKey = "main";
-    const hello = {};
+    const client = {};
     const handoff = createInitialUserMessageHandoff();
     prepareInitialUserMessageHandoff(
       handoff,
@@ -94,14 +94,14 @@ describe("initial user message handoff", () => {
         text: "history won the race",
         createdAt: 123,
       },
-      hello,
+      client,
     );
     const persisted = {
       role: "user",
       content: [{ type: "text", text: "history won the race" }],
       __openclaw: { seq: 1 },
     };
-    const createdSession = { chatMessages: [persisted] as unknown[], hello };
+    const createdSession = { chatMessages: [persisted] as unknown[], client };
 
     expect(
       reconcileInitialUserMessageHandoff(
@@ -114,13 +114,13 @@ describe("initial user message handoff", () => {
     ).toBe(false);
     expect(createdSession.chatMessages).toEqual([persisted]);
     expect(
-      admitInitialUserMessageHandoff(handoff, { chatMessages: [], hello }, routeSessionKey),
+      admitInitialUserMessageHandoff(handoff, { chatMessages: [], client }, routeSessionKey),
     ).toBe(false);
   });
 
   it("reconciles an image prompt by accepted message sequence", () => {
     const sessionKey = "agent:main:image-session";
-    const hello = {};
+    const client = {};
     const handoff = createInitialUserMessageHandoff();
     prepareInitialUserMessageHandoff(
       handoff,
@@ -138,10 +138,10 @@ describe("initial user message handoff", () => {
         ],
         createdAt: 123,
       },
-      hello,
+      client,
       { messageId: "initial-image-send", messageSeq: 1 },
     );
-    const projectedSession = { chatMessages: [] as unknown[], hello };
+    const projectedSession = { chatMessages: [] as unknown[], client };
     expect(admitInitialUserMessageHandoff(handoff, projectedSession, sessionKey)).toBe(true);
     expect(projectedSession.chatMessages).toEqual([
       {
@@ -168,7 +168,7 @@ describe("initial user message handoff", () => {
         media: [{ path: "/media/image-1", contentType: "image/png" }],
       },
     };
-    const createdSession = { chatMessages: [persisted] as unknown[], hello };
+    const createdSession = { chatMessages: [persisted] as unknown[], client };
     const projectedMessage = projectedSession.chatMessages[0];
 
     expect(
@@ -189,18 +189,33 @@ describe("initial user message handoff", () => {
     ]);
   });
 
-  it("does not expose a pending prompt after reconnecting", () => {
+  it("keeps a pending prompt across reconnects from the same browser client", () => {
     const sessionKey = "agent:main:new-session";
-    const originalConnection = {};
+    const client = {};
     const handoff = createInitialUserMessageHandoff();
     prepareInitialUserMessageHandoff(
       handoff,
       sessionKey,
       { text: "private prompt", createdAt: 123 },
-      originalConnection,
+      client,
     );
 
-    const replacementGatewaySession = { chatMessages: [] as unknown[], hello: {} };
+    const reconnectedSession = { chatMessages: [] as unknown[], client };
+    expect(admitInitialUserMessageHandoff(handoff, reconnectedSession, sessionKey)).toBe(true);
+    expect(reconnectedSession.chatMessages).toHaveLength(1);
+  });
+
+  it("does not expose a pending prompt to a replacement gateway client", () => {
+    const sessionKey = "agent:main:new-session";
+    const handoff = createInitialUserMessageHandoff();
+    prepareInitialUserMessageHandoff(
+      handoff,
+      sessionKey,
+      { text: "private prompt", createdAt: 123 },
+      {},
+    );
+
+    const replacementGatewaySession = { chatMessages: [] as unknown[], client: {} };
     expect(admitInitialUserMessageHandoff(handoff, replacementGatewaySession, sessionKey)).toBe(
       false,
     );

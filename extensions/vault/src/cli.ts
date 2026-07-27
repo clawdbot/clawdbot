@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
@@ -360,7 +359,10 @@ async function runSetup(options: SetupOptions): Promise<void> {
   const planPath =
     normalizeOptionalString(options.planOut) ??
     path.join(resolvePreferredOpenClawTmpDir(), `openclaw-vault-secrets-${process.pid}.json`);
-  await fs.writeFile(planPath, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
+  await pluginSecretRefSetup.writePlanFile({
+    planPath,
+    content: `${JSON.stringify(plan, null, 2)}\n`,
+  });
   writeLine(`Plan written to ${planPath}`);
   writeLine(`Targets: ${plan.targets.length}`);
   writeLine("");

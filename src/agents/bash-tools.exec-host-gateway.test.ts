@@ -527,9 +527,72 @@ describe("processGatewayAllowlist", () => {
     });
   }
 
-  it("still requires approval when allowlist execution plan is unavailable despite durable trust", async () => {
+  it("denies shell-expansion plan misses immediately when asking is off and fallback denies", async () => {
+    const command = "grep -il needle -r /tmp --include=*.md";
+    const authorizationPlan = await planShellAuthorization({
+      command,
+      env: { PATH: "/usr/bin:/bin" },
+    });
+    expect(authorizationPlan.ok).toBe(true);
+    if (!authorizationPlan.ok) {
+      throw new Error(authorizationPlan.reason);
+    }
+    const segments = authorizationPlan.groups.flatMap((group) =>
+      group.candidates.map((candidate) => candidate.sourceSegment),
+    );
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
+      allowlistMatches: [{ pattern: "/usr/bin/grep" }],
+      analysisOk: true,
+      allowlistSatisfied: true,
+      segments,
+      segmentAllowlistEntries: [{ pattern: "/usr/bin/grep" }],
+      segmentSatisfiedBy: ["allowlist"],
+      authorizationPlan,
+    });
+    const captured = captureSecurityEvents();
+
+    let result: Awaited<ReturnType<typeof runGatewayAllowlist>>;
+    try {
+      result = await runGatewayAllowlist({ command });
+    } finally {
+      captured.stop();
+    }
+
+    expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
+    expect(result!.deniedResult?.content[0]).toEqual(
+      expect.objectContaining({
+        text: expect.stringContaining("ask-fallback-deny: execution-plan-miss"),
+      }),
+    );
+    expect(captured.events).toHaveLength(1);
+    expect(captured.events[0]).toMatchObject({
+      action: "exec.approval.denied",
+      outcome: "denied",
+      reason: "ask-fallback-deny: execution-plan-miss",
+      policy: {
+        id: "exec.approval",
+        decision: "deny",
+        reason: "ask-fallback-deny: execution-plan-miss",
+      },
+      attributes: {
+        security: "allowlist",
+        ask: "off",
+        segment_count: 1,
+      },
+    });
+  });
+
+  it("still requires approval for unavailable allowlist plans when ask is on-miss", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "on-miss",
+      askFallback: "deny",
+    });
+
     const result = await runGatewayAllowlist({
       command: "echo ok",
+      ask: "on-miss",
     });
 
     expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);

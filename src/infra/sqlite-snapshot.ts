@@ -663,15 +663,21 @@ export async function createVerifiedSqliteSnapshot(
         readOnly: true,
       });
       try {
-        source.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF;");
-        await loadSqliteVecExtension({ db: source });
-        assertSqliteIntegrity(source, options.sourcePath);
-        options.validate?.(source, options.sourcePath);
-        // Copy in incremental steps so concurrent writers are blocked only while
-        // each batch is read. Compaction happens after releasing the live source.
-        await sqlite.backup(source, resolveSqliteFilesystemPath(stagedPath));
+        source.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF; BEGIN;");
+        try {
+          // Pin validation and backup together; Node restarts stepped backups on concurrent writes.
+          source.prepare("PRAGMA schema_version;").get();
+          await loadSqliteVecExtension({ db: source });
+          assertSqliteIntegrity(source, options.sourcePath);
+          options.validate?.(source, options.sourcePath);
+          await sqlite.backup(source, resolveSqliteFilesystemPath(stagedPath));
+        } finally {
+          source.exec("ROLLBACK;");
+        }
       } finally {
-        source.close();
+        if (source.isOpen) {
+          source.close();
+        }
       }
     });
 

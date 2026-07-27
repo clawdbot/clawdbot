@@ -126,6 +126,7 @@ export abstract class ChatPaneHeaderRender extends ChatPaneHeader {
             ></openclaw-viewer-facepile>`
           : nothing,
       faceControl: renderBoardFaceToggle(board.hasBoard, board.face, (face) => {
+        this.syncChatSidebarForDock(face === "dashboard" ? board.dock : "hidden");
         this.persistBoardSessionView({ face });
       }),
       sharingControl:
@@ -148,6 +149,9 @@ export abstract class ChatPaneHeaderRender extends ChatPaneHeader {
         board.dock,
         (dock) => this.handleBoardDockChange(dock),
       ),
+      nativeGateways: this.nativeGateways,
+      gatewaysSnapshot: this.gatewaysSnapshot,
+      onboarding: this.onboarding,
       onBeginRename: () => row && this.beginHeaderRename(row),
       onRenameInput: (value) => {
         this.headerRenameValue = value;

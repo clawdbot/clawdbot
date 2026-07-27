@@ -10,9 +10,22 @@ function readSource(relativePath: string): string {
   return readFileSync(path.join(repoRoot, relativePath), "utf8");
 }
 
+function readServerImplementation(): string {
+  return [
+    "src/gateway/server-start.ts",
+    "src/gateway/server-startup-bootstrap.ts",
+    "src/gateway/server-runtime-state-prepare.ts",
+    "src/gateway/server-lifecycle.ts",
+    "src/gateway/server-core-runtime.ts",
+    "src/gateway/server-startup-finish.ts",
+  ]
+    .map(readSource)
+    .join("\n");
+}
+
 describe("gateway startup import boundaries", () => {
   it("keeps heavy cron and doctor legacy paths out of the server.impl import graph", () => {
-    const serverImpl = readSource("src/gateway/server.impl.ts");
+    const serverImpl = readServerImplementation();
     const validation = readSource("src/config/validation.ts");
 
     expect(serverImpl).not.toContain('from "./server-cron.js"');
@@ -72,7 +85,7 @@ describe("gateway startup import boundaries", () => {
   });
 
   it("defers retained plugin generation cleanup to the post-ready idle scheduler", () => {
-    const serverImpl = readSource("src/gateway/server.impl.ts");
+    const serverImpl = readServerImplementation();
     const cleanup = readSource("src/gateway/server-retained-plugin-cleanup.ts");
     const importBoundary = serverImpl.indexOf("type LoadGatewayModelCatalog");
     const serverStart = serverImpl.indexOf("export async function startGatewayServer");
@@ -117,7 +130,7 @@ describe("gateway startup import boundaries", () => {
   });
 
   it("fences config reload before gateway teardown and gateway_stop hooks", () => {
-    const serverImpl = readSource("src/gateway/server.impl.ts");
+    const serverImpl = readServerImplementation();
     const closeStart = /close:\s*async\s*\([^)]*\)\s*=>/u.exec(serverImpl)?.index ?? -1;
     const hookStart = serverImpl.indexOf("runGlobalGatewayStopSafely", closeStart);
     const reloadStopStart = serverImpl.indexOf("await beginClosePrelude();", closeStart);
@@ -149,10 +162,10 @@ describe("gateway startup import boundaries", () => {
       "await stopConfigReloaderForClose()",
     );
     expect(postReadyStart).toBeGreaterThan(-1);
-    expect(postReadyBlock).toContain("isClosing: () => closePreludeStarted");
-    expect(postReadyBlock).toContain("if (closePreludeStarted)");
+    expect(postReadyBlock).toContain("isClosing: () => lifecycle.closePreludeStarted");
+    expect(postReadyBlock).toContain("if (lifecycle.closePreludeStarted)");
     expect(postReadyBlock).toContain(
-      "shouldStartCron: () => !closePreludeStarted && !gatewayCronStartHandled",
+      "shouldStartCron: () => !lifecycle.closePreludeStarted && !cronStartState.handled",
     );
   });
 });

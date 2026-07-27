@@ -191,6 +191,7 @@
           "type": "string"
         },
         "label": {
+          "description": "Short task title shown in UI lists; name the work, not the agent.",
           "type": "string"
         },
         "lightContext": {

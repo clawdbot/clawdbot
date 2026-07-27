@@ -1,7 +1,7 @@
 /** Prepares prompt-lock ownership and prompt-local images for submission. */
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import type { OwnedSessionTranscriptCacheSnapshot } from "../../../config/sessions/transcript-write-context.js";
-import { readPersistedMediaFactsWithLegacyFallback } from "../../../media/media-facts.js";
+import { readPersistedMediaFacts } from "../../../media/media-facts.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { AgentSession } from "../../sessions/index.js";
@@ -71,9 +71,7 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
   const persistedMessage =
     attempt.userTurnTranscriptRecorder?.message ??
     (await attempt.userTurnTranscriptRecorder?.resolveMessage());
-  const persistedMedia = persistedMessage
-    ? (readPersistedMediaFactsWithLegacyFallback(persistedMessage) ?? [])
-    : [];
+  const persistedMedia = persistedMessage ? (readPersistedMediaFacts(persistedMessage) ?? []) : [];
 
   return await detectAndLoadPromptImages({
     prompt: input.prompt,

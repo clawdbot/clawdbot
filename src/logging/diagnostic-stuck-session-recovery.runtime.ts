@@ -57,6 +57,7 @@ function resolveStaleActiveLaneTaskReleaseMs(params: StuckSessionRecoveryParams)
 }
 
 function isActiveRunProgressStale(params: {
+  ageMs: number;
   sessionId?: string;
   sessionKey?: string;
   queueDepth?: number;
@@ -70,7 +71,11 @@ function isActiveRunProgressStale(params: {
     sessionKey: params.sessionKey,
   });
   const lastProgressAgeMs = activity.lastProgressAgeMs;
-  return typeof lastProgressAgeMs === "number" && lastProgressAgeMs >= params.staleAbortMs;
+  // A missing activity row is the orphan-handle state: classification age is
+  // the only progress evidence available, so it owns the stale fallback.
+  return typeof lastProgressAgeMs === "number"
+    ? lastProgressAgeMs >= params.staleAbortMs
+    : params.ageMs >= params.staleAbortMs;
 }
 
 function formatRecoveryContext(
@@ -160,11 +165,30 @@ export async function recoverStuckDiagnosticSession(
     let forceCleared = false;
     const staleActiveProgressAbortMs = resolveStaleActiveProgressAbortMs(params);
     const staleActiveLaneTaskReleaseMs = resolveStaleActiveLaneTaskReleaseMs(params);
+    const activeReplyPhase = activeWorkSessionId
+      ? resolveEmbeddedAgentReplyRunPhase(activeWorkSessionId)
+      : undefined;
+
+    if (activeReplyPhase === "waiting_for_global_lane") {
+      // A global-lane queue owner is healthy pending work. Reclaiming it here
+      // reintroduces the silent reply drop that the wait phase prevents.
+      const outcome: StuckSessionRecoveryOutcome = {
+        status: "skipped",
+        action: "keep_lane",
+        reason: "global_lane_wait",
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        activeSessionId: activeWorkSessionId,
+      };
+      diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
+      return outcome;
+    }
 
     if (activeSessionId) {
       const reclaimStaleActiveRun =
         params.allowActiveAbort !== true &&
         isActiveRunProgressStale({
+          ageMs: params.ageMs,
           sessionId: activeSessionId,
           sessionKey: params.sessionKey,
           queueDepth: params.queueDepth,
@@ -206,7 +230,6 @@ export async function recoverStuckDiagnosticSession(
     }
 
     if (!activeSessionId && activeWorkSessionId && isEmbeddedAgentRunActive(activeWorkSessionId)) {
-      const activeReplyPhase = resolveEmbeddedAgentReplyRunPhase(activeWorkSessionId);
       if (activeReplyPhase === "waiting_for_deferred_maintenance") {
         const outcome: StuckSessionRecoveryOutcome = {
           status: "skipped",
@@ -222,6 +245,7 @@ export async function recoverStuckDiagnosticSession(
       const reclaimStaleReplyWork =
         params.allowActiveAbort !== true &&
         isActiveRunProgressStale({
+          ageMs: params.ageMs,
           sessionId: activeWorkSessionId,
           sessionKey: params.sessionKey,
           queueDepth: params.queueDepth,

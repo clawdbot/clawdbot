@@ -64,6 +64,7 @@ function createHarness(initialScopeId: string) {
     client: { request } as unknown as GatewayBrowserClient,
     phase: "connected",
     offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: "main",
     sessionKey: "main",

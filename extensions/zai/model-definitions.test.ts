@@ -48,9 +48,31 @@ describe("zai model definitions", () => {
       id: "glm-5.1",
       reasoning: true,
       input: ["text"],
-      contextWindow: 202800,
-      maxTokens: 131100,
+      contextWindow: 200_000,
+      maxTokens: 131_072,
       cost: { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
+    });
+  });
+
+  it("uses official GLM-5-Turbo metadata", () => {
+    expectZaiModelFields({
+      id: "glm-5-turbo",
+      reasoning: true,
+      input: ["text"],
+      contextWindow: 200_000,
+      maxTokens: 131_072,
+      cost: { input: 1.2, output: 4, cacheRead: 0.24, cacheWrite: 0 },
+    });
+  });
+
+  it("uses official GLM-5V-Turbo metadata", () => {
+    expectZaiModelFields({
+      id: "glm-5v-turbo",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 200_000,
+      maxTokens: 131_072,
+      cost: { input: 1.2, output: 4, cacheRead: 0.24, cacheWrite: 0 },
     });
   });
 });

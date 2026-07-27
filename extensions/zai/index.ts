@@ -8,7 +8,6 @@ import {
   type ProviderAuthMethod,
   type ProviderAuthMethodNonInteractiveContext,
   type ProviderResolveDynamicModelContext,
-  type ProviderRuntimeModel,
   type ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -25,7 +24,7 @@ import { buildOpenAICompatibleProviderCatalog } from "openclaw/plugin-sdk/provid
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   buildProviderReplayFamilyHooks,
-  normalizeModelCompat,
+  resolveFamilyForwardCompatModel,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createPayloadPatchStreamWrapper,
@@ -90,41 +89,34 @@ async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams)
   }
 }
 
-function resolveGlm5ForwardCompatModel(
-  ctx: ProviderResolveDynamicModelContext,
-): ProviderRuntimeModel | undefined {
-  const trimmedModelId = ctx.modelId.trim();
-  if (!normalizeLowercaseStringOrEmpty(trimmedModelId).startsWith("glm-5")) {
-    return undefined;
-  }
-
-  const existing = ctx.modelRegistry.find(
-    PROVIDER_ID,
-    trimmedModelId,
-  ) as ProviderRuntimeModel | null;
-  if (existing) {
-    return existing;
-  }
-
-  const def = buildZaiModelDefinition({ id: trimmedModelId });
-  const template = ctx.modelRegistry.find(
-    PROVIDER_ID,
-    GLM5_TEMPLATE_MODEL_ID,
-  ) as ProviderRuntimeModel | null;
-  return normalizeModelCompat({
-    ...template,
-    id: def.id,
-    name: def.name,
-    // Native models must never fall through to the OpenAI SDK's default host.
-    baseUrl: ctx.providerConfig?.baseUrl ?? template?.baseUrl ?? resolveZaiBaseUrl(),
-    api: "openai-completions",
-    provider: PROVIDER_ID,
-    reasoning: def.reasoning,
-    input: def.input,
-    cost: def.cost,
-    contextWindow: def.contextWindow,
-    maxTokens: def.maxTokens,
-  } as ProviderRuntimeModel);
+function resolveGlm5ForwardCompatModel(ctx: ProviderResolveDynamicModelContext) {
+  return resolveFamilyForwardCompatModel({
+    providerId: PROVIDER_ID,
+    ctx,
+    cases: [
+      {
+        match: (id) => id.startsWith("glm-5"),
+        templateIds: [GLM5_TEMPLATE_MODEL_ID],
+        patch: ({ modelId, template }) => {
+          const def = buildZaiModelDefinition({ id: modelId });
+          return {
+            name: def.name,
+            // Native models must never fall through to the OpenAI SDK's default host.
+            baseUrl: ctx.providerConfig?.baseUrl ?? template?.baseUrl ?? resolveZaiBaseUrl(),
+            api: "openai-completions",
+            provider: PROVIDER_ID,
+            reasoning: def.reasoning,
+            input: def.input as ("text" | "image")[],
+            cost: def.cost,
+            contextWindow: def.contextWindow,
+            maxTokens: def.maxTokens,
+          };
+        },
+      },
+    ],
+    preserveExisting: true,
+    synthesize: true,
+  });
 }
 
 function isTrueParam(value: unknown): boolean {

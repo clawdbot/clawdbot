@@ -52,6 +52,7 @@ export function sidebarSessionAttentionPriority(attention: SidebarSessionAttenti
 
 export type SidebarRecentSession = {
   key: string;
+  displayName?: string;
   incognito?: boolean;
   createdActor?: SessionCreatedActor;
   archivedBy?: SessionCreatedActor;
@@ -161,8 +162,8 @@ export function resolveSidebarSessionsScrollState(
   }
   return "middle";
 }
-export type SidebarSessionGroupDropTarget = {
-  group: string;
+export type SidebarSectionDropTarget = {
+  sectionId: string;
   position: "before" | "after";
 };
 

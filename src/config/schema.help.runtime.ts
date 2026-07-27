@@ -95,10 +95,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Enables the agent_to_agent tool surface so one agent can invoke another agent at runtime. Keep off in simple deployments and enable only when orchestration value outweighs complexity.",
   "tools.agentToAgent.allow":
     "Allowlist of target agent IDs permitted for agent_to_agent calls when orchestration is enabled. Use explicit allowlists to avoid uncontrolled cross-agent call graphs.",
-  "tools.experimental":
-    "Experimental built-in tool flags. Use each tool's switch to opt in or out of its documented default.",
-  "tools.experimental.planTool":
-    "Structured `update_plan` checklist tool for non-trivial multi-step work. Enabled by default for embedded models; set false to opt out.",
+  "tools.updatePlan":
+    "Structured `update_plan` checklist tool for non-trivial multi-step work. Enabled by default; set false to opt out.",
   "tools.toolSearch":
     "Compact large OpenClaw, MCP, and client tool catalogs. Set to true for the default code bridge or use the object form to choose structured controls or a compact visible tool directory.",
   "tools.toolSearch.enabled":

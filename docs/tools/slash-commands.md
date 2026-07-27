@@ -481,6 +481,10 @@ Unlike a normal message:
 - Does **not** change future session context.
 - Is not written to transcript history.
 
+In the Control UI, `/btw` and `/side` open the session rail and ask its
+read-only companion instead of starting the detached BTW path. The TUI and
+external-channel behavior above is unchanged.
+
 See [BTW side questions](/tools/btw) for the full behavior.
 
 ## Surface notes

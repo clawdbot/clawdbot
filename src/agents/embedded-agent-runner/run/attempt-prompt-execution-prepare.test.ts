@@ -184,11 +184,6 @@ describe("prepareEmbeddedAttemptPromptExecution", () => {
 
   it.each([
     {
-      name: "legacy-only",
-      message: { MediaPath: "/tmp/legacy.png", MediaType: "image/png" },
-      expectedPath: "/tmp/legacy.png",
-    },
-    {
       name: "facts-only",
       message: { __openclaw: { media: [{ path: "/tmp/fact.png", contentType: "image/png" }] } },
       expectedPath: "/tmp/fact.png",
@@ -231,7 +226,7 @@ describe("prepareEmbeddedAttemptPromptExecution", () => {
       },
       expectedPath: "/tmp/media-only.png",
     },
-  ])("hydrates $name persisted rows through facts-first media", async (testCase) => {
+  ])("hydrates $name persisted rows through canonical media", async (testCase) => {
     const base = createInput();
     const persistedMessage = {
       role: "user" as const,

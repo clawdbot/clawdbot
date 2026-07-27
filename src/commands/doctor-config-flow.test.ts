@@ -1514,6 +1514,7 @@ vi.mock("./doctor-state-migrations.js", () => ({
   autoMigrateLegacyState: vi.fn(async () => ({ changes: [], warnings: [] })),
   autoMigrateLegacyStateDir: vi.fn(async () => ({ changes: [], warnings: [] })),
   autoMigrateLegacyTaskStateSidecars: vi.fn(async () => ({ changes: [], warnings: [] })),
+  migrateLegacyMediaPersistence: vi.fn(() => ({ changes: [], warnings: [] })),
 }));
 
 function resetTerminalNoteMock() {
@@ -1646,6 +1647,93 @@ describe("doctor config flow", () => {
       ops: { default: true, workspace: "/srv/ops" },
     });
     expect(result.cfg.agents).not.toHaveProperty("list");
+  });
+
+  it("materializes ambient roles for a multi-agent configured default", async () => {
+    const config = {
+      agents: {
+        entries: {
+          ops: { default: true },
+          research: {},
+        },
+      },
+      channels: { telegram: { enabled: true } },
+      talk: { provider: "test" },
+    };
+    const result = await runDoctorConfigWithInput({
+      config,
+      parsedConfig: config,
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.cfg.bindings).toEqual([
+      { agentId: "ops", match: { channel: "telegram", accountId: "*" } },
+    ]);
+    expect(result.cfg.agents?.defaults).toMatchObject({
+      heartbeat: { agentId: "ops" },
+      systemAgent: { agentId: "ops" },
+    });
+    expect(result.cfg.talk).toMatchObject({ provider: "test", agentId: "ops" });
+  });
+
+  it("preserves shared all-agent heartbeat enrollment during materialization", async () => {
+    const config = {
+      agents: {
+        defaults: { heartbeat: { every: "1h" } },
+        entries: {
+          ops: { default: true },
+          research: {},
+        },
+      },
+      channels: { telegram: { enabled: true } },
+      talk: { provider: "test" },
+    };
+    const result = await runDoctorConfigWithInput({
+      config,
+      parsedConfig: config,
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.cfg.agents?.defaults?.heartbeat).toEqual({ every: "1h" });
+    expect(result.cfg.agents?.defaults?.heartbeat).not.toHaveProperty("agentId");
+    expect(result.cfg.agents?.defaults?.systemAgent).toEqual({ agentId: "ops" });
+  });
+
+  it("does not rematerialize explicit roles or touch single-agent configs", async () => {
+    const materialized = {
+      agents: {
+        defaults: {
+          heartbeat: { agentId: "ops" },
+          systemAgent: { agentId: "ops" },
+        },
+        entries: { ops: { default: true }, research: {} },
+      },
+      bindings: [{ agentId: "ops", match: { channel: "telegram", accountId: "*" } }],
+      channels: { telegram: { enabled: true } },
+      talk: { provider: "test", agentId: "ops" },
+    };
+    const secondRun = await runDoctorConfigWithInput({
+      config: materialized,
+      parsedConfig: materialized,
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+    const singleAgent = await runDoctorConfigWithInput({
+      config: {
+        agents: { entries: { ops: { default: true } } },
+        channels: { telegram: { enabled: true } },
+        talk: { provider: "test" },
+      },
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(secondRun.shouldWriteConfig).toBe(false);
+    expect(singleAgent.shouldWriteConfig).toBe(false);
   });
 
   it("preserves malformed keyed entries for schema validation during repair", async () => {

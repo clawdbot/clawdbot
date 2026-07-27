@@ -21479,6 +21479,16 @@
       "translated": "Далі"
     },
     {
+      "id": "native.apple.3db546546fbaf38e",
+      "source": "OpenClaw is preparing a local model.",
+      "translated": "OpenClaw готує локальну модель."
+    },
+    {
+      "id": "native.apple.c5992a23c991f948",
+      "source": "OpenClaw is completing provider sign-in.",
+      "translated": "OpenClaw завершує вхід до постачальника."
+    },
+    {
       "id": "native.apple.0f3c1c6f0672bed7",
       "source": "The Gateway setup request failed.",
       "translated": "Запит на налаштування Gateway не вдався."
@@ -21614,6 +21624,21 @@
       "translated": "Перевірити ще раз"
     },
     {
+      "id": "native.apple.82148c7c60e4fb74",
+      "source": "Set up a local model",
+      "translated": "Налаштувати локальну модель"
+    },
+    {
+      "id": "native.apple.506a932536c642c2",
+      "source": "Download or prepare a local model on this Gateway.",
+      "translated": "Завантажте або підготуйте локальну модель на цьому Gateway."
+    },
+    {
+      "id": "native.apple.d31411a9f3c68c33",
+      "source": "Set up / Download model",
+      "translated": "Налаштувати / Завантажити модель"
+    },
+    {
       "id": "native.apple.7fc409b6aaa6d3b9",
       "source": "Sign in with a provider",
       "translated": "Увійти через провайдера"
@@ -21644,6 +21669,11 @@
       "translated": "Увійти"
     },
     {
+      "id": "native.apple.b62dfd708d5cfb14",
+      "source": "The model is downloaded and prepared on this Gateway.",
+      "translated": "Модель завантажено та підготовлено на цьому Gateway."
+    },
+    {
       "id": "native.apple.869fe436119bb8a6",
       "source": "Credentials stay on this Gateway and are saved only after the live test succeeds.",
       "translated": "Облікові дані залишаються на цьому Gateway і зберігаються лише після успішного онлайн-тесту."
@@ -21654,9 +21684,19 @@
       "translated": "Відкрити сторінку входу…"
     },
     {
+      "id": "native.apple.91cd595c858a6ea7",
+      "source": "Starting local model setup…",
+      "translated": "Запуск налаштування локальної моделі…"
+    },
+    {
       "id": "native.apple.bb3352787887c424",
       "source": "Starting secure sign-in…",
       "translated": "Запуск безпечного входу…"
+    },
+    {
+      "id": "native.apple.ba9a46f1e6c4d477",
+      "source": "Model setup didn’t complete",
+      "translated": "Налаштування моделі не завершено"
     },
     {
       "id": "native.apple.d7519516740bfc93",

@@ -51,7 +51,7 @@ import {
   requireArgAfter,
   requireRecord,
   requireRegexMatch,
-  withTempExecApprovalsFile,
+  withTempExecApprovalsState,
   withTempOpenClawHome,
   type PreparedCliRunContextOverrides,
 } from "./cli-runner.test-helpers.js";
@@ -3929,7 +3929,7 @@ describe("runCliAgent spawn path", () => {
     };
 
     if (testCase.approvals) {
-      await withTempExecApprovalsFile(testCase.approvals, run);
+      await withTempExecApprovalsState(testCase.approvals, run);
     } else {
       await run();
     }

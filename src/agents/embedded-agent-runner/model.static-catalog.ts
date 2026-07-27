@@ -5,7 +5,7 @@ import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/mod
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { planManifestModelCatalogRows } from "../../model-catalog/manifest-planner.js";
+import { planEffectiveModelCatalogRows } from "../../model-catalog/index.js";
 import { normalizePluginsConfig } from "../../plugins/config-state.js";
 import { listOpenClawPluginManifestMetadata } from "../../plugins/manifest-metadata-scan.js";
 import { passesManifestOwnerBasePolicy } from "../../plugins/manifest-owner-policy.js";
@@ -123,7 +123,7 @@ function modelFromProviderStaticCatalog(params: {
 }
 
 type StaticCatalogPlugin = Parameters<
-  typeof planManifestModelCatalogRows
+  typeof planEffectiveModelCatalogRows
 >[0]["registry"]["plugins"][number];
 
 function listBundledStaticCatalogPlugins(params: {
@@ -221,7 +221,7 @@ export function createBundledStaticCatalogModelResolver(params?: {
     cfg: params?.cfg,
     env: params?.env ?? process.env,
   });
-  const plans = new Map<string, ReturnType<typeof planManifestModelCatalogRows>>();
+  const plans = new Map<string, ReturnType<typeof planEffectiveModelCatalogRows>>();
   return (lookup) => {
     const provider = normalizeProviderId(lookup.provider);
     if (!provider || !lookup.modelId.trim() || bundledStaticPlugins.length === 0) {
@@ -229,8 +229,9 @@ export function createBundledStaticCatalogModelResolver(params?: {
     }
     let plan = plans.get(provider);
     if (!plan) {
-      plan = planManifestModelCatalogRows({
+      plan = planEffectiveModelCatalogRows({
         registry: { plugins: bundledStaticPlugins },
+        config: params?.cfg ?? {},
         providerFilter: provider,
       });
       plans.set(provider, plan);

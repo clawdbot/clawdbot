@@ -12,7 +12,7 @@ import {
   formatInvalidConfigDetails,
 } from "../config/io.invalid-config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
-import { createMergePatch } from "../config/io.write-prepare.js";
+import { createMergePatch } from "../config/merge-patch.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import { ConfigMutationConflictError } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

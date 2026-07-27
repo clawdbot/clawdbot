@@ -29,7 +29,7 @@ import {
   isBlockedPageRef,
   isBlockedTarget,
   isRecoverablePlaywrightDisconnectError,
-  pageTargetId,
+  pageTargetInfo,
   retirePlaywrightBrowserConnectionExact,
   takeCachedPlaywrightBrowserConnection,
 } from "./pw-session-connection.js";
@@ -52,7 +52,10 @@ import {
   getObservedBrowserStateForPage,
   normalizeCdpUrl,
 } from "./pw-session-state.js";
-import { BROWSER_REF_MARKER_ATTRIBUTE } from "./pw-session.page-cdp.js";
+import {
+  BROWSER_REF_MARKER_ATTRIBUTE,
+  readMainFrameDocumentIdentityForPage,
+} from "./pw-session.page-cdp.js";
 
 export async function getObservedBrowserStateViaPlaywright(opts: {
   cdpUrl: string;
@@ -61,6 +64,15 @@ export async function getObservedBrowserStateViaPlaywright(opts: {
 }): Promise<BrowserObservedState> {
   const page = await getPageForTargetId(opts);
   return getObservedBrowserStateForPage(page);
+}
+
+/** Resolve a page and read its current main-frame document identity. */
+export async function getMainFrameDocumentIdentityViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+}): Promise<string | undefined> {
+  const page = await getPageForTargetId(opts);
+  return await readMainFrameDocumentIdentityForPage(page);
 }
 
 export function refLocator(page: Page, ref: string) {
@@ -324,34 +336,20 @@ async function readPagesViaPlaywright(
     { cdpUrl: opts.cdpUrl, ssrfPolicy: opts.ssrfPolicy, attempt },
     async (browser) => {
       const pages = await getAllPages(browser);
-      const results: Array<{
-        targetId: string;
-        title: string;
-        url: string;
-        type: string;
-      }> = [];
-
-      for (const page of pages) {
-        if (isBlockedPageRef(opts.cdpUrl, page)) {
-          continue;
-        }
-        let tid: string | null;
-        try {
-          tid = await pageTargetId(page);
-        } catch (err) {
-          if (isRecoverablePlaywrightDisconnectError(err)) {
-            throw err;
-          }
-          tid = null;
-        }
-        if (tid && !isBlockedTarget(opts.cdpUrl, tid)) {
-          let title = "";
+      const candidatePages = pages.filter((page) => !isBlockedPageRef(opts.cdpUrl, page));
+      const pageResults = await Promise.all(
+        candidatePages.map(async (page) => {
+          let targetInfo: Awaited<ReturnType<typeof pageTargetInfo>>;
           try {
-            title = await page.title();
+            targetInfo = await pageTargetInfo(page);
           } catch (err) {
             if (isRecoverablePlaywrightDisconnectError(err)) {
               throw err;
             }
+            targetInfo = null;
+          }
+          if (!targetInfo || isBlockedTarget(opts.cdpUrl, targetInfo.targetId)) {
+            return null;
           }
           let url = "";
           try {
@@ -361,15 +359,17 @@ async function readPagesViaPlaywright(
               throw err;
             }
           }
-          results.push({
-            targetId: tid,
-            title,
+          return {
+            targetId: targetInfo.targetId,
+            title: targetInfo.title,
             url,
             type: "page",
-          });
-        }
-      }
-      return results;
+          };
+        }),
+      );
+      // Promise.all preserves candidate order and still propagates recoverable disconnects
+      // to the outer reconnect path when any per-page task rejects.
+      return pageResults.filter((result) => result !== null);
     },
   );
 }
@@ -446,7 +446,7 @@ export async function createPageViaPlaywright(
   const page = await context.newPage();
   ensurePageState(page);
   clearBlockedPageRef(opts.cdpUrl, page);
-  const createdTargetId = await pageTargetId(page).catch(() => null);
+  const createdTargetId = (await pageTargetInfo(page).catch(() => null))?.targetId ?? null;
   clearBlockedTarget(opts.cdpUrl, createdTargetId ?? undefined);
 
   // Navigate to the URL
@@ -499,7 +499,7 @@ export async function createPageViaPlaywright(
   }
 
   // Get the targetId for this page
-  const tid = createdTargetId || (await pageTargetId(page).catch(() => null));
+  const tid = createdTargetId ?? (await pageTargetInfo(page).catch(() => null))?.targetId ?? null;
   if (!tid) {
     throw new Error("Failed to get targetId for new page");
   }

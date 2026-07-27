@@ -3,7 +3,6 @@ import { hasPersistedMedia } from "./user-turn-media.js";
 
 describe("hasPersistedMedia", () => {
   it.each([
-    ["legacy-only", { MediaPath: "/media/legacy.png" }],
     ["facts-only", { __openclaw: { media: [{ path: "/media/fact.png" }] } }],
     [
       "both-equal",
@@ -24,6 +23,7 @@ describe("hasPersistedMedia", () => {
   });
 
   it("rejects empty and alignment-only rows", () => {
+    expect(hasPersistedMedia({ MediaPath: "/media/legacy.png" })).toBe(false);
     expect(hasPersistedMedia({ role: "user", content: "" })).toBe(false);
     expect(hasPersistedMedia({ __openclaw: { media: [{}] } })).toBe(false);
   });

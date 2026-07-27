@@ -7,6 +7,8 @@ import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionPath,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -23,6 +25,12 @@ const uiProofArtifactDir = path.join(
   ".artifacts",
   "control-ui-e2e",
   "cloud-worker-session",
+);
+const reconnectProofArtifactDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "initial-prompt-reconnect",
 );
 
 const WORKSPACE = "/home/peter/openclaw";
@@ -99,6 +107,71 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
   afterAll(async () => {
     await browser?.close();
     await server?.close();
+  });
+
+  it("grows the first prompt through ten lines before using a narrow scrollbar", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      const message = page.locator(".new-session-page__message");
+      await message.waitFor();
+
+      const initial = await message.evaluate((element) => ({
+        height: element.clientHeight,
+        overflowY: getComputedStyle(element).overflowY,
+      }));
+      await message.fill(Array.from({ length: 10 }, (_, index) => `line ${index + 1}`).join("\n"));
+      const tenLines = await message.evaluate((element) => {
+        const style = getComputedStyle(element);
+        return {
+          height: element.clientHeight,
+          lineHeight: Number.parseFloat(style.lineHeight),
+          overflowY: style.overflowY,
+          padding: Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom),
+          scrollbarWidth: style.scrollbarWidth,
+          webkitScrollbarWidth: getComputedStyle(element, "::-webkit-scrollbar").width,
+        };
+      });
+
+      expect(tenLines.height).toBeGreaterThan(initial.height);
+      expect(tenLines.height).toBeGreaterThanOrEqual(
+        Math.floor(tenLines.lineHeight * 10 + tenLines.padding) - 1,
+      );
+      expect(tenLines.overflowY).toBe("hidden");
+      expect(tenLines.scrollbarWidth).toBe("thin");
+      expect(Number.parseFloat(tenLines.webkitScrollbarWidth)).toBeLessThanOrEqual(6);
+      await captureUiProof(page, "new-session-composer-ten-lines.png");
+
+      const longPrompt = Array.from({ length: 14 }, (_, index) => `line ${index + 1}`).join("\n");
+      await message.fill(longPrompt);
+      const capped = await message.evaluate((element) => ({
+        clientHeight: element.clientHeight,
+        overflowY: getComputedStyle(element).overflowY,
+        scrollHeight: element.scrollHeight,
+      }));
+      expect(capped.clientHeight).toBeLessThan(capped.scrollHeight);
+      expect(capped.overflowY).toBe("auto");
+      await captureUiProof(page, "new-session-composer-capped-scrollbar.png");
+      const start = page.getByRole("button", { name: "Start thread" });
+      await expect(start.isVisible()).resolves.toBe(true);
+      await expect(start.isEnabled()).resolves.toBe(true);
+      await start.focus();
+      await expect(start.evaluate((element) => document.activeElement === element)).resolves.toBe(
+        true,
+      );
+      await start.press("Enter");
+      await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
+        params: { message: longPrompt },
+      });
+    } finally {
+      await context.close();
+    }
   });
 
   it("pastes an image into the draft and forwards it with the initial turn", async () => {
@@ -186,7 +259,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}new`);
       await page.locator(".new-session-page__message").fill(message);
       await page.getByRole("button", { name: "Start thread" }).click();
-      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
       await gateway.waitForRequest("chat.history");
@@ -201,6 +274,76 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         throw new Error("expected visible prompt and tool rows");
       }
       expect(userRow.y).toBeLessThan(toolRow.y);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps the initial prompt visible across a Gateway reconnect", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const sessionKey = "agent:main:reconnected-initial-prompt";
+    const message = "keep this first prompt through reconnect";
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.create": { key: sessionKey, runStarted: true },
+        "chat.history": {
+          messages: [],
+          sessionId: "reconnected-initial-prompt",
+          sessionInfo: { hasActiveRun: true, key: sessionKey, status: "running" },
+        },
+      },
+    });
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await page.locator(".new-session-page__message").fill(message);
+      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+        timeout: 30_000,
+      });
+      await gateway.waitForRequest("chat.history");
+      await expect.poll(() => page.locator(".chat-group.user").textContent()).toContain(message);
+
+      const socketsBeforeReconnect = await gateway.getSocketCount();
+      await gateway.setOnline(false);
+      await expect
+        .poll(() => gateway.getSocketCount(), { timeout: 10_000 })
+        .toBeGreaterThan(socketsBeforeReconnect);
+      await gateway.setOnline(true);
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime?: { context: { gateway: { snapshot: { phase: string } } } };
+            };
+            return app.runtime?.context.gateway.snapshot.phase;
+          }),
+        )
+        .toBe("connected");
+      await page.evaluate((selectedSessionKey) => {
+        const pane = document.querySelector("openclaw-chat-pane") as unknown as HTMLElement & {
+          state: { chatMessages: unknown[]; chatMessagesBySession: Map<string, unknown> };
+          switchPaneSession: (sessionKey: string) => void;
+        };
+        pane.state.chatMessages = [];
+        pane.state.chatMessagesBySession.clear();
+        pane.switchPaneSession("agent:main:temporary-session");
+        pane.switchPaneSession(selectedSessionKey);
+      }, sessionKey);
+      if (captureUiProofEnabled) {
+        await mkdir(reconnectProofArtifactDir, { recursive: true });
+        await page.screenshot({
+          path: path.join(reconnectProofArtifactDir, "reconnected-session.png"),
+          fullPage: true,
+        });
+      }
+
+      await expect.poll(() => page.locator(".chat-group.user").textContent()).toContain(message);
+      await expect.poll(() => page.locator(".chat-group.user").count()).toBe(1);
     } finally {
       await context.close();
     }
@@ -254,7 +397,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await composer.fill(message);
       await pastePng(composer);
       await page.getByRole("button", { name: "Start thread" }).click();
-      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
       await gateway.waitForRequest("chat.history");
@@ -506,7 +649,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
       await page.getByRole("button", { name: "Start thread" }).click();
       await page.waitForURL(
-        (url) => url.searchParams.get("session") === "agent:main:preview-cleanup",
+        (url) => url.pathname === controlUiSessionPath("agent:main:preview-cleanup"),
       );
       await expect.poll(async () => await proof()).toEqual({ created: 4, revoked: 4 });
     } finally {
@@ -760,8 +903,8 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       });
 
       await expect
-        .poll(() => new URL(page.url()).search)
-        .toContain(`session=${encodeURIComponent("agent:main:draft-e2e")}`);
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath("agent:main:draft-e2e"));
     } finally {
       await context.close();
     }
@@ -1416,9 +1559,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         ts: Date.now(),
       });
       await gateway.emitGatewayEvent("sessions.changed", { sessionKey, reason: "dispatch" });
-      await page.goto(
-        `${server.baseUrl}chat?session=${encodeURIComponent("agent:cloud:neutral-e2e")}`,
-      );
+      await page.goto(controlUiSessionUrl(server.baseUrl, "agent:cloud:neutral-e2e"));
       const managedSessionKey = "agent:cloud:managed-e2e";
       const sessionRow = page.locator(`[data-session-key="${managedSessionKey}"]`);
       const localSessionRow = page.locator('[data-session-key="agent:cloud:local-e2e"]');
@@ -1657,7 +1798,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         message,
       });
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
     } finally {
@@ -1845,6 +1986,9 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.getByRole("button", { name: "Start thread" }).click();
       const firstCreate = await gateway.waitForRequest("sessions.create");
       const firstKey = (firstCreate.params as { key?: string }).key;
+      if (!firstKey) {
+        throw new Error("expected the first recovery create to include a session key");
+      }
       expect(firstKey).toMatch(/^agent:cloud:dashboard:/);
 
       await page.reload();
@@ -1863,7 +2007,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       expect(await gateway.waitForRequest("sessions.send")).toMatchObject({
         params: { key: firstKey, agentId: "cloud", message },
       });
-      await page.waitForURL((url) => url.searchParams.get("session") === firstKey, {
+      await page.waitForURL((url) => url.pathname === controlUiSessionPath(firstKey), {
         timeout: 30_000,
       });
     } finally {
@@ -2063,7 +2207,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .poll(async () => (await gateway.getRequests("environments.list")).length)
         .toBeGreaterThan(profileRequests);
       await page.getByRole("button", { name: "Start thread" }).click();
-      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
 
@@ -2235,9 +2379,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         agentId: "main",
         message: "create during refresh",
       });
-      await expect
-        .poll(() => new URL(page.url()).search)
-        .toContain(`session=${encodeURIComponent(sessionKey)}`);
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
 
       await gateway.resolveDeferred("sessions.list", listResponse);
     } finally {
@@ -3048,7 +3190,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
             "The Gateway changed while this thread was starting. Check recent threads before starting this task again.",
           )
           .waitFor();
-        expect(new URL(page.url()).searchParams.get("session")).toBeNull();
+        expect(new URL(page.url()).pathname).toBe("/new");
         expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
       } finally {
         await context.close();
@@ -3228,7 +3370,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect.poll(async () => (await gateway.getRequests("sessions.create")).length).toBe(2);
       const retry = (await gateway.getRequests("sessions.create")).at(-1);
       expect(retry?.params).toMatchObject({ message: submittedMessage });
-      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
     } finally {
@@ -3308,7 +3450,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
       });
 
-      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
       await expect
@@ -3382,7 +3524,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await pastePng(composer);
       await page.getByRole("button", { name: "Start thread" }).click();
 
-      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
       await expect

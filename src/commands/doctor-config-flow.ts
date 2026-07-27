@@ -24,6 +24,7 @@ import {
   applyUnknownConfigKeyStep,
 } from "./doctor/shared/config-flow-steps.js";
 import { applyDoctorConfigMutation } from "./doctor/shared/config-mutation-state.js";
+import { materializeDefaultAgentRoles } from "./doctor/shared/default-agent-role-materialization.js";
 import { isSingleTopLevelIncludeMigration } from "./doctor/shared/include-migration-ownership.js";
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 
@@ -198,6 +199,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       mutation: rosterRepair,
       shouldRepair,
       fixHint: `Run "${doctorFixCommand}" to persist the explicit agent roster.`,
+    }));
+  }
+  const defaultRoleMaterialization = materializeDefaultAgentRoles(candidate);
+  if (defaultRoleMaterialization.changes.length > 0) {
+    emitDoctorChangesPanel(defaultRoleMaterialization.changes, shouldRepair);
+    ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
+      state: { cfg, candidate, pendingChanges, fixHints },
+      mutation: defaultRoleMaterialization,
+      shouldRepair,
+      fixHint: `Run "${doctorFixCommand}" to persist explicit ambient agent targets.`,
     }));
   }
   const { collectBlockedLegacyOpenAICodexProviderPlan } =

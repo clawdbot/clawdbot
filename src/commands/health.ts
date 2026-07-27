@@ -36,8 +36,6 @@ import {
 } from "../gateway/channel-health-policy.js";
 import type { GatewayHotReloadStatus } from "../gateway/config-reload-status.types.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
-import { getGatewayModelPricingHealth } from "../gateway/model-pricing-cache-state.js";
-import { isGatewayModelPricingEnabled } from "../gateway/model-pricing-config.js";
 import type { ChannelRuntimeSnapshot } from "../gateway/server-channel-runtime.types.js";
 import { info } from "../globals.js";
 import { countFailedDeliveryQueueEntries } from "../infra/delivery-queue-sqlite.js";
@@ -212,19 +210,6 @@ function formatEventLoopHealthLine(summary: HealthSummary): string | null {
   )}ms p99=${Math.round(eventLoop.delayP99Ms)}ms util=${eventLoop.utilization} cpu=${
     eventLoop.cpuCoreRatio
   }`;
-}
-
-/** Formats optional model-pricing cache degradation for text health output. */
-export function formatModelPricingHealthLine(summary: HealthSummary): string | null {
-  const modelPricing = summary.modelPricing;
-  if (!modelPricing || modelPricing.state === "disabled") {
-    return null;
-  }
-  if (modelPricing.state === "ok") {
-    return null;
-  }
-  const detail = modelPricing.detail ? ` (${modelPricing.detail})` : "";
-  return `Model pricing: warning (optional pricing refresh degraded)${detail}`;
 }
 
 function buildContextEngineHealthSummary(): ContextEngineHealthSummary | undefined {
@@ -788,7 +773,6 @@ export async function getHealthSnapshot(params?: {
     ...(params?.configReloadHotReloadStatus
       ? { configReload: { hotReloadStatus: params.configReloadHotReloadStatus } }
       : {}),
-    modelPricing: getGatewayModelPricingHealth({ enabled: isGatewayModelPricingEnabled(cfg) }),
     channels,
     channelOrder,
     channelLabels,
@@ -1014,10 +998,6 @@ export async function healthCommand(
     const eventLoopLine = formatEventLoopHealthLine(summary);
     if (eventLoopLine) {
       runtime.log(styleHealthChannelLine(eventLoopLine, rich));
-    }
-    const modelPricingLine = formatModelPricingHealthLine(summary);
-    if (modelPricingLine) {
-      runtime.log(styleHealthChannelLine(modelPricingLine, rich));
     }
     const contextEngineLine = formatContextEngineHealthLine(summary);
     if (contextEngineLine) {

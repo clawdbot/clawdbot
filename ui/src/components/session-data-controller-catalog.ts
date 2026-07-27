@@ -17,6 +17,12 @@ import {
 } from "./app-sidebar-session-catalog-state.ts";
 import { sessionCatalogHostKey } from "./app-sidebar-session-types.ts";
 import type { SidebarSessionStatusFilter } from "./app-sidebar-session-types.ts";
+import {
+  completePanelRefresh,
+  createPanelRefreshStatus,
+  failPanelRefresh,
+  type PanelRefreshStatus,
+} from "./panel-refresh-status.ts";
 
 export interface SessionDataControllerHost extends ReactiveControllerHost {
   readonly isConnected: boolean;
@@ -35,6 +41,7 @@ export interface SessionCatalogDataOwner {
   readonly isSessionDataHostConnected: boolean;
   readonly sessionDataHostConnected: boolean;
   sessionCatalogs: SessionCatalog[];
+  sessionCatalogRefreshStatus: PanelRefreshStatus;
   loadingMoreSessionCatalogIds: ReadonlySet<string>;
   readonly sessionCatalogLive: SessionCatalogLiveState;
   sessionCatalogAgentId: string | null;
@@ -68,6 +75,7 @@ export function synchronizeSessionCatalogAgent(
   owner.sessionCatalogGeneration += 1;
   owner.sessionCatalogRevision += 1;
   owner.sessionCatalogLive.clear();
+  owner.sessionCatalogRefreshStatus = createPanelRefreshStatus();
   owner.loadingMoreSessionCatalogIds = new Set();
   if (owner.sessionCatalogs.some((catalog) => catalog.capabilities.createSession)) {
     owner.sessionCatalogs = owner.sessionCatalogs.map((catalog) => {
@@ -141,6 +149,7 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
     connected: () => owner.isSessionDataHostConnected,
     applyFinal: (catalogs, revisedCatalogIds) => {
       owner.sessionCatalogs = catalogs;
+      owner.sessionCatalogRefreshStatus = completePanelRefresh();
       owner.requestSessionDataUpdate();
       for (const catalogId of revisedCatalogIds) {
         owner.sessionCatalogRevisions.set(
@@ -149,6 +158,13 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
         );
       }
       owner.sessionCatalogRevision += 1;
+    },
+    applyError: (error) => {
+      owner.sessionCatalogRefreshStatus = failPanelRefresh(
+        owner.sessionCatalogRefreshStatus,
+        sessionCatalogRequestError(error).message,
+      );
+      owner.requestSessionDataUpdate();
     },
     refresh: () => void owner.refreshSessionCatalogs(),
   });

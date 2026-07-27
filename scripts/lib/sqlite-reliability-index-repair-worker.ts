@@ -1,5 +1,5 @@
 import { pathToFileURL } from "node:url";
-import { requireNodeSqlite } from "../../src/infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../../src/infra/node-sqlite.js";
 import { repairCanonicalSqliteIndexes } from "../../src/infra/sqlite-index-schema.js";
 import {
   INDEX_REPAIR_SCHEMA_SQL,
@@ -36,8 +36,7 @@ async function main(argv: string[]): Promise<void> {
     throw new Error("invalid SQLite index repair worker arguments");
   }
   const journalMode = parseJournalMode(journalModeValue);
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath);
+  const database = openNodeSqliteDatabase(databasePath);
   try {
     database.exec(`
       PRAGMA busy_timeout = 30000;

@@ -113,6 +113,17 @@ type RuntimeCreateSessionEntryBaseParams = {
         pluginExtensions?: RuntimeSessionPluginExtensions;
         /** Registry-injected owner; plugin callers cannot select another owner. */
         pluginOwnerId?: string;
+      }
+    | {
+        acpBackendId: string;
+        acpSessionBinding: {
+          acpAgentId: string;
+          agentSessionId: string;
+        };
+        modelSelectionLocked?: true;
+        pluginExtensions?: RuntimeSessionPluginExtensions;
+        /** Registry-injected owner; plugin callers cannot select another owner. */
+        pluginOwnerId?: string;
       };
 };
 type RuntimeCreateSessionEntryParams = RuntimeCreateSessionEntryBaseParams &

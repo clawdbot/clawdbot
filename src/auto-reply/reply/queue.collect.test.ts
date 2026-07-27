@@ -3904,10 +3904,11 @@ describe("followup queue collect routing", () => {
     const message = await calls[0]?.userTurnTranscriptRecorder?.resolveMessage();
     expect(message?.content).toContain("first transcript");
     expect(message?.content).toContain("second transcript");
-    expect((message as unknown as { MediaPaths?: string[] } | undefined)?.MediaPaths).toEqual([
-      "/tmp/first.png",
-      "/tmp/second.png",
-    ]);
+    expect(
+      (message as unknown as { __openclaw?: { media?: Array<{ path?: string }> } } | undefined)?.[
+        "__openclaw"
+      ]?.media?.map((fact) => fact.path),
+    ).toEqual(["/tmp/first.png", "/tmp/second.png"]);
     await vi.waitFor(() => expect(firstComplete).toHaveBeenCalledTimes(1));
     expect(secondComplete).toHaveBeenCalledTimes(1);
   });

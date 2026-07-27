@@ -1592,6 +1592,40 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-group-footer")).toBeNull();
   });
 
+  it("morphs one assistant turn from working status to its terminal recap", () => {
+    const container = document.createElement("div");
+    const message = {
+      role: "assistant",
+      content: "First result is ready.",
+      timestamp: 1_000,
+    };
+
+    renderAssistantMessage(container, message, {
+      activeContinuation: {
+        parts: [{ kind: "reading-indicator", key: "reading", startedAt: 1_000 }],
+        options: {},
+      },
+    });
+
+    expect(container.querySelectorAll(".chat-group.assistant")).toHaveLength(1);
+    expect(container.querySelector(".chat-reading-indicator")).toBeNull();
+    expect(container.querySelector(".chat-working-indicator--continuation")).not.toBeNull();
+    expect(container.querySelector(".chat-working-indicator__status")?.textContent).toContain(
+      "Working…",
+    );
+
+    renderAssistantMessage(container, message, {
+      turnRecap: { runtimeMs: 5_000, outputTokens: 42 },
+    });
+
+    expect(container.querySelectorAll(".chat-group.assistant")).toHaveLength(1);
+    expect(container.querySelector(".chat-working-indicator")).toBeNull();
+    expect(container.querySelector(".chat-turn-recap--continuation")?.textContent).toContain(
+      "Done in 5s",
+    );
+    expect(container.querySelector(".chat-tasks-status__claw")).toBeNull();
+  });
+
   it("renders the active startup phase with elapsed time", () => {
     const container = document.createElement("div");
 
@@ -1691,8 +1725,8 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
   });
 
-  it("seeds a stable claw stance per reading-indicator key", () => {
-    const stanceFor = (key: string) => {
+  it("seeds at most one stable claw surprise per reading-indicator key", () => {
+    const surpriseFor = (key: string) => {
       const container = document.createElement("div");
       render(renderStreamGroup([{ kind: "reading-indicator", key, startedAt: 1 }]), container);
       const bubble = container.querySelector(".chat-reading-indicator");
@@ -1701,10 +1735,10 @@ describe("grouped chat rendering", () => {
       );
     };
 
-    const first = stanceFor("stream:agent:main:pending");
-    // Stable across re-renders: same key always claws the same style.
-    expect(stanceFor("stream:agent:main:pending")).toEqual(first);
-    // At most one stance modifier; plain in-place clawing is the unmarked default.
+    const first = surpriseFor("stream:agent:main:pending");
+    // Stable across re-renders: the same key keeps the same surprise decision.
+    expect(surpriseFor("stream:agent:main:pending")).toEqual(first);
+    // At most one surprise modifier; plain in-place clawing is the unmarked default.
     expect(first.length).toBeLessThanOrEqual(1);
     for (const cls of first) {
       expect([

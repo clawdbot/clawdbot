@@ -653,6 +653,8 @@ export type SessionMessageCutMutationResult =
       key: string;
       entry: SessionEntry;
       editorText?: string;
+      editorAttachments?: Array<{ mimeType: string; data: string }>;
+      editorMediaRefs?: Array<{ path: string; contentType: string }>;
     }
   | { status: "missing-session" }
   | { status: "missing-entry" }

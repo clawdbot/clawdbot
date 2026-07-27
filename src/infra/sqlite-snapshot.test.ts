@@ -408,6 +408,46 @@ describe("createVerifiedSqliteSnapshot", () => {
     }
   });
 
+  it("pins validation and backup to one WAL snapshot", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const targetPath = path.join(tempDir, "snapshot.sqlite");
+    const sqlite = requireNodeSqlite();
+    const writer = new sqlite.DatabaseSync(sourcePath);
+    writer.exec(`
+      PRAGMA journal_mode = WAL;
+      PRAGMA wal_autocheckpoint = 0;
+      CREATE TABLE records (value TEXT NOT NULL);
+      INSERT INTO records VALUES ('before');
+      PRAGMA wal_checkpoint(TRUNCATE);
+    `);
+    const backup = sqlite.backup.bind(sqlite);
+    const backupSpy = vi.spyOn(sqlite, "backup").mockImplementationOnce(async (...args) => {
+      writer.prepare("INSERT INTO records VALUES (?)").run("during");
+      return await backup(...args);
+    });
+
+    try {
+      await createVerifiedSqliteSnapshot({ sourcePath, targetPath });
+
+      expect(writer.prepare("SELECT value FROM records ORDER BY rowid").all()).toEqual([
+        { value: "before" },
+        { value: "during" },
+      ]);
+      const snapshot = new sqlite.DatabaseSync(targetPath, { readOnly: true });
+      try {
+        expect(snapshot.prepare("SELECT value FROM records ORDER BY rowid").all()).toEqual([
+          { value: "before" },
+        ]);
+      } finally {
+        snapshot.close();
+      }
+    } finally {
+      backupSpy.mockRestore();
+      writer.close();
+    }
+  });
+
   it("rejects unsafe index drift and removes the failed target", async () => {
     const tempDir = await createTempDir();
     const sourcePath = path.join(tempDir, "source.sqlite");

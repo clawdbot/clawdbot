@@ -4,11 +4,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  clearRuntimeConfigSnapshot,
-  getRuntimeConfig,
-  type OpenClawConfig,
-} from "../config/config.js";
+import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../config/config.js";
 import { callGateway as realCallGateway } from "../gateway/call.js";
 import { GatewayClient } from "../gateway/client.js";
 import { dispatchGatewayMethodInProcess as realDispatchGatewayMethodInProcess } from "../gateway/server-plugins.js";
@@ -22,7 +18,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { isLiveTestEnabled } from "./live-test-helpers.js";
+import { isLiveTestEnabled, readLiveTestConfig } from "./live-test-helpers.js";
 import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.test-support.js";
 import { testing as subagentAnnounceTesting } from "./subagent-announce.js";
 import { resolveSubagentController, steerControlledSubagentRun } from "./subagent-control.js";
@@ -577,7 +573,7 @@ describeLive("subagent announce live", () => {
       expect(runBeforeSteer.completion?.resultText, runStateBeforeSteer).toBeUndefined();
       console.log(`[subagent-steer] steering active child run; runs=${runStateBeforeSteer}`);
 
-      const cfg = getRuntimeConfig();
+      const cfg = await readLiveTestConfig();
       const steerResult = await steerControlledSubagentRun({
         cfg,
         controller: resolveSubagentController({ cfg, agentSessionKey: sessionKey }),

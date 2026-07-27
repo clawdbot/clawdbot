@@ -496,14 +496,11 @@ public enum ChatSessionSidebarModel {
             // active row selectable instead of showing an empty selection.
             entries.append(self.placeholder(key: currentSessionKey))
         }
-        entries.sort { (($0.updatedAt ?? $0.lastActivityAt) ?? 0) > (($1.updatedAt ?? $1.lastActivityAt) ?? 0) }
-
-        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !needle.isEmpty else { return entries }
-        return entries.filter { entry in
-            self.displayName(for: entry).lowercased().contains(needle) ||
-                entry.key.lowercased().contains(needle)
-        }
+        // Gateway, cached lists, iOS, and macOS must share the same pin
+        // chronology, stable key ties, and searchable session fields.
+        return OpenClawChatSessionListOrganizer.filter(
+            OpenClawChatSessionListOrganizer.organize(entries),
+            search: query)
     }
 
     private static func placeholder(key: String) -> OpenClawChatSessionEntry {

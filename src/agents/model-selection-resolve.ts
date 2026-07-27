@@ -17,7 +17,6 @@ import {
 } from "./model-selection-shared.js";
 
 export {
-  buildConfiguredAllowlistKeys,
   buildModelAliasIndex,
   normalizeModelSelection,
   resolveConfiguredModelRef,

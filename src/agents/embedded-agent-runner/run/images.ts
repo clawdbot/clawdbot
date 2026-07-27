@@ -9,7 +9,7 @@ import {
   normalizeMediaFacts,
   readRuntimePromptImageOrder,
   readRuntimePromptMediaFacts,
-  readPersistedMediaFactsWithLegacyFallback,
+  readPersistedMediaFacts,
   type MediaFact,
 } from "../../../media/media-facts.js";
 import { resolveMediaReferenceLocalPath } from "../../../media/media-reference.js";
@@ -607,7 +607,7 @@ export async function hydratePromptMediaMessages(
     }
     const runtimeMedia = readRuntimePromptMediaFacts(message);
     const meta = (message as unknown as Record<string, unknown>)["__openclaw"];
-    const resolvedMedia = runtimeMedia ?? readPersistedMediaFactsWithLegacyFallback(message) ?? [];
+    const resolvedMedia = runtimeMedia ?? readPersistedMediaFacts(message) ?? [];
     const runtimeImageOrder = readRuntimePromptImageOrder(message);
     const mediaImageLayout = readPersistedMediaImageLayout(message);
     if (!resolvedMedia.length) {

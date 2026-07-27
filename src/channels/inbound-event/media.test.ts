@@ -598,7 +598,6 @@ describe("channel inbound media facts", () => {
     expect(buildMediaPayload(media)).toEqual(compact);
 
     const aligned = { ...compact, MediaTypes: ["image/png", ""] };
-    expect(projectMediaFacts(media, "aligned")).toEqual(aligned);
     expect(buildMediaPayload(media, { preserveMediaTypeCardinality: true })).toEqual(aligned);
   });
 
@@ -621,10 +620,6 @@ describe("channel inbound media facts", () => {
     expect(projectMediaFacts(richerMedia, "compact")).toEqual(compact);
     expect(buildAgentMediaPayload(richerMedia)).toEqual(compact);
     expect(buildMediaPayload(richerMedia)).toEqual(compact);
-    expect(projectMediaFacts(richerMedia, "aligned")).toEqual({
-      ...compact,
-      MediaTypes: [""],
-    });
     expect(buildMediaPayload(richerMedia, { preserveMediaTypeCardinality: true })).toEqual({
       ...compact,
       MediaTypes: [""],

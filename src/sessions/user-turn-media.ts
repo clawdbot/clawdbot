@@ -1,7 +1,4 @@
-import {
-  isMeaningfulMediaFact,
-  readPersistedMediaFactsWithLegacyFallback,
-} from "../media/media-facts.js";
+import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 
 // Model-facing marker for user turns that carry media but no caption. Never
 // persist it as transcript content — UIs render content verbatim; the LLM
@@ -12,5 +9,5 @@ export function hasPersistedMedia(message: unknown): boolean {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
     return false;
   }
-  return (readPersistedMediaFactsWithLegacyFallback(message) ?? []).some(isMeaningfulMediaFact);
+  return (readPersistedMediaFacts(message) ?? []).some(isMeaningfulMediaFact);
 }

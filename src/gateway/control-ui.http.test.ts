@@ -451,7 +451,7 @@ describe("handleControlUiHttpRequest", () => {
           "Permissions-Policy",
           "camera=(self), microphone=*, geolocation=*, clipboard-write=*",
         );
-        expect(responseBody(end)).toContain('data-openclaw-terminal-enabled="false"');
+        expect(responseBody(end)).toContain('data-openclaw-terminal-enabled="true"');
       },
     });
   });
@@ -1059,7 +1059,7 @@ describe("handleControlUiHttpRequest", () => {
         );
         expect(handled).toBe(true);
         expect(end).toHaveBeenCalledWith(
-          html.replace("<html", '<html data-openclaw-terminal-enabled="false"'),
+          html.replace("<html", '<html data-openclaw-terminal-enabled="true"'),
         );
       },
     });
@@ -1090,6 +1090,56 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it.each([
+    {
+      name: "root-mounted nested routes",
+      requestPath: "/settings/approvals",
+      basePath: undefined,
+      expectedPrefix: "",
+    },
+    {
+      name: "base-mounted nested routes",
+      requestPath: "/openclaw/settings/approvals",
+      basePath: "/openclaw",
+      expectedPrefix: "/openclaw",
+    },
+  ])(
+    "anchors Vite-relative public asset hrefs for $name",
+    async ({ requestPath, basePath, expectedPrefix }) => {
+      const assets = [
+        "favicon.svg",
+        "favicon-32.png",
+        "apple-touch-icon.png",
+        "manifest.webmanifest",
+      ];
+      const html = `<html><head>${assets
+        .map((asset) => `<link href="./${asset}" />`)
+        .join("")}</head><body></body></html>\n`;
+
+      await withControlUiRoot({
+        indexHtml: html,
+        fn: async (tmp) => {
+          const { res, end } = makeMockHttpResponse();
+          const handled = await handleControlUiHttpRequest(
+            { url: requestPath, method: "GET" } as IncomingMessage,
+            res,
+            {
+              ...(basePath ? { basePath } : {}),
+              root: { kind: "resolved", path: tmp },
+            },
+          );
+
+          expect(handled).toBe(true);
+          const body = String(end.mock.calls[0]?.[0] ?? "");
+          for (const asset of assets) {
+            expect(body).toContain(`href="${expectedPrefix}/${asset}"`);
+            expect(body).not.toContain(`href="./${asset}"`);
+          }
+        },
+      });
+    },
+  );
+
   it("serves bootstrap config JSON", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
@@ -1118,7 +1168,7 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantAgentId).toBe("main");
         expect(parsed.seamColor).toBe("#1A2b3C");
         expect(parsed.timeFormat).toBe("auto");
-        expect(parsed.terminalEnabled).toBe(false);
+        expect(parsed.terminalEnabled).toBe(true);
         expect(parsed.devGitBranch).toBeUndefined();
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
       },
@@ -2462,7 +2512,7 @@ describe("handleControlUiHttpRequest", () => {
           expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
           expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
           expect(gunzipSync(end.mock.calls[0]?.[0] as Buffer).toString()).toContain(
-            '<html data-openclaw-terminal-enabled="false">',
+            '<html data-openclaw-terminal-enabled="true">',
           );
           expect(closeSync.mock.invocationCallOrder.at(-1)).toBeLessThan(
             end.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,

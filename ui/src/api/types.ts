@@ -884,13 +884,14 @@ export type SkillStatusEntry = {
   userInvocable?: boolean;
   commandVisible?: boolean;
   requirements: {
-    anyBins?: string[];
+    anyBins: string[];
     bins: string[];
     env: string[];
     config: string[];
     os: string[];
   };
   missing: {
+    anyBins: string[];
     bins: string[];
     env: string[];
     config: string[];

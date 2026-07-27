@@ -1,8 +1,7 @@
 // Mattermost tests cover reply delivery plugin behavior.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
 import {
@@ -225,9 +224,11 @@ describe("deliverMattermostReplyPayload", () => {
   });
 
   it("passes agent-scoped mediaLocalRoots when sending media paths", async () => {
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mm-state-"));
-    process.env.OPENCLAW_STATE_DIR = stateDir;
+    const openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-mm-state-",
+    });
+    const stateDir = openClawState.stateDir;
 
     try {
       const sendMessage = vi.fn(async () => undefined);
@@ -269,12 +270,7 @@ describe("deliverMattermostReplyPayload", () => {
         }),
       );
     } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      await fs.rm(stateDir, { recursive: true, force: true });
+      await openClawState.cleanup();
     }
   });
 

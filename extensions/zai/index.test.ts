@@ -106,8 +106,8 @@ describe("zai provider plugin", () => {
           baseUrl: "https://api.z.ai/api/paas/v4",
           input: ["text"],
           reasoning: true,
-          contextWindow: 202800,
-          maxTokens: 131100,
+          contextWindow: 200_000,
+          maxTokens: 131_072,
         },
       },
       {
@@ -117,8 +117,8 @@ describe("zai provider plugin", () => {
           baseUrl: "https://api.z.ai/api/paas/v4",
           input: ["text", "image"],
           reasoning: true,
-          contextWindow: 202800,
-          maxTokens: 131100,
+          contextWindow: 200_000,
+          maxTokens: 131_072,
         },
       },
     ] as const;
@@ -194,13 +194,13 @@ describe("zai provider plugin", () => {
 
     const resolved = provider.resolveDynamicModel?.({
       provider: "zai",
-      modelId: "glm-5-turbo",
+      modelId: "glm-5.3",
       modelRegistry: {
         find: () => null,
       },
     } as never) as Record<string, unknown> | undefined;
     expectModelFields(resolved, {
-      id: "glm-5-turbo",
+      id: "glm-5.3",
       provider: "zai",
       api: "openai-completions",
       baseUrl: "https://api.z.ai/api/paas/v4",
@@ -215,14 +215,13 @@ describe("zai provider plugin", () => {
 
     const resolved = provider.resolveDynamicModel?.({
       provider: "zai",
-      modelId: "glm-5-turbo",
+      modelId: "glm-5.3",
       modelRegistry: {
         find: (_provider: string, modelId: string) => (modelId === "glm-4.7" ? template : null),
       },
     } as never) as Record<string, unknown> | undefined;
     expectModelFields(resolved, {
-      id: "glm-5-turbo",
-      name: "GLM-5 Turbo",
+      id: "glm-5.3",
       provider: "zai",
       api: "openai-completions",
       baseUrl: "https://api.z.ai/api/paas/v4",

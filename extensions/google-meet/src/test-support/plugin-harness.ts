@@ -225,8 +225,7 @@ export function setupGoogleMeetPlugin(
 
 type GoogleMeetToolError = {
   error?: string;
-  manualActionRequired?: boolean;
-  manualActionReason?: string;
+  manualAction?: { reason: string; message: string };
 };
 
 type GoogleMeetToolDetails = {

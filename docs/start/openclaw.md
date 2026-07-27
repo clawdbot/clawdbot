@@ -173,7 +173,7 @@ Set `agents.defaults.heartbeat.every: "0m"` to disable. Heartbeat checklists liv
 
 - If the monitor scratch exists but is effectively empty (only blank lines, Markdown/HTML comments, Markdown headings like `# Heading`, fence markers, or empty checklist stubs), OpenClaw skips the heartbeat run to save API calls.
 - If no scratch exists, the heartbeat still runs and the model decides what to do.
-- If the agent replies with `HEARTBEAT_OK` (optionally with short padding; see `agents.defaults.heartbeat.ackMaxChars`), OpenClaw suppresses outbound delivery for that heartbeat.
+- If the agent replies with `HEARTBEAT_OK`, optionally with at most 300 characters of remaining text, OpenClaw suppresses outbound delivery for that heartbeat. The 300-character budget is fixed.
 - By default, heartbeat delivery to DM-style `user:<id>` targets is allowed. Set `agents.defaults.heartbeat.directPolicy: "block"` to suppress direct-target delivery while keeping heartbeat runs active.
 - Heartbeats run full agent turns - shorter intervals burn more tokens.
 

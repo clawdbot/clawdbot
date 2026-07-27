@@ -426,6 +426,9 @@ async function agentCommandInternal(
         embeddedSessionState,
         trackInternalModelRunTarget,
       });
+      if (embeddedAttempt.fallbackExhausted) {
+        opts.onModelFallbackExhausted?.();
+      }
       sessionEntry = embeddedAttempt.sessionEntry;
       lifecycleGeneration = embeddedAttempt.lifecycleGeneration;
       const finalized = await finalizeEmbeddedAgentCommand({

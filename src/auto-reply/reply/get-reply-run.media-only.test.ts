@@ -769,7 +769,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
       role: "user",
       content: "",
-      MediaPath: "/tmp/input.png",
+      __openclaw: { media: [expect.objectContaining({ path: "/tmp/input.png" })] },
     });
   });
 
@@ -953,12 +953,7 @@ describe("runPreparedReply media-only handling", () => {
 
   it("does not duplicate thread starter text with a plain-text prelude", async () => {
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
-      [
-        "Thread starter (untrusted, for context):",
-        "```json",
-        '{"body":"starter message"}',
-        "```",
-      ].join("\n"),
+      ["Thread starter:", "```json", '{"body":"starter message"}', "```"].join("\n"),
     );
 
     const result = await runPreparedReply(
@@ -987,9 +982,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(result).toEqual({ text: "ok" });
 
     const call = requireRunReplyAgentCall();
-    expect(call.followupRun.currentInboundContext?.text).toContain(
-      "Thread starter (untrusted, for context):",
-    );
+    expect(call.followupRun.currentInboundContext?.text).toContain("Thread starter:");
     expect(call.followupRun.prompt).not.toContain("[Thread starter - for context]");
   });
 
@@ -1018,7 +1011,7 @@ describe("runPreparedReply media-only handling", () => {
   it("still skips metadata-only turns when inbound context adds chat_id", async () => {
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
       [
-        "Conversation info (untrusted metadata):",
+        "Conversation info:",
         "```json",
         JSON.stringify({ chat_id: "paperclip:issue:abc" }, null, 2),
         "```",
@@ -1052,7 +1045,7 @@ describe("runPreparedReply media-only handling", () => {
   it("allows pending inbound history to trigger a bare mention turn", async () => {
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
       [
-        "Chat history since last reply (untrusted, for context):",
+        "Chat history since last reply:",
         "```json",
         JSON.stringify(
           [{ sender: "Alice", timestamp_ms: 1_700_000_000_000, body: "what changed?" }],
@@ -1101,7 +1094,7 @@ describe("runPreparedReply media-only handling", () => {
   it("does not treat blank pending inbound history as user input", async () => {
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
       [
-        "Chat history since last reply (untrusted, for context):",
+        "Chat history since last reply:",
         "```json",
         JSON.stringify([{ sender: "Alice", timestamp_ms: 1_700_000_000_000, body: "" }], null, 2),
         "```",
@@ -1139,7 +1132,7 @@ describe("runPreparedReply media-only handling", () => {
   it("allows webchat pure-image turns when image content is carried outside MediaPath", async () => {
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
       [
-        "Conversation info (untrusted metadata):",
+        "Conversation info:",
         "```json",
         JSON.stringify({ provider: "webchat", chat_id: "webchat:local" }, null, 2),
         "```",
@@ -1227,10 +1220,9 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
       role: "user",
       content: "describe this",
-      MediaPath: imagePath,
-      MediaPaths: [imagePath],
-      MediaType: "image/png",
-      MediaTypes: ["image/png"],
+      __openclaw: {
+        media: [expect.objectContaining({ path: imagePath, contentType: "image/png" })],
+      },
     });
     expect(call.followupRun.images?.[0]?.data).toHaveLength(92);
     expect(call.followupRun.imageOrder).toEqual(["inline"]);
@@ -2346,7 +2338,7 @@ describe("runPreparedReply media-only handling", () => {
   it("runs bare mention replies when the reply target is the current-turn context", async () => {
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
       [
-        "Reply target of current user message (untrusted, for context):",
+        "Reply target of current user message:",
         "```json",
         JSON.stringify({ sender_label: "Bot", body: "quoted status body" }, null, 2),
         "```",
@@ -2398,12 +2390,12 @@ describe("runPreparedReply media-only handling", () => {
   it("runs room events as contextual events instead of direct user prompts", async () => {
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
       [
-        "Conversation info (untrusted metadata):",
+        "Conversation info:",
         "```json",
         JSON.stringify({ message_id: "35676", inbound_event_kind: "room_event" }, null, 2),
         "```",
         "",
-        "Conversation context (untrusted, chronological, selected for current message):",
+        "Conversation context (chronological, selected for current message):",
         "#35673 obviyus: @HamVerBot make a note",
         "#35674 Keśava: I wish I could enjoy 5.5",
         "#35675 obviyus ->#35674: Are you fr fr",
@@ -3309,12 +3301,7 @@ describe("runPreparedReply media-only handling", () => {
     "keeps inbound sender context in reply-targeted bare %s model prompt while hiding startup instructions from transcript prompt",
     async (commandText, startupAction) => {
       vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
-        [
-          "Conversation info (untrusted metadata):",
-          "Sender (untrusted metadata):",
-          "sender_id",
-          "telegram-user-1",
-        ].join("\n"),
+        ["Conversation info:", "Sender:", "sender_id", "telegram-user-1"].join("\n"),
       );
 
       await runPreparedReply(
@@ -3355,14 +3342,14 @@ describe("runPreparedReply media-only handling", () => {
 
       const call = requireLastRunReplyAgentCall();
       expect(call?.commandBody).toContain("A new session was started via /new or /reset.");
-      expect(call?.commandBody).toContain("Conversation info (untrusted metadata):");
-      expect(call?.commandBody).toContain("Sender (untrusted metadata):");
+      expect(call?.commandBody).toContain("Conversation info:");
+      expect(call?.commandBody).toContain("Sender:");
       expect(call?.commandBody).toContain("telegram-user-1");
       expect(call?.followupRun.prompt).toContain("A new session was started via /new or /reset.");
-      expect(call?.followupRun.prompt).toContain("Sender (untrusted metadata):");
+      expect(call?.followupRun.prompt).toContain("Sender:");
       expect(call?.transcriptCommandBody).toBe(`[OpenClaw session ${startupAction}]`);
       expect(call?.followupRun.transcriptPrompt).toBe(`[OpenClaw session ${startupAction}]`);
-      expect(call?.followupRun.transcriptPrompt).not.toContain("Sender (untrusted metadata):");
+      expect(call?.followupRun.transcriptPrompt).not.toContain("Sender:");
     },
   );
 
@@ -3706,9 +3693,9 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.senderIsOwner).toBe(true);
   });
 
-  it("does not downgrade sender ownership when event text contains the untrusted marker", async () => {
+  it("does not downgrade sender ownership when event text contains a system marker", async () => {
     vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
-      "System: [t] Relay text mentions System (untrusted): but event is trusted.",
+      "System: [t] Relay text mentions System: but event is trusted.",
     );
     const params = ownerParams();
 

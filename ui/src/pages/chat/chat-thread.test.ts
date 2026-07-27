@@ -2,9 +2,11 @@
 // Control UI tests cover build chat items behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { extractToolCardsCached as extractToolCards } from "../../lib/chat/tool-cards.ts";
 import {
+  assistantGroupCanOwnActiveRunStatus,
   buildCachedChatItems,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
@@ -14,6 +16,29 @@ import {
   resetChatThreadState,
   syncToolCardExpansionState,
 } from "./chat-thread.ts";
+
+describe("assistantGroupCanOwnActiveRunStatus", () => {
+  const group = (message: Record<string, unknown>): MessageGroup => ({
+    kind: "group",
+    key: "assistant:1",
+    role: "assistant",
+    timestamp: 1,
+    isStreaming: false,
+    messages: [{ key: "message:1", message }],
+  });
+
+  it("accepts visible replies and rejects forwarded assistant input", () => {
+    expect(assistantGroupCanOwnActiveRunStatus(group({ content: "Reply" }))).toBe(true);
+    expect(
+      assistantGroupCanOwnActiveRunStatus(
+        group({
+          content: "Forwarded input",
+          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        }),
+      ),
+    ).toBe(false);
+  });
+});
 
 describe("persistedMessageEntryId", () => {
   it("rejects optimistic pending bubbles and accepts transcript identities", () => {
@@ -35,8 +60,9 @@ type WorkGroupItem = Extract<
   { kind: "work-group" }
 >;
 
-const SENDER_METADATA_BLOCK =
-  'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n```';
+// Inbound context blocks are stamped with the provenance marker; strippers key
+// on the marker, so display fixtures must carry it to be recognized.
+const SENDER_METADATA_BLOCK = `${markInboundContextLabel("Sender:")}\n\`\`\`json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n\`\`\``;
 
 function createProps(overrides: Partial<CachedChatItemsProps> = {}): CachedChatItemsProps {
   return {

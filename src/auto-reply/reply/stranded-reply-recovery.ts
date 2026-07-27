@@ -1,6 +1,7 @@
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
+import { shouldWarnAboutPrivateMessageToolFinal } from "./private-message-tool-final.js";
 import type { FollowupRun } from "./queue/types.js";
 
 const STRANDED_REPLY_RETRY_MARKER = "stranded-reply-retry";
@@ -13,6 +14,55 @@ export function buildStrandedReplyDeliveryFailurePayload(): ReplyPayload {
     isError: true,
     isStatusNotice: true,
   });
+}
+
+type StrandedReplyRecovery =
+  | { kind: "none" }
+  | { kind: "retry"; run: FollowupRun }
+  | { kind: "diagnostic"; payload: ReplyPayload; warn: boolean };
+
+/** Resolve the one allowed recovery action for a final that missed source delivery. */
+export function resolveStrandedReplyRecovery(params: {
+  base: FollowupRun;
+  finalText: string;
+  sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
+  sendPolicyDenied: boolean;
+  successfulSourceReplyDelivery: boolean;
+  isHeartbeat: boolean;
+  isRoomEvent: boolean;
+}): StrandedReplyRecovery {
+  if (
+    params.isHeartbeat ||
+    params.isRoomEvent ||
+    params.sourceReplyDeliveryMode !== "message_tool_only" ||
+    params.sendPolicyDenied ||
+    params.successfulSourceReplyDelivery
+  ) {
+    return { kind: "none" };
+  }
+  const shouldWarn = shouldWarnAboutPrivateMessageToolFinal({
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    sendPolicyDenied: params.sendPolicyDenied,
+    successfulSourceReplyDelivery: params.successfulSourceReplyDelivery,
+    finalText: params.finalText,
+  });
+  if (params.base.strandedReplyRetry === true) {
+    return {
+      kind: "diagnostic",
+      payload: buildStrandedReplyDeliveryFailurePayload(),
+      warn: shouldWarn,
+    };
+  }
+  if (!shouldWarn) {
+    return { kind: "none" };
+  }
+  return {
+    kind: "retry",
+    run: buildStrandedReplyRetryFollowupRun(params.base, {
+      finalText: params.finalText,
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    }),
+  };
 }
 
 function buildStrandedReplyRetryPrompt(finalText: string): string {

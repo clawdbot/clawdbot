@@ -493,6 +493,12 @@ describe("buildOpenAIProvider", () => {
         data: [
           { id: "gpt-5.6", object: "model" },
           { id: "gpt-5.5", object: "model" },
+          { id: "chat-latest", object: "model" },
+          { id: "gpt-5.4", object: "model" },
+          { id: "gpt-5.4-pro", object: "model" },
+          { id: "gpt-5.4-mini", object: "model" },
+          { id: "gpt-5.4-nano", object: "model" },
+          { id: "gpt-5.3-codex-spark", object: "model" },
           { id: "not-in-manifest", object: "model" },
         ],
       }),
@@ -508,6 +514,47 @@ describe("buildOpenAIProvider", () => {
     expect(provider.apiKey).toBe("sk-openai");
     expect(provider.models.map((model) => model.id)).toContain("gpt-5.6");
     expect(provider.models.map((model) => model.id)).toContain("gpt-5.5");
+    expect(provider.models.map((model) => model.id)).toEqual(
+      expect.arrayContaining([
+        "chat-latest",
+        "gpt-5.4",
+        "gpt-5.4-pro",
+        "gpt-5.4-mini",
+        "gpt-5.4-nano",
+      ]),
+    );
+    expect(provider.models.find((model) => model.id === "chat-latest")).toMatchObject({
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+      reasoning: false,
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+    });
+    expect(provider.models.find((model) => model.id === "gpt-5.4-pro")).toMatchObject({
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+    });
+    expect(provider.models.find((model) => model.id === "gpt-5.4-mini")).toMatchObject({
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+      cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
+    });
+    expect(provider.models.find((model) => model.id === "gpt-5.4-nano")).toMatchObject({
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+      cost: { input: 0.2, output: 1.25, cacheRead: 0.02, cacheWrite: 0 },
+    });
+    expect(provider.models.map((model) => model.id)).not.toContain("gpt-5.3-codex-spark");
     expect(provider.models.map((model) => model.id)).not.toContain("not-in-manifest");
     const fetchParams = vi.mocked(fetchGuard).mock.calls[0]?.[0];
     expect(fetchParams?.url).toBe("https://api.openai.com/v1/models");
@@ -519,6 +566,38 @@ describe("buildOpenAIProvider", () => {
     }
     expect(headers.get("Authorization")).toBe("Bearer sk-openai");
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("does not surface platform models omitted by the account's live catalog", async () => {
+    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
+      response: Response.json({ data: [{ id: "gpt-5.5", object: "model" }] }),
+      finalUrl: "https://api.openai.com/v1/models",
+      release: async () => undefined,
+    }));
+
+    const provider = await buildOpenAILiveProviderConfig({
+      apiKey: "sk-openai",
+      fetchGuard,
+    });
+
+    expect(provider.models.map((model) => model.id)).toEqual(["gpt-5.5"]);
+  });
+
+  it("keeps only manifest fallback models when OpenAI discovery is unavailable", async () => {
+    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
+      response: new Response("temporarily unavailable", { status: 503 }),
+      finalUrl: "https://api.openai.com/v1/models",
+      release: async () => undefined,
+    }));
+
+    const provider = await buildOpenAILiveProviderConfig({
+      apiKey: "sk-openai",
+      fetchGuard,
+    });
+
+    expect(provider.models.map((model) => model.id)).toEqual(
+      manifest.modelCatalog.providers.openai.models.map((model) => model.id),
+    );
   });
 
   it("skips OpenAI live discovery for custom OpenAI-compatible base URLs", async () => {
