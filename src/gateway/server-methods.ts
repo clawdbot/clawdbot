@@ -7,7 +7,7 @@ import {
   gatewayStartupUnavailableDetails,
   GATEWAY_STARTUP_RETRY_AFTER_MS,
 } from "../../packages/gateway-protocol/src/startup-unavailable.js";
-import { getPluginRegistryState } from "../plugins/runtime-state.js";
+import { getActivePluginHttpRouteRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   getGatewaySuspendAdmissionPhase,
@@ -898,10 +898,11 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
 function createRequestGatewayMethodRegistry(
   extraHandlers?: GatewayRequestHandlers,
 ): GatewayMethodRegistry {
-  const activePluginRegistry = getPluginRegistryState()?.activeRegistry;
-  const activePluginHandlers = activePluginRegistry?.gatewayHandlers ?? {};
+  // Attached gateway methods must not be shadowed by agent-scoped registry loads.
+  const gatewayPluginRegistry = getActivePluginHttpRouteRegistry();
+  const gatewayPluginHandlers = gatewayPluginRegistry?.gatewayHandlers ?? {};
   const extraHandlerEntries = Object.entries(extraHandlers ?? {});
-  const pluginMethodNames = new Set(Object.keys(activePluginHandlers));
+  const pluginMethodNames = new Set(Object.keys(gatewayPluginHandlers));
   const coreDescriptorHandlers = { ...coreGatewayHandlers };
   for (const [method, extraHandler] of extraHandlerEntries) {
     // Tests and local harnesses can override classified core methods, but plugin-provided
@@ -925,7 +926,7 @@ function createRequestGatewayMethodRegistry(
   );
   return createGatewayMethodRegistry([
     ...coreDescriptors,
-    ...(activePluginRegistry ? createPluginGatewayMethodDescriptors(activePluginRegistry) : []),
+    ...(gatewayPluginRegistry ? createPluginGatewayMethodDescriptors(gatewayPluginRegistry) : []),
     ...createGatewayMethodDescriptorsFromHandlers({
       handlers: auxHandlers,
       owner: { kind: "aux", area: "gateway-extra" },
@@ -941,8 +942,8 @@ export async function handleGatewayRequest(
   const { req, respond, client, isWebchatConnect, context } = opts;
   // Prefer the caller-attached registry when it owns the requested method so plugin dispatch
   // metadata newer than global runtime state still authorizes and dispatches correctly. When the
-  // attached snapshot does not own the method, rebuild from the live plugin registry so plugin RPC
-  // methods registered after the startup snapshot stay reachable (#94127).
+  // attached snapshot does not own the method, rebuild from the gateway-pinned registry. Without
+  // a gateway pin, that registry follows active plugins so late methods remain reachable (#94127).
   const methodRegistry =
     opts.methodRegistry?.getHandler(req.method) !== undefined
       ? opts.methodRegistry

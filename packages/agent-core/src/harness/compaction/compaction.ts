@@ -1,4 +1,3 @@
-// Agent Core module implements compaction behavior.
 import {
   resolveClaudeFable5ModelIdentity,
   type AssistantMessage,
@@ -8,6 +7,11 @@ import {
   type StreamFn,
   type Usage,
 } from "@openclaw/llm-core";
+// Agent Core module implements compaction behavior.
+import {
+  CHARS_PER_TOKEN_ESTIMATE,
+  estimateStringChars,
+} from "@openclaw/normalization-core/cjk-chars";
 import { resolveAgentReasoningOption } from "../../reasoning.js";
 import {
   type AgentCoreCompletionRuntimeDeps,
@@ -269,7 +273,7 @@ function countContentBlockChars(
     if (block.type === "image") {
       chars += IMAGE_BLOCK_CHARS;
     } else {
-      chars += getCompactionContentBlockText(block).length;
+      chars += estimateStringChars(getCompactionContentBlockText(block));
     }
   }
   return chars;
@@ -286,42 +290,45 @@ export function estimateTokens(message: AgentMessage): number {
         harnessMessage as { content: string | Array<{ type: string; text?: string }> }
       ).content;
       if (typeof content === "string") {
-        chars = content.length;
+        chars = estimateStringChars(content);
       } else if (Array.isArray(content)) {
         chars = countContentBlockChars(content);
       }
-      return Math.ceil(chars / 4);
+      return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
     case "assistant": {
       const assistant = harnessMessage;
       for (const block of assistant.content) {
         if (block.type === "text") {
-          chars += block.text.length;
+          chars += estimateStringChars(block.text);
         } else if (block.type === "thinking") {
-          chars += block.thinking.length;
+          chars += estimateStringChars(block.thinking);
         } else if (block.type === "toolCall") {
-          chars += block.name.length + safeJsonStringify(block.arguments).length;
+          chars +=
+            estimateStringChars(block.name) +
+            estimateStringChars(safeJsonStringify(block.arguments));
         }
       }
-      return Math.ceil(chars / 4);
+      return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
     case "custom":
     case "toolResult": {
       if (typeof harnessMessage.content === "string") {
-        chars = harnessMessage.content.length;
+        chars = estimateStringChars(harnessMessage.content);
       } else {
         chars = countContentBlockChars(harnessMessage.content);
       }
-      return Math.ceil(chars / 4);
+      return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
     case "bashExecution": {
-      chars = harnessMessage.command.length + harnessMessage.output.length;
-      return Math.ceil(chars / 4);
+      chars =
+        estimateStringChars(harnessMessage.command) + estimateStringChars(harnessMessage.output);
+      return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
     case "branchSummary":
     case "compactionSummary": {
-      chars = harnessMessage.summary.length;
-      return Math.ceil(chars / 4);
+      chars = estimateStringChars(harnessMessage.summary);
+      return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
   }
 

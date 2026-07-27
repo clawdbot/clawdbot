@@ -57,6 +57,8 @@ const GATEWAY_DAEMON_CHECK_ID = "core/doctor/gateway-daemon";
 const GATEWAY_HEALTH_CHECK_ID = "core/doctor/gateway-health";
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
 const SESSION_LOCKS_CHECK_ID = "core/doctor/session-locks";
+const TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID =
+  "core/doctor/telegram-general-topic-conversations";
 const SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID = "core/doctor/skill-workshop-tool-policy";
 type CoreHealthCheckContext = HealthCheckContext & {
   readonly deep?: boolean;
@@ -845,6 +847,53 @@ const codexSessionRoutesCheck: HealthCheck = {
   },
 };
 
+const telegramGeneralTopicConversationsCheck: HealthCheck = {
+  id: TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID,
+  kind: "core",
+  description: "Telegram General-topic conversation bindings use the canonical chat target.",
+  source: "doctor",
+  async detect(ctx) {
+    const { detectTelegramGeneralTopicConversationRepairs } =
+      await import("../commands/doctor-telegram-general-topic-conversations.js");
+    const repairs = detectTelegramGeneralTopicConversationRepairs({
+      cfg: ctx.cfg,
+      ...(ctx.env ? { env: ctx.env } : {}),
+    });
+    return repairs.map((repair) => ({
+      checkId: TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID,
+      severity: "warning" as const,
+      message: `Agent ${repair.agentId} has a stale Telegram General-topic conversation identity.`,
+      target: repair.agentId,
+      requirement: "One canonical chat-scoped conversation binding for Telegram General topic.",
+      fixHint: "Run `openclaw doctor --fix` to merge the stale topic-qualified identity.",
+    }));
+  },
+  async repair(ctx) {
+    const { repairTelegramGeneralTopicConversations } =
+      await import("../commands/doctor-telegram-general-topic-conversations.js");
+    const effect = {
+      kind: "state" as const,
+      action: ctx.dryRun ? "would-merge-stale-bindings" : "merge-stale-bindings",
+      target: "Telegram General topic conversations",
+      dryRunSafe: false,
+    };
+    if (ctx.dryRun) {
+      return {
+        changes: ["Would merge stale Telegram General-topic identities."],
+        effects: [effect],
+      };
+    }
+    const repaired = await repairTelegramGeneralTopicConversations({
+      cfg: ctx.cfg,
+      ...(ctx.env ? { env: ctx.env } : {}),
+    });
+    return {
+      changes: [`Merged ${repaired} stale Telegram General-topic conversation identity row(s).`],
+      effects: repaired > 0 ? [effect] : [],
+    };
+  },
+};
+
 const gatewayServicesExtraCheck: HealthCheck = {
   id: GATEWAY_SERVICES_EXTRA_CHECK_ID,
   kind: "core",
@@ -1211,6 +1260,7 @@ function createConvertedWorkflowChecks(
     legacyWhatsAppCrontabCheck,
     legacyCronStoreCheck,
     codexSessionRoutesCheck,
+    telegramGeneralTopicConversationsCheck,
     sessionLocksCheck,
     shellCompletionCheck,
     uiProtocolFreshnessCheck,

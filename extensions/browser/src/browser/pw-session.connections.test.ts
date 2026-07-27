@@ -4,6 +4,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as chromeModule from "./chrome.js";
 import { pwAi } from "./pw-ai.js";
 
+const { registerManagedProxyBrowserCdpBypassMock } = vi.hoisted(() => ({
+  registerManagedProxyBrowserCdpBypassMock: vi.fn<(url: string) => (() => void) | undefined>(
+    () => undefined,
+  ),
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
+  registerManagedProxyBrowserCdpBypass: registerManagedProxyBrowserCdpBypassMock,
+}));
+
 const {
   closePlaywrightBrowserConnection,
   createPageViaPlaywright,
@@ -222,11 +232,94 @@ function makeMutatingDisconnectBrowser(): BrowserMockBundle & {
 afterEach(async () => {
   connectOverCdpSpy.mockReset();
   getChromeWebSocketUrlSpy.mockReset();
+  registerManagedProxyBrowserCdpBypassMock.mockReset();
+  registerManagedProxyBrowserCdpBypassMock.mockImplementation(() => undefined);
   await closePlaywrightBrowserConnection().catch(() => {});
   vi.useRealTimers();
 });
 
 describe("pw-session connection scoping", () => {
+  it("keeps the exact managed-proxy bypass active through a discovered CDP handshake", async () => {
+    const browser = makeBrowser("A", "https://example.com");
+    const wsUrl = "ws://127.0.0.1:9222/devtools/browser/discovered";
+    const release = vi.fn();
+    registerManagedProxyBrowserCdpBypassMock.mockReturnValue(release);
+    getChromeWebSocketUrlSpy.mockResolvedValue(wsUrl);
+    connectOverCdpSpy.mockImplementationOnce(async () => {
+      expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith(wsUrl);
+      expect(release).not.toHaveBeenCalled();
+      return browser.browser;
+    });
+
+    await expect(listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" })).resolves.toEqual([
+      expect.objectContaining({ targetId: "A" }),
+    ]);
+
+    expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("registers only the credential-stripped Playwright CDP endpoint", async () => {
+    const browser = makeBrowser("A", "https://example.com");
+    const cdpUrl = "wss://browser-user:browser-password@browserless.example/devtools/browser/id";
+    connectOverCdpSpy.mockResolvedValue(browser.browser);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    await listPagesViaPlaywright({ cdpUrl });
+
+    expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith(
+      "wss://browserless.example/devtools/browser/id",
+    );
+  });
+
+  it("releases every managed-proxy bypass after failed CDP connection attempts", async () => {
+    const releases: Array<ReturnType<typeof vi.fn>> = [];
+    registerManagedProxyBrowserCdpBypassMock.mockImplementation(() => {
+      const release = vi.fn();
+      releases.push(release);
+      return release;
+    });
+    connectOverCdpSpy.mockRejectedValue(new Error("CDP socket hang up"));
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    await expect(listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" })).rejects.toThrow(
+      "CDP socket hang up",
+    );
+
+    expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledTimes(3);
+    expect(releases).toHaveLength(3);
+    for (const release of releases) {
+      expect(release).toHaveBeenCalledOnce();
+    }
+  });
+
+  it("registers and releases the exact endpoint for both WebSocket connection attempts", async () => {
+    const browser = makeBrowser("A", "https://example.com");
+    const cdpUrl = "ws://127.0.0.1:9222/devtools/browser/original";
+    const discoveredUrl = "ws://127.0.0.1:9222/devtools/browser/discovered";
+    const releases: Array<ReturnType<typeof vi.fn>> = [];
+    registerManagedProxyBrowserCdpBypassMock.mockImplementation(() => {
+      const release = vi.fn();
+      releases.push(release);
+      return release;
+    });
+    getChromeWebSocketUrlSpy.mockResolvedValue(discoveredUrl);
+    connectOverCdpSpy
+      .mockRejectedValueOnce(new Error("stale discovered endpoint"))
+      .mockResolvedValueOnce(browser.browser);
+
+    await expect(listPagesViaPlaywright({ cdpUrl })).resolves.toEqual([
+      expect.objectContaining({ targetId: "A" }),
+    ]);
+
+    expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenNthCalledWith(1, discoveredUrl);
+    expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenNthCalledWith(2, cdpUrl);
+    expect(releases).toHaveLength(2);
+    for (const release of releases) {
+      expect(release).toHaveBeenCalledOnce();
+    }
+  });
+
   it("keeps URL credentials out of Playwright and escaped connection errors", async () => {
     const username = "browser-user";
     const password = "browser-password";

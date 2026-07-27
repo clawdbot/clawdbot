@@ -1291,14 +1291,24 @@ export function abortReplyRunBySessionId(sessionId: string): boolean {
   return operation.abortByUser();
 }
 
-export function forceClearReplyRunBySessionId(sessionId: string, cause?: unknown): boolean {
-  const operation = resolveReplyRunForCurrentSessionId(sessionId);
-  if (!operation) {
+export function resolveActiveReplyOperationForSessionId(
+  sessionId: string,
+): ReplyOperation | undefined {
+  return resolveReplyRunForCurrentSessionId(sessionId);
+}
+
+export function forceClearReplyOperation(operation: ReplyOperation, cause?: unknown): boolean {
+  if (replyRunState.activeRunsByKey.get(operation.key) !== operation) {
     return false;
   }
   operation.fail("run_failed", cause);
   operation.complete();
   return true;
+}
+
+export function forceClearReplyRunBySessionId(sessionId: string, cause?: unknown): boolean {
+  const operation = resolveReplyRunForCurrentSessionId(sessionId);
+  return operation ? forceClearReplyOperation(operation, cause) : false;
 }
 
 export function clearReplyRunForResetBySessionId(sessionId: string): void {

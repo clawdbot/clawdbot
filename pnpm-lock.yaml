@@ -2197,6 +2197,15 @@ importers:
       markdown-it-cjk-friendly:
         specifier: 2.0.2
         version: 2.0.2(@types/markdown-it@14.1.2)(markdown-it@14.3.0)
+      mdast-util-from-markdown:
+        specifier: 2.0.3
+        version: 2.0.3(supports-color@10.2.2)
+      mdast-util-gfm-table:
+        specifier: 2.0.0
+        version: 2.0.0(supports-color@10.2.2)
+      micromark-extension-gfm-table:
+        specifier: 2.1.1
+        version: 2.1.1
       yaml:
         specifier: 2.9.0
         version: 2.9.0

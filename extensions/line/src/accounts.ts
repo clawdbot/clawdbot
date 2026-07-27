@@ -1,11 +1,15 @@
+import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 // Line plugin module implements accounts behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId as normalizeSharedAccountId,
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/account-id";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
-import { resolveAccountEntry } from "openclaw/plugin-sdk/account-resolution";
+import {
+  resolveAccountEntry,
+  resolveListedDefaultAccountId,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/account-resolution";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import type {
   LineAccountConfig,
@@ -15,6 +19,12 @@ import type {
   LineTokenSource,
   ResolvedLineAccount,
 } from "./types.js";
+
+const { resolveAccountConfig: resolveMergedLineAccountConfig } = createAccountListHelpers<
+  Record<string, unknown> & LineConfig
+>("line", {
+  omitKeys: ["defaultAccount"],
+});
 
 function readCredentialFile(filePath: string, configPath: string) {
   return tryReadSecretFileSync(
@@ -162,18 +172,10 @@ export function resolveLineAccount(params: {
     accountConfig,
   });
 
-  const {
-    accounts: _ignoredAccounts,
-    defaultAccount: _ignoredDefaultAccount,
-    ...lineBase
-  } = (lineConfig ?? {}) as LineConfig & {
-    accounts?: unknown;
-    defaultAccount?: unknown;
-  };
-  const mergedConfig: LineConfig & LineAccountConfig = {
-    ...lineBase,
-    ...accountConfig,
-  };
+  const mergedConfig: LineConfig & LineAccountConfig = resolveMergedLineAccountConfig(
+    cfg,
+    accountId,
+  );
 
   const baseEnabled = lineConfig?.enabled !== false;
   const accountEnabled = accountConfig?.enabled !== false;
@@ -226,20 +228,13 @@ export function listLineAccountIds(cfg: OpenClawConfig): string[] {
 }
 
 export function resolveDefaultLineAccountId(cfg: OpenClawConfig): string {
-  const preferred = normalizeOptionalAccountId(
-    (cfg.channels?.line as LineConfig | undefined)?.defaultAccount,
-  );
-  if (
-    preferred &&
-    listLineAccountIds(cfg).some((accountId) => normalizeSharedAccountId(accountId) === preferred)
-  ) {
-    return preferred;
-  }
-  const ids = listLineAccountIds(cfg);
-  if (ids.includes(DEFAULT_ACCOUNT_ID)) {
-    return DEFAULT_ACCOUNT_ID;
-  }
-  return ids[0] ?? DEFAULT_ACCOUNT_ID;
+  return resolveListedDefaultAccountId({
+    accountIds: listLineAccountIds(cfg),
+    configuredDefaultAccountId: normalizeOptionalAccountId(
+      (cfg.channels?.line as LineConfig | undefined)?.defaultAccount,
+    ),
+    normalizeListedAccountId: normalizeSharedAccountId,
+  });
 }
 
 export function normalizeAccountId(accountId: string | undefined): string {

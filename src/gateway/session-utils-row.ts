@@ -416,6 +416,7 @@ export function buildGatewaySessionRow(params: {
     kind: classifySessionKey(key, entry),
     label: entry?.label,
     category: entry?.category,
+    boardFace: entry?.boardFace,
     displayName,
     derivedTitle,
     lastMessagePreview,
@@ -437,6 +438,7 @@ export function buildGatewaySessionRow(params: {
     agentStatus,
     observerDigest: observerDigest
       ? {
+          ...(observerDigest.agentId ? { agentId: observerDigest.agentId } : {}),
           runId: observerDigest.runId,
           headline: observerDigest.headline,
           health: observerDigest.health,

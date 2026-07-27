@@ -187,6 +187,7 @@ describe("navigationIconForRoute", () => {
       apps: "layoutGrid",
       approvals: "badgeCheck",
       workboard: "kanban",
+      dashboards: "layoutDashboard",
       worktrees: "folder",
       channels: "link",
       connection: "radio",
@@ -296,6 +297,7 @@ describe("titleForRoute", () => {
       apps: "Apps",
       approvals: "Approvals",
       workboard: "Workboard",
+      dashboards: "Dashboards",
       worktrees: "Worktrees",
       channels: "Channels",
       connection: "Connection",
@@ -342,6 +344,7 @@ describe("subtitleForRoute", () => {
       apps: "Companion apps for phone, watch, desktop, and browser.",
       approvals: "Recent exec, plugin, and system-agent approvals.",
       workboard: "Agent work queue and thread handoff.",
+      dashboards: "Threads that open on their dashboard face.",
       worktrees: "Isolated agent task checkouts and recovery snapshots.",
       channels: "Channels and settings.",
       connection: "Gateway endpoint, credentials, and handshake status.",
@@ -381,6 +384,7 @@ describe("pathForRoute", () => {
   it("returns correct path without base", () => {
     expect(pathForRoute("chat")).toBe("/chat");
     expect(pathForRoute("apps")).toBe("/apps");
+    expect(pathForRoute("dashboards")).toBe("/dashboards");
     expect(pathForRoute("custodian")).toBe("/custodian");
     expect(pathForRoute("connection")).toBe("/settings/connection");
     expect(pathForRoute("debug")).toBe("/debug");
@@ -417,6 +421,7 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/connection")).toBeNull();
     expect(routeIdFromPath("/activity")).toBe("activity");
     expect(routeIdFromPath("/apps")).toBe("apps");
+    expect(routeIdFromPath("/dashboards")).toBe("dashboards");
     expect(routeIdFromPath("/sessions")).toBe("sessions");
     expect(routeIdFromPath("/debug")).toBe("debug");
     expect(routeIdFromPath("/logs")).toBe("logs");
@@ -535,11 +540,14 @@ describe("routeIdFromPath", () => {
       agentId: "main",
       shortId: "12345678",
     });
+    // The slug is captured so it can settle a tie between ids sharing this prefix, but it
+    // never changes the parsed id: a wrong agent and a wrong slug both stay decorative.
     expect(sessionRefFromPath("/chat/wrong/wrong-slug-1234567890ab")).toEqual({
       namespace: "chat",
       kind: "short",
       agentId: "wrong",
       shortId: "1234567890ab",
+      slugHint: "wrong-slug",
     });
     expect(sessionRefFromPath("/chat/main/telegram/12345")).toEqual({
       namespace: "chat",

@@ -38,10 +38,11 @@ async function waitForLiveQaGatewayConfigApplied(params: {
         configRevisionHash: status.configRevisionHash,
         hash: status.hash,
       };
+      // The persisted raw-config hash and normalized runtime revision use different encodings.
       if (
         status.hash === params.expectedHash &&
-        status.configRevisionHash === params.expectedHash &&
-        status.appliedConfigHash === params.expectedHash
+        typeof status.configRevisionHash === "string" &&
+        status.appliedConfigHash === status.configRevisionHash
       ) {
         return;
       }

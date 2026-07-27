@@ -1295,6 +1295,43 @@ describe("openai image generation provider", () => {
     expect(result.images[0]?.buffer).toEqual(Buffer.from("codex-token-image"));
   });
 
+  it("keeps loopback proxy capabilities out of image generation", async () => {
+    const authStore = createCodexTokenAuthStore();
+    ensureAuthProfileStoreMock.mockReturnValue(authStore);
+    resolveApiKeyForProviderMock.mockResolvedValue({
+      apiKey: "opaque-loopback-capability",
+      source: "profile:openai:token",
+      mode: "token",
+    });
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            params: {
+              codexProxyBaseUrl: "http://127.0.0.1:7862/backend-api/codex",
+            },
+          },
+        },
+      },
+    } as never;
+
+    const provider = buildOpenAIImageGenerationProvider();
+    expect(provider.isConfigured?.({ cfg, agentDir: "/tmp/agent" })).toBe(false);
+    await expect(
+      provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Do not leak the loopback capability",
+        cfg,
+        authStore,
+      }),
+    ).rejects.toThrow(
+      "OpenAI image generation requires an API-key profile when a Codex credential proxy is configured",
+    );
+    expect(postJsonRequestMock).not.toHaveBeenCalled();
+    expect(postMultipartRequestMock).not.toHaveBeenCalled();
+  });
+
   it("uses configured Codex token auth before probing an available OpenAI API key", async () => {
     mockCodexImageStream({ imageData: "codex-token-image" });
     resolveApiKeyForProviderMock.mockImplementation(async (params?: { provider?: string }) => {

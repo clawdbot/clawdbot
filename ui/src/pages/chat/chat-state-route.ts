@@ -8,12 +8,15 @@ import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
   canonicalUiSessionKeyForPersistence,
+  isUiGlobalSessionKey,
+  isUiGlobalScopeConfigured,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiDefaultAgentId,
   resolveUiConfiguredMainKey,
   resolveUiKnownSelectedGlobalAgentId,
   resolveUiSelectedGlobalAgentId,
+  uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
 import { syncVisibleChatQueueProjection } from "./chat-queue.ts";
 import { resetChatRealtimeConversation } from "./chat-realtime.ts";
@@ -57,6 +60,37 @@ export function canCreateChatSession(state: ChatPageHost) {
     state.chatStream === null &&
     state.chatQueue.length === 0
   );
+}
+
+export function selectedChatSessionRow(state: ChatPageHost) {
+  const rows = state.sessionsResult?.sessions ?? [];
+  const exact = rows.find((candidate) =>
+    areUiSessionKeysEquivalent(candidate.key, state.sessionKey),
+  );
+  const row =
+    exact ??
+    (isUiGlobalScopeConfigured(state)
+      ? rows.find((candidate) =>
+          uiSessionRowMatchesSelectedChat(state, candidate.key, state.sessionKey),
+        )
+      : undefined);
+  if (!row || !isUiGlobalSessionKey(row.key)) {
+    return row;
+  }
+  const selectedAgentId = resolveUiSelectedGlobalAgentId(state);
+  if (
+    state.sessionsResultAgentId &&
+    normalizeAgentId(state.sessionsResultAgentId) !== selectedAgentId
+  ) {
+    return undefined;
+  }
+  if (
+    row.observerDigest?.agentId &&
+    normalizeAgentId(row.observerDigest.agentId) !== selectedAgentId
+  ) {
+    return { ...row, observerDigest: undefined };
+  }
+  return row;
 }
 
 function saveChatQueueForSession(state: ChatPageHost, sessionKey: string) {

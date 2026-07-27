@@ -663,6 +663,7 @@ describe("plugin-sdk subpath exports", () => {
         "SecretTargetRegistryEntry",
       ],
       omits: [
+        "buildChannelMetadata",
         "buildUntrustedChannelMetadata",
         "evaluateSupplementalContextVisibility",
         "resolvePinnedMainDmOwnerFromAllowlist",

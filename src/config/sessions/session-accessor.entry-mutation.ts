@@ -6,6 +6,7 @@ import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
   resolveAccessStorePath,
+  loadExactSessionEntry,
   loadSessionEntry,
   listSessionEntries,
   patchSessionEntry,
@@ -106,13 +107,16 @@ export async function canonicalizeSessionEntryAliases(params: {
     entry: SessionEntry | undefined,
   ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
 }): Promise<CanonicalizeSessionEntryAliasesResult> {
-  const store = Object.fromEntries(
-    listSessionEntries({ agentId: params.agentId, storePath: params.storePath }).map(
-      ({ sessionKey, entry }) => [sessionKey, entry],
-    ),
-  );
   const targetKeys = normalizeTargetStoreKeys(params.target);
-  const freshest = resolveFreshestTargetEntry(store, targetKeys);
+  const targetEntries = targetKeys.flatMap((sessionKey) => {
+    const entry = loadExactSessionEntry({
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      sessionKey,
+      storePath: params.storePath,
+    });
+    return entry ? [entry] : [];
+  });
+  const freshest = resolveFreshestTargetEntry(targetEntries, targetKeys);
   const patch = params.update ? await params.update(cloneOptionalEntry(freshest?.entry)) : null;
   const entry = patch
     ? ({

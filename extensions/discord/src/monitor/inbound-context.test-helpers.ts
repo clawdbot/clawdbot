@@ -3,12 +3,13 @@ import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runti
 import { buildDiscordInboundAccessContext } from "./inbound-context.js";
 
 export function buildFinalizedDiscordDirectInboundContext() {
-  const { groupSystemPrompt, ownerAllowFrom, untrustedContext } = buildDiscordInboundAccessContext({
-    channelConfig: null,
-    guildInfo: null,
-    sender: { id: "U1", name: "Alice", tag: "alice" },
-    isGuild: false,
-  });
+  const { groupSystemPrompt, ownerAllowFrom, channelStructuredContext } =
+    buildDiscordInboundAccessContext({
+      channelConfig: null,
+      guildInfo: null,
+      sender: { id: "U1", name: "Alice", tag: "alice" },
+      isGuild: false,
+    });
 
   return finalizeInboundContext({
     Body: "hi",
@@ -26,7 +27,7 @@ export function buildFinalizedDiscordDirectInboundContext() {
     SenderUsername: "alice",
     GroupSystemPrompt: groupSystemPrompt,
     OwnerAllowFrom: ownerAllowFrom,
-    UntrustedStructuredContext: untrustedContext,
+    ChannelStructuredContext: channelStructuredContext,
     Provider: "discord",
     Surface: "discord",
     WasMentioned: false,

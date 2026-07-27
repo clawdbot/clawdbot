@@ -139,7 +139,7 @@ and troubleshooting see the main [FAQ](/help/faq).
   </Accordion>
 
   <Accordion title="What runtime do I need?">
-    Node **22.22.3+**, **24.15+**, or **25.9+** is required (Node 24 recommended). `pnpm` is the repo package manager.
+    Node **22.22.3+**, **24.15+**, or **25.9+** is required (Node 26 recommended). `pnpm` is the repo package manager.
     Bun can install dependencies and run package scripts, but it cannot run the OpenClaw CLI or Gateway because it lacks `node:sqlite`.
   </Accordion>
 

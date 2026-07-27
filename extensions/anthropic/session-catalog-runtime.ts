@@ -1,5 +1,4 @@
 import {
-  listAgentIds,
   resolveAllowedModelRef,
   resolveDefaultAgentId,
   resolveDefaultModelForAgent,
@@ -7,6 +6,10 @@ import {
 import { resolveEffectiveAgentRuntime } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  listSessionCatalogEntries,
+  type SessionCatalogEntrySnapshot,
+} from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_ROUTE_PROBE_MODEL_IDS } from "./cli-constants.js";
 import { adoptedSourceKey, CLAUDE_LOCAL_SESSION_HOST_ID } from "./session-catalog-adoption.js";
@@ -47,17 +50,17 @@ function boundClaudeSource(
     : undefined;
 }
 
-export function listBoundClaudeSessions(api: OpenClawPluginApi): Map<string, string> {
+export function listBoundClaudeSessions(
+  api: OpenClawPluginApi,
+  sessionEntries?: SessionCatalogEntrySnapshot,
+): Map<string, string> {
   const config = currentClaudeSessionCatalogConfig(api);
-  const defaultAgentId = resolveDefaultAgentId(config);
-  const agentIds = [
-    defaultAgentId,
-    ...listAgentIds(config).filter((agentId) => agentId !== defaultAgentId),
-  ];
   const bound = new Map<string, string>();
-  for (const { sessionKey, entry } of agentIds.flatMap((agentId) =>
-    api.runtime.agent.session.listSessionEntries({ agentId, readOnly: true }),
-  )) {
+  for (const { sessionKey, entry } of listSessionCatalogEntries({
+    config,
+    runtime: api.runtime,
+    sessionEntries,
+  })) {
     const source = boundClaudeSource(api.id, entry);
     if (source) {
       bound.set(adoptedSourceKey(source.hostId, source.threadId), sessionKey);

@@ -1121,75 +1121,30 @@ final class TalkModeManager: NSObject {
             return OpenClawTalkPTTStopPayload(captureId: captureId, transcript: nil, status: "idle")
         }
         guard self.isPushToTalkActive else {
-            let shouldResume = self.isEnabled
-            self.isListening = false
-            self.isUserSpeechDetected = false
-            self.captureMode = .idle
-            self.stopRecognition()
-            self.pttTimeoutTask?.cancel()
-            self.pttTimeoutTask = nil
-            self.pttAutoStopEnabled = false
-            self.setStatus(String(localized: "Ready"), phase: .idle)
-            self.finishActivePushToTalk(captureId)
-            let payload = OpenClawTalkPTTStopPayload(
-                captureId: captureId,
-                transcript: nil,
-                status: "idle")
-            self.finishPTTOnce(payload)
-            self.scheduleContinuousResume(shouldResume)
-            return payload
+            self.stopPushToTalkRecognition()
+            return self.finishCapturedPushToTalk(captureId, transcript: nil, status: "idle")
         }
 
-        self.isPushToTalkActive = false
-        self.isListening = false
-        self.isUserSpeechDetected = false
-        self.captureMode = .idle
-        self.stopRecognition()
-        self.pttTimeoutTask?.cancel()
-        self.pttTimeoutTask = nil
-        self.pttAutoStopEnabled = false
+        self.stopPushToTalkRecognition()
 
         let transcript = self.lastTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
         self.lastTranscript = ""
         self.lastHeard = nil
 
         guard !transcript.isEmpty else {
-            self.setStatus(String(localized: "Ready"), phase: .idle)
-            let shouldResume = self.isEnabled
-            self.finishActivePushToTalk(captureId)
-            let payload = OpenClawTalkPTTStopPayload(
-                captureId: captureId,
-                transcript: nil,
-                status: "empty")
-            self.finishPTTOnce(payload)
-            self.scheduleContinuousResume(shouldResume)
-            return payload
+            return self.finishCapturedPushToTalk(captureId, transcript: nil, status: "empty")
         }
 
         if activePushToTalk.transcriptionOnly {
-            self.setStatus(String(localized: "Ready"), phase: .idle)
-            let shouldResume = self.isEnabled
-            self.finishActivePushToTalk(captureId)
-            let payload = OpenClawTalkPTTStopPayload(
-                captureId: captureId,
-                transcript: transcript,
-                status: "transcribed")
-            self.finishPTTOnce(payload)
-            self.scheduleContinuousResume(shouldResume)
-            return payload
+            return self.finishCapturedPushToTalk(captureId, transcript: transcript, status: "transcribed")
         }
 
         guard self.gatewayConnected else {
-            self.setStatus(String(localized: "Gateway not connected"), phase: .idle)
-            let shouldResume = self.isEnabled
-            self.finishActivePushToTalk(captureId)
-            let payload = OpenClawTalkPTTStopPayload(
-                captureId: captureId,
+            return self.finishCapturedPushToTalk(
+                captureId,
                 transcript: transcript,
-                status: "offline")
-            self.finishPTTOnce(payload)
-            self.scheduleContinuousResume(shouldResume)
-            return payload
+                status: "offline",
+                statusText: String(localized: "Gateway not connected"))
         }
 
         let payload = OpenClawTalkPTTStopPayload(
@@ -1292,27 +1247,10 @@ final class TalkModeManager: NSObject {
             return OpenClawTalkPTTStopPayload(captureId: captureId, transcript: nil, status: "idle")
         }
 
-        let shouldResume = self.isEnabled
-        self.isPushToTalkActive = false
-        self.isListening = false
-        self.captureMode = .idle
-        self.stopRecognition()
+        self.stopPushToTalkRecognition()
         self.lastTranscript = ""
         self.lastHeard = nil
-        self.pttAutoStopEnabled = false
-        self.pttTimeoutTask?.cancel()
-        self.pttTimeoutTask = nil
-        self.finishActivePushToTalk(captureId)
-        self.setStatus(String(localized: "Ready"), phase: .idle)
-
-        let payload = OpenClawTalkPTTStopPayload(
-            captureId: captureId,
-            transcript: nil,
-            status: "cancelled")
-        self.finishPTTOnce(payload)
-
-        self.scheduleContinuousResume(shouldResume)
-        return payload
+        return self.finishCapturedPushToTalk(captureId, transcript: nil, status: "cancelled")
     }
 
     private func ensurePushToTalkStartCurrent(
@@ -1398,6 +1336,35 @@ final class TalkModeManager: NSObject {
         guard self.clearActivePushToTalk(captureId) else { return }
         deactivateStandaloneAudioSessionIfIdle()
         self.pttAudioOwnershipEndHandler?(captureId)
+    }
+
+    private func stopPushToTalkRecognition() {
+        self.isPushToTalkActive = false
+        self.isListening = false
+        self.isUserSpeechDetected = false
+        self.captureMode = .idle
+        self.stopRecognition()
+        self.pttTimeoutTask?.cancel()
+        self.pttTimeoutTask = nil
+        self.pttAutoStopEnabled = false
+    }
+
+    private func finishCapturedPushToTalk(
+        _ captureId: String,
+        transcript: String?,
+        status: String,
+        statusText: String = String(localized: "Ready")) -> OpenClawTalkPTTStopPayload
+    {
+        self.setStatus(statusText, phase: .idle)
+        let shouldResume = self.isEnabled
+        self.finishActivePushToTalk(captureId)
+        let payload = OpenClawTalkPTTStopPayload(
+            captureId: captureId,
+            transcript: transcript,
+            status: status)
+        self.finishPTTOnce(payload)
+        self.scheduleContinuousResume(shouldResume)
+        return payload
     }
 
     private func transferActivePushToTalkToFinalizer(_ captureId: String) {

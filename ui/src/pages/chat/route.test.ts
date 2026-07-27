@@ -123,7 +123,7 @@ describe("loadChatRoute", () => {
     expect(list).not.toHaveBeenCalled();
   });
 
-  it("queries the full supplied prefix so longer disambiguation links can resolve", async () => {
+  it("queries the first uuid block so longer disambiguation links can resolve", async () => {
     const target = row({ key: "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001" });
     const { context, list } = contextFor(result([target]));
     await expect(
@@ -140,8 +140,11 @@ describe("loadChatRoute", () => {
       face: "chat",
       shortId: "123456780a",
     });
-    expect(list).toHaveBeenCalledWith(expect.objectContaining({ search: "123456780a" }));
-    expect(list).not.toHaveBeenCalledWith(expect.objectContaining({ search: "12345678" }));
+    // Stored keys hold a hyphenated uuid, so "123456780a" is not a substring of anything
+    // the gateway searches. Only the first block survives as a needle; the full prefix is
+    // still applied per row, so the longer link resolves instead of 404ing.
+    expect(list).toHaveBeenCalledWith(expect.objectContaining({ search: "12345678" }));
+    expect(list).not.toHaveBeenCalledWith(expect.objectContaining({ search: "123456780a" }));
   });
 
   it("stops prefix pagination at the fixed bound and reports an incomplete result", async () => {
@@ -381,14 +384,62 @@ describe("loadChatRoute", () => {
     expect(list).not.toHaveBeenCalled();
   });
 
+  it("reclassifies a slug-shaped path after cold defaults reveal the main key", async () => {
+    type GatewayListener = Parameters<ApplicationContext["gateway"]["subscribe"]>[0];
+    let listener: GatewayListener | null = null;
+    let snapshot = {
+      phase: "connecting",
+      client: null,
+      hello: null,
+    } as unknown as ApplicationContext["gateway"]["snapshot"];
+    const context = {
+      basePath: "",
+      gateway: {
+        get snapshot() {
+          return snapshot;
+        },
+        subscribe: (next: GatewayListener) => {
+          listener = next;
+          return () => undefined;
+        },
+      },
+      agents: { state: { agentsList: null } },
+    } as unknown as ApplicationContext;
+    const pending = loadChatRoute(
+      context,
+      { pathname: "/chat/research/workspace", search: "", hash: "" },
+      "chat",
+      new AbortController().signal,
+    );
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    snapshot = {
+      phase: "connected",
+      client: {},
+      hello: { snapshot: { sessionDefaults: { mainKey: "workspace" } } },
+    } as unknown as ApplicationContext["gateway"]["snapshot"];
+    const connectedListener = listener as GatewayListener | null;
+    if (!connectedListener) {
+      throw new Error("expected gateway readiness subscription");
+    }
+    connectedListener(snapshot);
+
+    await expect(pending).resolves.toEqual({
+      kind: "session",
+      sessionKey: "agent:research:workspace",
+      draft: undefined,
+      face: "chat",
+      canonicalLocation: { pathname: "/chat/research", search: "", hash: "" },
+    });
+  });
+
   it("canonicalizes a literal configured-main route after cold defaults arrive", async () => {
     for (const [pathname, targetSessionKey, mainKey, expectedCanonicalLocation] of [
-      [
-        "/chat/research/workspace",
-        "agent:research:workspace",
-        "workspace",
-        { pathname: "/chat/research", search: "", hash: "" },
-      ],
       [
         "/chat/research/team/primary",
         "agent:research:team:primary",
