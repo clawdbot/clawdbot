@@ -1983,6 +1983,87 @@ describe("Code Mode", () => {
     expect(details.value).toBe(42);
   });
 
+  it.each([
+    {
+      name: "template-literal import text",
+      code: "return `import('node:fs')`;",
+      value: "import('node:fs')",
+    },
+    {
+      name: "template-literal require text",
+      code: "return `require('node:fs')`;",
+      value: "require('node:fs')",
+    },
+    {
+      name: "nested template-literal module text",
+      code: "return `outer ${`require('node:fs')`}`;",
+      value: "outer require('node:fs')",
+    },
+    {
+      name: "regular-expression module text",
+      code: 'return /import.meta/.test("import.meta");',
+      value: true,
+    },
+    {
+      name: "regular-expression module text inside interpolation",
+      code: 'return `${/import.meta/.test("import.meta")}`;',
+      value: "true",
+    },
+  ])("executes harmless $name in the real guest worker", async ({ code, value }) => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      code,
+    });
+
+    expect(details).toMatchObject({ status: "completed", value });
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it("isolates and cleans up 12 concurrent real guest workers", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+    const execTool = expectDefined(codeModeTools[0], "codeModeTools[0] test invariant");
+
+    const results = await Promise.all(
+      Array.from({ length: 12 }, async (_, index) =>
+        resultDetails(
+          await execTool.execute(`code-call-concurrent-worker-${index}`, {
+            code: `return { index: ${index}, message: \`require('node:fs')\` };`,
+          }),
+        ),
+      ),
+    );
+
+    expect(results).toEqual(
+      Array.from({ length: 12 }, (_, index) =>
+        expect.objectContaining({
+          status: "completed",
+          value: { index, message: "require('node:fs')" },
+        }),
+      ),
+    );
+    expect(testing.activeRuns.size).toBe(0);
+    expect(testing.resumingRunIds.size).toBe(0);
+  });
+
   it("fails pending promises that have no host bridge work", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     applyCodeModeCatalog({
@@ -2133,6 +2214,7 @@ describe("Code Mode", () => {
 
   it("supports TypeScript source transform", async () => {
     testing.setTypescriptRuntimeForTest({
+      ...(await import("typescript")),
       transpileModule: vi.fn((code: string) => ({
         outputText: code.replace(": number", ""),
         diagnostics: [],
@@ -2166,6 +2248,42 @@ describe("Code Mode", () => {
     expect(details.status).toBe("completed");
     expect(details.value).toEqual({ value: 42 });
 
+    const moduleShapedTypeScript = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      language: "typescript",
+      code: "const value: number = 42; return `import('node:fs') ${value}`;",
+    });
+
+    expect(moduleShapedTypeScript.status).toBe("completed");
+    expect(moduleShapedTypeScript.value).toBe("import('node:fs') 42");
+
+    const moduleShapedTypeScriptRegex = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      language: "typescript",
+      code: 'const value: number = 42; return /import.meta/.test("import.meta");',
+    });
+
+    expect(moduleShapedTypeScriptRegex.status).toBe("completed");
+    expect(moduleShapedTypeScriptRegex.value).toBe(true);
+
+    for (const moduleAccess of ["import('node:fs')", "require('node:fs')"]) {
+      const unicodeModuleAccess = resultDetails(
+        await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
+          `code-call-typescript-unicode-${moduleAccess.startsWith("import") ? "import" : "require"}`,
+          {
+            language: "typescript",
+            code: `const value: number = 1; const padding = "${"😀".repeat(96)}"; return ${moduleAccess};`,
+          },
+        ),
+      );
+
+      expect(unicodeModuleAccess.status).toBe("failed");
+      expect(unicodeModuleAccess.code).toBe("invalid_input");
+      expect(unicodeModuleAccess.error).toContain("module access is disabled");
+    }
+
     const commandLikeTypeScript = await runUntilCompleted({
       execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
       waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
@@ -2194,6 +2312,22 @@ describe("Code Mode", () => {
     "return import('node:fs');",
     "return import.meta.url;",
     "return `${import('node:fs')}`;",
+    "return `${require('node:fs')}`;",
+    "return `${`nested ${import('node:fs')}`}`;",
+    "return `${`nested ${require('node:fs')}`}`;",
+    "return `${({ value: import('node:fs') }).value}`;",
+    "const message = `import('node:fs')`; return require('node:fs');",
+    "const pattern = /import.meta/; return import('node:fs');",
+    "let value = 1; return value++ / import('node:fs');",
+    "let value = 1; return value-- / import('node:fs');",
+    "const value = { of: 1 }; return value.of / import('node:fs');",
+    "const value = { return: 1 }; return value.return / import('node:fs');",
+    "const value = { if() { return 1; } }; return value.if() / import('node:fs');",
+    "const value = { return: 1 }; return value?.return / import('node:fs') / 1;",
+    "const value = { return: 1 }; return value?.return / require('node:fs') / 1;",
+    "const value = { if() { return 1; } }; return value?.if() / import('node:fs');",
+    "function run() { const await = 1; return await / (globalThis.pending = import('node:fs')); } run(); return globalThis.pending;",
+    "class Guest { #return = 1; run() { return this.#return / (globalThis.pending = import('node:fs')); } } new Guest().run(); return globalThis.pending;",
   ])("rejects module access: %s", async (code) => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     applyCodeModeCatalog({

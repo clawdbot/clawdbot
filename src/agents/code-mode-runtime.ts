@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
+import { parse, tokenizer } from "acorn";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { clampNumber } from "../utils.js";
@@ -343,66 +344,103 @@ export function readRunId(args: unknown): string {
   return runId.trim();
 }
 
-function maskCodeLiteralsAndComments(code: string): string {
-  // Module access detection should ignore strings and comments so examples or
-  // prose containing `import`/`require` do not reject otherwise valid code.
-  let masked = "";
-  let index = 0;
-  while (index < code.length) {
-    const char = code[index];
-    const next = code[index + 1];
-    if (char === "/" && next === "/") {
-      masked += "  ";
-      index += 2;
-      while (index < code.length && code[index] !== "\n") {
-        masked += " ";
-        index += 1;
+function maskCodeLiteralsAndComments(
+  code: string,
+  typescriptRuntime?: typeof import("typescript"),
+): string {
+  let masked = code.split("");
+  const maskRange = (start: number, end: number, offset = 0) => {
+    for (
+      let index = Math.max(start - offset, 0);
+      index < Math.min(end - offset, masked.length);
+      index += 1
+    ) {
+      if (masked[index] !== "\n" && masked[index] !== "\r") {
+        masked[index] = " ";
       }
-      continue;
     }
-    if (char === "/" && next === "*") {
-      masked += "  ";
-      index += 2;
-      while (index < code.length) {
-        if (code[index] === "*" && code[index + 1] === "/") {
-          masked += "  ";
-          index += 2;
-          break;
+  };
+
+  try {
+    const prefix = "(async () => {\n";
+    parse(`${prefix}${code}\n})`, {
+      ecmaVersion: "latest",
+      onComment: (_isBlock, _text, start, end) => maskRange(start, end, prefix.length),
+      onToken: (token) => {
+        // Parse in the real async guest context: standalone tokenization can
+        // mistake executable division for a regex after contextual keywords.
+        if (
+          token.type.label === "string" ||
+          token.type.label === "regexp" ||
+          token.type.label === "template"
+        ) {
+          maskRange(token.start, token.end, prefix.length);
         }
-        masked += code[index] === "\n" ? "\n" : " ";
-        index += 1;
-      }
-      continue;
-    }
-    if (char === "'" || char === '"') {
-      const quote = char;
-      masked += " ";
-      index += 1;
-      while (index < code.length) {
-        const current = code[index];
-        masked += current === "\n" ? "\n" : " ";
-        index += 1;
-        if (current === "\\") {
-          if (index < code.length) {
-            masked += code[index] === "\n" ? "\n" : " ";
-            index += 1;
+      },
+    });
+    return masked.join("");
+  } catch {
+    // Parser and tokenizer offsets are UTF-16 code units, not Unicode points.
+    masked = code.split("");
+    if (typescriptRuntime) {
+      try {
+        const sourceFile = typescriptRuntime.createSourceFile(
+          "code-mode.ts",
+          code,
+          typescriptRuntime.ScriptTarget.ES2022,
+          true,
+          typescriptRuntime.ScriptKind.TS,
+        );
+        const visit = (node: import("typescript").Node) => {
+          typescriptRuntime.forEachLeadingCommentRange(code, node.getFullStart(), (start, end) =>
+            maskRange(start, end),
+          );
+          typescriptRuntime.forEachTrailingCommentRange(code, node.getEnd(), (start, end) =>
+            maskRange(start, end),
+          );
+          if (
+            typescriptRuntime.isStringLiteralLike(node) ||
+            typescriptRuntime.isRegularExpressionLiteral(node) ||
+            typescriptRuntime.isTemplateHead(node) ||
+            typescriptRuntime.isTemplateMiddle(node) ||
+            typescriptRuntime.isTemplateTail(node)
+          ) {
+            maskRange(node.getStart(sourceFile), node.getEnd());
           }
-          continue;
-        }
-        if (current === quote) {
-          break;
+          typescriptRuntime.forEachChild(node, visit);
+        };
+        visit(sourceFile);
+        return masked.join("");
+      } catch {
+        // A failed TypeScript parse must never expose a partially masked scan.
+        return code;
+      }
+    }
+
+    // Malformed JavaScript needs a conservative lexical pass: never trust a
+    // context-free regexp token to hide executable module access.
+    try {
+      for (const token of tokenizer(code, {
+        ecmaVersion: "latest",
+        onComment: (_isBlock, _text, start, end) => maskRange(start, end),
+      })) {
+        if (token.type.label === "string" || token.type.label === "template") {
+          maskRange(token.start, token.end);
         }
       }
-      continue;
+      return masked.join("");
+    } catch {
+      // Never inspect partially masked input after a tokenizer failure.
+      return code;
     }
-    masked += char;
-    index += 1;
   }
-  return masked;
 }
 
-function rejectsModuleAccess(code: string): boolean {
-  const source = maskCodeLiteralsAndComments(code);
+function rejectsModuleAccess(
+  code: string,
+  typescriptRuntime?: typeof import("typescript"),
+): boolean {
+  const source = maskCodeLiteralsAndComments(code, typescriptRuntime);
   return /\bimport\b\s*(?:\.|\(|["'`{*]|\w)|\brequire\b\s*\(/u.test(source);
 }
 
@@ -422,16 +460,19 @@ export async function prepareSource(input: {
   if (!input.config.languages.includes(language)) {
     throw new ToolInputError(`code mode ${language} input is disabled.`);
   }
-  if (rejectsModuleAccess(input.code)) {
-    throw new ToolInputError("code mode module access is disabled.");
-  }
   if (language === "javascript") {
+    if (rejectsModuleAccess(input.code)) {
+      throw new ToolInputError("code mode module access is disabled.");
+    }
     if (isShellLikeCodeModeSource(input.code)) {
       throw new ToolInputError(CODE_MODE_SHELL_SOURCE_ERROR);
     }
     return input.code;
   }
   const ts = await loadTypeScriptRuntime();
+  if (rejectsModuleAccess(input.code, ts)) {
+    throw new ToolInputError("code mode module access is disabled.");
+  }
   const transformed = ts.transpileModule(input.code, {
     compilerOptions: {
       target: ts.ScriptTarget.ES2022,
@@ -448,7 +489,7 @@ export async function prepareSource(input: {
       .join("\n");
     throw new ToolInputError(`typescript transform failed: ${message}`);
   }
-  if (rejectsModuleAccess(transformed.outputText)) {
+  if (rejectsModuleAccess(transformed.outputText, ts)) {
     throw new ToolInputError("code mode module access is disabled.");
   }
   if (
