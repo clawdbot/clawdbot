@@ -3513,11 +3513,11 @@ describe("handleSendChat", () => {
     const sessionKey = "agent:main:visible";
     const items = [
       createQueuedLocalCommand("first-shared-local-command", "/think high", {
-        sessionKey: sessionKey,
+        sessionKey,
       }),
       createQueuedLocalCommand("second-shared-local-command", "/think low", {
         createdAt: 2,
-        sessionKey: sessionKey,
+        sessionKey,
       }),
     ];
     const visibleHost = makeHost({ client, chatQueue: items, sessionKey });
