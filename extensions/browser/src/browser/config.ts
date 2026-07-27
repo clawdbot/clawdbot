@@ -317,10 +317,30 @@ function resolveExtensionRelayPorts(
     .filter(([, profile]) => profile.driver === "extension" && profile.cdpPort == null)
     .map(([name]) => name)
     .toSorted();
+  const reservedPorts = new Set(
+    Object.values(profiles)
+      .map((profile) => profile.cdpPort)
+      .filter((port): port is number => port !== undefined),
+  );
+  // Only the eight ports between Browser control and the managed CDP band are
+  // owned by implicit extension relays. Never drift into the control/Gateway
+  // listeners when explicit profile ports consume that bounded range.
+  const controlPort = defaultPort - EXTENSION_RELAY_PORT_OFFSET;
   const ports: Record<string, number> = {};
-  names.forEach((name, index) => {
-    ports[name] = defaultPort - index;
-  });
+  let candidate = defaultPort;
+  for (const name of names) {
+    while (candidate > controlPort && reservedPorts.has(candidate)) {
+      candidate -= 1;
+    }
+    if (candidate <= controlPort) {
+      throw new Error(
+        "Too many implicit browser extension profiles for the available relay port range; set an explicit cdpPort.",
+      );
+    }
+    ports[name] = candidate;
+    reservedPorts.add(candidate);
+    candidate -= 1;
+  }
   return ports;
 }
 

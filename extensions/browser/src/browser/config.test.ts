@@ -142,6 +142,18 @@ describe("browser config", () => {
     expect(resolveProfile(resolved, "work")?.cdpPort).toBe(20123);
   });
 
+  it("keeps implicit extension relay ports distinct from explicit profile ports", () => {
+    const relayDefaultPort = resolveBrowserConfig(undefined).extensionRelayDefaultPort;
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        work: { driver: "extension", cdpPort: relayDefaultPort },
+      },
+    });
+
+    expect(resolveProfile(resolved, "work")?.cdpPort).toBe(relayDefaultPort);
+    expect(resolveProfile(resolved, "chrome")?.cdpPort).toBe(relayDefaultPort - 1);
+  });
+
   it("embeds the host-local relay secret as Basic auth in the extension cdpUrl", () => {
     const token = "a".repeat(64);
     writeRelaySecret(token);
