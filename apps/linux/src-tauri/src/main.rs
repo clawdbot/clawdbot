@@ -315,6 +315,17 @@ impl DesktopState {
         Ok(cli)
     }
 
+    pub(crate) fn main_window_has_local_content(&self, window: &WebviewWindow) -> bool {
+        window.url().is_ok_and(|mut current_url| {
+            let mut local_url = self.inner.local_url.clone();
+            current_url.set_query(None);
+            current_url.set_fragment(None);
+            local_url.set_query(None);
+            local_url.set_fragment(None);
+            current_url == local_url
+        })
+    }
+
     fn update_tray(&self, snapshot: &GatewaySnapshot) {
         if let Some(tray) = self
             .inner

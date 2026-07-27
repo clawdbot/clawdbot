@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { listAgentIds } from "./agent-scope-config.js";
 import { resolveSpawnAdmission, resolveSpawnMode } from "./spawn-plan.js";
 import { listSwarmRunsForGroup } from "./subagent-registry.js";
 import { resolveSubagentContextMode } from "./subagent-spawn-context.js";
@@ -15,12 +16,15 @@ import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "./subagent-spawn-plan.js";
 import { loadSubagentConfig } from "./subagent-spawn-session-patch.js";
-import { resolveConfiguredAgentIds } from "./subagent-spawn-validation.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./subagent-spawn.runtime.js";
 import { normalizeSubagentTaskName } from "./subagent-task-name.js";
 import { resolveSwarmConfig } from "./swarm-config.js";
 import { validateStructuredOutputSchema } from "./swarm-output-schema.js";
 import { reserveSwarmRun } from "./swarm-scheduler.js";
+
+function resolveConfiguredAgentIds(cfg: OpenClawConfig): string[] {
+  return listAgentIds(cfg);
+}
 
 type ResolvedSubagentSpawnRequest = {
   request: {
