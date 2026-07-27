@@ -3120,7 +3120,7 @@ describe("session accessor seam", () => {
     await expect(loadTranscriptEvents(scope)).resolves.toEqual([]);
   });
 
-  it("routes SQLite transcript turn appends through an active owned file lock", async () => {
+  it("routes SQLite transcript turn appends through an active owned target lock", async () => {
     const scope = {
       agentId: "main",
       sessionFile: transcriptPath,
@@ -3133,8 +3133,9 @@ describe("session accessor seam", () => {
 
     await withOwnedSessionTranscriptWrites(
       {
-        sessionFile: transcriptPath,
+        sessionFile: scope.sessionKey,
         sessionKey: scope.sessionKey,
+        sessionTarget: scope,
         withSessionWriteLock: async (run, options) => {
           publishOptions.push(options?.publishOwnedWrite);
           const result = await run();

@@ -1,7 +1,7 @@
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { getRuntimeConfig } from "../io.js";
 import { resolveStorePath } from "./paths.js";
-import { listSessionEntries, resolveSessionEntryFromStore } from "./session-accessor.entry.js";
+import { resolveSessionEntrySelection } from "./session-accessor.entry.js";
 import type {
   SessionTranscriptReadScope,
   SessionTranscriptReadTarget,
@@ -32,10 +32,12 @@ function resolveRuntimeContext(
     sessionKey: scope.sessionKey,
     storePath: configuredStorePath,
   });
-  const store = Object.fromEntries(
-    listSessionEntries({ agentId, storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-  );
-  const resolved = resolveSessionEntryFromStore({ store, sessionKey: scope.sessionKey });
+  const resolved = resolveSessionEntrySelection({
+    agentId,
+    ...(scope.env ? { env: scope.env } : {}),
+    sessionKey: scope.sessionKey,
+    storePath,
+  });
   return {
     agentId,
     sessionKey: resolved?.normalizedKey ?? scope.sessionKey,
@@ -75,11 +77,22 @@ export function resolveSessionTranscriptReadTarget(
     sessionKey,
     storePath: configuredStorePath,
   });
+  const resolved = sessionKey
+    ? resolveSessionEntrySelection(
+        {
+          agentId,
+          ...(scope.env ? { env: scope.env } : {}),
+          sessionKey,
+          storePath,
+        },
+        { readOnly: true },
+      )
+    : undefined;
   return {
     agentId,
     sessionId: scope.sessionId,
     storePath,
-    ...(sessionKey ? { sessionKey } : {}),
+    ...(resolved?.normalizedKey ? { sessionKey: resolved.normalizedKey } : {}),
   };
 }
 
