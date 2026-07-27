@@ -2607,7 +2607,6 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).not.toContain("Run QA Lab live Matrix lane");
     expect(releaseWorkflow).not.toContain("pnpm openclaw qa matrix");
     expect(qaWorkflow).toContain("pnpm openclaw qa matrix");
-    expect(qaWorkflow).toContain("for attempt in 1 2");
     expect(qaWorkflow).toContain('trusted_reason="repository-branch"');
     expect(qaWorkflow).toContain('"${selected_revision}" != "${EXPECTED_SHA}"');
     expect(qaWorkflow).toContain("EXPECTED_SHA: ${{ inputs.expected_sha }}");
@@ -2643,9 +2642,8 @@ describe("package artifact reuse", () => {
     expect(releaseTelegramWorkflow).toContain(
       'echo "Telegram live lane failed on attempt ${attempt}; retrying once..." >&2',
     );
-    expect(qaWorkflow).toContain(
-      'echo "Matrix live lane failed on attempt ${attempt}; retrying..." >&2',
-    );
+    expect(workflowStep(matrixJob, "Run Matrix live lane").run).not.toContain("for attempt in");
+    expect(qaWorkflow).not.toContain("Matrix live lane failed on attempt");
     expect(qaWorkflow).not.toContain("OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS");
     expect(qaWorkflow).not.toContain("--profile");
     expect(qaWorkflow).not.toContain("--fail-fast");

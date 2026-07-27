@@ -5,35 +5,28 @@ import { readQaScenarioPack } from "./scenario-catalog.js";
 import { readQaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
 
 describe("taxonomy profile scenario selection", () => {
-  it("resolves smoke membership from primary coverage owners only", () => {
+  it("resolves smoke membership from every primary coverage owner", () => {
     const catalog = readQaScenarioPack().scenarios;
-    const selection = resolveQaProfileScenarios({
-      profile: "smoke-ci",
-      providerMode: "mock-openai",
-    });
-    const selectedCoverageIds = new Set(selection.profile.coverageIds);
-    const selectedScenarioIds = new Set(selection.scenarios.map((scenario) => scenario.id));
+    const report = readQaScorecardTaxonomyReport(catalog);
+    const profile = report.profiles.find((candidate) => candidate.id === "smoke-ci");
+    expect(profile).toBeDefined();
+    const selectedCoverageIds = new Set(profile?.coverageIds ?? []);
+    const selectedScenarioRefs = new Set(profile?.scenarioRefs ?? []);
 
-    expect(selection.scenarios.length).toBeGreaterThan(0);
-    for (const scenario of selection.scenarios) {
+    expect(selectedScenarioRefs.size).toBeGreaterThan(0);
+    for (const scenario of catalog.filter((candidate) =>
+      selectedScenarioRefs.has(candidate.sourcePath),
+    )) {
       expect(scenario.coverage?.primary.some((id) => selectedCoverageIds.has(id))).toBe(true);
     }
     for (const coverageId of selectedCoverageIds) {
       const primaryOwners = catalog.filter((scenario) =>
         scenario.coverage?.primary.includes(coverageId),
       );
-      const representatives = primaryOwners.filter((scenario) =>
-        scenario.coverage?.representative?.includes(coverageId),
+      expect(primaryOwners.length).toBeGreaterThan(0);
+      expect(primaryOwners.every((scenario) => selectedScenarioRefs.has(scenario.sourcePath))).toBe(
+        true,
       );
-      const selectedOwners = primaryOwners.filter((scenario) =>
-        selectedScenarioIds.has(scenario.id),
-      );
-
-      expect(selectedOwners).toHaveLength(1);
-      if (primaryOwners.length > 1) {
-        expect(representatives).toHaveLength(1);
-        expect(selectedOwners[0]?.id).toBe(representatives[0]?.id);
-      }
     }
   });
 

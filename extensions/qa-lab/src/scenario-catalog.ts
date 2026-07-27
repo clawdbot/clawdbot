@@ -126,7 +126,6 @@ const qaScenarioCoverageSchema = z
   .object({
     primary: qaCoverageIdListSchema.optional(),
     secondary: qaCoverageIdListSchema.optional(),
-    representative: qaCoverageIdListSchema.optional(),
   })
   .superRefine((coverage, ctx) => {
     if (!coverage.primary && !coverage.secondary) {
@@ -157,20 +156,10 @@ const qaScenarioCoverageSchema = z
         });
       }
     }
-    for (const [index, id] of (coverage.representative ?? []).entries()) {
-      if (!coverage.primary?.includes(id)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["representative", index],
-          message: `representative coverage id must also be primary: ${id}`,
-        });
-      }
-    }
   })
   .transform((coverage) => ({
     primary: coverage.primary ?? [],
     ...(coverage.secondary ? { secondary: coverage.secondary } : {}),
-    ...(coverage.representative ? { representative: coverage.representative } : {}),
   }));
 
 const qaScenarioGatewayRuntimeSchema = z.object({

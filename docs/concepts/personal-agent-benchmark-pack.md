@@ -31,9 +31,8 @@ Ten scenarios, defined in `qa/scenarios/personal/*.yaml`:
 | `personal-failure-recovery`                | Failure recovery that reports partial status and keeps retry boundaries clear                |
 
 The machine-readable `personal-agent` profile lives in root `taxonomy.yaml` as
-semantic coverage IDs. QA Lab resolves the sole primary owner, or the
-scenario-declared representative when an ID has multiple primary owners, from
-the catalog; there is no second scenario-ID list. Run it with:
+semantic coverage IDs. QA Lab resolves every primary owner from the catalog;
+there is no second scenario-ID list. Run it with:
 
 ```bash
 OPENCLAW_ENABLE_PRIVATE_QA_CLI=1 pnpm openclaw qa run \

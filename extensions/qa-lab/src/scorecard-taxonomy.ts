@@ -595,27 +595,14 @@ function selectQaScorecardProfileScenarios(params: {
     const candidates = params.scenarios.filter((scenario) =>
       scenario.coverage?.primary.includes(coverageId),
     );
-    const representatives = candidates.filter((scenario) =>
-      scenario.coverage?.representative?.includes(coverageId),
-    );
-    const representative =
-      representatives.length === 1
-        ? representatives[0]
-        : representatives.length === 0 && candidates.length === 1
-          ? candidates[0]
-          : undefined;
-    if (!representative) {
-      const detail =
-        candidates.length === 0
-          ? "no primary owner"
-          : representatives.length > 1
-            ? `multiple representatives: ${representatives.map((scenario) => scenario.id).join(", ")}`
-            : `multiple primary owners without a representative: ${candidates.map((scenario) => scenario.id).join(", ")}`;
-      throw new Error(`${params.profileId} profile coverage ${coverageId} has ${detail}.`);
+    if (candidates.length === 0) {
+      throw new Error(`${params.profileId} profile coverage ${coverageId} has no primary owner.`);
     }
-    if (!selectedIds.has(representative.id)) {
-      selectedIds.add(representative.id);
-      selected.push(representative);
+    for (const candidate of candidates) {
+      if (!selectedIds.has(candidate.id)) {
+        selectedIds.add(candidate.id);
+        selected.push(candidate);
+      }
     }
   }
   return selected;

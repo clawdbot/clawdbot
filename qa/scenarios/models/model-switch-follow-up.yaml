@@ -6,8 +6,6 @@ scenario:
   coverage:
     primary:
       - agent-runtime.runtime-override-switching
-    representative:
-      - agent-runtime.runtime-override-switching
     secondary:
       - session-memory.session-parity-session-continuity
   objective: Verify the agent can switch to a different configured model and continue coherently.

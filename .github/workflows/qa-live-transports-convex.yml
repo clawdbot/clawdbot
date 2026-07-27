@@ -409,22 +409,12 @@ jobs:
             exit 1
           fi
 
-          for attempt in 1 2; do
-            attempt_output_dir="${output_dir}/attempt-${attempt}"
-            if pnpm openclaw qa matrix \
-              --repo-root . \
-              --output-dir "${attempt_output_dir}" \
-              --provider-mode mock-openai \
-              --shard "${{ matrix.shard }}/5" \
-              --fast; then
-              exit 0
-            fi
-            if [[ "${attempt}" == "2" ]]; then
-              exit 1
-            fi
-            echo "Matrix live lane failed on attempt ${attempt}; retrying..." >&2
-            sleep 10
-          done
+          pnpm openclaw qa matrix \
+            --repo-root . \
+            --output-dir "${output_dir}" \
+            --provider-mode mock-openai \
+            --shard "${{ matrix.shard }}/5" \
+            --fast
 
       - name: Upload Matrix QA artifacts
         id: upload_artifacts

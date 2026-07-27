@@ -85,11 +85,6 @@ describe("qa scenario catalog", () => {
           ) &&
           (scenario.coverage?.secondary ?? []).every((coverageId) =>
             twoPartCoverageIdPattern.test(coverageId),
-          ) &&
-          (scenario.coverage?.representative ?? []).every(
-            (coverageId) =>
-              twoPartCoverageIdPattern.test(coverageId) &&
-              scenario.coverage?.primary.includes(coverageId),
           ),
       ),
     ).toBe(true);

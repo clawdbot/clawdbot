@@ -8,7 +8,7 @@ snapshot:
 profiles:
   - id: smoke-ci
     description: Deterministic PR and merge proof with mock model providers and the
-      Crabline-backed channel driver; coverage IDs resolve to one canonical primary owner.
+      Crabline-backed channel driver; coverage IDs resolve to every eligible primary owner.
     evidenceMode: slim
     channelDriver: crabline
     coverageIds:
@@ -25,7 +25,7 @@ profiles:
       - gateway.websocket-transport
       - plugins.activation-lifecycle
       - session-memory.memory-files-dreaming
-      - channels.channel-native-commands
+      - telegram.built-in-commands
   - id: personal-agent
     description: Local personal-assistant reliability proof selected by semantic coverage targets.
     coverageIds:

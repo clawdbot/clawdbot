@@ -385,15 +385,15 @@ describe("qa cli runtime", () => {
               {
                 test: {
                   kind: "qa-scenario",
-                  id: "channel-top-level-reply-shape",
-                  title: "Channel top-level reply shape",
+                  id: "telegram-commands-command",
+                  title: "Telegram commands list reply",
                   source: {
-                    path: "qa/scenarios/channels/channel-top-level-reply-shape.yaml",
+                    path: "qa/scenarios/channels/telegram-commands-command.yaml",
                   },
                 },
                 coverage: [
                   {
-                    id: "channels.group-final-reply",
+                    id: "telegram.built-in-commands",
                     role: "primary",
                   },
                 ],
@@ -440,8 +440,8 @@ describe("qa cli runtime", () => {
         repoRoot: "/tmp/openclaw-repo",
         outputDir: ".artifacts/qa-e2e/smoke-ci",
         profile: "smoke-ci",
-        surface: "channels",
-        category: "channels.channel-actions-commands-and-approvals",
+        surface: "telegram",
+        category: "telegram.native-controls-and-approvals",
         scenarioIds: ["telegram-commands-command"],
         transportId: "qa-channel",
         fastMode: true,
@@ -490,7 +490,7 @@ describe("qa cli runtime", () => {
       expect(evidence.scorecard).not.toHaveProperty("taxonomy");
       expect(evidence.scorecard).not.toHaveProperty("profile");
       expect(evidence.scorecard?.categoryReports?.[0]).toMatchObject({
-        id: "channels.channel-actions-commands-and-approvals",
+        id: "telegram.native-controls-and-approvals",
       });
       expect(evidence.entries?.[0]).not.toHaveProperty("execution");
       expect(JSON.stringify(evidence.scorecard)).not.toContain("telegram-commands-command");
