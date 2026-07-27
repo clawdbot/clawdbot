@@ -256,6 +256,67 @@ describe("mcp auth profile bearer projection", () => {
     expect(Object.values(resolved.env ?? {})).toEqual(["static-token"]);
   });
 
+  it("accepts matching top-level and legacy auth profile selectors during migration", async () => {
+    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValueOnce({
+      version: 1,
+      profiles: {
+        "ducktape:static": {
+          type: "token",
+          provider: "ducktape",
+          token: "static-token",
+        },
+      },
+    });
+    authMocks.resolveApiKeyForProfile.mockResolvedValueOnce({
+      apiKey: "static-token",
+      provider: "ducktape",
+      profileId: "ducktape:static",
+      profileType: "token",
+    });
+
+    const resolved = await resolveMcpBearerBundleConfig({
+      config: {
+        mcpServers: {
+          ducktape: {
+            url: "https://agents.ducktape.xyz/mcp",
+            authProfileId: "ducktape:static",
+            auth: "oauth",
+            oauth: { authProfileId: "ducktape:static" },
+          },
+        },
+      },
+    });
+
+    expect(resolved.config.mcpServers.ducktape?.authProfileId).toBeUndefined();
+    expect(resolved.config.mcpServers.ducktape?.auth).toBeUndefined();
+    expect(resolved.config.mcpServers.ducktape?.oauth).toBeUndefined();
+    expect(resolved.config.mcpServers.ducktape?.headers).toEqual({
+      Authorization: expect.stringMatching(/^Bearer \$\{OPENCLAW_MCP_AUTH_[A-F0-9]{12}_TOKEN}$/),
+    });
+    expect(Object.values(resolved.env ?? {})).toEqual(["static-token"]);
+  });
+
+  it("rejects conflicting top-level and legacy auth profile selectors", async () => {
+    await expect(
+      resolveMcpBearerBundleConfig({
+        config: {
+          mcpServers: {
+            ducktape: {
+              url: "https://agents.ducktape.xyz/mcp",
+              authProfileId: "ducktape:static",
+              auth: "oauth",
+              oauth: { authProfileId: "ducktape:legacy" },
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow(
+      'conflicting auth profile selectors: authProfileId "ducktape:static" differs from legacy oauth.authProfileId "ducktape:legacy"',
+    );
+    expect(authMocks.loadAuthProfileStoreForSecretsRuntime).not.toHaveBeenCalled();
+    expect(authMocks.resolveApiKeyForProfile).not.toHaveBeenCalled();
+  });
+
   it("rejects expired token profiles instead of projecting stale bearer headers", async () => {
     authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValueOnce({
       version: 1,

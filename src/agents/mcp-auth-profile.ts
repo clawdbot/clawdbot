@@ -36,17 +36,24 @@ export function resolveMcpAuthProfileId(rawServer: unknown): string | undefined 
   if (!isRecord(rawServer)) {
     return undefined;
   }
-  const authProfileId = rawServer.authProfileId;
-  if (typeof authProfileId === "string" && authProfileId.trim().length > 0) {
-    return authProfileId.trim();
+  const authProfileId =
+    typeof rawServer.authProfileId === "string" && rawServer.authProfileId.trim().length > 0
+      ? rawServer.authProfileId.trim()
+      : undefined;
+  const legacyAuthProfileId =
+    rawServer.auth === "oauth" &&
+    isRecord(rawServer.oauth) &&
+    typeof rawServer.oauth.authProfileId === "string" &&
+    rawServer.oauth.authProfileId.trim().length > 0
+      ? rawServer.oauth.authProfileId.trim()
+      : undefined;
+
+  if (authProfileId && legacyAuthProfileId && authProfileId !== legacyAuthProfileId) {
+    throw new Error(
+      `MCP server config has conflicting auth profile selectors: authProfileId "${authProfileId}" differs from legacy oauth.authProfileId "${legacyAuthProfileId}". Use one selector, or keep both values identical during migration.`,
+    );
   }
-  if (rawServer.auth !== "oauth" || !isRecord(rawServer.oauth)) {
-    return undefined;
-  }
-  const legacyAuthProfileId = rawServer.oauth.authProfileId;
-  return typeof legacyAuthProfileId === "string" && legacyAuthProfileId.trim().length > 0
-    ? legacyAuthProfileId.trim()
-    : undefined;
+  return authProfileId ?? legacyAuthProfileId;
 }
 
 /** Returns whether a server needs an OpenClaw-managed bearer projected externally. */
