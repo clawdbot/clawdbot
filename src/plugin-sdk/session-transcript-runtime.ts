@@ -7,6 +7,7 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   publishTranscriptUpdate,
+  persistSessionTranscriptTurn,
   readTranscriptRawDelta,
   readSessionTranscriptVisibleMessageDelta as readVisibleMessageDelta,
   readLatestTranscriptAssistantText,
@@ -137,6 +138,11 @@ export type SessionTranscriptAppendMessagesParams<TMessage> = SessionTranscriptT
     "config" | "cwd" | "parentId" | "prepareMessageAfterIdempotencyCheck" | "useRawWhenLinear"
   >[];
 };
+
+export type SessionTranscriptStrictMessageAppendResult<TMessage> =
+  | { kind: "result"; result: TranscriptMessageAppendResult<TMessage> }
+  | { kind: "suppressed" }
+  | { kind: "rejected"; reason: "session-rebound" };
 
 export type SessionTranscriptAssistantMirrorAppendParams = SessionTranscriptReadParams & {
   config?: OpenClawConfig;
@@ -353,6 +359,44 @@ export async function appendSessionTranscriptMessageByIdentity<TMessage>(
   params: SessionTranscriptAppendMessageParams<TMessage>,
 ): Promise<TranscriptMessageAppendResult<TMessage> | undefined> {
   return await appendTranscriptMessage(params, params);
+}
+
+/** Appends one message while preserving distinct suppression and session-rebind outcomes. */
+export async function appendSessionTranscriptMessageByIdentityStrict<TMessage>(
+  params: SessionTranscriptAppendMessageParams<TMessage>,
+): Promise<SessionTranscriptStrictMessageAppendResult<TMessage>> {
+  const expectedSessionId = params.sessionId?.trim();
+  if (!expectedSessionId) {
+    throw new Error("Cannot strictly append a transcript message without an exact session id");
+  }
+  const turn = await persistSessionTranscriptTurn(params, {
+    ...(params.config ? { config: params.config } : {}),
+    ...(params.cwd ? { cwd: params.cwd } : {}),
+    expectedSessionId,
+    messages: [
+      {
+        ...(params.eventId !== undefined ? { eventId: params.eventId } : {}),
+        ...(params.idempotencyLookup !== undefined
+          ? { idempotencyLookup: params.idempotencyLookup }
+          : {}),
+        message: params.message,
+        ...(params.now !== undefined ? { now: params.now } : {}),
+        ...(params.parentId !== undefined ? { parentId: params.parentId } : {}),
+        ...(params.prepareMessageAfterIdempotencyCheck
+          ? { prepareMessageAfterIdempotencyCheck: params.prepareMessageAfterIdempotencyCheck }
+          : {}),
+        ...(params.useRawWhenLinear !== undefined
+          ? { useRawWhenLinear: params.useRawWhenLinear }
+          : {}),
+      },
+    ],
+    updateMode: "none",
+  });
+  if (turn.rejectedReason) {
+    return { kind: "rejected", reason: turn.rejectedReason };
+  }
+  const result = turn.messages[0] as TranscriptMessageAppendResult<TMessage> | undefined;
+  return result ? { kind: "result", result } : { kind: "suppressed" };
 }
 
 /**

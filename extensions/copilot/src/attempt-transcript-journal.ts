@@ -4,7 +4,7 @@ import {
   runAgentHarnessBeforeMessageWriteHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
-  appendSessionTranscriptMessageByIdentity,
+  appendSessionTranscriptMessageByIdentityStrict,
   appendSessionTranscriptMessagesByIdentity,
   publishSessionTranscriptUpdateByIdentity,
   readVisibleSessionTranscriptMessageEntries,
@@ -136,14 +136,21 @@ export function createAttemptTranscriptJournal(params: {
   };
 
   const append = async (write: PendingWrite): Promise<AppendResult> => {
-    return (await appendSessionTranscriptMessageByIdentity({
+    const outcome = await appendSessionTranscriptMessageByIdentityStrict({
       ...target,
       ...(config ? { config } : {}),
       ...(write.eventId ? { eventId: write.eventId } : {}),
       idempotencyLookup: "scan",
       message: write.message,
       prepareMessageAfterIdempotencyCheck: () => prepare(write, { singleton: true }),
-    })) as AppendResult;
+    });
+    if (outcome.kind === "suppressed") {
+      return undefined;
+    }
+    if (outcome.kind === "rejected") {
+      throw new Error("Transcript session changed before singleton append");
+    }
+    return outcome.result as AppendResult;
   };
 
   const appendToolGroup = async (group: ToolGroup) => {

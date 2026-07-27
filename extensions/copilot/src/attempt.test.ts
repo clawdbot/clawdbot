@@ -119,6 +119,11 @@ const transcriptRuntimeMock = vi.hoisted(() => ({
     })),
   ),
   publish: vi.fn(async () => undefined),
+  appendStrict: vi.fn(async (params: Record<string, unknown>) => {
+    const result = await transcriptRuntimeMock.append(params);
+    return result ? { kind: "result" as const, result } : { kind: "suppressed" as const };
+  }),
+  readVisible: vi.fn(async () => []),
 }));
 vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => {
   const actual =
@@ -126,8 +131,10 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal)
   return {
     ...actual,
     appendSessionTranscriptMessageByIdentity: transcriptRuntimeMock.append,
+    appendSessionTranscriptMessageByIdentityStrict: transcriptRuntimeMock.appendStrict,
     appendSessionTranscriptMessagesByIdentity: transcriptRuntimeMock.appendBatch,
     publishSessionTranscriptUpdateByIdentity: transcriptRuntimeMock.publish,
+    readVisibleSessionTranscriptMessageEntries: transcriptRuntimeMock.readVisible,
   };
 });
 
@@ -2911,7 +2918,9 @@ describe("runCopilotAttempt", () => {
     afterEach(() => {
       transcriptRuntimeMock.append.mockClear();
       transcriptRuntimeMock.appendBatch.mockClear();
+      transcriptRuntimeMock.appendStrict.mockClear();
       transcriptRuntimeMock.publish.mockClear();
+      transcriptRuntimeMock.readVisible.mockClear();
     });
 
     it("persists the prepared user before provider dispatch and owns the terminal assistant", async () => {
@@ -3135,6 +3144,25 @@ describe("runCopilotAttempt", () => {
       expect(sdk.client.deleteSession).not.toHaveBeenCalled();
       expect(result.replayMetadata.replaySafe).toBe(false);
       expect(result.messagesSnapshot.at(-1)).toMatchObject({ display: false });
+    });
+
+    it("fails closed instead of treating a singleton session rebind as policy suppression", async () => {
+      transcriptRuntimeMock.appendStrict.mockResolvedValueOnce({
+        kind: "rejected",
+        reason: "session-rebound",
+      });
+      const sdk = makeFakeSdk();
+
+      const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
+
+      expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toMatchObject({
+        code: "transcript_persistence_failed",
+        cause: expect.objectContaining({
+          message: "Transcript session changed before singleton append",
+        }),
+      });
+      expect(requireSession(sdk).sendAndWait).not.toHaveBeenCalled();
+      expect(result.assistantTranscriptOwned).toBeUndefined();
     });
 
     it("fails closed when an assistant append rejects", async () => {

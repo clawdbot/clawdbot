@@ -13,6 +13,7 @@ import * as transcriptEvents from "../sessions/transcript-events.js";
 import {
   appendAssistantMirrorMessageByIdentity,
   appendSessionTranscriptMessageByIdentity,
+  appendSessionTranscriptMessageByIdentityStrict,
   appendSessionTranscriptMessagesByIdentity,
   formatSessionTranscriptMemoryHitKey,
   parseSessionTranscriptMemoryHitKey,
@@ -116,6 +117,38 @@ describe("session transcript runtime SDK", () => {
       { id: "batch-assistant", parentId: null },
       { id: "batch-result", parentId: "batch-assistant" },
     ]);
+  });
+
+  it("distinguishes strict singleton results, suppression, and session rebound", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "strict-session",
+      sessionKey: "agent:main:strict",
+      storePath,
+    };
+    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+
+    await expect(
+      appendSessionTranscriptMessageByIdentityStrict({
+        ...scope,
+        message: { role: "user", content: "blocked" },
+        prepareMessageAfterIdempotencyCheck: () => undefined,
+      }),
+    ).resolves.toEqual({ kind: "suppressed" });
+    await expect(
+      appendSessionTranscriptMessageByIdentityStrict({
+        ...scope,
+        message: { role: "user", content: "persisted", idempotencyKey: "strict:user" },
+      }),
+    ).resolves.toMatchObject({ kind: "result", result: { appended: true } });
+
+    await upsertSessionEntry(scope, { sessionId: "replacement-session", updatedAt: 20 });
+    await expect(
+      appendSessionTranscriptMessageByIdentityStrict({
+        ...scope,
+        message: { role: "assistant", content: "stale" },
+      }),
+    ).resolves.toEqual({ kind: "rejected", reason: "session-rebound" });
   });
 
   it("pages raw events across appends and resets after replacement", async () => {
