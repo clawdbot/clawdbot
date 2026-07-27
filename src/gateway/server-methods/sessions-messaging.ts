@@ -323,6 +323,35 @@ async function handleSessionSend(params: {
     return;
   }
 
+  const readNextMessageSeq = async () =>
+    (await readSessionMessageCountAsync({
+      agentId: requestedAgentId,
+      sessionEntry: entry,
+      sessionId: entry.sessionId,
+      sessionKey: canonicalKey,
+      storePath,
+    })) + 1;
+  let messageSeq: number | undefined;
+  try {
+    messageSeq = await readNextMessageSeq();
+  } catch (error) {
+    if (!isSessionTranscriptProjectionUnavailableError(error)) {
+      throw error;
+    }
+    // Projection rebuilds are transient and happen before dispatch, so callers
+    // can safely retry the same idempotency key without duplicating a turn.
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, "session transcript is rebuilding; retry shortly", {
+        details: { method: params.method },
+        retryable: true,
+        retryAfterMs: 250,
+      }),
+    );
+    return;
+  }
+
   let interruptedActiveRun = false;
   if (params.interruptIfActive) {
     const interruptResult = await interruptSessionRunIfActive({
@@ -341,34 +370,21 @@ async function handleSessionSend(params: {
     }
     interruptedActiveRun = interruptResult.interrupted;
   }
-
-  let messageSeq: number;
-  try {
-    messageSeq =
-      (await readSessionMessageCountAsync({
-        agentId: requestedAgentId,
-        sessionEntry: entry,
-        sessionId: entry.sessionId,
-        sessionKey: canonicalKey,
-        storePath,
-      })) + 1;
-  } catch (error) {
-    if (!isSessionTranscriptProjectionUnavailableError(error)) {
-      throw error;
+  if (params.interruptIfActive) {
+    try {
+      // A run can finish before the active check or while an interruption
+      // drains. Refresh after every steer attempt so the pending seq is current.
+      messageSeq = await readNextMessageSeq();
+    } catch (error) {
+      if (!isSessionTranscriptProjectionUnavailableError(error)) {
+        throw error;
+      }
+      // Interruption may already have committed side effects. The sequence is
+      // optional, so preserve delivery and let transcript events reconcile it.
+      messageSeq = undefined;
     }
-    // Projection rebuilds are transient and happen before dispatch, so callers
-    // can safely retry the same idempotency key without duplicating a turn.
-    params.respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, "session transcript is rebuilding; retry shortly", {
-        details: { method: params.method },
-        retryable: true,
-        retryAfterMs: 250,
-      }),
-    );
-    return;
   }
+
   let sendAcked = false;
   let sendPayload: unknown;
   let sendCached = false;
@@ -388,7 +404,7 @@ async function handleSessionSend(params: {
         true,
         {
           ...(payload && typeof payload === "object" ? payload : {}),
-          messageSeq,
+          ...(messageSeq !== undefined ? { messageSeq } : {}),
           ...(interruptedActiveRun ? { interruptedActiveRun: true } : {}),
         },
         undefined,
