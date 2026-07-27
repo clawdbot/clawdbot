@@ -213,27 +213,41 @@ describe("tool display details", () => {
   });
 
   it("keeps normal search patterns concise", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: { command: 'rg "foo|bar" src/agents' },
-        detailMode: "explain",
-      }),
-    );
+    const cases = [
+      ['rg "foo|bar" src/agents', 'search "foo|bar" in src/agents'],
+      ["rg search src/agents", 'search "search" in src/agents'],
+    ];
 
-    expect(detail).toBe('search "foo|bar" in src/agents');
+    for (const [command, expected] of cases) {
+      const detail = formatToolDetail(
+        resolveToolDisplay({
+          name: "exec",
+          args: { command },
+          detailMode: "explain",
+        }),
+      );
+
+      expect(detail).toBe(expected);
+    }
   });
 
   it("uses a neutral label for recursive search summary patterns", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: { command: 'rg "Bash failed: search \\"foo\\" in src|search \\"bar\\"" src' },
-        detailMode: "explain",
-      }),
-    );
+    const cases = [
+      'rg "search \\"foo\\" in src/agents" src',
+      'rg "Bash failed: search \\"foo\\" in src|search \\"bar\\"" src',
+    ];
 
-    expect(detail).toBe("search text in src");
+    for (const command of cases) {
+      const detail = formatToolDetail(
+        resolveToolDisplay({
+          name: "exec",
+          args: { command },
+          detailMode: "explain",
+        }),
+      );
+
+      expect(detail).toBe("search text in src");
+    }
   });
 
   it("summarizes bash commands with the same command explainer", () => {

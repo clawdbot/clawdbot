@@ -299,8 +299,8 @@ function isUnsafeSearchSummaryPattern(pattern: string): boolean {
     trimmed.length > 120 ||
     /[\r\n`]/u.test(trimmed) ||
     /^Bash failed:/iu.test(trimmed) ||
-    /^search(?:\s|$)/iu.test(trimmed) ||
-    /\|\s*search(?:\s|$)/iu.test(trimmed)
+    /^search\s+["'][^"'\r\n]+["'](?:\s+in\s+\S.*)?$/iu.test(trimmed) ||
+    /\|\s*search\s+["'][^"'\r\n]+["'](?:\s+in\s+\S.*)?(?:\||$)/iu.test(trimmed)
   );
 }
 
