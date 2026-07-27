@@ -4536,8 +4536,11 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 transport: "sendMessage"))
 
         #expect(await probe.snapshot() == expectedApprovalIDs)
-        let snapshot = try #require(watchService.lastSentExecApprovalSnapshot)
+        let snapshot = try #require(watchService.sentExecApprovalSnapshots.first {
+            $0.requestId == "snapshot-canonical-owner-order"
+        })
         #expect(snapshot.requestId == "snapshot-canonical-owner-order")
+        #expect(snapshot.requestGatewayStableID == "test-gateway")
         #expect(snapshot.approvals.map(\.id) == expectedApprovalIDs.sorted())
         #expect(appModel._test_pendingPersistedExecApprovalReadbacks().isEmpty)
     }

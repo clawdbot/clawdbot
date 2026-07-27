@@ -1386,9 +1386,16 @@ final class NodeAppModel {
         }
         self.talkMode.setEnabled(enabled)
         if enabled {
+            // Preserve a known missing scope before an offline config reload can
+            // overwrite it; the operator reconnect owns the approval handshake.
+            self.requestTalkPermissionUpgradeIfNeeded()
             Task { [weak self] in
                 guard let self else { return }
-                await self.talkMode.reloadConfig()
+                guard !self.forceOperatorTalkPermissionUpgradeRequest else { return }
+                await self.talkMode.reloadConfig(shouldApply: { [weak self] in
+                    guard let self else { return false }
+                    return self.talkMode.isEnabled && !self.forceOperatorTalkPermissionUpgradeRequest
+                })
                 self.requestTalkPermissionUpgradeIfNeeded()
             }
         }
