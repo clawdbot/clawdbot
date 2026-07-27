@@ -69,9 +69,9 @@ async function resolveMcpAuthProfileBearerToken(
       `MCP server "${params.serverName}" references auth profile "${params.profileId}", but that profile was not found.`,
     );
   }
-  if (credential.type !== "oauth") {
+  if (credential.type !== "oauth" && credential.type !== "token") {
     throw new Error(
-      `MCP server "${params.serverName}" references auth profile "${params.profileId}", but ${credential.type} profiles are not refreshable. Use a refresh-capable OAuth profile.`,
+      `MCP server "${params.serverName}" references auth profile "${params.profileId}", but ${credential.type} profiles cannot be projected as bearer tokens. Use an OAuth or token profile.`,
     );
   }
   const resolved = await resolveApiKeyForProfile({
@@ -80,20 +80,21 @@ async function resolveMcpAuthProfileBearerToken(
     profileId: params.profileId,
     agentDir: params.agentDir,
   });
-  if (!resolved || resolved.profileType !== "oauth" || !resolved.apiKey) {
+  if (
+    !resolved ||
+    (resolved.profileType !== "oauth" && resolved.profileType !== "token") ||
+    !resolved.apiKey
+  ) {
     throw new Error(
-      `MCP server "${params.serverName}" could not resolve refreshable OAuth auth profile "${params.profileId}". Re-authenticate the profile and retry.`,
+      `MCP server "${params.serverName}" could not resolve bearer auth profile "${params.profileId}". Re-authenticate or rotate the profile and retry.`,
     );
   }
   if (
-    !resolved.credential ||
-    resolved.credential.type !== "oauth" ||
+    resolved.credential?.type !== "oauth" ||
     typeof resolved.credential.access !== "string" ||
     resolved.credential.access.trim().length === 0
   ) {
-    throw new Error(
-      `MCP server "${params.serverName}" resolved OAuth auth profile "${params.profileId}", but no raw access token was available for bearer projection.`,
-    );
+    return resolved.apiKey;
   }
   return resolved.credential.access;
 }
