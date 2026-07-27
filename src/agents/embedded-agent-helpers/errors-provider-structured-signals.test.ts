@@ -162,6 +162,25 @@ describe("provider failover hook structured signals", () => {
     ).toEqual({ kind: "reason", reason: "billing" });
   });
 
+  it("keeps specific typed API error classifications ahead of invalid-request format", () => {
+    providerRuntimeMocks.classifyProviderPluginError.mockReturnValue(undefined);
+
+    expect(
+      classifyFailoverSignal({
+        provider: "anthropic",
+        errorType: "invalid_request_error",
+        message: "Request size exceeds model context window",
+      }),
+    ).toEqual({ kind: "context_overflow" });
+    expect(
+      classifyFailoverSignal({
+        provider: "anthropic",
+        errorType: "invalid_request_error",
+        message: "You are out of extra usage. Add more at claude.ai/settings/usage",
+      }),
+    ).toEqual({ kind: "reason", reason: "billing" });
+  });
+
   it("lets structured billing details override an ambiguous quota message", () => {
     providerRuntimeMocks.classifyProviderPluginError.mockReturnValue(undefined);
     const message = makeAssistantMessageFixture({

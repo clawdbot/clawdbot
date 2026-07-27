@@ -1237,6 +1237,8 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
     detailClassification,
   );
   const errorTypeClassification = classifyFailoverClassificationFromErrorType(signal.errorType);
+  // Message/detail semantics stay ahead of generic structured types so an
+  // invalid-request wrapper cannot hide billing, context, or provider policy.
   const effectiveMessageClassification = providerPluginReason
     ? toReasonClassification(providerPluginReason)
     : (messageOrDetailClassification ?? errorTypeClassification);
