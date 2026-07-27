@@ -357,9 +357,11 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
       }
       adoptedSessionKey = result.sessionKey;
       announceCatalogSessionContinued({ ...key, sessionKey: result.sessionKey });
-      this.onPaneSessionChange?.(this.paneId, result.sessionKey);
+      // Make the adopted session authoritative before routing; otherwise the
+      // outgoing catalog pane can immediately restore the previous chat URL.
       this.switchPaneSession(result.sessionKey);
       adoptedCatalogGeneration = this.catalogLoadGeneration;
+      this.onPaneSessionChange?.(this.paneId, result.sessionKey);
       state.handleChatDraftChange(draft);
       await state.handleSendChat();
       if (this.activeCatalogContinuation === continuation) {

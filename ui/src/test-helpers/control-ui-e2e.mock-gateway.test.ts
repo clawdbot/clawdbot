@@ -162,6 +162,99 @@ describe("mock gateway stateful config", () => {
 });
 
 describe("mock gateway stateful sessions", () => {
+  it("makes a successfully adopted catalog session visible to the next sessions.list", async () => {
+    const sessionKey = "agent:main:adopted-codex";
+    const script = createControlUiMockGatewayInitScript({
+      methodResponses: {
+        "sessions.catalog.continue": { sessionKey },
+      },
+    });
+    window.sessionStorage.clear();
+    // oxlint-disable-next-line typescript/no-implied-eval -- Exercises the serialized Gateway initialization exactly as the browser does.
+    new Function(script)();
+
+    const socket = new WebSocket("ws://mock-gateway");
+    const frames: ResponseFrame[] = [];
+    socket.addEventListener("message", (event) => {
+      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    });
+    await flushMockTimers();
+
+    socket.send(
+      JSON.stringify({
+        type: "req",
+        id: "continue-1",
+        method: "sessions.catalog.continue",
+        params: { catalogId: "codex", hostId: "gateway:local", threadId: "thread-1" },
+      }),
+    );
+    await flushMockTimers();
+    expect(frames.find((frame) => frame.id === "continue-1")?.payload).toEqual({ sessionKey });
+
+    socket.send(
+      JSON.stringify({
+        type: "req",
+        id: "list-adopted-1",
+        method: "sessions.list",
+        params: { agentId: "main", search: "adopted-codex" },
+      }),
+    );
+    await flushMockTimers();
+    expect(frames.find((frame) => frame.id === "list-adopted-1")?.payload).toMatchObject({
+      count: 2,
+      sessions: [
+        expect.objectContaining({ key: "main" }),
+        expect.objectContaining({ key: sessionKey, hasActiveRun: false, status: "done" }),
+      ],
+    });
+    socket.close();
+  });
+
+  it("does not publish a rejected catalog adoption to sessions.list", async () => {
+    const sessionKey = "agent:main:rejected-adoption";
+    const script = createControlUiMockGatewayInitScript({
+      methodResponses: {
+        "sessions.catalog.continue": {
+          __mockError: { code: "INVALID_REQUEST", message: "catalog adoption rejected" },
+        },
+      },
+    });
+    window.sessionStorage.clear();
+    // oxlint-disable-next-line typescript/no-implied-eval -- Exercises the serialized Gateway initialization exactly as the browser does.
+    new Function(script)();
+
+    const socket = new WebSocket("ws://mock-gateway");
+    const frames: ResponseFrame[] = [];
+    socket.addEventListener("message", (event) => {
+      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    });
+    await flushMockTimers();
+
+    socket.send(
+      JSON.stringify({
+        type: "req",
+        id: "rejected-adoption",
+        method: "sessions.catalog.continue",
+        params: { catalogId: "codex", hostId: "gateway:local", threadId: "thread-1" },
+      }),
+    );
+    await flushMockTimers();
+    socket.send(
+      JSON.stringify({
+        type: "req",
+        id: "list-after-rejected-adoption",
+        method: "sessions.list",
+        params: { agentId: "main", search: "rejected-adoption" },
+      }),
+    );
+    await flushMockTimers();
+
+    const listed = frames.find((frame) => frame.id === "list-after-rejected-adoption")?.payload;
+    expect(listed).toMatchObject({ count: 1, sessions: [{ key: "main" }] });
+    expect(JSON.stringify(listed)).not.toContain(sessionKey);
+    socket.close();
+  });
+
   it("makes a newly created session visible to the next sessions.list", async () => {
     const sessionKey = "agent:main:created-session";
     const script = createControlUiMockGatewayInitScript({

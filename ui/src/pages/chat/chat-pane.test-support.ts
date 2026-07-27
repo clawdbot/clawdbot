@@ -30,7 +30,6 @@ export type TestChatPane = HTMLElement & {
   context: ApplicationContext;
   state: ChatPageHost;
   connectedClient: GatewayBrowserClient | null;
-  continueCatalogSession: (key: CatalogSessionKey) => Promise<void>;
   applyGatewaySnapshot: (snapshot: ApplicationContext["gateway"]["snapshot"]) => void;
   connectedCallback: () => void;
   connectionGeneration: number;
@@ -70,7 +69,6 @@ export type TestChatPane = HTMLElement & {
   ) => void;
   paneTitle: string;
   catalogSession: SessionCatalogSession | null;
-  catalogLoadGeneration: number;
   catalogItemMessage: (item: SessionCatalogTranscriptItem) => Record<string, unknown> | null;
   handleTranscriptScroll: (event: Event) => void;
   handleTranscriptHistoryIntent: (event: Event) => void;
@@ -163,7 +161,6 @@ export function createTestChatPane(params: {
     chatQueue: [],
     chatRunId: null,
     chatSending: false,
-    chatSendingScopeKey: null,
     chatStream: null,
     client: params.client,
     connected: true,
