@@ -34,7 +34,7 @@ export * from "./migration-api.js";
 export type * from "./public-session-catalog.js";
 export * from "./validator-registry.js";
 export * from "./schema-export-registry.js";
-export type * from "./schema.js";
+export type * from "./schema-types.js";
 
 // Local structural result keeps this package independent of core session types.
 export type SessionsPatchResult = {
