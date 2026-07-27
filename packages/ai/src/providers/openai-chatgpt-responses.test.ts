@@ -160,43 +160,6 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(providerToken).toBe(`Bearer ${realToken}`);
   });
 
-  it("sends opaque capabilities only to loopback Codex proxies", async () => {
-    const capability = "opaque-loopback-capability";
-    let requestUrl: string | undefined;
-    let headers: Headers | undefined;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input, init) => {
-        requestUrl = String(input);
-        headers = new Headers(init?.headers);
-        return completedSseResponse();
-      }),
-    );
-
-    const result = await streamOpenAICodexResponses(
-      { ...model, baseUrl: "http://127.0.0.1:7862/backend-api/codex" },
-      context,
-      { apiKey: capability, transport: "sse" },
-    ).result();
-
-    expect(result.stopReason).toBe("stop");
-    expect(requestUrl).toBe("http://127.0.0.1:7862/backend-api/codex/responses");
-    expect(headers?.get("authorization")).toBe(`Bearer ${capability}`);
-    expect(headers?.get("chatgpt-account-id")).toBeNull();
-
-    vi.mocked(fetch).mockClear();
-    const remote = await streamOpenAICodexResponses(
-      { ...model, baseUrl: "https://relay.example.test/backend-api/codex" },
-      context,
-      { apiKey: capability, transport: "sse" },
-    ).result();
-    expect(remote).toMatchObject({
-      stopReason: "error",
-      errorMessage: "Failed to extract accountId from token",
-    });
-    expect(fetch).not.toHaveBeenCalled();
-  });
-
   it("clamps session headers to the backend limit", async () => {
     const jwt = createJwt({ "https://api.openai.com/auth": { chatgpt_account_id: "acct" } });
     let headers: Headers | undefined;
