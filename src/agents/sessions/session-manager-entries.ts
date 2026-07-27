@@ -5,6 +5,7 @@ import {
   type SessionTreeEntry as CoreSessionTreeEntry,
 } from "../runtime/index.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
+import { isIndexedSessionEntry } from "./session-manager-codec.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import { SessionManagerPersistence } from "./session-manager-persistence.js";
 import type {
@@ -31,6 +32,9 @@ export class SessionManagerEntries extends SessionManagerPersistence {
   protected appendEntry(entry: SessionEntry, options?: AppendPersistenceOptions): void {
     // oxlint-disable-next-line unicorn/prefer-structured-clone -- Match the persisted JSON/toJSON shape exactly.
     const canonicalEntry = JSON.parse(JSON.stringify(entry)) as SessionEntry;
+    if (!isIndexedSessionEntry(canonicalEntry)) {
+      throw new Error(`Invalid session transcript entry: ${entry.type}`);
+    }
     this.persist(canonicalEntry, options);
     if (
       !isSessionTranscriptSideAppendEntry(canonicalEntry) &&
@@ -371,9 +375,6 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     if (branchTargetId === undefined) {
       throw new Error(`Entry ${branchFromId} not found`);
     }
-    this.leafId = branchTargetId;
-    this.appendParentId = branchTargetId;
-    this.appendMode = undefined;
     const entry: BranchSummaryEntry = {
       type: "branch_summary",
       id: generateSessionEntryId(this.byId),

@@ -472,9 +472,9 @@ export function readRecentSessionTranscriptMessageEvents(
 ): SessionTranscriptMessageEventPage {
   return withCurrentProjectionSnapshot(scope, (projection) => {
     const visible = resolveVisibleMessagePositions(projection);
-    const maxMessages = Math.max(
-      0,
-      Math.floor(Number.isFinite(options.maxMessages) ? options.maxMessages : 0),
+    const maxMessages = Math.min(
+      MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
+      Math.max(0, Math.floor(Number.isFinite(options.maxMessages) ? options.maxMessages : 0)),
     );
     const maxLines = Math.max(
       0,
@@ -555,9 +555,9 @@ export function readSessionTranscriptBoundedMessageTailPage(
       Math.max(0, Math.floor(Number.isFinite(options.offset) ? options.offset : 0)),
       totalMessages,
     );
-    const maxMessages = Math.max(
-      0,
-      Math.floor(Number.isFinite(options.maxMessages) ? options.maxMessages : 0),
+    const maxMessages = Math.min(
+      MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
+      Math.max(0, Math.floor(Number.isFinite(options.maxMessages) ? options.maxMessages : 0)),
     );
     const maxBytes = Math.max(
       0,

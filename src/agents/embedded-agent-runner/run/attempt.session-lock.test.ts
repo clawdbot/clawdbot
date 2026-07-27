@@ -895,6 +895,27 @@ describe("installPromptSubmissionLockRelease", () => {
     expect(providerError.cause).toBe(settlementError);
   });
 
+  it("does not attach a shared provider and settlement error as its own cause", async () => {
+    const sharedError = new Error("shared failure");
+    const session = {
+      agent: {
+        streamFn: vi.fn(async () => {
+          throw sharedError;
+        }),
+      },
+    };
+    installPromptSubmissionLockRelease({
+      session,
+      releaseForPrompt: vi.fn(async () => undefined),
+      reacquireAfterPrompt: vi.fn(async () => {
+        throw sharedError;
+      }),
+    });
+
+    await expect(session.agent.streamFn()).rejects.toBe(sharedError);
+    expect(sharedError.cause).toBeUndefined();
+  });
+
   it("preserves an undefined prompt settlement rejection", async () => {
     const session = { agent: { streamFn: vi.fn(async () => "ok") } };
     const undefinedRejection = new Promise<void>((_resolve, reject) => {

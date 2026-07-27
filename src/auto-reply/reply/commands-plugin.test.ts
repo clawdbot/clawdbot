@@ -124,6 +124,7 @@ describe("handlePluginCommand", () => {
         executePluginCommandMock.mock.calls as unknown as Array<
           [
             {
+              agentId?: string;
               authProfileId?: string;
               sessionId?: string;
               sessionFile?: string;
@@ -134,6 +135,7 @@ describe("handlePluginCommand", () => {
       )[0],
       "(executePluginCommandMock.mock.calls as unknown as Array<\n        [{ authProfileId?: string; sessionId?: string; sessionFile?: string }]\n      >)[0] test invariant",
     );
+    expect(commandParams.agentId).toBe("target");
     expect(commandParams.sessionId).toBe("target-session");
     expect(commandParams.sessionTarget).toMatchObject({
       agentId: "target",

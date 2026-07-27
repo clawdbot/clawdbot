@@ -65,7 +65,7 @@ export const handlePluginCommand: CommandHandler = async (
     isAuthorizedSender: command.isAuthorizedSender,
     senderIsOwner: command.senderIsOwner,
     gatewayClientScopes: params.ctx.GatewayClientScopes,
-    agentId: params.agentId,
+    agentId: targetAgentId,
     sessionKey: params.sessionKey,
     sessionId: targetSessionEntry?.sessionId,
     sessionTarget,

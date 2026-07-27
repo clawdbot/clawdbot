@@ -422,7 +422,9 @@ const saveSessionToMemory: HookHandler = (event) => {
       );
     }
   } catch {
-    // The async writer retains its existing best-effort read fallback.
+    // Projection reads verify indexedSeq against the latest committed seq in
+    // one transaction. An in-flight rebuild throws here and schedules repair,
+    // so the async writer falls back to the authoritative transcript rows.
   }
   const writePromise = saveSessionMemoryNow(event, capturedEvents);
   pendingSessionMemoryWrites.add(writePromise);

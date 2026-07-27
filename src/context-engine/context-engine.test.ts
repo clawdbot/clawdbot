@@ -761,6 +761,50 @@ describe("Engine contract tests", () => {
     ).rejects.toThrow("successor target conflicts with the caller session identity");
   });
 
+  it("rejects a successor marker that changes the caller store", async () => {
+    compactEmbeddedAgentSessionDirectMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        tokensBefore: 100,
+        sessionId: "store-redirect-successor",
+        sessionFile: "sqlite:main:store-redirect-successor:/tmp/other.sqlite",
+      },
+    });
+
+    await expect(
+      delegateCompactionToRuntime({
+        sessionId: "store-redirect-source",
+        sessionKey: "agent:main:store-redirect",
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "store-redirect-source",
+          sessionKey: "agent:main:store-redirect",
+          storePath: "/tmp/caller.sqlite",
+        },
+      }),
+    ).rejects.toThrow("successor target conflicts with the caller session identity");
+  });
+
+  it("rejects contradictory marker and top-level successor identities", async () => {
+    compactEmbeddedAgentSessionDirectMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        tokensBefore: 100,
+        sessionId: "top-level-successor",
+        sessionFile: "sqlite:main:marker-successor:/tmp/openclaw-agent.sqlite",
+      },
+    });
+
+    await expect(
+      delegateCompactionToRuntime({
+        sessionId: "source-session",
+        sessionKey: "agent:main:successor-conflict",
+      }),
+    ).rejects.toThrow("successor identity is inconsistent");
+  });
+
   it("rejects an internally consistent successor for another caller agent", async () => {
     installCompactRuntimeSpy();
 

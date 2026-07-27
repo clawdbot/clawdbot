@@ -366,6 +366,7 @@ export async function accountFollowupTurn(params: {
   if (accounting.autoCompactionCount > 0) {
     const previousSessionId = turn.queued.run.sessionId;
     const count = await incrementRunCompactionCount({
+      agentId: turn.queued.run.agentId,
       cfg: turn.config,
       sessionEntry: turn.session.current(),
       sessionStore: turn.sessionStore,

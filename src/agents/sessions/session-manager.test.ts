@@ -307,6 +307,16 @@ describe("SessionManager.open", () => {
     expect(() => SessionManager.open(scope, dir)).not.toThrow();
   });
 
+  it("rejects invalid entries before mutating in-memory state", () => {
+    const manager = SessionManager.inMemory("/tmp");
+    const entriesBefore = manager.getEntries();
+
+    expect(() => manager.appendModelChange("", "")).toThrow("Invalid session transcript entry");
+    expect(manager.getEntries()).toEqual(entriesBefore);
+    expect(manager.getLeafId()).toBeNull();
+    expect(manager.getAppendParentId()).toBeNull();
+  });
+
   it("uses the selected logical leaf immediately after a side append control", () => {
     const manager = SessionManager.inMemory("/tmp");
     const firstId = manager.appendMessage({ role: "user", content: "first", timestamp: 1 });
@@ -785,6 +795,9 @@ describe("SessionManager.open", () => {
     const entriesBeforeRejectedAppends = sessionManager.getEntries();
     const leafBeforeRejectedAppends = sessionManager.getLeafId();
     const appendParentBeforeRejectedAppends = sessionManager.getAppendParentId();
+    expect(() => sessionManager.branchWithSummary(null, "late summary")).toThrow(
+      "entry was not persisted",
+    );
     expect(() => sessionManager.appendModelChange("openai", "gpt-5.5")).toThrow(
       "entry was not persisted",
     );

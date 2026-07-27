@@ -488,7 +488,11 @@ async function settlePromptSubmission(params: {
 }
 
 function attachPromptSettlementError(promptError: unknown, settlementError: unknown): void {
-  if (promptError instanceof Error && promptError.cause === undefined) {
+  if (
+    promptError instanceof Error &&
+    promptError.cause === undefined &&
+    settlementError !== promptError
+  ) {
     try {
       promptError.cause = settlementError;
     } catch {

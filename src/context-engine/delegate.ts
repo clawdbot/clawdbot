@@ -39,37 +39,46 @@ function buildCompactionResultSessionTarget(params: {
   const targetSessionId = normalizeOptionalString(params.sessionTarget?.sessionId);
   const targetSessionKey = normalizeOptionalString(params.sessionTarget?.sessionKey);
   const targetStorePath = normalizeOptionalString(params.sessionTarget?.storePath);
-  const suppliedAgentId = normalizeOptionalString(params.agentId);
+  const requestedAgentId = normalizeOptionalString(params.agentId);
   const callerSessionId = normalizeOptionalString(params.callerSessionId);
-  const suppliedSessionId = normalizeOptionalString(params.sessionId);
-  const suppliedSessionKey = normalizeOptionalString(params.sessionKey);
-  const completeTarget = Boolean(
-    targetAgentId && targetSessionId && targetSessionKey && targetStorePath,
-  );
-  const callerAgentId = suppliedAgentId ?? parseAgentSessionKey(suppliedSessionKey)?.agentId;
+  const requestedSessionKey = normalizeOptionalString(params.sessionKey);
+  const requestedSessionKeyAgentId = parseAgentSessionKey(requestedSessionKey)?.agentId;
   if (
-    (callerAgentId && targetAgentId && targetAgentId !== callerAgentId) ||
-    (callerAgentId && marker && marker.agentId !== callerAgentId) ||
-    (suppliedSessionKey && targetSessionKey && targetSessionKey !== suppliedSessionKey)
+    (requestedAgentId && targetAgentId && requestedAgentId !== targetAgentId) ||
+    (callerSessionId && targetSessionId && callerSessionId !== targetSessionId) ||
+    (requestedSessionKey && targetSessionKey && requestedSessionKey !== targetSessionKey) ||
+    (requestedSessionKeyAgentId && targetAgentId && requestedSessionKeyAgentId !== targetAgentId)
   ) {
     throw new Error("Context-engine successor target conflicts with the caller session identity");
   }
-  const candidateSessionKey = targetSessionKey ?? suppliedSessionKey;
+  const suppliedAgentId = targetAgentId ?? requestedAgentId;
+  const suppliedSessionId = normalizeOptionalString(params.sessionId);
+  const suppliedSessionKey = targetSessionKey ?? requestedSessionKey;
+  const callerAgentId = suppliedAgentId ?? parseAgentSessionKey(suppliedSessionKey)?.agentId;
+  if (
+    (callerAgentId && marker && marker.agentId !== callerAgentId) ||
+    (targetStorePath && marker && path.resolve(marker.storePath) !== path.resolve(targetStorePath))
+  ) {
+    throw new Error("Context-engine successor target conflicts with the caller session identity");
+  }
+  if (marker && suppliedSessionId && marker.sessionId !== suppliedSessionId) {
+    throw new Error("Context-engine successor identity is inconsistent");
+  }
+  const candidateSessionKey = suppliedSessionKey;
   const candidateEntry =
-    marker && !completeTarget && candidateSessionKey
+    marker && candidateSessionKey
       ? loadSessionEntry({
           agentId: marker.agentId,
           sessionKey: candidateSessionKey,
           storePath: marker.storePath,
         })
       : undefined;
-  const markerMatches =
-    marker && !completeTarget
-      ? listSessionEntries({
-          agentId: marker.agentId,
-          storePath: marker.storePath,
-        }).filter(({ entry }) => entry.sessionId === marker.sessionId)
-      : [];
+  const markerMatches = marker
+    ? listSessionEntries({
+        agentId: marker.agentId,
+        storePath: marker.storePath,
+      }).filter(({ entry }) => entry.sessionId === marker.sessionId)
+    : [];
   const preferredMarkerSessionKey = marker
     ? resolvePreferredSessionKeyForSessionIdMatches(
         markerMatches.map(({ sessionKey, entry }) => [sessionKey, entry]),
@@ -89,15 +98,14 @@ function buildCompactionResultSessionTarget(params: {
         ? candidateSessionKey
         : (preferredMarkerSessionKey ?? (candidateEntry ? undefined : candidateSessionKey))
     : undefined;
-  if (!completeTarget && sessionFile && !marker) {
+  if (sessionFile && !marker) {
     throw new Error("Legacy context-engine file successors are unsupported");
   }
-  if (marker && !completeTarget && !markerSessionKey) {
+  if (marker && !markerSessionKey) {
     throw new Error("Legacy context-engine successor identity is ambiguous");
   }
   if (
     marker &&
-    !completeTarget &&
     candidateSessionKey &&
     ((candidateEntry &&
       candidateEntry.sessionId !== marker.sessionId &&
@@ -108,30 +116,22 @@ function buildCompactionResultSessionTarget(params: {
   }
   if (
     marker &&
-    !completeTarget &&
-    ((targetAgentId && targetAgentId !== marker.agentId) ||
-      (targetSessionId && targetSessionId !== marker.sessionId) ||
-      (parseAgentSessionKey(candidateSessionKey)?.agentId &&
-        parseAgentSessionKey(candidateSessionKey)?.agentId !== marker.agentId) ||
-      (targetStorePath && path.resolve(targetStorePath) !== path.resolve(marker.storePath)))
+    parseAgentSessionKey(candidateSessionKey)?.agentId &&
+    parseAgentSessionKey(candidateSessionKey)?.agentId !== marker.agentId
   ) {
     throw new Error("Legacy context-engine successor identity is inconsistent");
   }
-  const sessionId = targetSessionId ?? marker?.sessionId ?? suppliedSessionId;
+  const sessionId = marker?.sessionId ?? suppliedSessionId ?? targetSessionId ?? callerSessionId;
   if (!sessionId) {
     return undefined;
   }
-  const agentId = targetAgentId ?? marker?.agentId ?? suppliedAgentId;
-  const sessionKey = completeTarget
-    ? targetSessionKey
-    : marker
-      ? markerSessionKey
-      : (targetSessionKey ?? suppliedSessionKey);
+  const agentId = marker?.agentId ?? callerAgentId;
+  const sessionKey = marker ? markerSessionKey : suppliedSessionKey;
   const sessionKeyAgentId = parseAgentSessionKey(sessionKey)?.agentId;
   if (sessionKeyAgentId && agentId && sessionKeyAgentId !== agentId) {
     throw new Error("Context-engine successor session key conflicts with its agent identity");
   }
-  const storePath = targetStorePath ?? marker?.storePath;
+  const storePath = marker?.storePath ?? targetStorePath;
   return {
     ...(agentId ? { agentId } : {}),
     sessionId,
@@ -217,7 +217,9 @@ export async function delegateCompactionToRuntime(
           tokensBefore: result.result.tokensBefore,
           tokensAfter: result.result.tokensAfter,
           details: result.result.details,
-          ...(result.result.sessionId ? { sessionId: result.result.sessionId } : {}),
+          ...(result.result.sessionId
+            ? { sessionId: resultSessionTarget?.sessionId ?? result.result.sessionId }
+            : {}),
           // Core reports successors only through the typed sessionTarget; the
           // deprecated raw sessionFile field is reserved for shipped engines
           // reporting rotation to core, and post-flip core has no file path.

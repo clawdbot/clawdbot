@@ -217,7 +217,7 @@ describe("SQLite active transcript event projection", () => {
 
     const page = readSessionTranscriptBoundedMessageTailPage(scope, {
       maxBytes: 512,
-      maxMessages: 10,
+      maxMessages: Number.MAX_SAFE_INTEGER,
       offset: 0,
     });
 
