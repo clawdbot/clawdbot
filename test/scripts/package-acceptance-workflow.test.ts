@@ -2799,8 +2799,54 @@ describe("package artifact reuse", () => {
     expect(runtimePairRun).toContain("--runtime-parity-tier standard,live-only");
     expect(runtimePairRun).toContain("--runtime-parity-tier soak");
     expect(runtimePairRun).toContain("Frozen candidate cannot select runtime-pair lane");
-    expect(runtimePairRun).toContain("--scenario gateway-restart-inflight-run");
-    expect(runtimePairRun).toContain('--output-dir ".artifacts/qa-e2e/openclaw-core-restart"');
+    expect(workflowStep(laneJob, "Run runtime-pair lane")["continue-on-error"]).toBe(true);
+    const runtimePairValidation = workflowStep(laneJob, "Validate runtime-pair lane").run;
+    expect(runtimePairValidation).toContain("validator_args+=(--require-explicit-gap)");
+    expect(runtimePairValidation).toContain('--target-sha "$RELEASE_CHECK_TARGET_SHA"');
+    expect(runtimePairValidation).toContain('--lane "$RUNTIME_PAIR_LANE"');
+    expect(runtimePairValidation).toContain(
+      'node trusted-suite-validator/scripts/validate-qa-runtime-pair-summary.mjs "${validator_args[@]}"',
+    );
+    const coreRestartRun = workflowStep(laneJob, "Run OpenClaw core restart proof").run;
+    expect(coreRestartRun).toContain("--scenario gateway-restart-inflight-run");
+    expect(coreRestartRun).toContain('--output-dir ".artifacts/qa-e2e/openclaw-core-restart"');
+    const trustedValidatorCheckout = workflowStep(
+      laneJob,
+      "Checkout trusted validator after candidate suite",
+    );
+    expect(trustedValidatorCheckout.with).toMatchObject({
+      ref: "${{ github.sha }}",
+      path: "trusted-suite-validator",
+      "persist-credentials": false,
+    });
+    const runtimePairStepNames = (laneJob.steps ?? []).map((step) => step.name);
+    expect(runtimePairStepNames.indexOf("Run runtime-pair lane")).toBeLessThan(
+      runtimePairStepNames.indexOf("Checkout trusted validator after candidate suite"),
+    );
+    expect(
+      workflowStep(laneJob, "Generate runtime-pair lane report")["continue-on-error"],
+    ).toBe(true);
+    const runtimePairReport = workflowStep(laneJob, "Validate runtime-pair lane report").run;
+    expect(runtimePairReport).toContain(
+      '--report-summary "$report_dir/qa-runtime-parity-summary.json"',
+    );
+    expect(runtimePairReport).toContain(
+      '--report-markdown "$report_dir/qa-runtime-parity-report.md"',
+    );
+    expect(runtimePairReport).toContain("validator_args+=(--require-explicit-gap)");
+    expect(runtimePairReport).toContain(
+      "node trusted-report-validator/scripts/validate-qa-runtime-pair-summary.mjs",
+    );
+    expect(runtimePairStepNames.indexOf("Generate runtime-pair lane report")).toBeLessThan(
+      runtimePairStepNames.indexOf("Checkout trusted validator after candidate report"),
+    );
+    const recordedOutcomes = workflowStep(laneJob, "Record runtime-pair lane status").env?.[
+      "RELEASE_CHECK_STEP_OUTCOMES"
+    ];
+    expect(recordedOutcomes).toContain("steps.runtime_parity_validation.outcome");
+    expect(recordedOutcomes).toContain("steps.generate_runtime_parity_report.outcome");
+    expect(recordedOutcomes).not.toContain("steps.candidate_runtime_pair.outcome");
+    expect(recordedOutcomes).not.toContain("steps.candidate_runtime_parity_report.outcome");
     expect(workflowStep(laneJob, "Upload runtime-pair lane artifacts").with?.name).toContain(
       "${{ matrix.lane }}",
     );
