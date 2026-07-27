@@ -483,7 +483,7 @@ describe("slackPlugin status", () => {
     const cfg = {
       channels: {
         slack: {
-          identity: "user",
+          postAs: "user",
           userToken: "test-user-token",
           appToken: "test-app-token",
         },
@@ -801,7 +801,8 @@ describe("slackPlugin security", () => {
       cfg: {
         channels: {
           slack: {
-            dm: { policy: "allowlist", allowFrom: ["  slack:U123  "] },
+            dmPolicy: "allowlist",
+            allowFrom: ["  slack:U123  "],
           },
         },
       } as OpenClawConfig,
@@ -811,7 +812,8 @@ describe("slackPlugin security", () => {
             slack: {
               botToken: "xoxb-test",
               appToken: "xapp-test",
-              dm: { policy: "allowlist", allowFrom: ["  slack:U123  "] },
+              dmPolicy: "allowlist",
+              allowFrom: ["  slack:U123  "],
             },
           },
         } as OpenClawConfig,
@@ -1634,7 +1636,7 @@ describe("slackPlugin config", () => {
     {
       name: "Socket Mode",
       slack: {
-        identity: "user" as const,
+        postAs: "user" as const,
         userToken: "test-user-token",
         appToken: "test-app-token",
       },
@@ -1643,7 +1645,7 @@ describe("slackPlugin config", () => {
     {
       name: "HTTP mode",
       slack: {
-        identity: "user" as const,
+        postAs: "user" as const,
         mode: "http" as const,
         userToken: "test-user-token",
         signingSecret: "test-signing-secret",

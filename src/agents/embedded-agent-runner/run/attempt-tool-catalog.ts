@@ -20,7 +20,6 @@ import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js"
 import {
   applyToolSchemaDirectoryCatalog,
   applyToolSearchCatalog,
-  estimateToolSchemaDirectoryToolNames,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
@@ -96,27 +95,9 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
         executeTool: input.executeCodeModeTool,
       })
     : [];
-  const directoryRequiredToolNames =
+  const directoryDirectToolNames =
     attempt.forceMessageTool === true || attempt.sourceReplyDeliveryMode === "message_tool_only"
       ? ["message"]
-      : [];
-  const directoryHydratedToolNames =
-    toolSearchControlsEnabledForRun && toolSearchConfig.mode === "directory"
-      ? (() => {
-          try {
-            return estimateToolSchemaDirectoryToolNames({
-              tools: effectiveTools,
-              query: attempt.prompt,
-              maxTools: 4,
-              requiredToolNames: directoryRequiredToolNames,
-            });
-          } catch (err) {
-            log.warn(
-              `tool-search: directory schema estimation failed; continuing with deferred schemas only (${String(err)})`,
-            );
-            return directoryRequiredToolNames;
-          }
-        })()
       : [];
   const toolSearch = codeModeControlsEnabledForRun
     ? applyCodeModeCatalog({
@@ -139,7 +120,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
           runId: attempt.runId,
           catalogRef: preparedToolBase.toolSearchCatalogRef,
           toolHookContext: catalogToolHookContext,
-          hydrateToolNames: directoryHydratedToolNames,
+          directToolNames: directoryDirectToolNames,
         })
       : applyToolSearchCatalog({
           tools: effectiveTools,

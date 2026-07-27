@@ -20,7 +20,11 @@ import {
   renderSettingsSection,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { buildAgentContext } from "../../lib/agents/display.ts";
+import {
+  agentBadgeText,
+  buildAgentContext,
+  normalizeAgentLabel,
+} from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import "../../styles/agents.css";
@@ -110,6 +114,7 @@ type AgentsProps = {
   onTogglePinnedAgent: (agentId: string) => void;
   onRefresh: () => void;
   onSelectAgent: (agentId: string) => void;
+  onCreateAgent: () => void;
   onSelectPanel: (panel: AgentsPanel) => void;
   onLoadFiles: (agentId: string) => void;
   onSelectFile: (name: string) => void;
@@ -127,6 +132,7 @@ type AgentsProps = {
   onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
   onChannelsRefresh: () => void;
   onOpenMemoryImport?: () => void;
+  onOpenMemorySettings?: () => void;
   onCronRefresh: () => void;
   onCronRunNow: (jobId: string) => void;
   onSkillsFilterChange: (next: string) => void;
@@ -144,6 +150,12 @@ export function renderAgents(props: AgentsProps) {
   const selectedAgent = selectedId
     ? (agents.find((agent) => agent.id === selectedId) ?? null)
     : null;
+  const agentOptions = agents.map((agent) => ({
+    value: agent.id,
+    label: normalizeAgentLabel(agent),
+    agent,
+    badge: agentBadgeText(agent.id, defaultId) ?? undefined,
+  }));
   const selectedSkillCount =
     selectedId && props.agentSkills.agentId === selectedId
       ? (props.agentSkills.report?.skills?.length ?? null)
@@ -168,13 +180,14 @@ export function renderAgents(props: AgentsProps) {
         <div class="agents-toolbar-row">
           <div class="agents-control-select">
             <openclaw-agent-select
-              .agents=${agents}
-              .selectedId=${selectedId}
-              .defaultId=${defaultId}
+              .options=${agentOptions}
+              .value=${selectedId ?? ""}
+              .accessibleLabel=${t("usage.filters.agent")}
               .identityById=${props.agentIdentityById}
               .authToken=${props.authToken}
               .disabled=${props.loading}
               .onSelect=${props.onSelectAgent}
+              .onCreateAgent=${props.onCreateAgent}
             ></openclaw-agent-select>
           </div>
           <div class="agents-toolbar-actions">
@@ -362,6 +375,11 @@ export function renderAgents(props: AgentsProps) {
               ${props.activePanel === "memory"
                 ? html`
                     <div class="settings-group agent-memory-import-row">
+                      ${renderSettingsNavRow({
+                        title: t("tabs.memory"),
+                        description: t("subtitles.memory"),
+                        onClick: () => props.onOpenMemorySettings?.(),
+                      })}
                       ${renderSettingsNavRow({
                         title: t("tabs.memoryImport"),
                         description: t("subtitles.memoryImport"),

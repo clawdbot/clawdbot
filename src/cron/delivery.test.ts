@@ -56,17 +56,21 @@ describe("resolveCronDeliveryPlan", () => {
     expect(plan.to).toBe("123");
   });
 
-  it("defaults missing isolated agentTurn delivery to announce", () => {
-    const plan = resolveCronDeliveryPlan(
-      makeCronJob({
-        delivery: undefined,
-        payload: { kind: "agentTurn", message: "hello" },
-      }),
-    );
-    expect(plan.mode).toBe("announce");
-    expect(plan.requested).toBe(true);
-    expect(plan.channel).toBe("last");
-  });
+  it.each(["isolated", "current", "session:project-alpha"] as const)(
+    "defaults missing %s agentTurn delivery to announce",
+    (sessionTarget) => {
+      const plan = resolveCronDeliveryPlan(
+        makeCronJob({
+          delivery: undefined,
+          payload: { kind: "agentTurn", message: "hello" },
+          sessionTarget,
+        }),
+      );
+      expect(plan.mode).toBe("announce");
+      expect(plan.requested).toBe(true);
+      expect(plan.channel).toBe("last");
+    },
+  );
 
   it("resolves mode=none with requested=false and no channel (#21808)", () => {
     const plan = resolveCronDeliveryPlan(

@@ -1519,34 +1519,7 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("exits for embedded fallback runs that resolve after SIGTERM aborts them", async () => {
-    await withTempStore(async () => {
-      const signals = createSignalProcess();
-      callGateway.mockRejectedValueOnce(createGatewayClosedError());
-      let resolveFallback: ((value: Awaited<ReturnType<typeof AgentCommand>>) => void) | undefined;
-      agentCommand.mockImplementationOnce(async (_opts: { abortSignal?: AbortSignal }) => {
-        return await new Promise((resolve) => {
-          resolveFallback = resolve;
-        });
-      });
-
-      const run = agentCliCommand({ message: "hi", to: "+1555" }, runtime, {
-        process: signals.processLike,
-      });
-      await waitForAgentCommandCall();
-      signals.emit("SIGTERM");
-      resolveFallback?.({
-        payloads: [],
-        meta: { aborted: true },
-      } as unknown as Awaited<ReturnType<typeof AgentCommand>>);
-
-      await expect(run).resolves.toBeUndefined();
-      expect(callGateway).toHaveBeenCalledTimes(1);
-      expect(runtime.exit).toHaveBeenCalledWith(143);
-    });
-  });
-
-  it("does not route abort errors through embedded gateway fallback classification", async () => {
+  it("does not classify abort errors as gateway transport failures", async () => {
     await withTempStore(async () => {
       const err = new Error("gateway request aborted for agent");
       err.name = "AbortError";
@@ -1714,59 +1687,37 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("falls back to embedded agent when gateway fails", async () => {
+  it("rejects gateway timeout errors unchanged with a local retry hint", async () => {
     await withTempStore(async () => {
-      callGateway.mockRejectedValue(createGatewayClosedError());
-      mockLocalAgentReply();
+      const error = createGatewayTimeoutError();
+      callGateway.mockRejectedValue(error);
 
-      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+      await expect(agentCliCommand({ message: "hi", to: "+1555" }, runtime)).rejects.toBe(error);
 
       expect(callGateway).toHaveBeenCalledTimes(1);
-      expect(agentCommand).toHaveBeenCalledTimes(1);
-      const fallbackOpts = requireRecord(
-        requireFirstCallArg(agentCommand, "embedded agent"),
-        "embedded agent options",
-      );
-      const resultMetaOverrides = requireRecord(
-        fallbackOpts.resultMetaOverrides,
-        "fallback metadata",
-      );
-      expect(resultMetaOverrides.transport).toBe("embedded");
-      expect(resultMetaOverrides.fallbackFrom).toBe("gateway");
-      expect(resultMetaOverrides.fallbackReason).toBe("gateway_closed");
+      expect(agentCommand).not.toHaveBeenCalled();
       expect(
-        mockMessages(runtime.error).some((message) =>
-          message.includes(
-            "Gateway agent connection closed; running embedded agent with fresh session",
-          ),
+        mockMessages(runtime.error).some(
+          (message) =>
+            message.includes("Gateway agent call timed out") && message.includes("--local"),
         ),
       ).toBe(true);
-      expect(runtime.log).toHaveBeenCalledWith("local");
     });
   });
 
-  it("retries transient normal gateway closes before embedded fallback", async () => {
+  it("retries transient normal gateway closes before failing", async () => {
     vi.useFakeTimers();
     try {
       await withTempStore(async () => {
-        callGateway
-          .mockRejectedValueOnce(createGatewayNormalCloseError())
-          .mockRejectedValueOnce(createGatewayNormalCloseError())
-          .mockResolvedValue({
-            runId: "idem-1",
-            status: "ok",
-            result: {
-              payloads: [{ text: "remote" }],
-              meta: { stub: true },
-            },
-          });
+        const error = createGatewayNormalCloseError();
+        callGateway.mockRejectedValue(error);
 
         const command = agentCliCommand({ message: "hi", to: "+1555" }, runtime);
-        await vi.advanceTimersByTimeAsync(1_000);
-        await vi.advanceTimersByTimeAsync(2_000);
-        await command;
+        const rejection = expect(command).rejects.toBe(error);
+        await vi.advanceTimersByTimeAsync(33_000);
+        await rejection;
 
-        expect(callGateway).toHaveBeenCalledTimes(3);
+        expect(callGateway).toHaveBeenCalledTimes(6);
         const idempotencyKeys = callGateway.mock.calls.map(
           ([call]) => (call as { params?: { idempotencyKey?: unknown } }).params?.idempotencyKey,
         );
@@ -1776,283 +1727,53 @@ describe("agentCliCommand", () => {
           mockMessages(runtime.error).filter((message) =>
             message.includes("Gateway agent connection closed during handshake"),
           ),
-        ).toHaveLength(2);
-        expect(runtime.log).toHaveBeenCalledWith("remote");
+        ).toHaveLength(5);
+        expect(
+          mockMessages(runtime.error).some(
+            (message) =>
+              message.includes("Gateway agent call connection closed") &&
+              message.includes("--local"),
+          ),
+        ).toBe(true);
       });
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("uses a fresh embedded session when an accepted gateway turn closes abnormally", async () => {
+  it("rejects transport-closed errors unchanged with a local retry hint", async () => {
     await withTempStore(async () => {
-      callGateway.mockImplementationOnce(async (requestValue: unknown) => {
-        const request = requireRecord(requestValue, "gateway request");
-        const onAccepted = request.onAccepted as ((payload: unknown) => void) | undefined;
-        onAccepted?.({
-          status: "accepted",
-          runId: "accepted-run",
-          sessionKey: "agent:main:incident-42",
-        });
-        throw createGatewayClosedError();
-      });
-      mockLocalAgentReply();
+      const error = createGatewayClosedError();
+      callGateway.mockRejectedValue(error);
 
-      await agentCliCommand({ message: "hi", sessionKey: "agent:main:incident-42" }, runtime);
-
-      expect(callGateway).toHaveBeenCalledTimes(1);
-      expect(agentCommand).toHaveBeenCalledTimes(1);
-      const fallbackOpts = requireRecord(
-        requireFirstCallArg(agentCommand, "embedded agent"),
-        "embedded agent options",
-      );
-      const fallbackSessionId = String(fallbackOpts.sessionId);
-      const fallbackSessionKey = String(fallbackOpts.sessionKey);
-      expect(fallbackSessionId).toMatch(/^gateway-fallback-/);
-      expect(fallbackSessionKey).toBe(`agent:main:explicit:${fallbackSessionId}`);
-      expect(fallbackSessionKey).not.toBe("agent:main:incident-42");
-      expect(fallbackOpts.runId).toBe(fallbackSessionId);
-      expect(fallbackOpts.resultMetaOverrides).toMatchObject({
-        transport: "embedded",
-        fallbackFrom: "gateway",
-        fallbackReason: "gateway_closed",
-        fallbackSessionId,
-        fallbackSessionKey,
-      });
-    });
-  });
-
-  it("does not pass a harness-owned session key into closed gateway fallback", async () => {
-    await withTempStore(async () => {
-      const sessionKey = "agent:main:harness:codex:supervision:missing-fallback";
-      callGateway.mockRejectedValue(createGatewayClosedError());
-      mockLocalAgentReply();
-
-      await agentCliCommand({ message: "hi", sessionKey }, runtime);
-
-      expect(callGateway).toHaveBeenCalledOnce();
-      expect(agentCommand).toHaveBeenCalledOnce();
-      const fallbackOpts = requireRecord(
-        requireFirstCallArg(agentCommand, "embedded agent"),
-        "options",
-      );
-      const fallbackSessionId = String(fallbackOpts.sessionId);
-      expect(fallbackOpts.sessionKey).toBe(`agent:main:explicit:${fallbackSessionId}`);
-      expect(fallbackOpts.sessionKey).not.toBe(sessionKey);
-    });
-  });
-
-  it("does not fall back to embedded agent for gateway request errors", async () => {
-    await withTempStore(async () => {
-      callGateway.mockRejectedValue(
-        Object.assign(new Error("missing scope: operator.admin"), {
-          name: "GatewayClientRequestError",
-          gatewayCode: "INVALID_REQUEST",
-        }),
-      );
-
-      await expect(agentCliCommand({ message: "hi", to: "+1555" }, runtime)).rejects.toThrow(
-        "missing scope: operator.admin",
-      );
+      await expect(agentCliCommand({ message: "hi", to: "+1555" }, runtime)).rejects.toBe(error);
 
       expect(callGateway).toHaveBeenCalledTimes(1);
       expect(agentCommand).not.toHaveBeenCalled();
       expect(
-        mockMessages(runtime.error).some((message) => message.includes("EMBEDDED FALLBACK")),
-      ).toBe(false);
+        mockMessages(runtime.error).some(
+          (message) =>
+            message.includes("Gateway agent call connection closed") && message.includes("--local"),
+        ),
+      ).toBe(true);
     });
   });
 
-  it("uses a fresh embedded session when gateway agent times out", async () => {
+  it("rejects non-transport errors without a local retry hint", async () => {
     await withTempStore(async () => {
-      callGateway.mockRejectedValue(createGatewayTimeoutError());
-      mockLocalAgentReply();
+      const error = Object.assign(new Error("missing scope: operator.admin"), {
+        name: "GatewayClientRequestError",
+        gatewayCode: "INVALID_REQUEST",
+      });
+      callGateway.mockRejectedValue(error);
 
-      await agentCliCommand(
-        {
-          message: "hi",
-          sessionId: "locked-session",
-          runId: "locked-run",
-        },
-        runtime,
-      );
+      await expect(agentCliCommand({ message: "hi", to: "+1555" }, runtime)).rejects.toBe(error);
 
       expect(callGateway).toHaveBeenCalledTimes(1);
-      expect(agentCommand).toHaveBeenCalledTimes(1);
-      const fallbackOpts = requireRecord(
-        requireFirstCallArg(agentCommand, "embedded agent"),
-        "embedded agent options",
+      expect(agentCommand).not.toHaveBeenCalled();
+      expect(mockMessages(runtime.error).some((message) => message.includes("--local"))).toBe(
+        false,
       );
-      const fallbackSessionId = String(fallbackOpts.sessionId);
-      const fallbackSessionKey = String(fallbackOpts.sessionKey);
-      expect(fallbackSessionId).toMatch(/^gateway-fallback-/);
-      expect(fallbackSessionId).not.toBe("locked-session");
-      expect(fallbackSessionKey).toBe(`agent:main:explicit:${fallbackSessionId}`);
-      expect(fallbackOpts.runId).toBe(fallbackSessionId);
-      const resultMetaOverrides = requireRecord(
-        fallbackOpts.resultMetaOverrides,
-        "fallback metadata",
-      );
-      expect(resultMetaOverrides.transport).toBe("embedded");
-      expect(resultMetaOverrides.fallbackFrom).toBe("gateway");
-      expect(resultMetaOverrides.fallbackReason).toBe("gateway_timeout");
-      expect(resultMetaOverrides.fallbackSessionId).toBe(fallbackSessionId);
-      expect(resultMetaOverrides.fallbackSessionKey).toBe(fallbackSessionKey);
-      expect(
-        mockMessages(runtime.error).some((message) =>
-          message.includes("Gateway agent timed out; running embedded agent with fresh session"),
-        ),
-      ).toBe(true);
-      expect(runtime.log).toHaveBeenCalledWith("local");
-    });
-  });
-
-  it("uses the explicit session key agent for timeout fallback sessions", async () => {
-    await withTempStore(async () => {
-      callGateway.mockRejectedValue(createGatewayTimeoutError());
-      mockLocalAgentReply();
-
-      await agentCliCommand({ message: "hi", sessionKey: "agent:ops:incident-42" }, runtime);
-
-      expect(agentCommand).toHaveBeenCalledTimes(1);
-      const fallbackOpts = requireFirstCallArg(agentCommand, "embedded agent") as {
-        sessionId?: string;
-        sessionKey?: string;
-      };
-      expect(fallbackOpts.sessionId).toMatch(/^gateway-fallback-/);
-      expect(fallbackOpts.sessionKey).toBe(`agent:ops:explicit:${fallbackOpts.sessionId}`);
-    });
-  });
-
-  it("uses the default-scoped legacy session key agent for timeout fallback sessions", async () => {
-    await withTempStore(
-      async () => {
-        callGateway.mockRejectedValue(createGatewayTimeoutError());
-        mockLocalAgentReply();
-
-        await agentCliCommand({ message: "hi", sessionKey: "incident-42" }, runtime);
-
-        expect(agentCommand).toHaveBeenCalledTimes(1);
-        const fallbackOpts = requireFirstCallArg(agentCommand, "embedded agent") as {
-          sessionId?: string;
-          sessionKey?: string;
-        };
-        expect(fallbackOpts.sessionId).toMatch(/^gateway-fallback-/);
-        expect(fallbackOpts.sessionKey).toBe(`agent:ops:explicit:${fallbackOpts.sessionId}`);
-        expect(loadConfig.mock.calls).toEqual([[], []]);
-      },
-      { agents: { list: [{ id: "ops", default: true }, { id: "main" }] } },
-    );
-  });
-
-  it("uses the default agent for timeout fallback with unscoped global session keys", async () => {
-    await withTempStore(
-      async () => {
-        callGateway.mockRejectedValue(createGatewayTimeoutError());
-        mockLocalAgentReply();
-
-        await agentCliCommand({ message: "hi", sessionKey: "global" }, runtime);
-
-        expect(agentCommand).toHaveBeenCalledTimes(1);
-        const fallbackOpts = requireFirstCallArg(agentCommand, "embedded agent") as {
-          sessionId?: string;
-          sessionKey?: string;
-        };
-        expect(fallbackOpts.sessionId).toMatch(/^gateway-fallback-/);
-        expect(fallbackOpts.sessionKey).toBe(`agent:ops:explicit:${fallbackOpts.sessionId}`);
-      },
-      { agents: { list: [{ id: "ops", default: true }, { id: "main" }] } },
-    );
-  });
-
-  it("keeps timeout fallback from replacing the routed conversation session key", async () => {
-    await withTempStore(async () => {
-      callGateway.mockRejectedValue(createGatewayTimeoutError());
-      mockLocalAgentReply();
-
-      await agentCliCommand(
-        {
-          message: "hi",
-          to: "+1555",
-        },
-        runtime,
-      );
-
-      const fallbackOpts = requireFirstCallArg(agentCommand, "embedded agent") as {
-        sessionId?: string;
-        sessionKey?: string;
-        to?: string;
-      };
-      expect(fallbackOpts.to).toBe("+1555");
-      expect(fallbackOpts.sessionId).toMatch(/^gateway-fallback-/);
-      expect(fallbackOpts.sessionKey).toBe(`agent:main:explicit:${fallbackOpts.sessionId}`);
-      expect(fallbackOpts.sessionKey).not.toBe("agent:main:+1555");
-    });
-  });
-
-  it("passes fallback metadata into JSON embedded fallback output", async () => {
-    await withTempStore(async () => {
-      callGateway.mockRejectedValue(createGatewayClosedError());
-      agentCommand.mockImplementationOnce(async (opts, rt) => {
-        expect(loggingState.forceConsoleToStderr).toBe(true);
-        const resultMetaOverrides = (
-          opts as {
-            resultMetaOverrides?: { transport?: string; fallbackFrom?: string };
-          }
-        ).resultMetaOverrides;
-        const meta = {
-          durationMs: 1,
-          agentMeta: { sessionId: "s", provider: "p", model: "m" },
-          ...resultMetaOverrides,
-        };
-        rt?.log?.(
-          JSON.stringify(
-            {
-              payloads: [{ text: "local" }],
-              meta,
-            },
-            null,
-            2,
-          ),
-        );
-        return {
-          payloads: [{ text: "local" }],
-          meta,
-        } as unknown as Awaited<ReturnType<typeof AgentCommand>>;
-      });
-
-      const result = await agentCliCommand({ message: "hi", to: "+1555", json: true }, jsonRuntime);
-
-      expect(agentCommand).toHaveBeenCalledTimes(1);
-      const fallbackOpts = requireRecord(
-        requireFirstCallArg(agentCommand, "embedded agent"),
-        "embedded agent options",
-      );
-      const resultMetaOverrides = requireRecord(
-        fallbackOpts.resultMetaOverrides,
-        "fallback metadata",
-      );
-      expect(resultMetaOverrides.transport).toBe("embedded");
-      expect(resultMetaOverrides.fallbackFrom).toBe("gateway");
-      expect(
-        mockMessages(jsonRuntime.error).some((message) =>
-          message.includes("EMBEDDED FALLBACK: Gateway agent connection closed"),
-        ),
-      ).toBe(true);
-      expect(loggingState.forceConsoleToStderr).toBe(true);
-      expect(jsonRuntime.log).toHaveBeenCalledTimes(1);
-      const jsonPayload = requireFirstCallArg(jsonRuntime.log, "json runtime log");
-      const payload = requireRecord(JSON.parse(String(jsonPayload)), "json log payload");
-      expect(payload.payloads).toEqual([{ text: "local" }]);
-      const payloadMeta = requireRecord(payload.meta, "json log metadata");
-      expect(payloadMeta.durationMs).toBe(1);
-      expect(payloadMeta.transport).toBe("embedded");
-      expect(payloadMeta.fallbackFrom).toBe("gateway");
-      const resultRecord = requireRecord(result, "command result");
-      const resultMeta = requireRecord(resultRecord.meta, "command result metadata");
-      expect(resultMeta.durationMs).toBe(1);
-      expect(resultMeta.transport).toBe("embedded");
-      expect(resultMeta.fallbackFrom).toBe("gateway");
     });
   });
 
@@ -2078,7 +1799,6 @@ describe("agentCliCommand", () => {
       expect(localOpts.cleanupBundleMcpOnRunEnd).toBe(true);
       expect(localOpts.cleanupCliLiveSessionOnRunEnd).toBe(true);
       expect(localOpts.oneShotCliRun).toBe(true);
-      expect(localOpts).not.toHaveProperty("resultMetaOverrides");
       expect(runtime.log).toHaveBeenCalledWith("local");
     });
   });
@@ -2170,7 +1890,7 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("rejects malformed agent-prefixed session keys before gateway or local fallback", async () => {
+  it("rejects malformed agent-prefixed session keys before gateway or local dispatch", async () => {
     await withTempStore(async () => {
       await expect(
         agentCliCommand({ message: "hi", sessionKey: "agent:main" }, runtime),
@@ -2197,24 +1917,6 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("forces bundle MCP cleanup on embedded fallback", async () => {
-    await withTempStore(async () => {
-      callGateway.mockRejectedValue(createGatewayClosedError());
-      mockLocalAgentReply();
-
-      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
-
-      expect(agentCommand).toHaveBeenCalledTimes(1);
-      const fallbackOpts = requireRecord(
-        requireFirstCallArg(agentCommand, "embedded agent"),
-        "embedded agent options",
-      );
-      expect(fallbackOpts.cleanupBundleMcpOnRunEnd).toBe(true);
-      expect(fallbackOpts.cleanupCliLiveSessionOnRunEnd).toBe(true);
-      expect(fallbackOpts.oneShotCliRun).toBe(false);
-    });
-  });
-
   for (const message of [
     "/compact",
     "/compact Keep recent decisions.",
@@ -2234,13 +1936,12 @@ describe("agentCliCommand", () => {
 
       // The slash-command handler rejects CLI senders, so a /compact turn would
       // otherwise fall through to a normal turn and exit 0 without compacting.
-      // It must fail loudly before touching the gateway or a fresh embedded session.
+      // It must fail loudly before touching the gateway or local agent.
       expect(callGateway).not.toHaveBeenCalled();
       expect(agentCommand).not.toHaveBeenCalled();
       expect(runtime.exit).toHaveBeenCalledWith(1);
       const errorMessages = mockMessages(runtime.error);
       expect(errorMessages.some((m) => m.includes("openclaw sessions compact"))).toBe(true);
-      expect(errorMessages.some((m) => m.includes("EMBEDDED FALLBACK"))).toBe(false);
     });
   }
 
@@ -2261,7 +1962,6 @@ describe("agentCliCommand", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
     const errorMessages = mockMessages(runtime.error);
     expect(errorMessages.some((m) => m.includes("openclaw sessions compact"))).toBe(true);
-    expect(errorMessages.some((m) => m.includes("EMBEDDED FALLBACK"))).toBe(false);
   });
 
   it("does not mistake a /compacting-prefixed message for the /compact control command", async () => {

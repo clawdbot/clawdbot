@@ -31,9 +31,12 @@ export function isMonitoredAuthProvider(p: ModelAuthStatusProvider): boolean {
 
 export async function loadModelAuthStatus(
   client: GatewayBrowserClient,
-  opts?: { refresh?: boolean },
+  opts?: { refresh?: boolean; agentId?: string },
 ): Promise<ModelAuthStatusResult> {
-  const params = opts?.refresh ? { refresh: true } : {};
+  const params = {
+    ...(opts?.refresh ? { refresh: true } : {}),
+    ...(opts?.agentId ? { agentId: opts.agentId } : {}),
+  };
   return (
     (await client.request<ModelAuthStatusResult>("models.authStatus", params)) ?? EMPTY_AUTH_STATUS
   );

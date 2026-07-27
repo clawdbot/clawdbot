@@ -5,7 +5,8 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { describe, expect, it } from "vitest";
-import { createTelegramIngressDrain } from "./telegram-ingress-drain.js";
+import { createTelegramIngressMonitor } from "./telegram-ingress-drain.js";
+import { telegramSpooledUpdateLaneKey } from "./telegram-ingress-spool.js";
 import type { TelegramSpooledUpdatePayload } from "./telegram-ingress-spool.payload.js";
 
 async function withTempState<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
@@ -42,7 +43,7 @@ function updatePayload(updateId: number): TelegramSpooledUpdatePayload {
   };
 }
 
-describe("createTelegramIngressDrain", () => {
+describe("createTelegramIngressMonitor", () => {
   it("propagates failed-retryable dispatch results as claim release (not tombstone)", async () => {
     await withTempState(async (stateDir) => {
       const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
@@ -50,28 +51,31 @@ describe("createTelegramIngressDrain", () => {
         accountId: "default",
         stateDir,
       });
-      await queue.enqueue("1", updatePayload(1), { laneKey: "dm:111" });
+      const eventId = "1".padStart(16, "0");
+      const payload = updatePayload(1);
+      const laneKey = telegramSpooledUpdateLaneKey(payload.update);
+      await queue.enqueue(eventId, payload, { laneKey });
 
       const retryError = new Error("provider blip");
-      const drain = createTelegramIngressDrain({
+      const monitor = createTelegramIngressMonitor({
         queue,
         cfg,
         accountId: "default",
         dispatch: async () => ({ kind: "failed-retryable", error: retryError }),
       });
 
-      await drain.drainOnce();
-      await drain.waitForIdle();
+      monitor.start();
+      await monitor.waitForIdle();
 
       // Failed-retryable must release, not complete — re-enqueue is pending, not tombstone.
-      const status = await queue.enqueue("1", updatePayload(1), { laneKey: "dm:111" });
+      const status = await queue.enqueue(eventId, payload, { laneKey });
       expect(status.kind).not.toBe("completed");
       expect(status.kind === "accepted" || status.kind === "pending").toBe(true);
 
       const pending = await queue.listPending({ limit: "all" });
-      expect(pending.some((row) => row.id === "1")).toBe(true);
+      expect(pending.some((row) => row.id === eventId)).toBe(true);
 
-      drain.dispose();
+      await monitor.stop();
     });
   });
 
@@ -82,9 +86,12 @@ describe("createTelegramIngressDrain", () => {
         accountId: "default",
         stateDir,
       });
-      await queue.enqueue("2", updatePayload(2), { laneKey: "dm:111" });
+      const eventId = "2".padStart(16, "0");
+      const payload = updatePayload(2);
+      const laneKey = telegramSpooledUpdateLaneKey(payload.update);
+      await queue.enqueue(eventId, payload, { laneKey });
 
-      const drain = createTelegramIngressDrain({
+      const monitor = createTelegramIngressMonitor({
         queue,
         cfg,
         accountId: "default",
@@ -94,12 +101,12 @@ describe("createTelegramIngressDrain", () => {
         },
       });
 
-      await drain.drainOnce();
-      await drain.waitForIdle();
+      monitor.start();
+      await monitor.waitForIdle();
 
-      const status = await queue.enqueue("2", updatePayload(2), { laneKey: "dm:111" });
+      const status = await queue.enqueue(eventId, payload, { laneKey });
       expect(status.kind).toBe("completed");
-      drain.dispose();
+      await monitor.stop();
     });
   });
 });

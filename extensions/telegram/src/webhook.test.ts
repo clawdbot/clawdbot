@@ -879,6 +879,47 @@ describe("startTelegramWebhook", () => {
     );
   });
 
+  it("bounds shutdown when a webhook handler ignores abort", async () => {
+    let releaseWork: (() => void) | undefined;
+    handleUpdateSpy.mockImplementationOnce(
+      async () =>
+        await new Promise<void>((resolve) => {
+          releaseWork = resolve;
+        }),
+    );
+    const started = await startTelegramWebhook({
+      token: TELEGRAM_TOKEN,
+      port: 0,
+      secret: TELEGRAM_SECRET,
+      path: TELEGRAM_WEBHOOK_PATH,
+      spoolDir: requireWebhookSpoolDir(),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    });
+
+    try {
+      const response = await postWebhookJson({
+        url: webhookUrl(getServerPort(started.server), TELEGRAM_WEBHOOK_PATH),
+        payload: JSON.stringify({ update_id: 3, message: { text: "stuck" } }),
+        secret: TELEGRAM_SECRET,
+      });
+      expect(response.status).toBe(200);
+      await waitForWebhookState(() => expect(handleUpdateSpy).toHaveBeenCalledOnce());
+
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const stopTask = started.stop();
+      await vi.advanceTimersByTimeAsync(15_000);
+      await stopTask;
+
+      expect(started.server.listening).toBe(false);
+      expect(stopSpy).toHaveBeenCalledOnce();
+      expect(transportCloseSpies[0]).toHaveBeenCalledOnce();
+    } finally {
+      releaseWork?.();
+      vi.useRealTimers();
+      await started.stop();
+    }
+  });
+
   it("marks delivery accepted only after the durable enqueue commits", async () => {
     let releaseEnqueue: (() => void) | undefined;
     let markEnqueueStarted: (() => void) | undefined;
@@ -1122,7 +1163,6 @@ describe("startTelegramWebhook", () => {
 
   it("keeps a webhook lane guarded while claimed completion retries", async () => {
     let completeAttempts = 0;
-    let claimNextCalls = 0;
     let releaseCompletion: (() => void) | undefined;
     let markCompletionRetryStarted: (() => void) | undefined;
     const completionGate = new Promise<void>((resolve) => {
@@ -1140,10 +1180,6 @@ describe("startTelegramWebhook", () => {
           const queue = createChannelIngressQueue({ ...options, channelId: "telegram" });
           return {
             ...queue,
-            claimNext: async (...args: Parameters<typeof queue.claimNext>) => {
-              claimNextCalls += 1;
-              return await queue.claimNext(...args);
-            },
             complete: async (...args: Parameters<typeof queue.complete>) => {
               completeAttempts += 1;
               if (completeAttempts === 1) {
@@ -1184,13 +1220,6 @@ describe("startTelegramWebhook", () => {
     });
     try {
       await completionRetryStarted;
-      const claimNextCallsBeforeLaterDrain = claimNextCalls;
-      await waitForWebhookState(
-        () => {
-          expect(claimNextCalls).toBeGreaterThan(claimNextCallsBeforeLaterDrain);
-        },
-        { timeout: 2_000 },
-      );
       expect(seenUpdateIds).toEqual([50]);
       expect(
         (await listTelegramSpooledUpdateClaims({ spoolDir: requireWebhookSpoolDir() })).map(

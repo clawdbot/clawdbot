@@ -389,7 +389,7 @@ export function normalizeMetadata(value: unknown): WorkboardMetadata | undefined
         reason:
           typeof value.stale.reason === "string"
             ? value.stale.reason
-            : "Session has not reported recent activity.",
+            : "Thread has not reported recent activity.",
       }
     : undefined;
   const automation = normalizeAutomation(value.automation);

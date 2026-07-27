@@ -110,6 +110,7 @@ export type WorkboardCompleteInput = {
   token?: unknown;
   summary?: unknown;
   proof?: unknown;
+  proofId?: unknown;
   artifacts?: unknown;
   createdCardIds?: unknown;
 };

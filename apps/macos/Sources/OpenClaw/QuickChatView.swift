@@ -10,14 +10,19 @@ struct QuickChatView: View {
     let onDismiss: () -> Void
     let onSendAccepted: (Bool) -> Void
     let onShowAgentPicker: () -> Void
+    let onShowModelMenu: () -> Void
     let onShowRecentSessions: () -> Void
+    let onToggleDictation: () -> Void
+    let onStopDictation: () -> Void
     let onCaptureTextContext: () -> Void
     let onShowCaptureMenu: () -> Void
     let onGrantPermissions: () -> Void
+    let onPasteReply: () -> Void
     let onContentHeightChange: (CGFloat) -> Void
     let onTextViewReady: (NSTextView) -> Void
 
     @State private var editorHeight: CGFloat = 30
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
@@ -81,6 +86,7 @@ struct QuickChatView: View {
     private var inputRow: some View {
         HStack(spacing: 10) {
             self.agentChip
+            self.modelControl
 
             ZStack(alignment: .leading) {
                 if self.model.text.isEmpty {
@@ -95,8 +101,16 @@ struct QuickChatView: View {
                 }
                 QuickChatTextView(
                     text: self.$model.text,
+                    selectionRange: self.model.dictationSelectionRange,
                     onSubmit: self.submit,
-                    onEscape: self.onDismiss,
+                    onEscape: {
+                        self.onStopDictation()
+                        self.onDismiss()
+                    },
+                    onUserEdit: {
+                        guard self.model.isDictating || self.model.isStartingDictation else { return }
+                        self.onStopDictation()
+                    },
                     onHeightChange: { self.editorHeight = $0 },
                     onTextViewReady: self.onTextViewReady)
                     .frame(height: self.editorHeight)
@@ -114,6 +128,27 @@ struct QuickChatView: View {
                 .disabled(!self.model.canSelectRecentSession)
                 .help("Continue a recent conversation")
                 .accessibilityLabel("Continue a recent conversation")
+
+                Button(action: self.onToggleDictation) {
+                    Group {
+                        if self.model.isStartingDictation {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: self.model.isDictating ? "mic.fill" : "mic")
+                                .font(.system(size: 16.5, weight: .medium))
+                                .foregroundStyle(self.model.isDictating ? Color.red : Color.secondary)
+                                .symbolEffect(
+                                    .pulse,
+                                    isActive: self.model.isDictating && !self.reduceMotion)
+                        }
+                    }
+                    .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+                .disabled(!self.model.canToggleDictation)
+                .help(self.dictationButtonLabel)
+                .accessibilityLabel(Text(verbatim: self.dictationButtonLabel))
 
                 Button(action: self.onCaptureTextContext) {
                     Group {
@@ -185,6 +220,32 @@ struct QuickChatView: View {
             self.agentAvatar
                 .help(self.model.agentDisplay.name)
         }
+    }
+
+    private var modelControl: some View {
+        Button(action: self.onShowModelMenu) {
+            HStack(spacing: 4) {
+                if self.model.isLoadingModelControls || self.model.isUpdatingModel {
+                    ProgressView()
+                        .controlSize(.mini)
+                }
+                Text(verbatim: self.model.modelControlLabel)
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(Color.primary.opacity(0.06), in: Capsule())
+            .frame(maxWidth: 125)
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .disabled(!self.model.canUseModelControls)
+        .help("Choose model and reasoning")
+        .accessibilityLabel("Model and reasoning")
     }
 
     private var agentAvatar: some View {
@@ -285,6 +346,30 @@ struct QuickChatView: View {
                 isAttachmentInputEnabled: false)
                 .id(self.replyBinding.route)
                 .frame(height: 300)
+            if QuickChatPasteLogic.finalAssistantText(
+                messages: viewModel.messages,
+                afterUserIdempotencyKey: self.model.lastAcceptedIdempotencyKey,
+                streamingAssistantText: viewModel.streamingAssistantText,
+                pendingRunCount: viewModel.pendingRunCount) != nil
+            {
+                HStack {
+                    Spacer()
+                    Button {
+                        self.onPasteReply()
+                    } label: {
+                        if self.replyBinding.isPastingReply {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Label("Paste to \(self.model.frontmostAppName)", systemImage: "doc.on.clipboard")
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(self.replyBinding.isPastingReply)
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 9)
+            }
         }
     }
 
@@ -295,6 +380,15 @@ struct QuickChatView: View {
         if let message = self.model.textContextCaptureMessage {
             return (message, false)
         }
+        if let message = self.model.dictationStatusMessage {
+            return (message, true)
+        }
+        if let message = self.model.modelControlStatusMessage {
+            return (message, true)
+        }
+        if let message = self.replyBinding.pasteStatusMessage {
+            return (message, true)
+        }
         if let message = self.model.connectionStatusMessage {
             return (message, false)
         }
@@ -302,6 +396,7 @@ struct QuickChatView: View {
     }
 
     private func submit(openChat: Bool) {
+        self.onStopDictation()
         guard self.model.canSend, let presentationID = self.model.activePresentationID else { return }
         Task {
             guard await self.model.send() else { return }
@@ -315,5 +410,11 @@ struct QuickChatView: View {
             guard self.model.activePresentationID == presentationID else { return }
             self.onSendAccepted(false)
         }
+    }
+
+    private var dictationButtonLabel: String {
+        self.model.isDictating || self.model.isStartingDictation
+            ? String(localized: "Stop dictation")
+            : String(localized: "Start dictation")
     }
 }

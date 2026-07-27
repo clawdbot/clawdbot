@@ -90,7 +90,7 @@ The default model onboarding writes is `litellm/claude-opus-4-6`.
 
 LiteLLM can back the `image_generate` tool through OpenAI-compatible `/images/generations` and
 `/images/edits` routes. Default image model is `gpt-image-2`; configure a different one under
-`agents.defaults.imageGenerationModel`:
+`agents.defaults.mediaModels.image`:
 
 ```json5
 {

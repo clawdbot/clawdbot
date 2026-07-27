@@ -44,6 +44,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -56,6 +57,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -71,15 +74,16 @@ import androidx.wear.compose.material3.HorizontalPagerScaffold
 import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.Text
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-private const val PAGE_COUNT = 5
-private const val CHAT_PAGE = 0
-private const val VOICE_PAGE = 1
-private const val AGENTS_PAGE = 2
-private const val SESSIONS_PAGE = 3
-private const val CONTROLS_PAGE = 4
+internal enum class WearHomePage {
+  Chat,
+  Voice,
+  Controls,
+}
+
 private const val VOICE_MODE_COUNT = 2
 private const val VOICE_HOME_MODE = 0
 private const val VOICE_THREAD_MODE = 1
@@ -93,6 +97,7 @@ internal fun OpenClawWearScreens(
   speaking: Boolean,
   realtimeCapturing: Boolean,
   realtimePlaying: Boolean,
+  realtimeMouthLevel: Float,
   realtimePlaybackFailed: Boolean,
   realtimeThinkingOverride: Boolean,
   actionBusy: Boolean,
@@ -101,12 +106,17 @@ internal fun OpenClawWearScreens(
   themeMode: WearThemeMode,
   autoSpeak: Boolean,
   notificationsGranted: Boolean,
+  initialPage: WearHomePage = WearHomePage.Chat,
+  navigationRequest: WearNavigationRequest? = null,
+  voiceSwipeHintEnabled: Boolean = true,
+  onNavigationRequestHandled: (Int) -> Unit = {},
   onTalk: () -> Unit,
   onType: () -> Unit,
   onRealtimeTalk: () -> Unit,
   onAbort: () -> Unit,
   onSelectAgent: (String) -> Unit,
   onSelectSession: (String) -> Unit,
+  onSelectModel: (String) -> Unit,
   onRefresh: () -> Unit,
   onGatewayEnabledChange: (Boolean) -> Unit,
   onThemeModeChange: (WearThemeMode) -> Unit,
@@ -126,15 +136,25 @@ internal fun OpenClawWearScreens(
   }
 
   val colors = OpenClawWearTheme.colors
-  val pagerState = rememberPagerState(pageCount = { PAGE_COUNT })
+  val pagerState =
+    rememberPagerState(
+      initialPage = initialPage.ordinal,
+      pageCount = { WearHomePage.entries.size },
+    )
   val voicePagerState = rememberPagerState(pageCount = { VOICE_MODE_COUNT })
   val pagerScope = rememberCoroutineScope()
   val realtimeActive = snapshot.realtimeTalk.active || realtimeCapturing
-  var showVoiceSwipeHint by remember { mutableStateOf(true) }
+  var showVoiceSwipeHint by remember { mutableStateOf(voiceSwipeHintEnabled) }
   var realtimeStartedAtMillis by remember { mutableLongStateOf(0L) }
   var realtimeElapsedSeconds by remember { mutableLongStateOf(0L) }
+  LaunchedEffect(navigationRequest?.id) {
+    val request = navigationRequest ?: return@LaunchedEffect
+    val destination = wearLaunchPage(request.target, realtimeActive)
+    pagerState.scrollToPage(destination.ordinal)
+    onNavigationRequestHandled(request.id)
+  }
   LaunchedEffect(pagerState.currentPage, showVoiceSwipeHint) {
-    if (pagerState.currentPage == VOICE_PAGE && showVoiceSwipeHint) {
+    if (pagerState.currentPage == WearHomePage.Voice.ordinal && showVoiceSwipeHint) {
       delay(1_800L)
       showVoiceSwipeHint = false
     }
@@ -155,9 +175,9 @@ internal fun OpenClawWearScreens(
       delay(250L)
     }
   }
-  BackHandler(enabled = pagerState.currentPage == VOICE_PAGE) {
+  BackHandler(enabled = pagerState.currentPage == WearHomePage.Voice.ordinal) {
     pagerScope.launch {
-      pagerState.animateScrollToPage(CHAT_PAGE)
+      pagerState.animateScrollToPage(WearHomePage.Chat.ordinal)
     }
   }
   HorizontalPagerScaffold(
@@ -172,12 +192,12 @@ internal fun OpenClawWearScreens(
       modifier = Modifier.fillMaxSize(),
       rotaryScrollableBehavior = null,
       userScrollEnabled =
-        pagerState.currentPage != VOICE_PAGE ||
+        pagerState.currentPage != WearHomePage.Voice.ordinal ||
           voicePagerState.currentPage == VOICE_HOME_MODE ||
           voicePagerState.currentPage == VOICE_THREAD_MODE,
     ) { page ->
       when (page) {
-        CHAT_PAGE ->
+        WearHomePage.Chat.ordinal ->
           ChatPage(
             snapshot = snapshot,
             interaction = interaction,
@@ -188,24 +208,13 @@ internal fun OpenClawWearScreens(
             onTalk = onTalk,
             onType = onType,
             onAbort = onAbort,
+            onSelectAgent = onSelectAgent,
+            onSelectSession = onSelectSession,
+            onSelectModel = onSelectModel,
             onSpeakLatest = onSpeakLatest,
             onStopSpeaking = onStopSpeaking,
           )
-        AGENTS_PAGE ->
-          AgentsPage(
-            agents = snapshot.agents,
-            supported = snapshot.agentControlsSupported,
-            actionBusy = actionBusy,
-            errorText = snapshot.errorText,
-            onSelectAgent = onSelectAgent,
-          )
-        SESSIONS_PAGE ->
-          SessionsPage(
-            sessions = snapshot.sessions,
-            actionBusy = actionBusy,
-            onSelectSession = onSelectSession,
-          )
-        CONTROLS_PAGE ->
+        WearHomePage.Controls.ordinal ->
           ControlsPage(
             snapshot = snapshot,
             themeMode = themeMode,
@@ -223,11 +232,12 @@ internal fun OpenClawWearScreens(
         else ->
           VoicePage(
             voicePagerState = voicePagerState,
-            showSwipeHint = showVoiceSwipeHint && pagerState.currentPage == VOICE_PAGE,
+            showSwipeHint = showVoiceSwipeHint && pagerState.currentPage == WearHomePage.Voice.ordinal,
             realtimeTalk = snapshot.realtimeTalk,
             speaking = speaking,
             realtimeCapturing = realtimeCapturing,
             realtimePlaying = realtimePlaying,
+            realtimeMouthLevel = realtimeMouthLevel,
             realtimePlaybackFailed = realtimePlaybackFailed,
             realtimeThinkingOverride = realtimeThinkingOverride,
             realtimeElapsedSeconds = realtimeElapsedSeconds,
@@ -243,6 +253,11 @@ internal fun OpenClawWearScreens(
   }
 }
 
+internal fun wearLaunchPage(
+  target: WearLaunchTarget,
+  realtimeActive: Boolean,
+): WearHomePage = if (realtimeActive) WearHomePage.Voice else target.initialPage
+
 @Composable
 private fun ChatPage(
   snapshot: WearConversationSnapshot,
@@ -254,13 +269,22 @@ private fun ChatPage(
   onTalk: () -> Unit,
   onType: () -> Unit,
   onAbort: () -> Unit,
+  onSelectAgent: (String) -> Unit,
+  onSelectSession: (String) -> Unit,
+  onSelectModel: (String) -> Unit,
   onSpeakLatest: () -> Unit,
   onStopSpeaking: () -> Unit,
 ) {
   val colors = OpenClawWearTheme.colors
   WearPage(pageLabel = stringResource(R.string.chat)) {
     item {
-      ConversationIdentity(snapshot = snapshot)
+      ConversationIdentity(
+        snapshot = snapshot,
+        actionBusy = actionBusy,
+        onSelectAgent = onSelectAgent,
+        onSelectSession = onSelectSession,
+        onSelectModel = onSelectModel,
+      )
     }
     item {
       ConversationStatus(
@@ -334,13 +358,11 @@ private fun ChatPage(
         )
       }
     }
-    snapshot.errorText
-      ?.takeIf(String::isNotBlank)
-      ?.let { error ->
-        item {
-          InlineError(text = error)
-        }
+    snapshot.failure?.let { failure ->
+      item {
+        InlineError(text = failureDetail(failure))
       }
+    }
   }
 }
 
@@ -352,6 +374,7 @@ private fun VoicePage(
   speaking: Boolean,
   realtimeCapturing: Boolean,
   realtimePlaying: Boolean,
+  realtimeMouthLevel: Float,
   realtimePlaybackFailed: Boolean,
   realtimeThinkingOverride: Boolean,
   realtimeElapsedSeconds: Long,
@@ -418,6 +441,7 @@ private fun VoicePage(
             speaking = speaking,
             realtimeCapturing = realtimeCapturing,
             realtimePlaying = realtimePlaying,
+            realtimeMouthLevel = realtimeMouthLevel,
             realtimePlaybackFailed = realtimePlaybackFailed,
             realtimeThinkingOverride = realtimeThinkingOverride,
             realtimeElapsedSeconds = realtimeElapsedSeconds,
@@ -431,6 +455,8 @@ private fun VoicePage(
         else ->
           ThreadVoiceMode(
             conversation = realtimeTalk.conversation,
+            thinking =
+              realtimeThinkingOverride || realtimeTalk.status == WearRealtimeTalkStatus.THINKING,
             realtimeActive = realtimeTalk.active || realtimeCapturing,
             actionBusy = actionBusy,
             inputEnabled = inputEnabled,
@@ -462,6 +488,7 @@ private fun VoiceHomeMode(
   speaking: Boolean,
   realtimeCapturing: Boolean,
   realtimePlaying: Boolean,
+  realtimeMouthLevel: Float,
   realtimePlaybackFailed: Boolean,
   realtimeThinkingOverride: Boolean,
   realtimeElapsedSeconds: Long,
@@ -530,19 +557,7 @@ private fun VoiceHomeMode(
       state == RealtimeVoiceButtonState.ERROR -> colors.danger
       else -> colors.voiceAccent
     }
-  val containerColor =
-    when {
-      dictatePreview || state == RealtimeVoiceButtonState.IDLE -> colors.surfaceRaised
-      state == RealtimeVoiceButtonState.ERROR -> colors.danger.copy(alpha = 0.28f)
-      else -> colors.voiceAccentSoft
-    }
-  val contentColor =
-    when {
-      dictatePreview -> colors.voiceAccent
-      state == RealtimeVoiceButtonState.IDLE -> colors.text
-      state == RealtimeVoiceButtonState.ERROR -> colors.danger
-      else -> colors.voiceAccent
-    }
+  val avatarState = if (dictatePreview) RealtimeVoiceButtonState.LISTENING else state
   Box(
     modifier =
       Modifier
@@ -583,14 +598,11 @@ private fun VoiceHomeMode(
               .offset(y = (-4).dp)
               .fillMaxWidth(),
         )
-        VoiceOrb(
-          accent = accent,
-          containerColor = containerColor,
-          pulse = dictatePreview || state != RealtimeVoiceButtonState.IDLE,
-          size = 92.dp,
+        Box(
           modifier =
             Modifier
               .align(Alignment.Center)
+              .size(92.dp)
               .combinedClickable(
                 enabled = !dictatePreview,
                 role = Role.Button,
@@ -598,22 +610,16 @@ private fun VoiceHomeMode(
                 onDoubleClick = onOpenThread,
                 onLongClick = startDictate,
               ),
+          contentAlignment = Alignment.Center,
         ) {
-          if (
-            dictatePreview ||
-            state == RealtimeVoiceButtonState.LISTENING ||
-            state == RealtimeVoiceButtonState.SPEAKING
-          ) {
-            LiveWaveform(
-              color = colors.voiceAccent,
-              active = true,
-            )
-          } else {
-            MicrophoneGlyph(
-              color = contentColor,
-              modifier = Modifier.size(38.dp),
-            )
-          }
+          WearTalkAvatar(
+            state = avatarState,
+            mouthLevel = if (realtimePlaying) realtimeMouthLevel else 0f,
+            syntheticSpeech = ttsOnly,
+            accent = accent,
+            danger = colors.danger,
+            modifier = Modifier.fillMaxSize(),
+          )
         }
         statusText?.let { status ->
           Text(
@@ -696,6 +702,7 @@ private fun VoiceGestureLabel(
 @Composable
 private fun ThreadVoiceMode(
   conversation: List<WearRealtimeTalkEntry>,
+  thinking: Boolean,
   realtimeActive: Boolean,
   actionBusy: Boolean,
   inputEnabled: Boolean,
@@ -704,6 +711,40 @@ private fun ThreadVoiceMode(
 ) {
   val colors = OpenClawWearTheme.colors
   val listState = rememberTransformingLazyColumnState()
+  val coroutineScope = rememberCoroutineScope()
+  val visibleConversation = conversation.takeLast(VISIBLE_REALTIME_ENTRY_COUNT)
+  val contentRevision = wearThreadContentRevision(visibleConversation, thinking)
+  val latestAnchorIndex = wearThreadLatestAnchorIndex(visibleConversation.size, thinking)
+  var followState by remember { mutableStateOf(WearThreadFollowState()) }
+
+  LaunchedEffect(listState) {
+    snapshotFlow {
+      WearThreadViewport(
+        atLatest = !listState.canScrollForward,
+        scrollingBackward = listState.isScrollInProgress && listState.lastScrolledBackward,
+      )
+    }.collect { viewport ->
+      followState =
+        nextWearThreadFollowForViewport(
+          state = followState,
+          atLatest = viewport.atLatest,
+          scrollingBackward = viewport.scrollingBackward,
+        )
+    }
+  }
+  LaunchedEffect(realtimeActive, contentRevision) {
+    val update =
+      nextWearThreadFollowForContent(
+        state = followState,
+        contentRevision = contentRevision,
+        realtimeActive = realtimeActive,
+      )
+    followState = update.state
+    if (update.scrollToLatest && latestAnchorIndex >= 0) {
+      listState.requestScrollToItem(latestAnchorIndex)
+    }
+  }
+
   Box(modifier = Modifier.fillMaxSize()) {
     TransformingLazyColumn(
       modifier =
@@ -715,7 +756,7 @@ private fun ThreadVoiceMode(
       horizontalAlignment = Alignment.CenterHorizontally,
       verticalArrangement = Arrangement.spacedBy(7.dp),
     ) {
-      if (conversation.isEmpty()) {
+      if (visibleConversation.isEmpty() && !thinking) {
         item {
           Text(
             text = stringResource(R.string.no_live_conversation),
@@ -727,13 +768,46 @@ private fun ThreadVoiceMode(
           )
         }
       } else {
-        conversation
-          .takeLast(VISIBLE_REALTIME_ENTRY_COUNT)
-          .forEach { entry ->
-            item(key = entry.id) {
-              RealtimeTalkBubble(entry)
-            }
+        visibleConversation.forEach { entry ->
+          item(key = entry.id) {
+            RealtimeTalkBubble(entry)
           }
+        }
+        if (thinking) {
+          item(key = "realtime-thinking") {
+            WearThreadThinking()
+          }
+        }
+        // Follow a trailing anchor: centering a growing bubble can hide its newly streamed tail.
+        item(key = "realtime-thread-end") {
+          Spacer(modifier = Modifier.height(1.dp))
+        }
+      }
+    }
+    if (followState.hasNewContent) {
+      Box(
+        modifier =
+          Modifier
+            .align(Alignment.BottomCenter)
+            .padding(bottom = 44.dp)
+            .background(colors.voiceAccentSoft, RoundedCornerShape(14.dp))
+            .border(1.dp, colors.voiceAccent, RoundedCornerShape(14.dp))
+            .clickable(role = Role.Button) {
+              followState = wearThreadFollowLatest(followState)
+              if (latestAnchorIndex >= 0) {
+                coroutineScope.launch {
+                  listState.animateScrollToItem(latestAnchorIndex)
+                }
+              }
+            }.padding(horizontal = 10.dp, vertical = 5.dp),
+        contentAlignment = Alignment.Center,
+      ) {
+        Text(
+          text = stringResource(R.string.new_messages) + " ↓",
+          color = colors.voiceAccent,
+          fontSize = 9.sp,
+          fontWeight = FontWeight.Bold,
+        )
       }
     }
     Row(
@@ -798,46 +872,105 @@ private fun ThreadVoiceMode(
 }
 
 @Composable
-private fun VoiceOrb(
-  accent: Color,
-  containerColor: Color,
-  pulse: Boolean,
-  size: androidx.compose.ui.unit.Dp,
-  modifier: Modifier = Modifier,
-  content: @Composable () -> Unit,
-) {
-  val ringAlpha =
-    if (pulse) {
-      val transition = rememberInfiniteTransition(label = "voice-orb-ring")
-      transition
-        .animateFloat(
-          initialValue = 0.4f,
-          targetValue = 1f,
-          animationSpec =
-            infiniteRepeatable(
-              animation = tween(durationMillis = 850),
-              repeatMode = RepeatMode.Reverse,
-            ),
-          label = "voice-orb-ring-alpha",
-        ).value
-    } else {
-      1f
-    }
+private fun WearThreadThinking() {
+  val colors = OpenClawWearTheme.colors
   Box(
     modifier =
-      modifier
-        .size(size)
-        .background(containerColor, CircleShape)
-        .border(
-          width = if (pulse) 3.dp else 1.dp,
-          color = accent.copy(alpha = ringAlpha),
-          shape = CircleShape,
-        ),
-    contentAlignment = Alignment.Center,
+      Modifier
+        .fillMaxWidth()
+        .padding(start = 12.dp, end = 28.dp)
+        .background(colors.surfaceRaised, RoundedCornerShape(14.dp))
+        .border(1.dp, colors.borderStrong, RoundedCornerShape(14.dp))
+        .padding(horizontal = 12.dp, vertical = 8.dp),
   ) {
-    content()
+    Text(
+      text = stringResource(R.string.thinking) + "…",
+      color = colors.textMuted,
+      fontSize = 10.sp,
+      fontWeight = FontWeight.SemiBold,
+    )
   }
 }
+
+internal data class WearThreadContentRevision(
+  val entryCount: Int,
+  val latestEntryId: String?,
+  val latestText: String?,
+  val latestStreaming: Boolean,
+  val thinking: Boolean,
+)
+
+internal data class WearThreadFollowState(
+  val contentRevision: WearThreadContentRevision? = null,
+  val followingLatest: Boolean = true,
+  val hasNewContent: Boolean = false,
+)
+
+internal data class WearThreadFollowUpdate(
+  val state: WearThreadFollowState,
+  val scrollToLatest: Boolean,
+)
+
+private data class WearThreadViewport(
+  val atLatest: Boolean,
+  val scrollingBackward: Boolean,
+)
+
+internal fun wearThreadContentRevision(
+  conversation: List<WearRealtimeTalkEntry>,
+  thinking: Boolean,
+): WearThreadContentRevision {
+  val latest = conversation.lastOrNull()
+  return WearThreadContentRevision(
+    entryCount = conversation.size,
+    latestEntryId = latest?.id,
+    latestText = latest?.text,
+    latestStreaming = latest?.streaming == true,
+    thinking = thinking,
+  )
+}
+
+internal fun wearThreadLatestAnchorIndex(
+  entryCount: Int,
+  thinking: Boolean,
+): Int = if (entryCount == 0 && !thinking) -1 else entryCount + if (thinking) 1 else 0
+
+internal fun nextWearThreadFollowForContent(
+  state: WearThreadFollowState,
+  contentRevision: WearThreadContentRevision,
+  realtimeActive: Boolean = true,
+): WearThreadFollowUpdate {
+  if (!realtimeActive) {
+    return WearThreadFollowUpdate(
+      state = WearThreadFollowState(),
+      scrollToLatest = false,
+    )
+  }
+  if (state.contentRevision == contentRevision) {
+    return WearThreadFollowUpdate(state = state, scrollToLatest = false)
+  }
+  return WearThreadFollowUpdate(
+    state =
+      state.copy(
+        contentRevision = contentRevision,
+        hasNewContent = !state.followingLatest,
+      ),
+    scrollToLatest = state.followingLatest,
+  )
+}
+
+internal fun nextWearThreadFollowForViewport(
+  state: WearThreadFollowState,
+  atLatest: Boolean,
+  scrollingBackward: Boolean,
+): WearThreadFollowState =
+  when {
+    atLatest -> state.copy(followingLatest = true, hasNewContent = false)
+    scrollingBackward -> state.copy(followingLatest = false)
+    else -> state
+  }
+
+internal fun wearThreadFollowLatest(state: WearThreadFollowState): WearThreadFollowState = state.copy(followingLatest = true, hasNewContent = false)
 
 @Composable
 private fun MicrophoneGlyph(
@@ -884,47 +1017,6 @@ private fun MicrophoneGlyph(
   }
 }
 
-@Composable
-private fun LiveWaveform(
-  color: Color,
-  active: Boolean,
-) {
-  val transition = rememberInfiniteTransition(label = "live-waveform")
-  val phase by
-    transition.animateFloat(
-      initialValue = 0f,
-      targetValue = 1f,
-      animationSpec =
-        infiniteRepeatable(
-          animation = tween(durationMillis = 520),
-          repeatMode = RepeatMode.Reverse,
-        ),
-      label = "live-waveform-phase",
-    )
-  val amplitude = if (active) phase else 0f
-  Row(
-    horizontalArrangement = Arrangement.spacedBy(3.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    modifier = Modifier.height(28.dp),
-  ) {
-    listOf(
-      7f + (8f * amplitude),
-      10f + (13f * (1f - amplitude)),
-      12f + (14f * amplitude),
-      10f + (13f * (1f - amplitude)),
-      7f + (8f * amplitude),
-    ).forEach { barHeight ->
-      Box(
-        modifier =
-          Modifier
-            .width(3.dp)
-            .height(barHeight.dp)
-            .background(color, RoundedCornerShape(2.dp)),
-      )
-    }
-  }
-}
-
 private fun realtimeVoiceButtonState(
   realtimeTalk: WearRealtimeTalkSnapshot,
   ttsOnly: Boolean,
@@ -957,7 +1049,7 @@ private fun formatVoiceElapsedTime(totalSeconds: Long): String {
   return "$minutes:${seconds.toString().padStart(2, '0')}"
 }
 
-private enum class RealtimeVoiceButtonState {
+internal enum class RealtimeVoiceButtonState {
   IDLE,
   CONNECTING,
   LISTENING,
@@ -1020,92 +1112,6 @@ private fun RealtimeTalkBubble(entry: WearRealtimeTalkEntry) {
 }
 
 @Composable
-private fun AgentsPage(
-  agents: List<WearAgentSummary>,
-  supported: Boolean,
-  actionBusy: Boolean,
-  errorText: String?,
-  onSelectAgent: (String) -> Unit,
-) {
-  WearPage(pageLabel = stringResource(R.string.agents)) {
-    errorText?.takeIf(String::isNotBlank)?.let { error ->
-      item { InlineError(text = error) }
-    }
-    if (!supported) {
-      item {
-        EmptyPanel(
-          title = stringResource(R.string.update_required),
-          detail = stringResource(R.string.update_required_detail),
-        )
-      }
-    } else if (agents.isEmpty()) {
-      item {
-        EmptyPanel(
-          title = stringResource(R.string.no_agents),
-          detail = stringResource(R.string.no_agents_detail),
-        )
-      }
-    } else {
-      agents.forEach { agent ->
-        item(key = agent.id) {
-          SelectionButton(
-            title =
-              listOfNotNull(
-                agent.emoji?.takeIf(String::isNotBlank),
-                agent.name,
-              ).joinToString(" "),
-            detail =
-              if (agent.selected) {
-                stringResource(R.string.active_agent)
-              } else {
-                stringResource(R.string.available_agent)
-              },
-            selected = agent.selected,
-            enabled = !actionBusy && !agent.selected,
-            onClick = { onSelectAgent(agent.id) },
-          )
-        }
-      }
-    }
-  }
-}
-
-@Composable
-private fun SessionsPage(
-  sessions: List<WearSessionSummary>,
-  actionBusy: Boolean,
-  onSelectSession: (String) -> Unit,
-) {
-  WearPage(pageLabel = stringResource(R.string.sessions)) {
-    if (sessions.isEmpty()) {
-      item {
-        EmptyPanel(
-          title = stringResource(R.string.no_sessions),
-          detail = stringResource(R.string.no_sessions_detail),
-        )
-      }
-    } else {
-      sessions.forEach { session ->
-        item(key = session.id) {
-          SelectionButton(
-            title = session.title,
-            detail =
-              if (session.selected) {
-                stringResource(R.string.current_session)
-              } else {
-                stringResource(R.string.open_session)
-              },
-            selected = session.selected,
-            enabled = !actionBusy && !session.selected,
-            onClick = { onSelectSession(session.id) },
-          )
-        }
-      }
-    }
-  }
-}
-
-@Composable
 private fun ControlsPage(
   snapshot: WearConversationSnapshot,
   themeMode: WearThemeMode,
@@ -1125,8 +1131,8 @@ private fun ControlsPage(
     item {
       ConnectionPanel(snapshot = snapshot)
     }
-    snapshot.errorText?.takeIf(String::isNotBlank)?.let { error ->
-      item { InlineError(text = error) }
+    snapshot.failure?.let { failure ->
+      item { InlineError(text = failureDetail(failure)) }
     }
     item {
       SelectionButton(
@@ -1306,45 +1312,144 @@ private fun OpenClawHeader(pageLabel: String) {
 }
 
 @Composable
-private fun ConversationIdentity(snapshot: WearConversationSnapshot) {
-  val agent =
-    snapshot.agents.firstOrNull(WearAgentSummary::selected)
-      ?: snapshot.agents.firstOrNull()
-  val session =
-    snapshot.sessions.firstOrNull(WearSessionSummary::selected)
-      ?: snapshot.sessions.firstOrNull()
+private fun ConversationIdentity(
+  snapshot: WearConversationSnapshot,
+  actionBusy: Boolean,
+  onSelectAgent: (String) -> Unit,
+  onSelectSession: (String) -> Unit,
+  onSelectModel: (String) -> Unit,
+) {
+  val agentIndex = snapshot.agents.indexOfFirst(WearAgentSummary::selected)
+  val sessionIndex = snapshot.sessions.indexOfFirst(WearSessionSummary::selected)
+  val modelIndex = snapshot.models.indexOfFirst(WearModelSummary::selected)
+  val agent = snapshot.agents.getOrNull(agentIndex) ?: snapshot.agents.firstOrNull()
+  val session = snapshot.sessions.getOrNull(sessionIndex) ?: snapshot.sessions.firstOrNull()
+  val model = snapshot.models.getOrNull(modelIndex)
   Panel {
-    Text(
-      text =
+    ContextPickerRow(
+      label = stringResource(R.string.agent),
+      value =
         listOfNotNull(
           agent?.emoji?.takeIf(String::isNotBlank),
           agent?.name ?: stringResource(R.string.agent),
         ).joinToString(" "),
-      color = OpenClawWearTheme.colors.text,
-      fontSize = 18.sp,
-      fontWeight = FontWeight.SemiBold,
-      maxLines = 1,
-      overflow = TextOverflow.Ellipsis,
+      previous =
+        snapshot.agents
+          .getOrNull(agentIndex - 1)
+          ?.takeIf { snapshot.agentControlsSupported && !actionBusy }
+          ?.let { previous -> ({ onSelectAgent(previous.id) }) },
+      next =
+        snapshot.agents
+          .getOrNull(if (agentIndex < 0) 0 else agentIndex + 1)
+          ?.takeIf { snapshot.agentControlsSupported && !actionBusy }
+          ?.let { next -> ({ onSelectAgent(next.id) }) },
     )
-    Spacer(modifier = Modifier.height(2.dp))
+    ContextPickerRow(
+      label = stringResource(R.string.session),
+      value = session?.title ?: stringResource(R.string.current_session),
+      previous =
+        snapshot.sessions
+          .getOrNull(sessionIndex - 1)
+          ?.takeIf { !actionBusy }
+          ?.let { previous -> ({ onSelectSession(previous.id) }) },
+      next =
+        snapshot.sessions
+          .getOrNull(if (sessionIndex < 0) 0 else sessionIndex + 1)
+          ?.takeIf { !actionBusy }
+          ?.let { next -> ({ onSelectSession(next.id) }) },
+    )
+    ContextPickerRow(
+      label = stringResource(R.string.model),
+      value = model?.name ?: snapshot.selectedModelRef ?: stringResource(R.string.model),
+      previous =
+        snapshot.models
+          .getOrNull(modelIndex - 1)
+          ?.takeIf { snapshot.modelControlsSupported && !actionBusy }
+          ?.let { previous -> ({ onSelectModel(previous.ref) }) },
+      next =
+        snapshot.models
+          .getOrNull(if (modelIndex < 0) 0 else modelIndex + 1)
+          ?.takeIf { snapshot.modelControlsSupported && !actionBusy }
+          ?.let { next -> ({ onSelectModel(next.ref) }) },
+    )
+  }
+}
+
+@Composable
+private fun ContextPickerRow(
+  label: String,
+  value: String,
+  previous: (() -> Unit)?,
+  next: (() -> Unit)?,
+) {
+  Row(
+    modifier = Modifier.fillMaxWidth(),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    PickerChevron(
+      glyph = "‹",
+      contentDescription = stringResource(R.string.previous_item, label),
+      onClick = previous,
+    )
+    Column(
+      modifier = Modifier.weight(1f),
+      horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+      Text(
+        text = label.uppercase(),
+        color = OpenClawWearTheme.colors.textMuted,
+        fontSize = 8.sp,
+        fontWeight = FontWeight.Bold,
+        letterSpacing = 0.8.sp,
+        maxLines = 1,
+      )
+      Text(
+        text = value,
+        color = OpenClawWearTheme.colors.text,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.SemiBold,
+        textAlign = TextAlign.Center,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
+    }
+    PickerChevron(
+      glyph = "›",
+      contentDescription = stringResource(R.string.next_item, label),
+      onClick = next,
+    )
+  }
+}
+
+@Composable
+private fun PickerChevron(
+  glyph: String,
+  contentDescription: String,
+  onClick: (() -> Unit)?,
+) {
+  val colors = OpenClawWearTheme.colors
+  val enabled = onClick != null
+  Box(
+    modifier =
+      Modifier
+        .width(32.dp)
+        .height(30.dp)
+        .semantics { this.contentDescription = contentDescription }
+        .clickable(
+          enabled = enabled,
+          role = Role.Button,
+          onClick = { onClick?.invoke() },
+        ),
+    contentAlignment = Alignment.Center,
+  ) {
     Text(
-      text = session?.title ?: stringResource(R.string.current_session),
-      color = OpenClawWearTheme.colors.textMuted,
-      fontSize = 12.sp,
-      maxLines = 1,
-      overflow = TextOverflow.Ellipsis,
+      text = glyph,
+      color = if (enabled) colors.primary else colors.textMuted.copy(alpha = 0.42f),
+      fontSize = 24.sp,
+      lineHeight = 24.sp,
+      fontWeight = FontWeight.SemiBold,
+      textAlign = TextAlign.Center,
     )
-    snapshot.selectedModelRef
-      ?.takeIf(String::isNotBlank)
-      ?.let { model ->
-        Text(
-          text = model,
-          color = OpenClawWearTheme.colors.textMuted,
-          fontSize = 10.sp,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-      }
   }
 }
 

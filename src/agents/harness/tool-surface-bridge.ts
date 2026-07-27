@@ -15,6 +15,7 @@ import {
   resolveLocalModelLeanPreserveToolNames,
   shouldCatalogToolForLocalModelLean,
 } from "../local-model-lean.js";
+import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../tool-schema-projection.js";
 import { resolveAgentToolSearchRuntimeConfig } from "../tool-search-runtime-config.js";
 import {
@@ -22,7 +23,6 @@ import {
   applyToolSearchCatalog,
   clearToolSearchCatalog,
   createToolSearchCatalogRef,
-  estimateToolSchemaDirectoryToolNames,
   resolveToolSearchConfig,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
@@ -74,6 +74,7 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
   runtimeToolAllowlist?: readonly string[];
   sessionId?: string;
   sessionKey?: string;
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
   sourceReplyDeliveryMode?: string;
   toolsAllow?: readonly string[];
 }): AgentHarnessToolSurfaceRuntime {
@@ -124,6 +125,7 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
     modelProvider: params.modelProvider,
     modelId: params.modelId,
     runtimeToolAllowlist,
+    scheduledToolPolicy: params.scheduledToolPolicy,
   });
   const preserveToolNames = resolveLocalModelLeanPreserveToolNames({
     toolNames: capabilityProfile.policy.explicitToolOverrideAllowlist,
@@ -160,22 +162,7 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
           executeTool: params.executeTool,
         })
       : [];
-    const directoryRequiredToolNames = forceDirectMessageTool ? ["message"] : [];
-    const directoryHydratedToolNames =
-      toolSearchControlsEnabled && toolSearchConfig.mode === "directory"
-        ? (() => {
-            try {
-              return estimateToolSchemaDirectoryToolNames({
-                tools: effectiveTools,
-                query: params.prompt ?? "",
-                maxTools: 4,
-                requiredToolNames: directoryRequiredToolNames,
-              });
-            } catch {
-              return directoryRequiredToolNames;
-            }
-          })()
-        : [];
+    const directoryDirectToolNames = forceDirectMessageTool ? ["message"] : [];
     const compacted = codeModeControlsEnabled
       ? applyCodeModeCatalog({
           tools: [...codeModeTools, ...effectiveTools],
@@ -197,7 +184,7 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
             runId: params.runId,
             catalogRef: toolSearchCatalogRef,
             toolHookContext: options.hookContext,
-            hydrateToolNames: directoryHydratedToolNames,
+            directToolNames: directoryDirectToolNames,
           })
         : applyToolSearchCatalog({
             tools: effectiveTools,

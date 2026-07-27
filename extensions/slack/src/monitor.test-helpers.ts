@@ -293,7 +293,9 @@ export const defaultSlackTestConfig = () => ({
   },
   channels: {
     slack: {
-      dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+      dm: { enabled: true },
+      dmPolicy: "open",
+      allowFrom: ["*"],
       groupPolicy: "open",
     },
   },

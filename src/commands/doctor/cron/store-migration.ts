@@ -25,6 +25,7 @@ import {
   migrateLegacyAgentTurnCommandPayload,
   migrateLegacyCronPayload,
 } from "./payload-migration.js";
+import { createScheduledToolPolicyMigrationCollector } from "./scheduled-tool-policy-migration.js";
 
 type CronStoreIssueKey =
   | "jobId"
@@ -40,6 +41,7 @@ type CronStoreIssueKey =
   | "legacyTopLevelPayloadFields"
   | "legacyTopLevelDeliveryFields"
   | "legacyDeliveryMode"
+  | "migratedScheduledToolPolicy"
   | "invalidSchedule"
   | "invalidPayload";
 
@@ -95,6 +97,8 @@ type NormalizeCronStoreJobsResult = {
   issues: CronStoreIssues;
   unresolvedAgentTurnCommandPromptJobs: string[];
   unresolvedAgentTurnShellToolPromptJobs: string[];
+  legacyScheduledToolPolicyJobs: string[];
+  invalidScheduledToolPolicyJobs: string[];
   jobs: Array<Record<string, unknown>>;
   mutated: boolean;
   removedJobs: Array<{ job: Record<string, unknown>; reason: string; sourceIndex: number }>;
@@ -306,6 +310,7 @@ export function normalizeStoredCronJobs(
   const issues: CronStoreIssues = {};
   const unresolvedAgentTurnCommandPromptJobs: string[] = [];
   const unresolvedAgentTurnShellToolPromptJobs: string[] = [];
+  const scheduledToolPolicyMigrations = createScheduledToolPolicyMigrationCollector();
   const unresolvedAgentTurnPromptJobsByKind = {
     commandPromptWithoutShellAccess: unresolvedAgentTurnCommandPromptJobs,
     shellToolPrompt: unresolvedAgentTurnShellToolPromptJobs,
@@ -657,7 +662,9 @@ export function normalizeStoredCronJobs(
       }
     } else {
       const inferredSessionTarget =
-        payloadKind === "agentTurn" || payloadKind === "command" ? "isolated" : "main";
+        payloadKind === "agentTurn" || payloadKind === "command" || payloadKind === "script"
+          ? "isolated"
+          : "main";
       if (raw.sessionTarget !== inferredSessionTarget) {
         raw.sessionTarget = inferredSessionTarget;
         mutated = true;
@@ -669,14 +676,18 @@ export function normalizeStoredCronJobs(
       sessionTarget === "isolated" ||
       sessionTarget === "current" ||
       sessionTarget.startsWith("session:") ||
-      (sessionTarget === "" && (payloadKind === "agentTurn" || payloadKind === "command"));
+      (sessionTarget === "" &&
+        (payloadKind === "agentTurn" || payloadKind === "command" || payloadKind === "script"));
     const hasDelivery = delivery && typeof delivery === "object" && !Array.isArray(delivery);
     const normalizedLegacy = normalizeLegacyDeliveryInput({
       delivery: hasDelivery ? (delivery as Record<string, unknown>) : null,
       payload: payloadRecord,
     });
 
-    if (isIsolatedRunnablePayload && (payloadKind === "agentTurn" || payloadKind === "command")) {
+    if (
+      isIsolatedRunnablePayload &&
+      (payloadKind === "agentTurn" || payloadKind === "command" || payloadKind === "script")
+    ) {
       if (!hasDelivery && normalizedLegacy.delivery) {
         raw.delivery = normalizedLegacy.delivery;
         mutated = true;
@@ -691,6 +702,11 @@ export function normalizeStoredCronJobs(
       raw.delivery = normalizedLegacy.delivery;
       mutated = true;
     }
+
+    const scheduledPolicyMutated = scheduledToolPolicyMigrations.migrate(raw, () =>
+      trackIssue("migratedScheduledToolPolicy"),
+    );
+    mutated ||= scheduledPolicyMutated;
 
     const invalidPersistedReason = getInvalidPersistedCronJobReason(raw);
     if (
@@ -723,6 +739,8 @@ export function normalizeStoredCronJobs(
     issues,
     unresolvedAgentTurnCommandPromptJobs,
     unresolvedAgentTurnShellToolPromptJobs,
+    legacyScheduledToolPolicyJobs: scheduledToolPolicyMigrations.legacyJobs,
+    invalidScheduledToolPolicyJobs: scheduledToolPolicyMigrations.invalidJobs,
     jobs,
     mutated,
     removedJobs,

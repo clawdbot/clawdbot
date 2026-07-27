@@ -203,7 +203,8 @@ async function expectRpcNodePairingApprovalRejected(params: {
   operatorName: string;
   nodeId: string;
   commands: string[];
-  expectedMessage: string;
+  expectedMissingScope: string;
+  expectedRequiredScopes: string[];
 }): Promise<void> {
   const ws = await openTrackedWs(params.started.port);
   try {
@@ -225,7 +226,15 @@ async function expectRpcNodePairingApprovalRejected(params: {
     });
 
     expect(approve.ok).toBe(false);
-    expect(approve.error?.message).toContain(params.expectedMessage);
+    expect(approve.error).toEqual({
+      code: "FORBIDDEN",
+      message: `missing scope: ${params.expectedMissingScope}`,
+      details: {
+        code: "MISSING_SCOPE",
+        missingScope: params.expectedMissingScope,
+        requiredScopes: params.expectedRequiredScopes,
+      },
+    });
     await expect(findPairedNode(params.nodeId)).resolves.toBeNull();
   } finally {
     ws.close();
@@ -355,7 +364,8 @@ describe("gateway node pairing authorization", () => {
         operatorName: "operator-pairing",
         nodeId: "node-rpc-approve-reject-admin",
         commands: ["system.run"],
-        expectedMessage: "missing scope: operator.admin",
+        expectedMissingScope: "operator.admin",
+        expectedRequiredScopes: ["operator.pairing", "operator.admin"],
       });
     });
 
@@ -370,7 +380,8 @@ describe("gateway node pairing authorization", () => {
         operatorName: `operator-write-${id}`,
         nodeId: `node-rpc-${id}`,
         commands: [command],
-        expectedMessage: "missing scope: operator.admin",
+        expectedMissingScope: "operator.admin",
+        expectedRequiredScopes: ["operator.pairing", "operator.admin"],
       });
     });
 
@@ -381,7 +392,8 @@ describe("gateway node pairing authorization", () => {
         operatorName: "operator-write",
         nodeId: "node-rpc-approve-reject-pairing",
         commands: ["system.run"],
-        expectedMessage: "operator.pairing",
+        expectedMissingScope: "operator.pairing",
+        expectedRequiredScopes: ["operator.pairing"],
       });
     });
   });

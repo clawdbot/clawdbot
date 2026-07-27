@@ -189,6 +189,12 @@ export function buildQaGatewayConfig(params: {
       : {};
 
   return {
+    memory: {
+      backend: "builtin",
+      search: {
+        ...mockMemorySearch,
+      },
+    },
     plugins: {
       allow: allowedPlugins,
       slots: {
@@ -218,21 +224,12 @@ export function buildQaGatewayConfig(params: {
         model: buildQaModelSelection(primaryModel, alternateModel),
         ...(imageGenerationModelRef
           ? {
-              imageGenerationModel: {
-                primary: imageGenerationModelRef,
+              mediaModels: {
+                image: { primary: imageGenerationModelRef },
               },
             }
           : {}),
         ...(params.thinkingDefault ? { thinkingDefault: params.thinkingDefault } : {}),
-        memorySearch: {
-          ...mockMemorySearch,
-          sync: {
-            watch: true,
-            watchDebounceMs: 25,
-            onSessionStart: true,
-            onSearch: true,
-          },
-        },
         models: {
           [primaryModel]: resolveModelEntry(primaryModel),
           [alternateModel]: resolveModelEntry(alternateModel),
@@ -242,9 +239,8 @@ export function buildQaGatewayConfig(params: {
           maxConcurrent: 2,
         },
       },
-      list: [
-        {
-          id: "qa",
+      entries: {
+        qa: {
           default: true,
           model: buildQaModelSelection(primaryModel, alternateModel),
           ...(params.forcedRuntime === "codex" && params.fastMode !== undefined
@@ -263,10 +259,7 @@ export function buildQaGatewayConfig(params: {
             profile: "coding",
           },
         },
-      ],
-    },
-    memory: {
-      backend: "builtin",
+      },
     },
     tools: {
       // The parity scenarios are code-agent contracts: they must always expose
@@ -290,11 +283,6 @@ export function buildQaGatewayConfig(params: {
         mode: "token",
         token: params.gatewayToken,
       },
-      reload: {
-        // QA restart scenarios need deterministic reload timing instead of the
-        // much longer production deferral window.
-        deferralTimeoutMs: 1_000,
-      },
       controlUi: {
         enabled: params.controlUiEnabled ?? true,
         ...((params.controlUiEnabled ?? true) && params.controlUiRoot
@@ -302,7 +290,6 @@ export function buildQaGatewayConfig(params: {
           : {}),
         ...((params.controlUiEnabled ?? true)
           ? {
-              allowInsecureAuth: true,
               allowedOrigins,
             }
           : {}),

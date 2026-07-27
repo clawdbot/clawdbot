@@ -388,6 +388,42 @@ describe("verifyPlivoWebhook", () => {
     expectAcceptedWebhookVersion(result, "v3");
   });
 
+  it("pins Plivo publicUrl verification to the configured path", () => {
+    const authToken = "test-auth-token";
+    const nonce = "nonce-public-url-path";
+    const postBody = "CallUUID=uuid&CallStatus=in-progress&From=%2B15550000000";
+    const attackerPathUrl = "https://voice.openclaw.ai/admin?flow=answer&callId=abc";
+    const signature = plivoV3Signature({
+      authToken,
+      urlWithQuery: attackerPathUrl,
+      postBody,
+      nonce,
+    });
+
+    const result = verifyPlivoWebhook(
+      {
+        headers: {
+          host: "voice.openclaw.ai",
+          "x-forwarded-proto": "https",
+          "x-plivo-signature-v3": signature,
+          "x-plivo-signature-v3-nonce": nonce,
+        },
+        rawBody: postBody,
+        url: attackerPathUrl,
+        method: "POST",
+        query: { flow: "answer", callId: "abc" },
+      },
+      authToken,
+      { publicUrl: "https://voice.openclaw.ai/voice/webhook?provider=plivo" },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.version).toBe("v3");
+    expect(result.verificationUrl).toBe(
+      "https://voice.openclaw.ai/voice/webhook?flow=answer&callId=abc",
+    );
+  });
+
   it("matches trusted proxies for Plivo when Node reports an IPv4-mapped remote address", () => {
     const authToken = "test-auth-token";
     const nonce = "nonce-ipv4-mapped-plivo";

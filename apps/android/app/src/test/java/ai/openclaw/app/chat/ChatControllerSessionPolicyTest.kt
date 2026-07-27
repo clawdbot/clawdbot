@@ -179,4 +179,34 @@ class ChatControllerSessionPolicyTest {
     assertEquals(10L, merged.lastReadAt)
     assertEquals(20L, merged.lastActivityAt)
   }
+
+  @Test
+  fun sessionMergeReplacesRunMetadataAsOneSnapshot() {
+    val existing =
+      ChatSessionEntry(
+        key = "agent:main:phone",
+        updatedAtMs = 1L,
+        status = "done",
+        startedAt = 100L,
+        endedAt = 200L,
+        runtimeMs = 100L,
+        outputTokens = 12L,
+      )
+    val running =
+      ChatSessionEntry(
+        key = "agent:main:phone",
+        updatedAtMs = 2L,
+        status = "running",
+        startedAt = 300L,
+        hasRunMetadata = true,
+      )
+
+    val merged = mergeChatSessionEntry(existing, running)
+
+    assertEquals("running", merged.status)
+    assertEquals(300L, merged.startedAt)
+    assertEquals(null, merged.endedAt)
+    assertEquals(null, merged.runtimeMs)
+    assertEquals(null, merged.outputTokens)
+  }
 }

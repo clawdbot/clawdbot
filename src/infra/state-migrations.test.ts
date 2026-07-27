@@ -6,7 +6,6 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
-import * as sessionStore from "../config/sessions.js";
 import { loadNodeHostConfig } from "../node-host/config.js";
 import { readChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -38,6 +37,7 @@ import {
   resetAutoMigrateLegacyStateForTest,
   runLegacyStateMigrations,
 } from "./state-migrations.js";
+import * as sessionStore from "./state-migrations.legacy-session-store.js";
 import { loadVoiceWakeRoutingConfig, setVoiceWakeRoutingConfig } from "./voicewake-routing.js";
 import { loadVoiceWakeConfig, setVoiceWakeTriggers } from "./voicewake.js";
 
@@ -596,6 +596,74 @@ describe("state migrations", () => {
     expect(migrateLegacyState).toHaveBeenCalledOnce();
   });
 
+  it("runs doctor-only repairs after the automatic migration check", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const detectLegacyState = vi.fn(() => ({ preview: ["doctor-only repair"] }));
+    const migrateLegacyState = vi.fn(() => ({
+      changes: ["doctor-only repair migrated"],
+      warnings: [],
+    }));
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "memory-core",
+        migration: {
+          id: "memory-core-doctor-only-latch-test",
+          label: "Memory Core doctor-only latch test",
+          doctorOnly: true,
+          detectLegacyState,
+          migrateLegacyState,
+        },
+      },
+    ];
+
+    const automatic = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+    expect(automatic.changes).not.toContain("doctor-only repair migrated");
+    expect(detectLegacyState).not.toHaveBeenCalled();
+
+    const repaired = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+    expect(repaired.changes).toContain("doctor-only repair migrated");
+    expect(detectLegacyState).toHaveBeenCalledTimes(2);
+    expect(migrateLegacyState).toHaveBeenCalledOnce();
+  });
+
+  it("checks automatic migrations independently for each state directory", async () => {
+    const root = await createTempDir();
+    const stateDirs = [path.join(root, "state-a"), path.join(root, "state-b")];
+    const detectedStateDirs: string[] = [];
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "memory-core",
+        migration: {
+          id: "memory-core-state-dir-latch-test",
+          label: "Memory Core state-dir latch test",
+          detectLegacyState: ({ stateDir }) => {
+            detectedStateDirs.push(stateDir);
+            return null;
+          },
+          migrateLegacyState: () => ({ changes: [], warnings: [] }),
+        },
+      },
+    ];
+
+    for (const stateDir of stateDirs) {
+      await autoMigrateLegacyState({
+        cfg: createConfig(),
+        env: createEnv(stateDir),
+        homedir: () => root,
+      });
+    }
+
+    expect(new Set(detectedStateDirs)).toStrictEqual(new Set(stateDirs));
+  });
+
   it("detects legacy sessions, agent files, channel auth, and pairing state", () => {
     expect(detectionCase.targetAgentId).toBe("worker-1");
     expect(detectionCase.targetMainKey).toBe("desk");
@@ -925,17 +993,14 @@ describe("state migrations", () => {
       agents: { list: [{ id: "main", default: true }] },
     } as OpenClawConfig;
     const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
-    const realSaveSessionStore = sessionStore.saveSessionStore;
+    const realSaveSessionStore = sessionStore.saveLegacySessionStore;
     let sawRequiredWrite = false;
     const saveSpy = vi
-      .spyOn(sessionStore, "saveSessionStore")
+      .spyOn(sessionStore, "saveLegacySessionStore")
       .mockImplementation(async (storePath, store, options) => {
         sawRequiredWrite ||= options?.requireWriteSuccess === true;
         if (storePath === targetStorePath) {
-          if (options?.requireWriteSuccess) {
-            throw new Error("simulated alias write failure");
-          }
-          return;
+          throw new Error("simulated alias write failure");
         }
         await realSaveSessionStore(storePath, store, options);
       });
@@ -1359,18 +1424,22 @@ describe("state migrations", () => {
     >;
     for (const { legacyKey, canonicalKey, sessionId, runtimeSessionName } of cases) {
       expect(store[legacyKey]).toBeUndefined();
-      expect(store[canonicalKey]).toEqual({ sessionId, updatedAt: 10 });
+      expect(store[canonicalKey]).toEqual({
+        sessionId,
+        updatedAt: 10,
+        delivery: { kind: "none" },
+      });
       expect(
         readAcpSessionMetaForEntry({
           sessionKey: canonicalKey,
-          entry: { sessionId },
+          entry: { sessionId, lifecycleRevision: undefined },
           env,
         })?.runtimeSessionName,
       ).toBe(runtimeSessionName);
       expect(
         readAcpSessionMetaForEntry({
           sessionKey: legacyKey,
-          entry: { sessionId },
+          entry: { sessionId, lifecycleRevision: undefined },
           env,
         }),
       ).toBeUndefined();
@@ -1559,14 +1628,14 @@ describe("state migrations", () => {
     expect(
       readAcpSessionMetaForEntry({
         sessionKey: "agent:voice:desk",
-        entry: { sessionId: "voice-main" },
+        entry: { sessionId: "voice-main", lifecycleRevision: undefined },
         env,
       })?.runtimeSessionName,
     ).toBe("voice-runtime");
     expect(
       readAcpSessionMetaForEntry({
         sessionKey: "agent:voice:main",
-        entry: { sessionId: "voice-main" },
+        entry: { sessionId: "voice-main", lifecycleRevision: undefined },
         env,
       }),
     ).toBeUndefined();
@@ -1907,6 +1976,16 @@ describe("state migrations", () => {
       });
       expect(db.prepare("PRAGMA user_version").get()).toEqual({
         user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
+      expect(
+        db
+          .prepare(
+            "SELECT role, schema_version FROM schema_meta WHERE meta_key = 'primary' LIMIT 1",
+          )
+          .get(),
+      ).toEqual({
+        role: "global",
+        schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
       });
     } finally {
       db.close();

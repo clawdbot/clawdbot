@@ -33,7 +33,7 @@ import {
 // calls, so even metered external routes need the full window, and 120s
 // already covers local startup + generation (planner evidence).
 const AGENT_TURN_TIMEOUT_MS = 120_000;
-const SYSTEM_AGENT_MCP_TOOL_NAME = "mcp__openclaw__openclaw";
+const SYSTEM_AGENT_TOOL_NAME = "openclaw";
 
 export type SystemAgentTurnDirective =
   import("../agents/tools/system-agent-tool.js").SystemAgentToolDirective;
@@ -57,7 +57,7 @@ export type SystemAgentTurnRunner = (params: {
 export type SystemAgentSession = {
   sessionId: string;
   /** Exact live-tested inference owner for this ephemeral conversation. */
-  readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
+  verifiedInference: SystemAgentVerifiedInferenceBinding;
   /** Host-owned pending-proposal fingerprint; see system-agent-tool.ts. */
   proposalRef: { current?: string; operation?: SystemAgentOperation };
   /** Native CLI continuity, bound to the exact configured model/auth owner route. */
@@ -186,6 +186,7 @@ function cliRouteKey(
           bundleMcpMode: backend.bundleMcpMode,
           authEpochMode: backend.authEpochMode,
           nativeToolMode: backend.nativeToolMode,
+          toolAvailabilityEnforcement: backend.toolAvailabilityEnforcement,
           sideQuestionToolMode: backend.sideQuestionToolMode,
         }
       : null,
@@ -211,12 +212,16 @@ function resolveSystemAgentCliBackend(
 
 function resolveSystemAgentCliToolAvailability(
   backend: ResolvedCliBackend | null,
-): { native: []; mcp: string[] } | undefined {
+): { native: []; openClaw: string[] } | undefined {
   if (backend?.nativeToolMode === "none") {
     return undefined;
   }
-  if (backend?.nativeToolMode === "selectable" && backend.resolveExecutionArgs) {
-    return { native: [], mcp: [SYSTEM_AGENT_MCP_TOOL_NAME] };
+  if (
+    backend?.nativeToolMode === "selectable" &&
+    ((backend.toolAvailabilityEnforcement === "execution-args" && backend.resolveExecutionArgs) ||
+      (backend.toolAvailabilityEnforcement === "prepare-execution" && backend.prepareExecution))
+  ) {
+    return { native: [], openClaw: [SYSTEM_AGENT_TOOL_NAME] };
   }
   const backendId = backend?.id ?? "unknown";
   throw new Error(`CLI backend ${backendId} cannot enforce OpenClaw's exact tool availability`);

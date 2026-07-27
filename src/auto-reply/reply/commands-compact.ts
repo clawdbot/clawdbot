@@ -6,7 +6,10 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
-import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
+import {
+  classifyCompactionReason,
+  isBenignCompactionSkipResult,
+} from "../../agents/embedded-agent-runner/compact-reasons.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import {
   OPENAI_CODEX_PROVIDER_ID,
@@ -51,17 +54,6 @@ function extractCompactInstructions(params: {
     rest = rest.slice(1).trimStart();
   }
   return rest.length ? rest : undefined;
-}
-
-function isCompactionSkipReason(reason?: string): boolean {
-  const classification = classifyCompactionReason(reason);
-  // Manual /compact mirrors preflight semantics: already-small sessions are a
-  // successful no-op, not a failed compaction.
-  return (
-    classification === "no_compactable_entries" ||
-    classification === "below_threshold" ||
-    classification === "already_compacted_recently"
-  );
 }
 
 function formatCompactionReason(reason?: string): string | undefined {
@@ -227,7 +219,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       ? params.agentDir
       : resolveAgentDir(params.cfg, sessionAgentId);
   const customInstructions = extractCompactInstructions({
-    rawBody: params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body,
+    rawBody: params.ctx.commandText,
     ctx: params.ctx,
     cfg: params.cfg,
     agentId: sessionAgentId,
@@ -257,6 +249,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     senderName: params.ctx.SenderName,
     senderUsername: params.ctx.SenderUsername,
     senderE164: params.ctx.SenderE164,
+    inputProvenance: params.ctx.InputProvenance,
     sessionFile: runtime.resolveSessionFilePath(
       sessionId,
       targetSessionEntry,
@@ -297,7 +290,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   });
 
   const compactLabel =
-    result.ok || isCompactionSkipReason(result.reason)
+    result.ok || isBenignCompactionSkipResult(result)
       ? result.compacted
         ? result.result?.tokensBefore != null && result.result?.tokensAfter != null
           ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(result.result.tokensAfter)})`

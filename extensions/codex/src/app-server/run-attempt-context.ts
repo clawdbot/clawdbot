@@ -20,7 +20,6 @@ import {
   type CodexProjectedContextRange,
 } from "./context-engine-projection.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
-import { joinPresentSections } from "./run-attempt-state.js";
 import type { CodexAttemptTools } from "./run-attempt-tool-setup.js";
 import {
   buildDeveloperInstructions,
@@ -142,10 +141,9 @@ export async function prepareCodexAttemptContext(
     memoryToolNames,
     sandboxed: sandbox?.enabled === true,
   });
-  const baseDeveloperInstructions = joinPresentSections(
-    buildDeveloperInstructions(runtimeParams, { dynamicTools: toolBridge.availableSpecs }),
-    workspaceBootstrapContext.developerInstructions,
-  );
+  const baseDeveloperInstructions = buildDeveloperInstructions(runtimeParams, {
+    dynamicTools: toolBridge.availableSpecs,
+  });
   const openClawPromptContext = buildCodexOpenClawPromptContext({
     params: runtimeParams,
     workspacePromptContext: workspaceBootstrapContext.promptContext,
@@ -167,7 +165,7 @@ export async function prepareCodexAttemptContext(
   };
   const codexContextProjectionMaxChars = resolveCodexContextEngineProjectionMaxChars({
     contextTokenBudget: effectiveContextTokenBudget,
-    reserveTokens: resolveCodexContextEngineProjectionReserveTokens({ config: params.config }),
+    reserveTokens: resolveCodexContextEngineProjectionReserveTokens(),
   });
   return {
     runtime,

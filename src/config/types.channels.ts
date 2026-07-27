@@ -25,12 +25,14 @@ export type { ChannelBotLoopProtectionConfig } from "./types.bot-loop-protection
 export type { ChannelImplicitMentionsConfig } from "./types.implicit-mentions.js";
 
 export type ChannelDefaultsConfig = {
+  /** @deprecated Doctor-only legacy input. */
+  heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Default group-chat admission policy inherited by channels that support groups. */
   groupPolicy?: GroupPolicy;
   /** Default history/context visibility inherited by channel configs. */
   contextVisibility?: ContextVisibilityMode;
   /** Default heartbeat visibility for all channels. */
-  heartbeat?: ChannelHeartbeatVisibilityConfig;
+  heartbeatVisibility?: ChannelHeartbeatVisibilityConfig;
   /** Default pair loop guard settings for channels that support bot loop protection. */
   botLoopProtection?: ChannelBotLoopProtectionConfig;
   /** Default implicit-mention policy inherited by supporting channels. */
@@ -113,17 +115,11 @@ export type ExtensionChannelConfig = {
     spawnSessions?: boolean;
     /** Default context mode for thread-bound native subagent spawns. */
     defaultSpawnContext?: "isolated" | "fork";
-    /** @deprecated Use spawnSessions instead. */
-    spawnAcpSessions?: boolean;
-    /** @deprecated Use spawnSessions instead. */
-    spawnSubagentSessions?: boolean;
   };
   /** Channel-specific bot loop guard settings. */
   botLoopProtection?: ChannelBotLoopProtectionConfig;
   /** Channel-specific implicit-mention policy override. */
   implicitMentions?: ChannelImplicitMentionsConfig;
-  /** @deprecated Use threadBindings.spawnSessions instead. */
-  spawnSubagentSessions?: boolean;
   /** Explicit opt-in for channels that need private network callbacks or media fetches. */
   dangerouslyAllowPrivateNetwork?: boolean;
   /** Account-scoped channel config keyed by plugin-defined account id. */

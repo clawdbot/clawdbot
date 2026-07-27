@@ -9,14 +9,6 @@ import { createSmsWebhookHandler } from "./webhook.js";
 const enqueueSmsIngress = vi.hoisted(() =>
   vi.fn(async () => ({ kind: "accepted" as const, duplicate: false })),
 );
-const drainSmsIngress = vi.hoisted(() => vi.fn(async () => undefined));
-const runDetachedWebhookWork = vi.hoisted(() => vi.fn((run: () => Promise<void>) => run()));
-
-vi.mock("openclaw/plugin-sdk/webhook-request-guards", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/webhook-request-guards")>();
-  return { ...actual, runDetachedWebhookWork };
-});
 
 let testAccountSequence = 0;
 let activeAccountId = "test-0";
@@ -24,7 +16,6 @@ let activeAccountId = "test-0";
 function createIngress() {
   return {
     enqueue: enqueueSmsIngress,
-    drainOnce: drainSmsIngress,
   };
 }
 
@@ -152,8 +143,6 @@ describe("createSmsWebhookHandler", () => {
   beforeEach(() => {
     enqueueSmsIngress.mockReset();
     enqueueSmsIngress.mockResolvedValue({ kind: "accepted", duplicate: false });
-    drainSmsIngress.mockClear();
-    runDetachedWebhookWork.mockClear();
     activeAccountId = `test-${++testAccountSequence}`;
   });
 
@@ -172,7 +161,6 @@ describe("createSmsWebhookHandler", () => {
 
     expect(res.statusCode).toBe(200);
     expect(enqueueSmsIngress).toHaveBeenCalledWith(parseTestTwilioForm(body));
-    expect(runDetachedWebhookWork).toHaveBeenCalledTimes(1);
   });
 
   it("does not acknowledge when the durable enqueue fails", async () => {
@@ -190,7 +178,6 @@ describe("createSmsWebhookHandler", () => {
     );
 
     expect(res.endMock).not.toHaveBeenCalled();
-    expect(runDetachedWebhookWork).not.toHaveBeenCalled();
   });
 
   it("rejects a signed webhook without a stable MessageSid", async () => {

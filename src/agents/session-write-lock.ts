@@ -9,7 +9,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createFileLockManager } from "../infra/file-lock-manager.js";
+import { isGatewayArgv } from "../infra/gateway-process-argv.js";
 import { readGatewayProcessArgsSync as readProcessArgsSync } from "../infra/gateway-processes.js";
 import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import {
@@ -96,15 +98,7 @@ function isFileLockError(error: unknown, code: string): boolean {
   return (error as { code?: unknown } | null)?.code === code;
 }
 
-export type SessionWriteLockAcquireTimeoutConfig = {
-  session?: {
-    writeLock?: {
-      acquireTimeoutMs?: number;
-      staleMs?: number;
-      maxHoldMs?: number;
-    };
-  };
-};
+export type SessionWriteLockAcquireTimeoutConfig = OpenClawConfig;
 
 type SessionWriteLockMsKey = "acquireTimeoutMs" | "staleMs" | "maxHoldMs";
 
@@ -153,7 +147,6 @@ function parsePositiveMs(
 }
 
 function resolveSessionWriteLockMs(params: {
-  config?: SessionWriteLockAcquireTimeoutConfig;
   env?: NodeJS.ProcessEnv;
   key: SessionWriteLockMsKey;
   fallback: number;
@@ -162,17 +155,15 @@ function resolveSessionWriteLockMs(params: {
   const opts = { allowInfinity: params.allowInfinity };
   return (
     readPositiveMsEnv(params.env ?? process.env, SESSION_WRITE_LOCK_ENV[params.key], opts) ??
-    parsePositiveMs(params.config?.session?.writeLock?.[params.key], opts) ??
     params.fallback
   );
 }
 
 export function resolveSessionWriteLockAcquireTimeoutMs(
-  config?: SessionWriteLockAcquireTimeoutConfig,
+  _config?: SessionWriteLockAcquireTimeoutConfig,
   env?: NodeJS.ProcessEnv,
 ): number {
   return resolveSessionWriteLockMs({
-    config,
     env,
     key: "acquireTimeoutMs",
     fallback: DEFAULT_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS,
@@ -181,11 +172,10 @@ export function resolveSessionWriteLockAcquireTimeoutMs(
 }
 
 export function resolveSessionWriteLockStaleMs(
-  config?: SessionWriteLockAcquireTimeoutConfig,
+  _config?: SessionWriteLockAcquireTimeoutConfig,
   env?: NodeJS.ProcessEnv,
 ): number {
   return resolveSessionWriteLockMs({
-    config,
     env,
     key: "staleMs",
     fallback: DEFAULT_SESSION_WRITE_LOCK_STALE_MS,
@@ -193,11 +183,10 @@ export function resolveSessionWriteLockStaleMs(
 }
 
 function resolveSessionWriteLockMaxHoldMs(
-  config?: SessionWriteLockAcquireTimeoutConfig,
+  _config?: SessionWriteLockAcquireTimeoutConfig,
   params: { env?: NodeJS.ProcessEnv; fallback?: number } = {},
 ): number {
   return resolveSessionWriteLockMs({
-    config,
     env: params.env,
     key: "maxHoldMs",
     fallback: params.fallback ?? DEFAULT_SESSION_WRITE_LOCK_MAX_HOLD_MS,
@@ -297,8 +286,8 @@ async function runLockWatchdogCheck(nowMs = Date.now()): Promise<number> {
       continue;
     }
 
-    process.stderr.write(
-      `[session-write-lock] releasing lock held for ${heldForMs}ms (max=${maxHoldMs}ms): ${held.lockPath}\n`,
+    console.warn(
+      `[session-write-lock] releasing lock held for ${heldForMs}ms (max=${maxHoldMs}ms): ${held.lockPath}`,
     );
 
     const didRelease = await held.forceRelease();
@@ -468,12 +457,15 @@ function normalizeOwnerProcessArg(arg: string): string {
 }
 
 function isOpenClawSessionOwnerArgv(args: string[]): boolean {
+  if (isGatewayArgv(args, { allowGatewayBinary: true })) {
+    return true;
+  }
   const normalized = args.map(normalizeOwnerProcessArg).filter(Boolean);
   if (normalized.length === 0) {
     return false;
   }
   const exe = (normalized[0] ?? "").replace(/\.(bat|cmd|exe)$/i, "");
-  if (exe === "openclaw" || exe.endsWith("/openclaw") || exe.endsWith("/openclaw-gateway")) {
+  if (exe === "openclaw" || exe.endsWith("/openclaw")) {
     return true;
   }
   if (
@@ -495,9 +487,9 @@ function isOpenClawSessionOwnerArgv(args: string[]): boolean {
     "src/entry.ts",
     "src/index.ts",
   ];
-  const hasOpenClawCommandToken = normalized.some((arg) => arg === "gateway" || arg === "agent");
+  const hasAgentCommandToken = normalized.includes("agent");
   return normalized.some(
-    (arg) => entryCandidates.some((entry) => arg.endsWith(entry)) && hasOpenClawCommandToken,
+    (arg) => entryCandidates.some((entry) => arg.endsWith(entry)) && hasAgentCommandToken,
   );
 }
 

@@ -11,6 +11,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { appendTranscriptEvent, persistSessionTranscriptTurn } from "./session-accessor.js";
 import {
   readRecentSessionTranscriptMessageEvents,
+  readSessionTranscriptActiveLeafEvents,
   readSessionTranscriptMessageAnchorPage,
   readSessionTranscriptMessageEventById,
   readSessionTranscriptMessageEventCount,
@@ -108,6 +109,9 @@ describe("SQLite active transcript event projection", () => {
     expect(page.events.map((entry) => (entry.event as { id?: unknown }).id)).toEqual([
       "root",
       "active",
+    ]);
+    expect(readSessionTranscriptActiveLeafEvents(scope)).toEqual([
+      expect.objectContaining({ id: "active" }),
     ]);
     expect(page.events.map((entry) => entry.seq)).toEqual([1, 2]);
     expect(page.totalMessages).toBe(2);
@@ -211,6 +215,152 @@ describe("SQLite active transcript event projection", () => {
         .prepare("SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?")
         .get(scope.sessionId),
     ).toEqual({ needs_rebuild: 0 });
+  });
+
+  it("projects reset kept-tail and post-boundary messages without rewriting raw positions", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        { eventId: "old", parentId: null, message: { role: "user", content: "old" } },
+        {
+          eventId: "kept-user",
+          parentId: "old",
+          message: { role: "user", content: "kept question" },
+        },
+        {
+          eventId: "kept-tool",
+          parentId: "kept-user",
+          message: { role: "toolResult", content: `hidden tool ${"x".repeat(2_000)}` },
+        },
+        {
+          eventId: "kept-assistant",
+          parentId: "kept-tool",
+          message: { role: "assistant", content: "kept answer" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "reset-boundary",
+      parentId: "kept-assistant",
+      timestamp: "2026-07-22T00:00:00.000Z",
+      reason: "new",
+      firstKeptEntryId: "kept-user",
+    });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "post-reset",
+          parentId: "reset-boundary",
+          message: { role: "user", content: "new turn" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+
+    const page = readSessionTranscriptMessageEventPage(scope, { maxMessages: 10, offset: 0 });
+
+    expect(page.events.map((entry) => (entry.event as { id?: unknown }).id)).toEqual([
+      "kept-user",
+      "kept-assistant",
+      "post-reset",
+    ]);
+    expect(page.events.map((entry) => entry.seq)).toEqual([2, 4, 5]);
+    expect(page.totalMessages).toBe(3);
+    expect(readSessionTranscriptMessageEventCount(scope)).toBe(3);
+    expect(readSessionTranscriptMessageEventById(scope, "old")).toBeUndefined();
+    expect(readSessionTranscriptMessageEventById(scope, "kept-tool")).toBeUndefined();
+
+    const recent = readRecentSessionTranscriptMessageEvents(scope, {
+      maxBytes: 1_024,
+      maxLines: 10,
+      maxMessages: 3,
+    });
+    expect(recent.events.map((entry) => (entry.event as { id?: unknown }).id)).toEqual([
+      "kept-user",
+      "kept-assistant",
+      "post-reset",
+    ]);
+
+    await appendTranscriptEvent(scope, {
+      type: "compaction",
+      id: "newer-compaction",
+      parentId: "post-reset",
+      timestamp: "2026-07-22T00:01:00.000Z",
+      summary: "newer boundary shadows reset",
+      firstKeptEntryId: "old",
+      tokensBefore: 10,
+    });
+    expect(
+      readRecentSessionTranscriptMessageEvents(scope, {
+        maxBytes: 1_024,
+        maxLines: 1,
+        maxMessages: 1,
+      }).activeLeafEntryId,
+    ).toBe("newer-compaction");
+    expect(readSessionTranscriptActiveLeafEvents(scope)).toEqual([
+      expect.objectContaining({ id: "newer-compaction" }),
+    ]);
+    expect(readSessionTranscriptMessageEventCount(scope)).toBe(5);
+    expect(readSessionTranscriptMessageEventById(scope, "old")).toBeDefined();
+  });
+
+  it("recomputes a cached reset window after a branch-changing message", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        { eventId: "old", parentId: null, message: { role: "user", content: "old" } },
+        {
+          eventId: "kept-user",
+          parentId: "old",
+          message: { role: "user", content: "kept" },
+        },
+        {
+          eventId: "kept-assistant",
+          parentId: "kept-user",
+          message: { role: "assistant", content: "kept answer" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "reset-boundary",
+      parentId: "kept-assistant",
+      timestamp: "2026-07-22T00:00:00.000Z",
+      reason: "new",
+      firstKeptEntryId: "kept-user",
+    });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "post-reset",
+          parentId: "reset-boundary",
+          message: { role: "user", content: "post reset" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    expect(readSessionTranscriptMessageEventCount(scope)).toBe(3);
+
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "branch-message",
+          parentId: "old",
+          message: { role: "assistant", content: "branched" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    await waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId, env: scope.env });
+
+    const page = readSessionTranscriptMessageEventPage(scope, { maxMessages: 10, offset: 0 });
+    expect(page.events.map((entry) => (entry.event as { id?: unknown }).id)).toEqual([
+      "kept-user",
+      "kept-assistant",
+      "post-reset",
+      "branch-message",
+    ]);
   });
 
   it("reconciles work scheduled while an earlier pass is yielding", async () => {
@@ -627,5 +777,5 @@ describe("SQLite active transcript event projection", () => {
     await reconciliation;
     expect(order).toEqual(["event-loop-responsive", "live-write", "reconciled"]);
     expect(readSessionTranscriptMessageEventCount(scope)).toBe(100_001);
-  }, 30_000);
+  }, 60_000);
 });

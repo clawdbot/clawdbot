@@ -14,6 +14,7 @@ import {
 } from "../provider-auth-aliases.js";
 import {
   evaluateStoredCredentialEligibility,
+  resolveTokenExpiryState,
   type AuthCredentialReasonCode,
 } from "./credential-state.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
@@ -487,21 +488,30 @@ function orderProfilesByMode(
     }
   }
 
-  // Sort available profiles by type preference, then by lastUsed (oldest first = round-robin within type)
+  // Sort by type, OAuth expiry state, then lastUsed for round-robin within each tier.
   const scored = available.map((profileId) => {
-    const type = store.profiles[profileId]?.type;
+    const profile = store.profiles[profileId];
+    const type = profile?.type;
     const typeScore = type === "oauth" ? 0 : type === "token" ? 1 : type === "api_key" ? 2 : 3;
+    // A refreshable expired OAuth profile remains eligible, but refreshing an
+    // obsolete profile can rotate a one-time refresh token while a live peer exists.
+    const expiryScore =
+      profile?.type === "oauth" && resolveTokenExpiryState(profile.expires, now) === "expired"
+        ? 1
+        : 0;
     const lastUsed = store.usageStats?.[profileId]?.lastUsed ?? 0;
-    return { profileId, typeScore, lastUsed };
+    return { profileId, typeScore, expiryScore, lastUsed };
   });
 
   // Primary sort: type preference (oauth > token > api_key).
-  // Secondary sort: lastUsed (oldest first for round-robin within type).
   const sorted = scored
     .toSorted((a, b) => {
       // First by type (oauth > token > api_key)
       if (a.typeScore !== b.typeScore) {
         return a.typeScore - b.typeScore;
+      }
+      if (a.expiryScore !== b.expiryScore) {
+        return a.expiryScore - b.expiryScore;
       }
       // Then by lastUsed (oldest first)
       return a.lastUsed - b.lastUsed;

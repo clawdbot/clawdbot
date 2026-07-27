@@ -319,6 +319,24 @@ describe("isDeliveredMessagingToolResult", () => {
       }),
     ).toBe(true);
   });
+
+  it("accepts a nested provider message id as delivery evidence", () => {
+    expect(
+      isDeliveredMessagingToolResult({
+        toolName: "message",
+        args: {
+          action: "send",
+          channel: "qa-channel",
+          target: "qa-a2a-requester",
+          message: "reply",
+        },
+        result: {
+          content: [{ type: "text", text: '{"message":{"id":"qa-message-242"}}' }],
+          details: { message: { id: "qa-message-242" } },
+        },
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("isDeliveredMessageToolOnlySourceReplyResult", () => {

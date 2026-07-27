@@ -73,6 +73,8 @@ function formatModelOverrideResetEvent(params: {
   rejectedRef?: string;
   initialModelLabel: string;
   reason?: "disallowed" | "stale" | "temporarily-unavailable";
+  modelPolicyConfigPath?: string;
+  modelPolicyRepairConfigPath?: string;
 }): string {
   if (params.reason === "temporarily-unavailable") {
     // Non-destructive: the pin is preserved and comes back once the catalog reloads.
@@ -88,7 +90,9 @@ function formatModelOverrideResetEvent(params: {
     return `Stored model override is stale for this session; reverted to ${params.initialModelLabel}.`;
   }
   if (params.rejectedRef) {
-    return `Model override ${params.rejectedRef} is not allowed for this agent; reverted to ${params.initialModelLabel}. Add ${params.rejectedRef} to agents.defaults.models or pick an allowed model with /model list.`;
+    const policyPath = params.modelPolicyConfigPath ?? "modelPolicy.allow";
+    const repairPath = params.modelPolicyRepairConfigPath ?? "modelPolicy.allow";
+    return `Model override ${params.rejectedRef} is not allowed for this agent by ${policyPath}; reverted to ${params.initialModelLabel}. Add ${params.rejectedRef} to ${repairPath} or pick an allowed model with /model list.`;
   }
   return `Model override not allowed for this agent; reverted to ${params.initialModelLabel}.`;
 }
@@ -182,6 +186,7 @@ export async function applyInlineDirectiveOverrides(params: {
   const directiveModelState = {
     allowedModelKeys: modelState.allowedModelKeys,
     allowedModelCatalog: modelState.allowedModelCatalog,
+    policyAliasIndex: modelState.policyAliasIndex,
     resetModelOverride: modelState.resetModelOverride,
   };
   const createDirectiveHandlingBase = () => ({
@@ -215,6 +220,8 @@ export async function applyInlineDirectiveOverrides(params: {
         rejectedRef: modelState.resetModelOverrideRef,
         initialModelLabel,
         reason: modelState.resetModelOverrideReason,
+        modelPolicyConfigPath: modelState.modelPolicyConfigPath,
+        modelPolicyRepairConfigPath: modelState.modelPolicyRepairConfigPath,
       }),
       {
         sessionKey,
@@ -245,6 +252,7 @@ export async function applyInlineDirectiveOverrides(params: {
       allowedModelKeys: modelState.allowedModelKeys,
       allowedModelCatalog: modelState.allowedModelCatalog,
       provider,
+      agentId,
     });
     if (lockedModelResolution.modelSelection) {
       typing.cleanup();
@@ -329,6 +337,7 @@ export async function applyInlineDirectiveOverrides(params: {
         allowedModelKeys: modelState.allowedModelKeys,
         allowedModelCatalog: modelState.allowedModelCatalog,
         provider,
+        agentId,
       });
       if (modelResolution.errorText) {
         typing.cleanup();
@@ -357,13 +366,15 @@ export async function applyInlineDirectiveOverrides(params: {
         }
         const label = `${modelSelection.provider}/${modelSelection.model}`;
         const labelWithAlias = modelSelection.alias ? `${modelSelection.alias} (${label})` : label;
+        // Model change first, then the thinking remap it triggered: the remap is a
+        // consequence of the model switch, so the cause is announced before the effect.
         const parts = [
-          persisted.thinkingRemap
-            ? `Thinking level set to ${persisted.thinkingRemap.to} (${persisted.thinkingRemap.from} not supported for ${persisted.thinkingRemap.provider}/${persisted.thinkingRemap.model}).`
-            : undefined,
           modelSelection.isDefault
             ? `Model reset to default (${labelWithAlias}).`
             : `Model set to ${labelWithAlias} for this session.`,
+          persisted.thinkingRemap
+            ? `Thinking level set to ${persisted.thinkingRemap.to} (${persisted.thinkingRemap.from} not supported for ${persisted.thinkingRemap.provider}/${persisted.thinkingRemap.model}).`
+            : undefined,
           persisted.runtimeChange?.kind === "clear"
             ? "Runtime reset to configured policy."
             : persisted.runtimeChange?.kind === "set"
@@ -426,6 +437,7 @@ export async function applyInlineDirectiveOverrides(params: {
         provider,
         model,
         contextTokens,
+        thinkingCatalog,
         workspaceDir,
         resolvedThinkLevel: resolvedDefaultThinkLevel,
         resolvedVerboseLevel: currentVerboseLevel ?? "off",

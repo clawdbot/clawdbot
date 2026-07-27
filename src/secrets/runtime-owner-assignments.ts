@@ -142,6 +142,8 @@ function createDegradedOwner(
   assignments: SecretAssignment[],
   reason: SecretDegradationReason,
   degradationState: "cold" | "stale" = "cold",
+  providerFailures?: DegradedSecretOwner["providerFailures"],
+  refFailureReason?: string,
 ): DegradedSecretOwner {
   const owner = assignments[0]!;
   if (owner.ownerKind === "unknown") {
@@ -155,6 +157,8 @@ function createDegradedOwner(
     paths: assignments.map((assignment) => assignment.path),
     refKeys: assignments.map((assignment) => secretRefKey(assignment.ref)),
     reason,
+    ...(providerFailures?.length ? { providerFailures } : {}),
+    ...(refFailureReason ? { refFailureReason } : {}),
   };
 }
 
@@ -387,7 +391,14 @@ export async function resolveAndApplySecretAssignments(params: {
     );
     registerResolvedValuesForRedaction(resolution.resolved);
 
-    const failedOwners = new Map<SecretAssignment[], SecretDegradationReason>();
+    const failedOwners = new Map<
+      SecretAssignment[],
+      {
+        reason: SecretDegradationReason;
+        providerFailures: NonNullable<DegradedSecretOwner["providerFailures"]>;
+        refFailureReason?: SecretDegradationReason;
+      }
+    >();
     for (const failure of resolution.failures) {
       associateAssignmentFailureOwners({
         assignments: pendingOwners.flat(),
@@ -403,8 +414,28 @@ export async function resolveAndApplySecretAssignments(params: {
         throw failure.error;
       }
       for (const assignments of matchingOwners) {
-        if (!failedOwners.has(assignments)) {
-          failedOwners.set(assignments, assertOwnerCanBeIsolated(assignments, failure.error));
+        const reason = assertOwnerCanBeIsolated(assignments, failure.error);
+        const existing = failedOwners.get(assignments);
+        const providerFailure = isProviderScopedSecretResolutionError(failure.error)
+          ? { source: failure.error.source, provider: failure.error.provider }
+          : undefined;
+        if (!existing) {
+          failedOwners.set(assignments, {
+            reason,
+            providerFailures: providerFailure ? [providerFailure] : [],
+            ...(!providerFailure ? { refFailureReason: reason } : {}),
+          });
+        } else if (
+          providerFailure &&
+          !existing.providerFailures.some(
+            (entry) =>
+              entry.source === providerFailure.source &&
+              entry.provider === providerFailure.provider,
+          )
+        ) {
+          existing.providerFailures.push(providerFailure);
+        } else if (!providerFailure && !existing.refFailureReason) {
+          existing.refFailureReason = reason;
         }
       }
     }
@@ -437,8 +468,8 @@ export async function resolveAndApplySecretAssignments(params: {
 
     const nextPendingOwners: SecretAssignment[][] = [];
     for (const assignments of pendingOwners) {
-      const failureReason = failedOwners.get(assignments);
-      if (failureReason) {
+      const failure = failedOwners.get(assignments);
+      if (failure) {
         const owner = assignments[0]!;
         let degradationState = classifySecretOwnerDegradationState({
           ownerKind: owner.ownerKind as Exclude<typeof owner.ownerKind, "unknown">,
@@ -480,7 +511,13 @@ export async function resolveAndApplySecretAssignments(params: {
             assignment.apply({ ...assignment.ref });
           }
         }
-        const degradedOwner = createDegradedOwner(assignments, failureReason, degradationState);
+        const degradedOwner = createDegradedOwner(
+          assignments,
+          failure.refFailureReason ?? failure.reason,
+          degradationState,
+          failure.providerFailures,
+          failure.refFailureReason,
+        );
         degradedOwners.push(degradedOwner);
         warnDegradedSecretOwner(params.context, degradedOwner);
         continue;

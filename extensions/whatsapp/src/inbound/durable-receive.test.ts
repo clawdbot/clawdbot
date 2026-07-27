@@ -11,7 +11,7 @@ import {
 } from "./durable-payload.js";
 import {
   createWhatsAppDurableInboundMessageId,
-  createWhatsAppIngressDrain,
+  createWhatsAppIngressMonitor,
   enqueueWhatsAppDurableInbound,
   type WhatsAppDurableInboundPayload,
 } from "./durable-receive.js";
@@ -45,7 +45,7 @@ function payload(id: string, remoteJid = REMOTE_JID): WhatsAppDurableInboundPayl
   };
 }
 
-describe("createWhatsAppIngressDrain", () => {
+describe("createWhatsAppIngressMonitor", () => {
   it("releases claims when dispatch throws before adoption", async () => {
     await withTempState(async (stateDir) => {
       const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
@@ -56,21 +56,22 @@ describe("createWhatsAppIngressDrain", () => {
       const id = eventId("msg-1");
       await queue.enqueue(id, payload("msg-1"), { laneKey: REMOTE_JID });
 
-      const drain = createWhatsAppIngressDrain({
+      const monitor = createWhatsAppIngressMonitor({
         queue,
+        pollIntervalMs: 10,
         dispatch: async () => {
           throw new Error("downstream callback rejected");
         },
       });
 
-      await drain.drainOnce();
-      await drain.waitForIdle();
+      monitor.start();
+      await monitor.waitForIdle();
 
       const status = await queue.enqueue(id, payload("msg-1"), { laneKey: REMOTE_JID });
       expect(status.kind).not.toBe("completed");
       const pending = await queue.listPending({ limit: "all" });
       expect(pending.some((row) => row.id === id)).toBe(true);
-      drain.dispose();
+      await monitor.stop();
     });
   });
 
@@ -84,26 +85,27 @@ describe("createWhatsAppIngressDrain", () => {
       const id = eventId("msg-2");
       await queue.enqueue(id, payload("msg-2"), { laneKey: REMOTE_JID });
 
-      const drain = createWhatsAppIngressDrain({
+      const monitor = createWhatsAppIngressMonitor({
         queue,
+        pollIntervalMs: 10,
         dispatch: async () => ({
           kind: "failed-retryable",
           error: new Error("downstream flush rejected"),
         }),
       });
 
-      await drain.drainOnce();
-      await drain.waitForIdle();
+      monitor.start();
+      await monitor.waitForIdle();
 
       const pending = await queue.listPending({ limit: "all" });
       const row = pending.find((entry) => entry.id === id);
       expect(row).toBeDefined();
       expect((row?.attempts ?? 0) >= 1).toBe(true);
-      drain.dispose();
+      await monitor.stop();
     });
   });
 
-  it("tombstones after successful dispatch return", async () => {
+  it("tombstones after an explicit completed dispatch", async () => {
     await withTempState(async (stateDir) => {
       const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
         channelId: "whatsapp",
@@ -113,17 +115,18 @@ describe("createWhatsAppIngressDrain", () => {
       const id = eventId("msg-3");
       await queue.enqueue(id, payload("msg-3"), { laneKey: REMOTE_JID });
 
-      const drain = createWhatsAppIngressDrain({
+      const monitor = createWhatsAppIngressMonitor({
         queue,
-        dispatch: async () => {},
+        pollIntervalMs: 10,
+        dispatch: async () => ({ kind: "completed" }),
       });
 
-      await drain.drainOnce();
-      await drain.waitForIdle();
+      monitor.start();
+      await monitor.waitForIdle();
 
       const status = await queue.enqueue(id, payload("msg-3"), { laneKey: REMOTE_JID });
       expect(status.kind).toBe("completed");
-      drain.dispose();
+      await monitor.stop();
     });
   });
 
@@ -147,8 +150,9 @@ describe("createWhatsAppIngressDrain", () => {
 
       const dispatched: string[] = [];
       let adoptFirst: (() => void | Promise<void>) | undefined;
-      const drain = createWhatsAppIngressDrain({
+      const monitor = createWhatsAppIngressMonitor({
         queue,
+        pollIntervalMs: 10,
         dispatch: async (inbound, _payload, lifecycle) => {
           const id = inbound.key.id;
           if (!id) {
@@ -159,12 +163,12 @@ describe("createWhatsAppIngressDrain", () => {
             adoptFirst = lifecycle.onAdopted;
             return { kind: "deferred" as const };
           }
-          return undefined;
+          return { kind: "completed" as const };
         },
       });
 
-      await drain.drainOnce();
-      await drain.waitForIdle();
+      monitor.start();
+      await monitor.waitForIdle();
 
       // Core drain serializes a conversation lane: msg-4b cannot reach the
       // channel debouncer until msg-4a transfers into the reply lane.
@@ -176,13 +180,12 @@ describe("createWhatsAppIngressDrain", () => {
         throw new Error("expected first adoption callback");
       }
       await adoptFirst();
-      await drain.drainOnce();
-      await drain.waitForIdle();
+      await monitor.waitForIdle();
 
       expect(dispatched).toEqual(["msg-4a", "msg-4b"]);
       expect(await queue.listClaims()).toEqual([]);
       expect(await queue.listPending({ limit: "all" })).toEqual([]);
-      drain.dispose();
+      await monitor.stop();
     });
   });
 });

@@ -62,6 +62,7 @@ type FileBackedSessionStoreMaintenanceParams = {
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   log: SessionMaintenanceLogger;
   artifacts: RemovedSessionArtifactCleanup;
+  commitReducedStore?: () => Promise<void>;
 };
 
 type FileBackedSessionStoreMaintenanceResult = {
@@ -251,6 +252,7 @@ async function applyEnforcedMaintenance(params: {
     maintenance: params.maintenance,
     warnOnly: false,
     log: params.operation.log,
+    commitEvictedIndex: params.operation.commitReducedStore,
   });
   await params.operation.onMaintenanceApplied?.({
     mode: params.maintenance.mode,

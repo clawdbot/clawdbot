@@ -2,7 +2,9 @@
 import {
   recordChannelBotPairLoopAndCheckSuppression,
   resolveChannelInboundRouteEnvelope,
+  toInboundMediaFacts,
   type ChannelBotLoopProtectionFacts,
+  type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -218,9 +220,8 @@ async function processMessageWithPipeline(params: {
 
   const messageText = (message.argumentText ?? message.text ?? "").trim();
   const attachments = message.attachment ?? [];
-  const hasMedia = attachments.length > 0;
-  const rawBody = messageText || (hasMedia ? "<media:attachment>" : "");
-  if (!rawBody) {
+  const rawBody = messageText;
+  if (!rawBody && attachments.length === 0) {
     return;
   }
 
@@ -271,16 +272,21 @@ async function processMessageWithPipeline(params: {
     },
   });
 
-  let mediaPath: string | undefined;
-  let mediaType: string | undefined;
+  const mediaInputs: ChannelInboundMediaInput[] = attachments.map((attachment) => ({
+    contentType: attachment.contentType,
+  }));
   const first = attachments.at(0);
   if (first) {
     const attachmentData = await downloadAttachment(first, account, mediaMaxMb, core);
     if (attachmentData) {
-      mediaPath = attachmentData.path;
-      mediaType = attachmentData.contentType;
+      mediaInputs[0] = {
+        path: attachmentData.path,
+        url: attachmentData.path,
+        contentType: attachmentData.contentType ?? first.contentType,
+      };
     }
   }
+  const media = toInboundMediaFacts(mediaInputs);
 
   const fromLabel = isGroup
     ? space.displayName || `space:${spaceId}`
@@ -330,16 +336,7 @@ async function processMessageWithPipeline(params: {
       rawBody,
       commandBody: rawBody,
     },
-    media:
-      mediaPath || mediaType
-        ? [
-            {
-              path: mediaPath,
-              url: mediaPath,
-              contentType: mediaType,
-            },
-          ]
-        : undefined,
+    media: media.length > 0 ? media : undefined,
     supplemental: {
       groupSystemPrompt: isGroup ? groupSystemPrompt : undefined,
     },

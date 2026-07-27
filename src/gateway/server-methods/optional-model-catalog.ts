@@ -1,6 +1,7 @@
 // Optional model-catalog loading gives session/tool methods metadata when fast
 // while never blocking their primary response path on catalog discovery.
-import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import type { GatewayModelCatalogSnapshot } from "../server-model-catalog.types.js";
 import type { GatewayRequestContext } from "./types.js";
 
 /**
@@ -16,6 +17,7 @@ type OptionalServerMethodModelCatalogLoad<T> = {
 };
 
 type LoadOptionalServerMethodModelCatalogOptions<T> = {
+  loadParams?: Parameters<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>[0];
   logOnceKey?: string;
   startedLoad?: OptionalServerMethodModelCatalogLoad<T>;
   timeoutMs?: number;
@@ -25,13 +27,18 @@ function normalizeOptionalModelCatalog(value: unknown): ModelCatalogEntry[] | un
   return Array.isArray(value) ? value : undefined;
 }
 
-function normalizeOptionalModelCatalogSnapshot(value: unknown): ModelCatalogSnapshot | undefined {
+function normalizeOptionalModelCatalogSnapshot(
+  value: unknown,
+): GatewayModelCatalogSnapshot | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
-  const snapshot = value as Partial<ModelCatalogSnapshot>;
-  return Array.isArray(snapshot.entries) && Array.isArray(snapshot.routeVariants)
-    ? { entries: snapshot.entries, routeVariants: snapshot.routeVariants }
+  const snapshot = value as Partial<GatewayModelCatalogSnapshot>;
+  return typeof snapshot.agentDir === "string" &&
+    snapshot.config &&
+    Array.isArray(snapshot.entries) &&
+    Array.isArray(snapshot.routeVariants)
+    ? (snapshot as GatewayModelCatalogSnapshot)
     : undefined;
 }
 
@@ -61,9 +68,10 @@ function startOptionalServerMethodModelCatalogLoad(
 
 export function startOptionalServerMethodModelCatalogSnapshotLoad(
   context: GatewayRequestContext,
-): OptionalServerMethodModelCatalogLoad<ModelCatalogSnapshot> {
+  loadParams?: Parameters<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>[0],
+): OptionalServerMethodModelCatalogLoad<GatewayModelCatalogSnapshot> {
   return startOptionalServerMethodModelCatalogValueLoad({
-    load: () => context.loadGatewayModelCatalogSnapshot(),
+    load: () => context.loadGatewayModelCatalogSnapshot(loadParams),
     normalize: normalizeOptionalModelCatalogSnapshot,
   });
 }
@@ -117,9 +125,9 @@ export async function loadOptionalServerMethodModelCatalog(
 export async function loadOptionalServerMethodModelCatalogSnapshot(
   context: GatewayRequestContext,
   surface: string,
-  options?: LoadOptionalServerMethodModelCatalogOptions<ModelCatalogSnapshot>,
-): Promise<ModelCatalogSnapshot | undefined> {
+  options?: LoadOptionalServerMethodModelCatalogOptions<GatewayModelCatalogSnapshot>,
+): Promise<GatewayModelCatalogSnapshot | undefined> {
   return await loadOptionalServerMethodModelCatalogValue(context, surface, options, () =>
-    startOptionalServerMethodModelCatalogSnapshotLoad(context),
+    startOptionalServerMethodModelCatalogSnapshotLoad(context, options?.loadParams),
   );
 }

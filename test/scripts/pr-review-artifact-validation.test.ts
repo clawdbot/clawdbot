@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const reviewScript = join(process.cwd(), "scripts/pr-lib/review.sh");
+const reviewArtifactsScript = join(process.cwd(), "scripts/pr-lib/review-artifacts.mjs");
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
 function validReview() {
@@ -105,5 +106,49 @@ describePosix("scripts/pr review artifact validation", () => {
     expect(result.stdout).toContain(
       'Invalid behavioral sweep status in .local/review.json: "performed" (allowed: pass|needs_work|not_applicable)',
     );
+  });
+
+  it("reports every artifact violation before exiting", () => {
+    const review = validReview();
+    review.behavioralSweep.status = "performed";
+    review.behavioralSweep.branches = "src/example.ts" as unknown as unknown[];
+    review.docs = "todo";
+    const result = runValidation(review);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(
+      'Invalid behavioral sweep status in .local/review.json: "performed" (allowed: pass|needs_work|not_applicable)',
+    );
+    expect(result.stdout).toContain(
+      "Invalid behavioral sweep in .local/review.json: behavioralSweep.branches must be an array",
+    );
+    expect(result.stdout).toContain(
+      'Invalid docs status in .local/review.json: "todo" (allowed: up_to_date|missing|not_applicable)',
+    );
+    expect(result.stdout).toContain("3 artifact violations");
+  });
+
+  it("derives template enum hints from the validation table", () => {
+    const result = spawnSync(process.execPath, [reviewArtifactsScript, "template"], {
+      encoding: "utf8",
+    });
+    const template = JSON.parse(result.stdout) as ReturnType<typeof validReview>;
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(template.recommendation).toBe(
+      "NEEDS WORK (allowed: READY FOR /prepare-pr|NEEDS WORK|NEEDS DISCUSSION|NOT USEFUL (CLOSE))",
+    );
+    expect(template.nitSweep.status).toBe("none (allowed: none|has_nits)");
+    expect(template.behavioralSweep.status).toBe(
+      "not_applicable (allowed: pass|needs_work|not_applicable)",
+    );
+    expect(template.behavioralSweep.silentDropRisk).toBe("none (allowed: none|present|unknown)");
+    expect(template.issueValidation.source).toBe("pr_body (allowed: linked_issue|pr_body|both)");
+    expect(template.issueValidation.status).toBe(
+      "unclear (allowed: valid|unclear|invalid|already_fixed_on_main)",
+    );
+    expect(template.tests.result).toBe("pass (allowed: pass|fail|not_run)");
+    expect(template.docs).toBe("not_applicable (allowed: up_to_date|missing|not_applicable)");
+    expect(template.changelog).toBe("not_required (allowed: required|not_required)");
   });
 });

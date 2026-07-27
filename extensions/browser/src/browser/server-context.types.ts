@@ -4,7 +4,7 @@
  */
 import type { Server } from "node:http";
 import type { RunningChrome } from "./chrome.js";
-import type { BrowserTab, BrowserTransport } from "./client.types.js";
+import type { BrowserOpenResult, BrowserTab, BrowserTransport } from "./client.types.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
 import type { BrowserErrorResponse } from "./errors.js";
 import type { ExtensionRelayHandle } from "./extension-relay/relay-server.js";
@@ -80,7 +80,7 @@ type BrowserProfileActions = {
   openTab: (
     url: string,
     opts?: { label?: string; signal?: AbortSignal; timeoutMs?: number },
-  ) => Promise<BrowserTab>;
+  ) => Promise<BrowserOpenResult>;
   labelTab: (targetId: string, label: string) => Promise<BrowserTab>;
   focusTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<void>;
   closeTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<void>;

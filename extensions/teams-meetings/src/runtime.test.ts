@@ -57,9 +57,10 @@ function runtimeHarness(options?: { tabOpen?: boolean }) {
           cameraOff: true,
           ...(sessionConflict && fn.includes("const allowSessionAdoption = false")
             ? {
-                manualActionRequired: true,
-                manualActionReason: "teams-session-conflict",
-                manualActionMessage: "This Teams tab is owned by another active meeting session.",
+                manualAction: {
+                  reason: "teams-session-conflict",
+                  message: "This Teams tab is owned by another active meeting session.",
+                },
               }
             : {}),
           url: tabUrl,
@@ -105,12 +106,13 @@ describe("Microsoft Teams meeting session flow", () => {
         defaultMode: "transcribe",
         chrome: { waitForInCallMs: 1 },
       }),
-      fullConfig: {},
+      fullConfig: { agents: { list: [{ id: "operator", default: true }] } },
       runtime: harness.runtime,
       logger,
     });
 
     const first = await runtime.join({ url: URL, mode: "transcribe" });
+    expect(first.session.agentId).toBe("operator");
     expect(first.session.chrome?.health).toMatchObject({ inCall: true, cameraOff: true });
 
     const reused = await runtime.join({

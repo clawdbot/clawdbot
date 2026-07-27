@@ -2,6 +2,7 @@
 // outbound message execution context.
 import { Type } from "typebox";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
@@ -15,6 +16,7 @@ import {
   MESSAGE_TOOL_DELIVERY_HINTS,
   MESSAGE_TOOL_ONLY_DELIVERY_HINT,
 } from "../../plugin-sdk/message-tool-delivery-hints.js";
+import { EMPTY_PREPARED_MESSAGE_TOOL_CATALOG } from "../../plugins/prepared-message-tool-catalog.js";
 import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
 type CreateMessageTool = typeof import("./message-tool.js").createMessageTool;
 type CreateOpenClawTools = typeof import("../openclaw-tools.js").createOpenClawTools;
@@ -1697,6 +1699,31 @@ describe("message tool delivery mode schema", () => {
 
     expect(bestEffort?.type).toBe("boolean");
     expect(bestEffort?.description).toContain("requiring durable delivery");
+  });
+
+  it("does not rediscover an active catalog after a prepared absence", () => {
+    const plugin = createChannelPlugin({
+      id: "discord",
+      label: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "test",
+      actions: ["send"],
+      message: {
+        durableFinal: {
+          capabilities: { reconcileUnknownSend: true },
+          reconcileUnknownSend: async () => ({ status: "not_sent" }),
+        },
+      },
+    });
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "discord",
+      preparedMessageToolCatalog: EMPTY_PREPARED_MESSAGE_TOOL_CATALOG,
+    });
+
+    expect(getToolProperties(tool).bestEffort).toBeUndefined();
   });
 });
 
@@ -3589,12 +3616,12 @@ describe("message tool internal-runtime-context sanitization", () => {
         message: [
           "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
           "",
-          "Conversation info (untrusted metadata):",
+          markInboundContextLabel("Conversation info:"),
           "```json",
           '{"chat_id":"group:abc","sender_id":"+15551234567","is_group_chat":true}',
           "```",
           "",
-          "Sender (untrusted metadata):",
+          markInboundContextLabel("Sender:"),
           "```json",
           '{"label":"Bob (+15551234567)","id":"+15551234567"}',
           "```",
@@ -3626,7 +3653,7 @@ describe("message tool internal-runtime-context sanitization", () => {
     {
       name: "inbound metadata only",
       message: [
-        "Conversation info (untrusted metadata):",
+        markInboundContextLabel("Conversation info:"),
         "```json",
         '{"chat_id":"group:abc","sender_id":"+15551234567"}',
         "```",

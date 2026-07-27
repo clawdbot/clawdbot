@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../../agents/failover-error.js";
+import { AgentHarnessSessionSupersededError } from "../../agents/harness/errors.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -587,9 +588,8 @@ describe("runAgentTurnWithFallback: terminal failures", () => {
         expect(result.payload.text).toContain("CLI subprocess");
         expect(result.payload.text).toContain("no-output watchdog");
         expect(result.payload.text).toContain("separate from the overall agent timeout");
-        expect(result.payload.text).toContain(
-          "agents.defaults.cliBackends.<id>.reliability.watchdog.{fresh,resume}.noOutputTimeoutMs",
-        );
+        expect(result.payload.text).toContain("produced no output before its watchdog expired");
+        expect(result.payload.text).not.toContain("noOutputTimeoutMs");
         expect(result.payload.text).not.toContain("agents.defaults.timeoutSeconds");
       }
       expect(result.payload.text).not.toContain("/new");
@@ -655,7 +655,9 @@ describe("runAgentTurnWithFallback: terminal failures", () => {
 
   it("surfaces stale Codex session generations in groups instead of staying silent", async () => {
     state.runWithModelFallbackMock.mockRejectedValueOnce(
-      new Error("Codex session generation is no longer current: secret-session-id"),
+      new AgentHarnessSessionSupersededError(
+        "Codex session generation is no longer current: secret-session-id",
+      ),
     );
 
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();

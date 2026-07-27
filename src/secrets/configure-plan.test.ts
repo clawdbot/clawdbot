@@ -213,7 +213,7 @@ describe("secrets configure plan helpers", () => {
     expect(plan.options).toEqual({
       scrubEnv: true,
       scrubAuthProfilesForProviderTargets: true,
-      scrubLegacyAuthJson: true,
+      scrubLegacyAuthJson: false,
     });
   });
 });

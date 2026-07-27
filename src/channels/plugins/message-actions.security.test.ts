@@ -167,6 +167,58 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     expect(handleAction).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    { name: "missing", conversationReadOrigin: undefined },
+    { name: "unknown", conversationReadOrigin: "forged-direct-operator" as never },
+  ])(
+    "fails closed on $name origin despite model-argument and channelData spoofing",
+    async (testCase) => {
+      setReadPlugin();
+
+      await expect(
+        dispatchChannelMessageAction({
+          channel: "discord",
+          action: "read",
+          cfg: {} as OpenClawConfig,
+          params: {
+            channelId: "other",
+            conversationReadOrigin: "direct-operator",
+            pluginOrigin: "bundled",
+            channelData: {
+              conversationReadOrigin: "direct-operator",
+              pluginOrigin: "bundled",
+            },
+          },
+          accountId: "default",
+          requesterAccountId: "default",
+          conversationReadOrigin: testCase.conversationReadOrigin,
+          toolContext: {
+            currentChannelProvider: "discord",
+            currentChannelId: "current",
+          },
+        }),
+      ).rejects.toThrow("requires the exact current conversation and account");
+      expect(handleAction).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects a non-core runtime action before any plugin callback", async () => {
+    setReadPlugin();
+
+    const result = await dispatchChannelMessageAction({
+      channel: "discord",
+      action: "forged-read" as never,
+      cfg: {} as OpenClawConfig,
+      params: { channelId: "other" },
+      conversationReadOrigin: "direct-operator",
+    });
+
+    expect(result).toBeNull();
+    expect(handleAction).not.toHaveBeenCalled();
+    expect(supportsAction).not.toHaveBeenCalled();
+    expect(requiresTrustedRequesterSender).not.toHaveBeenCalled();
+  });
+
   it("matches a sanitized channelId to a typed current-channel target", async () => {
     setReadPlugin();
 
@@ -288,6 +340,47 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
         toolContext: {
           currentChannelProvider: "discord",
           currentMessagingTarget: "user:123",
+        },
+      }),
+    ).rejects.toThrow("requires the exact current conversation and account");
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
+  it("keeps external conversation ids case-sensitive after prefix normalization", async () => {
+    setReadPlugin();
+
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "discord",
+        action: "read",
+        cfg: {} as OpenClawConfig,
+        params: { channelId: "CHANNEL:CURRENT" },
+        accountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider: "discord",
+          currentChannelId: "channel:current",
+        },
+      }),
+    ).rejects.toThrow("requires the exact current conversation and account");
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
+  it("does not promote an omitted target account across a non-default requester account", async () => {
+    setReadPlugin();
+
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "discord",
+        action: "read",
+        cfg: {} as OpenClawConfig,
+        params: { channelId: "current" },
+        requesterAccountId: "work",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider: "discord",
+          currentChannelId: "current",
         },
       }),
     ).rejects.toThrow("requires the exact current conversation and account");
@@ -431,6 +524,52 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
         toolContext: {
           currentChannelProvider: "telegram",
           currentChannelId: "current",
+        },
+      }),
+    ).rejects.toThrow("requires the exact current conversation and account");
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
+  it.each(["react", "edit", "delete"] as const)(
+    "delegates Telegram %s topic binding to the bundled provider",
+    async (action) => {
+      setReadPlugin({ channel: "telegram", origin: "bundled" });
+
+      await dispatchChannelMessageAction({
+        channel: "telegram",
+        action,
+        cfg: {} as OpenClawConfig,
+        params: { chatId: "-1001" },
+        accountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "telegram:-1001:topic:77",
+          currentThreadTs: "77",
+        },
+      });
+
+      expect(handleAction).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not grant Telegram mutation enforcement to an external override", async () => {
+    setReadPlugin({ channel: "telegram", origin: "workspace" });
+
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "telegram",
+        action: "react",
+        cfg: {} as OpenClawConfig,
+        params: { chatId: "-1001" },
+        accountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "telegram:-1001:topic:77",
+          currentThreadTs: "77",
         },
       }),
     ).rejects.toThrow("requires the exact current conversation and account");
@@ -685,6 +824,123 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     expect(resolveDeliveryTarget).toHaveBeenCalledOnce();
     expect(handleAction).toHaveBeenCalledOnce();
   });
+
+  it("accepts an exact-current WhatsApp chatJid delivery alias", async () => {
+    setReadPlugin({
+      channel: "whatsapp",
+      origin: "bundled",
+      normalizeTarget: (raw) => raw.replace(/^whatsapp:/i, "").trim() || undefined,
+      messageActionTargetAliases: {
+        react: {
+          aliases: ["chatJid", "messageId"],
+          deliveryTargetAliases: ["chatJid"],
+          resolveDeliveryTarget: ({ args }) =>
+            typeof args.chatJid === "string" ? args.chatJid : undefined,
+        },
+      },
+    });
+
+    await dispatchChannelMessageAction({
+      channel: "whatsapp",
+      action: "react",
+      cfg: {} as OpenClawConfig,
+      params: {
+        chatJid: "current@g.us",
+        messageId: "current-message",
+      },
+      accountId: "Work",
+      requesterAccountId: "work",
+      conversationReadOrigin: "delegated",
+      toolContext: {
+        currentChannelProvider: "whatsapp",
+        currentChannelId: "whatsapp:current@g.us",
+        currentMessageId: "current-message",
+      },
+    });
+
+    expect(handleAction).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a sibling WhatsApp chatJid delivery alias before plugin code", async () => {
+    setReadPlugin({
+      channel: "whatsapp",
+      origin: "bundled",
+      normalizeTarget: (raw) => raw.replace(/^whatsapp:/i, "").trim() || undefined,
+      messageActionTargetAliases: {
+        react: {
+          aliases: ["chatJid", "messageId"],
+          deliveryTargetAliases: ["chatJid"],
+          resolveDeliveryTarget: ({ args }) =>
+            typeof args.chatJid === "string" ? args.chatJid : undefined,
+        },
+      },
+    });
+
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "whatsapp",
+        action: "react",
+        cfg: {} as OpenClawConfig,
+        params: {
+          chatJid: "sibling@g.us",
+          messageId: "sibling-message",
+        },
+        accountId: "work",
+        requesterAccountId: "Work",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider: "whatsapp",
+          currentChannelId: "whatsapp:current@g.us",
+          currentMessageId: "current-message",
+        },
+      }),
+    ).rejects.toThrow("requires the exact current conversation and account");
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "mismatched", accountId: "other", requesterAccountId: "work" },
+    { name: "invalid", accountId: "!!!", requesterAccountId: "work" },
+    { name: "missing requester", accountId: "work", requesterAccountId: undefined },
+  ])(
+    "rejects a WhatsApp chatJid with $name account context before resolution",
+    async (testCase) => {
+      const resolveDeliveryTarget = vi.fn(({ args }: { args: Record<string, unknown> }) =>
+        typeof args.chatJid === "string" ? args.chatJid : undefined,
+      );
+      setReadPlugin({
+        channel: "whatsapp",
+        origin: "bundled",
+        normalizeTarget: (raw) => raw.replace(/^whatsapp:/i, "").trim() || undefined,
+        messageActionTargetAliases: {
+          react: {
+            aliases: ["chatJid", "messageId"],
+            deliveryTargetAliases: ["chatJid"],
+            resolveDeliveryTarget,
+          },
+        },
+      });
+
+      await expect(
+        dispatchChannelMessageAction({
+          channel: "whatsapp",
+          action: "react",
+          cfg: {} as OpenClawConfig,
+          params: { chatJid: "current@g.us", messageId: "current-message" },
+          accountId: testCase.accountId,
+          requesterAccountId: testCase.requesterAccountId,
+          conversationReadOrigin: "delegated",
+          toolContext: {
+            currentChannelProvider: "whatsapp",
+            currentChannelId: "whatsapp:current@g.us",
+            currentMessageId: "current-message",
+          },
+        }),
+      ).rejects.toThrow("requires the exact current conversation and account");
+      expect(resolveDeliveryTarget).not.toHaveBeenCalled();
+      expect(handleAction).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses a bundled numeric chatId delivery alias for an exact-current provider target", async () => {
     const resolveDeliveryTarget = vi.fn(({ args }: { args: Record<string, unknown> }) =>

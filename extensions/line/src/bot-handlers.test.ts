@@ -1,5 +1,6 @@
 // Line tests cover bot handlers plugin behavior.
 import type { webhook } from "@line/bot-sdk";
+import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LineAccountConfig } from "./types.js";
@@ -134,7 +135,8 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   upsertChannelPairingRequest: upsertPairingRequestMock,
 }));
 
-vi.mock("./download.js", () => ({
+vi.mock("./download.js", async (importActual) => ({
+  ...(await importActual<typeof import("./download.js")>()),
   downloadLineMedia: downloadLineMediaMock,
 }));
 
@@ -1182,7 +1184,7 @@ describe("handleLineWebhookEvents", () => {
         id: "m-command-dm",
         type: "text",
         text: "please check /status",
-        quoteToken: "test-token-placeholder",
+        quoteToken: "test-quote-token",
       },
       source: { type: "user", userId: "user-dm" },
       webhookEventId: "evt-command-dm",
@@ -1267,6 +1269,37 @@ describe("handleLineWebhookEvents", () => {
       expect.objectContaining({ allMedia: [], mediaUnavailable: true }),
     );
     expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects the event for retry instead of degrading when preparation media fails transiently", async () => {
+    // A 202 "still preparing" download surfaces as a retryable MediaFetchError.
+    // The failure is before turn adoption, so rejecting lets the durable ingress
+    // drain retry the whole event once LINE finishes preparing the media, rather
+    // than degrading it to an unavailable-attachment notice and losing it.
+    downloadLineMediaMock.mockRejectedValueOnce(
+      new MediaFetchError("http_error", "still preparing (HTTP 202)", { status: 202 }),
+    );
+    const processMessage = vi.fn();
+    const event = createTestMessageEvent({
+      message: {
+        id: "image-preparing-1",
+        type: "image",
+        contentProvider: { type: "line" },
+        quoteToken: "test-token-placeholder",
+      },
+      source: { type: "user", userId: "user-image-preparing" },
+      webhookEventId: "evt-image-preparing",
+    });
+
+    await expect(
+      handleLineWebhookEvents(
+        [event],
+        createLineWebhookTestContext({ processMessage, dmPolicy: "open" }),
+      ),
+    ).rejects.toBeInstanceOf(MediaFetchError);
+
+    expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+    expect(processMessage).not.toHaveBeenCalled();
   });
 
   it("allows non-text group messages through when requireMention is set (cannot detect mention)", async () => {

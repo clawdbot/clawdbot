@@ -178,10 +178,7 @@ enum GatewayRemoteConfig {
         guard scheme == "ws" || scheme == "wss" else { return nil }
         let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !host.isEmpty else { return nil }
-        if scheme == "ws",
-           !LoopbackHost.isLoopbackHost(host),
-           !self.isTrustedPlaintextRemoteHost(host)
-        {
+        if scheme == "ws", !self.allowsPlaintextGatewayHost(host) {
             return nil
         }
         if scheme == "ws", url.port == nil {
@@ -194,13 +191,20 @@ enum GatewayRemoteConfig {
         return url
     }
 
+    static func allowsPlaintextGatewayHost(_ host: String) -> Bool {
+        LoopbackHost.isLoopbackHost(host) || self.isTrustedPlaintextRemoteHost(host)
+    }
+
     static func isTrustedPlaintextRemoteHost(_ host: String) -> Bool {
         let lower = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !lower.isEmpty else { return false }
         if lower == "localhost" || lower.hasSuffix(".local") || lower.hasSuffix(".ts.net") {
             return true
         }
-        if self.isPrivateIPv6Literal(lower) {
+        let ipv6Literal = lower.hasPrefix("[") && lower.hasSuffix("]")
+            ? String(lower.dropFirst().dropLast())
+            : lower
+        if self.isPrivateIPv6Literal(ipv6Literal) {
             return true
         }
         guard let parts = self.ipv4Parts(lower) else { return false }

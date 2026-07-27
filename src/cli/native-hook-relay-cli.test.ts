@@ -415,6 +415,51 @@ describe("native hook relay CLI", () => {
     );
   }, 1_000);
 
+  it("handles bridge rejection when the deadline expires during bridge startup", async () => {
+    let now = 0;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const invokeBridge = vi.fn(() => {
+      now = 26;
+      return Promise.reject(new Error("native hook relay bridge not found"));
+    });
+    const callGateway = vi.fn();
+    const stdout = createWritableTextBuffer();
+    const stderr = createWritableTextBuffer();
+
+    try {
+      const exitCode = await runNativeHookRelayCli(
+        {
+          provider: "codex",
+          relayId: "relay-1",
+          generation: "generation-1",
+          event: "pre_tool_use",
+          timeout: "25",
+        },
+        {
+          stdin: createReadableTextStream("{}"),
+          stdout,
+          stderr,
+          invokeBridge: invokeBridge as never,
+          callGateway: callGateway as never,
+        },
+      );
+
+      expect(exitCode).toBe(0);
+      expect(JSON.parse(stdout.text())).toMatchObject({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: "Native hook relay timed out",
+        },
+      });
+      expect(stderr.text()).toContain("native hook relay timed out");
+      expect(invokeBridge).toHaveBeenCalledOnce();
+      expect(callGateway).not.toHaveBeenCalled();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("rejects oversized hook input without touching the gateway", async () => {
     const callGateway = vi.fn();
     const stderr = createWritableTextBuffer();

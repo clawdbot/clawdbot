@@ -19,6 +19,7 @@ export type GatewayProtocolSocketHandlers = {
 export type GatewayProtocolRequestOptions = {
   timeoutMs?: number | null;
   expectFinal?: boolean;
+  onSent?: () => void;
   onAccepted?: (payload: unknown) => void;
   signal?: AbortSignal;
 };
@@ -294,6 +295,7 @@ export class GatewayProtocolClient<TPlan> {
       this.pending.set(id, pending);
       try {
         socket.send(JSON.stringify({ type: "req", id, method, params }));
+        this.invoke("sent", () => options?.onSent?.());
       } catch (error) {
         this.pending.delete(id);
         cleanup();

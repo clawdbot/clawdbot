@@ -804,8 +804,8 @@
 }
 
 .sw-btn--primary {
-  background: var(--accent);
-  color: white;
+  background: var(--primary);
+  color: var(--primary-foreground);
   border-color: var(--accent);
 }
 
@@ -814,7 +814,15 @@
 }
 
 .sw-btn--primary:disabled:hover {
-  background: var(--accent);
+  background: var(--primary);
+}
+
+:root[data-theme="dark"] .sw-btn--primary:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+:root[data-theme="openknot"] .sw-btn--primary:hover:not(:disabled) {
+  background: var(--primary-hover);
 }
 
 .sw-btn.is-busy {
@@ -1497,13 +1505,23 @@
 }
 
 .sw-today__big--primary {
-  background: var(--accent);
+  background: var(--primary);
   border-color: var(--accent);
-  color: white;
+  color: var(--primary-foreground);
 }
 
 .sw-today__big--primary:hover:not([disabled]) {
   filter: brightness(1.05);
+}
+
+:root[data-theme="dark"] .sw-today__big--primary:hover:not([disabled]) {
+  background: var(--primary-hover);
+  filter: none;
+}
+
+:root[data-theme="openknot"] .sw-today__big--primary:hover:not([disabled]) {
+  background: var(--primary-hover);
+  filter: none;
 }
 
 .sw-today__big--tweak {

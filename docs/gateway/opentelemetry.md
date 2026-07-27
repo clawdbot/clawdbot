@@ -97,15 +97,7 @@ stdout, or `both` for both.
       logsExporter: "otlp", // otlp | stdout | both
       sampleRate: 0.2, // root-span sampler, 0.0..1.0
       flushIntervalMs: 60000, // metric export interval (min 1000ms)
-      captureContent: {
-        enabled: false,
-        inputMessages: false,
-        outputMessages: false,
-        toolInputs: false,
-        toolOutputs: false,
-        systemPrompt: false,
-        toolDefinitions: false,
-      },
+      captureContent: false,
     },
   },
 }
@@ -132,8 +124,7 @@ Values that look like scoped agent session keys (for example starting with
 `agent:`) are replaced with `unknown` on low-cardinality attributes. OTLP log
 records keep severity, logger, code location, trusted trace context, and
 sanitized attributes by default; the raw log message body is exported only
-when `diagnostics.otel.captureContent` is boolean `true`. Granular
-`captureContent.*` subkeys never enable log bodies. Talk metrics export only
+when `diagnostics.otel.captureContent` is `true`. Talk metrics export only
 bounded event metadata (mode, transport, provider, event type) - no
 transcripts, audio payloads, session ids, turn ids, call ids, room ids, or
 handoff tokens.
@@ -143,23 +134,11 @@ from OpenClaw-owned diagnostic trace context for the active model call.
 Existing caller-supplied `traceparent` headers are replaced, so plugins or
 custom provider options cannot spoof cross-service trace ancestry.
 
-Set `diagnostics.otel.captureContent.*` to `true` only when your collector
-and retention policy are approved for prompt, response, tool, or
-system-prompt text. Each subkey is independent:
-
-- `inputMessages` - user prompt content.
-- `outputMessages` - model response content.
-- `toolInputs` - tool argument payloads.
-- `toolOutputs` - tool result payloads.
-- `systemPrompt` - assembled system/developer prompt.
-- `toolDefinitions` - model tool names, descriptions, and schemas.
-
-When any subkey is enabled, model and tool spans get bounded, redacted
-`openclaw.content.*` attributes for that class only.
-
-<Note>
-Boolean `captureContent: true` enables `inputMessages`, `outputMessages`, `toolInputs`, `toolOutputs`, `toolDefinitions`, and OTLP log bodies together, but **not** `systemPrompt` - set `captureContent.systemPrompt: true` explicitly if you also need the assembled system prompt.
-</Note>
+Set `diagnostics.otel.captureContent` to `true` only when your collector and
+retention policy are approved for prompt, response, tool, and tool-definition
+text. This enables bounded, redacted input messages, output messages, tool
+inputs, tool outputs, tool definitions, and OTLP log bodies. System prompts
+remain excluded.
 
 `toolInputs`/`toolOutputs` content is captured for the built-in agent
 runtime's tool executions (`openclaw.content.tool_input` and
@@ -278,12 +257,11 @@ CLI boundary:
 - `openclaw.model_call.time_to_first_byte_ms` is time to the first observable
   Claude CLI stdout or stderr output. It is not network TTFB.
 
-With the matching granular `captureContent` fields enabled, the span exports
-the effective prompt OpenClaw sends to Claude Code, OpenClaw's appended system
-prompt, and visible assistant text/reasoning/tool-call identity through
-`gen_ai.input.messages`, `gen_ai.output.messages`, and
-`gen_ai.system_instructions`. Tool arguments, opaque thinking signatures, and
-tool results are omitted from the Claude assistant envelope. OpenClaw does not
+With `captureContent` enabled, the span exports the effective prompt OpenClaw
+sends to Claude Code and visible assistant text/reasoning/tool-call identity
+through `gen_ai.input.messages` and `gen_ai.output.messages`. Tool arguments,
+opaque thinking signatures, tool results, and system prompts are omitted from
+the Claude assistant envelope. OpenClaw does not
 claim access to Claude Code's private system prompt, hidden resumed or
 compacted request payload, native internal tool schemas, raw Anthropic HTTP
 request, internal retries, upstream request id, or true network TTFB. Because
@@ -350,28 +328,18 @@ bounds; content remains off by default.
 
 ### Session liveness telemetry
 
-`diagnostics.stuckSessionWarnMs` is the no-progress age threshold for session
-liveness diagnostics. A `processing` session does not age toward this
-threshold while OpenClaw observes reply, tool, status, block, or ACP runtime
-progress. Typing keepalives do not count as progress, so a silent model or
-harness can still be detected.
+A `processing` session does not age toward the built-in liveness threshold while OpenClaw observes reply, tool, status, block, or ACP runtime progress. Typing keepalives do not count as progress, so a silent model or harness can still be detected.
 
 OpenClaw classifies sessions by the work it can still observe:
 
 - `session.long_running`: active embedded work, model calls, or tool calls
-  are still making progress. Owned model calls that stay silent past
-  `diagnostics.stuckSessionWarnMs` also report as long-running before
-  `diagnostics.stuckSessionAbortMs`, so slow or non-streaming model providers
-  do not look like stalled gateway sessions while abort-observable.
+  are still making progress. Owned silent model calls also report as long-running before the built-in abort threshold, so slow or non-streaming model providers do not look like stalled gateway sessions while abort-observable.
 - `session.stalled`: active work exists, but the active run has not reported
   recent progress. Owned model calls switch from `session.long_running` to
-  `session.stalled` at or after `diagnostics.stuckSessionAbortMs`; ownerless
+  `session.stalled` at or after the built-in abort threshold; ownerless
   stale model/tool activity is not treated as harmless long-running work.
   Stalled embedded runs stay observe-only at first, then abort-drain after
-  `diagnostics.stuckSessionAbortMs` with no progress so queued turns behind
-  the lane can resume. When unset, the abort threshold defaults to the safer
-  extended window of at least 5 minutes and 3x
-  `diagnostics.stuckSessionWarnMs`.
+  the abort threshold with no progress so queued turns behind the lane can resume.
 - `session.stuck`: stale session bookkeeping with no active work, or an idle
   queued session with stale ownerless model/tool activity. This releases the
   affected session lane immediately after recovery gates pass.
@@ -546,7 +514,7 @@ OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload openclaw gateway
 ```
 
 Flag output goes to the standard log file (`logging.file`) and is still
-redacted by `logging.redactSensitive`. Full guide:
+redacted by the always-on log redaction policy. Full guide:
 [Diagnostics flags](/diagnostics/flags).
 
 ## Disable

@@ -51,8 +51,6 @@ type ChannelSetupSelectionEntry = {
     label: string;
     selectionLabel?: string;
     exposure?: { setup?: boolean };
-    showConfigured?: boolean;
-    showInSetup?: boolean;
   };
 };
 

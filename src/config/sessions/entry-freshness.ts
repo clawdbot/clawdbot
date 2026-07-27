@@ -12,7 +12,7 @@ import {
   type SessionResetPolicy,
   type SessionResetType,
 } from "./reset.js";
-import { loadSessionEntry, type SessionAccessScope } from "./session-accessor.js";
+import { loadSessionEntryReadOnly, type SessionAccessScope } from "./session-accessor.js";
 import type { SessionEntry } from "./types.js";
 
 type ResolveSessionEntryResetFreshnessParams = SessionAccessScope & {
@@ -54,7 +54,8 @@ export function hasProviderOwnedSession(entry: SessionEntry | undefined): boolea
 export function resolveSessionEntryResetFreshness(
   params: ResolveSessionEntryResetFreshnessParams,
 ): ResolvedSessionEntryResetFreshness {
-  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
+  const agentId =
+    params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey, params.defaultAgentId);
   const sessionCfg = params.sessionCfg;
   const storePath =
     params.storePath ??
@@ -62,7 +63,7 @@ export function resolveSessionEntryResetFreshness(
       agentId,
       env: params.env,
     });
-  const entry = loadSessionEntry({
+  const entry = loadSessionEntryReadOnly({
     ...params,
     agentId,
     storePath,

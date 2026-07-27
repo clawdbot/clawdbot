@@ -49,6 +49,9 @@ const readConfigFileSnapshot = vi.hoisted(() =>
 const logPathTracker = createSuiteLogPathTracker("openclaw-guided-onboard-log-");
 
 vi.mock("../config/config.js", () => ({ readConfigFileSnapshot }));
+vi.mock("./onboard-agent.js", () => ({
+  ensureOnboardingAgent: async ({ config }: { config: OpenClawConfig }) => ({ config }),
+}));
 
 vi.mock("./onboard-helpers.js", () => ({
   DEFAULT_WORKSPACE: "/tmp/openclaw-workspace",
@@ -78,7 +81,7 @@ function existingModelCandidate() {
   return {
     kind: "existing-model",
     label: "Current model",
-    detail: "already configured",
+    detail: "acme/workspace-model — already configured",
     modelRef: "acme/workspace-model",
     recommended: false,
     credentials: true,
@@ -108,6 +111,10 @@ function setupApplyResult() {
     bootstrapPending: false,
     lines: [],
   };
+}
+
+function recommendationOutcome(config: OpenClawConfig) {
+  return { config, commitResult: vi.fn() };
 }
 
 function setupDeps(params: {
@@ -149,7 +156,8 @@ function setupDeps(params: {
       })),
     persistRiskAcknowledgement: params.persistRiskAcknowledgement ?? vi.fn(async () => undefined),
     runSetupMemoryImportStep: params.runSetupMemoryImportStep ?? vi.fn(async () => undefined),
-    runAppRecommendations: params.runAppRecommendations ?? vi.fn(async ({ config }) => config),
+    runAppRecommendations:
+      params.runAppRecommendations ?? vi.fn(async ({ config }) => recommendationOutcome(config)),
     runBrowserHandoff:
       params.runBrowserHandoff ??
       (vi.fn(async () => ({
@@ -232,7 +240,7 @@ describe("runGuidedOnboarding", () => {
     });
     const applySetup = vi.fn(async () => setupApplyResult());
     const runAppRecommendations = vi.fn<NonNullable<GuidedOnboardingDeps["runAppRecommendations"]>>(
-      async ({ config }) => config,
+      async ({ config }) => recommendationOutcome(config),
     );
     const deps = setupDeps({ prompter, applySetup, runAppRecommendations });
     const runtime = makeRuntime();
@@ -275,7 +283,7 @@ describe("runGuidedOnboarding", () => {
     const prompter = createWizardPrompter();
     const applySetup = vi.fn(async () => setupApplyResult());
     const runAppRecommendations = vi.fn<NonNullable<GuidedOnboardingDeps["runAppRecommendations"]>>(
-      async ({ config }) => config,
+      async ({ config }) => recommendationOutcome(config),
     );
     const probeBrowserHandoffGateway = vi.fn(async () => ({ ok: true }));
     const runBrowserHandoff = vi.fn(async () => ({ handedOff: true as const }));

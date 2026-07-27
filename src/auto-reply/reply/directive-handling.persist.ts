@@ -152,6 +152,7 @@ export async function persistInlineDirectives(params: {
         allowedModelKeys,
         allowedModelCatalog: params.modelCatalog ?? [],
         provider,
+        agentId: activeAgentId,
       })
     : undefined;
   const modelRuntimeResolution = modelResolution?.modelSelection
@@ -429,6 +430,7 @@ export async function persistInlineDirectives(params: {
           key: sessionKey,
           nextProvider: provider,
           nextModel: model,
+          nextRouteResolution: "resolved",
           nextModelOverrideSource: "user",
           nextAuthProfileId: appliedSessionEntry.authProfileOverride,
           nextAuthProfileIdSource: appliedSessionEntry.authProfileOverrideSource,

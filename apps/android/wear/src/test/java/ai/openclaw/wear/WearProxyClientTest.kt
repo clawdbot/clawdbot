@@ -23,6 +23,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -757,6 +758,45 @@ class WearProxyClientTest {
   }
 
   @Test
+  fun rpcResponseMustMatchTheCurrentStreamAndWatermark() {
+    val tracker = WearEventSequenceTracker()
+
+    tracker.adoptSnapshot("stream", 10)
+
+    assertTrue(tracker.isResponseCurrent(tracker.beginResponseRequest(), "stream", 10))
+    assertFalse(tracker.isResponseCurrent(tracker.beginResponseRequest(), "stream", 11))
+    assertFalse(tracker.isResponseCurrent(tracker.beginResponseRequest(), "stream", 9))
+    assertFalse(tracker.isResponseCurrent(tracker.beginResponseRequest(), "new-stream", 11))
+    val pendingSnapshot = tracker.beginResponseRequest()
+    tracker.requireSnapshot()
+    assertFalse(tracker.isResponseCurrent(pendingSnapshot, "stream", 11))
+  }
+
+  @Test
+  fun legacyRpcResponseWithoutWatermarkRequiresUnchangedEvents() {
+    val tracker = WearEventSequenceTracker()
+
+    tracker.adoptSnapshot(null, 10)
+
+    assertTrue(tracker.isResponseCurrent(tracker.beginResponseRequest(), null, null))
+    val staleRequest = tracker.beginResponseRequest()
+    assertEquals(WearSequenceDecision.Accepted, tracker.accept(null, 11))
+    assertFalse(tracker.isResponseCurrent(staleRequest, null, null))
+  }
+
+  @Test
+  fun newerRpcRequestInvalidatesAnOlderCompletion() {
+    val tracker = WearEventSequenceTracker()
+
+    tracker.adoptSnapshot("stream", 10)
+    val olderRequest = tracker.beginResponseRequest()
+    val newerRequest = tracker.beginResponseRequest()
+
+    assertFalse(tracker.isResponseCurrent(olderRequest, "stream", 12))
+    assertTrue(tracker.isResponseCurrent(newerRequest, "stream", 10))
+  }
+
+  @Test
   fun resyncBufferReplaysEventsNewerThanTheSnapshotWatermark() {
     val tracker = WearEventSequenceTracker()
     val buffer = WearEventResyncBuffer()
@@ -839,7 +879,6 @@ class WearProxyClientTest {
       WearUiState(
         loading = false,
         connected = true,
-        status = "Connected",
         proxyCapabilities = WearProxyCapability.entries.toSet(),
         sessions = listOf(selected),
         selectedSession = selected,
@@ -847,7 +886,7 @@ class WearProxyClientTest {
         streamText = "typing",
         activeRunId = "run-1",
         sending = true,
-        error = "old",
+        failure = WearConversationFailure.INTERNAL_ERROR,
       )
 
     val reset = state.resetForPhoneChange()
@@ -861,7 +900,7 @@ class WearProxyClientTest {
     assertEquals(null, reset.streamText)
     assertEquals(null, reset.activeRunId)
     assertTrue(reset.sending)
-    assertEquals(null, reset.error)
+    assertEquals(null, reset.failure)
   }
 
   @Test

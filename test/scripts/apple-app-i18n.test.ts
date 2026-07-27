@@ -1,21 +1,23 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   APPLE_I18N_LOCALES,
+  assertMacosCatalogCurrent,
   buildIosCatalog,
-  checkAppleAppI18n,
+  buildMacosCatalog,
   compileMacosLocalizations,
   findAmbiguousRuntimeInterpolations,
   infoPlistTranslationCandidates,
   selectInfoPlistTranslation,
+  verifyAppleAppI18n,
 } from "../../scripts/apple-app-i18n.ts";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-app-i18n.ts";
 
 describe("Apple app i18n catalogs", () => {
-  it("keeps generated runtime coverage complete for every native locale", async () => {
-    await expect(checkAppleAppI18n()).resolves.toBeUndefined();
+  it("keeps source-owned runtime coverage complete", async () => {
+    await expect(verifyAppleAppI18n()).resolves.toBeUndefined();
   });
 
   it("ships translated runtime keys for iOS, watchOS, and explicit localized calls", async () => {
@@ -64,6 +66,100 @@ describe("Apple app i18n catalogs", () => {
 
   it("keeps the Apple and native shipped locale sets identical", () => {
     expect(APPLE_I18N_LOCALES).toEqual(NATIVE_I18N_LOCALES);
+  });
+
+  it("derives broad macOS catalog coverage from the native source inventory", async () => {
+    const inventory = JSON.parse(await readFile("apps/.i18n/native-source.json", "utf8")) as {
+      entries: Array<{
+        id: string;
+        kind: string;
+        line: number;
+        path: string;
+        source: string;
+        surface: string;
+      }>;
+      version: number;
+    };
+    const build = buildMacosCatalog(
+      { sourceLanguage: "en", strings: {}, version: "1.0" },
+      inventory,
+      [],
+    );
+    const keys = Object.keys(build.catalog.strings ?? {});
+
+    expect(keys.length).toBeGreaterThan(900);
+    expect(keys).toEqual(
+      expect.arrayContaining([
+        "Browse ClawHub",
+        "Done in %@",
+        "Enable debug tools",
+        "Everyday OpenClaw app behavior.",
+        "General",
+        "Shelling",
+        "Voice Wake requires macOS 26 or newer",
+      ]),
+    );
+    expect(keys).not.toContain("OpenClaw");
+    expect(keys.some((key) => key.includes("\\("))).toBe(false);
+  });
+
+  it("rejects a checked-in macOS catalog that lags the derived inventory", () => {
+    const build = buildMacosCatalog(
+      { sourceLanguage: "en", strings: {}, version: "1.0" },
+      {
+        version: 1,
+        entries: [
+          {
+            id: "native.apple.settings",
+            kind: "ui-call",
+            line: 1,
+            path: "apps/macos/Sources/OpenClaw/Settings.swift",
+            source: "Settings",
+            surface: "apple",
+          },
+        ],
+      },
+      [],
+    );
+
+    expect(() =>
+      assertMacosCatalogCurrent(
+        `${JSON.stringify({ sourceLanguage: "en", strings: {}, version: "1.0" }, null, 2)}\n`,
+        build,
+      ),
+    ).toThrow("Apple catalog apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings is stale");
+  });
+
+  it("keeps macOS settings literals localized and runtime values verbatim", async () => {
+    const [components, channels, clawHub, gateways, general, approvals, voiceWake] =
+      await Promise.all([
+        readFile("apps/macos/Sources/OpenClaw/SettingsComponents.swift", "utf8"),
+        readFile("apps/macos/Sources/OpenClaw/ChannelConfigForm.swift", "utf8"),
+        readFile("apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift", "utf8"),
+        readFile("apps/macos/Sources/OpenClaw/GatewaySettings.swift", "utf8"),
+        readFile("apps/macos/Sources/OpenClaw/GeneralSettings.swift", "utf8"),
+        readFile("apps/macos/Sources/OpenClaw/SystemRunSettingsView.swift", "utf8"),
+        readFile("apps/macos/Sources/OpenClaw/VoiceWakeSettings.swift", "utf8"),
+      ]);
+
+    expect(components).toContain("enum SettingsTextValue: ExpressibleByStringLiteral");
+    expect(components).toContain("case localized(LocalizedStringKey)");
+    expect(components).toContain("case verbatim(String)");
+    expect(components).toContain("let title: SettingsTextValue");
+    expect(components).not.toContain("let title: String");
+    expect(channels).toContain('title: label.map(SettingsTextValue.verbatim) ?? "Enabled"');
+    expect(channels).toContain("subtitle: help.map(SettingsTextValue.verbatim)");
+    expect(clawHub).toContain("title: .verbatim(self.skill.displayName)");
+    expect(gateways).toContain("subtitle: .verbatim(profile.url.absoluteString)");
+    expect(general).toContain(
+      "subtitle: self.controlChannelSubtitle.map(SettingsTextValue.verbatim)",
+    );
+    expect(approvals).toContain(
+      "subtitle: self.model.readErrorMessage.map(SettingsTextValue.verbatim)",
+    );
+    expect(approvals).toContain("subtitle: .localized(self.model.security.policyDescription)");
+    expect(approvals).toContain("subtitle: .localized(self.model.ask.policyDescription)");
+    expect(voiceWake).toContain('format: String(localized: "Language %lld")');
   });
 
   it("selects duplicate-source translations deterministically while preserving shipped translations", () => {
@@ -285,6 +381,14 @@ describe("Apple app i18n catalogs", () => {
       "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "utf8",
     );
+    const agentDetailComponents = await readFile(
+      "apps/ios/Sources/Design/AgentProTab+DetailComponents.swift",
+      "utf8",
+    );
+    const agentDreaming = await readFile(
+      "apps/ios/Sources/Design/AgentProDreamingDestination.swift",
+      "utf8",
+    );
     const settingsActions = await readFile(
       "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "utf8",
@@ -327,6 +431,23 @@ describe("Apple app i18n catalogs", () => {
     expect(agentOverview).toContain(
       "func metricTile(\n        icon: String,\n        title: OpenClawTextValue,\n        value: String,\n        detail: OpenClawTextValue",
     );
+    expect(agentDetailComponents).toContain(
+      "func detailMetric(label: OpenClawTextValue, value: String)",
+    );
+    expect(agentDetailComponents).toContain("Text(verbatim: value)");
+    expect(agentDetailComponents).toContain(
+      "func emptyDetailRow(\n        icon: String,\n        title: OpenClawTextValue,\n        detail: OpenClawTextValue)",
+    );
+    expect(agentDetailComponents).toContain("title.text");
+    expect(agentDetailComponents).toContain("detail.text");
+    expect(agentDetailComponents).not.toContain("func detailMetric(label: String");
+    expect(agentDetailComponents).not.toContain("func emptyDetailRow(icon: String, title: String");
+    expect(agentDreaming).toContain(
+      "private func detailMetric(label: OpenClawTextValue, value: String)",
+    );
+    expect(agentDreaming).toContain("label.text");
+    expect(agentDreaming).toContain("Text(verbatim: value)");
+    expect(agentDreaming).not.toContain("private func detailMetric(label: String");
     expect(settingsActions).toContain(
       "func diagnosticCheckRow(\n        icon: String,\n        title: OpenClawTextValue,\n        detail: OpenClawTextValue,\n        value: OpenClawTextValue",
     );
@@ -368,7 +489,7 @@ describe("Apple app i18n catalogs", () => {
     ]);
   });
 
-  it("generates InfoPlist localizations for every shipped iOS target", async () => {
+  it("generates only localized usage descriptions for every shipped iOS target", async () => {
     const french = await readFile("apps/ios/Sources/fr.lproj/InfoPlist.strings", "utf8");
     const watchChinese = await readFile(
       "apps/ios/WatchApp/zh-Hans.lproj/InfoPlist.strings",
@@ -387,8 +508,28 @@ describe("Apple app i18n catalogs", () => {
     expect(french).toContain('"NSMicrophoneUsageDescription" = ');
     expect(french).toContain('"NSHealthUpdateUsageDescription" = ');
     expect(watchChinese).toContain('"NSLocalNetworkUsageDescription" = ');
-    expect(shareGerman).toContain('"CFBundleDisplayName" = "OpenClaw Share";');
-    expect(activityJapanese).toContain('"CFBundleDisplayName" = "OpenClaw Activity";');
+    expect(shareGerman.trim()).toBe("");
+    expect(activityJapanese.trim()).toBe("");
+
+    for (const root of [
+      "apps/ios/Sources",
+      "apps/ios/WatchApp",
+      "apps/ios/ShareExtension",
+      "apps/ios/ActivityWidget",
+    ]) {
+      const localeDirs = (await readdir(root, { withFileTypes: true })).filter(
+        (entry) => entry.isDirectory() && entry.name.endsWith(".lproj"),
+      );
+      expect(localeDirs).toHaveLength(APPLE_I18N_LOCALES.length);
+      for (const localeDir of localeDirs) {
+        const localizedPlist = await readFile(
+          path.join(root, localeDir.name, "InfoPlist.strings"),
+          "utf8",
+        );
+        expect(localizedPlist).not.toContain("CFBundleDisplayName");
+        expect(localizedPlist).not.toMatch(/\$\([^)]*\)|\$\{[^}]*\}/u);
+      }
+    }
   });
 
   it("refreshes InfoPlist copy from translations for the current source", () => {
@@ -459,6 +600,11 @@ describe("Apple app i18n catalogs", () => {
         "utf8",
       );
       expect(swedish).toContain('"Logout" = "Logga ut";');
+      const turkish = await readFile(
+        path.join(outputDir, "tr.lproj", "Localizable.strings"),
+        "utf8",
+      );
+      expect(turkish).toContain('"General" = "Genel";');
       await expect(
         readFile(path.join(outputDir, "zh-Hans.lproj", "Localizable.strings"), "utf8"),
       ).resolves.toContain('"Save" = ');

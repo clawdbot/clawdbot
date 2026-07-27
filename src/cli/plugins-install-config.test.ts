@@ -63,6 +63,8 @@ vi.mock("./plugins-location-bridges.js", () => ({
 const DISCORD_REPO_INSTALL_SPEC = repoInstallSpec("discord");
 const installWriteOptions = {
   assertConfigPathForWrite: assertConfigPathForWriteMock,
+  // Central install persistence stamps the journal origin onto every write.
+  auditOrigin: "plugin-install",
   expectedConfigPath: "/tmp/config.json5",
   ownedConfigPathForWrite: "/tmp/config.json5",
   includeFileHashesForWrite: { "/tmp/plugins.json5": "include-1" },

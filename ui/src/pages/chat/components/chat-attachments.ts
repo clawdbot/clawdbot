@@ -7,6 +7,7 @@ import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import {
+  generateAttachmentId,
   getChatAttachmentDataUrl,
   getChatAttachmentPreviewUrl,
   registerChatAttachmentPayload,
@@ -36,6 +37,65 @@ type ChatAttachmentControlsProps = {
   readSignal?: AbortSignal;
 };
 
+export class ChatAttachmentReadLifecycle {
+  pendingReads = 0;
+  private controller = new AbortController();
+
+  constructor(private readonly notify: () => void) {}
+
+  get readSignal(): AbortSignal {
+    return this.controller.signal;
+  }
+
+  updatePending(readSignal: AbortSignal, delta: 1 | -1): void {
+    if (this.controller.signal !== readSignal) {
+      return;
+    }
+    this.pendingReads = Math.max(0, this.pendingReads + delta);
+    this.notify();
+  }
+
+  abortReads(): void {
+    this.controller.abort();
+    this.controller = new AbortController();
+    this.pendingReads = 0;
+    this.notify();
+  }
+}
+
+export function isFileDrag(dataTransfer: DataTransfer | null): boolean {
+  return Array.from(dataTransfer?.types ?? []).includes("Files");
+}
+
+const TEXT_ENTRY_INPUT_TYPES = new Set([
+  "email",
+  "number",
+  "password",
+  "search",
+  "tel",
+  "text",
+  "url",
+]);
+
+// Native text/URL drop insertion is only meaningful on controls that can
+// actually accept it; anywhere else (disabled/readonly inputs, non-text
+// controls like checkbox/range) an uncancelled URL drop navigates the app
+// away and discards unsent drafts.
+export function isEditableDropTarget(event: DragEvent): boolean {
+  const target = event.target;
+  if (!(target instanceof Element)) {
+    return false;
+  }
+  const editable = target.closest("textarea, input, [contenteditable]");
+  if (editable instanceof HTMLInputElement) {
+    return TEXT_ENTRY_INPUT_TYPES.has(editable.type) && !editable.disabled && !editable.readOnly;
+  }
+  if (editable instanceof HTMLTextAreaElement) {
+    return !editable.disabled && !editable.readOnly;
+  }
+  return editable instanceof HTMLElement && editable.isContentEditable;
+}
+
 function currentAttachments(props: ChatAttachmentControlsProps): ChatAttachment[] {
   return props.getAttachments?.() ?? props.attachments ?? [];
 }
@@ -53,10 +113,6 @@ function clickComposerInput(target: HTMLElement, selector: string) {
     .closest(".agent-chat__composer-shell, .new-session-page__composer")
     ?.querySelector<HTMLInputElement>(selector)
     ?.click();
-}
-
-function generateAttachmentId(): string {
-  return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
 function chatAttachmentFromFile(file: File, dataUrl: string): ChatAttachment {
@@ -208,7 +264,6 @@ function readAttachmentFile(
   if (props.readSignal?.aborted) {
     return Promise.resolve(null);
   }
-  props.onPendingReadsChange?.(1);
   return new Promise((resolve) => {
     const reader = new FileReader();
     let settled = false;
@@ -218,7 +273,6 @@ function readAttachmentFile(
       }
       settled = true;
       props.readSignal?.removeEventListener("abort", abort);
-      props.onPendingReadsChange?.(-1);
       resolve(attachment);
     };
     const abort = () => {
@@ -247,19 +301,26 @@ async function appendAttachmentFiles(files: readonly File[], props: ChatAttachme
   if (!props.onAttachmentsChange || supported.length === 0) {
     return;
   }
-  const additions = (
-    await Promise.all(supported.map((file) => readAttachmentFile(file, props)))
-  ).filter((attachment): attachment is ChatAttachment => attachment !== null);
-  if (props.readSignal?.aborted) {
-    for (const attachment of additions) {
-      releaseChatAttachmentPayload(attachment.id);
+  props.onPendingReadsChange?.(1);
+  try {
+    const additions = (
+      await Promise.all(supported.map((file) => readAttachmentFile(file, props)))
+    ).filter((attachment): attachment is ChatAttachment => attachment !== null);
+    if (props.readSignal?.aborted) {
+      for (const attachment of additions) {
+        releaseChatAttachmentPayload(attachment.id);
+      }
+      return;
     }
-    return;
+    if (additions.length === 0) {
+      return;
+    }
+    // Keep the batch pending until its payloads are in the composer so an
+    // immediate send cannot slip between FileReader completion and insertion.
+    props.onAttachmentsChange([...currentAttachments(props), ...additions]);
+  } finally {
+    props.onPendingReadsChange?.(-1);
   }
-  if (additions.length === 0) {
-    return;
-  }
-  props.onAttachmentsChange([...currentAttachments(props), ...additions]);
 }
 
 export function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachmentControlsProps) {
@@ -314,6 +375,68 @@ function handleChatAttachmentFileSelect(e: Event, props: ChatAttachmentControlsP
 export function handleChatAttachmentDrop(e: DragEvent, props: ChatAttachmentControlsProps) {
   e.preventDefault();
   void appendAttachmentFiles([...(e.dataTransfer?.files ?? [])], props);
+}
+
+type ChatAttachmentDropProps = ChatAttachmentControlsProps & {
+  canCompose: boolean;
+};
+
+export function createChatAttachmentDropHandlers(props: ChatAttachmentDropProps) {
+  let depth = 0;
+  const setActive = (event: DragEvent, active: boolean) => {
+    const target = event.currentTarget;
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
+    if (active) {
+      if (!props.canCompose || !isFileDrag(event.dataTransfer)) {
+        return;
+      }
+      depth += 1;
+    } else {
+      depth = Math.max(0, depth - 1);
+    }
+    target.toggleAttribute("data-attachment-drop-active", depth > 0);
+  };
+  const clearActive = (event: DragEvent) => {
+    depth = 0;
+    const target = event.currentTarget;
+    if (target instanceof HTMLElement) {
+      target.removeAttribute("data-attachment-drop-active");
+    }
+  };
+  return {
+    onDragenter: (event: DragEvent) => setActive(event, true),
+    onDragleave: (event: DragEvent) => setActive(event, false),
+    onDragover: (event: DragEvent) => {
+      if (!isFileDrag(event.dataTransfer)) {
+        if (!isEditableDropTarget(event)) {
+          event.preventDefault();
+          if (event.dataTransfer) {
+            event.dataTransfer.dropEffect = "none";
+          }
+        }
+        return;
+      }
+      event.preventDefault();
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = props.canCompose ? "copy" : "none";
+      }
+    },
+    onDrop: (event: DragEvent) => {
+      if (!isFileDrag(event.dataTransfer)) {
+        if (!isEditableDropTarget(event)) {
+          event.preventDefault();
+        }
+        return;
+      }
+      event.preventDefault();
+      clearActive(event);
+      if (props.canCompose) {
+        handleChatAttachmentDrop(event, props);
+      }
+    },
+  };
 }
 
 export function renderChatAttachmentInputs(props: ChatAttachmentControlsProps) {

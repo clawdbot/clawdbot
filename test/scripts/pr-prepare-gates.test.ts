@@ -63,10 +63,11 @@ function runGatesBash(
         `script_parent_dir='${repoRoot}/scripts'`,
         `source '${repoRoot}/scripts/pr-lib/common.sh'`,
         `source '${repoRoot}/scripts/pr-lib/gates.sh'`,
+        "mark_pr_operation_side_effects_started() { :; }",
         ...(options.sourcePush ? [`source '${repoRoot}/scripts/pr-lib/push.sh'`] : []),
         ...(options.sourcePrepareCore
           ? [`source '${repoRoot}/scripts/pr-lib/prepare-core.sh'`]
-          : []),
+          : ["refresh_prep_branch_for_reviewed_head() { :; }"]),
         script,
       ].join("\n"),
     ],
@@ -170,6 +171,69 @@ function makeSyncRepo(options: { needsRebase: boolean }): string {
   writeFileSync(join(repoDir, ".local", "prep-context.env"), "PR_HEAD=topic\nPREP_BRANCH=prep\n");
   writeFileSync(join(repoDir, ".local", "prep.md"), "# Prepare\n");
   return repoDir;
+}
+
+function makePreparePushHeadDriftRepo(): {
+  repoDir: string;
+  recordedHead: string;
+  reviewedHead: string;
+} {
+  const repoDir = join(makeTempDir("openclaw-pr-prepare-drift-"), "repo");
+  mkdirSync(repoDir);
+
+  const git = (...args: string[]) => {
+    const result = spawnSync("git", args, { cwd: repoDir, encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    return result.stdout.trim();
+  };
+  git("init", "-q", "-b", "main");
+  git("config", "user.name", "t");
+  git("config", "user.email", "t@example.com");
+  writeFileSync(join(repoDir, "base.txt"), "base\n");
+  git("add", "base.txt");
+  git("commit", "-qm", "base");
+  const recordedHead = git("rev-parse", "HEAD");
+  git("remote", "add", "origin", ".");
+  git("fetch", "-q", "origin", "main");
+
+  git("checkout", "-qb", "pr-4242");
+  writeFileSync(join(repoDir, "reviewed.txt"), "new reviewed head\n");
+  git("add", "reviewed.txt");
+  git("commit", "-qm", "reviewed head update");
+  const reviewedHead = git("rev-parse", "HEAD");
+
+  git("checkout", "-qb", "prep", recordedHead);
+  writeFileSync(join(repoDir, "stale-fixup.txt"), "belongs to stale prep head\n");
+  git("add", "stale-fixup.txt");
+  git("commit", "-qm", "stale prep fixup");
+
+  mkdirSync(join(repoDir, ".local"));
+  writeFileSync(
+    join(repoDir, ".local", "pr-meta.env"),
+    [
+      "PR_NUMBER=4242",
+      "PR_AUTHOR=steipete",
+      "PR_URL=https://example.test/pr/4242",
+      "PR_HEAD=topic",
+      `PR_HEAD_SHA=${reviewedHead}`,
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(
+    join(repoDir, ".local", "prep-context.env"),
+    [
+      "PR_NUMBER=4242",
+      "PR_HEAD=topic",
+      `PR_HEAD_SHA_BEFORE=${recordedHead}`,
+      "PREP_BRANCH=prep",
+      "PREP_STARTED_AT=2026-07-19T00:00:00Z",
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(join(repoDir, ".local", "gates.env"), "GATES_MODE=stale\n");
+  writeFileSync(join(repoDir, ".local", "prep.env"), "PREP_HEAD_SHA=stale\n");
+  writeFileSync(join(repoDir, ".local", "prep.md"), "# Prepare\n");
+  return { repoDir, recordedHead, reviewedHead };
 }
 
 function prepareSyncHeadStubs(): string[] {
@@ -507,6 +571,45 @@ describe("prepare sync-head transitions", () => {
   });
 });
 
+describe("prepare push head drift", () => {
+  it("rebuilds a stale prep branch and reruns gates before push", () => {
+    const { repoDir, recordedHead, reviewedHead } = makePreparePushHeadDriftRepo();
+    const result = runGatesBash(
+      [
+        "enter_worktree() { :; }",
+        `reviewed_head='${reviewedHead}'`,
+        'gh() { printf "%s\\n" "$reviewed_head"; }',
+        "verify_pr_head_branch_matches_expected() { :; }",
+        "prepare_gates() {",
+        "  touch .local/gates-reran",
+        "  printf 'DOCS_ONLY=false\\nGATES_MODE=fresh\\n' > .local/gates.env",
+        "}",
+        "push_prep_head_to_pr_branch() {",
+        '  local result_env="$7"',
+        '  printf \'PUSH_PREP_HEAD_SHA=%q\\nPUSH_LOCAL_PREP_HEAD_SHA=%q\\nPUSHED_FROM_SHA=%q\\nPR_HEAD_SHA_AFTER_PUSH=%q\\n\' "$3" "$3" "$reviewed_head" "$3" > "$result_env"',
+        "}",
+        "prepare_push 4242",
+        'test "$(git rev-parse HEAD)" = "$reviewed_head"',
+        "test -e .local/gates-reran",
+        "test ! -e stale-fixup.txt",
+        'test "$(. .local/prep-context.env; printf "%s" "$PR_HEAD_SHA_BEFORE")" = "$reviewed_head"',
+        `grep -F 'drifted from ${recordedHead} to ${reviewedHead}' .local/prep.md`,
+        "grep -F 'Gate mode: fresh' .local/prep.md",
+      ].join("\n"),
+      { cwd: repoDir, sourcePrepareCore: true },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain(
+      `Prep source head changed from ${recordedHead} to reviewed head ${reviewedHead}.`,
+    );
+    expect(result.stdout).toContain(
+      "Prep branch was refreshed for reviewed head drift; rerunning prepare gates before push.",
+    );
+    expect(result.stdout).toContain("prepare-push complete");
+  });
+});
+
 describe("GraphQL fork publication", () => {
   it("accepts appended fixups and preserves the commit body", () => {
     const { repoDir, headSha } = makeRetryRepo();
@@ -696,7 +799,7 @@ describe("prepare gate stamp transitions", () => {
     }).stdout.trim();
     const result = runGatesBash(
       [
-        `gh() { if [ "$1" = pr ]; then printf '${currentHead}\\n'; else printf 'openclaw/openclaw\\n'; fi; }`,
+        `gh() { if [ "$1" = pr ]; then printf '{"headRefName":"topic","headRefOid":"${currentHead}","isCrossRepository":false}\\n'; else printf 'openclaw/openclaw\\n'; fi; }`,
         "run_quiet_logged() { printf 'ARG:%s\\n' \"$@\"; }",
         `run_hosted_prepare_gates 100606 ${currentHead} false`,
       ].join("\n"),
@@ -709,6 +812,43 @@ describe("prepare gate stamp transitions", () => {
     } else {
       expect(result.stdout).not.toContain("ARG:--recent-sha");
     }
+  });
+
+  it("prints the exact recovery command when hosted CI is missing", () => {
+    const { repoDir, headSha } = makeRetryRepo();
+    const result = runGatesBash(
+      [
+        `gh() { if [ "$1" = pr ]; then printf '{"headRefName":"topic","headRefOid":"${headSha}","isCrossRepository":false}\\n'; else printf 'openclaw/openclaw\\n'; fi; }`,
+        'rg() { command grep -F -q "$3" "$4"; }',
+        `run_quiet_logged() { printf 'Missing successful recent CI workflow for ${headSha}. Observed: none\\n' > "$2"; return 1; }`,
+        `run_hosted_prepare_gates 100606 ${headSha} false`,
+      ].join("\n"),
+      { cwd: repoDir },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("scripts/pr ci-dispatch 100606");
+    expect(result.stdout).toContain(
+      `gh workflow run ci.yml --ref topic -f target_ref=${headSha} -f release_gate=true -f pull_request_number=100606`,
+    );
+  });
+
+  it("does not advertise an unusable dispatch command for fork PRs", () => {
+    const { repoDir, headSha } = makeRetryRepo();
+    const result = runGatesBash(
+      [
+        `gh() { if [ "$1" = pr ]; then printf '{"headRefName":"topic","headRefOid":"${headSha}","isCrossRepository":true}\\n'; else printf 'openclaw/openclaw\\n'; fi; }`,
+        'rg() { command grep -F -q "$3" "$4"; }',
+        `run_quiet_logged() { printf 'Missing successful recent CI workflow for ${headSha}. Observed: none\\n' > "$2"; return 1; }`,
+        `run_hosted_prepare_gates 100606 ${headSha} false`,
+      ].join("\n"),
+      { cwd: repoDir },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("scripts/pr ci-dispatch 100606");
+    expect(result.stdout).toContain("unavailable: PR #100606 comes from a fork");
+    expect(result.stdout).not.toContain("gh workflow run");
   });
 
   it("clears remote stamps when fresh docs-only gates do not reuse prior proof", () => {

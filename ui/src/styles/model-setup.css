@@ -58,6 +58,10 @@
   border-radius: 5px;
 }
 
+.model-setup__icon.provider-brand-icon--fallback {
+  font-size: 11px;
+}
+
 .model-setup__provider-copy,
 .model-setup__manual-provider {
   display: flex;
@@ -102,6 +106,10 @@
   width: 28px;
   height: 28px;
   flex-basis: 28px;
+}
+
+.model-setup__icon--recommendation.provider-brand-icon--fallback {
+  font-size: 12px;
 }
 
 .model-setup__chip {
@@ -209,61 +217,10 @@
   overflow: auto;
 }
 
-.model-setup-wizard__body form {
-  display: grid;
-  gap: 12px;
-}
-
 .model-setup-wizard__footer {
   display: flex;
   justify-content: flex-end;
   border-top: 1px solid var(--border);
-}
-
-.model-setup-wizard__message {
-  white-space: pre-wrap;
-}
-
-.model-setup-wizard__device-code {
-  display: grid;
-  justify-items: start;
-  gap: 8px;
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg);
-}
-
-.model-setup-wizard__device-code code {
-  font-size: 18px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-}
-
-.model-setup-wizard__options {
-  display: grid;
-  gap: 8px;
-}
-
-.model-setup-wizard__option {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  cursor: pointer;
-}
-
-.model-setup-wizard__option small {
-  display: block;
-  margin-top: 2px;
-  color: var(--muted);
-}
-
-.model-setup-wizard__actions {
-  display: flex;
-  gap: 8px;
 }
 
 @media (max-width: 640px) {

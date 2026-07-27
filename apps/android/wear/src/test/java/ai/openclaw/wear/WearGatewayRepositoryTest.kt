@@ -36,11 +36,11 @@ class WearGatewayRepositoryTest {
           when (method) {
             WearRpcMethod.SessionsList ->
               json.parseToJsonElement(
-                """{"sessions":[{"key":"agent:main","agentId":"main","displayName":"Main","updatedAt":7,"hasActiveRun":true}],"activeAgentId":"main","selectedSessionValid":true}""",
+                """{"sessions":[{"key":"agent:main","agentId":"main","displayName":"Main","updatedAt":7,"hasActiveRun":true,"modelRef":"openai/gpt-test"}],"activeAgentId":"main","selectedSessionValid":true}""",
               )
             WearRpcMethod.ChatHistory ->
               json.parseToJsonElement(
-                """{"sessionKey":"agent:main","messages":[{"id":"m1","role":"assistant","content":[{"type":"text","text":"hello 😀"}],"timestamp":9}],"inFlightRun":{"runId":"run-1","text":"working"}}""",
+                """{"sessionKey":"agent:main","selectedModelRef":"openai/gpt-test","messages":[{"id":"m1","role":"assistant","content":[{"type":"text","text":"hello 😀"}],"timestamp":9}],"inFlightRun":{"runId":"run-1","text":"working"}}""",
               )
             else -> error("unexpected $method")
           }
@@ -60,11 +60,13 @@ class WearGatewayRepositoryTest {
       assertEquals("phone", sessions.phoneNodeId)
       assertEquals("phone", sessions.sessions.single().phoneNodeId)
       assertEquals("main", sessions.sessions.single().agentId)
+      assertEquals("openai/gpt-test", sessions.sessions.single().modelRef)
       assertEquals("main", sessions.activeAgentId)
       assertTrue(sessions.selectedSessionValid)
       assertEquals("hello 😀", history.messages.single().text)
       assertEquals("run-1", history.activeRunId)
       assertEquals("working", history.activeText)
+      assertEquals("openai/gpt-test", history.selectedModelRef)
       assertEquals(7L, history.eventSequence)
       assertEquals(setOf("limit", "selectedSessionKey"), requester.calls[0].second.keys)
       assertEquals(setOf("sessionKey", "limit", "maxChars"), requester.calls[1].second.keys)
@@ -84,7 +86,7 @@ class WearGatewayRepositoryTest {
             WearRpcMethod.AgentsSelect -> JsonObject(emptyMap())
             WearRpcMethod.GatewayDisconnect ->
               json.parseToJsonElement(
-                """{"connected":false,"status":"Offline","activeAgentId":"main","selectedModelRef":"openai/gpt-test","capabilities":["agent-controls","gateway-controls","session-selection-lookup"]}""",
+                """{"connected":false,"status":"Offline","activeAgentId":"main","selectedModelRef":"openai/gpt-test","capabilities":["agent-controls","gateway-controls","model-controls","session-selection-lookup"]}""",
               )
             else -> error("unexpected $method")
           }
@@ -102,7 +104,7 @@ class WearGatewayRepositoryTest {
 
       assertEquals("Main", agents.agents.single().name)
       assertTrue(agents.agents.single().selected)
-      assertEquals("Offline", status.detail)
+      assertFalse(status.connected)
       assertEquals("main", status.activeAgentId)
       assertEquals("openai/gpt-test", status.selectedModelRef)
       assertEquals(capabilities, status.capabilities)
@@ -137,10 +139,12 @@ class WearGatewayRepositoryTest {
             capabilities = status.capabilities,
           )
         }.exceptionOrNull()
+      val modelsFailure = runCatching { repository.models(status.phoneNodeId, status.capabilities) }.exceptionOrNull()
 
       assertTrue(status.capabilities.isEmpty())
       assertEquals("unsupported_peer", (agentsFailure as? WearProxyException)?.code)
       assertEquals("unsupported_peer", (gatewayFailure as? WearProxyException)?.code)
+      assertEquals("unsupported_peer", (modelsFailure as? WearProxyException)?.code)
       assertEquals(listOf(WearRpcMethod.ProxyStatus), requester.calls.map(Pair<WearRpcMethod, JsonObject>::first))
     }
 
@@ -150,13 +154,56 @@ class WearGatewayRepositoryTest {
       val requester =
         RecordingRequester { _, _ ->
           json.parseToJsonElement(
-            """{"connected":true,"status":"Connected","capabilities":["agent-controls","future-capability","gateway-controls","session-selection-lookup"]}""",
+            """{"connected":true,"status":"Connected","capabilities":["agent-controls","future-capability","gateway-controls","model-controls","session-selection-lookup"]}""",
           )
         }
 
       val status = WearGatewayRepository(requester).status()
 
       assertEquals(WearProxyCapability.entries.toSet(), status.capabilities)
+    }
+
+  @Test
+  fun modelSelectionKeepsTheSelectedSessionAndUsesThePreferredPhone() =
+    runTest {
+      val capabilities = setOf(WearProxyCapability.ModelControls)
+      val requester =
+        RecordingRequester { method, params ->
+          when (method) {
+            WearRpcMethod.ModelsList -> {
+              assertEquals("openai/gpt-a", params.getValue("selectedModelRef").jsonPrimitive.content)
+              json.parseToJsonElement(
+                """{"models":[{"ref":"openai/gpt-a","name":"GPT A"},{"ref":"openai/gpt-b","name":"GPT B"}]}""",
+              )
+            }
+            WearRpcMethod.ModelsSelect -> {
+              assertEquals("agent:main:thread-7", params.getValue("sessionKey").jsonPrimitive.content)
+              assertEquals("openai/gpt-b", params.getValue("modelRef").jsonPrimitive.content)
+              json.parseToJsonElement(
+                """{"sessionKey":"agent:main:thread-7","selectedModelRef":"openai/gpt-b"}""",
+              )
+            }
+            else -> error("unexpected $method")
+          }
+        }
+      val repository = WearGatewayRepository(requester)
+
+      val models = repository.models("phone-a", capabilities, selectedModelRef = "openai/gpt-a")
+      val selected =
+        repository.selectModel(
+          sessionKey = "agent:main:thread-7",
+          modelRef = "openai/gpt-b",
+          phoneNodeId = "phone-a",
+          capabilities = capabilities,
+        )
+
+      assertEquals(listOf("openai/gpt-a", "openai/gpt-b"), models.models.map(WearModel::ref))
+      assertEquals("openai/gpt-b", selected.selectedModelRef)
+      assertEquals(7L, selected.eventSequence)
+      assertEquals("phone-a", selected.phoneNodeId)
+      assertEquals(listOf(WearRpcMethod.ModelsList, WearRpcMethod.ModelsSelect), requester.calls.map { it.first })
+      assertTrue(requester.expectedNodeIds.all { it == "phone-a" })
+      assertTrue(requester.requirePreferredNodes.all { it })
     }
 
   @Test

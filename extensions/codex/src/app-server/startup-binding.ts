@@ -260,13 +260,6 @@ function readCodexAppServerRolloutTokenSnapshotLine(
   }
 }
 
-function toNonNegativeInt(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-    return undefined;
-  }
-  return Math.floor(value);
-}
-
 function readCompactionConfig(config: EmbeddedRunAttemptParams["config"] | undefined) {
   return isJsonObject(config?.agents?.defaults?.compaction)
     ? config.agents.defaults.compaction
@@ -274,18 +267,9 @@ function readCompactionConfig(config: EmbeddedRunAttemptParams["config"] | undef
 }
 
 function resolveCodexAppServerNativeThreadReserveTokens(
-  config: EmbeddedRunAttemptParams["config"] | undefined,
+  _config: EmbeddedRunAttemptParams["config"] | undefined,
 ): number {
-  const compaction = readCompactionConfig(config);
-  const reserveTokens = toNonNegativeInt(compaction?.reserveTokens);
-  const reserveTokensFloor = toNonNegativeInt(compaction?.reserveTokensFloor);
-  if (reserveTokens !== undefined) {
-    return Math.max(
-      reserveTokens,
-      reserveTokensFloor ?? CODEX_APP_SERVER_NATIVE_THREAD_DEFAULT_RESERVE_TOKENS,
-    );
-  }
-  return reserveTokensFloor ?? CODEX_APP_SERVER_NATIVE_THREAD_DEFAULT_RESERVE_TOKENS;
+  return CODEX_APP_SERVER_NATIVE_THREAD_DEFAULT_RESERVE_TOKENS;
 }
 
 function resolveCodexAppServerNativeThreadTokenFuse(params: {

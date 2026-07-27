@@ -2,6 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { computeBaseConfigSchemaResponse } from "./schema-base.js";
 import { FIELD_HELP } from "./schema.help.js";
 import {
   CHANNELS_AGENTS_TARGET_KEYS,
@@ -11,7 +12,71 @@ import {
   TARGET_KEYS,
   TOOLS_HOOKS_TARGET_KEYS,
 } from "./schema.help.quality.test-fixtures.js";
+import { buildBaseHints } from "./schema.hints.js";
 import { FIELD_LABELS } from "./schema.labels.js";
+
+type JsonSchemaNode = {
+  properties?: Record<string, JsonSchemaNode>;
+  additionalProperties?: JsonSchemaNode | boolean;
+  items?: JsonSchemaNode | JsonSchemaNode[];
+  anyOf?: JsonSchemaNode[];
+  oneOf?: JsonSchemaNode[];
+  allOf?: JsonSchemaNode[];
+};
+
+function collectSchemaLeafPaths(
+  schema: JsonSchemaNode,
+  path = "",
+  leaves = new Set<string>(),
+  visited = new WeakMap<object, Set<string>>(),
+): Set<string> {
+  const priorPaths = visited.get(schema);
+  if (priorPaths?.has(path)) {
+    return leaves;
+  }
+  if (priorPaths) {
+    priorPaths.add(path);
+  } else {
+    visited.set(schema, new Set([path]));
+  }
+
+  let hasChildren = false;
+  for (const [key, child] of Object.entries(schema.properties ?? {})) {
+    hasChildren = true;
+    collectSchemaLeafPaths(child, path ? `${path}.${key}` : key, leaves, visited);
+  }
+  if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
+    hasChildren = true;
+    collectSchemaLeafPaths(schema.additionalProperties, path ? `${path}.*` : "*", leaves, visited);
+  }
+  const items = Array.isArray(schema.items) ? schema.items : schema.items ? [schema.items] : [];
+  for (const item of items) {
+    hasChildren = true;
+    collectSchemaLeafPaths(item, path ? `${path}.*` : "*", leaves, visited);
+  }
+  for (const branches of [schema.anyOf, schema.oneOf, schema.allOf]) {
+    for (const branch of branches ?? []) {
+      hasChildren = true;
+      collectSchemaLeafPaths(branch, path, leaves, visited);
+    }
+  }
+  if (path && !hasChildren) {
+    leaves.add(path);
+  }
+  return leaves;
+}
+
+function formatMissingTierFailure(paths: readonly string[]): string {
+  const stubs = paths.map((path) => `  ${JSON.stringify(path)}: { advanced: true },`).join("\n");
+  return [
+    `${paths.length} config path(s) have no tier declaration.`,
+    "Add common/advanced boundaries in src/config/schema.tiers.ts:",
+    "",
+    stubs,
+    "",
+    "New leaves inherit their nearest declared ancestor; use a leaf hint for exceptions.",
+  ].join("\n");
+}
 
 function titleCaseLabelSegment(segment: string): string {
   return segment
@@ -160,36 +225,16 @@ describe("config help copy quality", () => {
     expect(/hides|hide/i.test(help)).toBe(true);
   });
 
-  it("includes concrete examples on path and interval fields", () => {
+  it("includes a concrete example on memory path fields", () => {
     expect(
       expectDefined(
         FIELD_HELP["memory.qmd.paths.pattern"],
         'FIELD_HELP["memory.qmd.paths.pattern"] test invariant',
       ).includes("**/*.md"),
     ).toBe(true);
-    expect(
-      expectDefined(
-        FIELD_HELP["memory.qmd.update.interval"],
-        'FIELD_HELP["memory.qmd.update.interval"] test invariant',
-      ).includes("5m"),
-    ).toBe(true);
-    expect(
-      expectDefined(
-        FIELD_HELP["memory.qmd.update.embedInterval"],
-        'FIELD_HELP["memory.qmd.update.embedInterval"] test invariant',
-      ).includes("60m"),
-    ).toBe(true);
   });
 
-  it("documents cron deprecation, migration, and retention formats", () => {
-    const legacy = expectDefined(
-      FIELD_HELP["cron.webhook"],
-      'FIELD_HELP["cron.webhook"] test invariant',
-    );
-    expect(/deprecated|legacy/i.test(legacy)).toBe(true);
-    expect(legacy.includes('delivery.mode="webhook"')).toBe(true);
-    expect(legacy.includes("delivery.to")).toBe(true);
-
+  it("documents cron retention formats", () => {
     const retention = expectDefined(
       FIELD_HELP["cron.sessionRetention"],
       'FIELD_HELP["cron.sessionRetention"] test invariant',
@@ -229,29 +274,6 @@ describe("config help copy quality", () => {
     expect(/raw|unnormalized/i.test(rawKeyPrefix)).toBe(true);
   });
 
-  it("documents session write-lock policy defaults", () => {
-    const acquireTimeout = expectDefined(
-      FIELD_HELP["session.writeLock.acquireTimeoutMs"],
-      'FIELD_HELP["session.writeLock.acquireTimeoutMs"] test invariant',
-    );
-    expect(acquireTimeout.includes("60000")).toBe(true);
-    expect(/transcript|lock/i.test(acquireTimeout)).toBe(true);
-
-    const stale = expectDefined(
-      FIELD_HELP["session.writeLock.staleMs"],
-      'FIELD_HELP["session.writeLock.staleMs"] test invariant',
-    );
-    expect(stale.includes("1800000")).toBe(true);
-    expect(stale.includes("OPENCLAW_SESSION_WRITE_LOCK_STALE_MS")).toBe(true);
-
-    const maxHold = expectDefined(
-      FIELD_HELP["session.writeLock.maxHoldMs"],
-      'FIELD_HELP["session.writeLock.maxHoldMs"] test invariant',
-    );
-    expect(maxHold.includes("300000")).toBe(true);
-    expect(maxHold.includes("OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS")).toBe(true);
-  });
-
   it("documents session maintenance duration/size examples and deprecations", () => {
     const pruneAfter = expectDefined(
       FIELD_HELP["session.maintenance.pruneAfter"],
@@ -259,13 +281,6 @@ describe("config help copy quality", () => {
     );
     expect(pruneAfter.includes("30d")).toBe(true);
     expect(pruneAfter.includes("12h")).toBe(true);
-
-    const deprecated = expectDefined(
-      FIELD_HELP["session.maintenance.pruneDays"],
-      'FIELD_HELP["session.maintenance.pruneDays"] test invariant',
-    );
-    expect(/deprecated/i.test(deprecated)).toBe(true);
-    expect(deprecated.includes("session.maintenance.pruneAfter")).toBe(true);
 
     const resetRetention = expectDefined(
       FIELD_HELP["session.maintenance.resetArchiveRetention"],
@@ -336,36 +351,21 @@ describe("config help copy quality", () => {
     expect(queueMode.includes('"steer"')).toBe(true);
   });
 
-  it("documents gateway bind modes and web reconnect semantics", () => {
+  it("documents gateway bind modes", () => {
     const bind = expectDefined(
       FIELD_HELP["gateway.bind"],
       'FIELD_HELP["gateway.bind"] test invariant',
     );
     expect(bind.includes('"loopback"')).toBe(true);
     expect(bind.includes('"tailnet"')).toBe(true);
-
-    const reconnect = expectDefined(
-      FIELD_HELP["web.reconnect.maxAttempts"],
-      'FIELD_HELP["web.reconnect.maxAttempts"] test invariant',
-    );
-    expect(/0 means no retries|no retries/i.test(reconnect)).toBe(true);
-    expect(/failure sequence|retry/i.test(reconnect)).toBe(true);
   });
 
-  it("documents metadata/admin semantics for logging, wizard, and plugins", () => {
-    const wizardMode = expectDefined(
-      FIELD_HELP["wizard.lastRunMode"],
-      'FIELD_HELP["wizard.lastRunMode"] test invariant',
-    );
-    expect(wizardMode.includes('"local"')).toBe(true);
-    expect(wizardMode.includes('"remote"')).toBe(true);
-
+  it("documents admin semantics for logging and plugins", () => {
     const consoleStyle = expectDefined(
       FIELD_HELP["logging.consoleStyle"],
       'FIELD_HELP["logging.consoleStyle"] test invariant',
     );
     expect(consoleStyle.includes('"pretty"')).toBe(true);
-    expect(consoleStyle.includes('"compact"')).toBe(true);
     expect(consoleStyle.includes('"json"')).toBe(true);
 
     const pluginApiKey = expectDefined(
@@ -385,8 +385,6 @@ describe("config help copy quality", () => {
       'FIELD_HELP["plugins.entries.*.hooks.allowPromptInjection"] test invariant',
     );
     expect(pluginPromptPolicy.includes("before_prompt_build")).toBe(true);
-    expect(pluginPromptPolicy.includes("before_agent_start")).toBe(true);
-    expect(pluginPromptPolicy.includes("modelOverride")).toBe(true);
 
     const pluginConversationPolicy = expectDefined(
       FIELD_HELP["plugins.entries.*.hooks.allowConversationAccess"],
@@ -424,12 +422,6 @@ describe("config help copy quality", () => {
     );
     expect(modelsMode.includes("SecretRef-managed")).toBe(true);
     expect(modelsMode.includes("preserve")).toBe(true);
-
-    const authCooldowns = expectDefined(
-      FIELD_HELP["auth.cooldowns"],
-      'FIELD_HELP["auth.cooldowns"] test invariant',
-    );
-    expect(/cooldown|backoff|retry/i.test(authCooldowns)).toBe(true);
   });
 
   it("documents agent compaction safeguards and memory flush behavior", () => {
@@ -440,11 +432,12 @@ describe("config help copy quality", () => {
     expect(mode.includes('"default"')).toBe(true);
     expect(mode.includes('"safeguard"')).toBe(true);
 
-    const historyShare = expectDefined(
-      FIELD_HELP["agents.defaults.compaction.maxHistoryShare"],
-      'FIELD_HELP["agents.defaults.compaction.maxHistoryShare"] test invariant',
+    const thinkingLevel = expectDefined(
+      FIELD_HELP["agents.defaults.compaction.thinkingLevel"],
+      'FIELD_HELP["agents.defaults.compaction.thinkingLevel"] test invariant',
     );
-    expect(/0\\.1-0\\.9|fraction|share/i.test(historyShare)).toBe(true);
+    expect(/session level|inherit/i.test(thinkingLevel)).toBe(true);
+    expect(/Codex app-server|no per-operation thinking override/i.test(thinkingLevel)).toBe(true);
 
     const identifierPolicy = expectDefined(
       FIELD_HELP["agents.defaults.compaction.identifierPolicy"],
@@ -452,7 +445,6 @@ describe("config help copy quality", () => {
     );
     expect(identifierPolicy.includes('"strict"')).toBe(true);
     expect(identifierPolicy.includes('"off"')).toBe(true);
-    expect(identifierPolicy.includes('"custom"')).toBe(true);
 
     const recentTurnsPreserve = expectDefined(
       FIELD_HELP["agents.defaults.compaction.recentTurnsPreserve"],
@@ -466,16 +458,6 @@ describe("config help copy quality", () => {
       'FIELD_HELP["agents.defaults.compaction.midTurnPrecheck.enabled"] test invariant',
     );
     expect(/mid-turn|tool loop|default:\s*false/i.test(midTurnPrecheck)).toBe(true);
-
-    const postCompactionSections = expectDefined(
-      FIELD_HELP["agents.defaults.compaction.postCompactionSections"],
-      'FIELD_HELP["agents.defaults.compaction.postCompactionSections"] test invariant',
-    );
-    expect(/opt-in|Leave unset/i.test(postCompactionSections)).toBe(true);
-    expect(/Session Startup|Red Lines/i.test(postCompactionSections)).toBe(true);
-    expect(/Every Session|Safety/i.test(postCompactionSections)).toBe(true);
-    expect(/\[\]|disable/i.test(postCompactionSections)).toBe(true);
-    expect(/duplicate project context/i.test(postCompactionSections)).toBe(true);
 
     const compactionModel = expectDefined(
       FIELD_HELP["agents.defaults.compaction.model"],
@@ -517,5 +499,29 @@ describe("config help copy quality", () => {
       'FIELD_HELP["agents.defaults.startupContext.dailyMemoryDays"] test invariant',
     );
     expect(/today \+ yesterday|default:\s*2/i.test(dailyMemoryDays)).toBe(true);
+  });
+});
+
+describe("config tier coverage", () => {
+  const response = computeBaseConfigSchemaResponse({ generatedAt: "tier-quality-test" });
+  const schema = response.schema as JsonSchemaNode;
+  const leaves = [...collectSchemaLeafPaths(schema)].toSorted();
+
+  it("requires every root section to declare a tier boundary", () => {
+    const authoredHints = buildBaseHints();
+    const missing = Object.keys(schema.properties ?? {})
+      .filter((path) => typeof authoredHints[path]?.advanced !== "boolean")
+      .toSorted();
+    expect(missing, formatMissingTierFailure(missing)).toEqual([]);
+  });
+
+  it("materializes a deterministic tier on every baseline leaf", () => {
+    const missing = leaves.filter((path) => typeof response.uiHints[path]?.advanced !== "boolean");
+    expect(missing, formatMissingTierFailure(missing)).toEqual([]);
+  });
+
+  it("keeps the curated common leaf set reviewable", () => {
+    const common = leaves.filter((path) => response.uiHints[path]?.advanced === false);
+    expect(common).toMatchSnapshot();
   });
 });

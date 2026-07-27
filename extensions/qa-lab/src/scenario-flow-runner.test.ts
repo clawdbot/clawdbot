@@ -44,6 +44,7 @@ async function runLoadedScenarioFlow(
   const state = params.state ?? createQaBusState();
   let waitCount = 0;
   const transport = {
+    accountId: "qa-channel",
     state,
     reset: async () => {
       state.reset();
@@ -80,6 +81,10 @@ async function runLoadedScenarioFlow(
             (!input.textIncludes || candidate.text.includes(input.textIncludes)),
         );
       if (match) {
+        state.resolvePollCursor({
+          accountId: "qa-channel",
+          cursor: state.getSnapshot().cursor,
+        });
         return match;
       }
       throw new Error(`timed out after ${input.timeoutMs}ms waiting for outbound marker`);
@@ -93,7 +98,14 @@ async function runLoadedScenarioFlow(
         }),
   };
   const api = {
-    env: { providerMode: "mock-openai" },
+    env: {
+      providerMode: "mock-openai",
+      gateway: {
+        restartAfterStateMutation: async (mutate: (context: unknown) => Promise<void>) => {
+          await mutate({});
+        },
+      },
+    },
     transport,
     state,
     scenario,
@@ -104,6 +116,15 @@ async function runLoadedScenarioFlow(
     waitForTransportReady: async () => undefined,
     waitForQaChannelReady: async () => undefined,
     waitForNoOutbound: async () => undefined,
+    waitForCondition: async <T>(check: () => T | Promise<T | undefined>) => {
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const value = await check();
+        if (value !== undefined) {
+          return value;
+        }
+      }
+      throw new Error("test condition was not met");
+    },
     sleep: async () => undefined,
     reset: async () => {
       state.reset();

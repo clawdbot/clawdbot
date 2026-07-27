@@ -6,6 +6,7 @@ export const GENERAL_SETTINGS_TARGET_IDS = {
 export const APPEARANCE_SETTINGS_TARGET_IDS = {
   theme: "settings-appearance-theme",
   textSize: "settings-appearance-text-size",
+  sidebar: "settings-appearance-sidebar",
   chat: "settings-appearance-chat",
   connection: "settings-appearance-connection",
 } as const;

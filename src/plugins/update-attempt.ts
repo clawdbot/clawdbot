@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ClawHubTrustErrorCode } from "../infra/clawhub-install-trust.js";
+import type { UpdateChannel } from "../infra/update-channels.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "./clawhub-error-codes.js";
 import { installPluginFromClawHub, type ClawHubRiskAcknowledgementRequest } from "./clawhub.js";
 import { installPluginFromGitSpec } from "./git-install.js";
@@ -20,6 +21,19 @@ import {
   type PluginUpdateOutcome,
   type UpdatablePluginInstallRecord,
 } from "./update-source.js";
+
+export function formatNewerExactPinnedNpmDefaultLineMessage(params: {
+  pluginId: string;
+  effectiveSpec: string;
+  currentVersion: string;
+  newer: { packageName: string; registryLine: "beta" | "latest"; version: string };
+}): string {
+  return (
+    `${params.pluginId} is pinned to ${params.effectiveSpec} (installed ${params.currentVersion}); ` +
+    `registry ${params.newer.registryLine} resolves to ${params.newer.version}. ` +
+    `Pass \`openclaw plugins update ${params.newer.packageName}@${params.newer.registryLine}\` to follow that registry line.`
+  );
+}
 
 export function formatNpmInstallFailure(params: {
   pluginId: string;
@@ -230,6 +244,7 @@ export async function buildDryRunPluginUpdateOutcome(params: {
   usedOfficialNpmFallback: boolean;
   hasSpecOverride: boolean;
   hasOfficialNpmSpec: boolean;
+  updateChannel?: UpdateChannel;
   timeoutMs?: number;
   channelFallbackSuffix: string;
   npmChannelFallback?: PluginUpdateChannelFallback;
@@ -268,6 +283,7 @@ export async function buildDryRunPluginUpdateOutcome(params: {
           currentVersion: params.currentVersion,
           effectiveSpec: params.effectiveSpec,
           probeNpmVersion: npmProbeVersion,
+          updateChannel: params.updateChannel,
           timeoutMs: params.timeoutMs,
         })
       : undefined;
@@ -275,16 +291,18 @@ export async function buildDryRunPluginUpdateOutcome(params: {
   if (unchanged) {
     const message =
       newerExactPinnedDefaultLine && params.effectiveSpec
-        ? `${params.pluginId} is pinned to ${params.effectiveSpec} (installed ${currentLabel}); ` +
-          `registry default resolves to ${newerExactPinnedDefaultLine.version}. ` +
-          `Pass \`openclaw plugins update ${newerExactPinnedDefaultLine.packageName}@latest\` to follow the registry default line.` +
-          params.channelFallbackSuffix
+        ? formatNewerExactPinnedNpmDefaultLineMessage({
+            pluginId: params.pluginId,
+            effectiveSpec: params.effectiveSpec,
+            currentVersion: currentLabel,
+            newer: newerExactPinnedDefaultLine,
+          }) + params.channelFallbackSuffix
         : `${params.pluginId} is up to date (${currentLabel}).${params.channelFallbackSuffix}`;
     return {
       pluginId: params.pluginId,
       status: "unchanged",
       currentVersion: params.currentVersion,
-      nextVersion: resolvedProbeVersion,
+      nextVersion: newerExactPinnedDefaultLine?.version ?? resolvedProbeVersion,
       message,
       ...(params.npmChannelFallback ? { channelFallback: params.npmChannelFallback } : {}),
     };

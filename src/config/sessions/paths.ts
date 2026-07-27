@@ -4,36 +4,32 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveStateDir } from "../paths.js";
 import { isCompactionCheckpointTranscriptFileName } from "./artifacts.js";
 
 function resolveAgentSessionsDir(
-  agentId?: string,
+  agentId: string,
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
 ): string {
+  if (!agentId?.trim()) {
+    throw new Error("Session storage path requires an explicit agent id.");
+  }
   const root = resolveStateDir(env, homedir);
-  const id = normalizeAgentId(agentId ?? DEFAULT_AGENT_ID);
+  const id = normalizeAgentId(agentId);
   return path.join(root, "agents", id, "sessions");
 }
 
-export function resolveSessionTranscriptsDir(
-  env: NodeJS.ProcessEnv = process.env,
-  homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
-): string {
-  return resolveAgentSessionsDir(DEFAULT_AGENT_ID, env, homedir);
-}
-
 export function resolveSessionTranscriptsDirForAgent(
-  agentId?: string,
+  agentId: string,
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
 ): string {
   return resolveAgentSessionsDir(agentId, env, homedir);
 }
 
-export function resolveDefaultSessionStorePath(agentId?: string): string {
+export function resolveDefaultSessionStorePath(agentId: string): string {
   return path.join(resolveAgentSessionsDir(agentId), "sessions.json");
 }
 
@@ -79,7 +75,10 @@ function resolveSessionsDir(opts?: SessionFilePathOptions): string {
   if (sessionsDir) {
     return path.resolve(sessionsDir);
   }
-  return resolveAgentSessionsDir(opts?.agentId);
+  if (!opts?.agentId?.trim()) {
+    throw new Error("Session storage path requires an explicit agent id.");
+  }
+  return resolveAgentSessionsDir(opts.agentId);
 }
 
 function resolvePathFromAgentSessionsDir(
@@ -289,7 +288,7 @@ export function resolveSessionTranscriptPathInDir(
 
 export function resolveSessionTranscriptPath(
   sessionId: string,
-  agentId?: string,
+  agentId: string,
   topicId?: string | number,
 ): string {
   return resolveSessionTranscriptPathInDir(sessionId, resolveAgentSessionsDir(agentId), topicId);
@@ -314,17 +313,32 @@ export function resolveSessionFilePath(
   return resolveSessionTranscriptPathInDir(sessionId, sessionsDir);
 }
 
+export class SessionStoreAgentIdRequiredError extends Error {
+  constructor() {
+    super("Session store path requires an explicit agent id.");
+    this.name = "SessionStoreAgentIdRequiredError";
+  }
+}
+
+/** Resolves fixed literal paths without an owner; derived or templated paths require agentId. */
 export function resolveStorePath(
   store?: string,
   opts?: { agentId?: string; env?: NodeJS.ProcessEnv },
 ) {
-  const agentId = normalizeAgentId(opts?.agentId ?? DEFAULT_AGENT_ID);
   const env = opts?.env ?? process.env;
   const homedir = () => resolveRequiredHomeDir(env, os.homedir);
   if (!store) {
+    if (!opts?.agentId?.trim()) {
+      throw new SessionStoreAgentIdRequiredError();
+    }
+    const agentId = normalizeAgentId(opts.agentId);
     return path.join(resolveAgentSessionsDir(agentId, env, homedir), "sessions.json");
   }
   if (store.includes("{agentId}")) {
+    if (!opts?.agentId?.trim()) {
+      throw new SessionStoreAgentIdRequiredError();
+    }
+    const agentId = normalizeAgentId(opts.agentId);
     // Template expansion is the only supported way to share one config path across agent stores.
     const expanded = store.replaceAll("{agentId}", agentId);
     if (expanded.startsWith("~")) {

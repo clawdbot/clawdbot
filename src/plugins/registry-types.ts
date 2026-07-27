@@ -28,7 +28,13 @@ import type {
   PluginDiagnostic,
   PluginFormat,
 } from "./manifest-types.js";
-import type { PluginManifestContracts } from "./manifest.js";
+import type {
+  PluginManifestContracts,
+  PluginManifestDashboard,
+  PluginManifestDashboardActionVerb,
+  PluginManifestDashboardDataBinding,
+  PluginManifestMcpServer,
+} from "./manifest.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -45,7 +51,8 @@ type ImageGenerationProviderPlugin = import("./types.js").ImageGenerationProvide
 type MediaUnderstandingProviderPlugin = import("./types.js").MediaUnderstandingProviderPlugin;
 type TranscriptSourceProvider = import("./types.js").TranscriptSourceProvider;
 type MusicGenerationProviderPlugin = import("./types.js").MusicGenerationProviderPlugin;
-type OpenClawPluginCliCommandDescriptor = import("./types.js").OpenClawPluginCliCommandDescriptor;
+type OpenClawPluginCliRootCommandDescriptor =
+  import("./types.js").OpenClawPluginCliRootCommandDescriptor;
 type OpenClawPluginCliRegistrar = import("./types.js").OpenClawPluginCliRegistrar;
 type OpenClawPluginCommandDefinition = import("./types.js").OpenClawPluginCommandDefinition;
 type PluginInteractiveHandlerRegistration =
@@ -97,7 +104,7 @@ type PluginCliRegistration = {
   register: OpenClawPluginCliRegistrar;
   parentPath: string[];
   commands: string[];
-  descriptors: OpenClawPluginCliCommandDescriptor[];
+  descriptors: OpenClawPluginCliRootCommandDescriptor[];
   source: string;
   rootDir?: string;
 };
@@ -172,9 +179,22 @@ type PluginSessionCatalogRegistration = {
   rootDir?: string;
 };
 
+export type PluginDashboardDataBindingRegistration = PluginManifestDashboardDataBinding & {
+  pluginId: string;
+  capabilityId: string;
+  handler: GatewayRequestHandlers[string];
+};
+
+export type PluginDashboardActionVerbRegistration = PluginManifestDashboardActionVerb & {
+  pluginId: string;
+  capabilityId: string;
+  handler: GatewayRequestHandlers[string];
+};
+
 type PluginCliBackendRegistration = {
   pluginId: string;
   pluginName?: string;
+  builtWithOpenClawVersion?: string;
   backend: CliBackendPlugin;
   source: string;
   rootDir?: string;
@@ -396,6 +416,7 @@ export type PluginRecord = {
   id: string;
   name: string;
   version?: string;
+  builtWithOpenClawVersion?: string;
   packageName?: string;
   description?: string;
   format?: PluginFormat;
@@ -449,6 +470,8 @@ export type PluginRecord = {
   configUiHints?: Record<string, PluginConfigUiHint>;
   configJsonSchema?: JsonSchemaObject;
   contracts?: PluginManifestContracts;
+  dashboard?: PluginManifestDashboard;
+  mcpServers?: Record<string, PluginManifestMcpServer>;
   memorySlotSelected?: boolean;
   dependencyStatus?: PluginDependencyStatus;
 };
@@ -484,6 +507,8 @@ export type PluginRegistry = {
   agentHarnesses: PluginAgentHarnessRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
   gatewayMethodDescriptors: GatewayMethodDescriptor[];
+  dashboardDataBindings: Map<string, PluginDashboardDataBindingRegistration>;
+  dashboardActionVerbs: Map<string, PluginDashboardActionVerbRegistration>;
   coreGatewayMethodNames: string[];
   httpRoutes: PluginHttpRouteRegistration[];
   hostedMediaResolvers: PluginHostedMediaResolverRegistration[];

@@ -9,6 +9,36 @@ export CLICOLOR_FORCE=0
 export FORCE_COLOR=0
 unset COLORTERM
 
+# This is the single source of truth for the canonical-wrapper trust boundary.
+# Advisory commands may run a mismatched local wrapper only with the explicit
+# developer opt-in; landing commands must always use canonical/origin-main code.
+# Classification is independent of serialization: ci-dispatch remains locked
+# because GitHub exposes neither dispatch deduplication nor a correlation ID.
+# PR_SUBCOMMAND_CLASSIFICATIONS_BEGIN
+pr_subcommand_classification() {
+  case "$1" in
+    ls | ci-dispatch)
+      printf 'advisory\n'
+      ;;
+    gc | lock-recover | review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run)
+      printf 'landing\n'
+      ;;
+    *) return 1 ;;
+  esac
+}
+# PR_SUBCOMMAND_CLASSIFICATIONS_END
+
+dev_wrapper_opt_in=0
+if [ "${OPENCLAW_PR_DEV_WRAPPER:-}" = "1" ]; then
+  dev_wrapper_opt_in=1
+fi
+if [ "${1-}" = "--dev-wrapper" ]; then
+  dev_wrapper_opt_in=1
+  export OPENCLAW_PR_DEV_WRAPPER=1
+  shift
+fi
+requested_subcommand="${1-}"
+
 # If invoked from a linked worktree copy of this script, re-exec the canonical
 # script from the repository root so behavior stays consistent across worktrees.
 script_self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
@@ -60,19 +90,39 @@ if common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolute
     if [ -z "$linked_wrapper_revision" ] ||
       [ -z "$anchor_wrapper_revision" ] ||
       [ "$linked_wrapper_revision" != "$anchor_wrapper_revision" ]; then
-      echo "scripts/pr implementation differs between this worktree and the canonical checkout, and does not match origin/main." >&2
-      echo "Refusing to silently substitute canonical wrapper code from: $canonical_repo_root" >&2
-      echo "Run scripts/pr from a checkout whose wrapper matches the canonical checkout or a fetched origin/main." >&2
-      exit 1
+      requested_classification=$(pr_subcommand_classification "$requested_subcommand" 2>/dev/null || true)
+      if [ "$dev_wrapper_opt_in" = "1" ] && [ "$requested_classification" = "advisory" ]; then
+        if [ "${OPENCLAW_PR_DEV_WRAPPER_BANNER_SHOWN:-}" != "1" ]; then
+          local_head_revision=$(git -C "$script_parent_dir" rev-parse HEAD 2>/dev/null || printf 'unknown')
+          echo "WARNING: running local scripts/pr revision $local_head_revision via dev-wrapper opt-in." >&2
+          echo "subcommand '$requested_subcommand' is classified advisory." >&2
+          echo "The local wrapper differs from the canonical checkout and origin/main; landing subcommands remain refused." >&2
+          export OPENCLAW_PR_DEV_WRAPPER_BANNER_SHOWN=1
+        fi
+      else
+        if [ "$dev_wrapper_opt_in" = "1" ] && [ -n "$requested_classification" ]; then
+          echo "subcommand '$requested_subcommand' is classified $requested_classification; dev-wrapper opt-in is unavailable." >&2
+        fi
+        echo "scripts/pr implementation differs between this worktree and the canonical checkout, and does not match origin/main." >&2
+        echo "Refusing to silently substitute canonical wrapper code from: $canonical_repo_root" >&2
+        echo "Run scripts/pr from a checkout whose wrapper matches the canonical checkout or a fetched origin/main." >&2
+        exit 1
+      fi
     fi
   fi
 fi
 
 is_locked_pr_command() {
-  case "$1" in
-    review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run) return 0 ;;
-    *) return 1 ;;
-  esac
+  # Advisory trust classification permits local dogfood, but dispatches still
+  # serialize with landing operations because the remote mutation is not atomic.
+  if [ "$1" = "ci-dispatch" ]; then
+    return 0
+  fi
+  local classification
+  classification=$(pr_subcommand_classification "$1") || return 1
+  [ "$classification" = "landing" ] || return 1
+  # gc manages per-PR locks itself; lock-recover performs an exact-OID CAS.
+  [ "$1" != "gc" ] && [ "$1" != "lock-recover" ]
 }
 
 is_main_only_pr_command() {
@@ -107,6 +157,7 @@ source "$script_parent_dir/lib/plain-gh.sh"
 usage() {
   cat <<USAGE
 Usage:
+  scripts/pr [--dev-wrapper] <subcommand> ...
   scripts/pr ls
   scripts/pr gc [--dry-run]
   scripts/pr lock-recover <PR> <OWNER_OID> --confirmed-no-running-tools
@@ -124,9 +175,13 @@ Usage:
   scripts/pr prepare-push <PR>
   scripts/pr prepare-sync-head <PR>
   scripts/pr prepare-run <PR>
+  scripts/pr ci-dispatch <PR>
   scripts/pr merge-verify <PR>
   scripts/pr merge-run <PR>
     OPENCLAW_PR_MERGE_METHOD=merge|rebase preserves the PR commit series.
+
+  --dev-wrapper permits a mismatched local wrapper only for subcommands
+  classified advisory. OPENCLAW_PR_DEV_WRAPPER=1 is equivalent.
 USAGE
 }
 
@@ -213,7 +268,7 @@ main() {
     review-tests)
       [ "$#" -ge 2 ] || { usage; exit 2; }
       ;;
-    review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run)
+    review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | ci-dispatch | merge-verify | merge-run)
       [ "$#" -ge 1 ] || { usage; exit 2; }
       ;;
     *)
@@ -231,6 +286,7 @@ main() {
   if is_locked_pr_command "$cmd"; then
     local locked_pr="${1-}"
     acquire_pr_operation_lock "$locked_pr"
+    begin_pr_operation_validation_phase
     trap 'exit 129' HUP
     trap 'exit 130' INT
     trap 'exit 131' QUIT
@@ -318,6 +374,11 @@ main() {
       local pr="${1-}"
       [ -n "$pr" ] || { usage; exit 2; }
       prepare_run "$pr"
+      ;;
+    ci-dispatch)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
+      ci_dispatch "$pr"
       ;;
     merge-verify)
       local pr="${1-}"

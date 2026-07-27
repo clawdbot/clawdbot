@@ -59,13 +59,15 @@ describe("fetchPluralKitMessageInfo", () => {
   });
 
   it("returns null on 404", async () => {
-    const fetcher = vi.fn(async () => buildResponse({ status: 404 }));
+    const tracked = cancelTrackedResponse("missing", { status: 404 });
+    const fetcher = vi.fn(async () => tracked.response);
     const result = await fetchPluralKitMessageInfo({
       messageId: "missing",
       config: { enabled: true },
       fetcher: fetcher as unknown as typeof fetch,
     });
     expect(result).toBeNull();
+    expect(tracked.wasCanceled()).toBe(true);
   });
 
   it("returns payload and sends token when configured", async () => {

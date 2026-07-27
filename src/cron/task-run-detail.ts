@@ -170,6 +170,7 @@ export function cronRunLogEntryToTaskDetail(
   options: {
     storeKey: string;
     triggerEval?: { fired: boolean; stateChanged: boolean; state?: unknown };
+    scriptResult?: { scriptStateChanged?: boolean; scriptState?: unknown };
   },
 ): JsonValue {
   const detail = toJsonValue({
@@ -195,6 +196,11 @@ export function cronRunLogEntryToTaskDetail(
     triggerState:
       options.triggerEval?.fired === true && options.triggerEval.stateChanged
         ? options.triggerEval.state
+        : undefined,
+    scriptStateChanged: options.scriptResult?.scriptStateChanged === true ? true : undefined,
+    scriptState:
+      options.scriptResult?.scriptStateChanged === true
+        ? options.scriptResult.scriptState
         : undefined,
     model: entry.model,
     provider: entry.provider,
@@ -230,6 +236,19 @@ export function cronTaskRecordToTriggerEval(
     ...(task.detail.triggerStateChanged === true && "triggerState" in task.detail
       ? { state: task.detail.triggerState }
       : {}),
+  };
+}
+
+/** Reads internal payload-script recovery data without exposing it in run history. */
+export function cronTaskRecordToScriptRunResult(
+  task: TaskRecord,
+): { scriptStateChanged: true; scriptState?: JsonValue } | undefined {
+  if (!isJsonObject(task.detail) || task.detail.scriptStateChanged !== true) {
+    return undefined;
+  }
+  return {
+    scriptStateChanged: true,
+    ...(Object.hasOwn(task.detail, "scriptState") ? { scriptState: task.detail.scriptState } : {}),
   };
 }
 

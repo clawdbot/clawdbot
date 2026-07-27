@@ -77,7 +77,6 @@ function hasEntryCredential(
     | "envVars"
     | "getConfiguredCredentialValue"
     | "getConfiguredCredentialFallback"
-    | "getCredentialValue"
     | "requiresCredential"
   >,
   config: OpenClawConfig | undefined,
@@ -112,7 +111,6 @@ function hasImplicitProviderSelectionSignal(
     | "envVars"
     | "getConfiguredCredentialValue"
     | "getConfiguredCredentialFallback"
-    | "getCredentialValue"
     | "requiresCredential"
   >,
   config: OpenClawConfig | undefined,

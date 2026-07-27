@@ -13,7 +13,13 @@ import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-m
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
-import { clearCliSession, setCliSessionBinding, setCliSessionId } from "../cli-session.js";
+import { resolveDefaultAgentId } from "../agent-scope.js";
+import {
+  clearCliSession,
+  getCliSessionBinding,
+  setCliSessionBinding,
+  setCliSessionId,
+} from "../cli-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { clearMainSessionRecoveryAfterAgentRun } from "../main-session-recovery-clear.js";
 import { isCliProvider } from "../model-selection.js";
@@ -141,6 +147,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
         entry,
         sessionKey,
         storePath,
+        defaultAgentId: resolveDefaultAgentId(cfg),
         newSessionId: sessionId,
       });
     next.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;
@@ -212,13 +219,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
     const { estimateUsageCost, resolveModelCostConfig } = await getUsageFormatModule();
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;
-    const usageForContext = isCliProvider(providerUsed, cfg)
-      ? lastCallUsage
-      : lastCallUsage?.contextUsage
-        ? lastCallUsage
-        : usage;
     const totalTokens = deriveSessionTotalTokens({
-      usage: promptTokens ? undefined : usageForContext,
+      lastCallUsage,
       contextTokens,
       promptTokens,
     });
@@ -333,16 +335,14 @@ export async function clearCliSessionInStore(params: {
   sessionStore: Record<string, SessionEntry>;
   storePath: string;
   expectedSessionId?: string;
+  expectedCliSessionId?: string;
 }): Promise<SessionEntry | undefined> {
-  const { provider, sessionKey, sessionStore, storePath, expectedSessionId } = params;
+  const { provider, sessionKey, sessionStore, storePath, expectedSessionId, expectedCliSessionId } =
+    params;
   const entry = sessionStore[sessionKey];
   if (!entry) {
     return undefined;
   }
-
-  const next = { ...entry };
-  clearCliSession(next, provider);
-  next.updatedAt = Date.now();
 
   const persisted = await patchSessionEntry(
     {
@@ -356,6 +356,15 @@ export async function clearCliSessionInStore(params: {
       ) {
         return null;
       }
+      if (
+        expectedCliSessionId &&
+        getCliSessionBinding(currentEntry, provider)?.sessionId !== expectedCliSessionId
+      ) {
+        return null;
+      }
+      const next = { ...currentEntry };
+      clearCliSession(next, provider);
+      next.updatedAt = Date.now();
       return next;
     },
     { fallbackEntry: entry },
@@ -403,7 +412,7 @@ export async function consumeCliSessionForkInStore(params: {
   return persisted ?? undefined;
 }
 
-/** Re-arms a claimed fork marker after a failed CLI turn. */
+/** Arms a fork marker for recovery, or re-arms one after a failed CLI turn. */
 export async function restoreCliSessionForkInStore(params: {
   provider: string;
   sessionKey: string;

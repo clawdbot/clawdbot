@@ -207,14 +207,11 @@ async function postCronWebhook(params: {
   logger: CronLogger;
 }): Promise<void> {
   const abortController = new AbortController();
-  const timeout = setTimeout(() => {
-    abortController.abort();
-  }, CRON_WEBHOOK_TIMEOUT_MS);
-
   try {
     assertSecretOwnerAvailable("capability", "cron-webhook");
     const result = await fetchWithSsrFGuard({
       url: params.webhookUrl,
+      timeoutMs: CRON_WEBHOOK_TIMEOUT_MS,
       init: {
         method: "POST",
         headers: buildCronWebhookHeaders(params.webhookToken),
@@ -222,7 +219,13 @@ async function postCronWebhook(params: {
         signal: abortController.signal,
       },
     });
-    await result.release();
+    try {
+      if (!result.response.ok) {
+        throw new Error(`Webhook request failed with HTTP ${result.response.status}`);
+      }
+    } finally {
+      await result.release();
+    }
   } catch (err) {
     if (err instanceof SsrFBlockedError) {
       params.logger.warn(
@@ -243,8 +246,6 @@ async function postCronWebhook(params: {
         params.failedLog,
       );
     }
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
@@ -340,6 +341,10 @@ export function dispatchGatewayCronFinishedNotifications(params: {
 }): void {
   const webhookToken = normalizeOptionalString(params.webhookToken);
   const redactedWebhookEvent = redactCommandCronEventForExternalDelivery(params.evt, params.job);
+  const completionSummary =
+    params.job?.payload.kind === "script"
+      ? normalizeOptionalString(redactedWebhookEvent.summary)
+      : params.evt.summary;
   const webhookTargets = resolveCronWebhookTargets({
     delivery:
       params.job?.delivery && typeof params.job.delivery.mode === "string"
@@ -377,7 +382,9 @@ export function dispatchGatewayCronFinishedNotifications(params: {
     );
   }
 
-  if (params.evt.summary) {
+  // Script notify is carried as the completion summary, so its absence uses
+  // the same silent-summary suppression path as NO_REPLY output.
+  if (completionSummary || params.evt.status === "error") {
     for (const webhookTarget of webhookTargets) {
       const payload = buildCronFinishedWebhookPayload(redactedWebhookEvent);
       // Completion notification fanout is best-effort; the cron service has

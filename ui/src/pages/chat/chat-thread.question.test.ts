@@ -12,7 +12,7 @@ function prompt(status: QuestionPrompt["status"]): QuestionPrompt {
     id: "question-1",
     questions: [
       {
-        id: "format",
+        questionId: "format",
         header: "Format",
         question: "Which format?",
         options: [{ label: "Compact" }, { label: "Detailed" }],
@@ -20,6 +20,7 @@ function prompt(status: QuestionPrompt["status"]): QuestionPrompt {
       },
     ],
     sessionKey: "agent:main:main",
+    runId: "run-question",
     createdAtMs: 1_000,
     expiresAtMs: 60_000,
     status,
@@ -33,11 +34,11 @@ function prompt(status: QuestionPrompt["status"]): QuestionPrompt {
   };
 }
 
-function items(question: QuestionPrompt, runActive: boolean) {
+function items(question: QuestionPrompt, runActive: boolean, messages: unknown[] = []) {
   return buildCachedChatItems({
     paneId: `pane-${question.status}`,
     sessionKey: "agent:main:main",
-    messages: [],
+    messages,
     toolMessages: [],
     streamSegments: [],
     stream: null,
@@ -73,9 +74,29 @@ describe("question chat items", () => {
     expect(result).toMatchObject([{ kind: "question", questionId: "question-1" }]);
   });
 
+  it("keeps a terminal question between the surrounding transcript turns", () => {
+    const result = items(prompt("answered"), false, [
+      {
+        role: "user",
+        content: "First prompt",
+        timestamp: 900,
+        __openclaw: { idempotencyKey: "run-question:user" },
+      },
+      { role: "assistant", content: "First reply", timestamp: 1_300 },
+      { role: "user", content: "Next prompt", timestamp: 2_000 },
+    ]);
+
+    expect(result.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
+      "user",
+      "question",
+      "assistant",
+      "user",
+    ]);
+  });
+
   it("renders answered and skipped prompts as compact summary lines", () => {
     const answered = prompt("answered");
-    answered.answers = { answers: { format: { answers: ["Compact"] } } };
+    answered.answers = { answers: { format: ["Compact"] } };
     const skipped = prompt("cancelled");
     const container = document.createElement("div");
 
@@ -94,7 +115,7 @@ describe("question chat items", () => {
   it("keeps supplied answer labels when another client resolved the question", () => {
     const answered = prompt("answered");
     answered.answeredElsewhere = true;
-    answered.answers = { answers: { format: { answers: ["Detailed"] } } };
+    answered.answers = { answers: { format: ["Detailed"] } };
     const container = document.createElement("div");
 
     render(renderChatQuestionSummary(answered), container);

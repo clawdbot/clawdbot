@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest";
 import {
   assertCodeModeResponsesToolSurface,
   enforceCodeModeResponsesToolSurface,
-} from "./openai-transport-params.js";
+} from "@openclaw/ai/transports";
+import { describe, expect, it } from "vitest";
 
 describe("OpenAI Code Mode direct tools", () => {
   it("keeps the native image loader model-visible", () => {

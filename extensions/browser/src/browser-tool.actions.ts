@@ -49,6 +49,7 @@ const browserToolActionDeps = {
 };
 
 const BROWSER_DOWNLOAD_REQUEST_TIMEOUT_SLACK_MS = 5_000;
+export { executeExtractAction } from "./browser-extract.js";
 
 type BrowserActRequest = Parameters<typeof browserAct>[1];
 type BrowserActRequestWithTimeout = BrowserActRequest & { timeoutMs?: number };
@@ -120,10 +121,7 @@ function withConfiguredActTimeout(
     return request;
   }
 
-  const cfg = browserToolActionDeps.getRuntimeConfig();
-  const configuredTimeout =
-    normalizePositiveTimeoutMs(cfg.browser?.actionTimeoutMs) ?? DEFAULT_BROWSER_ACTION_TIMEOUT_MS;
-  return { ...typedRequest, timeoutMs: configuredTimeout } as BrowserActRequest;
+  return { ...typedRequest, timeoutMs: DEFAULT_BROWSER_ACTION_TIMEOUT_MS } as BrowserActRequest;
 }
 
 function resolveActProxyTimeoutMs(request: BrowserActRequest): number | undefined {
@@ -462,6 +460,7 @@ export async function executeSnapshotAction(params: {
       targetId: snapshot.targetId,
       url: snapshot.url,
       truncated: snapshot.truncated,
+      newElements: snapshot.newElements,
       stats: snapshot.stats,
       refs: snapshot.refs ? Object.keys(snapshot.refs).length : undefined,
       labels: snapshot.labels,
@@ -649,7 +648,7 @@ export async function executeActAction(params: {
       readStringValue((result as { targetId?: unknown }).targetId) ??
         readStringValue(effectiveRequest.targetId),
     );
-    return jsonResult(result);
+    return formatActToolResult(result);
   } catch (err) {
     if (isChromeStaleTargetError(profile, err)) {
       const tabs = proxyRequest
@@ -691,7 +690,7 @@ export async function executeActAction(params: {
           readStringValue((retryResult as { targetId?: unknown }).targetId) ??
             readStringValue(retryRequest.targetId),
         );
-        return jsonResult(retryResult);
+        return formatActToolResult(retryResult);
       }
       if (!tabs.length) {
         throw new Error(
@@ -706,4 +705,38 @@ export async function executeActAction(params: {
     }
     throw err;
   }
+}
+
+function formatActToolResult(result: unknown): AgentToolResult<unknown> {
+  const formatted = jsonResult(result);
+  if (!result || typeof result !== "object") {
+    return formatted;
+  }
+  const aborted = (result as { aborted?: unknown }).aborted;
+  if (!aborted || typeof aborted !== "object") {
+    return formatted;
+  }
+  const summary = aborted as {
+    reason?: unknown;
+    afterAction?: unknown;
+    url?: unknown;
+    skipped?: unknown;
+  };
+  if (
+    (summary.reason !== "navigation" && summary.reason !== "closed") ||
+    typeof summary.afterAction !== "number" ||
+    typeof summary.url !== "string" ||
+    typeof summary.skipped !== "number"
+  ) {
+    return formatted;
+  }
+  const reason =
+    summary.reason === "navigation"
+      ? `the page navigated to ${summary.url}`
+      : "the page or browser context closed";
+  const note = `Batch aborted after action ${summary.afterAction} because ${reason}; ${summary.skipped} remaining action(s) skipped. Take a new snapshot before continuing.`;
+  return {
+    ...formatted,
+    content: [...formatted.content, { type: "text", text: note }],
+  };
 }

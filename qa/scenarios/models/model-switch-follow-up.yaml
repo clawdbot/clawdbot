@@ -5,9 +5,9 @@ scenario:
   surface: models
   coverage:
     primary:
-      - models.switching
+      - agent-runtime.runtime-override-switching
     secondary:
-      - runtime.session-continuity
+      - session-memory.session-parity-session-continuity
   objective: Verify the agent can switch to a different configured model and continue coherently.
   successCriteria:
     - Agent reflects the model switch request.

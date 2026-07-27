@@ -31,6 +31,15 @@ You can answer from any supported conversation surface:
 OpenClaw always enables a free-text **Other** answer. The agent must not add an
 `Other` option to the authored option list.
 
+## Platform behavior
+
+Answers work on every supported conversation surface. The web Control UI uses a
+docked stepper that replaces the composer while expanded; collapsing it restores
+the full composer beneath a slim question bar. iOS, macOS, and Android show
+inline cards; multiple questions stay stacked as an intentional touch-friendly
+idiom. Every platform keeps the question-to-answer summary in the active chat
+timeline without timed eviction, and **Skip** is available everywhere.
+
 Prompts that cannot use native buttons, including multi-question and
 multi-select prompts, degrade to readable text on channels. The Control UI
 keeps the full structured stepper.
@@ -43,6 +52,11 @@ The default timeout is 900 seconds. `timeoutSeconds` is clamped to the range
 If the question expires or is cancelled before an answer arrives, the tool
 returns `status: "no_answer"`. The agent then continues with its best judgment.
 An aborted agent run cancels its pending Gateway question.
+
+Gateway question records include the optional originating `runId`. Clients can
+use it to keep the prompt and its terminal answer summary with the correct agent
+turn, including after reconnecting and recovering the question with
+`question.list` or `question.get`.
 
 ## Tool schema
 
@@ -72,9 +86,7 @@ Example answered result:
   "status": "answered",
   "answers": {
     "answers": {
-      "deploy_target": {
-        "answers": ["Staging (Recommended)"]
-      }
+      "deploy_target": ["Staging (Recommended)"]
     }
   }
 }

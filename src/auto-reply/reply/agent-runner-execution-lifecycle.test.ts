@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import type { SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
+import { updateMcpAppModelContext } from "../../agents/mcp-app-model-context.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
+import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -48,6 +51,36 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
     expect(embeddedCall.abortSignal).toBe(replyOperation.abortSignal);
   });
 
+  it("records diagnostic progress from global-lane wait notifications", async () => {
+    const replyOperation = createReplyOperation({
+      sessionKey: "agent:main:global-lane-progress",
+      sessionId: "global-lane-progress",
+      resetTriggered: false,
+    });
+    replyOperation.markWaitingForGlobalLane();
+    let progressReasonDuringWait: string | undefined;
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      params.onLaneWait?.({ waitMs: 5_000, queuedAhead: 4, waiting: true });
+      progressReasonDuringWait = getDiagnosticSessionActivitySnapshot({
+        sessionId: replyOperation.sessionId,
+        sessionKey: replyOperation.key,
+      }).lastProgressReason;
+      return { payloads: [{ text: "ok" }], meta: {} };
+    });
+
+    try {
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      await runAgentTurnWithFallback({
+        ...createMinimalRunAgentTurnParams(),
+        replyOperation,
+      });
+
+      expect(progressReasonDuringWait).toBe("global_lane:waiting");
+    } finally {
+      replyOperation.complete();
+    }
+  });
+
   it("revalidates thinking for each main-chat fallback candidate without mutating the run", async () => {
     const followupRun = createFollowupRun();
     followupRun.run.provider = "openai";
@@ -84,6 +117,8 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
 
   it("freezes abort ownership only after model fallback settles", async () => {
     const { replyOperation, freezeAbortMock } = createMockReplyOperation();
+    const followupRun = createFollowupRun();
+    followupRun.media = [{ path: "/tmp/retry.png", contentType: "image/png" }];
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       expect(freezeAbortMock).not.toHaveBeenCalled();
       await params.run("anthropic", "claude").catch(() => undefined);
@@ -106,11 +141,15 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
 
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
     await runAgentTurnWithFallback({
-      ...createMinimalRunAgentTurnParams(),
+      ...createMinimalRunAgentTurnParams({ followupRun }),
       replyOperation,
     });
 
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    expect(state.runEmbeddedAgentMock.mock.calls.map((call) => call[0]?.media)).toEqual([
+      followupRun.media,
+      followupRun.media,
+    ]);
     expect(freezeAbortMock).toHaveBeenCalledTimes(1);
   });
 
@@ -354,6 +393,65 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
     expect(onAgentRunStart).toHaveBeenCalledOnce();
   });
 
+  it("injects pending MCP App context exactly once without changing transcript text", async () => {
+    const runtime = { sessionId: "session" } as SessionMcpRuntime;
+    state.peekSessionMcpRuntimeMock.mockReturnValue(runtime);
+    updateMcpAppModelContext(
+      runtime,
+      {},
+      {
+        content: [{ type: "text", text: "selected item 42" }],
+      },
+    );
+    state.runEmbeddedAgentMock.mockImplementation(async (params: EmbeddedAgentParams) => {
+      params.onExecutionPhase?.({ phase: "model_call_started" });
+      return { payloads: [{ text: "ok" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams(),
+      commandBody: "show details",
+      transcriptCommandBody: "show details",
+    });
+    await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams(),
+      commandBody: "next question",
+      transcriptCommandBody: "next question",
+    });
+
+    expect(state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.prompt).toContain("selected item 42");
+    expect(state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.transcriptPrompt).toBe("show details");
+    expect(state.runEmbeddedAgentMock.mock.calls[1]?.[0]?.prompt).toBe("next question");
+    expect(state.runEmbeddedAgentMock.mock.calls[1]?.[0]?.transcriptPrompt).toBe("next question");
+  });
+
+  it("does not consume pending MCP App context when pre-start validation fails", async () => {
+    const runtime = { sessionId: "session" } as SessionMcpRuntime;
+    state.peekSessionMcpRuntimeMock.mockReturnValue(runtime);
+    updateMcpAppModelContext(
+      runtime,
+      {},
+      {
+        content: [{ type: "text", text: "still pending" }],
+      },
+    );
+    state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(new Error("invalid image"));
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await expect(runAgentTurnWithFallback(createMinimalRunAgentTurnParams())).rejects.toThrow(
+      "invalid image",
+    );
+    state.resolveCurrentTurnImagesMock.mockResolvedValueOnce({});
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      params.onExecutionPhase?.({ phase: "model_call_started" });
+      return { payloads: [{ text: "ok" }], meta: {} };
+    });
+    await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.prompt).toContain("still pending");
+  });
+
   it("forwards CLI harness execution phases into typing signals", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
@@ -375,6 +473,7 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
     followupRun.run.provider = "codex-cli";
     followupRun.run.model = "gpt-5.4";
     followupRun.run.clientCaps = ["tool-events", "inline-widgets"];
+    followupRun.media = [{ path: "/tmp/cli.png", contentType: "image/png" }];
     const typingSignals = createMockTypingSignaler();
 
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
@@ -391,7 +490,45 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
       provider: "codex-cli",
       model: "gpt-5.4",
       clientCaps: ["tool-events", "inline-widgets"],
+      media: followupRun.media,
     });
+  });
+
+  it("consumes pending MCP App context when a CLI process receives the turn", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("codex-cli", "gpt-5.4"),
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
+    const runtime = { sessionId: "session" } as SessionMcpRuntime;
+    state.peekSessionMcpRuntimeMock.mockReturnValue(runtime);
+    updateMcpAppModelContext(
+      runtime,
+      {},
+      {
+        content: [{ type: "text", text: "CLI selection" }],
+      },
+    );
+    state.runCliAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      params.onExecutionPhase?.({ phase: "process_spawned" });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "codex-cli";
+    followupRun.run.model = "gpt-5.4";
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        followupRun,
+      }),
+    );
+
+    expect(state.runCliAgentMock.mock.calls[0]?.[0]?.prompt).toContain("CLI selection");
+    expect(state.runCliAgentMock.mock.calls[0]?.[0]?.transcriptPrompt).toBe("fix it");
+    expect(runtime.pendingMcpAppModelContext).toBeUndefined();
   });
 
   it("propagates commitment-only bootstrap scope to CLI runs", async () => {

@@ -135,22 +135,6 @@ function pushInactiveProviderCredentialWarnings<
   }
 }
 
-/**
- * Ensures a nested config object exists and returns it for mutation.
- */
-export function ensureObject(
-  target: Record<string, unknown>,
-  key: string,
-): Record<string, unknown> {
-  const current = target[key];
-  if (isRecord(current)) {
-    return current;
-  }
-  const next: Record<string, unknown> = {};
-  target[key] = next;
-  return next;
-}
-
 function normalizeKnownProvider(
   value: unknown,
   providers: Array<{ id: string }>,

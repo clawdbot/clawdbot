@@ -8,7 +8,7 @@ import {
   createPlainTextToolCallCompatWrapper,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ssrf-runtime";
-import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asPositiveSafeInteger, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_PROVIDER_ID } from "./defaults.js";
 import { ensureLmstudioModelLoaded } from "./models.fetch.js";
 import { resolveLmstudioInferenceBase } from "./models.js";
@@ -78,7 +78,6 @@ function isPreloadCoolingDown(preloadKey: string, now: number): PreloadCooldownE
     return undefined;
   }
   if (entry.untilMs <= now) {
-    preloadCooldown.delete(preloadKey);
     return undefined;
   }
   return entry;
@@ -123,12 +122,23 @@ function shouldPreloadLmstudioModels(value: unknown): boolean {
 }
 
 function withLmstudioUsageCompat(model: StreamModel): StreamModel {
+  const compat = model.compat && typeof model.compat === "object" ? model.compat : {};
+  const unsupportedToolSchemaKeywords =
+    "unsupportedToolSchemaKeywords" in compat && Array.isArray(compat.unsupportedToolSchemaKeywords)
+      ? compat.unsupportedToolSchemaKeywords.filter(
+          (keyword): keyword is string => typeof keyword === "string",
+        )
+      : [];
+  const normalizedCompat = {
+    ...compat,
+    supportsUsageInStreaming: true,
+    // LM Studio's GGUF grammar rejects regex constraints; the shared transport
+    // removes this keyword recursively while preserving native tool calling.
+    unsupportedToolSchemaKeywords: uniqueStrings([...unsupportedToolSchemaKeywords, "pattern"]),
+  };
   return {
     ...model,
-    compat: {
-      ...(model.compat && typeof model.compat === "object" ? model.compat : {}),
-      supportsUsageInStreaming: true,
-    },
+    compat: normalizedCompat,
   };
 }
 

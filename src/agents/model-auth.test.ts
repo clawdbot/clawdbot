@@ -1,4 +1,5 @@
 // Verifies provider auth resolution, synthetic auth, and auth header behavior.
+import { fileURLToPath } from "node:url";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/config.js";
@@ -17,19 +18,42 @@ import {
 } from "./provider-request-config.js";
 
 vi.mock("../plugins/plugin-registry.js", () => ({
-  loadPluginRegistrySnapshotWithMetadata: () => ({
-    source: "derived",
-    snapshot: { plugins: [] },
-    diagnostics: [],
-  }),
+  loadPluginRegistrySnapshotWithMetadata: () => {
+    const rootDir = fileURLToPath(new URL("../../extensions/ollama/", import.meta.url));
+    return {
+      source: "derived",
+      snapshot: {
+        plugins: [
+          {
+            pluginId: "ollama",
+            manifestPath: fileURLToPath(
+              new URL("../../extensions/ollama/openclaw.plugin.json", import.meta.url),
+            ),
+            manifestHash: "ollama-model-auth-fixture",
+            rootDir,
+            origin: "bundled",
+            enabled: true,
+            startup: {
+              sidecar: false,
+              memory: false,
+              deferConfiguredChannelFullLoadUntilAfterListen: false,
+              agentHarnesses: [],
+            },
+            compat: [],
+          },
+        ],
+      },
+      diagnostics: [],
+    };
+  },
   loadPluginManifestRegistryForPluginRegistry: () => ({
     diagnostics: [],
     plugins: [
       {
         origin: "bundled",
         nonSecretAuthMarkers: ["gcp-vertex-credentials", "ollama-local"],
-        providerAuthEnvVars: {
-          ollama: ["OLLAMA_API_KEY"],
+        setup: {
+          providers: [{ id: "ollama", envVars: ["OLLAMA_API_KEY"] }],
         },
       },
     ],

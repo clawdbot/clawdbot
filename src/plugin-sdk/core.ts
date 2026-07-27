@@ -98,7 +98,6 @@ export type {
   ProviderCatalogContext,
   ProviderCatalogResult,
   ProviderDefaultThinkingPolicyContext,
-  ProviderDiscoveryContext,
   ProviderFetchUsageSnapshotContext,
   ProviderModernModelPolicyContext,
   ProviderNormalizeResolvedModelContext,
@@ -527,18 +526,21 @@ type CreateChannelPluginBaseOptions<TResolvedAccount> = {
   configSchema?: ChannelPlugin<TResolvedAccount>["configSchema"];
   config?: ChannelPlugin<TResolvedAccount>["config"];
   security?: ChannelPlugin<TResolvedAccount>["security"];
-  setup: NonNullable<ChannelPlugin<TResolvedAccount>["setup"]>;
+  setup?: NonNullable<ChannelPlugin<TResolvedAccount>["setup"]>;
+  setupContract?: NonNullable<ChannelPlugin<TResolvedAccount>["setupContract"]>;
   groups?: ChannelPlugin<TResolvedAccount>["groups"];
 };
 
 type CreatedChannelPluginBase<TResolvedAccount> = Pick<
   ChannelPlugin<TResolvedAccount>,
-  "id" | "meta" | "setup"
+  "id" | "meta"
 > &
   Partial<
     Pick<
       ChannelPlugin<TResolvedAccount>,
       | "setupWizard"
+      | "setup"
+      | "setupContract"
       | "capabilities"
       | "commands"
       | "doctor"
@@ -869,7 +871,8 @@ export function createChannelPluginBase<TResolvedAccount>(
     ...(params.config ? { config: params.config } : {}),
     ...(params.security ? { security: params.security } : {}),
     ...(params.groups ? { groups: params.groups } : {}),
-    setup: params.setup,
+    ...(params.setup ? { setup: params.setup } : {}),
+    ...(params.setupContract ? { setupContract: params.setupContract } : {}),
   } as CreatedChannelPluginBase<TResolvedAccount>;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

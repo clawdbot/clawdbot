@@ -1,6 +1,9 @@
 import { accessSync, constants, statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { resolveAcpSessionAvailability } from "openclaw/plugin-sdk/acp-runtime";
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveNodeHostExecutable } from "openclaw/plugin-sdk/node-host";
 import type {
   OpenClawPluginApi,
@@ -15,6 +18,13 @@ import type {
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
 } from "openclaw/plugin-sdk/session-catalog";
+import {
+  createSessionCatalogAdoptionCoordinator,
+  importSessionCatalogHistory,
+  listAdoptedSessionCatalogSessions,
+  sessionCatalogAdoptedSessionKey,
+  sessionCatalogAdoptedSourceKey,
+} from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   OPENCODE_LOCAL_SESSION_HOST_ID as LOCAL_HOST_ID,
@@ -25,20 +35,24 @@ import {
   OPENCODE_SESSION_ID_PATTERN as SESSION_ID_PATTERN,
   OPENCODE_SESSION_READ_COMMAND,
   OPENCODE_TERMINAL_RESUME_COMMAND,
+  OpenCodeCatalogParamsError,
 } from "./session-catalog-shared.js";
 import {
   createOpenCodeTerminalNodeHostCommand,
   openOpenCodeCatalogTerminal,
 } from "./session-catalog-terminal.js";
 import {
+  isExactOpenCodeSessionCursor,
   listLocalOpenCodeSessionPage,
-  optionalOpenCodeString,
   readLocalOpenCodeTranscriptPage,
   type OpenCodeSessionPage,
 } from "./session-catalog.js";
+import {
+  checkOpenCodeUpstreamActivity,
+  linkContinuedOpenCodeSession,
+} from "./session-upstream-activity.js";
 
 const MAX_HOSTS = 100;
-const MAX_CURSOR_LENGTH = 128;
 const TRANSCRIPT_ITEM_TYPES = new Set([
   "userMessage",
   "agentMessage",
@@ -47,6 +61,14 @@ const TRANSCRIPT_ITEM_TYPES = new Set([
   "toolResult",
   "other",
 ]);
+const ACPX_BACKEND_ID = "acpx";
+const OPENCODE_ACP_AGENT_ID = "opencode";
+const OPENCODE_ADOPTED_SESSION_KEY_PREFIX = "plugin:opencode:catalog-adopt:";
+
+const continueAdoption =
+  createSessionCatalogAdoptionCoordinator<
+    Awaited<ReturnType<typeof linkContinuedOpenCodeSession>>
+  >();
 
 function isOptionalString(value: unknown): boolean {
   return value === undefined || typeof value === "string";
@@ -72,7 +94,7 @@ function isNodeSession(value: unknown): value is SessionCatalogSession {
     isOptionalString(value.modelProvider) &&
     isOptionalString(value.cliVersion) &&
     isOptionalString(value.gitBranch) &&
-    isOptionalString(value.openClawSessionKey) &&
+    isOptionalString(value.sessionKey) &&
     isOptionalNumber(value.createdAt) &&
     isOptionalNumber(value.updatedAt) &&
     isOptionalNumber(value.recencyAt)
@@ -200,12 +222,13 @@ function unwrapNodePayload(value: unknown): unknown {
 
 type CatalogNode = Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"][number];
 
-function setTerminalCapability(
+function setCatalogCapabilities(
   page: OpenCodeSessionPage,
-  canOpenTerminal: boolean,
+  capabilities: { canContinue: boolean; canOpenTerminal: boolean },
 ): OpenCodeSessionPage {
   for (const session of page.sessions) {
-    session.canOpenTerminal = canOpenTerminal;
+    session.canContinue = capabilities.canContinue;
+    session.canOpenTerminal = capabilities.canOpenTerminal;
   }
   return page;
 }
@@ -231,13 +254,17 @@ async function listOpenCodeNodeHost(
     };
   }
   try {
+    const cursor = query.cursors?.[hostId];
+    if (cursor !== undefined && !isExactOpenCodeSessionCursor(cursor)) {
+      throw new Error("cursor is invalid");
+    }
     const raw = await runtime.nodes.invoke({
       nodeId: node.nodeId,
       command: OPENCODE_SESSIONS_LIST_COMMAND,
       params: {
         ...(query.limitPerHost ? { limit: query.limitPerHost } : {}),
         ...(query.search ? { searchTerm: query.search } : {}),
-        ...(query.cursors?.[hostId] ? { cursor: query.cursors[hostId] } : {}),
+        ...(cursor !== undefined ? { cursor } : {}),
       },
       timeoutMs: NODE_TIMEOUT_MS,
       scopes: ["operator.write"],
@@ -247,7 +274,7 @@ async function listOpenCodeNodeHost(
     const canOpenTerminal = commands?.includes(OPENCODE_TERMINAL_RESUME_COMMAND) === true;
     return {
       ...common,
-      ...setTerminalCapability(page, canOpenTerminal),
+      ...setCatalogCapabilities(page, { canContinue: false, canOpenTerminal }),
     };
   } catch {
     return {
@@ -273,11 +300,11 @@ function parseNodeSessionPage(value: unknown): OpenCodeSessionPage {
     throw new Error("OpenCode node returned an invalid session page");
   }
   const sessions = value.sessions;
-  const nextCursor = optionalOpenCodeString(value.nextCursor, MAX_CURSOR_LENGTH);
-  if (value.nextCursor !== undefined && !nextCursor) {
+  const nextCursor = value.nextCursor;
+  if (nextCursor !== undefined && !isExactOpenCodeSessionCursor(nextCursor)) {
     throw new Error("OpenCode node returned an invalid cursor");
   }
-  return { sessions, ...(nextCursor ? { nextCursor } : {}) };
+  return { sessions, ...(nextCursor !== undefined ? { nextCursor } : {}) };
 }
 
 function parseNodeTranscriptPage(value: unknown, threadId: string): SessionsCatalogReadResult {
@@ -290,22 +317,28 @@ function parseNodeTranscriptPage(value: unknown, threadId: string): SessionsCata
   ) {
     throw new Error("OpenCode node returned an invalid transcript page");
   }
-  const nextCursor = optionalOpenCodeString(value.nextCursor, MAX_CURSOR_LENGTH);
-  if (value.nextCursor !== undefined && !nextCursor) {
+  const nextCursor = value.nextCursor;
+  if (nextCursor !== undefined && !isExactOpenCodeSessionCursor(nextCursor)) {
     throw new Error("OpenCode node returned an invalid cursor");
   }
   return {
     hostId: LOCAL_HOST_ID,
     threadId,
     items: value.items,
-    ...(nextCursor ? { nextCursor } : {}),
+    ...(nextCursor !== undefined ? { nextCursor } : {}),
   };
 }
 
 async function listOpenCodeHosts(
-  runtime: PluginRuntime,
+  api: OpenClawPluginApi,
   query: Parameters<SessionCatalogProvider["list"]>[0],
 ): Promise<SessionCatalogHost[]> {
+  const runtime = api.runtime;
+  const canContinue = resolveAcpSessionAvailability({
+    config: currentOpenCodeCatalogConfig(api),
+    backendId: ACPX_BACKEND_ID,
+    agentId: OPENCODE_ACP_AGENT_ID,
+  }).available;
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
   const hosts: SessionCatalogHost[] = [];
   if (
@@ -326,7 +359,7 @@ async function listOpenCodeHosts(
           limit: query.limitPerHost,
           ...(query.search ? { searchTerm: query.search } : {}),
           cursor: query.cursors?.[LOCAL_HOST_ID],
-        }).then((page) => setTerminalCapability(page, true))),
+        }).then((page) => setCatalogCapabilities(page, { canContinue, canOpenTerminal: true }))),
       });
     } catch {
       hosts.push({
@@ -341,7 +374,7 @@ async function listOpenCodeHosts(
   }
   let nodes: Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"];
   try {
-    nodes = (await runtime.nodes.list()).nodes;
+    nodes = (await (query.listNodes?.() ?? runtime.nodes.list())).nodes;
   } catch {
     return hosts;
   }
@@ -363,11 +396,15 @@ async function readOpenCodeTranscript(
   runtime: PluginRuntime,
   request: Parameters<SessionCatalogProvider["read"]>[0],
 ): Promise<SessionsCatalogReadResult> {
+  const cursor = request.cursor;
+  if (cursor !== undefined && !isExactOpenCodeSessionCursor(cursor)) {
+    throw new Error("cursor is invalid");
+  }
   if (request.hostId === LOCAL_HOST_ID) {
     return await readLocalOpenCodeTranscriptPage({
       threadId: request.threadId,
       ...(request.limit ? { limit: request.limit } : {}),
-      ...(request.cursor ? { cursor: request.cursor } : {}),
+      ...(cursor !== undefined ? { cursor } : {}),
     });
   }
   if (!request.hostId.startsWith("node:")) {
@@ -389,7 +426,7 @@ async function readOpenCodeTranscript(
     params: {
       threadId: request.threadId,
       ...(request.limit ? { limit: request.limit } : {}),
-      ...(request.cursor ? { cursor: request.cursor } : {}),
+      ...(cursor !== undefined ? { cursor } : {}),
     },
     timeoutMs: NODE_TIMEOUT_MS,
     scopes: ["operator.write"],
@@ -401,6 +438,112 @@ async function readOpenCodeTranscript(
   };
 }
 
+function currentOpenCodeCatalogConfig(api: OpenClawPluginApi): OpenClawConfig {
+  return (api.runtime.config?.current?.() ?? api.config ?? {}) as OpenClawConfig;
+}
+
+function listAdoptedOpenCodeSessions(api: OpenClawPluginApi): Map<string, string> {
+  return listAdoptedSessionCatalogSessions({
+    config: currentOpenCodeCatalogConfig(api),
+    pluginId: api.id,
+    runtime: api.runtime,
+    sourceFromEntry: (entry) => {
+      const opencode = isRecord(entry.pluginExtensions?.opencode)
+        ? entry.pluginExtensions.opencode
+        : undefined;
+      const marker =
+        opencode && isRecord(opencode.sessionCatalog) ? opencode.sessionCatalog : undefined;
+      return marker && typeof marker.sourceThreadId === "string"
+        ? { hostId: LOCAL_HOST_ID, threadId: marker.sourceThreadId }
+        : undefined;
+    },
+  });
+}
+
+async function continueOpenCodeSession(
+  api: OpenClawPluginApi,
+  hostId: string,
+  threadId: string,
+): Promise<Awaited<ReturnType<typeof linkContinuedOpenCodeSession>>> {
+  if (hostId.startsWith("node:")) {
+    throw new OpenCodeCatalogParamsError("paired-node OpenCode session rows are view-only");
+  }
+  if (hostId !== LOCAL_HOST_ID) {
+    throw new OpenCodeCatalogParamsError("OpenCode session catalog hostId is invalid");
+  }
+  const availability = resolveAcpSessionAvailability({
+    config: currentOpenCodeCatalogConfig(api),
+    backendId: ACPX_BACKEND_ID,
+    agentId: OPENCODE_ACP_AGENT_ID,
+  });
+  if (!availability.available) {
+    throw new OpenCodeCatalogParamsError(availability.message);
+  }
+  const sourceKey = sessionCatalogAdoptedSourceKey(hostId, threadId);
+  return await continueAdoption({
+    sourceKey,
+    findExisting: () => listAdoptedOpenCodeSessions(api).get(sourceKey),
+    create: async () => {
+      const page = await listLocalOpenCodeSessionPage({
+        searchTerm: threadId,
+        limit: MAX_PAGE_LIMIT,
+      }).catch(() => undefined);
+      const record = page?.sessions.find((session) => session.threadId === threadId);
+      if (!record) {
+        throw new OpenCodeCatalogParamsError("OpenCode session is unavailable");
+      }
+      const config = currentOpenCodeCatalogConfig(api);
+      const currentAvailability = resolveAcpSessionAvailability({
+        config,
+        backendId: ACPX_BACKEND_ID,
+        agentId: OPENCODE_ACP_AGENT_ID,
+      });
+      if (!currentAvailability.available) {
+        throw new OpenCodeCatalogParamsError(currentAvailability.message);
+      }
+      const marker = { sourceThreadId: threadId };
+      const created = await api.runtime.agent.session.createSessionEntry({
+        cfg: config,
+        key: sessionCatalogAdoptedSessionKey(OPENCODE_ADOPTED_SESSION_KEY_PREFIX, threadId),
+        agentId: resolveDefaultAgentId(config),
+        recoverMatchingInitialEntry: true,
+        ...(record.name ? { label: record.name } : {}),
+        ...(record.cwd ? { spawnedCwd: record.cwd } : {}),
+        initialEntry: {
+          acpBackendId: ACPX_BACKEND_ID,
+          acpSessionBinding: {
+            acpAgentId: OPENCODE_ACP_AGENT_ID,
+            agentSessionId: threadId,
+          },
+          pluginExtensions: { opencode: { sessionCatalog: marker } },
+        },
+        afterCreate: async (entry) => {
+          await importSessionCatalogHistory({
+            catalogId: "opencode",
+            threadId,
+            read: async ({ cursor, limit }) =>
+              await readOpenCodeTranscript(api.runtime, {
+                hostId,
+                threadId,
+                limit,
+                ...(cursor ? { cursor } : {}),
+              }),
+            sessionId: entry.sessionId,
+            sessionKey: entry.key,
+            agentId: entry.agentId,
+            ...(record.cwd ? { cwd: record.cwd } : {}),
+            config,
+          });
+          return { pluginExtensions: { opencode: { sessionCatalog: marker } } };
+        },
+      });
+      return { sessionKey: created.key };
+    },
+    complete: async (continued) =>
+      await linkContinuedOpenCodeSession(continued.sessionKey, threadId),
+  });
+}
+
 export function registerOpenCodeSessionCatalog(api: OpenClawPluginApi): void {
   if (!isOpenCodeSessionCatalogEnabled(api.pluginConfig)) {
     return;
@@ -408,8 +551,11 @@ export function registerOpenCodeSessionCatalog(api: OpenClawPluginApi): void {
   api.registerSessionCatalog({
     id: "opencode",
     label: "OpenCode",
-    list: async (query) => await listOpenCodeHosts(api.runtime, query),
+    list: async (query) => await listOpenCodeHosts(api, query),
     read: async (request) => await readOpenCodeTranscript(api.runtime, request),
+    continueSession: async (request) =>
+      await continueOpenCodeSession(api, request.hostId, request.threadId),
+    checkUpstreamActivity: checkOpenCodeUpstreamActivity,
     openTerminal: async (request) =>
       await openOpenCodeCatalogTerminal({
         runtime: api.runtime,

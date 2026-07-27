@@ -1,7 +1,10 @@
 /** SQLite-backed Codex app-server thread bindings. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  AgentHarnessSessionSupersededError,
+  embeddedAgentLog,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   ensureAuthProfileStore,
   resolveDefaultAgentDir,
@@ -69,6 +72,15 @@ export function sessionBindingIdentity(params: {
     sessionId: params.sessionId,
     ...(sessionKey ? { sessionKey } : {}),
   };
+}
+
+/** Builds the terminal coordination error used when a newer OpenClaw session owns the binding. */
+export function createCodexSessionGenerationSupersededError(
+  sessionId: string,
+): AgentHarnessSessionSupersededError {
+  return new AgentHarnessSessionSupersededError(
+    `Codex session generation is no longer current: ${sessionId}`,
+  );
 }
 
 const optionalStringSchema = z.string().optional().catch(undefined);
@@ -511,6 +523,9 @@ export type CodexAppServerBindingStore = {
     identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
     expectedPreviousSessionId: string,
   ): Promise<CodexSessionGenerationAdoptionResult>;
+  resetSessionGeneration(
+    identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
+  ): Promise<CodexSessionGenerationRetirementResult>;
   retireSessionGeneration(
     identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
   ): Promise<CodexSessionGenerationRetirementResult>;
@@ -745,11 +760,16 @@ export function createCodexAppServerBindingStore(
         return { kind: "resolved", result: true };
       }
       const currentSessionId = current.sessionId;
-      if (!currentSessionId || currentSessionId === identity.sessionId) {
+      if (!currentSessionId) {
         return {
           kind: "resolved",
           result: current.state !== "cleared" || current.retired !== true,
         };
+      }
+      if (currentSessionId === identity.sessionId) {
+        return current.state === "cleared" && current.retired === true
+          ? { kind: "verify", expectedPreviousSessionId: currentSessionId }
+          : { kind: "resolved", result: true };
       }
       return { kind: "verify", expectedPreviousSessionId: currentSessionId };
     },
@@ -775,6 +795,24 @@ export function createCodexAppServerBindingStore(
                 return { result: true };
               }
               if (ownsGeneration) {
+                if (
+                  current.state === "cleared" &&
+                  current.retired === true &&
+                  current.sessionId === mutation.expectedPreviousSessionId
+                ) {
+                  // Reset boundaries now retain the OpenClaw session id. The
+                  // authoritative session-store check above proves this fence
+                  // belongs to the previous in-place lifecycle, not live work.
+                  return {
+                    result: true,
+                    next: {
+                      version: 1,
+                      state: "cleared",
+                      sessionId: identity.sessionId,
+                      ...ownedLease,
+                    },
+                  };
+                }
                 return {
                   result: current.state !== "cleared" || current.retired !== true,
                 };
@@ -918,6 +956,40 @@ export function createCodexAppServerBindingStore(
             next: { ...current, sessionId: targetSessionId },
           };
         });
+      });
+    },
+
+    async resetSessionGeneration(identity) {
+      return await runBindingMutation(async () => {
+        const key = bindingStoreKey(identity);
+        return await transactKey(
+          key,
+          (current, leaseToken) => {
+            if (!current) {
+              return { result: "absent" as const };
+            }
+            if (!ownsStoredSessionGeneration(identity, current)) {
+              return { result: "conflict" as const };
+            }
+            // A retired same-id row may be a deletion fence. Only the authoritative
+            // session-store reclaim path can prove it belongs to an in-place reset.
+            if (current.state === "cleared" && current.retired === true) {
+              return { result: "conflict" as const };
+            }
+            return {
+              result: "applied" as const,
+              next: {
+                version: 1,
+                state: "cleared",
+                ...storedSessionGeneration(identity, current),
+                ...(current.lease && current.lease.token === leaseToken
+                  ? { lease: current.lease }
+                  : {}),
+              },
+            };
+          },
+          leaseContext.getStore()?.has(key) ? undefined : 1,
+        );
       });
     },
 

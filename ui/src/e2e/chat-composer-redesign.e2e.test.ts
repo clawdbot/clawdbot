@@ -3,6 +3,7 @@ import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -179,7 +180,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       await expect.poll(() => contextUsage.locator(".context-ring__detail").count()).toBe(0);
       await expect
         .poll(() => contextUsage.getAttribute("aria-label"))
-        .toBe("Session context usage: 46k of 200k (23%)");
+        .toBe("Thread context usage: 46k of 200k (23%)");
       await expect
         .poll(() =>
           contextUsage.evaluate((node) => node.closest(".agent-chat__composer-meta") != null),
@@ -703,7 +704,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}chat?session=agent%3Awork%3Amain`);
+      await page.goto(controlUiSessionUrl(server.baseUrl, "agent:work:main"));
       await expect
         .poll(
           async () => {
@@ -778,7 +779,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}chat?session=agent%3Amain%3Amain`);
+      await page.goto(controlUiSessionUrl(server.baseUrl, "agent:main:main"));
       await gateway.waitForRequest("chat.startup");
       await page.locator("openclaw-chat-pane").evaluate((pane) => {
         (pane as HTMLElement & { sessionKey: string }).sessionKey = "agent:work:main";
@@ -891,7 +892,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}chat?session=agent%3Awork%3Amain`);
+      await page.goto(controlUiSessionUrl(server.baseUrl, "agent:work:main"));
       await expect.poll(async () => (await gateway.getRequests("chat.startup")).length).toBe(1);
 
       const composer = page.locator(".agent-chat__input");

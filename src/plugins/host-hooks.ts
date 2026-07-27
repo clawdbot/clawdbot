@@ -93,8 +93,8 @@ type PluginControlUiTabGroup = "control" | "agent";
 
 export type PluginControlUiDescriptor = {
   id: string;
-  /** "tab" adds a Control UI sidebar tab; other surfaces attach to existing views. */
-  surface: "session" | "tool" | "run" | "settings" | "tab";
+  /** "tab" adds a sidebar tab; "widget" advertises a trusted dashboard renderer. */
+  surface: "session" | "tool" | "run" | "settings" | "tab" | "widget";
   label: string;
   description?: string;
   placement?: string;
@@ -222,6 +222,12 @@ type PluginSessionAttachmentFile = {
 };
 
 export type PluginAttachmentChannelHints = {
+  parseMode?: "HTML";
+  silent?: boolean;
+  /** Require host detection to match this MIME before forcing document delivery. */
+  forceDocumentMime?: string;
+  threadId?: string | number;
+  /** @deprecated Put portable attachment hints directly on `channelHints`. */
   telegram?: {
     parseMode?: "HTML";
     disableNotification?: boolean;
@@ -231,6 +237,7 @@ export type PluginAttachmentChannelHints = {
      */
     forceDocumentMime?: string;
   };
+  /** @deprecated Use `channelHints.threadId`. */
   slack?: {
     threadTs?: string;
   };

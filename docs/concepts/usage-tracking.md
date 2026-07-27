@@ -256,6 +256,9 @@ Pipe a value through verbs left to right; a non-verb segment is the fallback.
 `fixed:N` accepts only a complete decimal integer from 0 through 100. Invalid
 precision arguments make that interpolation empty.
 
+`meter:W:SCALE` accepts only a complete decimal integer width from 1 through 100. Leave the width blank to use the default 5 (`meter::braille`); invalid
+widths make that interpolation empty.
+
 ### Piece forms
 
 - `{ "text": "📚 {context.max_tokens|num}" }`: literal + interpolation.

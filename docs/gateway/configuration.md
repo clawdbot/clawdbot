@@ -19,6 +19,8 @@ Common reasons to add a config:
 
 See the [full reference](/gateway/configuration-reference) for every available field.
 
+Configuration follows a two-bucket rule: root siblings hold infrastructure and cross-agent defaults, while `agents.defaults` holds agent-loop behavior. Entries under `agents.entries` may override either bucket where the schema supports a per-agent override.
+
 Agents and automation should use `config.schema.lookup` for exact field-level
 docs before editing config. Use this page for task-oriented guidance and
 [Configuration reference](/gateway/configuration-reference) for the broader
@@ -61,6 +63,10 @@ field map and defaults.
     available, with a **Raw JSON** editor as an escape hatch. For drill-down
     UIs and other tooling, the gateway also exposes `config.schema.lookup` to
     fetch one path-scoped schema node plus immediate child summaries.
+    Settings show common fields first. Each section keeps its advanced fields
+    in a collapsed **Advanced (N)** group; use **Show advanced** to expand all
+    groups. Settings search always includes both tiers and opens the matching
+    advanced group when needed.
   </Tab>
   <Tab title="Direct edit">
     Edit `~/.openclaw/openclaw.json` directly. The Gateway watches the file and applies changes automatically (see [hot reload](#config-hot-reload)).
@@ -79,6 +85,12 @@ child summaries for drill-down tooling. Field `title`/`description` docs metadat
 carries through nested objects, wildcard (`*`), array-item (`[]`), and `anyOf`/
 `oneOf`/`allOf` branches. Runtime plugin and channel schemas merge in when the
 manifest registry is loaded.
+
+Every config leaf has a common or advanced presentation tier in `uiHints`.
+`advanced: false` marks common settings and `advanced: true` marks advanced
+settings. A leaf inherits the nearest ancestor tier when it has no direct hint;
+paths with no declared ancestor default to advanced. This affects presentation
+only, not validation, defaults, reload behavior, or whether the key can be set.
 
 When validation fails:
 
@@ -151,8 +163,8 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     }
     ```
 
-    - `agents.defaults.models` defines the model catalog and acts as the allowlist for `/model`; `provider/*` entries filter `/model`, `/models`, and model pickers to selected providers while still using dynamic model discovery.
-    - Use `openclaw config set agents.defaults.models '<json>' --strict-json --merge` to add allowlist entries without removing existing models. Plain replacements that would remove entries are rejected unless you pass `--replace`.
+    - `agents.defaults.models` stores aliases and per-model settings; adding an entry never restricts `/model` or `--model` overrides.
+    - `agents.defaults.modelPolicy.allow` is the explicit allowlist for overrides and model pickers. It accepts exact refs and `provider/*` wildcards; omit it or use `[]` to allow any model.
     - Model refs use `provider/model` format (e.g. `anthropic/claude-opus-4-6`).
     - `agents.defaults.imageMaxDimensionPx` controls transcript/tool image downscaling (default `1200`); lower values usually reduce vision-token usage on screenshot-heavy runs.
     - See [Models CLI](/concepts/models) for switching models in chat and [Model Failover](/concepts/model-failover) for auth rotation and fallback behavior.
@@ -213,7 +225,7 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
 
   <Accordion title="Restrict skills per agent">
     Use `agents.defaults.skills` for a shared baseline, then override specific
-    agents with `agents.list[].skills`:
+    agents with `agents.entries.*.skills`:
 
     ```json5
     {
@@ -231,23 +243,18 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     ```
 
     - Omit `agents.defaults.skills` for unrestricted skills by default.
-    - Omit `agents.list[].skills` to inherit the defaults.
-    - Set `agents.list[].skills: []` for no skills.
+    - Omit `agents.entries.*.skills` to inherit the defaults.
+    - Set `agents.entries.*.skills: []` for no skills.
     - See [Skills](/tools/skills), [Skills config](/tools/skills-config), and
       the [Configuration Reference](/gateway/config-agents#agents-defaults-skills).
 
   </Accordion>
 
-  <Accordion title="Tune gateway channel health monitoring">
-    Control how aggressively the gateway restarts channels that look stale:
+  <Accordion title="Configure per-channel health monitoring">
+    Disable or enable automatic health restarts for a channel or account:
 
     ```json5
     {
-      gateway: {
-        channelHealthCheckMinutes: 5,
-        channelStaleEventThresholdMinutes: 30,
-        channelMaxRestartsPerHour: 10,
-      },
       channels: {
         telegram: {
           healthMonitor: { enabled: false },
@@ -261,28 +268,8 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     }
     ```
 
-    - Values shown are the defaults. Set `gateway.channelHealthCheckMinutes: 0` to disable health-monitor restarts globally.
-    - `channelStaleEventThresholdMinutes` should be greater than or equal to the check interval.
-    - Use `channels.<provider>.healthMonitor.enabled` or `channels.<provider>.accounts.<id>.healthMonitor.enabled` to disable auto-restarts for one channel or account without disabling the global monitor.
+    - Use `channels.<provider>.healthMonitor.enabled` or `channels.<provider>.accounts.<id>.healthMonitor.enabled` to control auto-restarts for one channel or account.
     - See [Health Checks](/gateway/health) for operational debugging and the [full reference](/gateway/configuration-reference#gateway) for all fields.
-
-  </Accordion>
-
-  <Accordion title="Tune gateway WebSocket handshake timeout">
-    Give local clients more time to complete the pre-auth WebSocket handshake on
-    loaded or low-powered hosts:
-
-    ```json5
-    {
-      gateway: {
-        handshakeTimeoutMs: 30000,
-      },
-    }
-    ```
-
-    - Default is `15000` milliseconds.
-    - `OPENCLAW_HANDSHAKE_TIMEOUT_MS` still takes precedence for one-off service or shell overrides.
-    - Prefer fixing startup/event-loop stalls first; this knob is for hosts that are healthy but slow during warmup.
 
   </Accordion>
 
@@ -420,7 +407,6 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     {
       cron: {
         enabled: true,
-        maxConcurrentRuns: 8, // default; cron dispatch + isolated cron agent-turn execution
         sessionRetention: "24h",
       },
     }
@@ -636,7 +622,7 @@ config file already exists (a first write with no existing config skips the chec
 replacement is intentional. If a patch would replace or delete an existing array
 with fewer entries, the Gateway rejects the write unless that exact path appears
 in `replacePaths`; nested arrays under array entries use `[]`, such as
-`agents.list[].skills`. This prevents truncated `config.get` snapshots from
+`agents.entries.*.skills`. This prevents truncated `config.get` snapshots from
 silently clobbering routing or allowlist arrays. Use `config.apply` when you
 intend to replace the full config.
 
@@ -715,7 +701,7 @@ Rules:
   },
   channels: {
     googlechat: {
-      serviceAccountRef: {
+      serviceAccount: {
         source: "exec",
         provider: "vault",
         id: "channels/googlechat/serviceAccount",

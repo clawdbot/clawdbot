@@ -118,10 +118,6 @@ export type PluginRuntime = PluginRuntimeCore & {
     getSessionMessages: (
       params: SubagentGetSessionMessagesParams,
     ) => Promise<SubagentGetSessionMessagesResult>;
-    /** @deprecated Use getSessionMessages. */
-    getSession: (
-      params: SubagentGetSessionMessagesParams,
-    ) => Promise<SubagentGetSessionMessagesResult>;
     deleteSession: (params: SubagentDeleteSessionParams) => Promise<void>;
   };
   nodes: {

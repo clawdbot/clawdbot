@@ -25,6 +25,7 @@ import {
 } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import {
+  createPluginRegistrationTransaction,
   restorePluginProcessGlobalState,
   snapshotPluginProcessGlobalState,
 } from "./plugin-registration-transaction.js";
@@ -77,6 +78,19 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   }
 
   pluginLoaderCacheState.beginLoad(context.cacheKey);
+  let registryBuilder: ReturnType<typeof createPluginRegistry> | undefined;
+  const activatingLoadTransaction = context.shouldActivate
+    ? createPluginRegistrationTransaction({
+        rollbackGlobalSideEffects: () => {
+          const loadedPluginIds = (registryBuilder?.registry.plugins ?? [])
+            .filter((plugin) => plugin.status === "loaded")
+            .map((plugin) => plugin.id);
+          for (const pluginId of loadedPluginIds.toReversed()) {
+            registryBuilder?.rollbackPluginGlobalSideEffects(pluginId);
+          }
+        },
+      })
+    : null;
   try {
     // Snapshot loads must not wipe global state registered by the active plugin set.
     if (context.shouldActivate) {
@@ -93,7 +107,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       runtimeOptions: options.runtimeOptions,
       loadPluginModule,
     });
-    const registryBuilder = createPluginRegistry({
+    registryBuilder = createPluginRegistry({
       logger,
       runtime,
       coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
@@ -104,7 +118,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       activateGlobalSideEffects: context.shouldActivate,
     });
     const { registry } = registryBuilder;
-    const { manifestRegistry, orderedCandidates, manifestByRoot, provenance } =
+    const { manifestRegistry, orderedCandidates, manifestBySource, provenance } =
       resolvePluginLoadDiscovery({
         options,
         context,
@@ -131,7 +145,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     });
     const pluginLoadStartMs = performance.now();
     for (const candidate of orderedCandidates) {
-      const manifestRecord = manifestByRoot.get(candidate.rootDir);
+      const manifestRecord = manifestBySource.get(candidate.source);
       if (!manifestRecord) {
         continue;
       }
@@ -192,6 +206,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       );
     }
     if (context.shouldActivate) {
+      // Activation installs the new registry before initializing its hook runner. Commit the
+      // rollback first so an activation throw cannot restore old globals under the new registry.
+      activatingLoadTransaction?.commit({ activate: true });
       activatePluginRegistry(
         registry,
         context.cacheKey,
@@ -200,6 +217,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       );
     }
     return registry;
+  } catch (error) {
+    activatingLoadTransaction?.rollback();
+    throw error;
   } finally {
     pluginLoaderCacheState.finishLoad(context.cacheKey);
   }

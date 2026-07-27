@@ -130,20 +130,13 @@ vi.mock("./markdown-to-line.js", () => ({
   processLineMessage: vi.fn(),
 }));
 
-vi.mock("./reply-chunks.js", () => ({
-  sendLineReplyChunks: vi.fn(),
-}));
-
 vi.mock("./send.js", () => ({
   createFlexMessage: vi.fn(),
   createImageMessage: vi.fn(),
   createLocationMessage: vi.fn(),
   createQuickReplyItems: vi.fn(),
-  createTextMessageWithQuickReplies: vi.fn(),
   getUserDisplayName: vi.fn(),
-  pushMessageLine: vi.fn(),
   pushMessagesLine: vi.fn(),
-  pushTextMessageWithQuickReplies: vi.fn(),
   replyMessageLine: vi.fn(),
   showLoadingAnimation: vi.fn(),
 }));
@@ -166,7 +159,6 @@ describe("monitorLineProvider lifecycle", () => {
     vi.doUnmock("./webhook-node.js");
     vi.doUnmock("./auto-reply-delivery.js");
     vi.doUnmock("./markdown-to-line.js");
-    vi.doUnmock("./reply-chunks.js");
     vi.doUnmock("./send.js");
     vi.doUnmock("./template-messages.js");
     vi.resetModules();

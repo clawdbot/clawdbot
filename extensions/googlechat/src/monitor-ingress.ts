@@ -1,12 +1,9 @@
 // Googlechat plugin module owns raw webhook durable admission and draining.
 import {
-  bindIngressLifecycleToReplyOptions,
-  createChannelIngressDrain,
-  DEFAULT_INGRESS_ADOPTION_STALL_MS,
-  DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-  DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-  type ChannelIngressDrain,
+  createChannelIngressMonitor,
   type ChannelIngressQueue,
+  type ChannelIngressMonitorDeliveryResult,
+  type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { GoogleChatEventPayloadError, parseGoogleChatInboundPayload } from "./monitor-event.js";
@@ -29,14 +26,12 @@ type GoogleChatIngressPayload = {
   rawEvent: string;
 };
 
-export type GoogleChatIngressLifecycle = ReturnType<
-  typeof bindIngressLifecycleToReplyOptions
->["turnAdoptionLifecycle"];
+export type GoogleChatIngressLifecycle = Omit<
+  ChannelIngressMonitorLifecycle,
+  "onAdoptionFinalizing"
+>;
 
-type GoogleChatIngressDispatchResult =
-  | { kind: "completed" }
-  | { kind: "deferred" }
-  | { kind: "failed-retryable"; error: unknown };
+type GoogleChatIngressDispatchResult = ChannelIngressMonitorDeliveryResult;
 
 type GoogleChatIngressDispatch = (
   event: GoogleChatEvent,
@@ -102,22 +97,10 @@ function inspectGoogleChatIngressEvent(raw: unknown): { eventId: string; laneKey
   return { eventId: messageName, laneKey: `space:${spaceName}` };
 }
 
-function parseClaimedGoogleChatEvent(
-  payload: GoogleChatIngressPayload,
-  claimedId: string,
-): GoogleChatEvent {
-  if (
-    payload.version !== GOOGLECHAT_INGRESS_PAYLOAD_VERSION ||
-    typeof payload.rawEvent !== "string"
-  ) {
-    throw new GoogleChatIngressPermanentError(
-      "invalid-event",
-      `Google Chat ingress row ${claimedId} has an invalid payload.`,
-    );
-  }
+function deserializeGoogleChatIngressEvent(rawEvent: string, claimedId: string): unknown {
   let raw: unknown;
   try {
-    raw = JSON.parse(payload.rawEvent);
+    raw = JSON.parse(rawEvent);
   } catch (error) {
     throw new GoogleChatIngressPermanentError(
       "invalid-event",
@@ -125,13 +108,10 @@ function parseClaimedGoogleChatEvent(
       { cause: error },
     );
   }
-  const facts = inspectGoogleChatIngressEvent(raw);
-  if (!facts || facts.eventId !== claimedId) {
-    throw new GoogleChatIngressPermanentError(
-      "invalid-event",
-      `Google Chat ingress row ${claimedId} has invalid message identity.`,
-    );
-  }
+  return raw;
+}
+
+function normalizeClaimedGoogleChatEvent(raw: unknown, claimedId: string): GoogleChatEvent {
   try {
     const parsed = parseGoogleChatInboundPayload(raw);
     const eventType = parsed.event.type ?? parsed.event.eventType;
@@ -187,116 +167,6 @@ export function createGoogleChatIngressMonitor(options: {
   adoptionStallTimeoutMs?: number;
   abortSignal?: AbortSignal;
 }): GoogleChatIngressMonitor {
-  let queue = options.queue;
-  let drain: ChannelIngressDrain | undefined;
-  let running = false;
-  let requested = false;
-  let pumping: Promise<void> | undefined;
-  let pollTimer: ReturnType<typeof setInterval> | undefined;
-  let lastPrunedAt = 0;
-  const activeDeliveries = new Set<Promise<GoogleChatIngressDispatchResult | void>>();
-
-  const getQueue = (): ChannelIngressQueue<GoogleChatIngressPayload> => {
-    queue ??= getGoogleChatRuntime().state.openChannelIngressQueue<GoogleChatIngressPayload>({
-      accountId: options.accountId,
-    });
-    return queue;
-  };
-
-  const getDrain = (): ChannelIngressDrain => {
-    drain ??= createChannelIngressDrain<GoogleChatIngressPayload>({
-      queue: getQueue(),
-      adoptionStallTimeoutMs: options.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS,
-      startLimit: GOOGLECHAT_INGRESS_MAX_CONCURRENT_DELIVERIES,
-      retryPolicy: {
-        maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-        deadLetterMinAgeMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-      },
-      resolveNonRetryableFailure: resolveGoogleChatIngressNonRetryableFailure,
-      ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
-      onLog: (message) => options.runtime.error?.(`googlechat: ${message}`),
-      dispatchClaimedEvent: async (record, lifecycle) => {
-        if (lifecycle.abortSignal.aborted) {
-          return { kind: "failed-retryable", error: lifecycle.abortSignal.reason };
-        }
-        const event = parseClaimedGoogleChatEvent(record.payload, record.id);
-        const boundLifecycle = bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle;
-        if (boundLifecycle.abortSignal.aborted) {
-          return { kind: "failed-retryable", error: boundLifecycle.abortSignal.reason };
-        }
-        const delivery = Promise.resolve().then(() => options.dispatch(event, boundLifecycle));
-        activeDeliveries.add(delivery);
-        try {
-          return await delivery;
-        } finally {
-          activeDeliveries.delete(delivery);
-        }
-      },
-    });
-    return drain;
-  };
-
-  const pruneIfDue = async (): Promise<void> => {
-    const now = Date.now();
-    if (now - lastPrunedAt < GOOGLECHAT_INGRESS_PRUNE_INTERVAL_MS) {
-      return;
-    }
-    await getQueue().prune({
-      completedTtlMs: GOOGLECHAT_INGRESS_COMPLETED_TTL_MS,
-      completedMaxEntries: GOOGLECHAT_INGRESS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: GOOGLECHAT_INGRESS_FAILED_TTL_MS,
-      failedMaxEntries: GOOGLECHAT_INGRESS_FAILED_MAX_ENTRIES,
-      now,
-    });
-    lastPrunedAt = now;
-  };
-
-  const waitForActiveDeliveries = async (): Promise<void> => {
-    while (activeDeliveries.size > 0) {
-      await Promise.allSettled(activeDeliveries);
-    }
-  };
-
-  const runPump = async (): Promise<void> => {
-    try {
-      for (;;) {
-        requested = false;
-        await pruneIfDue();
-        // stop() may race the async prune; never create a fresh drain afterward.
-        if (!running) {
-          break;
-        }
-        const activeDrain = getDrain();
-        const { started } = await activeDrain.drainOnce({
-          shouldStop: () =>
-            !running || activeDeliveries.size >= GOOGLECHAT_INGRESS_MAX_CONCURRENT_DELIVERIES,
-        });
-        await waitForActiveDeliveries();
-        if (!running || (!requested && started === 0)) {
-          break;
-        }
-      }
-    } catch (error) {
-      options.runtime.error?.(`googlechat ingress drain failed: ${formatErrorMessage(error)}`);
-    } finally {
-      pumping = undefined;
-      if (running && requested) {
-        requestDrain();
-      }
-    }
-  };
-
-  const requestDrain = (): void => {
-    requested = true;
-    if (!running || pumping) {
-      return;
-    }
-    pumping = runPump();
-  };
-
-  // Serialize concurrent HTTP admissions so append retry cannot invert a space lane.
-  let admissionTail: Promise<void> = Promise.resolve();
-
   const serializeForIngress = (rawEvent: unknown): string => {
     if (!isRecord(rawEvent)) {
       throw new GoogleChatIngressPermanentError(
@@ -317,36 +187,55 @@ export function createGoogleChatIngressMonitor(options: {
     return serialized;
   };
 
-  const admitOnce = async (params: {
-    rawEvent: string;
-    facts: { eventId: string; laneKey: string };
-    receivedAt: number;
-  }): Promise<void> => {
-    let lastError: unknown;
-    for (const delayMs of [0, 100, 300]) {
-      if (delayMs > 0) {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, delayMs);
-        });
-      }
-      try {
-        await getQueue().enqueue(
-          params.facts.eventId,
-          { version: GOOGLECHAT_INGRESS_PAYLOAD_VERSION, rawEvent: params.rawEvent },
-          { receivedAt: params.receivedAt, laneKey: params.facts.laneKey },
-        );
-        requestDrain();
-        return;
-      } catch (error) {
-        lastError = error;
-      }
-    }
-    throw lastError;
-  };
+  const monitor = createChannelIngressMonitor<unknown, string, GoogleChatIngressPayload>({
+    queue:
+      options.queue ??
+      (() =>
+        getGoogleChatRuntime().state.openChannelIngressQueue<GoogleChatIngressPayload>({
+          accountId: options.accountId,
+        })),
+    inspect: (rawEvent) => inspectGoogleChatIngressEvent(rawEvent),
+    payload: {
+      storage: "raw-event",
+      version: GOOGLECHAT_INGRESS_PAYLOAD_VERSION,
+      serialize: serializeForIngress,
+      deserialize: (rawEvent, { claim }) => deserializeGoogleChatIngressEvent(rawEvent, claim.id),
+      createClaimError: (kind, claim) =>
+        new GoogleChatIngressPermanentError(
+          "invalid-event",
+          kind === "invalid-version"
+            ? `Google Chat ingress row ${claim.id} has an invalid payload.`
+            : `Google Chat ingress row ${claim.id} has invalid message identity.`,
+        ),
+    },
+    deliver: (rawEvent, lifecycle, claim) =>
+      options.dispatch(normalizeClaimedGoogleChatEvent(rawEvent, claim.id), lifecycle),
+    pollIntervalMs: options.pollIntervalMs ?? GOOGLECHAT_INGRESS_POLL_INTERVAL_MS,
+    retention: {
+      pruneIntervalMs: GOOGLECHAT_INGRESS_PRUNE_INTERVAL_MS,
+      completedTtlMs: GOOGLECHAT_INGRESS_COMPLETED_TTL_MS,
+      completedMaxEntries: GOOGLECHAT_INGRESS_COMPLETED_MAX_ENTRIES,
+      failedTtlMs: GOOGLECHAT_INGRESS_FAILED_TTL_MS,
+      failedMaxEntries: GOOGLECHAT_INGRESS_FAILED_MAX_ENTRIES,
+    },
+    drain: {
+      resolveNonRetryableFailure: resolveGoogleChatIngressNonRetryableFailure,
+      startLimit: GOOGLECHAT_INGRESS_MAX_CONCURRENT_DELIVERIES,
+      ...(options.adoptionStallTimeoutMs === undefined
+        ? {}
+        : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
+      onLog: (message) => options.runtime.error?.(`googlechat: ${message}`),
+    },
+    ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
+    admissionMode: "while-running",
+    createStoppedError: () => new Error("Google Chat ingress is stopped."),
+    onError: (error) =>
+      options.runtime.error?.(`googlechat ingress drain failed: ${formatErrorMessage(error)}`),
+  });
 
   return {
     receive: async (rawEvent) => {
-      if (!running) {
+      if (!monitor.isRunning()) {
         throw new Error("Google Chat ingress is stopped.");
       }
       let facts: ReturnType<typeof inspectGoogleChatIngressEvent>;
@@ -361,51 +250,11 @@ export function createGoogleChatIngressMonitor(options: {
       if (!facts) {
         return { kind: "ignored" };
       }
-      const serialized = serializeForIngress(rawEvent);
-      const receivedAt = Date.now();
-      const admission = admissionTail.then(async () => {
-        await admitOnce({ rawEvent: serialized, facts, receivedAt });
-      });
-      admissionTail = admission.catch(() => undefined);
-      await admission;
+      await monitor.admit(rawEvent, { facts });
       return { kind: "durable" };
     },
-    start: () => {
-      if (running) {
-        return;
-      }
-      running = true;
-      pollTimer = setInterval(
-        requestDrain,
-        options.pollIntervalMs ?? GOOGLECHAT_INGRESS_POLL_INTERVAL_MS,
-      );
-      pollTimer.unref?.();
-      requestDrain();
-    },
-    stop: async () => {
-      running = false;
-      if (pollTimer) {
-        clearInterval(pollTimer);
-        pollTimer = undefined;
-      }
-      await admissionTail;
-      drain?.dispose();
-      await pumping;
-      await waitForActiveDeliveries();
-      // The pump can lazily create the drain before observing running=false.
-      drain?.dispose();
-      await drain?.waitForIdle();
-    },
-    waitForIdle: async () => {
-      for (;;) {
-        const activePump = pumping;
-        if (!activePump) {
-          break;
-        }
-        await activePump;
-      }
-      await waitForActiveDeliveries();
-      await drain?.waitForIdle();
-    },
+    start: monitor.start,
+    stop: monitor.stop,
+    waitForIdle: monitor.waitForIdle,
   };
 }

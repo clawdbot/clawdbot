@@ -71,7 +71,7 @@ describe("runEmbeddedAgent usage reporting", () => {
     });
 
     expect(mockedEnsureRuntimePluginsLoaded).toHaveBeenCalledWith({
-      config: undefined,
+      config: {},
       workspaceDir: "/tmp/workspace",
     });
   });
@@ -95,7 +95,7 @@ describe("runEmbeddedAgent usage reporting", () => {
     });
 
     expect(mockedEnsureRuntimePluginsLoaded).toHaveBeenCalledWith({
-      config: undefined,
+      config: {},
       workspaceDir: "/tmp/workspace",
       allowGatewaySubagentBinding: true,
     });

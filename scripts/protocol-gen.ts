@@ -3,15 +3,42 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ProtocolSchemas } from "../packages/gateway-protocol/src/schema.js";
+import { listCoreGatewayMethodMetadata } from "../src/gateway/methods/core-descriptors.js";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
+const defaultOutputPath = path.join(repoRoot, "dist", "protocol.schema.json");
 
-async function writeJsonSchema() {
+function resolveOutputPath(args: string[]): string {
+  let outputPath = defaultOutputPath;
+  let hasOutputPath = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg !== "--out") {
+      throw new Error(`Unknown argument: ${arg}`);
+    }
+    if (hasOutputPath) {
+      throw new Error("--out may only be specified once.");
+    }
+    const value = args[index + 1]?.trim();
+    if (!value || value === "--out") {
+      throw new Error("--out requires a path.");
+    }
+    outputPath = path.resolve(value);
+    hasOutputPath = true;
+    index += 1;
+  }
+  return outputPath;
+}
+
+async function writeJsonSchema(jsonSchemaPath: string) {
   const definitions: Record<string, unknown> = {};
   for (const [name, schema] of Object.entries(ProtocolSchemas)) {
     definitions[name] = schema;
   }
+  const methods = Object.fromEntries(
+    listCoreGatewayMethodMetadata().map(({ name, scope, since }) => [name, { since, scope }]),
+  );
 
   const rootSchema = {
     $schema: "http://json-schema.org/draft-07/schema#",
@@ -31,19 +58,18 @@ async function writeJsonSchema() {
         event: "#/definitions/EventFrame",
       },
     },
+    methods,
     definitions,
   };
 
-  const distDir = path.join(repoRoot, "dist");
-  await fs.mkdir(distDir, { recursive: true });
-  const jsonSchemaPath = path.join(distDir, "protocol.schema.json");
+  await fs.mkdir(path.dirname(jsonSchemaPath), { recursive: true });
   await fs.writeFile(jsonSchemaPath, JSON.stringify(rootSchema, null, 2));
   console.log(`wrote ${jsonSchemaPath}`);
   return { jsonSchemaPath, schemaString: JSON.stringify(rootSchema) };
 }
 
 async function main() {
-  await writeJsonSchema();
+  await writeJsonSchema(resolveOutputPath(process.argv.slice(2)));
 }
 
 main().catch((err: unknown) => {

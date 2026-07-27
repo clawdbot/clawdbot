@@ -7,7 +7,7 @@ scenario:
     primary:
       - anthropic.signed-redacted-thinking-replay
     secondary:
-      - runtime.retry-policy
+      - agent-runtime.failure-recovery-retry-policy
   gatewayConfigPatch:
     agents:
       defaults:

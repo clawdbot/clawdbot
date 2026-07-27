@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IMessageRpcClient } from "./client.js";
 import { loadFreshIMessageReplyCacheForTest } from "./test-support/runtime.js";
@@ -75,15 +76,22 @@ function createApprovalText(id = "approval-123"): string {
 }
 
 describe("sendMessageIMessage receipts", () => {
+  let openClawState: OpenClawTestState;
+
   beforeEach(async () => {
+    openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-imessage-send-",
+    });
     await loadFreshSendModule();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     clearIMessageApprovalReactionTargetsForTest();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     vi.useRealTimers();
+    await openClawState.cleanup();
   });
 
   it("attaches a text receipt for native send ids", async () => {
@@ -479,10 +487,9 @@ describe("sendMessageIMessage receipts", () => {
       resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
       runCliJson,
     });
-
     expect(result.messageId).toBe("p:0/media-guid");
-    expect(result.sentText).toBe("");
-    expect(result.echoText).toBe("<media:image>");
+    expect(result.echoText).toBeUndefined();
+    expect(result.echoMedia).toEqual({ contentType: "image/png", kind: "image" });
     expect(result.receipt.primaryPlatformMessageId).toBe("p:0/media-guid");
     expect(result.receipt.platformMessageIds).toEqual(["p:0/media-guid"]);
     expect(client["request"]).not.toHaveBeenCalled();
@@ -906,8 +913,6 @@ describe("sendMessageIMessage receipts", () => {
   });
 
   it("does not persist caption text when the caption follow-up send fails", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imessage-send-"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const client = createRejectingClient(new Error("caption failed"));
     const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/dm-media-guid" });
 
@@ -920,10 +925,11 @@ describe("sendMessageIMessage receipts", () => {
         runCliJson,
       }),
     ).rejects.toThrow("caption failed");
-
     const scope = "default:imessage:+15550004567";
     expect(hasPersistedIMessageEcho({ scope, text: "caption" })).toBe(false);
-    expect(hasPersistedIMessageEcho({ scope, text: "<media:image>" })).toBe(true);
+    expect(
+      hasPersistedIMessageEcho({ scope, media: { contentType: "image/png", kind: "image" } }),
+    ).toBe(true);
     expect(hasPersistedIMessageEcho({ scope, messageId: "p:0/dm-media-guid" })).toBe(true);
   });
 

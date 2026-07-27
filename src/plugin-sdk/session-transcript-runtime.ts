@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { redactTranscriptMessage } from "../agents/transcript-redact.js";
 import {
   appendTranscriptMessage,
@@ -334,7 +335,9 @@ export async function appendAssistantMirrorMessageByIdentity(
 }
 
 /**
- * Appends a transcript message by scoped transcript target.
+ * Appends an already-canonical transcript message by scoped transcript target.
+ * Media-bearing user turns use ordered `message.__openclaw.media` facts; this
+ * low-level API does not infer deprecated top-level Media* projections.
  */
 export async function appendSessionTranscriptMessageByIdentity<TMessage>(
   params: SessionTranscriptAppendMessageParams<TMessage>,
@@ -483,10 +486,6 @@ function extractAssistantMirrorComparableText(
 
 function isDeliveryMirrorAssistantMessage(message: SessionTranscriptAssistantMessage): boolean {
   return message.provider === "openclaw" && message.model === "delivery-mirror";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function readNonEmptyString(value: unknown): string | undefined {

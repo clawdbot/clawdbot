@@ -1,5 +1,5 @@
 // Tests CLI entrypoint argument handling and startup behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { tryHandlePrecomputedCommandHelpFastPath, tryHandleRootHelpFastPath } from "./entry.js";
 
 describe("entry root help fast path", () => {
@@ -63,6 +63,41 @@ describe("entry root help fast path", () => {
     expect(handled).toBe(true);
     expect(outputPrecomputedRootHelpTextCalls).toBe(0);
     expect(outputRootHelpOptions).toEqual([liveOptions]);
+  });
+
+  it("structures root help rendering failures for JSON console style", async () => {
+    const logging = await import("./logging.js");
+    logging.setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle: "json" });
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true as unknown as ReturnType<typeof process.stderr.write>);
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`exit ${String(code)}`);
+    }) as typeof process.exit);
+
+    try {
+      await expect(
+        tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
+          env: {},
+          loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => ({
+            config: {},
+            env: {},
+          }),
+          outputRootHelp: () => {
+            throw new Error("render failed");
+          },
+        }),
+      ).rejects.toThrow("exit 1");
+      const line = stderrSpy.mock.calls.map(([value]) => String(value)).join("");
+      expect(JSON.parse(line)).toMatchObject({
+        level: "error",
+        message: expect.stringContaining("Failed to display help"),
+      });
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    } finally {
+      logging.resetLogger();
+      vi.restoreAllMocks();
+    }
   });
 
   it("ignores non-root help invocations", async () => {

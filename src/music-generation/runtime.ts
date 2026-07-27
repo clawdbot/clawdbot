@@ -52,10 +52,10 @@ export async function generateMusic(
   const logger = deps.log ?? log;
   const timeoutMs =
     params.timeoutMs ??
-    resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.musicGenerationModel);
+    resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.mediaModels?.music);
   const candidates = resolveCapabilityModelCandidates({
     cfg: params.cfg,
-    modelConfig: params.cfg.agents?.defaults?.musicGenerationModel,
+    modelConfig: params.cfg.agents?.defaults?.mediaModels?.music,
     modelOverride: params.modelOverride,
     parseModelRef: parseMusicGenerationModelRef,
     agentDir: params.agentDir,
@@ -66,7 +66,7 @@ export async function generateMusic(
     throw new Error(
       buildNoCapabilityModelConfiguredMessage({
         capabilityLabel: "music-generation",
-        modelConfigKey: "musicGenerationModel",
+        modelConfigKey: "mediaModels.music",
         providers: listProviders(params.cfg),
         fallbackSampleRef: "google/lyria-3-clip-preview",
         getProviderEnvVars: deps.getProviderEnvVars,

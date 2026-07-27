@@ -1,10 +1,9 @@
-// Usage accumulator tests cover multi-call token aggregation and last-call
-// snapshots used for billing metadata on embedded run results.
+// Usage accumulator tests cover multi-call token aggregation used for billing
+// metadata on embedded run results.
 import { describe, expect, it } from "vitest";
 import {
   createUsageAccumulator,
   mergeUsageIntoAccumulator,
-  toLastCallUsage,
   toNormalizedUsage,
 } from "./usage-accumulator.js";
 
@@ -51,11 +50,6 @@ function createAccumulatorWithUsage(...usages: UsageInput[]) {
   return acc;
 }
 
-const emptyAccumulatorCases = [
-  { name: "toNormalizedUsage", resolve: toNormalizedUsage },
-  { name: "toLastCallUsage", resolve: toLastCallUsage },
-];
-
 describe("usage-accumulator", () => {
   describe("mergeUsageIntoAccumulator", () => {
     it("accumulates usage across multiple API calls", () => {
@@ -67,22 +61,6 @@ describe("usage-accumulator", () => {
       expect(acc.cacheRead).toBe(246_000);
       expect(acc.cacheWrite).toBe(5_000);
       expect(acc.total).toBe(251_490);
-    });
-
-    it("stores the exact final call snapshot", () => {
-      const acc = createAccumulatorWithUsage(FIRST_USAGE, FINAL_USAGE);
-
-      expect(acc.lastInput).toBe(150);
-      expect(acc.lastOutput).toBe(40);
-      expect(acc.lastReasoningTokens).toBe(7);
-      expect(acc.lastCacheRead).toBe(84_000);
-      expect(acc.lastCacheWrite).toBe(0);
-      expect(acc.lastContextUsage).toEqual({
-        state: "available",
-        promptTokens: 84_150,
-        totalTokens: 84_190,
-      });
-      expect(acc.lastTotal).toBe(84_190);
     });
 
     it("ignores undefined or zero-only usage", () => {
@@ -101,16 +79,11 @@ describe("usage-accumulator", () => {
     });
   });
 
-  describe("empty accumulator", () => {
-    it.each(emptyAccumulatorCases)(
-      "$name returns undefined for an empty accumulator",
-      ({ resolve }) => {
-        expect(resolve(createUsageAccumulator())).toBeUndefined();
-      },
-    );
-  });
-
   describe("toNormalizedUsage", () => {
+    it("returns undefined for an empty accumulator", () => {
+      expect(toNormalizedUsage(createUsageAccumulator())).toBeUndefined();
+    });
+
     it("returns accumulated totals for billing", () => {
       const acc = createUsageAccumulator();
 
@@ -155,41 +128,6 @@ describe("usage-accumulator", () => {
         cacheWrite: undefined,
         total: 150,
       });
-    });
-  });
-
-  describe("toLastCallUsage", () => {
-    it("returns the exact final call snapshot", () => {
-      const acc = createAccumulatorWithUsage(FIRST_USAGE, FINAL_USAGE);
-
-      expect(toLastCallUsage(acc)).toEqual({
-        input: 150,
-        output: 40,
-        reasoningTokens: 7,
-        cacheRead: 84_000,
-        cacheWrite: undefined,
-        contextUsage: {
-          state: "available",
-          promptTokens: 84_150,
-          totalTokens: 84_190,
-        },
-        total: 84_190,
-      });
-    });
-
-    it("preserves an unavailable context snapshot", () => {
-      const acc = createUsageAccumulator();
-      mergeUsageIntoAccumulator(acc, {
-        input: 12,
-        output: 15_104,
-        cacheRead: 819_661,
-        cacheWrite: 93_130,
-        contextUsage: { state: "unavailable" },
-        total: 927_907,
-      });
-
-      expect(toLastCallUsage(acc)?.contextUsage).toEqual({ state: "unavailable" });
-      expect(toNormalizedUsage(acc)?.contextUsage).toBeUndefined();
     });
   });
 });

@@ -1,5 +1,4 @@
 import CoreLocation
-import CryptoKit
 import Observation
 import OpenClawChatUI
 import OpenClawKit
@@ -10,10 +9,9 @@ import SwiftUI
 import UIKit
 import UserNotifications
 
-/// Wrap errors without pulling non-Sendable types into async notification paths.
-private struct NotificationCallError: Error {
-    let message: String
-}
+private let clientDatabaseLogger = Logger(
+    subsystem: "ai.openclawfoundation.app",
+    category: "ClientDatabases")
 
 private struct GatewayRelayIdentityResponse: Decodable {
     let deviceId: String
@@ -26,27 +24,6 @@ private struct WatchChatPreview {
     var statusText: String?
 }
 
-private struct WatchChatMetadataEnvelope: Decodable {
-    struct Metadata: Decodable {
-        var id: String?
-    }
-
-    var metadata: Metadata?
-    var messageToolMirror: [String: String]?
-
-    enum CodingKeys: String, CodingKey {
-        case metadata = "__openclaw"
-        case messageToolMirror = "openclawMessageToolMirror"
-    }
-}
-
-private struct WatchChatMessageEntry {
-    var message: OpenClawChatMessage
-    var text: String
-    var serverId: String?
-    var isMessageToolMirror: Bool
-}
-
 private struct ExecApprovalGatewayEventPayload: Decodable {
     var id: String
 }
@@ -54,33 +31,6 @@ private struct ExecApprovalGatewayEventPayload: Decodable {
 private struct NodeEventRequestPayload: Encodable {
     var event: String
     var payloadJSON: String
-}
-
-/// Ensures notification requests return promptly even if the system prompt blocks.
-private final class NotificationInvokeLatch<T: Sendable>: @unchecked Sendable {
-    private let lock = NSLock()
-    private var continuation: CheckedContinuation<Result<T, NotificationCallError>, Never>?
-    private var resumed = false
-
-    func setContinuation(_ continuation: CheckedContinuation<Result<T, NotificationCallError>, Never>) {
-        self.lock.lock()
-        defer { self.lock.unlock() }
-        self.continuation = continuation
-    }
-
-    func resume(_ response: Result<T, NotificationCallError>) {
-        let cont: CheckedContinuation<Result<T, NotificationCallError>, Never>?
-        self.lock.lock()
-        if self.resumed {
-            self.lock.unlock()
-            return
-        }
-        self.resumed = true
-        cont = self.continuation
-        self.continuation = nil
-        self.lock.unlock()
-        cont?.resume(returning: response)
-    }
 }
 
 private enum IOSDeepLinkAgentPolicy {
@@ -93,11 +43,15 @@ private enum TalkCapturePreparationOwner {
     case chatDictation(epoch: UInt64)
 }
 
+private enum GatewayConnectionWaitOwner {
+    case node
+    case `operator`
+}
+
 @MainActor
 @Observable
 // swiftlint:disable type_body_length file_length
 final class NodeAppModel {
-    private nonisolated static let watchChatPreviewItemLimit = 5
     private nonisolated static let watchMessageMaxImmediateRetryAttempts = 3
 
     struct AgentDeepLinkPrompt: Identifiable, Equatable {
@@ -405,6 +359,7 @@ final class NodeAppModel {
     var isBackgrounded: Bool = false
     let screen: ScreenController
     private let camera: any CameraServicing
+    private(set) var preferredCameraFacing: OpenClawCameraFacing
     private let screenRecorder: any ScreenRecordingServicing
     private var watchGatewayConnectionStatus: OpenClawWatchAppStatusCode?
     var gatewayStatusText: String = "Offline" {
@@ -461,6 +416,12 @@ final class NodeAppModel {
     var homeCanvasRevision: Int = 0
     var lastShareEventText: String = "No share events yet."
     var openChatRequestID: Int = 0
+    var newChatRequestID: Int = 0
+    // RootTabs has one chat destination; keep its acknowledgement here so recreating
+    // that destination cannot replay a request that the prior view already handled.
+    @ObservationIgnored private var consumedNewChatRequestID: Int = 0
+    var dashboardNavigationRequestID: Int = 0
+    @ObservationIgnored private var consumedDashboardNavigationRequestID: Int = 0
     var gatewaySetupRequestID: Int = 0
     private(set) var pendingAgentDeepLinkPrompt: AgentDeepLinkPrompt?
     private var pendingGatewaySetupLink: GatewayConnectDeepLink?
@@ -537,6 +498,7 @@ final class NodeAppModel {
     let voiceWake = VoiceWakeManager()
     let voiceNoteRecorder: OpenClawVoiceNoteRecorder
     let talkMode: TalkModeManager
+    private(set) var locationAuthorizationSnapshot = LocationAuthorizationSnapshot.undetermined
     private let locationService: any LocationServicing
     private let deviceStatusService: any DeviceStatusServicing
     private let photosService: any PhotosServicing
@@ -561,6 +523,7 @@ final class NodeAppModel {
     private var chatDictationCaptureId: String?
     private var talkPttCommandEpoch: UInt64 = 0
     private var chatDictationCommandEpoch: UInt64 = 0
+    private(set) var isChatDictationPending = false
     private var talkPreparationInFlight = false
     private var auxiliaryAudioCapture: AuxiliaryAudioCapture?
     private var foregroundCaptureCancellations: [UUID: @MainActor () -> Void] = [:]
@@ -579,7 +542,9 @@ final class NodeAppModel {
     @ObservationIgnored private var watchMessageRetryAttempts: [String: Int] = [:]
     @ObservationIgnored private var watchMessageRetryTask: Task<Void, Never>?
     @ObservationIgnored private let appleReviewDemoChatTransport = AppleReviewDemoChatTransport()
-    @ObservationIgnored private var chatTranscriptCachesByGatewayID: [String: OpenClawChatSQLiteTranscriptCache] = [:]
+    @ObservationIgnored private var clientDatabases: OpenClawClientDatabases?
+    @ObservationIgnored private var chatTranscriptCachesByGatewayID:
+        [GatewayStableIdentifier.Key: OpenClawChatSQLiteTranscriptCache] = [:]
     @ObservationIgnored private var chatSessionRoutingRestoreTask: Task<Void, Never>?
     private var watchExecApprovalPromptsByID: [ExecApprovalIdentifier.Key: ExecApprovalPrompt] = [:]
     private var execApprovalInboxPromptsByKey: [ExecApprovalInboxKey: ExecApprovalPrompt] = [:]
@@ -680,7 +645,8 @@ final class NodeAppModel {
     /// "operator" must rebuild the view model so transcripts are never read
     /// from or written under another gateway's cache scope.
     var chatViewModelIdentityID: String {
-        "\(self.chatTransportModeID)|\(self.chatTranscriptCacheGatewayID ?? "")|\(self.chatTranscriptCacheGeneration)"
+        let gatewayID = self.chatTranscriptCacheGatewayIdentityComponent
+        return "\(self.chatTransportModeID)|\(gatewayID)|\(self.chatTranscriptCacheGeneration)"
     }
 
     /// Stable owner key for the long-lived chat view model. Connectivity still
@@ -688,23 +654,42 @@ final class NodeAppModel {
     /// not rebuild Chat and discard an offline draft on the same gateway.
     var chatViewModelOwnerID: String {
         let modeID = self.isLocalGatewayFixtureEnabled ? self.chatTransportModeID : "gateway"
-        return "\(modeID)|\(self.chatTranscriptCacheGatewayID ?? "")|\(self.chatTranscriptCacheGeneration)"
+        return "\(modeID)|\(self.chatTranscriptCacheGatewayIdentityComponent)|\(self.chatTranscriptCacheGeneration)"
+    }
+
+    private var chatTranscriptCacheGatewayIdentityComponent: String {
+        self.chatTranscriptCacheGatewayID.flatMap(GatewayStableIdentifier.storageComponent) ?? ""
     }
 
     private var chatTranscriptCacheGeneration = 0
+    private var quarantinedChatOfflineGatewayIDs: Set<GatewayStableIdentifier.Key> = []
+    #if DEBUG
+    @ObservationIgnored private var testRemoveAllChatDatabaseFilesHandler: (() throws -> Void)?
+    #endif
 
-    /// Offline transcript cache plus durable command outbox, both scoped to
-    /// the paired gateway identity (one SQLite file per gateway, memoized so
-    /// retire/purge can close every open handle). Nil for fixture/unpaired
-    /// transports: no cache and no outbox.
+    /// Gateway-scoped facade over the installation-wide cache and client-state
+    /// databases. Nil for fixture/unpaired transports: no cache and no outbox.
     func makeChatOfflineStore() -> OpenClawChatSQLiteTranscriptCache? {
-        guard let gatewayID = self.chatTranscriptCacheGatewayID else { return nil }
-        if let cache = self.chatTranscriptCachesByGatewayID[gatewayID] {
+        guard let gatewayID = self.chatTranscriptCacheGatewayID,
+              let gatewayKey = GatewayStableIdentifier.key(gatewayID),
+              !self.quarantinedChatOfflineGatewayIDs.contains(gatewayKey)
+        else { return nil }
+        if self.clientDatabases == nil {
+            self.clientDatabases = Self.makeClientDatabases()
+        }
+        guard let clientDatabases else { return nil }
+        // The durable marker is authoritative across task suspension and app
+        // relaunch. Never expose even an existing facade while cleanup can
+        // still delete rows written through it.
+        guard !clientDatabases.hasPendingGatewayRemoval(gatewayID: gatewayID) else {
+            self.quarantinedChatOfflineGatewayIDs.insert(gatewayKey)
+            return nil
+        }
+        if let cache = self.chatTranscriptCachesByGatewayID[gatewayKey] {
             return cache
         }
-        guard let databaseURL = Self.chatTranscriptCacheDatabaseURL(gatewayID: gatewayID) else { return nil }
-        let cache = OpenClawChatSQLiteTranscriptCache(databaseURL: databaseURL, gatewayID: gatewayID)
-        self.chatTranscriptCachesByGatewayID[gatewayID] = cache
+        let cache = clientDatabases.store(gatewayID: gatewayID)
+        self.chatTranscriptCachesByGatewayID[gatewayKey] = cache
         return cache
     }
 
@@ -727,7 +712,7 @@ final class NodeAppModel {
         #endif
         guard !Task.isCancelled,
               let identity,
-              self.chatTranscriptCacheGatewayID == store.gatewayID,
+              GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, store.gatewayID),
               self.chatSessionRoutingContract == nil
         else { return }
         self.selectedAgentId = GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: store.gatewayID)
@@ -748,20 +733,72 @@ final class NodeAppModel {
         await cache.storeSessions(sessions)
     }
 
-    /// Delete one gateway's cache during bootstrap replacement, or the whole
-    /// disposable database during a full onboarding reset. The offline command
-    /// outbox shares each gateway's database file, so purging a cache also
-    /// drops that gateway's queued commands.
-    func purgeChatTranscriptCache(gatewayID: String? = nil) async {
-        if let gatewayID, !gatewayID.isEmpty {
-            guard let databaseURL = Self.chatTranscriptCacheDatabaseURL(gatewayID: gatewayID) else { return }
-            if let cache = self.chatTranscriptCachesByGatewayID[gatewayID] {
-                await cache.retire()
-            }
-            OpenClawChatSQLiteTranscriptCache.removeDatabaseFiles(at: databaseURL)
-            self.chatTranscriptCachesByGatewayID.removeValue(forKey: gatewayID)
+    /// Delete one forgotten gateway's cache and durable state, or both
+    /// installation-wide databases during a full onboarding reset.
+    func stageChatOfflineDataRemoval(gatewayID: String) async -> Bool {
+        guard let gatewayKey = GatewayStableIdentifier.key(gatewayID) else { return false }
+        if self.clientDatabases == nil {
+            self.clientDatabases = Self.makeClientDatabases()
+        }
+        guard let clientDatabases else { return false }
+        do {
+            try clientDatabases.stageGatewayRemoval(gatewayID: gatewayID)
+            await self.chatTranscriptCachesByGatewayID[gatewayKey]?.retire()
+            return true
+        } catch {
+            clientDatabaseLogger.error(
+                "gateway removal staging failed: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
+    func commitChatOfflineDataRemoval(gatewayID: String) -> Bool {
+        guard let gatewayKey = GatewayStableIdentifier.key(gatewayID),
+              let clientDatabases
+        else { return false }
+        do {
+            try clientDatabases.commitGatewayRemoval(gatewayID: gatewayID)
+            self.quarantinedChatOfflineGatewayIDs.remove(gatewayKey)
+            self.chatTranscriptCachesByGatewayID.removeValue(forKey: gatewayKey)
             self.chatTranscriptCacheGeneration &+= 1
-            return
+            return true
+        } catch {
+            clientDatabaseLogger.error(
+                "gateway removal commit failed: \(error.localizedDescription, privacy: .public)")
+            // The removal may already be irreversible. Keep this gateway
+            // quarantined until foreground recovery proves no marker remains.
+            self.quarantinedChatOfflineGatewayIDs.insert(gatewayKey)
+            self.chatTranscriptCachesByGatewayID.removeValue(forKey: gatewayKey)
+            self.chatTranscriptCacheGeneration &+= 1
+            return false
+        }
+    }
+
+    func cancelChatOfflineDataRemoval(gatewayID: String) {
+        guard let gatewayKey = GatewayStableIdentifier.key(gatewayID),
+              let clientDatabases
+        else { return }
+        do {
+            try clientDatabases.cancelGatewayRemoval(gatewayID: gatewayID)
+        } catch {
+            clientDatabaseLogger.error(
+                "gateway removal cancellation failed: \(error.localizedDescription, privacy: .public)")
+        }
+        // The registry owner did not commit, so cleanup never crossed into the
+        // irreversible phase. Repair the retired live facade even if the
+        // cancellation transaction or its checkpoint must be retried later.
+        self.quarantinedChatOfflineGatewayIDs.remove(gatewayKey)
+        if self.chatTranscriptCachesByGatewayID[gatewayKey] != nil {
+            self.chatTranscriptCachesByGatewayID[gatewayKey] = clientDatabases.store(gatewayID: gatewayID)
+            self.chatTranscriptCacheGeneration &+= 1
+        }
+    }
+
+    @discardableResult
+    func purgeChatTranscriptCache(gatewayID: String? = nil) async -> Bool {
+        if let gatewayID, !gatewayID.isEmpty {
+            guard await self.stageChatOfflineDataRemoval(gatewayID: gatewayID) else { return false }
+            return self.commitChatOfflineDataRemoval(gatewayID: gatewayID)
         }
 
         // Full reset retires every open handle before removing SQLite sidecars,
@@ -769,33 +806,94 @@ final class NodeAppModel {
         for cache in self.chatTranscriptCachesByGatewayID.values {
             await cache.retire()
         }
-        if let directoryURL = Self.chatTranscriptCacheDirectoryURL() {
-            try? FileManager.default.removeItem(at: directoryURL)
+        var closeError: (any Error)?
+        do {
+            try self.clientDatabases?.close()
+        } catch {
+            closeError = error
         }
+        self.clientDatabases = nil
         self.chatTranscriptCachesByGatewayID.removeAll()
+        self.quarantinedChatOfflineGatewayIDs.removeAll()
         self.chatTranscriptCacheGeneration &+= 1
+        do {
+            if let closeError {
+                throw closeError
+            }
+            try self.removeAllChatDatabaseFiles()
+        } catch {
+            clientDatabaseLogger.error(
+                "full database reset failed: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+        return true
     }
 
     /// Debug launch reset runs before Chat can create a cache actor, so direct
     /// file removal preserves the launch flag's synchronous startup contract.
     func purgeChatTranscriptCacheBeforeStartup() {
-        guard let directoryURL = Self.chatTranscriptCacheDirectoryURL() else { return }
-        try? FileManager.default.removeItem(at: directoryURL)
+        var closeError: (any Error)?
+        do {
+            try self.clientDatabases?.close()
+        } catch {
+            closeError = error
+        }
+        self.clientDatabases = nil
         self.chatTranscriptCachesByGatewayID.removeAll()
+        self.quarantinedChatOfflineGatewayIDs.removeAll()
         self.chatTranscriptCacheGeneration &+= 1
+        do {
+            if let closeError {
+                throw closeError
+            }
+            try self.removeAllChatDatabaseFiles()
+        } catch {
+            clientDatabaseLogger.error(
+                "startup database reset failed: \(error.localizedDescription, privacy: .public)")
+            return
+        }
     }
 
-    private static func chatTranscriptCacheDirectoryURL() -> URL? {
+    static func chatDatabaseDirectoryURL() -> URL? {
+        try? OpenClawNodeStorage.appSupportDir()
+            .appendingPathComponent("databases", isDirectory: true)
+    }
+
+    private static func legacyChatDatabaseDirectoryURL() -> URL? {
         try? OpenClawNodeStorage.appSupportDir()
             .appendingPathComponent("chat-cache", isDirectory: true)
     }
 
-    static func chatTranscriptCacheDatabaseURL(gatewayID: String) -> URL? {
-        let digest = SHA256.hash(data: Data(gatewayID.utf8))
-            .map { String(format: "%02x", $0) }
-            .joined()
-        return Self.chatTranscriptCacheDirectoryURL()?
-            .appendingPathComponent("\(digest).sqlite", isDirectory: false)
+    private func removeAllChatDatabaseFiles() throws {
+        #if DEBUG
+        if let testRemoveAllChatDatabaseFilesHandler {
+            try testRemoveAllChatDatabaseFilesHandler()
+            return
+        }
+        #endif
+        if let directoryURL = Self.chatDatabaseDirectoryURL() {
+            try OpenClawClientDatabases.removeDatabaseFiles(in: directoryURL)
+        }
+        if let legacyDirectoryURL = Self.legacyChatDatabaseDirectoryURL(),
+           FileManager.default.fileExists(atPath: legacyDirectoryURL.path)
+        {
+            try FileManager.default.removeItem(at: legacyDirectoryURL)
+        }
+    }
+
+    private static func makeClientDatabases() -> OpenClawClientDatabases? {
+        guard let directoryURL = chatDatabaseDirectoryURL() else { return nil }
+        let legacyDirectories = Self.legacyChatDatabaseDirectoryURL().map { [$0] } ?? []
+        do {
+            return try OpenClawClientDatabases(
+                directoryURL: directoryURL,
+                legacyDirectoryURLs: legacyDirectories,
+                registeredGatewayIDs: GatewaySettingsStore.loadGatewayRegistry().entries.map(\.stableID))
+        } catch {
+            clientDatabaseLogger.error(
+                "client databases unavailable: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
     }
 
     private(set) var activeGatewayConnectConfig: GatewayConnectConfig?
@@ -803,6 +901,7 @@ final class NodeAppModel {
     private static let watchExecApprovalBridgeStateKey = "watch.execApproval.bridge.state.v1"
     private static let backgroundAliveLastSuccessAtMsKey = "gateway.backgroundAlive.lastSuccessAtMs"
     private static let backgroundAliveLastTriggerKey = "gateway.backgroundAlive.lastTrigger"
+    private static let preferredCameraFacingKey = "camera.preferredFacing"
     private static let foregroundResumeHealthTimeoutSeconds = 1
     private static let watchChatCompletionWaitMs = 75000
     private static let watchChatRunWaitSliceMs = 60000
@@ -838,8 +937,11 @@ final class NodeAppModel {
     {
         self.screen = screen
         self.camera = camera
+        self.preferredCameraFacing = Self.cameraFacingPreference(
+            rawValue: UserDefaults.standard.string(forKey: Self.preferredCameraFacingKey))
         self.screenRecorder = screenRecorder
         self.locationService = locationService
+        self.locationAuthorizationSnapshot = locationService.authorizationSnapshot()
         self.notificationCenter = notificationCenter
         self.deviceStatusService = deviceStatusService
         self.photosService = photosService
@@ -939,11 +1041,12 @@ final class NodeAppModel {
         refreshLastShareEventFromRelay()
         let talkEnabled = UserDefaults.standard.bool(forKey: "talk.enabled")
         self.setTalkEnabled(talkEnabled)
-        self.locationService.setAuthorizationChangeHandler { [weak self] status in
+        self.locationService.setAuthorizationChangeHandler { [weak self] snapshot in
             guard let self else { return }
+            self.locationAuthorizationSnapshot = snapshot
             self.reconcileSignificantLocationMonitoring(
                 mode: self.locationMode(),
-                authorizationStatus: status)
+                authorizationStatus: snapshot.authorizationStatus)
         }
 
         // Wire up deep links from canvas taps
@@ -1077,6 +1180,25 @@ final class NodeAppModel {
             break
         case .active:
             self.isBackgrounded = false
+            if self.clientDatabases == nil {
+                // Recovery must run even after forgetting the final gateway;
+                // no chat facade may remain to initialize the container.
+                self.clientDatabases = Self.makeClientDatabases()
+            }
+            let registeredGatewayIDs = GatewaySettingsStore.loadGatewayRegistry().entries.map(\.stableID)
+            self.clientDatabases?.resolvePendingGatewayRemovals(
+                registeredGatewayIDs: registeredGatewayIDs)
+            if let clientDatabases = self.clientDatabases {
+                let recoveredGatewayIDs = self.quarantinedChatOfflineGatewayIDs.filter {
+                    !clientDatabases.hasPendingGatewayRemoval(gatewayID: $0.rawValue)
+                }
+                if !recoveredGatewayIDs.isEmpty {
+                    self.quarantinedChatOfflineGatewayIDs.subtract(recoveredGatewayIDs)
+                    self.chatTranscriptCacheGeneration &+= 1
+                }
+            }
+            self.clientDatabases?.retryLegacyImport(
+                registeredGatewayIDs: registeredGatewayIDs)
             self.endBackgroundConnectionGracePeriod(reason: "scene_foreground")
             self.clearBackgroundReconnectSuppression(reason: "scene_foreground")
             var shouldStartGatewayHealthMonitor = self.operatorConnected
@@ -1150,8 +1272,13 @@ final class NodeAppModel {
         self.pushWakeLogger.info("Background grace started seconds=\(seconds, privacy: .public)")
         self.backgroundGraceTaskTimer = Task { [weak self] in
             guard let self else { return }
-            try? await Task.sleep(nanoseconds: UInt64(max(1, seconds) * 1_000_000_000))
+            do {
+                try await Task.sleep(nanoseconds: UInt64(max(1, seconds) * 1_000_000_000))
+            } catch {
+                return
+            }
             await MainActor.run {
+                guard !Task.isCancelled, self.backgroundGraceTaskID == taskID else { return }
                 self.suppressBackgroundReconnect(reason: "background_grace_timer", disconnectIfNeeded: true)
                 self.endBackgroundConnectionGracePeriod(reason: "timer")
             }
@@ -1264,9 +1391,16 @@ final class NodeAppModel {
         }
         self.talkMode.setEnabled(enabled)
         if enabled {
+            // Preserve a known missing scope before an offline config reload can
+            // overwrite it; the operator reconnect owns the approval handshake.
+            self.requestTalkPermissionUpgradeIfNeeded()
             Task { [weak self] in
                 guard let self else { return }
-                await self.talkMode.reloadConfig()
+                guard !self.forceOperatorTalkPermissionUpgradeRequest else { return }
+                await self.talkMode.reloadConfig(shouldApply: { [weak self] in
+                    guard let self else { return false }
+                    return self.talkMode.isEnabled && !self.forceOperatorTalkPermissionUpgradeRequest
+                })
                 self.requestTalkPermissionUpgradeIfNeeded()
             }
         }
@@ -1290,12 +1424,15 @@ final class NodeAppModel {
     }
 
     private func requestTalkPermissionUpgrade() {
+        if self.forceOperatorTalkPermissionUpgradeRequest {
+            guard case .requestFailed = self.talkMode.gatewayTalkPermissionState else { return }
+            self.cancelTalkPermissionUpgrade()
+        }
         guard let config = activeGatewayConnectConfig else {
             self.talkMode.gatewayTalkPermissionState = .requestFailed("Gateway is not connected")
             self.talkMode.statusText = "Gateway not connected"
             return
         }
-        guard !self.forceOperatorTalkPermissionUpgradeRequest else { return }
         GatewayDiagnostics.log("talk permission upgrade requested")
         self.talkMode.gatewayTalkPermissionState = .requestingUpgrade
         self.talkMode.statusText = "Requesting Talk approval"
@@ -1342,10 +1479,24 @@ final class NodeAppModel {
     }
 
     private func requestTalkPermissionUpgradeIfNeeded() {
-        guard self.talkMode.isEnabled,
-              case .missingScope = self.talkMode.gatewayTalkPermissionState
+        guard Self.shouldRequestTalkPermissionUpgrade(
+            isTalkEnabled: self.talkMode.isEnabled,
+            state: self.talkMode.gatewayTalkPermissionState)
         else { return }
         self.requestTalkPermissionUpgrade()
+    }
+
+    nonisolated static func shouldRequestTalkPermissionUpgrade(
+        isTalkEnabled: Bool,
+        state: TalkGatewayPermissionState) -> Bool
+    {
+        guard isTalkEnabled else { return false }
+        return switch state {
+        case .missingScope, .requestFailed:
+            true
+        default:
+            false
+        }
     }
 
     private func startTalkPermissionUpgradePolling() {
@@ -1508,7 +1659,9 @@ final class NodeAppModel {
             let session = config["session"] as? [String: Any]
             let mainKey = SessionKey.normalizeMainKey(session?["mainKey"] as? String)
             let scope = (session?["scope"] as? String) ?? "per-sender"
-            guard shouldApply(), self.chatTranscriptCacheGatewayID == sourceGatewayID else { return }
+            guard shouldApply(),
+                  GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID)
+            else { return }
             await MainActor.run {
                 self.mainSessionBaseKey = mainKey
                 self.gatewaySessionScope = scope
@@ -1530,7 +1683,7 @@ final class NodeAppModel {
         do {
             guard let sourceGatewayID = self.chatTranscriptCacheGatewayID,
                   let sourceStore = self.makeChatOfflineStore(),
-                  sourceStore.gatewayID == sourceGatewayID,
+                  GatewayStableIdentifier.matches(sourceStore.gatewayID, sourceGatewayID),
                   let sourceRoute = await operatorGateway.currentRoute(ifGatewayID: sourceGatewayID)
             else { return }
             let request = OpenClawChatGatewayRequests.agentsList(timeoutMs: 8000)
@@ -1542,7 +1695,9 @@ final class NodeAppModel {
                 scope: decoded.scope.value as? String,
                 mainSessionKey: decoded.mainkey,
                 defaultAgentID: decoded.defaultid)
-            guard shouldApply(), self.chatTranscriptCacheGatewayID == sourceGatewayID else { return }
+            guard shouldApply(),
+                  GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID)
+            else { return }
             await MainActor.run {
                 self.gatewayDefaultAgentId = decoded.defaultid
                 self.gatewayAgents = decoded.agents
@@ -2059,12 +2214,11 @@ final class NodeAppModel {
                     }
                     return decoded.ok ?? false
                 } catch {
-                    if let gatewayError = error as? GatewayResponseError {
-                        let lower = gatewayError.message.lowercased()
-                        if lower.contains("unauthorized role") || lower.contains("missing scope") {
-                            await self.setGatewayHealthMonitorDisabled(true)
-                            return true
-                        }
+                    if let gatewayError = error as? GatewayResponseError,
+                       gatewayError.isAuthorizationFailure
+                    {
+                        await self.setGatewayHealthMonitorDisabled(true)
+                        return true
                     }
                     return false
                 }
@@ -2374,8 +2528,11 @@ final class NodeAppModel {
             triggerCameraFlash()
             let params = (try? Self.decodeParams(OpenClawCameraSnapParams.self, from: req.paramsJSON)) ??
                 OpenClawCameraSnapParams()
+            let defaultFacing = self.preferredCameraFacing
             let res = try await self.withForegroundCapture {
-                try await self.camera.snap(params: params)
+                try await self.camera.snap(
+                    params: params,
+                    defaultFacing: defaultFacing)
             }
 
             struct Payload: Codable {
@@ -2398,11 +2555,14 @@ final class NodeAppModel {
                 OpenClawCameraClipParams()
 
             let includeAudio = params.includeAudio ?? true
+            let defaultFacing = self.preferredCameraFacing
             showCameraHUD(ownerID: req.id, text: "Recording…", kind: .recording)
             let res = try await self.withForegroundCapture(
                 audioOwner: includeAudio ? .cameraClip : nil)
             {
-                try await self.camera.clip(params: params)
+                try await self.camera.clip(
+                    params: params,
+                    defaultFacing: defaultFacing)
             }
 
             struct Payload: Codable {
@@ -2494,7 +2654,7 @@ final class NodeAppModel {
                 error: OpenClawNodeError(code: .unavailable, message: "NOT_AUTHORIZED: notifications"))
         }
 
-        let addResult = await runNotificationCall(timeoutSeconds: 2.0) { [notificationCenter] in
+        let addResult = await NotificationOperationRunner.run(timeoutSeconds: 2.0) { [notificationCenter] in
             let content = UNMutableNotificationContent()
             content.title = title
             content.body = body
@@ -2551,7 +2711,7 @@ final class NodeAppModel {
 
         let messageId = UUID().uuidString
         if notificationsAllowed {
-            let addResult = await runNotificationCall(timeoutSeconds: 2.0) { [notificationCenter] in
+            let addResult = await NotificationOperationRunner.run(timeoutSeconds: 2.0) { [notificationCenter] in
                 let content = UNMutableNotificationContent()
                 content.title = "OpenClaw"
                 content.body = text
@@ -2584,7 +2744,7 @@ final class NodeAppModel {
     }
 
     private func notificationAuthorizationStatus() async -> NotificationAuthorizationStatus {
-        let result = await runNotificationCall(timeoutSeconds: 1.5) { [notificationCenter] in
+        let result = await NotificationOperationRunner.run(timeoutSeconds: 1.5) { [notificationCenter] in
             await notificationCenter.authorizationStatus()
         }
         switch result {
@@ -2636,37 +2796,6 @@ final class NodeAppModel {
 
     func resetExecApprovalNotificationGuidanceSuppression() {
         UserDefaults.standard.removeObject(forKey: Self.execApprovalNotificationGuidanceSuppressedKey)
-    }
-
-    private func runNotificationCall<T: Sendable>(
-        timeoutSeconds: Double,
-        operation: @escaping @Sendable () async throws -> T) async -> Result<T, NotificationCallError>
-    {
-        let latch = NotificationInvokeLatch<T>()
-        var opTask: Task<Void, Never>?
-        var timeoutTask: Task<Void, Never>?
-        defer {
-            opTask?.cancel()
-            timeoutTask?.cancel()
-        }
-        let clamped = max(0.0, timeoutSeconds)
-        return await withCheckedContinuation { (cont: CheckedContinuation<Result<T, NotificationCallError>, Never>) in
-            latch.setContinuation(cont)
-            opTask = Task { @MainActor in
-                do {
-                    let value = try await operation()
-                    latch.resume(.success(value))
-                } catch {
-                    latch.resume(.failure(NotificationCallError(message: error.localizedDescription)))
-                }
-            }
-            timeoutTask = Task.detached {
-                if clamped > 0 {
-                    try? await Task.sleep(nanoseconds: UInt64(clamped * 1_000_000_000))
-                }
-                latch.resume(.failure(NotificationCallError(message: "notification request timed out")))
-            }
-        }
     }
 
     private func handleDeviceInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
@@ -2884,7 +3013,9 @@ final class NodeAppModel {
     /// Captures one locally recognized utterance for the chat draft. Unlike
     /// remote PTT, this returns text without starting an agent turn or TTS.
     func transcribeChatDraft() async throws -> String? {
-        guard self.chatDictationCaptureId == nil else { return nil }
+        guard !self.isChatDictationPending, self.chatDictationCaptureId == nil else { return nil }
+        self.isChatDictationPending = true
+        defer { self.isChatDictationPending = false }
 
         let commandEpoch = self.chatDictationCommandEpoch
         var reservedCaptureId: String?
@@ -2901,6 +3032,7 @@ final class NodeAppModel {
                         self.chatDictationCommandEpoch == commandEpoch && !self.isBackgrounded
                     },
                     onCaptureReserved: { captureId in
+                        self.isChatDictationPending = false
                         reservedCaptureId = captureId
                         self.chatDictationCaptureId = captureId
                         self.acquirePttVoiceWakeLease(for: captureId)
@@ -2955,6 +3087,8 @@ final class NodeAppModel {
         // Cancellation must also invalidate permission/preparation work before a
         // capture ID exists, or a dismissed dictation can start recording later.
         self.chatDictationCommandEpoch &+= 1
+        // The suspended starter owns the pending flag. Keep it set until that task
+        // unwinds so another start cannot overlap the cancelled preparation.
         guard let captureId = self.chatDictationCaptureId else { return }
         _ = self.talkMode.cancelPushToTalk(captureId: captureId)
         self.chatDictationCaptureId = nil
@@ -3418,6 +3552,21 @@ extension NodeAppModel {
         return UserDefaults.standard.bool(forKey: "camera.enabled")
     }
 
+    nonisolated static func cameraFacingPreference(rawValue: String?) -> OpenClawCameraFacing {
+        rawValue.flatMap(OpenClawCameraFacing.init(rawValue:)) ?? .front
+    }
+
+    func setPreferredCameraFacing(_ facing: OpenClawCameraFacing) {
+        guard self.preferredCameraFacing != facing else { return }
+        self.preferredCameraFacing = facing
+        UserDefaults.standard.set(facing.rawValue, forKey: Self.preferredCameraFacingKey)
+    }
+
+    func flipPreferredCameraFacing() {
+        self.setPreferredCameraFacing(self.preferredCameraFacing == .front ? .back : .front)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+
     private func triggerCameraFlash() {
         self.cameraFlashNonce &+= 1
     }
@@ -3504,6 +3653,28 @@ extension NodeAppModel {
             self.acknowledgeChatSessionReadIfNeeded(activeKey)
         }
         self.openChatRequestID &+= 1
+    }
+
+    func requestNewChat() {
+        self.newChatRequestID &+= 1
+    }
+
+    func consumeNewChatRequest(_ requestID: Int) -> Bool {
+        guard requestID != 0,
+              requestID == self.newChatRequestID,
+              requestID != self.consumedNewChatRequestID
+        else { return false }
+        self.consumedNewChatRequestID = requestID
+        return true
+    }
+
+    func consumeDashboardNavigationRequest(_ requestID: Int) -> Bool {
+        guard requestID != 0,
+              requestID == self.dashboardNavigationRequestID,
+              requestID != self.consumedDashboardNavigationRequestID
+        else { return false }
+        self.consumedDashboardNavigationRequestID = requestID
+        return true
     }
 
     /// One acknowledgement per unread episode: the pending flag clears when a fresh
@@ -3988,7 +4159,9 @@ extension NodeAppModel {
         self.apnsLastRegisteredTokenHex = nil
         self.apnsLastRegisteredGatewayStableID = nil
         self.chatSessionRoutingRestoreTask = Task { [weak self] in
-            guard !Task.isCancelled, self?.connectedGatewayID == stableID else { return }
+            guard !Task.isCancelled,
+                  GatewayStableIdentifier.matches(self?.connectedGatewayID, stableID)
+            else { return }
             await self?.restoreChatSessionRoutingIdentityIfNeeded()
         }
     }
@@ -5103,7 +5276,10 @@ extension NodeAppModel {
             role: "operator",
             scopes: scopes,
             scopesAreExplicit: forceExplicitScopes,
-            caps: [OpenClawGatewayClientCapability.inlineWidgets],
+            caps: [
+                OpenClawGatewayClientCapability.agentKind,
+                OpenClawGatewayClientCapability.inlineWidgets,
+            ],
             commands: [],
             permissions: [:],
             clientId: clientId,
@@ -5181,17 +5357,21 @@ extension NodeAppModel {
 }
 
 extension NodeAppModel {
-    func enterAppleReviewDemoMode() {
+    /// Both local transports must retire the same real gateway owners before a
+    /// fixture publishes connected state; stale loops must never outlive the switch.
+    private func prepareLocalGatewayFixture(screenshot: Bool) {
         self.invalidateGatewayConnectAttempts()
-        self.isAppleReviewDemoModeEnabled = true
-        self.isScreenshotFixtureModeEnabled = false
+        self.isAppleReviewDemoModeEnabled = !screenshot
+        self.isScreenshotFixtureModeEnabled = screenshot
         self.gatewayAutoReconnectEnabled = false
         self.gatewayPairingPaused = false
         self.gatewayPairingRequestId = nil
         self.lastGatewayProblem = nil
         self.nodeGatewayProblem = nil
         self.operatorGatewayProblem = nil
-        self.credentialHandoffFailureGeneration = nil
+        if !screenshot {
+            self.credentialHandoffFailureGeneration = nil
+        }
         self.nodeGatewayTask?.cancel()
         self.nodeGatewayTask = nil
         self.operatorGatewayTask?.cancel()
@@ -5199,7 +5379,8 @@ extension NodeAppModel {
         self.voiceWakeSyncTask?.cancel()
         self.voiceWakeSyncTask = nil
         self.gatewayHealthMonitor.stop()
-        LiveActivityManager.shared.endActivity(reason: "apple_review_demo")
+        LiveActivityManager.shared.endActivity(
+            reason: screenshot ? "screenshot_fixture" : "apple_review_demo")
 
         Task {
             await self.operatorGateway.disconnect()
@@ -5208,6 +5389,20 @@ extension NodeAppModel {
 
         self.gatewayStatusText = "Connected"
         self.nodeStatusText = "Connected"
+    }
+
+    private func configureLocalGatewayFixtureSession(agents: [AgentSummary]) {
+        self.mainSessionBaseKey = "main"
+        self.gatewaySessionScope = "per-sender"
+        self.selectedAgentId = nil
+        self.gatewayDefaultAgentId = "main"
+        self.gatewayAgents = agents
+        self.focusedChatSessionKey = nil
+        self.synchronizeTalkSessionKey()
+    }
+
+    func enterAppleReviewDemoMode() {
+        self.prepareLocalGatewayFixture(screenshot: false)
         self.gatewayServerName = AppleReviewDemoMode.gatewayName
         self.gatewayRemoteAddress = AppleReviewDemoMode.gatewayAddress
         self.connectedGatewayID = AppleReviewDemoMode.gatewayID
@@ -5219,42 +5414,12 @@ extension NodeAppModel {
         self.talkMode.updateGatewayConnected(false)
         self.talkMode.setEnabled(false)
         self.talkMode.statusText = "Demo mode only"
-        self.mainSessionBaseKey = "main"
-        self.gatewaySessionScope = "per-sender"
-        self.selectedAgentId = nil
-        self.gatewayDefaultAgentId = "main"
-        self.gatewayAgents = AppleReviewDemoMode.agents
-        self.focusedChatSessionKey = nil
-        self.synchronizeTalkSessionKey()
+        self.configureLocalGatewayFixtureSession(agents: AppleReviewDemoMode.agents)
         self.homeCanvasRevision &+= 1
     }
 
     func enterScreenshotFixtureMode() {
-        self.invalidateGatewayConnectAttempts()
-        self.isAppleReviewDemoModeEnabled = false
-        self.isScreenshotFixtureModeEnabled = true
-        self.gatewayAutoReconnectEnabled = false
-        self.gatewayPairingPaused = false
-        self.gatewayPairingRequestId = nil
-        self.lastGatewayProblem = nil
-        self.nodeGatewayProblem = nil
-        self.operatorGatewayProblem = nil
-        self.nodeGatewayTask?.cancel()
-        self.nodeGatewayTask = nil
-        self.operatorGatewayTask?.cancel()
-        self.operatorGatewayTask = nil
-        self.voiceWakeSyncTask?.cancel()
-        self.voiceWakeSyncTask = nil
-        self.gatewayHealthMonitor.stop()
-        LiveActivityManager.shared.endActivity(reason: "screenshot_fixture")
-
-        Task {
-            await self.operatorGateway.disconnect()
-            await self.nodeGateway.disconnect()
-        }
-
-        self.gatewayStatusText = "Connected"
-        self.nodeStatusText = "Connected"
+        self.prepareLocalGatewayFixture(screenshot: true)
         self.gatewayServerName = ScreenshotFixtureMode.gatewayName
         self.gatewayRemoteAddress = ScreenshotFixtureMode.gatewayAddress
         self.connectedGatewayID = ScreenshotFixtureMode.gatewayID
@@ -5262,13 +5427,7 @@ extension NodeAppModel {
         self.gatewayConnected = true
         self.setOperatorConnected(true)
         self.hasOperatorAdminScope = true
-        self.mainSessionBaseKey = "main"
-        self.gatewaySessionScope = "per-sender"
-        self.selectedAgentId = nil
-        self.gatewayDefaultAgentId = "main"
-        self.gatewayAgents = ScreenshotFixtureMode.agents
-        self.focusedChatSessionKey = nil
-        self.synchronizeTalkSessionKey()
+        self.configureLocalGatewayFixtureSession(agents: ScreenshotFixtureMode.agents)
         self.talkMode.enterScreenshotFixtureMode()
         self.homeCanvasRevision &+= 1
     }
@@ -6295,7 +6454,7 @@ extension NodeAppModel {
                     .requestHistory(sessionKey: self.chatSessionKey)
             }
 
-            let items = Self.makeWatchChatItems(from: payload.messages ?? [])
+            let items = WatchChatPresentation.makeItems(from: payload.messages ?? [])
             return WatchChatPreview(
                 items: items,
                 status: items.isEmpty
@@ -6309,143 +6468,6 @@ extension NodeAppModel {
                 status: OpenClawWatchAppStatus(code: .chatUnavailable),
                 statusText: "Chat unavailable")
         }
-    }
-
-    private nonisolated static func watchChatReplyText(
-        from raw: [OpenClawKit.AnyCodable],
-        runId: String,
-        submittedText: String,
-        submittedAtMs: Int64) -> String?
-    {
-        let entries = raw.compactMap(self.decodeWatchChatMessage)
-        if let directReply = entries.last(where: {
-            self.isTerminalWatchAssistant($0) && $0.message.idempotencyKey == runId
-        }) {
-            return directReply.text
-        }
-
-        let userIdempotencyKey = "\(runId):user"
-        let exactUserIndex = entries.lastIndex(where: {
-            $0.message.role.lowercased() == "user" &&
-                $0.message.idempotencyKey == userIdempotencyKey
-        })
-        let queuedUserIndex = entries.lastIndex(where: { entry in
-            guard entry.message.role.lowercased() == "user",
-                  let timestampMs = self.watchTimestampMs(entry.message.timestamp),
-                  timestampMs >= submittedAtMs
-            else {
-                return false
-            }
-            return entry.text.contains(submittedText)
-        })
-        guard let userIndex = exactUserIndex ?? queuedUserIndex else { return nil }
-        return entries[(userIndex + 1)...].first(where: {
-            self.isTerminalWatchAssistant($0)
-        })?.text
-    }
-
-    private nonisolated static func isTerminalWatchAssistant(_ entry: WatchChatMessageEntry) -> Bool {
-        guard entry.message.role.lowercased() == "assistant" else { return false }
-        if entry.isMessageToolMirror {
-            return true
-        }
-        guard let stopReason = entry.message.stopReason?.lowercased() else { return false }
-        // Tool-use rows can contain visible progress text, but a later assistant row owns the final reply.
-        return stopReason != "tooluse" && stopReason != "tool_use" && stopReason != "tool_calls"
-    }
-
-    private nonisolated static func decodeWatchChatMessage(
-        _ raw: OpenClawKit.AnyCodable) -> WatchChatMessageEntry?
-    {
-        guard let data = try? JSONEncoder().encode(raw),
-              let message = try? JSONDecoder().decode(OpenClawChatMessage.self, from: data),
-              let text = nonEmptyWatchChatText(watchChatText(from: message))
-        else {
-            return nil
-        }
-        let metadata = try? JSONDecoder().decode(WatchChatMetadataEnvelope.self, from: data)
-        return WatchChatMessageEntry(
-            message: message,
-            text: text,
-            serverId: metadata?.metadata?.id,
-            isMessageToolMirror: metadata?.messageToolMirror != nil)
-    }
-
-    private nonisolated static func makeWatchChatItems(
-        from raw: [OpenClawKit.AnyCodable]) -> [OpenClawWatchChatItem]
-    {
-        let readableMessages = raw.compactMap(self.decodeWatchChatMessage)
-        var idOccurrences: [String: Int] = [:]
-        let identified = readableMessages.map { entry -> (WatchChatMessageEntry, String) in
-            let baseId = entry.serverId.map { "\(entry.message.role)-\($0)" }
-                ?? self.watchChatFallbackKey(entry)
-            idOccurrences[baseId, default: 0] += 1
-            let stableId = "\(baseId)-\(idOccurrences[baseId]!)"
-            return (entry, stableId)
-        }
-        return identified.suffix(self.watchChatPreviewItemLimit).map { entry, stableId in
-            let timestampMs = self.watchTimestampMs(entry.message.timestamp)
-            return OpenClawWatchChatItem(
-                id: stableId,
-                role: entry.message.role,
-                text: self.truncatedWatchChatText(entry.text),
-                timestampMs: timestampMs)
-        }
-    }
-
-    private nonisolated static func watchChatFallbackKey(_ entry: WatchChatMessageEntry) -> String {
-        let timestamp = self.watchTimestampMs(entry.message.timestamp).map(String.init) ?? "missing"
-        let source = "\(entry.message.role)\u{0}\(timestamp)\u{0}\(entry.text)"
-        let digest = SHA256.hash(data: Data(source.utf8)).map { String(format: "%02x", $0) }.joined()
-        return "\(entry.message.role)-\(digest)"
-    }
-
-    private nonisolated static func watchChatText(from message: OpenClawChatMessage) -> String {
-        let parts = message.content.compactMap { content -> String? in
-            let kind = (content.type ?? "text").lowercased()
-            guard kind.isEmpty || kind == "text" || kind == "output_text" else { return nil }
-            if let text = self.nonEmptyWatchChatText(content.text) {
-                return text
-            }
-            if let text = self.nonEmptyWatchChatText(content.content?.value as? String) {
-                return text
-            }
-            if let dict = content.content?.value as? [String: OpenClawKit.AnyCodable],
-               let text = self.nonEmptyWatchChatText(dict["text"]?.value as? String)
-            {
-                return text
-            }
-            return nil
-        }
-        let contentText = parts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        if !contentText.isEmpty {
-            return contentText
-        }
-        return message.errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    }
-
-    private nonisolated static func nonEmptyWatchChatText(_ text: String?) -> String? {
-        let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private nonisolated static func truncatedWatchChatText(_ text: String) -> String {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count > 240 else { return trimmed }
-        return "\(trimmed.prefix(237))..."
-    }
-
-    private nonisolated static func watchTimestampMs(_ timestamp: Double?) -> Int64? {
-        guard let timestamp, timestamp.isFinite, timestamp >= 0 else { return nil }
-        let milliseconds = timestamp > 100_000_000_000 ? timestamp : timestamp * 1000
-        let maxReasonableEpochMs: Double = 32_503_680_000_000
-        guard milliseconds.isFinite,
-              milliseconds >= 0,
-              milliseconds <= maxReasonableEpochMs
-        else {
-            return nil
-        }
-        return Int64(milliseconds)
     }
 
     private func makeWatchAppSnapshot(
@@ -6799,9 +6821,9 @@ extension NodeAppModel {
                     return .sent
                 }
                 let history = try await appleReviewDemoChatTransport.requestHistory(sessionKey: sessionKey)
-                if let replyText = Self.watchChatReplyText(
+                if let replyText = WatchChatPresentation.replyText(
                     from: history.messages ?? [],
-                    runId: response.runId,
+                    runID: response.runId,
                     submittedText: text,
                     submittedAtMs: submittedAtMs)
                 {
@@ -6911,9 +6933,9 @@ extension NodeAppModel {
             if let payload = try? await transport.requestHistory(
                 sessionKey: sessionKey,
                 ifCurrentRoute: expectedRoute),
-                let replyText = Self.watchChatReplyText(
+                let replyText = WatchChatPresentation.replyText(
                     from: payload.messages ?? [],
-                    runId: runId,
+                    runID: runId,
                     submittedText: submittedText,
                     submittedAtMs: submittedAtMs)
             {
@@ -7046,33 +7068,29 @@ extension NodeAppModel {
         let visiblePromptWasResolving = self.pendingExecApprovalPromptResolving
         let surfaceGenerationAtStart = self.pendingExecApprovalPromptSurfaceGeneration
 
-        let cachedPass = await self.readBackCachedWatchExecApprovalPrompts(
-            prompts,
-            gatewayStableID: gatewayStableID,
-            reason: reason,
-            syncSnapshots: syncSnapshots)
-        let persistedPass = await self.readBackPersistedWatchExecApprovalReadbacks(
-            persistedReadbacks,
-            gatewayStableID: gatewayStableID,
-            syncSnapshots: syncSnapshots)
         var classifiedApprovalIDs = cachedApprovalIDs
         classifiedApprovalIDs.formUnion(persistedReadbacks.compactMap {
             Self.execApprovalIDKey($0.approvalId)
         })
-        let heldPass = await self.readBackHeldWatchExecApprovals(
-            heldApprovalsByID,
-            alreadyClassifiedApprovalIDs: classifiedApprovalIDs,
+        var candidates: [WatchApprovalReadbackCandidate<ExecApprovalPrompt, PersistedExecApprovalReadback>] =
+            prompts.map { .cached($0) } + persistedReadbacks.map { .persisted($0) }
+        for heldApproval in heldApprovalsByID.values.sorted(by: {
+            Self.approvalIDSortsBefore($0.approvalId, $1.approvalId)
+        }) {
+            guard let approvalID = Self.execApprovalIDKey(heldApproval.approvalId),
+                  classifiedApprovalIDs.insert(approvalID).inserted
+            else { continue }
+            candidates.append(.held(heldApproval))
+        }
+        // Cached cards, durable migration rows, then Watch-held actions must retain
+        // their original order so presentation and write fences stay deterministic.
+        let readback = await self.readBackWatchExecApprovals(
+            candidates,
             gatewayStableID: gatewayStableID,
             reason: reason,
             syncSnapshots: syncSnapshots)
-        // Concatenation order mirrors the original readback order: cached prompts,
-        // persisted readbacks, then held Watch approvals.
-        var loadedPrompts = cachedPass.loadedPrompts + persistedPass.loadedPrompts + heldPass.loadedPrompts
-        let allReadbacksWereAuthoritative = cachedPass.allReadbacksWereAuthoritative &&
-            persistedPass.allReadbacksWereAuthoritative &&
-            heldPass.allReadbacksWereAuthoritative
-
-        guard allReadbacksWereAuthoritative else { return false }
+        guard readback.isAuthoritative else { return false }
+        var loadedPrompts = readback.loadedPrompts
 
         // Readbacks can interleave with terminal events while awaiting other owners.
         // Re-check the live owner table instead of replaying the stale local array.
@@ -7133,7 +7151,7 @@ extension NodeAppModel {
                 syncSnapshots: syncSnapshots)
         }
 
-        guard let selectedPhonePrompt else { return allReadbacksWereAuthoritative }
+        guard let selectedPhonePrompt else { return true }
         let selectedPromptWasResolving = visiblePromptWasResolving &&
             visiblePromptAtStart.map { Self.approvalIDsMatch($0.id, selectedPhonePrompt.id) } == true &&
             visiblePromptNow.map { Self.approvalIDsMatch($0.id, selectedPhonePrompt.id) } == true &&
@@ -7146,143 +7164,85 @@ extension NodeAppModel {
             self.pendingExecApprovalPromptErrorText =
                 "The previous decision was not recorded. Review and try again."
         }
-        return allReadbacksWereAuthoritative
+        return true
     }
 
-    private struct WatchExecApprovalReadbackPass {
+    private func readBackWatchExecApprovals(
+        _ candidates: [WatchApprovalReadbackCandidate<ExecApprovalPrompt, PersistedExecApprovalReadback>],
+        gatewayStableID: String,
+        reason: String,
+        syncSnapshots: Bool) async -> (loadedPrompts: [ExecApprovalPrompt], isAuthoritative: Bool)
+    {
         var loadedPrompts: [ExecApprovalPrompt] = []
-        var allReadbacksWereAuthoritative = true
-    }
-
-    private func readBackCachedWatchExecApprovalPrompts(
-        _ prompts: [ExecApprovalPrompt],
-        gatewayStableID: String,
-        reason: String,
-        syncSnapshots: Bool) async -> WatchExecApprovalReadbackPass
-    {
-        var pass = WatchExecApprovalReadbackPass()
-        for cachedPrompt in prompts {
-            let persistedReadback = PersistedExecApprovalReadback(
-                approvalId: cachedPrompt.id,
-                gatewayStableID: cachedPrompt.gatewayStableID)
-            let readback = await self.fetchExecApprovalPrompt(
-                approvalId: cachedPrompt.id,
-                sourceReason: reason)
-            switch readback {
-            case let .loaded(prompt):
-                self.upsertWatchExecApprovalPrompt(prompt)
-                self.removePendingPersistedExecApprovalReadback(persistedReadback)
-                pass.loadedPrompts.append(prompt)
-            case let .terminal(terminal):
-                self.removePendingPersistedExecApprovalReadback(persistedReadback)
-                let outcome = await self.applyCanonicalExecApprovalTerminal(
-                    terminal,
-                    appliedHere: false,
-                    gatewayStableID: gatewayStableID,
-                    syncSnapshots: syncSnapshots)
-                if case .failed = outcome {
-                    pass.allReadbacksWereAuthoritative = false
-                }
-            case .stale:
-                self.removePendingPersistedExecApprovalReadback(persistedReadback)
-                self.markPendingExecApprovalTerminal(
-                    approvalId: cachedPrompt.id,
-                    outcome: ExecApprovalOutcome(
-                        text: "This approval is no longer available.",
-                        tone: .warning))
-                await self.publishWatchExecApprovalExpired(
-                    approvalId: cachedPrompt.id,
-                    gatewayStableID: gatewayStableID,
-                    reason: .notFound,
-                    syncSnapshots: syncSnapshots)
-            case .failed:
-                pass.allReadbacksWereAuthoritative = false
+        var isAuthoritative = true
+        for candidate in candidates {
+            let approvalID: String
+            let persistedReadback: PersistedExecApprovalReadback?
+            let fetchReason: String
+            let markVisiblePromptStale: Bool
+            switch candidate {
+            case let .cached(prompt):
+                approvalID = prompt.id
+                persistedReadback = PersistedExecApprovalReadback(
+                    approvalId: prompt.id,
+                    gatewayStableID: prompt.gatewayStableID)
+                fetchReason = reason
+                markVisiblePromptStale = true
+            case let .persisted(readback):
+                approvalID = readback.approvalId
+                persistedReadback = readback
+                fetchReason = "persisted_upgrade"
+                markVisiblePromptStale = false
+            case let .held(approval):
+                approvalID = approval.approvalId
+                persistedReadback = nil
+                fetchReason = reason
+                markVisiblePromptStale = false
             }
-        }
-        return pass
-    }
 
-    private func readBackPersistedWatchExecApprovalReadbacks(
-        _ persistedReadbacks: [PersistedExecApprovalReadback],
-        gatewayStableID: String,
-        syncSnapshots: Bool) async -> WatchExecApprovalReadbackPass
-    {
-        var pass = WatchExecApprovalReadbackPass()
-        for persistedReadback in persistedReadbacks {
-            let readback = await self.fetchExecApprovalPrompt(
-                approvalId: persistedReadback.approvalId,
-                sourceReason: "persisted_upgrade")
-            switch readback {
-            case let .loaded(prompt):
-                self.upsertWatchExecApprovalPrompt(prompt)
-                self.removePendingPersistedExecApprovalReadback(persistedReadback)
-                pass.loadedPrompts.append(prompt)
-            case let .terminal(terminal):
-                self.removePendingPersistedExecApprovalReadback(persistedReadback)
-                let outcome = await self.applyCanonicalExecApprovalTerminal(
-                    terminal,
-                    appliedHere: false,
-                    gatewayStableID: gatewayStableID,
-                    syncSnapshots: syncSnapshots)
-                if case .failed = outcome {
-                    pass.allReadbacksWereAuthoritative = false
-                }
-            case .stale:
-                self.removePendingPersistedExecApprovalReadback(persistedReadback)
-                await self.publishWatchExecApprovalExpired(
-                    approvalId: persistedReadback.approvalId,
-                    gatewayStableID: gatewayStableID,
-                    reason: .notFound,
-                    syncSnapshots: syncSnapshots)
-            case .failed:
-                pass.allReadbacksWereAuthoritative = false
-            }
-        }
-        return pass
-    }
-
-    private func readBackHeldWatchExecApprovals(
-        _ heldApprovalsByID: [ExecApprovalIdentifier.Key: WatchExecApprovalSnapshotRequestItem],
-        alreadyClassifiedApprovalIDs: Set<ExecApprovalIdentifier.Key>,
-        gatewayStableID: String,
-        reason: String,
-        syncSnapshots: Bool) async -> WatchExecApprovalReadbackPass
-    {
-        var pass = WatchExecApprovalReadbackPass()
-        var classifiedApprovalIDs = alreadyClassifiedApprovalIDs
-        for heldApproval in heldApprovalsByID.values.sorted(by: {
-            Self.approvalIDSortsBefore($0.approvalId, $1.approvalId)
-        }) {
-            guard let approvalID = Self.execApprovalIDKey(heldApproval.approvalId),
-                  classifiedApprovalIDs.insert(approvalID).inserted
-            else { continue }
             switch await self.fetchExecApprovalPrompt(
-                approvalId: heldApproval.approvalId,
-                sourceReason: reason)
+                approvalId: approvalID,
+                sourceReason: fetchReason)
             {
             case let .loaded(prompt):
                 self.upsertWatchExecApprovalPrompt(prompt)
-                pass.loadedPrompts.append(prompt)
+                if let persistedReadback {
+                    self.removePendingPersistedExecApprovalReadback(persistedReadback)
+                }
+                loadedPrompts.append(prompt)
             case let .terminal(terminal):
+                if let persistedReadback {
+                    self.removePendingPersistedExecApprovalReadback(persistedReadback)
+                }
                 let outcome = await self.applyCanonicalExecApprovalTerminal(
                     terminal,
                     appliedHere: false,
                     gatewayStableID: gatewayStableID,
                     syncSnapshots: syncSnapshots)
                 if case .failed = outcome {
-                    pass.allReadbacksWereAuthoritative = false
+                    isAuthoritative = false
                 }
             case .stale:
+                if let persistedReadback {
+                    self.removePendingPersistedExecApprovalReadback(persistedReadback)
+                }
+                if markVisiblePromptStale {
+                    self.markPendingExecApprovalTerminal(
+                        approvalId: approvalID,
+                        outcome: ExecApprovalOutcome(
+                            text: "This approval is no longer available.",
+                            tone: .warning))
+                }
                 await self.publishWatchExecApprovalExpired(
-                    approvalId: heldApproval.approvalId,
+                    approvalId: approvalID,
                     gatewayStableID: gatewayStableID,
                     reason: .notFound,
                     syncSnapshots: syncSnapshots)
             case .failed:
-                pass.allReadbacksWereAuthoritative = false
+                isAuthoritative = false
             }
         }
-        return pass
+        return (loadedPrompts, isAuthoritative)
     }
 
     private nonisolated static func watchExecApprovalIDsNeedingFetch(
@@ -9848,44 +9808,32 @@ extension NodeAppModel {
         var durationMs: Int
     }
 
-    private func waitForGatewayConnection(timeoutMs: Int, pollMs: Int) async -> Bool {
+    private func waitForGatewayConnection(
+        timeoutMs: Int,
+        pollMs: Int,
+        owner: GatewayConnectionWaitOwner = .node) async -> Bool
+    {
         let clampedTimeoutMs = max(0, timeoutMs)
         let pollIntervalNs = UInt64(max(50, pollMs)) * 1_000_000
         let deadline = Date().addingTimeInterval(Double(clampedTimeoutMs) / 1000.0)
+        let isConnected: @MainActor () -> Bool = {
+            switch owner {
+            case .node:
+                self.gatewayConnected
+            case .operator:
+                self.operatorConnected
+            }
+        }
         while Date() < deadline {
-            if Task.isCancelled {
-                return false
-            }
-            if await isGatewayConnected() {
-                return true
-            }
+            if Task.isCancelled { return false }
+            if isConnected() { return true }
             do {
                 try await Task.sleep(nanoseconds: pollIntervalNs)
             } catch {
                 return false
             }
         }
-        return await isGatewayConnected()
-    }
-
-    private func waitForOperatorConnection(timeoutMs: Int, pollMs: Int) async -> Bool {
-        let clampedTimeoutMs = max(0, timeoutMs)
-        let pollIntervalNs = UInt64(max(50, pollMs)) * 1_000_000
-        let deadline = Date().addingTimeInterval(Double(clampedTimeoutMs) / 1000.0)
-        while Date() < deadline {
-            if Task.isCancelled {
-                return false
-            }
-            if await self.isOperatorConnected() {
-                return true
-            }
-            do {
-                try await Task.sleep(nanoseconds: pollIntervalNs)
-            } catch {
-                return false
-            }
-        }
-        return await self.isOperatorConnected()
+        return isConnected()
     }
 
     private func ensureOperatorReconnectLoopIfNeeded() {
@@ -9972,7 +9920,11 @@ extension NodeAppModel {
         GatewayDiagnostics.log(
             "watch exec approval: watch_request_reconnect_wait "
                 + "reason=\(reconnectReason) phase=initial timeoutMs=\(initialWaitMs)")
-        if await self.waitForOperatorConnection(timeoutMs: initialWaitMs, pollMs: 200) {
+        if await self.waitForGatewayConnection(
+            timeoutMs: initialWaitMs,
+            pollMs: 200,
+            owner: .operator)
+        {
             GatewayDiagnostics.log(
                 "watch exec approval: watch_request_reconnect_connected "
                     + "reason=\(reconnectReason) phase=initial")
@@ -10002,7 +9954,10 @@ extension NodeAppModel {
         GatewayDiagnostics.log(
             "watch exec approval: watch_request_reconnect_wait "
                 + "reason=\(reconnectReason) phase=restart timeoutMs=\(remainingWaitMs)")
-        let connected = await waitForOperatorConnection(timeoutMs: remainingWaitMs, pollMs: 200)
+        let connected = await self.waitForGatewayConnection(
+            timeoutMs: remainingWaitMs,
+            pollMs: 200,
+            owner: .operator)
         GatewayDiagnostics.log(
             "watch exec approval: watch_request_reconnect_\(connected ? "connected" : "timeout") "
                 + "reason=\(reconnectReason) phase=restart")
@@ -10014,7 +9969,10 @@ extension NodeAppModel {
             return true
         }
         self.ensureOperatorReconnectLoopIfNeeded()
-        return await self.waitForOperatorConnection(timeoutMs: timeoutMs, pollMs: 250)
+        return await self.waitForGatewayConnection(
+            timeoutMs: timeoutMs,
+            pollMs: 250,
+            owner: .operator)
     }
 
     private func performBackgroundAliveBeaconIfNeeded(
@@ -10137,12 +10095,11 @@ extension NodeAppModel {
             VoiceWakePreferences.saveTriggerWords(triggers)
         } catch {
             guard shouldApply() else { return }
-            if let gatewayError = error as? GatewayResponseError {
-                let lower = gatewayError.message.lowercased()
-                if lower.contains("unauthorized role") || lower.contains("missing scope") {
-                    self.setGatewayHealthMonitorDisabled(true)
-                    return
-                }
+            if let gatewayError = error as? GatewayResponseError,
+               gatewayError.isAuthorizationFailure
+            {
+                self.setGatewayHealthMonitorDisabled(true)
+                return
             }
             // Best-effort only.
         }
@@ -10206,7 +10163,7 @@ extension NodeAppModel {
         case let .gateway(link):
             self.stageGatewaySetupLink(link)
         case .dashboard:
-            break
+            self.dashboardNavigationRequestID &+= 1
         }
     }
 
@@ -10469,6 +10426,10 @@ extension NodeAppModel {
 
 #if DEBUG
 extension NodeAppModel {
+    func _test_backgroundReconnectIsSuppressed() -> Bool {
+        self.backgroundReconnectSuppressed
+    }
+
     func _test_setActiveGatewayConnectConfig(_ config: GatewayConnectConfig?) {
         self.activeGatewayConnectConfig = config
     }
@@ -10502,6 +10463,10 @@ extension NodeAppModel {
 
     func _test_setChatSessionRoutingRestoreHandler(_ handler: (() async -> Void)?) {
         self.testChatSessionRoutingRestoreHandler = handler
+    }
+
+    func _test_setRemoveAllChatDatabaseFilesHandler(_ handler: (() throws -> Void)?) {
+        self.testRemoveAllChatDatabaseFilesHandler = handler
     }
 
     func _test_hasChatSessionRoutingRestoreTask() -> Bool {
@@ -10616,7 +10581,7 @@ extension NodeAppModel {
     }
 
     nonisolated static func _test_makeWatchChatItems(from raw: [OpenClawKit.AnyCodable]) -> [OpenClawWatchChatItem] {
-        self.makeWatchChatItems(from: raw)
+        WatchChatPresentation.makeItems(from: raw)
     }
 
     nonisolated static func _test_watchChatReplyText(
@@ -10625,9 +10590,9 @@ extension NodeAppModel {
         submittedText: String,
         submittedAtMs: Int64) -> String?
     {
-        self.watchChatReplyText(
+        WatchChatPresentation.replyText(
             from: raw,
-            runId: runId,
+            runID: runId,
             submittedText: submittedText,
             submittedAtMs: submittedAtMs)
     }

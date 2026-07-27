@@ -4,8 +4,25 @@ import Testing
 import UIKit
 @testable import OpenClaw
 
+struct RootSidebarTypographyTests {
+    @Test func `root sidebar uses branded typography`() throws {
+        let sidebar = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Sources/RootSidebar.swift"),
+            encoding: .utf8)
+
+        #expect(sidebar.contains("OpenClawType.headline"))
+        #expect(sidebar.contains("OpenClawType.subheadSemiBold"))
+        #expect(sidebar.contains("OpenClawType.captionMedium"))
+        #expect(sidebar.contains("OpenClawType.caption2Bold"))
+        #expect(!sidebar.contains(".font(."))
+    }
+}
+
 struct OpenClawTypographyTests {
-    @Test func `session controls use branded typography`() throws {
+    @Test func `thread controls use branded typography`() throws {
         let support = try String(
             contentsOf: Self.sourceURL("Design/CommandCenterSupport.swift"),
             encoding: .utf8)
@@ -203,6 +220,11 @@ struct OpenClawTypographyTests {
                 .deletingLastPathComponent()
                 .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift"),
             encoding: .utf8)
+        let chatWorkingClawView = try String(
+            contentsOf: Self.iosRootURL()
+                .deletingLastPathComponent()
+                .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingClawView.swift"),
+            encoding: .utf8)
         let chatMarkdownRenderer = try String(
             contentsOf: Self.iosRootURL()
                 .deletingLastPathComponent()
@@ -355,10 +377,15 @@ struct OpenClawTypographyTests {
         }
 
         #expect(chatMessageViews.contains("font: OpenClawChatTypography.body"))
+        #expect(chatMessageViews.contains(".font(OpenClawChatTypography.caption)"))
+        #expect(chatMessageViews.contains("chat-user-message-disclosure-toggle"))
         #expect(chatMessageViews.contains("OpenClawChatTypography.callout.italic()"))
         #expect(!chatMessageViews.contains("font: .body"))
         #expect(!chatMessageViews.contains("Font.body"))
         #expect(!chatMessageViews.contains("Font.callout"))
+        #expect(chatWorkingClawView.contains(".font(OpenClawChatTypography.caption)"))
+        #expect(chatWorkingClawView.contains(".font(OpenClawChatTypography.captionSemiBold)"))
+        #expect(!chatWorkingClawView.contains(".font(."))
         #expect(chatMarkdownRenderer.contains(".font(self.font)"))
         #expect(chatTypography
             .contains("Font.custom(self.macSystemFontName(size: size), size: size, relativeTo: textStyle)"))
