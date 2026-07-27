@@ -162,12 +162,14 @@ describe("Copilot attempt transcript journal", () => {
     );
 
     const waiting = journal.barrier("concurrent event");
-    session.emit(
-      event("assistant.message", "assistant-after-barrier", {
-        content: "second",
-        messageId: "assistant-after-barrier",
-      }),
-    );
+    queueMicrotask(() => {
+      session.emit(
+        event("assistant.message", "assistant-after-barrier", {
+          content: "second",
+          messageId: "assistant-after-barrier",
+        }),
+      );
+    });
     await waiting;
 
     expect(journal.snapshot().messagesSnapshot.map((message) => message.role)).toEqual([

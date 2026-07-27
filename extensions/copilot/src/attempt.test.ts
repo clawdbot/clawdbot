@@ -2938,6 +2938,41 @@ describe("runCopilotAttempt", () => {
       expect(result.messagesSnapshot.at(-1)).toMatchObject({ role: "user" });
     });
 
+    it("keeps the prepared recorder user when journal setup fails before assignment", async () => {
+      const sdk = makeFakeSdk();
+      const params = makeParams({ messages: [] }) as AgentHarnessAttemptParams & {
+        sessionTarget?: unknown;
+      };
+      delete params.sessionTarget;
+
+      const result = await runCopilotAttempt(params, { pool: makeFakePool(sdk) });
+
+      expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toMatchObject({
+        code: "transcript_persistence_failed",
+      });
+      expect(result.messagesSnapshot).toMatchObject([
+        { role: "user", content: params.userTurnTranscriptRecorder?.message.content },
+      ]);
+    });
+
+    it("does not collapse distinct repeated users in the pre-journal fallback", async () => {
+      const sdk = makeFakeSdk();
+      const recorder = makeUserTurnRecorder({ role: "user", content: "repeat", timestamp: 2 });
+      const params = makeParams({
+        messages: [{ role: "user", content: "repeat", timestamp: 1 }],
+        prompt: "repeat",
+        userTurnTranscriptRecorder: recorder,
+      }) as AgentHarnessAttemptParams & { sessionTarget?: unknown };
+      delete params.sessionTarget;
+
+      const result = await runCopilotAttempt(params, { pool: makeFakePool(sdk) });
+
+      expect(result.messagesSnapshot).toMatchObject([
+        { role: "user", content: "repeat", timestamp: 1 },
+        { role: "user", content: "repeat", timestamp: 2 },
+      ]);
+    });
+
     it("fails closed, aborts once, and invalidates replay after an append rejection", async () => {
       const appendError = new Error("sqlite unavailable");
       transcriptRuntimeMock.append.mockRejectedValueOnce(appendError);

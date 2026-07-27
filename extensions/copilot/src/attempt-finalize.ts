@@ -73,7 +73,9 @@ export async function completeCopilotAttempt(params: {
   const transcript = transcriptJournal?.snapshot();
   // Pre-journal failures keep the prepared input snapshot. Reconstructing a
   // user/assistant mirror here would restore the deleted dual-write owner.
-  const messagesSnapshot = transcript?.messagesSnapshot ?? messages;
+  const messagesSnapshot =
+    transcript?.messagesSnapshot ??
+    includePreparedUser(messages, input.userTurnTranscriptRecorder?.message);
   const result = createResult(input, {
     aborted,
     assistantTexts,
@@ -144,4 +146,36 @@ export async function completeCopilotAttempt(params: {
   return settledToolFinalization
     ? result
     : finalizeCopilotAttempt(input, result, hookContext, attemptStartedAt, now);
+}
+
+function includePreparedUser(
+  messages: AgentMessage[],
+  prepared: Extract<AgentMessage, { role: "user" }> | undefined,
+): AgentMessage[] {
+  if (!prepared) {
+    return messages;
+  }
+  const tail = messages.at(-1);
+  if (isSamePreparedUser(tail, prepared)) {
+    return [...messages.slice(0, -1), prepared];
+  }
+  return [...messages, prepared];
+}
+
+function isSamePreparedUser(
+  candidate: AgentMessage | undefined,
+  prepared: Extract<AgentMessage, { role: "user" }>,
+): boolean {
+  if (candidate?.role !== "user") {
+    return false;
+  }
+  if (candidate === prepared) {
+    return true;
+  }
+  const candidateKey = (candidate as { idempotencyKey?: unknown }).idempotencyKey;
+  const preparedKey = (prepared as { idempotencyKey?: unknown }).idempotencyKey;
+  if (typeof candidateKey === "string" || typeof preparedKey === "string") {
+    return candidateKey === preparedKey;
+  }
+  return false;
 }

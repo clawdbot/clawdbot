@@ -198,7 +198,7 @@ export function createAttemptTranscriptJournal(params: {
     }
   };
 
-  const barrier = async (boundary: string) => {
+  const drainQueue = async () => {
     // SDK events can append work while an earlier write is pending. Drain until
     // the observed tail stays stable so finalization cannot outrun persistence.
     while (true) {
@@ -208,6 +208,16 @@ export function createAttemptTranscriptJournal(params: {
         break;
       }
     }
+  };
+
+  const barrier = async (boundary: string) => {
+    await drainQueue();
+    if (!firstFailure && !pendingTools) {
+      // Give an already-delivered SDK event one microtask turn to reach the
+      // bridge, then re-drain without another yield before returning.
+      await Promise.resolve();
+      await drainQueue();
+    }
     if (!firstFailure && pendingTools) {
       captureFailure(
         new Error(
@@ -215,7 +225,9 @@ export function createAttemptTranscriptJournal(params: {
         ),
       );
     }
-    await abortPromise;
+    if (abortPromise) {
+      await abortPromise;
+    }
     if (firstFailure) {
       const error = new Error(
         `[copilot-attempt] canonical transcript persistence failed: ${firstFailure.message}`,
