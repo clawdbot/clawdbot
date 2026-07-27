@@ -17,6 +17,7 @@ import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runt
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import {
   createTelegramCallbackContext,
   runTelegramTestMiddlewareChain,
@@ -65,7 +66,6 @@ const {
   setSessionStoreEntriesForTest,
   setMessageReactionSpy,
   setMyCommandsSpy,
-  telegramBotInfoForTest,
   telegramBotDepsForTest,
   throttlerSpy,
   useSpy,

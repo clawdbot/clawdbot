@@ -21,7 +21,10 @@ import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
-import type { TelegramBotDeps } from "./bot-deps.js";
+import {
+  createTelegramNativeCommandTestDeps,
+  telegramBotInfoForTest,
+} from "./bot.create-telegram-bot.test-support.js";
 import {
   createTelegramCallbackContext,
   createTelegramReactionContext,
@@ -97,7 +100,6 @@ const {
   resolveExecApprovalSpy,
   sendMessageSpy,
   setMyCommandsSpy,
-  telegramBotInfoForTest,
   telegramBotDepsForTest,
   wasSentByBot,
 } = await import("./bot.create-telegram-bot.test-harness.js");
@@ -631,11 +633,15 @@ describe("createTelegramBot", () => {
         telegram: { dmPolicy: "open", allowFrom: ["*"] },
       },
     });
+    const telegramDeps = {
+      ...telegramBotDepsForTest,
+      ...createTelegramNativeCommandTestDeps(dispatchReplyWithBufferedBlockDispatcher),
+    };
     createTelegramBot = (opts) =>
       createTelegramBotBase({
         botInfo: telegramBotInfoForTest,
         ...opts,
-        telegramDeps: telegramBotDepsForTest,
+        telegramDeps,
       });
   });
 

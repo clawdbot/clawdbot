@@ -2,6 +2,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 
 const saveRemoteMedia = vi.fn();
 const saveMediaBuffer = vi.fn();
@@ -57,14 +58,8 @@ vi.mock("./sticker-cache.js", () => ({
 }));
 
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
-const {
-  getLoadConfigMock,
-  getOnHandler,
-  replySpy,
-  sendMessageSpy,
-  telegramBotDepsForTest,
-  telegramBotInfoForTest,
-} = harness;
+const { getLoadConfigMock, getOnHandler, replySpy, sendMessageSpy, telegramBotDepsForTest } =
+  harness;
 const { createTelegramBotCore: createTelegramBotBase } = await import("./bot-core.js");
 const { runWithTelegramSpooledReplayUpdate, runWithTelegramUpdateProcessingFrame } =
   await import("./bot-processing-outcome.js");
@@ -105,7 +100,9 @@ function setOpenChannelPostConfig() {
   });
 }
 
-function getChannelPostHandler(testTimings = TELEGRAM_TEST_TIMINGS) {
+function getChannelPostHandler(
+  testTimings: { mediaGroupFlushMs: number; textFragmentGapMs: number } = TELEGRAM_TEST_TIMINGS,
+) {
   createTelegramBot({ token: "tok", testTimings });
   return getOnHandler("channel_post") as (ctx: Record<string, unknown>) => Promise<void>;
 }

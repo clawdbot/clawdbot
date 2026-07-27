@@ -328,7 +328,9 @@ async function expectPinnedFallbackIpDispatcher(callIndex: number) {
       | ((hostname: string, callback: (err: null, address: string, family: number) => void) => void)
       | undefined
   )?.("api.telegram.org", callback);
-  await new Promise<void>((resolve) => process.nextTick(resolve));
+  await new Promise<void>((resolve) => {
+    process.nextTick(resolve);
+  });
   expect(callback).toHaveBeenCalledWith(null, "149.154.167.220", 4);
 }
 
