@@ -1,7 +1,7 @@
 import { t } from "../../i18n/index.ts";
 
 /** What a lab row writes at its gate. Most gates are booleans; some are modes. */
-export type LabFeatureValue = boolean | string;
+type LabFeatureValue = boolean | string;
 
 export type LabFeature = {
   id: string;
