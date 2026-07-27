@@ -54,6 +54,10 @@ import {
   toolingIsolatedTestFiles,
 } from "../test/vitest/vitest.tooling-isolated-paths.mjs";
 import {
+  isUiIsolatedTestFile,
+  uiIsolatedTestFiles,
+} from "../test/vitest/vitest.ui-isolated-paths.mjs";
+import {
   getUnitFastIsolatedTestFiles,
   getUnitFastTestFiles,
   getUnitFastTimerTestFiles,
@@ -314,6 +318,7 @@ const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
 const TUI_PTY_VITEST_CONFIG = "test/vitest/vitest.tui-pty.config.ts";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
 const UI_E2E_VITEST_CONFIG = "test/vitest/vitest.ui-e2e.config.ts";
+const UI_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.ui-isolated.config.ts";
 const UTILS_VITEST_CONFIG = "test/vitest/vitest.utils.config.ts";
 const WIZARD_VITEST_CONFIG = "test/vitest/vitest.wizard.config.ts";
 const INCLUDE_FILE_ENV_KEY = "OPENCLAW_VITEST_INCLUDE_FILE";
@@ -409,6 +414,7 @@ const VITEST_CONFIG_BY_KIND = {
   tuiPty: TUI_PTY_VITEST_CONFIG,
   ui: UI_VITEST_CONFIG,
   uiE2e: UI_E2E_VITEST_CONFIG,
+  uiIsolated: UI_ISOLATED_VITEST_CONFIG,
   utils: UTILS_VITEST_CONFIG,
   wizard: WIZARD_VITEST_CONFIG,
 };
@@ -4005,6 +4011,9 @@ function classifyTarget(arg, cwd) {
   if (isControlUiE2eTarget(relative)) {
     return "uiE2e";
   }
+  if (isUiIsolatedTestFile(relative)) {
+    return "uiIsolated";
+  }
   if (isPathAtOrUnder(relative, "ui/src")) {
     return "ui";
   }
@@ -4401,6 +4410,23 @@ export function buildVitestRunPlans(
     }
     groupedTargets.set("toolingIsolated", current);
   }
+  const uiTargets = groupedTargets.get("ui") ?? [];
+  const impliedUiIsolatedTargets = !watchMode
+    ? uiIsolatedTestFiles.filter((file) =>
+        uiTargets.some((targetArg) =>
+          includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [file]),
+        ),
+      )
+    : [];
+  if (impliedUiIsolatedTargets.length > 0) {
+    const current = groupedTargets.get("uiIsolated") ?? [];
+    for (const target of impliedUiIsolatedTargets) {
+      if (!current.includes(target)) {
+        current.push(target);
+      }
+    }
+    groupedTargets.set("uiIsolated", current);
+  }
 
   if (watchMode && groupedTargets.size > 1) {
     throw new Error(
@@ -4463,6 +4489,7 @@ export function buildVitestRunPlans(
     "agentsTools",
     "plugin",
     "ui",
+    "uiIsolated",
     "uiE2e",
     "unitSrc",
     "unitSecurity",

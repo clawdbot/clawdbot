@@ -3635,6 +3635,27 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes isolated ui test targets to the isolated project", () => {
+    expect(buildVitestRunPlans(["ui/src/pages/workboard/view.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.ui-isolated.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/pages/workboard/view.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("adds the isolated project for broad ui targets", () => {
+    const plans = buildVitestRunPlans(["ui/src"]);
+
+    expect(plans.map((plan) => plan.config)).toEqual([
+      "test/vitest/vitest.ui.config.ts",
+      "test/vitest/vitest.ui-isolated.config.ts",
+    ]);
+    expect(plans[1]?.includePatterns).toContain("ui/src/pages/workboard/view.test.ts");
+  });
+
   it("keeps explicit non-renderer ui test targets scoped", () => {
     expect(
       buildVitestRunPlans([
