@@ -53,7 +53,11 @@ describe("SessionPullRequestIndicatorsController", () => {
       }),
     );
     const snapshot = {
-      client: { request } as unknown as GatewayBrowserClient,
+      client: {
+        request,
+        requestSessionPullRequests: (params: { sessionKey: string; agentId?: string }) =>
+          request("controlUi.sessionPullRequests", params),
+      } as unknown as GatewayBrowserClient,
       hello: { features: { methods: ["controlUi.sessionPullRequests"] } },
     } as ApplicationGatewaySnapshot;
     const controller = new SessionPullRequestIndicatorsController(host, {
