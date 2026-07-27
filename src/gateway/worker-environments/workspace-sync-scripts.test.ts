@@ -203,6 +203,23 @@ describe("remote workspace quiescence scripts", () => {
     );
     expect(result.code).not.toBe(0);
   });
+
+  it("every ps probe in REMOTE_QUIESCENCE_PS_JS carries timeout and killSignal SIGKILL", () => {
+    // Structural guard: assert every execFileSync("ps", ...) in the shared
+    // PS fragment carries BOTH timeout AND killSignal: "SIGKILL".
+    const source = REMOTE_WORKSPACE_QUIESCE_JS;
+    const psCallPattern = /execFileSync\("ps",\s*\[[^\]]*\],\s*\{[^}]*\}/g;
+    const matches = [...source.matchAll(psCallPattern)];
+    expect(matches.length).toBeGreaterThanOrEqual(1);
+    for (const match of matches) {
+      const call = match[0]!;
+      expect(call).toContain("timeout:");
+      expect(call).toContain('killSignal: "SIGKILL"');
+    }
+    // Also check RENEW and RESUME scripts embed the shared PS fragment.
+    expect(REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS).toContain('killSignal: "SIGKILL"');
+    expect(REMOTE_WORKSPACE_RESUME_JS).toContain('killSignal: "SIGKILL"');
+  });
 });
 
 describe("remote workspace manifest script", () => {

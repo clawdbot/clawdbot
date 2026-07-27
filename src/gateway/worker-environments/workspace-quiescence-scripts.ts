@@ -3,6 +3,7 @@ const REMOTE_QUIESCENCE_PS_JS = String.raw`function processes() {
     encoding: "utf8",
     maxBuffer: 4 * 1024 * 1024,
     timeout: 2000,
+    killSignal: "SIGKILL",
   });
   const rows = new Map();
   for (const line of output.split("\n")) {
@@ -31,6 +32,8 @@ function processIdentity(pid) {
     const start = require("node:child_process").execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
       encoding: "utf8",
       maxBuffer: 4096,
+      timeout: 2000,
+      killSignal: "SIGKILL",
     }).trim();
     return start || null;
   } catch (error) {
@@ -40,7 +43,7 @@ function processIdentity(pid) {
 }
 function processStatus(pid) {
   try {
-    const output = childProcess.execFileSync("ps", ["-o", "stat=,lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096, timeout: 2000 }).trim();
+    const output = childProcess.execFileSync("ps", ["-o", "stat=,lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096, timeout: 2000, killSignal: "SIGKILL" }).trim();
     const match = /^(\S+)\s+(.+)$/u.exec(output);
     return match ? { state: match[1], start: match[2] } : null;
   } catch (error) {
