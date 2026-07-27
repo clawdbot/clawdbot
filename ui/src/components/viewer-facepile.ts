@@ -1,9 +1,16 @@
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
+import { keyed } from "lit/directives/keyed.js";
+import { until } from "lit/directives/until.js";
 import type { PresenceEntry } from "../api/types.ts";
 import { CONTROL_UI_BUILD_INFO, type ControlUiBuildInfo } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
-import { resolveAvatar } from "../lib/identity-avatar.ts";
+import {
+  resolveAvatar,
+  resolveAvatarImageUrl,
+  settleAvatarImageUrl,
+  type ResolvedIdentityAvatar,
+} from "../lib/identity-avatar.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { renderSidebarServerDetails } from "./sidebar-build-chip-format.ts";
 import "./tooltip.ts";
@@ -135,28 +142,34 @@ function renderAvatarInitials(user: PresenceViewer) {
   return html`<span style=${`background: ${avatarColor(user.id)}`}>${initialsFor(user)}</span>`;
 }
 
-function resolveViewerAvatar(user: PresenceViewer) {
-  const avatar = resolveAvatar({
-    id: user.email ?? user.id,
-    name: user.name,
-    profileAvatarUrl: user.avatarUrl,
-  });
-  if (avatar.kind === "initials") {
+function renderViewerAvatar(
+  user: PresenceViewer,
+  avatar: ResolvedIdentityAvatar,
+  imageUrl: string | Promise<string | null> | null,
+) {
+  if (avatar.kind === "initials" || !imageUrl) {
     return renderAvatarInitials(user);
   }
   return html`<img
-      src=${avatar.url}
+      src=${typeof imageUrl === "string"
+        ? imageUrl
+        : until(
+            imageUrl.then((url) => url ?? nothing),
+            nothing,
+          )}
       alt=""
       referrerpolicy="no-referrer"
       @error=${(event: Event) => {
         const image = event.currentTarget;
         if (image instanceof HTMLImageElement) {
+          settleAvatarImageUrl(image.getAttribute("src"));
           image.closest<HTMLElement>(".viewer-avatar")?.classList.add("is-fallback");
         }
       }}
       @load=${(event: Event) => {
         const image = event.currentTarget;
         if (image instanceof HTMLImageElement) {
+          settleAvatarImageUrl(image.getAttribute("src"));
           image.closest<HTMLElement>(".viewer-avatar")?.classList.remove("is-fallback");
         }
       }}
@@ -178,13 +191,26 @@ class ViewerAvatar extends OpenClawLightDomContentsElement {
       return nothing;
     }
     const label = presenceViewerLabel(user);
-    return html`<span
-      class="viewer-avatar viewer-avatar--${this.variant}"
-      data-viewer-id=${user.id}
-      aria-label=${label}
-    >
-      ${resolveViewerAvatar(user)}
-    </span>`;
+    const avatar = resolveAvatar({
+      id: user.id,
+      name: user.name,
+      username: user.email,
+      profileAvatarUrl: user.avatarUrl,
+    });
+    const imageUrl = avatar.kind === "initials" ? null : resolveAvatarImageUrl(avatar.url);
+    const pending = imageUrl !== null && typeof imageUrl !== "string";
+    // A changed route or request must own fresh DOM so an older image's load
+    // callback cannot suppress the next avatar's pending initials.
+    return html`${keyed(
+      imageUrl ?? `${user.id}:${this.variant}`,
+      html`<span
+        class=${`viewer-avatar viewer-avatar--${this.variant}${pending ? " is-fallback" : ""}`}
+        data-viewer-id=${user.id}
+        aria-label=${label}
+      >
+        ${renderViewerAvatar(user, avatar, imageUrl)}
+      </span>`,
+    )}`;
   }
 }
 
