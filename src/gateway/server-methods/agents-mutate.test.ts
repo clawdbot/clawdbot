@@ -3058,6 +3058,31 @@ describe("agents.files.list", () => {
     expect(soul).not.toHaveProperty("expectedAbsent");
   });
 
+  // Clients merge the get response over the listed entry, so dropping the flag here
+  // made a picked optional file re-render as a fault in the Control UI.
+  it("carries expectedAbsent through agents.files.get for a missing file", async () => {
+    agentsTesting.setDepsForTests({
+      root: makeRootForTest({
+        read: async () => {
+          throw new FsSafeError("not-found", "no such file");
+        },
+      }),
+    });
+
+    const { respond, promise } = makeCall("agents.files.get", {
+      agentId: "main",
+      name: "SOUL.md",
+    });
+    await promise;
+
+    const result = firstRespondResult(respond);
+    expectRecordFields((result as { file: unknown }).file, {
+      name: "SOUL.md",
+      missing: true,
+      expectedAbsent: true,
+    });
+  });
+
   it("reports unreadable workspace files as present in list responses", async () => {
     const rootOpen = vi.fn(async () => {
       throw createErrnoError("EACCES");

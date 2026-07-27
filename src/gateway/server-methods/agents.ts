@@ -772,7 +772,14 @@ function respondWorkspaceFileMissing(params: {
     {
       agentId: params.agentId,
       workspace: params.workspaceDir,
-      file: { name: params.name, path: params.filePath, missing: true },
+      // Clients merge this entry over the listed one, so it must carry the same
+      // absence classification or a picked optional file re-renders as a fault.
+      file: {
+        name: params.name,
+        path: params.filePath,
+        missing: true,
+        expectedAbsent: isExpectedAbsentBootstrapFile(params.name),
+      },
     },
     undefined,
   );
