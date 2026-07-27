@@ -888,6 +888,13 @@ describe("ci workflow guards", () => {
   it("keeps Testbox pull request validation off leased runner capacity", () => {
     const workflow = readTestboxWorkflow();
 
+    expect(workflow.on.pull_request).toEqual({
+      types: ["opened", "reopened", "synchronize", "ready_for_review"],
+      paths: [".github/workflows/**"],
+    });
+    expect(workflow.jobs.check.if).toBe(
+      "${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}",
+    );
     expect(workflow.jobs.check["runs-on"]).toBe(
       "${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}",
     );
