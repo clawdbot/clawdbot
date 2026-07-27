@@ -4551,7 +4551,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const publishJob = maturityWorkflow.jobs.publish;
     const publishPrJob = maturityWorkflow.jobs.publish_generated_pr;
     const qaRunJob = qaEvidenceWorkflow.jobs.run_qa_profile;
-    const qaMergeJob = qaEvidenceWorkflow.jobs.merge_qa_profile;
 
     expect(maturityWorkflow.on.workflow_call.inputs).toMatchObject({
       qa_evidence_run_id: {
@@ -4606,15 +4605,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile.default).toBe("all");
     expect(qaEvidenceWorkflow.on.workflow_call.inputs.qa_profile.type).toBe("string");
     expect(qaRunJob["timeout-minutes"]).toBe(60);
-    expect(qaRunJob.strategy).toEqual({
-      "fail-fast": false,
-      matrix: {
-        include: [
-          { part: "core", execution_kinds: "flow,vitest,playwright" },
-          { part: "script", execution_kinds: "script" },
-        ],
-      },
-    });
     const validateProfileStep = qaRunJob.steps.find(
       (step: WorkflowStep) => step.name === "Validate QA profile input",
     );
@@ -4630,19 +4620,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       (step: WorkflowStep) => step.name === "Run QA profile",
     );
     expect(runProfileStep.env?.OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("120000");
-    expect(runProfileStep.run).toContain("category.profiles.includes(process.env.QA_PROFILE)");
-    expect(runProfileStep.run).toContain('scenario_args+=(--scenario "$scenario_id")');
     expect(runProfileStep.run).toContain("--concurrency 3");
     expect(runProfileStep.run).toContain("--fast");
-    const uploadPartStep = qaRunJob.steps.find(
-      (step: WorkflowStep) => step.name === "Upload QA profile part evidence",
-    );
-    expect(uploadPartStep.with.name).toContain("${{ inputs.qa_profile }}");
-    const downloadPartsStep = qaMergeJob.steps.find(
-      (step: WorkflowStep) => step.name === "Download QA profile parts",
-    );
-    expect(downloadPartsStep.with.pattern).toContain("${{ inputs.qa_profile }}");
-    const failProfileStep = qaMergeJob.steps.find(
+    const failProfileStep = qaRunJob.steps.find(
       (step: WorkflowStep) => step.name === "Fail if QA profile failed",
     );
     expect(failProfileStep.if).toBe("always()");
@@ -4797,21 +4777,21 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(validateManifestStep.run).toContain("QA evidence manifest profile must be all");
     expect(validateManifestStep.run).toContain("manifest.targetSha !== targetSha");
 
-    expect(qaMergeJob.outputs.artifact_name).toBe("${{ steps.evidence.outputs.artifact_name }}");
-    const qaEvidenceStep = qaMergeJob.steps.find(
+    expect(qaRunJob.outputs.artifact_name).toBe("${{ steps.evidence.outputs.artifact_name }}");
+    const qaEvidenceStep = qaRunJob.steps.find(
       (step: WorkflowStep) => step.name === "Validate QA profile evidence",
     );
     expect(qaEvidenceStep.env.ARTIFACT_NAME).toBe(
-      "qa-profile-evidence-${{ inputs.qa_profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}",
+      "qa-profile-evidence-${{ steps.profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}",
     );
     expect(qaEvidenceStep.run).toContain("qa-profile-evidence-manifest.json");
 
-    const qaUploadStep = qaMergeJob.steps.find(
+    const qaUploadStep = qaRunJob.steps.find(
       (step: WorkflowStep) => step.name === "Upload QA profile evidence",
     );
     expect(qaUploadStep.with).toMatchObject({
-      name: "${{ steps.evidence.outputs.artifact_name }}",
-      path: ".artifacts/qa-e2e/profile-${{ inputs.qa_profile }}-${{ github.run_id }}-${{ github.run_attempt }}",
+      name: "qa-profile-evidence-${{ steps.profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}",
+      path: "${{ steps.run_profile.outputs.output_dir }}",
       "if-no-files-found": "error",
     });
 

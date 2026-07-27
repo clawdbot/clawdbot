@@ -48,25 +48,25 @@ on:
     outputs:
       artifact_name:
         description: Uploaded QA profile evidence artifact name
-        value: ${{ jobs.merge_qa_profile.outputs.artifact_name }}
+        value: ${{ jobs.run_qa_profile.outputs.artifact_name }}
       qa_profile:
         description: Taxonomy QA profile id that produced the evidence
-        value: ${{ jobs.merge_qa_profile.outputs.qa_profile }}
+        value: ${{ jobs.run_qa_profile.outputs.qa_profile }}
       qa_exit_code:
         description: Exit code from the QA profile run; non-zero evidence is still uploaded
-        value: ${{ jobs.merge_qa_profile.outputs.qa_exit_code }}
+        value: ${{ jobs.run_qa_profile.outputs.qa_exit_code }}
       qa_passed:
         description: Whether the QA profile command exited successfully
-        value: ${{ jobs.merge_qa_profile.outputs.qa_passed }}
+        value: ${{ jobs.run_qa_profile.outputs.qa_passed }}
       target_sha:
         description: Resolved OpenClaw SHA that produced the evidence
-        value: ${{ jobs.merge_qa_profile.outputs.target_sha }}
+        value: ${{ jobs.run_qa_profile.outputs.target_sha }}
       trusted_reason:
         description: Trust reason accepted before the secret-bearing QA job
-        value: ${{ jobs.merge_qa_profile.outputs.trusted_reason }}
+        value: ${{ jobs.run_qa_profile.outputs.trusted_reason }}
       qa_evidence_path:
         description: Path to qa-evidence.json inside the uploaded artifact
-        value: ${{ jobs.merge_qa_profile.outputs.qa_evidence_path }}
+        value: ${{ jobs.run_qa_profile.outputs.qa_evidence_path }}
 
 permissions:
   contents: read
@@ -194,22 +194,20 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   run_qa_profile:
-    name: Generate QA profile evidence (${{ matrix.part }})
+    name: Generate QA profile evidence
     needs: validate_selected_ref
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
     permissions:
       contents: read
-    strategy:
-      fail-fast: false
-      # Script scenarios can rebuild dist, so isolate them from live gateways while
-      # letting both partitions start immediately instead of serializing the scripts last.
-      matrix:
-        include:
-          - part: core
-            execution_kinds: flow,vitest,playwright
-          - part: script
-            execution_kinds: script
+    outputs:
+      artifact_name: ${{ steps.evidence.outputs.artifact_name }}
+      qa_profile: ${{ steps.profile.outputs.profile }}
+      qa_exit_code: ${{ steps.evidence.outputs.qa_exit_code }}
+      qa_passed: ${{ steps.evidence.outputs.qa_passed }}
+      target_sha: ${{ steps.evidence.outputs.target_sha }}
+      trusted_reason: ${{ steps.evidence.outputs.trusted_reason }}
+      qa_evidence_path: ${{ steps.evidence.outputs.qa_evidence_path }}
     environment: qa-live-shared
     steps:
       - name: Checkout selected ref
@@ -287,9 +285,7 @@ jobs:
       - name: Run QA profile
         id: run_profile
         env:
-          EXECUTION_KINDS: ${{ matrix.execution_kinds }}
           QA_PROFILE: ${{ steps.profile.outputs.profile }}
-          QA_PROFILE_PART: ${{ matrix.part }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
@@ -300,115 +296,27 @@ jobs:
         run: |
           set -euo pipefail
 
-          output_dir=".artifacts/qa-e2e/profile-${QA_PROFILE}-${QA_PROFILE_PART}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          output_dir=".artifacts/qa-e2e/profile-${QA_PROFILE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
-
-          node --import tsx --input-type=module > "$RUNNER_TEMP/qa-profile-scenarios.txt" <<'NODE'
-          import { readQaScenarioPack } from "./extensions/qa-lab/src/scenario-catalog.ts";
-          import { readQaScorecardTaxonomyReport } from "./extensions/qa-lab/src/scorecard-taxonomy.ts";
-
-          const executionKinds = new Set((process.env.EXECUTION_KINDS ?? "").split(","));
-          const scenarioPack = readQaScenarioPack();
-          const scenarioByPath = new Map(
-            scenarioPack.scenarios.map((scenario) => [scenario.sourcePath, scenario]),
-          );
-          const scenarioIds = [
-            ...new Set(
-              readQaScorecardTaxonomyReport(scenarioPack.scenarios)
-                .categories.filter((category) => category.profiles.includes(process.env.QA_PROFILE))
-                .flatMap((category) => category.scenarioRefs),
-            ),
-          ]
-            .map((scenarioRef) => scenarioByPath.get(scenarioRef))
-            .filter((scenario) => scenario && executionKinds.has(scenario.execution.kind))
-            .map((scenario) => scenario.id);
-          if (scenarioIds.length === 0) {
-            throw new Error(`No QA scenarios use execution kinds ${[...executionKinds].join(", ")}`);
-          }
-          process.stdout.write(`${scenarioIds.join("\n")}\n`);
-          NODE
-
-          scenario_args=()
-          while IFS= read -r scenario_id; do
-            scenario_args+=(--scenario "$scenario_id")
-          done < "$RUNNER_TEMP/qa-profile-scenarios.txt"
 
           qa_exit_code=0
           pnpm openclaw qa run \
             --repo-root . \
             --qa-profile "${QA_PROFILE}" \
-            "${scenario_args[@]}" \
             --concurrency 3 \
             --fast \
             --output-dir "${output_dir}" || qa_exit_code=$?
 
           echo "qa_exit_code=${qa_exit_code}" >> "$GITHUB_OUTPUT"
 
-      - name: Prepare QA profile part evidence
-        if: always()
-        env:
-          OUTPUT_DIR: ${{ steps.run_profile.outputs.output_dir }}
-          QA_EXIT_CODE: ${{ steps.run_profile.outputs.qa_exit_code }}
-          QA_PROFILE_PART: ${{ matrix.part }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "${OUTPUT_DIR:-}" && test -n "${QA_EXIT_CODE:-}"
-          mv "${OUTPUT_DIR}/qa-evidence.json" "${OUTPUT_DIR}/qa-evidence-${QA_PROFILE_PART}.json"
-          printf '%s\n' "$QA_EXIT_CODE" > "${OUTPUT_DIR}/qa-exit-code-${QA_PROFILE_PART}.txt"
-
-      - name: Upload QA profile part evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: qa-profile-evidence-part-${{ inputs.qa_profile }}-${{ matrix.part }}-${{ needs.validate_selected_ref.outputs.selected_revision }}
-          path: ${{ steps.run_profile.outputs.output_dir }}
-          retention-days: 1
-          if-no-files-found: error
-
-  merge_qa_profile:
-    name: Merge QA profile evidence
-    needs: [validate_selected_ref, run_qa_profile]
-    if: ${{ always() && needs.validate_selected_ref.result == 'success' && needs.run_qa_profile.result == 'success' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    outputs:
-      artifact_name: ${{ steps.evidence.outputs.artifact_name }}
-      qa_profile: ${{ steps.evidence.outputs.qa_profile }}
-      qa_exit_code: ${{ steps.evidence.outputs.qa_exit_code }}
-      qa_passed: ${{ steps.evidence.outputs.qa_passed }}
-      target_sha: ${{ steps.evidence.outputs.target_sha }}
-      trusted_reason: ${{ steps.evidence.outputs.trusted_reason }}
-      qa_evidence_path: ${{ steps.evidence.outputs.qa_evidence_path }}
-    steps:
-      - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          persist-credentials: false
-          ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
-          fetch-depth: 1
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "false"
-
-      - name: Download QA profile parts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          pattern: qa-profile-evidence-part-${{ inputs.qa_profile }}-*-${{ needs.validate_selected_ref.outputs.selected_revision }}
-          path: .artifacts/qa-e2e/profile-${{ inputs.qa_profile }}-${{ github.run_id }}-${{ github.run_attempt }}
-          merge-multiple: true
-
       - name: Validate QA profile evidence
         id: evidence
+        if: always()
         env:
-          ARTIFACT_NAME: qa-profile-evidence-${{ inputs.qa_profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}
-          OUTPUT_DIR: .artifacts/qa-e2e/profile-${{ inputs.qa_profile }}-${{ github.run_id }}-${{ github.run_attempt }}
-          QA_PROFILE: ${{ inputs.qa_profile }}
+          ARTIFACT_NAME: qa-profile-evidence-${{ steps.profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}
+          OUTPUT_DIR: ${{ steps.run_profile.outputs.output_dir }}
+          QA_EXIT_CODE: ${{ steps.run_profile.outputs.qa_exit_code }}
+          QA_PROFILE: ${{ steps.profile.outputs.profile }}
           REQUESTED_REF: ${{ inputs.ref }}
           TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
           TRUSTED_REASON: ${{ needs.validate_selected_ref.outputs.trusted_reason }}
@@ -416,71 +324,36 @@ jobs:
         run: |
           set -euo pipefail
 
-          node --import tsx --input-type=module <<'NODE'
+          node --input-type=module <<'NODE'
           import fs from "node:fs";
           import path from "node:path";
-          import {
-            QA_EVIDENCE_SUMMARY_KIND,
-            QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
-            validateQaEvidenceSummaryJson,
-          } from "./extensions/qa-lab/src/evidence-summary.ts";
-          import { readQaScenarioPack } from "./extensions/qa-lab/src/scenario-catalog.ts";
-          import { attachQaProfileScorecardEvidenceToFile } from "./extensions/qa-lab/src/scorecard-evidence.ts";
-          import { readQaScorecardTaxonomyReport } from "./extensions/qa-lab/src/scorecard-taxonomy.ts";
 
-          const profile = process.env.QA_PROFILE.trim();
-          const parts = ["core", "script"].map((part) => {
-            const evidence = validateQaEvidenceSummaryJson(
-              JSON.parse(
-                fs.readFileSync(path.join(process.env.OUTPUT_DIR, `qa-evidence-${part}.json`), "utf8"),
-              ),
-            );
-            if (evidence.profile !== profile) {
-              throw new Error(`QA profile part ${part} evidence has profile ${evidence.profile}.`);
-            }
-            const exitCode = Number(
-              fs.readFileSync(path.join(process.env.OUTPUT_DIR, `qa-exit-code-${part}.txt`), "utf8"),
-            );
-            if (!Number.isInteger(exitCode) || exitCode < 0) {
-              throw new Error(`QA profile part ${part} has invalid exit code ${exitCode}.`);
-            }
-            return { evidence, exitCode };
-          });
-          for (const part of ["core", "script"]) {
-            fs.rmSync(path.join(process.env.OUTPUT_DIR, `qa-evidence-${part}.json`));
-            fs.rmSync(path.join(process.env.OUTPUT_DIR, `qa-exit-code-${part}.txt`));
+          const outputDir = process.env.OUTPUT_DIR;
+          if (!outputDir) {
+            throw new Error("OUTPUT_DIR is required");
+          }
+          if (!process.env.QA_EXIT_CODE) {
+            throw new Error("QA_EXIT_CODE is required");
           }
 
-          const generatedAt = new Date().toISOString();
-          const evidencePath = path.join(process.env.OUTPUT_DIR, "qa-evidence.json");
-          const evidence = validateQaEvidenceSummaryJson({
-            kind: QA_EVIDENCE_SUMMARY_KIND,
-            schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
-            generatedAt,
-            evidenceMode: parts.every(({ evidence }) => evidence.evidenceMode === "slim")
-              ? "slim"
-              : "full",
-            entries: parts.flatMap(({ evidence }) => evidence.entries),
-            profile,
-          });
-          fs.writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
-
-          const scenarioPack = readQaScenarioPack();
-          const taxonomy = readQaScorecardTaxonomyReport(scenarioPack.scenarios);
-          await attachQaProfileScorecardEvidenceToFile({
-            evidencePath,
-            profile,
-            filters: {},
-            categories: taxonomy.categories.filter((category) => category.profiles.includes(profile)),
-          });
+          const evidencePath = path.join(outputDir, "qa-evidence.json");
           const payload = JSON.parse(fs.readFileSync(evidencePath, "utf8"));
-          const qaExitCode = parts.find(({ exitCode }) => exitCode !== 0)?.exitCode ?? 0;
+          if (payload.profile !== process.env.QA_PROFILE) {
+            throw new Error(`qa-evidence.json profile must be ${process.env.QA_PROFILE}, got ${JSON.stringify(payload.profile)}`);
+          }
+          if (!payload.scorecard || !Array.isArray(payload.scorecard.categoryReports)) {
+            throw new Error("QA profile qa-evidence.json must include scorecard.categoryReports");
+          }
+          if (payload.scorecard.categoryReports.length === 0) {
+            throw new Error("QA profile qa-evidence.json scorecard has no category reports");
+          }
+
           const manifest = {
             artifactName: process.env.ARTIFACT_NAME,
-            generatedAt,
-            qaProfile: profile,
-            qaExitCode,
-            qaPassed: qaExitCode === 0,
+            generatedAt: new Date().toISOString(),
+            qaProfile: process.env.QA_PROFILE,
+            qaExitCode: Number(process.env.QA_EXIT_CODE),
+            qaPassed: process.env.QA_EXIT_CODE === "0",
             requestedRef: process.env.REQUESTED_REF,
             targetSha: process.env.TARGET_SHA,
             trustedReason: process.env.TRUSTED_REASON,
@@ -493,30 +366,29 @@ jobs:
             },
           };
           fs.writeFileSync(
-            path.join(process.env.OUTPUT_DIR, "qa-profile-evidence-manifest.json"),
+            path.join(outputDir, "qa-profile-evidence-manifest.json"),
             `${JSON.stringify(manifest, null, 2)}\n`,
-          );
-          fs.appendFileSync(
-            process.env.GITHUB_OUTPUT,
-            [
-              `artifact_name=${process.env.ARTIFACT_NAME}`,
-              `qa_profile=${profile}`,
-              `qa_exit_code=${qaExitCode}`,
-              `qa_passed=${qaExitCode === 0}`,
-              `target_sha=${process.env.TARGET_SHA}`,
-              `trusted_reason=${process.env.TRUSTED_REASON}`,
-              "qa_evidence_path=qa-evidence.json",
-            ].join("\n") + "\n",
           );
           NODE
 
-          qa_exit_code="$(node -e 'const fs = require("node:fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).qaExitCode)' "${OUTPUT_DIR}/qa-profile-evidence-manifest.json")"
+          echo "artifact_name=${ARTIFACT_NAME}" >> "$GITHUB_OUTPUT"
+          echo "qa_profile=${QA_PROFILE}" >> "$GITHUB_OUTPUT"
+          echo "qa_exit_code=${QA_EXIT_CODE}" >> "$GITHUB_OUTPUT"
+          if [[ "$QA_EXIT_CODE" == "0" ]]; then
+            echo "qa_passed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "qa_passed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::QA profile '${QA_PROFILE}' completed with exit code ${QA_EXIT_CODE}; evidence was still validated and uploaded."
+          fi
+          echo "target_sha=${TARGET_SHA}" >> "$GITHUB_OUTPUT"
+          echo "trusted_reason=${TRUSTED_REASON}" >> "$GITHUB_OUTPUT"
+          echo "qa_evidence_path=qa-evidence.json" >> "$GITHUB_OUTPUT"
           {
             echo "### QA profile evidence"
             echo
             echo "- Artifact: \`${ARTIFACT_NAME}\`"
             echo "- QA profile: \`${QA_PROFILE}\`"
-            echo "- QA exit code: \`${qa_exit_code}\`"
+            echo "- QA exit code: \`${QA_EXIT_CODE}\`"
             echo "- Target SHA: \`${TARGET_SHA}\`"
             echo "- Evidence path: \`${OUTPUT_DIR}/qa-evidence.json\`"
             echo "- Manifest: \`${OUTPUT_DIR}/qa-profile-evidence-manifest.json\`"
@@ -526,16 +398,16 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: ${{ steps.evidence.outputs.artifact_name }}
-          path: .artifacts/qa-e2e/profile-${{ inputs.qa_profile }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: qa-profile-evidence-${{ steps.profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}
+          path: ${{ steps.run_profile.outputs.output_dir }}
           retention-days: 30
           if-no-files-found: error
 
       - name: Fail if QA profile failed
         if: always()
         env:
-          QA_EXIT_CODE: ${{ steps.evidence.outputs.qa_exit_code }}
-          QA_PROFILE: ${{ steps.evidence.outputs.qa_profile }}
+          QA_EXIT_CODE: ${{ steps.run_profile.outputs.qa_exit_code }}
+          QA_PROFILE: ${{ steps.profile.outputs.profile }}
         shell: bash
         run: |
           set -euo pipefail
