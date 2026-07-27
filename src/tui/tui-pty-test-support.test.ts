@@ -77,7 +77,8 @@ describe("TUI PTY test support", () => {
   ])(
     "preserves Unicode characters with fixture-specific $chunkSize-character input chunks",
     async ({ chunkSize, chunks }) => {
-      const pty = createMockPty();
+      const write = vi.fn();
+      const pty = createMockPty({ write });
       nodePtyMocks.spawn.mockReturnValue(pty);
 
       const run = startPty("node", [], {
@@ -92,8 +93,8 @@ describe("TUI PTY test support", () => {
 
       await run.write("A👋B");
 
-      expect(pty.write).toHaveBeenCalledTimes(chunks.length);
-      expect(vi.mocked(pty.write).mock.calls.map(([chunk]) => chunk)).toEqual(chunks);
+      expect(write).toHaveBeenCalledTimes(chunks.length);
+      expect(write.mock.calls.map(([chunk]) => chunk)).toEqual(chunks);
     },
   );
 

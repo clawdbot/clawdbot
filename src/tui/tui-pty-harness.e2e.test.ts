@@ -7,6 +7,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   approveWorkspaceSkill,
   buildOpaqueSessionIsolationFixture,
+  COMPACT_TERMINAL_SIZES,
+  exerciseFragmentedUnicodePrompt,
   objectFieldEquals,
   readFixtureLog,
   waitForFixtureLogEntry,
@@ -655,7 +657,7 @@ describe.sequential("TUI PTY harness", () => {
   });
 
   it(
-    "drives the real TUI terminal loop through typed input",
+    "drives the real TUI terminal loop through typed and fragmented Unicode input",
     async () => {
       await fixture.run.write("hello from pty\r");
       await fixture.run.waitForOutput("PTY_RESPONSE: hello from pty");
@@ -663,31 +665,7 @@ describe.sequential("TUI PTY harness", () => {
         (entry) =>
           entry.method === "sendChat" && objectFieldEquals(entry, "message", "hello from pty"),
       );
-    },
-    TEST_TIMEOUT_MS,
-  );
-
-  it(
-    "preserves Unicode prompts during fragmented terminal input",
-    async () => {
-      const fragmentedFixture = await startTuiFixture({
-        env: {
-          OPENCLAW_TUI_PTY_TYPE_CHUNK_SIZE: "1",
-          OPENCLAW_TUI_PTY_TYPE_DELAY_MS: "1",
-        },
-      });
-
-      try {
-        await fragmentedFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
-        await fragmentedFixture.run.write("hello 👋 from pty\r");
-        await fragmentedFixture.run.waitForOutput("PTY_RESPONSE: hello 👋 from pty");
-        await fragmentedFixture.waitForLogEntry(
-          (entry) =>
-            entry.method === "sendChat" && objectFieldEquals(entry, "message", "hello 👋 from pty"),
-        );
-      } finally {
-        await fragmentedFixture.cleanup();
-      }
+      await exerciseFragmentedUnicodePrompt(startTuiFixture, STARTUP_TIMEOUT_MS);
     },
     STARTUP_TEST_TIMEOUT_MS,
   );
@@ -732,14 +710,9 @@ describe.sequential("TUI PTY harness", () => {
     TEST_TIMEOUT_MS,
   );
 
-  it.each([
-    { cols: 64, rows: 18 },
-    { cols: 68, rows: 18 },
-    { cols: 72, rows: 20 },
-    { cols: 80, rows: 20 },
-  ])(
-    "presents and resolves workspace skill approval in a $cols×$rows terminal",
-    async ({ cols, rows }) => {
+  it.each(COMPACT_TERMINAL_SIZES)(
+    "presents and resolves workspace skill approval in a %i×%i terminal",
+    async (cols, rows) => {
       const compactFixture = await startTuiFixture({
         env: {
           OPENCLAW_TUI_PTY_COLS: String(cols),
