@@ -253,6 +253,7 @@ async function* walkWorkspaceFiles(
         }
         // Not descended: the link is a terminal leaf candidate, yielded only on a
         // full match like any file.
+        // oxlint-disable-next-line unicorn/prefer-regexp-test -- Minimatch.match returns a boolean; it has no RegExp#test.
         if (matcher.match(normalizedChildPath)) {
           yield normalizedChildPath;
         }
