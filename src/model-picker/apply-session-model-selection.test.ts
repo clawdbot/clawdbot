@@ -1,7 +1,6 @@
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -11,6 +10,7 @@ const effects = vi.hoisted(() => ({
   refreshQueuedFollowupSession: vi.fn(),
   triggerSessionPatchHook: vi.fn(),
 }));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => effects.enqueueSystemEvent(...args),
@@ -309,25 +309,21 @@ describe("applySessionModelSelection", () => {
   });
 
   it("rejects when the authoritative persisted row became locked", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-picker-lock-"));
+    const tempRoot = tempDirs.make("openclaw-model-picker-lock-");
     const storePath = path.join(tempRoot, "sessions.json");
     const sessionKey = "agent:main:dm:locked-disk";
     const sessionEntry = createEntry();
     const lockedEntry = createEntry({ modelSelectionLocked: true, updatedAt: 2 });
     await replaceSessionEntry({ sessionKey, storePath }, lockedEntry);
 
-    try {
-      const result = await applySessionModelSelection(
-        createParams({ sessionEntry, sessionKey, storePath }),
-      );
-      expect(result).toMatchObject({ status: "rejected", reason: "locked" });
-      expect(sessionEntry).toEqual(lockedEntry);
-      expect(effects.triggerSessionPatchHook).not.toHaveBeenCalled();
-      expect(effects.refreshQueuedFollowupSession).not.toHaveBeenCalled();
-      expect(effects.enqueueSystemEvent).not.toHaveBeenCalled();
-    } finally {
-      fs.rmSync(tempRoot, { recursive: true, force: true });
-    }
+    const result = await applySessionModelSelection(
+      createParams({ sessionEntry, sessionKey, storePath }),
+    );
+    expect(result).toMatchObject({ status: "rejected", reason: "locked" });
+    expect(sessionEntry).toEqual(lockedEntry);
+    expect(effects.triggerSessionPatchHook).not.toHaveBeenCalled();
+    expect(effects.refreshQueuedFollowupSession).not.toHaveBeenCalled();
+    expect(effects.enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -423,7 +419,7 @@ describe("applySessionModelSelection", () => {
       }),
     },
   ])("returns conflict without a hybrid row after concurrent $name", async ({ concurrent }) => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-picker-service-"));
+    const tempRoot = tempDirs.make("openclaw-model-picker-service-");
     const storePath = path.join(tempRoot, "sessions.json");
     const sessionEntry = createEntry({
       providerOverride: "anthropic",
@@ -434,22 +430,18 @@ describe("applySessionModelSelection", () => {
     const sessionKey = "agent:main:dm:race";
     await replaceSessionEntry({ sessionKey, storePath }, concurrent);
 
-    try {
-      const result = await applySessionModelSelection(
-        createParams({ sessionKey, storePath, sessionEntry }),
-      );
-      expect(result).toEqual({
-        status: "conflict",
-        message: "Model change was not applied because the session changed. Retry.",
-      });
-      expect(sessionEntry).toEqual(concurrent);
-      expect(sessionEntry).not.toMatchObject({ modelOverride: "gpt-4o" });
-      expect(effects.triggerSessionPatchHook).not.toHaveBeenCalled();
-      expect(effects.refreshQueuedFollowupSession).not.toHaveBeenCalled();
-      expect(effects.enqueueSystemEvent).not.toHaveBeenCalled();
-    } finally {
-      fs.rmSync(tempRoot, { recursive: true, force: true });
-    }
+    const result = await applySessionModelSelection(
+      createParams({ sessionKey, storePath, sessionEntry }),
+    );
+    expect(result).toEqual({
+      status: "conflict",
+      message: "Model change was not applied because the session changed. Retry.",
+    });
+    expect(sessionEntry).toEqual(concurrent);
+    expect(sessionEntry).not.toMatchObject({ modelOverride: "gpt-4o" });
+    expect(effects.triggerSessionPatchHook).not.toHaveBeenCalled();
+    expect(effects.refreshQueuedFollowupSession).not.toHaveBeenCalled();
+    expect(effects.enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
   it("keeps idempotent model acknowledgement facts without duplicate effects", async () => {

@@ -88,7 +88,7 @@ type AppliedRuntimeDirective =
   | { kind: "clear" }
   | { kind: "set"; runtime: string };
 
-export type ApplySessionModelSelectionToEntryResult = {
+type ApplySessionModelSelectionToEntryResult = {
   changed: boolean;
   runtimeChange?: { kind: "clear" } | { kind: "set"; runtime: string };
 };
