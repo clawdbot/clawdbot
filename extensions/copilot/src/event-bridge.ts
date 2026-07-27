@@ -812,9 +812,15 @@ function buildAssistantProjectionGroup(
 function hasUnprojectedAssistantReplayState(
   event: Extract<SessionEvent, { type: "assistant.message" }>,
 ): boolean {
-  // The SDK contract names both fields as provider round-trip state. The
-  // canonical AgentMessage cannot represent them, so native replay must stay.
-  return event.data.serverTools !== undefined || event.data.reasoningWireField !== undefined;
+  // The SDK contract marks these as provider/session-bound state or custom
+  // call shape. AgentMessage cannot represent them, so native replay must stay.
+  return (
+    event.data.serverTools !== undefined ||
+    event.data.reasoningWireField !== undefined ||
+    event.data.reasoningOpaque !== undefined ||
+    event.data.encryptedContent !== undefined ||
+    event.data.toolRequests?.some((request) => request.type === "custom") === true
+  );
 }
 
 function isAssistantMessageEvent(

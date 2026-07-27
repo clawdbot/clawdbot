@@ -68,11 +68,11 @@ async function createFixture(trigger?: string) {
     sessionKey: "agent:main:session-1",
     storePath: path.join(tempDir, "sessions.json"),
   };
-  const userMessage = {
+  const userMessage: Extract<AgentMessage, { role: "user" }> = {
     role: "user",
     content: "inspect both files",
     timestamp: 1,
-  } as const;
+  };
   let blocked = false;
   let persisted = false;
   const recorder = {
@@ -420,6 +420,64 @@ describe("Copilot attempt transcript journal", () => {
 
     expect(journal.snapshot().replayInvalid).toBe(true);
     expect(journal.snapshot().messagesSnapshot).toMatchObject([{ role: "user" }]);
+  });
+
+  it("marks session-bound encrypted reasoning replay-incomplete", async () => {
+    for (const [field, value] of [
+      ["encryptedContent", "encrypted-openai-state"],
+      ["reasoningOpaque", "opaque-anthropic-state"],
+    ] as const) {
+      const { journal, session } = await createFixture();
+      await journal.persistInitialUser();
+      session.emit(event("user.message", `initial-user-${field}`, { content: "inspect" }));
+      session.emit(
+        event("assistant.message", `assistant-${field}`, {
+          apiCallId: `api-call-${field}`,
+          content: "",
+          messageId: `assistant-${field}`,
+          [field]: value,
+        }),
+      );
+      session.emit(
+        event("assistant.usage", `assistant-usage-${field}`, {
+          apiCallId: `api-call-${field}`,
+          model: "gpt-5",
+        }),
+      );
+      await journal.barrier(`session-bound ${field}`);
+
+      expect(journal.snapshot().replayInvalid).toBe(true);
+    }
+  });
+
+  it("marks custom tool calls replay-incomplete", async () => {
+    const { journal, session } = await createFixture();
+    await journal.persistInitialUser();
+    session.emit(event("user.message", "initial-user", { content: "inspect" }));
+    session.emit(
+      event("assistant.message", "assistant-custom-tool", {
+        content: "run custom tool",
+        messageId: "assistant-custom-tool",
+        toolRequests: [
+          {
+            arguments: { input: "value" },
+            name: "custom_tool",
+            toolCallId: "custom-call",
+            type: "custom",
+          },
+        ],
+      }),
+    );
+    session.emit(
+      event("tool.execution_complete", "custom-result", {
+        result: { content: "done" },
+        success: true,
+        toolCallId: "custom-call",
+      }),
+    );
+    await journal.barrier("custom tool group");
+
+    expect(journal.snapshot().replayInvalid).toBe(true);
   });
 
   it("hides autopilot users while preserving unknown SDK source provenance", async () => {
