@@ -21,6 +21,7 @@ import {
   resetSessionEntryLifecycle,
 } from "./session-accessor.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { trimSqliteTranscriptForManualCompact } from "./session-accessor.sqlite-transcript-write.js";
 import {
   enforceSqliteSessionHistoryDiskBudget,
   kickSessionHistoryDiskBudgetMaintenance,
@@ -164,6 +165,90 @@ describe("SQLite historical session disk budget", () => {
       compactionBackupOnDisk: false,
       searchableSessionSurvived: true,
       finishedWithinHighWater: true,
+    });
+  });
+
+  // The pre-SQLite store rotation is retired, but the backups it left behind
+  // still sit in upgraded installs and the measurement still counts them.
+  it("reclaims a legacy store backup instead of evicting searchable history", async () => {
+    await createHistoricalTranscript({
+      content: "keep searchable history",
+      nextSessionId: "legacy-live",
+      sessionId: "legacy-history",
+      sessionKey: "agent:main:legacy-store-backup-pressure",
+      updatedAt: 1,
+    });
+    database().walMaintenance.checkpoint();
+    const legacyStoreBackup = path.join(tempDir, "sessions.json.bak.1737420882");
+    fs.writeFileSync(legacyStoreBackup, Buffer.alloc(256 * 1024));
+    const before = await measureSessionPhysicalDiskUsage(storePath);
+
+    const result = await enforceSqliteSessionHistoryDiskBudget({
+      storePath,
+      mode: "enforce",
+      maintenance: {
+        maxDiskBytes: before.totalBytes - 1,
+        highWaterBytes: before.totalBytes - 64 * 1024,
+      },
+    });
+
+    expect({
+      evictedSessions: result?.removedEntries,
+      legacyBackupOnDisk: fs.existsSync(legacyStoreBackup),
+      searchableSessionSurvived: sessionExists("legacy-history"),
+    }).toEqual({
+      evictedSessions: 0,
+      legacyBackupOnDisk: false,
+      searchableSessionSurvived: true,
+    });
+  });
+
+  // Same invariant, but the backup comes from the production compaction writer
+  // rather than a hand-written file, so the archive name, compression suffix,
+  // and location are the ones a real `sessions compact --max-lines` produces.
+  it("reclaims a backup written by the manual compaction path", async () => {
+    const sessionKey = "agent:main:real-compaction-backup";
+    await createHistoricalTranscript({
+      content: "keep searchable history " + "x".repeat(64 * 1024),
+      nextSessionId: "compact-live",
+      sessionId: "compact-history",
+      sessionKey,
+      updatedAt: 1,
+    });
+    for (let index = 0; index < 8; index += 1) {
+      await appendTranscriptMessage(
+        { sessionId: "compact-live", sessionKey, storePath },
+        { message: { role: "user", content: `live ${index} ${"y".repeat(32 * 1024)}` } },
+      );
+    }
+    const compacted = await trimSqliteTranscriptForManualCompact(
+      { sessionId: "compact-live", sessionKey, storePath },
+      (lines) => lines.slice(-1),
+    );
+    expect(compacted.trimmed).toBe(true);
+    const backupPath = compacted.trimmed ? compacted.archivedPath : "";
+    expect(fs.existsSync(backupPath)).toBe(true);
+    settlePhysicalUsage();
+    const before = await measureSessionPhysicalDiskUsage(storePath);
+    const backupBytes = fs.statSync(backupPath).size;
+
+    const result = await enforceSqliteSessionHistoryDiskBudget({
+      storePath,
+      mode: "enforce",
+      maintenance: {
+        maxDiskBytes: before.totalBytes - 1,
+        highWaterBytes: before.totalBytes - Math.floor(backupBytes / 2),
+      },
+    });
+
+    expect({
+      evictedSessions: result?.removedEntries,
+      backupOnDisk: fs.existsSync(backupPath),
+      searchableSessionSurvived: sessionExists("compact-history"),
+    }).toEqual({
+      evictedSessions: 0,
+      backupOnDisk: false,
+      searchableSessionSurvived: true,
     });
   });
 
