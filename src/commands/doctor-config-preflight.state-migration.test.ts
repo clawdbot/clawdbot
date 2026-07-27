@@ -958,6 +958,31 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
   });
 
+  it("blocks gateway readiness when startup migrations leave warnings", async () => {
+    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    // The uninitialized-target state-dir skip stays in `warnings` (#112395), so this
+    // also proves non-equivalent legacy contents cannot checkpoint readiness.
+    autoMigrateLegacyStateDir.mockResolvedValueOnce({
+      migrated: false,
+      skipped: false,
+      changes: [],
+      warnings: ["State dir migration skipped: target already exists. Remove or merge manually."],
+    });
+
+    await expect(
+      runDoctorConfigPreflight({
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
+        requireStartupMigrationCheckpoint: true,
+      }),
+    ).rejects.toThrow(
+      "OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready.",
+    );
+
+    expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
+    expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
+  });
+
   it("blocks gateway readiness when plugin repair warnings remain", async () => {
     needsStartupMigrationCheckpoint.mockReturnValue(true);
     runPostCorePluginConvergence.mockResolvedValueOnce(

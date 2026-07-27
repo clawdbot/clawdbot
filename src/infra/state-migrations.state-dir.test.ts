@@ -43,6 +43,8 @@ describe("legacy state dir auto-migration", () => {
       });
 
       expect(result.migrated).toBe(false);
+      // No canonical target dir exists, so the symlinked legacy path is the active
+      // state root: the skip must stay a startup-blocking warning.
       expect(result.warnings).toEqual([
         `Legacy state dir is a symlink (${legacySymlink} → ${legacyDir}); skipping auto-migration.`,
       ]);
@@ -50,6 +52,91 @@ describe("legacy state dir auto-migration", () => {
         "ok",
       );
       expect(fs.readFileSync(path.join(root, ".clawdbot", "marker.txt"), "utf-8")).toBe("ok");
+    });
+  });
+
+  it("keeps the outside-roots symlink skip blocking even when the canonical target is initialized", async () => {
+    await withStateDirFixture(async (root) => {
+      // Anomalous legacy shapes say nothing about convergence, so they never
+      // downgrade to notices regardless of target-side markers.
+      const legacySymlink = path.join(root, ".clawdbot");
+      const legacyDir = path.join(root, "legacy-state-source");
+      const targetDir = path.join(root, ".openclaw");
+      fs.mkdirSync(targetDir, { recursive: true });
+      fs.writeFileSync(path.join(targetDir, "openclaw.json"), "{}", "utf-8");
+      fs.mkdirSync(legacyDir, { recursive: true });
+
+      const dirLinkType = process.platform === "win32" ? "junction" : "dir";
+      fs.symlinkSync(legacyDir, legacySymlink, dirLinkType);
+
+      const result = await autoMigrateLegacyStateDir({
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => root,
+      });
+
+      expect(result.migrated).toBe(false);
+      expect(result.warnings).toEqual([
+        `Legacy state dir is a symlink (${legacySymlink} → ${legacyDir}); skipping auto-migration.`,
+      ]);
+      expect(result.notices ?? []).toStrictEqual([]);
+    });
+  });
+
+  it("keeps a non-directory legacy state path as a blocking warning without a canonical target", async () => {
+    await withStateDirFixture(async (root) => {
+      const legacyPath = path.join(root, ".clawdbot");
+      fs.writeFileSync(legacyPath, "not a directory", "utf-8");
+
+      const result = await autoMigrateLegacyStateDir({
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => root,
+      });
+
+      expect(result.migrated).toBe(false);
+      expect(result.warnings).toEqual([`Legacy state path is not a directory: ${legacyPath}`]);
+      expect(result.notices ?? []).toStrictEqual([]);
+    });
+  });
+
+  it("keeps a non-directory legacy state path blocking even when the canonical target is initialized", async () => {
+    await withStateDirFixture(async (root) => {
+      const legacyPath = path.join(root, ".clawdbot");
+      const targetDir = path.join(root, ".openclaw");
+      fs.mkdirSync(targetDir, { recursive: true });
+      fs.writeFileSync(path.join(targetDir, "openclaw.json"), "{}", "utf-8");
+      fs.writeFileSync(legacyPath, "not a directory", "utf-8");
+
+      const result = await autoMigrateLegacyStateDir({
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => root,
+      });
+
+      expect(result.migrated).toBe(false);
+      expect(result.warnings).toEqual([`Legacy state path is not a directory: ${legacyPath}`]);
+      expect(result.notices ?? []).toStrictEqual([]);
+    });
+  });
+
+  it("keeps skips blocking when the canonical target exists but is not an initialized state root (#112395)", async () => {
+    await withStateDirFixture(async (root) => {
+      // A bare target dir proves nothing about where the user's state lives: the
+      // populated legacy dir may still be authoritative, so the skip must stay a
+      // startup-blocking warning instead of checkpointing against empty state.
+      const legacyDir = path.join(root, ".clawdbot");
+      fs.mkdirSync(legacyDir, { recursive: true });
+      fs.writeFileSync(path.join(legacyDir, "openclaw.json"), "{}", "utf-8");
+      fs.mkdirSync(path.join(root, ".openclaw"), { recursive: true });
+
+      const result = await autoMigrateLegacyStateDir({
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => root,
+      });
+
+      expect(result.migrated).toBe(false);
+      expect(result.warnings).toEqual([
+        `State dir migration skipped: target already exists (${path.join(root, ".openclaw")}). Remove or merge manually.`,
+      ]);
+      expect(result.notices ?? []).toStrictEqual([]);
     });
   });
 

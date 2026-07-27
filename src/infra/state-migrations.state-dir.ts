@@ -112,6 +112,20 @@ function isDirPath(filePath: string): boolean {
   }
 }
 
+// Mirrors CONFIG_FILENAME / LEGACY_CONFIG_FILENAMES in config/paths.ts (kept local
+// so this internal heuristic does not widen the public config barrel).
+const STATE_ROOT_CONFIG_MARKERS = ["openclaw.json", "clawdbot.json"] as const;
+
+// Only a config file (canonical, or legacy from a restored pre-rebrand root) proves
+// the target dir is a state root the user actually operates: `state/`, `agents/`, and
+// `credentials/` are auto-created by DB bootstrap (openclaw-state-db-permissions)
+// before startup migrations run, so their presence proves nothing about ownership.
+// maybeMigrateLegacyConfig refuses to copy a config out of an unresolved legacy dir,
+// so this marker cannot be planted by future blocked runs.
+function isInitializedStateRoot(targetDir: string): boolean {
+  return STATE_ROOT_CONFIG_MARKERS.some((name) => fs.existsSync(path.join(targetDir, name)));
+}
+
 function isLegacyTreeSymlinkMirror(currentDir: string, realTargetDir: string): boolean {
   let entries: fs.Dirent[];
   try {
@@ -228,9 +242,21 @@ export async function autoMigrateLegacyStateDir(params: {
       ...(notices.length > 0 ? { notices } : {}),
     };
   }
+  // Broken/anomalous legacy shapes (non-directory path, unresolvable or outside-roots
+  // symlink, too-deep chain) say nothing about convergence, so they always stay
+  // startup-blocking warnings; only the proven target-already-exists skip below may
+  // downgrade to a notice.
+  const targetIsDir = isDirPath(targetDir);
+  const skipResult = () => ({
+    migrated: false,
+    skipped: false,
+    changes,
+    warnings,
+    ...(notices.length > 0 ? { notices } : {}),
+  });
   if (!legacyStat.isDirectory() && !legacyStat.isSymbolicLink()) {
     warnings.push(`Legacy state path is not a directory: ${legacyDir}`);
-    return { migrated: false, skipped: false, changes, warnings };
+    return skipResult();
   }
 
   let symlinkDepth = 0;
@@ -240,7 +266,7 @@ export async function autoMigrateLegacyStateDir(params: {
       warnings.push(
         `Legacy state dir is a symlink (${legacyDir ?? "unknown"}); could not resolve target.`,
       );
-      return { migrated: false, skipped: false, changes, warnings };
+      return skipResult();
     }
     if (path.resolve(legacyTarget) === path.resolve(targetDir)) {
       await migratePluginInstallIndex();
@@ -261,26 +287,26 @@ export async function autoMigrateLegacyStateDir(params: {
       }
       if (!legacyStat) {
         warnings.push(`Legacy state dir missing after symlink resolution: ${legacyDir}`);
-        return { migrated: false, skipped: false, changes, warnings };
+        return skipResult();
       }
       if (!legacyStat.isDirectory() && !legacyStat.isSymbolicLink()) {
         warnings.push(`Legacy state path is not a directory: ${legacyDir}`);
-        return { migrated: false, skipped: false, changes, warnings };
+        return skipResult();
       }
       symlinkDepth += 1;
       if (symlinkDepth > 2) {
         warnings.push(`Legacy state dir symlink chain too deep: ${legacyDir}`);
-        return { migrated: false, skipped: false, changes, warnings };
+        return skipResult();
       }
       continue;
     }
     warnings.push(
       `Legacy state dir is a symlink (${legacyDir ?? "unknown"} → ${legacyTarget}); skipping auto-migration.`,
     );
-    return { migrated: false, skipped: false, changes, warnings };
+    return skipResult();
   }
 
-  if (isDirPath(targetDir)) {
+  if (targetIsDir) {
     if (legacyDir && isLegacyDirSymlinkMirror(legacyDir, targetDir)) {
       await migratePluginInstallIndex();
       return {
@@ -292,7 +318,11 @@ export async function autoMigrateLegacyStateDir(params: {
       };
     }
     await migratePluginInstallIndex();
-    warnings.push(
+    // An initialized target root wins state-dir resolution and is where the gateway
+    // already operates, so this deterministic skip is inert residue: surface it as a
+    // non-blocking notice. A bare/stray target keeps it a startup-blocking warning.
+    const targetExistsSkips = isInitializedStateRoot(targetDir) ? notices : warnings;
+    targetExistsSkips.push(
       `State dir migration skipped: target already exists (${targetDir}). Remove or merge manually.`,
     );
     return {

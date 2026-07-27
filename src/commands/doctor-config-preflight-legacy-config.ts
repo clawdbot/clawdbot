@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveCanonicalConfigPath } from "../config/paths.js";
+import { resolveCanonicalConfigPath, resolveNewStateDir } from "../config/paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveHomeDir } from "../utils.js";
 
@@ -25,6 +25,25 @@ export async function maybeMigrateLegacyConfig(): Promise<string[]> {
   for (const candidate of legacyCandidates) {
     try {
       await fs.access(candidate);
+      // When the copy target is the default canonical root (~/.openclaw), copy only
+      // out of a legacy dir the state-dir migration RESOLVED: a symlink pointing at
+      // that same canonical root. Copying from an unresolved (real, or elsewhere-
+      // pointing) legacy dir would plant the config into a root the migration has
+      // not converged, forging the initialized-state-root marker
+      // (state-migrations.state-dir.ts) and letting a later boot checkpoint while
+      // real data sits in the legacy dir. Custom state dirs, explicit config paths,
+      // and profiles are outside that migration's ownership and keep copying.
+      const targetsDefaultStateRoot =
+        path.resolve(targetDir) === path.resolve(resolveNewStateDir(() => home));
+      if (targetsDefaultStateRoot) {
+        const legacyDir = path.dirname(candidate);
+        const resolvesToTarget = await Promise.all([fs.realpath(legacyDir), fs.realpath(targetDir)])
+          .then(([resolvedLegacy, resolvedTarget]) => resolvedLegacy === resolvedTarget)
+          .catch(() => false);
+        if (!(await fs.lstat(legacyDir)).isSymbolicLink() || !resolvesToTarget) {
+          continue;
+        }
+      }
       legacyPath = candidate;
       break;
     } catch {
