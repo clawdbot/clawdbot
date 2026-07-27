@@ -130,7 +130,7 @@ function sessionKeyLeasePath(sessionKey: string): string {
 }
 
 export function resolveSessionWriteLockTargetKey(target: SessionTranscriptRuntimeTarget): string {
-  return JSON.stringify([target.agentId, path.resolve(target.storePath), target.sessionKey]);
+  return JSON.stringify([target.agentId, path.resolve(target.storePath), target.sessionId]);
 }
 
 function runSessionKeyLeaseWrite<T>(

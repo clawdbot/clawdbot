@@ -1,6 +1,10 @@
 // Context engine tests cover context extraction and prompt context assembly.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -8,6 +12,7 @@ import {
   registerMemoryPromptPreparation,
   registerTestMemoryPromptBuilder,
 } from "../plugins/memory-state.test-fixtures.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 // ---------------------------------------------------------------------------
 // We dynamically import the registry so we can get a fresh module per test
 // group when needed.  For most groups we use the shared singleton directly.
@@ -689,6 +694,53 @@ describe("Engine contract tests", () => {
       },
     });
     expect(result.result).not.toHaveProperty("sessionFile");
+  });
+
+  it("allows the caller key to rebind to a legacy successor session", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "context-successor-"));
+    const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
+    const sessionKey = "agent:main:successor";
+    try {
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey, storePath },
+        { sessionId: "before-compaction", updatedAt: 1 },
+      );
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: "agent:main:aaa-successor-alias", storePath },
+        { sessionId: "after-compaction", updatedAt: 2 },
+      );
+      compactEmbeddedAgentSessionDirectMock.mockResolvedValueOnce({
+        ok: true,
+        compacted: true,
+        reason: undefined,
+        result: {
+          summary: "summary",
+          firstKeptEntryId: "entry-1",
+          tokensBefore: 100,
+          tokensAfter: 40,
+          details: undefined,
+          sessionId: "after-compaction",
+          sessionFile: `sqlite:main:after-compaction:${storePath}`,
+        },
+      });
+
+      const result = await delegateCompactionToRuntime({
+        agentId: "main",
+        sessionId: "before-compaction",
+        sessionKey,
+        tokenBudget: 4096,
+      });
+
+      expect(result.result?.sessionTarget).toMatchObject({
+        agentId: "main",
+        sessionId: "after-compaction",
+        sessionKey,
+        storePath,
+      });
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("rejects a structured successor key from another agent", async () => {

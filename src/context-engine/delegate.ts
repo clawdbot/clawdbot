@@ -27,6 +27,7 @@ const loadCompactRuntime = createLazyRuntimeModule(
 
 function buildCompactionResultSessionTarget(params: {
   agentId?: string;
+  callerSessionId?: string;
   sessionFile?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -39,6 +40,7 @@ function buildCompactionResultSessionTarget(params: {
   const targetSessionKey = normalizeOptionalString(params.sessionTarget?.sessionKey);
   const targetStorePath = normalizeOptionalString(params.sessionTarget?.storePath);
   const suppliedAgentId = normalizeOptionalString(params.agentId);
+  const callerSessionId = normalizeOptionalString(params.callerSessionId);
   const suppliedSessionId = normalizeOptionalString(params.sessionId);
   const suppliedSessionKey = normalizeOptionalString(params.sessionKey);
   const completeTarget = Boolean(
@@ -74,10 +76,18 @@ function buildCompactionResultSessionTarget(params: {
         marker.sessionId,
       )
     : undefined;
+  const callerAuthorizedMarkerKey = Boolean(
+    candidateSessionKey &&
+    suppliedSessionKey &&
+    candidateSessionKey === suppliedSessionKey &&
+    (!candidateEntry || candidateEntry.sessionId === callerSessionId),
+  );
   const markerSessionKey = marker
-    ? candidateEntry?.sessionId === marker.sessionId
+    ? callerAuthorizedMarkerKey
       ? candidateSessionKey
-      : (preferredMarkerSessionKey ?? (candidateEntry ? undefined : candidateSessionKey))
+      : candidateEntry?.sessionId === marker.sessionId
+        ? candidateSessionKey
+        : (preferredMarkerSessionKey ?? (candidateEntry ? undefined : candidateSessionKey))
     : undefined;
   if (!completeTarget && sessionFile && !marker) {
     throw new Error("Legacy context-engine file successors are unsupported");
@@ -89,7 +99,9 @@ function buildCompactionResultSessionTarget(params: {
     marker &&
     !completeTarget &&
     candidateSessionKey &&
-    ((candidateEntry && candidateEntry.sessionId !== marker.sessionId) ||
+    ((candidateEntry &&
+      candidateEntry.sessionId !== marker.sessionId &&
+      !callerAuthorizedMarkerKey) ||
       (!candidateEntry && markerMatches.length > 0))
   ) {
     throw new Error("Legacy context-engine successor session key is inconsistent");
@@ -186,6 +198,7 @@ export async function delegateCompactionToRuntime(
   const resultSessionTarget = result.result
     ? buildCompactionResultSessionTarget({
         agentId,
+        callerSessionId: params.sessionId,
         sessionFile: result.result.sessionFile,
         sessionId: result.result.sessionId,
         sessionKey,

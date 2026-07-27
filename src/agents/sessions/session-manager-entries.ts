@@ -29,22 +29,23 @@ import type {
 
 export class SessionManagerEntries extends SessionManagerPersistence {
   protected appendEntry(entry: SessionEntry, options?: AppendPersistenceOptions): void {
-    this.persist(entry, options);
+    const canonicalEntry = JSON.parse(JSON.stringify(entry)) as SessionEntry;
+    this.persist(canonicalEntry, options);
     if (
-      !isSessionTranscriptSideAppendEntry(entry) &&
-      entry.parentId === this.appendParentId &&
+      !isSessionTranscriptSideAppendEntry(canonicalEntry) &&
+      canonicalEntry.parentId === this.appendParentId &&
       this.leafId !== this.appendParentId
     ) {
-      this.logicalParentsById.set(entry.id, this.leafId);
+      this.logicalParentsById.set(canonicalEntry.id, this.leafId);
     }
-    this.fileEntries.push(entry);
-    this.byId.set(entry.id, entry);
-    this.appendParentId = entry.id;
-    if (isSessionTranscriptSideAppendEntry(entry)) {
+    this.fileEntries.push(canonicalEntry);
+    this.byId.set(canonicalEntry.id, canonicalEntry);
+    this.appendParentId = canonicalEntry.id;
+    if (isSessionTranscriptSideAppendEntry(canonicalEntry)) {
       this.appendMode = "side";
-      this.promptReleasedSideBranchParentId = entry.id;
+      this.promptReleasedSideBranchParentId = canonicalEntry.id;
     } else {
-      this.leafId = entry.id;
+      this.leafId = canonicalEntry.id;
       this.appendMode = undefined;
       this.promptReleasedSideBranchParentId = undefined;
     }

@@ -49,6 +49,23 @@ describe("SessionManager.open", () => {
     );
   });
 
+  it("retains the same canonical value that persistence serializes", () => {
+    let serializationCount = 0;
+    const manager = SessionManager.inMemory();
+    manager.appendCustomEntry("canonical", {
+      toJSON() {
+        serializationCount += 1;
+        return { serialized: serializationCount };
+      },
+    });
+
+    expect(manager.getEntries().at(-1)).toMatchObject({
+      type: "custom",
+      data: { serialized: 1 },
+    });
+    expect(serializationCount).toBe(1);
+  });
+
   it("opens SQLite markers without creating marker-named files and persists assistant replies", async () => {
     const dir = await makeTempDir();
     const storePath = path.join(dir, "sessions.json");

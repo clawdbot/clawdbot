@@ -298,6 +298,18 @@ describe("acquireSessionWriteLock", () => {
     await Promise.all([first.release(), second.release()]);
   });
 
+  it("uses one lease key for aliases of the same session incarnation", () => {
+    const base = {
+      agentId: "main",
+      sessionId: "shared-session",
+      storePath: "/tmp/main/sessions.json",
+    };
+
+    expect(resolveSessionWriteLockTargetKey({ ...base, sessionKey: "agent:main:alias-a" })).toBe(
+      resolveSessionWriteLockTargetKey({ ...base, sessionKey: "agent:main:alias-b" }),
+    );
+  });
+
   it("reference-counts reentrant session-key leases", async () => {
     const sessionKey = `agent:main:write-lock-reentrant-${Date.now()}`;
     const first = await acquireSessionWriteLock({
