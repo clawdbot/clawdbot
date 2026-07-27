@@ -261,7 +261,7 @@ Extracts the last user/assistant messages (default 15, configurable with `hooks.
 
 `patterns` and `files` are accepted as aliases of `paths`. Paths resolve relative to the workspace and must stay inside it. Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`, `MEMORY.md`).
 
-Legacy patterns that name nested `TOOLS.md` files are used by `openclaw doctor` to migrate each file into the sibling `AGENTS.md` and add the corresponding `AGENTS.md` pattern; `TOOLS.md` is not loaded into runtime context.
+`TOOLS.md` is no longer a recognized bootstrap basename and is not loaded into runtime context. `openclaw doctor --fix` migrates the workspace-root `TOOLS.md` into the `## Tools` section of `AGENTS.md`; patterns that name other `TOOLS.md` files are not migrated and should be repointed at `AGENTS.md`.
 
 <a id="command-logger"></a>
 
