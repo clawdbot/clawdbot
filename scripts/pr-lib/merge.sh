@@ -26,6 +26,34 @@ print_file_list_with_limit() {
   fi
 }
 
+auto_merge_unavailable_error() {
+  local log_file="$1"
+  local auto_merge_pattern='[Aa][Uu][Tt][Oo][ -][Mm][Ee][Rr][Gg][Ee]'
+  local unavailable_pattern
+  local line
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      *$auto_merge_pattern*)
+        for unavailable_pattern in \
+          '[Nn][Oo][Tt] [Aa][Ll][Ll][Oo][Ww][Ee][Dd]' \
+          '[Nn][Oo][Tt] [Ee][Nn][Aa][Bb][Ll][Ee][Dd]' \
+          '[Nn][Oo][Tt] [Aa][Vv][Aa][Ii][Ll][Aa][Bb][Ll][Ee]' \
+          '[Uu][Nn][Aa][Vv][Aa][Ii][Ll][Aa][Bb][Ll][Ee]' \
+          '[Nn][Oo][Tt] [Cc][Oo][Nn][Ff][Ii][Gg][Uu][Rr][Ee][Dd]' \
+          '[Nn][Oo][Tt] [Ss][Uu][Pp][Pp][Oo][Rr][Tt][Ee][Dd]' \
+          '[Mm][Uu][Ss][Tt] [Bb][Ee] [Ee][Nn][Aa][Bb][Ll][Ee][Dd]'; do
+          case "$line" in
+            *$unavailable_pattern*) return 0 ;;
+          esac
+        done
+        ;;
+    esac
+  done < "$log_file"
+
+  return 1
+}
+
 mainline_drift_requires_sync() {
   local mainline_base="$1"
   local prepared_head_sha="$2"
@@ -130,11 +158,35 @@ merge_verify() {
   gh pr checks "$pr" --required --watch --fail-fast >.local/merge-checks-watch.log 2>&1 || true
   local checks_json
   local checks_err_file
+  local checks_exit_status
   checks_err_file=$(mktemp)
-  checks_json=$(gh pr checks "$pr" --required --json name,bucket,state 2>"$checks_err_file" || true)
+  if checks_json=$(gh pr checks "$pr" --required --json name,bucket,state 2>"$checks_err_file"); then
+    checks_exit_status=0
+  else
+    checks_exit_status=$?
+  fi
+  # gh documents exit 8 for pending checks even when it emits valid JSON. Let
+  # the checked evidence below reject pending checks without hiding API errors.
+  if [ "$checks_exit_status" -ne 0 ] && [ "$checks_exit_status" -ne 8 ]; then
+    local checks_error
+    checks_error=$(cat "$checks_err_file")
+    case "$checks_error" in
+      "no required checks reported on the '"*"' branch")
+        # gh reports the valid empty-required set as an error, not a JSON array.
+        checks_json='[]'
+        ;;
+      *)
+        echo "Merge verify failed: unable to verify the required GitHub checks." >&2
+        printf '%s\n' "$checks_error" >&2
+        rm -f "$checks_err_file"
+        return 1
+        ;;
+    esac
+  fi
   rm -f "$checks_err_file"
-  if [ -z "$checks_json" ]; then
-    checks_json='[]'
+  if ! printf '%s\n' "$checks_json" | jq -e 'type == "array"' >/dev/null; then
+    echo "Merge verify failed: GitHub returned invalid required-check evidence." >&2
+    return 1
   fi
   local required_count
   required_count=$(printf '%s\n' "$checks_json" | jq 'length')
@@ -186,13 +238,23 @@ merge_verify() {
 
 merge_run() {
   local pr="$1"
+  local auto_merge_requested="${2:-false}"
   enter_worktree "$pr" false
 
   local required
-  for required in .local/review.md .local/review.json .local/prep.md .local/prep.env; do
+  for required in \
+    .local/review.md \
+    .local/review.json \
+    .local/pr-meta.env \
+    .local/pr-meta.json \
+    .local/prep.md \
+    .local/prep.env
+  do
     require_artifact "$required"
   done
 
+  validate_review_artifact_data || return 1
+  require_ready_review_recommendation || return 1
   merge_verify "$pr"
   # shellcheck disable=SC1091
   source .local/prep.env
@@ -257,17 +319,133 @@ merge_run() {
       ;;
   esac
 
-  if ! gh pr merge "$pr" \
-    "$merge_flag" \
-    --match-head-commit "$PREP_HEAD_SHA" \
-    >.local/merge-output.log 2>&1
-  then
-    print_relevant_log_excerpt .local/merge-output.log
-    exit 1
+  if [ "$auto_merge_requested" = "true" ] && [ "$merge_method" != "squash" ]; then
+    echo "Auto-merge requires squash; unset OPENCLAW_PR_MERGE_METHOD or set it to squash."
+    exit 2
   fi
 
-  local state
-  state=$(gh pr view "$pr" --json state --jq .state)
+  local merge_submitted=false
+  local state=""
+  # Auto-merge is only a post-verification landing strategy. Keep every
+  # artifact, exact-head, required-check, and drift check in merge_verify.
+  if [ "$auto_merge_requested" = "true" ]; then
+    local auto_meta
+    auto_meta=$(gh pr view "$pr" --json state,headRefOid,mergeable,mergeStateStatus,autoMergeRequest)
+    local auto_head_sha
+    auto_head_sha=$(printf '%s\n' "$auto_meta" | jq -r .headRefOid)
+    if [ "$auto_head_sha" != "$PREP_HEAD_SHA" ]; then
+      echo "PR head changed before auto-merge enablement (expected $PREP_HEAD_SHA, got $auto_head_sha)."
+      exit 1
+    fi
+
+    local mergeable
+    local merge_state_status
+    local existing_auto_method
+    mergeable=$(printf '%s\n' "$auto_meta" | jq -r '.mergeable // "UNKNOWN"')
+    merge_state_status=$(printf '%s\n' "$auto_meta" | jq -r '.mergeStateStatus // "UNKNOWN"')
+    existing_auto_method=$(printf '%s\n' "$auto_meta" | jq -r '.autoMergeRequest.mergeMethod // ""')
+
+    if [ "$mergeable" = "CONFLICTING" ]; then
+      echo "PR is not mergeable: GitHub reports merge conflicts."
+      exit 1
+    fi
+
+    if [ -n "$existing_auto_method" ]; then
+      echo "Auto-merge is already enabled with $existing_auto_method; re-arming it as pinned SQUASH."
+      if ! gh pr merge "$pr" --disable-auto >.local/merge-output.log 2>&1; then
+        print_relevant_log_excerpt .local/merge-output.log
+        exit 1
+      fi
+      auto_meta=$(gh pr view "$pr" --json state,headRefOid,mergeable,mergeStateStatus,autoMergeRequest)
+      auto_head_sha=$(printf '%s\n' "$auto_meta" | jq -r .headRefOid)
+      mergeable=$(printf '%s\n' "$auto_meta" | jq -r '.mergeable // "UNKNOWN"')
+      merge_state_status=$(printf '%s\n' "$auto_meta" | jq -r '.mergeStateStatus // "UNKNOWN"')
+      existing_auto_method=$(printf '%s\n' "$auto_meta" | jq -r '.autoMergeRequest.mergeMethod // ""')
+      if [ "$auto_head_sha" != "$PREP_HEAD_SHA" ]; then
+        echo "PR head changed while re-arming auto-merge (expected $PREP_HEAD_SHA, got $auto_head_sha)."
+        exit 1
+      fi
+      if [ -n "$existing_auto_method" ]; then
+        echo "Auto-merge remained enabled after GitHub accepted the disable request."
+        exit 1
+      fi
+    fi
+
+    if [ "$mergeable" != "MERGEABLE" ] || [ "$merge_state_status" != "BEHIND" ]; then
+      echo "Auto-merge eligibility not met (mergeable=$mergeable, mergeStateStatus=$merge_state_status; expected MERGEABLE/BEHIND)."
+      echo "Falling back to the current immediate pinned merge behavior."
+    else
+      # GitHub's EnablePullRequestAutoMergeInput contract keeps expectedHeadOid
+      # as the head that must match to allow the eventual merge.
+      if gh pr merge "$pr" \
+        --auto \
+        --squash \
+        --match-head-commit "$PREP_HEAD_SHA" \
+        >.local/merge-output.log 2>&1
+      then
+        auto_meta=$(gh pr view "$pr" --json state,headRefOid,mergeable,mergeStateStatus,autoMergeRequest)
+        auto_head_sha=$(printf '%s\n' "$auto_meta" | jq -r .headRefOid)
+        state=$(printf '%s\n' "$auto_meta" | jq -r .state)
+        existing_auto_method=$(printf '%s\n' "$auto_meta" | jq -r '.autoMergeRequest.mergeMethod // ""')
+        if [ "$auto_head_sha" != "$PREP_HEAD_SHA" ]; then
+          echo "PR head changed while enabling auto-merge (expected $PREP_HEAD_SHA, got $auto_head_sha)."
+          exit 1
+        elif [ "$state" = "MERGED" ]; then
+          merge_submitted=true
+          merge_label="squash auto-merge"
+        elif [ "$existing_auto_method" = "SQUASH" ]; then
+          echo "AUTO-MERGE ENABLED for PR #$pr at $PREP_HEAD_SHA."
+          echo "GitHub will land it via squash when required checks and branch up-to-dateness are satisfied."
+          return 0
+        else
+          echo "GitHub accepted the auto-merge command but did not report a squash auto-merge request."
+          print_relevant_log_excerpt .local/merge-output.log
+          exit 1
+        fi
+      else
+        auto_meta=$(gh pr view "$pr" --json state,headRefOid,autoMergeRequest)
+        auto_head_sha=$(printf '%s\n' "$auto_meta" | jq -r .headRefOid)
+        existing_auto_method=$(printf '%s\n' "$auto_meta" | jq -r '.autoMergeRequest.mergeMethod // ""')
+        if [ "$auto_head_sha" = "$PREP_HEAD_SHA" ] && [ -n "$existing_auto_method" ]; then
+          echo "Auto-merge enablement was inconclusive; clearing the observed $existing_auto_method request to fail closed."
+          if ! gh pr merge "$pr" --disable-auto >>.local/merge-output.log 2>&1; then
+            print_relevant_log_excerpt .local/merge-output.log
+            exit 1
+          fi
+          auto_meta=$(gh pr view "$pr" --json state,headRefOid,autoMergeRequest)
+          auto_head_sha=$(printf '%s\n' "$auto_meta" | jq -r .headRefOid)
+          existing_auto_method=$(printf '%s\n' "$auto_meta" | jq -r '.autoMergeRequest.mergeMethod // ""')
+          if [ "$auto_head_sha" != "$PREP_HEAD_SHA" ] || [ -n "$existing_auto_method" ]; then
+            echo "Unable to prove the inconclusive auto-merge request was cleared at the verified head."
+            exit 1
+          fi
+          echo "The inconclusive auto-merge request was cleared safely; re-run merge-run to retry."
+          exit 1
+        fi
+        if ! auto_merge_unavailable_error .local/merge-output.log; then
+          print_relevant_log_excerpt .local/merge-output.log
+          exit 1
+        fi
+        echo "GitHub auto-merge is unavailable for this repository or branch protection; falling back to the current immediate pinned merge behavior."
+        print_relevant_log_excerpt .local/merge-output.log
+      fi
+    fi
+  fi
+
+  if [ "$merge_submitted" != "true" ]; then
+    if ! gh pr merge "$pr" \
+      "$merge_flag" \
+      --match-head-commit "$PREP_HEAD_SHA" \
+      >.local/merge-output.log 2>&1
+    then
+      print_relevant_log_excerpt .local/merge-output.log
+      exit 1
+    fi
+  fi
+
+  if [ -z "$state" ]; then
+    state=$(gh pr view "$pr" --json state --jq .state)
+  fi
   if [ "$state" != "MERGED" ]; then
     echo "Landing not finalized yet (state=$state), waiting up to 15 minutes..."
     local i

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createMockCronStateForJobs } from "./service.test-harness.js";
-import { listPage } from "./service/ops.js";
+import { listPage } from "./service/ops-read.js";
 import type { CronJob } from "./types.js";
 
 function createBaseJob(overrides?: Partial<CronJob>): CronJob {

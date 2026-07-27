@@ -896,6 +896,16 @@ describe("config schema", () => {
     ).toBe(false);
   });
 
+  it("accepts the Code Mode auto tier and rejects unknown tiers", () => {
+    expect(ToolsSchema.parse({ codeMode: "auto" })?.codeMode).toBe("auto");
+    expect(ToolsSchema.parse({ codeMode: false })?.codeMode).toBe(false);
+    expect(ToolsSchema.parse({ codeMode: { enabled: "auto" } })?.codeMode).toEqual({
+      enabled: "auto",
+    });
+    expect(ToolsSchema.safeParse({ codeMode: "on" }).success).toBe(false);
+    expect(ToolsSchema.safeParse({ codeMode: { enabled: "always" } }).success).toBe(false);
+  });
+
   it("accepts strict Swarm config in the runtime zod schema", () => {
     expect(ToolsSchema.parse({ swarm: true })?.swarm).toBe(true);
     expect(

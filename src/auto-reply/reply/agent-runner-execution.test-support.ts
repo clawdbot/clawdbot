@@ -81,8 +81,11 @@ vi.mock("../../agents/cli-runner.js", () => ({
   runCliAgent: (params: unknown) => state.runCliAgentMock(params),
 }));
 
-vi.mock("../../agents/model-fallback.js", () => ({
+vi.mock("../../agents/model-fallback-runner.js", () => ({
   runWithModelFallback: (params: unknown) => state.runWithModelFallbackMock(params),
+}));
+
+vi.mock("../../agents/model-fallback-attempt.js", () => ({
   isFallbackSummaryError: (err: unknown) =>
     err instanceof Error &&
     err.name === "FallbackSummaryError" &&

@@ -7,6 +7,13 @@ export type FixtureLogEntry = {
   payload?: unknown;
 };
 
+export const COMPACT_TERMINAL_SIZES = [
+  [64, 18],
+  [68, 18],
+  [72, 20],
+  [80, 20],
+] as const;
+
 export async function readFixtureLog(logPath: string): Promise<FixtureLogEntry[]> {
   try {
     const text = await readFile(logPath, "utf8");
@@ -51,6 +58,32 @@ export function objectFieldEquals(entry: FixtureLogEntry, field: string, value: 
   }
   const payload = entry.payload as Record<string, unknown>;
   return Object.hasOwn(payload, field) && payload[field] === value;
+}
+
+/** Proves fixture-local fragmentation preserves a Unicode prompt through the real TUI loop. */
+export async function exerciseFragmentedUnicodePrompt(
+  startFixture: (opts: { env?: NodeJS.ProcessEnv }) => Promise<{
+    run: PtyRun;
+    waitForLogEntry: (predicate: (entry: FixtureLogEntry) => boolean) => Promise<FixtureLogEntry>;
+    cleanup: () => Promise<void>;
+  }>,
+  startupTimeoutMs: number,
+) {
+  const fixture = await startFixture({
+    env: { OPENCLAW_TUI_PTY_TYPE_CHUNK_SIZE: "1", OPENCLAW_TUI_PTY_TYPE_DELAY_MS: "1" },
+  });
+  const message = "hello 👋 from pty";
+
+  try {
+    await fixture.run.waitForOutput("local ready", startupTimeoutMs);
+    await fixture.run.write(`${message}\r`);
+    await fixture.run.waitForOutput(`PTY_RESPONSE: ${message}`);
+    await fixture.waitForLogEntry(
+      (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
+    );
+  } finally {
+    await fixture.cleanup();
+  }
 }
 
 /** Approves a workspace skill using exact fragments that survive narrow-terminal wrapping. */

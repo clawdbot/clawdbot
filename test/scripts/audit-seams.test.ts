@@ -10,7 +10,7 @@ describe("audit-seams cron seam classification", () => {
   it("detects cron agent handoff and outbound delivery boundaries", () => {
     const source = `
       import { runCliAgent } from "../../agents/cli-runner.js";
-      import { runWithModelFallback } from "../../agents/model-fallback.js";
+      import { runWithModelFallback } from "../../agents/model-fallback-runner.js";
       import { registerAgentRunContext } from "../../infra/agent-events.js";
       import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
       import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
@@ -45,7 +45,9 @@ describe("audit-seams cron seam classification", () => {
       }
     `;
 
-    expect(describeSeamKinds("src/cron/service/ops.ts", source)).toContain("cron-scheduler-state");
+    expect(describeSeamKinds("src/cron/service/ops-lifecycle.ts", source)).toContain(
+      "cron-scheduler-state",
+    );
   });
 });
 

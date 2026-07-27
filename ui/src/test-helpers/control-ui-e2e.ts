@@ -717,11 +717,19 @@ function installControlUiMockGateway(input: {
     sessionPatches.set(params.key, patch);
   }
 
-  function recordCreatedSession(params: unknown, response: unknown): void {
-    if (!isRecord(response) || typeof response.key !== "string" || !response.key.trim()) {
+  function recordMaterializedSession(params: unknown, response: unknown): void {
+    if (!isRecord(response)) {
       return;
     }
-    const key = response.key;
+    const key =
+      typeof response.key === "string"
+        ? response.key
+        : typeof response.sessionKey === "string"
+          ? response.sessionKey
+          : "";
+    if (!key.trim()) {
+      return;
+    }
     const label = isRecord(params) && typeof params.label === "string" ? params.label.trim() : "";
     const {
       displayName: _defaultDisplayName,
@@ -752,8 +760,8 @@ function installControlUiMockGateway(input: {
         isRecord(row) && typeof row.key === "string" ? [row.key] : [],
       ),
     );
-    // A successful sessions.create commits before its response. Route
-    // resolution must see that same session in the next sessions.list.
+    // Successful session creation and catalog adoption commit before their
+    // responses. Route resolution must see either session in the next list.
     const sourceSessions = [
       ...response.sessions,
       ...[...createdSessions].flatMap(([key, row]) => (knownSessionKeys.has(key) ? [] : [row])),
@@ -964,8 +972,8 @@ function installControlUiMockGateway(input: {
     }
     const configured = configuredResponse(method, params);
     if (configured.found) {
-      if (method === "sessions.create") {
-        recordCreatedSession(params, configured.value);
+      if (method === "sessions.create" || method === "sessions.catalog.continue") {
+        recordMaterializedSession(params, configured.value);
       }
       return method === "sessions.list"
         ? applySessionPatches(configured.value, params)
@@ -1399,8 +1407,11 @@ function installControlUiMockGateway(input: {
         throw new Error(`Deferred mock Gateway response disappeared for ${method}`);
       }
       const resolvedPayload = payload ?? buildResponse(response.method, response.params);
-      if (response.method === "sessions.create") {
-        recordCreatedSession(response.params, resolvedPayload);
+      if (
+        response.method === "sessions.create" ||
+        response.method === "sessions.catalog.continue"
+      ) {
+        recordMaterializedSession(response.params, resolvedPayload);
       }
       response.socket.deliver({
         id: response.id,

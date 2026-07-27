@@ -28,22 +28,26 @@ import {
   createBoardGrantSnapshot,
   createBoardWidgetPutSnapshot,
   type BoardStore,
-  type BoardSnapshotWithHtmlDocuments,
+  type BoardSnapshotWithHtmlViewMetadata,
   type BoardWidgetHtmlDocument,
+  type BoardWidgetHtmlViewMetadata,
   type BoardWidgetMcpAppDocument,
 } from "./board-store.js";
 import {
+  BOARD_WIDGET_SNAPSHOT_COLUMNS,
   createBoardWidgetContentFields,
   effectiveGrantState,
   parseDescriptor,
   parseManifest,
   parsePluginContent,
   rowToTab,
+  rowToHtmlViewMetadata,
   rowToWidget,
   serializeManifest,
   updateManifestHeightMode,
   type SelectedBoardTabRow,
   type SelectedBoardWidgetRow,
+  type SelectedBoardWidgetSnapshotRow,
 } from "./sqlite-board-codec.js";
 
 type BoardDatabase = Pick<
@@ -55,7 +59,8 @@ type BoardDatabaseHandle = Pick<OpenClawAgentDatabase, "db" | "path">;
 type StoredBoard = {
   snapshot: BoardSnapshot;
   tabRows: SelectedBoardTabRow[];
-  widgetRows: SelectedBoardWidgetRow[];
+  widgetRows: SelectedBoardWidgetSnapshotRow[];
+  htmlViewMetadata: ReadonlyMap<string, BoardWidgetHtmlViewMetadata>;
 };
 
 const ensuredBoardDatabases = new WeakSet<DatabaseSync>();
@@ -127,24 +132,34 @@ function readStoredBoard(database: BoardDatabaseHandle, sessionKey: string): Sto
         database.db,
         db
           .selectFrom("board_widgets")
-          .selectAll()
+          .select(BOARD_WIDGET_SNAPSHOT_COLUMNS)
           .where("session_key", "=", sessionKey)
           .orderBy("tab_id", "asc")
           .orderBy("position", "asc")
           .orderBy("name", "asc"),
-      ).rows as SelectedBoardWidgetRow[];
+      ).rows as SelectedBoardWidgetSnapshotRow[];
+      const parsedWidgetRows = selectedWidgetRows.map((row) => ({
+        row,
+        manifest: parseManifest(row.manifest),
+      }));
       // Rows without the canonical authority snapshot predate this unreleased contract.
       // Keep them out of runtime state so they can never mint an interactive lease.
-      const widgetRows = selectedWidgetRows.filter((row) => {
+      const admittedWidgetRows = parsedWidgetRows.filter(({ row, manifest }) => {
         if (row.content_kind !== "mcp-app") {
           return true;
         }
-        const manifest = parseManifest(row.manifest);
         return manifest.mcpAppInteractive !== undefined && manifest.mcpAppInstanceId !== undefined;
       });
+      const htmlViewMetadata = new Map<string, BoardWidgetHtmlViewMetadata>();
+      for (const { row, manifest } of admittedWidgetRows) {
+        const metadata = rowToHtmlViewMetadata(row, manifest);
+        if (metadata) {
+          htmlViewMetadata.set(row.name, metadata);
+        }
+      }
       const layout = normalizeBoardLayout({
         tabs: tabRows.map(rowToTab),
-        widgets: widgetRows.map(rowToWidget),
+        widgets: admittedWidgetRows.map(({ row, manifest }) => rowToWidget(row, manifest)),
       });
       return {
         snapshot: {
@@ -155,7 +170,8 @@ function readStoredBoard(database: BoardDatabaseHandle, sessionKey: string): Sto
           ...layout,
         },
         tabRows,
-        widgetRows,
+        widgetRows: admittedWidgetRows.map(({ row }) => row),
+        htmlViewMetadata,
       };
     },
     { databaseLabel: database.path, operationLabel: "board.read" },
@@ -397,7 +413,7 @@ export class SqliteBoardStore implements BoardStore {
     );
   }
 
-  getSnapshotWithHtmlDocuments(sessionKey: string): BoardSnapshotWithHtmlDocuments {
+  getSnapshotWithHtmlViewMetadata(sessionKey: string): BoardSnapshotWithHtmlViewMetadata {
     const resolved = this.resolve(sessionKey);
     const result = withOpenClawAgentDatabaseReadOnly(
       (database) =>
@@ -411,16 +427,9 @@ export class SqliteBoardStore implements BoardStore {
       },
     );
     const stored = result.found ? result.value : undefined;
-    const htmlDocuments = new Map<string, BoardWidgetHtmlDocument>();
-    for (const row of stored?.widgetRows ?? []) {
-      const document = rowToHtmlDocument(row);
-      if (document) {
-        htmlDocuments.set(row.name, document);
-      }
-    }
     return {
       snapshot: cloneBoardSnapshot(stored?.snapshot ?? emptyBoardSnapshot(resolved.sessionKey)),
-      htmlDocuments,
+      htmlViewMetadata: stored?.htmlViewMetadata ?? new Map(),
     };
   }
 

@@ -211,6 +211,15 @@ export function registerCompletionCli(program: Command) {
       // Route logs to stderr so plugin loading messages do not corrupt
       // the completion script written to stdout.
       routeLogsToStderr();
+
+      // Cached installation needs only the existing script; loading the command tree can
+      // introduce unrelated plugin failures before the cache can be checked or installed.
+      if (options.install && !options.writeState) {
+        const targetShell = options.shell ?? resolveShellFromEnv();
+        await installCompletion(targetShell, Boolean(options.yes), program.name());
+        return;
+      }
+
       const shell = options.shell ?? "zsh";
 
       // Completion needs the full Commander command tree (including nested subcommands).
