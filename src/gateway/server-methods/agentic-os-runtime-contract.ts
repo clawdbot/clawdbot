@@ -1,6 +1,8 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agents/agent-run-terminal-outcome.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { stripToolMessages } from "../../agents/tools/chat-history-text.js";
+import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { findTaskByRunIdForStatus } from "../../tasks/task-status-access.js";
 import {
   ContractInputError,
@@ -100,6 +102,25 @@ function readOptionalBoolean(params: Record<string, unknown>, key: string): bool
     throw new ContractInputError(`invalid boolean: ${key}`);
   }
   return value;
+}
+
+function buildTaskTerminalOutcome(task: TaskRecord | undefined) {
+  if (!task || task.status === "queued" || task.status === "running") {
+    return undefined;
+  }
+  return buildAgentRunTerminalOutcomeFromWaitResult({
+    status: task.status === "succeeded" ? "ok" : task.status === "timed_out" ? "timeout" : "error",
+    error: task.error,
+    stopReason: task.status === "cancelled" ? "stop" : undefined,
+    livenessState:
+      task.terminalOutcome === "blocked"
+        ? "blocked"
+        : task.status === "lost"
+          ? "abandoned"
+          : undefined,
+    startedAt: task.startedAt,
+    endedAt: task.endedAt,
+  });
 }
 
 async function callCanonicalHandler(
@@ -215,16 +236,15 @@ export const agenticOsRuntimeContractHandlers: GatewayRequestHandlers = {
       const runId = typeof tracked.runId === "string" ? tracked.runId : undefined;
       const runtimeTask = runId ? findTaskByRunIdForStatus(runId) : undefined;
       const runSnapshot = runId ? await waitForAgentJob({ runId, timeoutMs: 0 }) : null;
-      const lifecycleStatus = runSnapshot
-        ? runSnapshot.status === "ok"
+      const terminalOutcome =
+        buildAgentRunTerminalOutcomeFromWaitResult(runSnapshot ?? undefined) ??
+        buildTaskTerminalOutcome(runtimeTask);
+      const lifecycleStatus = terminalOutcome
+        ? terminalOutcome.reason === "completed"
           ? "completed"
           : "failed"
         : runtimeTask
-          ? runtimeTask.status === "queued" || runtimeTask.status === "running"
-            ? "running"
-            : runtimeTask.status === "succeeded"
-              ? "completed"
-              : "failed"
+          ? "running"
           : "unknown";
       return {
         ...tracked,
@@ -235,14 +255,10 @@ export const agenticOsRuntimeContractHandlers: GatewayRequestHandlers = {
           session_exists: sessionExists,
           transcript_available: sessionExists,
           lifecycle_status: lifecycleStatus,
-          runtime_status: runSnapshot?.status ?? runtimeTask?.status ?? "unavailable",
-          terminal: runSnapshot
-            ? true
-            : runtimeTask
-              ? runtimeTask.status !== "queued" && runtimeTask.status !== "running"
-              : false,
-          started_at_ms: runSnapshot?.startedAt ?? runtimeTask?.startedAt,
-          ended_at_ms: runSnapshot?.endedAt ?? runtimeTask?.endedAt,
+          runtime_status: terminalOutcome?.reason ?? (runtimeTask ? "running" : "unavailable"),
+          terminal: terminalOutcome !== undefined,
+          started_at_ms: terminalOutcome?.startedAt ?? runtimeTask?.startedAt,
+          ended_at_ms: terminalOutcome?.endedAt ?? runtimeTask?.endedAt,
         },
       };
     });

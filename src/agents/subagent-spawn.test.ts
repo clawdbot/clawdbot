@@ -258,6 +258,43 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(result.childSessionKey).toMatch(/^agent:task-manager:subagent:/);
   });
 
+  it("uses host-preallocated child and run identities", async () => {
+    const preallocatedChildSessionKey = "agent:main:subagent:host-reserved-child";
+    const preallocatedRunId = "host-reserved-run";
+    hoisted.callGatewayMock.mockImplementation(async ({ method, params }) =>
+      method === "agent"
+        ? { runId: requireRecord(params).idempotencyKey }
+        : method?.startsWith("sessions.")
+          ? { ok: true }
+          : {},
+    );
+
+    const result = await spawnSubagentDirect(
+      { task: "launch with durable host identities" },
+      {
+        agentSessionKey: "agent:main:main",
+        preallocatedChildSessionKey,
+        preallocatedRunId,
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      childSessionKey: preallocatedChildSessionKey,
+      runId: preallocatedRunId,
+    });
+    expect(firstRegisteredSubagentRun()).toMatchObject({
+      childSessionKey: preallocatedChildSessionKey,
+      runId: preallocatedRunId,
+    });
+    expect(gatewayRequest("agent")).toMatchObject({
+      params: {
+        sessionKey: preallocatedChildSessionKey,
+        idempotencyKey: preallocatedRunId,
+      },
+    });
+  });
+
   it("inherits incognito storage ownership for direct children", async () => {
     const requesterSessionKey = "agent:main:dashboard:incognito-parent";
     const sessionPatches: Record<string, unknown>[] = [];

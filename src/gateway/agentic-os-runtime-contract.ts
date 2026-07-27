@@ -8,6 +8,11 @@ import {
   spawnProjectionPayload,
 } from "./agentic-os-runtime-contract-projections.js";
 import {
+  clearSpawnReservation,
+  createSpawnReservation,
+  reconcileSpawnReservation,
+} from "./agentic-os-runtime-contract-reservation.js";
+import {
   AGENTIC_OS_ALLOW_LEASE_MAX_TTL_MS,
   AGENTIC_OS_RUNTIME_MAX_RECORDS,
   AGENTIC_OS_RUNTIME_REPLAY_RETENTION_MS,
@@ -19,10 +24,7 @@ import {
   FORBIDDEN_LEASE_CAMEL_ALIASES,
   FORBIDDEN_RELEASE_ALIASES,
   FORBIDDEN_SESSION_STATUS_CAMEL_ALIASES,
-  FORBIDDEN_SPAWN_CAMEL_ALIASES,
-  SESSION_METADATA_FIELDS,
   assertNoForbiddenAliases,
-  isRecord,
   pickStrings,
   readPositiveInteger,
   readString,
@@ -33,14 +35,17 @@ import {
   type SpawnPending,
 } from "./agentic-os-runtime-contract-shared.js";
 import {
+  parseAgenticOsSpawnInput,
+  requireLeaseAuthorizesSpawn,
+  spawnResultRunId,
+  spawnResultSessionKey,
+} from "./agentic-os-runtime-contract-spawn-input.js";
+import {
   loadAgenticOsRuntimeSnapshot,
   runtimeSnapshotPath,
   saveAgenticOsRuntimeSnapshot,
 } from "./agentic-os-runtime-contract-store.js";
-import {
-  sessionRecordHasActiveChildRun,
-  taskDigest,
-} from "./agentic-os-runtime-contract-task-state.js";
+import { sessionRecordHasActiveChildRun } from "./agentic-os-runtime-contract-task-state.js";
 
 const leasesByGatewayId = new Map<string, LeaseRecord>();
 const acquireByIdempotencyKey = new Map<string, LeaseRecord>();
@@ -73,7 +78,7 @@ function snapshotRuntimeState(): RuntimeSnapshot {
   };
 }
 
-function hydrateRuntimeSnapshot(snapshot: RuntimeSnapshot): void {
+function hydrateRuntimeSnapshot(snapshot: RuntimeSnapshot): boolean {
   leasesByGatewayId.clear();
   acquireByIdempotencyKey.clear();
   acquireByClientLeaseId.clear();
@@ -84,7 +89,29 @@ function hydrateRuntimeSnapshot(snapshot: RuntimeSnapshot): void {
   spawnPendingByIdempotencyKey.clear();
   spawnPendingByClientRequestId.clear();
 
+  let changed = false;
+  const hydrationNow = Date.now();
+  const reconciledSessions = [...snapshot.sessions];
+  const acceptedSessionByLease = new Map(
+    snapshot.sessions.map((session) => [session.gatewayLeaseId, session]),
+  );
   for (const lease of snapshot.leases) {
+    if (lease.spawn_reservation_fingerprint && !lease.released_at_ms && !lease.consumed_at_ms) {
+      // A pending promise cannot survive process restart. Promote the durable
+      // outbox identity into the normal session replay indexes before consuming
+      // the lease. Exact retries then return the same child identity without
+      // risking a second launch across the ambiguous crash boundary.
+      const acceptedSession = reconcileSpawnReservation({
+        lease,
+        acceptedSession: acceptedSessionByLease.get(lease.gatewayLeaseId),
+        now: hydrationNow,
+      });
+      if (acceptedSession && !acceptedSessionByLease.has(lease.gatewayLeaseId)) {
+        reconciledSessions.push(acceptedSession);
+        acceptedSessionByLease.set(lease.gatewayLeaseId, acceptedSession);
+      }
+      changed = true;
+    }
     acquireByIdempotencyKey.set(
       principalScopedKey(lease.authenticatedPrincipalId, lease.acquireIdempotencyKey),
       lease,
@@ -105,7 +132,7 @@ function hydrateRuntimeSnapshot(snapshot: RuntimeSnapshot): void {
       );
     }
   }
-  for (const session of snapshot.sessions) {
+  for (const session of reconciledSessions) {
     const idempotencyScopedKey = principalScopedKey(
       session.authenticatedPrincipalId,
       session.idempotencyKey,
@@ -118,6 +145,7 @@ function hydrateRuntimeSnapshot(snapshot: RuntimeSnapshot): void {
     spawnByIdempotencyKey.set(idempotencyScopedKey, session);
     spawnByClientRequestId.set(clientRequestScopedKey, session);
   }
+  return changed;
 }
 
 function ensureRuntimeStateLoaded(): void {
@@ -125,13 +153,16 @@ function ensureRuntimeStateLoaded(): void {
   if (loadedSnapshotPath === storePath) {
     return;
   }
-  hydrateRuntimeSnapshot(
+  const reconciledReservation = hydrateRuntimeSnapshot(
     (loadAgenticOsRuntimeSnapshot() as RuntimeSnapshot | undefined) ?? {
       leases: [],
       releaseReplays: [],
       sessions: [],
     },
   );
+  if (reconciledReservation) {
+    saveAgenticOsRuntimeSnapshot(snapshotRuntimeState());
+  }
   loadedSnapshotPath = storePath;
 }
 
@@ -383,59 +414,6 @@ export function releaseAgenticOsAllowLease(
   return response;
 }
 
-function readSessionMetadata(params: Record<string, unknown>): Record<string, unknown> {
-  const metadata = params.metadata;
-  if (!isRecord(metadata)) {
-    throw new ContractInputError("missing required object: metadata");
-  }
-  const keys = Object.keys(metadata).toSorted();
-  const expected = [...SESSION_METADATA_FIELDS].toSorted();
-  if (stableJson(keys) !== stableJson(expected)) {
-    throw new ContractInputError("metadata must contain exactly the Agentic OS session v1 fields");
-  }
-  const normalized: Record<string, unknown> = {};
-  for (const field of SESSION_METADATA_FIELDS) {
-    normalized[field] = readString(metadata, field);
-  }
-  return normalized;
-}
-
-function requireLeaseAuthorizesSpawn(params: {
-  lease: LeaseRecord;
-  metadata: Record<string, unknown>;
-  agentId: string;
-}) {
-  const { lease, metadata, agentId } = params;
-  const expected: Record<(typeof ALLOW_LEASE_OWNER_FIELDS)[number], unknown> = {
-    client_lease_id: lease.spawnOwner.client_lease_id,
-    run_id: metadata.run_id,
-    phase: metadata.phase,
-    transition_id: metadata.transition_id,
-    agent_id: agentId,
-    requester_agent_id: lease.spawnOwner.requester_agent_id,
-  };
-  for (const field of ALLOW_LEASE_OWNER_FIELDS) {
-    if (lease.spawnOwner[field] !== expected[field]) {
-      rejectConflict(`gateway_lease_id owner does not authorize spawn: ${field}`);
-    }
-  }
-}
-
-function spawnResultSessionKey(result: Record<string, unknown>): string | undefined {
-  for (const key of ["childSessionKey", "sessionKey", "session_key"]) {
-    const value = result[key];
-    if (typeof value === "string" && value) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
-function spawnResultRunId(result: Record<string, unknown>): string | undefined {
-  const value = result.runId;
-  return typeof value === "string" && value ? value : undefined;
-}
-
 export async function spawnAgenticOsSession(
   params: Record<string, unknown>,
   authenticatedRequesterAgentId?: string,
@@ -443,73 +421,20 @@ export async function spawnAgenticOsSession(
 ): Promise<Record<string, unknown>> {
   ensureRuntimeStateLoaded();
   pruneExpiredLeases();
-  assertNoForbiddenAliases(params, FORBIDDEN_SPAWN_CAMEL_ALIASES);
-  const clientRequestId = readString(params, "client_request_id");
-  const idempotencyKey = readString(params, "idempotency_key");
-  const gatewayLeaseId = readString(params, "gateway_lease_id");
-  const task = readString(params, "task");
-  const runtime = readString(params, "runtime");
-  if (runtime !== "subagent") {
-    return rejectConflict("unsupported sessions_spawn runtime");
-  }
-  const metadata = readSessionMetadata(params);
-  const metadataClientRequestId = metadata.client_request_id;
-  const metadataIdempotencyKey = metadata.idempotency_key;
-  if (metadataClientRequestId !== clientRequestId || metadataIdempotencyKey !== idempotencyKey) {
-    return rejectConflict("session metadata identity does not match spawn identity");
-  }
-  if (metadata.task_digest !== taskDigest(task)) {
-    return rejectConflict("session metadata task_digest does not match spawn task");
-  }
-  const agentId =
-    typeof params.agentId === "string" && params.agentId
-      ? params.agentId
-      : String(metadata.agent_id);
-  if (agentId !== metadata.agent_id) {
-    return rejectConflict("spawn agentId does not match session metadata agent_id");
-  }
-  const taskName =
-    typeof params.taskName === "string" && params.taskName ? params.taskName : undefined;
-  if (Object.hasOwn(params, "mode") && params.mode !== "run") {
-    return rejectConflict("invalid enum: mode");
-  }
-  const mode = "run";
-  const cleanup =
-    params.cleanup === "delete" || params.cleanup === "keep" ? params.cleanup : undefined;
-  if (
-    Object.hasOwn(params, "cleanup") &&
-    params.cleanup !== "delete" &&
-    params.cleanup !== "keep"
-  ) {
-    return rejectConflict("invalid enum: cleanup");
-  }
-  const context =
-    params.context === "fork" || params.context === "isolated" ? params.context : undefined;
-  if (
-    Object.hasOwn(params, "context") &&
-    params.context !== "fork" &&
-    params.context !== "isolated"
-  ) {
-    return rejectConflict("invalid enum: context");
-  }
-  if (Object.hasOwn(params, "lightContext") && typeof params.lightContext !== "boolean") {
-    return rejectConflict("invalid boolean: lightContext");
-  }
-  const lightContext = params.lightContext === true;
-  const fingerprint = stableJson({
-    client_request_id: clientRequestId,
-    idempotency_key: idempotencyKey,
-    gateway_lease_id: gatewayLeaseId,
+  const {
+    clientRequestId,
+    idempotencyKey,
+    gatewayLeaseId,
     task,
     taskName,
-    runtime,
     mode,
     cleanup,
     context,
     lightContext,
     agentId,
     metadata,
-  });
+    fingerprint,
+  } = parseAgenticOsSpawnInput(params);
   const idempotencyScopedKey = principalScopedKey(authenticatedPrincipalId, idempotencyKey);
   const clientRequestScopedKey = principalScopedKey(authenticatedPrincipalId, clientRequestId);
   const existingByIdempotency = spawnByIdempotencyKey.get(idempotencyScopedKey);
@@ -553,13 +478,29 @@ export async function spawnAgenticOsSession(
   requireLeaseAuthorizesSpawn({ lease, metadata, agentId });
   assertRecordCapacity(spawnByIdempotencyKey, "session spawn replay");
   assertRecordCapacity(spawnPendingByIdempotencyKey, "pending session spawn");
-  lease.spawn_reserved_at_ms = Date.now();
+  const reservationNow = Date.now();
+  if (lease.expires_at_ms <= reservationNow) {
+    pruneExpiredLeases(reservationNow);
+    return rejectConflict("gateway_lease_id is not active");
+  }
+  const reservedSession = createSpawnReservation({
+    fingerprint,
+    clientRequestId,
+    idempotencyKey,
+    gatewayLeaseId,
+    metadata: metadataEnvelope(metadata),
+    taskName,
+    agentId,
+    authenticatedPrincipalId,
+    createdAtMs: reservationNow,
+  });
+  lease.spawn_reserved_at_ms = reservationNow;
   lease.spawn_reservation_fingerprint = fingerprint;
+  lease.spawn_reservation = reservedSession;
   try {
     persistRuntimeState();
   } catch (error) {
-    delete lease.spawn_reserved_at_ms;
-    delete lease.spawn_reservation_fingerprint;
+    clearSpawnReservation(lease);
     throw error;
   }
   const pending: SpawnPending = {
@@ -582,6 +523,8 @@ export async function spawnAgenticOsSession(
             agentSessionKey: `agent:${lease.spawnOwner.requester_agent_id}:main`,
             requesterAgentIdOverride: lease.spawnOwner.requester_agent_id,
             authorizedTargetAgentId: lease.spawnOwner.agent_id,
+            preallocatedChildSessionKey: reservedSession.sessionKey,
+            preallocatedRunId: reservedSession.runId,
           },
         )) as Record<string, unknown>;
         if (spawnResult.status !== "accepted") {
@@ -612,8 +555,7 @@ export async function spawnAgenticOsSession(
         spawnByIdempotencyKey.set(idempotencyScopedKey, record);
         spawnByClientRequestId.set(clientRequestScopedKey, record);
         lease.consumed_at_ms = Date.now();
-        delete lease.spawn_reserved_at_ms;
-        delete lease.spawn_reservation_fingerprint;
+        clearSpawnReservation(lease);
         leasesByGatewayId.delete(gatewayLeaseId);
         try {
           persistAcceptedSpawn();
@@ -626,8 +568,7 @@ export async function spawnAgenticOsSession(
         return record;
       } catch (error) {
         if (lease.spawn_reservation_fingerprint === fingerprint) {
-          delete lease.spawn_reserved_at_ms;
-          delete lease.spawn_reservation_fingerprint;
+          clearSpawnReservation(lease);
           if (!lease.released_at_ms && !lease.consumed_at_ms) {
             leasesByGatewayId.set(gatewayLeaseId, lease);
           }

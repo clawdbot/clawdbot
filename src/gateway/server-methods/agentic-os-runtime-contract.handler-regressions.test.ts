@@ -18,6 +18,10 @@ const canonicalHistory = vi.hoisted(() => ({
   payload: { messages: [] as unknown[] },
   requests: [] as Record<string, unknown>[],
 }));
+const runtimeMocks = vi.hoisted(() => ({
+  findTask: vi.fn(),
+  waitForAgentJob: vi.fn(),
+}));
 
 vi.mock("../agentic-os-runtime-contract.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../agentic-os-runtime-contract.js")>();
@@ -58,9 +62,9 @@ vi.mock("./chat-history-handler.js", () => ({
     },
   },
 }));
-vi.mock("./agent-job.js", () => ({ waitForAgentJob: vi.fn(async () => null) }));
+vi.mock("./agent-job.js", () => ({ waitForAgentJob: runtimeMocks.waitForAgentJob }));
 vi.mock("../../tasks/task-status-access.js", () => ({
-  findTaskByRunIdForStatus: vi.fn(() => undefined),
+  findTaskByRunIdForStatus: runtimeMocks.findTask,
 }));
 
 import { agenticOsRuntimeContractHandlers } from "./agentic-os-runtime-contract.js";
@@ -118,6 +122,8 @@ describe("Agentic OS runtime handler regressions", () => {
     canonicalSession.payload = { messages: [], sessionExists: false, totalMessages: 0 };
     canonicalHistory.payload = { messages: [] };
     canonicalHistory.requests = [];
+    runtimeMocks.findTask.mockReset();
+    runtimeMocks.waitForAgentJob.mockReset().mockResolvedValue(null);
   });
 
   it("rejects device-less connected callers instead of binding authority to connId", async () => {
@@ -231,5 +237,58 @@ describe("Agentic OS runtime handler regressions", () => {
 
     expect(response[0]).toBe(false);
     expect(response[2]?.message).toContain("synthetic canonical read failure");
+  });
+
+  it("projects failed child lifecycle without exposing raw failure text", async () => {
+    runtimeMocks.waitForAgentJob.mockResolvedValue({
+      status: "error",
+      startedAt: 10,
+      endedAt: 20,
+      error: "private provider failure",
+    });
+
+    const response = await invoke("sessions_status", null);
+    const runtime = (response[1] as { runtime_session: Record<string, unknown> }).runtime_session;
+
+    expect(runtime).toMatchObject({
+      lifecycle_status: "failed",
+      runtime_status: "failed",
+      terminal: true,
+      started_at_ms: 10,
+      ended_at_ms: 20,
+    });
+    expect(JSON.stringify(runtime)).not.toContain("private provider failure");
+  });
+
+  it("keeps terminal runtime_status stable after the agent-job cache expires", async () => {
+    runtimeMocks.waitForAgentJob
+      .mockResolvedValueOnce({
+        status: "error",
+        startedAt: 10,
+        endedAt: 20,
+        error: "private cached failure",
+      })
+      .mockResolvedValueOnce(null);
+    runtimeMocks.findTask.mockReturnValue({
+      status: "failed",
+      startedAt: 10,
+      endedAt: 20,
+    });
+
+    const cached = await invoke("sessions_status", null);
+    const persisted = await invoke("sessions_status", null);
+    const cachedRuntime = (cached[1] as { runtime_session: Record<string, unknown> })
+      .runtime_session;
+    const persistedRuntime = (persisted[1] as { runtime_session: Record<string, unknown> })
+      .runtime_session;
+
+    expect(cachedRuntime).toMatchObject({
+      lifecycle_status: "failed",
+      runtime_status: "failed",
+      terminal: true,
+      started_at_ms: 10,
+      ended_at_ms: 20,
+    });
+    expect(persistedRuntime).toEqual(cachedRuntime);
   });
 });

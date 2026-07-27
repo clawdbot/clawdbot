@@ -174,6 +174,23 @@ describe("Agentic OS runtime contract spawn safeguards", () => {
     expect(accepted.session_key).toBe("agent:ai-engineer:subagent:real-child");
   });
 
+  it("rechecks lease expiry immediately before persisting the spawn reservation", async () => {
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const gatewayLeaseId = await acquireLease({ ...acquireParams, ttl_ms: 60_000 });
+    dateNow.mockReset();
+    dateNow.mockReturnValueOnce(60_999).mockReturnValueOnce(61_000).mockReturnValue(61_000);
+    try {
+      expectInvalid(
+        await invoke("sessions_spawn", spawnParamsFor(gatewayLeaseId)),
+        "gateway_lease_id is not active",
+      );
+      expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+      expect(payload(await invoke("subagents.allowLease.status")).leases).toEqual([]);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
   it("caps distinct slow pending spawns atomically and fails the overflow request closed", async () => {
     vi.resetModules();
     const now = Date.now();

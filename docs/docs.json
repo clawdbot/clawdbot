@@ -1891,6 +1891,7 @@
                 "pages": [
                   "reference/rpc",
                   "gateway/external-apps",
+                  "gateway/lease-backed-session-spawn",
                   "reference/device-models"
                 ]
               },

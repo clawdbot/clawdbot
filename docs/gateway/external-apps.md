@@ -50,6 +50,8 @@ for results, cancel work, or inspect Gateway resources.
 
 For agent runs, start with the `agent` RPC and pair it with `agent.wait` for a
 terminal result. For durable conversation state, use the `sessions.*` methods.
+External orchestrators that need one fail-closed authorization per child spawn
+should use the [lease-backed session spawning contract](/gateway/lease-backed-session-spawn).
 For UI integrations, subscribe to Gateway events and render only the event
 families your app understands.
 
@@ -180,6 +182,7 @@ plugins loaded by OpenClaw.
 
 - [Building a Gateway client](https://docs.openclaw.ai/gateway/clients)
 - [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding)
+- [Lease-backed session spawning](/gateway/lease-backed-session-spawn)
 - [Gateway protocol](/gateway/protocol)
 - [Gateway RPC reference](/reference/rpc)
 - [CLI agent command](/cli/agent)

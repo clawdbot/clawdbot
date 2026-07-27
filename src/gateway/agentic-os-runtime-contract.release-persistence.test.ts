@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -94,5 +95,87 @@ describe("Agentic OS allow lease release persistence", () => {
     const restarted = await import("./agentic-os-runtime-contract.js");
     expect(restarted.listAgenticOsAllowLeases().leases).toEqual([]);
     expect(restarted.releaseAgenticOsAllowLease(releaseParams)).toEqual(released);
+  });
+
+  it("reconciles an orphaned durable spawn reservation into exact session replay", async () => {
+    const contract = await import("./agentic-os-runtime-contract.js");
+    const shared = await import("./agentic-os-runtime-contract-shared.js");
+    const acquired = contract.acquireAgenticOsAllowLease(acquireParams);
+    const gatewayLeaseId = acquired.gateway_lease_id as string;
+    const store = await import("./agentic-os-runtime-contract-store.js");
+    const snapshot = store.loadAgenticOsRuntimeSnapshot() as {
+      leases: Array<Record<string, unknown>>;
+      releaseReplays: unknown[];
+      sessions: unknown[];
+    };
+    const reservedAt = Date.now();
+    const task = "restart must not duplicate an uncertain child";
+    const metadata = {
+      run_id: acquireParams.run_id,
+      transition_id: acquireParams.transition_id,
+      client_request_id: "spawn-restart",
+      idempotency_key: "spawn-restart-idem",
+      phase: acquireParams.phase,
+      agent_id: acquireParams.agent_id,
+      task_digest: createHash("sha256").update(task).digest("hex"),
+    };
+    const spawnParams = {
+      task,
+      runtime: "subagent",
+      agentId: "ai-engineer",
+      gateway_lease_id: gatewayLeaseId,
+      client_request_id: "spawn-restart",
+      idempotency_key: "spawn-restart-idem",
+      metadata,
+    };
+    const fingerprint = shared.stableJson({
+      client_request_id: spawnParams.client_request_id,
+      idempotency_key: spawnParams.idempotency_key,
+      gateway_lease_id: spawnParams.gateway_lease_id,
+      task,
+      taskName: undefined,
+      runtime: "subagent",
+      mode: "run",
+      cleanup: undefined,
+      context: undefined,
+      lightContext: false,
+      agentId: "ai-engineer",
+      metadata,
+    });
+    const reservedSession = {
+      sessionKey: "agent:ai-engineer:subagent:reserved-after-restart",
+      fingerprint,
+      clientRequestId: spawnParams.client_request_id,
+      idempotencyKey: spawnParams.idempotency_key,
+      gatewayLeaseId,
+      metadata: {
+        metadata_contract_version: "v1",
+        normalized: metadata,
+        raw_json: shared.stableJson(metadata),
+      },
+      agentId: "ai-engineer",
+      authenticatedPrincipalId: "internal",
+      runId: "reserved-run-after-restart",
+      created_at_ms: reservedAt,
+    };
+    Object.assign(snapshot.leases[0]!, {
+      spawn_reserved_at_ms: reservedAt,
+      spawn_reservation_fingerprint: fingerprint,
+      spawn_reservation: reservedSession,
+    });
+    store.saveAgenticOsRuntimeSnapshot(snapshot);
+
+    vi.resetModules();
+    const restarted = await import("./agentic-os-runtime-contract.js");
+    expect(restarted.listAgenticOsAllowLeases().leases).toEqual([]);
+    expect(restarted.acquireAgenticOsAllowLease(acquireParams)).toMatchObject({
+      status: "consumed",
+      gateway_lease_id: gatewayLeaseId,
+    });
+    await expect(restarted.spawnAgenticOsSession(spawnParams)).resolves.toMatchObject({
+      status: "accepted",
+      childSessionKey: reservedSession.sessionKey,
+      runId: reservedSession.runId,
+    });
   });
 });

@@ -381,7 +381,11 @@ describe("Agentic OS runtime contract v1", () => {
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
     expect(spawnSubagentDirectMock).toHaveBeenLastCalledWith(
       expect.any(Object),
-      expect.objectContaining({ agentSessionKey: "agent:main:main" }),
+      expect.objectContaining({
+        agentSessionKey: "agent:main:main",
+        preallocatedChildSessionKey: expect.stringMatching(/^agent:ai-engineer:subagent:/u),
+        preallocatedRunId: expect.any(String),
+      }),
     );
     const replayed = payload(await invoke("sessions_spawn", spawnParams));
     expect(replayed.session_key).toBe(accepted.session_key);
@@ -940,43 +944,6 @@ describe("Agentic OS runtime contract v1", () => {
     } finally {
       chatHistoryHandlers["chat.history"] = original;
     }
-  });
-
-  it("projects canonical failed child lifecycle without exposing raw failure text", async () => {
-    const gatewayLeaseId = await acquireLease();
-    const accepted = payload(
-      await invoke("sessions_spawn", {
-        task: "verify failure lifecycle",
-        runtime: "subagent",
-        agentId: "ai-engineer",
-        gateway_lease_id: gatewayLeaseId,
-        client_request_id: "spawn-failure",
-        idempotency_key: "spawn-failure-idem",
-        metadata: {
-          ...sessionMetadata,
-          client_request_id: "spawn-failure",
-          idempotency_key: "spawn-failure-idem",
-          task_digest: sha256Hex("verify failure lifecycle"),
-        },
-      }),
-    );
-    waitForAgentJobMock.mockResolvedValue({
-      status: "error",
-      startedAt: 10,
-      endedAt: 20,
-      error: "private provider failure",
-    });
-    const status = payload(
-      await invoke("sessions_status", { session_key: accepted.session_key as string }),
-    );
-    expect(status.runtime_session).toMatchObject({
-      lifecycle_status: "failed",
-      runtime_status: "error",
-      terminal: true,
-      started_at_ms: 10,
-      ended_at_ms: 20,
-    });
-    expect(JSON.stringify(status.runtime_session)).not.toContain("private provider failure");
   });
 
   it("prunes aged session projections after bounded retention", async () => {

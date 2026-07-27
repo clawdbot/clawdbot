@@ -94,13 +94,19 @@ export async function resolveSubagentChildPlan(params: {
     requesterMemberRoleIds: params.ctx.agentMemberRoleIds,
   });
   const incognito = isIncognitoSessionKey(params.requesterInternalKey);
-  const mintedChildSessionKey = mintSpawnSessionKey({
-    targetAgentId: params.targetAgentId,
-    backend: "subagent",
-  });
-  const childSessionKey = incognito
-    ? mintedChildSessionKey.replace(":subagent:", ":subagent:incognito-")
-    : mintedChildSessionKey;
+  const preallocatedChildSessionKey = normalizeOptionalString(
+    params.ctx.preallocatedChildSessionKey,
+  );
+  const mintedChildSessionKey =
+    preallocatedChildSessionKey ??
+    mintSpawnSessionKey({
+      targetAgentId: params.targetAgentId,
+      backend: "subagent",
+    });
+  const childSessionKey =
+    incognito && !preallocatedChildSessionKey
+      ? mintedChildSessionKey.replace(":subagent:", ":subagent:incognito-")
+      : mintedChildSessionKey;
   const requesterRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     sessionKey: params.requesterInternalKey,

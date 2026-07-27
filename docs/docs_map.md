@@ -3660,6 +3660,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Safety guarantees
   - H2: Related
 
+## gateway/lease-backed-session-spawn.md
+
+- Route: /gateway/lease-backed-session-spawn
+- Headings:
+  - H2: Authorization
+  - H2: Workflow
+  - H2: Acquire a lease
+  - H2: Spawn the child session
+  - H2: Read session state
+  - H2: Release, replay, and recovery
+  - H2: Related
+
 ## gateway/local-model-services.md
 
 - Route: /gateway/local-model-services

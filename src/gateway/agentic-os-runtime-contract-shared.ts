@@ -80,6 +80,7 @@ export type LeaseRecord = {
   consumed_at_ms?: number;
   spawn_reserved_at_ms?: number;
   spawn_reservation_fingerprint?: string;
+  spawn_reservation?: SessionRecord;
   released_at_ms?: number;
 };
 
