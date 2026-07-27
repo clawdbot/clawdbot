@@ -15,7 +15,7 @@ regressions for real-world provider/model bugs.
 <Note>
 **QA stack (qa-lab, qa-channel, live transport lanes)** is documented separately:
 
-- [QA overview](/concepts/qa-e2e-automation) - architecture, command surface, scenario authoring, and Matrix profiles.
+- [QA overview](/concepts/qa-e2e-automation) - architecture, command surface, scenario authoring, and the Matrix live lane.
 - [Maturity scorecard](/maturity/scorecard) - how release QA evidence supports stability and LTS decisions.
 - [QA channel](/channels/qa-channel) - the synthetic transport plugin used by repo-backed scenarios.
 
@@ -173,12 +173,12 @@ checks keep exhaustive live/Docker soak behind `run_release_soak=true`; the
 `full` profile forces soak on. `QA-Lab - All Lanes` runs nightly on `main` and
 from manual dispatch with the mock parity lane, live Matrix lane,
 Convex-managed live Telegram lane, and Convex-managed live Discord lane as
-parallel jobs. Scheduled QA and release checks run the Matrix release profile
-through the shared live adapter. The Matrix CLI and manual workflow input
-default remain `all`; manual `all` dispatches fan out the transport, media, and
-E2EE profiles, while focused dispatches can select `fast`, `release`, or
-`transport`. `OpenClaw Release Checks` runs parity plus the reusable Matrix
-live-adapter profile and Telegram lane before release approval. Release
+parallel jobs. Scheduled QA and release checks run the catalog-derived Matrix
+selection through the shared live adapter. The Matrix CLI and workflow have no
+curated profiles: scenario channel eligibility defines default membership,
+explicit `--scenario` flags narrow local runs, and CI fans the same selection
+across deterministic shards. `OpenClaw Release Checks` runs parity plus the
+reusable Matrix live-adapter lane and Telegram lane before release approval. Release
 transport checks use `mock-openai/gpt-5.6-luna` so they stay deterministic and
 avoid normal provider-plugin startup. These live transport gateways
 disable memory search; memory behavior stays covered by the QA parity suites.
