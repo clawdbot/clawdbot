@@ -79,9 +79,10 @@ describe("Microsoft Teams meetings node realtime recovery", () => {
                       }
                     : {
                         inCall: false,
-                        manualActionMessage: "Waiting for admission",
-                        manualActionReason: "teams-admission-required",
-                        manualActionRequired: true,
+                        manualAction: {
+                          reason: "teams-admission-required",
+                          message: "Waiting for admission",
+                        },
                         url: URL,
                       },
                 ),

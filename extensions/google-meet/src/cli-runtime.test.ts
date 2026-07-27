@@ -363,9 +363,7 @@ describe("google-meet CLI", () => {
     const testListen = vi.fn(async () => ({
       createdSession: true,
       inCall: true,
-      manualActionRequired: false,
-      manualActionReason: undefined,
-      manualActionMessage: undefined,
+      manualAction: undefined,
       listenVerified: true,
       listenTimedOut: false,
       captioning: true,

@@ -15,13 +15,11 @@ export function consumerLightMeetingUrl(meetingCode: string, passcode: string) {
   return `https://teams.live.com/light-meetings/launch?coords=${encodeURIComponent(coordinates)}`;
 }
 
-export function status(manualActionReason: string, manualActionMessage = "manual action") {
+export function status(reason: string, message = "manual action") {
   const health = TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.parseStatus({
     result: JSON.stringify({
       inCall: false,
-      manualActionRequired: true,
-      manualActionReason,
-      manualActionMessage,
+      manualAction: { reason, message },
       url: URL,
     }),
   });

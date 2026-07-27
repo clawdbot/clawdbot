@@ -38,7 +38,7 @@ import type {
 import { ZOOM_MEETINGS_PLATFORM_ADAPTER } from "./transports/zoom-meetings-platform-adapter.js";
 import { hasSameZoomMeetingJoinCredential } from "./transports/zoom-meetings-urls.js";
 
-type ManualActionReason = NonNullable<ZoomMeetingsChromeHealth["manualActionReason"]>;
+type ManualActionReason = NonNullable<ZoomMeetingsChromeHealth["manualAction"]>["reason"];
 type SpeechBlockedReason = NonNullable<ZoomMeetingsChromeHealth["speechBlockedReason"]>;
 type SessionRuntime = MeetingSessionRuntime<
   ZoomMeetingsSession,
@@ -86,7 +86,7 @@ function noteSession(session: ZoomMeetingsSession, note: string): void {
 function isAwaitingAdmission(session: ZoomMeetingsSession): boolean {
   return (
     session.chrome?.health?.lobbyWaiting === true ||
-    session.chrome?.health?.manualActionReason === "zoom-admission-required"
+    session.chrome?.health?.manualAction?.reason === "zoom-admission-required"
   );
 }
 
@@ -131,7 +131,6 @@ export class ZoomMeetingsRuntime {
         speech: {
           audioBridgeUnavailable: "Realtime speech requires an active Chrome audio bridge.",
           browserUnverified: "Zoom browser state has not been verified yet.",
-          manualActionFallback: "Resolve the Zoom browser prompt before asking OpenClaw to speak.",
           microphoneMuted: "Turn on the OpenClaw Zoom microphone before asking OpenClaw to speak.",
           microphoneMutedReason: "zoom-microphone-muted",
           notInCall: "Zoom has not reported that the browser guest is in the call.",
@@ -218,12 +217,12 @@ export class ZoomMeetingsRuntime {
         const staleSession =
           !browser?.browserTab ||
           health?.meetingEnded === true ||
-          health?.manualActionReason === "zoom-session-conflict" ||
-          health?.manualActionReason === "browser-control-unavailable" ||
+          health?.manualAction?.reason === "zoom-session-conflict" ||
+          health?.manualAction?.reason === "browser-control-unavailable" ||
           health?.bridgeClosed === true;
         const replacePendingJoin =
           health?.inCall !== true &&
-          health?.manualActionReason === "zoom-passcode-required" &&
+          health?.manualAction?.reason === "zoom-passcode-required" &&
           !hasSameZoomMeetingJoinCredential(session.url, request.url);
         if (staleSession || replacePendingJoin) {
           session.state = "ended";
@@ -536,9 +535,7 @@ export class ZoomMeetingsRuntime {
           captioning: false,
           audioInputRouted: false,
           audioOutputRouted: false,
-          manualActionRequired: true,
-          manualActionReason: "browser-control-unavailable",
-          manualActionMessage: result.message,
+          manualAction: { reason: "browser-control-unavailable", message: result.message },
           status: "browser-tab-missing",
           notes: [
             ...(session.chrome.health?.notes ?? []).filter((note) => note !== result.message),
@@ -558,9 +555,7 @@ export class ZoomMeetingsRuntime {
           captioning: false,
           audioInputRouted: false,
           audioOutputRouted: false,
-          manualActionRequired: true,
-          manualActionReason: "browser-control-unavailable",
-          manualActionMessage: message,
+          manualAction: { reason: "browser-control-unavailable", message },
           status: "browser-control",
           notes: [
             ...(session.chrome.health?.notes ?? []).filter((note) => note !== message),

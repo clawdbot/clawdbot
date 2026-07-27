@@ -105,7 +105,7 @@ Browser automation handles the normal guest-name, prejoin camera and microphone,
 - Microsoft Teams may require tenant sign-in, email verification, or organizer admission.
 - Zoom may require authentication, email verification, a passcode, CAPTCHA completion, or host admission; an account can also disable browser join.
 
-When a join or status result reports `manualActionRequired`, complete the reported step in the same OpenClaw Chrome profile before retrying. Repeatedly opening new tabs does not resolve an account, tenant, lobby, or CAPTCHA gate.
+When a join or status result includes `manualAction`, complete its reported step in the same OpenClaw Chrome profile before retrying. Repeatedly opening new tabs does not resolve an account, tenant, lobby, or CAPTCHA gate.
 
 Only join meetings where the operator is authorized to add an agent. Tell participants when local policy or consent rules require disclosure of automated participation, transcription, or synthesized speech.
 

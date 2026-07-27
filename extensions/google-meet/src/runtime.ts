@@ -67,7 +67,7 @@ type ChromeAudioBridgeResult = NonNullable<
 type ChromeLaunchResult =
   | Awaited<ReturnType<typeof launchChromeMeet>>
   | Awaited<ReturnType<typeof launchChromeMeetOnNode>>;
-type GoogleMeetManualActionReason = NonNullable<GoogleMeetChromeHealth["manualActionReason"]>;
+type GoogleMeetManualActionReason = NonNullable<GoogleMeetChromeHealth["manualAction"]>["reason"];
 type GoogleMeetSpeechBlockedReason = NonNullable<GoogleMeetChromeHealth["speechBlockedReason"]>;
 type GoogleMeetSessionRuntime = MeetingSessionRuntime<
   GoogleMeetSession,
@@ -130,8 +130,6 @@ export class GoogleMeetRuntime {
         speech: {
           audioBridgeUnavailable: "Realtime speech requires an active Chrome audio bridge.",
           browserUnverified: "Google Meet browser state has not been verified yet.",
-          manualActionFallback:
-            "Resolve the Google Meet browser prompt before asking OpenClaw to speak.",
           microphoneMuted:
             "Turn on the OpenClaw Google Meet microphone before asking OpenClaw to speak.",
           microphoneMutedReason: "meet-microphone-muted",
@@ -476,7 +474,7 @@ export class GoogleMeetRuntime {
       session.chrome.audioBridge ||
       session.chrome.health?.inCall !== true ||
       session.chrome.health.micMuted !== false ||
-      session.chrome.health.manualActionRequired === true
+      session.chrome.health.manualAction
     ) {
       return undefined;
     }

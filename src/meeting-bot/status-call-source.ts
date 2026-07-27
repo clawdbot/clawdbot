@@ -609,13 +609,11 @@ export function createMeetingStatusCallSource(options: MeetingStatusCallSourceOp
       text: entry.text,
     }));
   }
-  if (inCall && allowMicrophone && !manualActionReason) {
+  if (inCall && allowMicrophone && !manualAction) {
     if (audioInputRouted !== true || audioOutputRouted !== true) {
-      manualActionReason = "${options.platform.manualActionReasonPrefix}-audio-choice-required";
-      manualActionMessage = "Verify BlackHole 2ch is selected as both the ${options.platform.displayName} microphone and speaker before starting talk-back.";
+      manualAction = manualActionFor("${options.platform.manualActionReasonPrefix}-audio-choice-required", "Verify BlackHole 2ch is selected as both the ${options.platform.displayName} microphone and speaker before starting talk-back.");
     } else if (micMuted !== false) {
-      manualActionReason = "${options.platform.manualActionReasonPrefix}-microphone-required";
-      manualActionMessage = "Unmute the ${options.platform.displayName} microphone and verify the microphone control shows it is on before starting talk-back.";
+      manualAction = manualActionFor("${options.platform.manualActionReasonPrefix}-microphone-required", "Unmute the ${options.platform.displayName} microphone and verify the microphone control shows it is on before starting talk-back.");
     }
   }
   return JSON.stringify({
@@ -641,9 +639,7 @@ export function createMeetingStatusCallSource(options: MeetingStatusCallSourceOp
     audioOutputDeviceLabel,
     audioOutputRouteError,
     audioOutputRouteRetryable,
-    manualActionRequired: Boolean(manualActionReason),
-    manualActionReason,
-    manualActionMessage,
+    manualAction,
     title: document.title,
     url: location.href,
     notes,

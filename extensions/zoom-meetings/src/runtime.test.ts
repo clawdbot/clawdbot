@@ -78,22 +78,24 @@ function runtimeHarness(options?: {
           ...(!inCall
             ? {
                 ...(pendingReason === "admission" ? { lobbyWaiting: true } : {}),
-                manualActionRequired: true,
-                manualActionReason:
-                  pendingReason === "admission"
-                    ? "zoom-admission-required"
-                    : "zoom-passcode-required",
-                manualActionMessage:
-                  pendingReason === "admission"
-                    ? "Waiting for host admission."
-                    : "Enter the meeting passcode.",
+                manualAction: {
+                  reason:
+                    pendingReason === "admission"
+                      ? "zoom-admission-required"
+                      : "zoom-passcode-required",
+                  message:
+                    pendingReason === "admission"
+                      ? "Waiting for host admission."
+                      : "Enter the meeting passcode.",
+                },
               }
             : {}),
           ...(sessionConflict && fn.includes("const allowSessionAdoption = false")
             ? {
-                manualActionRequired: true,
-                manualActionReason: "zoom-session-conflict",
-                manualActionMessage: "This Zoom tab is owned by another active meeting session.",
+                manualAction: {
+                  reason: "zoom-session-conflict",
+                  message: "This Zoom tab is owned by another active meeting session.",
+                },
               }
             : {}),
           url: tabUrl,
@@ -215,7 +217,7 @@ describe("Zoom meeting session flow", () => {
             audioOutputRouted: false,
             captioning: false,
             inCall: false,
-            manualActionRequired: false,
+            manualAction: undefined,
             providerConnected: false,
             realtimeReady: false,
           },
@@ -401,8 +403,7 @@ describe("Zoom meeting session flow", () => {
         browserTab: undefined,
         health: {
           inCall: false,
-          manualActionReason: undefined,
-          manualActionRequired: false,
+          manualAction: undefined,
           status: "browser-tab-missing",
         },
       },

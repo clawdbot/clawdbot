@@ -37,9 +37,7 @@ export type MeetingBrowserHealth<
 > = {
   inCall?: boolean;
   micMuted?: boolean;
-  manualActionRequired?: boolean;
-  manualActionReason?: TManualReason;
-  manualActionMessage?: string;
+  manualAction?: { reason: TManualReason; message: string };
   speechReady?: boolean;
   speechBlockedReason?: TSpeechBlockedReason;
   speechBlockedMessage?: string;

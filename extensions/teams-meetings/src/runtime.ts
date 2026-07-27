@@ -37,7 +37,7 @@ import type {
   TeamsMeetingsSession,
 } from "./transports/types.js";
 
-type ManualActionReason = NonNullable<TeamsMeetingsChromeHealth["manualActionReason"]>;
+type ManualActionReason = NonNullable<TeamsMeetingsChromeHealth["manualAction"]>["reason"];
 type SpeechBlockedReason = NonNullable<TeamsMeetingsChromeHealth["speechBlockedReason"]>;
 type SessionRuntime = MeetingSessionRuntime<
   TeamsMeetingsSession,
@@ -123,8 +123,6 @@ export class TeamsMeetingsRuntime {
         speech: {
           audioBridgeUnavailable: "Realtime speech requires an active Chrome audio bridge.",
           browserUnverified: "Microsoft Teams browser state has not been verified yet.",
-          manualActionFallback:
-            "Resolve the Microsoft Teams browser prompt before asking OpenClaw to speak.",
           microphoneMuted: "Turn on the OpenClaw Teams microphone before asking OpenClaw to speak.",
           microphoneMutedReason: "teams-microphone-muted",
           notInCall: "Microsoft Teams has not reported that the browser guest is in the call.",

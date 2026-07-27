@@ -144,7 +144,6 @@ function createTestRuntime(params: {
       speech: {
         audioBridgeUnavailable: "bridge unavailable",
         browserUnverified: "browser unverified",
-        manualActionFallback: "manual action",
         microphoneMuted: "microphone muted",
         microphoneMutedReason: "microphone-muted",
         notInCall: "not in call",
@@ -632,9 +631,7 @@ describe("MeetingSessionRuntime leave cleanup", () => {
           health: {
             inCall: true,
             micMuted: false,
-            manualActionMessage: "old action",
-            manualActionReason: "old-action",
-            manualActionRequired: true,
+            manualAction: { reason: "old-action", message: "old action" },
             speechReady: true,
             speechBlockedMessage: "old speech block",
             speechBlockedReason: "old-speech-block",
@@ -655,14 +652,13 @@ describe("MeetingSessionRuntime leave cleanup", () => {
         browser: {
           health: {
             inCall: false,
-            manualActionRequired: false,
+            manualAction: undefined,
             speechReady: false,
           },
         },
       },
     });
-    expect(session.browser?.health?.manualActionReason).toBeUndefined();
-    expect(session.browser?.health?.manualActionMessage).toBeUndefined();
+    expect(session.browser?.health?.manualAction).toBeUndefined();
     expect(session.browser?.health?.micMuted).toBeUndefined();
     expect(session.browser?.health?.speechBlockedReason).toBeUndefined();
     expect(session.browser?.health?.speechBlockedMessage).toBeUndefined();

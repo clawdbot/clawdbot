@@ -117,7 +117,7 @@ openclaw googlemeet create --access-type OPEN --transport chrome-node --mode age
 
 This only applies to API-created rooms, so OAuth must be configured. If you authenticated before this option existed, rerun `openclaw googlemeet auth login --json` after adding the `meetings.space.settings` scope to your OAuth consent screen.
 
-If the browser fallback hits a Google login or Meet permission blocker, the tool returns `manualActionRequired: true` with `manualActionReason`, `manualActionMessage`, and the `browser.nodeId`/`browser.targetId`/`browserUrl`. Report that message and stop opening new Meet tabs until the operator finishes the browser step.
+If the browser fallback hits a Google login or Meet permission blocker, the tool returns `manualAction: { reason, message }` with the `browser.nodeId`/`browser.targetId`/`browserUrl`. Report that message and stop opening new Meet tabs until the operator finishes the browser step.
 
 ### Observe-only join
 
@@ -147,7 +147,7 @@ It joins in transcribe mode, waits for fresh caption/transcript movement, and re
 
 ### Realtime session health
 
-During talk-back sessions, `google_meet` status reports Chrome/audio bridge health: `inCall`, `manualActionRequired`, `providerConnected`, `realtimeReady`, `audioInputActive`, `audioOutputActive`, last input/output timestamps, byte counters, and bridge-closed state. Managed Chrome sessions only speak the intro/test phrase after health reports `inCall: true`; otherwise `speechReady: false` and the speech attempt is blocked rather than silently no-opping.
+During talk-back sessions, `google_meet` status reports Chrome/audio bridge health: `inCall`, `manualAction`, `providerConnected`, `realtimeReady`, `audioInputActive`, `audioOutputActive`, last input/output timestamps, byte counters, and bridge-closed state. Managed Chrome sessions only speak the intro/test phrase after health reports `inCall: true`; otherwise `speechReady: false` and the speech attempt is blocked rather than silently no-opping.
 
 Local Chrome joins through the signed-in OpenClaw browser profile and needs `BlackHole 2ch` for the mic/speaker path. A single BlackHole device is enough for a first smoke test but can echo; use separate virtual devices or a Loopback-style graph for clean duplex audio.
 
@@ -242,7 +242,7 @@ For a one-command smoke test that creates or reuses a session, speaks a known ph
 openclaw googlemeet test-speech https://meet.google.com/abc-defg-hij
 ```
 
-During realtime join, browser automation fills the guest name, clicks Join/Ask to join, and accepts Meet's first-run "Use microphone" prompt when it appears (or "Continue without microphone" during observe-only join and browser-only meeting creation). If the profile is signed out, Meet is waiting for host admission, Chrome needs mic/camera permission, or Meet is stuck on an unresolved prompt, the result reports `manualActionRequired: true` with `manualActionReason` and `manualActionMessage`. Stop retrying, report that message plus `browserUrl`/`browserTitle`, and retry only after the manual action completes.
+During realtime join, browser automation fills the guest name, clicks Join/Ask to join, and accepts Meet's first-run "Use microphone" prompt when it appears (or "Continue without microphone" during observe-only join and browser-only meeting creation). If the profile is signed out, Meet is waiting for host admission, Chrome needs mic/camera permission, or Meet is stuck on an unresolved prompt, the result includes `manualAction: { reason, message }`. Stop retrying, report that message plus `browserUrl`/`browserTitle`, and retry only after the manual action completes.
 
 If `chromeNode.node` is omitted, OpenClaw auto-selects only when exactly one connected node advertises both `googlemeet.chrome` and browser control; pin `chromeNode.node` (node id, display name, or remote IP) when several capable nodes are connected.
 
@@ -621,9 +621,10 @@ If the browser fallback hits Google login or a Meet permission blocker first, `g
 {
   "source": "browser",
   "error": "google-login-required: Sign in to Google in the OpenClaw browser profile, then retry meeting creation.",
-  "manualActionRequired": true,
-  "manualActionReason": "google-login-required",
-  "manualActionMessage": "Sign in to Google in the OpenClaw browser profile, then retry meeting creation.",
+  "manualAction": {
+    "reason": "google-login-required",
+    "message": "Sign in to Google in the OpenClaw browser profile, then retry meeting creation."
+  },
   "browser": {
     "nodeId": "ba0f4e4bc...",
     "targetId": "tab-1",
@@ -654,7 +655,7 @@ API create JSON:
 }
 ```
 
-Creating joins by default, but Chrome/Chrome-node still needs a signed-in Google profile to join through the browser; if signed out, OpenClaw reports `manualActionRequired: true` or a browser fallback error and asks the operator to finish Google login before retrying.
+Creating joins by default, but Chrome/Chrome-node still needs a signed-in Google profile to join through the browser; if signed out, OpenClaw returns `manualAction` or a browser fallback error and asks the operator to finish Google login before retrying.
 
 Set `preview.enrollmentAcknowledged: true` only after confirming your Cloud project, OAuth principal, and meeting participants are enrolled in the Google Workspace Developer Preview Program for Meet media APIs.
 
@@ -908,20 +909,20 @@ Speaking on demand:
 
 `status` includes Chrome health when available:
 
-| Field                                                                 | Meaning                                                                                                                |
-| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `inCall`                                                              | Chrome appears to be inside the Meet call                                                                              |
-| `micMuted`                                                            | Best-effort Meet microphone state                                                                                      |
-| `manualActionRequired` / `manualActionReason` / `manualActionMessage` | Browser profile needs manual login, Meet host admission, permissions, or browser-control repair before speech can work |
-| `speechReady` / `speechBlockedReason` / `speechBlockedMessage`        | Whether managed Chrome speech is allowed now; `speechReady: false` means OpenClaw did not send the intro/test phrase   |
-| `providerConnected` / `realtimeReady`                                 | Realtime voice bridge state                                                                                            |
-| `lastInputAt` / `lastOutputAt`                                        | Last audio seen from/sent to the bridge                                                                                |
-| `audioOutputRouted` / `audioOutputDeviceLabel`                        | Whether the Meet tab's media output was actively routed to the bridge's BlackHole device                               |
-| `lastOutputLoopbackAt` / `outputLoopbackSignalBytes`                  | Fresh output whose waveform fingerprint was correlated on the BlackHole microphone capture path                        |
-| `lastOutputLoopbackCorrelation`                                       | Correlation score tying the captured signal to the current assistant-output generation                                 |
-| `outputGeneration` / `verifiedOutputGeneration`                       | Monotonic ids; equality means the current output, rather than an older utterance, passed loopback proof                |
-| `lastOutputLoopbackRms` / `lastOutputLoopbackPeak`                    | Audio-energy diagnostics for the latest verified loopback capture chunk                                                |
-| `lastSuppressedInputAt` / `suppressedInputBytes`                      | Loopback input ignored while assistant playback is active                                                              |
+| Field                                                          | Meaning                                                                                                                |
+| -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `inCall`                                                       | Chrome appears to be inside the Meet call                                                                              |
+| `micMuted`                                                     | Best-effort Meet microphone state                                                                                      |
+| `manualAction.reason` / `manualAction.message`                 | Browser profile needs manual login, Meet host admission, permissions, or browser-control repair before speech can work |
+| `speechReady` / `speechBlockedReason` / `speechBlockedMessage` | Whether managed Chrome speech is allowed now; `speechReady: false` means OpenClaw did not send the intro/test phrase   |
+| `providerConnected` / `realtimeReady`                          | Realtime voice bridge state                                                                                            |
+| `lastInputAt` / `lastOutputAt`                                 | Last audio seen from/sent to the bridge                                                                                |
+| `audioOutputRouted` / `audioOutputDeviceLabel`                 | Whether the Meet tab's media output was actively routed to the bridge's BlackHole device                               |
+| `lastOutputLoopbackAt` / `outputLoopbackSignalBytes`           | Fresh output whose waveform fingerprint was correlated on the BlackHole microphone capture path                        |
+| `lastOutputLoopbackCorrelation`                                | Correlation score tying the captured signal to the current assistant-output generation                                 |
+| `outputGeneration` / `verifiedOutputGeneration`                | Monotonic ids; equality means the current output, rather than an older utterance, passed loopback proof                |
+| `lastOutputLoopbackRms` / `lastOutputLoopbackPeak`             | Audio-energy diagnostics for the latest verified loopback capture chunk                                                |
+| `lastSuppressedInputAt` / `suppressedInputBytes`               | Loopback input ignored while assistant playback is active                                                              |
 
 ## Agent and bidi modes
 
@@ -1073,7 +1074,7 @@ openclaw nodes status --connected
 
 ### Browser opens but agent cannot join
 
-Run `googlemeet test-listen` for observe-only joins or `googlemeet test-speech` for realtime joins, then inspect the returned Chrome health. If either reports `manualActionRequired: true`, show `manualActionMessage` to the operator and stop retrying until the browser action is complete.
+Run `googlemeet test-listen` for observe-only joins or `googlemeet test-speech` for realtime joins, then inspect the returned Chrome health. If either includes `manualAction`, show `manualAction.message` to the operator and stop retrying until the browser action is complete.
 
 Common manual actions: sign in to the Chrome profile; admit the guest from the Meet host account; grant Chrome microphone/camera permissions when the native prompt appears; close or repair a stuck Meet permission dialog.
 
@@ -1086,7 +1087,7 @@ Do not report "not signed in" just because Meet asks "Do you want people to hear
 - **API creation**: `oauth.clientId` and `oauth.refreshToken` (or matching `OPENCLAW_GOOGLE_MEET_*` env vars) are present, and the refresh token was minted after create support was added; older tokens may lack `meetings.space.created`, so rerun `openclaw googlemeet auth login --json`.
 - **Browser fallback**: `defaultTransport: "chrome-node"` and `chromeNode.node` point at a connected node with `browser.proxy` and `googlemeet.chrome`; the OpenClaw Chrome profile on that node is signed in and can open `https://meet.google.com/new`.
 - **Browser fallback retries**: reuse an existing `.../new` or Google account prompt tab before opening a new one; retry the tool call rather than manually opening another tab.
-- **Manual action**: if the tool returns `manualActionRequired: true`, use `browser.nodeId`, `browser.targetId`, `browserUrl`, and `manualActionMessage` to guide the operator; do not retry in a loop.
+- **Manual action**: if the tool returns `manualAction`, use `browser.nodeId`, `browser.targetId`, `browserUrl`, and `manualAction.message` to guide the operator; do not retry in a loop.
 - **Audio-choice interstitial**: if Meet shows "Do you want people to hear you in the meeting?", leave the tab open. OpenClaw should click **Use microphone** or (create-only) **Continue without microphone** and keep waiting for the generated URL; if it cannot, the error should mention `meet-audio-choice-required`, not `google-login-required`.
 
 ### Agent joins but does not talk
