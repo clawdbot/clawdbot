@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import {
   createMinimalRunAgentTurnParams,
   createMockReplyOperation,
@@ -58,5 +59,22 @@ describe("executeAgentTurn contract", () => {
       abortReason: "user",
       result: { payloads: [{ text: "late reply" }] },
     });
+  });
+
+  it("releases an unsettled operation when a restart error aborts execution", async () => {
+    const { replyOperation } = createMockReplyOperation();
+    const unsettledOperation = {
+      ...replyOperation,
+      freezeAbort: () => {
+        throw createAgentRunRestartAbortError();
+      },
+    };
+
+    const result = await executeAgentTurn(
+      createMinimalRunAgentTurnParams({ replyOperation: unsettledOperation }),
+    );
+
+    expect(result.outcome).toEqual({ kind: "aborted", reason: "restart" });
+    expect(replyOperation.complete).toHaveBeenCalledOnce();
   });
 });

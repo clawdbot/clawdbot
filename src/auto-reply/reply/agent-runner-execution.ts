@@ -595,6 +595,9 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
       isReplyOperationRestartAbort(executionParams.replyOperation) ||
       isAgentRunRestartAbortReason(error)
     ) {
+      if (executionParams.replyOperation && !executionParams.replyOperation.result) {
+        executionParams.replyOperation.complete();
+      }
       return { runId, outcome: { kind: "aborted", reason: "restart" } };
     }
     if (isReplyOperationUserAbort(executionParams.replyOperation)) {
