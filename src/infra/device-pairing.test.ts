@@ -1,10 +1,14 @@
 // Covers device pairing, token, and role lifecycle behavior.
+import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import {
   FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
 } from "../shared/device-bootstrap-profile.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } from "./device-bootstrap.js";
 import {
@@ -36,6 +40,7 @@ import {
 } from "./device-pairing.js";
 import { approveNodePairing, requestNodePairing, updatePairedNodeBins } from "./node-pairing.js";
 import { loadApnsRegistration, registerApnsRegistration } from "./push-apns.js";
+import { configureSqliteConnectionPragmas } from "./sqlite-wal.js";
 
 type RotateDeviceTokenResult = Awaited<ReturnType<typeof rotateDeviceToken>>;
 
@@ -320,6 +325,34 @@ describe("device pairing tokens", () => {
   afterAll(async () => {
     closeOpenClawStateDatabaseForTest();
     await suiteRootTracker.cleanup();
+  });
+
+  test("reloads cached pairing tables after another connection commits", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedOperatorDevice(baseDir, ["operator.read"]);
+    expect((await listDevicePairing(baseDir)).paired[0]?.displayName).toBeUndefined();
+
+    const database = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: baseDir },
+    });
+    const external = new DatabaseSync(database.path);
+    const maintenance = configureSqliteConnectionPragmas(external, {
+      checkpointIntervalMs: 0,
+      databaseLabel: "device-pairing-external-writer",
+      databasePath: database.path,
+      foreignKeys: true,
+      synchronous: "NORMAL",
+    });
+    try {
+      external
+        .prepare("UPDATE device_pairing_paired SET display_name = ? WHERE device_id = ?")
+        .run("external name", "device-1");
+
+      expect((await listDevicePairing(baseDir)).paired[0]?.displayName).toBe("external name");
+    } finally {
+      maintenance.close();
+      external.close();
+    }
   });
 
   test("reuses existing pending requests for the same device", async () => {

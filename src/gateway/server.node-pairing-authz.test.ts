@@ -10,6 +10,7 @@ import {
 } from "../infra/device-pairing.js";
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import { approveNodePairing, listNodePairing, requestNodePairing } from "../infra/node-pairing.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -661,6 +662,75 @@ describe("gateway node pairing authorization", () => {
   });
 
   describeWithGatewayServer("pending diagnostics scopes", (getStarted) => {
+    test("scans pairing tables once across two node.list dispatches", async () => {
+      const ws = await openTrackedWs(getStarted().port);
+      try {
+        await connectOk(ws, {
+          token: "secret",
+          scopes: ["operator.read", "operator.pairing"],
+          deviceIdentityPath: `${await makeNodePairingStateDir()}/scan-count.sqlite`,
+        });
+        await seedNodeDevice("node-list-scan-count");
+        const database = openOpenClawStateDatabase();
+        const originalPrepare = database.db.prepare.bind(database.db);
+        const tableSelects = { paired: 0, pending: 0 };
+        const prepareSpy = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
+          if (sql.includes('from "device_pairing_pending"')) {
+            tableSelects.pending += 1;
+          }
+          if (sql.includes('from "device_pairing_paired"')) {
+            tableSelects.paired += 1;
+          }
+          return originalPrepare(sql);
+        });
+        try {
+          expect((await rpcReq(ws, "node.list", {})).ok).toBe(true);
+          expect((await rpcReq(ws, "node.list", {})).ok).toBe(true);
+          expect(tableSelects).toEqual({ paired: 1, pending: 1 });
+        } finally {
+          prepareSpy.mockRestore();
+        }
+      } finally {
+        ws.close();
+      }
+    });
+
+    test("reflects a pairing mutation on the next node.list dispatch", async () => {
+      const nodeId = "node-list-cache-mutation";
+      await seedNodeDevice(nodeId);
+      const ws = await openTrackedWs(getStarted().port);
+      try {
+        await connectOk(ws, {
+          token: "secret",
+          scopes: ["operator.read", "operator.pairing"],
+          deviceIdentityPath: `${await makeNodePairingStateDir()}/mutation.sqlite`,
+        });
+        const before = await rpcReq<{
+          nodes?: Array<{ nodeId: string; pendingRequestId?: string }>;
+        }>(ws, "node.list", {});
+        expect(before.payload?.nodes?.find((node) => node.nodeId === nodeId)).not.toHaveProperty(
+          "pendingRequestId",
+        );
+
+        const pending = await requestNodePairing({
+          nodeId,
+          platform: "macos",
+          commands: ["system.run"],
+        });
+        const after = await rpcReq<{
+          nodes?: Array<{ nodeId: string; pendingRequestId?: string }>;
+        }>(ws, "node.list", {});
+        expect(after.payload?.nodes).toContainEqual(
+          expect.objectContaining({
+            nodeId,
+            pendingRequestId: pending.request.requestId,
+          }),
+        );
+      } finally {
+        ws.close();
+      }
+    });
+
     test("shows pending pairing records to direct-local backend shared-auth callers", async () => {
       const pendingOnlyNodeId = "node-local-backend-pending";
       await seedNodeDevice(pendingOnlyNodeId);
