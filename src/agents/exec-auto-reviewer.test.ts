@@ -523,6 +523,59 @@ describe("createModelExecAutoReviewer", () => {
     }
   });
 
+  it("cancels pending model preparation with the execution", async () => {
+    const controller = new AbortController();
+    const prepare = vi.fn(() => new Promise<never>(() => {}));
+    const reviewer = createModelExecAutoReviewer({
+      cfg: {},
+      signal: controller.signal,
+      deps: {
+        prepareSimpleCompletionModelForAgent:
+          prepare as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+      },
+    });
+
+    const result = reviewer(input);
+    await vi.waitFor(() => expect(prepare).toHaveBeenCalledTimes(1));
+    controller.abort(new Error("execution cancelled during reviewer preparation"));
+
+    await expect(result).rejects.toThrow("execution cancelled during reviewer preparation");
+  });
+
+  it("aborts a pending provider review when its execution is cancelled", async () => {
+    const controller = new AbortController();
+    let providerSignal: AbortSignal | undefined;
+    const complete = vi.fn(
+      (request: { options: { signal?: AbortSignal } }) =>
+        new Promise<never>((_resolve, reject) => {
+          providerSignal = request.options.signal;
+          providerSignal?.addEventListener("abort", () => reject(new Error("provider aborted")), {
+            once: true,
+          });
+        }),
+    );
+    const reviewer = createModelExecAutoReviewer({
+      cfg: {},
+      signal: controller.signal,
+      deps: {
+        prepareSimpleCompletionModelForAgent: vi.fn(async () => ({
+          selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
+          model: { provider: "openrouter", id: "reviewer", api: "openai" as const },
+          auth: { apiKey: "redacted", mode: "env" as const },
+        })) as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+        completeWithPreparedSimpleCompletionModel:
+          complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
+      },
+    });
+
+    const result = reviewer(input);
+    await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(1));
+    controller.abort(new Error("execution cancelled during provider review"));
+
+    await expect(result).rejects.toThrow("execution cancelled during provider review");
+    expect(providerSignal?.aborted).toBe(true);
+  });
+
   it("caps oversized reviewer timeouts before scheduling timers", async () => {
     vi.useFakeTimers();
     try {

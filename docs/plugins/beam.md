@@ -117,6 +117,37 @@ Beam is passive session publication, not remote control.
 - The receiver still treats every transcript as untrusted text. Copying a beamed transcript into a new agent session is a separate operator action.
 - Requests are rate-limited and concurrency-limited before the body is read.
 
+## Mirroring
+
+Beam can also act as the sender: an opt-in mirror that continuously publishes this machine's active local coding sessions (Claude Code, Codex, and other registered session catalogs) to a remote Beam receiver, such as a shared team Gateway. Teammates then watch near-live session transcripts in the remote Control UI without any access to the source machine.
+
+```json5
+{
+  plugins: {
+    entries: {
+      beam: {
+        enabled: true,
+        config: {
+          mirror: {
+            endpoint: "https://team.example.com/api/v1/beam/sessions",
+            token: { source: "env", provider: "default", id: "BEAM_TEAM_TOKEN" },
+            catalogs: ["claude", "codex"],
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+- `endpoint` (required): the remote receiver URL. HTTPS is enforced for non-loopback hosts; plaintext `http://` is accepted only for `localhost`/`127.0.0.1`/`::1` development.
+- `token`: Gateway credential for the remote receiver, sent as `Authorization: Bearer`. Accepts a plain string or a secret reference; a configured-but-unresolved token pauses mirroring instead of sending unauthenticated requests. Deployments fronted by an identity-aware proxy need an ingress that accepts this bearer credential.
+- `catalogs` (required): the session catalog ids to mirror, as explicit per-catalog consent — an omitted or empty list mirrors nothing. The local `beam` receiver catalog is always excluded so two mirrored Gateways cannot re-mirror each other's rows.
+- `pollSeconds` (default 30, minimum 10): how often the mirror scans local catalogs.
+- `activeWindowMinutes` (default 180): sessions with newer activity than this window count as live and stay mirrored; when a session goes idle past the window the mirror sends one final `completed` update.
+
+The mirror applies the same redaction contract as the beam skill before anything leaves the machine: only user and agent message text is uploaded, while reasoning, tool calls, tool results, and raw payloads are replaced with compact counts. Snapshots are capped to the receiver limits (200 items, 56 KiB), dropping oldest entries first and marking the upload `truncated`. Sessions on paired nodes are not mirrored; the mirror shares only sessions from this Gateway's machine, newest 32 first.
+
 ## Troubleshooting
 
 `404 Not Found`

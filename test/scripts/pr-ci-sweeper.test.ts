@@ -294,11 +294,12 @@ function fakeGithub(options: {
   >;
   checksByRef?: Record<string, FakeCheckRun[]>;
   workflowRunsById?: Record<number, FakeWorkflowRun>;
-  pullsGetByNumber?: Record<number, Record<string, unknown>>;
+  pullsGetByNumber?: Record<number, Record<string, unknown> | Array<Record<string, unknown>>>;
   events?: Array<Record<string, unknown>>;
   pageSize?: number;
 }) {
   const calls: FakeCall[] = [];
+  const pullsGetCallCounts = new Map<number, number>();
   const record = (method: string, args: Record<string, unknown>) => {
     calls.push({ method, args });
   };
@@ -351,9 +352,13 @@ function fakeGithub(options: {
         list: { endpointName: "pulls.list" },
         get: (args: Record<string, unknown>) => {
           record("pulls.get", args);
-          const match =
-            options.pullsGetByNumber?.[args.pull_number as number] ??
-            options.prs.find((entry) => entry.number === args.pull_number);
+          const pullNumber = args.pull_number as number;
+          const configured = options.pullsGetByNumber?.[pullNumber];
+          const callIndex = pullsGetCallCounts.get(pullNumber) ?? 0;
+          pullsGetCallCounts.set(pullNumber, callIndex + 1);
+          const match = Array.isArray(configured)
+            ? configured[Math.min(callIndex, configured.length - 1)]
+            : (configured ?? options.prs.find((entry) => entry.number === pullNumber));
           return Promise.resolve({ data: match });
         },
         update: (args: Record<string, unknown>) => {
@@ -542,6 +547,54 @@ describe("runPrCiSweeper", () => {
     expect(
       calls.filter((call) => call.method === "pulls.get" && call.args.pull_number === 110),
     ).toEqual([]);
+  });
+
+  it("does not spend the re-fire budget on PRs that change during revalidation", async () => {
+    const dropped = Array.from({ length: 11 }, (_, index) => ({
+      ...pr(),
+      number: 200 + index,
+      state: "open",
+      head: { sha: index.toString(16).padStart(2, "0").repeat(20) },
+    }));
+    const pullsGetByNumber = Object.fromEntries(
+      dropped
+        .slice(0, 10)
+        .map((candidate) => [
+          candidate.number,
+          [candidate, { ...candidate, head: { sha: "f".repeat(40) } }],
+        ]),
+    );
+    const { github, calls } = fakeGithub({ prs: dropped, runsBySha: {}, pullsGetByNumber });
+    const { core: loggedCore, logs } = recordingCore();
+
+    const results = await runPrCiSweeper({
+      github: github as never,
+      context: context as never,
+      core: loggedCore as never,
+      now: NOW,
+    });
+
+    expect(results.slice(0, 10)).toEqual(
+      dropped.slice(0, 10).map((candidate) => ({
+        number: candidate.number,
+        sha: candidate.head.sha.slice(0, 12),
+        action: "skip",
+        reason: "changed-during-sweep",
+      })),
+    );
+    expect(results.at(-1)).toEqual({
+      number: 210,
+      sha: "0a".repeat(6),
+      action: "refire",
+      reason: "ci-run-missing",
+    });
+    expect(calls.filter((call) => call.method === "pulls.update").map((call) => call.args)).toEqual(
+      [
+        { owner: "openclaw", repo: "openclaw", pull_number: 210, state: "closed" },
+        { owner: "openclaw", repo: "openclaw", pull_number: 210, state: "open" },
+      ],
+    );
+    expect(logs.at(-1)).toContain("1 re-fire");
   });
 
   it("stops listing pages once creation dates cross the lookback", async () => {

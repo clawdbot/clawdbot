@@ -1,3 +1,4 @@
+import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { HookContext } from "../agent-tools.before-tool-call.js";
 import { getActiveAgentRingZeroTools } from "../agent-tools.ring-zero-context.js";
@@ -79,8 +80,7 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
   sourceReplyDeliveryMode?: string;
   toolsAllow?: readonly string[];
 }): AgentHarnessToolSurfaceRuntime {
-  const forceDirectMessageTool =
-    params.forceMessageTool === true || params.sourceReplyDeliveryMode === "message_tool_only";
+  const forceDirectMessageTool = messageToolOwnsVisibleReply(params);
   const codeModeConfig = resolveCodeModeConfig(params.config, params.agentId);
   const toolSearchRuntimeConfig = resolveAgentToolSearchRuntimeConfig({
     config: params.config,

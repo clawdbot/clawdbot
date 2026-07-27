@@ -208,66 +208,8 @@ async function sendSlackOutboundMessage(params: {
 function createSlackAttachedSendAdapter() {
   return createAttachedChannelResultAdapter({
     channel: "slack",
-    sendText: async ({
-      cfg,
-      to,
-      text,
-      accountId,
-      deps,
-      replyToId,
-      threadId,
-      identity,
-      deliveryQueueId,
-      onPlatformSendDispatch,
-      onDeliveryResult,
-    }) =>
-      await sendSlackOutboundMessage({
-        cfg,
-        to,
-        text,
-        accountId,
-        deps,
-        replyToId,
-        threadId,
-        identity,
-        deliveryQueueId,
-        onPlatformSendDispatch,
-        onDeliveryResult,
-      }),
-    sendMedia: async ({
-      cfg,
-      to,
-      text,
-      mediaUrl,
-      mediaAccess,
-      mediaLocalRoots,
-      mediaReadFile,
-      accountId,
-      deps,
-      replyToId,
-      threadId,
-      identity,
-      deliveryQueueId,
-      onPlatformSendDispatch,
-      onDeliveryResult,
-    }) =>
-      await sendSlackOutboundMessage({
-        cfg,
-        to,
-        text,
-        mediaUrl,
-        mediaAccess,
-        mediaLocalRoots,
-        mediaReadFile,
-        accountId,
-        deps,
-        replyToId,
-        threadId,
-        identity,
-        deliveryQueueId,
-        onPlatformSendDispatch,
-        onDeliveryResult,
-      }),
+    sendText: sendSlackOutboundMessage,
+    sendMedia: sendSlackOutboundMessage,
   });
 }
 
@@ -331,34 +273,20 @@ export const slackOutbound: ChannelOutboundAdapter = {
         mediaUrls,
         send: async ({ text, mediaUrl }) =>
           await sendSlackOutboundMessage({
-            cfg: ctx.cfg,
-            to: ctx.to,
+            ...ctx,
             text,
             mediaUrl,
-            mediaAccess: ctx.mediaAccess,
-            mediaLocalRoots: ctx.mediaLocalRoots,
-            mediaReadFile: ctx.mediaReadFile,
-            accountId: ctx.accountId,
-            deps: ctx.deps,
-            replyToId: ctx.replyToId,
-            threadId: ctx.threadId,
-            identity: ctx.identity,
             deliveryQueueId: useSingleDeliveryMarker ? ctx.deliveryQueueId : undefined,
             onPlatformSendDispatch: useSingleDeliveryMarker
               ? ctx.onPlatformSendDispatch
               : undefined,
-            onDeliveryResult: ctx.onDeliveryResult,
           }),
         finalize: async () => {
           let lastResult: Awaited<ReturnType<SlackSendFn>> | undefined;
           for (const message of deliveryMessages) {
             lastResult = await sendSlackOutboundMessage({
-              cfg: ctx.cfg,
-              to: ctx.to,
+              ...ctx,
               text: message.text,
-              mediaAccess: ctx.mediaAccess,
-              mediaLocalRoots: ctx.mediaLocalRoots,
-              mediaReadFile: ctx.mediaReadFile,
               ...(message.blocks ? { blocks: message.blocks } : {}),
               ...(message.authoredTextPlacement
                 ? { authoredTextPlacement: message.authoredTextPlacement }
@@ -367,16 +295,10 @@ export const slackOutbound: ChannelOutboundAdapter = {
                 ? { nativeDataFallbackBaseText: message.nativeDataFallbackBaseText }
                 : {}),
               ...(message.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
-              accountId: ctx.accountId,
-              deps: ctx.deps,
-              replyToId: ctx.replyToId,
-              threadId: ctx.threadId,
-              identity: ctx.identity,
               deliveryQueueId: useSingleDeliveryMarker ? ctx.deliveryQueueId : undefined,
               onPlatformSendDispatch: useSingleDeliveryMarker
                 ? ctx.onPlatformSendDispatch
                 : undefined,
-              onDeliveryResult: ctx.onDeliveryResult,
             });
           }
           if (!lastResult) {
