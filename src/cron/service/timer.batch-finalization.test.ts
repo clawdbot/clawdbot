@@ -13,6 +13,7 @@ import { isCronJobActive, markCronJobActive } from "../active-jobs.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
+import { add, remove } from "./ops-mutations.js";
 import { createCronServiceState } from "./state.js";
 import {
   createCompletedCronRunOutcomeDrain,
@@ -69,6 +70,90 @@ function findCronTask(jobId: string) {
 }
 
 describe("cron batch outcome finalization", () => {
+  it.each([
+    { trigger: "scheduled", deleteAfterRun: false },
+    { trigger: "scheduled", deleteAfterRun: true },
+    { trigger: "startup", deleteAfterRun: false },
+    { trigger: "startup", deleteAfterRun: true },
+  ] as const)(
+    "does not apply a removed $trigger run to a same-id replacement (deleteAfterRun=$deleteAfterRun)",
+    async ({ trigger, deleteAfterRun }) => {
+      const store = fixtures.makeStorePath();
+      const dueAt = Date.parse("2026-02-06T10:05:00.750Z");
+      const replacementAt = dueAt + 60 * 60_000;
+      const original = createDueIsolatedJob({
+        id: `removed-${trigger}-replacement-${deleteAfterRun}`,
+        nowMs: dueAt,
+        nextRunAtMs: dueAt,
+        deleteAfterRun,
+      });
+      original.name = "removed original scheduled job";
+      await saveCronStore(store.storePath, { version: 1, jobs: [original] });
+
+      const started = createDeferred<void>();
+      const release = createDeferred<{ status: "ok"; summary: string }>();
+      const events: Array<{ action: string; jobId: string; job?: CronJob }> = [];
+      const state = createBatchState({
+        storePath: store.storePath,
+        nowMs: dueAt,
+        runIsolatedAgentJob: vi.fn(async () => {
+          started.resolve();
+          return await release.promise;
+        }),
+        onEvent: (event) => events.push(event),
+      });
+      const batch = startBatch(trigger, state);
+
+      try {
+        await started.promise;
+        await expect(remove(state, original.id)).resolves.toEqual({ ok: true, removed: true });
+        await add(state, {
+          id: original.id,
+          name: "independent replacement scheduled job",
+          enabled: true,
+          deleteAfterRun,
+          schedule: { kind: "at", at: new Date(replacementAt).toISOString() },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "run only the replacement occurrence" },
+          delivery: { mode: "none" },
+        });
+
+        release.resolve({ status: "ok", summary: "removed original completed" });
+        await batch;
+
+        for (const jobs of [state.store?.jobs ?? [], (await loadCronStore(store.storePath)).jobs]) {
+          const replacement = jobs.find((job) => job.id === original.id);
+          expect(replacement).toMatchObject({
+            id: original.id,
+            name: "independent replacement scheduled job",
+            enabled: true,
+            deleteAfterRun,
+            state: { nextRunAtMs: replacementAt },
+          });
+          expect(replacement?.state.lastRunAtMs).toBeUndefined();
+          expect(replacement?.state.lastRunStatus).toBeUndefined();
+          expect(replacement?.state.lastStatus).toBeUndefined();
+          expect(replacement?.state.runningAtMs).toBeUndefined();
+        }
+        expect(
+          events.filter((event) => event.action === "finished" && event.jobId === original.id),
+        ).toEqual([
+          expect.objectContaining({
+            job: expect.objectContaining({ name: "removed original scheduled job" }),
+          }),
+        ]);
+        expect(isCronJobActive(original.id)).toBe(false);
+      } finally {
+        release.resolve({ status: "ok", summary: "removed original completed" });
+        await batch;
+        if (state.timer) {
+          clearTimeout(state.timer);
+        }
+      }
+    },
+  );
+
   it("coalesces simultaneously finished outcomes into one durable write", async () => {
     const store = fixtures.makeStorePath();
     const dueAt = Date.parse("2026-02-06T10:05:01.000Z");

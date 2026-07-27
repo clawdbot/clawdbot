@@ -28,9 +28,11 @@ import { getCronChannelOptions, warnIfCronSchedulerDisabled } from "./shared.js"
 import { normalizeCronSessionTargetOption } from "./thread-id-shared.js";
 import { readCronTriggerScript } from "./trigger-options.js";
 
-async function readCronJobForEdit(opts: GatewayRpcOpts, id: string): Promise<CronJob> {
+type CronJobForEdit = CronJob & { configRevision?: string };
+
+async function readCronJobForEdit(opts: GatewayRpcOpts, id: string): Promise<CronJobForEdit> {
   try {
-    return (await callGatewayFromCli("cron.get", opts, { id })) as CronJob;
+    return (await callGatewayFromCli("cron.get", opts, { id })) as CronJobForEdit;
   } catch (error) {
     if (!isUnknownCronGetMethodError(error)) {
       throw error;
@@ -162,6 +164,18 @@ export function registerCronEditCommand(cron: Command) {
       )
       .action(async (id, opts) => {
         try {
+          if (opts.clearTools && opts.tools !== undefined) {
+            throw new Error("Use --tools or --clear-tools, not both");
+          }
+          let existingJobPromise: Promise<CronJobForEdit> | undefined;
+          let expectedConfigRevision: string | undefined;
+          const readExistingCronJob = async (): Promise<CronJobForEdit> => {
+            const existing = await (existingJobPromise ??= readCronJobForEdit(opts, String(id)));
+            if (typeof existing.configRevision === "string") {
+              expectedConfigRevision = existing.configRevision;
+            }
+            return existing;
+          };
           const sessionTarget =
             typeof opts.session === "string"
               ? normalizeCronSessionTargetOption(opts.session)
@@ -283,7 +297,7 @@ export function registerCronEditCommand(cron: Command) {
           if (opts.clearPacing) {
             patch.pacing = null;
           } else if (hasPacingMin || hasPacingMax) {
-            const existing = await readCronJobForEdit(opts, String(id));
+            const existing = await readExistingCronJob();
             patch.pacing = {
               ...existing.pacing,
               ...(pacingMin ? { min: pacingMin } : {}),
@@ -303,7 +317,7 @@ export function registerCronEditCommand(cron: Command) {
               ...(opts.triggerOnce ? { once: true } : {}),
             };
           } else if (opts.triggerOnce) {
-            const existing = await readCronJobForEdit(opts, String(id));
+            const existing = await readExistingCronJob();
             if (!existing.trigger) {
               throw new Error("--trigger-once requires an existing trigger or --trigger-script");
             }
@@ -326,7 +340,7 @@ export function registerCronEditCommand(cron: Command) {
           });
           if (scheduleRequest.kind === "direct") {
             if (scheduleRequest.schedule.kind === "stream") {
-              const existing = await readCronJobForEdit(opts, String(id));
+              const existing = await readExistingCronJob();
               if (existing.schedule.kind === "stream") {
                 const metadataRequest = resolveCronEditScheduleRequest({
                   streamCwd: opts.streamCwd,
@@ -348,7 +362,7 @@ export function registerCronEditCommand(cron: Command) {
               scheduleRequest.schedule.kind === "cron" &&
               scheduleRequest.schedule.tz === undefined
             ) {
-              const existing = await readCronJobForEdit(opts, String(id));
+              const existing = await readExistingCronJob();
               patch.schedule =
                 existing.schedule.kind === "cron" && existing.schedule.tz !== undefined
                   ? { ...scheduleRequest.schedule, tz: existing.schedule.tz }
@@ -357,18 +371,16 @@ export function registerCronEditCommand(cron: Command) {
               patch.schedule = scheduleRequest.schedule;
             }
           } else if (scheduleRequest.kind === "patch-existing-cron") {
-            const existing = await readCronJobForEdit(opts, String(id));
+            const existing = await readExistingCronJob();
             patch.schedule = applyExistingCronSchedulePatch(existing.schedule, scheduleRequest);
           } else if (scheduleRequest.kind === "patch-existing-stream") {
-            const existing = await readCronJobForEdit(opts, String(id));
+            const existing = await readExistingCronJob();
             patch.schedule = applyExistingStreamSchedulePatch(existing.schedule, scheduleRequest);
           }
 
           Object.assign(
             patch,
-            await resolveCronEditPayloadDeliveryPatch(opts, () =>
-              readCronJobForEdit(opts, String(id)),
-            ),
+            await resolveCronEditPayloadDeliveryPatch(opts, readExistingCronJob),
           );
 
           const hasFailureAlertAfter = typeof opts.failureAlertAfter === "string";
@@ -447,6 +459,7 @@ export function registerCronEditCommand(cron: Command) {
           const res = await callGatewayFromCli("cron.update", opts, {
             id,
             patch,
+            ...(expectedConfigRevision !== undefined ? { expectedConfigRevision } : {}),
           });
           defaultRuntime.writeJson(res);
           await warnIfCronSchedulerDisabled(opts);

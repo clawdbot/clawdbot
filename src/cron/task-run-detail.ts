@@ -2,7 +2,7 @@
  * Deliberately free of agent/runtime imports so history reads stay dependency-light;
  * the event->entry write codec lives in task-run-event-codec.ts. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { CRON_JOB_EXECUTION_TIMEOUT_ERROR } from "./execution-error-constants.js";
+import { isCronTimeoutErrorText } from "./execution-error-constants.js";
 import { normalizeCronRunDiagnostics } from "./run-diagnostics-normalize.js";
 
 type FailoverReason = import("../agents/embedded-agent-helpers/types.js").FailoverReason;
@@ -259,7 +259,7 @@ export function cronRunStatusToTaskStatus(
   if (entry.status === "ok" || entry.status === "skipped") {
     return "succeeded";
   }
-  return entry.error === CRON_JOB_EXECUTION_TIMEOUT_ERROR ? "timed_out" : "failed";
+  return isCronTimeoutErrorText(entry.error) ? "timed_out" : "failed";
 }
 
 /** Reconstructs the unchanged CronRunLogEntry wire shape from a cron task row. */

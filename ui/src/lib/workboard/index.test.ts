@@ -2714,6 +2714,58 @@ describe("workboard controller", () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 
+  it("does not poll tasks or reconcile archived session cards", async () => {
+    state.loaded = true;
+    const archived = createWorkboardCard({
+      status: "running",
+      sessionKey: sampleSession.key,
+      taskId: "archived-task",
+      metadata: { archivedAt: 10 },
+    });
+    state.cards = [archived];
+    const client = createClient({});
+
+    await syncLifecycle(client, [
+      { ...sampleSession, status: "done", hasActiveRun: false, updatedAt: 20 },
+    ]);
+
+    expect(client.request).not.toHaveBeenCalled();
+    expect(state.cards).toEqual([archived]);
+    expect(state.tasksByCardId.size).toBe(0);
+  });
+
+  it("reconciles active session cards without rewriting an archived sibling", async () => {
+    state.loaded = true;
+    const archived = createWorkboardCard({
+      id: "archived-session-card",
+      status: "running",
+      sessionKey: sampleSession.key,
+      taskId: "archived-task",
+      metadata: { archivedAt: 10 },
+    });
+    const active = createWorkboardCard({
+      id: "active-session-card",
+      status: "todo",
+      sessionKey: sampleSession.key,
+    });
+    state.cards = [archived, active];
+    const updated = { ...active, status: "review" as const };
+    const client = createClient((method) =>
+      method === "workboard.cards.update" ? { card: updated } : {},
+    );
+
+    await syncLifecycle(client, [
+      { ...sampleSession, status: "done", hasActiveRun: false, updatedAt: 20 },
+    ]);
+
+    expect(client.request).toHaveBeenCalledOnce();
+    expect(client.request).toHaveBeenCalledWith(
+      "workboard.cards.update",
+      expect.objectContaining({ id: active.id }),
+    );
+    expect(state.cards.find((card) => card.id === archived.id)).toEqual(archived);
+  });
+
   it.each(["editing", "dragging"] as const)(
     "does not start lifecycle writes while a card is %s",
     async (interaction) => {
@@ -2893,6 +2945,37 @@ describe("workboard controller", () => {
       sessionKey: sampleSession.key,
     });
     expect(getWorkboardState(host).cards[0]).toMatchObject({ sessionKey: sampleSession.key });
+  });
+
+  it("captures a session on the selected named board", async () => {
+    state.loaded = true;
+    state.boardFilter = "ops";
+    state.boards = [{ id: "ops", total: 0, active: 0, archived: 0, byStatus: {} }];
+    const created = createWorkboardCard({
+      id: "captured-ops-card",
+      sessionKey: sampleSession.key,
+      metadata: { automation: { boardId: "ops" } },
+    });
+    const client = createClient((method) => {
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      if (method === "workboard.cards.create") {
+        return { card: created };
+      }
+      return {};
+    });
+
+    await expect(captureSession(client, sampleSession)).resolves.toMatchObject({
+      id: "captured-ops-card",
+      metadata: { automation: { boardId: "ops" } },
+    });
+
+    expect(client.request).toHaveBeenCalledWith(
+      "workboard.cards.create",
+      expect.objectContaining({ boardId: "ops", sessionKey: sampleSession.key }),
+    );
+    expect(state.cards).toContainEqual(created);
   });
 
   it("does not duplicate existing captured sessions", async () => {

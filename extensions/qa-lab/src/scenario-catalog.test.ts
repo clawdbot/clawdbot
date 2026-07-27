@@ -709,6 +709,15 @@ describe("qa scenario catalog", () => {
     );
   });
 
+  it("binds model switch follow-up assertions to the configured alternate model", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("model-switch-follow-up"));
+    const flow = JSON.stringify(scenario.execution.flow);
+
+    expect(flow).toContain("alternate?.model");
+    expect(flow).toContain("config.followupPrompt");
+    expect(flow).not.toContain("gpt-5.6-luna-alt");
+  });
+
   it("keeps provider-sensitive QA flow scenarios on their supported lanes", () => {
     const strandedConfig = readQaScenarioExecutionConfig("message-tool-stranded-final-reply") as
       | { requiredProviderMode?: string }
