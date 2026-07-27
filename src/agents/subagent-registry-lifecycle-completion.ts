@@ -572,7 +572,10 @@ export function createSubagentRegistryLifecycleCompletion(
     // Recovery persists its terminal state before draining this callback, so an
     // unchanged row still needs its first session-status and progress events.
     const shouldPublishTerminalStatus =
-      mutated || (!isProvisionalKill && !progressEndedEntries.has(entry));
+      mutated ||
+      (completeParams.recoverInterrupted === true &&
+        !isProvisionalKill &&
+        !progressEndedEntries.has(entry));
     if (
       shouldPublishTerminalStatus &&
       !suppressedForSteerRestart &&
