@@ -448,6 +448,57 @@ openclaw mcp logout docs
 openclaw mcp unset context7
 ```
 
+### Auth-profile bearer projection
+
+HTTP and SSE MCP servers configured with `auth: "oauth"` can resolve their bearer token from an
+auth profile instead of storing a literal `Authorization` header in `mcp.servers`.
+
+Use `oauth.authProfileId` when an MCP server should project a stored bearer credential:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "docs": {
+        "url": "https://mcp.example.com/mcp",
+        "transport": "streamable-http",
+        "auth": "oauth",
+        "oauth": {
+          "authProfileId": "docs:mcp"
+        }
+      }
+    }
+  },
+  "auth": {
+    "profiles": {
+      "docs:mcp": {
+        "provider": "docs",
+        "mode": "token"
+      }
+    }
+  }
+}
+```
+
+`authProfileId` supports two bearer-profile lifecycles:
+
+- `type: "oauth"` profiles are refresh-capable. OpenClaw refreshes them through the provider's
+  OAuth flow and projects the fresh raw access token as `Authorization: Bearer <token>`.
+- `type: "token"` profiles are static bearer tokens, such as a PAT or service-minted JWT. OpenClaw
+  does not refresh them. If the profile has an `expires` timestamp and it is expired or invalid, MCP
+  bearer projection fails instead of sending a stale token.
+
+For CLI runtimes, OpenClaw resolves the profile before handing off MCP config, strips the
+OpenClaw-only `auth`/`oauth` fields, and writes only an environment placeholder such as
+`Authorization: Bearer ${OPENCLAW_MCP_AUTH_<hash>_TOKEN}` into the projected MCP config. The actual
+token value stays in the runtime environment. For embedded OpenClaw MCP clients, OpenClaw resolves
+the profile at same-origin request time and replaces any stale configured or SDK-provided
+`Authorization` header.
+
+To rotate a static token profile, update the stored auth profile token or `tokenRef` value, then
+restart or reload the runtime that owns the MCP connection. This is a rotation/reconnect lifecycle,
+not OAuth refresh.
+
 ### Common server recipes
 
 These examples save server definitions only. Run `openclaw mcp doctor --probe` afterward to prove that the server starts and exposes tools.
