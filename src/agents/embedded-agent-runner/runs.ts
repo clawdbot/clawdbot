@@ -324,7 +324,11 @@ export function queueEmbeddedAgentMessageWithOutcome(
   if (prepared.kind === "complete") {
     return prepared.outcome;
   }
-  logMessageQueued({ sessionId, source: "embedded-agent-runner" });
+  logMessageQueued({
+    sessionId,
+    source: "embedded-agent-runner",
+    countsTowardBacklog: false,
+  });
   void prepared.handle
     .queueMessage(text, options ?? { steeringMode: "all" })
     .catch((err: unknown) => {
@@ -427,7 +431,11 @@ export async function queueEmbeddedAgentMessageWithOutcomeAsync(
     const enqueuedAtMs = Date.now();
     await prepared.handle.queueMessage(text, options ?? { steeringMode: "all" });
     const deliveredAtMs = options?.waitForTranscriptCommit ? Date.now() : undefined;
-    logMessageQueued({ sessionId, source: "embedded-agent-runner" });
+    logMessageQueued({
+      sessionId,
+      source: "embedded-agent-runner",
+      countsTowardBacklog: false,
+    });
     return {
       queued: true,
       sessionId,

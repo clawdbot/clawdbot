@@ -670,12 +670,15 @@ export function logMessageQueued(params: {
   sessionKey?: string;
   channel?: string;
   source: string;
+  countsTowardBacklog?: boolean;
 }) {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
   const state = getDiagnosticSessionState(params);
-  state.queueDepth += 1;
+  if (params.countsTowardBacklog !== false) {
+    state.queueDepth += 1;
+  }
   state.lastActivity = Date.now();
   state.generation = (state.generation ?? 0) + 1;
   state.lastStuckWarnAgeMs = undefined;
