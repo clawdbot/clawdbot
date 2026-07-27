@@ -2311,8 +2311,6 @@ importers:
         specifier: workspace:*
         version: link:../normalization-core
 
-  packages/web-content-core: {}
-
   packages/workboard-contract: {}
 
   ui:

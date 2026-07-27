@@ -244,10 +244,6 @@
       "@openclaw/net-policy/url-protocol": ["./packages/net-policy/src/url-protocol.ts"],
       "@openclaw/net-policy/url-userinfo": ["./packages/net-policy/src/url-userinfo.ts"],
       "@openclaw/net-policy/*": ["./packages/net-policy/src/*"],
-      "@openclaw/web-content-core/provider-runtime-shared": [
-        "./packages/web-content-core/src/provider-runtime-shared.ts"
-      ],
-      "@openclaw/web-content-core/*": ["./packages/web-content-core/src/*"],
       "@openclaw/speech-core": ["./packages/speech-core/runtime-api.ts"],
       "@openclaw/speech-core/runtime-api": ["./packages/speech-core/runtime-api.ts"],
       "@openclaw/speech-core/speaker": ["./packages/speech-core/speaker.ts"],
