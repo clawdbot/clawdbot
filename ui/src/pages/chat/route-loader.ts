@@ -192,6 +192,24 @@ function sessionReferenceMatches(
   return result.sessions.filter((row) => sessionKeyUuid(row.key)?.startsWith(prefix) === true);
 }
 
+// Two sessions can share a short id's prefix, which would send an otherwise exact link to
+// the disambiguation view. When the link also carries a display-name slug, that slug says
+// which one was meant, so it settles the tie and keeps generated links durable at their
+// normal length. It can only narrow: a hint that matches nothing (a stale or hand-edited
+// name) leaves the original candidates for the chooser rather than dropping the session.
+function narrowBySlugHint(
+  resolution: SessionReferenceResolution,
+  slugHint: string | undefined,
+): SessionReferenceResolution {
+  if (resolution.kind !== "ambiguous" || !slugHint) {
+    return resolution;
+  }
+  const matched = resolution.sessions.filter(
+    (row) => controlUiSessionSlug(row.displayName) === slugHint,
+  );
+  return matched.length === 1 && matched[0] ? { kind: "unique", session: matched[0] } : resolution;
+}
+
 function incompleteSessionReferenceResolution(
   search: SessionReferenceSearch,
   sessions: GatewaySessionRow[],
@@ -685,12 +703,15 @@ export async function loadChatRoute(
       ...(canonicalLocationReady ? { canonicalLocationReady } : {}),
     };
   }
-  const resolution = requireSessionReferenceResolution(
-    await querySessionReference(
-      context,
-      { kind: "short", value: target.shortId, agentId: target.agentId },
-      signal,
+  const resolution = narrowBySlugHint(
+    requireSessionReferenceResolution(
+      await querySessionReference(
+        context,
+        { kind: "short", value: target.shortId, agentId: target.agentId },
+        signal,
+      ),
     ),
+    target.slugHint,
   );
   if (resolution.kind === "not-found") {
     return notFound({ routeId: face });

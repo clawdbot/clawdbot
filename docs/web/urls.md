@@ -77,10 +77,15 @@ The following parts are stable URL contracts:
 - The key UUID short id in short-id URLs.
 - The arity and short-versus-literal parsing rules above.
 
-In short-id form, the agent segment and slug are explicitly decorative. They may
-change without notice and are not used to identify or validate the session.
-After resolution, the Control UI replaces the address bar with the current
-agent id and current display-name slug without adding a browser-history entry.
+In short-id form, the agent segment is decorative and the slug is almost
+decorative. Neither identifies the session on its own, and both may change
+without notice. The one exception is a tie: if the short id matches more than
+one session and exactly one of them still carries the slug in the link, that
+session is used, so a generated link keeps working even when two ids happen to
+share a prefix. A slug that matches none or several of the tied sessions is
+ignored and the disambiguation view is shown. After resolution, the Control UI
+replaces the address bar with the current agent id and current display-name slug
+without adding a browser-history entry.
 
 In literal-key form, the agent segment is authoritative because it is part of
 the reconstructed session key. The remaining literal segments are authoritative
@@ -95,9 +100,10 @@ the slug, the UI shows the same disambiguation view used for short-id ties
 instead of guessing. Exact short-id and literal-key references always win over
 slug matching.
 
-If one short id matches more than one session, the UI does not guess. It shows a
-small disambiguation view with the matching display names, agents, and longer id
-prefixes. Use a longer prefix to make the URL unique. Resolution examines at
+If one short id matches more than one session and the slug does not settle it,
+the UI does not guess. It shows a small disambiguation view with the matching
+display names, agents, and longer id prefixes. Use a longer prefix to make the
+URL unique. Resolution examines at
 most five pages of search results; if more remain, the view says that the search
 was incomplete instead of guessing.
 
