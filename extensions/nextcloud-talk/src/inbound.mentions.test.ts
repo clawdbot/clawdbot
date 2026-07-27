@@ -144,6 +144,18 @@ describe("parseStructuredNextcloudTalkBody", () => {
     expect(result.mentionEntries).toEqual([]);
   });
 
+  it("ignores parameters that are not referenced by the message", () => {
+    const raw = JSON.stringify({
+      message: "hello",
+      parameters: {
+        hidden: { type: "user", id: "agent", name: "OpenClaw" },
+      },
+    });
+    const result = parseStructuredNextcloudTalkBody(raw, new Set(["agent"]));
+    expect(result.text).toBe("hello");
+    expect(result.mentionEntries).toEqual([]);
+  });
+
   it("extracts mention-id (hyphenated) field into mentionId", () => {
     const raw = JSON.stringify({
       message: "ping {m}",

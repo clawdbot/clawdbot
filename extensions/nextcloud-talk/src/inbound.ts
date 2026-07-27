@@ -86,18 +86,20 @@ export function parseStructuredNextcloudTalkBody(
     const rawMessage = typeof parsed.message === "string" ? parsed.message : raw;
     const parameters =
       parsed.parameters && typeof parsed.parameters === "object" ? parsed.parameters : {};
-    const mentionEntries = Object.entries(parameters).map(([key, value]) => ({
-      key,
-      type: typeof value?.type === "string" ? value.type : undefined,
-      id: typeof value?.id === "string" ? value.id : undefined,
-      mentionId:
-        typeof value?.["mention-id"] === "string"
-          ? value["mention-id"]
-          : typeof value?.mentionId === "string"
-            ? value.mentionId
-            : undefined,
-      name: typeof value?.name === "string" ? value.name : undefined,
-    }));
+    const mentionEntries = Object.entries(parameters)
+      .filter(([key]) => rawMessage.includes(`{${key}}`))
+      .map(([key, value]) => ({
+        key,
+        type: typeof value?.type === "string" ? value.type : undefined,
+        id: typeof value?.id === "string" ? value.id : undefined,
+        mentionId:
+          typeof value?.["mention-id"] === "string"
+            ? value["mention-id"]
+            : typeof value?.mentionId === "string"
+              ? value.mentionId
+              : undefined,
+        name: typeof value?.name === "string" ? value.name : undefined,
+      }));
     const botMentionKeys = new Set(
       mentionEntries
         .filter((entry) => {
@@ -438,15 +440,15 @@ export async function handleNextcloudTalkInbound(params: {
     return;
   }
 
-  const mentionRegexes = core.channel.mentions.buildMentionRegexes(config as OpenClawConfig);
   const explicitMention = resolveExplicitNextcloudTalkMention({
     mentionEntries: parsedBody.mentionEntries,
     account,
   });
+  const mentionRegexes = core.channel.mentions.buildMentionRegexes(config as OpenClawConfig);
   const wasMentioned =
     explicitMention ||
     (mentionRegexes.length
-      ? core.channel.mentions.matchesMentionPatterns(effectiveBody, mentionRegexes)
+      ? core.channel.mentions.matchesMentionPatterns(commandBody, mentionRegexes)
       : false);
   if (isGroup) {
     access = await resolveAccess(wasMentioned);

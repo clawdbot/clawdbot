@@ -234,6 +234,84 @@ describe("nextcloud-talk inbound behavior", () => {
     expect(runtime.log).toHaveBeenCalledWith("nextcloud-talk: drop room room-group (no mention)");
   });
 
+  it("does not let structured display names satisfy mention gating", async () => {
+    const matchesMentionPatterns = vi.fn((body: string) => /openclaw/i.test(body));
+    const mentionRegexes = [/openclaw/i];
+    const coreRuntime = installRuntime({
+      buildMentionRegexes: vi.fn(() => mentionRegexes),
+      matchesMentionPatterns,
+    });
+    createChannelPairingControllerMock.mockReturnValue({
+      readStoreForDmPolicy: vi.fn(async () => []),
+      issueChallenge: vi.fn(),
+    });
+    resolveNextcloudTalkRoomKindMock.mockResolvedValue("group");
+    const runtime = createRuntimeEnv();
+
+    await handleNextcloudTalkInbound({
+      message: createMessage({
+        roomToken: "room-group",
+        roomName: "Ops",
+        isGroupChat: true,
+        text: JSON.stringify({
+          message: "ask {mention0}",
+          parameters: {
+            mention0: { type: "user", id: "alice", name: "OpenClaw" },
+          },
+        }),
+      }),
+      account: createAccount({
+        config: {
+          dmPolicy: "allowlist",
+          allowFrom: [],
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["user-1"],
+          apiUser: "agent",
+        },
+      }),
+      config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
+      runtime,
+    });
+
+    expect(matchesMentionPatterns).toHaveBeenCalledWith("ask _", mentionRegexes);
+    expect(coreRuntime.channel.inbound.dispatchReply).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith("nextcloud-talk: drop room room-group (no mention)");
+  });
+
+  it("matches literal mention text in a structured message", async () => {
+    const mentionRegexes = [/@openclaw/i];
+    const coreRuntime = installRuntime({
+      buildMentionRegexes: vi.fn(() => mentionRegexes),
+      matchesMentionPatterns: vi.fn((body: string) => mentionRegexes[0]?.test(body) ?? false),
+    });
+    createChannelPairingControllerMock.mockReturnValue({
+      readStoreForDmPolicy: vi.fn(async () => []),
+      issueChallenge: vi.fn(),
+    });
+    resolveNextcloudTalkRoomKindMock.mockResolvedValue("group");
+
+    await handleNextcloudTalkInbound({
+      message: createMessage({
+        roomToken: "room-group",
+        roomName: "Ops",
+        isGroupChat: true,
+        text: JSON.stringify({ message: "@openclaw help", parameters: {} }),
+      }),
+      account: createAccount({
+        config: {
+          dmPolicy: "allowlist",
+          allowFrom: [],
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["user-1"],
+        },
+      }),
+      config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(coreRuntime.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
+  });
+
   it("blocks unauthorized group text control commands even when room sender access allows chat", async () => {
     const buildMentionRegexes = vi.fn(() => [/@openclaw/i]);
     const coreRuntime = installRuntime({
