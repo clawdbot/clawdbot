@@ -176,7 +176,9 @@ function createSessionsSpawnToolSchema(params: {
     cleanup: optionalStringEnum(["delete", "keep"] as const, {
       description: "Hidden session cleanup; visible=true always keeps the session.",
     }),
-    sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
+    sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES, {
+      description: '"inherit" parent sandbox policy; "require" fails unless child is sandboxed.',
+    }),
     context: optionalStringEnum(SUBAGENT_SPAWN_CONTEXT_MODES, {
       description:
         "Native: omit/isolated clean; fork only needing requester transcript; visible fork requires same agent.",
@@ -188,10 +190,22 @@ function createSessionsSpawnToolSchema(params: {
     ),
     ...(params.swarmEnabled
       ? {
-          collect: Type.Optional(Type.Boolean()),
-          outputSchema: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+          collect: Type.Optional(
+            Type.Boolean({
+              description: "Swarm collector child for parallel fan-out; await via agents_wait.",
+            }),
+          ),
+          outputSchema: Type.Optional(
+            Type.Record(Type.String(), Type.Unknown(), {
+              description: "JSON Schema for the child's structured result; requires collect=true.",
+            }),
+          ),
           fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
-          groupId: Type.Optional(Type.String()),
+          groupId: Type.Optional(
+            Type.String({
+              description: "Groups parallel collector children; requires collect=true.",
+            }),
+          ),
         }
       : {}),
     ...VISIBLE_SESSIONS_SPAWN_SCHEMA,
@@ -282,7 +296,11 @@ export function createSessionsSpawnTool(
     displaySummary: acpAvailable
       ? SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY
       : SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY,
-    description: describeSessionsSpawnTool({ acpAvailable, threadAvailable }),
+    description: describeSessionsSpawnTool({
+      acpAvailable,
+      threadAvailable,
+      swarmEnabled: swarmConfig.enabled,
+    }),
     parameters: createSessionsSpawnToolSchema({
       acpAvailable,
       threadAvailable,
