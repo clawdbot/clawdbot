@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { ClickClackHttpError } from "../http-client.js";
+import { ClickClackHttpError, type ClickClackClient } from "../http-client.js";
+import type { ClickClackChannel } from "../types.js";
 import { controlSessionUrl } from "./control-session-url.js";
 import { fallbackDiscussionLabel } from "./naming.js";
 import { MANAGED_CONTRACT_FIELDS, createHarness, testExternalRef } from "./service-test-support.js";
@@ -98,6 +99,21 @@ const SESSION_URL_CONTRACT_CASES = [
   },
 ] satisfies readonly SessionUrlContractCase[];
 
+function legacyCreateResponse(
+  input: Parameters<ClickClackClient["createChannel"]>[1],
+): ClickClackChannel {
+  const response: ClickClackChannel = {
+    id: "chn_discussion",
+    route_id: "discussion-route",
+    workspace_id: "wsp_team",
+    ...input,
+    kind: "public",
+    created_at: "2026-07-19T00:00:00.000Z",
+  };
+  Reflect.deleteProperty(response, "display_title");
+  return response;
+}
+
 describe("ClickClack discussion service", () => {
   it("matches the Control UI session URL contract vectors", () => {
     for (const testCase of SESSION_URL_CONTRACT_CASES) {
@@ -149,7 +165,89 @@ describe("ClickClack discussion service", () => {
       external_ref: testExternalRef(sessionKey),
       external_url: "https://control.example/control/chat/main",
       sidebar_section: "Projects",
+      display_title: "Release Planning",
     });
+  });
+
+  it("clears display_title for fallback labels", async () => {
+    const harness = createHarness({});
+    const sessionKey = "agent:main:untitled";
+
+    await harness.service.open(sessionKey);
+
+    expect(harness.createChannel).toHaveBeenCalledWith(
+      "wsp_team",
+      expect.objectContaining({
+        name: fallbackDiscussionLabel(sessionKey, "main"),
+        display_title: "",
+      }),
+    );
+  });
+
+  it("truncates display_title by Unicode code point", async () => {
+    const harness = createHarness({ label: "😀".repeat(201) });
+
+    await harness.service.open("agent:main:long-title");
+
+    expect(harness.createChannel).toHaveBeenCalledWith(
+      "wsp_team",
+      expect.objectContaining({ display_title: "😀".repeat(200) }),
+    );
+  });
+
+  it("records display_title confirmation only when create responses include it", async () => {
+    const modern = createHarness({ label: "Confirmed title" });
+    await modern.service.open("agent:main:confirmed-title");
+    expect(modern.store.lookup("agent:main:confirmed-title")).toMatchObject({
+      displayTitle: "Confirmed title",
+    });
+
+    const legacy = createHarness({ label: "Unconfirmed title" });
+    vi.mocked(legacy.createChannel).mockImplementationOnce(async (_workspaceId, input) =>
+      legacyCreateResponse(input),
+    );
+    await legacy.service.open("agent:main:unconfirmed-title");
+    expect(legacy.store.lookup("agent:main:unconfirmed-title")).toMatchObject({
+      displayTitle: undefined,
+    });
+  });
+
+  it("backfills an unchanged title after a sibling confirms server support", async () => {
+    const harness = createHarness({ label: "Needs Backfill" });
+    const sessionKey = "agent:main:needs-backfill";
+    vi.mocked(harness.createChannel).mockImplementationOnce(async (_workspaceId, input) =>
+      legacyCreateResponse(input),
+    );
+    await harness.service.open(sessionKey);
+
+    harness.setSessionEntry({ label: "Confirmed Sibling" });
+    await harness.service.open("agent:main:confirmed-sibling");
+    expect(harness.store.lookup("agent:main:confirmed-sibling")).toMatchObject({
+      displayTitle: "Confirmed Sibling",
+    });
+
+    harness.updateChannel.mockClear();
+    harness.setSessionEntry({ label: "Needs Backfill" });
+    await harness.service.reconcile(sessionKey);
+
+    expect(harness.updateChannel).toHaveBeenCalledWith("chn_discussion", {
+      display_title: "Needs Backfill",
+    });
+    expect(harness.store.lookup(sessionKey)).toMatchObject({ displayTitle: "Needs Backfill" });
+  });
+
+  it("does not retry an unchanged title without server capability confirmation", async () => {
+    const harness = createHarness({ label: "Legacy title" });
+    const sessionKey = "agent:main:legacy-title-no-retry";
+    vi.mocked(harness.createChannel).mockImplementationOnce(async (_workspaceId, input) =>
+      legacyCreateResponse(input),
+    );
+    await harness.service.open(sessionKey);
+
+    harness.updateChannel.mockClear();
+    await harness.service.reconcile(sessionKey);
+
+    expect(harness.updateChannel).not.toHaveBeenCalled();
   });
 
   it("pins the configured default for global keys and preserves qualified owners", async () => {
@@ -255,6 +353,7 @@ describe("ClickClack discussion service", () => {
     await harness.service.reconcile(sessionKey);
     expect(harness.updateChannel).toHaveBeenLastCalledWith("chn_discussion", {
       archived: true,
+      display_title: "Renamed Session",
       name: "renamed-session",
       sidebar_section: "Incidents",
     });
@@ -272,6 +371,21 @@ describe("ClickClack discussion service", () => {
       archived: true,
     });
     expect(await harness.service.info(sessionKey)).toEqual({ state: "available" });
+  });
+
+  it("renames a fallback discussion when displayName arrives", async () => {
+    const harness = createHarness({});
+    const sessionKey = "agent:main:generated-title";
+    await harness.service.open(sessionKey);
+
+    harness.setSessionEntry({ displayName: "Generated Session Title" });
+    await harness.service.reconcile(sessionKey);
+
+    expect(harness.updateChannel).toHaveBeenLastCalledWith("chn_discussion", {
+      display_title: "Generated Session Title",
+      name: "generated-session-title",
+    });
+    expect(harness.store.lookup(sessionKey)).toMatchObject({ label: "Generated Session Title" });
   });
 
   it("does not return a binding removed while info or open reconciles a deleted session", async () => {
@@ -328,7 +442,7 @@ describe("ClickClack discussion service", () => {
     expect(harness.store.lookup(sessionKey)).toBeUndefined();
   });
 
-  it("uses the short session fallback when a label slug already exists", async () => {
+  it("suffixes a desired name when its slug already exists", async () => {
     const harness = createHarness({ label: "Release Planning" });
     vi.mocked(harness.channels).mockResolvedValue([
       {
@@ -346,39 +460,30 @@ describe("ClickClack discussion service", () => {
 
     expect(harness.createChannel).toHaveBeenCalledWith(
       "wsp_team",
-      expect.objectContaining({ name: fallbackDiscussionLabel("agent:main:duplicate-label") }),
+      expect.objectContaining({ name: "release-planning-2" }),
     );
   });
 
-  it("adds a deterministic suffix when both the label and hash fallback are occupied", async () => {
+  it("falls back after exhausting desired-name suffixes through 20", async () => {
     const harness = createHarness({ label: "Release Planning" });
     const sessionKey = "agent:main:duplicate-label";
-    vi.mocked(harness.channels).mockResolvedValue([
-      {
-        id: "chn_existing_label",
-        route_id: "existing-label-route",
+    vi.mocked(harness.channels).mockResolvedValue(
+      Array.from({ length: 20 }, (_, index) => ({
+        id: `chn_existing_${index}`,
+        route_id: `existing-route-${index}`,
         workspace_id: "wsp_team",
-        name: "release-planning",
+        name: index === 0 ? "release-planning" : `release-planning-${index + 1}`,
         kind: "public",
         ...MANAGED_CONTRACT_FIELDS,
         created_at: "2026-07-19T00:00:00.000Z",
-      },
-      {
-        id: "chn_existing_hash",
-        route_id: "existing-hash-route",
-        workspace_id: "wsp_team",
-        name: fallbackDiscussionLabel(sessionKey),
-        kind: "public",
-        ...MANAGED_CONTRACT_FIELDS,
-        created_at: "2026-07-19T00:00:00.000Z",
-      },
-    ]);
+      })),
+    );
 
     await harness.service.open(sessionKey);
 
     expect(harness.createChannel).toHaveBeenCalledWith(
       "wsp_team",
-      expect.objectContaining({ name: `${fallbackDiscussionLabel(sessionKey)}-2` }),
+      expect.objectContaining({ name: fallbackDiscussionLabel(sessionKey, "main") }),
     );
   });
 
@@ -410,7 +515,7 @@ describe("ClickClack discussion service", () => {
     expect(harness.createChannel).toHaveBeenCalledTimes(2);
     expect(harness.createChannel).toHaveBeenLastCalledWith(
       "wsp_team",
-      expect.objectContaining({ name: fallbackDiscussionLabel(sessionKey) }),
+      expect.objectContaining({ name: "release-planning-2" }),
     );
   });
 
@@ -444,7 +549,7 @@ describe("ClickClack discussion service", () => {
     expect(harness.updateChannel).toHaveBeenCalledTimes(2);
     expect(harness.updateChannel).toHaveBeenLastCalledWith(
       "chn_discussion",
-      expect.objectContaining({ name: fallbackDiscussionLabel(sessionKey) }),
+      expect.objectContaining({ name: "renamed-2" }),
     );
   });
 

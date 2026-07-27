@@ -17,17 +17,17 @@ import {
   subscribeChatOutboxProjection,
   updateQueuedMessageForSession,
 } from "./chat-queue.ts";
+import { ChatStateController } from "./chat-state-controller.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
+import { createPageState } from "./chat-state-page.ts";
+import { refreshChatMetadata } from "./chat-state-refresh.ts";
 import {
-  ChatStateController,
-  createPageState,
-  handlePageGatewayEvent,
-  refreshChatMetadata,
   resetChatStateForRouteSession,
   retryChatComposerMemoryFallback,
   resolveChatAvatarUrl,
   selectedChatSessionRow,
-  type ChatPageHost,
-} from "./chat-state.ts";
+} from "./chat-state-route.ts";
 import {
   admitStoredChatComposerQueueItem,
   ChatComposerPersistence,
@@ -588,6 +588,48 @@ describe("ChatStateController render lifecycle", () => {
     await completion;
 
     expect(effect).not.toHaveBeenCalled();
+  });
+
+  it("aborts attachment reads when a pane adopts a different session", () => {
+    const host = {
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: () => undefined,
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost;
+    const controller = new ChatStateController<ChatPageHost>(host);
+    const previousSignal = controller.attachmentReads.readSignal;
+
+    controller.attachmentReads.updatePending(previousSignal, 1);
+    expect(controller.attachmentReads.pendingReads).toBe(1);
+
+    controller.adoptComposerRoute();
+
+    expect(previousSignal.aborted).toBe(true);
+    expect(controller.attachmentReads.pendingReads).toBe(0);
+    expect(controller.attachmentReads.readSignal).not.toBe(previousSignal);
+    controller.attachmentReads.updatePending(previousSignal, 1);
+    expect(controller.attachmentReads.pendingReads).toBe(0);
+  });
+
+  it("aborts attachment reads when a chat pane disconnects", () => {
+    const host = {
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: () => undefined,
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost;
+    const controller = new ChatStateController<ChatPageHost>(host);
+    const previousSignal = controller.attachmentReads.readSignal;
+
+    controller.attachmentReads.updatePending(previousSignal, 1);
+    controller.hostDisconnected();
+
+    expect(previousSignal.aborted).toBe(true);
+    expect(controller.attachmentReads.pendingReads).toBe(0);
+    expect(controller.attachmentReads.readSignal).not.toBe(previousSignal);
+    controller.attachmentReads.updatePending(previousSignal, -1);
+    expect(controller.attachmentReads.pendingReads).toBe(0);
   });
 
   it("rejects lifecycle work from detached and replaced state epochs", async () => {

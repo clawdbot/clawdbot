@@ -12,10 +12,8 @@ import {
 } from "../infra/diagnostic-events.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
-import {
-  clearCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -33,12 +31,10 @@ import {
 import { clearAgentHarnesses, registerAgentHarness } from "./harness/registry.js";
 import type { AgentHarness } from "./harness/types.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
-import {
-  isFallbackSummaryError,
-  resolveModelCandidateChain,
-  runWithImageModelFallback,
-  runWithModelFallback as runWithModelFallbackBase,
-} from "./model-fallback.js";
+import { isFallbackSummaryError } from "./model-fallback-attempt.js";
+import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
+import { runWithImageModelFallback } from "./model-fallback-image.js";
+import { runWithModelFallback as runWithModelFallbackBase } from "./model-fallback-runner.js";
 import { shouldDiscardDeferredSessionSuspension } from "./model-fallback.test-support.js";
 import {
   createAgentRunDirectAbortError,

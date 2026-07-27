@@ -1761,7 +1761,6 @@ jobs:
             const compatibilityScenarioIds = new Set([
               "control-ui-chat-flow-playwright",
               "system-agent-ring-zero-setup",
-              "dreaming-shadow-trial-report",
               "gateway-smoke",
               "group-visible-reply-tool",
               "long-running-release-audit",

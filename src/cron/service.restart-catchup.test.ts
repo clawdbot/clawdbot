@@ -687,6 +687,87 @@ describe("CronService restart catch-up", () => {
     );
   });
 
+  it.each([false, true])(
+    "preserves a future one-shot rescheduled before an interrupted run restarts (deleteAfterRun=%s)",
+    async (deleteAfterRun) => {
+      const restartedAt = Date.parse("2025-12-13T17:00:00.000Z");
+      const interruptedAt = Date.parse("2025-12-13T16:30:00.000Z");
+      const replacementAt = Date.parse("2025-12-13T18:00:00.000Z");
+      const jobId = `restart-rescheduled-one-shot-${deleteAfterRun}`;
+
+      await withRestartedCron(
+        [
+          {
+            id: jobId,
+            name: "one-shot rescheduled before restart",
+            enabled: true,
+            deleteAfterRun,
+            createdAtMs: Date.parse("2025-12-13T15:00:00.000Z"),
+            updatedAtMs: Date.parse("2025-12-13T16:45:00.000Z"),
+            schedule: { kind: "at", at: new Date(replacementAt).toISOString() },
+            sessionTarget: "main",
+            wakeMode: "next-heartbeat",
+            payload: { kind: "systemEvent", text: "replacement one-shot" },
+            state: {
+              nextRunAtMs: replacementAt,
+              runningAtMs: interruptedAt,
+            },
+          },
+        ],
+        async ({ cron, enqueueSystemEvent, requestHeartbeat, onEvent }) => {
+          expect(enqueueSystemEvent).not.toHaveBeenCalled();
+          expect(requestHeartbeat).not.toHaveBeenCalled();
+
+          const listedJobs = await cron.list({ includeDisabled: true });
+          const replacement = listedJobs.find((job) => job.id === jobId);
+          expect(replacement?.enabled).toBe(true);
+          expect(replacement?.state.nextRunAtMs).toBe(replacementAt);
+          expect(replacement?.state.runningAtMs).toBeUndefined();
+          expect(replacement?.state.lastRunAtMs).toBe(interruptedAt);
+          expect(replacement?.state.lastRunStatus).toBe("error");
+          expect(replacement?.state.lastError).toBe("cron: job interrupted by gateway restart");
+          expect(replacement?.updatedAtMs).toBe(restartedAt);
+          expectInterruptedJobEvent(onEvent, { jobId, runAtMs: interruptedAt });
+        },
+      );
+    },
+  );
+
+  it("does not mistake a future retry for a rescheduled one-shot on restart", async () => {
+    const interruptedAt = Date.parse("2025-12-13T16:30:00.000Z");
+    const originalAt = Date.parse("2025-12-13T16:00:00.000Z");
+    const retryAt = Date.parse("2025-12-13T18:00:00.000Z");
+    const jobId = "restart-future-retry-is-not-a-replacement";
+
+    await withRestartedCron(
+      [
+        {
+          id: jobId,
+          name: "future retry is not a rescheduled one-shot",
+          enabled: true,
+          deleteAfterRun: true,
+          createdAtMs: Date.parse("2025-12-13T15:00:00.000Z"),
+          updatedAtMs: interruptedAt,
+          schedule: { kind: "at", at: new Date(originalAt).toISOString() },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "do not replay interrupted retry" },
+          state: { nextRunAtMs: retryAt, runningAtMs: interruptedAt },
+        },
+      ],
+      async ({ cron, enqueueSystemEvent, requestHeartbeat, onEvent }) => {
+        const listedJobs = await cron.list({ includeDisabled: true });
+        const recovered = listedJobs.find((job) => job.id === jobId);
+        expect(recovered?.enabled).toBe(false);
+        expect(recovered?.state.nextRunAtMs).toBeUndefined();
+        expect(recovered?.state.runningAtMs).toBeUndefined();
+        expect(enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(requestHeartbeat).not.toHaveBeenCalled();
+        expectInterruptedJobEvent(onEvent, { jobId, runAtMs: interruptedAt });
+      },
+    );
+  });
+
   it("does not replay cron slot when the latest slot already ran before restart", async () => {
     vi.setSystemTime(new Date("2025-12-13T04:02:00.000Z"));
     await withRestartedCron(

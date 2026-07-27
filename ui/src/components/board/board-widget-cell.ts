@@ -270,6 +270,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
         return this.pluginRenderer({
           widget,
           sessionKey: this.sessionKey,
+          canMutate: this.canMutate && !widget.readOnly,
           requestUpdate: () => this.requestUpdate(),
         });
       }

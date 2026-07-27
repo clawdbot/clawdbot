@@ -81,7 +81,7 @@ export async function prepareEmbeddedAttemptStreamRuntime(input: {
 }) {
   const { activeSession, attempt, sessionManager } = input;
   const idleTimeoutTriggerRef: { current?: (error: Error) => void } = {};
-  const { cacheObservabilityEnabled, promptCacheToolNames } = installEmbeddedAttemptStreamGuards({
+  const { cacheObservabilityEnabled, promptCacheTools } = installEmbeddedAttemptStreamGuards({
     ...input.guards,
     attempt,
     session: activeSession,
@@ -180,7 +180,7 @@ export async function prepareEmbeddedAttemptStreamRuntime(input: {
     abortable,
     cache: {
       observabilityEnabled: cacheObservabilityEnabled,
-      promptToolNames: promptCacheToolNames,
+      promptTools: promptCacheTools,
     },
     history: preparedHistory,
     isProbeSession,

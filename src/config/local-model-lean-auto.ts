@@ -1,24 +1,8 @@
+import { isCloudModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 const AUTO_LOCAL_MODEL_LEAN_PROVIDER_IDS = new Set(["lmstudio", "ollama"]);
-
-function parseOllamaModelSourceSuffix(
-  modelRef: string,
-): { base: string; source: "cloud" | "local" } | undefined {
-  const sourceSeparator = modelRef.lastIndexOf(":");
-  if (sourceSeparator < 0) {
-    return undefined;
-  }
-  const source = modelRef.slice(sourceSeparator + 1);
-  if (source === "cloud" || source === "local") {
-    return { base: modelRef.slice(0, sourceSeparator), source };
-  }
-  if (!source.includes("/") && source.endsWith("-cloud")) {
-    return { base: modelRef.slice(0, -"-cloud".length), source: "cloud" };
-  }
-  return undefined;
-}
 
 /** Returns true only for local runtimes that onboarding can identify without model-name guesses. */
 function shouldAutoEnableLocalModelLean(providerId: string, modelRef: string): boolean {
@@ -29,12 +13,8 @@ function shouldAutoEnableLocalModelLean(providerId: string, modelRef: string): b
   if (normalizedProviderId !== "ollama") {
     return true;
   }
-  // Ollama can route hosted source-tagged models through the same local daemon.
-  // Nested source suffixes are ambiguous and must retain the owner's local classification.
-  const modelSource = parseOllamaModelSourceSuffix(modelRef.trim().toLowerCase());
-  return (
-    modelSource?.source !== "cloud" || parseOllamaModelSourceSuffix(modelSource.base) !== undefined
-  );
+  // Hosted source-tagged models can be routed through the same local daemon.
+  return !isCloudModelRef(modelRef);
 }
 
 function resolveDefaultModelRef(config: OpenClawConfig): string | undefined {
@@ -53,6 +33,7 @@ export function applyAutoLocalModelLean(params: {
   config: OpenClawConfig;
   providerId: string;
   modelRef: string;
+  previousModelRef?: string;
 }): {
   config: OpenClawConfig;
   changed: boolean;
@@ -61,7 +42,8 @@ export function applyAutoLocalModelLean(params: {
   const localModelLean = params.config.agents?.defaults?.experimental?.localModelLean;
   const autoModel = params.config.wizard?.localModelLeanAutoModel;
   const onboardingOwnsSetting =
-    autoModel !== undefined && resolveDefaultModelRef(params.config) === autoModel;
+    autoModel !== undefined &&
+    (params.previousModelRef ?? resolveDefaultModelRef(params.config)) === autoModel;
   if (!shouldAutoEnableLocalModelLean(params.providerId, params.modelRef)) {
     if (!autoModel) {
       return { config: params.config, changed: false, enabled: false };

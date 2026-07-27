@@ -2880,6 +2880,44 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(talkMode.cancelPushToTalk(captureId: second.captureId).status == "cancelled")
     }
 
+    @Test @MainActor func `transcribed PTT releases audio once before replacement capture`() async throws {
+        var ownershipEvents: [String] = []
+        let talkMode = TalkModeManager(
+            allowSimulatorCapture: true,
+            audioSessionDeactivationAction: { ownershipEvents.append("deactivate") })
+        talkMode.setPushToTalkAudioOwnershipEndHandler {
+            ownershipEvents.append("release:\($0)")
+        }
+        defer {
+            talkMode.setPushToTalkAudioOwnershipEndHandler(nil)
+            talkMode.stop()
+        }
+
+        let first = try await talkMode.beginPushToTalk(transcriptionOnly: true)
+        await talkMode._test_handlePushToTalkTranscript(
+            "transcription survives release",
+            isFinal: false,
+            captureId: first.captureId)
+
+        let finished = talkMode.endPushToTalk(captureId: first.captureId)
+
+        #expect(finished.status == "transcribed")
+        #expect(finished.transcript == "transcription survives release")
+        #expect(ownershipEvents == ["deactivate", "release:\(first.captureId)"])
+        #expect(talkMode._test_activePushToTalkCaptureId() == nil)
+        #expect(talkMode._test_pushToTalkCaptureIsIdle())
+
+        let replacement = try await talkMode.beginPushToTalk(transcriptionOnly: true)
+        #expect(replacement.captureId != first.captureId)
+        #expect(talkMode.cancelPushToTalk(captureId: replacement.captureId).status == "cancelled")
+        #expect(ownershipEvents == [
+            "deactivate",
+            "release:\(first.captureId)",
+            "deactivate",
+            "release:\(replacement.captureId)",
+        ])
+    }
+
     @Test @MainActor func `standalone PTT deactivates audio before releasing ownership`() async throws {
         var events: [String] = []
         let talkMode = TalkModeManager(
@@ -3718,6 +3756,23 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(!response.ok)
         #expect(talkMode._test_activePushToTalkCaptureId() == nil)
         #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
+    }
+
+    @Test @MainActor func `cancelled background timer cannot suppress a replacement background lease`() async {
+        let appModel = NodeAppModel(talkMode: TalkModeManager(allowSimulatorCapture: true))
+        defer { appModel.setScenePhase(.active) }
+
+        appModel.setScenePhase(.background)
+        appModel.setScenePhase(.active)
+        appModel.setScenePhase(.background)
+
+        for _ in 0..<8 {
+            await Task.yield()
+        }
+
+        #expect(appModel.isBackgrounded)
+        #expect(!appModel._test_backgroundReconnectIsSuppressed())
+        #expect(appModel.gatewayStatusText != "Background idle")
     }
 
     @Test @MainActor func `stale foreground resume cannot reopen Talk after rebackgrounding`() async {

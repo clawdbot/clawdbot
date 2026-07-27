@@ -221,6 +221,7 @@ export function registerCronAddCommand(cron: Command) {
               const commandShell = normalizeOptionalString(opts.command);
               const commandArgv = parseCronCommandArgv(opts.commandArgv);
               const scriptPath = normalizeOptionalString(opts.script);
+              const toolsAllow = parseCronToolsAllow(opts.tools);
               if (optionMessage && positionalMessage && optionMessage !== positionalMessage) {
                 throw new Error(
                   "Pass the cron job message either positionally or with --message, not both.",
@@ -244,7 +245,11 @@ export function registerCronAddCommand(cron: Command) {
                 );
               }
               if (systemEvent) {
-                return { kind: "systemEvent" as const, text: systemEvent };
+                return {
+                  kind: "systemEvent" as const,
+                  text: systemEvent,
+                  ...(toolsAllow ? { toolsAllow } : {}),
+                };
               }
               if (scriptPath) {
                 const scriptTimeoutSeconds = parseStrictPositiveIntOrUndefined(
@@ -262,7 +267,7 @@ export function registerCronAddCommand(cron: Command) {
                   scriptPath,
                   timeoutSeconds: scriptTimeoutSeconds,
                   toolBudget: scriptToolBudget,
-                  toolsAllow: parseCronToolsAllow(opts.tools),
+                  toolsAllow,
                 };
               }
               const timeoutSeconds = parseStrictPositiveIntOrUndefined(opts.timeoutSeconds);
@@ -304,6 +309,7 @@ export function registerCronAddCommand(cron: Command) {
                       : undefined,
                   outputMaxBytes:
                     outputMaxBytes && Number.isFinite(outputMaxBytes) ? outputMaxBytes : undefined,
+                  ...(toolsAllow ? { toolsAllow } : {}),
                 };
               }
               return {
@@ -315,7 +321,7 @@ export function registerCronAddCommand(cron: Command) {
                 timeoutSeconds:
                   timeoutSeconds && Number.isFinite(timeoutSeconds) ? timeoutSeconds : undefined,
                 lightContext: opts.lightContext === true ? true : undefined,
-                toolsAllow: parseCronToolsAllow(opts.tools),
+                toolsAllow,
               };
             })();
             const resolvedPayload = await (async () => {

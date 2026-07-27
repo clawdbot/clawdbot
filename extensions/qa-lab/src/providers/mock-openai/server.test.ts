@@ -1725,39 +1725,6 @@ describe("qa mock openai server", () => {
     );
   });
 
-  it("keeps the dreaming shadow trial ahead of system exact-reply fallbacks", async () => {
-    const server = await startMockServer();
-    const response = await postResponses(server, {
-      stream: true,
-      model: "gpt-5.6-luna",
-      input: [
-        {
-          role: "system",
-          content: [
-            {
-              type: "input_text",
-              text: "Nothing to say: entire reply exactly NO_REPLY",
-            },
-          ],
-        },
-        makeUserInput(
-          "Dreaming shadow trial report check. Read DREAMING_SHADOW_TRIAL_BRIEF.md and DREAMING_CANDIDATE_EVIDENCE.md first. Reply with the report path and exact marker DREAMING-SHADOW-TRIAL-OK.",
-        ),
-      ],
-    });
-
-    expect(response.status).toBe(200);
-    const body = await response.text();
-    expect(body).toContain('"name":"read"');
-    expect(body).toContain('"arguments":"{\\"path\\":\\"DREAMING_SHADOW_TRIAL_BRIEF.md\\"}"');
-    expect(body).not.toContain('"text":"NO_REPLY"');
-
-    const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
-    expect(debugResponse.status).toBe(200);
-    const debugPayload = requireRecord(await debugResponse.json(), "debug request");
-    expect(debugPayload.plannedToolName).toBe("read");
-  });
-
   it("advances personal task followthrough when transcript text is newer than extracted tool output", async () => {
     const server = await startMockServer();
 

@@ -145,6 +145,126 @@ describe("Workboard plugin widgets", () => {
     );
   });
 
+  it("does not offer or issue status changes for a read-only card widget", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "workboard.cards.list") {
+        return { cards, statuses: ["ready", "running", "done"] };
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const element = document.createElement("openclaw-workboard-card-widget");
+    element.widget = pluginWidget("workboard:card", { cardId: "card-ready" });
+    element.sessionKey = "agent:main:test";
+    Reflect.set(element, "canMutate", false);
+
+    await mount(element, createContext(request), request);
+
+    const select = element.querySelector("select");
+    expect(select).not.toBeNull();
+    expect(select?.disabled).toBe(true);
+    if (select) {
+      select.value = "running";
+      select.dispatchEvent(new Event("change"));
+    }
+    expect(request).not.toHaveBeenCalledWith("workboard.cards.move", expect.anything());
+  });
+
+  it("ignores a stale card move after the gateway connection changes", async () => {
+    const staleMove = deferred<unknown>();
+    const staleRequest = vi.fn(async (method: string) => {
+      if (method === "workboard.cards.list") {
+        return { cards, statuses: ["ready", "running", "done"] };
+      }
+      if (method === "workboard.cards.move") {
+        return await staleMove.promise;
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const currentCard = { ...cards[0], title: "Current connection card" };
+    const currentRequest = vi.fn(async (method: string) => {
+      if (method === "workboard.cards.list") {
+        return { cards: [currentCard], statuses: ["ready", "running", "done"] };
+      }
+      if (method === "workboard.cards.move") {
+        return { card: { ...currentCard, status: "running", position: 0 } };
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const element = document.createElement("openclaw-workboard-card-widget");
+    element.widget = pluginWidget("workboard:card", { cardId: "card-ready" });
+    element.sessionKey = "agent:main:test";
+    const provider = createApplicationContextProvider(createContext(staleRequest));
+    provider.append(element);
+    document.body.append(provider);
+    await vi.waitFor(() => expect(element.textContent).toContain("Ready card"));
+
+    const select = element.querySelector("select");
+    expect(select).not.toBeNull();
+    if (select) {
+      select.value = "running";
+      select.dispatchEvent(new Event("change"));
+    }
+    await vi.waitFor(() =>
+      expect(staleRequest).toHaveBeenCalledWith("workboard.cards.move", {
+        id: "card-ready",
+        status: "running",
+        position: 2,
+      }),
+    );
+    const moveCallIndex = staleRequest.mock.calls.findIndex(
+      ([method]) => method === "workboard.cards.move",
+    );
+    const pendingMove = staleRequest.mock.results[moveCallIndex]?.value as Promise<unknown>;
+
+    provider.setContext(createContext(currentRequest));
+    await vi.waitFor(() => expect(element.textContent).toContain("Current connection card"));
+    const currentSelect = element.querySelector("select");
+    expect(currentSelect).not.toBeNull();
+    if (currentSelect) {
+      currentSelect.value = "running";
+      currentSelect.dispatchEvent(new Event("change"));
+    }
+    await vi.waitFor(() =>
+      expect(currentRequest).toHaveBeenCalledWith("workboard.cards.move", {
+        id: "card-ready",
+        status: "running",
+        position: 0,
+      }),
+    );
+    staleMove.resolve({
+      card: { ...cards[0], title: "Stale connection card", status: "running", position: 2 },
+    });
+    await pendingMove;
+    await Promise.resolve();
+    await element.updateComplete;
+
+    expect(element.textContent).toContain("Current connection card");
+    expect(element.textContent).not.toContain("Stale connection card");
+    expect(element.querySelector("select")?.value).toBe("running");
+  });
+
+  it("does not render or move an archived card", async () => {
+    const archivedCard = {
+      ...cards[0],
+      title: "Archived ready card",
+      metadata: { ...cards[0].metadata, archivedAt: 10 },
+    };
+    const request = vi.fn(async () => ({
+      cards: [archivedCard],
+      statuses: ["ready", "running", "done"],
+    }));
+    const element = document.createElement("openclaw-workboard-card-widget");
+    element.widget = pluginWidget("workboard:card", { cardId: archivedCard.id });
+    element.sessionKey = "agent:main:test";
+
+    await mount(element, createContext(request), request);
+
+    expect(element.querySelector(".workboard-widget__state")).not.toBeNull();
+    expect(element.textContent).not.toContain(archivedCard.title);
+    expect(element.querySelector("select")).toBeNull();
+    expect(request).not.toHaveBeenCalledWith("workboard.cards.move", expect.anything());
+  });
+
   it("renders per-status board counts and the top ready/running cards", async () => {
     const request = vi.fn(async () => ({ cards, statuses: ["ready", "running", "done"] }));
     const element = document.createElement("openclaw-workboard-mini-widget");
@@ -161,6 +281,33 @@ describe("Workboard plugin widgets", () => {
     expect(element.textContent).toContain("Running card");
     expect(element.textContent).toContain("Ready card");
     expect(element.querySelector("a")?.getAttribute("href")).toBe("/control/workboard?board=ops");
+  });
+
+  it("excludes archived running cards from board counts and active cards", async () => {
+    const archivedCard = {
+      ...cards[1],
+      id: "card-archived",
+      title: "Archived running card",
+      metadata: { ...cards[1].metadata, archivedAt: 10 },
+    };
+    const request = vi.fn(async () => ({
+      cards: [...cards, archivedCard],
+      statuses: ["ready", "running", "done"],
+    }));
+    const element = document.createElement("openclaw-workboard-mini-widget");
+    element.widget = pluginWidget("workboard:mini", { boardId: "ops", limit: 5 });
+    element.sessionKey = "agent:main:test";
+
+    await mount(element, createContext(request), request);
+
+    const counts = [...element.querySelectorAll(".workboard-widget-mini__counts span")].map(
+      (entry) => entry.textContent?.replace(/\s+/g, " ").trim(),
+    );
+    expect(counts).toContain("1 Ready");
+    expect(counts).toContain("1 Running");
+    expect(counts).toContain("1 Done");
+    expect(element.textContent).toContain("Running card");
+    expect(element.textContent).not.toContain(archivedCard.title);
   });
 
   it("aggregates every board when no boardId prop is set", async () => {

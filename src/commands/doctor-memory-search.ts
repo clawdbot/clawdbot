@@ -398,7 +398,7 @@ export async function maybeRepairMemoryRecallHealth(params: {
           message: formatAgentMessage(
             scope.agentId,
             labelAgents,
-            "Normalize memory recall artifacts and remove stale promotion locks?",
+            "Remove dangling memory recalls, normalize recall artifacts, and remove stale promotion locks?",
           ),
           initialValue: true,
         });
@@ -409,6 +409,9 @@ export async function maybeRepairMemoryRecallHealth(params: {
             const details = [
               repair.removedInvalidEntries > 0
                 ? `-${repair.removedInvalidEntries} invalid entries`
+                : null,
+              (repair.removedDanglingEntries ?? 0) > 0
+                ? `-${repair.removedDanglingEntries} dangling entries`
                 : null,
               removedOverflowEntries > 0 ? `-${removedOverflowEntries} overflow entries` : null,
             ]

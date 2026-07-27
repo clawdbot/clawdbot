@@ -224,10 +224,10 @@ function normalizeUiSessionEventKey(
       buildAgentMainSessionKey({ agentId: defaultAgentId, mainKey }),
     ]
       .filter((value): value is string => Boolean(value))
-      .map(normalizeLowercaseStringOrEmpty),
+      .map(normalizeSessionKeyForUiComparison),
   );
-  const normalized = normalizeLowercaseStringOrEmpty(raw);
-  return aliases.has(normalized) ? normalizeLowercaseStringOrEmpty(canonicalMain) : normalized;
+  const normalized = normalizeSessionKeyForUiComparison(raw);
+  return aliases.has(normalized) ? normalizeSessionKeyForUiComparison(canonicalMain) : normalized;
 }
 
 export function canonicalUiSessionKeyForPersistence(
