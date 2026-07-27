@@ -1,6 +1,11 @@
 import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
 import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/run-state.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import {
+  collectConfigAuthProfileApiKeyDriftWarnings,
+  scanConfigAuthProfileApiKeyDrifts,
+} from "../commands/doctor/shared/config-auth-profile-api-key-drift.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
 import {
   collectConfigRuntimeEnvOwnership,
@@ -518,6 +523,28 @@ export async function prepareGatewayServerBootstrap(input: {
       ["deferredChannelPluginCount", metrics.deferredChannelPluginCount],
     ]);
   }
+
+  // Config apiKey edits never reach the bound SQLite auth profile the resolver
+  // prefers, so a plain restart would otherwise keep sending the old key with no
+  // signal. Runs after the plugin metadata snapshot so provider-alias resolution
+  // reuses it instead of forcing an eager discovery load, and stays warn-only:
+  // repair belongs to `openclaw doctor --fix`. A diagnostic must never block boot.
+  await startupTrace.measure("auth.config-profile-drift", () => {
+    try {
+      const configAuthProfileApiKeyDrifts = scanConfigAuthProfileApiKeyDrifts({
+        cfg: cfgAtStart,
+        env: process.env,
+      });
+      for (const warning of collectConfigAuthProfileApiKeyDriftWarnings({
+        hits: configAuthProfileApiKeyDrifts,
+        doctorFixCommand: formatCliCommand("openclaw doctor --fix"),
+      })) {
+        log.warn(warning);
+      }
+    } catch (error) {
+      log.debug(`config auth profile apiKey drift scan skipped: ${String(error)}`);
+    }
+  });
 
   return {
     opts,

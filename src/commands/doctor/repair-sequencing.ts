@@ -26,6 +26,7 @@ import {
   collectChannelDoctorRepairMutations,
 } from "./shared/channel-doctor.js";
 import { maybeRepairCodexRoutes } from "./shared/codex-route-warnings.js";
+import { repairConfigAuthProfileApiKeyDrifts } from "./shared/config-auth-profile-api-key-drift.js";
 import {
   applyDoctorConfigMutation,
   type DoctorConfigMutationState,
@@ -245,6 +246,16 @@ export async function runDoctorRepairSequence(params: {
   if (staleOAuthShadowRepair.warnings.length > 0) {
     warningNotes.push(sanitizeLines(staleOAuthShadowRepair.warnings));
   }
+  const configAuthProfileApiKeyDriftRepair = await repairConfigAuthProfileApiKeyDrifts({
+    cfg: state.candidate,
+    env,
+  });
+  if (configAuthProfileApiKeyDriftRepair.changes.length > 0) {
+    changeNotes.push(sanitizeLines(configAuthProfileApiKeyDriftRepair.changes));
+  }
+  if (configAuthProfileApiKeyDriftRepair.warnings.length > 0) {
+    warningNotes.push(sanitizeLines(configAuthProfileApiKeyDriftRepair.warnings));
+  }
   const authProfileSqliteMigration = await maybeMigrateAuthProfileJsonStoresToSqlite({
     cfg: state.candidate,
     prompter: { confirmAutoFix: async () => true },
@@ -275,6 +286,7 @@ export async function runDoctorRepairSequence(params: {
     legacyOAuthSidecarRepair.changes.length > 0 ||
     openAIAuthProviderRepair.changes.length > 0 ||
     staleOAuthShadowRepair.changes.length > 0 ||
+    configAuthProfileApiKeyDriftRepair.changes.length > 0 ||
     authProfileSqliteMigration.changes.length > 0;
 
   const activeToolSchemaWarnings = collectActiveToolSchemaProjectionWarnings({
