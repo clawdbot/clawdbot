@@ -706,12 +706,33 @@ async function deliverOutboundPayloadsWithQueueCleanup(
     }
     if (queueId) {
       if (isDeliveryAbortError(err)) {
-        const acked = await (
-          producerClaimId ? ackOwnedQueue({ suppressCompletionReceipt: true }) : ackOwnedQueue()
-        )
-          .then(() => true)
-          .catch(() => false);
-        if (acked) {
+        const ambiguousStableAbort =
+          producerClaimId !== undefined &&
+          (deliveredResults.length > 0 ||
+            queuedPreSendState === "marked" ||
+            queuedPostSendState === "marked" ||
+            stablePayloadOutcomes?.some((outcome) => outcome.status === "sent"));
+        if (ambiguousStableAbort) {
+          if (queuedPostSendState !== "failed") {
+            await recordOwnedQueueFailure(
+              failDeliveryAfterPlatformSend,
+              `delivery aborted after platform send: ${formatErrorMessage(err)}`,
+            );
+            queuedPostSendState = "failed";
+          }
+          emitTerminals(() =>
+            uniformOutboundAuditTerminals(params.payloads.length, {
+              outcome: "unknown",
+              failureStage: "platform_send",
+            }),
+          );
+        } else if (
+          await (
+            producerClaimId ? ackOwnedQueue({ suppressCompletionReceipt: true }) : ackOwnedQueue()
+          )
+            .then(() => true)
+            .catch(() => false)
+        ) {
           emitTerminals(() =>
             failedOutboundAuditTerminals({
               payloadCount: params.payloads.length,
@@ -768,20 +789,34 @@ async function deliverOutboundPayloadsWithQueueCleanup(
             let ownerRejected = false;
             let queueAcked = false;
             try {
-              if (params.deliveryCompletion) {
-                rejectDurableDelivery(params.deliveryCompletion, permanentRejection.message);
-                ownerRejected = true;
+              const ambiguousStableRejection =
+                producerClaimId !== undefined &&
+                (deliveredResults.length > 0 ||
+                  queuedPostSendState === "marked" ||
+                  stablePayloadOutcomes?.some((outcome) => outcome.status === "sent"));
+              if (ambiguousStableRejection) {
+                await recordOwnedQueueFailure(
+                  failDeliveryAfterPlatformSend,
+                  `delivery partially sent before permanent rejection: ${permanentRejection.message}`,
+                );
+                queuedPostSendState = "failed";
+                terminalRejectionHandled = true;
+              } else {
+                if (params.deliveryCompletion) {
+                  rejectDurableDelivery(params.deliveryCompletion, permanentRejection.message);
+                  ownerRejected = true;
+                }
+                await (producerClaimId
+                  ? ackOwnedQueue({ suppressCompletionReceipt: true })
+                  : ackOwnedQueue());
+                queueAcked = true;
               }
-              await (producerClaimId
-                ? ackOwnedQueue({ suppressCompletionReceipt: true })
-                : ackOwnedQueue());
-              queueAcked = true;
             } catch (rejectionError) {
               log.warn(
                 `failed to finalize permanently rejected delivery ${queueId}: ${formatErrorMessage(rejectionError)}`,
               );
             }
-            terminalRejectionHandled = ownerRejected || queueAcked;
+            terminalRejectionHandled ||= ownerRejected || queueAcked;
             if (queueAcked) {
               emitTerminals(() =>
                 failedOutboundAuditTerminals({

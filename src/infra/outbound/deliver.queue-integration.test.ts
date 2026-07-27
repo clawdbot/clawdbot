@@ -639,6 +639,52 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     },
   );
 
+  it.each(["abort", "permanent rejection"] as const)(
+    "preserves an already-sent Matrix payload when a later payload ends in %s",
+    async (failureKind) => {
+      process.env.OPENCLAW_STATE_DIR = tmpDir;
+      const cause =
+        failureKind === "abort"
+          ? Object.assign(new Error("later stable delivery aborted"), { name: "AbortError" })
+          : new PlatformMessageNotDispatchedError("later stable payload permanently rejected", {
+              cause: new Error("invalid second payload"),
+              retryable: false,
+            });
+      const sendMatrix = vi
+        .fn()
+        .mockResolvedValueOnce({ messageId: "already-visible-stable-message" })
+        .mockRejectedValueOnce(cause);
+      const deliveryIntentId = `cron-direct-delivery:v1:partial-${failureKind.replaceAll(" ", "-")}-no-replay`;
+      const params = {
+        cfg: {} as OpenClawConfig,
+        channel: "matrix" as const,
+        to: "!room:example",
+        payloads: [{ text: "already visible" }, { text: "later terminal failure" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required" as const,
+        deliveryIntentId,
+        completionRetention: boundedCronCompletionRetention,
+        reusePendingDeliveryIntent: true,
+      };
+
+      await expect(deliverOutboundPayloads(params)).rejects.toThrow(cause.message);
+      expect(sendMatrix).toHaveBeenCalledTimes(2);
+      expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
+        id: deliveryIntentId,
+        recoveryState: "unknown_after_send",
+        retryCount: 1,
+      });
+      expect(
+        getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
+      ).toBe("pending");
+
+      await expect(deliverOutboundPayloads(params)).rejects.toThrow(
+        `Stable delivery intent is already queued: ${deliveryIntentId}`,
+      );
+      expect(sendMatrix).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("retries a stable delivery intent only after a proven pre-dispatch failure", async () => {
     process.env.OPENCLAW_STATE_DIR = tmpDir;
     const notDispatchedError = new PlatformMessageNotDispatchedError(
