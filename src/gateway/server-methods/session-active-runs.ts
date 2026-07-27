@@ -7,7 +7,7 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayRequestContext } from "./types.js";
 
 /** Active-run matcher including hidden remote lifecycle projections. */
-export type TrackedActiveSessionRun = {
+type TrackedActiveSessionRun = {
   runId: string;
   sessionKey?: string;
   sessionId?: string;

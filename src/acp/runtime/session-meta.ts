@@ -3,7 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { sql, type Insertable, type Selectable } from "kysely";
+import type { Insertable, Selectable } from "kysely";
 import { getRuntimeConfig } from "../../config/config.js";
 import { patchSessionEntryWithKey } from "../../config/sessions/session-accessor.js";
 import {
@@ -260,20 +260,21 @@ export function readAcpSessionMetaBatch(params: {
     env: params.env,
     path: params.databasePath,
   });
-  // SQLite's JSON table keeps this to one SELECT and one bind even for caller-requested
-  // list limits above the engine's variable cap; splitting it would restore per-batch latency.
+  // Chunked IN keeps each statement under SQLite's bind-variable cap, matching the
+  // sharing-store membership precedent; one statement per 500 keys instead of per row.
   const db = getAcpSessionKysely(database.db);
-  const requestedKeys = db
-    .selectFrom(
-      sql<{ value: string }>`json_each(${JSON.stringify([...entriesByKey.keys()])})`.as(
-        "requested_keys",
-      ),
-    )
-    .select("requested_keys.value");
-  const rows = executeSqliteQuerySync(
-    database.db,
-    db.selectFrom("acp_sessions").selectAll().where("session_key", "in", requestedKeys),
-  ).rows;
+  const requestedKeys = [...entriesByKey.keys()];
+  const keyChunks: string[][] = [];
+  for (let index = 0; index < requestedKeys.length; index += 500) {
+    keyChunks.push(requestedKeys.slice(index, index + 500));
+  }
+  const rows = keyChunks.flatMap(
+    (chunk) =>
+      executeSqliteQuerySync(
+        database.db,
+        db.selectFrom("acp_sessions").selectAll().where("session_key", "in", chunk),
+      ).rows,
+  );
   const rowsByKey = new Map(rows.map((row) => [row.session_key, row]));
   for (const [sessionKey, entries] of entriesByKey) {
     for (const entry of entries) {
