@@ -912,6 +912,21 @@ export async function collectDoctorPreviewNotes(params: {
     );
   }
 
+  const { collectConfigAuthProfileApiKeyDriftWarnings, scanConfigAuthProfileApiKeyDrifts } =
+    await import("./config-auth-profile-api-key-drift.js");
+  const configAuthProfileApiKeyDrifts = scanConfigAuthProfileApiKeyDrifts({
+    cfg: params.cfg,
+    env,
+  });
+  if (configAuthProfileApiKeyDrifts.length > 0) {
+    warnings.push(
+      collectConfigAuthProfileApiKeyDriftWarnings({
+        hits: configAuthProfileApiKeyDrifts,
+        doctorFixCommand: params.doctorFixCommand,
+      }).join("\n"),
+    );
+  }
+
   const { collectStaleConfiguredAuthOrderWarnings } = await import("./stale-auth-order.js");
   warnings.push(
     ...collectStaleConfiguredAuthOrderWarnings({
