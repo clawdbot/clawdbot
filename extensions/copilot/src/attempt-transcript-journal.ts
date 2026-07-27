@@ -56,6 +56,12 @@ export function createAttemptTranscriptJournal(params: {
   if (currentUser) {
     replaceTailUser(currentUser, projectDisplay(currentUser));
   }
+  const snapshotIdempotencyKeys = new Set(
+    messagesSnapshot.flatMap((message) => {
+      const key = readIdempotencyKey(message);
+      return key && isCurrentJournalIdentity(key, params) ? [key] : [];
+    }),
+  );
   const target = resolveTranscriptTarget(params.attempt);
   const config = params.attempt.config;
   const seenEventIds = new Set<string>();
@@ -66,6 +72,7 @@ export function createAttemptTranscriptJournal(params: {
   let abortPromise: Promise<void> | undefined;
   let replayInvalid = false;
   let initialSdkUserObserved = false;
+  let persistedInitialUser: Extract<AgentMessage, { role: "user" }> | undefined;
   let latestAssistantKey: string | undefined;
   let assistantTranscriptOwned = false;
   let assistantTranscriptIdempotencyKey: string | undefined;
@@ -188,7 +195,14 @@ export function createAttemptTranscriptJournal(params: {
     if (!result) {
       return false;
     }
-    messagesSnapshot.push(result.message);
+    const key = readIdempotencyKey(result.message);
+    const snapshotKey = key && isCurrentJournalIdentity(key, params) ? key : undefined;
+    if (!snapshotKey || !snapshotIdempotencyKeys.has(snapshotKey)) {
+      messagesSnapshot.push(result.message);
+      if (snapshotKey) {
+        snapshotIdempotencyKeys.add(snapshotKey);
+      }
+    }
     return result.appended;
   };
   const ownAssistant = (key: string, persisted: boolean) => {
@@ -272,6 +286,7 @@ export function createAttemptTranscriptJournal(params: {
         }
         const persisted = outcome.message as Extract<AgentMessage, { role: "user" }>;
         accept(outcome);
+        persistedInitialUser = persisted;
         recorder.markRuntimePersisted(persisted);
         params.attempt.onUserMessagePersisted?.(persisted);
         await publish(outcome.appended);
@@ -292,6 +307,12 @@ export function createAttemptTranscriptJournal(params: {
       replayInvalid ||= input.replayIncomplete === true;
       if (!initialSdkUserObserved && !input.autopilotContinuation) {
         initialSdkUserObserved = true;
+        if (
+          !persistedInitialUser ||
+          userText(persistedInitialUser.content) !== userText(input.message.content)
+        ) {
+          replayInvalid = true;
+        }
         return;
       }
       initialSdkUserObserved = true;
@@ -441,9 +462,20 @@ function isCompatibleSingletonRewrite(
   );
 }
 
-function readIdempotencyKey(message: TranscriptMessage): string | undefined {
+function readIdempotencyKey(message: AgentMessage): string | undefined {
   const key = (message as { idempotencyKey?: unknown }).idempotencyKey;
   return typeof key === "string" && key ? key : undefined;
+}
+
+function isCurrentJournalIdentity(
+  key: string,
+  params: { attempt: AttemptParamsLike; sdkSessionId: string },
+): boolean {
+  // Old mirror keys can be content fingerprints and are not turn identity.
+  // Current journal keys use a run id or the SDK's unique event id.
+  return (
+    key === `${params.attempt.runId}:user` || key.startsWith(`copilot-sdk:${params.sdkSessionId}:`)
+  );
 }
 
 function isCompleteToolGroup(messages: TranscriptMessage[], order: string[]): boolean {
@@ -471,9 +503,23 @@ function isSameUserTurn(
   const candidateKey = (candidate as { idempotencyKey?: unknown }).idempotencyKey;
   const currentKey = (current as { idempotencyKey?: unknown }).idempotencyKey;
   if (typeof candidateKey === "string" || typeof currentKey === "string") {
-    return candidateKey === currentKey;
+    if (typeof candidateKey === "string" && typeof currentKey === "string") {
+      return candidateKey === currentKey;
+    }
+    if (
+      typeof candidateKey !== "string" ||
+      typeof currentKey === "string" ||
+      !candidateKey.startsWith("copilot:")
+    ) {
+      return false;
+    }
   }
-  return userText(candidate.content) === userText(current.content);
+  // The embedded-runner boundary identifies the active user as the last user
+  // and stamps it with this recorder timestamp; historical turns are ineligible.
+  return (
+    candidate.timestamp === current.timestamp &&
+    userText(candidate.content) === userText(current.content)
+  );
 }
 
 function userText(content: unknown): string {

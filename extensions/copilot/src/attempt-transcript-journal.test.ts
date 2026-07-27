@@ -243,6 +243,17 @@ describe("Copilot attempt transcript journal", () => {
     expect(journal.snapshot().replayInvalid).toBe(true);
   });
 
+  it("marks a mismatched initial SDK user replay-incomplete", async () => {
+    const { journal, session } = await createFixture();
+    await journal.persistInitialUser();
+    session.emit(
+      event("user.message", "mismatched-initial-user", { content: "provider saw different" }),
+    );
+    await journal.barrier("mismatched initial user");
+
+    expect(journal.snapshot().replayInvalid).toBe(true);
+  });
+
   it("marks durable system and developer prompts replay-incomplete", async () => {
     for (const role of ["system", "developer"] as const) {
       const { journal, session } = await createFixture();
@@ -798,12 +809,15 @@ describe("Copilot attempt transcript journal", () => {
     emitGroup(session);
     await journal.barrier("first commit");
     expect(hook).toHaveBeenCalledTimes(3);
+    const existingMessages = transcriptMessages(await readSessionTranscriptEvents(target)).map(
+      (row) => row.message,
+    );
 
     const replaySession = createFakeSession();
     const replayJournal = createAttemptTranscriptJournal({
       abortSession: () => replaySession.abort(),
       attempt,
-      messages: [],
+      messages: existingMessages,
       sdkSessionId: "sdk-session",
     });
     attachEventBridge(replaySession, {
@@ -821,6 +835,7 @@ describe("Copilot attempt transcript journal", () => {
 
     expect(hook).toHaveBeenCalledTimes(3);
     expect(transcriptMessages(await readSessionTranscriptEvents(target))).toHaveLength(3);
+    expect(replayJournal.snapshot().messagesSnapshot).toHaveLength(3);
   });
 
   it("rolls back the complete group when SQLite fails mid-group", async () => {

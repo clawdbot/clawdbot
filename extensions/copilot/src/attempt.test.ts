@@ -2998,6 +2998,57 @@ describe("runCopilotAttempt", () => {
       ]);
     });
 
+    it("does not collapse distinct repeated users in the normal journal path", async () => {
+      const recorder = makeUserTurnRecorder({ role: "user", content: "repeat", timestamp: 2 });
+
+      const result = await runCopilotAttempt(
+        makeParams({
+          messages: [
+            {
+              role: "user",
+              content: "repeat",
+              idempotencyKey: "copilot:legacy:user:content-fingerprint",
+              timestamp: 1,
+            },
+          ],
+          prompt: "repeat",
+          userTurnTranscriptRecorder: recorder,
+        }),
+        { pool: makeFakePool(makeFakeSdk()) },
+      );
+
+      expect(result.messagesSnapshot.slice(0, 2)).toMatchObject([
+        { role: "user", content: "repeat", timestamp: 1 },
+        { role: "user", content: "repeat", timestamp: 2 },
+      ]);
+    });
+
+    it("replaces the active legacy-keyed user instead of duplicating it", async () => {
+      const recorder = makeUserTurnRecorder({ role: "user", content: "active", timestamp: 2 });
+
+      const result = await runCopilotAttempt(
+        makeParams({
+          messages: [
+            {
+              role: "user",
+              content: "active",
+              idempotencyKey: "copilot:legacy:user:content-fingerprint",
+              timestamp: 2,
+            },
+          ],
+          prompt: "active",
+          userTurnTranscriptRecorder: recorder,
+        }),
+        { pool: makeFakePool(makeFakeSdk()) },
+      );
+
+      expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["user", "assistant"]);
+      expect(result.messagesSnapshot[0]).toMatchObject({
+        content: "active",
+        idempotencyKey: "run-1:user",
+      });
+    });
+
     it("fails closed, aborts once, and invalidates replay after an append rejection", async () => {
       const appendError = new Error("sqlite unavailable");
       transcriptRuntimeMock.append.mockRejectedValueOnce(appendError);
