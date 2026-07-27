@@ -310,7 +310,12 @@ function dropReboundExecApprovalFollowup(params: {
   setGatewayDedupeEntries({
     dedupe: params.context.dedupe,
     keys: params.agentDedupeKeys,
-    entry: { ts: Date.now(), ok: true, payload: droppedPayload },
+    entry: {
+      ts: Date.now(),
+      ok: true,
+      agentReplayCapability: params.request.replayCapability,
+      payload: droppedPayload,
+    },
   });
   params.respond(true, droppedPayload, undefined, { runId: params.runId });
   return true;

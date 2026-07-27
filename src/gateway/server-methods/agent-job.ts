@@ -16,6 +16,8 @@ import type { DedupeEntry } from "../server-shared.js";
 
 const AGENT_RUN_CACHE_TTL_MS = 10 * 60_000;
 const AGENT_RUN_CACHE_MAX_ENTRIES = 5_000;
+const AGENT_RUN_RECOVERY_CACHE_MAX_ENTRIES = 1_000;
+const AGENT_RUN_RECOVERY_CACHE_MAX_BYTES = 64 * 1024 * 1024;
 
 type AgentJobTerminalSnapshot = {
   status: "ok" | "error" | "timeout";
@@ -38,6 +40,11 @@ type AgentRunObservation = AgentJobTerminalSnapshot & {
   version: number;
 };
 type AgentRunSnapshot = AgentRunObservation & { cachedAt: number };
+type AgentRunRecoveryEntry = {
+  cachedAt: number;
+  entry: DedupeEntry;
+  bytes: number;
+};
 type PendingAgentRunTerminal = {
   snapshot: AgentRunObservation;
   timer: NodeJS.Timeout;
@@ -53,12 +60,21 @@ type DedupeObservation =
   | { state: "untracked" };
 
 const agentJobs = new Map<string, AgentJobRecord>();
+const agentRunRecoveryEntries = new Map<string, AgentRunRecoveryEntry>();
 const agentRunStarts = new Map<string, number>();
 const pendingAgentRunErrors = new Map<string, PendingAgentRunTerminal>();
 const pendingAgentRunTimeouts = new Map<string, PendingAgentRunTerminal>();
 const agentRunWaiters = new Map<string, Set<AgentJobWaiter>>();
 let agentRunListenerStarted = false;
 let agentRunVersion = 0;
+let agentRunRecoveryCacheLimitsForTests:
+  | Partial<Pick<AgentRunRecoveryCacheLimits, "maxEntries" | "maxBytes">>
+  | undefined;
+
+type AgentRunRecoveryCacheLimits = {
+  maxEntries: number;
+  maxBytes: number;
+};
 
 function nextAgentRunVersion(): number {
   agentRunVersion += 1;
@@ -72,6 +88,52 @@ function pruneAgentRunCache(now = Date.now()) {
     }
     agentJobs.delete(runId);
   }
+}
+
+function resolveAgentRunRecoveryCacheLimits(): AgentRunRecoveryCacheLimits {
+  return {
+    maxEntries:
+      agentRunRecoveryCacheLimitsForTests?.maxEntries ?? AGENT_RUN_RECOVERY_CACHE_MAX_ENTRIES,
+    maxBytes: agentRunRecoveryCacheLimitsForTests?.maxBytes ?? AGENT_RUN_RECOVERY_CACHE_MAX_BYTES,
+  };
+}
+
+function recoveryEntryBytes(entry: DedupeEntry): number {
+  return Buffer.byteLength(JSON.stringify(entry), "utf8");
+}
+
+function removeAgentRunRecoveryEntry(runId: string): void {
+  agentRunRecoveryEntries.delete(runId);
+}
+
+function pruneAgentRunRecoveryCache(now = Date.now()): void {
+  const limits = resolveAgentRunRecoveryCacheLimits();
+  let retainedBytes = 0;
+  for (const [runId, cached] of agentRunRecoveryEntries) {
+    if (now - cached.cachedAt > AGENT_RUN_CACHE_TTL_MS) {
+      agentRunRecoveryEntries.delete(runId);
+      continue;
+    }
+    retainedBytes += cached.bytes;
+  }
+  while (agentRunRecoveryEntries.size > limits.maxEntries || retainedBytes > limits.maxBytes) {
+    const oldestRunId = agentRunRecoveryEntries.keys().next().value;
+    if (oldestRunId === undefined) {
+      return;
+    }
+    retainedBytes -= agentRunRecoveryEntries.get(oldestRunId)?.bytes ?? 0;
+    agentRunRecoveryEntries.delete(oldestRunId);
+  }
+}
+
+function retainAgentRunRecoveryEntry(runId: string, entry: DedupeEntry): void {
+  removeAgentRunRecoveryEntry(runId);
+  agentRunRecoveryEntries.set(runId, {
+    cachedAt: Date.now(),
+    entry,
+    bytes: recoveryEntryBytes(entry),
+  });
+  pruneAgentRunRecoveryCache();
 }
 
 function enforceAgentRunCacheMaxEntries() {
@@ -120,7 +182,10 @@ function mergeSnapshot(
   if (!existing || !shouldPreserveTerminalSnapshot(existing, incoming)) {
     return incoming;
   }
-  return { ...existing, cachedAt: incoming.cachedAt };
+  return {
+    ...existing,
+    cachedAt: incoming.cachedAt,
+  };
 }
 
 function notifyAgentRunWaiters(runId: string) {
@@ -132,7 +197,7 @@ function notifyAgentRunWaiters(runId: string) {
 function recordAgentRunSnapshot(
   snapshot: Omit<AgentRunObservation, "version">,
   version = nextAgentRunVersion(),
-) {
+): boolean {
   const entry = { ...snapshot, cachedAt: Date.now(), version };
   pruneAgentRunCache(entry.cachedAt);
 
@@ -147,6 +212,7 @@ function recordAgentRunSnapshot(
   });
   enforceAgentRunCacheMaxEntries();
   notifyAgentRunWaiters(entry.runId);
+  return sourceSnapshot.version === entry.version;
 }
 
 function clearPendingAgentRunError(runId: string) {
@@ -172,6 +238,7 @@ function beginAgentJob(runId: string, startedAt?: number) {
   clearPendingAgentRunError(runId);
   clearPendingAgentRunTimeout(runId);
   agentJobs.delete(runId);
+  removeAgentRunRecoveryEntry(runId);
   if (startedAt !== undefined) {
     agentRunStarts.set(runId, startedAt);
   }
@@ -428,23 +495,44 @@ export function setGatewayDedupeEntry(params: {
     return;
   }
 
-  params.dedupe.set(params.key, params.entry);
   const key = parseDedupeKey(params.key);
   if (!key) {
+    params.dedupe.set(params.key, params.entry);
     return;
   }
   if (incomingObservation.state === "active") {
+    params.dedupe.set(params.key, params.entry);
+    // Provisional reservations belong only to the live Gateway dedupe map. Never
+    // let an abandoned reservation outlive that map in the recovery cache.
     beginAgentJob(key.runId);
     return;
   }
   if (incomingObservation.state === "terminal") {
-    recordAgentRunSnapshot({
+    const selectedIncoming = recordAgentRunSnapshot({
       ...incomingObservation.snapshot,
       runId: key.runId,
       source: key.source,
       recordedAt: params.entry.ts,
     });
+    if (!selectedIncoming) {
+      return;
+    }
+    params.dedupe.set(params.key, params.entry);
+    if (key.source === "agent" && params.entry.agentReplayCapability) {
+      retainAgentRunRecoveryEntry(key.runId, params.entry);
+    }
+    return;
   }
+  params.dedupe.set(params.key, params.entry);
+}
+
+/**
+ * Returns the exact terminal agent response retained for the same recovery window as `agent.wait`.
+ * The caller must verify `agentReplayCapability` before exposing this entry.
+ */
+export function readAgentRunRecoveryEntry(runId: string): DedupeEntry | undefined {
+  pruneAgentRunRecoveryCache();
+  return agentRunRecoveryEntries.get(runId)?.entry;
 }
 
 function getFreshestDedupeSnapshot(
@@ -582,5 +670,18 @@ export async function waitForAgentJob(params: {
     onWake();
   });
 }
+
+export const agentJobTesting = {
+  setRecoveryCacheLimitsForTests(
+    limits?: Partial<Pick<AgentRunRecoveryCacheLimits, "maxEntries" | "maxBytes">>,
+  ): void {
+    agentRunRecoveryCacheLimitsForTests = limits;
+    pruneAgentRunRecoveryCache();
+  },
+  resetRecoveryCacheForTests(): void {
+    agentRunRecoveryEntries.clear();
+    agentRunRecoveryCacheLimitsForTests = undefined;
+  },
+};
 
 ensureAgentRunListener();

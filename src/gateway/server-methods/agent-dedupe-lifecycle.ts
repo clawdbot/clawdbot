@@ -40,6 +40,7 @@ export function createAgentDedupeLifecycle(params: {
   let accepted = false;
   let committedResetCompletion: CommittedResetCompletion | undefined;
   const reservationId = randomUUID();
+  const replayCapability = params.request.replayCapability;
 
   const reserve = (sessionKey?: string, dedupeAgentId?: string) => {
     if (reserved) {
@@ -60,6 +61,7 @@ export function createAgentDedupeLifecycle(params: {
       entry: {
         ts: acceptedAt,
         ok: true,
+        agentReplayCapability: replayCapability,
         payload: {
           runId: params.runId,
           reservationId,
@@ -123,7 +125,12 @@ export function createAgentDedupeLifecycle(params: {
       setGatewayDedupeEntries({
         dedupe: params.context.dedupe,
         keys: params.agentDedupeKeys,
-        entry: { ts: Date.now(), ok: true, payload: responsePayload },
+        entry: {
+          ts: Date.now(),
+          ok: true,
+          agentReplayCapability: replayCapability,
+          payload: responsePayload,
+        },
       });
       params.respond(true, responsePayload, undefined, { runId: params.runId });
       emitSessionsChanged(params.context, {
@@ -143,6 +150,7 @@ export function createAgentDedupeLifecycle(params: {
       sessionKey: target?.sessionKey,
       runId: params.runId,
       stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
+      agentReplayCapability: replayCapability,
     });
     params.respond(
       true,
@@ -162,6 +170,7 @@ export function createAgentDedupeLifecycle(params: {
 
   return {
     reservationId,
+    replayCapability,
     reserve,
     clearUnaccepted,
     abortForLifecycleRotation,

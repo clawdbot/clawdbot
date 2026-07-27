@@ -179,7 +179,12 @@ export async function runAgentResetPhase(params: {
     setGatewayDedupeEntries({
       dedupe: params.context.dedupe,
       keys: params.agentDedupeKeys,
-      entry: { ts: Date.now(), ok: true, payload: responsePayload },
+      entry: {
+        ts: Date.now(),
+        ok: true,
+        agentReplayCapability: params.request.replayCapability,
+        payload: responsePayload,
+      },
     });
     params.respond(true, responsePayload, undefined, { runId: params.runId });
     emitSessionsChanged(params.context, {

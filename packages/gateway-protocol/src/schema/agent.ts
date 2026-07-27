@@ -332,6 +332,11 @@ export const AgentParamsSchema = closedObject({
   // restart-safe path even if the model omits or clears the tool argument.
   forceRestartSafeTools: Type.Optional(Type.Boolean()),
   voiceWakeTrigger: Type.Optional(Type.String()),
+  // Recovery callers may read only an existing idempotency entry. A cache miss
+  // must fail instead of admitting a new run with the same request payload.
+  replayOnly: Type.Optional(Type.Boolean()),
+  // Per-request random capability required for cache-only replay.
+  replayCapability: Type.Optional(NonEmptyString),
   idempotencyKey: NonEmptyString,
   label: Type.Optional(SessionLabelString),
 });

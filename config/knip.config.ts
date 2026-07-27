@@ -357,6 +357,8 @@ const config = {
     // the full-tree companion config still audits their actual consumers.
     "src/commitments/runtime.ts": ["exports"],
     "src/gateway/board-view-ticket.ts": ["exports"],
+    // Focused replay tests consume the recovery-cache reset and limit hooks.
+    "src/gateway/server-methods/agent-job.ts": ["exports"],
     // GatewayBoardProvider and boardExists are constructed/asserted by the
     // focused Control UI provider tests, not by a separate production module.
     "ui/src/lib/board/provider.ts": ["exports"],

@@ -6,6 +6,8 @@ export const ErrorCodes = {
   NOT_PAIRED: "NOT_PAIRED",
   /** Agent turn exceeded the gateway wait window. */
   AGENT_TIMEOUT: "AGENT_TIMEOUT",
+  /** Cache-only recovery could not find the requested agent run result. */
+  AGENT_RESULT_NOT_FOUND: "AGENT_RESULT_NOT_FOUND",
   /** Request payload failed protocol validation or method preconditions. */
   INVALID_REQUEST: "INVALID_REQUEST",
   /** Authenticated caller lacks permission for the requested operation. */
@@ -21,12 +23,21 @@ export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
 
 /** Stable discriminants for structured method-level failures. */
 export const GatewayErrorDetailCodes = {
+  CACHED_AGENT_RESULT: "CACHED_AGENT_RESULT",
   MISSING_SCOPE: "MISSING_SCOPE",
   MCP_APP_VIEW_EXPIRED: "MCP_APP_VIEW_EXPIRED",
   SESSION_COMPANION_BUSY: "SESSION_COMPANION_BUSY",
   UNKNOWN_AGENT_ID: "UNKNOWN_AGENT_ID",
   WIZARD_NOT_FOUND: "WIZARD_NOT_FOUND",
 } as const;
+
+/** Marks a request failure as the cached terminal result of an earlier agent run. */
+export type CachedAgentResultErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.CACHED_AGENT_RESULT;
+  runId: string;
+  requestedRunId?: string;
+  originalDetails?: unknown;
+};
 
 /** Missing operator-scope details shared by WebSocket and HTTP responses. */
 export type MissingScopeErrorDetails = {
@@ -50,7 +61,11 @@ export type WizardNotFoundErrorDetails = {
   code: typeof GatewayErrorDetailCodes.WIZARD_NOT_FOUND;
 };
 
-/** Structured details emitted by method-level failures. */
+/**
+ * Structured details emitted by method-level failures.
+ * Cached agent failures stay additive via their named type instead of
+ * widening this public union.
+ */
 export type GatewayErrorDetails =
   | MissingScopeErrorDetails
   | McpAppViewExpiredErrorDetails
@@ -70,6 +85,34 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+/** Reads the discriminator carried by replay-only cached agent failures. */
+export function readCachedAgentResultErrorDetails(
+  details: unknown,
+): CachedAgentResultErrorDetails | null {
+  const record = asRecord(details);
+  if (record?.code !== GatewayErrorDetailCodes.CACHED_AGENT_RESULT) {
+    return null;
+  }
+  const runId = typeof record.runId === "string" ? record.runId.trim() : "";
+  if (!runId) {
+    return null;
+  }
+  const hasRequestedRunId = Object.hasOwn(record, "requestedRunId");
+  const requestedRunId =
+    typeof record.requestedRunId === "string" ? record.requestedRunId.trim() : "";
+  if (hasRequestedRunId && !requestedRunId) {
+    return null;
+  }
+  return {
+    code: GatewayErrorDetailCodes.CACHED_AGENT_RESULT,
+    runId,
+    ...(requestedRunId ? { requestedRunId } : {}),
+    ...(Object.hasOwn(record, "originalDetails")
+      ? { originalDetails: record.originalDetails }
+      : {}),
+  };
 }
 
 /** Reads validated missing-scope details from an untrusted protocol payload. */

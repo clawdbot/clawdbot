@@ -128,6 +128,7 @@ export function startAgentRunExecution(params: {
           agentId: params.resolvedSessionKey === "global" ? params.activeSessionAgentId : undefined,
           runId: params.runId,
           stopReason,
+          agentReplayCapability: params.request.replayCapability,
         });
         params.respond(
           true,
@@ -423,6 +424,7 @@ export function startAgentRunExecution(params: {
         },
         runId: params.runId,
         dedupeKeys: params.agentDedupeKeys,
+        replayCapability: params.request.replayCapability,
         abortController: prepared.activeRunAbort.controller,
         cleanupAbortController: cleanupAdmittedRun,
         onSettled: params.restoredCronContinuation
@@ -448,7 +450,13 @@ export function startAgentRunExecution(params: {
       setGatewayDedupeEntries({
         dedupe: params.context.dedupe,
         keys: params.agentDedupeKeys,
-        entry: { ts: Date.now(), ok: false, payload, error },
+        entry: {
+          ts: Date.now(),
+          ok: false,
+          agentReplayCapability: params.request.replayCapability,
+          payload,
+          error,
+        },
       });
       params.respond(false, payload, error, {
         runId: params.runId,

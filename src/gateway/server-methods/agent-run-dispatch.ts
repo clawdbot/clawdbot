@@ -91,6 +91,7 @@ export function dispatchAgentRunFromGateway(params: {
   ingressOpts: Parameters<typeof agentCommandFromGatewayIngress>[0];
   runId: string;
   dedupeKeys: readonly string[];
+  replayCapability?: string;
   /**
    * Controller whose signal is wired into `ingressOpts.abortSignal`. Used on
    * completion to drop the matching `chatAbortControllers` entry without
@@ -199,6 +200,7 @@ export function dispatchAgentRunFromGateway(params: {
           entry: {
             ts: Date.now(),
             ok: true,
+            agentReplayCapability: params.replayCapability,
             payload,
           },
         });
@@ -211,7 +213,13 @@ export function dispatchAgentRunFromGateway(params: {
         setGatewayDedupeEntries({
           dedupe: params.context.dedupe,
           keys: params.dedupeKeys,
-          entry: { ts: Date.now(), ok: false, payload: failedPayload, error },
+          entry: {
+            ts: Date.now(),
+            ok: false,
+            agentReplayCapability: params.replayCapability,
+            payload: failedPayload,
+            error,
+          },
         });
         params.respond(false, failedPayload, error, { runId: params.runId, error: summary });
         return;
@@ -261,6 +269,7 @@ export function dispatchAgentRunFromGateway(params: {
           entry: {
             ts: Date.now(),
             ok: aborted && settlementPersisted,
+            agentReplayCapability: params.replayCapability,
             payload,
             ...(aborted ? {} : { error }),
           },

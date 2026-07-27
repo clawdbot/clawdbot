@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import {
   ErrorCodes,
   GatewayErrorDetailCodes,
+  type CachedAgentResultErrorDetails,
   type ErrorCode,
   type MissingScopeErrorDetails,
 } from "../gateway-error-details.js";
@@ -13,6 +14,7 @@ import { NonEmptyString } from "./primitives.js";
 export {
   ErrorCodes,
   GatewayErrorDetailCodes,
+  type CachedAgentResultErrorDetails,
   type ErrorCode,
   type GatewayErrorDetails,
   type McpAppViewExpiredErrorDetails,
@@ -20,9 +22,18 @@ export {
   type UnknownAgentIdErrorDetails,
   type WizardNotFoundErrorDetails,
   isMcpAppViewExpiredError,
+  readCachedAgentResultErrorDetails,
   readMissingScopeError,
   readMissingScopeErrorDetails,
 } from "../gateway-error-details.js";
+
+/** Cached agent-result details distinguish replayed terminal failures from RPC failures. */
+export const CachedAgentResultErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.CACHED_AGENT_RESULT),
+  runId: NonEmptyString,
+  requestedRunId: Type.Optional(NonEmptyString),
+  originalDetails: Type.Optional(Type.Unknown()),
+});
 
 /** Missing operator-scope details shared by WebSocket and HTTP responses. */
 export const MissingScopeErrorDetailsSchema = closedObject({
@@ -44,7 +55,11 @@ export const WizardNotFoundErrorDetailsSchema = closedObject({
   code: Type.Literal(GatewayErrorDetailCodes.WIZARD_NOT_FOUND),
 });
 
-/** Structured details emitted by method-level failures. */
+/**
+ * Structured details emitted by method-level failures.
+ * Cached agent failures stay additive via their named schema instead of
+ * widening this public union.
+ */
 export const GatewayErrorDetailsSchema = Type.Union([
   MissingScopeErrorDetailsSchema,
   McpAppViewExpiredErrorDetailsSchema,
@@ -62,6 +77,20 @@ export function errorShape(
     code,
     message,
     ...opts,
+  };
+}
+
+/** Builds the structured marker attached to a replay-only cached failure. */
+export function buildCachedAgentResultErrorDetails(params: {
+  runId: string;
+  requestedRunId?: string;
+  originalDetails?: unknown;
+}): CachedAgentResultErrorDetails {
+  return {
+    code: GatewayErrorDetailCodes.CACHED_AGENT_RESULT,
+    runId: params.runId,
+    ...(params.requestedRunId ? { requestedRunId: params.requestedRunId } : {}),
+    ...(params.originalDetails === undefined ? {} : { originalDetails: params.originalDetails }),
   };
 }
 

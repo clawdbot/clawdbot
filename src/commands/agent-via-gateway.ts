@@ -1,4 +1,4 @@
-// Gateway-first agent CLI implementation with explicit --local embedded execution.
+// Gateway-first agent CLI implementation with gateway run recovery; explicit --local is the only embedded execution path.
 import fs from "node:fs/promises";
 import { TextDecoder } from "node:util";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
@@ -7,6 +7,10 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import {
+  ErrorCodes,
+  readCachedAgentResultErrorDetails,
+} from "../../packages/gateway-protocol/src/gateway-error-details.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -53,8 +57,11 @@ type AgentGatewayResult = {
 
 type GatewayAgentResponse = {
   runId?: string;
+  sessionKey?: string;
   status?: string;
   summary?: string;
+  error?: string;
+  endedAt?: number;
   result?: AgentGatewayResult;
   deliveryStatus?: unknown;
 };
@@ -107,6 +114,7 @@ type AgentSessionModuleLoader = () => Promise<AgentSessionModule>;
 const AGENT_CLI_SIGNALS: readonly AgentCliSignal[] = ["SIGINT", "SIGTERM"];
 const GATEWAY_ABORT_RETRY_DELAYS_MS = [50, 150, 300, 600] as const;
 const GATEWAY_ABORT_REQUEST_TIMEOUT_MS = 2_000;
+const GATEWAY_UNCONFIRMED_RUN_RECOVERY_WAIT_MS = 2_000;
 const AGENT_CLI_SIGNAL_EXIT_CODES: Record<AgentCliSignal, number> = {
   SIGINT: 130,
   SIGTERM: 143,
@@ -293,6 +301,48 @@ async function formatPayloadForLog(payload: {
   return lines.join("\n").trimEnd();
 }
 
+class GatewayAgentOutcomeUnknownError extends Error {
+  readonly transportReason: "gateway_timeout" | "gateway_closed";
+  readonly runId: string;
+
+  constructor(params: {
+    cause: unknown;
+    transportReason: "gateway_timeout" | "gateway_closed";
+    runId: string;
+  }) {
+    super(
+      `Gateway run ${params.runId} could not be recovered after the connection became uncertain. Its outcome remains unknown.`,
+      { cause: params.cause },
+    );
+    this.name = "GatewayAgentOutcomeUnknownError";
+    this.transportReason = params.transportReason;
+    this.runId = params.runId;
+  }
+}
+
+class GatewayAgentTerminalFailureError extends Error {
+  readonly runId: string;
+
+  constructor(params: { cause?: unknown; message: string; runId: string }) {
+    super(params.message, params.cause === undefined ? undefined : { cause: params.cause });
+    this.name = "GatewayAgentTerminalFailureError";
+    this.runId = params.runId;
+  }
+}
+
+class GatewayAgentTerminalResultUnavailableError extends Error {
+  readonly runId: string;
+
+  constructor(params: { cause: unknown; runId: string }) {
+    super(
+      `Gateway run ${params.runId} completed, but its result is unavailable for recovery. The turn was not rerun.`,
+      { cause: params.cause },
+    );
+    this.name = "GatewayAgentTerminalResultUnavailableError";
+    this.runId = params.runId;
+  }
+}
+
 function isCompactControlCommand(message: string): boolean {
   return /^\/compact(?:\s|:|$)/iu.test(message.trim());
 }
@@ -318,6 +368,40 @@ function resolveGatewayAgentFailureHint(
   // callGateway's wrapper timer gives this CLI path typed transport errors.
   // Legacy request-timeout strings belong to lower-level and in-process callers.
   return err.kind === "timeout" ? "timed out" : "connection closed";
+}
+
+// Transport loss after dispatch is ambiguous: the Gateway may have accepted and
+// may still finish the turn, so typed transport errors route into run recovery
+// instead of failing immediately. Terminal recovery errors are not transport
+// errors and never re-enter recovery.
+function resolveGatewayAgentRecoveryReason(
+  err: unknown,
+): "gateway_timeout" | "gateway_closed" | undefined {
+  if (!isGatewayTransportError(err)) {
+    return undefined;
+  }
+  return err.kind === "timeout" ? "gateway_timeout" : "gateway_closed";
+}
+
+function isRetryableGatewayAgentTerminalReplayError(err: unknown): boolean {
+  if (isGatewayTransportError(err)) {
+    return true;
+  }
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  const gatewayCode = (err as Error & { gatewayCode?: unknown }).gatewayCode;
+  return (
+    gatewayCode === ErrorCodes.UNAVAILABLE || gatewayCode === ErrorCodes.AGENT_RESULT_NOT_FOUND
+  );
+}
+
+function isTerminalGatewayAgentWaitResponse(response: GatewayAgentResponse | undefined): boolean {
+  return (
+    response?.status === "ok" ||
+    response?.status === "error" ||
+    (response?.status === "timeout" && typeof response.endedAt === "number")
+  );
 }
 
 function isTransientGatewayAgentConnectClose(err: unknown): boolean {
@@ -397,7 +481,33 @@ function isAbortError(err: unknown): boolean {
   return err instanceof Error && err.name === "AbortError";
 }
 
-function readAcceptedRunContext(payload: unknown): {
+function isRecoveredGatewayAgentTerminalFailure(
+  err: unknown,
+  runId: string,
+): err is Error & { details?: unknown } {
+  if (!(err instanceof Error) || err.name !== "GatewayClientRequestError") {
+    return false;
+  }
+  const requestError = err as Error & { details?: unknown };
+  // A generic Gateway error cannot prove the original run failed; only replay's cache marker can.
+  const details = readCachedAgentResultErrorDetails(requestError.details);
+  return details?.runId === runId || details?.requestedRunId === runId;
+}
+
+function isUnsupportedGatewayAgentRecoveryError(err: unknown): boolean {
+  if (!(err instanceof Error) || err.name !== "GatewayClientRequestError") {
+    return false;
+  }
+  const requestError = err as Error & { gatewayCode?: unknown };
+  const message = err.message.toLowerCase();
+  return (
+    requestError.gatewayCode === ErrorCodes.INVALID_REQUEST &&
+    message.includes("invalid agent params") &&
+    message.includes("replaycapability")
+  );
+}
+
+function readAgentRunContext(payload: unknown): {
   runId?: string;
   sessionKey?: string;
 } {
@@ -407,7 +517,7 @@ function readAcceptedRunContext(payload: unknown): {
   const runId = (payload as { runId?: unknown }).runId;
   const sessionKey = (payload as { sessionKey?: unknown }).sessionKey;
   const status = (payload as { status?: unknown }).status;
-  if (status !== "accepted") {
+  if (status !== "accepted" && status !== "in_flight") {
     return {};
   }
   return {
@@ -645,6 +755,9 @@ async function agentViaGatewayCommand(
   opts: AgentDispatchOpts,
   runtime: RuntimeEnv,
   signalBridge: ReturnType<typeof createAgentCliSignalBridge>,
+  recoverTransientClose: boolean,
+  recoverInFlightResponse: boolean,
+  replayCapability: string,
 ) {
   const body = opts.message;
   const explicitSessionKey = opts.sessionKey?.trim();
@@ -669,6 +782,7 @@ async function agentViaGatewayCommand(
   }
   const timeoutSeconds = parseTimeoutSeconds({ cfg, timeout: opts.timeout });
   const gatewayTimeoutMs = resolveGatewayAgentTimeoutMs(timeoutSeconds);
+  const gatewayDeadlineMs = Date.now() + gatewayTimeoutMs;
   const channel = normalizeMessageChannel(opts.channel);
   const deferExplicitRecipientSession = Boolean(
     !explicitSessionKey &&
@@ -715,12 +829,116 @@ async function agentViaGatewayCommand(
         ...(usesRemoteGateway ? {} : { scopes: [ADMIN_SCOPE] }),
       };
 
+  // Recovery can begin after admission but before the accepted ack arrives. Seed
+  // abort context from the request, then replace it with later canonical context.
   let acceptedRunId: string | undefined = idempotencyKey;
   let acceptedSessionKey: string | undefined = abortSessionKey;
   let acceptedGatewayRun = false;
+  let deferredRecipientContextResolved = !deferExplicitRecipientSession;
   let activeConnectionAbortAttempted = false;
   let activeConnectionAbortSucceeded = false;
   let response: GatewayAgentResponse | undefined;
+  let lastConfirmedInFlight: GatewayAgentResponse | undefined;
+  const baseAgentParams = {
+    message: body,
+    agentId,
+    model: modelOverride,
+    to: opts.to,
+    replyTo: opts.replyTo,
+    sessionId: opts.sessionId,
+    sessionKey,
+    thinking: opts.thinking,
+    deliver: Boolean(opts.deliver),
+    channel,
+    replyChannel: opts.replyChannel,
+    replyAccountId: opts.replyAccount,
+    bestEffortDeliver: opts.bestEffortDeliver,
+    timeout: timeoutSeconds,
+    lane: opts.lane,
+    extraSystemPrompt: opts.extraSystemPrompt,
+    cleanupBundleMcpOnRunEnd: true,
+    idempotencyKey,
+  };
+  const agentParams = {
+    ...baseAgentParams,
+    replayCapability,
+  };
+  let gatewayRecoveryEnabled = true;
+  const refreshDeferredRecipientAbortContext = async (request: GatewayRequestFunction) => {
+    if (deferredRecipientContextResolved || !gatewayRecoveryEnabled) {
+      return;
+    }
+    try {
+      // The accepted ack may have been lost after provider-owned routing selected a
+      // different session. Capability-protected replay resolves that authoritative
+      // context before chat.abort is allowed to use the request-side fallback key.
+      const replay = await request<GatewayAgentResponse>(
+        "agent",
+        { ...agentParams, replayOnly: true },
+        { timeoutMs: GATEWAY_ABORT_REQUEST_TIMEOUT_MS, expectFinal: true },
+      );
+      const context = readAgentRunContext(replay);
+      if (!isInFlightGatewayAgentResponse(replay) || !context.sessionKey) {
+        acceptedSessionKey = undefined;
+        return;
+      }
+      acceptedRunId = context.runId ?? acceptedRunId;
+      acceptedSessionKey = context.sessionKey;
+      deferredRecipientContextResolved = true;
+    } catch {
+      // A terminal cached failure or cache miss means there is no confirmed active
+      // routed context to abort; the signal path still exits without guessing one.
+      acceptedSessionKey = undefined;
+    }
+  };
+  const abortAcceptedRunOnActiveConnection = async (request: GatewayRequestFunction) => {
+    activeConnectionAbortAttempted = true;
+    await refreshDeferredRecipientAbortContext(request);
+    activeConnectionAbortSucceeded = await abortAcceptedGatewayAgentRunOnActiveConnection({
+      runId: acceptedRunId,
+      sessionKey: acceptedSessionKey,
+      signal: signalBridge.getReceivedSignal(),
+      runtime,
+      request,
+    });
+  };
+  const abortAcceptedRunAfterRecoverySignal = async () => {
+    if (activeConnectionAbortSucceeded) {
+      return;
+    }
+    await refreshDeferredRecipientAbortContext(
+      async (method, requestParams, requestOpts) =>
+        await callGateway({
+          method,
+          params: requestParams,
+          timeoutMs: requestOpts?.timeoutMs ?? undefined,
+          expectFinal: requestOpts?.expectFinal,
+          config: cfg,
+          ...gatewayIdentity,
+        }),
+    );
+    await abortAcceptedGatewayAgentRunWithGatewayCall({
+      runId: acceptedRunId,
+      sessionKey: acceptedSessionKey,
+      signal: signalBridge.getReceivedSignal(),
+      runtime,
+      gatewayIdentity,
+      config: cfg,
+    });
+  };
+  const delayBeforeNextRecoveryAttempt = async (remainingMs: number) => {
+    try {
+      await delayMs(Math.min(1_000, remainingMs), signalBridge.signal);
+    } catch (delayError) {
+      if (isAbortError(delayError) || signalBridge.signal.aborted) {
+        await abortAcceptedRunAfterRecoverySignal();
+        throw isAbortError(delayError)
+          ? delayError
+          : createAbortError("gateway agent recovery aborted");
+      }
+      throw delayError;
+    }
+  };
   const dispatchGatewayAgentCall = async (activeCfg: OpenClawConfig) =>
     await withProgress(
       {
@@ -731,57 +949,190 @@ async function agentViaGatewayCommand(
       async () =>
         await callGateway({
           method: "agent",
-          params: {
-            message: body,
-            agentId,
-            model: modelOverride,
-            to: opts.to,
-            replyTo: opts.replyTo,
-            sessionId: opts.sessionId,
-            sessionKey,
-            thinking: opts.thinking,
-            deliver: Boolean(opts.deliver),
-            channel,
-            replyChannel: opts.replyChannel,
-            replyAccountId: opts.replyAccount,
-            bestEffortDeliver: opts.bestEffortDeliver,
-            timeout: timeoutSeconds,
-            lane: opts.lane,
-            extraSystemPrompt: opts.extraSystemPrompt,
-            cleanupBundleMcpOnRunEnd: true,
-            idempotencyKey,
-          },
+          params: gatewayRecoveryEnabled ? agentParams : baseAgentParams,
           expectFinal: true,
           timeoutMs: gatewayTimeoutMs,
           config: activeCfg,
           signal: signalBridge.signal,
           onAccepted: (payload) => {
             acceptedGatewayRun = true;
-            const accepted = readAcceptedRunContext(payload);
+            const accepted = readAgentRunContext(payload);
             acceptedRunId = accepted.runId ?? acceptedRunId;
             acceptedSessionKey = accepted.sessionKey ?? acceptedSessionKey;
+            deferredRecipientContextResolved ||= Boolean(accepted.sessionKey);
           },
-          onSignalAbort: async (request) => {
-            activeConnectionAbortAttempted = true;
-            activeConnectionAbortSucceeded = await abortAcceptedGatewayAgentRunOnActiveConnection({
-              runId: acceptedRunId,
-              sessionKey: acceptedSessionKey,
-              signal: signalBridge.getReceivedSignal(),
-              runtime,
-              request,
-            });
-          },
+          onSignalAbort: abortAcceptedRunOnActiveConnection,
           ...gatewayIdentity,
         }),
     );
+
+  const recoverOriginalRun = async (
+    transportReason: "gateway_timeout" | "gateway_closed",
+  ): Promise<GatewayAgentResponse> => {
+    let runId = acceptedRunId ?? idempotencyKey;
+    runtime.error?.(
+      `Gateway connection became uncertain; waiting for original run ${runId} before reporting failure.`,
+    );
+    for (;;) {
+      const remainingMs = Math.max(0, gatewayDeadlineMs - Date.now());
+      const canWaitForOriginalRun = acceptedGatewayRun || lastConfirmedInFlight !== undefined;
+      // Before acceptance is observed, the request may never have reached the Gateway.
+      // Bound the probe so a connection failure does not consume the whole agent deadline.
+      const waitTimeoutMs = canWaitForOriginalRun
+        ? remainingMs
+        : Math.min(remainingMs, GATEWAY_UNCONFIRMED_RUN_RECOVERY_WAIT_MS);
+      let waitResponse: GatewayAgentResponse | undefined;
+      try {
+        waitResponse = await callGateway<GatewayAgentResponse>({
+          method: "agent.wait",
+          params: { runId, timeoutMs: waitTimeoutMs },
+          timeoutMs: resolveTimerTimeoutMs(waitTimeoutMs + 10_000, 10_000, 10_000),
+          config: cfg,
+          signal: signalBridge.signal,
+          onSignalAbort: abortAcceptedRunOnActiveConnection,
+          ...gatewayIdentity,
+        });
+      } catch (waitError) {
+        if (isAbortError(waitError) || signalBridge.signal.aborted) {
+          await abortAcceptedRunAfterRecoverySignal();
+          throw isAbortError(waitError)
+            ? waitError
+            : createAbortError("gateway agent recovery aborted");
+        }
+      }
+      const terminalWaitResponse = isTerminalGatewayAgentWaitResponse(waitResponse);
+      if (waitResponse?.status === "error") {
+        throw new GatewayAgentTerminalFailureError({
+          message: waitResponse.error?.trim() || `Gateway run ${runId} failed.`,
+          runId,
+        });
+      }
+      let replay: GatewayAgentResponse;
+      try {
+        replay = await callGateway<GatewayAgentResponse>({
+          method: "agent",
+          params: { ...agentParams, replayOnly: true },
+          expectFinal: true,
+          timeoutMs: 10_000,
+          config: cfg,
+          signal: signalBridge.signal,
+          onSignalAbort: abortAcceptedRunOnActiveConnection,
+          ...gatewayIdentity,
+        });
+      } catch (replayError) {
+        if (isAbortError(replayError) || signalBridge.signal.aborted) {
+          await abortAcceptedRunAfterRecoverySignal();
+          throw isAbortError(replayError)
+            ? replayError
+            : createAbortError("gateway agent recovery aborted");
+        }
+        if (isRecoveredGatewayAgentTerminalFailure(replayError, runId)) {
+          throw new GatewayAgentTerminalFailureError({
+            cause: replayError,
+            message: replayError.message,
+            runId,
+          });
+        }
+        if (terminalWaitResponse) {
+          const retryRemainingMs = Math.max(0, gatewayDeadlineMs - Date.now());
+          if (retryRemainingMs > 0 && isRetryableGatewayAgentTerminalReplayError(replayError)) {
+            runtime.error?.(
+              `Gateway run ${runId} completed; retrying terminal result recovery after a transient replay failure.`,
+            );
+            await delayBeforeNextRecoveryAttempt(retryRemainingMs);
+            continue;
+          }
+          throw new GatewayAgentTerminalResultUnavailableError({
+            cause: replayError,
+            runId,
+          });
+        }
+        if (lastConfirmedInFlight) {
+          if (!isRetryableGatewayAgentTerminalReplayError(replayError)) {
+            throw replayError;
+          }
+          const retryRemainingMs = Math.max(0, gatewayDeadlineMs - Date.now());
+          if (retryRemainingMs <= 0) {
+            return lastConfirmedInFlight;
+          }
+          runtime.error?.(
+            `Gateway run ${runId} remains confirmed in flight; retrying recovery after a transient replay failure.`,
+          );
+          await delayBeforeNextRecoveryAttempt(retryRemainingMs);
+          continue;
+        }
+        throw new GatewayAgentOutcomeUnknownError({
+          cause: replayError,
+          transportReason,
+          runId,
+        });
+      }
+      if (replay.status === "error") {
+        throw new GatewayAgentTerminalFailureError({
+          message: replay.error?.trim() || replay.summary?.trim() || `Gateway run ${runId} failed.`,
+          runId,
+        });
+      }
+      if (!isInFlightGatewayAgentResponse(replay)) {
+        runtime.error?.(`Recovered terminal result for original Gateway run ${runId}.`);
+        return replay;
+      }
+      const recoveredContext = readAgentRunContext(replay);
+      lastConfirmedInFlight = replay;
+      runId = recoveredContext.runId ?? runId;
+      acceptedRunId = runId;
+      acceptedSessionKey = recoveredContext.sessionKey ?? acceptedSessionKey;
+      deferredRecipientContextResolved ||= Boolean(recoveredContext.sessionKey);
+      const retryRemainingMs = Math.max(0, gatewayDeadlineMs - Date.now());
+      if (retryRemainingMs <= 0) {
+        if (terminalWaitResponse) {
+          throw new GatewayAgentTerminalResultUnavailableError({
+            cause: replay,
+            runId,
+          });
+        }
+        // Cache replay proves the original run still owns the work. Report it as
+        // unresolved instead of allowing an embedded duplicate after the deadline.
+        return replay;
+      }
+      runtime.error?.(`Gateway run ${runId} is still in flight; continuing recovery.`);
+      // agent.wait can observe terminal state before dedupe persistence completes.
+      // Throttle every in-flight replay so that transition cannot create a hot loop.
+      await delayBeforeNextRecoveryAttempt(retryRemainingMs);
+    }
+  };
 
   let shellEnvFallbackRetriesRemaining = 1;
   const consumeShellEnvFallbackRetry = () => shellEnvFallbackRetriesRemaining-- > 0;
   for (;;) {
     try {
       response = await dispatchGatewayAgentCall(cfg);
+      if (
+        gatewayRecoveryEnabled &&
+        recoverInFlightResponse &&
+        isInFlightGatewayAgentResponse(response)
+      ) {
+        lastConfirmedInFlight = response;
+        const inFlight = readAgentRunContext(response);
+        acceptedGatewayRun = true;
+        acceptedRunId = inFlight.runId ?? acceptedRunId;
+        acceptedSessionKey = inFlight.sessionKey ?? acceptedSessionKey;
+        deferredRecipientContextResolved ||= Boolean(inFlight.sessionKey);
+        response = await recoverOriginalRun("gateway_closed");
+      }
       break;
     } catch (err) {
+      if (
+        !acceptedGatewayRun &&
+        gatewayRecoveryEnabled &&
+        isUnsupportedGatewayAgentRecoveryError(err)
+      ) {
+        gatewayRecoveryEnabled = false;
+        runtime.error?.(
+          "Gateway does not support cached agent recovery; retrying with legacy agent parameters.",
+        );
+        continue;
+      }
       if (
         !acceptedGatewayRun &&
         shouldRetryGatewayDispatchWithShellEnvFallback(err) &&
@@ -795,14 +1146,23 @@ async function agentViaGatewayCommand(
         !activeConnectionAbortSucceeded &&
         (acceptedGatewayRun || activeConnectionAbortAttempted)
       ) {
-        await abortAcceptedGatewayAgentRunWithGatewayCall({
-          runId: acceptedRunId,
-          sessionKey: acceptedSessionKey,
-          signal: signalBridge.getReceivedSignal(),
-          runtime,
-          gatewayIdentity,
-          config: cfg,
-        });
+        // Same-connection abort can fail as the request socket closes. Reuse the
+        // recovery abort path so deferred routing is refreshed before reconnecting.
+        await abortAcceptedRunAfterRecoverySignal();
+      }
+      if (isAbortError(err)) {
+        throw err;
+      }
+      const recoveryReason = resolveGatewayAgentRecoveryReason(err);
+      if (
+        recoveryReason &&
+        (!isTransientGatewayAgentConnectClose(err) || acceptedGatewayRun || recoverTransientClose)
+      ) {
+        if (!gatewayRecoveryEnabled) {
+          throw err;
+        }
+        response = await recoverOriginalRun(recoveryReason);
+        break;
       }
       throw err;
     }
@@ -810,7 +1170,6 @@ async function agentViaGatewayCommand(
   if (!response) {
     throw new Error("gateway agent call did not return a response");
   }
-
   if (opts.json) {
     writeRuntimeJson(runtime, buildGatewayJsonResponse(response));
     return response;
@@ -846,12 +1205,23 @@ async function agentViaGatewayCommandWithTransientRetries(
   runtime: RuntimeEnv,
   signalBridge: ReturnType<typeof createAgentCliSignalBridge>,
 ) {
+  // Handshake retries belong to one logical invocation, so they must retain the
+  // capability that authorizes cache-only recovery of its original run.
+  const replayCapability = randomIdempotencyKey();
   for (const [attempt, retryDelayMs] of [
     ...GATEWAY_TRANSIENT_CONNECT_RETRY_DELAYS_MS,
     0,
   ].entries()) {
     try {
-      return await agentViaGatewayCommand(opts, runtime, signalBridge);
+      const isFinalAttempt = attempt === GATEWAY_TRANSIENT_CONNECT_RETRY_DELAYS_MS.length;
+      return await agentViaGatewayCommand(
+        opts,
+        runtime,
+        signalBridge,
+        isFinalAttempt,
+        attempt > 0,
+        replayCapability,
+      );
     } catch (err) {
       if (isAbortError(err)) {
         throw err;
@@ -861,7 +1231,7 @@ async function agentViaGatewayCommandWithTransientRetries(
         throw err;
       }
       runtime.error?.(
-        `Gateway agent connection closed during handshake; retrying in ${retryDelayMs}ms before failing.`,
+        `Gateway agent connection closed during handshake; retrying in ${retryDelayMs}ms before recovery.`,
       );
       await delayMs(retryDelayMs, signalBridge.signal);
     }
@@ -926,7 +1296,12 @@ export async function agentCliCommand(
         }
         throw err;
       }
-      const failureHint = resolveGatewayAgentFailureHint(err);
+      const failureHint =
+        err instanceof GatewayAgentOutcomeUnknownError
+          ? err.transportReason === "gateway_timeout"
+            ? "timed out"
+            : "connection closed"
+          : resolveGatewayAgentFailureHint(err);
       if (failureHint) {
         // Transport loss is ambiguous: the Gateway may have accepted and may still
         // finish this turn. Recommending a blind retry or --local here could

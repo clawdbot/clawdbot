@@ -392,6 +392,7 @@ export async function prepareAgentRunDispatch(params: {
     entry: {
       ts: Date.now(),
       ok: true,
+      agentReplayCapability: params.request.replayCapability,
       payload: {
         ...accepted,
         controlUiVisible: !params.suppressVisibleSessionEffects,

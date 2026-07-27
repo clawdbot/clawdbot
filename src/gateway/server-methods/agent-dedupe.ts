@@ -113,6 +113,7 @@ export function setAbortedAgentDedupeEntries(params: {
   sessionKey?: string;
   runId: string;
   stopReason: string;
+  agentReplayCapability?: string;
 }): void {
   setGatewayDedupeEntries({
     dedupe: params.dedupe,
@@ -120,6 +121,7 @@ export function setAbortedAgentDedupeEntries(params: {
     entry: {
       ts: Date.now(),
       ok: true,
+      agentReplayCapability: params.agentReplayCapability,
       payload: {
         runId: params.runId,
         ...(params.agentId ? { agentId: params.agentId } : {}),

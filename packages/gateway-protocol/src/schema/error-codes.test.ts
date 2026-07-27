@@ -1,13 +1,16 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
+  CachedAgentResultErrorDetailsSchema,
   ErrorCodes,
   GatewayErrorDetailCodes,
   GatewayErrorDetailsSchema,
   isMcpAppViewExpiredError,
   McpAppViewExpiredErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
+  buildCachedAgentResultErrorDetails,
   missingScopeErrorShape,
+  readCachedAgentResultErrorDetails,
   readMissingScopeError,
   readMissingScopeErrorDetails,
   UnknownAgentIdErrorDetailsSchema,
@@ -15,6 +18,31 @@ import {
 } from "./error-codes.js";
 
 describe("gateway error details", () => {
+  it("distinguishes cached agent failures from replay RPC failures", () => {
+    const details = buildCachedAgentResultErrorDetails({
+      runId: "run-recovery",
+      requestedRunId: "run-alias",
+      originalDetails: { provider: "mock" },
+    });
+
+    expect(Value.Check(CachedAgentResultErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(false);
+    expect(readCachedAgentResultErrorDetails(details)).toEqual(details);
+    expect(
+      readCachedAgentResultErrorDetails({
+        code: GatewayErrorDetailCodes.CACHED_AGENT_RESULT,
+        runId: "",
+      }),
+    ).toBeNull();
+    expect(
+      readCachedAgentResultErrorDetails({
+        code: GatewayErrorDetailCodes.CACHED_AGENT_RESULT,
+        runId: "run-recovery",
+        requestedRunId: "",
+      }),
+    ).toBeNull();
+  });
+
   it("validates missing-scope details", () => {
     const details = {
       code: GatewayErrorDetailCodes.MISSING_SCOPE,

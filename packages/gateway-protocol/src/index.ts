@@ -2,6 +2,7 @@ export * from "./clawhub-trust-error-details.js";
 export * from "./system-agent-error-details.js";
 export {
   isMcpAppViewExpiredError,
+  readCachedAgentResultErrorDetails,
   readMissingScopeError,
   readMissingScopeErrorDetails,
 } from "./gateway-error-details.js";
@@ -18,6 +19,7 @@ export * from "./schema/worker-inference.js";
 export * from "./schema/skill-history.js";
 export * from "./schema/ui-command.js";
 export type {
+  CachedAgentResultErrorDetails,
   GatewayErrorDetails,
   McpAppViewExpiredErrorDetails,
   MissingScopeErrorDetails,

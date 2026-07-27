@@ -104,6 +104,7 @@ export function createAgentAdmissionController(params: {
             sessionKey: resolvedSessionKey,
             runId: params.runId,
             stopReason: "timeout",
+            agentReplayCapability: params.dedupeLifecycle.replayCapability,
           });
         }
         return;
@@ -130,6 +131,7 @@ export function createAgentAdmissionController(params: {
             sessionKey: resolvedSessionKey,
             runId: params.runId,
             stopReason: "timeout",
+            agentReplayCapability: params.dedupeLifecycle.replayCapability,
           });
         }
         return;
@@ -203,6 +205,7 @@ export function createAgentAdmissionController(params: {
         sessionKey: params.getResolvedSessionKey(),
         runId: params.runId,
         stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
+        agentReplayCapability: params.dedupeLifecycle.replayCapability,
       });
     }
   };

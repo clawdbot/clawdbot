@@ -25,6 +25,7 @@ public enum ErrorCode: String, Codable, Sendable {
     case notLinked = "NOT_LINKED"
     case notPaired = "NOT_PAIRED"
     case agentTimeout = "AGENT_TIMEOUT"
+    case agentResultNotFound = "AGENT_RESULT_NOT_FOUND"
     case invalidRequest = "INVALID_REQUEST"
     case forbidden = "FORBIDDEN"
     case approvalNotFound = "APPROVAL_NOT_FOUND"
@@ -1440,6 +1441,32 @@ public struct ErrorShape: Codable, Sendable {
     }
 }
 
+public struct CachedAgentResultErrorDetails: Codable, Sendable {
+    public let code: String
+    public let runid: String
+    public let requestedrunid: String?
+    public let originaldetails: AnyCodable?
+
+    public init(
+        code: String,
+        runid: String,
+        requestedrunid: String? = nil,
+        originaldetails: AnyCodable? = nil)
+    {
+        self.code = code
+        self.runid = runid
+        self.requestedrunid = requestedrunid
+        self.originaldetails = originaldetails
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case code
+        case runid = "runId"
+        case requestedrunid = "requestedRunId"
+        case originaldetails = "originalDetails"
+    }
+}
+
 public struct MissingScopeErrorDetails: Codable, Sendable {
     public let code: String
     public let missingscope: String
@@ -2610,6 +2637,8 @@ public struct AgentParams: Codable, Sendable {
     public let swarmoutputschema: [String: AnyCodable]?
     public let forcerestartsafetools: Bool?
     public let voicewaketrigger: String?
+    public let replayonly: Bool?
+    public let replaycapability: String?
     public let idempotencykey: String
     public let label: String?
 
@@ -2657,6 +2686,8 @@ public struct AgentParams: Codable, Sendable {
         swarmoutputschema: [String: AnyCodable]? = nil,
         forcerestartsafetools: Bool? = nil,
         voicewaketrigger: String? = nil,
+        replayonly: Bool? = nil,
+        replaycapability: String? = nil,
         idempotencykey: String,
         label: String? = nil)
     {
@@ -2703,6 +2734,8 @@ public struct AgentParams: Codable, Sendable {
         self.swarmoutputschema = swarmoutputschema
         self.forcerestartsafetools = forcerestartsafetools
         self.voicewaketrigger = voicewaketrigger
+        self.replayonly = replayonly
+        self.replaycapability = replaycapability
         self.idempotencykey = idempotencykey
         self.label = label
     }
@@ -2751,6 +2784,8 @@ public struct AgentParams: Codable, Sendable {
         case swarmoutputschema = "swarmOutputSchema"
         case forcerestartsafetools = "forceRestartSafeTools"
         case voicewaketrigger = "voiceWakeTrigger"
+        case replayonly = "replayOnly"
+        case replaycapability = "replayCapability"
         case idempotencykey = "idempotencyKey"
         case label
     }
