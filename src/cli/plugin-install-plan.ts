@@ -26,7 +26,7 @@ type BundledLookup = (params: {
   value: string;
 }) => BundledPluginSource | undefined;
 
-export type PluginInstallSourcePlan =
+type PluginInstallSourcePlan =
   | { ok: false; error: string }
   | {
       ok: true;
@@ -235,7 +235,7 @@ export function resolveBundledInstallPlanForCatalogEntry(params: {
   return { bundledSource: bundledById };
 }
 
-export function resolveBundledInstallPlanBeforeNpm(params: {
+function resolveBundledInstallPlanBeforeNpm(params: {
   rawSpec: string;
   findBundledSource: BundledLookup;
 }): { bundledSource: BundledPluginSource; warning: string } | null {

@@ -168,7 +168,7 @@ export type ManagedPluginSourceInstallRequest =
       allowBundledFallback?: boolean;
     };
 
-export type ManagedPluginSourceInstallResult =
+type ManagedPluginSourceInstallResult =
   | {
       ok: true;
       pluginId: string;

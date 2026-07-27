@@ -11,7 +11,6 @@ import {
 } from "../plugins/official-external-install-trust.js";
 import {
   resolveBundledInstallPlanForCatalogEntry,
-  resolveBundledInstallPlanBeforeNpm,
   resolveBundledInstallPlanForNpmFailure,
   resolvePluginInstallSourcePlan,
 } from "./plugin-install-plan.js";
@@ -39,104 +38,6 @@ describe("plugin install plan helpers", () => {
         request: { source: "npm", spec: "plugin.js" },
       },
     );
-  });
-
-  it("prefers bundled plugin for bare plugin-id specs", () => {
-    const findBundledSource = vi.fn().mockReturnValue({
-      pluginId: "voice-call",
-      localPath: installedPluginRoot("/tmp", "voice-call"),
-      npmSpec: "@openclaw/voice-call",
-    });
-
-    const result = resolveBundledInstallPlanBeforeNpm({
-      rawSpec: "voice-call",
-      findBundledSource,
-    });
-
-    expect(findBundledSource).toHaveBeenCalledWith({ kind: "pluginId", value: "voice-call" });
-    expect(result?.bundledSource.pluginId).toBe("voice-call");
-    expect(result?.warning).toContain('bare install spec "voice-call"');
-  });
-
-  it("prefers bundled plugin for scoped npm package specs", () => {
-    const findBundledSource = vi
-      .fn()
-      .mockImplementation(({ kind, value }: { kind: "pluginId" | "npmSpec"; value: string }) => {
-        if (kind === "npmSpec" && value === "@openclaw/voice-call") {
-          return {
-            pluginId: "voice-call",
-            localPath: installedPluginRoot("/tmp", "voice-call"),
-            npmSpec: "@openclaw/voice-call",
-          };
-        }
-        return undefined;
-      });
-    const result = resolveBundledInstallPlanBeforeNpm({
-      rawSpec: "@openclaw/voice-call@2026.5.20",
-      findBundledSource,
-    });
-
-    expect(findBundledSource).toHaveBeenCalledWith({
-      kind: "npmSpec",
-      value: "@openclaw/voice-call@2026.5.20",
-    });
-    expect(findBundledSource).toHaveBeenCalledWith({
-      kind: "npmSpec",
-      value: "@openclaw/voice-call",
-    });
-    expect(result?.bundledSource.pluginId).toBe("voice-call");
-    expect(result?.warning).toContain('npm install spec "@openclaw/voice-call@2026.5.20"');
-    expect(result?.warning).toContain("npm:@openclaw/voice-call@2026.5.20");
-  });
-
-  it("keeps scoped npm specs on the registry path for source checkout bundles", () => {
-    const { packageRoot, pluginRoot } = createSourceCheckoutPlugin("codex");
-    try {
-      const findBundledSource = vi.fn().mockReturnValue({
-        pluginId: "codex",
-        localPath: pluginRoot,
-        npmSpec: "@openclaw/codex",
-      });
-
-      const result = resolveBundledInstallPlanBeforeNpm({
-        rawSpec: "@openclaw/codex@2026.7.2-beta.3",
-        findBundledSource,
-      });
-
-      expect(result).toBeNull();
-    } finally {
-      fs.rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("keeps bare plugin ids on source checkout bundles", () => {
-    const { packageRoot, pluginRoot } = createSourceCheckoutPlugin("codex");
-    try {
-      const findBundledSource = vi.fn().mockReturnValue({
-        pluginId: "codex",
-        localPath: pluginRoot,
-        npmSpec: "@openclaw/codex",
-      });
-
-      const result = resolveBundledInstallPlanBeforeNpm({
-        rawSpec: "codex",
-        findBundledSource,
-      });
-
-      expect(result?.bundledSource.pluginId).toBe("codex");
-    } finally {
-      fs.rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("skips bundled pre-plan for npm specs that do not match bundled packages", () => {
-    const findBundledSource = vi.fn();
-    const result = resolveBundledInstallPlanBeforeNpm({
-      rawSpec: "@openclaw/not-bundled",
-      findBundledSource,
-    });
-
-    expect(result).toBeNull();
   });
 
   it("resolves exact official external plugin ids before npm fallback", () => {
