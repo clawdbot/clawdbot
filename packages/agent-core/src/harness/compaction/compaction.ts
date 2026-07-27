@@ -1,8 +1,3 @@
-// Agent Core module implements compaction behavior.
-import {
-  CHARS_PER_TOKEN_ESTIMATE,
-  estimateStringChars,
-} from "@openclaw/normalization-core/cjk-chars";
 import {
   resolveClaudeFable5ModelIdentity,
   type AssistantMessage,
@@ -12,6 +7,11 @@ import {
   type StreamFn,
   type Usage,
 } from "@openclaw/llm-core";
+// Agent Core module implements compaction behavior.
+import {
+  CHARS_PER_TOKEN_ESTIMATE,
+  estimateStringChars,
+} from "@openclaw/normalization-core/cjk-chars";
 import { resolveAgentReasoningOption } from "../../reasoning.js";
 import {
   type AgentCoreCompletionRuntimeDeps,

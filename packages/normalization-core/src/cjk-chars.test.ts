@@ -12,9 +12,7 @@ describe("normalization-core/cjk-chars", () => {
   });
 
   it("weights common CJK text as roughly one token per character", () => {
-    expect(estimateStringChars("\u4F60\u597D\u4E16\u754C")).toBe(
-      4 * CHARS_PER_TOKEN_ESTIMATE,
-    );
+    expect(estimateStringChars("\u4F60\u597D\u4E16\u754C")).toBe(4 * CHARS_PER_TOKEN_ESTIMATE);
     expect(estimateStringChars("hi\u4F60\u597D")).toBe(10);
   });
 
