@@ -112,6 +112,24 @@ async function navigateInApp(page: Page, routeId: string, search = "") {
   );
 }
 
+/**
+ * The chat route pushes its base path and then commits the session path. A
+ * navigation issued inside that window is replaced by the committed route and
+ * rejected as notFound, so wait for the path to settle before leaving again.
+ */
+async function waitForCommittedChatRoute(page: Page) {
+  await page.waitForURL((url) => url.pathname.startsWith("/chat"));
+  let previous = "";
+  await expect
+    .poll(() => {
+      const current = new URL(page.url()).pathname;
+      const settled = current === previous;
+      previous = current;
+      return settled;
+    })
+    .toBe(true);
+}
+
 async function choosePackagesFolder(page: Page) {
   await page.locator("#new-session-place-trigger").click();
   await page.getByRole("button", { name: "Browse folders" }).click();
@@ -963,7 +981,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
 
       await navigateInApp(page, "chat");
-      await page.waitForURL((url) => url.pathname.endsWith("/chat"));
+      await waitForCommittedChatRoute(page);
       const metadataRequests = (await gateway.getRequests("chat.metadata")).length;
       const branchRequests = (await gateway.getRequests("worktrees.branches")).length;
       await gateway.deferNext("chat.metadata");
@@ -1159,7 +1177,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await choosePackagesFolder(page);
 
       await navigateInApp(page, "chat");
-      await page.waitForURL((url) => url.pathname.endsWith("/chat"));
+      await waitForCommittedChatRoute(page);
       const validationRequests = (await gateway.getRequests("fs.listDir")).length;
       await gateway.deferNext("fs.listDir");
       await navigateInApp(page, "new-session");
@@ -1189,7 +1207,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
           request.params.path === PICKED,
       ).length;
       await navigateInApp(page, "chat");
-      await page.waitForURL((url) => url.pathname.endsWith("/chat"));
+      await waitForCommittedChatRoute(page);
       await navigateInApp(page, "new-session");
       await expect
         .poll(() => placeTrigger.locator(".new-session-page__trigger-label").textContent())
@@ -1270,7 +1288,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await choosePackagesFolder(page);
 
       await navigateInApp(page, "chat");
-      await page.waitForURL((url) => url.pathname.endsWith("/chat"));
+      await waitForCommittedChatRoute(page);
       const validationRequests = (await gateway.getRequests("fs.listDir")).length;
       await gateway.deferNext("fs.listDir");
       await navigateInApp(page, "new-session");
