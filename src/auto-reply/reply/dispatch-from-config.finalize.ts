@@ -40,7 +40,6 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     flushPendingCommentaryProgress,
     getDispatchAbortSignal,
     getObservedReplyDelivery,
-    hasDeliveredRoutedBlockReply,
     isRoutedReplyDelivered,
     markIdle,
     markInboundDedupeReplayUnsafe,
@@ -63,6 +62,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     suppressAutomaticSourceDelivery,
     suppressDelivery,
     throwIfDispatchOperationAborted,
+    turnLedger,
     waitForPendingDirectBlockReplyDelivery,
   } = state;
   const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
@@ -112,8 +112,6 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true &&
     (ctx.InboundEventKind !== "room_event" || explicitCommandTurnCtx);
   const sentFinalPayloadDedupeKeys = new Set<string>();
-  let sawDedupedAgainstBlock = false;
-  let sawVisibleFinalDelivery = false;
   for (const [replyIndex, reply] of replies.entries()) {
     throwIfDispatchOperationAborted();
     // Durable reasoning is a channel-owned lane; generic channels keep the
@@ -148,20 +146,12 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     sentFinalPayloadDedupeKeys.add(finalPayloadDedupeKey);
     const finalReply = await sendFinalPayload(reply, { deliveryId: String(replyIndex) });
     if (finalReply.dedupedAgainstBlock) {
-      sawDedupedAgainstBlock = true;
+      // The delivering block already settled into the turn ledger.
       continue;
     }
     attemptedFinalDelivery = true;
     queuedFinal = finalReply.queuedFinal || queuedFinal;
     routedFinalCount += finalReply.routedFinalCount;
-    // Routed drops of empty payloads report ok without sending anything; only a
-    // contentful final proves visibility for the no-visible-reply fallback gate.
-    if (
-      hasOutboundReplyContent(reply, { trimText: true }) &&
-      (finalReply.queuedFinal || finalReply.routedFinalCount > 0)
-    ) {
-      sawVisibleFinalDelivery = true;
-    }
     if (finalReply.queuedFinal) {
       if (finalReply.dispatcherOutcome) {
         finalDeliveries.push({ outcome: finalReply.dispatcherOutcome, payload: reply });
@@ -263,7 +253,6 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
             queuedFinal = result.ok || queuedFinal;
             if (isRoutedReplyDelivered(result)) {
               routedFinalCount += 1;
-              sawVisibleFinalDelivery = true;
             }
             if (!result.ok) {
               logVerbose(
@@ -273,9 +262,8 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
           } else {
             throwIfDispatchOperationAborted();
             markInboundDedupeReplayUnsafe();
-            const didQueue = dispatcher.sendFinalReply(normalizedTtsOnlyPayload);
-            queuedFinal = didQueue || queuedFinal;
-            sawVisibleFinalDelivery = didQueue || sawVisibleFinalDelivery;
+            queuedFinal =
+              turnLedger.sendQueued("final", normalizedTtsOnlyPayload).queued || queuedFinal;
           }
         }
       } catch (err) {
@@ -290,26 +278,29 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   }
 
   await waitForPendingDirectBlockReplyDelivery(getDispatchAbortSignal());
+  // Observed delivery is plugin-attested visibility, a trust level the transport
+  // ledger intentionally does not own.
+  const noVisibleReplyFallbackAllowed = () =>
+    !suppressDelivery &&
+    !sendPolicyDenied &&
+    sourceReplyDeliveryMode !== "message_tool_only" &&
+    !emptyFinalAllowedAsSilent &&
+    !getObservedReplyDelivery() &&
+    !turnLedger.hasVisibleDelivery() &&
+    !turnLedger.hasForeignQueuedAdmissions();
+  if (noVisibleReplyFallbackAllowed()) {
+    // Only a turn that still looks empty pays for settlement: pending admissions
+    // must resolve (beforeDeliver cancellation, transport failure) before the
+    // silence verdict. Turns with settled visibility or a policy-suppressed
+    // fallback skip the wait, so deliveries that legitimately outlive the turn
+    // (queued same-session mirroring) cannot deadlock the gate on themselves.
+    await turnLedger.settleQueued(getDispatchAbortSignal());
+  }
   let counts = dispatcher.getQueuedCounts();
   let noVisibleReplyFallbackDelivered = false;
   // Visible agent turns must never end silently: empty model completions get a
   // core fallback final. emptyFinalAllowedAsSilent is the only sanctioned silence.
-  // Routed streamed blocks bypass dispatcher counts, so blockCount and the
-  // deduped-against-block signal must also prove the turn was empty before falling back.
-  if (
-    !suppressDelivery &&
-    !sendPolicyDenied &&
-    sourceReplyDeliveryMode !== "message_tool_only" &&
-    !sawVisibleFinalDelivery &&
-    !getObservedReplyDelivery() &&
-    !emptyFinalAllowedAsSilent &&
-    !sawDedupedAgainstBlock &&
-    !hasDeliveredRoutedBlockReply() &&
-    state.blockCount === 0 &&
-    counts.tool === 0 &&
-    counts.block === 0 &&
-    counts.final === 0
-  ) {
+  if (noVisibleReplyFallbackAllowed()) {
     try {
       throwIfDispatchOperationAborted();
       const fallbackPayload: ReplyPayload = { text: NO_VISIBLE_REPLY_FALLBACK_TEXT };
@@ -332,14 +323,16 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       } else {
         throwIfDispatchOperationAborted();
         markInboundDedupeReplayUnsafe();
-        // Queue admission, not settled delivery: a beforeDeliver hook can still
-        // cancel this payload. Accepted tradeoff until a unified visible-delivery
-        // signal exists; every sibling in this function shares the semantics.
-        const didQueue = dispatcher.sendFinalReply(fallbackPayload);
-        if (didQueue) {
+        const fallbackSend = turnLedger.sendQueued("final", fallbackPayload);
+        // Settlement decides the flag: a beforeDeliver hook can still cancel the
+        // admitted fallback, and a cancelled fallback must keep the eligibility
+        // flag alive for channel-level recovery. Dispatchers without settlement
+        // tracking keep admission as their strongest fact.
+        const fallbackOutcome = fallbackSend.outcome ? await fallbackSend.outcome : "delivered";
+        if (fallbackSend.queued && fallbackOutcome === "delivered") {
           queuedFinal = true;
           noVisibleReplyFallbackDelivered = true;
-          // Re-snapshot so the queued fallback is reflected in reported counts,
+          // Re-snapshot so the delivered fallback is reflected in reported counts,
           // matching the TTS-only path which enqueues before the snapshot.
           counts = dispatcher.getQueuedCounts();
         }
@@ -371,11 +364,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
         ? { sessionMetadataChanges: state.sessionMetadataChangesForResult }
         : {}),
       ...(getObservedReplyDelivery() ? { observedReplyDelivery: true } : {}),
-      // Eligibility keys off visible delivery, not queue/route admission: an
-      // empty routed final reports ok without sending, and must not mask a
-      // failed fallback from channel-level recovery.
-      ...(!sawVisibleFinalDelivery &&
-      !noVisibleReplyFallbackDelivered &&
+      // Eligibility keys off settled visible delivery: a suppressed or cancelled
+      // final (including the core fallback itself) leaves channel-level recovery
+      // eligible, while any settled visible delivery clears it.
+      ...(!turnLedger.hasVisibleDelivery() &&
       !getObservedReplyDelivery() &&
       !emptyFinalAllowedAsSilent
         ? { noVisibleReplyFallbackEligible: true }

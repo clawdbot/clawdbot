@@ -381,11 +381,14 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       });
       await hookStarted.promise;
       await vi.advanceTimersByTimeAsync(15_000);
+      // The timed-out final settles invisible, so the no-visible-reply fallback
+      // is attempted through the same wedged hook and needs its own stage budget.
+      await vi.advanceTimersByTimeAsync(15_000);
       const result = await resultPromise;
 
       expect(result.queuedFinal).toBe(true);
       expect(deliver).not.toHaveBeenCalled();
-      expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
+      expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 2 });
       expect(sessionStoreMocks.updateSessionEntry).toHaveBeenCalledOnce();
       expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBe(true);
       expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBe("durable reply");
@@ -672,6 +675,9 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
         pendingFinalDeliveryIntentId: "newer-intent",
       };
       await vi.advanceTimersByTimeAsync(15_000);
+      // Second stage budget: the no-visible-reply fallback runs through the same
+      // wedged hook after the older final times out.
+      await vi.advanceTimersByTimeAsync(15_000);
       await resultPromise;
 
       expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBe(true);
@@ -712,7 +718,9 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
         }),
     });
 
-    expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
+    // The failed final settles invisible, so the no-visible-reply fallback is
+    // attempted through the same failing transport before the turn ends.
+    expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 2 });
     expect(sessionStoreMocks.updateSessionEntry).toHaveBeenCalledOnce();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBeUndefined();
@@ -748,7 +756,9 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
 
     expect(result.queuedFinal).toBe(true);
     expect(deliver).not.toHaveBeenCalled();
-    expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
+    // The cancelled final settles invisible, so the no-visible-reply fallback is
+    // attempted and cancelled by the same hook before the turn ends.
+    expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 0, final: 2 });
     expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
     expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBeUndefined();
