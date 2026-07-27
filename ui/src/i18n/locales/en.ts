@@ -3196,6 +3196,7 @@ export const en: TranslationMap = {
     },
   },
   attention: {
+    cronErrorUnknown: "Unknown error",
     cronFailed: "{count} cron job(s) failed",
     cronOverdue: "{count} cron job(s) overdue",
     modelAuthExpired: "Model auth expired: {providers}",

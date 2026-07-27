@@ -13,6 +13,7 @@ import type { SidebarAttentionKind } from "./sidebar-attention-dismissals.ts";
 // A cron job counts as overdue when its next planned run is this far in the
 // past; mirrors the threshold the Overview attention list used.
 const CRON_OVERDUE_GRACE_MS = 300_000;
+const CRON_ERROR_MAX_LENGTH = 200;
 
 type SidebarAttentionAction =
   | { kind: "navigate"; routeId: NavigationRouteId }
@@ -23,6 +24,8 @@ export type SidebarAttentionItem = {
   severity: "error" | "warning";
   icon: IconName;
   label: string;
+  // Multi-line tooltip body; "\n" separates lines rendered via pre-line.
+  detail?: string;
   action: SidebarAttentionAction;
   // Sorted identities of the entities behind the chip. A dismissal stores
   // this signature so the chip stays hidden only while the same incident set
@@ -44,6 +47,7 @@ export function buildSidebarAttentionItems(params: {
 }): SidebarAttentionItem[] {
   const items: SidebarAttentionItem[] = [];
   const signatureOf = (ids: readonly string[]) => ids.toSorted().join("\n");
+  const cronJobName = (job: CronJob) => job.name?.trim() || job.id;
 
   if (params.approvalQueue.length > 0) {
     const count = params.approvalQueue.length;
@@ -66,6 +70,19 @@ export function buildSidebarAttentionItems(params: {
       severity: "error",
       icon: "clock",
       label: t("attention.cronFailed", { count: String(failedCron.length) }),
+      detail: failedCron
+        .map((job) => {
+          const errorText = [job.state?.lastError, job.state?.lastErrorReason]
+            .map((value) => value?.trim())
+            .find((value): value is string => Boolean(value));
+          const resolvedError = errorText ?? t("attention.cronErrorUnknown");
+          const cappedError =
+            resolvedError.length > CRON_ERROR_MAX_LENGTH
+              ? `${resolvedError.slice(0, CRON_ERROR_MAX_LENGTH - 1)}…`
+              : resolvedError;
+          return `${cronJobName(job)}: ${cappedError}`;
+        })
+        .join("\n"),
       action: { kind: "navigate", routeId: "cron" },
       signature: signatureOf(failedCron.map((job) => job.id)),
     });
@@ -82,6 +99,7 @@ export function buildSidebarAttentionItems(params: {
       severity: "warning",
       icon: "clock",
       label: t("attention.cronOverdue", { count: String(overdueCron.length) }),
+      detail: overdueCron.map(cronJobName).join("\n"),
       action: { kind: "navigate", routeId: "cron" },
       // nextRunAtMs is the incident identity: stable while a job stays stuck,
       // new once it runs again and later goes overdue anew — so a fresh

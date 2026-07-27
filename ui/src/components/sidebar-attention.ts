@@ -223,7 +223,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
         ${items.map(
           (item) => html`
             <div class="sidebar-attention__item sidebar-attention__item--${item.severity}">
-              <openclaw-tooltip .content=${item.label}>
+              <openclaw-tooltip .content=${item.detail ?? item.label}>
                 <button
                   type="button"
                   class="sidebar-attention__open"

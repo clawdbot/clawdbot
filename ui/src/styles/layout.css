@@ -968,7 +968,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   color: inherit;
   font: inherit;
   text-align: left;
-  cursor: pointer;
+  cursor: default;
 }
 
 .sidebar-attention__dismiss {
@@ -980,7 +980,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   border: 0;
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
+  cursor: default;
   opacity: 0.6;
 }
 
