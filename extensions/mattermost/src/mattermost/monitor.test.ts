@@ -597,6 +597,48 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     expect(draftStream.clear).not.toHaveBeenCalled();
   });
 
+  it("keeps late verbose finals out of a preview post finalized in place", async () => {
+    const draftStream = createDraftStreamMock();
+    const deliverFinal = vi.fn(async () => {});
+    const previewState = { finalizedViaPreviewPost: false };
+    const sharedParams = {
+      info: { kind: "final" as const },
+      kind: "channel" as const,
+      client: createMattermostClientMock(),
+      draftStream,
+      effectiveReplyToId: "thread-root-1",
+      resolvePreviewFinalText: (text?: string) => text?.trim(),
+      previewState,
+      logVerboseMessage: vi.fn(),
+      deliverPayload: deliverFinal,
+    };
+
+    // The single-chunk answer finalizes in place by editing the draft preview post.
+    await deliverMattermostReplyWithDraftPreview({
+      payload: { text: "Final answer" } as never,
+      ...sharedParams,
+    });
+    expect(previewState.finalizedViaPreviewPost).toBe(true);
+    expect(updateMattermostPostSpy).toHaveBeenCalledWith(expect.anything(), "preview-post-1", {
+      message: "Final answer",
+    });
+
+    // A late verbose/plugin final (for example the end-of-turn Active Memory status line)
+    // must not edit the finalized post again; it is delivered as its own post instead.
+    await deliverMattermostReplyWithDraftPreview({
+      payload: { text: "\u{1F9E9} Active Memory: status=ok elapsed=4.2s query=recent" } as never,
+      ...sharedParams,
+    });
+
+    expect(updateMattermostPostSpy).toHaveBeenCalledTimes(1);
+    expect(deliverFinal).toHaveBeenCalledTimes(1);
+    expect(deliverFinal).toHaveBeenCalledWith({
+      text: "\u{1F9E9} Active Memory: status=ok elapsed=4.2s query=recent",
+    });
+    expect(draftStream.discardPending).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
+  });
+
   it("keeps the existing preview unchanged when final delivery fails", async () => {
     const draftStream = createDraftStreamMock();
     const deliverFinal = vi.fn(async () => {

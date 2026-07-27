@@ -45,6 +45,23 @@ export async function deliverMattermostReplyWithDraftPreview(
     return;
   }
 
+  const deliverNormally = async (payload: ReplyPayload) => {
+    const supplement = getReplyPayloadTtsSupplement(payload);
+    await params.deliverPayload(
+      supplement && !payload.text?.trim() && supplement.visibleTextAlreadyDelivered !== true
+        ? { ...payload, text: supplement.spokenText }
+        : payload,
+    );
+  };
+
+  // A draft post finalized in place is terminal: late final payloads (such as end-of-turn
+  // verbose plugin status lines) must not edit it again and overwrite the delivered answer.
+  // Route them to their own posts, matching the multi-chunk final behavior.
+  if (params.info.kind === "final" && params.previewState.finalizedViaPreviewPost) {
+    await deliverNormally(params.payload);
+    return;
+  }
+
   await deliverWithFinalizableLivePreviewAdapter({
     kind: params.info.kind,
     payload: params.payload,
@@ -104,13 +121,6 @@ export async function deliverMattermostReplyWithDraftPreview(
         );
       },
     }),
-    deliverNormally: async (payload) => {
-      const supplement = getReplyPayloadTtsSupplement(payload);
-      await params.deliverPayload(
-        supplement && !payload.text?.trim() && supplement.visibleTextAlreadyDelivered !== true
-          ? { ...payload, text: supplement.spokenText }
-          : payload,
-      );
-    },
+    deliverNormally,
   });
 }
