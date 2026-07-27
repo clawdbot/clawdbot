@@ -3970,6 +3970,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Sandboxed browser
   - H2: SSH backend
   - H2: OpenShell backend
+  - H2: sbx backend
   - H2: Workspace access
   - H2: Multiple folders for one agent
   - H3: Other bind behavior
@@ -3978,6 +3979,23 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Tool policy and escape hatches
   - H2: Multi-agent overrides
   - H2: Minimal enable example
+  - H2: Related
+
+## gateway/sbx.md
+
+- Route: /gateway/sbx
+- Headings:
+  - H2: Prerequisites
+  - H2: Quick start
+  - H2: Configuration reference
+  - H2: Workspace model
+  - H2: Examples
+  - H3: Minimal rw setup
+  - H3: Custom template and pull policy
+  - H3: Per-agent sbx with a custom agent/kit
+  - H2: Lifecycle management
+  - H2: Current limitations
+  - H2: How it works
   - H2: Related
 
 ## gateway/secrets-plan-contract.md
@@ -4375,6 +4393,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: E2E (gateway smoke)
   - H3: E2E (Control UI mocked browser)
   - H3: E2E: OpenShell backend smoke
+  - H3: E2E: sbx backend smoke
   - H3: Live (real providers + real models)
   - H2: Which suite should I run?
   - H2: Live (network-touching) tests
@@ -7163,6 +7182,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Distribution
   - H2: Surface
   - H2: Related docs
+
+## plugins/reference/sbx.md
+
+- Route: /plugins/reference/sbx
+- Headings:
+  - H1: Sbx plugin
+  - H2: Distribution
+  - H2: Surface
 
 ## plugins/reference/searxng.md
 

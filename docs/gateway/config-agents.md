@@ -736,7 +736,7 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
     defaults: {
       sandbox: {
         mode: "non-main", // off (default) | non-main | all
-        backend: "docker", // docker (default) | ssh | openshell
+        backend: "docker", // docker (default) | ssh | openshell | sbx
         scope: "agent", // session | agent (default) | shared
         workspaceAccess: "none", // none (default) | ro | rw
         workspaceRoot: "~/.openclaw/sandboxes",
@@ -833,9 +833,11 @@ Defaults shown above (`off`/`docker`/`agent`/`none`/`bookworm-slim` image/`none`
 - `docker`: local Docker runtime (default)
 - `ssh`: generic SSH-backed remote runtime
 - `openshell`: OpenShell runtime
+- `sbx`: Docker Sandboxes (`sbx` CLI) runtime
 
 When `backend: "openshell"` is selected, runtime-specific settings move to
-`plugins.entries.openshell.config`.
+`plugins.entries.openshell.config`. When `backend: "sbx"` is selected,
+runtime-specific settings move to `plugins.entries.sbx.config`.
 
 **SSH backend config:**
 

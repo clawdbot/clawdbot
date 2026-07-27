@@ -1,0 +1,37 @@
+{
+  "name": "@openclaw/sbx-sandbox",
+  "version": "2026.6.2",
+  "description": "OpenClaw sandbox backend for Docker's sbx CLI, using native bind-mounted sandbox containers for exec and file tools.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "type": "module",
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "npmSpec": "@openclaw/sbx-sandbox",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.6.2"
+    },
+    "compat": {
+      "pluginApi": ">=2026.6.2"
+    },
+    "build": {
+      "openclawVersion": "2026.6.2",
+      "bundledDist": false
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  }
+}

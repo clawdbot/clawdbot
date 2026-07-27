@@ -58,6 +58,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "phone-control",
   "policy",
   "reef",
+  "sbx",
   "talk-voice",
   "teams-meetings",
   "thread-ownership",

@@ -5,7 +5,7 @@ read_when: "You are managing sandbox runtimes or debugging sandbox/tool-policy b
 status: active
 ---
 
-Manage sandbox runtimes for isolated agent execution: Docker containers, SSH targets, or OpenShell backends.
+Manage sandbox runtimes for isolated agent execution: Docker containers, SSH targets, OpenShell, or sbx backends.
 
 [`openclaw agent exec`](/cli/agent#agent-exec) does not use these configured runtimes. Its isolated implicit policy config turns the agent sandbox off, allows full Gateway-host execution, and restricts filesystem tools to `--cwd`.
 
@@ -43,7 +43,7 @@ Options:
 
 Pass exactly one of `--all`, `--session`, or `--agent`.
 
-For `ssh` and OpenShell `remote`, recreate matters more than with Docker: the remote workspace is canonical after the initial seed, `recreate` deletes that canonical remote workspace for the selected scope, and the next run reseeds it from the current local workspace.
+For `ssh` and OpenShell `remote`, recreate matters more than with Docker: the remote workspace is canonical after the initial seed, `recreate` deletes that canonical remote workspace for the selected scope, and the next run reseeds it from the current local workspace. The sbx backend bind-mounts the workspace instead, so recreate mainly resets the sandbox container itself.
 
 ### `openclaw sandbox explain`
 
@@ -76,6 +76,7 @@ Prefer `openclaw sandbox recreate` over manual backend-specific cleanup. It uses
 | Sandbox config (`agents.defaults.sandbox.*`)                                                                                                                   | `openclaw sandbox recreate --all`                                   |
 | SSH target/auth (`agents.defaults.sandbox.ssh.{target,workspaceRoot,identityFile,certificateFile,knownHostsFile,identityData,certificateData,knownHostsData}`) | `openclaw sandbox recreate --all`                                   |
 | OpenShell source/policy/mode (`plugins.entries.openshell.config.{from,mode,policy}`)                                                                           | `openclaw sandbox recreate --all`                                   |
+| sbx agent/template (`plugins.entries.sbx.config.{agent,template}`)                                                                                             | `openclaw sandbox recreate --all`                                   |
 | `setupCommand`                                                                                                                                                 | `openclaw sandbox recreate --all` (or `--agent <id>` for one agent) |
 
 <Note>
@@ -102,7 +103,7 @@ Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sand
     "defaults": {
       "sandbox": {
         "mode": "all", // off, non-main, all
-        "backend": "docker", // docker, ssh, openshell (plugin-provided)
+        "backend": "docker", // docker, ssh, openshell, sbx (plugin-provided)
         "scope": "agent", // session, agent, shared
         "docker": {
           "image": "openclaw-sandbox:bookworm-slim",

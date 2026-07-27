@@ -1,0 +1,60 @@
+{
+  "id": "sbx",
+  "activation": {
+    "onStartup": true
+  },
+  "name": "Docker Sandboxes (sbx)",
+  "description": "OpenClaw sandbox backend for Docker's sbx CLI, using native bind-mounted sandbox containers for exec and file tools.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "command": {
+        "type": "string",
+        "minLength": 1
+      },
+      "agent": {
+        "type": "string",
+        "minLength": 1
+      },
+      "template": {
+        "type": "string",
+        "minLength": 1
+      },
+      "pull": {
+        "type": "string",
+        "enum": ["always", "missing", "never"]
+      },
+      "timeoutSeconds": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 2147000
+      }
+    }
+  },
+  "uiHints": {
+    "command": {
+      "label": "sbx Command",
+      "help": "Path or command name for the Docker Sandboxes (sbx) CLI."
+    },
+    "agent": {
+      "label": "Agent/Kit",
+      "help": "sbx agent or kit name used when creating a sandbox. Use \"shell\" for a plain exec sandbox."
+    },
+    "template": {
+      "label": "Template",
+      "help": "Optional container image override passed as --template.",
+      "advanced": true
+    },
+    "pull": {
+      "label": "Pull Policy",
+      "help": "Image pull policy passed as --pull (always, missing, or never).",
+      "advanced": true
+    },
+    "timeoutSeconds": {
+      "label": "Command Timeout Seconds",
+      "help": "Timeout for sbx CLI operations such as create.",
+      "advanced": true
+    }
+  }
+}

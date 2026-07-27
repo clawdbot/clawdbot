@@ -693,6 +693,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/perplexity/**"
+"extensions: sbx":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/sbx/**"
 "extensions: sglang":
   - changed-files:
       - any-glob-to-any-file:

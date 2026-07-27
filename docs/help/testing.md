@@ -815,6 +815,22 @@ Native dependency policy:
   - `OPENCLAW_E2E_OPENSHELL_CONFIG_HOME=/path/to/config` to expose the registered gateway config to the isolated test
   - `OPENCLAW_E2E_OPENSHELL_HOST_IP=172.18.0.1` to override the Docker gateway IP used by the host policy fixture
 
+### E2E: sbx backend smoke
+
+- Command: `pnpm test:e2e:sbx`
+- File: `extensions/sbx/src/backend.e2e.test.ts`
+- Scope:
+  - Creates a `shell` sbx sandbox bind-mounted at a temporary local workspace
+  - Exercises OpenClaw's sbx backend over real `sbx exec`
+  - Verifies bind-mounted filesystem bridge behavior (writes visible on host immediately)
+- Expectations:
+  - Opt-in only; not part of the default `pnpm test:e2e` run
+  - Requires a local `sbx` CLI (Docker Desktop Sandboxes or standalone binary) plus a working Docker daemon
+  - Removes the test sandbox on completion
+- Useful overrides:
+  - `OPENCLAW_E2E_SBX=1` to enable the test when running the broader e2e suite manually
+  - `OPENCLAW_E2E_SBX_COMMAND=/path/to/sbx` to point at a non-default CLI binary or wrapper script
+
 ### Live (real providers + real models)
 
 - Command: `pnpm test:live`

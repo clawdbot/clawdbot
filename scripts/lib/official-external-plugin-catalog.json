@@ -420,6 +420,23 @@
       }
     },
     {
+      "name": "@openclaw/sbx-sandbox",
+      "description": "OpenClaw Docker Sandboxes (sbx) backend",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "sbx",
+          "label": "Docker Sandboxes (sbx)"
+        },
+        "install": {
+          "npmSpec": "@openclaw/sbx-sandbox",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/parallel-plugin",
       "description": "OpenClaw Parallel web search plugin.",
       "source": "official",

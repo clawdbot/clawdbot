@@ -26,11 +26,11 @@ Not sandboxed:
 
 Three independent settings control sandbox behavior:
 
-| Setting | Key                               | Values                       | Default  |
-| ------- | --------------------------------- | ---------------------------- | -------- |
-| Mode    | `agents.defaults.sandbox.mode`    | `off`, `non-main`, `all`     | `off`    |
-| Scope   | `agents.defaults.sandbox.scope`   | `agent`, `session`, `shared` | `agent`  |
-| Backend | `agents.defaults.sandbox.backend` | `docker`, `ssh`, `openshell` | `docker` |
+| Setting | Key                               | Values                              | Default  |
+| ------- | --------------------------------- | ----------------------------------- | -------- |
+| Mode    | `agents.defaults.sandbox.mode`    | `off`, `non-main`, `all`            | `off`    |
+| Scope   | `agents.defaults.sandbox.scope`   | `agent`, `session`, `shared`        | `agent`  |
+| Backend | `agents.defaults.sandbox.backend` | `docker`, `ssh`, `openshell`, `sbx` | `docker` |
 
 **Mode** controls when sandboxing applies:
 
@@ -44,17 +44,17 @@ Three independent settings control sandbox behavior:
 - `session`: one container per session.
 - `shared`: one container shared by all sandboxed sessions (per-agent `docker`/`ssh`/`browser` overrides are ignored under this scope).
 
-**Backend** controls which runtime executes sandboxed tools. SSH-specific config lives under `agents.defaults.sandbox.ssh`; OpenShell-specific config lives under `plugins.entries.openshell.config`.
+**Backend** controls which runtime executes sandboxed tools. SSH-specific config lives under `agents.defaults.sandbox.ssh`; OpenShell-specific config lives under `plugins.entries.openshell.config`; sbx-specific config lives under `plugins.entries.sbx.config`.
 
-|                     | Docker                           | SSH                            | OpenShell                                           |
-| ------------------- | -------------------------------- | ------------------------------ | --------------------------------------------------- |
-| **Where it runs**   | Local container                  | Any SSH-accessible host        | OpenShell managed sandbox                           |
-| **Setup**           | `scripts/sandbox-setup.sh`       | SSH key + target host          | OpenShell plugin enabled                            |
-| **Workspace model** | Bind-mount or copy               | Remote-canonical (seed once)   | `mirror` or `remote`                                |
-| **Network control** | `docker.network` (default: none) | Depends on remote host         | Depends on OpenShell                                |
-| **Browser sandbox** | Supported                        | Not supported                  | Not supported yet                                   |
-| **Bind mounts**     | `docker.binds`                   | N/A                            | N/A                                                 |
-| **Best for**        | Local dev, full isolation        | Offloading to a remote machine | Managed remote sandboxes with optional two-way sync |
+|                     | Docker                           | SSH                            | OpenShell                                           | sbx                                        |
+| ------------------- | -------------------------------- | ------------------------------ | --------------------------------------------------- | ------------------------------------------ |
+| **Where it runs**   | Local container                  | Any SSH-accessible host        | OpenShell managed sandbox                           | Local `sbx`-managed container              |
+| **Setup**           | `scripts/sandbox-setup.sh`       | SSH key + target host          | OpenShell plugin enabled                            | `sbx`/Docker Desktop Sandboxes installed   |
+| **Workspace model** | Bind-mount or copy               | Remote-canonical (seed once)   | `mirror` or `remote`                                | Bind-mount at the same host path (no sync) |
+| **Network control** | `docker.network` (default: none) | Depends on remote host         | Depends on OpenShell                                | `sbx policy` egress allowlist              |
+| **Browser sandbox** | Supported                        | Not supported                  | Not supported yet                                   | Not supported yet                          |
+| **Bind mounts**     | `docker.binds`                   | N/A                            | N/A                                                 | N/A (workspace mounts are automatic)       |
+| **Best for**        | Local dev, full isolation        | Offloading to a remote machine | Managed remote sandboxes with optional two-way sync | Local dev with zero sync overhead          |
 
 ## Docker backend
 
@@ -158,6 +158,36 @@ Use `backend: "openshell"` to sandbox tools in an OpenShell-managed remote envir
 `openclaw sandbox list`/`recreate`/prune all treat OpenShell runtimes the same as Docker runtimes; prune logic is backend-aware.
 
 For the full prerequisites, configuration reference, workspace-mode comparison, and lifecycle details, see [OpenShell](/gateway/openshell).
+
+## sbx backend
+
+Use `backend: "sbx"` to sandbox tools locally with Docker's `sbx` CLI. Unlike SSH/OpenShell, sbx bind-mounts the workspace at the same absolute path inside the sandbox container as on the host, so there is no upload/sync step: file tools and exec always see a live, consistent view of the workspace.
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        mode: "all",
+        backend: "sbx",
+        scope: "session",
+        workspaceAccess: "rw",
+      },
+    },
+  },
+  plugins: {
+    entries: {
+      sbx: {
+        enabled: true,
+      },
+    },
+  },
+}
+```
+
+`plugins.entries.sbx.config` controls the `sbx` CLI path (`command`), the sbx agent/kit used to create the sandbox (`agent`, default `"shell"`), an optional `template` image override, the `pull` policy, and `timeoutSeconds`. Current limitations: sandbox browser isn't supported yet, GPU passthrough isn't exposed yet (upstream `sbx create --gpu` is still experimental/feature-gated), and `sandbox.docker.binds` doesn't apply to this backend.
+
+For the full prerequisites, configuration reference, and lifecycle details, see [sbx](/gateway/sbx).
 
 ## Workspace access
 
@@ -447,6 +477,7 @@ Each agent can override sandbox + tools: `agents.entries.*.sandbox` and `agents.
 
 - [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) -- per-agent overrides and precedence
 - [OpenShell](/gateway/openshell) -- managed sandbox backend setup, workspace modes, and config reference
+- [sbx](/gateway/sbx) -- Docker Sandboxes backend setup and config reference
 - [Sandbox configuration](/gateway/config-agents#agentsdefaultssandbox)
 - [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) -- debugging "why is this blocked?"
 - [Security](/gateway/security)
