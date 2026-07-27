@@ -390,7 +390,9 @@ describe("acquireSessionWriteLock", () => {
       targetKind: "session-key",
       maxHoldMs: 5,
     });
-    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 10);
+    });
     await expect(
       acquireSessionWriteLock({
         sessionFile: sessionKey,
@@ -419,7 +421,9 @@ describe("acquireSessionWriteLock", () => {
       targetKind: "session-key",
       maxHoldMs: 5,
     });
-    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 10);
+    });
 
     await expect(
       acquireSessionWriteLock({

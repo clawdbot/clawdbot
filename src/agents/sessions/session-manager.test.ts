@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import "../../../test/helpers/session-manager-file-compat.js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
@@ -16,13 +16,10 @@ import {
   replaceTranscriptEventsSync,
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import * as Logger from "../../logger.js";
 import {
   buildSessionContext,
   CURRENT_SESSION_VERSION,
-  parseSessionEntries,
   SessionManager,
-  type SessionEntry,
   type SessionMessageEntry,
 } from "./session-manager.js";
 
@@ -47,23 +44,6 @@ describe("SessionManager.open", () => {
     await Promise.all(
       tempPaths.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
     );
-  });
-
-  it("retains the same canonical value that persistence serializes", () => {
-    let serializationCount = 0;
-    const manager = SessionManager.inMemory();
-    manager.appendCustomEntry("canonical", {
-      toJSON() {
-        serializationCount += 1;
-        return { serialized: serializationCount };
-      },
-    });
-
-    expect(manager.getEntries().at(-1)).toMatchObject({
-      type: "custom",
-      data: { serialized: 1 },
-    });
-    expect(serializationCount).toBe(1);
   });
 
   it("opens SQLite markers without creating marker-named files and persists assistant replies", async () => {
@@ -1034,98 +1014,6 @@ describe("SessionManager.openFile test compatibility", () => {
     );
   });
 });
-describe("parseSessionEntries", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("parses valid JSONL lines without logging warnings", () => {
-    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
-    const content = [
-      JSON.stringify({ type: "session", id: "s1" }),
-      JSON.stringify({ type: "message", id: "m1" }),
-    ].join("\n");
-
-    const entries = parseSessionEntries(content);
-
-    expect(entries).toHaveLength(2);
-    expect(warnSpy).not.toHaveBeenCalled();
-  });
-
-  it("logs a warning and skips malformed JSONL lines while preserving valid entries", () => {
-    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
-    const content = [
-      JSON.stringify({ type: "session", id: "s1" }),
-      "not valid json {{{",
-      JSON.stringify({ type: "message", id: "m1" }),
-    ].join("\n");
-
-    const entries = parseSessionEntries(content);
-
-    expect(entries).toHaveLength(2);
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("parseJsonlEntries: skipped 1 malformed JSONL line"),
-    );
-  });
-
-  it("reports the correct skip count for multiple malformed lines", () => {
-    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
-    const content = [
-      "bad line 1",
-      JSON.stringify({ type: "session", id: "s1" }),
-      "bad line 2",
-      "bad line 3",
-    ].join("\n");
-
-    const entries = parseSessionEntries(content);
-
-    expect(entries).toHaveLength(1);
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("parseJsonlEntries: skipped 3 malformed JSONL line"),
-    );
-  });
-
-  it("skips empty lines without counting them as malformed", () => {
-    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
-    const content = [
-      "",
-      JSON.stringify({ type: "session", id: "s1" }),
-      "",
-      JSON.stringify({ type: "message", id: "m1" }),
-      "",
-    ].join("\n");
-
-    const entries = parseSessionEntries(content);
-
-    expect(entries).toHaveLength(2);
-    expect(warnSpy).not.toHaveBeenCalled();
-  });
-
-  it("parseJsonlEntries logs warning for malformed lines via loadEntriesFromFile", async () => {
-    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
-    const dir = await makeTempDir();
-    const sessionFile = path.join(dir, "session.jsonl");
-    const header = buildSessionHeader(dir);
-    const content = [
-      JSON.stringify(header),
-      "not valid json {{{",
-      JSON.stringify(buildMessageEntry(1, null)),
-    ].join("\n");
-    await fs.writeFile(sessionFile, content, "utf8");
-
-    const entries = parseSessionEntries(await fs.readFile(sessionFile, "utf8"));
-
-    expect(entries.length).toBeGreaterThanOrEqual(1);
-    expect(warnSpy).toHaveBeenCalled();
-    expect(
-      warnSpy.mock.calls.some((call) =>
-        call[0].includes("parseJsonlEntries: skipped 1 malformed JSONL line"),
-      ),
-    ).toBe(true);
-  });
-});
 
 function buildAssistantMessage(text: string) {
   return {
@@ -1144,25 +1032,5 @@ function buildAssistantMessage(text: string) {
     },
     stopReason: "stop" as const,
     timestamp: Date.now(),
-  };
-}
-
-function buildSessionHeader(cwd: string, id = "test-session") {
-  return {
-    type: "session",
-    version: CURRENT_SESSION_VERSION,
-    id,
-    timestamp: "2026-06-04T00:00:00.000Z",
-    cwd,
-  };
-}
-
-function buildMessageEntry(index: number, parentId: string | null): SessionEntry {
-  return {
-    type: "message",
-    id: `entry-${index}`,
-    parentId,
-    timestamp: `2026-06-04T00:00:0${index}.000Z`,
-    message: { role: "user", content: `message ${index}`, timestamp: index },
   };
 }

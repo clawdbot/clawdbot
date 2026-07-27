@@ -306,7 +306,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       });
     },
     withSessionWriteLock: (run) => {
-      const rejectWrite = (error: unknown): Promise<never> => {
+      const rejectWrite = (error: Error): Promise<never> => {
         const rejected = Promise.reject(error);
         void rejected.catch(() => {});
         return rejected;
