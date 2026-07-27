@@ -4,7 +4,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   type TaskSummary,
   type TasksListParams,
   validateTasksCancelParams,
@@ -19,6 +18,7 @@ import { cancelDetachedTaskRunById } from "../../tasks/task-executor.js";
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
 import { mapTaskSummary, taskUpdatedAt } from "./task-summary.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 const DEFAULT_TASKS_LIST_LIMIT = 100;
 const MAX_TASKS_LIST_LIMIT = 500;
@@ -89,15 +89,7 @@ function parseCursor(cursor: string | undefined): number | null {
 // above keep runtime registry details out of the wire result.
 export const tasksHandlers: GatewayRequestHandlers = {
   "tasks.list": ({ params, respond, context }) => {
-    if (!validateTasksListParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid tasks.list params: ${formatValidationErrors(validateTasksListParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateTasksListParams, "tasks.list", respond)) {
       return;
     }
     const cursor = parseCursor(params.cursor);
@@ -150,15 +142,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
     });
   },
   "tasks.get": ({ params, respond }) => {
-    if (!validateTasksGetParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid tasks.get params: ${formatValidationErrors(validateTasksGetParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateTasksGetParams, "tasks.get", respond)) {
       return;
     }
     const taskId = params.taskId;
@@ -176,15 +160,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
     respond(true, { task: mapTaskSummary(task, { includePrompt: true }) });
   },
   "tasks.cancel": async ({ params, respond, context }) => {
-    if (!validateTasksCancelParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid tasks.cancel params: ${formatValidationErrors(validateTasksCancelParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateTasksCancelParams, "tasks.cancel", respond)) {
       return;
     }
     const taskId = params.taskId;
