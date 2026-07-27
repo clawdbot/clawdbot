@@ -5,7 +5,7 @@ import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { createOpenClawCodingTools } from "../../agent-tools.js";
 import { getActiveAgentRingZeroTools } from "../../agent-tools.ring-zero-context.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
-import { resolveCodeModeConfig } from "../../code-mode.js";
+import { isCodeModeEngagedForModel, resolveCodeModeConfig } from "../../code-mode.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import {
   isLocalModelLeanEnabled,
@@ -91,7 +91,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     !isRawModelRun &&
     attempt.skillWorkshopProposalOnly !== true &&
     attempt.toolsAllow?.length !== 0 &&
-    codeModeConfig.enabled;
+    isCodeModeEngagedForModel(codeModeConfig, attempt.model);
   const toolSearchControlsEnabledForRun =
     toolsEnabled &&
     !ringZeroToolRun &&
