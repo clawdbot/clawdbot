@@ -133,6 +133,8 @@ export function createFollowupRunner(
       if (error instanceof FollowupRunDeferredError) {
         disposition = { kind: "deferred", reason: error.message };
       } else if (executionStarted) {
+        // There is no durable post-execution resume record yet. Requeueing the prompt
+        // here can duplicate persisted turns and external tool side effects.
         defaultRuntime.error?.(
           `followup queue: execution failed after start; refusing replay: ${formatErrorMessage(error)}`,
         );

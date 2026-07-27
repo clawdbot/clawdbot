@@ -11,6 +11,7 @@ import { buildAgentRuntimeDeliveryPlan } from "../../agents/runtime-plan/build.j
 import { logVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
@@ -96,8 +97,11 @@ export function resolveFollowupDeliveryDecision(params: {
   );
   const isInteractive =
     hasDestination &&
-    (turn.queued.run.inputProvenance?.kind === undefined ||
-      turn.queued.run.inputProvenance.kind === "external_user");
+    (turn.queued.run.inputProvenance?.kind === "external_user" ||
+      (turn.queued.run.inputProvenance?.kind === undefined &&
+        !isInternalMessageChannel(
+          turn.queued.originatingChannel ?? turn.queued.run.messageProvider,
+        )));
   if (execution.outcome.kind === "rejected") {
     if (!isInteractive) {
       return { kind: "suppress", reason: "silent" };
@@ -149,17 +153,18 @@ export function resolveFollowupDeliveryDecision(params: {
       getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true &&
       hasOutboundReplyContent(payload),
   );
-  const recovery = hasExplicitlyDeliverablePayload
-    ? ({ kind: "none" } as const)
-    : resolveStrandedReplyRecovery({
-        base: turn.queued,
-        finalText: assistantFinalText,
-        sourceReplyDeliveryMode: sourcePolicy.sourceReplyDeliveryMode,
-        sendPolicyDenied: sourcePolicy.sendPolicyDenied,
-        successfulSourceReplyDelivery: completedSourceDelivery,
-        isHeartbeat: opts?.isHeartbeat === true,
-        isRoomEvent: false,
-      });
+  const recovery =
+    hasExplicitlyDeliverablePayload || accounting.terminalFailurePayload
+      ? ({ kind: "none" } as const)
+      : resolveStrandedReplyRecovery({
+          base: turn.queued,
+          finalText: assistantFinalText,
+          sourceReplyDeliveryMode: sourcePolicy.sourceReplyDeliveryMode,
+          sendPolicyDenied: sourcePolicy.sendPolicyDenied,
+          successfulSourceReplyDelivery: completedSourceDelivery,
+          isHeartbeat: opts?.isHeartbeat === true,
+          isRoomEvent: false,
+        });
   if (recovery.kind === "retry") {
     return {
       kind: "retry-source-delivery",

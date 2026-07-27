@@ -518,6 +518,23 @@ describe("resolveFollowupDeliveryDecision", () => {
     ).toEqual({ kind: "suppress", reason: "silent" });
   });
 
+  it("keeps provenance-less internal-channel failures non-interactive", () => {
+    const turn = createTurn();
+    turn.queued.originatingChannel = "webchat";
+    turn.queued.run.messageProvider = "webchat";
+
+    expect(
+      resolveFollowupDeliveryDecision({
+        turn,
+        execution: {
+          runId: "run-1",
+          outcome: { kind: "rejected", payload: { text: "internal failure" } },
+        },
+        opts: { onBlockReply: vi.fn(async () => {}) },
+      }),
+    ).toEqual({ kind: "suppress", reason: "silent" });
+  });
+
   it("normalizes rejected failures with the originating delivery context", () => {
     const turn = createTurn();
     turn.queued.originatingChatType = "group";
@@ -680,6 +697,27 @@ describe("resolveFollowupDeliveryDecision", () => {
       turn,
       execution: createSettledExecution(),
       accounting: createAccounting([{ text: "private partial" }], {
+        terminalFailurePayload: { text: "terminal failure", isError: true },
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      kind: "deliver",
+      payloads: [{ text: "terminal failure", isError: true }],
+    });
+  });
+
+  it("prefers terminal failure over stranded-text recovery", () => {
+    const turn = createTurn();
+    turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
+    const execution = createSettledExecution(
+      "This incomplete private text is substantive. It must not replace the sanitized failure.",
+    );
+
+    const decision = resolveFollowupDeliveryDecision({
+      turn,
+      execution,
+      accounting: createAccounting([], {
         terminalFailurePayload: { text: "terminal failure", isError: true },
       }),
     });
