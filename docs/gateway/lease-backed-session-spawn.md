@@ -33,10 +33,11 @@ lease and spawn replay identities to that principal.
 For internal agent callers, `requester_agent_id` must match the authenticated
 requester. A lease also binds `run_id`, `phase`, `transition_id`, `agent_id`,
 and `client_lease_id`; `sessions_spawn` fails closed if any owner field differs.
-External clients do not invent the requester id. Call `tools.catalog` without
-`agentId`; the response is scoped to the configured default agent and includes
-that resolved `agentId`. Use that exact value as `requester_agent_id` when
-acquiring the lease.
+External clients do not invent the requester id, and the Gateway does not trust
+a caller-selected `requester_agent_id` as authority. Call `tools.catalog`
+without `agentId`; the response is scoped to the configured default agent and
+includes that resolved `agentId`. Use that exact value as
+`requester_agent_id` when acquiring the lease.
 
 ## Workflow
 
@@ -154,7 +155,8 @@ cannot be reused to launch another child.
   `hard_timeout`, `timed_out`, `cancelled`, `aborted`, `blocked`, `abandoned`,
   or `failed`.
 - `sessions_history` takes `{ "sessionKey": "...", "limit": 50,
-"includeTools": false }`. `limit` must be a positive integer no greater than 1000.
+"includeTools": false }`. `limit` must be a positive integer no greater than
+  1000 and values above 1000 are rejected before transcript delegation.
   `includeTools` defaults to false so tool and tool-result messages are omitted.
 
 The status and history methods verify the stored contract projection and then

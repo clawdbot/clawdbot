@@ -49,6 +49,7 @@ export function reconcileSpawnReservation(params: {
     Number.isFinite(params.lease.spawn_reserved_at_ms)
       ? Math.min(params.lease.spawn_reserved_at_ms, params.now)
       : params.now;
+  delete params.lease.released_at_ms;
   params.lease.consumed_at_ms = acceptedSession?.created_at_ms ?? reservedAt;
   clearSpawnReservation(params.lease);
   return acceptedSession;

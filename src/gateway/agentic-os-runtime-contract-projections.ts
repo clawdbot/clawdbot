@@ -15,10 +15,10 @@ export function metadataEnvelope(normalized: Record<string, unknown>): RuntimeMe
 }
 
 export function leaseResponse(record: LeaseRecord): Record<string, unknown> {
-  const status = record.released_at_ms
-    ? "released"
-    : record.consumed_at_ms
-      ? "consumed"
+  const status = record.consumed_at_ms
+    ? "consumed"
+    : record.released_at_ms
+      ? "released"
       : record.spawn_reservation_fingerprint
         ? "reserved"
         : "active";

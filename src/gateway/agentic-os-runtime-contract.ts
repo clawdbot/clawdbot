@@ -607,6 +607,7 @@ export async function spawnAgenticOsSession(
         sessionsByKey.set(record.sessionKey, record);
         spawnByIdempotencyKey.set(idempotencyScopedKey, record);
         spawnByClientRequestId.set(clientRequestScopedKey, record);
+        delete lease.released_at_ms;
         lease.consumed_at_ms = Date.now();
         clearSpawnReservation(lease);
         leasesByGatewayId.delete(gatewayLeaseId);

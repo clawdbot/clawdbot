@@ -743,6 +743,22 @@ describe("sessions tools", () => {
     );
   });
 
+  it("sessions_history rejects limits above 1000 before gateway delegation", async () => {
+    callGatewayMock.mockResolvedValue({ messages: [] });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    await expect(
+      tool.execute("call-history-limit", { sessionKey: "main", limit: 1001 }),
+    ).rejects.toThrow("limit must be no greater than 1000");
+    expect(callGatewayMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "chat.history" }),
+    );
+  });
+
   it("sessions_history caps oversized payloads and strips heavy fields", async () => {
     const oversized = Array.from({ length: 80 }, (_, idx) => ({
       role: "assistant",

@@ -281,7 +281,7 @@ describe("Agentic OS allow lease release persistence", () => {
     const restarted = await import("./agentic-os-runtime-contract.js");
     expect(restarted.releaseAgenticOsAllowLease(releaseParams)).toEqual(released);
     expect(restarted.acquireAgenticOsAllowLease(acquireParams)).toMatchObject({
-      status: "released",
+      status: "consumed",
       gateway_lease_id: gatewayLeaseId,
     });
     await expect(restarted.spawnAgenticOsSession(spawnParams)).resolves.toMatchObject({
