@@ -68,7 +68,10 @@ function syncLifecycle(
   return syncWorkboardLifecycle({ host, client, sessions, ...options });
 }
 
-function refreshBoard(client: WorkboardTestClient, source: "live" | "manual") {
+function refreshBoard(
+  client: Parameters<typeof refreshWorkboard>[0]["client"],
+  source: "live" | "manual",
+) {
   return refreshWorkboard({ host, client, source });
 }
 
