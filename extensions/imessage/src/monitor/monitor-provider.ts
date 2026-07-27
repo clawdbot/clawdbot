@@ -1,5 +1,4 @@
 // Imessage provider module implements model/runtime integration.
-import os from "node:os";
 import path from "node:path";
 import { resolveAgentConfig, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
@@ -52,6 +51,7 @@ import { resolveIMessageAccount } from "../accounts.js";
 import { pollPendingIMessageApprovalReactions } from "../approval-reaction-poller.js";
 import { maybeResolveIMessageApprovalReaction } from "../approval-reactions.js";
 import { markIMessageChatRead, sendIMessageTyping } from "../chat.js";
+import { resolveIMessageHomeDir } from "../cli-path.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "../client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "../constants.js";
 import {
@@ -190,23 +190,11 @@ function formatIMessageInboundMediaBody(params: {
   });
 }
 
-function resolveLocalMessagesHomeDir(): string | undefined {
-  const home = process.env.HOME?.trim();
-  if (home) {
-    return home;
-  }
-  try {
-    return os.homedir().trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function resolveLocalMessagesDbPath(dbPath: string): string {
   if (!dbPath.startsWith("~")) {
     return dbPath;
   }
-  const home = resolveLocalMessagesHomeDir();
+  const home = resolveIMessageHomeDir();
   return home ? path.join(home, dbPath.slice(1).replace(/^\/+/, "")) : dbPath;
 }
 
@@ -230,7 +218,7 @@ function resolveIMessageWatchSourceDbPath(params: {
   if (cliPath !== "imsg" && path.basename(cliPath) !== "imsg") {
     return undefined;
   }
-  const home = resolveLocalMessagesHomeDir();
+  const home = resolveIMessageHomeDir();
   return home ? path.join(home, "Library", "Messages", "chat.db") : undefined;
 }
 

@@ -9,6 +9,7 @@ export async function detectRemoteHostFromCliPath(cliPath: string): Promise<stri
     if (userHostMatch) {
       return userHostMatch[1];
     }
+
     const hostOnlyMatch = content.match(/\bssh\b[^\n]*?\s+([a-zA-Z][a-zA-Z0-9._-]*)\s+\S*\bimsg\b/);
     return hostOnlyMatch?.[1];
   } catch (err) {
