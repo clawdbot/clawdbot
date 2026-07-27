@@ -1053,6 +1053,10 @@ async function runPluginInstallCommandUnlocked(params: RunPluginInstallCommandPa
         }
         return runtime.exit(1);
       }
+      if (!result.clawhub) {
+        runtime.error("ClawHub plugin install completed without source metadata.");
+        return runtime.exit(1);
+      }
 
       if (!params.clawManaged && result.clawhub.version) {
         markClawPackageIndependentlyOwned({

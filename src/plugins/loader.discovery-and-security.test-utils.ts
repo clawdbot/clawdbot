@@ -602,7 +602,10 @@ describe("loadOpenClawPlugins", () => {
         },
         expectedLoadedOrigin: "config",
         expectedDisabledOrigin: "bundled",
-        assert: (registry: PluginRegistry, scenario) => {
+        assert: (
+          registry: PluginRegistry,
+          scenario: Parameters<typeof expectPluginSourcePrecedence>[1],
+        ) => {
           expectPluginSourcePrecedence(registry, scenario);
           expect(registry.agentToolResultMiddlewareOwners).toEqual([]);
         },

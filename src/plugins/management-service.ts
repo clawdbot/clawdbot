@@ -15,13 +15,16 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { buildNpmResolutionFields } from "../infra/install-source-utils.js";
+import { buildNpmResolutionFields, type NpmSpecResolution } from "../infra/install-source-utils.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { installBundledPluginSource } from "./bundled-install.js";
 import type { BundledPluginSource } from "./bundled-sources.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "./clawhub-error-codes.js";
-import { buildClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
+import {
+  buildClawHubPluginInstallRecordFields,
+  type ClawHubPluginInstallRecordFields,
+} from "./clawhub-install-records.js";
 import { installPluginFromClawHub } from "./clawhub.js";
 import { enableExplicitlySelectedPluginInConfig } from "./enable.js";
 import { installPluginFromGitSpec } from "./git-install.js";
@@ -163,6 +166,29 @@ export type ManagedPluginSourceInstallRequest =
       expectedIntegrity?: string;
       trustedSourceLinkedOfficialInstall?: boolean;
       allowBundledFallback?: boolean;
+    };
+
+export type ManagedPluginSourceInstallResult =
+  | {
+      ok: true;
+      pluginId: string;
+      config: OpenClawConfig;
+      warnings?: string[];
+      targetDir?: string;
+      version?: string;
+      npmResolution?: NpmSpecResolution;
+      clawhub?: ClawHubPluginInstallRecordFields;
+    }
+  | { ok: false; error: string; code?: string; version?: string; warning?: string };
+
+type SourceInstallerResult =
+  | { ok: false; error: string; code?: string; version?: string; warning?: string }
+  | {
+      ok: true;
+      pluginId: string;
+      targetDir: string;
+      version?: string;
+      npmResolution?: NpmSpecResolution;
     };
 
 export class ManagedPluginLifecycleError extends Error {
@@ -1068,7 +1094,7 @@ export async function installManagedPluginSource(params: {
   runtime?: RuntimeEnv;
   invalidateRuntimeCache?: boolean;
   cleanupOnPersistenceFailure?: boolean;
-}) {
+}): Promise<ManagedPluginSourceInstallResult> {
   const { request } = params;
   const extensionsDir = resolveDefaultPluginExtensionsDir(params.env ?? process.env);
   if (request.source === "bundled") {
@@ -1093,7 +1119,7 @@ export async function installManagedPluginSource(params: {
     extensionsDir,
     logger: params.logger,
   };
-  const complete = async <T extends { ok: boolean }>(
+  const complete = async <T extends SourceInstallerResult>(
     installResult: Promise<T>,
     completed: {
       install: (result: Extract<T, { ok: true }>) => PluginInstallRecord;
@@ -1102,7 +1128,7 @@ export async function installManagedPluginSource(params: {
       snapshot?: ConfigSnapshotForInstallPersist;
       successMessage?: string;
     },
-  ) => {
+  ): Promise<ManagedPluginSourceInstallResult> => {
     const result = await installResult;
     if (!result.ok) {
       return result;
