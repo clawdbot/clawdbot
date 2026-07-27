@@ -697,11 +697,13 @@ describe("exec auto-review adversarial model-response stress", () => {
       const decisions = await Promise.all(
         batch.map((_variant, offset) => {
           const index = start + offset;
-          return reviewer({
-            ...baselineInput,
-            command: `git status --case=${index}`,
-            argv: ["git", "status", `--case=${index}`],
-          });
+          return Promise.resolve(
+            reviewer({
+              ...baselineInput,
+              command: `git status --case=${index}`,
+              argv: ["git", "status", `--case=${index}`],
+            }),
+          );
         }),
       );
       for (const [offset, decision] of decisions.entries()) {
