@@ -487,7 +487,9 @@ Use top-level `authProfileId` when an MCP server should project a stored bearer 
 
 For compatibility with earlier configs, `oauth.authProfileId` is still accepted when `auth: "oauth"`
 is set. Prefer the top-level `authProfileId` for new bearer-profile bindings, especially static
-token profiles, so the MCP contract is not named after one credential lifecycle.
+token profiles, so the MCP contract is not named after one credential lifecycle. If both selectors
+are present, they must match; differing values fail closed instead of silently choosing one bearer
+credential.
 
 For CLI runtimes, OpenClaw resolves the profile before handing off MCP config, strips the
 OpenClaw-only `authProfileId`/`auth`/`oauth` fields, and writes only an environment placeholder such as

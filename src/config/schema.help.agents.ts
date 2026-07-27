@@ -218,9 +218,9 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "mcp.servers.*.toolFilter.exclude":
     "Exact MCP tool names or simple '*' globs to hide from this server.",
   "mcp.servers.*.authProfileId":
-    "Bearer-capable auth profile id used to inject the current token into this remote MCP server. Prefer this neutral field for static token profiles and new bearer-profile bindings.",
+    "Bearer-capable auth profile id used to inject the current token into this remote MCP server. Prefer this neutral field for static token profiles and new bearer-profile bindings. If legacy oauth.authProfileId is also set, both values must match.",
   "mcp.servers.*.oauth.authProfileId":
-    "Legacy OAuth-nested auth profile id used to inject the current bearer token into this remote MCP server. Prefer mcp.servers.*.authProfileId for new bearer-profile bindings.",
+    "Legacy OAuth-nested auth profile id used to inject the current bearer token into this remote MCP server. Prefer mcp.servers.*.authProfileId for new bearer-profile bindings. If both selectors are set, both values must match.",
   "mcp.servers.*.codex.agents":
     "Optional non-empty OpenClaw agent ids that should receive this MCP server in Codex app-server thread config. Empty, blank, or invalid lists fail closed; when omitted, the server is projected for all Codex app-server agents.",
   "mcp.servers.*.codex.defaultToolsApprovalMode":
