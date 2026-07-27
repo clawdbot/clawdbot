@@ -102,7 +102,78 @@ function quarantineStorePath(stateDir: string): string {
   return path.join(stateDir, "state", "openclaw-quarantine.sqlite");
 }
 
+function readLinuxPosixLocksForPath(pathname: string): string[] {
+  if (process.platform !== "linux") {
+    return [];
+  }
+  const inode = fs.statSync(pathname, { bigint: true }).ino;
+  const lockInode = new RegExp(`\\b[0-9a-f]+:[0-9a-f]+:${inode}\\b`, "u");
+  return fs
+    .readFileSync("/proc/locks", "utf8")
+    .split("\n")
+    .filter((line) => line.includes(" POSIX ") && lockInode.test(line));
+}
+
 describe("OpenClaw database integrity verifier", () => {
+  it.skipIf(process.platform === "win32")(
+    "preserves live WAL ownership while snapshotting an open database",
+    async () => {
+      const stateDir = makeTempDir(tempDirs, "openclaw-database-verify-live-locks-");
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      const agent = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+      agent.db
+        .prepare(
+          "INSERT INTO auth_profile_state (state_key, state_json, updated_at) VALUES (?, ?, ?)",
+        )
+        .run("verifier-lock-owner", JSON.stringify({ preserved: true }), 1);
+      const walBefore = fs.statSync(`${agent.path}-wal`);
+      const shmBefore = fs.statSync(`${agent.path}-shm`);
+      const baseLocksBefore = readLinuxPosixLocksForPath(agent.path);
+      if (process.platform === "linux") {
+        expect(baseLocksBefore.length).toBeGreaterThan(0);
+      }
+      const targets: OpenClawDatabaseVerifyTarget[] = [
+        { kind: "agent", label: "OpenClaw agent database worker-1", path: agent.path },
+      ];
+
+      await expect(runDatabaseVerifyWorker(targets)).resolves.toEqual([
+        { path: agent.path, ok: true },
+      ]);
+      if (process.platform === "linux") {
+        // SQLite 3.51 can preserve visible WAL files after a lock is lost, so
+        // assert the kernel lock itself rather than relying on that symptom.
+        expect(readLinuxPosixLocksForPath(agent.path).length).toBeGreaterThan(0);
+      }
+      const reader = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `
+            import { DatabaseSync } from "node:sqlite";
+            const database = new DatabaseSync(process.env.OPENCLAW_VERIFY_TEST_PATH);
+            database.prepare("PRAGMA schema_version;").get();
+            database.close();
+          `,
+        ],
+        {
+          env: { ...process.env, OPENCLAW_VERIFY_TEST_PATH: agent.path },
+          encoding: "utf8",
+        },
+      );
+
+      expect(reader.stderr).toBe("");
+      expect(reader.status).toBe(0);
+      expect(fs.statSync(`${agent.path}-wal`).ino).toBe(walBefore.ino);
+      expect(fs.statSync(`${agent.path}-shm`).ino).toBe(shmBefore.ino);
+      expect(() =>
+        agent.db
+          .prepare("UPDATE auth_profile_state SET updated_at = ? WHERE state_key = ?")
+          .run(2, "verifier-lock-owner"),
+      ).not.toThrow();
+    },
+  );
+
   it("detects corruption off-thread, quarantines it, and latches later opens", async () => {
     const stateDir = makeTempDir(tempDirs, "openclaw-database-verify-");
     const env = { OPENCLAW_STATE_DIR: stateDir };

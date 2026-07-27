@@ -1,4 +1,3 @@
-import { parentPort, workerData } from "node:worker_threads";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
   assertSqliteIntegrity,
@@ -6,6 +5,8 @@ import {
 } from "../infra/sqlite-integrity.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
+
+const DATABASE_VERIFY_CHILD_ARG = "--openclaw-database-verify-child";
 
 export type OpenClawDatabaseVerifyTarget = {
   path: string;
@@ -89,7 +90,30 @@ export async function verifyOpenClawDatabases(
   return results;
 }
 
-if (parentPort) {
-  const targets = Array.isArray(workerData) ? workerData.filter(isVerifyTarget) : [];
-  parentPort.postMessage(await verifyOpenClawDatabases(targets), []);
+// This module is also imported for its verifier function. Only the dedicated
+// child may consume and disconnect the process-wide IPC channel.
+const sendToParent =
+  process.argv[2] === DATABASE_VERIFY_CHILD_ARG ? process.send?.bind(process) : undefined;
+if (sendToParent) {
+  process.once("message", (message: unknown) => {
+    void (async () => {
+      try {
+        const targets = Array.isArray(message) ? message.filter(isVerifyTarget) : [];
+        const results = await verifyOpenClawDatabases(targets);
+        await new Promise<void>((resolve, reject) => {
+          sendToParent(results, (error) => {
+            if (error) {
+              reject(error);
+            } else {
+              resolve();
+            }
+          });
+        });
+      } catch {
+        process.exitCode = 1;
+      } finally {
+        process.disconnect?.();
+      }
+    })();
+  });
 }
