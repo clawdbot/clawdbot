@@ -261,6 +261,7 @@ export function resolveSessionKeyForRequest(opts: {
     ...(loadOptions ? { clone: false } : {}),
   });
 
+  // Supported CLI, gateway, and embedded entry points migrate orphan aliases before runtime reads.
   const ctx: MsgContext | undefined = opts.to?.trim() ? { From: opts.to } : undefined;
   let sessionKey: string | undefined =
     explicitSessionKey ?? (ctx ? resolveSessionKey(scope, ctx, mainKey, storeAgentId) : undefined);

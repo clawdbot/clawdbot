@@ -341,6 +341,7 @@ function createHostRequestHandler(params: {
       args = [];
     }
     // Snapshotted method counters keep launch identity independent of unrelated bridge traffic.
+    // Snapshots are process-local, so every resumable guest comes from the ID-aware source above.
     const id = bridgeIdHandle?.toString();
     if (!id?.startsWith(`bridge:${method}:`) || !/^bridge:[A-Za-z]+:[1-9]\d*$/u.test(id)) {
       throw new Error("invalid code mode bridge id");
