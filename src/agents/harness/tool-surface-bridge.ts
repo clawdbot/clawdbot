@@ -11,9 +11,7 @@ import {
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import {
   filterLocalModelLeanTools,
-  isLocalModelLeanEnabled,
   resolveLocalModelLeanPreserveToolNames,
-  shouldCatalogToolForLocalModelLean,
 } from "../local-model-lean.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../tool-schema-projection.js";
@@ -80,11 +78,6 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
 }): AgentHarnessToolSurfaceRuntime {
   const forceDirectMessageTool =
     params.forceMessageTool === true || params.sourceReplyDeliveryMode === "message_tool_only";
-  const localModelLeanEnabled = isLocalModelLeanEnabled({
-    config: params.config,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
   const codeModeConfig = resolveCodeModeConfig(params.config, params.agentId);
   const toolSearchRuntimeConfig = resolveAgentToolSearchRuntimeConfig({
     config: params.config,
@@ -162,7 +155,9 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
           executeTool: params.executeTool,
         })
       : [];
-    const directoryDirectToolNames = forceDirectMessageTool ? ["message"] : [];
+    // When the message tool is the only reply path it must stay directly visible
+    // in every search mode; a hidden delivery tool can leave the run mute.
+    const requiredDirectToolNames = forceDirectMessageTool ? ["message"] : [];
     const compacted = codeModeControlsEnabled
       ? applyCodeModeCatalog({
           tools: [...codeModeTools, ...effectiveTools],
@@ -184,7 +179,7 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
             runId: params.runId,
             catalogRef: toolSearchCatalogRef,
             toolHookContext: options.hookContext,
-            directToolNames: directoryDirectToolNames,
+            directToolNames: requiredDirectToolNames,
           })
         : applyToolSearchCatalog({
             tools: effectiveTools,
@@ -195,10 +190,7 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
             runId: params.runId,
             catalogRef: toolSearchCatalogRef,
             toolHookContext: options.hookContext,
-            shouldCatalogTool:
-              localModelLeanEnabled && toolSearchConfig.mode === "tools"
-                ? shouldCatalogToolForLocalModelLean
-                : undefined,
+            directToolNames: requiredDirectToolNames,
           });
     const projectedCompactedTools = options.localModelLeanApplied
       ? compacted.tools
