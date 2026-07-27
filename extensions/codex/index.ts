@@ -81,7 +81,12 @@ export default definePluginEntry({
         origin: "bundled",
         config: normalizePluginsConfig(liveConfig.plugins),
         rootConfig: liveConfig,
-        enabledByDefault: readCodexPluginConfig(livePluginConfig).supervision?.enabled === true,
+        // Core auto-enables this bundled plugin whenever the operator declares a
+        // codex config block, so a live block is the plugin-side default. Gating
+        // on a feature flag (supervision) here would silently drop unrelated
+        // harness settings such as appServer.homeScope; feature gates belong in
+        // the feature's own surface (see requireSupervisionEnabled).
+        enabledByDefault: livePluginConfig !== undefined,
       }).enabled;
       if (!enabled) {
         return undefined;

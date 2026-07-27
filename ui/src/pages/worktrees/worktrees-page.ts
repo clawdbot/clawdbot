@@ -5,6 +5,7 @@ import type { WorktreeRecord } from "../../../../packages/gateway-protocol/src/i
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { shouldHandleNavigationClick } from "../../components/app-sidebar-nav-menus.ts";
 import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts";
 import {
   renderSettingsEmpty,
@@ -345,12 +346,26 @@ class WorktreesPage extends OpenClawLightDomElement {
   private renderOwner(record: WorktreeRecord) {
     if (record.ownerKind === "session" && record.ownerId) {
       const face = resolveSessionPreferredFaceForKey(this.context, record.ownerId);
-      const href = sessionNavigationTarget({
+      const target = sessionNavigationTarget({
         context: this.context,
         face,
         sessionKey: record.ownerId,
-      }).href;
-      return html`<a href=${href} title=${record.ownerId}>${t("worktrees.ownerSession")}</a>`;
+        preferenceDerivedFace: true,
+      });
+      // The clean href stays shareable; the in-app click navigates with the options so an
+      // uncached owner still carries the marker that resolves its stored face.
+      return html`<a
+        href=${target.href}
+        title=${record.ownerId}
+        @click=${(event: MouseEvent) => {
+          if (!shouldHandleNavigationClick(event)) {
+            return;
+          }
+          event.preventDefault();
+          this.context.navigate(face, target.options);
+        }}
+        >${t("worktrees.ownerSession")}</a
+      >`;
     }
     if (record.ownerKind === "workboard") {
       return html`<span title=${record.ownerId ?? ""}>${t("worktrees.ownerWorkboard")}</span>`;

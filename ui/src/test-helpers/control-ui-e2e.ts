@@ -657,6 +657,22 @@ function installControlUiMockGateway(input: {
     return { found: true, value: matchingCase.response };
   }
 
+  /** Transcript fields a scenario configured on chat.history, replayed onto the
+   * chat.startup payload so both bootstrap paths serve the same conversation. */
+  function configuredHistoryTranscript(): Record<string, unknown> {
+    const configured = scenario.methodResponses["chat.history"];
+    if (!isRecord(configured) || responseCases(configured) || responseSequence(configured)) {
+      return {};
+    }
+    const transcript: Record<string, unknown> = {};
+    for (const field of ["messages", "sessionId", "sessionInfo", "inFlightRun", "thinkingLevel"]) {
+      if (hasOwn(configured, field)) {
+        transcript[field] = configured[field];
+      }
+    }
+    return transcript;
+  }
+
   /** Presence slice of the connect snapshot. The self-flagged entry adopts the
    * connecting client's instanceId so presence surfaces resolve "you". */
   function presenceSnapshot(connectParams: unknown): { presence?: unknown[] } {
@@ -1042,6 +1058,10 @@ function installControlUiMockGateway(input: {
           thinkingLevel: null,
           ...(scenario.inFlightRun ? { inFlightRun: scenario.inFlightRun } : {}),
           ...(scenario.sessionInfo ? { sessionInfo: scenario.sessionInfo } : {}),
+          // The transcript bootstrap picks chat.startup whenever the Gateway
+          // advertises it, so a scenario that configures only chat.history would
+          // otherwise have its transcript silently dropped on the startup path.
+          ...configuredHistoryTranscript(),
         };
       case "chat.metadata":
         return {

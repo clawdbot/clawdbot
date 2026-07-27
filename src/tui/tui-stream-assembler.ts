@@ -1,10 +1,13 @@
 // Assembles streamed backend events into TUI-visible messages.
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
   composeThinkingAndContent,
   extractContentFromMessage,
   extractThinkingFromMessage,
   resolveFinalAssistantText,
 } from "./tui-formatters.js";
+
+const MAX_TRACKED_STREAM_RUNS = 200;
 
 // Per-run state used to merge streaming deltas with final assistant messages.
 type RunStreamState = {
@@ -109,18 +112,28 @@ function shouldPreserveBoundaryDroppedText(params: {
 export class TuiStreamAssembler {
   private runs = new Map<string, RunStreamState>();
 
-  private getOrCreateRun(runId: string): RunStreamState {
-    let state = this.runs.get(runId);
-    if (!state) {
-      state = {
-        thinkingText: "",
-        contentText: "",
-        contentBlocks: [],
-        sawNonTextContentBlocks: false,
-        displayText: "",
-      };
-      this.runs.set(runId, state);
+  private createRunState(): RunStreamState {
+    return {
+      thinkingText: "",
+      contentText: "",
+      contentBlocks: [],
+      sawNonTextContentBlocks: false,
+      displayText: "",
+    };
+  }
+
+  private getTrackedRun(runId: string): RunStreamState {
+    const existing = this.runs.get(runId);
+    if (existing) {
+      // Keep a still-streaming older run ahead of abandoned runs in eviction order.
+      this.runs.delete(runId);
+      this.runs.set(runId, existing);
+      return existing;
     }
+
+    const state = this.createRunState();
+    this.runs.set(runId, state);
+    pruneMapToMaxSize(this.runs, MAX_TRACKED_STREAM_RUNS);
     return state;
   }
 
@@ -168,7 +181,7 @@ export class TuiStreamAssembler {
 
   /** Ingests a streaming delta and returns updated display text only when it changed. */
   ingestDelta(runId: string, message: unknown, showThinking: boolean): string | null {
-    const state = this.getOrCreateRun(runId);
+    const state = this.getTrackedRun(runId);
     const previousDisplayText = state.displayText;
     this.updateRunState(state, message, showThinking, {
       boundaryDropMode: "streamed-or-incoming",
@@ -183,7 +196,8 @@ export class TuiStreamAssembler {
 
   /** Finalizes a run, combines any error text, and drops stored stream state. */
   finalize(runId: string, message: unknown, showThinking: boolean, errorMessage?: string): string {
-    const state = this.getOrCreateRun(runId);
+    // Late finals must not insert an evicted run and displace a live stream.
+    const state = this.runs.get(runId) ?? this.createRunState();
     const streamedDisplayText = state.displayText;
     const streamedTextBlocks = [...state.contentBlocks];
     const streamedSawNonTextContentBlocks = state.sawNonTextContentBlocks;

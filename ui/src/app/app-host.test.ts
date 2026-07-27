@@ -15,6 +15,7 @@ import {
   UI_COMMAND_EVENT,
 } from "../components/panel-toggle-contract.ts";
 import { i18n } from "../i18n/index.ts";
+import { SESSION_FACE_PREFERENCE_PARAM } from "../lib/sessions/route-navigation.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
 import { resetAppHostTestGlobals, type ShellKeyboardState } from "./app-host.test-support.ts";
@@ -907,7 +908,12 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     expect(setSessionKey).toHaveBeenCalledWith(
       "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
     );
-    expect(navigate).toHaveBeenCalledWith("chat", { pathname: "/chat/main/12345678" });
+    // The pushed command names a session the UI has not cached, so its face is a guess
+    // and the navigation is marked for the chat loader to re-derive from the gateway.
+    expect(navigate).toHaveBeenCalledWith("chat", {
+      pathname: "/chat/main/12345678",
+      search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
+    });
     expect(uiCommandEvent).toHaveBeenLastCalledWith(
       expect.objectContaining({
         detail: {

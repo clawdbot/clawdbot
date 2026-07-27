@@ -299,9 +299,8 @@ type OpenClawCodingToolsOptions = {
   sandbox?: SandboxContext | null;
   sessionKey?: string;
   /**
-   * The actual live run session key. When the tool set is constructed with a
-   * sandbox/policy session key, this allows `session_status({sessionKey:"current"})`
-   * to resolve to the live run session instead of the stale sandbox key.
+   * The durable store session key for the live run when it differs from the
+   * sandbox/policy session key used to construct the tool set.
    */
   runSessionKey?: string;
   /** Ephemeral session UUID — regenerated on /new and /reset. */

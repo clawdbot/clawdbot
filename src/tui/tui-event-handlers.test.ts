@@ -8,6 +8,7 @@ import type {
   BtwEvent,
   ChatEvent,
   SessionChangedEvent,
+  SessionMessageEvent,
   TuiHistoryLoadResult,
   TuiStateAccess,
 } from "./tui-types.js";
@@ -1931,6 +1932,342 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
+
+  describe("session.message history reload", () => {
+    it("reloads the current session when another client appends a message", () => {
+      const { state, loadHistory, handleSessionMessageEvent } = createHandlersHarness({
+        state: {
+          activeChatRunId: null,
+          currentSessionId: "session-before",
+          sessionInfo: { verboseLevel: "on", updatedAt: 100 },
+        },
+      });
+
+      handleSessionMessageEvent({
+        sessionKey: state.currentSessionKey,
+        sessionId: "session-after",
+        updatedAt: 200,
+      } satisfies SessionMessageEvent);
+
+      expect(state.currentSessionId).toBe("session-after");
+      expect(state.sessionInfo.updatedAt).toBe(200);
+      expect(loadHistory).toHaveBeenCalledTimes(1);
+    });
+
+    it("accepts the canonical session's unscoped alias", () => {
+      const { loadHistory, handleSessionMessageEvent } = createHandlersHarness({
+        state: { activeChatRunId: null, currentSessionKey: "agent:main:main" },
+      });
+
+      handleSessionMessageEvent({ sessionKey: "main" } satisfies SessionMessageEvent);
+
+      expect(loadHistory).toHaveBeenCalledTimes(1);
+    });
+
+    it("ignores an unscoped alias owned by a different agent", () => {
+      const { state, loadHistory, handleSessionMessageEvent } = createHandlersHarness({
+        state: {
+          activeChatRunId: null,
+          currentAgentId: "work",
+          currentSessionId: "session-work",
+          currentSessionKey: "agent:work:main",
+          sessionInfo: { verboseLevel: "on", updatedAt: 100 },
+        },
+      });
+
+      handleSessionMessageEvent({
+        sessionKey: "main",
+        agentId: "main",
+        sessionId: "session-default-agent",
+        updatedAt: 200,
+      } satisfies SessionMessageEvent);
+
+      expect(state.currentSessionId).toBe("session-work");
+      expect(state.sessionInfo.updatedAt).toBe(100);
+      expect(loadHistory).not.toHaveBeenCalled();
+    });
+
+    it("does not assign an unqualified default-agent alias to another agent", () => {
+      const { state, loadHistory, handleSessionMessageEvent } = createHandlersHarness({
+        state: {
+          activeChatRunId: null,
+          currentAgentId: "work",
+          currentSessionId: "session-work",
+          currentSessionKey: "agent:work:main",
+        },
+      });
+
+      handleSessionMessageEvent({
+        sessionKey: "main",
+        sessionId: "session-default-agent",
+      } satisfies SessionMessageEvent);
+
+      expect(state.currentSessionId).toBe("session-work");
+      expect(loadHistory).not.toHaveBeenCalled();
+    });
+
+    it("ignores messages for another session without changing selected metadata", () => {
+      const { state, loadHistory, tui, handleSessionMessageEvent } = createHandlersHarness({
+        state: {
+          activeChatRunId: null,
+          currentAgentId: "work",
+          currentSessionId: "session-before",
+          currentSessionKey: "agent:work:main",
+          sessionInfo: { verboseLevel: "on", updatedAt: 100 },
+        },
+      });
+
+      handleSessionMessageEvent({
+        sessionKey: "agent:work:other",
+        agentId: "work",
+        sessionId: "other-session",
+        updatedAt: 200,
+      } satisfies SessionMessageEvent);
+
+      expect(state.currentSessionId).toBe("session-before");
+      expect(state.sessionInfo.updatedAt).toBe(100);
+      expect(loadHistory).not.toHaveBeenCalled();
+      expect(tui.requestRender).not.toHaveBeenCalled();
+    });
+
+    it("does not let an older transcript snapshot replace newer session metadata", () => {
+      const { state, loadHistory, handleSessionMessageEvent } = createHandlersHarness({
+        state: {
+          activeChatRunId: null,
+          currentSessionId: "session-current",
+          sessionInfo: { verboseLevel: "on", updatedAt: 200 },
+        },
+      });
+
+      handleSessionMessageEvent({
+        sessionKey: state.currentSessionKey,
+        sessionId: "session-stale",
+        updatedAt: 100,
+      } satisfies SessionMessageEvent);
+
+      expect(state.currentSessionId).toBe("session-current");
+      expect(state.sessionInfo.updatedAt).toBe(200);
+      expect(loadHistory).toHaveBeenCalledTimes(1);
+    });
+
+    it("reloads a global session only for its selected agent", () => {
+      const { loadHistory, handleSessionMessageEvent } = createHandlersHarness({
+        state: {
+          agentDefaultId: "main",
+          activeChatRunId: null,
+          currentAgentId: "work",
+          currentSessionKey: "global",
+          sessionScope: "global",
+        },
+      });
+
+      handleSessionMessageEvent({
+        sessionKey: "global",
+        agentId: "main",
+      } satisfies SessionMessageEvent);
+      expect(loadHistory).not.toHaveBeenCalled();
+
+      handleSessionMessageEvent({
+        sessionKey: "global",
+        agentId: "work",
+      } satisfies SessionMessageEvent);
+      expect(loadHistory).toHaveBeenCalledTimes(1);
+    });
+
+    it("coalesces a burst of transcript updates into one follow-up reload", async () => {
+      let resolveFirstHistory: ((result: TuiHistoryLoadResult) => void) | undefined;
+      const { state, loadHistory, handleSessionMessageEvent } = createHandlersHarness({
+        state: { activeChatRunId: null },
+      });
+      loadHistory.mockImplementationOnce(
+        () =>
+          new Promise<TuiHistoryLoadResult>((resolve) => {
+            resolveFirstHistory = resolve;
+          }),
+      );
+
+      for (let index = 0; index < 250; index += 1) {
+        handleSessionMessageEvent({
+          sessionKey: state.currentSessionKey,
+          updatedAt: index,
+        } satisfies SessionMessageEvent);
+      }
+
+      expect(loadHistory).toHaveBeenCalledTimes(1);
+      expect(state.sessionInfo.updatedAt).toBe(249);
+
+      resolveFirstHistory?.({ loaded: true, inFlightRunId: null });
+      await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledTimes(2));
+    });
+
+    it("waits for terminal persistence before refreshing a displayed local final", () => {
+      const {
+        state,
+        chatLog,
+        loadHistory,
+        handleChatEvent,
+        handleSessionsChangedEvent,
+        handleSessionMessageEvent,
+      } = createHandlersHarness({ state: { activeChatRunId: "run-active" } });
+
+      handleSessionMessageEvent({
+        sessionKey: state.currentSessionKey,
+      } satisfies SessionMessageEvent);
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "keep this visible" }] },
+      });
+
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("keep this visible", "run-active");
+      expect(loadHistory).not.toHaveBeenCalled();
+
+      handleSessionMessageEvent({
+        sessionKey: state.currentSessionKey,
+        updatedAt: 200,
+      } satisfies SessionMessageEvent);
+      expect(loadHistory).not.toHaveBeenCalled();
+
+      handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        runId: "run-active",
+        phase: "end",
+      } satisfies SessionChangedEvent);
+
+      expect(loadHistory).toHaveBeenCalledTimes(1);
+    });
+
+    it("refreshes after a local final when terminal persistence arrives first", () => {
+      const {
+        state,
+        chatLog,
+        loadHistory,
+        handleChatEvent,
+        handleSessionsChangedEvent,
+        handleSessionMessageEvent,
+      } = createHandlersHarness({ state: { activeChatRunId: "run-active" } });
+
+      handleSessionMessageEvent({
+        sessionKey: state.currentSessionKey,
+      } satisfies SessionMessageEvent);
+      handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        runId: "run-active",
+        phase: "end",
+      } satisfies SessionChangedEvent);
+      expect(loadHistory).not.toHaveBeenCalled();
+
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "keep this visible" }] },
+      });
+
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("keep this visible", "run-active");
+      expect(loadHistory).toHaveBeenCalledTimes(1);
+    });
+
+    it("defers the first external update after a visible final until persistence", () => {
+      const {
+        state,
+        chatLog,
+        loadHistory,
+        handleChatEvent,
+        handleSessionsChangedEvent,
+        handleSessionMessageEvent,
+      } = createHandlersHarness({ state: { activeChatRunId: "run-active" } });
+
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "keep this visible" }] },
+      });
+
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("keep this visible", "run-active");
+      expect(loadHistory).not.toHaveBeenCalled();
+
+      handleSessionMessageEvent({
+        sessionKey: state.currentSessionKey,
+      } satisfies SessionMessageEvent);
+
+      expect(loadHistory).not.toHaveBeenCalled();
+
+      handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        runId: "run-active",
+        phase: "end",
+      } satisfies SessionChangedEvent);
+
+      expect(loadHistory).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not reload until an optimistic submit is resolved", () => {
+      const { state, loadHistory, handleSessionMessageEvent, flushPendingHistoryRefreshIfIdle } =
+        createHandlersHarness({
+          state: { activeChatRunId: null, pendingSubmit: sendingSubmit("run-pending") },
+        });
+
+      handleSessionMessageEvent({
+        sessionKey: state.currentSessionKey,
+      } satisfies SessionMessageEvent);
+      expect(loadHistory).not.toHaveBeenCalled();
+
+      state.pendingSubmit = null;
+      flushPendingHistoryRefreshIfIdle();
+
+      expect(loadHistory).toHaveBeenCalledTimes(1);
+    });
+
+    it("waits for persistence when a refresh arrives before an optimistic run is accepted", () => {
+      const {
+        state,
+        chatLog,
+        loadHistory,
+        handleAgentEvent,
+        handleChatEvent,
+        handleSessionsChangedEvent,
+        handleSessionMessageEvent,
+      } = createHandlersHarness({
+        state: { activeChatRunId: null, pendingSubmit: sendingSubmit("run-pending") },
+      });
+
+      handleSessionMessageEvent({
+        sessionKey: state.currentSessionKey,
+      } satisfies SessionMessageEvent);
+      expect(loadHistory).not.toHaveBeenCalled();
+
+      state.pendingSubmit = acceptedSubmit("run-pending");
+      handleAgentEvent({
+        runId: "run-pending",
+        sessionKey: state.currentSessionKey,
+        stream: "lifecycle",
+        data: { phase: "start" },
+      } satisfies AgentEvent);
+      handleChatEvent({
+        runId: "run-pending",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "keep accepted output visible" }] },
+      });
+
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledWith(
+        "keep accepted output visible",
+        "run-pending",
+      );
+      expect(loadHistory).not.toHaveBeenCalled();
+
+      handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        runId: "run-pending",
+        phase: "end",
+      } satisfies SessionChangedEvent);
+
+      expect(loadHistory).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe("sessions.changed history reload", () => {

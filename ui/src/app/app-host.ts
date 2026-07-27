@@ -839,7 +839,15 @@ class OpenClawShell extends OpenClawLightDomElement {
               const face = resolveSessionPreferredFaceForKey(context, sessionKey);
               // Ambiguous one-segment keys intentionally fall back to /chat;
               // the removed query deep-link format is not a compatibility path.
-              this.navigate(face, sessionNavigationTarget({ context, face, sessionKey }).options);
+              this.navigate(
+                face,
+                sessionNavigationTarget({
+                  context,
+                  face,
+                  sessionKey,
+                  preferenceDerivedFace: true,
+                }).options,
+              );
             },
           }),
         );
@@ -901,7 +909,12 @@ class OpenClawShell extends OpenClawLightDomElement {
     const face = resolveSessionPreferredFaceForKey(context, command.sessionKey);
     this.navigate(
       face,
-      sessionNavigationTarget({ context, face, sessionKey: command.sessionKey }).options,
+      sessionNavigationTarget({
+        context,
+        face,
+        sessionKey: command.sessionKey,
+        preferenceDerivedFace: true,
+      }).options,
     );
   };
 
@@ -1765,7 +1778,15 @@ class OpenClawShell extends OpenClawLightDomElement {
             .onSelectSession=${(sessionKey: string) => {
               context.gateway.setSessionKey(sessionKey);
               const face = resolveSessionPreferredFaceForKey(context, sessionKey);
-              this.navigate(face, sessionNavigationTarget({ context, face, sessionKey }).options);
+              this.navigate(
+                face,
+                sessionNavigationTarget({
+                  context,
+                  face,
+                  sessionKey,
+                  preferenceDerivedFace: true,
+                }).options,
+              );
             }}
             .onSlashCommand=${this.handleCommandPaletteSlashCommand}
           ></openclaw-command-palette>`

@@ -14,6 +14,8 @@ import {
   resolveUiDefaultAgentId,
 } from "./session-key.ts";
 
+export const SESSION_FACE_PREFERENCE_PARAM = "__openclawSessionFacePreference";
+
 type ContextSessionNavigationTargetParams<TRouteId extends string> = {
   context: ApplicationContext<TRouteId>;
   face: BoardFace;
@@ -24,6 +26,7 @@ type ContextSessionNavigationTargetParams<TRouteId extends string> = {
   row?: never;
   mainKey?: never;
   shortIdLength?: number;
+  preferenceDerivedFace?: boolean;
 };
 
 type ExplicitSessionNavigationTargetParams = {
@@ -36,6 +39,7 @@ type ExplicitSessionNavigationTargetParams = {
   mainKey?: string | null;
   shortIdLength?: number;
   agentId?: never;
+  preferenceDerivedFace?: boolean;
 };
 
 type SessionNavigationTarget = {
@@ -49,14 +53,20 @@ export function resolveSessionPreferredFace(
   return row?.boardFace === "dashboard" ? "dashboard" : "chat";
 }
 
+export function findUiSessionRow<TRouteId extends string>(
+  context: Pick<ApplicationContext<TRouteId>, "sessions">,
+  sessionKey: string,
+): GatewaySessionRow | undefined {
+  return context.sessions.state.result?.sessions.find((candidate) =>
+    areUiSessionKeysEquivalent(candidate.key, sessionKey),
+  );
+}
+
 export function resolveSessionPreferredFaceForKey<TRouteId extends string>(
   context: Pick<ApplicationContext<TRouteId>, "sessions">,
   sessionKey: string,
 ): BoardFace {
-  const row = context.sessions.state.result?.sessions.find((candidate) =>
-    areUiSessionKeysEquivalent(candidate.key, sessionKey),
-  );
-  return resolveSessionPreferredFace(row);
+  return resolveSessionPreferredFace(findUiSessionRow(context, sessionKey));
 }
 
 export function resolveSessionNavigationAgentId<TRouteId extends string>(
@@ -115,9 +125,7 @@ export function sessionNavigationTarget<TRouteId extends string>(
     fallbackAgentId = resolveSessionNavigationAgentId(context, params.agentId);
     basePath = context.basePath;
     mainKey = resolveUiConfiguredMainKey(defaults);
-    row = context.sessions.state.result?.sessions.find((candidate) =>
-      areUiSessionKeysEquivalent(candidate.key, sessionKey),
-    );
+    row = findUiSessionRow(context, sessionKey);
   } else {
     fallbackAgentId = params.fallbackAgentId;
     basePath = params.basePath ?? "";
@@ -138,6 +146,23 @@ export function sessionNavigationTarget<TRouteId extends string>(
     ...(catalogKey ? { mainKey } : { row, mainKey }),
   });
   const search = catalogKey ? catalogSessionSearch(catalogKey) : undefined;
-  const options = search ? { pathname, search } : { pathname };
+  // A cached row carries the authoritative boardFace, so the caller's face is already
+  // correct. Only an uncached key made it a guess: mark the in-app navigation so the
+  // chat loader re-derives the face from the gateway and replaces the URL.
+  //
+  // The marker stays out of `href` on purpose. That string is what users hover, copy,
+  // and share, and it must not carry an internal parameter. The accepted cost is that
+  // alternate activation (middle-click, open-in-new-tab, modified click) follows the
+  // clean guessed path and can land on the other face for an uncached session, exactly
+  // as every open did before gateway resolution existed. The face is one click to
+  // change and the change persists, so this is a smaller win, not a regression.
+  const navigationParams = new URLSearchParams(search ?? "");
+  if (params.preferenceDerivedFace && !row) {
+    navigationParams.set(SESSION_FACE_PREFERENCE_PARAM, "1");
+  }
+  const serializedNavigation = navigationParams.toString();
+  const options = serializedNavigation
+    ? { pathname, search: `?${serializedNavigation}` }
+    : { pathname };
   return { href: `${pathname}${search ?? ""}`, options };
 }

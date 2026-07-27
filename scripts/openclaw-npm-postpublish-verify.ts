@@ -960,13 +960,22 @@ function readBundledExtensionPackageJsons(packageRoot: string): {
   errors: string[];
 } {
   const extensionsDir = join(packageRoot, "dist", "extensions");
-  if (!existsSync(extensionsDir)) {
-    return { manifests: [], errors: [] };
-  }
-
   const manifests: InstalledBundledExtensionManifestRecord[] = [];
   const errors: string[] = [];
   const expectedPackageIds = collectExpectedBundledExtensionPackageIds();
+
+  // Scan the package contract first: absent bundled directories are invisible
+  // when verification only walks the installed extension root.
+  for (const expectedPackageId of expectedPackageIds) {
+    const packageJsonPath = join(extensionsDir, expectedPackageId, "package.json");
+    if (!existsSync(packageJsonPath)) {
+      errors.push(`installed bundled extension manifest missing: ${packageJsonPath}.`);
+    }
+  }
+
+  if (!existsSync(extensionsDir)) {
+    return { manifests, errors };
+  }
 
   for (const entry of readdirSync(extensionsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) {
@@ -976,9 +985,6 @@ function readBundledExtensionPackageJsons(packageRoot: string): {
     const extensionDirPath = join(extensionsDir, entry.name);
     const packageJsonPath = join(extensionsDir, entry.name, "package.json");
     if (!existsSync(packageJsonPath)) {
-      if (expectedPackageIds.has(entry.name)) {
-        errors.push(`installed bundled extension manifest missing: ${packageJsonPath}.`);
-      }
       continue;
     }
 
