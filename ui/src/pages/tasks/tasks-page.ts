@@ -12,6 +12,8 @@ import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { t } from "../../i18n/index.ts";
 import {
+  findUiSessionRow,
+  resolveSessionPreferredFaceForKey,
   resolveSessionNavigationAgentId,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
@@ -382,16 +384,20 @@ class TasksPage extends OpenClawLightDomElement {
         error: this.error,
         tasks: this.tasks,
         cancellingTaskIds: this.cancellingTaskIds,
+        sessionRow: (sessionKey) => findUiSessionRow(this.context, sessionKey),
         onCancel: (taskId) => void this.cancelTask(taskId),
-        onNavigateToChat: (sessionKey) =>
+        onNavigateToChat: (sessionKey) => {
+          const face = resolveSessionPreferredFaceForKey(this.context, sessionKey);
           this.context.navigate(
-            "chat",
+            face,
             sessionNavigationTarget({
               context: this.context,
-              face: "chat",
+              face,
               sessionKey,
+              preferenceDerivedFace: true,
             }).options,
-          ),
+          );
+        },
       })}
     `;
   }

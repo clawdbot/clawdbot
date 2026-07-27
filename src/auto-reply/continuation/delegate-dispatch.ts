@@ -30,7 +30,6 @@ import {
 import { generateChainId } from "../../infra/secure-random.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { sanitizeInboundSystemTags } from "../../security/system-tags.js";
 import { resolveContinuationRuntimeConfig } from "./config.js";
 import { partitionKnownAcceptedDelegateChildren } from "./delegate-dispatch-accepted-children.js";
 import type {
@@ -63,7 +62,7 @@ const formatErrorMessage = (err: unknown): string =>
   err instanceof Error ? err.message : String(err);
 
 function formatDelegateTaskForSystemEvent(task: string): string {
-  return sanitizeInboundSystemTags(task);
+  return task;
 }
 /** @internal One-way recovery classifier for persist-before-terminal failures. */
 export class DelegateTerminalChainStatePersistError extends Error {

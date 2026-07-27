@@ -2261,18 +2261,31 @@ describe("Claude session catalog", () => {
       await openGate;
       return await originalOpen(...args);
     });
-    const listNodes = vi.fn(async () => ({ nodes: [] }));
+    const runtimeListNodes = vi.fn(async () => ({ nodes: [] }));
+    const requestListNodes = vi.fn(async () => ({ nodes: [] }));
     const provider = captureCatalogProvider({
-      nodes: { list: listNodes },
+      nodes: { list: runtimeListNodes },
     } as unknown as PluginRuntime);
 
-    const listing = provider.list({});
+    const listing = provider.list({ listNodes: requestListNodes });
     await opened;
-    expect(listNodes).toHaveBeenCalledOnce();
+    expect(requestListNodes).toHaveBeenCalledOnce();
+    expect(runtimeListNodes).not.toHaveBeenCalled();
     releaseOpen();
     await expect(listing).resolves.toMatchObject([
       { hostId: "gateway:local", sessions: [expect.objectContaining({ threadId: sessionId })] },
     ]);
+  });
+
+  it("falls back to the plugin node runtime without a request snapshot", async () => {
+    const runtimeListNodes = vi.fn(async () => ({ nodes: [] }));
+    const provider = captureCatalogProvider({
+      nodes: { list: runtimeListNodes },
+    } as unknown as PluginRuntime);
+
+    await expect(provider.list({ hostIds: ["node:missing"] })).resolves.toEqual([]);
+
+    expect(runtimeListNodes).toHaveBeenCalledOnce();
   });
 
   it("keeps the underlying paired-node list failure", async () => {

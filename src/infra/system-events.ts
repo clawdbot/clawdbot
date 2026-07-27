@@ -9,7 +9,6 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
-import { sanitizeInboundSystemTags } from "../security/system-tags.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import {
   mergeDeliveryContext,
@@ -60,21 +59,13 @@ type SystemEventOptions = {
   expectedSessionId?: string;
   delegateArtifactReceipt?: DelegateArtifactDeliveryReceipt;
   /**
-   * @deprecated Legacy untrusted-producer downgrade flag, re-exported via the
-   * the `plugin-sdk/system-event-runtime` subpath.
-   * Accepted-and-ignored for installed third-party channel plugins that still
-   * pass it: the anti-spoof sanitizer is now unconditional for untrusted
-   * producers (sanitize-by-default), so this flag has no runtime effect. Kept
-   * until a named SDK removal window.
+   * @deprecated Legacy no-op retained for plugin compatibility. System event
+   * text is stored unchanged; provenance is controlled by `trusted`.
    */
   forceSenderIsOwnerFalse?: boolean;
   /**
-   * Trusted-internal enrichment marker (continuation/OCR/transcripts). When
-   * `true`, the payload is trusted core data that may legitimately contain
-   * `System:`/`[System]` examples (subagent returns, post-compaction context,
-   * AGENTS.md text), so it bypasses the inbound anti-spoof sanitizer and is
-   * preserved verbatim. Untrusted producers (plugin/channel text) omit this
-   * flag and are sanitized at the queue boundary.
+   * Trusted-internal enrichment marker. Only core producers may attach managed
+   * delivery provenance such as expectedSessionId and delegateArtifactReceipt.
    */
   trusted?: boolean;
   /**
@@ -181,12 +172,7 @@ export function enqueueSystemEventEntry(
   }
   const key = requireSessionKey(options.sessionKey);
   const entry = getOrCreateSessionQueue(key);
-  // Untrusted producers (plugin/channel text) are rendered as `System:` lines, so
-  // strip nested system-marker spoofs at the queue boundary before any such text
-  // reaches a prompt. Trusted-internal producers (tagged `trusted: true`) carry
-  // workspace/subagent data that may legitimately contain those markers and are
-  // preserved verbatim.
-  const cleaned = (options.trusted === true ? text : sanitizeInboundSystemTags(text)).trim();
+  const cleaned = text.trim();
   if (!cleaned) {
     return null;
   }
@@ -289,7 +275,7 @@ function areDelegateArtifactReceiptsEqual(
 function replaceSystemEventEntry(text: string, options: SystemEventOptions): SystemEvent | null {
   const key = requireSessionKey(options.sessionKey);
   const entry = getOrCreateSessionQueue(key);
-  const cleaned = (options.trusted === true ? text : sanitizeInboundSystemTags(text)).trim();
+  const cleaned = text.trim();
   if (!cleaned) {
     return null;
   }

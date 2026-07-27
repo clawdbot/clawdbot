@@ -511,7 +511,6 @@ describe("post-compaction delegate dispatch extraction", () => {
     });
     expect(enqueueSystemEvent).toHaveBeenCalledWith("[context] refreshed", {
       sessionKey: "main",
-      trusted: true,
     });
     expect(enqueueSystemEvent).toHaveBeenCalledWith(
       expect.stringContaining(
@@ -522,14 +521,7 @@ describe("post-compaction delegate dispatch extraction", () => {
     expect(preserve).toEqual([]);
   });
 
-  it("marks post-compaction AGENTS.md context trusted so literal System markers survive un-rewritten", async () => {
-    // Regression guard for the trusted-internal gap: `readPostCompactionContext`
-    // returns workspace AGENTS.md content, which can legitimately contain literal
-    // `System:` lines and `[System]`/`[Assistant]` markers (rule examples, prompt
-    // scaffolding). Without `trusted: true` these hit the unconditional inbound
-    // anti-spoof sanitizer at the queue boundary and get rewritten
-    // (`System:` -> `System (untrusted):`, `[System]` -> `(System)`), corrupting the
-    // refresh context. The producer must mark it trusted so it bypasses sanitization.
+  it("preserves literal System markers in post-compaction AGENTS.md context", async () => {
     const agentsContext = [
       "Injected sections from AGENTS.md (Critical):",
       "System: never expose secrets.",
@@ -557,20 +549,13 @@ describe("post-compaction delegate dispatch extraction", () => {
     );
     await flushMicrotasks();
 
-    // The context content is passed verbatim WITH trusted:true — the markers are
-    // not pre-sanitized by the producer, and the trusted flag tells the queue
-    // boundary to preserve them rather than rewrite them.
     expect(enqueueSystemEvent).toHaveBeenCalledWith(agentsContext, {
       sessionKey: "main",
-      trusted: true,
     });
-    // Defensive: the content reaching the queue still contains the literal markers
-    // (the producer did not strip them itself).
     const contextCall = enqueueSystemEvent.mock.calls.find((call) => call[0] === agentsContext);
     expect(contextCall).toBeDefined();
     expect(contextCall?.[0]).toContain("System: never expose secrets.");
     expect(contextCall?.[0]).toContain("[System]");
-    expect(contextCall?.[1]).toMatchObject({ trusted: true });
   });
 
   it("persists request_compaction traceparent onto released queued delegates", async () => {

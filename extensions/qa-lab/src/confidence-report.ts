@@ -1028,7 +1028,7 @@ async function detectRuntimeDrift(params: {
   const result = await runRuntimeParityScenario({
     scenarioId: params.scenarioId,
     runCell: async (runtime) => ({
-      scenarioStatus: "pass",
+      status: "pass",
       cell: runtime === "openclaw" ? params.openclaw : params.codex,
     }),
   });
@@ -1100,7 +1100,10 @@ function detectTokenEfficiencyRegression(): boolean {
   });
   const runtimeParity: RuntimeParityResult = {
     scenarioId: "token-efficiency-regression",
-    cells: { openclaw, codex },
+    cells: {
+      openclaw: { ...openclaw, status: "pass" },
+      codex: { ...codex, status: "pass" },
+    },
     drift: "none",
   };
   const report = buildTokenEfficiencyReport({

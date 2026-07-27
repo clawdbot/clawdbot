@@ -476,6 +476,35 @@ describe("sweepCronRunSessions", () => {
     expect(result.pruned).toBe(0);
   });
 
+  it("sweeps immediately when disabled retention is enabled again", async () => {
+    const now = Date.now();
+    const sessionKey = "agent:main:cron:job1:run:expired-run";
+    await seedSessionEntries(storePath, {
+      [sessionKey]: {
+        sessionId: "expired-run",
+        updatedAt: now - 25 * 3_600_000,
+      },
+    });
+
+    expect(
+      await sweepCronRunSessions({
+        cronConfig: { sessionRetention: false },
+        sessionStorePath: storePath,
+        nowMs: now,
+        log,
+      }),
+    ).toEqual({ swept: false, pruned: 0 });
+
+    expect(
+      await sweepCronRunSessions({
+        sessionStorePath: storePath,
+        nowMs: now + 1_000,
+        log,
+      }),
+    ).toEqual({ swept: true, pruned: 1 });
+    expect(readSessionEntries(storePath)[sessionKey]).toBeUndefined();
+  });
+
   it("throttles sweeps without force", async () => {
     const now = Date.now();
     // First sweep runs
@@ -493,6 +522,30 @@ describe("sweepCronRunSessions", () => {
       log,
     });
     expect(r2.swept).toBe(false);
+  });
+
+  it("shares one throttle for canonical agent and session-store aliases", async () => {
+    const now = Date.now();
+
+    expect(
+      await sweepCronRunSessionsImpl({
+        agentId: "main",
+        defaultAgentId: "main",
+        sessionStorePath: storePath,
+        nowMs: now,
+        log,
+      }),
+    ).toEqual({ swept: true, pruned: 0 });
+
+    expect(
+      await sweepCronRunSessionsImpl({
+        agentId: "MAIN",
+        defaultAgentId: "main",
+        sessionStorePath: `${tmpDir}${path.sep}.${path.sep}sessions.json`,
+        nowMs: now + 1_000,
+        log,
+      }),
+    ).toEqual({ swept: false, pruned: 0 });
   });
 
   it("throttles per store path", async () => {

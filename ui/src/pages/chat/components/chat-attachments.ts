@@ -37,6 +37,32 @@ type ChatAttachmentControlsProps = {
   readSignal?: AbortSignal;
 };
 
+export class ChatAttachmentReadLifecycle {
+  pendingReads = 0;
+  private controller = new AbortController();
+
+  constructor(private readonly notify: () => void) {}
+
+  get readSignal(): AbortSignal {
+    return this.controller.signal;
+  }
+
+  updatePending(readSignal: AbortSignal, delta: 1 | -1): void {
+    if (this.controller.signal !== readSignal) {
+      return;
+    }
+    this.pendingReads = Math.max(0, this.pendingReads + delta);
+    this.notify();
+  }
+
+  abortReads(): void {
+    this.controller.abort();
+    this.controller = new AbortController();
+    this.pendingReads = 0;
+    this.notify();
+  }
+}
+
 export function isFileDrag(dataTransfer: DataTransfer | null): boolean {
   return Array.from(dataTransfer?.types ?? []).includes("Files");
 }
@@ -238,7 +264,6 @@ function readAttachmentFile(
   if (props.readSignal?.aborted) {
     return Promise.resolve(null);
   }
-  props.onPendingReadsChange?.(1);
   return new Promise((resolve) => {
     const reader = new FileReader();
     let settled = false;
@@ -248,7 +273,6 @@ function readAttachmentFile(
       }
       settled = true;
       props.readSignal?.removeEventListener("abort", abort);
-      props.onPendingReadsChange?.(-1);
       resolve(attachment);
     };
     const abort = () => {
@@ -277,19 +301,26 @@ async function appendAttachmentFiles(files: readonly File[], props: ChatAttachme
   if (!props.onAttachmentsChange || supported.length === 0) {
     return;
   }
-  const additions = (
-    await Promise.all(supported.map((file) => readAttachmentFile(file, props)))
-  ).filter((attachment): attachment is ChatAttachment => attachment !== null);
-  if (props.readSignal?.aborted) {
-    for (const attachment of additions) {
-      releaseChatAttachmentPayload(attachment.id);
+  props.onPendingReadsChange?.(1);
+  try {
+    const additions = (
+      await Promise.all(supported.map((file) => readAttachmentFile(file, props)))
+    ).filter((attachment): attachment is ChatAttachment => attachment !== null);
+    if (props.readSignal?.aborted) {
+      for (const attachment of additions) {
+        releaseChatAttachmentPayload(attachment.id);
+      }
+      return;
     }
-    return;
+    if (additions.length === 0) {
+      return;
+    }
+    // Keep the batch pending until its payloads are in the composer so an
+    // immediate send cannot slip between FileReader completion and insertion.
+    props.onAttachmentsChange([...currentAttachments(props), ...additions]);
+  } finally {
+    props.onPendingReadsChange?.(-1);
   }
-  if (additions.length === 0) {
-    return;
-  }
-  props.onAttachmentsChange([...currentAttachments(props), ...additions]);
 }
 
 export function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachmentControlsProps) {

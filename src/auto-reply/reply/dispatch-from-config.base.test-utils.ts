@@ -1016,7 +1016,9 @@ describe("dispatchReplyFromConfig", () => {
         replyResolver: async () => undefined,
       });
 
-      expect(result.queuedFinal).toBe(false);
+      // Direct empty completions get a core no-visible-reply fallback final.
+      expect(result.queuedFinal).toBe(true);
+      expect(result.noVisibleReplyFallbackDelivered).toBe(true);
       await vi.waitFor(
         () => {
           expect(
@@ -1284,8 +1286,9 @@ describe("dispatchReplyFromConfig", () => {
       });
 
       expect(result).toMatchObject({
-        queuedFinal: false,
+        queuedFinal: true,
         counts: { tool: 0, block: 0, final: 0 },
+        noVisibleReplyFallbackDelivered: true,
       });
       expect(replyResolver).toHaveBeenCalledTimes(1);
       expect(replyRunRegistry.get(sessionKey)).toBe(activeOperation);

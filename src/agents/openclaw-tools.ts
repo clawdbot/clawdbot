@@ -354,7 +354,10 @@ export function createOpenClawTools(options?: CreateOpenClawToolsRuntimeOptions)
                 }),
               ]),
           createCronTool({
-            agentSessionKey: options?.agentSessionKey,
+            // attempt-tool-base-prepare preserves the durable store key as runSessionKey.
+            // Cron bindings, wakes, and reminder history need that transcript owner; a
+            // policy-scoped DM key can be empty and cleanup-retired, leaving jobs dangling.
+            agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentAccountId: gatewayCallerAccountId,
             currentDeliveryContext: {
               channel: options?.agentChannel,

@@ -8,7 +8,6 @@ import {
 import { generateChainId } from "../../infra/secure-random.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { defaultRuntime } from "../../runtime.js";
-import { sanitizeInboundSystemTags } from "../../security/system-tags.js";
 import { resolveLiveContinuationRuntimeConfig } from "../continuation/config.js";
 import {
   enqueuePendingDelegate,
@@ -25,8 +24,8 @@ import type {
 } from "./agent-runner-continuation.js";
 import type { FollowupRun } from "./queue.js";
 
-function sanitizeDelegateEchoForTrustedSystemEvent(value: string): string {
-  return sanitizeInboundSystemTags(value);
+function formatDelegateEchoForSystemEvent(value: string): string {
+  return value;
 }
 
 type ContinuationUsage = { input?: number; output?: number } | undefined;
@@ -108,7 +107,7 @@ export async function handleContinuationSignal(context: {
         : {}),
       ...(effectiveContinuationSignal.model ? { model: effectiveContinuationSignal.model } : {}),
     });
-    const taskEcho = sanitizeDelegateEchoForTrustedSystemEvent(effectiveContinuationSignal.task);
+    const taskEcho = formatDelegateEchoForSystemEvent(effectiveContinuationSignal.task);
     enqueueSystemEvent(
       `[continuation:delegate-staged-post-compaction] Bracket delegate staged for post-compaction release: ${taskEcho}`,
       { sessionKey, trusted: true },
@@ -320,7 +319,7 @@ export async function handleContinuationSignal(context: {
                   }
                   dispatchSpan.setStatus("OK");
                 }
-                const taskEcho = sanitizeDelegateEchoForTrustedSystemEvent(task);
+                const taskEcho = formatDelegateEchoForSystemEvent(task);
                 enqueueSystemEvent(
                   `[continuation:delegate-spawned] Spawned turn ${plannedHop}/${maxChainLength}: ${taskEcho}`,
                   { sessionKey, trusted: true },
@@ -328,8 +327,8 @@ export async function handleContinuationSignal(context: {
                 return true;
               }
               const reasonText = spawnResult.error ?? "delegation was not accepted.";
-              const reasonEcho = sanitizeDelegateEchoForTrustedSystemEvent(reasonText);
-              const taskEcho = sanitizeDelegateEchoForTrustedSystemEvent(task);
+              const reasonEcho = formatDelegateEchoForSystemEvent(reasonText);
+              const taskEcho = formatDelegateEchoForSystemEvent(task);
               defaultRuntime.log(
                 `DELEGATE spawn rejected (${spawnResult.status}) for session ${sessionKey} reason=${reasonText}`,
               );
@@ -341,8 +340,8 @@ export async function handleContinuationSignal(context: {
               return false;
             } catch (err) {
               const errorMessage = String(err);
-              const errorEcho = sanitizeDelegateEchoForTrustedSystemEvent(errorMessage);
-              const taskEcho = sanitizeDelegateEchoForTrustedSystemEvent(task);
+              const errorEcho = formatDelegateEchoForSystemEvent(errorMessage);
+              const taskEcho = formatDelegateEchoForSystemEvent(task);
               dispatchSpan?.recordException(err);
               dispatchSpan?.setStatus("ERROR", errorMessage);
               defaultRuntime.log(

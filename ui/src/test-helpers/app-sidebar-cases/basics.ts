@@ -6,6 +6,7 @@ import {
   clearSessionBoardAvailability,
   recordSessionBoardAvailability,
 } from "../../lib/board/provider.ts";
+import { SESSION_FACE_PREFERENCE_PARAM } from "../../lib/sessions/route-navigation.ts";
 import {
   createGateway,
   createGatewayHarness,
@@ -483,9 +484,12 @@ describe("AppSidebar agent chip", () => {
     );
     await sidebar.updateComplete;
 
+    // Uncached agent main session: the face is a guess, so the navigation carries the
+    // marker that lets the chat loader re-derive it from the gateway.
     expect(setSessionKey).toHaveBeenCalledWith("agent:settings:main");
     expect(onNavigate).toHaveBeenCalledWith("chat", {
       pathname: "/chat/settings",
+      search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
     });
     expect(onNavigate).not.toHaveBeenCalledWith("config");
   });

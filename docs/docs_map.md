@@ -69,6 +69,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Heartbeat task migration
   - H3: Stream sources
   - H3: Dynamic cadence (pacing)
+  - H3: /loop chat shortcut
   - H3: Day-of-month and day-of-week use OR logic
   - H2: Event triggers (condition watchers)
   - H2: Payloads
@@ -2929,6 +2930,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /concepts/queue-steering
 - Headings:
   - H2: Runtime boundary
+  - H2: Why steering waits for the current batch
   - H2: Modes
   - H2: Burst example
   - H2: Scope
@@ -3250,16 +3252,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: 10. Discussion and Future Work
   - H3: 10.1 Summary
   - H3: 10.2 Future directions
-  - H2: Appendix A. Proposed and unimplemented extensions
+  - H2: Appendix A. Extension contracts and future seams
   - H3: A.1 Bounded pre-compaction evacuation window
   - H3: A.2 Compaction-triggered evacuation delegate
   - H3: A.3 Proposed `context_pressure` lifecycle hook
   - H3: A.4 Proposed configuration values not shipped in the current codebase
-  - H3: A.5 Proposed restoration: typed `continue_delegate()` on-dispatch input attachments (#1192)
+  - H3: A.5 Typed `continue_delegate()` on-dispatch input attachments (#1192)
   - H4: A.5.1 Public typed-tool contract
   - H4: A.5.2 Dispatch snapshot and lifecycle
   - H4: A.5.3 Required regression proofs
-  - H3: A.6 Proposed managed delegate return claims and recipient arrival context (#666)
+  - H3: A.6 Managed delegate return claims and recipient arrival context (#666)
   - H4: A.6.1 Scope and non-goals
   - H4: A.6.2 Immutable claim record, lifecycle, and recovery
   - H4: A.6.3 Recipient arrival context, including inter-session delivery
@@ -6009,6 +6011,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Compatibility registry
   - H2: Deprecation policy
   - H2: Current compatibility areas
+  - H3: Channel prompt-context identifier aliases
   - H3: WhatsApp inbound callback flat aliases
   - H3: WhatsApp inbound admission fields
   - H2: Plugin inspector package
@@ -8897,7 +8900,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Soul (required)
   - H2: Shared spaces (recommended)
   - H2: Memory system (recommended)
-  - H2: Tools and skills
+  - H2: Tools
+  - H3: Local notes
   - H2: Backup tip (recommended)
   - H2: What OpenClaw does
   - H2: Core skills (enable in Settings → Skills)
@@ -9173,6 +9177,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Existing solutions preflight
   - H2: Daily memory (recommended)
   - H2: Heartbeats (optional)
+  - H2: Tools
   - H2: Customize
   - H2: C-3PO Origin Memory
   - H3: Birth Day: 2026-01-09
@@ -9247,24 +9252,11 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Continuity
   - H2: Related
 
-## reference/templates/TOOLS.dev.md
-
-- Route: /reference/templates/TOOLS.dev
-- Headings:
-  - H1: TOOLS.md - User Tool Notes (editable)
-  - H2: Examples
-  - H3: imsg
-  - H3: sag
-  - H2: Related
-
 ## reference/templates/TOOLS.md
 
 - Route: /reference/templates/TOOLS
 - Headings:
-  - H1: TOOLS.md - Local Notes
-  - H2: Examples
-  - H2: Why Separate?
-  - H2: Related
+  - H1: TOOLS.md is retired
 
 ## reference/templates/USER.dev.md
 
@@ -10588,6 +10580,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Bundled plugin commands
   - H3: Skill commands
   - H2: /tools: what the agent can use now
+  - H2: /loop: recurring conversation work
   - H2: /model: model selection
   - H2: /config: on-disk config writes
   - H2: /mcp: MCP server config
@@ -10918,6 +10911,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /web/dashboards
 - Headings:
+  - H2: Find your dashboards
   - H2: Build a dashboard by asking
   - H2: The board
   - H2: What widgets are allowed to do

@@ -115,7 +115,11 @@ describe("chat pane pull request refresh", () => {
       ],
       rateLimited: false,
     });
-    const client = { request } as unknown as GatewayBrowserClient;
+    const client = {
+      request,
+      requestSessionPullRequests: (params: { sessionKey: string; refresh?: boolean }) =>
+        request("controlUi.sessionPullRequests", params),
+    } as unknown as GatewayBrowserClient;
     const epoch = Symbol("pr-refresh");
     const setPullRequestSummary = vi.fn();
     const sessions = {
@@ -173,7 +177,11 @@ describe("chat pane pull request refresh", () => {
     const request = vi.fn().mockResolvedValue({ pullRequests: [], rateLimited: true });
     const setPullRequestSummary = vi.fn();
     const { pane } = createTestChatPane({
-      client: { request } as unknown as GatewayBrowserClient,
+      client: {
+        request,
+        requestSessionPullRequests: (params: { sessionKey: string }) =>
+          request("controlUi.sessionPullRequests", params),
+      } as unknown as GatewayBrowserClient,
       sessions: {
         capturePullRequestEpoch: vi.fn(() => Symbol("pr-refresh")),
         setPullRequestSummary,
@@ -206,7 +214,11 @@ describe("chat pane pull request refresh", () => {
     const epoch = Symbol("pr-refresh");
     const setPullRequestSummary = vi.fn();
     const { pane } = createTestChatPane({
-      client: { request } as unknown as GatewayBrowserClient,
+      client: {
+        request,
+        requestSessionPullRequests: (params: { sessionKey: string }) =>
+          request("controlUi.sessionPullRequests", params),
+      } as unknown as GatewayBrowserClient,
       sessions: {
         capturePullRequestEpoch: vi.fn(() => epoch),
         setPullRequestSummary,

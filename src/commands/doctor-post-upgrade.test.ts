@@ -3,7 +3,8 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { resetLogger, setLoggerOverride } from "../logging.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { runPostUpgradeProbes } from "./doctor-post-upgrade.js";
@@ -75,6 +76,45 @@ describe("runPostUpgradeProbes — plugin.index_unavailable", () => {
 });
 
 describe("runPostUpgradeProbes — plugin.entry_unresolved", () => {
+  it("structures unreadable package diagnostics for JSON console output", async () => {
+    const root = await makeFixtureRoot("entry-unreadable-json");
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true as unknown as ReturnType<typeof process.stderr.write>);
+    try {
+      const installsPath = path.join(root, "plugins", "installs.json");
+      await fs.mkdir(path.dirname(installsPath), { recursive: true });
+      await fs.writeFile(
+        installsPath,
+        JSON.stringify({
+          plugins: [
+            {
+              pluginId: "broken",
+              rootDir: path.join(root, "broken"),
+              enabled: true,
+              packageJson: { path: "missing-package.json" },
+            },
+          ],
+        }),
+        "utf-8",
+      );
+      setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle: "json" });
+
+      const report = await runPostUpgradeProbes({ installsPath });
+
+      expect(report.findings).toEqual([]);
+      const line = stderrSpy.mock.calls.map(([value]) => String(value)).join("");
+      expect(JSON.parse(line)).toMatchObject({
+        level: "warn",
+        message: expect.stringContaining("could not read package.json for broken"),
+      });
+    } finally {
+      stderrSpy.mockRestore();
+      resetLogger();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("reads the canonical SQLite plugin index by default", async () => {
     const root = await makeFixtureRoot("entry-sqlite");
     try {

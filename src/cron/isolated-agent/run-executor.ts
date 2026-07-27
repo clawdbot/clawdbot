@@ -333,6 +333,7 @@ function createCronPromptExecutor(params: {
       cfg: params.cfgWithAgentDefaults,
       provider: params.liveSelection.provider,
       model: params.liveSelection.model,
+      requestedRouteResolution: "resolved",
       runId: params.cronSession.sessionEntry.sessionId,
       sessionId: params.cronSession.sessionEntry.sessionId,
       lane: resolveCronAgentLane(params.lane),

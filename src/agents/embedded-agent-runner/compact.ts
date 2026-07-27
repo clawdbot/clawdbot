@@ -188,6 +188,7 @@ export async function compactEmbeddedAgentSessionDirect(
       cfg: params.config,
       provider: primaryProvider,
       model: primaryModel,
+      requestedRouteResolution: "resolved",
       fallbacksOverride,
     })[0];
     const fallbackAgentId = resolveSessionAgentIds({
@@ -200,6 +201,7 @@ export async function compactEmbeddedAgentSessionDirect(
       cfg: params.config,
       provider: primaryProvider,
       model: primaryModel,
+      requestedRouteResolution: "resolved",
       runId: params.runId ?? params.sessionId,
       agentDir: params.agentDir,
       agentId: fallbackAgentId,

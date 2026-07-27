@@ -135,6 +135,30 @@ export function classifyCompactionReason(reason?: string): CompactionReasonCode 
   return "unknown";
 }
 
+/** Return whether a classified reason represents an intentional compaction no-op. */
+export function isBenignCompactionSkipReason(reason?: string): boolean {
+  const classification = classifyCompactionReason(reason);
+  return classification === "below_threshold" || classification === "already_compacted_recently";
+}
+
+/** Return whether a compaction result is an intentional no-op rather than a failure. */
+export function isBenignCompactionSkipResult(result: {
+  ok: boolean;
+  compacted: boolean;
+  reason?: string;
+}): boolean {
+  if (result.compacted) {
+    return false;
+  }
+  const classification = classifyCompactionReason(result.reason);
+  return (
+    isBenignCompactionSkipReason(result.reason) ||
+    (result.ok &&
+      (classification === "no_compactable_entries" ||
+        classification === "no_real_conversation_messages"))
+  );
+}
+
 /** Sanitize an unknown reason into a short log/metric-safe detail suffix. */
 export function formatUnknownCompactionReasonDetail(reason?: string): string | undefined {
   const sanitized = sanitizeForLog((reason ?? "").replace(/\s+/g, " "))

@@ -52,6 +52,7 @@ type PreparedManualRun =
       terminalTracker?: ManualRunTerminalTracker;
       owningCronLaneTaskMarker?: CommandLaneTaskMarker;
       reservationAt: number;
+      scheduleOwnershipAtMs: number;
       reservationIdentity: object;
       wasEnabled: boolean;
       payload?: CronPayload;
@@ -67,11 +68,13 @@ export type ActivatedManualRun = Extract<PreparedManualRun, { ran: true }> & {
   startedAt: number;
   taskRunId?: string;
   activeJobMarker?: CronActiveJobMarker;
+  admittedJob: CronJob;
   executionJob: CronJob;
 };
 
 export type ManualRunOptions = {
   runId?: string;
+  scheduleOwnershipAtMs?: number;
   payload?: CronPayload;
   terminalTracker?: ManualRunTerminalTracker;
   owningCronLaneTaskMarker?: CommandLaneTaskMarker;
@@ -379,6 +382,7 @@ export async function prepareManualRun(
       terminalTracker: opts?.terminalTracker,
       owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
       reservationAt,
+      scheduleOwnershipAtMs: opts?.scheduleOwnershipAtMs ?? reservationAt,
       reservationIdentity,
       wasEnabled: isJobEnabled(job),
       ...(opts?.payload ? { payload: structuredClone(opts.payload) } : {}),
@@ -499,6 +503,7 @@ export async function activatePreparedManualRun(
     const activeJobMarker = markManualCronJobActive(state, job);
     // Execute against a snapshot so later reload/merge can preserve delivery
     // target writeback from disk without mutating the running object.
+    const admittedJob = structuredClone(job);
     const executionJob = structuredClone(job);
     if (mode === "force" && executionJob.trigger && !prepared.evaluateTrigger) {
       // Force means run the payload now; strip the gate only from this snapshot
@@ -514,6 +519,7 @@ export async function activatePreparedManualRun(
       runId: prepared.runId ?? taskRunId,
       taskRunId,
       activeJobMarker,
+      admittedJob,
       executionJob,
     } as const;
   });

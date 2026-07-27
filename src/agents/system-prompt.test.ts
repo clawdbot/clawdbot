@@ -1599,6 +1599,33 @@ describe("buildAgentSystemPrompt", () => {
       expect(variant.slice(0, variant.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY))).toBe(stablePrefix);
     }
   });
+
+  it("keeps automatic tool discovery in the stable prompt-cache prefix", () => {
+    const toolSchemaDirectoryPrompt = [
+      "Available deferred-schema tools:",
+      "- fake_calendar: Schedule a calendar event",
+      "- fake_weather: Read current weather",
+      "",
+      "Use tool_search_code with openclaw.tools.search(query).",
+    ].join("\n");
+    const buildPrompt = (owner: string) =>
+      buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        toolNames: ["tool_search_code"],
+        toolSchemaDirectoryPrompt,
+        ownerNumbers: [owner],
+      });
+    const first = buildPrompt("+123");
+    const second = buildPrompt("+456");
+    const firstBoundary = first.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
+    const secondBoundary = second.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
+
+    expect(firstBoundary).toBeGreaterThan(first.indexOf("### Deferred Tool Schemas"));
+    expect(first.slice(0, firstBoundary)).toBe(second.slice(0, secondBoundary));
+    expect(first.slice(0, firstBoundary)).toContain(toolSchemaDirectoryPrompt);
+    expect(first.slice(firstBoundary)).toContain("Allowlisted senders: +123");
+    expect(second.slice(secondBoundary)).toContain("Allowlisted senders: +456");
+  });
 });
 
 describe("buildSubagentSystemPrompt", () => {

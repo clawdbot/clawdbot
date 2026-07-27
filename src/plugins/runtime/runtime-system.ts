@@ -16,9 +16,9 @@ const runHeartbeatOnceInternal = createLazyRuntimeMethod(
 );
 
 // Plugin-provided system events are untrusted by construction: force `trusted: false`
-// so a channel/plugin cannot set `trusted: true` to bypass the inbound anti-spoof
-// sanitizer. Trusted-internal producers (continuation/post-compaction) enqueue via the
-// direct `infra/system-events` import, not this plugin runtime facade.
+// so prompt assembly keeps plugin content in the external-content role. Trusted-internal
+// producers (continuation/post-compaction) enqueue via the direct `infra/system-events`
+// import, not this plugin runtime facade.
 //
 // Also strip the session-delivery ack fields (`sessionDeliveryAckId` /
 // `sessionDeliveryAckStateDir`): on drain they trigger a blind

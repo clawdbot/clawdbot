@@ -1431,6 +1431,17 @@ openclaw-session-owner-chip {
   color: var(--ok);
 }
 
+/* Pending routes share the native mascot without exposing transient panel text. */
+.lazy-view-state--loading {
+  display: grid;
+  flex: 1 1 auto;
+  place-items: center;
+  min-width: 0;
+  min-height: min(50dvh, 360px);
+  width: 100%;
+  margin: auto;
+}
+
 /* Lazy route load failure — a centered panel state, not a stretched callout. */
 .lazy-view-error {
   margin: auto;
@@ -3712,6 +3723,21 @@ td.data-table-key-col {
   opacity: 0.5;
 }
 
+.agent-tab-add {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  background: transparent;
+}
+
+.agent-tab-add:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
 .agent-tab-badge {
   margin-left: 4px;
   font-size: 12px; /* was 9px */
@@ -4040,6 +4066,7 @@ td.data-table-key-col {
 
 .md-preview-dialog__body {
   flex: 1;
+  min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
   padding: clamp(18px, 3vw, 28px);

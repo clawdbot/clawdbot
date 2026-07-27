@@ -14,7 +14,6 @@ import {
 import { generateChainId } from "../../infra/secure-random.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { sanitizeInboundSystemTags } from "../../security/system-tags.js";
 import type { InlineAttachment, InlineAttachmentMount } from "../../shared/inline-attachments.js";
 import { resolveContinuationRuntimeConfig } from "./config.js";
 import { partitionKnownAcceptedDelegateChildren } from "./delegate-dispatch-accepted-children.js";
@@ -26,7 +25,7 @@ import { hasCrossSessionDelegateTargeting } from "./targeting-pure.js";
 const postCompactionLog = createSubsystemLogger("continuation/compaction");
 
 function formatDelegateTaskForSystemEvent(task: string): string {
-  return sanitizeInboundSystemTags(task);
+  return task;
 }
 
 export interface PostCompactionSpawnContext {

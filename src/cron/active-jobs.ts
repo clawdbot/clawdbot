@@ -15,6 +15,7 @@ export type CronActiveJobMarker = {
   jobId: string;
   generation: number;
   token: number;
+  scheduleMutated?: true;
   legacy?: boolean;
   preserveAcrossGenerationAdvance?: boolean;
 };
@@ -116,6 +117,20 @@ export function clearCronJobActive(jobId: string, marker?: CronActiveJobMarker) 
     state.activeJobIds?.delete(jobId);
   }
   notifyActiveCronJobWaitersIfEmpty(state);
+}
+
+/** Records a durable schedule edit against the exact run that was active for it. */
+export function noteActiveCronJobScheduleMutation(jobId: string): void {
+  if (!jobId) {
+    return;
+  }
+  const state = getCronActiveJobState();
+  const marker = state.activeJobs.get(jobId);
+  if (marker && isMarkerActiveInGeneration(marker, state.generation)) {
+    // Keep mutation history on the admitted run: A→B→A has the original
+    // schedule value but still belongs to the operator's newer edit.
+    marker.scheduleMutated = true;
+  }
 }
 
 /** Returns whether the given cron job id is currently executing in this process. */

@@ -253,4 +253,152 @@ describe("model catalog normalization", () => {
     expect(buildModelCatalogRef("OpenAI", "GPT-5.4")).toBe("openai/GPT-5.4");
     expect(buildModelCatalogMergeKey("OpenAI", "GPT-5.4")).toBe("openai::gpt-5.4");
   });
+
+  it("normalizes complete provider routing, pricing, reasoning, and image limits", () => {
+    const tier = { input: 0, output: 2, cacheRead: 0, cacheWrite: 1, range: [128] };
+    const catalog = normalizeModelCatalog(
+      {
+        providers: {
+          OpenAI: {
+            models: [
+              {
+                id: " gpt-5.4 ",
+                headers: Object.fromEntries([
+                  ["x-safe", " value "],
+                  ["__proto__", "polluted"],
+                  ["constructor", "polluted"],
+                  ["prototype", "polluted"],
+                ]),
+                cost: {
+                  input: 0,
+                  output: 2,
+                  cacheWrite: 1,
+                  tieredPricing: [tier, { ...tier, range: [-1] }, { input: 1, range: [0, 2] }],
+                },
+                mediaInput: {
+                  image: {
+                    maxBytes: 4096,
+                    maxPixels: 1024,
+                    maxSidePx: 64,
+                    preferredSidePx: 32,
+                    tokenMode: "tile",
+                  },
+                },
+                compat: {
+                  supportsPromptCacheKey: true,
+                  toolSchemaProfile: " strict ",
+                  toolCallArgumentsEncoding: " json ",
+                  visibleReasoningDetailTypes: [" summary ", ""],
+                  supportedReasoningEfforts: [" low ", " high "],
+                  unsupportedToolSchemaKeywords: [" pattern ", ""],
+                  reasoningEffortMap: { " low ": " minimal ", empty: "  " },
+                  maxTokensField: "max_completion_tokens",
+                  thinkingFormat: "openrouter",
+                  openRouterRouting: {
+                    allow_fallbacks: false,
+                    require_parameters: true,
+                    data_collection: "deny",
+                    zdr: true,
+                    enforce_distillable_text: true,
+                    order: [" openai ", ""],
+                    only: [" anthropic "],
+                    ignore: [" bad "],
+                    quantizations: [" fp8 "],
+                    sort: { by: " throughput ", partition: null },
+                    max_price: { prompt: " 0.5 ", completion: 2, image: 0, audio: 3, request: 4 },
+                    preferred_min_throughput: { p50: 10, p75: 20, p90: 30, p99: 40 },
+                    preferred_max_latency: 1,
+                  },
+                  vercelGatewayRouting: { only: [" openai "], order: [" anthropic "] },
+                },
+              },
+            ],
+          },
+        },
+      },
+      { ownedProviders: new Set([" OpenAI "]) },
+    );
+
+    expect(catalog?.providers?.openai?.models).toEqual([
+      {
+        id: "gpt-5.4",
+        headers: { "x-safe": "value" },
+        cost: { input: 0, output: 2, cacheWrite: 1, tieredPricing: [tier] },
+        mediaInput: {
+          image: {
+            maxBytes: 4096,
+            maxPixels: 1024,
+            maxSidePx: 64,
+            preferredSidePx: 32,
+            tokenMode: "tile",
+          },
+        },
+        compat: {
+          supportsPromptCacheKey: true,
+          toolSchemaProfile: "strict",
+          toolCallArgumentsEncoding: "json",
+          visibleReasoningDetailTypes: ["summary"],
+          supportedReasoningEfforts: ["low", "high"],
+          unsupportedToolSchemaKeywords: ["pattern"],
+          reasoningEffortMap: { low: "minimal" },
+          maxTokensField: "max_completion_tokens",
+          thinkingFormat: "openrouter",
+          openRouterRouting: {
+            allow_fallbacks: false,
+            require_parameters: true,
+            data_collection: "deny",
+            zdr: true,
+            enforce_distillable_text: true,
+            order: ["openai"],
+            only: ["anthropic"],
+            ignore: ["bad"],
+            quantizations: ["fp8"],
+            sort: { by: "throughput", partition: null },
+            max_price: { prompt: "0.5", completion: 2, image: 0, audio: 3, request: 4 },
+            preferred_min_throughput: { p50: 10, p75: 20, p90: 30, p99: 40 },
+            preferred_max_latency: 1,
+          },
+          vercelGatewayRouting: { only: ["openai"], order: ["anthropic"] },
+        },
+      },
+    ]);
+  });
+
+  it.each([
+    { name: "non-record catalog", value: null },
+    { name: "unowned provider", value: { providers: { anthropic: { models: [{ id: "x" }] } } } },
+    { name: "missing model id", value: { providers: { openai: { models: [{ id: "  " }] } } } },
+    { name: "unowned alias", value: { aliases: { alias: { provider: "anthropic" } } } },
+    { name: "invalid suppression", value: { suppressions: [{ provider: "openai" }] } },
+    { name: "unknown discovery", value: { discovery: { openai: "unknown" } } },
+  ])("rejects a $name instead of publishing an empty catalog", ({ value }) => {
+    expect(normalizeModelCatalog(value, { ownedProviders: new Set(["openai"]) })).toBeUndefined();
+  });
+
+  it("sorts provider rows and drops invalid models while preserving model overrides", () => {
+    expect(
+      normalizeModelCatalogProviderRows({
+        provider: " OpenAI ",
+        providerCatalog: {
+          headers: { "x-provider": " default ", "x-override": " old " },
+          models: [
+            { id: "z-model", headers: { "x-override": " new " } },
+            { id: "  " },
+            { id: "a-model", mediaInput: { image: { tokenMode: "detail", maxBytes: 1 } } },
+          ],
+        },
+        source: "runtime-refresh",
+      }),
+    ).toMatchObject([
+      {
+        id: "a-model",
+        provider: "openai",
+        input: ["text"],
+        reasoning: false,
+        status: "available",
+        mediaInput: { image: { tokenMode: "detail", maxBytes: 1 } },
+      },
+      { id: "z-model", headers: { "x-provider": "default", "x-override": "new" } },
+    ]);
+  });
 });

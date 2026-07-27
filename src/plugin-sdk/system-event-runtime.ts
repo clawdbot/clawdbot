@@ -7,8 +7,8 @@ export { peekSystemEventEntries, resetSystemEventsForTest } from "../infra/syste
 
 /**
  * SDK consumers are untrusted by construction — force `trusted: false` so a
- * plugin cannot set `trusted: true` to bypass the inbound anti-spoof sanitizer.
- * Trusted-internal producers use the direct `infra/system-events` import.
+ * plugin cannot attach trusted-only session and delegate-artifact provenance.
+ * Trusted internal producers use the direct `infra/system-events` import.
  *
  * Also strip the session-delivery ack fields (`sessionDeliveryAckId` /
  * `sessionDeliveryAckStateDir`): on drain they trigger a blind

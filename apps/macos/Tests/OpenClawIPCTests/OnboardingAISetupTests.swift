@@ -372,12 +372,21 @@ private func wizardStartResponse(id: String, sessionID: String) -> Data {
         """.utf8)
 }
 
-private func wizardProgressResponse(id: String, sessionID: String) -> Data {
+private func wizardProgressResponse(id: String, sessionID: String, message: String) -> Data {
     Data(
         """
         {"type":"res","id":"\(id)","ok":true,"payload":{
           "sessionId":"\(sessionID)","done":false,"status":"running",
-          "step":{"id":"download","type":"progress","message":"Downloading model: 25%"}
+          "step":{"id":"download","type":"progress","executor":"gateway","message":"\(message)"}
+        }}
+        """.utf8)
+}
+
+private func wizardDoneResponse(id: String, sessionID: String) -> Data {
+    Data(
+        """
+        {"type":"res","id":"\(id)","ok":true,"payload":{
+          "sessionId":"\(sessionID)","done":true,"status":"done"
         }}
         """.utf8)
 }
@@ -637,8 +646,10 @@ struct OnboardingAISetupTests {
             "openclaw.setup.prepare.start")
     }
 
-    @Test func `prepare action starts shared wizard with the local auth choice`() async throws {
+    @Test func `prepare starts the shared wizard and polls gateway progress`() async throws {
         let recorder = AISetupRequestRecorder()
+        let frames = AISetupSocketGeneration()
+        let completion = AISetupRequestGate()
         let session = GatewayTestWebSocketSession(taskFactory: {
             GatewayTestWebSocketTask(
                 sendHook: { task, message, sendIndex in
@@ -657,9 +668,26 @@ struct OnboardingAISetupTests {
                             sessionID: sessionID)))
                     case "wizard.next":
                         let sessionID = request.params["sessionId"] as? String ?? "prepare-session"
-                        task.emitReceiveSuccess(.data(wizardProgressResponse(
-                            id: request.id,
-                            sessionID: sessionID)))
+                        // Two gateway-executed progress frames, then the terminal
+                        // result: a client that stops after the first frame never
+                        // reaches either follow-up.
+                        switch frames.claim() {
+                        case 0:
+                            task.emitReceiveSuccess(.data(wizardProgressResponse(
+                                id: request.id,
+                                sessionID: sessionID,
+                                message: "Downloading model: 25%")))
+                        case 1:
+                            task.emitReceiveSuccess(.data(wizardProgressResponse(
+                                id: request.id,
+                                sessionID: sessionID,
+                                message: "Downloading model: 80%")))
+                        default:
+                            await completion.wait()
+                            task.emitReceiveSuccess(.data(wizardDoneResponse(
+                                id: request.id,
+                                sessionID: sessionID)))
+                        }
                     default:
                         break
                     }
@@ -685,19 +713,30 @@ struct OnboardingAISetupTests {
         await model.detectAndAutoConnect()
         let option = try #require(model.prepareOptions.first { $0.id == "llama-cpp" })
         model.startProviderPrepare(option)
-        let requests = await waitForAISetupRequests(recorder, count: 3)
+        // Bounded wait, not `completion.waitUntilStarted()`: a client that stops
+        // polling never reaches the gated frame, and this must fail rather than
+        // hang. Once five requests are recorded the third `wizard.next` is held
+        // at the gate, so the sheet deterministically shows the second frame.
+        let requests = await waitForAISetupRequests(recorder, count: 5)
 
-        #expect(requests.methods == [
+        #expect(Array(requests.methods.prefix(5)) == [
             "openclaw.setup.detect",
             "openclaw.setup.prepare.start",
+            "wizard.next",
+            "wizard.next",
             "wizard.next",
         ])
         #expect(requests.authChoices == ["llama-cpp"])
         #expect(model.isPreparingModel)
-        for _ in 0..<200 where model.authStep.map(wizardStepType) != "progress" {
+        #expect(model.authStep.map(wizardStepType) == "progress")
+        #expect(model.authStep?.message == "Downloading model: 80%")
+
+        await completion.release()
+        for _ in 0..<200 where model.activeAuthOption != nil {
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
-        #expect(model.authStep.map(wizardStepType) == "progress")
+        #expect(model.activeAuthOption == nil)
+        #expect(model.authError == nil)
     }
 
     @Test func `provider auth opens only safe external links`() {

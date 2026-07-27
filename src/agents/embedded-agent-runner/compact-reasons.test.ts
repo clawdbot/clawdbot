@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   classifyCompactionReason,
   formatUnknownCompactionReasonDetail,
+  isBenignCompactionSkipResult,
+  isBenignCompactionSkipReason,
   type CompactionReasonCode,
   isCompactionSkipCode,
   isCompactionSkipReason,
@@ -87,6 +89,30 @@ describe("classifyCompactionReason", () => {
     const code: CompactionReasonCode = classifyCompactionReason("nothing to compact");
     expect(code).toBe("no_compactable_entries");
   });
+});
+
+describe("isBenignCompactionSkipReason", () => {
+  it.each(["already under target", "already compacted recently"])(
+    "keeps the established %s skip contract",
+    (reason) => {
+      expect(isBenignCompactionSkipReason(reason)).toBe(true);
+    },
+  );
+
+  it("requires an explicit successful-result opt-in for empty transcripts", () => {
+    const reason = "no real conversation messages";
+    expect(isBenignCompactionSkipReason(reason)).toBe(false);
+    expect(isBenignCompactionSkipResult({ ok: true, compacted: false, reason })).toBe(true);
+    expect(isBenignCompactionSkipResult({ ok: false, compacted: false, reason })).toBe(false);
+    expect(isBenignCompactionSkipResult({ ok: true, compacted: true, reason })).toBe(false);
+  });
+
+  it.each([undefined, "Compaction timed out", "No API provider registered for api: ollama"])(
+    "does not hide the failure reason %s",
+    (reason) => {
+      expect(isBenignCompactionSkipResult({ ok: true, compacted: false, reason })).toBe(false);
+    },
+  );
 });
 
 describe("formatUnknownCompactionReasonDetail", () => {

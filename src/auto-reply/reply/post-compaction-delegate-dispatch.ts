@@ -502,14 +502,8 @@ export async function dispatchPostCompactionDelegates(
     droppedDelegates: droppedCompactionDelegates,
   });
   if (postCompactionContextContent) {
-    // Trusted-internal producer: this is workspace AGENTS.md content read by
-    // `readPostCompactionContext`, which may legitimately contain literal
-    // `System:`/`[System]` strings (critical-rule examples, prompt scaffolding).
-    // Mark it trusted so the inbound anti-spoof sanitizer preserves it verbatim
-    // instead of rewriting those markers and corrupting the refresh context.
     deps.enqueueSystemEvent(postCompactionContextContent, {
       sessionKey: params.sessionKey,
-      trusted: true,
     });
   }
   deps.enqueueSystemEvent(lifecycleEvent, {

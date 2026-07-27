@@ -2517,6 +2517,47 @@ describe("WorkboardStore", () => {
     });
   });
 
+  it("keeps archived cards out of diagnostics without rewriting their history", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Archived completed work", status: "done" });
+    const now = Date.now();
+
+    await expect(store.refreshDiagnostics(now)).resolves.toMatchObject({
+      diagnostics: [
+        expect.objectContaining({
+          card: expect.objectContaining({ id: card.id }),
+          diagnostics: [expect.objectContaining({ kind: "missing_proof" })],
+        }),
+      ],
+      count: 1,
+    });
+
+    const archived = await store.archive(card.id, true);
+    const changes = vi.fn();
+    const unsubscribe = store.subscribeChanges(changes);
+
+    await expect(store.diagnostics(now + 1)).resolves.toEqual({ diagnostics: [], count: 0 });
+    await expect(store.refreshDiagnostics(now + 1)).resolves.toEqual({
+      diagnostics: [],
+      count: 0,
+    });
+    await expect(store.get(card.id)).resolves.toEqual(archived);
+    await expect(store.list()).resolves.toEqual([archived]);
+    expect(changes).not.toHaveBeenCalled();
+
+    unsubscribe();
+    const restored = await store.archive(card.id, false);
+    await expect(store.diagnostics(now + 2)).resolves.toMatchObject({
+      diagnostics: [
+        expect.objectContaining({
+          card: expect.objectContaining({ id: restored.id }),
+          diagnostics: [expect.objectContaining({ kind: "missing_proof" })],
+        }),
+      ],
+      count: 1,
+    });
+  });
+
   it("does not drop concurrent updates while refreshing diagnostics", async () => {
     let proofPromise: Promise<unknown> | undefined;
     let triggered = false;
@@ -3085,6 +3126,75 @@ describe("WorkboardStore", () => {
     await expect(store.get(archived.id)).resolves.not.toMatchObject({
       metadata: { workerProtocol: expect.any(Object) },
     });
+  });
+
+  it("does not mutate archived ready cards during repeated dispatch", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Archived ready work",
+      status: "ready",
+    });
+    const archived = await store.archive(card.id, true);
+    const changes = vi.fn();
+    store.subscribeChanges(changes);
+
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      await expect(store.dispatch(10 + attempt)).resolves.toEqual({
+        promoted: [],
+        reclaimed: [],
+        blocked: [],
+        orchestrated: [],
+        count: 0,
+      });
+    }
+
+    await expect(store.get(card.id)).resolves.toEqual(archived);
+    expect(changes).not.toHaveBeenCalled();
+  });
+
+  it("does not promote, time out, or reclaim archived cards during dispatch", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const store = new WorkboardStore(createMemoryStore());
+      const timedOut = await store.create({
+        title: "Archived timed-out work",
+        status: "running",
+        maxRuntimeSeconds: 1,
+      });
+      const scheduled = await store.create({
+        title: "Archived scheduled work",
+        status: "scheduled",
+        scheduledAt: 2_000,
+      });
+      const parent = await store.create({ title: "Dependency parent", status: "running" });
+      const dependent = await store.create({
+        title: "Archived dependent work",
+        parents: [parent.id],
+      });
+      const archived = await Promise.all([
+        store.archive(timedOut.id, true),
+        store.archive(scheduled.id, true),
+        store.archive(dependent.id, true),
+      ]);
+      await store.complete(parent.id, { summary: "Dependency finished." });
+      const changes = vi.fn();
+      store.subscribeChanges(changes);
+
+      await expect(store.dispatch(3_000)).resolves.toEqual({
+        promoted: [],
+        reclaimed: [],
+        blocked: [],
+        orchestrated: [],
+        count: 0,
+      });
+      await expect(Promise.all(archived.map((card) => store.get(card.id)))).resolves.toEqual(
+        archived,
+      );
+      expect(changes).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("applies auto orchestration dispatch caps per board", async () => {

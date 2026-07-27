@@ -489,6 +489,7 @@ export function buildCliArgs(params: {
   promptArg?: string;
   useResume: boolean;
   forkResume?: boolean;
+  resumeAt?: string;
   sendSystemPromptOnResume?: boolean;
 }): string[] {
   const args: string[] = [...params.baseArgs];
@@ -534,6 +535,12 @@ export function buildCliArgs(params: {
       throw new Error("CLI backend does not support forked session resume");
     }
     args.push(params.backend.forkArg);
+  }
+  if (params.resumeAt) {
+    if (!params.useResume || !params.backend.resumeAtArg) {
+      throw new Error("CLI backend does not support checkpointed session resume");
+    }
+    args.push(params.backend.resumeAtArg, params.resumeAt);
   }
   if (params.promptArg !== undefined) {
     let replacedPromptPlaceholder = false;

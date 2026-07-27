@@ -7,8 +7,8 @@ import {
 } from "./api.js";
 import { mistralMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { mistralMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
-import { MISTRAL_DEFAULT_MODEL_REF } from "./model-definitions.js";
 import { applyMistralConfig } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildMistralProvider } from "./provider-catalog.js";
 import { buildMistralRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 
@@ -24,25 +24,11 @@ export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Mistral Provider",
   description: "Bundled Mistral provider plugin",
+  manifest,
   provider: {
     label: "Mistral",
     docsPath: "/providers/models",
-    auth: [
-      {
-        methodId: "api-key",
-        label: "Mistral API key",
-        hint: "API key",
-        optionKey: "mistralApiKey",
-        flagName: "--mistral-api-key",
-        envVar: "MISTRAL_API_KEY",
-        promptMessage: "Enter Mistral API key",
-        defaultModel: MISTRAL_DEFAULT_MODEL_REF,
-        applyConfig: (cfg) => applyMistralConfig(cfg),
-        wizard: {
-          groupLabel: "Mistral AI",
-        },
-      },
-    ],
+    manifestAuth: { applyConfig: applyMistralConfig },
     catalog: {
       buildProvider: buildMistralProvider,
       buildStaticProvider: buildMistralProvider,

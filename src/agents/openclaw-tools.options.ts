@@ -23,9 +23,8 @@ export type CreateOpenClawToolsOptions = {
   agentSessionKey?: string;
   toolBindings?: Readonly<Record<string, unknown>>;
   /**
-   * The actual live run session key. When the tool is constructed with a sandbox/policy
-   * session key, this allows `session_status({sessionKey:"current"})` to resolve to
-   * the live run session instead of the stale sandbox key.
+   * The durable store session key for the live run when it differs from the
+   * sandbox/policy session key used to construct the tool set.
    */
   runSessionKey?: string;
   agentChannel?: GatewayMessageChannel;

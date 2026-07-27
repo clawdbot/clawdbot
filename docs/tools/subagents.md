@@ -147,7 +147,7 @@ session to confirm the effective tool list.
 
 - **Model:** native sub-agents inherit the caller unless you set `agents.defaults.subagents.model` (or per-agent `agents.entries.*.subagents.model`). ACP runtime spawns use the same configured subagent model when present; otherwise the ACP harness keeps its own default. An explicit `sessions_spawn.model` still wins.
 - **Thinking:** native sub-agents inherit the caller unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.entries.*.subagents.thinking`). ACP runtime spawns also apply `agents.defaults.models["provider/model"].params.thinking` for the selected model. An explicit `sessions_spawn.thinking` still wins.
-- **Run timeout:** OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise it falls back to `0` (no timeout). `sessions_spawn` does not accept per-call timeout overrides.
+- **Run timeout:** pass `runTimeoutSeconds` to set a timeout for a specific native, ACP, or visible sub-agent run. When omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` if configured; otherwise it falls back to `0` (no timeout). An explicit `0` disables the timeout for that run.
 - **Process lifetime:** a detached OpenClaw sub-agent has its own run lifecycle. A background task created inside an external CLI backend is different: it shares the parent CLI subprocess and stops if that parent reaches `agents.defaults.timeoutSeconds`.
 - **Task delivery:** native sub-agents receive the delegated task in their first visible `[Subagent Task]` message. The sub-agent system prompt carries runtime rules and routing context, not a hidden duplicate of the task.
 
@@ -211,6 +211,9 @@ Per-agent override: `agents.entries.*.subagents.delegationMode`.
 </ParamField>
 <ParamField path="model" type="string">
   Override the sub-agent model. Invalid values are skipped and the sub-agent runs on the default model with a warning in the tool result.
+</ParamField>
+<ParamField path="runTimeoutSeconds" type="integer">
+  Override the configured run timeout for this child. Must be a non-negative integer; `0` disables the timeout. Applies to native, ACP, and visible sessions.
 </ParamField>
 <ParamField path="thinking" type="string">
   Override thinking level for the sub-agent run. Not available with `visible: true`.
@@ -418,7 +421,7 @@ worker sub-sub-agents.
     defaults: {
       subagents: {
         maxSpawnDepth: 2, // allow sub-agents to spawn children (default: 1, range 1-5)
-        maxChildrenPerAgent: 5, // max active children per agent session (default: 5, range 1-20)
+        maxChildrenPerAgent: 5, // max active children per agent session (default: 5, range 1-10000)
         maxConcurrent: 8, // global concurrency lane cap (default: 8)
         runTimeoutSeconds: 900, // default timeout for sessions_spawn (0 = no timeout)
         announceTimeoutMs: 120000, // per-call gateway announce timeout
@@ -474,7 +477,7 @@ Each agent session (at any depth) can have at most `maxChildrenPerAgent`
 (default `5`) active children at a time. This prevents runaway fan-out
 from a single orchestrator.
 
-**Interaction with continuation knobs:** when `agents.defaults.continuation.enabled === true`, the per-agent children-cap acts as a complementary floor alongside the continuation runaway-safety guards (`maxDelegatesPerTurn`, `maxChainLength`, `costCapTokens`). Token-budget (`costCapTokens`) and chain-length (`maxChainLength`) remain the primary runaway-safety guards; `maxChildrenPerAgent` provides per-session-children pressure-relief for wide-fanout patterns like large-scale distribution, code-agent fan-out, or batch deployment chains.
+**Interaction with continuation knobs:** when `agents.defaults.continuation.enabled === true`, the per-agent children cap acts as a complementary guard alongside the continuation runaway-safety guards (`maxDelegatesPerTurn`, `maxChainLength`, `costCapTokens`). Token budget (`costCapTokens`) and chain length (`maxChainLength`) remain the primary runaway-safety guards; `maxChildrenPerAgent` provides per-session pressure relief for wide-fanout patterns like large-scale distribution, code-agent fan-out, or batch deployment chains.
 
 **Override-headroom:** the zod schema permits values up to `10000` via config-override. The default stays at `5` for interactive single-agent safety; operators running wide-fanout patterns should raise via `agents.defaults.subagents.maxChildrenPerAgent` in `~/.openclaw/openclaw.json`.
 
@@ -680,7 +683,7 @@ still need normal device approval for scope upgrades.
 - Sub-agent announce is **best-effort**. If the gateway restarts, pending "announce back" work is lost.
 - Sub-agents still share the same gateway process resources; treat `maxConcurrent` as a safety valve.
 - `sessions_spawn` is always non-blocking: it returns `{ status: "accepted", runId, childSessionKey }` immediately.
-- Sub-agent context only injects `AGENTS.md` and `TOOLS.md` (no `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, or `BOOTSTRAP.md`). Codex-native subagents follow the same boundary: `TOOLS.md` stays in inherited Codex thread instructions, while parent-only persona, identity, and user files are injected as turn-scoped collaboration instructions so children do not clone them.
+- Sub-agent context only injects `AGENTS.md` (no `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, or `BOOTSTRAP.md`). Its `## Tools` section carries environment-specific notes. Codex-native subagents follow the same boundary through native `AGENTS.md` discovery, while parent-only persona, identity, and user files are injected as turn-scoped collaboration instructions so children do not clone them.
 - Maximum nesting depth is 5 (`maxSpawnDepth` range: 1–5). Depth 2 is recommended for most use cases.
 - `maxChildrenPerAgent` caps active children per session (default `5`, range `1–10000`). Default stays low for interactive single-agent safety; raise via config for wide-fanout patterns (parallel delegate fan-out, batch processing, distributed investigation).
 

@@ -345,6 +345,52 @@ describe("trajectory runtime", () => {
     expect(second.data.truncated).toBeUndefined();
   });
 
+  it("caps large final prompts and records their original length", () => {
+    const writes: string[] = [];
+    const finalPromptText = `prompt-${"🙂".repeat(4_096)}`;
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      writer: {
+        filePath: "/tmp/session.trajectory.jsonl",
+        write: (line) => {
+          writes.push(line);
+        },
+        flush: async () => undefined,
+      },
+    });
+
+    expectTrajectoryRuntimeRecorder(recorder).recordEvent("model.completed", { finalPromptText });
+
+    const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
+    expect(Buffer.byteLength(parsed.data.finalPromptText, "utf8")).toBeLessThanOrEqual(4 * 1024);
+    expect(Buffer.byteLength(parsed.data.finalPromptText, "utf8")).toBeGreaterThan(4 * 1024 - 4);
+    expect(parsed.data.finalPromptTextOriginalLength).toBe(finalPromptText.length);
+  });
+
+  it("leaves short final prompts unchanged", () => {
+    const writes: string[] = [];
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      writer: {
+        filePath: "/tmp/session.trajectory.jsonl",
+        write: (line) => {
+          writes.push(line);
+        },
+        flush: async () => undefined,
+      },
+    });
+
+    expectTrajectoryRuntimeRecorder(recorder).recordEvent("trace.artifacts", {
+      finalPromptText: "short prompt",
+    });
+
+    const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
+    expect(parsed.data.finalPromptText).toBe("short prompt");
+    expect(parsed.data.finalPromptTextOriginalLength).toBeUndefined();
+  });
+
   it("redacts secrets before preserving usage in truncated runtime events", () => {
     const writes: string[] = [];
     const recorder = createTrajectoryRuntimeRecorder({

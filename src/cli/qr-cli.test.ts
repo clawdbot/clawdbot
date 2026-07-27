@@ -371,7 +371,7 @@ describe("registerQrCli", () => {
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   });
 
-  it("uses OPENCLAW_GATEWAY_PASSWORD without resolving local password SecretRef", async () => {
+  it("does not let OPENCLAW_GATEWAY_PASSWORD mask a local password SecretRef", async () => {
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "password-from-env");
     loadConfig.mockReturnValue(
       createLocalGatewayConfigWithAuth(
@@ -379,9 +379,9 @@ describe("registerQrCli", () => {
       ),
     );
 
-    await runQr(["--setup-code-only"]);
-
-    expectLoggedLocalSetupCode();
+    await expectQrExit(["--setup-code-only"]);
+    const output = runtimeError.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
+    expect(output).toContain("MISSING_LOCAL_GATEWAY_PASSWORD");
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   });
 

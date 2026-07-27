@@ -3,6 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import {
   markDelegateArtifactDeliveryUnavailable,
@@ -268,7 +269,10 @@ export async function prepareFormattedSystemEvents(params: {
   const selected = selectGenericSystemEvents(peekSystemEventEntries(params.sessionKey), {
     suppressHeartbeatOwnedEvents: params.suppressHeartbeatOwnedEvents,
   });
-  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  const agentId = resolveAgentIdFromSessionKey(
+    params.sessionKey,
+    resolveDefaultAgentId(params.cfg),
+  );
   const currentSessionId = loadSessionEntry({
     agentId,
     sessionKey: params.sessionKey,
@@ -552,6 +556,9 @@ export async function prepareFormattedSystemEvents(params: {
     const lines = compacted
       .split("\n")
       .map((subline, index) => `System: ${index === 0 ? `${timestamp} ` : ""}${subline}`);
+    // Inbound text is deliberately not rewritten to neutralize look-alike `System:` lines.
+    // Role separation plus external-content wrapping is the boundary.
+    // This is an explicit product decision.
     blocks.push({
       ...(event.sessionDeliveryAckId
         ? { key: `session-delivery:${event.sessionDeliveryAckId}` }

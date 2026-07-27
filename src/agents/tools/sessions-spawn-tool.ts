@@ -49,6 +49,7 @@ import type { AnyAgentTool } from "./common.js";
 import {
   jsonResult,
   normalizeToolModelOverride,
+  readNonNegativeIntegerParam,
   readStringParam,
   ToolInputError,
 } from "./common.js";
@@ -72,11 +73,6 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "replyTo",
   "reply_to",
 ] as const;
-const UNSUPPORTED_SESSIONS_SPAWN_TIMEOUT_PARAM_KEYS = [
-  "runTimeoutSeconds",
-  "timeoutSeconds",
-] as const;
-
 type AcpSpawnModule = typeof import("../acp-spawn.js");
 
 const acpSpawnModuleLoader = createLazyImportLoader<AcpSpawnModule>(
@@ -156,6 +152,13 @@ function createSessionsSpawnToolSchema(params: {
     ),
     agentId: Type.Optional(Type.String()),
     model: Type.Optional(Type.String()),
+    runTimeoutSeconds: Type.Optional(
+      Type.Integer({
+        minimum: 0,
+        description:
+          "Per-run timeout in seconds; overrides the configured subagent default. Zero disables the timeout.",
+      }),
+    ),
     thinking: Type.Optional(
       Type.String({ description: "Thinking override; unavailable with visible=true." }),
     ),
@@ -178,7 +181,9 @@ function createSessionsSpawnToolSchema(params: {
     cleanup: optionalStringEnum(["delete", "keep"] as const, {
       description: "Hidden session cleanup; visible=true always keeps the session.",
     }),
-    sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
+    sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES, {
+      description: '"inherit" parent sandbox policy; "require" fails unless child is sandboxed.',
+    }),
     context: optionalStringEnum(SUBAGENT_SPAWN_CONTEXT_MODES, {
       description:
         "Native: omit/isolated clean; fork only needing requester transcript; visible fork requires same agent.",
@@ -190,10 +195,22 @@ function createSessionsSpawnToolSchema(params: {
     ),
     ...(params.swarmEnabled
       ? {
-          collect: Type.Optional(Type.Boolean()),
-          outputSchema: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+          collect: Type.Optional(
+            Type.Boolean({
+              description: "Swarm collector child for parallel fan-out; await via agents_wait.",
+            }),
+          ),
+          outputSchema: Type.Optional(
+            Type.Record(Type.String(), Type.Unknown(), {
+              description: "JSON Schema for the child's structured result; requires collect=true.",
+            }),
+          ),
           fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
-          groupId: Type.Optional(Type.String()),
+          groupId: Type.Optional(
+            Type.String({
+              description: "Groups parallel collector children; requires collect=true.",
+            }),
+          ),
         }
       : {}),
     ...VISIBLE_SESSIONS_SPAWN_SCHEMA,
@@ -288,7 +305,11 @@ export function createSessionsSpawnTool(
     displaySummary: acpAvailable
       ? SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY
       : SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY,
-    description: describeSessionsSpawnTool({ acpAvailable, threadAvailable }),
+    description: describeSessionsSpawnTool({
+      acpAvailable,
+      threadAvailable,
+      swarmEnabled: swarmConfig.enabled,
+    }),
     parameters: createSessionsSpawnToolSchema({
       acpAvailable,
       threadAvailable,
@@ -333,17 +354,14 @@ export function createSessionsSpawnTool(
           `sessions_spawn does not support "${unsupportedParam}". Use "message" or "sessions_send" for channel delivery.`,
         );
       }
-      const unsupportedTimeoutParam = UNSUPPORTED_SESSIONS_SPAWN_TIMEOUT_PARAM_KEYS.find((key) =>
-        resolveSnakeCaseParamKey(params, key),
-      );
+      const unsupportedTimeoutParam = resolveSnakeCaseParamKey(params, "timeoutSeconds");
       if (unsupportedTimeoutParam) {
-        const providedTimeoutParam =
-          resolveSnakeCaseParamKey(params, unsupportedTimeoutParam) ?? unsupportedTimeoutParam;
         throw new ToolInputError(
-          `sessions_spawn does not support per-call "${providedTimeoutParam}". Configure agents.defaults.subagents.runTimeoutSeconds instead.`,
+          `sessions_spawn does not support "${unsupportedTimeoutParam}". Use "runTimeoutSeconds" for a per-run timeout.`,
         );
       }
       const task = readStringParam(params, "task", { required: true });
+      const runTimeoutSeconds = readNonNegativeIntegerParam(params, "runTimeoutSeconds");
       const taskNameResult = normalizeSubagentTaskName(params.taskName);
       if (taskNameResult.error) {
         return jsonResult({
@@ -379,6 +397,7 @@ export function createSessionsSpawnTool(
         label,
         runtime,
         requestedAgentId,
+        runTimeoutSeconds,
         sandbox,
         options: opts,
       });
@@ -449,6 +468,7 @@ export function createSessionsSpawnTool(
             resumeSessionId,
             model: modelOverride,
             thinking: thinkingOverrideRaw,
+            ...(runTimeoutSeconds !== undefined ? { runTimeoutSeconds } : {}),
             cwd,
             mode: mode === "run" || mode === "session" ? mode : undefined,
             thread,
@@ -489,6 +509,7 @@ export function createSessionsSpawnTool(
           agentId: requestedAgentId,
           model: modelOverride,
           thinking: thinkingOverrideRaw,
+          ...(runTimeoutSeconds !== undefined ? { runTimeoutSeconds } : {}),
           collect: hasCollectParam ? collect : undefined,
           outputSchema:
             params.outputSchema && typeof params.outputSchema === "object"
