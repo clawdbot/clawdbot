@@ -66,40 +66,46 @@ function attemptResult(
 }
 
 describe("prepareEmbeddedRunTerminal", () => {
-  it("does not use errored assistant text as final terminal text", async () => {
-    const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
-    const assistant = assistantMessage("error");
-    const prepared = prepareEmbeddedRunTerminal({
-      runParams: {
-        sessionId: "session-1",
-        runId: "run-1",
-        workspaceDir: "/tmp/openclaw-test",
-        prompt: "hi",
-        trigger: "user",
-        timeoutMs: 60_000,
-      },
-      attempt: attemptResult({
-        lastAssistant: assistant,
-        currentAttemptAssistant: assistant,
+  it.each(["error", "aborted"] as const)(
+    "does not use %s assistant text as final terminal text",
+    async (stopReason) => {
+      const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
+      const assistant = assistantMessage(stopReason);
+      const prepared = prepareEmbeddedRunTerminal({
+        runParams: {
+          sessionId: "session-1",
+          runId: "run-1",
+          workspaceDir: "/tmp/openclaw-test",
+          prompt: "hi",
+          trigger: "user",
+          timeoutMs: 60_000,
+        },
+        attempt: attemptResult({
+          lastAssistant: assistant,
+          currentAttemptAssistant: assistant,
+          currentAttemptCompletedAssistant: assistant,
+        }),
         currentAttemptCompletedAssistant: assistant,
-      }),
-      currentAttemptCompletedAssistant: assistant,
-      provider: "openai",
-      model: "gpt-5.4",
-      activeErrorContext: { provider: "openai", model: "gpt-5.4" },
-      authProfileStore: { version: 1, profiles: {} },
-      sessionIdUsed: "session-1",
-      outerContextTokenMeta: {},
-      usageAccumulator: createUsageAccumulator(),
-      contextRecoveryState: createEmbeddedRunContextRecoveryState(),
-      resolvedToolResultFormat: "markdown",
-      terminalInterrupted: false,
-      terminalTimedOut: false,
-      timedOutDuringCompaction: false,
-      timedOutDuringToolExecution: false,
-    });
+        provider: "openai",
+        model: "gpt-5.4",
+        activeErrorContext: { provider: "openai", model: "gpt-5.4" },
+        authProfileStore: { version: 1, profiles: {} },
+        sessionIdUsed: "session-1",
+        outerContextTokenMeta: {},
+        usageAccumulator: createUsageAccumulator(),
+        contextRecoveryState: createEmbeddedRunContextRecoveryState(),
+        resolvedToolResultFormat: "markdown",
+        terminalState: {
+          outcome:
+            stopReason === "aborted"
+              ? { reason: "aborted", status: "error", stopReason }
+              : { reason: "failed", status: "error", stopReason, error: "provider failed" },
+          signalOwnedInterruption: false,
+        },
+      });
 
-    expect(prepared.finalAssistantVisibleText).toBeUndefined();
-    expect(prepared.finalAssistantRawText).toBeUndefined();
-  });
+      expect(prepared.finalAssistantVisibleText).toBeUndefined();
+      expect(prepared.finalAssistantRawText).toBeUndefined();
+    },
+  );
 });
