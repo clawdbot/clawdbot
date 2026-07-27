@@ -5719,6 +5719,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Request
   - H2: Storage and visibility
   - H2: Security boundary
+  - H2: Mirroring
   - H2: Troubleshooting
   - H2: Related
 

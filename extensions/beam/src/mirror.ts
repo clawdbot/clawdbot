@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import type {
@@ -28,7 +29,7 @@ const MIRROR_BODY_BUDGET_BYTES = BEAM_MAX_BODY_BYTES - 2_048;
 // One warning per source per interval keeps a broken endpoint from flooding logs.
 const MIRROR_WARN_INTERVAL_MS = 5 * 60_000;
 
-export type BeamMirrorConfig = {
+type BeamMirrorConfig = {
   endpoint: string;
   token?: unknown;
   catalogs?: string[];
@@ -153,11 +154,17 @@ export function buildBeamMirrorItems(items: readonly SessionCatalogTranscriptIte
       dropped = new Map();
     }
   };
-  const droppedLabel: Record<string, string> = {
-    toolCall: "tool calls",
-    toolResult: "tool results",
-    reasoning: "reasoning items",
-    other: "other entries",
+  const droppedLabel = (type: string): string => {
+    switch (type) {
+      case "toolCall":
+        return "tool calls";
+      case "toolResult":
+        return "tool results";
+      case "reasoning":
+        return "reasoning items";
+      default:
+        return "other entries";
+    }
   };
   for (const item of items) {
     const text = item.text?.trim();
@@ -167,7 +174,7 @@ export function buildBeamMirrorItems(items: readonly SessionCatalogTranscriptIte
       continue;
     }
     droppedRaw += 1;
-    const label = droppedLabel[item.type] ?? droppedLabel.other;
+    const label = droppedLabel(item.type);
     dropped.set(label, (dropped.get(label) ?? 0) + 1);
   }
   flush();
@@ -193,7 +200,7 @@ export function fitBeamMirrorUpload(upload: BeamMirrorUpload): BeamMirrorUpload 
   return fitted;
 }
 
-export type BeamMirrorCandidate = {
+type BeamMirrorCandidate = {
   catalogId: string;
   hostId: string;
   threadId: string;
@@ -235,7 +242,7 @@ type TrackedMirrorSession = {
   fingerprint: string;
 };
 
-export type BeamMirrorRunner = {
+type BeamMirrorRunner = {
   tick: () => Promise<void>;
 };
 
@@ -336,7 +343,8 @@ export function createBeamMirrorRunner(params: {
       let token: string | undefined;
       if (mirror.token !== undefined) {
         const resolved = await resolveConfiguredSecretInputString({
-          config,
+          // The resolver only reads; the plugin runtime exposes a DeepReadonly view.
+          config: config as OpenClawConfig,
           env,
           value: mirror.token,
           path: MIRROR_TOKEN_PATH,
