@@ -19,6 +19,7 @@ import {
 } from "../ui/vite.config.ts";
 import { buildBackgroundTasksMock } from "./control-ui-mock-background-tasks.ts";
 import { buildChannelsStatusMock, buildChannelWizardMocks } from "./control-ui-mock-channels.ts";
+import { buildCronMocks } from "./control-ui-mock-cron.ts";
 import { buildPluginCatalogMock } from "./control-ui-mock-plugins.ts";
 import { buildSkillWorkshopMocks } from "./control-ui-mock-skill-workshop.js";
 
@@ -1259,6 +1260,7 @@ async function createChatPickerScenario(
   const profileUsage = buildProfileUsageMocks(Date.now());
   const modelProviders = buildModelProviderMocks(Date.now());
   const skillWorkshop = buildSkillWorkshopMocks(Date.now());
+  const cronMocks = buildCronMocks(Date.now());
   const channelWizard = buildChannelWizardMocks();
   const configMocks = buildConfigMocks({ swarmEnabled: fixture === "swarm" });
   return {
@@ -1288,6 +1290,7 @@ async function createChatPickerScenario(
     ],
     methodResponses: {
       ...buildBackgroundTasksMock(baseTime),
+      ...cronMocks,
       "users.self": { profile: selfProfile },
       // Custom session group catalog so the sidebar's category zone (and its
       // drag-reordering against built-in sections) is exercised in the mock.
