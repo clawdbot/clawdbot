@@ -901,7 +901,7 @@ jobs:
 
       - name: Scan pull request for leaked credentials
         if: github.event_name == 'pull_request'
-        uses: trufflesecurity/trufflehog@27b0417c16317ca9a472a9a8092acce143b49c55 # v3.95.9
+        uses: trufflesecurity/trufflehog@6f3c981e7b77f235fd2702dd74af25fc4b72bf11 # v3.96.0
         with:
           base: ${{ steps.diff_base.outputs.sha }}
           head: ${{ github.sha }}
