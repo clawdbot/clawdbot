@@ -32,10 +32,15 @@ const MIRROR_WARN_INTERVAL_MS = 5 * 60_000;
 type BeamMirrorConfig = {
   endpoint: string;
   token?: unknown;
-  catalogs?: string[];
+  catalogs: string[];
   pollSeconds: number;
   activeWindowMinutes: number;
 };
+
+function isLoopbackHostname(hostname: string): boolean {
+  const bare = hostname.replace(/^\[|\]$/g, "");
+  return bare === "localhost" || bare === "127.0.0.1" || bare === "::1";
+}
 
 const MIRROR_KEYS = new Set([
   "endpoint",
@@ -75,23 +80,29 @@ export function parseBeamMirrorConfig(config: unknown): BeamMirrorConfig | undef
   } catch {
     return `${MIRROR_CONFIG_PATH}.endpoint must be an absolute URL`;
   }
-  if (parsedEndpoint.protocol !== "https:" && parsedEndpoint.protocol !== "http:") {
+  // Bearer credentials and transcripts must never cross the network in the
+  // clear; plaintext HTTP is a loopback-development affordance only.
+  if (parsedEndpoint.protocol === "http:") {
+    if (!isLoopbackHostname(parsedEndpoint.hostname)) {
+      return `${MIRROR_CONFIG_PATH}.endpoint must use https for non-loopback hosts`;
+    }
+  } else if (parsedEndpoint.protocol !== "https:") {
     return `${MIRROR_CONFIG_PATH}.endpoint must use http(s)`;
   }
-  let catalogs: string[] | undefined;
-  if (mirror.catalogs !== undefined) {
-    if (
-      !Array.isArray(mirror.catalogs) ||
-      mirror.catalogs.some((id) => typeof id !== "string" || !id.trim())
-    ) {
-      return `${MIRROR_CONFIG_PATH}.catalogs must be a list of catalog ids`;
-    }
-    catalogs = mirror.catalogs.map((id) => (id as string).trim().toLowerCase());
+  // Explicit per-catalog consent: an omitted or empty list mirrors nothing,
+  // so one Beam setting can never silently export third-party catalogs.
+  if (
+    !Array.isArray(mirror.catalogs) ||
+    mirror.catalogs.length === 0 ||
+    mirror.catalogs.some((id) => typeof id !== "string" || !id.trim())
+  ) {
+    return `${MIRROR_CONFIG_PATH}.catalogs must explicitly list the catalog ids to mirror`;
   }
+  const catalogs = mirror.catalogs.map((id) => (id as string).trim().toLowerCase());
   return {
     endpoint,
     ...(mirror.token !== undefined ? { token: mirror.token } : {}),
-    ...(catalogs ? { catalogs } : {}),
+    catalogs,
     pollSeconds: boundedNumber(mirror.pollSeconds, DEFAULT_POLL_SECONDS, 10, 3_600),
     activeWindowMinutes: boundedNumber(
       mirror.activeWindowMinutes,
@@ -362,8 +373,7 @@ export function createBeamMirrorRunner(params: {
         (catalog) =>
           // Never mirror the local beam receiver back out: a two-gateway pair
           // would otherwise re-mirror each other's rows forever.
-          catalog.id !== "beam" &&
-          (mirror.catalogs === undefined || mirror.catalogs.includes(catalog.id)),
+          catalog.id !== "beam" && mirror.catalogs.includes(catalog.id),
       );
       const catalogById = new Map(catalogs.map((catalog) => [catalog.id, catalog]));
       const candidates: BeamMirrorCandidate[] = [];
@@ -449,9 +459,7 @@ export function createBeamMirrorService(params: { runtime: PluginRuntime }): {
         void runner.tick();
       }, mirror.pollSeconds * 1_000);
       interval.unref?.();
-      ctx.logger.info(
-        `beam mirror active: ${mirror.catalogs?.join(", ") ?? "all local catalogs"} -> ${mirror.endpoint}`,
-      );
+      ctx.logger.info(`beam mirror active: ${mirror.catalogs.join(", ")} -> ${mirror.endpoint}`);
       void runner.tick();
     },
     stop() {

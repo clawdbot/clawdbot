@@ -22,7 +22,7 @@
       "mirror": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["endpoint"],
+        "required": ["endpoint", "catalogs"],
         "properties": {
           "endpoint": {
             "type": "string"

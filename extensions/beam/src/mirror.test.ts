@@ -25,7 +25,11 @@ function mirrorConfig(overrides: Record<string, unknown> = {}): unknown {
         beam: {
           enabled: true,
           config: {
-            mirror: { endpoint: "https://team.example/api/v1/beam/sessions", ...overrides },
+            mirror: {
+              endpoint: "https://team.example/api/v1/beam/sessions",
+              catalogs: ["claude", "codex", "beam"],
+              ...overrides,
+            },
           },
         },
       },
@@ -118,6 +122,28 @@ describe("parseBeamMirrorConfig", () => {
     expect(typeof parseBeamMirrorConfig(mirrorConfig({ bogus: true }))).toBe("string");
     expect(typeof parseBeamMirrorConfig(mirrorConfig({ endpoint: "ftp://x" }))).toBe("string");
     expect(typeof parseBeamMirrorConfig(mirrorConfig({ endpoint: "not a url" }))).toBe("string");
+  });
+
+  it("allows plaintext http only for loopback development endpoints", () => {
+    expect(typeof parseBeamMirrorConfig(mirrorConfig({ endpoint: "http://team.example/x" }))).toBe(
+      "string",
+    );
+    expect(
+      parseBeamMirrorConfig(mirrorConfig({ endpoint: "http://127.0.0.1:19351/x" })),
+    ).toMatchObject({ endpoint: "http://127.0.0.1:19351/x" });
+    expect(
+      parseBeamMirrorConfig(mirrorConfig({ endpoint: "http://localhost:19351/x" })),
+    ).toMatchObject({ endpoint: "http://localhost:19351/x" });
+    expect(parseBeamMirrorConfig(mirrorConfig({ endpoint: "http://[::1]:19351/x" }))).toMatchObject(
+      {
+        endpoint: "http://[::1]:19351/x",
+      },
+    );
+  });
+
+  it("requires explicit catalog consent", () => {
+    expect(typeof parseBeamMirrorConfig(mirrorConfig({ catalogs: undefined }))).toBe("string");
+    expect(typeof parseBeamMirrorConfig(mirrorConfig({ catalogs: [] }))).toBe("string");
   });
 
   it("bounds poll and window values", () => {
