@@ -5,7 +5,7 @@ import path from "node:path";
 import { expect } from "vitest";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
-export type SessionFilesMethod =
+type SessionFilesMethod =
   | "sessions.files.list"
   | "sessions.files.get"
   | "sessions.files.set"
@@ -14,7 +14,7 @@ export type SessionFilesMethod =
 type ResponderCall = { ok: boolean; payload?: unknown; error?: unknown };
 type ReturnValueMock = { mockReturnValue: (value: unknown) => unknown };
 
-export function createResponder() {
+function createResponder() {
   const calls: ResponderCall[] = [];
   const respond: RespondFn = (ok, payload, error) => {
     calls.push({ ok, payload, error });
@@ -22,30 +22,23 @@ export function createResponder() {
   return { calls, respond };
 }
 
-export async function invokeSessionFilesHandler(
-  handlers: GatewayRequestHandlers,
-  method: SessionFilesMethod,
-  params: Record<string, unknown>,
-  context: Record<string, unknown> = {},
-) {
-  const responder = createResponder();
-  await handlers[method]?.({
-    req: { type: "req", id: method, method, params: {} },
-    params,
-    client: null,
-    isWebchatConnect: () => false,
-    respond: responder.respond,
-    context: context as never,
-  });
-  return responder.calls;
-}
-
 export function createSessionFilesHandlerInvoker(handlers: GatewayRequestHandlers) {
-  return (
+  return async (
     method: SessionFilesMethod,
     params: Record<string, unknown>,
     context: Record<string, unknown> = {},
-  ) => invokeSessionFilesHandler(handlers, method, params, context);
+  ) => {
+    const responder = createResponder();
+    await handlers[method]?.({
+      req: { type: "req", id: method, method, params: {} },
+      params,
+      client: null,
+      isWebchatConnect: () => false,
+      respond: responder.respond,
+      context: context as never,
+    });
+    return responder.calls;
+  };
 }
 
 export function expectOkPayload(calls: ResponderCall[]): Record<string, any> {
