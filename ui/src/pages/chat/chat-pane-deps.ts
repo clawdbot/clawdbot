@@ -277,7 +277,7 @@ export {
   storedChatOutboxScopeKey,
 } from "./composer-persistence.ts";
 export { exportChatMarkdown } from "./export.ts";
-export { admitInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
+export { admitInitialTurnHandoff, admitInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
 export {
   hasAbortableSessionRun,
   reconcileStaleChatRunAfterSessionStatePublication,

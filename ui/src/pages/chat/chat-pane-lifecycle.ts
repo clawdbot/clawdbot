@@ -1,6 +1,8 @@
 import {
   BROWSER_ANNOTATION_EVENT,
+  CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
   WIDGET_PROMPT_EVENT,
+  admitInitialTurnHandoff,
   admitInitialUserMessageHandoff,
   areUiSessionKeysEquivalent,
   chatAttachmentFromDataUrl,
@@ -356,6 +358,24 @@ export abstract class ChatPaneLifecycle extends ChatPaneReset {
       } else if (catalogKey && this.catalogRequestedSessionKey !== this.sessionKey) {
         this.catalogLoadGeneration += 1;
         this.openCatalogSession(catalogKey, this.state);
+      } else if (nextSessionKey) {
+        // A pane routed straight onto the created session never runs the switch
+        // path, so its one-shot handoffs would expire unclaimed: the rejected turn
+        // would vanish instead of offering a retry, and the accepted prompt would
+        // stay hidden until the transcript bootstrap resolved.
+        const rejectedTurn = admitInitialTurnHandoff(this.state, nextSessionKey);
+        const acceptedPrompt = admitInitialUserMessageHandoff(
+          this.state.initialUserMessage,
+          this.state,
+          nextSessionKey,
+        );
+        if (rejectedTurn) {
+          this.state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
+          this.state.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
+        }
+        if (rejectedTurn || acceptedPrompt) {
+          this.requestUpdate();
+        }
       }
       this.chatState.restoreCreatedSessionComposer(nextSessionKey);
     }
