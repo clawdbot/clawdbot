@@ -223,6 +223,43 @@ describe("Agentic OS runtime contract claim 9 regressions", () => {
     expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
+  it("normalizes metadata agent identity before spawn authorization and replay", async () => {
+    const gatewayLeaseId = await acquireLease();
+    const accepted = payload(
+      await invoke("sessions_spawn", {
+        ...spawnParamsFor(gatewayLeaseId),
+        agentId: " ai-engineer ",
+        metadata: {
+          ...sessionMetadata,
+          agent_id: " ai-engineer ",
+        },
+      }),
+    );
+
+    expect(accepted.status).toBe("accepted");
+    expect(accepted.agent_id).toBe("ai-engineer");
+    expect(spawnSubagentDirectMock.mock.calls[0]?.[0]).toMatchObject({
+      agentId: "ai-engineer",
+    });
+    expect(spawnSubagentDirectMock.mock.calls[0]?.[1]).toMatchObject({
+      authorizedTargetAgentId: "ai-engineer",
+      preallocatedChildSessionKey: accepted.session_key,
+    });
+
+    const exactRetry = payload(
+      await invoke("sessions_spawn", {
+        ...spawnParamsFor(gatewayLeaseId),
+        agentId: "ai-engineer",
+        metadata: {
+          ...sessionMetadata,
+          agent_id: "ai-engineer",
+        },
+      }),
+    );
+    expect(exactRetry.session_key).toBe(accepted.session_key);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+  });
+
   it("scopes completed and hydrated sessions_spawn replay identities by principal", async () => {
     const firstLease = await acquireLease(acquireParams, "device-a");
     const secondAcquire = {

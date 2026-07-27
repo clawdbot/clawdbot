@@ -68,7 +68,10 @@ Call `subagents.allowLease.acquire` with:
 ```
 
 All identity fields are required non-empty strings. `ttl_ms` is a positive
-integer with a maximum of 86,400,000 milliseconds (24 hours).
+integer with a maximum of 86,400,000 milliseconds (24 hours). Identity strings
+are trimmed before validation and before the Gateway builds the canonical
+metadata and replay fingerprints; surrounding whitespace is never part of the
+authorized agent identity.
 
 The response includes `status`, `gateway_lease_id`, `external_id`, `lease`, and
 `metadata`. Active lease status is `active`; terminal states are `consumed` and

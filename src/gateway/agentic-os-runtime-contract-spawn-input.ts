@@ -52,8 +52,8 @@ export function parseAgenticOsSpawnInput(params: Record<string, unknown>) {
     return rejectConflict("session metadata task_digest does not match spawn task");
   }
   const agentId =
-    typeof params.agentId === "string" && params.agentId
-      ? params.agentId
+    typeof params.agentId === "string" && params.agentId.trim()
+      ? params.agentId.trim()
       : String(metadata.agent_id);
   if (agentId !== metadata.agent_id) {
     return rejectConflict("spawn agentId does not match session metadata agent_id");

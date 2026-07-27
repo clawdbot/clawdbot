@@ -146,7 +146,7 @@ export function readString(params: Record<string, unknown>, key: string): string
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new ContractInputError(`missing required string: ${key}`);
   }
-  return value;
+  return value.trim();
 }
 
 export function readPositiveInteger(params: Record<string, unknown>, key: string): number {
