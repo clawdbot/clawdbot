@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { SESSION_FACE_PREFERENCE_PARAM } from "../../lib/sessions/route-navigation.ts";
 import {
   createGateway,
   createGatewayHarness,
@@ -76,10 +77,12 @@ describe("AppSidebar agent chip", () => {
     );
     await sidebar.updateComplete;
 
-    // No cached sessions for the other agent: resume falls back to its main key.
+    // No cached sessions for the other agent: resume falls back to its main key, and
+    // the uncached face is a guess, so navigation is marked for gateway re-derivation.
     expect(setSessionKey).toHaveBeenCalledWith("agent:research:main");
     expect(onNavigate).toHaveBeenCalledWith("chat", {
       pathname: "/chat/research",
+      search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
     });
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
   });

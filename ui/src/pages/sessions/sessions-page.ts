@@ -1404,6 +1404,7 @@ class SessionsPage extends OpenClawLightDomElement {
                 face,
                 sessionKey,
                 agentId: this.sessionPathAgentId(sessionKey, context),
+                preferenceDerivedFace: true,
               }).options,
               hash: "",
             });

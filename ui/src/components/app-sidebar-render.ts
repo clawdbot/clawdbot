@@ -145,6 +145,7 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
         basePath: host.basePath,
         row: mainRow ?? undefined,
         mainKey: parseAgentSessionKey(mainKey)?.rest,
+        preferenceDerivedFace: true,
       }).href}
       class="nav-item nav-item--home ${active ? "nav-item--active" : ""}"
       aria-current=${active ? "page" : nothing}

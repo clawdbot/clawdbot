@@ -87,6 +87,14 @@ the reconstructed session key. The remaining literal segments are authoritative
 too. A slug, when present, is always decorative; literal-key forms do not
 synthesize one.
 
+As a best-effort convenience, an unescaped one-segment literal that does not
+resolve as an exact session key is also checked against display-name slugs. One
+exact slug match is replaced in the address bar with its full
+`/<namespace>/<agentId>/<slug>-<shortId>` reference. If several sessions share
+the slug, the UI shows the same disambiguation view used for short-id ties
+instead of guessing. Exact short-id and literal-key references always win over
+slug matching.
+
 If one short id matches more than one session, the UI does not guess. It shows a
 small disambiguation view with the matching display names, agents, and longer id
 prefixes. Use a longer prefix to make the URL unique. Resolution examines at

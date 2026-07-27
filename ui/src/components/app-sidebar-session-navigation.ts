@@ -293,6 +293,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       basePath: this.basePath,
       row: this.findSidebarSessionByKey(sessionKey),
       mainKey: this.sessionMainKey(),
+      preferenceDerivedFace: true,
     });
     this.context?.gateway.setSessionKey(sessionKey);
     this.onNavigate?.(face, target.options);
@@ -432,6 +433,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       basePath: this.basePath,
       row: this.findSidebarSessionByKey(sessionKey),
       mainKey: this.sessionMainKey(),
+      preferenceDerivedFace: true,
     });
     this.context?.gateway.setSessionKey(sessionKey);
     if (isSessionRouteId(this.activeRouteId)) {

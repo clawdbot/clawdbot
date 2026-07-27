@@ -383,7 +383,12 @@ class WorkboardPage extends OpenClawLightDomElement {
         onOpenSession: (sessionKey) => {
           const face = resolveSessionPreferredFaceForKey(context, sessionKey);
           context.navigate(face, {
-            ...sessionNavigationTarget({ context, face, sessionKey }).options,
+            ...sessionNavigationTarget({
+              context,
+              face,
+              sessionKey,
+              preferenceDerivedFace: true,
+            }).options,
             hash: "",
           });
         },

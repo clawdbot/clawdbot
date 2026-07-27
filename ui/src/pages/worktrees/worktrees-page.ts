@@ -349,6 +349,7 @@ class WorktreesPage extends OpenClawLightDomElement {
         context: this.context,
         face,
         sessionKey: record.ownerId,
+        preferenceDerivedFace: true,
       }).href;
       return html`<a href=${href} title=${record.ownerId}>${t("worktrees.ownerSession")}</a>`;
     }
