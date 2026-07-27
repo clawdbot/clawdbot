@@ -551,6 +551,7 @@ export async function processResponsesStream(
       }
       recordResponsesTerminalOutcome({
         response,
+        terminalEventType: type,
         output,
         model,
         serviceTier: options?.serviceTier,
@@ -566,6 +567,15 @@ export async function processResponsesStream(
         `Error Code ${stringifyUnknown(event.code, "unknown")}: ${stringifyUnknown(event.message, "Unknown error")}`,
       );
     } else if (type === "response.failed") {
+      const response = event.response as Record<string, unknown> | undefined;
+      recordResponsesTerminalOutcome({
+        response,
+        terminalEventType: "response.failed",
+        output,
+        model,
+        serviceTier: options?.serviceTier,
+        applyServiceTierPricing: options?.applyServiceTierPricing,
+      });
       const failure = normalizeResponsesFailedEvent(event, model);
       if (failure.responseId) {
         output.responseId = failure.responseId;

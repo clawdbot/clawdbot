@@ -91,13 +91,23 @@ function mapResponsesTerminalStopReason(
  */
 export function resolveResponsesTerminalStopReason(params: {
   status: OpenAI.Responses.ResponseStatus | undefined;
+  terminalEventType?: "response.completed" | "response.incomplete" | "response.failed";
   incompleteReason?: string;
   hasToolCall: boolean;
 }): { stopReason: StopReason; errorMessage?: string } {
-  if (params.status === "incomplete" && params.incompleteReason === "content_filter") {
+  const status =
+    params.status ??
+    (params.terminalEventType === "response.completed"
+      ? "completed"
+      : params.terminalEventType === "response.incomplete"
+        ? "incomplete"
+        : params.terminalEventType === "response.failed"
+          ? "failed"
+          : undefined);
+  if (status === "incomplete" && params.incompleteReason === "content_filter") {
     return { stopReason: "error", errorMessage: "Provider incomplete_reason: content_filter" };
   }
-  const stopReason = mapResponsesTerminalStopReason(params.status);
+  const stopReason = mapResponsesTerminalStopReason(status);
   if (stopReason === "stop" && params.hasToolCall) {
     return { stopReason: "toolUse" };
   }

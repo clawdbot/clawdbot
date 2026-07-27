@@ -1410,6 +1410,12 @@ describe("processResponsesStream", () => {
             id: "resp_failed",
             status: "failed",
             error: { code: "server_error", message: "provider failed" },
+            usage: {
+              input_tokens: 21,
+              output_tokens: 4,
+              total_tokens: 25,
+              input_tokens_details: { cached_tokens: 6, cache_write_tokens: 2 },
+            },
           },
         },
       ]),
@@ -1422,6 +1428,13 @@ describe("processResponsesStream", () => {
       responseId: "resp_failed",
       stopReason: "error",
       errorMessage: "server_error: provider failed",
+      usage: {
+        input: 13,
+        output: 4,
+        cacheRead: 6,
+        cacheWrite: 2,
+        totalTokens: 25,
+      },
     });
   });
 

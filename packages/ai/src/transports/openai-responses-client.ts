@@ -164,6 +164,8 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
         firstEventAbort = createFirstStreamEventAbortController(options?.signal);
         const requestOptions = buildOpenAISdkRequestOptions(model, firstEventAbort.signal, {
           stream: true,
+          timeoutMs: options?.timeoutMs,
+          maxRetries: options?.maxRetries,
         });
         emitModelTransportDebug(
           log,
@@ -285,7 +287,10 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
         }
         const requestStartedAt = Date.now();
         firstEventAbort = createFirstStreamEventAbortController(options?.signal);
-        const requestOptions = buildOpenAISdkRequestOptions(model, firstEventAbort.signal);
+        const requestOptions = buildOpenAISdkRequestOptions(model, firstEventAbort.signal, {
+          timeoutMs: options?.timeoutMs,
+          maxRetries: options?.maxRetries,
+        });
         emitModelTransportDebug(
           log,
           `[responses] start provider=${model.provider} api=${model.api} model=${model.id} ` +

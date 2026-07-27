@@ -19,6 +19,7 @@ import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js"
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
+import { resolveOpenAIResponsesTextFormat } from "./openai-response-format.js";
 import {
   applyCommonResponsesParams,
   convertResponsesMessages,
@@ -205,6 +206,10 @@ function buildParams(
     prompt_cache_retention: getPromptCacheRetention(compat, cacheRetention),
     store: false,
   };
+
+  if (options?.responseFormat !== undefined) {
+    params.text = { format: resolveOpenAIResponsesTextFormat(options.responseFormat) };
+  }
 
   if (options?.maxTokens) {
     params.max_output_tokens = options?.maxTokens;

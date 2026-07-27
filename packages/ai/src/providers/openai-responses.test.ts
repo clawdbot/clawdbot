@@ -24,7 +24,7 @@ vi.mock("openai", () => ({
   },
 }));
 
-import { streamOpenAIResponses } from "./openai-responses.js";
+import { streamOpenAIResponses, streamSimpleOpenAIResponses } from "./openai-responses.js";
 
 const context = {
   messages: [{ role: "user", content: "hello", timestamp: 0 }],
@@ -101,5 +101,30 @@ describe("OpenAI Responses provider", () => {
     expect(result.stopReason).toBe("error");
     expect(openAiMockState.params[0]).toMatchObject({ max_output_tokens: 16, store: false });
     expect(openAiMockState.requestOptions[0]).toMatchObject({ maxRetries: 0 });
+  });
+
+  it("projects structured-output schemas for direct and simple Responses streams", async () => {
+    const responseFormat = {
+      type: "object",
+      properties: { reply: { type: "string" } },
+      required: ["reply"],
+      additionalProperties: false,
+    };
+
+    await streamOpenAIResponses(model(), context, {
+      apiKey: "sentinel-key",
+      responseFormat,
+    }).result();
+    await streamSimpleOpenAIResponses(model(), context, {
+      apiKey: "sentinel-key",
+      responseFormat,
+    }).result();
+
+    const expectedText = {
+      format: { type: "json_schema", name: "openclaw_response", schema: responseFormat },
+    };
+    expect(openAiMockState.params).toHaveLength(2);
+    expect(openAiMockState.params[0]).toMatchObject({ text: expectedText });
+    expect(openAiMockState.params[1]).toMatchObject({ text: expectedText });
   });
 });

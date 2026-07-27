@@ -29,6 +29,7 @@ function readIncompleteReason(response: Record<string, unknown> | undefined): st
 /** Record usage, cost and stop reason from a terminal Responses event onto the output. */
 export function recordResponsesTerminalOutcome(params: {
   response: Record<string, unknown> | undefined;
+  terminalEventType?: "response.completed" | "response.incomplete" | "response.failed";
   output: MutableAssistantOutput;
   model: Model;
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
@@ -58,6 +59,7 @@ export function recordResponsesTerminalOutcome(params: {
   }
   const terminal = resolveResponsesTerminalStopReason({
     status: response?.status as OpenAI.Responses.ResponseStatus | undefined,
+    terminalEventType: params.terminalEventType,
     incompleteReason: readIncompleteReason(response),
     hasToolCall: output.content.some((block) => block.type === "toolCall"),
   });
