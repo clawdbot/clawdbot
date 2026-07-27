@@ -356,6 +356,20 @@ describe("createEmbeddedAttemptSessionLockController", () => {
     expect(release).toHaveBeenCalledTimes(2);
   });
 
+  it("rejects a second cleanup acquisition without replacing ownership", async () => {
+    const release = vi.fn(async () => undefined);
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release })),
+      lockOptions: { sessionFile: "agent:main:main" },
+    });
+    const cleanupLock = await controller.acquireForCleanup();
+
+    await expect(controller.acquireForCleanup()).rejects.toThrow("attempt cleanup already started");
+    await cleanupLock.release();
+    await expect(controller.dispose()).resolves.toBeUndefined();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("allows cleanup from an async descendant after its write callback settles", async () => {
     let resumeDescendant!: () => void;
     const descendantBlocked = new Promise<void>((resolve) => {

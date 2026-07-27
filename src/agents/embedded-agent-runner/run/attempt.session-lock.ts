@@ -305,6 +305,9 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         if (disposed) {
           throw new Error("attempt disposed before cleanup");
         }
+        if (cleanupStarted) {
+          throw new Error("attempt cleanup already started");
+        }
         cleanupStarted = true;
         if (promptReleaseNeedsReload) {
           try {
