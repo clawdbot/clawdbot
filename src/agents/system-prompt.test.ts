@@ -1210,7 +1210,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("### message tool");
   });
 
-  it("uses Slack interactive reply hints instead of generic inline button config guidance", () => {
+  it("uses Slack typed presentation hints instead of generic inline button config guidance", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["message"],
@@ -1218,13 +1218,11 @@ describe("buildAgentSystemPrompt", () => {
         channel: "slack",
       },
       messageToolHints: [
-        "- Prefer Slack buttons/selects for 2-5 discrete choices or parameter picks instead of asking the user to type one.",
-        "- Slack interactive replies: use `[[slack_buttons: Label:value, Other:other]]` to add action buttons that route clicks back as Slack interaction system events.",
+        "- Use `presentation` buttons/selects for discrete choices or parameter picks instead of asking the user to type one.",
       ],
     });
 
-    expect(prompt).toContain("Slack interactive replies");
-    expect(prompt).toContain("[[slack_buttons: Label:value, Other:other]]");
+    expect(prompt).toContain("`presentation` buttons/selects");
     expect(prompt).not.toContain("Inline buttons not enabled for slack");
     expect(prompt).not.toContain("slack.capabilities.inlineButtons");
     expect(prompt).not.toContain("buttons=[[{text,callback_data,style?}]]");

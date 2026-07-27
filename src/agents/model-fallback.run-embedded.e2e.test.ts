@@ -63,13 +63,13 @@ const installRunEmbeddedMocks = () => {
 };
 
 let runEmbeddedAgent: typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
-let runWithModelFallback: typeof import("./model-fallback.js").runWithModelFallback;
+let runWithModelFallback: typeof import("./model-fallback-runner.js").runWithModelFallback;
 
 beforeAll(async () => {
   vi.resetModules();
   installRunEmbeddedMocks();
   ({ runEmbeddedAgent } = await import("./embedded-agent-runner/run.js"));
-  ({ runWithModelFallback } = await import("./model-fallback.js"));
+  ({ runWithModelFallback } = await import("./model-fallback-runner.js"));
 });
 
 beforeEach(() => {

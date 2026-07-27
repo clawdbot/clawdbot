@@ -57,7 +57,7 @@ let actualPrivateFileStore:
 installModelsConfigTestHooks();
 
 let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClawModelsJson;
-let clearCurrentPluginMetadataSnapshot: typeof import("../plugins/current-plugin-metadata-snapshot.js").clearCurrentPluginMetadataSnapshot;
+let clearCurrentPluginMetadataSnapshot: typeof import("../plugins/current-plugin-metadata-state.js").clearCurrentPluginMetadataSnapshot;
 let setCurrentPluginMetadataSnapshot: typeof import("../plugins/current-plugin-metadata-snapshot.js").setCurrentPluginMetadataSnapshot;
 
 function createPluginMetadataSnapshot(workspaceDir: string): PluginMetadataSnapshot {
@@ -160,7 +160,9 @@ beforeAll(async () => {
     };
   });
   ({ ensureOpenClawModelsJson } = await import("./models-config.js"));
-  ({ clearCurrentPluginMetadataSnapshot, setCurrentPluginMetadataSnapshot } =
+  ({ clearCurrentPluginMetadataSnapshot } =
+    await import("../plugins/current-plugin-metadata-state.js"));
+  ({ setCurrentPluginMetadataSnapshot } =
     await import("../plugins/current-plugin-metadata-snapshot.js"));
 });
 

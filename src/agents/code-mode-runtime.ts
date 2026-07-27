@@ -436,10 +436,116 @@ function maskCodeLiteralsAndComments(
   }
 }
 
+function isModuleLoaderCallee(callee: import("acorn").Expression | import("acorn").Super): boolean {
+  if (callee.type === "ParenthesizedExpression") {
+    return isModuleLoaderCallee(callee.expression);
+  }
+  if (callee.type === "ChainExpression") {
+    return isModuleLoaderCallee(callee.expression);
+  }
+  if (callee.type === "SequenceExpression") {
+    const expression = callee.expressions[callee.expressions.length - 1];
+    return expression !== undefined && isModuleLoaderCallee(expression);
+  }
+  return callee.type === "Identifier" && callee.name === "require";
+}
+
+function containsModuleAccess(node: import("acorn").AnyNode): boolean {
+  if (
+    node.type === "ImportDeclaration" ||
+    node.type === "ImportExpression" ||
+    (node.type === "MetaProperty" && node.meta.name === "import") ||
+    (node.type === "CallExpression" && isModuleLoaderCallee(node.callee))
+  ) {
+    return true;
+  }
+
+  for (const value of Object.values(node)) {
+    if (Array.isArray(value)) {
+      for (const child of value) {
+        if (
+          child !== null &&
+          typeof child === "object" &&
+          "type" in child &&
+          typeof child.type === "string" &&
+          containsModuleAccess(child as import("acorn").AnyNode)
+        ) {
+          return true;
+        }
+      }
+      continue;
+    }
+    if (
+      value !== null &&
+      typeof value === "object" &&
+      "type" in value &&
+      typeof value.type === "string" &&
+      containsModuleAccess(value as import("acorn").AnyNode)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function typeScriptContainsModuleAccess(code: string, ts: typeof import("typescript")): boolean {
+  const source = ts.createSourceFile(
+    "code-mode.ts",
+    code,
+    ts.ScriptTarget.ES2022,
+    true,
+    ts.ScriptKind.TS,
+  );
+
+  const isLoaderCallee = (expression: import("typescript").Expression): boolean => {
+    if (ts.isParenthesizedExpression(expression)) {
+      return isLoaderCallee(expression.expression);
+    }
+    if (
+      ts.isBinaryExpression(expression) &&
+      expression.operatorToken.kind === ts.SyntaxKind.CommaToken
+    ) {
+      return isLoaderCallee(expression.right);
+    }
+    return ts.isIdentifier(expression) && expression.text === "require";
+  };
+
+  const visit = (node: import("typescript").Node): boolean => {
+    if (
+      ts.isImportDeclaration(node) ||
+      ts.isImportEqualsDeclaration(node) ||
+      (ts.isMetaProperty(node) && node.keywordToken === ts.SyntaxKind.ImportKeyword) ||
+      (ts.isCallExpression(node) &&
+        (node.expression.kind === ts.SyntaxKind.ImportKeyword || isLoaderCallee(node.expression)))
+    ) {
+      return true;
+    }
+    return ts.forEachChild(node, (child) => (visit(child) ? true : undefined)) === true;
+  };
+
+  return visit(source);
+}
+
 function rejectsModuleAccess(
   code: string,
   typescriptRuntime?: typeof import("typescript"),
 ): boolean {
+  try {
+    const source = parse(`(async () => {\n${code}\n})`, {
+      ecmaVersion: "latest",
+    });
+    // The WASI guest has no host module loader. Only executable module syntax
+    // belongs in this early check; ordinary guest methods are not capabilities.
+    return containsModuleAccess(source);
+  } catch {
+    if (typescriptRuntime) {
+      try {
+        return typeScriptContainsModuleAccess(code, typescriptRuntime);
+      } catch {
+        // Keep malformed input on the conservative lexical fallback.
+      }
+    }
+  }
   const source = maskCodeLiteralsAndComments(code, typescriptRuntime);
   return /\bimport\b\s*(?:\.|\(|["'`{*]|\w)|\brequire\b\s*\(/u.test(source);
 }
