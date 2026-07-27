@@ -202,6 +202,9 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     ]);
     expect(hoisted.applyAgentAutoCompactionGuard).toHaveBeenCalledTimes(2);
     expect(hoisted.applyAgentCompactionSettingsFromConfig).toHaveBeenCalledOnce();
+    expect(hoisted.applyAgentCompactionSettingsFromConfig.mock.invocationCallOrder[0]).toBeLessThan(
+      hoisted.applyAgentAutoCompactionGuard.mock.invocationCallOrder[1] ?? 0,
+    );
     expect(hoisted.createAgentSessionForEmbeddedRunner).toHaveBeenCalledWith(
       expect.objectContaining({
         resourceLoader: fixture.resourceLoader,

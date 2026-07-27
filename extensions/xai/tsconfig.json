@@ -294,6 +294,9 @@
       "openclaw/plugin-sdk/session-catalog": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/session-catalog.d.ts"
       ],
+      "openclaw/plugin-sdk/session-catalog-runtime": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/session-catalog-runtime.d.ts"
+      ],
       "openclaw/plugin-sdk/session-key-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/session-key-runtime.d.ts"
       ],

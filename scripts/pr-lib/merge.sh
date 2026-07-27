@@ -28,7 +28,7 @@ print_file_list_with_limit() {
 
 auto_merge_unavailable_error() {
   local log_file="$1"
-  rg -q -i \
+  grep -Eqi -- \
     'auto[- ]merge.*(not allowed|not enabled|not available|unavailable|not configured|not supported|must be enabled)|(not allowed|not enabled|not available|unavailable|not configured|not supported).*auto[- ]merge' \
     "$log_file"
 }
