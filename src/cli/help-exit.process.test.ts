@@ -4,24 +4,28 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { Command, CommanderError } from "commander";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { registerCoreCliByName } from "./program/command-registry.js";
+import { createProgramContext } from "./program/context.js";
+import { registerSubCliByName } from "./program/register.subclis.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const CHILD_PROCESS_TIMEOUT_MS = 30_000;
 const LAZY_GROUP_HELP_CASES = [
-  { group: "backup", usageCommand: "backup" },
-  { group: "capability", usageCommand: "infer|capability" },
-  { group: "channels", usageCommand: "channels" },
-  { group: "clawbot", usageCommand: "clawbot" },
-  { group: "daemon", usageCommand: "daemon" },
-  { group: "hooks", usageCommand: "hooks" },
-  { group: "infer", usageCommand: "infer|capability" },
-  { group: "migrate", usageCommand: "migrate" },
-  { group: "node", usageCommand: "node" },
-  { group: "security", usageCommand: "security" },
-  { group: "update", usageCommand: "update" },
+  { group: "backup", usageCommand: "backup", registry: "core" },
+  { group: "capability", usageCommand: "infer|capability", registry: "subcli" },
+  { group: "channels", usageCommand: "channels", registry: "subcli" },
+  { group: "clawbot", usageCommand: "clawbot", registry: "subcli" },
+  { group: "daemon", usageCommand: "daemon", registry: "subcli" },
+  { group: "hooks", usageCommand: "hooks", registry: "subcli" },
+  { group: "infer", usageCommand: "infer|capability", registry: "subcli" },
+  { group: "migrate", usageCommand: "migrate", registry: "core" },
+  { group: "node", usageCommand: "node", registry: "subcli" },
+  { group: "security", usageCommand: "security", registry: "subcli" },
+  { group: "update", usageCommand: "update", registry: "subcli" },
 ] as const;
 
 async function createHelpProcessFixture(
@@ -199,35 +203,22 @@ type CliProcessFailure = Error & {
   stderr?: string;
   stdout?: string;
 };
-
-async function runCliProcessExpectFailure(args: string[]): Promise<CliProcessFailure> {
-  try {
-    await runCliProcess({ args });
-  } catch (error) {
-    return error as CliProcessFailure;
-  }
-  throw new Error(`expected CLI process failure for ${args.join(" ")}`);
-}
-
 describe("CLI help process exit", () => {
-  it.each([
-    { args: ["--help"], usage: "Usage: openclaw [options] [command]" },
-    { args: ["path", "--help"], usage: "Usage: openclaw path [options] [command]" },
-  ])("exits promptly after $args", async ({ args, usage }) => {
-    const result = await runCliProcess({ args, forbidTlsImport: true });
+  it("exits promptly after root --help", async () => {
+    const result = await runCliProcess({ args: ["--help"], forbidTlsImport: true });
 
     expect(result.stderr).toBe("");
-    expect(result.stdout).toContain(usage);
+    expect(result.stdout).toContain("Usage: openclaw [options] [command]");
   });
 
-  it.each(LAZY_GROUP_HELP_CASES)("exits promptly after $group --help", async (testCase) => {
-    const { group, usageCommand } = testCase;
-    const result = await runCliProcess({ args: [group, "--help"], keepAlive: true });
+  // One lazy process is representative by design; the matrix below exercises
+  // both core and sub-CLI registrars without multiplying Node+tsx launches.
+  it("exits promptly after a lazy group --help", async () => {
+    const result = await runCliProcess({ args: ["backup", "--help"], keepAlive: true });
 
     expect(result.stderr).toBe("");
-    expect(result.stdout).toContain(`Usage: openclaw ${usageCommand} [options] [command]`);
+    expect(result.stdout).toContain("Usage: openclaw backup [options] [command]");
   });
-
   it("flushes explicitly requested entry traces on precomputed help", async () => {
     const result = await runCliProcess({
       args: ["gateway", "--help"],
@@ -244,20 +235,56 @@ describe("CLI help process exit", () => {
       ]),
     );
   });
-});
 
-describe("route-first CLI process rejection", () => {
-  it.each([
-    { name: "health", args: ["health", "--wat"], option: "--wat" },
-    { name: "status", args: ["status", "--wat"], option: "--wat" },
-    { name: "sessions", args: ["sessions", "--wat"], option: "--wat" },
-    { name: "agents list", args: ["agents", "list", "--wat"], option: "--wat" },
-    { name: "bare agents", args: ["agents", "--wat"], option: "--wat" },
-  ])("rejects unknown $name options with a nonzero exit", async ({ args, option }) => {
-    const failure = await runCliProcessExpectFailure(args);
+  it.each(LAZY_GROUP_HELP_CASES)(
+    "renders in-process help for $group",
+    async ({ group, usageCommand, registry }) => {
+      let stdout = "";
+      let stderr = "";
+      const program = new Command()
+        .name("openclaw")
+        .exitOverride()
+        .configureOutput({
+          writeOut: (value) => {
+            stdout += value;
+          },
+          writeErr: (value) => {
+            stderr += value;
+          },
+        });
+      const argv = ["node", "openclaw", group, "--help"];
+      const registered =
+        registry === "core"
+          ? await registerCoreCliByName(program, createProgramContext(), group, argv)
+          : await registerSubCliByName(program, group, argv);
+      const error = await program
+        .parseAsync(argv.slice(2), { from: "user" })
+        .catch((error) => error);
 
-    expect(failure.code).toBe(1);
-    expect(failure.stderr).toContain(`does not recognize option "${option}"`);
+      expect(registered).toBe(true);
+      expect(error).toBeInstanceOf(CommanderError);
+      expect(error).toMatchObject({ code: "commander.helpDisplayed", exitCode: 0 });
+      expect(stderr).toBe("");
+      expect(stdout).toContain(`Usage: openclaw ${usageCommand} [options] [command]`);
+    },
+  );
+
+  // Keep the process budget to root plus one core lazy group. Route-first
+  // rejection is decomposed across route-args/routes and error-output tests.
+  it("keeps the lazy help table exhaustive", () => {
+    expect(LAZY_GROUP_HELP_CASES.map(({ group }) => group)).toEqual([
+      "backup",
+      "capability",
+      "channels",
+      "clawbot",
+      "daemon",
+      "hooks",
+      "infer",
+      "migrate",
+      "node",
+      "security",
+      "update",
+    ]);
   });
 });
 
