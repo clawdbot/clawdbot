@@ -22,7 +22,18 @@ const panels: DiscussionPanelElement[] = [];
 
 afterEach(() => {
   panels.splice(0).forEach((panel) => panel.remove());
+  document.documentElement.removeAttribute("data-theme");
+  document.documentElement.removeAttribute("data-theme-mode");
+  document.documentElement.removeAttribute("style");
+  vi.restoreAllMocks();
 });
+
+function expectedEmbedUrl(url: string, mode: "light" | "dark" = "dark"): string {
+  const resolved = new URL(url);
+  resolved.searchParams.set("theme", mode);
+  resolved.searchParams.set("hostOrigin", window.location.origin);
+  return resolved.href;
+}
 
 function mount(params: {
   loadInfo: SessionDiscussionInfoLoader;
@@ -56,7 +67,7 @@ describe("session discussion panel", () => {
 
     await vi.waitFor(() => {
       expect(panel.querySelector("iframe")?.getAttribute("src")).toBe(
-        "https://discussion.example/embed/thread",
+        expectedEmbedUrl("https://discussion.example/embed/thread"),
       );
       expect(panel.querySelector("iframe")?.getAttribute("sandbox")).toBe(
         "allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts",
@@ -72,6 +83,91 @@ describe("session discussion panel", () => {
     );
     expect(panel.querySelector(".session-discussion__header")).toBeNull();
     expect(panel.querySelector("a")).toBeNull();
+  });
+
+  it("selects the host color mode before the discussion frame paints", async () => {
+    document.documentElement.dataset.themeMode = "light";
+    const panel = mount({
+      loadInfo: vi.fn().mockResolvedValue({
+        state: "open",
+        embedUrl: "https://discussion.example/embed/channel/T1/C1?existing=1#messages",
+      }),
+      openDiscussion: vi.fn(),
+    });
+
+    await vi.waitFor(() => {
+      expect(panel.querySelector("iframe")?.getAttribute("src")).toBe(
+        expectedEmbedUrl(
+          "https://discussion.example/embed/channel/T1/C1?existing=1#messages",
+          "light",
+        ),
+      );
+    });
+  });
+
+  it("posts the complete host palette to the exact discussion origin on frame load", async () => {
+    document.documentElement.dataset.themeMode = "light";
+    document.documentElement.style.setProperty("--bg", "#faf9f7");
+    document.documentElement.style.setProperty("--card", "#ffffff");
+    document.documentElement.style.setProperty("--accent", "#bd4531");
+    const panel = mount({
+      loadInfo: vi.fn().mockResolvedValue({
+        state: "open",
+        embedUrl: "https://discussion.example/embed/channel/T1/C1",
+      }),
+      openDiscussion: vi.fn(),
+    });
+
+    await vi.waitFor(() => expect(panel.querySelector("iframe")).not.toBeNull());
+    const frame = panel.querySelector<HTMLIFrameElement>("iframe")!;
+    const postMessage = vi.spyOn(frame.contentWindow!, "postMessage");
+
+    frame.dispatchEvent(new Event("load"));
+
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "openclaw:widget-theme",
+        mode: "light",
+        tokens: expect.objectContaining({
+          surface: "#faf9f7",
+          card: "#ffffff",
+          accent: "#bd4531",
+        }),
+      }),
+      "https://discussion.example",
+    );
+  });
+
+  it("updates an existing discussion frame when the host theme changes", async () => {
+    document.documentElement.dataset.themeMode = "light";
+    document.documentElement.style.setProperty("--bg", "#faf9f7");
+    const panel = mount({
+      loadInfo: vi.fn().mockResolvedValue({
+        state: "open",
+        embedUrl: "https://discussion.example/embed/channel/T1/C1",
+      }),
+      openDiscussion: vi.fn(),
+    });
+
+    await vi.waitFor(() => expect(panel.querySelector("iframe")).not.toBeNull());
+    const frame = panel.querySelector<HTMLIFrameElement>("iframe")!;
+    const originalUrl = frame.src;
+    const postMessage = vi.spyOn(frame.contentWindow!, "postMessage");
+
+    document.documentElement.dataset.themeMode = "dark";
+    document.documentElement.style.setProperty("--bg", "#0e1015");
+
+    await vi.waitFor(() => {
+      expect(postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "openclaw:widget-theme",
+          mode: "dark",
+          tokens: expect.objectContaining({ surface: "#0e1015" }),
+        }),
+        "https://discussion.example",
+      );
+    });
+    expect(frame.src).toBe(originalUrl);
   });
 
   it("offers the valid open URL when a same-origin embed is rejected", async () => {
@@ -180,7 +276,7 @@ describe("session discussion panel", () => {
     const panel = mount({ loadInfo, openDiscussion: vi.fn() });
     await vi.waitFor(() => {
       expect(panel.querySelector("iframe")?.getAttribute("src")).toBe(
-        "https://old.example/embed/thread",
+        expectedEmbedUrl("https://old.example/embed/thread"),
       );
     });
 
@@ -188,7 +284,7 @@ describe("session discussion panel", () => {
 
     await vi.waitFor(() => {
       expect(panel.querySelector("iframe")?.getAttribute("src")).toBe(
-        "https://new.example/embed/thread",
+        expectedEmbedUrl("https://new.example/embed/thread"),
       );
     });
     expect(loadInfo).toHaveBeenCalledTimes(2);
