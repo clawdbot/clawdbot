@@ -1358,6 +1358,21 @@ describe("openai transport stream", () => {
     }
 
     {
+      const schema = {
+        type: "object",
+        properties: { reply: { type: "string" } },
+        required: ["reply"],
+        additionalProperties: false,
+      };
+      const params = buildOpenAIResponsesParams(model, context, {
+        responseFormat: schema,
+      }) as Record<string, unknown>;
+      expect(params.text).toEqual({
+        format: { type: "json_schema", name: "openclaw_response", schema },
+      });
+    }
+
+    {
       const params = buildOpenAIResponsesParams(model, context, {}) as Record<string, unknown>;
       expect(params).not.toHaveProperty("text");
     }

@@ -90,4 +90,14 @@ describe("resolveResponsesTerminalStopReason", () => {
       },
     );
   });
+
+  it("uses the terminal event type when a compatible response omits status", () => {
+    expect(
+      resolveResponsesTerminalStopReason({
+        status: undefined,
+        terminalEventType: "response.incomplete",
+        hasToolCall: false,
+      }),
+    ).toEqual({ stopReason: "length" });
+  });
 });

@@ -81,6 +81,31 @@ describe("openai transport stream", () => {
     ).toBeUndefined();
   });
 
+  it("lets per-turn timeout and retry controls override model SDK defaults", () => {
+    const signal = new AbortController().signal;
+    const model = {
+      id: "gpt-5.6-luna",
+      name: "GPT-5.6 Luna",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 8192,
+      requestTimeoutMs: 900_000,
+    } satisfies Model<"openai-responses"> & { requestTimeoutMs: number };
+
+    expect(
+      testing.buildOpenAISdkRequestOptions(model, signal, {
+        timeoutMs: 1_234,
+        maxRetries: 0,
+        stream: true,
+      }),
+    ).toEqual({ signal, timeout: 1_234, maxRetries: 0 });
+  });
+
   it("streams OpenAI-compatible loopback requests with the configured SDK timeout", async () => {
     let captured: { path?: string; timeout?: string; model?: string; roles?: string[] } = {};
     const server = createServer((req, res) => {

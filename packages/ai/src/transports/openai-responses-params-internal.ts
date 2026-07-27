@@ -1,10 +1,6 @@
 import type { Context, Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type {
-  FunctionTool,
-  ResponseFormatTextConfig,
-  ResponseInput,
-} from "openai/resources/responses/responses.js";
+import type { FunctionTool, ResponseInput } from "openai/resources/responses/responses.js";
 import {
   normalizeOpenAIReasoningEffort,
   normalizeOpenAIStrictToolParameters,
@@ -15,6 +11,7 @@ import {
   type OpenAIToolProjection,
 } from "../internal/openai.js";
 import { stripSystemPromptCacheBoundary } from "../internal/shared.js";
+import { resolveOpenAIResponsesTextFormat } from "../providers/openai-response-format.js";
 import { resolveOpenAIStrictToolSetting } from "./host-policy.js";
 import {
   OPENAI_CODEX_RESPONSES_DEFAULT_INSTRUCTIONS,
@@ -204,23 +201,6 @@ function ensureOpenAICodexResponsesInput(messages: ResponseInput, context: Conte
       { type: "input_text", text: OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT },
     ]),
   );
-}
-
-function resolveOpenAIResponsesTextFormat(
-  responseFormat: Record<string, unknown>,
-): ResponseFormatTextConfig {
-  if (
-    responseFormat.type === "json_schema" &&
-    responseFormat.json_schema &&
-    typeof responseFormat.json_schema === "object" &&
-    !Array.isArray(responseFormat.json_schema)
-  ) {
-    return {
-      ...(responseFormat.json_schema as Record<string, unknown>),
-      type: "json_schema",
-    } as unknown as ResponseFormatTextConfig;
-  }
-  return responseFormat as unknown as ResponseFormatTextConfig;
 }
 
 export function buildOpenAIResponsesParams(

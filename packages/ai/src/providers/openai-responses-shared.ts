@@ -951,17 +951,12 @@ export async function processResponsesStream<TApi extends Api>(
       });
     }
   };
-  const finalizeResponse = (
+  const finalizeUsage = (
     response: Extract<
       ResponseStreamEvent,
-      { type: "response.completed" | "response.incomplete" }
+      { type: "response.completed" | "response.incomplete" | "response.failed" }
     >["response"],
   ): void => {
-    terminalResponseEvent = "finalized";
-    backfillReasoningSignatures(response.output ?? []);
-    if (response.id) {
-      output.responseId = response.id;
-    }
     const mappedUsage = mapResponsesTerminalUsage(response.usage);
     if (mappedUsage) {
       output.usage = {
@@ -976,8 +971,23 @@ export async function processResponsesStream<TApi extends Api>(
         : (response.service_tier ?? options.serviceTier);
       options.applyServiceTierPricing(output.usage, serviceTier);
     }
+  };
+  const finalizeResponse = (
+    response: Extract<
+      ResponseStreamEvent,
+      { type: "response.completed" | "response.incomplete" }
+    >["response"],
+    terminalEventType: "response.completed" | "response.incomplete",
+  ): void => {
+    terminalResponseEvent = "finalized";
+    backfillReasoningSignatures(response.output ?? []);
+    if (response.id) {
+      output.responseId = response.id;
+    }
+    finalizeUsage(response);
     const terminal = resolveResponsesTerminalStopReason({
       status: response.status,
+      terminalEventType,
       incompleteReason: response.incomplete_details?.reason,
       hasToolCall: output.content.some((block) => block.type === "toolCall"),
     });
@@ -1370,7 +1380,7 @@ export async function processResponsesStream<TApi extends Api>(
       if (streamingToolCalls.hasActive()) {
         throw new Error("Responses stream completed with unresolved tool calls");
       }
-      finalizeResponse(event.response);
+      finalizeResponse(event.response, event.type);
     } else if (event.type === "error") {
       throw new Error(
         event.message ? `Error Code ${event.code}: ${event.message}` : "Unknown error",
@@ -1379,6 +1389,7 @@ export async function processResponsesStream<TApi extends Api>(
       const error = event.response?.error;
       const details = event.response?.incomplete_details;
       output.responseId = event.response.id;
+      finalizeUsage(event.response);
       output.stopReason = "error";
       output.errorMessage = error
         ? `${error.code || "unknown"}: ${error.message || "no message"}`

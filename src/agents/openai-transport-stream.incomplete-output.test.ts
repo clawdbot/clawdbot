@@ -10,6 +10,38 @@ import { testing } from "./openai-transport-stream.test-support.js";
 // streams that emitted nothing. These cover the two sides of that guard: an incomplete turn
 // whose text arrived only on the terminal event, and one whose text already streamed.
 describe("incomplete Responses terminal output", () => {
+  it("uses the incomplete event type when a compatible endpoint omits response status", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.incomplete",
+          response: {
+            id: "resp-status-omitted",
+            incomplete_details: { reason: "max_output_tokens" },
+            output: [
+              {
+                type: "message",
+                id: "msg-status-omitted",
+                role: "assistant",
+                content: [{ type: "text", text: "TERMINAL_PARTIAL" }],
+              },
+            ],
+            usage: { input_tokens: 9, output_tokens: 2, total_tokens: 11 },
+          },
+        },
+      ]),
+      output,
+      { push: vi.fn() },
+      model,
+    );
+
+    expect(output.stopReason).toBe("length");
+    expect(output.content).toMatchObject([{ type: "text", text: "TERMINAL_PARTIAL" }]);
+  });
+
   it("does not replay terminal text that already streamed", async () => {
     const model = createAzureResponsesModel();
     const output = createResponsesAssistantOutput(model);

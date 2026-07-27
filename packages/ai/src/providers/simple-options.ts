@@ -22,6 +22,7 @@ export function buildBaseOptions(
   return {
     temperature: options?.temperature,
     maxTokens: options?.maxTokens,
+    responseFormat: options?.responseFormat,
     stop: options?.stop,
     signal: options?.signal,
     apiKey: apiKey || options?.apiKey,

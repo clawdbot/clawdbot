@@ -189,6 +189,13 @@ describe("openai transport stream", () => {
               id: "resp_failed_runtime",
               status: "failed",
               model: "gpt-5.4-pro",
+              usage: {
+                input_tokens: 18,
+                output_tokens: 3,
+                total_tokens: 21,
+                input_tokens_details: { cached_tokens: 4, cache_write_tokens: 2 },
+                output_tokens_details: { reasoning_tokens: 1 },
+              },
             },
           },
         ]),
@@ -199,6 +206,14 @@ describe("openai transport stream", () => {
     ).rejects.toThrow("Unknown error (no error details in response)");
 
     expect(output.responseId).toBe("resp_failed_runtime");
+    expect(output.usage).toMatchObject({
+      input: 12,
+      output: 3,
+      cacheRead: 4,
+      cacheWrite: 2,
+      reasoningTokens: 1,
+      totalTokens: 21,
+    });
   });
 
   it("treats empty Responses error objects as detail-less failures", async () => {
