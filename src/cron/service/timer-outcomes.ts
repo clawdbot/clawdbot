@@ -41,6 +41,8 @@ export function applyJobResult(
   opts?: {
     // Manual force runs update outcome state but are out-of-band for cadence.
     scheduleMode?: "advance" | "preserve";
+    // Lane and admission waits must not transfer a pre-deadline manual run's ownership.
+    scheduleOwnershipAtMs?: number;
     // Startup replay restores alert cooldown bookkeeping without redelivery.
     replayFailureAlertAtMs?: number;
   },
@@ -138,14 +140,28 @@ export function applyJobResult(
     job.state.lastFailureAlertAtMs = undefined;
   }
 
-  // The gateway watcher disables on-exit jobs before firing; successful removal here
-  // completes the same deleteAfterRun contract as a one-shot at schedule.
+  // An operator force-run borrows a future at-schedule; it cannot consume,
+  // disable, or retry that scheduled occurrence. On-exit watchers also use
+  // force, but their terminal callback owns and must retire the watched job.
+  const preserveOneShotSchedule =
+    opts?.scheduleMode === "preserve" &&
+    job.schedule.kind === "at" &&
+    previousScheduleState.nextRunAtMs !== undefined &&
+    previousScheduleState.nextRunAtMs > (opts.scheduleOwnershipAtMs ?? result.startedAt);
   const isOneShotSchedule = job.schedule.kind === "at" || job.schedule.kind === "on-exit";
-  const shouldDelete = isOneShotSchedule && job.deleteAfterRun === true && result.status === "ok";
+  const shouldDelete =
+    isOneShotSchedule &&
+    !preserveOneShotSchedule &&
+    job.deleteAfterRun === true &&
+    result.status === "ok";
   const retryDisabledHeartbeatOneShot = shouldRetryDisabledHeartbeatOneShot(job, result);
 
   if (!shouldDelete) {
-    if (job.schedule.kind === "at") {
+    if (preserveOneShotSchedule) {
+      job.state.nextRunAtMs = previousScheduleState.nextRunAtMs;
+      job.state.pacedNextRunAtMs = previousScheduleState.pacedNextRunAtMs;
+      job.state.forcePreservedNextRunAtMs = previousScheduleState.nextRunAtMs;
+    } else if (job.schedule.kind === "at") {
       if (retryDisabledHeartbeatOneShot) {
         const retryDecision = resolveDisabledHeartbeatOneShotRetryDecision({
           cronConfig: state.deps.cronConfig,
