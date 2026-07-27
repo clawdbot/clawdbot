@@ -2,8 +2,7 @@
  * Resolves workspace, sandbox, provider runtime, and phase reporting for an embedded attempt.
  */
 import fs from "node:fs/promises";
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { getCurrentPluginMetadataSnapshot } from "../../../plugins/current-plugin-metadata-snapshot.js";
+import { isPluginMetadataSnapshotCompatible } from "../../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import {
   resolveProviderRuntimePluginHandle,
@@ -24,33 +23,64 @@ import {
 import { resolveAttemptFsWorkspaceOnly } from "./attempt.prompt-helpers.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-function pluginMetadataSnapshotCoversProvider(
-  snapshot: PluginMetadataSnapshot | undefined,
-  provider: string,
-): snapshot is PluginMetadataSnapshot {
-  const normalizedProvider = normalizeProviderId(provider);
-  if (!snapshot || !normalizedProvider) {
-    return false;
-  }
-  return snapshot.manifestRegistry.plugins.some((plugin) => {
-    const ownsProvider = plugin.providers.some(
-      (providerId) => normalizeProviderId(providerId) === normalizedProvider,
-    );
-    if (ownsProvider) {
-      return true;
-    }
-    const modelCatalogProviderIds = [
-      ...Object.keys(plugin.modelCatalog?.providers ?? {}),
-      ...Object.keys(plugin.modelCatalog?.aliases ?? {}),
-    ];
-    return modelCatalogProviderIds.some(
-      (providerId) => normalizeProviderId(providerId) === normalizedProvider,
-    );
+type PreparedProviderRuntimePluginHandle = ProviderRuntimePluginHandle & {
+  modelId: string;
+  prepared: true;
+};
+
+type AttemptWorkspaceParams = Pick<
+  EmbeddedRunAttemptParams,
+  | "agentId"
+  | "config"
+  | "cwd"
+  | "execOverrides"
+  | "sandboxSessionKey"
+  | "sessionId"
+  | "sessionKey"
+  | "workspaceDir"
+>;
+
+/** Resolves the shared workspace and sandbox policy used by native and plugin harnesses. */
+export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspaceParams) {
+  const resolvedWorkspace = resolveUserPath(params.workspaceDir);
+  await fs.mkdir(resolvedWorkspace, { recursive: true });
+  const sandboxSessionKey =
+    params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
+  const sandbox = await resolveSandboxContext({
+    config: params.config,
+    execOverrides: params.execOverrides,
+    sessionKey: sandboxSessionKey,
+    workspaceDir: resolvedWorkspace,
   });
+  const effectiveWorkspace =
+    sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : resolvedWorkspace;
+  const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
+  if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
+    throw new Error(
+      "cwd override is not supported for sandboxed embedded agent runs; omit cwd or use the agent workspace as cwd",
+    );
+  }
+  await fs.mkdir(effectiveWorkspace, { recursive: true });
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+    agentId: params.agentId,
+  });
+  return {
+    effectiveCwd: sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace),
+    effectiveFsWorkspaceOnly: resolveAttemptFsWorkspaceOnly({
+      config: params.config,
+      sessionAgentId,
+    }),
+    effectiveWorkspace,
+    resolvedWorkspace,
+    sandbox,
+    sandboxSessionKey,
+    sessionAgentId,
+  };
 }
 
 export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptParams) {
-  const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   // Ultra is a logical orchestration mode, not a provider effort. Preserve it for
   // prompt/status surfaces, then lower only at agent-core and provider boundaries.
   const agentCoreThinkingLevel = mapThinkingLevel(params.thinkLevel);
@@ -94,80 +124,59 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
     }
   };
 
-  await fs.mkdir(resolvedWorkspace, { recursive: true });
-  const sandboxSessionKey =
-    params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
-  const sandbox = await resolveSandboxContext({
-    config: params.config,
-    execOverrides: params.execOverrides,
-    sessionKey: sandboxSessionKey,
-    workspaceDir: resolvedWorkspace,
-  });
-  const effectiveWorkspace = sandbox?.enabled
-    ? sandbox.workspaceAccess === "rw"
-      ? resolvedWorkspace
-      : sandbox.workspaceDir
-    : resolvedWorkspace;
-  const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
-  if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
-    throw new Error(
-      "cwd override is not supported for sandboxed embedded agent runs; omit cwd or use the agent workspace as cwd",
-    );
-  }
-  const effectiveCwd = sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace);
-  await fs.mkdir(effectiveWorkspace, { recursive: true });
+  const workspace = await resolveAttemptWorkspaceSandbox(params);
+  const { effectiveWorkspace } = workspace;
 
-  let currentPluginMetadataSnapshotResolved = false;
-  let currentPluginMetadataSnapshot: PluginMetadataSnapshot | undefined;
-  const getCurrentAttemptPluginMetadataSnapshot = () => {
-    if (!currentPluginMetadataSnapshotResolved) {
-      currentPluginMetadataSnapshot = getCurrentPluginMetadataSnapshot({
-        allowScopedSnapshot: true,
-        config: params.config,
-        env: process.env,
-        workspaceDir: effectiveWorkspace,
-      });
-      currentPluginMetadataSnapshotResolved = true;
-    }
-    return currentPluginMetadataSnapshot;
-  };
-  let providerRuntimeHandle: ProviderRuntimePluginHandle | undefined;
-  const getProviderRuntimeHandle = () => {
-    if (providerRuntimeHandle?.plugin) {
+  const getCurrentAttemptPluginMetadataSnapshot = (): PluginMetadataSnapshot | undefined =>
+    params.preparedModelRuntime?.metadataSnapshot;
+  let providerRuntimeHandle = params.runtimePlan?.providerRuntimeHandle as
+    | PreparedProviderRuntimePluginHandle
+    | undefined;
+  const getProviderRuntimeHandle = (): PreparedProviderRuntimePluginHandle => {
+    if (
+      providerRuntimeHandle &&
+      providerRuntimeHandle.prepared &&
+      providerRuntimeHandle.provider === params.provider &&
+      providerRuntimeHandle.modelId === params.modelId &&
+      providerRuntimeHandle.workspaceDir === effectiveWorkspace
+    ) {
       return providerRuntimeHandle;
     }
     const pluginMetadataSnapshot = getCurrentAttemptPluginMetadataSnapshot();
-    const resolvedHandle = resolveProviderRuntimePluginHandle({
+    const compatibleMetadataSnapshot =
+      pluginMetadataSnapshot &&
+      pluginMetadataSnapshot.pluginIds === undefined &&
+      isPluginMetadataSnapshotCompatible({
+        snapshot: pluginMetadataSnapshot,
+        config: params.config,
+        env: process.env,
+        workspaceDir: effectiveWorkspace,
+      })
+        ? pluginMetadataSnapshot
+        : undefined;
+    providerRuntimeHandle = {
+      ...resolveProviderRuntimePluginHandle({
+        provider: params.provider,
+        modelId: params.modelId,
+        config: params.config,
+        workspaceDir: effectiveWorkspace,
+        env: process.env,
+        ...(compatibleMetadataSnapshot
+          ? { pluginMetadataSnapshot: compatibleMetadataSnapshot }
+          : {}),
+      }),
       provider: params.provider,
       modelId: params.modelId,
-      config: params.config,
+      prepared: true,
       workspaceDir: effectiveWorkspace,
-      env: process.env,
-      ...(pluginMetadataSnapshotCoversProvider(pluginMetadataSnapshot, params.provider)
-        ? { pluginMetadataSnapshot }
-        : {}),
-    });
-    if (resolvedHandle.plugin) {
-      providerRuntimeHandle = resolvedHandle;
-    }
-    return resolvedHandle;
+    };
+    return providerRuntimeHandle;
   };
-  const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.config,
-    agentId: params.agentId,
-  });
-  const effectiveFsWorkspaceOnly = resolveAttemptFsWorkspaceOnly({
-    config: params.config,
-    sessionAgentId,
-  });
   prepStages.mark("workspace-sandbox");
 
   return {
     agentCoreThinkingLevel,
-    effectiveCwd,
-    effectiveFsWorkspaceOnly,
-    effectiveWorkspace,
+    ...workspace,
     emitCorePluginToolStageSummary,
     emitPrepStageSummary,
     getCurrentAttemptPluginMetadataSnapshot,
@@ -175,9 +184,5 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
     prepStages,
     proactiveSubagentOrchestration,
     providerThinkingLevel,
-    resolvedWorkspace,
-    sandbox,
-    sandboxSessionKey,
-    sessionAgentId,
   };
 }

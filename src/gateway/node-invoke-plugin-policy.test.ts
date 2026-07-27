@@ -77,7 +77,7 @@ function createContext(opts?: {
     context: {
       getRuntimeConfig:
         opts?.getRuntimeConfig ??
-        (() => ({ gateway: { nodes: { allowCommands: [DEMO_COMMAND] } } })),
+        (() => ({ gateway: { nodes: { commands: { allow: [DEMO_COMMAND] } } } })),
       nodeRegistry: { get: () => nodeSession, invoke },
       broadcast: vi.fn(),
       broadcastToConnIds: vi.fn(),
@@ -286,9 +286,9 @@ describe("applyPluginNodeInvokePolicy", () => {
     const { context, invoke } = createContext({
       getRuntimeConfig: () => ({
         gateway: {
-          nodes: allowCommand
-            ? { allowCommands: [DEMO_COMMAND] }
-            : { denyCommands: [DEMO_COMMAND] },
+          nodes: {
+            commands: allowCommand ? { allow: [DEMO_COMMAND] } : { deny: [DEMO_COMMAND] },
+          },
         },
       }),
     });
@@ -303,6 +303,53 @@ describe("applyPluginNodeInvokePolicy", () => {
         reason: "command not allowlisted",
         nodeCommandDispatched: false,
       },
+    });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("rejects plugin transport dispatch after invocation ownership changes", async () => {
+    setDangerousDemoCommandRegistry([
+      createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
+    ]);
+    const { context, invoke } = createContext();
+
+    const result = await applyPluginNodeInvokePolicy({
+      context,
+      client: null,
+      nodeSession: createNodeSession(),
+      command: DEMO_COMMAND,
+      params: DEMO_PARAMS,
+      isInvocationCurrent: async () => false,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: "PAIRING_CHANGED",
+      details: { nodeCommandDispatched: false },
+    });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("rejects plugin transport dispatch through an invalidated node session", async () => {
+    setDangerousDemoCommandRegistry([
+      createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
+    ]);
+    const nodeSession = createNodeSession();
+    nodeSession.client.invalidated = true;
+    const { context, invoke } = createContext({ nodeSession });
+
+    const result = await applyPluginNodeInvokePolicy({
+      context,
+      client: null,
+      nodeSession,
+      command: DEMO_COMMAND,
+      params: DEMO_PARAMS,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: "PAIRING_CHANGED",
+      details: { nodeCommandDispatched: false },
     });
     expect(invoke).not.toHaveBeenCalled();
   });

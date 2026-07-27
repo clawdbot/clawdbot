@@ -31,7 +31,14 @@ type PluginTargetedInboundClaimOutcome = Awaited<
 
 const mocks = vi.hoisted(() => ({
   isRoutableChannel: vi.fn((_channel: string | undefined) => true),
-  routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
+  routeReply: vi.fn(
+    async (
+      _params: unknown,
+    ): Promise<{ ok: boolean; messageId?: string; suppressed?: boolean; error?: string }> => ({
+      ok: true,
+      messageId: "mock",
+    }),
+  ),
   tryFastAbortFromMessage: vi.fn<() => Promise<AbortResult>>(async () => ({
     handled: false,
     aborted: false,
@@ -134,7 +141,7 @@ const sessionStoreMocks = vi.hoisted(() => ({
   currentEntry: undefined as Record<string, unknown> | undefined,
   entriesBySessionKey: new Map<string, Record<string, unknown>>(),
   loadSessionEntry: vi.fn((..._args: unknown[]) => sessionStoreMocks.currentEntry),
-  loadSessionStoreEntry: vi.fn(() => sessionStoreMocks.currentEntry),
+  loadSessionStoreEntry: vi.fn((..._args: unknown[]) => sessionStoreMocks.currentEntry),
   loadSessionStore: vi.fn(() => ({})),
   readSessionEntry: vi.fn(() => sessionStoreMocks.currentEntry),
   resolveStorePath: vi.fn(() => "/tmp/mock-sessions.json"),
@@ -313,10 +320,16 @@ const conversationBindingMocks = vi.hoisted(() => {
       if (!conversationId) {
         return null;
       }
+      const rawThreadParentId = resolveTarget(channel, params.ctx.ThreadParentId);
+      const explicitThreadParentId =
+        channel === "discord" && rawThreadParentId && !rawThreadParentId.includes(":")
+          ? `channel:${rawThreadParentId}`
+          : rawThreadParentId;
       const parentConversationId =
-        threadId && baseConversationId && baseConversationId !== threadId
+        explicitThreadParentId ??
+        (threadId && baseConversationId && baseConversationId !== threadId
           ? baseConversationId
-          : resolveTarget(channel, params.ctx.ThreadParentId);
+          : undefined);
       return {
         channel,
         accountId: resolveAccountId(params.ctx, params.cfg, channel),
@@ -485,6 +498,7 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
   return {
     ...actual,
     loadSessionEntry: (...args: unknown[]) => sessionStoreMocks.loadSessionEntry(...args),
+    loadSessionEntryReadOnly: (...args: unknown[]) => sessionStoreMocks.loadSessionEntry(...args),
     updateSessionEntry: (...args: Parameters<typeof sessionStoreMocks.updateSessionEntry>) =>
       sessionStoreMocks.updateSessionEntry(...args),
   };
@@ -537,7 +551,10 @@ vi.mock("../../bindings/records.js", () => ({
 vi.mock("../../infra/agent-events.js", () => ({
   emitAgentAuditEvent: (params: unknown) => agentEventMocks.emitAgentAuditEvent(params),
   emitAgentEvent: (params: unknown) => agentEventMocks.emitAgentEvent(params),
+  getAgentEventLifecycleGeneration: () => "test-generation",
+  isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
   onAgentEvent: (listener: unknown) => agentEventMocks.onAgentEvent(listener),
+  registerAgentEventLifecycleRotationHandler: vi.fn(),
 }));
 vi.mock("../../plugins/conversation-binding.js", () => ({
   buildPluginBindingDeclinedText: () => "Plugin binding request was declined.",

@@ -108,7 +108,7 @@ describe("file log redaction", () => {
     }
   });
 
-  it("honors logging redaction opt-out for structured file log fields", () => {
+  it("keeps structured file log fields redacted when the retired opt-out is present", () => {
     const logPath = logPathTracker.nextPath();
     const configPath = logPathTracker.nextPath();
     fs.writeFileSync(
@@ -131,10 +131,10 @@ describe("file log redaction", () => {
     });
 
     const content = fs.readFileSync(logPath, "utf8");
-    expect(content).toContain("token-value-1234567890");
-    expect(content).toContain("ya29.fake-access-token-with-enough-length");
-    expect(content).toContain("abcd-efgh-ijkl-mnop");
-    expect(content).toContain(secret);
+    expect(content).not.toContain("token-value-1234567890");
+    expect(content).not.toContain("ya29.fake-access-token-with-enough-length");
+    expect(content).not.toContain("abcd-efgh-ijkl-mnop");
+    expect(content).not.toContain(secret);
   });
 
   it("uses logging.file from the active config path", () => {

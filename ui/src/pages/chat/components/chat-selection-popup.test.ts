@@ -104,6 +104,45 @@ describe("chat selection popup", () => {
     expect(document.body.querySelector(".chat-selection-popup")).toBeNull();
   });
 
+  it("does not restore the popup after its owner tears down", () => {
+    vi.useFakeTimers();
+    const { thread, textNode } = buildThreadWithBubble("tear down before the selection settles");
+    selectRange(textNode, 0, 9);
+    handleChatSelectionPointerUp({ currentTarget: thread } as unknown as PointerEvent, {
+      onMoreDetails: onMoreDetailsSpy,
+      onAskSideChat: onAskSideChatSpy,
+    });
+
+    removeChatSelectionPopup();
+    vi.runAllTimers();
+
+    expect(document.body.querySelector(".chat-selection-popup")).toBeNull();
+  });
+
+  it("keeps only the latest pending selection popup", () => {
+    vi.useFakeTimers();
+    const { thread, textNode } = buildThreadWithBubble("replacement selection");
+    const firstMoreDetails = vi.fn();
+    const secondMoreDetails = vi.fn();
+    selectRange(textNode, 0, 11);
+    const pendingTimerCount = vi.getTimerCount();
+    handleChatSelectionPointerUp({ currentTarget: thread } as unknown as PointerEvent, {
+      onMoreDetails: firstMoreDetails,
+      onAskSideChat: onAskSideChatSpy,
+    });
+    handleChatSelectionPointerUp({ currentTarget: thread } as unknown as PointerEvent, {
+      onMoreDetails: secondMoreDetails,
+      onAskSideChat: onAskSideChatSpy,
+    });
+
+    expect(vi.getTimerCount()).toBe(pendingTimerCount + 1);
+    vi.advanceTimersToNextTimer();
+    (document.body.querySelector(".chat-selection-popup button") as HTMLButtonElement).click();
+
+    expect(firstMoreDetails).not.toHaveBeenCalled();
+    expect(secondMoreDetails).toHaveBeenCalledWith("replacement");
+  });
+
   it("dismisses when the selection collapses", () => {
     vi.useFakeTimers();
     const { thread, textNode } = buildThreadWithBubble("dismiss me later");

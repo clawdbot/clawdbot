@@ -262,13 +262,15 @@ describe("node.invoke approval bypass", () => {
       gateway: {
         nodes: {
           pairing: { autoApproveCidrs: ["127.0.0.1/32", "::1/128"] },
-          allowCommands: [
-            "system.run",
-            "system.run.prepare",
-            "system.which",
-            "browser.proxy",
-            "fs.listDir",
-          ],
+          commands: {
+            allow: [
+              "system.run",
+              "system.run.prepare",
+              "system.which",
+              "browser.proxy",
+              "fs.listDir",
+            ],
+          },
         },
       },
     });

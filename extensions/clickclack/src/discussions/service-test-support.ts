@@ -67,7 +67,16 @@ export function discussionConfig(): CoreConfig {
 }
 
 export function createHarness(
-  entry: { sessionId?: string; label?: string; category?: string; archivedAt?: number } | undefined,
+  entry:
+    | {
+        sessionId?: string;
+        label?: string;
+        displayName?: string;
+        subject?: string;
+        category?: string;
+        archivedAt?: number;
+      }
+    | undefined,
   options: { bindingGenerationFactory?: () => string } = {},
 ) {
   let sessionEntry = entry;
@@ -115,9 +124,9 @@ export function createHarness(
       kind: "public",
       external_managed: patch.external_managed ?? true,
       external_ref: patch.external_ref ?? "agent:main:main",
-      external_url:
-        patch.external_url ?? "https://control.example/control/chat?session=agent%3Amain%3Amain",
+      external_url: patch.external_url ?? "https://control.example/control/chat/main",
       sidebar_section: patch.sidebar_section ?? "Projects",
+      ...(patch.display_title !== undefined ? { display_title: patch.display_title } : {}),
       archived: patch.archived ?? false,
       created_at: "2026-07-19T00:00:00.000Z",
     }),

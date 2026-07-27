@@ -113,6 +113,7 @@ function addLoadedPlugin(
 }
 
 function createLookUpTableForTest(params: {
+  installRecords?: PluginLookUpTable["index"]["installRecords"];
   manifestRegistry?: PluginLookUpTable["manifestRegistry"];
   pluginIds?: readonly string[];
   workerProviderIds?: readonly string[];
@@ -126,7 +127,7 @@ function createLookUpTableForTest(params: {
       migrationVersion: 1,
       policyHash: "test",
       generatedAtMs: 1,
-      installRecords: {},
+      installRecords: params.installRecords ?? {},
       plugins: [],
       diagnostics: [],
     },
@@ -544,9 +545,17 @@ describe("loadGatewayPlugins", () => {
   test("reuses a provided lookup table for startup scope and auto-enable manifests", () => {
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
     const manifestRegistry = { plugins: [], diagnostics: [] };
+    const installRecords = {
+      telegram: {
+        source: "npm" as const,
+        spec: "@openclaw/telegram@1.0.0",
+        installPath: "/tmp/plugins/telegram",
+      },
+    };
 
     loadGatewayPluginsForTest({
       pluginLookUpTable: createLookUpTableForTest({
+        installRecords,
         manifestRegistry,
         pluginIds: ["telegram"],
       }),
@@ -559,6 +568,7 @@ describe("loadGatewayPlugins", () => {
       manifestRegistry,
     });
     expect(getLastPluginLoadOption("manifestRegistry")).toBe(manifestRegistry);
+    expect(getLastPluginLoadOption("installRecords")).toEqual(installRecords);
     expect(getLastPluginLoadOption("onlyPluginIds")).toEqual(["telegram"]);
   });
 
@@ -918,6 +928,23 @@ describe("loadGatewayPlugins", () => {
     ).resolves.toEqual({ status: "ok" });
   });
 
+  test("carries delegated tool-policy handoffs only in synthetic client context", async () => {
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("delegated-tool-policy"));
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      expect(opts.req.params).not.toHaveProperty("delegatedToolPolicyHandoff");
+      expect(opts.client?.internal?.delegatedToolPolicyHandoff).toBe(true);
+      opts.respond(true, { status: "ok" });
+    });
+
+    await expect(
+      serverPluginsModule.dispatchGatewayMethodInProcess(
+        "agent",
+        { sessionKey: "agent:main:main" },
+        { delegatedToolPolicyHandoff: true, forceSyntheticClient: true },
+      ),
+    ).resolves.toEqual({ status: "ok" });
+  });
+
   test("carries scoped delivery media only in the synthetic client context", async () => {
     serverPluginsModule.setFallbackGatewayContext(createTestContext("scoped-delivery-media"));
     handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
@@ -1047,7 +1074,7 @@ describe("loadGatewayPlugins", () => {
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
     loadGatewayStartupPluginsForTest();
     serverPluginsModule.setFallbackGatewayContext({
-      getRuntimeConfig: () => ({ gateway: { nodes: { denyCommands: [command] } } }),
+      getRuntimeConfig: () => ({ gateway: { nodes: { commands: { deny: [command] } } } }),
       nodeRegistry: {
         get: () => ({
           nodeId: "node-policy",
@@ -1482,6 +1509,7 @@ describe("loadGatewayPlugins", () => {
             pluginId: "other-plugin",
             toolNames: ["other_plugin_tool"],
           },
+          delegatedToolPolicyHandoff: true,
         },
       } as unknown as GatewayRequestOptions["client"],
       isWebchatConnect: () => false,
@@ -1498,6 +1526,7 @@ describe("loadGatewayPlugins", () => {
 
     expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("workboard");
     expect(getLastDispatchedClientInternal().runtimePluginToolGrant).toBeUndefined();
+    expect(getLastDispatchedClientInternal().delegatedToolPolicyHandoff).toBeUndefined();
   });
 
   test("forwards lightContext as lightweight bootstrap context on subagent run", async () => {

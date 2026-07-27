@@ -13,11 +13,9 @@ const SOURCE_PATH = "test/e2e/qa-lab/runtime/docker-artifact-proof.ts";
 
 const PROOFS = {
   "compose-setup": {
-    secondaryCoverageIds: ["docker.compose"],
     title: "Docker Compose setup evidence",
   },
   "docker-package-install": {
-    secondaryCoverageIds: ["docker.package-artifact-generation", "cli.package-manager-installs"],
     title: "Docker package install evidence",
   },
 } as const;
@@ -179,7 +177,6 @@ async function runDockerArtifactProofProducer(
       ],
       docsRefs: ["docs/install/docker.md", "docs/help/testing.md"],
       id: options.lane,
-      secondaryCoverageIds: proof.secondaryCoverageIds,
       sourcePath: SOURCE_PATH,
       title: proof.title,
     },

@@ -293,7 +293,7 @@ export function registerVideoCapabilityCommands(capability: Command): void {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const cfg = getRuntimeConfig();
         const selectedGenerationProvider = resolveSelectedProviderFromModelRef(
-          resolveAgentModelPrimaryValue(cfg.agents?.defaults?.videoGenerationModel),
+          resolveAgentModelPrimaryValue(cfg.agents?.defaults?.mediaModels?.video),
         );
         const result = {
           generation: listRuntimeVideoGenerationProviders({ config: cfg }).map((provider) => ({

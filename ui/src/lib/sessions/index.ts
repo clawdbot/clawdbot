@@ -1,3 +1,4 @@
+import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import {
   GatewayRequestError,
   type GatewayBrowserClient,
@@ -22,6 +23,7 @@ import type {
   SessionWorkspaceListResult,
   SessionWorkspaceSetResult,
 } from "../../api/types.ts";
+import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { isGatewayMethodAdvertised } from "../gateway-methods.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
@@ -31,8 +33,8 @@ import {
   type SessionCreateOutcome,
   type SessionCreateParams,
 } from "./create.ts";
-import { readSessionCustomGroupNames } from "./custom-groups.ts";
-import { scopedAgentListParamsForSession } from "./navigation.ts";
+import { readSessionCustomGroupNames, readSidebarSectionOrder } from "./custom-groups.ts";
+import { scopedAgentListParamsForSession, type SessionArchivedFilter } from "./navigation.ts";
 import type { SessionPatch, SessionPatchOptions, SessionPatchRoute } from "./patch.ts";
 import {
   readSessionChangedEvent,
@@ -43,6 +45,7 @@ import {
 } from "./reconcile.ts";
 import {
   areUiSessionKeysEquivalent,
+  isUiGlobalSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiSelectedGlobalAgentId,
@@ -66,22 +69,28 @@ type SessionState = {
   deletedSessions: readonly SessionDeleteTarget[];
   /** Gateway-owned custom group catalog in display order. */
   groups: readonly string[];
+  /** Gateway-owned sidebar section order; pinned is intentionally absent. */
+  sectionOrder: readonly string[];
 };
 
 type SessionGroupMutationResult = "completed" | "stale";
 
+export type { SessionArchivedFilter } from "./navigation.ts";
+
 export type SessionListOptions = {
   agentId?: string;
   spawnedBy?: string;
+  boardFace?: "chat" | "dashboard";
   activeMinutes?: number;
   search?: string;
+  creatorId?: string;
   offset?: number;
   limit?: number;
   includeGlobal?: boolean;
   includeUnknown?: boolean;
   configuredAgentsOnly?: boolean;
   includeDerivedTitles?: boolean;
-  showArchived?: boolean;
+  archivedFilter?: SessionArchivedFilter;
   append?: boolean;
 };
 
@@ -154,7 +163,7 @@ type SessionResetResult = "completed" | "not-started" | "uncertain";
 type SessionGateway = {
   readonly snapshot: {
     client: GatewayBrowserClient | null;
-    connected: boolean;
+    phase: ApplicationGatewayPhase;
     hello: GatewayHelloOk | null;
     assistantAgentId?: string | null;
     sessionKey?: string;
@@ -175,16 +184,19 @@ type SessionConnectionScope = {
   epoch: number;
 };
 
-type SessionMessageSubscription = {
+type SessionCreateReconciliation = "blocking" | "background";
+
+export type SessionMessageSubscription = {
   key: string;
   agentId?: string | null;
 };
 
 export type SessionCapability = {
   readonly state: SessionState;
-  /** Advances only when a canonical sessions.list response is published. */
+  /** Advances only when a canonical sessions.list result is published. */
   readonly canonicalListRevision: number;
   list: (options?: SessionListOptions) => Promise<SessionsListResult | null>;
+  setCreatorFilter: (creatorId: string | null) => Promise<void>;
   reconcile: (
     row: GatewaySessionRow | undefined,
     defaults?: SessionsListResult["defaults"],
@@ -194,10 +206,22 @@ export type SessionCapability = {
   reconcileRunTerminal: (terminal: SessionRunTerminal) => boolean;
   refresh: (options?: SessionRefreshOptions) => Promise<void>;
   refreshReplacement: (agentId?: string | null) => Promise<void>;
-  createResult: (params?: SessionCreateParams) => Promise<SessionCreateOutcome | null>;
+  createResult: (
+    params?: SessionCreateParams,
+    options?: { reconciliation?: SessionCreateReconciliation },
+  ) => Promise<SessionCreateOutcome | null>;
   create: (params?: SessionCreateParams) => Promise<string | null>;
   patch: SessionPatchRoute;
   setModelOverride: (key: string, value: string | null | undefined) => void;
+  /** True while a just-created work session is waiting for its canonical placement row. */
+  isPreparedWorkSession: (key: string) => boolean;
+  pullRequestSummary: (key: string) => SessionCatalogPullRequestSummary | undefined;
+  capturePullRequestEpoch: (key: string) => symbol;
+  setPullRequestSummary: (
+    key: string,
+    summary: SessionCatalogPullRequestSummary | undefined,
+    epoch?: symbol,
+  ) => void;
   delete: (key: string, options?: SessionDeleteOptions) => Promise<SessionDeleteOutcome>;
   deleteMany: (targets: readonly SessionDeleteTarget[]) => Promise<SessionDeleteBatchResult>;
   reset: (key: string, options?: SessionResetOptions) => Promise<SessionResetResult>;
@@ -260,7 +284,10 @@ export type SessionCapability = {
   /** Loads the gateway-owned group catalog, coalescing successful connection attempts. */
   groupsLoad: () => Promise<void>;
   /** Replaces the group catalog; stale means the initiating connection retired. */
-  groupsPut: (names: readonly string[]) => Promise<SessionGroupMutationResult>;
+  groupsPut: (
+    names: readonly string[],
+    sectionOrder?: readonly string[],
+  ) => Promise<SessionGroupMutationResult>;
   /** Renames a group; stale means the initiating connection retired before reconciliation. */
   groupsRename: (from: string, to: string) => Promise<SessionGroupMutationResult>;
   /** Deletes a group; stale means the initiating connection retired before reconciliation. */
@@ -278,11 +305,11 @@ export {
   filterVisibleSessionRows,
   getVisibleSessionRows,
   resolveSessionNavigation,
+  sessionMatchesArchivedFilter,
   scopedAgentIdForSession,
   scopedAgentListParamsForRefreshTarget,
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
-  searchForSession,
   visibleSessionMatches,
 } from "./navigation.ts";
 export type {
@@ -342,11 +369,13 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
   if (options.includeDerivedTitles === true) {
     params.includeDerivedTitles = true;
   }
-  if (options.showArchived === true) {
+  if (options.archivedFilter === "archived") {
     params.archived = true;
+  } else if (options.archivedFilter === "all") {
+    params.archived = "all";
   }
   const activeMinutes =
-    options.showArchived === true
+    options.archivedFilter === "archived" || options.archivedFilter === "all"
       ? 0
       : typeof options.activeMinutes === "number" && options.activeMinutes > 0
         ? Math.floor(options.activeMinutes)
@@ -357,6 +386,10 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
   const agentId = options.agentId?.trim();
   const spawnedBy = options.spawnedBy?.trim();
   const search = options.search?.trim();
+  const creatorId = options.creatorId?.trim();
+  if (options.boardFace) {
+    params.boardFace = options.boardFace;
+  }
   if (agentId) {
     params.agentId = agentId;
   }
@@ -365,6 +398,9 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
   }
   if (search) {
     params.search = search;
+  }
+  if (creatorId) {
+    params.creatorId = creatorId;
   }
   if (typeof options.offset === "number" && options.offset > 0) {
     params.offset = Math.floor(options.offset);
@@ -493,7 +529,7 @@ function subscribeSessionGateway(client: SessionRequestClient): Promise<void> {
   return client.request("sessions.subscribe", {}).then(() => undefined);
 }
 
-async function subscribeSessionMessages(
+async function requestSessionMessageSubscription(
   client: SessionRequestClient,
   key: string,
   options: { agentId?: string | null } = {},
@@ -511,7 +547,7 @@ async function subscribeSessionMessages(
   };
 }
 
-export function unsubscribeSessionMessages(
+function requestSessionMessageUnsubscribe(
   client: SessionRequestClient,
   subscription: SessionMessageSubscription,
 ): Promise<void> {
@@ -521,6 +557,90 @@ export function unsubscribeSessionMessages(
       buildSessionRequestParams(subscription.key, subscription.agentId),
     )
     .then(() => undefined);
+}
+
+type SessionMessageSubscriptionEntry = {
+  key: string;
+  agentId: string | null;
+  owners: number;
+  result: Promise<SessionMessageSubscription>;
+};
+
+const sessionMessageSubscriptionRegistries = new WeakMap<
+  GatewayBrowserClient,
+  Set<SessionMessageSubscriptionEntry>
+>();
+const sessionMessageSubscriptionOwners = new WeakMap<
+  SessionMessageSubscription,
+  {
+    client: GatewayBrowserClient;
+    entry: SessionMessageSubscriptionEntry;
+    registry: Set<SessionMessageSubscriptionEntry>;
+    onRelease: (subscription: SessionMessageSubscription) => void;
+  }
+>();
+
+function resetSessionMessageSubscriptionRegistry(client: GatewayBrowserClient): void {
+  sessionMessageSubscriptionRegistries.get(client)?.clear();
+  sessionMessageSubscriptionRegistries.delete(client);
+}
+
+async function acquireSessionMessageSubscription(
+  client: GatewayBrowserClient,
+  key: string,
+  options: { agentId?: string | null } = {},
+  onRelease: (subscription: SessionMessageSubscription) => void = () => undefined,
+): Promise<SessionMessageSubscription> {
+  const normalizedKey = key.trim();
+  const agentId =
+    isUiGlobalSessionKey(normalizedKey) && options.agentId?.trim()
+      ? normalizeAgentId(options.agentId)
+      : null;
+  const registry = sessionMessageSubscriptionRegistries.get(client) ?? new Set();
+  sessionMessageSubscriptionRegistries.set(client, registry);
+  let entry = [...registry].find(
+    (candidate) =>
+      candidate.agentId === agentId && areUiSessionKeysEquivalent(candidate.key, normalizedKey),
+  );
+  if (!entry) {
+    const result = requestSessionMessageSubscription(client, normalizedKey, { agentId });
+    entry = { key: normalizedKey, agentId, owners: 0, result };
+    registry.add(entry);
+    void result.catch(() => registry.delete(entry!));
+  }
+  entry.owners += 1;
+  try {
+    const resolved = await entry.result;
+    const subscription: SessionMessageSubscription = {
+      key: resolved.key,
+      agentId: resolved.agentId ?? null,
+    };
+    sessionMessageSubscriptionOwners.set(subscription, { client, entry, registry, onRelease });
+    return subscription;
+  } catch (error) {
+    entry.owners -= 1;
+    throw error;
+  }
+}
+
+async function releaseSessionMessageSubscription(
+  subscription: SessionMessageSubscription,
+): Promise<void> {
+  const owner = sessionMessageSubscriptionOwners.get(subscription);
+  if (!owner) {
+    return;
+  }
+  sessionMessageSubscriptionOwners.delete(subscription);
+  owner.onRelease(subscription);
+  owner.entry.owners -= 1;
+  if (
+    owner.entry.owners > 0 ||
+    sessionMessageSubscriptionRegistries.get(owner.client) !== owner.registry ||
+    !owner.registry.delete(owner.entry)
+  ) {
+    return;
+  }
+  await requestSessionMessageUnsubscribe(owner.client, subscription);
 }
 
 async function listSessionCheckpoints(
@@ -712,6 +832,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     error: null,
     deletedSessions: [],
     groups: [],
+    sectionOrder: [],
   };
   let inFlight: Promise<void> | null = null;
   let queuedRefresh: SessionRefreshOptions | null = null;
@@ -719,22 +840,26 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   let disposed = false;
   let connectionEpoch = 0;
   let connectionClient = gateway.snapshot.client;
-  let connectionConnected = gateway.snapshot.connected;
+  let connectionConnected = gateway.snapshot.phase === "connected";
   const pendingModelPatches = new Map<
     string,
     { token: symbol; previous: string | null | undefined }
   >();
+  const preparedWorkSessionKeys = new Set<string>();
   const swarmActivity = new SwarmActivityTracker();
+  const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
+  const pullRequestEpochs = new Map<string, symbol>();
   let subscribedClient: GatewayBrowserClient | null = null;
   let lastListOptions: SessionListOptions = {};
   let hasForegroundListOptions = false;
   let hasSeededListOptions = false;
   const listeners = new Set<(next: SessionState) => void>();
   const createdListeners = new Set<(key: string) => void>();
+  const ownedMessageSubscriptions = new Set<SessionMessageSubscription>();
 
   const captureConnection = (): SessionConnectionScope | null => {
     const snapshot = gateway.snapshot;
-    return !disposed && snapshot.connected && snapshot.client
+    return !disposed && snapshot.phase === "connected" && snapshot.client
       ? { client: snapshot.client, epoch: connectionEpoch }
       : null;
   };
@@ -744,7 +869,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return (
       !disposed &&
       connectionEpoch === scope.epoch &&
-      snapshot.connected &&
+      snapshot.phase === "connected" &&
       snapshot.client === scope.client
     );
   };
@@ -757,7 +882,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return null;
     }
     const result = await requestSessionList(scope.client, options);
-    return isCurrentConnection(scope) ? (result ?? null) : null;
+    return isCurrentConnection(scope) ? swarmActivity.decorate(result ?? null) : null;
   };
 
   const publish = (next: SessionState) => {
@@ -765,6 +890,53 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     for (const listener of listeners) {
       listener(state);
     }
+  };
+
+  const pullRequestSummary = (key: string): SessionCatalogPullRequestSummary | undefined =>
+    pullRequestSummaries.get(key.trim());
+
+  const capturePullRequestEpoch = (key: string): symbol => {
+    const normalizedKey = key.trim();
+    const epoch = Symbol(normalizedKey);
+    pullRequestEpochs.set(normalizedKey, epoch);
+    return epoch;
+  };
+
+  const retirePullRequestSummary = (key: string) => {
+    const normalizedKey = key.trim();
+    pullRequestEpochs.delete(normalizedKey);
+    pullRequestSummaries.delete(normalizedKey);
+  };
+
+  // A deleted key stays reusable for a later ordinary thread, so a leftover
+  // prepared entry would keep classifying that new session as Coding forever.
+  const retirePreparedWorkSession = (key: string) => {
+    preparedWorkSessionKeys.delete(key.trim());
+  };
+
+  const setPullRequestSummary = (
+    key: string,
+    summary: SessionCatalogPullRequestSummary | undefined,
+    epoch?: symbol,
+  ) => {
+    const normalizedKey = key.trim();
+    if (!normalizedKey || (epoch !== undefined && pullRequestEpochs.get(normalizedKey) !== epoch)) {
+      return;
+    }
+    const previous = pullRequestSummaries.get(normalizedKey);
+    const unchanged =
+      previous?.state === summary?.state &&
+      previous?.numbers.length === summary?.numbers.length &&
+      previous?.numbers.every((number, index) => number === summary?.numbers[index]);
+    if (unchanged || (!previous && !summary)) {
+      return;
+    }
+    if (summary) {
+      pullRequestSummaries.set(normalizedKey, summary);
+    } else {
+      pullRequestSummaries.delete(normalizedKey);
+    }
+    publish({ ...state });
   };
 
   const setModelOverride = (key: string, value: string | null | undefined) => {
@@ -856,6 +1028,11 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         }
       }
       nextResult = swarmActivity.decorate(nextResult);
+      for (const row of nextResult?.sessions ?? []) {
+        if (row.worktree || row.execNode) {
+          preparedWorkSessionKeys.delete(row.key);
+        }
+      }
       canonicalListRevision += 1;
       publish({
         result: nextResult,
@@ -865,6 +1042,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         error: null,
         deletedSessions: [],
         groups: state.groups,
+        sectionOrder: state.sectionOrder,
       });
     } catch (error) {
       if (isCurrentConnection(scope)) {
@@ -892,7 +1070,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   };
 
   const refresh = (options: SessionRefreshOptions = {}) => {
-    if (!gateway.snapshot.connected || !gateway.snapshot.client || disposed) {
+    if (gateway.snapshot.phase !== "connected" || !gateway.snapshot.client || disposed) {
       return Promise.resolve();
     }
     if (inFlight) {
@@ -915,7 +1093,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   };
 
   const refreshReplacement = (agentId?: string | null) => {
-    const options = { ...lastListOptions };
+    // Mutation refreshes replace the visible sidebar rows. A foreground probe
+    // that omitted derived titles must not turn readable names back into ids.
+    const options = {
+      ...lastListOptions,
+      includeDerivedTitles: lastListOptions.includeDerivedTitles ?? true,
+    };
     const normalizedAgentId = agentId?.trim();
     if (normalizedAgentId) {
       options.agentId = normalizedAgentId;
@@ -923,7 +1106,16 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return refresh({ ...options, force: true });
   };
 
-  const createResult = async (params: SessionCreateParams = {}) => {
+  const setCreatorFilter = (creatorId: string | null) => {
+    const options = { ...lastListOptions, creatorId: creatorId?.trim() || undefined };
+    delete options.offset;
+    return refresh({ ...options, force: true });
+  };
+
+  const createResult = async (
+    params: SessionCreateParams = {},
+    options: { reconciliation?: SessionCreateReconciliation } = {},
+  ) => {
     const scope = captureConnection();
     if (!scope) {
       return null;
@@ -937,14 +1129,38 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (!isCurrentConnection(scope)) {
         return null;
       }
-      await refreshReplacement(params.agentId);
-      if (!isCurrentConnection(scope)) {
-        return null;
+      // The create response precedes list reconciliation. Carry submitted facts
+      // across that gap so a partial history row cannot briefly lose its zone/model.
+      if (requestParams.worktree === true || Boolean(requestParams.execNode?.trim())) {
+        preparedWorkSessionKeys.add(result.key.trim());
       }
-      // Creation may overlap read-only list loading. Notify presentation owners
-      // after its queued refresh so they never guess from stale list churn.
-      for (const listener of createdListeners) {
-        listener(result.key);
+      if (requestParams.model?.trim()) {
+        setModelOverride(result.key, requestParams.model);
+      } else if (preparedWorkSessionKeys.has(result.key)) {
+        publish({ ...state });
+      }
+      const reconcileCreatedSession = async () => {
+        await refreshReplacement(params.agentId);
+        if (!isCurrentConnection(scope)) {
+          return;
+        }
+        // Creation may overlap read-only list loading. Notify presentation owners
+        // after its queued refresh so they never guess from stale list churn.
+        for (const listener of createdListeners) {
+          listener(result.key);
+        }
+      };
+      if (options.reconciliation === "background") {
+        void reconcileCreatedSession().catch((error: unknown) => {
+          if (isCurrentConnection(scope)) {
+            publish({ ...state, error: String(error) });
+          }
+        });
+      } else {
+        await reconcileCreatedSession();
+        if (!isCurrentConnection(scope)) {
+          return null;
+        }
       }
       return result;
     } catch (error) {
@@ -991,11 +1207,17 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return Math.min(Math.max(requested, GROUPS_RETRY_MIN_MS), GROUPS_RETRY_MAX_MS);
   };
 
-  const publishGroups = (groups: readonly string[]) => {
-    if (groups.length === state.groups.length && groups.every((g, i) => g === state.groups[i])) {
+  const publishGroupCatalog = (groups: readonly string[], sectionOrder: readonly string[]) => {
+    const groupsUnchanged =
+      groups.length === state.groups.length &&
+      groups.every((group, i) => group === state.groups[i]);
+    const orderUnchanged =
+      sectionOrder.length === state.sectionOrder.length &&
+      sectionOrder.every((sectionId, i) => sectionId === state.sectionOrder[i]);
+    if (groupsUnchanged && orderUnchanged) {
       return;
     }
-    publish({ ...state, groups: [...groups] });
+    publish({ ...state, groups: [...groups], sectionOrder: [...sectionOrder] });
   };
 
   const finishGroupMutationFailure = (
@@ -1039,6 +1261,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         return;
       }
       let names = readSessionCustomGroupNames(listed);
+      let sectionOrder = readSidebarSectionOrder(listed);
       // One-time migration: browser-local catalogs predate the gateway store.
       const legacy = readLegacyStoredGroups();
       if (names.length === 0 && legacy.length > 0) {
@@ -1047,6 +1270,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
           return;
         }
         names = readSessionCustomGroupNames(put);
+        sectionOrder = readSidebarSectionOrder(put);
       }
       if (legacy.length > 0) {
         try {
@@ -1055,7 +1279,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
           // The gateway catalog is canonical either way.
         }
       }
-      publishGroups(names);
+      publishGroupCatalog(names, sectionOrder);
     } catch (error) {
       if (
         !isCurrentConnection(scope) ||
@@ -1092,23 +1316,29 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     const generation = ++groupsLoadGeneration;
     groupsLoadedEpoch = scope.epoch;
     if (advertised === false) {
-      publishGroups([]);
+      publishGroupCatalog([], []);
       return;
     }
     await loadGroups(scope, generation, advertised);
   };
 
-  const groupsPut = async (names: readonly string[]): Promise<SessionGroupMutationResult> => {
+  const groupsPut = async (
+    names: readonly string[],
+    sectionOrder?: readonly string[],
+  ): Promise<SessionGroupMutationResult> => {
     const scope = captureConnection();
     if (!scope) {
       return "stale";
     }
     try {
-      const result = await scope.client.request("sessions.groups.put", { names: [...names] });
+      const result = await scope.client.request("sessions.groups.put", {
+        names: [...names],
+        ...(sectionOrder === undefined ? {} : { sectionOrder: [...sectionOrder] }),
+      });
       if (!isCurrentConnection(scope)) {
         return "stale";
       }
-      publishGroups(readSessionCustomGroupNames(result));
+      publishGroupCatalog(readSessionCustomGroupNames(result), readSidebarSectionOrder(result));
       return "completed";
     } catch (error) {
       return finishGroupMutationFailure(isCurrentConnection(scope), error);
@@ -1125,7 +1355,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (!isCurrentConnection(scope)) {
         return "stale";
       }
-      publishGroups(readSessionCustomGroupNames(result));
+      publishGroupCatalog(readSessionCustomGroupNames(result), readSidebarSectionOrder(result));
       // The mutation response is the commit point. Reconcile member rows in
       // the background so a later disconnect cannot downgrade confirmed work.
       void refresh({ ...lastListOptions, force: true });
@@ -1145,7 +1375,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (!isCurrentConnection(scope)) {
         return "stale";
       }
-      publishGroups(readSessionCustomGroupNames(result));
+      publishGroupCatalog(readSessionCustomGroupNames(result), readSidebarSectionOrder(result));
       // See groupsRename: collapsed-state consumers must observe confirmed
       // completion before an unrelated refresh can outlive the connection.
       void refresh({ ...lastListOptions, force: true });
@@ -1198,10 +1428,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         restoreModelOverride();
         return null;
       }
-      await refreshReplacement(options.agentId);
-      if (!isCurrentConnection(scope)) {
-        restoreModelOverride();
-        return null;
+      if (!options.deferListRefresh) {
+        await refreshReplacement(options.agentId);
+        if (!isCurrentConnection(scope)) {
+          restoreModelOverride();
+          return null;
+        }
       }
       if (pendingModelPatches.get(normalizedKey)?.token === modelPatchToken) {
         pendingModelPatches.delete(normalizedKey);
@@ -1243,7 +1475,6 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     payload: unknown,
     options?: SessionReconcileOptions,
   ): SessionChangedResult => {
-    swarmActivity.observe(payload);
     const base = reconcileSessionChanged(state.result, payload, options);
     const result = swarmActivity.decorate(base.result);
     const reconciled =
@@ -1254,6 +1485,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
             result,
             row: base.row ? result?.sessions.find((row) => row.key === base.row?.key) : undefined,
           };
+    if (reconciled.deletedKey) {
+      retirePullRequestSummary(reconciled.deletedKey);
+    }
     if (reconciled.applied && (reconciled.result !== state.result || reconciled.deletedKey)) {
       publish({
         ...state,
@@ -1295,6 +1529,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (!confirmsSessionDeletion(response)) {
         return { deleted: false };
       }
+      retirePullRequestSummary(key);
+      retirePreparedWorkSession(key);
       publish({ ...state, deletedSessions: [{ key, agentId: options.agentId }] });
       setModelOverride(key, undefined);
       await refreshReplacement(options.agentId);
@@ -1342,6 +1578,10 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       }
     }
     if (deleted.length > 0 && isCurrentConnection(scope)) {
+      for (const key of deleted) {
+        retirePullRequestSummary(key);
+        retirePreparedWorkSession(key);
+      }
       publish({
         ...state,
         deletedSessions: targets.filter((target) => deleted.includes(target.key)),
@@ -1457,20 +1697,21 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (!scope) {
       throw new Error("Session message subscription requires an active Gateway connection");
     }
-    const subscription = await subscribeSessionMessages(scope.client, key, options);
+    const subscription = await acquireSessionMessageSubscription(
+      scope.client,
+      key,
+      options,
+      (released) => ownedMessageSubscriptions.delete(released),
+    );
+    ownedMessageSubscriptions.add(subscription);
     if (!isCurrentConnection(scope)) {
+      await releaseSessionMessageSubscription(subscription).catch(() => undefined);
       throw new Error("Session message subscription completed on a replaced Gateway connection");
     }
     return subscription;
   };
 
-  const unsubscribeMessages = async (subscription: SessionMessageSubscription) => {
-    const scope = captureConnection();
-    if (!scope) {
-      return;
-    }
-    await unsubscribeSessionMessages(scope.client, subscription);
-  };
+  const unsubscribeMessages = releaseSessionMessageSubscription;
 
   const listCheckpoints = async (
     key: string,
@@ -1585,19 +1826,33 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   };
 
   const stopGateway = gateway.subscribe((next) => {
-    const connectionChanged =
-      next.client !== connectionClient || next.connected !== connectionConnected;
+    const previousClient = connectionClient;
+    const connected = next.phase === "connected";
+    const connectionChanged = next.client !== connectionClient || connected !== connectionConnected;
     connectionClient = next.client;
-    connectionConnected = next.connected;
+    connectionConnected = connected;
     if (connectionChanged) {
+      const hadPullRequestSummaries = pullRequestSummaries.size > 0;
       connectionEpoch += 1;
+      if (previousClient) {
+        resetSessionMessageSubscriptionRegistry(previousClient);
+      }
+      ownedMessageSubscriptions.clear();
       invalidateGroupsLoad();
       swarmActivity.clear();
       inFlight = null;
       queuedRefresh = null;
       rollbackPendingModelPatches();
+      preparedWorkSessionKeys.clear();
+      pullRequestSummaries.clear();
+      pullRequestEpochs.clear();
+      // A connected client replacement needs its own invalidation publish;
+      // disconnects publish the cleared state in the branch immediately below.
+      if (hadPullRequestSummaries && connected && next.client) {
+        publish({ ...state });
+      }
     }
-    if (!next.connected || !next.client) {
+    if (!connected || !next.client) {
       subscribedClient = null;
       publish({
         result: null,
@@ -1607,6 +1862,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         error: null,
         deletedSessions: [],
         groups: state.groups,
+        sectionOrder: state.sectionOrder,
       });
       return;
     }
@@ -1626,8 +1882,11 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         } finally {
           if (isCurrentConnection(scope)) {
             const sessionKey = gateway.snapshot.sessionKey?.trim();
+            const agentScope = sessionKey
+              ? scopedAgentListParamsForSession(gateway.snapshot, sessionKey)
+              : { agentId: resolveUiSelectedGlobalAgentId(gateway.snapshot) };
             await refresh({
-              ...(sessionKey ? scopedAgentListParamsForSession(gateway.snapshot, sessionKey) : {}),
+              ...agentScope,
               includeDerivedTitles: true,
               backgroundHydrate: true,
               force: true,
@@ -1650,7 +1909,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       }
       const reconciled = reconcileSessionChanged(state.result, event.payload, {
         resultAgentId: state.agentId,
-        showArchived: lastListOptions.showArchived,
+        archivedFilter: lastListOptions.archivedFilter,
       });
       const eventInfo = readSessionChangedEvent(event.payload);
       // Catalog mutations from other clients invalidate the per-connection
@@ -1669,6 +1928,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         return;
       }
       if (reconciled.deletedKey) {
+        retirePullRequestSummary(reconciled.deletedKey);
         // Preserve remote-deletion navigation before the canonical refresh
         // clears transient event state.
         publish({
@@ -1692,6 +1952,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return canonicalListRevision;
     },
     list: requestList,
+    setCreatorFilter,
     reconcile,
     reconcileChanged,
     reconcileRunTerminal,
@@ -1701,6 +1962,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     create,
     patch,
     setModelOverride,
+    isPreparedWorkSession(key) {
+      return preparedWorkSessionKeys.has(key.trim());
+    },
+    pullRequestSummary,
+    capturePullRequestEpoch,
+    setPullRequestSummary,
     delete: remove,
     deleteMany: removeMany,
     reset,
@@ -1731,6 +1998,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return () => listeners.delete(listener);
     },
     dispose() {
+      for (const subscription of ownedMessageSubscriptions) {
+        void releaseSessionMessageSubscription(subscription).catch(() => undefined);
+      }
       disposed = true;
       connectionEpoch += 1;
       invalidateGroupsLoad();
@@ -1739,7 +2009,10 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       queuedRefresh = null;
       subscribedClient = null;
       pendingModelPatches.clear();
+      preparedWorkSessionKeys.clear();
       swarmActivity.clear();
+      pullRequestSummaries.clear();
+      pullRequestEpochs.clear();
       stopGateway();
       stopEvents();
       createdListeners.clear();

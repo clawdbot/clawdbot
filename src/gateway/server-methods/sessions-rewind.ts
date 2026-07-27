@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   ErrorCodes,
   errorShape,
@@ -18,10 +19,12 @@ import {
   type SessionBranchSwitchMutationResult,
   type SessionMessageCutMutationResult,
 } from "../../config/sessions/session-accessor.js";
+import { MEDIA_MAX_BYTES, readMediaBuffer } from "../../media/store.js";
 import {
   isCompetingSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import { recordSessionCreated } from "../../sessions/session-state-events.js";
 import {
   readSessionUpstreamLink,
   type SessionUpstreamLink,
@@ -33,6 +36,7 @@ import {
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import { hasVisibleActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import {
   loadAccessorSessionEntryForGatewayTarget,
   resolveSessionWorkerPlacementMutationError,
@@ -45,6 +49,40 @@ type MessageCutAction = "fork" | "rewind" | "switch";
 
 const EXTERNAL_CONVERSATION_ERROR =
   "Session history changes are unavailable because this session is owned by an external agent harness.";
+
+// A message realistically carries a handful of images; a corrupt transcript must
+// not turn rewind into a bulk media read.
+const EDITOR_MEDIA_REF_LIMIT = 10;
+
+async function resolveEditorMediaAttachments(
+  refs: Array<{ path: string; contentType: string }> | undefined,
+): Promise<Array<{ mimeType: string; data: string }>> {
+  if (!refs) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const attachments: Array<{ mimeType: string; data: string }> = [];
+  for (const ref of refs) {
+    // Transcript paths are untrusted hints; only the basename is read through the
+    // media store (its traversal guards and byte cap stay authoritative), so
+    // dedupe on that resolved id — path aliases must not repeat the same read.
+    const id = path.basename(ref.path);
+    if (seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    if (seen.size > EDITOR_MEDIA_REF_LIMIT) {
+      break;
+    }
+    try {
+      const media = await readMediaBuffer(id, "inbound", MEDIA_MAX_BYTES);
+      attachments.push({ mimeType: ref.contentType, data: media.buffer.toString("base64") });
+    } catch {
+      // Skipped refs (missing file, oversized, guard rejection) never fail the cut.
+    }
+  }
+  return attachments;
+}
 
 function resolveUpstreamForkHarness(link: SessionUpstreamLink) {
   const matches = listRegisteredAgentHarnesses().filter((entry) =>
@@ -127,11 +165,11 @@ async function listBranches(options: GatewayRequestHandlerOptions): Promise<void
     agentId: requestedAgent.agentId,
   });
   if (!current.entry?.sessionId) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${sessionKey}`),
-    );
+    // A session key that has not materialized yet (fresh chat, no first
+    // message) legitimately has no branches. Only the mutating siblings
+    // (rewind/switch/fork) treat a missing session as an error; erroring here
+    // put a spurious failure in gateway logs on every new-chat load.
+    respond(true, { branches: [] }, undefined);
     return;
   }
   if (readSessionUpstreamLink(current.canonicalKey, current.target.agentId)) {
@@ -155,7 +193,7 @@ async function mutateSessionAtMessage(
   options: GatewayRequestHandlerOptions,
   action: MessageCutAction,
 ): Promise<void> {
-  const { params, respond, context } = options;
+  const { params, respond, context, client } = options;
   const sessionKey = typeof params.sessionKey === "string" ? params.sessionKey.trim() : "";
   const entryId =
     action === "switch"
@@ -385,6 +423,7 @@ async function mutateSessionAtMessage(
               sessionStoreKey: current.sessionStoreKey,
               storePath: current.storePath,
               targetKey,
+              creation: resolveOperatorSessionCreation(client),
             })
           : action === "rewind"
             ? rewindSessionToMessage({
@@ -413,8 +452,23 @@ async function mutateSessionAtMessage(
         respondMessageCutError(result, action, entryId, respond);
         return;
       }
+      const editorAttachments =
+        action === "switch"
+          ? []
+          : [
+              ...("editorAttachments" in result ? (result.editorAttachments ?? []) : []),
+              ...(await resolveEditorMediaAttachments(
+                "editorMediaRefs" in result ? result.editorMediaRefs : undefined,
+              )),
+            ];
       if (action !== "fork") {
         clearSessionQueues(lifecycleIdentities);
+      } else {
+        recordSessionCreated({
+          sessionKey: result.key,
+          agentId: current.target.agentId,
+          entry: result.entry,
+        });
       }
       respond(
         true,
@@ -424,9 +478,15 @@ async function mutateSessionAtMessage(
               ...("editorText" in result && result.editorText
                 ? { editorText: result.editorText }
                 : {}),
+              ...(editorAttachments.length > 0 ? { editorAttachments } : {}),
             }
-          : action === "rewind" && "editorText" in result && result.editorText
-            ? { editorText: result.editorText }
+          : action === "rewind"
+            ? {
+                ...("editorText" in result && result.editorText
+                  ? { editorText: result.editorText }
+                  : {}),
+                ...(editorAttachments.length > 0 ? { editorAttachments } : {}),
+              }
             : {},
         undefined,
       );

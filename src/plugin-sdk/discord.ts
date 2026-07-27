@@ -42,7 +42,6 @@ export {
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
 } from "./channel-status.js";
-export { DiscordConfigSchema } from "../config/zod-schema.providers-core.js";
 
 /** Discord channel config shape for one account in OpenClaw config. */
 export type DiscordAccountConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["discord"]>;

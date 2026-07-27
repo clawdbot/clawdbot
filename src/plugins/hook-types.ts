@@ -57,6 +57,8 @@ export type {
 export type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
+  PluginHookInboundMessageMetadata,
+  PluginHookMediaFact,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
@@ -929,6 +931,14 @@ type PluginHookGatewayCronJobState = {
   lastFailureNotificationDelivered?: boolean;
   lastFailureNotificationDeliveryStatus?: PluginHookGatewayCronDeliveryStatus;
   lastFailureNotificationDeliveryError?: string;
+  streamStatus?: "starting" | "running" | "restarting" | "stopped" | "disabled" | "error";
+  streamError?: string;
+  streamConsecutiveFailures?: number;
+  streamRestartExhausted?: boolean;
+  streamDroppedBatches?: number;
+  streamCoalescedBatches?: number;
+  streamLastStartedAtMs?: number;
+  streamLastExitAtMs?: number;
 };
 
 export type PluginHookGatewayCronJob = {
@@ -958,6 +968,15 @@ export type PluginHookGatewayCronJob = {
         kind: "on-exit";
         command?: string;
         cwd?: string;
+      }
+    | {
+        kind: "stream";
+        command?: string[];
+        cwd?: string;
+        mode?: "line" | "match";
+        match?: string;
+        batchMs?: number;
+        maxBatchBytes?: number;
       };
   sessionTarget?: string;
   wakeMode?: string;

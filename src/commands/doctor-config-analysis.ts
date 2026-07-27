@@ -243,3 +243,23 @@ export function noteIncludeConfinementWarning(snapshot: {
     "Doctor warnings",
   );
 }
+
+/** Warns when a trusted-proxy gateway has no public sandbox origin for widget/MCP-app frames. */
+export function noteSandboxOriginProxyWarning(cfg: OpenClawConfig): void {
+  // trusted-proxy auth means the Control UI is reached through a reverse proxy
+  // or tunnel. Widget and MCP-app frames load from a separate sandbox listener
+  // (gateway port + 1); without mcp.apps.sandboxOrigin the browser derives that
+  // URL by port substitution, which such proxies do not route, and every
+  // pinned widget fails to render.
+  if (cfg.gateway?.auth?.mode !== "trusted-proxy" || cfg.mcp?.apps?.sandboxOrigin) {
+    return;
+  }
+  note(
+    [
+      '- gateway.auth.mode is "trusted-proxy" but mcp.apps.sandboxOrigin is not set.',
+      "  Dashboard widgets and MCP apps render from a separate sandbox listener (gateway port + 1). If your proxy or tunnel does not also route that port, widget frames cannot load.",
+      "  Check: either route the sandbox port through your proxy, or set mcp.apps.sandboxOrigin to a dedicated public origin routed to the sandbox listener (see the MCP Apps section of docs/cli/mcp.md).",
+    ].join("\n"),
+    "Doctor warnings",
+  );
+}

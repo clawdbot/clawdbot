@@ -13,7 +13,7 @@ OpenClaw gives agents tools to work across sessions, inspect status, and orchest
 
 | Tool                 | What it does                                                                |
 | -------------------- | --------------------------------------------------------------------------- |
-| `sessions`           | Patch visible session settings and manage the global session-group catalog  |
+| `sessions`           | Patch, reset, or delete visible sessions and manage session groups          |
 | `sessions_list`      | List sessions with optional filters (kind, label, agent, archive, preview)  |
 | `sessions_search`    | Search visible session transcripts and return matching excerpts             |
 | `sessions_history`   | Read the transcript of a specific session                                   |
@@ -58,10 +58,14 @@ Use [`sessions_search`](/concepts/session-search) for exact full-text recall acr
 
 ## Managing session settings and groups
 
-The owner-gated `sessions` tool exposes two bounded self-service surfaces:
+The owner-gated `sessions` tool exposes bounded self-service surfaces:
 
-- `action: "patch"` changes the current session by default, or another visible session selected by `sessionKey`. It can set the label, sidebar icon, pin/archive state, model, and thinking level. It does not expose reset, delete, or compact actions.
+- `action: "patch"` changes the current session by default, or another visible session selected by `sessionKey`. It can set the label, sidebar icon, pin/archive state, model, and thinking level.
+- `action: "reset"` resets another visible session selected by `sessionKey`.
+- `action: "delete"` first archives and then deletes the exact same generation of another visible session selected by `sessionKey`. By default its transcript is retained as a deleted archive; pass `deleteTranscript: false` to leave the transcript state untouched. Resetting or deleting the session currently running the tool is rejected.
 - `group_list`, `group_set`, `group_rename`, and `group_delete` manage the global ordered session-group catalog. `group_set` replaces the ordered name list rather than patching one entry.
+
+Use `sessions_spawn` with `visible: true` to create a persistent dashboard session. This keeps session creation on the controlled spawn path, which enforces the parent's tool policy, sandbox, concurrency limits, and run timeout.
 
 An agent-selected model patch stays reversible until that selection completes a successful run. If the selected model is definitively unusable because of authentication, billing, or model-not-found failure, OpenClaw restores the previous model and writes a visible system note. Transient rate-limit, overload, timeout, network, and server failures do not undo the selection.
 
@@ -120,6 +124,7 @@ Key options:
 
 - `runtime: "subagent"` (default) or `"acp"` for external harness agents.
 - `model` and `thinking` overrides for the child session.
+- `runTimeoutSeconds` to override the configured child-run timeout; `0` disables it.
 - `thread: true` to bind the spawn to a chat thread (Discord, Slack, etc.).
 - `sandbox: "require"` to enforce sandboxing on the child.
 - `context: "fork"` for native sub-agents when the child needs the current requester transcript; omit it or use `context: "isolated"` for a clean child. `context: "fork"` is only valid with `runtime: "subagent"`. Thread-bound native sub-agents default to `context: "fork"` unless `threadBindings.defaultSpawnContext` says otherwise.

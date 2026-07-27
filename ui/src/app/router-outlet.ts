@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { property } from "lit/decorators.js";
 import { icon } from "../components/icons.ts";
+import { renderLoadingState } from "../components/loading-state.ts";
 import { McpAppUnmountGate } from "../components/mcp-app-unmount.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
@@ -13,7 +14,7 @@ import {
 } from "./router-outlet-controller.ts";
 import {
   isStaleChunkImportError,
-  retryStaleChunkReload,
+  retryStaleChunkReloadWhenReachable,
   scheduleStaleChunkReload,
 } from "./stale-chunk-reload.ts";
 
@@ -46,13 +47,23 @@ function measureRoutedRender<T>(routeId: string, render: () => T): T {
   return result;
 }
 
-function renderPending() {
-  return html`
-    <section class="card lazy-view-state lazy-view-state--loading" role="status">
-      <div class="card-title">${t("lazyView.loadingTitle")}</div>
-      <div class="card-sub">${t("common.loading")}</div>
-    </section>
-  `;
+/**
+ * Shows progress while waiting for the restarting gateway. The state lives on
+ * the element rather than in render state because the reload replaces the
+ * document; a re-render that resets the label is harmless, since the pending
+ * wait still reloads on its own once the gateway answers.
+ */
+function markButtonReloading(button: HTMLButtonElement | null): () => void {
+  if (!button) {
+    return () => {};
+  }
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = t("lazyView.reloading");
+  return () => {
+    button.disabled = false;
+    button.textContent = label;
+  };
 }
 
 function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
@@ -75,17 +86,25 @@ function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
     }
     void router.revalidate(retryContext, routeId).catch(() => undefined);
   };
-  const handleRetry = () => {
+  const handleRetry = (event: Event) => {
     if (!staleChunk) {
       revalidate();
       return;
     }
-    // Reload only when the gateway is reachable; during a restart fall back to
-    // revalidation so the panel error stays recoverable inside app webviews.
-    void retryStaleChunkReload().then((reloading) => {
-      if (!reloading) {
-        revalidate();
+    // The gateway is usually still restarting when this is clicked (that update
+    // is what stranded the chunk), so wait for it to answer and then reload
+    // instead of declining on the first failed probe — a silent no-op here is
+    // what drives people to a manual hard reload. Reloading against an
+    // unreachable gateway would replace the recoverable panel error with a
+    // fatal navigation error in app webviews, so the wait is still bounded.
+    const button = event.currentTarget instanceof HTMLButtonElement ? event.currentTarget : null;
+    const restoreButton = markButtonReloading(button);
+    void retryStaleChunkReloadWhenReachable().then((reloading) => {
+      if (reloading) {
+        return;
       }
+      restoreButton();
+      revalidate();
     });
   };
   // Stale-chunk failures are routine after a gateway update, so present them
@@ -144,7 +163,7 @@ function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TDat
           routeId,
         )
       : selection.showPending
-        ? renderPending()
+        ? renderLoadingState()
         : nothing;
   }
   const routeModule = renderedMatch.module;

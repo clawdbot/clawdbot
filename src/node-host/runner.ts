@@ -158,8 +158,7 @@ async function resolveNodeHostGatewayCredentials(params: {
   return await resolveGatewayConnectionAuth({
     config: configForResolution,
     env: params.env,
-    localTokenPrecedence: "env-first",
-    localPasswordPrecedence: "env-first", // pragma: allowlist secret
+    localPrecedence: "env-first",
     remoteTokenPrecedence: "env-first",
     remotePasswordPrecedence: "env-first", // pragma: allowlist secret
   });

@@ -355,8 +355,7 @@ describe("handleQaInbound", () => {
 
     expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
     const ctxPayload = firstRunAssembledParams(runtime).ctxPayload;
-    expect(ctxPayload.MediaPath).toBeUndefined();
-    expect(ctxPayload.MediaPaths).toBeUndefined();
+    expect(ctxPayload.media?.every((fact) => fact.path === undefined)).toBe(true);
   });
 
   it("rejects non-http attachment URLs without dropping the message", async () => {
@@ -388,8 +387,7 @@ describe("handleQaInbound", () => {
 
       expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
       const ctxPayload = firstRunAssembledParams(runtime).ctxPayload;
-      expect(ctxPayload.MediaPath).toBeUndefined();
-      expect(ctxPayload.MediaPaths).toBeUndefined();
+      expect(ctxPayload.media?.every((fact) => fact.path === undefined)).toBe(true);
       expect(warn).toHaveBeenCalledTimes(2);
     } finally {
       warn.mockRestore();

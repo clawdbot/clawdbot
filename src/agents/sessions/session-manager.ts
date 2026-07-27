@@ -1,13 +1,11 @@
 /**
- * JSONL-backed session tree manager.
+ * Session tree manager backed by SQLite markers or explicit standalone files.
  *
- * The public facade lives here; codec, storage, discovery, persistence, and
- * branching behavior are split into focused internal modules.
+ * The public facade lives here; codec, storage, persistence, and branching
+ * behavior are split into focused internal modules.
  */
-import { existsSync, mkdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.js";
-import { appendJsonlEntrySync } from "../../config/sessions/transcript-jsonl.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { ImageContent, Message, TextContent } from "../../llm/types.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
@@ -15,25 +13,21 @@ import { SessionManagerBranching } from "./session-manager-branching.js";
 import type { SqliteSessionManagerPersistence } from "./session-manager-core.js";
 import {
   getDefaultSessionDir,
-  loadEntriesFromFile,
   loadEntriesFromFileWithSnapshot,
   loadSqliteMarkedSessionFile,
   revalidateLoadedSessionFile,
   type LoadedSessionFile,
 } from "./session-manager-file.js";
-import { createSessionId } from "./session-manager-id.js";
-import { findMostRecentSession, listAllSessions, listSessions } from "./session-manager-list.js";
 import type {
   AppendPersistenceOptions,
   FileEntry,
   NewSessionOptions,
   PromptReleasedSessionEntry,
   PromptReleasedSessionMergeResult,
+  ResetReason,
   SessionContext,
   SessionEntry,
   SessionHeader,
-  SessionInfo,
-  SessionListProgress,
   SessionTreeNode,
 } from "./session-manager-types.js";
 
@@ -46,7 +40,6 @@ export {
   parseSessionEntries,
 } from "./session-manager-codec.js";
 export { getDefaultSessionDir, loadEntriesFromFile } from "./session-manager-file.js";
-export { findMostRecentSession } from "./session-manager-list.js";
 export type {
   BranchSummaryEntry,
   CompactionEntry,
@@ -56,13 +49,13 @@ export type {
   LabelEntry,
   ModelChangeEntry,
   NewSessionOptions,
+  ResetEntry,
+  ResetReason,
   SessionContext,
   SessionEntry,
   SessionEntryBase,
   SessionHeader,
-  SessionInfo,
   SessionInfoEntry,
-  SessionListProgress,
   SessionMessageEntry,
   SessionTreeNode,
   ThinkingLevelChangeEntry,
@@ -94,6 +87,11 @@ export class SessionManager extends SessionManagerBranching {
 
   override clearPreservedOpaqueFileEntries(): void {
     super.clearPreservedOpaqueFileEntries();
+  }
+
+  /** Makes pending append-oriented persistence durable without rewriting committed entries. */
+  override flushPendingPersistence(): void {
+    super.flushPendingPersistence();
   }
 
   override isPersisted(): boolean {
@@ -167,6 +165,10 @@ export class SessionManager extends SessionManagerBranching {
     return super.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromHook);
   }
 
+  override appendResetBoundary(reason: ResetReason, firstKeptEntryId?: string): string {
+    return super.appendResetBoundary(reason, firstKeptEntryId);
+  }
+
   override appendCustomEntry(customType: string, data?: unknown): string {
     return super.appendCustomEntry(customType, data);
   }
@@ -218,6 +220,10 @@ export class SessionManager extends SessionManagerBranching {
 
   override buildSessionContext(): SessionContext {
     return super.buildSessionContext();
+  }
+
+  override getBoundaryCount(): number {
+    return super.getBoundaryCount();
   }
 
   override getHeader(): SessionHeader | null {
@@ -282,62 +288,8 @@ export class SessionManager extends SessionManagerBranching {
     return new SessionManager(cwd, directory, path, true, loaded);
   }
 
-  static continueRecent(cwd: string, sessionDir?: string): SessionManager {
-    const directory = sessionDir ?? getDefaultSessionDir(cwd);
-    const mostRecent = findMostRecentSession(directory, cwd);
-    return mostRecent
-      ? new SessionManager(cwd, directory, mostRecent, true)
-      : new SessionManager(cwd, directory, undefined, true);
-  }
-
   static inMemory(cwd: string = process.cwd()): SessionManager {
     return new SessionManager(cwd, "", undefined, false);
-  }
-
-  static forkFrom(sourcePath: string, targetCwd: string, sessionDir?: string): SessionManager {
-    const sourceEntries = loadEntriesFromFile(sourcePath);
-    if (sourceEntries.length === 0) {
-      throw new Error(`Cannot fork: source session file is empty or invalid: ${sourcePath}`);
-    }
-    if (!sourceEntries.some((entry) => entry.type === "session")) {
-      throw new Error(`Cannot fork: source session has no header: ${sourcePath}`);
-    }
-
-    const directory = sessionDir ?? getDefaultSessionDir(targetCwd);
-    if (!existsSync(directory)) {
-      mkdirSync(directory, { recursive: true });
-    }
-    const newSessionId = createSessionId();
-    const timestamp = new Date().toISOString();
-    const fileTimestamp = timestamp.replace(/[:.]/g, "-");
-    const newSessionFile = join(directory, `${fileTimestamp}_${newSessionId}.jsonl`);
-    const newHeader: SessionHeader = {
-      type: "session",
-      version: CURRENT_SESSION_VERSION,
-      id: newSessionId,
-      timestamp,
-      cwd: targetCwd,
-      parentSession: sourcePath,
-    };
-    appendJsonlEntrySync(newSessionFile, newHeader);
-    for (const entry of sourceEntries) {
-      if (entry.type !== "session") {
-        appendJsonlEntrySync(newSessionFile, entry);
-      }
-    }
-    return new SessionManager(targetCwd, directory, newSessionFile, true);
-  }
-
-  static async list(
-    cwd: string,
-    sessionDir?: string,
-    onProgress?: SessionListProgress,
-  ): Promise<SessionInfo[]> {
-    return await listSessions(cwd, sessionDir ?? getDefaultSessionDir(cwd), onProgress);
-  }
-
-  static async listAll(onProgress?: SessionListProgress): Promise<SessionInfo[]> {
-    return await listAllSessions(onProgress);
   }
 }
 

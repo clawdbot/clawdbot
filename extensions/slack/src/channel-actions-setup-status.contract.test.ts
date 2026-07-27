@@ -44,22 +44,6 @@ describe("slack actions contract", () => {
         expectedCapabilities: ["presentation"],
       },
       {
-        name: "interactive replies keep the shared presentation capability",
-        cfg: {
-          channels: {
-            slack: {
-              botToken: "xoxb-test",
-              appToken: "xapp-test",
-              capabilities: {
-                interactiveReplies: true,
-              },
-            },
-          },
-        } as OpenClawConfig,
-        expectedActions: slackDefaultActions,
-        expectedCapabilities: ["presentation"],
-      },
-      {
         name: "missing tokens disables the actions surface",
         cfg: {
           channels: {
@@ -115,7 +99,7 @@ describe("slack setup contract", () => {
         assertPatchedConfig: (cfg) => {
           expect(cfg.channels?.slack).toMatchObject({
             enabled: true,
-            identity: "user",
+            postAs: "user",
             userToken: "test-user-token",
             appToken: "test-app-token",
           });
@@ -135,7 +119,7 @@ describe("slack setup contract", () => {
         assertPatchedConfig: (cfg) => {
           expect(cfg.channels?.slack).toMatchObject({
             enabled: true,
-            identity: "user",
+            postAs: "user",
             mode: "http",
             userToken: "test-user-token",
             signingSecret: "test-signing-secret",
@@ -149,7 +133,7 @@ describe("slack setup contract", () => {
         cfg: {
           channels: {
             slack: {
-              identity: "user",
+              postAs: "user",
               userToken: "test-old-user-token",
               appToken: "test-old-app-token",
             },
@@ -164,7 +148,7 @@ describe("slack setup contract", () => {
         assertPatchedConfig: (cfg) => {
           expect(cfg.channels?.slack).toMatchObject({
             enabled: true,
-            identity: "user",
+            postAs: "user",
             mode: "http",
             userToken: "test-user-token",
             signingSecret: "test-signing-secret",
@@ -208,7 +192,7 @@ describe("slack setup contract", () => {
         assertPatchedConfig: (cfg) => {
           expect(cfg.channels?.slack).toMatchObject({
             enabled: true,
-            identity: "bot",
+            postAs: "bot",
             botToken: "test-bot-token",
             appToken: "test-app-token",
           });

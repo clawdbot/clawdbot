@@ -323,7 +323,7 @@ If disabling SIP is not acceptable for your threat model:
     Mention gating for groups:
 
     - iMessage has no native mention metadata
-    - mention detection uses regex patterns (`agents.list[].groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
+    - mention detection uses regex patterns (`agents.entries.*.groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
     - with no configured patterns, mention gating cannot be enforced
     - control commands from authorized senders bypass mention gating
 
@@ -670,81 +670,15 @@ Disable:
 
 ## Coalescing split-send DMs (command + URL in one composition)
 
-When a user types a command and a URL together — e.g. `Dump https://example.com/article` — Apple's Messages app splits the send into **two separate `chat.db` rows**:
+Apple can store a command and its URL preview as separate physical `chat.db` rows. `imsg` 0.13.1 and newer coalesces those rows before watch, history, or search returns the message, so OpenClaw receives one logical inbound message without adding channel-specific DM latency.
 
-1. A text message (`"Dump"`).
-2. A URL-preview balloon (`"https://..."`) with OG-preview images as attachments.
+No iMessage coalescing setting is needed. The retired `channels.imessage.coalesceSameSenderDms` key is removed by `openclaw doctor --fix`. Generic `messages.inbound` debounce remains available when you intentionally want to batch rapid text messages across a channel.
 
-The two rows arrive at OpenClaw ~0.8-2.0 s apart on most setups. Without coalescing, the agent gets the command alone on turn 1 (and often replies "send me the URL") before the URL arrives on turn 2. This is Apple's send pipeline, not anything OpenClaw or `imsg` introduces.
+If command-plus-URL sends arrive as separate agent turns, update `imsg` on the Messages Mac:
 
-`channels.imessage.coalesceSameSenderDms` opts a DM into buffering consecutive same-sender rows. When `imsg` exposes the structural URL-preview marker `balloon_bundle_id: "com.apple.messages.URLBalloonProvider"` on one of the source rows, OpenClaw merges only that real split-send and keeps any other buffered rows as separate turns. On older `imsg` builds that emit no balloon metadata at all, OpenClaw cannot tell a split-send from separate sends, so it falls back to merging the bucket. That preserves the pre-metadata behavior rather than regressing `Dump <url>` split-sends into two turns. Group chats continue to dispatch per-message so multi-user turn structure is preserved.
-
-<Tabs>
-  <Tab title="When to enable">
-    Enable when:
-
-    - You ship skills that expect `command + payload` in one message (dump, paste, save, queue, etc.).
-    - Your users paste URLs alongside commands.
-    - You can accept the added DM turn latency (see below).
-
-    Leave disabled when:
-
-    - You need minimum command latency for single-word DM triggers.
-    - All your flows are one-shot commands without payload follow-ups.
-
-  </Tab>
-  <Tab title="Enabling">
-    ```json5
-    {
-      channels: {
-        imessage: {
-          coalesceSameSenderDms: true, // opt in (default: false)
-        },
-      },
-    }
-    ```
-
-    With the flag on and no explicit `messages.inbound.byChannel.imessage` or global `messages.inbound.debounceMs`, the debounce window widens to **7000 ms** (the legacy default is 0 ms — no debouncing). The wider window is required because Apple's URL-preview split-send cadence can stretch to several seconds while Messages.app emits the preview row.
-
-    To tune the window yourself:
-
-    ```json5
-    {
-      messages: {
-        inbound: {
-          byChannel: {
-            // 7000 ms covers observed Messages.app URL-preview delays.
-            imessage: 7000,
-          },
-        },
-      },
-    }
-    ```
-
-  </Tab>
-  <Tab title="Trade-offs">
-    - **Precise merging needs current `imsg` payload metadata.** With `balloon_bundle_id` present, only the real split-send merges; the metadata-less fallback merge described above is interim back-compat, removed once `imsg` coalesces split-sends upstream.
-    - **Added latency for DM messages.** With the flag on, every DM (including standalone control commands and single-text follow-ups) waits up to the debounce window before dispatching, in case a URL-preview row is coming. Group-chat messages keep instant dispatch.
-    - **Merged output is bounded.** Merged text caps at 4000 chars with an explicit `…[truncated]` marker; attachments cap at 20; source entries cap at 10 (first-plus-latest retained beyond that). Every source GUID is tracked in `coalescedMessageGuids` for downstream telemetry.
-    - **DM-only.** Group chats fall through to per-message dispatch so the bot stays responsive when multiple people are typing.
-    - **Opt-in, per-channel.** Other channels (Discord, Slack, Telegram, WhatsApp, …) are unaffected. Legacy BlueBubbles configs that set `channels.bluebubbles.coalesceSameSenderDms` should migrate that value to `channels.imessage.coalesceSameSenderDms`.
-
-  </Tab>
-</Tabs>
-
-### Scenarios and what the agent sees
-
-The "Flag on" column shows behavior on an `imsg` build that emits `balloon_bundle_id`. On older `imsg` builds that emit no balloon metadata at all, the rows below marked "Two turns" / "N turns" instead fall back to a legacy merge (one turn): OpenClaw cannot structurally tell a split-send from separate sends, so it preserves the pre-metadata merge. Precise separation activates once the build emits balloon metadata.
-
-| User composes                                                      | `chat.db` produces                  | Flag off (default)                      | Flag on + window (imsg emits balloon metadata)                                                      |
-| ------------------------------------------------------------------ | ----------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `Dump https://example.com` (one send)                              | 2 rows ~1 s apart                   | Two agent turns: "Dump" alone, then URL | One turn: merged text `Dump https://example.com`                                                    |
-| `Save this 📎image.jpg caption` (attachment + text)                | 2 rows without URL balloon metadata | Two turns                               | Two turns after metadata is observed; one merged turn on old/pre-latch metadata-less sessions       |
-| `/status` (standalone command)                                     | 1 row                               | Instant dispatch                        | **Wait up to window, then dispatch**                                                                |
-| URL pasted alone                                                   | 1 row                               | Instant dispatch                        | Wait up to window, then dispatch                                                                    |
-| Text + URL sent as two deliberate separate messages, minutes apart | 2 rows outside window               | Two turns                               | Two turns (window expires between them)                                                             |
-| Rapid flood (>10 small DMs inside window)                          | N rows without URL balloon metadata | N turns                                 | N turns after metadata is observed; one bounded merged turn on old/pre-latch metadata-less sessions |
-| Two people typing in a group chat                                  | N rows from M senders               | M+ turns (one per sender bucket)        | M+ turns — group chats are not coalesced                                                            |
+```bash
+brew update && brew upgrade imsg
+```
 
 ## Inbound recovery after a bridge or gateway restart
 
@@ -840,7 +774,7 @@ openclaw channels status --probe --channel imessage
     - `channels.imessage.groupPolicy`
     - `channels.imessage.groupAllowFrom`
     - `channels.imessage.groups` allowlist behavior
-    - mention pattern configuration (`agents.list[].groupChat.mentionPatterns`)
+    - mention pattern configuration (`agents.entries.*.groupChat.mentionPatterns`)
 
   </Accordion>
 

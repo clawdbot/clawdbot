@@ -107,6 +107,12 @@ enum MacChatTranscriptCache {
     @MainActor
     static func makeContext() -> Context? {
         guard let gatewayID = currentGatewayID() else { return nil }
+        return self.makeContext(gatewayID: gatewayID)
+    }
+
+    /// Explicit profile context for windows whose route is independent of the app-wide gateway.
+    @MainActor
+    static func makeContext(gatewayID: String) -> Context? {
         guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
         else {
             return nil

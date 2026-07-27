@@ -47,6 +47,14 @@ const transcriptStoreMocks = vi.hoisted(() => ({
     (limit: number) => Array<{ role: "user" | "assistant"; text: string; at: number }>
   >(() => []),
 }));
+const greetingMocks = vi.hoisted(() => ({
+  acknowledgeSystemAgentGreetingDelivery: vi.fn(),
+  loadSystemAgentGreetingFacts: vi.fn(),
+  resolveSystemAgentGreeting: vi.fn(),
+}));
+const onboardingWelcomeMocks = vi.hoisted(() => ({
+  buildOnboardingWelcome: vi.fn(),
+}));
 
 vi.mock("../../system-agent/setup-inference.js", () => ({
   activateSetupInference: setupInferenceMocks.activateSetupInference,
@@ -67,6 +75,18 @@ vi.mock("../../system-agent/transcript-store.js", () => ({
   appendTranscriptReset: transcriptStoreMocks.appendTranscriptReset,
   appendTranscriptTurn: transcriptStoreMocks.appendTranscriptTurn,
   readTranscriptTail: transcriptStoreMocks.readTranscriptTail,
+}));
+vi.mock("../../system-agent/greeting.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../system-agent/greeting.js")>();
+  return {
+    ...actual,
+    acknowledgeSystemAgentGreetingDelivery: greetingMocks.acknowledgeSystemAgentGreetingDelivery,
+    loadSystemAgentGreetingFacts: greetingMocks.loadSystemAgentGreetingFacts,
+    resolveSystemAgentGreeting: greetingMocks.resolveSystemAgentGreeting,
+  };
+});
+vi.mock("../../system-agent/onboarding-welcome.js", () => ({
+  buildOnboardingWelcome: onboardingWelcomeMocks.buildOnboardingWelcome,
 }));
 
 type RespondCall = {
@@ -190,6 +210,20 @@ beforeEach(async () => {
   transcriptStoreMocks.appendTranscriptTurn.mockReset();
   transcriptStoreMocks.appendTranscriptReset.mockReset();
   transcriptStoreMocks.readTranscriptTail.mockReset().mockReturnValue([]);
+  greetingMocks.acknowledgeSystemAgentGreetingDelivery.mockReset();
+  greetingMocks.loadSystemAgentGreetingFacts.mockReset().mockReturnValue({
+    updateAvailable: null,
+    channelHealth: { available: true, degraded: [] },
+    recentExternalEdit: false,
+    auditSequence: 0,
+  });
+  greetingMocks.resolveSystemAgentGreeting.mockReset().mockResolvedValue({
+    text: "I'm OpenClaw. All systems nominal.",
+    source: "model",
+  });
+  onboardingWelcomeMocks.buildOnboardingWelcome.mockReset().mockResolvedValue({
+    text: "Inference is ready. Let's finish setup.",
+  });
 });
 
 afterEach(() => {
@@ -201,6 +235,10 @@ afterEach(() => {
   providerAuthChoiceMocks.applyAuthChoiceLoadedPluginProvider.mockReset();
   setupSharedMocks.readSetupConfigFileSnapshot.mockReset();
   setupSharedMocks.writeWizardConfigFile.mockReset();
+  greetingMocks.loadSystemAgentGreetingFacts.mockReset();
+  greetingMocks.resolveSystemAgentGreeting.mockReset();
+  greetingMocks.acknowledgeSystemAgentGreetingDelivery.mockReset();
+  onboardingWelcomeMocks.buildOnboardingWelcome.mockReset();
   verifiedInference = undefined;
   verifiedInferenceDeps = undefined;
   resetCommandQueueStateForTest();

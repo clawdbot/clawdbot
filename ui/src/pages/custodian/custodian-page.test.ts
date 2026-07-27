@@ -293,11 +293,10 @@ describe("custodian page", () => {
     await page.updateComplete;
     expect(page.querySelector("openclaw-option-card")).not.toBeNull();
 
-    setGatewaySnapshot({ connected: false, reconnecting: true });
+    setGatewaySnapshot({ phase: "reconnecting" });
     await page.updateComplete;
     setGatewaySnapshot({
-      connected: true,
-      reconnecting: false,
+      phase: "connected",
     });
     await page.updateComplete;
 
@@ -537,6 +536,69 @@ describe("custodian page", () => {
     await waitForFast(() => expect(page.querySelector("openclaw-option-card")).toBeNull());
   });
 
+  it("exits onboarding locally when the question declares an exit skip action", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "What would you like to do first?",
+      action: "none",
+      question: {
+        id: "onboarding-next-step",
+        header: "Next step",
+        question: "What would you like to do first?",
+        options: [{ label: "Talk to my agent" }, { label: "Connect a channel" }],
+        isOther: true,
+        skipAction: "exit",
+      },
+    });
+    const { context } = createContext(request);
+    const { page } = await mountPage(context);
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await page.updateComplete;
+
+    page.querySelector<HTMLButtonElement>(".option-card__skip")!.click();
+
+    expect(context.navigate).toHaveBeenCalledWith("chat");
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("does not render a silent assistant reply", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: " NO_REPLY ",
+      action: "none",
+    });
+    const { context } = createContext(request);
+    const { page } = await mountPage(context);
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await page.updateComplete;
+
+    expect(page.querySelector(".chat-group.assistant")).toBeNull();
+    expect(page.textContent).not.toContain("NO_REPLY");
+  });
+
+  it("keeps a structured question attached to a silent assistant reply", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "NO_REPLY",
+      action: "none",
+      question: {
+        id: "channel",
+        header: "Channel",
+        question: "Which channel?",
+        options: [{ label: "WhatsApp" }, { label: "Telegram" }],
+      },
+    });
+    const { context } = createContext(request);
+    const { page } = await mountPage(context);
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await page.updateComplete;
+
+    expect(page.querySelector(".chat-group.assistant")).toBeNull();
+    expect(page.querySelector("openclaw-option-card")).not.toBeNull();
+    expect(page.textContent).toContain("Which channel?");
+    expect(page.textContent).not.toContain("NO_REPLY");
+  });
+
   it("retires a structured question after a freeform reply", async () => {
     const question = {
       id: "access",
@@ -607,6 +669,40 @@ describe("custodian page", () => {
     expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "status" });
   });
 
+  it("renders and sends quick actions on the normal caretaker welcome", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionId: "control-ui-caretaker-00000000-0000-4000-8000-000000000001",
+        reply: "I'm OpenClaw. All systems nominal.",
+        action: "none",
+        question: {
+          id: "system-agent-quick-actions",
+          header: "Quick actions",
+          question: "What would you like me to do?",
+          options: [
+            { label: "Talk to my agent", reply: "talk to agent", recommended: true },
+            { label: "Show recent changes", reply: "audit" },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        sessionId: "control-ui-caretaker-00000000-0000-4000-8000-000000000001",
+        reply: "Here's the audit state.",
+        action: "none",
+      });
+    const { context } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await page.updateComplete;
+
+    page.querySelector<HTMLButtonElement>('[data-option-value="Show recent changes"]')!.click();
+
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "audit" });
+    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("welcomeVariant");
+  });
+
   it("starts a fresh welcome when onboarding mode changes", async () => {
     const request = vi
       .fn()
@@ -646,7 +742,8 @@ describe("custodian page", () => {
     await page.updateComplete;
 
     expect(context.navigate).toHaveBeenCalledWith("chat", {
-      search: `?session=main&draft=${encodeURIComponent("Wake up, my friend!")}`,
+      pathname: "/chat/main",
+      search: `?draft=${encodeURIComponent("Wake up, my friend!")}`,
     });
   });
 

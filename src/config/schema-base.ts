@@ -12,6 +12,7 @@ import {
 import { FIELD_LABELS } from "./schema.labels.js";
 import { asSchemaObject, cloneSchema } from "./schema.shared.js";
 import { applyDerivedTags } from "./schema.tags.js";
+import { applyResolvedConfigTierHints } from "./schema.tiers.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 type ConfigSchema = Record<string, unknown>;
@@ -246,10 +247,16 @@ function computeBaseConfigSchemaStablePayload(): BaseConfigSchemaStablePayload {
     "",
     isSensitiveUrlConfigPath,
   );
+  const publicSchema = stripLegacyCompatSchemaPaths(stripChannelSchema(schema));
   const stablePayload = {
-    schema: stripLegacyCompatSchemaPaths(stripChannelSchema(schema)),
-    uiHints: stripLegacyCompatHints(
-      applyDerivedTags(applySensitiveUrlHints(baseHints, sensitiveUrlPaths)),
+    schema: publicSchema,
+    uiHints: applyDerivedTags(
+      applyResolvedConfigTierHints(
+        publicSchema,
+        stripLegacyCompatHints(
+          applyDerivedTags(applySensitiveUrlHints(baseHints, sensitiveUrlPaths)),
+        ),
+      ),
     ),
     version: VERSION,
   } satisfies BaseConfigSchemaStablePayload;

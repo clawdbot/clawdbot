@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 // OpenClaw gateway methods host the setup/repair conversation for clients.
 import {
   buildSystemAgentSessionInvalidatedErrorDetails,
@@ -18,16 +17,22 @@ import {
   SYSTEM_AGENT_APPROVAL_TIMEOUT_MS,
   type SystemAgentApprovalRequestPayload,
 } from "../../infra/system-agent-approvals.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
 import { resolveSystemAgentDelegationKey } from "../../system-agent/delegation-session.js";
+import {
+  acknowledgeSystemAgentGreetingDelivery,
+  buildSystemAgentGreetingQuestion,
+  loadSystemAgentGreetingFacts,
+  resolveSystemAgentGreeting,
+} from "../../system-agent/greeting.js";
 import { isSystemAgentInferenceUnavailableError } from "../../system-agent/inference-error.js";
 import { buildNewAgentWelcome } from "../../system-agent/new-agent-welcome.js";
 import { buildOnboardingWelcome } from "../../system-agent/onboarding-welcome.js";
 import { describeSystemAgentPersistentOperation } from "../../system-agent/operations.js";
-import { formatSystemAgentStartupMessage } from "../../system-agent/overview.js";
 import {
   appendTranscriptReset,
   appendTranscriptTurn,
@@ -77,6 +82,15 @@ function getSystemAgentSessionQueue(
     systemAgentSessionQueues.set(sessions, queue);
   }
   return queue;
+}
+
+function acknowledgeDeliveredSystemAgentWelcome(session: SystemAgentChatSession): void {
+  const auditSequence = session.welcomeAuditSequence;
+  if (auditSequence === undefined) {
+    return;
+  }
+  acknowledgeSystemAgentGreetingDelivery({ auditSequence });
+  delete session.welcomeAuditSequence;
 }
 
 async function runSystemAgentGatewayTask<T>(task: () => Promise<T>): Promise<T> {
@@ -521,6 +535,8 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           await existing?.engine.dispose();
         }
         let session = sessions.get(sessionId);
+        let greetingAuditSequence: number | undefined;
+        const welcomeOnly = params.message === undefined || !params.message.trim();
         if (!session) {
           const inference = params.delegation
             ? await import("../../system-agent/inference-fallback.js").then(
@@ -572,7 +588,18 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             } else if (params.welcomeVariant === "new-agent") {
               welcome = buildNewAgentWelcome({ engine });
             } else {
-              welcome = formatSystemAgentStartupMessage(await engine.loadOverview());
+              const overview = await engine.loadOverview();
+              const facts = loadSystemAgentGreetingFacts();
+              greetingAuditSequence = facts.auditSequence;
+              welcome = (
+                await resolveSystemAgentGreeting({
+                  overview,
+                  facts,
+                  planner: (plannerParams) => engine.planGreeting(plannerParams),
+                  allowInference: welcomeOnly,
+                })
+              ).text;
+              welcomeQuestion = buildSystemAgentGreetingQuestion(overview, facts);
               engine.noteAssistantMessage(welcome);
             }
           } catch (error) {
@@ -592,11 +619,14 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             engine,
             welcome,
             ...(welcomeQuestion ? { welcomeQuestion } : {}),
+            ...(greetingAuditSequence !== undefined
+              ? { welcomeAuditSequence: greetingAuditSequence }
+              : {}),
             lastUsedAt: Date.now(),
             ownerKey,
           };
           sessions.set(sessionId, session);
-          if (params.message === undefined || !params.message.trim()) {
+          if (welcomeOnly) {
             respond(
               true,
               {
@@ -607,10 +637,12 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               },
               undefined,
             );
+            acknowledgeDeliveredSystemAgentWelcome(session);
             return;
           }
         }
         session.lastUsedAt = Date.now();
+        // Inline check (not `welcomeOnly`) so TS narrows params.message below.
         if (params.message === undefined || !params.message.trim()) {
           respond(
             true,
@@ -622,6 +654,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             },
             undefined,
           );
+          acknowledgeDeliveredSystemAgentWelcome(session);
           return;
         }
         const historyStart = session.engine.historyLength();

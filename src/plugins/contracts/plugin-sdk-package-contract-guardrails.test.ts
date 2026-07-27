@@ -748,7 +748,15 @@ describe("plugin-sdk package contract guardrails", () => {
   });
 
   it("keeps package.json exports aligned with built plugin-sdk entrypoints", () => {
-    expect(collectPluginSdkPackageExports()).toEqual([...publicPluginSdkEntrypoints].toSorted());
+    const localOnly = new Set(privateLocalOnlyPluginSdkEntrypoints);
+    const packageExports = collectPluginSdkPackageExports();
+
+    expect(packageExports.filter((entrypoint) => !localOnly.has(entrypoint))).toEqual(
+      [...publicPluginSdkEntrypoints].toSorted(),
+    );
+    expect(
+      publicPluginSdkEntrypoints.filter((entrypoint) => !packageExports.includes(entrypoint)),
+    ).toEqual([]);
   });
 
   it("keeps Vitest-backed SDK test helpers local-only", () => {

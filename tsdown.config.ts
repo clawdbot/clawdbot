@@ -233,7 +233,11 @@ function shouldAlwaysBundleDependency(id: string): boolean {
     id === "@openclaw/retry" ||
     id === "@openclaw/media-core" ||
     id.startsWith("@openclaw/media-core/") ||
-    ["@openclaw/acp-core", "@openclaw/workboard-contract"].includes(id) ||
+    [
+      "@openclaw/acp-core",
+      "@openclaw/session-url-contract",
+      "@openclaw/workboard-contract",
+    ].includes(id) ||
     id.startsWith("@openclaw/acp-core/") ||
     id === "zod" ||
     id.startsWith("zod/")
@@ -435,7 +439,7 @@ function shouldExternalizeGatewayProtocolDependency(id: string): boolean {
 }
 
 function shouldExternalizeGatewayClientDependency(id: string): boolean {
-  return ["ws", "@openclaw/net-policy", "@openclaw/gateway-protocol"].some(
+  return ["ws", "@openclaw/gateway-protocol"].some(
     (dependency) => id === dependency || id.startsWith(`${dependency}/`),
   );
 }

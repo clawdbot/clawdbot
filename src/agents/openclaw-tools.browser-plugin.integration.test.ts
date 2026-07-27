@@ -243,9 +243,7 @@ describe("createOpenClawTools browser plugin integration", () => {
         allow: ["browser"],
       },
       tools: {
-        experimental: {
-          planTool: true,
-        },
+        updatePlan: true,
       },
     } as OpenClawConfig;
     let capturedRuntimeConfig: OpenClawConfig | undefined;
@@ -292,9 +290,7 @@ describe("createOpenClawTools browser plugin integration", () => {
         allow: ["browser"],
       },
       tools: {
-        experimental: {
-          planTool: true,
-        },
+        updatePlan: true,
       },
     } as OpenClawConfig;
     let capturedRuntimeConfig: OpenClawConfig | undefined;

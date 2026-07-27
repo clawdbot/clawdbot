@@ -171,17 +171,11 @@ export type LegacyInteractiveReplyTextBlock = {
   text: string;
 };
 
-/** @deprecated Use MessagePresentationTextBlock. */
-export type InteractiveReplyTextBlock = LegacyInteractiveReplyTextBlock;
-
 export type LegacyInteractiveReplySelectBlock = {
   type: "select";
   placeholder?: string;
   options: LegacyInteractiveReplyOption[];
 };
-
-/** @deprecated Use MessagePresentationSelectBlock. */
-export type InteractiveReplySelectBlock = LegacyInteractiveReplySelectBlock;
 
 export type LegacyInteractiveReplyBlock =
   | LegacyInteractiveReplyTextBlock

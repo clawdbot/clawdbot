@@ -5,18 +5,28 @@ import {
   abortActiveReplyRuns,
   abortReplyRunBySessionId,
   expireStaleReplyRunBySessionId,
-  forceClearReplyRunBySessionId,
+  forceClearReplyOperation,
   isReplyRunEvidenceStaleBySessionId,
   isReplyRunActiveForSessionId,
   isReplyRunAbortableForCompaction,
   isReplyRunStreamingForSessionId,
   listActiveReplyRunSessionIds,
   queueReplyRunMessage,
+  resolveActiveReplyOperationForSessionId,
+  resolveActiveReplyRunSessionId,
   resolveReplyBackendQueueMessageMismatch,
   resolveReplyRunPhaseForSessionId,
+  type ReplyOperation,
   type ReplyOperationPhase,
   waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
+import { getRuntimeConfig } from "../../config/io.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
+import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  getAgentEventLifecycleGeneration,
+  isAgentEventLifecycleGenerationCurrent,
+} from "../../infra/agent-events.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunEnded,
@@ -29,10 +39,12 @@ import {
   logSessionStateChange,
   updateDiagnosticSessionFile,
 } from "../../logging/diagnostic.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
 import {
   ACTIVE_EMBEDDED_RUNS,
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
+  ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
   ACTIVE_EMBEDDED_RUN_SNAPSHOTS,
@@ -42,6 +54,7 @@ import {
   EMBEDDED_RUN_WAITERS,
   getActiveEmbeddedRunCount,
   RETAINED_EMBEDDED_RUN_ABORTABILITY_RUN_IDS,
+  setActiveEmbeddedRunLifecycleGeneration,
   type ActiveEmbeddedRunSnapshot,
   type AbandonedEmbeddedRun,
   type EmbeddedAgentQueueHandle,
@@ -613,6 +626,35 @@ export function isEmbeddedAgentRunActive(sessionId: string): boolean {
   return active;
 }
 
+/**
+ * Returns whether a registry-owned run is still doing user-visible work.
+ * Terminal reply operations and aborted handles retain their lane for cleanup,
+ * but must not keep session activity projections in the running state.
+ */
+export function isEmbeddedAgentRunInProgress(sessionId: string): boolean {
+  const replyPhase = resolveReplyRunPhaseForSessionId(sessionId);
+  const replyInProgress =
+    replyPhase !== undefined &&
+    replyPhase !== "completed" &&
+    replyPhase !== "failed" &&
+    replyPhase !== "aborted";
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  let handleInProgress = handle !== undefined;
+  if (handle?.isAborted) {
+    try {
+      if (handle.isAborted()) {
+        handleInProgress = false;
+      }
+    } catch {
+      // A failed optional status probe cannot prove that live work has ended.
+      handleInProgress = true;
+    }
+  }
+  // Reply operations and embedded handles are independent lifecycle owners.
+  // A retained terminal owner must not hide a newer live owner for the session.
+  return replyInProgress || handleInProgress;
+}
+
 export function resolveEmbeddedAgentReplyRunPhase(
   sessionId: string,
 ): ReplyOperationPhase | undefined {
@@ -790,6 +832,8 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
   reason?: string;
 }): Promise<AbortAndDrainEmbeddedAgentRunResult> {
   const settleMs = params.settleMs ?? 15_000;
+  const embeddedRunHandle = ACTIVE_EMBEDDED_RUNS.get(params.sessionId);
+  const replyOperation = resolveActiveReplyOperationForSessionId(params.sessionId);
   // Recovery is a staleness expiry: stamp run_stalled on the reply operation
   // BEFORE any handle abort, or the run loop's abort handler re-enters
   // abortByUser and misattributes the watchdog kill to the user.
@@ -807,11 +851,105 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
   }
   const aborted = abortEmbeddedAgentRun(params.sessionId) || expiredReplyRun;
   const drained = aborted ? await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs) : false;
+  const persistenceSnapshot =
+    params.forceClear === true && params.sessionKey
+      ? tryLoadForceClearSessionSnapshot(params.sessionKey)
+      : undefined;
   const forceCleared =
     params.forceClear === true && (!aborted || !drained)
-      ? forceClearEmbeddedAgentRun(params.sessionId, params.sessionKey, params.reason)
+      ? forceClearEmbeddedAgentRun(
+          params.sessionId,
+          embeddedRunHandle,
+          replyOperation,
+          params.sessionKey,
+          params.reason,
+        )
       : false;
+  if (forceCleared && params.sessionKey && persistenceSnapshot) {
+    await persistForceClearedEmbeddedRunTerminalState({
+      ...persistenceSnapshot,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+    });
+  }
   return { aborted, drained, forceCleared };
+}
+
+type ForceClearSessionSnapshot = {
+  startedAt?: number;
+  storePath: string;
+  updatedAt: number;
+};
+
+function tryLoadForceClearSessionSnapshot(
+  sessionKey: string,
+): ForceClearSessionSnapshot | undefined {
+  try {
+    const cfg = getRuntimeConfig();
+    const agentId = resolveAgentIdFromSessionKey(sessionKey);
+    const storePath = resolveStorePath(cfg.session?.store, { agentId });
+    const entry = loadSessionEntry({ sessionKey, storePath });
+    if (!entry || entry.status !== "running") {
+      return undefined;
+    }
+    return {
+      ...(entry.startedAt === undefined ? {} : { startedAt: entry.startedAt }),
+      storePath,
+      updatedAt: entry.updatedAt,
+    };
+  } catch (err) {
+    diag.warn(
+      `load force-clear session snapshot failed: sessionKey=${sessionKey} error=${String(err)}`,
+    );
+    return undefined;
+  }
+}
+
+/** Persists terminal state when a forced registry clear cannot emit normal lifecycle. */
+async function persistForceClearedEmbeddedRunTerminalState(params: {
+  sessionId: string;
+  sessionKey: string;
+  startedAt?: number;
+  storePath: string;
+  updatedAt: number;
+}): Promise<void> {
+  try {
+    await updateSessionEntry(
+      { sessionKey: params.sessionKey, storePath: params.storePath },
+      (entry) => {
+        // A replacement can reuse the session id; bind this patch to both owners' exact snapshot.
+        if (
+          ACTIVE_EMBEDDED_RUNS.has(params.sessionId) ||
+          ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.has(params.sessionKey) ||
+          isReplyRunActiveForSessionId(params.sessionId) ||
+          resolveActiveReplyRunSessionId(params.sessionKey) !== undefined ||
+          entry.sessionId !== params.sessionId ||
+          entry.status !== "running" ||
+          entry.updatedAt !== params.updatedAt ||
+          entry.startedAt !== params.startedAt
+        ) {
+          return null;
+        }
+        const endedAt = Date.now();
+        return {
+          status: "killed",
+          abortedLastRun: true,
+          endedAt,
+          updatedAt: endedAt,
+        };
+      },
+      {
+        skipMaintenance: true,
+        takeCacheOwnership: true,
+        requireWriteSuccess: false,
+      },
+    );
+  } catch (err) {
+    // Registry ownership is already gone; preserve the completed recovery result.
+    diag.warn(
+      `persist force-cleared terminal state failed: sessionKey=${params.sessionKey} error=${String(err)}`,
+    );
+  }
 }
 
 function notifyEmbeddedRunEnded(sessionId: string) {
@@ -835,6 +973,22 @@ export function setActiveEmbeddedRun(
   sessionKey?: string,
   sessionFile?: string,
 ) {
+  const currentLifecycleGeneration = getAgentEventLifecycleGeneration();
+  const incomingLifecycleGeneration = setActiveEmbeddedRunLifecycleGeneration(
+    handle,
+    currentLifecycleGeneration,
+  );
+  // The immutable handle generation rejects delayed stale registration even
+  // when rotation left no replacement owner in the session slot.
+  if (!isAgentEventLifecycleGenerationCurrent(incomingLifecycleGeneration)) {
+    try {
+      handle.abort("restart");
+    } catch (error) {
+      diag.warn(`stale run registration abort failed: sessionId=${sessionId} err=${String(error)}`);
+      throw error;
+    }
+    return;
+  }
   const previousHandle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   const wasActive = previousHandle !== undefined;
   if (previousHandle) {
@@ -845,6 +999,7 @@ export function setActiveEmbeddedRun(
   if (handle.runId) {
     ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.set(handle.runId, handle);
   }
+  clearActiveRunSessionKeys(sessionId);
   setActiveRunSessionKey(sessionKey, sessionId);
   clearActiveRunSessionFiles(sessionId);
   setActiveRunSessionFile(sessionFile, sessionId);
@@ -855,7 +1010,7 @@ export function setActiveEmbeddedRun(
     state: "processing",
     reason: wasActive ? "run_replaced" : "run_started",
   });
-  markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
+  markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId: handle.runId });
   if (!sessionId.startsWith("probe-")) {
     diag.debug(`run registered: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
   }
@@ -874,8 +1029,14 @@ export function updateActiveEmbeddedRunSnapshot(
 export function updateActiveEmbeddedRunSessionFile(
   sessionId: string,
   sessionFile: string | undefined,
+  lifecycleGeneration: string,
 ): void {
-  if (!ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  if (
+    handle === undefined ||
+    ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS.get(handle) !== lifecycleGeneration ||
+    !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)
+  ) {
     return;
   }
   clearActiveRunSessionFiles(sessionId);
@@ -919,12 +1080,14 @@ export function clearActiveEmbeddedRun(
 
 function forceClearEmbeddedAgentRun(
   sessionId: string,
+  expectedHandle: EmbeddedAgentQueueHandle | undefined,
+  expectedReplyOperation: ReplyOperation | undefined,
   sessionKey?: string,
   reason = "stuck_recovery",
 ): boolean {
   let cleared = false;
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
-  if (handle) {
+  if (handle && handle === expectedHandle) {
     ACTIVE_EMBEDDED_RUNS.delete(sessionId);
     clearEmbeddedRunAbortability(handle);
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
@@ -936,7 +1099,10 @@ function forceClearEmbeddedAgentRun(
     cleared = true;
   }
   const cause = new Error(`Embedded run force-cleared by ${reason}`);
-  return forceClearReplyRunBySessionId(sessionId, cause) || cleared;
+  return (
+    (expectedReplyOperation ? forceClearReplyOperation(expectedReplyOperation, cause) : false) ||
+    cleared
+  );
 }
 
 const testing = {

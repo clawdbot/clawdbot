@@ -257,4 +257,21 @@ describe("minimal npm extended-stable workflow", () => {
       "find preflight-tarball -type f -name '*.tgz'",
     );
   });
+
+  it("publishes gateway packages in manifest order before the root package", () => {
+    const parsed = workflow();
+    const preflightPack = step(
+      parsed.jobs?.preflight_openclaw_npm,
+      "Pack publishable core packages",
+    );
+    const publish = step(parsed.jobs?.publish_openclaw_npm, "Publish");
+    expect(preflightPack.env?.CORE_PACKAGE_DIRS).toBe(
+      "packages/ai packages/gateway-protocol packages/gateway-client",
+    );
+    expect(readFileSync(workflowPath, "utf8")).toContain('packageName: "@openclaw/gateway-client"');
+    expect(publish.run).toContain(".corePackageTarballs[] | [.packageName, .tarballName] | @tsv");
+    expect(publish.run).toContain(
+      'bash scripts/openclaw-npm-publish.sh --publish "${publish_target}"',
+    );
+  });
 });

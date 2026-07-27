@@ -32,6 +32,7 @@ import {
   listBundledPluginPackArtifacts,
 } from "./lib/bundled-plugin-build-entries.mjs";
 import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
+import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import {
   isLegacyPluginDependencyInstallStagePath,
   LOCAL_BUILD_METADATA_DIST_PATHS,
@@ -83,7 +84,6 @@ const rootPackageExcludedExtensionPrefixes = [...rootPackageExcludedExtensionDir
   (extensionId) => `dist/extensions/${extensionId}/`,
 );
 const requiredPathGroups = [
-  "npm-shrinkwrap.json",
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   ["dist/index.js", "dist/index.mjs"],
   ["dist/entry.js", "dist/entry.mjs"],
@@ -107,6 +107,7 @@ const requiredPathGroups = [
   "scripts/lib/official-external-plugin-catalog.json",
   "scripts/lib/official-external-provider-catalog.json",
   "scripts/lib/recommended-tool-installs.json",
+  "scripts/lib/guard-inventory-utils.mjs",
   "scripts/lib/package-dist-imports.mjs",
   "scripts/postinstall-bundled-plugins.mjs",
   "dist/agents/compaction-planning.worker.js",
@@ -201,21 +202,6 @@ const PACKED_PLUGIN_SDK_TYPESCRIPT_SMOKE_FIXTURE = resolve(
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts",
 );
 
-function positiveEnvInt(name: string, fallback: number): number {
-  const raw = process.env[name]?.trim();
-  if (raw === undefined || raw === "") {
-    return fallback;
-  }
-  if (!/^[1-9]\d*$/u.test(raw)) {
-    throw new Error(`invalid ${name}: ${raw}`);
-  }
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value)) {
-    throw new Error(`invalid ${name}: ${raw}`);
-  }
-  return value;
-}
-
 export function runReleaseCheckCommand(
   invocation: ReleaseCheckCommandInvocation,
   options: {
@@ -235,16 +221,18 @@ export function runReleaseCheckCommand(
     killSignal: "SIGKILL",
     maxBuffer:
       options.maxBuffer ??
-      positiveEnvInt(
+      readPositiveEnvInt(
         "OPENCLAW_RELEASE_CHECK_COMMAND_MAX_BUFFER_BYTES",
+        process.env,
         DEFAULT_RELEASE_CHECK_COMMAND_MAX_BUFFER_BYTES,
       ),
     shell: invocation.shell ?? options.shell,
     stdio: options.stdio,
     timeout:
       options.timeoutMs ??
-      positiveEnvInt(
+      readPositiveEnvInt(
         "OPENCLAW_RELEASE_CHECK_COMMAND_TIMEOUT_MS",
+        process.env,
         DEFAULT_RELEASE_CHECK_COMMAND_TIMEOUT_MS,
       ),
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
@@ -477,7 +465,11 @@ export function resolveReleaseCheckLocalPackageTarballs(
   const gatewayProtocolTarballs = tarballs.filter(
     (tarballPath) => localPackageNameForTarball(tarballPath) === "@openclaw/gateway-protocol",
   );
-  const recognizedTarballs = aiTarballs.length + gatewayProtocolTarballs.length;
+  const gatewayClientTarballs = tarballs.filter(
+    (tarballPath) => localPackageNameForTarball(tarballPath) === "@openclaw/gateway-client",
+  );
+  const recognizedTarballs =
+    aiTarballs.length + gatewayProtocolTarballs.length + gatewayClientTarballs.length;
   if (recognizedTarballs !== tarballs.length) {
     throw new Error(
       `release-check: ${RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV} contains an unsupported package tarball.`,
@@ -487,9 +479,13 @@ export function resolveReleaseCheckLocalPackageTarballs(
   const aiTarballRequirement = requiresAi
     ? "exactly one @openclaw/ai tarball"
     : "no @openclaw/ai tarballs";
-  if (aiTarballs.length !== expectedAiTarballs || gatewayProtocolTarballs.length > 1) {
+  if (
+    aiTarballs.length !== expectedAiTarballs ||
+    gatewayProtocolTarballs.length > 1 ||
+    gatewayClientTarballs.length > 1
+  ) {
     throw new Error(
-      `release-check: ${RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV} must contain ${aiTarballRequirement} and at most one @openclaw/gateway-protocol tarball; found ${aiTarballs.length} and ${gatewayProtocolTarballs.length}.`,
+      `release-check: ${RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV} must contain ${aiTarballRequirement}, at most one @openclaw/gateway-protocol tarball, and at most one @openclaw/gateway-client tarball; found ${aiTarballs.length}, ${gatewayProtocolTarballs.length}, and ${gatewayClientTarballs.length}.`,
     );
   }
   return tarballs;
@@ -509,6 +505,9 @@ function localPackageNameForTarball(tarballPath: string): string | undefined {
   }
   if (/^openclaw-gateway-protocol(?:-.+)?\.tgz$/.test(filename)) {
     return "@openclaw/gateway-protocol";
+  }
+  if (/^openclaw-gateway-client(?:-.+)?\.tgz$/.test(filename)) {
+    return "@openclaw/gateway-client";
   }
   return undefined;
 }

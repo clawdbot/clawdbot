@@ -13,7 +13,14 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
-import { initSessionState } from "./session.js";
+import { finalizeInboundContext } from "./inbound-context.js";
+import { initSessionState as initSessionStateRaw } from "./session.js";
+
+const initSessionState = (
+  params: Omit<Parameters<typeof initSessionStateRaw>[0], "ctx"> & {
+    ctx: Record<string, unknown>;
+  },
+) => initSessionStateRaw({ ...params, ctx: finalizeInboundContext(params.ctx) });
 
 const hookRunnerMocks = vi.hoisted(() => ({
   hasHooks: vi.fn<HookRunner["hasHooks"]>(),
@@ -247,17 +254,17 @@ describe("session hook context wiring", () => {
     expectFields(event, {
       sessionKey,
       reason: "new",
-      transcriptArchived: true,
+      transcriptArchived: false,
     });
     expectFields(context, { sessionKey, agentId: "main", sessionId: event?.sessionId });
-    expect(event?.sessionFile).toContain(".jsonl.reset.");
 
     const [startEvent, startContext] = requireHookCall(
       hookRunnerMocks.runSessionStart,
       "session_start",
     );
     expectFields(startEvent, { resumedFrom: "old-session" });
-    expect(event?.nextSessionId).toBe(startEvent?.sessionId);
+    expect(event?.nextSessionId).toBe("old-session");
+    expect(startEvent?.sessionId).toBe("old-session");
     expectFields(startContext, { sessionId: startEvent?.sessionId });
   });
 
@@ -403,10 +410,10 @@ describe("session hook context wiring", () => {
       const [startEvent] = requireHookCall(hookRunnerMocks.runSessionStart, "session_start");
       expectFields(event, {
         reason: "daily",
-        transcriptArchived: true,
+        transcriptArchived: false,
       });
-      expect(event?.sessionFile).toContain(".jsonl.reset.");
       expect(event?.nextSessionId).toBe(startEvent?.sessionId);
+      expect(startEvent?.sessionId).toBe("daily-session");
     } finally {
       vi.useRealTimers();
     }

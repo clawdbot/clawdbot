@@ -1,0 +1,12 @@
+{
+  "id": "beam",
+  "activation": {
+    "onStartup": false,
+    "onConfigPaths": ["plugins.entries.beam"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -374,7 +374,6 @@ describe("guardSessionManager integration", () => {
   it("redacts configured text patterns before persisting transcript messages", () => {
     const cfg = {
       logging: {
-        redactSensitive: "tools",
         redactPatterns: [String.raw`([\w]|[-.])+@([\w]|[-.])+\.\w+`],
       },
     } satisfies OpenClawConfig;
@@ -413,5 +412,42 @@ describe("guardSessionManager integration", () => {
     expect(serialized).toContain('"text":"contact peter@d***.io"');
     expect(serialized).toContain('"text":"peter@d***.io\\n"');
     expect(serialized).toContain('"/tmp/peter@d***.io"');
+  });
+
+  it("can skip plugin write hooks without skipping core transcript redaction", () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_message_write",
+          handler: () => ({
+            message: makeAgentAssistantMessage({
+              content: [{ type: "text", text: "changed by hook" }],
+            }),
+          }),
+        },
+      ]),
+    );
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      config: {
+        logging: {
+          redactPatterns: [String.raw`([\w]|[-.])+@([\w]|[-.])+\.\w+`],
+        },
+      },
+      skipBeforeMessageWriteHooks: true,
+    });
+
+    sm.appendMessage(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "contact peter@dc.io" }],
+      }),
+    );
+
+    const entry = sm.getEntries().find((candidate) => candidate.type === "message");
+    expect(entry).toMatchObject({
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "contact peter@d***.io" }],
+      },
+    });
   });
 });

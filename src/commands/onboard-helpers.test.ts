@@ -152,11 +152,13 @@ describe("handleReset", () => {
     const profileConfigPath = path.join(profileStateDir, "openclaw.json");
     const profileCredentialsDir = path.join(profileStateDir, "credentials");
     const profileSessionsDir = path.join(profileStateDir, "agents", "main", "sessions");
+    const secondarySessionsDir = path.join(profileStateDir, "agents", "ops", "sessions");
     const workspaceDir = path.join(profileStateDir, "workspace");
     const defaultCredentialsDir = path.join(defaultStateDir, "credentials");
 
     fs.mkdirSync(profileCredentialsDir, { recursive: true });
     fs.mkdirSync(profileSessionsDir, { recursive: true });
+    fs.mkdirSync(secondarySessionsDir, { recursive: true });
     fs.mkdirSync(workspaceDir, { recursive: true });
     fs.mkdirSync(defaultCredentialsDir, { recursive: true });
     fs.writeFileSync(profileConfigPath, "{}\n");
@@ -166,6 +168,7 @@ describe("handleReset", () => {
       profileConfigPath,
       profileCredentialsDir,
       profileSessionsDir,
+      secondarySessionsDir,
       workspaceDir,
     ].map(expectedTrashSourcePath);
     const expectedDefaultCredentialsDir = expectedTrashSourcePath(defaultCredentialsDir);

@@ -133,6 +133,27 @@ private final class WebSocketMessageRecorder: @unchecked Sendable {
     }
 }
 
+private final class GatewayConnectionEndpointSource: @unchecked Sendable {
+    private let lock = NSLock()
+    private var endpoint: GatewayConnection.EndpointSnapshot
+
+    init(endpoint: GatewayConnection.EndpointSnapshot) {
+        self.endpoint = endpoint
+    }
+
+    func setEndpoint(_ endpoint: GatewayConnection.EndpointSnapshot) {
+        lock.lock()
+        self.endpoint = endpoint
+        lock.unlock()
+    }
+
+    func snapshot() -> GatewayConnection.EndpointSnapshot {
+        lock.lock()
+        defer { self.lock.unlock() }
+        return endpoint
+    }
+}
+
 private final class GatewayConnectionRouteConfigSource: @unchecked Sendable {
     private let lock = NSLock()
     private var url: URL
@@ -324,6 +345,43 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
         #expect(GatewayConnection.wizardCancellationOutcome(after: notFound) == .absent)
         #expect(GatewayConnection.wizardCancellationOutcome(after: locked) == .unresolved)
         #expect(GatewayConnection.wizardCancellationOutcome(after: URLError(.timedOut)) == .unresolved)
+    }
+
+    @Test func `operator connection rebuilds when direct TLS pin changes`() async throws {
+        let url = try #require(URL(string: "wss://gateway.example.invalid"))
+        let firstFingerprint = String(repeating: "a", count: 64)
+        let secondFingerprint = String(repeating: "b", count: 64)
+        let firstTLS = try #require(GatewayTLSRoute.resolve(
+            url: url,
+            connectionMode: .remote,
+            configuredFingerprint: firstFingerprint,
+            storedFingerprint: nil))
+        let secondTLS = try #require(GatewayTLSRoute.resolve(
+            url: url,
+            connectionMode: .remote,
+            configuredFingerprint: secondFingerprint,
+            storedFingerprint: nil))
+        let source = GatewayConnectionEndpointSource(endpoint: GatewayConnection.EndpointSnapshot(
+            config: (url: url, token: "token", password: nil),
+            tls: firstTLS,
+            routeAuthority: nil,
+            revision: 1))
+        let connection = GatewayConnection(endpointProvider: { source.snapshot() })
+
+        try await connection.refresh()
+        let firstGeneration = await connection._test_routeGeneration()
+        #expect(await connection.configuredTLSFingerprintSHA256() == firstFingerprint)
+
+        source.setEndpoint(GatewayConnection.EndpointSnapshot(
+            config: (url: url, token: "token", password: nil),
+            tls: secondTLS,
+            routeAuthority: nil,
+            revision: 2))
+        try await connection.refresh()
+
+        #expect(await connection._test_routeGeneration() > firstGeneration)
+        #expect(await connection.configuredTLSFingerprintSHA256() == secondFingerprint)
+        await connection.shutdown()
     }
 
     @Test func `direct endpoint never receives another route device token`() async throws {

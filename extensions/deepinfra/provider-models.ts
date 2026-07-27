@@ -334,12 +334,26 @@ export function getDeepInfraSurfaceFallbackCatalog(): DeepInfraDiscoveredCatalog
   return manifestFallbackCatalog();
 }
 
+// DeepInfra serves every model family over one OpenAI-compatible endpoint, so
+// core's endpoint-based attribution resolves all of them to thinkingFormat
+// "openai". DeepSeek models emit DSML tool-call markup (`<|DSML|tool_calls>`)
+// and reasoning_content that core only strips/recovers when thinkingFormat is
+// "deepseek"; without this tag the markup leaks into user channels and the tool
+// calls are lost. Declare the dialect per family like opencode-go does for Qwen
+// (extensions/opencode-go/provider-catalog.ts).
+function resolveDeepInfraThinkingFormat(modelId: string | undefined): "deepseek" | undefined {
+  const vendor = (modelId ?? "").toLowerCase().split("/")[0];
+  return vendor === "deepseek-ai" ? "deepseek" : undefined;
+}
+
 export function buildDeepInfraModelDefinition(model: ModelDefinitionConfig): ModelDefinitionConfig {
+  const thinkingFormat = model.compat?.thinkingFormat ?? resolveDeepInfraThinkingFormat(model.id);
   return {
     ...model,
     compat: {
       ...model.compat,
       supportsUsageInStreaming: model.compat?.supportsUsageInStreaming ?? true,
+      ...(thinkingFormat ? { thinkingFormat } : {}),
     },
   };
 }

@@ -31,13 +31,15 @@ function buildMultiResult(sessions: SessionsListResult["sessions"]): SessionsLis
 function buildProps(result: SessionsListResult): SessionsProps {
   return {
     loading: false,
+    agentId: "main",
+    mainKey: "main",
     result,
     error: null,
     activeMinutes: "",
     limit: "120",
     includeGlobal: false,
     includeUnknown: false,
-    showArchived: false,
+    statusFilter: "active",
     basePath: "",
     searchQuery: "",
     transcriptSearchAvailable: true,
@@ -70,7 +72,7 @@ function buildProps(result: SessionsListResult): SessionsProps {
     onPageChange: () => undefined,
     onPageSizeChange: () => undefined,
     onRefresh: () => undefined,
-    onArchivedViewChange: () => undefined,
+    onStatusFilterChange: () => undefined,
     onDeleteAllArchived: () => undefined,
     onPatch: () => undefined,
     onToggleSelect: () => undefined,
@@ -101,6 +103,28 @@ function sessionTableHeaders(container: HTMLElement): Array<string | undefined> 
 const SESSION_TABLE_HEADERS = ["", "Key", "Kind", "Status", "Updated", "Tokens", "Actions"];
 
 describe("sessions view", () => {
+  it("uses the stored face for generic session links", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
+            kind: "direct",
+            boardFace: "dashboard",
+            updatedAt: 1,
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelector<HTMLAnchorElement>(".session-link")?.getAttribute("href")).toBe(
+      "/dashboard/main/12345678",
+    );
+  });
+
   it("keeps transcript search distinct from the loaded-roster filter", async () => {
     const container = document.createElement("div");
     const onTranscriptSearchChange = vi.fn();
@@ -214,29 +238,56 @@ describe("sessions view", () => {
     expect(onTranscriptSearch).not.toHaveBeenCalled();
   });
 
-  it("renders an Active and Archived segment", async () => {
+  it("renders Active, Archived, and All status segments", async () => {
     const container = document.createElement("div");
-    const onArchivedViewChange = vi.fn();
+    const onStatusFilterChange = vi.fn();
     render(
       renderSessions({
         ...buildProps(buildMultiResult([])),
-        onArchivedViewChange,
+        onStatusFilterChange,
       }),
       container,
     );
     await Promise.resolve();
 
-    const buttons = container.querySelectorAll<HTMLButtonElement>(".sessions-view-segment button");
-    expect([...buttons].map((button) => button.textContent?.trim())).toEqual([
+    const radios = container.querySelectorAll<HTMLElement & { checked: boolean }>(
+      ".sessions-view-segment wa-radio",
+    );
+    expect([...radios].map((radio) => radio.textContent?.trim())).toEqual([
       "Active",
       "Archived",
+      "All",
     ]);
-    expect(buttons[0]?.getAttribute("aria-pressed")).toBe("true");
-    expect(buttons[1]?.getAttribute("aria-pressed")).toBe("false");
+    expect([...radios].map((radio) => radio.checked)).toEqual([true, false, false]);
 
-    buttons[1]?.click();
+    const group = radios[2]?.closest<HTMLElement & { value: string }>("wa-radio-group");
+    if (group) {
+      group.value = "all";
+      group.dispatchEvent(new Event("change", { bubbles: true }));
+    }
 
-    expect(onArchivedViewChange).toHaveBeenCalledWith(true);
+    expect(onStatusFilterChange).toHaveBeenCalledWith("all");
+  });
+
+  it("dims and labels archived rows in the mixed view", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            { key: "agent:main:active", kind: "direct", updatedAt: 2, archived: false },
+            { key: "agent:main:archived", kind: "direct", updatedAt: 1, archived: true },
+          ]),
+        ),
+        statusFilter: "all",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const archivedRow = container.querySelector(".session-data-row--archived");
+    expect(archivedRow?.textContent).toContain("Archived");
+    expect(container.querySelectorAll(".session-data-row--archived")).toHaveLength(1);
   });
 
   it("groups sessions by channel with section headers and no pagination", async () => {
@@ -691,7 +742,7 @@ describe("sessions view", () => {
         buildProps(
           buildResult({
             key: "agent:main:cron:daily-digest",
-            kind: "cron",
+            kind: "direct",
             updatedAt: Date.now(),
           }),
         ),
@@ -1310,14 +1361,14 @@ describe("sessions view", () => {
         limit: "",
         includeGlobal: true,
         includeUnknown: true,
-        showArchived: true,
+        statusFilter: "archived",
       }),
       container,
     );
     await Promise.resolve();
 
     const emptyCell = container.querySelector(".data-table-empty-cell");
-    expect(emptyCell?.textContent?.trim()).toBe("No threads found.");
+    expect(emptyCell?.textContent?.trim()).toBe("No archived sessions.");
     expect(emptyCell?.querySelector("button")).toBeNull();
   });
 
@@ -1333,7 +1384,7 @@ describe("sessions view", () => {
         limit: testCase.limit,
         includeGlobal: true,
         includeUnknown: true,
-        showArchived: true,
+        statusFilter: "archived",
       }),
       container,
     );
@@ -1341,7 +1392,7 @@ describe("sessions view", () => {
 
     const emptyState = container.querySelector(".data-table-empty-state");
     expect(emptyState?.firstElementChild?.textContent?.trim()).toBe(
-      testCase.filtered ? "No threads match your filters." : "No threads found.",
+      testCase.filtered ? "No threads match your filters." : "No archived sessions.",
     );
     expect(emptyState?.querySelector("button") !== null).toBe(testCase.filtered);
   });
@@ -1362,7 +1413,7 @@ describe("sessions view", () => {
             },
             {
               key: "agent:main:idle",
-              kind: "cron",
+              kind: "direct",
               updatedAt: 1,
               unread: true,
               totalTokens: 300,
@@ -1511,8 +1562,9 @@ describe("sessions view", () => {
         buildProps(
           buildMultiResult([
             {
-              key: "agent:main:live",
-              kind: "cron",
+              // Cron display kind derives from the key shape, never the wire kind.
+              key: "agent:main:cron:live",
+              kind: "direct",
               updatedAt: 2,
               hasActiveRun: true,
               status: "running",

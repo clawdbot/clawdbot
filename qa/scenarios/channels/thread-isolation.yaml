@@ -5,8 +5,8 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.threads
-      - memory.thread-isolation
+      - channels.native-threads
+      - channels.native-threads-thread-isolation
   objective: Verify a fresh top-level prompt does not inherit the prior thread relation.
   successCriteria:
     - A threaded prompt receives a threaded reply.

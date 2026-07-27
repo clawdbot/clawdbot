@@ -166,6 +166,7 @@ import WatchKit
         var appSnapshotStatusText: String?
         var appCommandStatus: WatchAppCommandStatus?
         var appCommandStatusText: String?
+        var voiceTurnState: WatchVoiceTurnState?
         var deferredGatewayPayloads: [DeferredGatewayPayload]?
         var execApprovalTerminalTombstones: [ExecApprovalTerminalTombstone]?
     }
@@ -202,7 +203,6 @@ import WatchKit
     var appSnapshotUpdatedAt: Date?
     var appSnapshotStatus: WatchAppCommandStatus?
     var appCommandStatus: WatchAppCommandStatus?
-    var chatCompletion: WatchChatCompletionMessage?
     var greetingTextOverride: String?
     var isExecApprovalReviewLoading = false
     var execApprovalReviewStatusText: String?
@@ -212,6 +212,7 @@ import WatchKit
     private var lastExecApprovalSnapshotSentAtMs: Int64?
     private var hasCompletedExecApprovalSnapshotRefreshInSession = false
     private var lastDeliveryKey: String?
+    var voiceTurnState = WatchVoiceTurnState()
     /// WatchConnectivity does not order application-context updates against user-info
     /// transfers. Persist a bounded handoff queue so a new route's alert is not lost
     /// before its owner snapshot arrives.
@@ -235,6 +236,10 @@ import WatchKit
 
     var appCommandStatusText: String? {
         self.appCommandStatus?.localizedText()
+    }
+
+    func persistVoiceTurnState() {
+        self.persistState()
     }
 
     init(
@@ -662,10 +667,6 @@ import WatchKit
             self.ensureValidExecApprovalSelection()
         }
         self.persistState()
-    }
-
-    func consume(chatCompletion message: WatchChatCompletionMessage) {
-        self.chatCompletion = message
     }
 
     func markAppSnapshotRequestStarted() {
@@ -1427,6 +1428,8 @@ extension WatchInboxStore {
         self.appCommandStatus = state.appCommandStatus
             ?? state.appCommandStatusText.flatMap(
                 WatchAppCommandStatus.decodeLegacyLocalizedText)
+        self.voiceTurnState = state.voiceTurnState ?? WatchVoiceTurnState()
+        self.voiceTurnState.expireIfNeeded(nowMs: Self.nowMs())
         self.deferredGatewayPayloads = Array(
             (state.deferredGatewayPayloads ?? []).suffix(Self.maxDeferredGatewayPayloads))
         self.execApprovalTerminalTombstones = state.execApprovalTerminalTombstones ?? []
@@ -1505,6 +1508,7 @@ extension WatchInboxStore {
             appSnapshotStatusText: nil,
             appCommandStatus: appCommandStatus,
             appCommandStatusText: nil,
+            voiceTurnState: voiceTurnState,
             deferredGatewayPayloads: deferredGatewayPayloads,
             execApprovalTerminalTombstones: execApprovalTerminalTombstones)
         guard let data = try? JSONEncoder().encode(state) else { return }

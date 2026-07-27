@@ -1,6 +1,10 @@
 // Whatsapp type declarations define plugin contracts.
 import type { AnyMessageContent, MiscMessageGenerationOptions } from "baileys";
-import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
+import type {
+  ChannelInboundMediaInput,
+  MediaPlaceholderTextFact,
+  NormalizedLocation,
+} from "openclaw/plugin-sdk/channel-inbound";
 import type { PollInput } from "openclaw/plugin-sdk/poll-runtime";
 import type { WhatsAppIdentity, WhatsAppReplyContext, WhatsAppSelfIdentity } from "../identity.js";
 import type { DeprecatedWebInboundAdmissionTopLevelFields } from "./admission-types.js";
@@ -22,6 +26,7 @@ export type ActiveWebSendOptions = {
     fromMe: boolean;
     participant?: string;
     messageText?: string;
+    media?: MediaPlaceholderTextFact;
   };
   gifPlayback?: boolean;
   accountId?: string;
@@ -69,6 +74,7 @@ export type WhatsAppInboundQuote = {
   context?: WhatsAppReplyContext;
   id?: string;
   body?: string;
+  media?: MediaPlaceholderTextFact;
   sender?: {
     displayName?: string;
     jid?: string;
@@ -85,6 +91,13 @@ export type WhatsAppInboundGroupContext = {
   };
 };
 
+type WhatsAppInboundStructuredContextEntry = {
+  label: string;
+  source?: string;
+  type?: string;
+  payload: unknown;
+};
+
 type WhatsAppInboundPayload = {
   body: string;
   commandBody?: string;
@@ -93,14 +106,12 @@ type WhatsAppInboundPayload = {
     type?: string;
     fileName?: string;
     url?: string;
+    kind?: ChannelInboundMediaInput["kind"];
   };
   location?: NormalizedLocation;
-  untrustedStructuredContext?: Array<{
-    label: string;
-    source?: string;
-    type?: string;
-    payload: unknown;
-  }>;
+  channelStructuredContext?: WhatsAppInboundStructuredContextEntry[];
+  /** @deprecated Use `channelStructuredContext`. Removal: 2026-08-30. */
+  untrustedStructuredContext?: WhatsAppInboundStructuredContextEntry[];
 };
 
 type WhatsAppInboundPlatform = {
@@ -194,13 +205,10 @@ export type DeprecatedWebInboundMessageFlatAliases = {
   mediaFileName?: string;
   /** @deprecated Use `payload.media.url`. */
   mediaUrl?: string;
-  /** @deprecated Use `payload.untrustedStructuredContext`. */
-  untrustedStructuredContext?: Array<{
-    label: string;
-    source?: string;
-    type?: string;
-    payload: unknown;
-  }>;
+  /** @deprecated Use `payload.channelStructuredContext`. */
+  channelStructuredContext?: WhatsAppInboundStructuredContextEntry[];
+  /** @deprecated Use `payload.channelStructuredContext`. Removal: 2026-08-30. */
+  untrustedStructuredContext?: WhatsAppInboundStructuredContextEntry[];
   /** @deprecated Use `event.isBatched`. */
   isBatched?: boolean;
 };

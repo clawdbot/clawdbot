@@ -38,6 +38,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "bonjour",
   "browser",
   "canvas",
+  "cua-computer",
   "device-pair",
   "diagnostics-otel",
   "diagnostics-prometheus",
@@ -72,6 +73,7 @@ const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "canvas",
   "device-pair",
   "file-transfer",
+  "google-meet",
   "linux-canvas",
   "linux-node",
   "memory-core",
@@ -79,6 +81,8 @@ const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "opencode",
   "phone-control",
   "talk-voice",
+  "teams-meetings",
+  "zoom-meetings",
 ] as const;
 
 installGeneratedPluginTempRootCleanup();
@@ -509,7 +513,7 @@ describe("bundled plugin metadata", () => {
         dir: "discord",
         configuredState: {
           env: {
-            allOf: ["DISCORD_BOT_TOKEN"],
+            anyOf: ["DISCORD_BOT_TOKEN"],
           },
         },
       },
@@ -525,7 +529,7 @@ describe("bundled plugin metadata", () => {
         dir: "slack",
         configuredState: {
           env: {
-            anyOf: ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_USER_TOKEN"],
+            anyOf: ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_USER_TOKEN"],
           },
         },
       },
@@ -533,7 +537,7 @@ describe("bundled plugin metadata", () => {
         dir: "telegram",
         configuredState: {
           env: {
-            allOf: ["TELEGRAM_BOT_TOKEN"],
+            anyOf: ["TELEGRAM_BOT_TOKEN"],
           },
         },
       },
@@ -579,6 +583,15 @@ describe("bundled plugin metadata", () => {
 
     expect(entry?.manifest.commandAliases).toStrictEqual([{ name: "voicecall" }]);
     expect(entry?.manifest.activation?.onCommands).toStrictEqual(["voicecall"]);
+  });
+
+  it("keeps Workboard CLI ownership separate from its slash command", () => {
+    const entry = listRepoBundledPluginManifests().find(
+      ({ manifest }) => manifest.id === "workboard",
+    );
+
+    expect(entry?.manifest.commandAliases).toStrictEqual([{ name: "workboard" }]);
+    expect(entry?.manifest.activation?.onCommands).toStrictEqual(["workboard"]);
   });
 
   it("scopes Codex CLI activation to the codex command", () => {

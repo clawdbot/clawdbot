@@ -10,11 +10,10 @@ import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
+  appendTranscriptMessage,
   appendTranscriptEvent,
-  listSessionEntries,
   loadSessionEntry,
-  replaceSessionEntry,
-  upsertSessionEntry,
+  loadTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
@@ -36,16 +35,25 @@ import {
   isSessionLifecycleMutationActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { finalizeInboundContext } from "./inbound-context.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
-import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
+import { resolveReplySessionPreprocessingState } from "./session.js";
+import {
+  initSessionState,
+  readSessionStore as readSessionStoreFast,
+  runExplicitResetCases,
+  writeSessionStore as writeSessionStoreFast,
+} from "./test/session.test-support.js";
 
 const sessionForkMocks = vi.hoisted(() => ({
   forkSessionFromParent: vi.fn(),
@@ -280,46 +288,13 @@ function expectEntryFields(
   }
 }
 
-async function writeSessionStoreFast(
-  storePath: string,
-  store: Record<string, SessionEntry | Record<string, unknown>>,
-): Promise<void> {
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
-  for (const [sessionKey, entry] of Object.entries(store)) {
-    const patch = entry as Partial<SessionEntry>;
-    if (typeof patch.sessionId === "string" && patch.sessionId.trim()) {
-      await replaceSessionEntry({ storePath, sessionKey }, patch as SessionEntry);
-    } else {
-      await upsertSessionEntry({ storePath, sessionKey }, patch);
-    }
-  }
-}
-
-function readSessionStoreFast(storePath: string): Record<string, SessionEntry> {
-  const entries = Object.fromEntries(
-    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-  ) as Record<string, SessionEntry>;
-  return new Proxy(entries, {
-    get(target, prop, receiver) {
-      if (typeof prop !== "string" || prop in target) {
-        return Reflect.get(target, prop, receiver);
-      }
-      const entry = loadSessionEntry({ storePath, sessionKey: prop, readConsistency: "latest" });
-      if (entry) {
-        target[prop] = entry;
-      }
-      return Reflect.get(target, prop, receiver);
-    },
-  });
-}
-
 describe("resolveReplySessionPreprocessingState", () => {
   const sessionKey = "agent:main:harness:codex:supervision:media-preflight";
 
   function resolvePreprocessingState(storePath: string) {
     return resolveReplySessionPreprocessingState({
       cfg: { session: { store: storePath } } as OpenClawConfig,
-      ctx: {
+      ctx: finalizeInboundContext({
         Body: "<media:audio>",
         RawBody: "<media:audio>",
         CommandBody: "<media:audio>",
@@ -329,7 +304,7 @@ describe("resolveReplySessionPreprocessingState", () => {
         SessionKey: sessionKey,
         Provider: "telegram",
         Surface: "telegram",
-      },
+      }),
     });
   }
 
@@ -579,6 +554,7 @@ beforeEach(() => {
     });
 });
 afterEach(async () => {
+  closeOpenClawStateDatabaseForTest();
   resetSystemEventsForTest();
   await sessionMcpTesting.resetSessionMcpRuntimeManager();
 });
@@ -720,6 +696,10 @@ describe("initSessionState thread forking", () => {
     expect(result.sessionEntry.totalTokensFresh).toBe(false);
 
     expect(result.sessionEntry.forkedFromParent).toBe(true);
+    expect(result.sessionEntry.forkSource).toEqual({
+      sessionKey: parentSessionKey,
+      sessionId: parentSessionId,
+    });
     expect(result.sessionEntry.sessionFile).toBe(
       formatSqliteSessionFileMarker({
         agentId: "main",
@@ -811,6 +791,10 @@ describe("initSessionState thread forking", () => {
 
     expect(first.sessionEntry.sessionId).not.toBe("preseed-thread-session");
     expect(first.sessionEntry.forkedFromParent).toBe(true);
+    expect(first.sessionEntry.forkSource).toEqual({
+      sessionKey: parentSessionKey,
+      sessionId: parentSessionId,
+    });
     expect(first.sessionEntry.totalTokens).toBeUndefined();
     expect(first.sessionEntry.totalTokensFresh).toBe(false);
     expect(first.sessionEntry.abortedLastRun).toBe(false);
@@ -899,6 +883,7 @@ describe("initSessionState thread forking", () => {
 
     // Should be marked as forked (to prevent re-attempts) but NOT actually forked from parent
     expect(result.sessionEntry.forkedFromParent).toBe(true);
+    expect(result.sessionEntry.forkSource).toBeUndefined();
     // Session ID should NOT match the parent — it should be a fresh UUID
     expect(result.sessionEntry.sessionId).not.toBe(parentSessionId);
     // Session file should NOT be the parent's file (it was not forked)
@@ -1156,7 +1141,7 @@ describe("initSessionState RawBody", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.resetTriggered).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionId).toBe(existingSessionId);
     expect(result.sessionEntry.skillsSnapshot).toBeUndefined();
     expect(result.sessionEntry.totalTokens).toBe(0);
     expect(result.sessionEntry.totalTokensFresh).toBe(true);
@@ -1236,7 +1221,7 @@ describe("initSessionState RawBody", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.resetTriggered).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionId).toBe(existingSessionId);
     await expect(
       drainFormattedSystemEvents({
         cfg,
@@ -1294,7 +1279,7 @@ describe("initSessionState RawBody", () => {
     // The session rolled over implicitly (stale), not via /new.
     expect(result.isNewSession).toBe(true);
     expect(result.resetTriggered).toBe(false);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionId).toBe(existingSessionId);
     // The user override must survive.
     expect(result.sessionEntry.providerOverride).toBe("minimax");
     expect(result.sessionEntry.modelOverride).toBe("m2.7");
@@ -1308,89 +1293,67 @@ describe("initSessionState RawBody", () => {
     expect(store[sessionKey]?.modelOverrideSource).toBe("user");
   });
 
-  it("preserves user-set behavior and pinned state across an implicit daily stale rollover (#92562)", async () => {
-    // Regression: session-level behavior overrides (/think, /verbose, /reasoning,
-    // /trace, ttsAuto) survive an explicit /new but were dropped after the
-    // automatic daily/idle reset, because the carryover was gated on
-    // resetTriggered while the implicit stale rollover runs with
-    // resetTriggered === false. The model override on this same path was already
-    // fixed (#90119); the behavior overrides must follow suit.
-    const root = await makeCaseDir("openclaw-daily-rollover-behavior-");
+  it("stamps trusted creation provenance when initializing a missing session", async () => {
+    const root = await makeCaseDir("openclaw-session-creation-provenance-");
     const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:discord:channel:daily-rollover-behavior";
-    const existingSessionId = "session-before-daily-reset-behavior";
-    // Stale under the configured daily reset (atHour 4): started ~48h ago.
-    const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
+    const sessionKey = "agent:main:dashboard:created";
 
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: existingSessionId,
-        updatedAt: staleStartedAt,
-        sessionStartedAt: staleStartedAt,
-        lastInteractionAt: staleStartedAt,
-        systemSent: true,
-        // User-set behavior overrides (what /think, /verbose, etc. write).
-        thinkingLevel: "medium",
-        verboseLevel: "on",
-        traceLevel: "high",
-        reasoningLevel: "low",
-        ttsAuto: "always",
-        pinnedAt: 123,
+    const result = await withEnvAsync(
+      { OPENCLAW_STATE_DIR: path.join(root, "state") },
+      async () => {
+        const initialized = await initSessionState({
+          ctx: {
+            RawBody: "hello",
+            ChatType: "direct",
+            SessionKey: sessionKey,
+            SessionCreation: {
+              via: "operator",
+              actor: { type: "human", id: "profile-ada" },
+            },
+          },
+          cfg: { session: { store: storePath } } as OpenClawConfig,
+          commandAuthorized: true,
+        });
+        expect(listSessionStateEventsSince(sessionKey, "main", 0, 20).events).toContainEqual(
+          expect.objectContaining({
+            kind: "created",
+            actorType: "human",
+            actorId: "profile-ada",
+          }),
+        );
+        return initialized;
       },
+    );
+    expect(result.sessionEntry).toMatchObject({
+      createdVia: "operator",
+      createdActor: { type: "human", id: "profile-ada" },
+      createdAt: expect.any(Number),
     });
-
-    const cfg = {
-      session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
-    } as OpenClawConfig;
-
-    const result = await initSessionState({
-      ctx: {
-        // Ordinary message — NOT a reset trigger.
-        RawBody: "hello again",
-        ChatType: "channel",
-        SessionKey: sessionKey,
-      },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    // The session rolled over implicitly (stale), not via /new.
-    expect(result.isNewSession).toBe(true);
-    expect(result.resetTriggered).toBe(false);
-    expect(result.sessionId).not.toBe(existingSessionId);
-    // The user-set behavior overrides must survive the implicit rollover.
-    expect(result.sessionEntry.thinkingLevel).toBe("medium");
-    expect(result.sessionEntry.verboseLevel).toBe("on");
-    expect(result.sessionEntry.traceLevel).toBe("high");
-    expect(result.sessionEntry.reasoningLevel).toBe("low");
-    expect(result.sessionEntry.ttsAuto).toBe("always");
-    expect(result.sessionEntry.pinnedAt).toBe(123);
-
-    const store = readSessionStoreFast(storePath) as Record<
-      string,
-      {
-        thinkingLevel?: string;
-        verboseLevel?: string;
-        traceLevel?: string;
-        reasoningLevel?: string;
-        ttsAuto?: string;
-        pinnedAt?: number;
-      }
-    >;
-    expect(store[sessionKey]?.thinkingLevel).toBe("medium");
-    expect(store[sessionKey]?.verboseLevel).toBe("on");
-    expect(store[sessionKey]?.traceLevel).toBe("high");
-    expect(store[sessionKey]?.reasoningLevel).toBe("low");
-    expect(store[sessionKey]?.ttsAuto).toBe("always");
-    expect(store[sessionKey]?.pinnedAt).toBe(123);
   });
 
-  it("preserves usage footer mode across daily rollover", async () => {
-    const root = await makeCaseDir("openclaw-daily-rollover-usage-");
+  it("preserves session lineage across an implicit daily stale rollover (#90119)", async () => {
+    const root = await makeCaseDir("openclaw-daily-rollover-lineage-");
     const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:discord:channel:daily-rollover-usage";
-    const existingSessionId = "session-before-daily-reset-usage";
+    const sessionKey = "agent:main:subagent:daily-rollover-lineage";
+    const existingSessionId = "session-before-daily-reset-lineage";
     const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
+    const lineage = {
+      spawnedBy: "agent:main:main",
+      spawnedWorkspaceDir: "/tmp/child-workspace",
+      spawnedCwd: "/tmp/task-repo",
+      parentSessionKey: "agent:main:main",
+      forkedFromParent: true,
+      forkSource: {
+        sessionKey: "agent:main:root",
+        sessionId: "root-transcript-generation",
+      },
+      createdVia: "spawn",
+      createdActor: { type: "agent", id: "agent:main:main" },
+      createdAt: staleStartedAt - 1_000,
+      spawnDepth: 1,
+      subagentRole: "leaf",
+      subagentControlScope: "none",
+    } as const;
 
     await writeSessionStoreFast(storePath, {
       [sessionKey]: {
@@ -1398,48 +1361,13 @@ describe("initSessionState RawBody", () => {
         updatedAt: staleStartedAt,
         sessionStartedAt: staleStartedAt,
         lastInteractionAt: staleStartedAt,
-        responseUsage: "full",
+        ...lineage,
       },
     });
 
     const result = await initSessionState({
       ctx: {
-        RawBody: "hello again",
-        ChatType: "channel",
-        SessionKey: sessionKey,
-      },
-      cfg: {
-        session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
-      } as OpenClawConfig,
-      commandAuthorized: true,
-    });
-
-    expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
-    expect(result.sessionEntry.responseUsage).toBe("full");
-  });
-
-  it("preserves user labels across dashboard session stale rollover (#101451)", async () => {
-    const root = await makeCaseDir("openclaw-dashboard-rollover-label-");
-    const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:dashboard:8c0b2b68-05e1-4b25-a8c2-ef6f43a01f77";
-    const existingSessionId = "dashboard-session-before-rollover";
-    const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
-
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: existingSessionId,
-        updatedAt: staleStartedAt,
-        sessionStartedAt: staleStartedAt,
-        lastInteractionAt: staleStartedAt,
-        label: "Other",
-        displayName: "Dashboard Chat",
-      },
-    });
-
-    const result = await initSessionState({
-      ctx: {
-        RawBody: "continue",
+        RawBody: "continue child work",
         ChatType: "direct",
         SessionKey: sessionKey,
       },
@@ -1451,267 +1379,194 @@ describe("initSessionState RawBody", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.resetTriggered).toBe(false);
-    expect(result.sessionId).not.toBe(existingSessionId);
-    expect(result.sessionEntry.label).toBe("Other");
-    expect(result.sessionEntry.displayName).toBe("Dashboard Chat");
-
-    const store = readSessionStoreFast(storePath) as Record<
-      string,
-      { label?: string; displayName?: string }
-    >;
-    expect(store[sessionKey]?.label).toBe("Other");
-    expect(store[sessionKey]?.displayName).toBe("Dashboard Chat");
+    expect(result.sessionId).toBe(existingSessionId);
+    expect(result.sessionEntry.previousSessionId).toBeUndefined();
+    expectEntryFields(result.sessionEntry, lineage);
   });
 
-  it("clears an auto-fallback model override on an implicit daily stale rollover (#90119)", async () => {
-    // Counterpart: auto-created fallback overrides must still be cleared on a
-    // daily rollover so stale sessions return to the configured default.
-    const root = await makeCaseDir("openclaw-daily-rollover-fallback-");
-    const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:discord:channel:daily-rollover-fallback";
-    const existingSessionId = "session-before-daily-reset-fallback";
-    const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
-
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: existingSessionId,
-        updatedAt: staleStartedAt,
-        sessionStartedAt: staleStartedAt,
-        lastInteractionAt: staleStartedAt,
+  it.each([
+    {
+      name: "preserves user-set behavior and pinned state across an implicit daily stale rollover (#92562)",
+      slug: "behavior",
+      entry: {
         systemSent: true,
-        // Auto-fallback override (rate-limit/auto-pin), not user-driven.
-        providerOverride: "minimax",
-        modelOverride: "m2.7",
-        modelOverrideFallbackOriginProvider: "openai",
-        modelOverrideFallbackOriginModel: "gpt-4o-mini",
-      },
-    });
-
-    const cfg = {
-      session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
-    } as OpenClawConfig;
-
-    const result = await initSessionState({
-      ctx: {
-        RawBody: "hello again",
-        ChatType: "channel",
-        SessionKey: sessionKey,
-      },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.isNewSession).toBe(true);
-    expect(result.resetTriggered).toBe(false);
-    expect(result.sessionEntry.modelOverride).toBeUndefined();
-    expect(result.sessionEntry.providerOverride).toBeUndefined();
-    expect(result.sessionEntry.modelOverrideSource).toBeUndefined();
-  });
-
-  it("preserves behavior overrides while clearing an auto-fallback model override on one implicit daily rollover (#92562)", async () => {
-    // Documents the clear/preserve split on a single implicit rollover: a
-    // user-set /think survives (no fallback provenance to filter) while an
-    // auto-fallback model override is dropped back to the configured default.
-    // The two travel separate paths (direct carry vs resolveResetPreservedSelection),
-    // so they must not interfere.
-    const root = await makeCaseDir("openclaw-daily-rollover-mixed-");
-    const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:discord:channel:daily-rollover-mixed";
-    const existingSessionId = "session-before-daily-reset-mixed";
-    const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
-
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: existingSessionId,
-        updatedAt: staleStartedAt,
-        sessionStartedAt: staleStartedAt,
-        lastInteractionAt: staleStartedAt,
-        systemSent: true,
-        // User-set behavior override (must survive).
         thinkingLevel: "medium",
-        // Auto-fallback model override (must be cleared).
+        verboseLevel: "on",
+        traceLevel: "high",
+        reasoningLevel: "low",
+        ttsAuto: "always",
+        pinnedAt: 123,
+      },
+      expected: {
+        thinkingLevel: "medium",
+        verboseLevel: "on",
+        traceLevel: "high",
+        reasoningLevel: "low",
+        ttsAuto: "always",
+        pinnedAt: 123,
+      },
+      persisted: true,
+    },
+    {
+      name: "preserves usage footer mode across daily rollover",
+      slug: "usage",
+      entry: { responseUsage: "full" as const },
+      expected: { responseUsage: "full" },
+    },
+    {
+      name: "preserves user labels across dashboard session stale rollover (#101451)",
+      slug: "label",
+      sessionKey: "agent:main:dashboard:8c0b2b68-05e1-4b25-a8c2-ef6f43a01f77",
+      chatType: "direct",
+      entry: { label: "Other", displayName: "Dashboard Chat" },
+      expected: { label: "Other", displayName: "Dashboard Chat" },
+      persisted: true,
+    },
+    {
+      name: "clears an auto-fallback model override on an implicit daily stale rollover (#90119)",
+      slug: "fallback",
+      entry: {
+        systemSent: true,
         providerOverride: "minimax",
         modelOverride: "m2.7",
         modelOverrideFallbackOriginProvider: "openai",
         modelOverrideFallbackOriginModel: "gpt-4o-mini",
       },
+      expected: {},
+      absent: ["modelOverride", "providerOverride", "modelOverrideSource"],
+    },
+    {
+      name: "preserves behavior overrides while clearing an auto-fallback model override on one implicit daily rollover (#92562)",
+      slug: "mixed",
+      entry: {
+        systemSent: true,
+        thinkingLevel: "medium",
+        providerOverride: "minimax",
+        modelOverride: "m2.7",
+        modelOverrideFallbackOriginProvider: "openai",
+        modelOverrideFallbackOriginModel: "gpt-4o-mini",
+      },
+      expected: { thinkingLevel: "medium" },
+      absent: ["modelOverride", "providerOverride"],
+    },
+  ])("$name", async (scenario) => {
+    const storePath = await createStorePath(`openclaw-daily-rollover-${scenario.slug}-`);
+    const sessionKey =
+      "sessionKey" in scenario && typeof scenario.sessionKey === "string"
+        ? scenario.sessionKey
+        : `agent:main:discord:channel:daily-rollover-${scenario.slug}`;
+    const existingSessionId = `session-before-daily-reset-${scenario.slug}`;
+    const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: staleStartedAt,
+        sessionStartedAt: staleStartedAt,
+        lastInteractionAt: staleStartedAt,
+        ...scenario.entry,
+      },
     });
-
-    const cfg = {
-      session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
-    } as OpenClawConfig;
 
     const result = await initSessionState({
       ctx: {
         RawBody: "hello again",
-        ChatType: "channel",
+        ChatType: "chatType" in scenario ? scenario.chatType : "channel",
         SessionKey: sessionKey,
       },
-      cfg,
+      cfg: {
+        session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+      } as OpenClawConfig,
       commandAuthorized: true,
     });
 
     expect(result.isNewSession).toBe(true);
     expect(result.resetTriggered).toBe(false);
-    // Behavior override preserved...
-    expect(result.sessionEntry.thinkingLevel).toBe("medium");
-    // ...while the auto-fallback model override is cleared.
-    expect(result.sessionEntry.modelOverride).toBeUndefined();
-    expect(result.sessionEntry.providerOverride).toBeUndefined();
+    expect(result.sessionId).toBe(existingSessionId);
+    expectEntryFields(result.sessionEntry, scenario.expected, scenario.name);
+    if ("absent" in scenario && Array.isArray(scenario.absent)) {
+      for (const field of scenario.absent) {
+        expect(
+          (result.sessionEntry as Record<string, unknown>)[field],
+          scenario.name,
+        ).toBeUndefined();
+      }
+    }
+    if ("persisted" in scenario && scenario.persisted) {
+      expectEntryFields(
+        expectDefined(readSessionStoreFast(storePath)[sessionKey], "stored session"),
+        scenario.expected,
+        scenario.name,
+      );
+    }
   });
-
-  it("rotates local session state for /new on bound ACP sessions", async () => {
-    const root = await makeCaseDir("openclaw-rawbody-acp-reset-");
-    const storePath = path.join(root, "sessions.json");
+  it.each([
+    {
+      name: "rotates local session state for /new on bound ACP sessions",
+      body: "/new",
+      to: "1478836151241412759",
+      includeBinding: true,
+    },
+    {
+      name: "rotates local session state for ACP /new when no matching conversation binding exists",
+      body: "/new",
+      to: "user:12345",
+      originatingTo: "user:12345",
+      includeBinding: false,
+    },
+    {
+      name: "keeps custom reset triggers working on bound ACP sessions",
+      body: "/fresh",
+      to: "1478836151241412759",
+      includeBinding: true,
+      resetTriggers: ["/fresh"],
+    },
+    {
+      name: "keeps normal /new behavior for unbound ACP-shaped session keys",
+      body: "/new",
+      to: "1478836151241412759",
+      includeBinding: false,
+    },
+  ])("$name", async (scenario) => {
+    const storePath = await createStorePath("openclaw-rawbody-acp-reset-");
     const sessionKey = "agent:codex:acp:binding:discord:default:feedface";
     const existingSessionId = "session-existing";
-    const now = Date.now();
-
     await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: existingSessionId,
-        updatedAt: now,
-        systemSent: true,
-      },
+      [sessionKey]: { sessionId: existingSessionId, updatedAt: Date.now(), systemSent: true },
     });
-
-    const cfg = {
-      session: { store: storePath },
-      bindings: [
-        {
-          type: "acp",
-          agentId: "codex",
-          match: {
-            channel: "discord",
-            accountId: "default",
-            peer: { kind: "channel", id: "1478836151241412759" },
+    const bindings = scenario.includeBinding
+      ? [
+          {
+            type: "acp" as const,
+            agentId: "codex",
+            match: {
+              channel: "discord",
+              accountId: "default",
+              peer: { kind: "channel" as const, id: "1478836151241412759" },
+            },
+            acp: { mode: "persistent" as const },
           },
-          acp: { mode: "persistent" },
-        },
-      ],
-      channels: {
-        discord: {
-          allowFrom: ["*"],
-        },
-      },
-    } as OpenClawConfig;
-
+        ]
+      : undefined;
     const result = await initSessionState({
       ctx: {
-        RawBody: "/new",
-        CommandBody: "/new",
+        RawBody: scenario.body,
+        CommandBody: scenario.body,
         Provider: "discord",
         Surface: "discord",
         SenderId: "12345",
         From: "discord:12345",
-        To: "1478836151241412759",
+        To: scenario.to,
+        OriginatingTo: "originatingTo" in scenario ? scenario.originatingTo : undefined,
         SessionKey: sessionKey,
       },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.resetTriggered).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
-    expect(result.isNewSession).toBe(true);
-  });
-
-  it("rotates local session state for ACP /new when no matching conversation binding exists", async () => {
-    const root = await makeCaseDir("openclaw-rawbody-acp-reset-no-conversation-");
-    const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:codex:acp:binding:discord:default:feedface";
-    const existingSessionId = "session-existing";
-    const now = Date.now();
-
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: existingSessionId,
-        updatedAt: now,
-        systemSent: true,
-      },
-    });
-
-    const cfg = {
-      session: { store: storePath },
-      channels: {
-        discord: {
-          allowFrom: ["*"],
+      cfg: {
+        session: {
+          store: storePath,
+          ...("resetTriggers" in scenario ? { resetTriggers: scenario.resetTriggers } : {}),
         },
-      },
-    } as OpenClawConfig;
-
-    const result = await initSessionState({
-      ctx: {
-        RawBody: "/new",
-        CommandBody: "/new",
-        Provider: "discord",
-        Surface: "discord",
-        SenderId: "12345",
-        From: "discord:12345",
-        To: "user:12345",
-        OriginatingTo: "user:12345",
-        SessionKey: sessionKey,
-      },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.resetTriggered).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
-    expect(result.isNewSession).toBe(true);
-  });
-
-  it("keeps custom reset triggers working on bound ACP sessions", async () => {
-    const root = await makeCaseDir("openclaw-rawbody-acp-custom-reset-");
-    const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:codex:acp:binding:discord:default:feedface";
-    const existingSessionId = "session-existing";
-    const now = Date.now();
-
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: existingSessionId,
-        updatedAt: now,
-        systemSent: true,
-      },
-    });
-
-    const cfg = {
-      session: {
-        store: storePath,
-        resetTriggers: ["/fresh"],
-      },
-      bindings: [
-        {
-          type: "acp",
-          agentId: "codex",
-          match: {
-            channel: "discord",
-            accountId: "default",
-            peer: { kind: "channel", id: "1478836151241412759" },
-          },
-          acp: { mode: "persistent" },
-        },
-      ],
-      channels: {
-        discord: {
-          allowFrom: ["*"],
-        },
-      },
-    } as OpenClawConfig;
-
-    const result = await initSessionState({
-      ctx: {
-        RawBody: "/fresh",
-        CommandBody: "/fresh",
-        Provider: "discord",
-        Surface: "discord",
-        SenderId: "12345",
-        From: "discord:12345",
-        To: "1478836151241412759",
-        SessionKey: sessionKey,
-      },
-      cfg,
+        ...(bindings ? { bindings } : {}),
+        channels: { discord: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
       commandAuthorized: true,
     });
 
@@ -1719,51 +1574,6 @@ describe("initSessionState RawBody", () => {
     expect(result.isNewSession).toBe(true);
     expect(result.sessionId).not.toBe(existingSessionId);
   });
-
-  it("keeps normal /new behavior for unbound ACP-shaped session keys", async () => {
-    const root = await makeCaseDir("openclaw-rawbody-acp-unbound-reset-");
-    const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:codex:acp:binding:discord:default:feedface";
-    const existingSessionId = "session-existing";
-    const now = Date.now();
-
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: existingSessionId,
-        updatedAt: now,
-        systemSent: true,
-      },
-    });
-
-    const cfg = {
-      session: { store: storePath },
-      channels: {
-        discord: {
-          allowFrom: ["*"],
-        },
-      },
-    } as OpenClawConfig;
-
-    const result = await initSessionState({
-      ctx: {
-        RawBody: "/new",
-        CommandBody: "/new",
-        Provider: "discord",
-        Surface: "discord",
-        SenderId: "12345",
-        From: "discord:12345",
-        To: "1478836151241412759",
-        SessionKey: sessionKey,
-      },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.resetTriggered).toBe(true);
-    expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
-  });
-
   it("does not suppress /new when active conversation binding points to a non-ACP session", async () => {
     const root = await makeCaseDir("openclaw-rawbody-acp-nonacp-binding-");
     const storePath = path.join(root, "sessions.json");
@@ -1904,7 +1714,7 @@ describe("initSessionState RawBody", () => {
 
     expect(result.resetTriggered).toBe(true);
     expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionId).toBe(existingSessionId);
   });
 
   it("prefers native command target sessions over bound slash sessions", async () => {
@@ -2079,6 +1889,54 @@ describe("initSessionState RawBody", () => {
 
     expect(result.sessionKey).toBe(boundSessionKey);
   });
+
+  it("does not apply a source admission id to a bound conversation target", async () => {
+    setMinimalCurrentConversationBindingRegistryForTests();
+    registerCurrentConversationBindingAdapterForTest({
+      channel: "slack",
+      accountId: "default",
+    });
+    const storePath = await createStorePath("openclaw-bound-admission-id-");
+    const sourceSessionKey = "agent:main:slack:source";
+    const sourceSessionId = "source-admission-session";
+    const boundSessionKey = "plugin-binding:codex:bound-target";
+    const boundSessionId = "bound-target-session";
+    await writeSessionStoreFast(storePath, {
+      [sourceSessionKey]: { sessionId: sourceSessionId, updatedAt: Date.now() },
+      [boundSessionKey]: { sessionId: boundSessionId, updatedAt: Date.now() },
+    });
+    await getSessionBindingService().bind({
+      targetSessionKey: boundSessionKey,
+      targetKind: "session",
+      conversation: {
+        channel: "slack",
+        accountId: "default",
+        conversationId: "user:U123",
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "hello",
+        SessionKey: sourceSessionKey,
+        Provider: "slack",
+        Surface: "slack",
+        From: "slack:user:U123",
+        To: "user:U123",
+        OriginatingTo: "user:U123",
+        SenderId: "U123",
+        ChatType: "direct",
+      },
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      commandAuthorized: true,
+      expectedExistingSessionId: sourceSessionId,
+      pinExpectedExistingSession: true,
+    });
+
+    expect(result.sessionKey).toBe(boundSessionKey);
+    expect(result.sessionId).toBe(boundSessionId);
+    expect(result.isNewSession).toBe(false);
+  });
 });
 
 describe("initSessionState reset policy", () => {
@@ -2088,7 +1946,7 @@ describe("initSessionState reset policy", () => {
     vi.useFakeTimers();
     clearBootstrapSnapshotOnSessionRolloverSpy = vi.spyOn(
       bootstrapCache,
-      "clearBootstrapSnapshotOnSessionRollover",
+      "clearBootstrapSnapshotOnSessionBoundary",
     );
   });
 
@@ -2097,217 +1955,109 @@ describe("initSessionState reset policy", () => {
     vi.useRealTimers();
   });
 
-  it("keeps the current session across the former daily boundary by default", async () => {
-    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
-    const root = await makeCaseDir("openclaw-reset-daily-");
-    const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:whatsapp:dm:s1";
-    const existingSessionId = "daily-session-id";
-
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: existingSessionId,
-        updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
-      },
-    });
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
-    const result = await initSessionState({
-      ctx: { Body: "hello", SessionKey: sessionKey },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.isNewSession).toBe(false);
-    expect(result.sessionId).toBe(existingSessionId);
-    expect(clearBootstrapSnapshotOnSessionRolloverSpy).toHaveBeenCalledWith({
-      sessionKey,
-      previousSessionId: undefined,
-    });
-  });
-
-  it("treats sessions as stale before the daily reset when updated before yesterday's boundary", async () => {
-    vi.setSystemTime(new Date(2026, 0, 18, 3, 0, 0));
-    const root = await makeCaseDir("openclaw-reset-daily-edge-");
-    const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:whatsapp:dm:s-edge";
-    const existingSessionId = "daily-edge-session";
-
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: existingSessionId,
-        updatedAt: new Date(2026, 0, 17, 3, 30, 0).getTime(),
-      },
-    });
-
-    const cfg = {
-      session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
-    } as OpenClawConfig;
-    const result = await initSessionState({
-      ctx: { Body: "hello", SessionKey: sessionKey },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
-  });
-
-  it("expires sessions when idle timeout wins over daily reset", async () => {
-    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
-    const root = await makeCaseDir("openclaw-reset-idle-");
-    const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:whatsapp:dm:s2";
-    const existingSessionId = "idle-session-id";
-
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: existingSessionId,
-        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
-      },
-    });
-
-    const cfg = {
-      session: {
-        store: storePath,
-        reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
-      },
-    } as OpenClawConfig;
-    const result = await initSessionState({
-      ctx: { Body: "hello", SessionKey: sessionKey },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
-  });
-
-  it("preserves idle rollover when an ordinary send asserts the current session id", async () => {
-    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
-    const root = await makeCaseDir("openclaw-reset-idle-requested-session-ordinary-");
-    const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:main";
-    const existingSessionId = "webchat-ordinary-session-id";
-
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: existingSessionId,
-        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
-      },
-    });
-
-    const cfg = {
-      session: {
-        store: storePath,
-        reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
-      },
-    } as OpenClawConfig;
-    const result = await initSessionState({
-      ctx: { Body: "hello", SessionKey: sessionKey, Provider: "internal", Surface: "internal" },
-      cfg,
-      commandAuthorized: true,
-      requestedSessionId: existingSessionId,
-    });
-
-    expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
-  });
-
-  it("pins a durably admitted session across an idle reset boundary", async () => {
-    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
-    const root = await makeCaseDir("openclaw-reset-idle-pinned-admission-");
-    const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:main";
-    const existingSessionId = "durably-admitted-session-id";
-
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: existingSessionId,
-        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
-      },
-    });
-
-    const result = await initSessionState({
-      ctx: { Body: "hello", SessionKey: sessionKey, Provider: "internal", Surface: "internal" },
-      cfg: {
-        session: {
-          store: storePath,
-          reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
-        },
-      } as OpenClawConfig,
-      commandAuthorized: true,
-      expectedExistingSessionId: existingSessionId,
+  it.each([
+    {
+      name: "keeps the current session across the former daily boundary by default",
+      now: new Date(2026, 0, 18, 5, 0, 0),
+      slug: "daily",
+      updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+      session: {},
+      expectedNew: false,
+      expectBootstrapBoundary: false,
+    },
+    {
+      name: "treats sessions as stale before the daily reset when updated before yesterday's boundary",
+      now: new Date(2026, 0, 18, 3, 0, 0),
+      slug: "daily-edge",
+      updatedAt: new Date(2026, 0, 17, 3, 30, 0).getTime(),
+      session: { reset: { mode: "daily" as const, atHour: 4 } },
+      expectedNew: true,
+    },
+    {
+      name: "expires sessions when idle timeout wins over daily reset",
+      now: new Date(2026, 0, 18, 5, 30, 0),
+      slug: "idle",
+      updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      session: { reset: { mode: "daily" as const, atHour: 4, idleMinutes: 30 } },
+      expectedNew: true,
+    },
+    {
+      name: "preserves idle rollover when an ordinary send asserts the current session id",
+      now: new Date(2026, 0, 18, 5, 30, 0),
+      slug: "idle-requested-session-ordinary",
+      updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      session: { reset: { mode: "daily" as const, atHour: 4, idleMinutes: 30 } },
+      requestedSessionId: "existing",
+      expectedNew: true,
+    },
+    {
+      name: "pins a durably admitted session across an idle reset boundary",
+      now: new Date(2026, 0, 18, 5, 30, 0),
+      slug: "idle-pinned-admission",
+      updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      session: { reset: { mode: "daily" as const, atHour: 4, idleMinutes: 30 } },
+      expectedExistingSessionId: "existing",
       pinExpectedExistingSession: true,
-    });
-
-    expect(result.isNewSession).toBe(false);
-    expect(result.sessionId).toBe(existingSessionId);
-  });
-
-  it("reuses an idle-expired session when a reconnecting client requests current session resume", async () => {
-    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
-    const root = await makeCaseDir("openclaw-reset-idle-requested-session-");
-    const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:main";
-    const existingSessionId = "webchat-reconnect-session-id";
-
+      expectedNew: false,
+    },
+    {
+      name: "reuses an idle-expired session when a reconnecting client requests current session resume",
+      now: new Date(2026, 0, 18, 5, 30, 0),
+      slug: "idle-requested-session",
+      updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      session: { reset: { mode: "daily" as const, atHour: 4, idleMinutes: 30 } },
+      requestedSessionId: "existing",
+      resumeRequestedSession: true,
+      expectedNew: false,
+    },
+    {
+      name: "does not reuse an idle-expired session for a stale asserted session id",
+      now: new Date(2026, 0, 18, 5, 30, 0),
+      slug: "idle-stale-requested-session",
+      updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      session: { reset: { mode: "daily" as const, atHour: 4, idleMinutes: 30 } },
+      requestedSessionId: "stale",
+      resumeRequestedSession: true,
+      expectedNew: true,
+    },
+  ])("$name", async (scenario) => {
+    vi.setSystemTime(scenario.now);
+    const storePath = await createStorePath(`openclaw-reset-${scenario.slug}-`);
+    const sessionKey = scenario.slug.startsWith("idle-")
+      ? "agent:main:main"
+      : `agent:main:whatsapp:dm:${scenario.slug}`;
+    const existingSessionId = `${scenario.slug}-session-id`;
     await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: existingSessionId,
-        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
-      },
+      [sessionKey]: { sessionId: existingSessionId, updatedAt: scenario.updatedAt },
     });
 
-    const cfg = {
-      session: {
-        store: storePath,
-        reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
-      },
-    } as OpenClawConfig;
     const result = await initSessionState({
       ctx: { Body: "hello", SessionKey: sessionKey, Provider: "internal", Surface: "internal" },
-      cfg,
+      cfg: { session: { store: storePath, ...scenario.session } } as OpenClawConfig,
       commandAuthorized: true,
-      requestedSessionId: existingSessionId,
-      resumeRequestedSession: true,
+      requestedSessionId:
+        "requestedSessionId" in scenario && scenario.requestedSessionId === "existing"
+          ? existingSessionId
+          : "requestedSessionId" in scenario && scenario.requestedSessionId === "stale"
+            ? "webchat-stale-session-id"
+            : undefined,
+      resumeRequestedSession:
+        "resumeRequestedSession" in scenario ? scenario.resumeRequestedSession : undefined,
+      expectedExistingSessionId:
+        "expectedExistingSessionId" in scenario ? existingSessionId : undefined,
+      pinExpectedExistingSession:
+        "pinExpectedExistingSession" in scenario ? scenario.pinExpectedExistingSession : undefined,
     });
 
-    expect(result.isNewSession).toBe(false);
+    expect(result.isNewSession).toBe(scenario.expectedNew);
     expect(result.sessionId).toBe(existingSessionId);
+    if ("expectBootstrapBoundary" in scenario && scenario.expectBootstrapBoundary === false) {
+      expect(clearBootstrapSnapshotOnSessionRolloverSpy).toHaveBeenCalledWith({
+        boundaryAppended: false,
+        sessionKey,
+      });
+    }
   });
-
-  it("does not reuse an idle-expired session for a stale asserted session id", async () => {
-    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
-    const root = await makeCaseDir("openclaw-reset-idle-stale-requested-session-");
-    const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:main";
-    const existingSessionId = "webchat-current-session-id";
-
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: existingSessionId,
-        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
-      },
-    });
-
-    const cfg = {
-      session: {
-        store: storePath,
-        reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
-      },
-    } as OpenClawConfig;
-    const result = await initSessionState({
-      ctx: { Body: "hello", SessionKey: sessionKey, Provider: "internal", Surface: "internal" },
-      cfg,
-      commandAuthorized: true,
-      requestedSessionId: "webchat-stale-session-id",
-      resumeRequestedSession: true,
-    });
-
-    expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
-  });
-
   it("drains stale system events when idle rollover creates a new session", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
     const root = await makeCaseDir("openclaw-reset-idle-system-events-");
@@ -2340,7 +2090,7 @@ describe("initSessionState reset policy", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.resetTriggered).toBe(false);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionId).toBe(existingSessionId);
     await expect(
       drainFormattedSystemEvents({
         cfg,
@@ -2470,8 +2220,8 @@ describe("initSessionState reset policy", () => {
     const persisted = readSessionStoreFast(storePath);
     const entry = persisted[scenario.sessionKey];
     if (scenario.expectNewSession) {
-      expect(result.sessionId).not.toBe(existingSessionId);
-      expect(entry?.sessionId).not.toBe(existingSessionId);
+      expect(result.sessionId).toBe(existingSessionId);
+      expect(entry?.sessionId).toBe(existingSessionId);
       expect(entry?.status).toBeUndefined();
       expect(entry?.startedAt).toBeUndefined();
       expect(entry?.endedAt).toBeUndefined();
@@ -2539,12 +2289,28 @@ describe("initSessionState reset policy", () => {
     expect(persisted[sessionKey]?.abortedLastRun).toBeUndefined();
   });
 
-  it("keeps the existing stale session for /reset soft", async () => {
+  it.each([
+    {
+      name: "keeps the existing stale session for /reset soft",
+      body: "/reset soft",
+      slug: "soft",
+    },
+    {
+      name: "keeps the existing stale session for /reset: soft",
+      body: "/reset: soft",
+      slug: "soft-colon",
+    },
+    {
+      name: "keeps the existing stale session for multiline /reset soft tails",
+      body: "/reset soft\nre-read persona files",
+      slug: "soft-multiline",
+    },
+  ])("$name", async ({ body, slug }) => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
-    const root = await makeCaseDir("openclaw-reset-soft-stale-");
+    const root = await makeCaseDir(`openclaw-reset-${slug}-stale-`);
     const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:whatsapp:dm:soft-stale";
-    const existingSessionId = "soft-stale-session-id";
+    const sessionKey = `agent:main:whatsapp:dm:${slug}-stale`;
+    const existingSessionId = `${slug}-stale-session-id`;
 
     await writeSessionStoreFast(storePath, {
       [sessionKey]: {
@@ -2561,9 +2327,9 @@ describe("initSessionState reset policy", () => {
     } as OpenClawConfig;
     const result = await initSessionState({
       ctx: {
-        Body: "/reset soft",
-        RawBody: "/reset soft",
-        CommandBody: "/reset soft",
+        Body: body,
+        RawBody: body,
+        CommandBody: body,
         SessionKey: sessionKey,
       },
       cfg,
@@ -2574,88 +2340,8 @@ describe("initSessionState reset policy", () => {
     expect(result.isNewSession).toBe(false);
     expect(result.sessionId).toBe(existingSessionId);
     expect(clearBootstrapSnapshotOnSessionRolloverSpy).not.toHaveBeenCalledWith({
+      boundaryAppended: true,
       sessionKey,
-      previousSessionId: existingSessionId,
-    });
-  });
-
-  it("keeps the existing stale session for /reset: soft", async () => {
-    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
-    const root = await makeCaseDir("openclaw-reset-soft-colon-stale-");
-    const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:whatsapp:dm:soft-colon-stale";
-    const existingSessionId = "soft-colon-stale-session-id";
-
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: existingSessionId,
-        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
-      },
-    });
-
-    const cfg = {
-      session: {
-        store: storePath,
-        reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
-      },
-    } as OpenClawConfig;
-    const result = await initSessionState({
-      ctx: {
-        Body: "/reset: soft",
-        RawBody: "/reset: soft",
-        CommandBody: "/reset: soft",
-        SessionKey: sessionKey,
-      },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.resetTriggered).toBe(false);
-    expect(result.isNewSession).toBe(false);
-    expect(result.sessionId).toBe(existingSessionId);
-    expect(clearBootstrapSnapshotOnSessionRolloverSpy).not.toHaveBeenCalledWith({
-      sessionKey,
-      previousSessionId: existingSessionId,
-    });
-  });
-
-  it("keeps the existing stale session for multiline /reset soft tails", async () => {
-    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
-    const root = await makeCaseDir("openclaw-reset-soft-multiline-stale-");
-    const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:whatsapp:dm:soft-multiline-stale";
-    const existingSessionId = "soft-multiline-stale-session-id";
-
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: existingSessionId,
-        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
-      },
-    });
-
-    const cfg = {
-      session: {
-        store: storePath,
-        reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
-      },
-    } as OpenClawConfig;
-    const result = await initSessionState({
-      ctx: {
-        Body: "/reset soft\nre-read persona files",
-        RawBody: "/reset soft\nre-read persona files",
-        CommandBody: "/reset soft\nre-read persona files",
-        SessionKey: sessionKey,
-      },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.resetTriggered).toBe(false);
-    expect(result.isNewSession).toBe(false);
-    expect(result.sessionId).toBe(existingSessionId);
-    expect(clearBootstrapSnapshotOnSessionRolloverSpy).not.toHaveBeenCalledWith({
-      sessionKey,
-      previousSessionId: existingSessionId,
     });
   });
 
@@ -2725,136 +2411,78 @@ describe("initSessionState reset policy", () => {
 
     expect(result.resetTriggered).toBe(false);
     expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
-    expect(clearBootstrapSnapshotOnSessionRolloverSpy).toHaveBeenCalledWith({
-      sessionKey,
-      previousSessionId: existingSessionId,
-    });
-  });
-
-  it("uses per-type overrides for thread sessions", async () => {
-    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
-    const root = await makeCaseDir("openclaw-reset-thread-");
-    const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:slack:channel:c1:thread:123";
-    const existingSessionId = "thread-session-id";
-
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: existingSessionId,
-        updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
-      },
-    });
-
-    const cfg = {
-      session: {
-        store: storePath,
-        reset: { mode: "daily", atHour: 4 },
-        resetByType: { thread: { mode: "idle", idleMinutes: 180 } },
-      },
-    } as OpenClawConfig;
-    const result = await initSessionState({
-      ctx: { Body: "reply", SessionKey: sessionKey, ThreadLabel: "Slack thread" },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.isNewSession).toBe(false);
-    expect(result.sessionId).toBe(existingSessionId);
-  });
-
-  it("detects thread sessions without thread key suffix", async () => {
-    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
-    const root = await makeCaseDir("openclaw-reset-thread-nosuffix-");
-    const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:discord:channel:c1";
-    const existingSessionId = "thread-nosuffix";
-
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: existingSessionId,
-        updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
-      },
-    });
-
-    const cfg = {
-      session: {
-        store: storePath,
-        resetByType: { thread: { mode: "idle", idleMinutes: 180 } },
-      },
-    } as OpenClawConfig;
-    const result = await initSessionState({
-      ctx: { Body: "reply", SessionKey: sessionKey, ThreadLabel: "Discord thread" },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.isNewSession).toBe(false);
-    expect(result.sessionId).toBe(existingSessionId);
-  });
-
-  it("keeps the no-reset default for types without an override", async () => {
-    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
-    const root = await makeCaseDir("openclaw-reset-type-default-");
-    const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:whatsapp:dm:s4";
-    const existingSessionId = "type-default-session";
-
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: existingSessionId,
-        updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
-      },
-    });
-
-    const cfg = {
-      session: {
-        store: storePath,
-        resetByType: { thread: { mode: "idle", idleMinutes: 60 } },
-      },
-    } as OpenClawConfig;
-    const result = await initSessionState({
-      ctx: { Body: "hello", SessionKey: sessionKey },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.isNewSession).toBe(false);
-    expect(result.sessionId).toBe(existingSessionId);
-  });
-
-  it("keeps legacy idleMinutes behavior without reset config", async () => {
-    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
-    const root = await makeCaseDir("openclaw-reset-legacy-");
-    const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:whatsapp:dm:s3";
-    const existingSessionId = "legacy-session-id";
-
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: existingSessionId,
-        updatedAt: new Date(2026, 0, 18, 3, 30, 0).getTime(),
-      },
-    });
-
-    const cfg = {
-      session: {
-        store: storePath,
-        idleMinutes: 240,
-      },
-    } as OpenClawConfig;
-    const result = await initSessionState({
-      ctx: { Body: "hello", SessionKey: sessionKey },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.isNewSession).toBe(false);
     expect(result.sessionId).toBe(existingSessionId);
     expect(clearBootstrapSnapshotOnSessionRolloverSpy).toHaveBeenCalledWith({
+      boundaryAppended: true,
       sessionKey,
-      previousSessionId: undefined,
     });
+  });
+
+  it.each([
+    {
+      name: "uses per-type overrides for thread sessions",
+      slug: "thread",
+      sessionKey: "agent:main:slack:channel:c1:thread:123",
+      sessionId: "thread-session-id",
+      updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+      session: {
+        reset: { mode: "daily" as const, atHour: 4 },
+        resetByType: { thread: { mode: "idle" as const, idleMinutes: 180 } },
+      },
+      ctx: { Body: "reply", ThreadLabel: "Slack thread" },
+    },
+    {
+      name: "detects thread sessions without thread key suffix",
+      slug: "thread-nosuffix",
+      sessionKey: "agent:main:discord:channel:c1",
+      sessionId: "thread-nosuffix",
+      updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+      session: { resetByType: { thread: { mode: "idle" as const, idleMinutes: 180 } } },
+      ctx: { Body: "reply", ThreadLabel: "Discord thread" },
+    },
+    {
+      name: "keeps the no-reset default for types without an override",
+      slug: "type-default",
+      sessionKey: "agent:main:whatsapp:dm:s4",
+      sessionId: "type-default-session",
+      updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+      session: { resetByType: { thread: { mode: "idle" as const, idleMinutes: 60 } } },
+      ctx: { Body: "hello" },
+    },
+    {
+      name: "keeps legacy idleMinutes behavior without reset config",
+      slug: "legacy",
+      sessionKey: "agent:main:whatsapp:dm:s3",
+      sessionId: "legacy-session-id",
+      updatedAt: new Date(2026, 0, 18, 3, 30, 0).getTime(),
+      session: { idleMinutes: 240 },
+      ctx: { Body: "hello" },
+      expectBootstrapBoundary: false,
+    },
+  ])("$name", async (scenario) => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+    const storePath = await createStorePath(`openclaw-reset-${scenario.slug}-`);
+    await writeSessionStoreFast(storePath, {
+      [scenario.sessionKey]: {
+        sessionId: scenario.sessionId,
+        updatedAt: scenario.updatedAt,
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: { SessionKey: scenario.sessionKey, ...scenario.ctx },
+      cfg: { session: { store: storePath, ...scenario.session } } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(scenario.sessionId);
+    if ("expectBootstrapBoundary" in scenario) {
+      expect(clearBootstrapSnapshotOnSessionRolloverSpy).toHaveBeenCalledWith({
+        boundaryAppended: false,
+        sessionKey: scenario.sessionKey,
+      });
+    }
   });
 });
 
@@ -2892,51 +2520,31 @@ describe("initSessionState browser tab cleanup", () => {
     expect(cleanupParams.sessionKeys).toEqual([existingSessionId, sessionKey]);
   });
 
-  it("skips browser tab cleanup when root browser support is disabled", async () => {
+  it.each([
+    {
+      name: "skips browser tab cleanup when root browser support is disabled",
+      slug: "browser-disabled",
+      config: { browser: { enabled: false } },
+    },
+    {
+      name: "skips browser tab cleanup when the browser plugin entry is disabled",
+      slug: "browser-plugin-disabled",
+      config: { plugins: { entries: { browser: { enabled: false } } } },
+    },
+  ])("$name", async ({ slug, config }) => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
-    const storePath = await createStorePath("openclaw-tab-cleanup-browser-disabled-");
-    const sessionKey = "agent:main:webchat:dm:tab-disabled";
-    const existingSessionId = "tab-disabled-session-id";
+    const storePath = await createStorePath(`openclaw-tab-cleanup-${slug}-`);
+    const sessionKey = `agent:main:webchat:dm:tab-${slug}`;
 
     await writeSessionStoreFast(storePath, {
       [sessionKey]: {
-        sessionId: existingSessionId,
+        sessionId: `tab-${slug}-session-id`,
         updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
       },
     });
 
     const cfg = {
-      browser: { enabled: false },
-      session: {
-        store: storePath,
-        reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
-      },
-    } as OpenClawConfig;
-    const result = await initSessionState({
-      ctx: { Body: "hello", SessionKey: sessionKey },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.isNewSession).toBe(true);
-    expect(browserMaintenanceMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
-  });
-
-  it("skips browser tab cleanup when the browser plugin entry is disabled", async () => {
-    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
-    const storePath = await createStorePath("openclaw-tab-cleanup-browser-plugin-disabled-");
-    const sessionKey = "agent:main:webchat:dm:tab-plugin-disabled";
-    const existingSessionId = "tab-plugin-disabled-session-id";
-
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: existingSessionId,
-        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
-      },
-    });
-
-    const cfg = {
-      plugins: { entries: { browser: { enabled: false } } },
+      ...config,
       session: {
         store: storePath,
         reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
@@ -3167,7 +2775,7 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
       expect(result.triggerBodyNormalized, testCase.name).toBe("/new");
       expect(result.isNewSession, testCase.name).toBe(testCase.expectedIsNewSession);
       if (testCase.expectedIsNewSession) {
-        expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
+        expect(result.sessionId, testCase.name).toBe(existingSessionId);
         expect(result.bodyStripped, testCase.name).toBe("");
       } else {
         expect(result.sessionId, testCase.name).toBe(existingSessionId);
@@ -3211,9 +2819,7 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
     });
 
     expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
-    );
+    expect(result.sessionId).toBe("old-group-activation-session");
     expect(result.sessionEntry.groupActivation).toBe("always");
     expect(result.sessionEntry.sessionId).toBe(result.sessionId);
     expect(typeof result.sessionEntry.updatedAt).toBe("number");
@@ -3271,7 +2877,7 @@ describe("initSessionState reset triggers in Slack channels", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.resetTriggered).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionId).toBe(existingSessionId);
     expect(result.bodyStripped).toBe("take notes");
   });
 });
@@ -3397,49 +3003,18 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       reasoningLevel: "low",
       label: "telegram-priority",
     } as const;
-    const cases = [
-      {
-        name: "new preserves behavior overrides",
-        body: "/new",
-      },
-      {
-        name: "reset preserves behavior overrides",
-        body: "/reset",
-      },
-    ] as const;
+    const cases = await runExplicitResetCases({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      entry: overrides,
+    });
 
-    for (const testCase of cases) {
-      await seedSessionStoreWithOverrides({
-        storePath,
-        sessionKey,
-        sessionId: existingSessionId,
-        overrides: { ...overrides },
-      });
-
-      const cfg = {
-        session: { store: storePath, idleMinutes: 999 },
-      } as OpenClawConfig;
-
-      const result = await initSessionState({
-        ctx: {
-          Body: testCase.body,
-          RawBody: testCase.body,
-          CommandBody: testCase.body,
-          From: "user-overrides",
-          To: "bot",
-          ChatType: "direct",
-          SessionKey: sessionKey,
-          Provider: "telegram",
-          Surface: "telegram",
-        },
-        cfg,
-        commandAuthorized: true,
-      });
-
-      expect(result.isNewSession, testCase.name).toBe(true);
-      expect(result.resetTriggered, testCase.name).toBe(true);
-      expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
-      expectEntryFields(result.sessionEntry, overrides, testCase.name);
+    for (const { name, result } of cases) {
+      expect(result.isNewSession, name).toBe(true);
+      expect(result.resetTriggered, name).toBe(true);
+      expect(result.sessionId, name).toBe(existingSessionId);
+      expectEntryFields(result.sessionEntry, overrides, name);
     }
   });
 
@@ -3447,65 +3022,33 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     const storePath = await createStorePath("openclaw-reset-usage-family-");
     const sessionKey = "agent:main:telegram:dm:user-usage-family";
     const existingSessionId = "existing-session-usage-family";
-    const cases = [
-      {
-        name: "new preserves usage family metadata",
-        body: "/new",
+    const cases = await runExplicitResetCases({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      entry: {
+        usageFamilyKey: "family:user-usage-family",
+        usageFamilySessionIds: ["ancestor-session", existingSessionId],
       },
-      {
-        name: "reset preserves usage family metadata",
-        body: "/reset",
-      },
-    ] as const;
+    });
 
-    for (const testCase of cases) {
-      await seedSessionStoreWithOverrides({
-        storePath,
-        sessionKey,
-        sessionId: existingSessionId,
-        overrides: {
-          usageFamilyKey: "family:user-usage-family",
-          usageFamilySessionIds: ["ancestor-session", existingSessionId],
-        },
-      });
-
-      const result = await initSessionState({
-        ctx: {
-          Body: testCase.body,
-          RawBody: testCase.body,
-          CommandBody: testCase.body,
-          From: "user-usage-family",
-          To: "bot",
-          ChatType: "direct",
-          SessionKey: sessionKey,
-          Provider: "telegram",
-          Surface: "telegram",
-        },
-        cfg: {
-          session: { store: storePath, idleMinutes: 999 },
-        } as OpenClawConfig,
-        commandAuthorized: true,
-      });
-
-      expect(result.resetTriggered, testCase.name).toBe(true);
-      expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
-      expect(result.sessionEntry.usageFamilyKey, testCase.name).toBe("family:user-usage-family");
-      expect(result.sessionEntry.usageFamilySessionIds, testCase.name).toEqual([
+    for (const { name, result, stored } of cases) {
+      expect(result.resetTriggered, name).toBe(true);
+      expect(result.sessionId, name).toBe(existingSessionId);
+      expect(result.sessionEntry.usageFamilyKey, name).toBe("family:user-usage-family");
+      expect(result.sessionEntry.usageFamilySessionIds, name).toEqual([
         "ancestor-session",
         existingSessionId,
-        result.sessionId,
       ]);
-
-      const stored = readSessionStoreFast(storePath);
       expect(
         expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").usageFamilyKey,
-        testCase.name,
+        name,
       ).toBe("family:user-usage-family");
       expect(
         expectDefined(stored[sessionKey], "stored[sessionKey] test invariant")
           .usageFamilySessionIds,
-        testCase.name,
-      ).toEqual(["ancestor-session", existingSessionId, result.sessionId]);
+        name,
+      ).toEqual(["ancestor-session", existingSessionId]);
     }
   });
 
@@ -3528,64 +3071,29 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       },
       claudeCliSessionId: "cli-session-123",
     } as const;
-    const cases = [
-      {
-        name: "new preserves selected auth profile overrides",
-        body: "/new",
-      },
-      {
-        name: "reset preserves selected auth profile overrides",
-        body: "/reset",
-      },
-    ] as const;
+    const cases = await runExplicitResetCases({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      entry: overrides,
+    });
 
-    for (const testCase of cases) {
-      await seedSessionStoreWithOverrides({
-        storePath,
-        sessionKey,
-        sessionId: existingSessionId,
-        overrides: { ...overrides },
-      });
-
-      const cfg = {
-        session: { store: storePath, idleMinutes: 999 },
-      } as OpenClawConfig;
-
-      const result = await initSessionState({
-        ctx: {
-          Body: testCase.body,
-          RawBody: testCase.body,
-          CommandBody: testCase.body,
-          From: "user-model-auth",
-          To: "bot",
-          ChatType: "direct",
-          SessionKey: sessionKey,
-          Provider: "telegram",
-          Surface: "telegram",
-        },
-        cfg,
-        commandAuthorized: true,
-      });
-
-      expect(result.isNewSession, testCase.name).toBe(true);
-      expect(result.resetTriggered, testCase.name).toBe(true);
-      expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
-      expect(result.sessionEntry.providerOverride, testCase.name).toBe(overrides.providerOverride);
-      expect(result.sessionEntry.modelOverride, testCase.name).toBe(overrides.modelOverride);
-      expect(result.sessionEntry.authProfileOverride, testCase.name).toBe(
-        overrides.authProfileOverride,
-      );
-      expect(result.sessionEntry.authProfileOverrideSource, testCase.name).toBe(
+    for (const { name, result, stored } of cases) {
+      expect(result.isNewSession, name).toBe(true);
+      expect(result.resetTriggered, name).toBe(true);
+      expect(result.sessionId, name).toBe(existingSessionId);
+      expect(result.sessionEntry.providerOverride, name).toBe(overrides.providerOverride);
+      expect(result.sessionEntry.modelOverride, name).toBe(overrides.modelOverride);
+      expect(result.sessionEntry.authProfileOverride, name).toBe(overrides.authProfileOverride);
+      expect(result.sessionEntry.authProfileOverrideSource, name).toBe(
         overrides.authProfileOverrideSource,
       );
-      expect(result.sessionEntry.authProfileOverrideCompactionCount, testCase.name).toBe(
+      expect(result.sessionEntry.authProfileOverrideCompactionCount, name).toBe(
         overrides.authProfileOverrideCompactionCount,
       );
       expect(result.sessionEntry.cliSessionIds).toBeUndefined();
       expect(result.sessionEntry.cliSessionBindings).toBeUndefined();
       expect(result.sessionEntry.claudeCliSessionId).toBeUndefined();
-
-      const stored = readSessionStoreFast(storePath);
       expect(
         expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds,
       ).toBeUndefined();
@@ -3611,50 +3119,25 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       authProfileOverrideCompactionCount: 1,
       verboseLevel: "on",
     } as const;
-    const cases = [
-      { name: "new clears auto-sourced overrides", body: "/new" },
-      { name: "reset clears auto-sourced overrides", body: "/reset" },
-    ] as const;
+    const cases = await runExplicitResetCases({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      entry: autoOverrides,
+    });
 
-    for (const testCase of cases) {
-      await seedSessionStoreWithOverrides({
-        storePath,
-        sessionKey,
-        sessionId: existingSessionId,
-        overrides: { ...autoOverrides },
-      });
-
-      const cfg = {
-        session: { store: storePath, idleMinutes: 999 },
-      } as OpenClawConfig;
-
-      const result = await initSessionState({
-        ctx: {
-          Body: testCase.body,
-          RawBody: testCase.body,
-          CommandBody: testCase.body,
-          From: "6761477233",
-          To: "bot",
-          ChatType: "direct",
-          SessionKey: sessionKey,
-          Provider: "telegram",
-          Surface: "telegram",
-        },
-        cfg,
-        commandAuthorized: true,
-      });
-
-      expect(result.isNewSession, testCase.name).toBe(true);
-      expect(result.resetTriggered, testCase.name).toBe(true);
-      expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
-      expect(result.sessionEntry.modelOverride, testCase.name).toBeUndefined();
-      expect(result.sessionEntry.providerOverride, testCase.name).toBeUndefined();
-      expect(result.sessionEntry.modelOverrideSource, testCase.name).toBeUndefined();
-      expect(result.sessionEntry.authProfileOverride, testCase.name).toBeUndefined();
-      expect(result.sessionEntry.authProfileOverrideSource, testCase.name).toBeUndefined();
-      expect(result.sessionEntry.authProfileOverrideCompactionCount, testCase.name).toBeUndefined();
+    for (const { name, result } of cases) {
+      expect(result.isNewSession, name).toBe(true);
+      expect(result.resetTriggered, name).toBe(true);
+      expect(result.sessionId, name).toBe(existingSessionId);
+      expect(result.sessionEntry.modelOverride, name).toBeUndefined();
+      expect(result.sessionEntry.providerOverride, name).toBeUndefined();
+      expect(result.sessionEntry.modelOverrideSource, name).toBeUndefined();
+      expect(result.sessionEntry.authProfileOverride, name).toBeUndefined();
+      expect(result.sessionEntry.authProfileOverrideSource, name).toBeUndefined();
+      expect(result.sessionEntry.authProfileOverrideCompactionCount, name).toBeUndefined();
       // Unrelated behavior overrides still carry across the reset.
-      expect(result.sessionEntry.verboseLevel, testCase.name).toBe(autoOverrides.verboseLevel);
+      expect(result.sessionEntry.verboseLevel, name).toBe(autoOverrides.verboseLevel);
     }
   });
 
@@ -3669,51 +3152,23 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       modelOverrideFallbackOriginModel: "claude-opus-4-6",
       verboseLevel: "on",
     } as const;
-    const cases = [
-      { name: "new clears recovered auto fallback override", body: "/new" },
-      { name: "reset clears recovered auto fallback override", body: "/reset" },
-    ] as const;
+    const cases = await runExplicitResetCases({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      entry: autoOverrides,
+    });
 
-    for (const testCase of cases) {
-      await seedSessionStoreWithOverrides({
-        storePath,
-        sessionKey,
-        sessionId: existingSessionId,
-        overrides: { ...autoOverrides },
-      });
-
-      const cfg = {
-        session: { store: storePath, idleMinutes: 999 },
-      } as OpenClawConfig;
-
-      const result = await initSessionState({
-        ctx: {
-          Body: testCase.body,
-          RawBody: testCase.body,
-          CommandBody: testCase.body,
-          From: "6761477233",
-          To: "bot",
-          ChatType: "direct",
-          SessionKey: sessionKey,
-          Provider: "telegram",
-          Surface: "telegram",
-        },
-        cfg,
-        commandAuthorized: true,
-      });
-
-      expect(result.isNewSession, testCase.name).toBe(true);
-      expect(result.resetTriggered, testCase.name).toBe(true);
-      expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
-      expect(result.sessionEntry.modelOverride, testCase.name).toBeUndefined();
-      expect(result.sessionEntry.providerOverride, testCase.name).toBeUndefined();
-      expect(result.sessionEntry.modelOverrideSource, testCase.name).toBeUndefined();
-      expect(
-        result.sessionEntry.modelOverrideFallbackOriginProvider,
-        testCase.name,
-      ).toBeUndefined();
-      expect(result.sessionEntry.modelOverrideFallbackOriginModel, testCase.name).toBeUndefined();
-      expect(result.sessionEntry.verboseLevel, testCase.name).toBe(autoOverrides.verboseLevel);
+    for (const { name, result } of cases) {
+      expect(result.isNewSession, name).toBe(true);
+      expect(result.resetTriggered, name).toBe(true);
+      expect(result.sessionId, name).toBe(existingSessionId);
+      expect(result.sessionEntry.modelOverride, name).toBeUndefined();
+      expect(result.sessionEntry.providerOverride, name).toBeUndefined();
+      expect(result.sessionEntry.modelOverrideSource, name).toBeUndefined();
+      expect(result.sessionEntry.modelOverrideFallbackOriginProvider, name).toBeUndefined();
+      expect(result.sessionEntry.modelOverrideFallbackOriginModel, name).toBeUndefined();
+      expect(result.sessionEntry.verboseLevel, name).toBe(autoOverrides.verboseLevel);
     }
   });
 
@@ -3764,7 +3219,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
 
     expect(result.isNewSession).toBe(true);
     expect(result.resetTriggered).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionId).toBe(existingSessionId);
     expect(result.sessionEntry.providerOverride).toBeUndefined();
     expect(result.sessionEntry.modelOverride).toBeUndefined();
     expect(result.sessionEntry.modelOverrideSource).toBeUndefined();
@@ -3805,122 +3260,50 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       modelOverride: "m2.7",
       modelOverrideSource: "user",
     } as const;
-    const cases = [
-      { name: "new clears stale runtime model cache", body: "/new" },
-      { name: "reset clears stale runtime model cache", body: "/reset" },
-    ] as const;
+    const cases = await runExplicitResetCases({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      entry: { ...runtimeModelCache, ...explicitUserOverride },
+    });
 
-    for (const testCase of cases) {
-      await seedSessionStoreWithOverrides({
-        storePath,
-        sessionKey,
-        sessionId: existingSessionId,
-        overrides: { ...runtimeModelCache, ...explicitUserOverride },
-      });
-      const seeded = readSessionStoreFast(storePath);
-      expect(seeded[sessionKey]?.modelProvider, testCase.name).toBe(
-        runtimeModelCache.modelProvider,
-      );
-      expect(seeded[sessionKey]?.model, testCase.name).toBe(runtimeModelCache.model);
-
-      const cfg = {
-        session: { store: storePath, idleMinutes: 999 },
-      } as OpenClawConfig;
-
-      const result = await initSessionState({
-        ctx: {
-          Body: testCase.body,
-          RawBody: testCase.body,
-          CommandBody: testCase.body,
-          From: "6761477233",
-          To: "bot",
-          ChatType: "direct",
-          SessionKey: sessionKey,
-          Provider: "telegram",
-          Surface: "telegram",
-        },
-        cfg,
-        commandAuthorized: true,
-      });
-
-      expect(result.isNewSession, testCase.name).toBe(true);
-      expect(result.resetTriggered, testCase.name).toBe(true);
-      expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
-      expect(result.sessionEntry.modelProvider, testCase.name).toBeUndefined();
-      expect(result.sessionEntry.model, testCase.name).toBeUndefined();
-      expect(result.sessionEntry.cacheRead, testCase.name).toBeUndefined();
-      expect(result.sessionEntry.cacheWrite, testCase.name).toBeUndefined();
-      expect(result.sessionEntry.fallbackNoticeSelectedModel, testCase.name).toBeUndefined();
-      expect(result.sessionEntry.fallbackNoticeActiveModel, testCase.name).toBeUndefined();
-      expect(result.sessionEntry.fallbackNoticeReason, testCase.name).toBeUndefined();
-      expect(result.sessionEntry.systemPromptReport, testCase.name).toBeUndefined();
-      expect(result.sessionEntry.providerOverride, testCase.name).toBe(
+    for (const { name, result, stored } of cases) {
+      expect(result.isNewSession, name).toBe(true);
+      expect(result.resetTriggered, name).toBe(true);
+      expect(result.sessionId, name).toBe(existingSessionId);
+      expect(result.sessionEntry.modelProvider, name).toBeUndefined();
+      expect(result.sessionEntry.model, name).toBeUndefined();
+      expect(result.sessionEntry.cacheRead, name).toBeUndefined();
+      expect(result.sessionEntry.cacheWrite, name).toBeUndefined();
+      expect(result.sessionEntry.fallbackNoticeSelectedModel, name).toBeUndefined();
+      expect(result.sessionEntry.fallbackNoticeActiveModel, name).toBeUndefined();
+      expect(result.sessionEntry.fallbackNoticeReason, name).toBeUndefined();
+      expect(result.sessionEntry.systemPromptReport, name).toBeUndefined();
+      expect(result.sessionEntry.providerOverride, name).toBe(
         explicitUserOverride.providerOverride,
       );
-      expect(result.sessionEntry.modelOverride, testCase.name).toBe(
-        explicitUserOverride.modelOverride,
-      );
-      expect(result.sessionEntry.modelOverrideSource, testCase.name).toBe(
+      expect(result.sessionEntry.modelOverride, name).toBe(explicitUserOverride.modelOverride);
+      expect(result.sessionEntry.modelOverrideSource, name).toBe(
         explicitUserOverride.modelOverrideSource,
       );
-      // Unrelated behavior overrides still carry across the reset.
-      expect(result.sessionEntry.verboseLevel, testCase.name).toBe(runtimeModelCache.verboseLevel);
-
-      const stored = readSessionStoreFast(storePath);
-      expect(
-        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").modelProvider,
-        testCase.name,
-      ).toBeUndefined();
-      expect(
-        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").model,
-        testCase.name,
-      ).toBeUndefined();
-      expect(
-        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead,
-        testCase.name,
-      ).toBeUndefined();
-      expect(
-        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheWrite,
-        testCase.name,
-      ).toBeUndefined();
-      expect(
-        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant")
-          .fallbackNoticeSelectedModel,
-        testCase.name,
-      ).toBeUndefined();
-      expect(
-        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant")
-          .fallbackNoticeActiveModel,
-        testCase.name,
-      ).toBeUndefined();
-      expect(
-        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").fallbackNoticeReason,
-        testCase.name,
-      ).toBeUndefined();
-      expect(
-        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").systemPromptReport,
-        testCase.name,
-      ).toBeUndefined();
-      expect(
-        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").providerOverride,
-        testCase.name,
-      ).toBe(explicitUserOverride.providerOverride);
-      expect(
-        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").modelOverride,
-        testCase.name,
-      ).toBe(explicitUserOverride.modelOverride);
-      expect(
-        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").modelOverrideSource,
-        testCase.name,
-      ).toBe(explicitUserOverride.modelOverrideSource);
-      expect(
-        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").contextTokens,
-        testCase.name,
-      ).toBeUndefined();
-      expect(
-        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").verboseLevel,
-        testCase.name,
-      ).toBe(runtimeModelCache.verboseLevel);
+      expect(result.sessionEntry.verboseLevel, name).toBe(runtimeModelCache.verboseLevel);
+      expect(stored[sessionKey]?.modelProvider, name).toBeUndefined();
+      expect(stored[sessionKey]?.model, name).toBeUndefined();
+      expect(stored[sessionKey]?.cacheRead, name).toBeUndefined();
+      expect(stored[sessionKey]?.cacheWrite, name).toBeUndefined();
+      expect(stored[sessionKey]?.fallbackNoticeSelectedModel, name).toBeUndefined();
+      expect(stored[sessionKey]?.fallbackNoticeActiveModel, name).toBeUndefined();
+      expect(stored[sessionKey]?.fallbackNoticeReason, name).toBeUndefined();
+      expect(stored[sessionKey]?.systemPromptReport, name).toBeUndefined();
+      expect(stored[sessionKey]?.providerOverride, name).toBe(
+        explicitUserOverride.providerOverride,
+      );
+      expect(stored[sessionKey]?.modelOverride, name).toBe(explicitUserOverride.modelOverride);
+      expect(stored[sessionKey]?.modelOverrideSource, name).toBe(
+        explicitUserOverride.modelOverrideSource,
+      );
+      expect(stored[sessionKey]?.contextTokens, name).toBeUndefined();
+      expect(stored[sessionKey]?.verboseLevel, name).toBe(runtimeModelCache.verboseLevel);
     }
   });
 
@@ -3931,6 +3314,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     const overrides = {
       spawnedBy: "agent:main:main",
       spawnedWorkspaceDir: "/tmp/child-workspace",
+      spawnedCwd: "/tmp/task-repo",
       parentSessionKey: "agent:main:main",
       forkedFromParent: true,
       spawnDepth: 2,
@@ -3973,7 +3357,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
 
       expect(result.isNewSession, testCase.name).toBe(true);
       expect(result.resetTriggered, testCase.name).toBe(true);
-      expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
+      expect(result.sessionId, testCase.name).toBe(existingSessionId);
       expectEntryFields(result.sessionEntry, overrides, testCase.name);
     }
   });
@@ -4015,76 +3399,46 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     expect(result.sessionId).toBe(existingSessionId);
   });
 
-  it("keeps the existing session for /reset soft", async () => {
-    const storePath = await createStorePath("openclaw-soft-reset-session-");
-    const sessionKey = "agent:main:telegram:dm:user-soft-reset";
-    const existingSessionId = "existing-session-soft-reset";
-
-    await seedSessionStoreWithOverrides({
-      storePath,
-      sessionKey,
-      sessionId: existingSessionId,
-      overrides: {
+  it.each([
+    {
+      name: "keeps the existing session for /reset soft",
+      slug: "soft-reset",
+      body: "/reset soft",
+      entry: {
         cliSessionIds: { "claude-cli": "cli-session-1" },
         cliSessionBindings: {
-          "claude-cli": {
-            sessionId: "cli-session-1",
-            extraSystemPromptHash: "prompt-hash",
-          },
+          "claude-cli": { sessionId: "cli-session-1", extraSystemPromptHash: "prompt-hash" },
         },
       },
-    });
-
-    const cfg = {
-      session: { store: storePath, idleMinutes: 999 },
-    } as OpenClawConfig;
-
-    const result = await initSessionState({
-      ctx: {
-        Body: "/reset soft",
-        RawBody: "/reset soft",
-        CommandBody: "/reset soft",
-        Provider: "telegram",
-        Surface: "telegram",
-        ChatType: "direct",
-        SessionKey: sessionKey,
-      },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.resetTriggered).toBe(false);
-    expect(result.isNewSession).toBe(false);
-    expect(result.sessionId).toBe(existingSessionId);
-  });
-
-  it("keeps the existing session for /reset newline soft", async () => {
-    const storePath = await createStorePath("openclaw-reset-newline-soft-");
-    const sessionKey = "agent:main:telegram:dm:user-reset-newline-soft";
-    const existingSessionId = "existing-session-reset-newline-soft";
-
+    },
+    {
+      name: "keeps the existing session for /reset newline soft",
+      slug: "reset-newline-soft",
+      body: "/reset \nsoft",
+      entry: {},
+    },
+  ])("$name", async ({ slug, body, entry }) => {
+    const storePath = await createStorePath(`openclaw-${slug}-`);
+    const sessionKey = `agent:main:telegram:dm:user-${slug}`;
+    const existingSessionId = `existing-session-${slug}`;
     await seedSessionStoreWithOverrides({
       storePath,
       sessionKey,
       sessionId: existingSessionId,
-      overrides: {},
+      overrides: entry,
     });
-
-    const cfg = {
-      session: { store: storePath, idleMinutes: 999 },
-    } as OpenClawConfig;
 
     const result = await initSessionState({
       ctx: {
-        Body: "/reset \nsoft",
-        RawBody: "/reset \nsoft",
-        CommandBody: "/reset \nsoft",
+        Body: body,
+        RawBody: body,
+        CommandBody: body,
         Provider: "telegram",
         Surface: "telegram",
         ChatType: "direct",
         SessionKey: sessionKey,
       },
-      cfg,
+      cfg: { session: { store: storePath, idleMinutes: 999 } } as OpenClawConfig,
       commandAuthorized: true,
     });
 
@@ -4092,19 +3446,24 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     expect(result.isNewSession).toBe(false);
     expect(result.sessionId).toBe(existingSessionId);
   });
-
-  it("archives the old session store entry on /new", async () => {
+  it("retains the transcript in place on /new", async () => {
     const storePath = await createStorePath("openclaw-archive-old-");
     const sessionKey = "agent:main:telegram:dm:user-archive";
     const existingSessionId = "existing-session-archive";
-    const transcriptPath = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
     await seedSessionStoreWithOverrides({
       storePath,
       sessionKey,
       sessionId: existingSessionId,
       overrides: { verboseLevel: "on" },
     });
-    await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
+    await appendTranscriptMessage(
+      { agentId: "main", sessionId: existingSessionId, sessionKey, storePath },
+      { message: { role: "user", content: "kept question" } },
+    );
+    await appendTranscriptMessage(
+      { agentId: "main", sessionId: existingSessionId, sessionKey, storePath },
+      { message: { role: "assistant", content: "kept answer" } },
+    );
 
     const cfg = {
       session: { store: storePath, idleMinutes: 999 },
@@ -4128,14 +3487,24 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
 
     expect(result.isNewSession).toBe(true);
     expect(result.resetTriggered).toBe(true);
-    expect(await fs.stat(transcriptPath).catch(() => null)).toBeNull();
+    expect(result.sessionId).toBe(existingSessionId);
+    const events = await loadTranscriptEvents({
+      agentId: "main",
+      sessionId: existingSessionId,
+      sessionKey,
+      storePath,
+    });
+    expect(events.map((event) => (event as { type?: unknown }).type)).toContain("reset");
+    expect(
+      events.findLast((event) => (event as { type?: unknown }).type === "reset"),
+    ).toMatchObject({ reason: "new", firstKeptEntryId: expect.any(String) });
     const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
       entry.startsWith(`${existingSessionId}.jsonl.reset.`),
     );
-    expect(archived).toHaveLength(1);
+    expect(archived).toHaveLength(0);
   });
 
-  it("drains foreign work before replacing a reply session", async () => {
+  it("drains foreign work before appending a reply reset boundary", async () => {
     const storePath = await createStorePath("openclaw-rollover-admission-");
     const sessionKey = "agent:main:telegram:dm:rollover-admission";
     const existingSessionId = "session-before-admitted-rollover";
@@ -4181,8 +3550,8 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
 
       admission.release();
       const result = await initialization;
-      expect(result.sessionId).not.toBe(existingSessionId);
-      expect(await fs.stat(transcriptPath).catch(() => null)).toBeNull();
+      expect(result.sessionId).toBe(existingSessionId);
+      expect(await fs.stat(transcriptPath).catch(() => null)).not.toBeNull();
     } finally {
       admission.release();
       await initialization.catch(() => {});
@@ -4223,7 +3592,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
             commandAuthorized: true,
           }),
       );
-      expect(result.sessionId).not.toBe(existingSessionId);
+      expect(result.sessionId).toBe(existingSessionId);
       expect(onInterrupt).not.toHaveBeenCalled();
     } finally {
       admission.release();
@@ -4280,7 +3649,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     const outcomes = await Promise.allSettled([runRollover(0), runRollover(1)]);
     expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
     expect(outcomes.filter((outcome) => outcome.status === "rejected")).toHaveLength(1);
-    expect(readSessionStoreFast(storePath)[sessionKey]?.sessionId).not.toBe(existingSessionId);
+    expect(readSessionStoreFast(storePath)[sessionKey]?.sessionId).toBe(existingSessionId);
   });
 
   it.each([
@@ -4417,7 +3786,9 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         Provider: "telegram",
         Surface: "telegram",
       },
-      cfg: { session: { store: storePath, idleMinutes: 1 } } as OpenClawConfig,
+      cfg: {
+        session: { store: storePath, reset: { mode: "idle", idleMinutes: 1 } },
+      } as OpenClawConfig,
       commandAuthorized: true,
     });
     const replaceSession = runExclusiveSessionStoreWrite(storePath, async () => {
@@ -4441,7 +3812,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         expect(replacementIdentityFenced).toBe(true);
         expect(postDrainIdentityFenced).toBe(true);
         expect(finalGapIdentityFenced).toBe(true);
-        expect(result.sessionId).not.toBe(finalGapSessionId);
+        expect(result.sessionId).toBe(finalGapSessionId);
       } else {
         expect(result.sessionId).toBe(replacementSessionId);
       }
@@ -4457,7 +3828,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
-  it("archives the old session transcript on daily/scheduled reset (stale session)", async () => {
+  it("retains the transcript on daily/scheduled reset (stale session)", async () => {
     // Daily resets occur when the session becomes stale (not via /new or /reset command).
     // Previously, previousSessionEntry was only set when resetTriggered=true, leaving
     // old transcript files orphaned on disk. Refs #35481.
@@ -4499,12 +3870,12 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
 
       expect(result.isNewSession).toBe(true);
       expect(result.resetTriggered).toBe(false);
-      expect(result.sessionId).not.toBe(existingSessionId);
-      expect(await fs.stat(transcriptPath).catch(() => null)).toBeNull();
+      expect(result.sessionId).toBe(existingSessionId);
+      expect(await fs.stat(transcriptPath).catch(() => null)).not.toBeNull();
       const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
         entry.startsWith(`${existingSessionId}.jsonl.reset.`),
       );
-      expect(archived).toHaveLength(1);
+      expect(archived).toHaveLength(0);
     } finally {
       vi.useRealTimers();
     }
@@ -4571,7 +3942,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
-  it("does not defer stale archival for the current turn's queued reservation", async () => {
+  it("does not defer stale boundary append for the current turn's queued reservation", async () => {
     vi.useFakeTimers();
     let operation: ReturnType<typeof replyRunRegistry.begin> | undefined;
     try {
@@ -4616,20 +3987,20 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(operation.phase).toBe("queued");
       expect(result.isNewSession).toBe(true);
       expect(result.resetTriggered).toBe(false);
-      expect(result.sessionId).not.toBe(existingSessionId);
+      expect(result.sessionId).toBe(existingSessionId);
       expect(result.previousSessionEntry?.sessionId).toBe(existingSessionId);
-      expect(await fs.stat(transcriptPath).catch(() => null)).toBeNull();
+      expect(await fs.stat(transcriptPath).catch(() => null)).not.toBeNull();
       const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
         entry.startsWith(`${existingSessionId}.jsonl.reset.`),
       );
-      expect(archived).toHaveLength(1);
+      expect(archived).toHaveLength(0);
     } finally {
       operation?.complete();
       vi.useRealTimers();
     }
   });
 
-  it("does not defer stale archival for a different active session id", async () => {
+  it("does not defer stale boundary append for a different active session id", async () => {
     vi.useFakeTimers();
     let operation: ReturnType<typeof replyRunRegistry.begin> | undefined;
     try {
@@ -4674,13 +4045,13 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
 
       expect(result.isNewSession).toBe(true);
       expect(result.resetTriggered).toBe(false);
-      expect(result.sessionId).not.toBe(existingSessionId);
+      expect(result.sessionId).toBe(existingSessionId);
       expect(result.previousSessionEntry?.sessionId).toBe(existingSessionId);
-      expect(await fs.stat(transcriptPath).catch(() => null)).toBeNull();
+      expect(await fs.stat(transcriptPath).catch(() => null)).not.toBeNull();
       const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
         entry.startsWith(`${existingSessionId}.jsonl.reset.`),
       );
-      expect(archived).toHaveLength(1);
+      expect(archived).toHaveLength(0);
     } finally {
       operation?.complete();
       vi.useRealTimers();
@@ -4792,7 +4163,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     });
 
     expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionId).toBe(existingSessionId);
     expect(result.sessionEntry.cliSessionBindings).toBeUndefined();
   });
 
@@ -4968,25 +4339,21 @@ describe("drainFormattedSystemEvents", () => {
 });
 
 describe("persistSessionUsageUpdate", () => {
-  async function seedSessionStore(params: {
-    storePath: string;
-    sessionKey: string;
-    entry: Record<string, unknown>;
-  }) {
-    await fs.mkdir(path.dirname(params.storePath), { recursive: true });
-    await replaceSessionEntry(
-      { storePath: params.storePath, sessionKey: params.sessionKey },
-      params.entry as SessionEntry,
-    );
+  async function seedSessionStore(
+    storePath: string,
+    sessionKey: string,
+    entry: Record<string, unknown>,
+  ) {
+    await writeSessionStoreFast(storePath, { [sessionKey]: entry });
   }
 
   it("uses lastCallUsage for totalTokens when provided", async () => {
     const storePath = await createStorePath("openclaw-usage-");
     const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      entry: { sessionId: "s1", updatedAt: Date.now(), totalTokens: 100_000 },
+    await seedSessionStore(storePath, sessionKey, {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      totalTokens: 100_000,
     });
 
     const accumulatedUsage = { input: 180_000, output: 10_000, total: 190_000 };
@@ -5018,15 +4385,11 @@ describe("persistSessionUsageUpdate", () => {
   it("keeps the prior total stale when last-call context is unavailable", async () => {
     const storePath = await createStorePath("openclaw-usage-unavailable-context-");
     const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "s1",
-        updatedAt: Date.now(),
-        totalTokens: 148_874,
-        totalTokensFresh: true,
-      },
+    await seedSessionStore(storePath, sessionKey, {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      totalTokens: 148_874,
+      totalTokensFresh: true,
     });
 
     await persistSessionUsageUpdate({
@@ -5059,18 +4422,27 @@ describe("persistSessionUsageUpdate", () => {
     );
   });
 
-  it("marks a fresh zero stale when a completed run has no context snapshot", async () => {
+  it.each([
+    {
+      name: "marks a fresh zero stale when a completed run has no context snapshot",
+      totalTokens: 0,
+      preserve: false,
+      expectedFresh: false,
+    },
+    {
+      name: "preserves fresh post-compaction totalTokens across model-only updates",
+      totalTokens: 42_000,
+      preserve: true,
+      expectedFresh: true,
+    },
+  ])("$name", async ({ totalTokens, preserve, expectedFresh }) => {
     const storePath = await createStorePath("openclaw-usage-no-snapshot-");
     const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "s1",
-        updatedAt: Date.now(),
-        totalTokens: 0,
-        totalTokensFresh: true,
-      },
+    await seedSessionStore(storePath, sessionKey, {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      totalTokens,
+      totalTokensFresh: true,
     });
 
     await persistSessionUsageUpdate({
@@ -5078,68 +4450,29 @@ describe("persistSessionUsageUpdate", () => {
       sessionKey,
       modelUsed: "claude-sonnet-4-6",
       contextTokensUsed: 200_000,
+      preserveFreshTotalTokensOnStaleUsage: preserve,
     });
 
-    const stored = readSessionStoreFast(storePath);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      0,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(false);
+    const stored = expectDefined(readSessionStoreFast(storePath)[sessionKey], "stored session");
+    expect(stored.totalTokens).toBe(totalTokens);
+    expect(stored.totalTokensFresh).toBe(expectedFresh);
   });
-
-  it("preserves fresh post-compaction totalTokens across model-only updates", async () => {
-    const storePath = await createStorePath("openclaw-usage-no-snapshot-");
-    const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "s1",
-        updatedAt: Date.now(),
-        totalTokens: 42_000,
-        totalTokensFresh: true,
-      },
-    });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      modelUsed: "claude-sonnet-4-6",
-      contextTokensUsed: 200_000,
-      preserveFreshTotalTokensOnStaleUsage: true,
-    });
-
-    const stored = readSessionStoreFast(storePath);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      42_000,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(true);
-  });
-
   it("accounts exhausted-run usage without committing its model and persists CLI binding", async () => {
     const storePath = await createStorePath("openclaw-usage-exhausted-");
     const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "s1",
-        updatedAt: 1,
-        modelProvider: "google",
-        model: "gemini-3-pro",
-        contextTokens: 1_000_000,
-        cliSessionBindings: {
-          "claude-cli": { sessionId: "existing-cli-session" },
-        },
-        cliSessionIds: {
-          "claude-cli": "existing-cli-session",
-        },
-        claudeCliSessionId: "existing-cli-session",
+    await seedSessionStore(storePath, sessionKey, {
+      sessionId: "s1",
+      updatedAt: 1,
+      modelProvider: "google",
+      model: "gemini-3-pro",
+      contextTokens: 1_000_000,
+      cliSessionBindings: {
+        "claude-cli": { sessionId: "existing-cli-session" },
       },
+      cliSessionIds: {
+        "claude-cli": "existing-cli-session",
+      },
+      claudeCliSessionId: "existing-cli-session",
     });
 
     await persistSessionUsageUpdate({
@@ -5176,25 +4509,21 @@ describe("persistSessionUsageUpdate", () => {
   it("accounts goal usage when fresh token snapshots are persisted", async () => {
     const storePath = await createStorePath("openclaw-usage-goal-");
     const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "s1",
+    await seedSessionStore(storePath, sessionKey, {
+      sessionId: "s1",
+      updatedAt: 1,
+      goal: {
+        schemaVersion: 1,
+        id: "goal-1",
+        objective: "ship",
+        status: "active",
+        createdAt: 1,
         updatedAt: 1,
-        goal: {
-          schemaVersion: 1,
-          id: "goal-1",
-          objective: "ship",
-          status: "active",
-          createdAt: 1,
-          updatedAt: 1,
-          tokenStart: 0,
-          tokenStartFresh: false,
-          tokensUsed: 0,
-          tokenBudget: 20,
-          continuationTurns: 0,
-        },
+        tokenStart: 0,
+        tokenStartFresh: false,
+        tokensUsed: 0,
+        tokenBudget: 20,
+        continuationTurns: 0,
       },
     });
 
@@ -5228,168 +4557,69 @@ describe("persistSessionUsageUpdate", () => {
     expect(storedEntry2?.goal?.status).toBe("budget_limited");
   });
 
-  it("uses lastCallUsage cache counters when available", async () => {
-    const storePath = await createStorePath("openclaw-usage-cache-");
-    const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      entry: { sessionId: "s1", updatedAt: Date.now() },
-    });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      usage: {
-        input: 100_000,
-        output: 8_000,
-        cacheRead: 260_000,
-        cacheWrite: 90_000,
+  it.each([
+    {
+      name: "uses lastCallUsage cache counters when available",
+      seed: {},
+      update: {
+        usage: { input: 100_000, output: 8_000, cacheRead: 260_000, cacheWrite: 90_000 },
+        lastCallUsage: { input: 12_000, output: 1_000, cacheRead: 18_000, cacheWrite: 4_000 },
       },
-      lastCallUsage: {
-        input: 12_000,
-        output: 1_000,
-        cacheRead: 18_000,
-        cacheWrite: 4_000,
+      expected: { inputTokens: 100_000, outputTokens: 8_000, cacheRead: 18_000, cacheWrite: 4_000 },
+    },
+    {
+      name: "marks totalTokens as unknown when no fresh context snapshot is available",
+      seed: {},
+      update: { usage: { input: 50_000, output: 5_000, total: 55_000 } },
+      expected: { totalTokens: undefined, totalTokensFresh: false },
+    },
+    {
+      name: "preserves fresh post-compaction totalTokens across stale usage updates",
+      seed: { totalTokens: 42_000, totalTokensFresh: true },
+      update: {
+        usage: { input: 50_000, output: 5_000, total: 55_000 },
+        preserveFreshTotalTokensOnStaleUsage: true,
       },
-      contextTokensUsed: 200_000,
-    });
-
-    const stored = readSessionStoreFast(storePath);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
-      100_000,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
-    ).toBe(8_000);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead).toBe(
-      18_000,
-    );
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheWrite).toBe(
-      4_000,
-    );
-  });
-
-  it("marks totalTokens as unknown when no fresh context snapshot is available", async () => {
+      expected: { totalTokens: 42_000, totalTokensFresh: true },
+    },
+    {
+      name: "marks older fresh totalTokens stale when no compaction preservation is requested",
+      seed: { totalTokens: 42_000, totalTokensFresh: true },
+      update: { usage: { input: 50_000, output: 5_000, total: 55_000 } },
+      expected: { totalTokens: 42_000, totalTokensFresh: false },
+    },
+    {
+      name: "uses promptTokens when available without lastCallUsage",
+      seed: {},
+      update: { usage: { input: 50_000, output: 5_000, total: 55_000 }, promptTokens: 42_000 },
+      expected: { totalTokens: 42_000, totalTokensFresh: true },
+    },
+  ])("$name", async ({ seed, update, expected, name }) => {
     const storePath = await createStorePath("openclaw-usage-");
     const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      entry: { sessionId: "s1", updatedAt: Date.now() },
+    await seedSessionStore(storePath, sessionKey, {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      ...seed,
     });
 
     await persistSessionUsageUpdate({
       storePath,
       sessionKey,
-      usage: { input: 50_000, output: 5_000, total: 55_000 },
       contextTokensUsed: 200_000,
+      ...update,
     });
 
-    const stored = readSessionStoreFast(storePath);
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens,
-    ).toBeUndefined();
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(false);
-  });
-
-  it("preserves fresh post-compaction totalTokens across stale usage updates", async () => {
-    const storePath = await createStorePath("openclaw-usage-");
-    const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "s1",
-        updatedAt: Date.now(),
-        totalTokens: 42_000,
-        totalTokensFresh: true,
-      },
-    });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      usage: { input: 50_000, output: 5_000, total: 55_000 },
-      contextTokensUsed: 200_000,
-      preserveFreshTotalTokensOnStaleUsage: true,
-    });
-
-    const stored = readSessionStoreFast(storePath);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      42_000,
+    expectEntryFields(
+      expectDefined(readSessionStoreFast(storePath)[sessionKey], "stored session"),
+      expected,
+      name,
     );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(true);
   });
-
-  it("marks older fresh totalTokens stale when no compaction preservation is requested", async () => {
-    const storePath = await createStorePath("openclaw-usage-");
-    const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "s1",
-        updatedAt: Date.now(),
-        totalTokens: 42_000,
-        totalTokensFresh: true,
-      },
-    });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      usage: { input: 50_000, output: 5_000, total: 55_000 },
-      contextTokensUsed: 200_000,
-    });
-
-    const stored = readSessionStoreFast(storePath);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      42_000,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(false);
-  });
-
-  it("uses promptTokens when available without lastCallUsage", async () => {
-    const storePath = await createStorePath("openclaw-usage-");
-    const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      entry: { sessionId: "s1", updatedAt: Date.now() },
-    });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      usage: { input: 50_000, output: 5_000, total: 55_000 },
-      promptTokens: 42_000,
-      contextTokensUsed: 200_000,
-    });
-
-    const stored = readSessionStoreFast(storePath);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      42_000,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(true);
-  });
-
   it("treats CLI usage as a fresh context snapshot when requested", async () => {
     const storePath = await createStorePath("openclaw-usage-cli-");
     const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      entry: { sessionId: "s1", updatedAt: Date.now() },
-    });
+    await seedSessionStore(storePath, sessionKey, { sessionId: "s1", updatedAt: Date.now() });
 
     await persistSessionUsageUpdate({
       storePath,
@@ -5433,27 +4663,23 @@ describe("persistSessionUsageUpdate", () => {
   it("clears stale CLI binding when usage update reports an unflushed replacement", async () => {
     const storePath = await createStorePath("openclaw-usage-cli-clear-");
     const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "s1",
-        updatedAt: Date.now(),
-        cliSessionIds: {
-          "claude-cli": "stale-cli-session",
-          "codex-cli": "codex-session",
-        },
-        cliSessionBindings: {
-          "claude-cli": {
-            sessionId: "stale-cli-session",
-            authProfileId: "anthropic:old",
-          },
-          "codex-cli": {
-            sessionId: "codex-session",
-          },
-        },
-        claudeCliSessionId: "stale-cli-session",
+    await seedSessionStore(storePath, sessionKey, {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      cliSessionIds: {
+        "claude-cli": "stale-cli-session",
+        "codex-cli": "codex-session",
       },
+      cliSessionBindings: {
+        "claude-cli": {
+          sessionId: "stale-cli-session",
+          authProfileId: "anthropic:old",
+        },
+        "codex-cli": {
+          sessionId: "codex-session",
+        },
+      },
+      claudeCliSessionId: "stale-cli-session",
     });
 
     await persistSessionUsageUpdate({
@@ -5497,19 +4723,15 @@ describe("persistSessionUsageUpdate", () => {
   it("prefers fresh final usage over zero compactionTokensAfter", async () => {
     const storePath = await createStorePath("openclaw-usage-compaction-reset-");
     const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "s1",
-        updatedAt: Date.now(),
-        totalTokens: 1_794_391,
-        totalTokensFresh: true,
-        inputTokens: 20,
-        outputTokens: 10_855,
-        cacheRead: 1_761_324,
-        cacheWrite: 33_047,
-      },
+    await seedSessionStore(storePath, sessionKey, {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      totalTokens: 1_794_391,
+      totalTokensFresh: true,
+      inputTokens: 20,
+      outputTokens: 10_855,
+      cacheRead: 1_761_324,
+      cacheWrite: 33_047,
     });
 
     await persistSessionUsageUpdate({
@@ -5547,15 +4769,11 @@ describe("persistSessionUsageUpdate", () => {
   it("prefers fresh lastCallUsage over positive compactionTokensAfter", async () => {
     const storePath = await createStorePath("openclaw-usage-compaction-positive-");
     const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "s1",
-        updatedAt: Date.now(),
-        totalTokens: 180_000,
-        totalTokensFresh: true,
-      },
+    await seedSessionStore(storePath, sessionKey, {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      totalTokens: 180_000,
+      totalTokensFresh: true,
     });
 
     await persistSessionUsageUpdate({
@@ -5589,36 +4807,32 @@ describe("persistSessionUsageUpdate", () => {
   it("uses positive compactionTokensAfter when final usage has no prompt total", async () => {
     const storePath = await createStorePath("openclaw-usage-compaction-fallback-");
     const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "s1",
-        updatedAt: Date.now(),
-        totalTokens: 180_000,
-        totalTokensFresh: true,
-        inputTokens: 5_000,
-        outputTokens: 2_000,
-        cacheRead: 50_000,
-        contextBudgetStatus: {
-          schemaVersion: 1,
-          source: "pre-prompt-estimate",
-          updatedAt: 1,
-          provider: "claude-cli",
-          model: "claude-opus-4-7",
-          route: "compact_only",
-          shouldCompact: true,
-          estimatedPromptTokens: 180_000,
-          contextTokenBudget: 1_048_576,
-          promptBudgetBeforeReserve: 1_044_480,
-          reserveTokens: 4_096,
-          effectiveReserveTokens: 4_096,
-          remainingPromptBudgetTokens: 864_480,
-          overflowTokens: 0,
-          toolResultReducibleChars: 0,
-          messageCount: 0,
-          unwindowedMessageCount: 0,
-        },
+    await seedSessionStore(storePath, sessionKey, {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      totalTokens: 180_000,
+      totalTokensFresh: true,
+      inputTokens: 5_000,
+      outputTokens: 2_000,
+      cacheRead: 50_000,
+      contextBudgetStatus: {
+        schemaVersion: 1,
+        source: "pre-prompt-estimate",
+        updatedAt: 1,
+        provider: "claude-cli",
+        model: "claude-opus-4-7",
+        route: "compact_only",
+        shouldCompact: true,
+        estimatedPromptTokens: 180_000,
+        contextTokenBudget: 1_048_576,
+        promptBudgetBeforeReserve: 1_044_480,
+        reserveTokens: 4_096,
+        effectiveReserveTokens: 4_096,
+        remainingPromptBudgetTokens: 864_480,
+        overflowTokens: 0,
+        toolResultReducibleChars: 0,
+        messageCount: 0,
+        unwindowedMessageCount: 0,
       },
     });
 
@@ -5655,15 +4869,11 @@ describe("persistSessionUsageUpdate", () => {
   it("persists totalTokens from promptTokens when usage is unavailable", async () => {
     const storePath = await createStorePath("openclaw-usage-");
     const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "s1",
-        updatedAt: Date.now(),
-        inputTokens: 1_234,
-        outputTokens: 456,
-      },
+    await seedSessionStore(storePath, sessionKey, {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      inputTokens: 1_234,
+      outputTokens: 456,
     });
 
     await persistSessionUsageUpdate({
@@ -5692,11 +4902,7 @@ describe("persistSessionUsageUpdate", () => {
   it("keeps non-clamped lastCallUsage totalTokens when exceeding context window", async () => {
     const storePath = await createStorePath("openclaw-usage-");
     const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      entry: { sessionId: "s1", updatedAt: Date.now() },
-    });
+    await seedSessionStore(storePath, sessionKey, { sessionId: "s1", updatedAt: Date.now() });
 
     await persistSessionUsageUpdate({
       storePath,
@@ -5718,13 +4924,9 @@ describe("persistSessionUsageUpdate", () => {
   it("snapshots estimatedCostUsd instead of accumulating (fixes #69347)", async () => {
     const storePath = await createStorePath("openclaw-usage-cost-");
     const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "s1",
-        updatedAt: Date.now(),
-      },
+    await seedSessionStore(storePath, sessionKey, {
+      sessionId: "s1",
+      updatedAt: Date.now(),
     });
 
     const cfg: OpenClawConfig = {
@@ -5790,15 +4992,11 @@ describe("persistSessionUsageUpdate", () => {
   it("preserves the displayed session model when heartbeat usage uses a heartbeat model", async () => {
     const storePath = await createStorePath("openclaw-usage-heartbeat-model-");
     const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "s1",
-        updatedAt: Date.now(),
-        modelProvider: "openai",
-        model: "gpt-5.4",
-      },
+    await seedSessionStore(storePath, sessionKey, {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      modelProvider: "openai",
+      model: "gpt-5.4",
     });
 
     await persistSessionUsageUpdate({
@@ -5836,22 +5034,18 @@ describe("persistSessionUsageUpdate", () => {
   it("persists heartbeat CLI binding while preserving displayed session model", async () => {
     const storePath = await createStorePath("openclaw-usage-heartbeat-cli-binding-");
     const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "s1",
-        updatedAt: Date.now(),
-        modelProvider: "openai",
-        model: "gpt-5.4",
-        cliSessionBindings: {
-          "claude-cli": { sessionId: "old-heartbeat-cli-session" },
-        },
-        cliSessionIds: {
-          "claude-cli": "old-heartbeat-cli-session",
-        },
-        claudeCliSessionId: "old-heartbeat-cli-session",
+    await seedSessionStore(storePath, sessionKey, {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      modelProvider: "openai",
+      model: "gpt-5.4",
+      cliSessionBindings: {
+        "claude-cli": { sessionId: "old-heartbeat-cli-session" },
       },
+      cliSessionIds: {
+        "claude-cli": "old-heartbeat-cli-session",
+      },
+      claudeCliSessionId: "old-heartbeat-cli-session",
     });
 
     await persistSessionUsageUpdate({
@@ -5897,24 +5091,20 @@ describe("persistSessionUsageUpdate", () => {
   it("honors heartbeat CLI binding clears while preserving displayed session model", async () => {
     const storePath = await createStorePath("openclaw-usage-heartbeat-cli-clear-");
     const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "s1",
-        updatedAt: Date.now(),
-        modelProvider: "openai",
-        model: "gpt-5.4",
-        cliSessionIds: {
-          "claude-cli": "old-heartbeat-cli-session",
-          "codex-cli": "codex-cli-session",
-        },
-        cliSessionBindings: {
-          "claude-cli": { sessionId: "old-heartbeat-cli-session" },
-          "codex-cli": { sessionId: "codex-cli-session" },
-        },
-        claudeCliSessionId: "old-heartbeat-cli-session",
+    await seedSessionStore(storePath, sessionKey, {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      modelProvider: "openai",
+      model: "gpt-5.4",
+      cliSessionIds: {
+        "claude-cli": "old-heartbeat-cli-session",
+        "codex-cli": "codex-cli-session",
       },
+      cliSessionBindings: {
+        "claude-cli": { sessionId: "old-heartbeat-cli-session" },
+        "codex-cli": { sessionId: "codex-cli-session" },
+      },
+      claudeCliSessionId: "old-heartbeat-cli-session",
     });
 
     await persistSessionUsageUpdate({
@@ -5966,31 +5156,27 @@ describe("persistSessionUsageUpdate", () => {
   it("preserves the displayed session model when an internal announce uses fallback", async () => {
     const storePath = await createStorePath("openclaw-usage-internal-announce-model-");
     const sessionKey = "agent:main:telegram:group:-1003871627242:topic:6823";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "s1",
-        updatedAt: Date.now(),
-        modelProvider: "openai",
-        model: "gpt-5.5",
-        contextTokens: 200_000,
-        inputTokens: 1_234,
-        outputTokens: 56,
-        cacheRead: 7,
-        cacheWrite: 8,
-        totalTokens: 1_305,
-        totalTokensFresh: true,
-        estimatedCostUsd: 0.123,
-        cliSessionIds: { "claude-cli": "visible-cli-session" },
-        cliSessionBindings: {
-          "claude-cli": {
-            sessionId: "visible-cli-session",
-            authProfileId: "anthropic:visible",
-          },
+    await seedSessionStore(storePath, sessionKey, {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      modelProvider: "openai",
+      model: "gpt-5.5",
+      contextTokens: 200_000,
+      inputTokens: 1_234,
+      outputTokens: 56,
+      cacheRead: 7,
+      cacheWrite: 8,
+      totalTokens: 1_305,
+      totalTokensFresh: true,
+      estimatedCostUsd: 0.123,
+      cliSessionIds: { "claude-cli": "visible-cli-session" },
+      cliSessionBindings: {
+        "claude-cli": {
+          sessionId: "visible-cli-session",
+          authProfileId: "anthropic:visible",
         },
-        claudeCliSessionId: "visible-cli-session",
       },
+      claudeCliSessionId: "visible-cli-session",
     });
 
     await persistSessionUsageUpdate({
@@ -6070,13 +5256,9 @@ describe("persistSessionUsageUpdate", () => {
   it("persists zero estimatedCostUsd for free priced models", async () => {
     const storePath = await createStorePath("openclaw-usage-free-cost-");
     const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "s1",
-        updatedAt: Date.now(),
-      },
+    await seedSessionStore(storePath, sessionKey, {
+      sessionId: "s1",
+      updatedAt: Date.now(),
     });
 
     await persistSessionUsageUpdate({
@@ -6198,26 +5380,29 @@ describe("initSessionState stale threadId fallback", () => {
 });
 
 describe("initSessionState dmScope delivery migration", () => {
-  it("retires stale main-session delivery route when dmScope uses per-channel DM keys", async () => {
-    const storePath = await createStorePath("dm-scope-retire-main-route-");
+  it.each([
+    {
+      name: "retires stale main-session delivery route when dmScope uses per-channel DM keys",
+      legacyTo: "6101296751",
+      expectRetired: true,
+    },
+    {
+      name: "keeps legacy main-session delivery route when current DM target does not match",
+      legacyTo: "1111",
+      expectRetired: false,
+    },
+  ])("$name", async ({ legacyTo, expectRetired }) => {
+    const storePath = await createStorePath("dm-scope-main-route-");
     await writeSessionStoreFast(storePath, {
       "agent:main:main": {
         sessionId: "legacy-main",
         updatedAt: Date.now(),
         lastChannel: "telegram",
-        lastTo: "6101296751",
+        lastTo: legacyTo,
         lastAccountId: "default",
-        deliveryContext: {
-          channel: "telegram",
-          to: "6101296751",
-          accountId: "default",
-        },
+        deliveryContext: { channel: "telegram", to: legacyTo, accountId: "default" },
       },
     });
-    const cfg = {
-      session: { store: storePath, dmScope: "per-channel-peer" },
-    } as OpenClawConfig;
-
     const result = await initSessionState({
       ctx: {
         Body: "hello",
@@ -6226,64 +5411,32 @@ describe("initSessionState dmScope delivery migration", () => {
         OriginatingTo: "6101296751",
         AccountId: "default",
       },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.sessionKey).toBe("agent:main:telegram:direct:6101296751");
-    const persisted = readSessionStoreFast(storePath);
-    expect(persisted["agent:main:main"]?.sessionId).toBe("legacy-main");
-    expect(persisted["agent:main:main"]?.route).toBeUndefined();
-    expect(persisted["agent:main:main"]?.deliveryContext).toBeUndefined();
-    expect(persisted["agent:main:main"]?.lastChannel).toBeUndefined();
-    expect(persisted["agent:main:main"]?.lastTo).toBeUndefined();
-    expect(persisted["agent:main:telegram:direct:6101296751"]?.deliveryContext?.to).toBe(
-      "6101296751",
-    );
-  });
-
-  it("keeps legacy main-session delivery route when current DM target does not match", async () => {
-    const storePath = await createStorePath("dm-scope-keep-main-route-");
-    await writeSessionStoreFast(storePath, {
-      "agent:main:main": {
-        sessionId: "legacy-main",
-        updatedAt: Date.now(),
-        lastChannel: "telegram",
-        lastTo: "1111",
-        lastAccountId: "default",
-        deliveryContext: {
-          channel: "telegram",
-          to: "1111",
-          accountId: "default",
-        },
-      },
-    });
-    const cfg = {
-      session: { store: storePath, dmScope: "per-channel-peer" },
-    } as OpenClawConfig;
-
-    await initSessionState({
-      ctx: {
-        Body: "hello",
-        SessionKey: "agent:main:telegram:direct:6101296751",
-        OriginatingChannel: "telegram",
-        OriginatingTo: "6101296751",
-        AccountId: "default",
-      },
-      cfg,
+      cfg: {
+        session: { store: storePath, dmScope: "per-channel-peer" },
+      } as OpenClawConfig,
       commandAuthorized: true,
     });
 
     const persisted = readSessionStoreFast(storePath);
-    expect(persisted["agent:main:main"]?.deliveryContext).toEqual({
-      channel: "telegram",
-      to: "1111",
-      accountId: "default",
-    });
-    expect(persisted["agent:main:main"]?.lastTo).toBe("1111");
+    const legacy = persisted["agent:main:main"];
+    if (expectRetired) {
+      expect(result.sessionKey).toBe("agent:main:telegram:direct:6101296751");
+      expect(legacy?.sessionId).toBe("legacy-main");
+      expect(legacy?.route).toBeUndefined();
+      expect(legacy?.deliveryContext).toBeUndefined();
+      expect(legacy?.lastChannel).toBeUndefined();
+      expect(legacy?.lastTo).toBeUndefined();
+      expect(persisted[result.sessionKey]?.deliveryContext?.to).toBe("6101296751");
+    } else {
+      expect(legacy?.deliveryContext).toEqual({
+        channel: "telegram",
+        to: legacyTo,
+        accountId: "default",
+      });
+      expect(legacy?.lastTo).toBe(legacyTo);
+    }
   });
 });
-
 describe("initSessionState internal channel routing preservation", () => {
   it("clears stale thread routing on non-thread system-event sessions", async () => {
     const storePath = await createStorePath("system-event-clears-stale-thread-");
@@ -6451,296 +5604,147 @@ describe("initSessionState internal channel routing preservation", () => {
     });
   });
 
-  it("keeps persisted external lastChannel when OriginatingChannel is internal webchat", async () => {
-    const storePath = await createStorePath("preserve-external-channel-");
-    const sessionKey = "agent:main:telegram:group:12345";
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: "sess-1",
-        updatedAt: Date.now(),
-        lastChannel: "telegram",
-        lastTo: "group:12345",
-        deliveryContext: {
-          channel: "telegram",
-          to: "group:12345",
-        },
-      },
-    });
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
-
-    const result = await initSessionState({
+  it.each([
+    {
+      name: "keeps persisted external lastChannel when OriginatingChannel is internal webchat",
+      prefix: "preserve-external-channel-",
+      sessionKey: "agent:main:telegram:group:12345",
+      seed: { lastChannel: "telegram", lastTo: "group:12345" },
       ctx: {
         Body: "internal follow-up",
-        SessionKey: sessionKey,
         OriginatingChannel: "webchat",
         OriginatingTo: "session:dashboard",
       },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.sessionEntry.lastChannel).toBe("telegram");
-    expect(result.sessionEntry.lastTo).toBe("group:12345");
-    expect(result.sessionEntry.deliveryContext?.channel).toBe("telegram");
-    expect(result.sessionEntry.deliveryContext?.to).toBe("group:12345");
-  });
-
-  it("preserves persisted external route when webchat views a channel-peer session (fixes #47745)", async () => {
-    // Regression: dashboard/webchat access must not overwrite an established
-    // external delivery route (e.g. Telegram/iMessage) on a channel-scoped session.
-    // Subagent completions should still be delivered to the original channel.
-    const storePath = await createStorePath("webchat-direct-route-preserve-");
-    const sessionKey = "agent:main:imessage:direct:+1555";
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: "sess-webchat-direct",
-        updatedAt: Date.now(),
-        lastChannel: "imessage",
-        lastTo: "+1555",
-        deliveryContext: {
-          channel: "imessage",
-          to: "+1555",
-        },
-      },
-    });
-    const cfg = {
-      session: { store: storePath, dmScope: "per-channel-peer" },
-    } as OpenClawConfig;
-
-    const result = await initSessionState({
+      expected: { lastChannel: "telegram", lastTo: "group:12345" },
+      expectedDelivery: { channel: "telegram", to: "group:12345" },
+    },
+    {
+      name: "preserves persisted external route when webchat views a channel-peer session (fixes #47745)",
+      prefix: "webchat-direct-route-preserve-",
+      sessionKey: "agent:main:imessage:direct:+1555",
+      seed: { lastChannel: "imessage", lastTo: "+1555" },
+      session: { dmScope: "per-channel-peer" as const },
       ctx: {
         Body: "reply from control ui",
-        SessionKey: sessionKey,
         OriginatingChannel: "webchat",
         OriginatingTo: "session:dashboard",
         Surface: "webchat",
       },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    // External route must be preserved — webchat is admin/monitoring only
-    expect(result.sessionEntry.lastChannel).toBe("imessage");
-    expect(result.sessionEntry.lastTo).toBe("+1555");
-    expect(result.sessionEntry.deliveryContext?.channel).toBe("imessage");
-    expect(result.sessionEntry.deliveryContext?.to).toBe("+1555");
-  });
-
-  it("lets direct webchat turns own routing for sessions with no prior external route", async () => {
-    // Webchat should still own routing for sessions that were created via webchat
-    // (no external channel ever established).
-    const storePath = await createStorePath("webchat-direct-route-noext-");
-    const sessionKey = "agent:main:main";
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: "sess-webchat-noext",
-        updatedAt: Date.now(),
-      },
-    });
-    const cfg = {
-      session: { store: storePath, dmScope: "per-channel-peer" },
-    } as OpenClawConfig;
-
-    const result = await initSessionState({
+      expected: { lastChannel: "imessage", lastTo: "+1555" },
+      expectedDelivery: { channel: "imessage", to: "+1555" },
+    },
+    {
+      name: "lets direct webchat turns own routing for sessions with no prior external route",
+      prefix: "webchat-direct-route-noext-",
+      sessionKey: "agent:main:main",
+      seed: {},
+      session: { dmScope: "per-channel-peer" as const },
       ctx: {
         Body: "reply from control ui",
-        SessionKey: sessionKey,
         OriginatingChannel: "webchat",
         OriginatingTo: "session:dashboard",
         Surface: "webchat",
       },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.sessionEntry.lastChannel).toBe("webchat");
-    expect(result.sessionEntry.lastTo).toBe("session:dashboard");
-    expect(result.sessionEntry.deliveryContext?.channel).toBe("webchat");
-    expect(result.sessionEntry.deliveryContext?.to).toBe("session:dashboard");
-  });
-
-  it("keeps persisted external route when OriginatingChannel is non-deliverable", async () => {
-    const storePath = await createStorePath("preserve-nondeliverable-route-");
-    const sessionKey = "agent:main:discord:channel:24680";
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: "sess-2",
-        updatedAt: Date.now(),
-        lastChannel: "discord",
-        lastTo: "channel:24680",
-        deliveryContext: {
-          channel: "discord",
-          to: "channel:24680",
-        },
-      },
-    });
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
-
-    const result = await initSessionState({
+      expected: { delivery: { kind: "internal" } },
+    },
+    {
+      name: "keeps persisted external route when OriginatingChannel is non-deliverable",
+      prefix: "preserve-nondeliverable-route-",
+      sessionKey: "agent:main:discord:channel:24680",
+      seed: { lastChannel: "discord", lastTo: "channel:24680" },
       ctx: {
         Body: "internal handoff",
-        SessionKey: sessionKey,
         OriginatingChannel: "sessions_send",
         OriginatingTo: "session:handoff",
       },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.sessionEntry.lastChannel).toBe("discord");
-    expect(result.sessionEntry.lastTo).toBe("channel:24680");
-    expect(result.sessionEntry.deliveryContext?.channel).toBe("discord");
-    expect(result.sessionEntry.deliveryContext?.to).toBe("channel:24680");
-  });
-
-  it("uses session key channel hint when first turn is internal webchat", async () => {
-    const storePath = await createStorePath("session-key-channel-hint-");
-    const sessionKey = "agent:main:telegram:group:98765";
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
-
-    const result = await initSessionState({
-      ctx: {
-        Body: "hello",
-        SessionKey: sessionKey,
-        OriginatingChannel: "webchat",
-      },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.sessionEntry.lastChannel).toBe("telegram");
-    expect(result.sessionEntry.deliveryContext?.channel).toBe("telegram");
-  });
-
-  it("keeps internal route when there is no persisted external fallback", async () => {
-    const storePath = await createStorePath("no-external-fallback-");
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
-
-    const result = await initSessionState({
+      expected: { lastChannel: "discord", lastTo: "channel:24680" },
+      expectedDelivery: { channel: "discord", to: "channel:24680" },
+    },
+    {
+      name: "uses session key channel hint when first turn is internal webchat",
+      prefix: "session-key-channel-hint-",
+      sessionKey: "agent:main:telegram:group:98765",
+      ctx: { Body: "hello", OriginatingChannel: "webchat" },
+      expected: { lastChannel: "telegram" },
+      expectedDelivery: { channel: "telegram" },
+    },
+    {
+      name: "keeps internal route when there is no persisted external fallback",
+      prefix: "no-external-fallback-",
+      sessionKey: "agent:main:main",
       ctx: {
         Body: "handoff only",
-        SessionKey: "agent:main:main",
         OriginatingChannel: "sessions_send",
         OriginatingTo: "session:handoff",
       },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.sessionEntry.lastChannel).toBe("sessions_send");
-    expect(result.sessionEntry.lastTo).toBe("session:handoff");
-  });
-
-  it("keeps webchat channel for webchat/main sessions", async () => {
-    const storePath = await createStorePath("preserve-webchat-main-");
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
-
-    const result = await initSessionState({
-      ctx: {
-        Body: "hello",
-        SessionKey: "agent:main:main",
-        OriginatingChannel: "webchat",
-      },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.sessionEntry.lastChannel).toBe("webchat");
-  });
-
-  it("preserves external route for main session when webchat accesses without destination (fixes #47745)", async () => {
-    // Regression: webchat monitoring a main session that has an established WhatsApp
-    // route must not clear that route. Subagents should still deliver to WhatsApp.
-    const storePath = await createStorePath("webchat-main-preserve-external-");
-    const sessionKey = "agent:main:main";
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: "sess-webchat-main-1",
-        updatedAt: Date.now(),
-        lastChannel: "whatsapp",
-        lastTo: "+15555550123",
-        deliveryContext: {
-          channel: "whatsapp",
-          to: "+15555550123",
-        },
-      },
-    });
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
-
-    const result = await initSessionState({
-      ctx: {
-        Body: "webchat follow-up",
-        SessionKey: sessionKey,
-        OriginatingChannel: "webchat",
-      },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.sessionEntry.lastChannel).toBe("whatsapp");
-    expect(result.sessionEntry.lastTo).toBe("+15555550123");
-  });
-
-  it("preserves external route for main session when webchat sends with destination (fixes #47745)", async () => {
-    // Regression: webchat sending to a main session with an established WhatsApp route
-    // must not steal that route for webchat delivery.
-    const storePath = await createStorePath("preserve-main-external-webchat-send-");
-    const sessionKey = "agent:main:main";
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: "sess-webchat-main-2",
-        updatedAt: Date.now(),
-        lastChannel: "whatsapp",
-        lastTo: "+15555550123",
-        deliveryContext: {
-          channel: "whatsapp",
-          to: "+15555550123",
-        },
-      },
-    });
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
-
-    const result = await initSessionState({
+      expected: { delivery: { kind: "internal" } },
+    },
+    {
+      name: "keeps webchat channel for webchat/main sessions",
+      prefix: "preserve-webchat-main-",
+      sessionKey: "agent:main:main",
+      ctx: { Body: "hello", OriginatingChannel: "webchat" },
+      expected: { delivery: { kind: "internal" } },
+    },
+    {
+      name: "preserves external route for main session when webchat accesses without destination (fixes #47745)",
+      prefix: "webchat-main-preserve-external-",
+      sessionKey: "agent:main:main",
+      seed: { lastChannel: "whatsapp", lastTo: "+15555550123" },
+      ctx: { Body: "webchat follow-up", OriginatingChannel: "webchat" },
+      expected: { lastChannel: "whatsapp", lastTo: "+15555550123" },
+    },
+    {
+      name: "preserves external route for main session when webchat sends with destination (fixes #47745)",
+      prefix: "preserve-main-external-webchat-send-",
+      sessionKey: "agent:main:main",
+      seed: { lastChannel: "whatsapp", lastTo: "+15555550123" },
       ctx: {
         Body: "reply only here",
-        SessionKey: sessionKey,
         OriginatingChannel: "webchat",
         OriginatingTo: "session:webchat-main",
       },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.sessionEntry.lastChannel).toBe("whatsapp");
-    expect(result.sessionEntry.lastTo).toBe("+15555550123");
-    expect(result.sessionEntry.deliveryContext?.channel).toBe("whatsapp");
-    expect(result.sessionEntry.deliveryContext?.to).toBe("+15555550123");
-  });
-
-  it("uses the configured default account for persisted routing when AccountId is omitted", async () => {
-    const storePath = await createStorePath("default-account-routing-context-");
-    const cfg = {
-      session: { store: storePath },
-      channels: {
-        discord: {
-          defaultAccount: "work",
+      expected: { lastChannel: "whatsapp", lastTo: "+15555550123" },
+      expectedDelivery: { channel: "whatsapp", to: "+15555550123" },
+    },
+    {
+      name: "uses the configured default account for persisted routing when AccountId is omitted",
+      prefix: "default-account-routing-context-",
+      sessionKey: "agent:main:discord:channel:24680",
+      config: { channels: { discord: { defaultAccount: "work" } } },
+      ctx: { Body: "hello", OriginatingChannel: "discord", OriginatingTo: "channel:24680" },
+      expected: { lastAccountId: "work" },
+      expectedDelivery: { accountId: "work" },
+    },
+  ])("$name", async (scenario) => {
+    const storePath = await createStorePath(scenario.prefix);
+    const seed = "seed" in scenario ? scenario.seed : undefined;
+    if (seed) {
+      await writeSessionStoreFast(storePath, {
+        [scenario.sessionKey]: {
+          sessionId: `session-${scenario.prefix}`,
+          updatedAt: Date.now(),
+          ...seed,
+          ...("lastChannel" in seed
+            ? { deliveryContext: { channel: seed.lastChannel, to: seed.lastTo } }
+            : {}),
         },
-      },
-    } as OpenClawConfig;
-
+      });
+    }
     const result = await initSessionState({
-      ctx: {
-        Body: "hello",
-        SessionKey: "agent:main:discord:channel:24680",
-        OriginatingChannel: "discord",
-        OriginatingTo: "channel:24680",
-      },
-      cfg,
+      ctx: { SessionKey: scenario.sessionKey, ...scenario.ctx },
+      cfg: {
+        ...("config" in scenario ? scenario.config : {}),
+        session: { store: storePath, ...("session" in scenario ? scenario.session : {}) },
+      } as OpenClawConfig,
       commandAuthorized: true,
     });
 
-    expect(result.sessionEntry.lastAccountId).toBe("work");
-    expect(result.sessionEntry.deliveryContext?.accountId).toBe("work");
+    expectEntryFields(result.sessionEntry, scenario.expected, scenario.name);
+    const expectedDelivery = "expectedDelivery" in scenario ? scenario.expectedDelivery : undefined;
+    if (expectedDelivery) {
+      expect(result.sessionEntry.deliveryContext, scenario.name).toMatchObject(expectedDelivery);
+    }
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

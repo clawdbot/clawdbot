@@ -127,7 +127,7 @@
     "type": "function"
   },
   {
-    "description": "List ids allowed for `sessions_spawn(runtime:\"subagent\")`.",
+    "description": "List configured agent ids with name/model/runtime metadata, allowed as `sessions_spawn(runtime:\"subagent\")` targets.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {},
@@ -138,7 +138,7 @@
     "type": "function"
   },
   {
-    "description": "Spawn clean child; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot background. `visible=true`: persistent dashboard session; subagent only; omit `mode` (no `mode=\"run\"`), `thread`, `thinking`, `lightContext`, `attachments`, `attachAs`; inherited tool allow/denylist blocks it at spawn with no config override. Session listing/addressing obeys `tools.sessions.visibility` (`tree` default: current + own spawn subtree). Inherits parent workspace. Native task arrives as first `[Subagent Task]`. Native transcript needed: `context=\"fork\"`; else omit/isolated. Use fresh child for sidecar/parallel batch reads, multi-step search, data collection; avoid quick lookup/single read unless policy prefers. After spawn, do non-overlap work while run result returns.",
+    "description": "Spawn clean child; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot background. `agentId` targets a configured agent (see agents_list); `model` overrides its model; `cleanup` delete|keep hidden child session; `sandbox` inherit|require. `visible=true`: persistent dashboard session; subagent only; omit `mode` (no `mode=\"run\"`), `thread`, `thinking`, `lightContext`, `attachments`, `attachAs`; inherited tool allow/denylist blocks it at spawn with no config override; may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`. Session listing/addressing obeys `tools.sessions.visibility` (`tree` default: current + own spawn subtree). Inherits parent workspace. Native task arrives as first `[Subagent Task]`. Native transcript needed: `context=\"fork\"`; else omit/isolated. Use fresh child for sidecar/parallel batch reads, multi-step search, data collection; avoid quick lookup/single read unless policy prefers. After spawn, do non-overlap work while run result returns.",
     "inputSchema": {
       "properties": {
         "agentId": {
@@ -191,6 +191,7 @@
           "type": "string"
         },
         "label": {
+          "description": "Short task title shown in UI lists; name the work, not the agent.",
           "type": "string"
         },
         "lightContext": {
@@ -210,7 +211,13 @@
           "enum": ["subagent"],
           "type": "string"
         },
+        "runTimeoutSeconds": {
+          "description": "Per-run timeout in seconds; overrides the configured subagent default. Zero disables the timeout.",
+          "minimum": 0,
+          "type": "integer"
+        },
         "sandbox": {
+          "description": "\"inherit\" parent sandbox policy; \"require\" fails unless child is sandboxed.",
           "enum": ["inherit", "require"],
           "type": "string"
         },
@@ -249,25 +256,12 @@
     "type": "function"
   },
   {
-    "description": "End turn after subagent spawn; results arrive next message.",
-    "inputSchema": {
-      "properties": {
-        "message": {
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
-    "name": "sessions_yield",
-    "type": "function"
-  },
-  {
     "description": "",
     "name": "openclaw",
     "tools": [
       {
         "deferLoading": true,
-        "description": "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing, notify, camera/photos/screen/location/notifications, executable lookup (which + bins), generic invoke. Files: file_fetch.",
+        "description": "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke. Files: file_fetch.",
         "inputSchema": {
           "properties": {
             "action": {
@@ -429,7 +423,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Gateway schedules/wakes: reminders, later checks/follow-ups, recurring work. Never exec sleep/process-poll as timer. Main job => heartbeat system event; isolated => background task in `openclaw tasks`.\n\nACTIONS:\n- status scheduler; list compact summaries (includeDisabled, session agentId auto-filter; get for full); get jobId\n- add job; update jobId+patch; remove jobId\n- run jobId (due only; runMode=\"force\" now); runs jobId history; next_check in (current paced job only)\n- wake text (+ optional mode). Default caller lane; top-level sessionKey/agentId selects another caller-owned lane.\n\nADD JOB:\n{ \"name\":\"...\", \"schedule\":{...}, \"pacing\":{ \"min\":\"15m\", \"max\":\"4h\" }, \"trigger\":{ \"script\":\"...\", \"once\":false }, \"payload\":{...}, \"delivery\":{...}, \"sessionTarget\":\"main|isolated|current|session:<id>\", \"enabled\":true }\nRequired: schedule,payload. enabled default true. trigger only every/cron.\n\nTARGET/PAYLOAD:\n- main => systemEvent {kind:\"systemEvent\",text:\"...\"} or script; systemEvent defaults main.\n- isolated/current/session:<id> => agentTurn {kind:\"agentTurn\",message:\"...\",model?,thinking?,timeoutSeconds?}; agentTurn defaults isolated. timeoutSeconds=0 means none.\n- script {kind:\"script\",script:\"...\",timeoutSeconds?,toolBudget?} supports main or isolated only and requires cron.triggers.enabled.\n- current binds caller session at creation. session:<id> is persistent. Prefer isolated unless user explicitly wants current binding.\n\nSCHEDULE:\n- at: {kind:\"at\",at:\"ISO-8601\"}; timezone-less = UTC.\n- every: {kind:\"every\",everyMs:<ms>,anchorMs?}.\n- cron: {kind:\"cron\",expr:\"...\",tz?:\"IANA\"}. Expr is requested local wall time; never pre-convert to UTC. Missing tz = Gateway host local, not UTC. Shanghai 18:00: {kind:\"cron\",expr:\"0 18 * * *\",tz:\"Asia/Shanghai\"}.\n\nTRIGGER SCRIPT:\n- Requires cron.triggers.enabled; if off, explain and never model-poll fallback.\n- Headless owner allowlist; quiet check has no model. Prior trigger.state is frozen JSON. Return/json({fire:boolean,message?:string,state?:JSONValue}); create new state, never mutate prior.\n- fire:false saves state only; no payload/history. fire:true runs payload and appends message; fired state saves only after payload success.\n- Fire on every actionable state, including failures/timeouts; success-only watchers go silent when broken, which looks healthy. Dedupe by comparing trigger.state and returning new state, never memory.\n- Keep scripts read-only; actions belong in payload. message must be self-contained: it is the fired run's entire context.\n- Silent watcher: top-level delivery.mode=\"none\". Omitted delivery on isolated agentTurn announces and missing route may fail.\n- once:true disables after first successful fire. Per check: 30s, 5 tool calls, 16KB state.\n- Hidden Code Mode tools: await tools.call(\"exec\", {command:\"...\"}); unknown id => search/describe.\n\nDELIVERY top-level: {mode:\"none|announce|webhook\",channel?,to?,threadId?,bestEffort?}\n- Isolated agentTurn omitted delivery => announce. announce only isolated/current/session; channel/to optional; threadId chat topic. Specific chat: set channel/to; no messaging tool inside run.\n- webhook posts finished-run event to URL in to.\n\nRestricted isolated runs may only self status/list, current get/runs/remove, and next_check for their own paced job. wake mode: next-heartbeat default | now. jobId canonical; id compat. contextMessages 0-10 adds prior messages.",
+        "description": "Gateway scheduler: reminders, delayed self-wakeups, loops, recurring work, event watchers. Never exec sleep/poll as timer.\n\nACTIONS: status | list [includeDisabled,limit?,offset?] (use nextOffset for the next page) | get jobId | add job | update jobId patch | remove jobId | run jobId (runMode \"force\"=now) | runs jobId = history | next_check in:\"30m\" (own paced run only) | wake text mode?:\"now\"|\"next-heartbeat\"(default) nudges a caller-owned lane (sessionKey/agentId to pick another).\n\nADD: {name?,schedule,payload,sessionTarget?,pacing?,trigger?,delivery?,enabled?}. Required: schedule+payload.\n\nSCHEDULE:\n- {kind:\"at\",at:\"ISO-8601\"} one-shot; no tz=UTC; auto-deletes after run.\n- {kind:\"every\",everyMs}.\n- {kind:\"cron\",expr,tz?:\"IANA\"}: expr is wall time in tz; never pre-convert to UTC; no tz=gateway host local. 18:00 Shanghai => {expr:\"0 18 * * *\",tz:\"Asia/Shanghai\"}.\n- {kind:\"stream\",command:[argv],mode?:\"line\"|\"match\",match?}: fires on supervised process output; needs cron.triggers.enabled.\n\nTARGET+PAYLOAD:\n- \"current\" (agentTurn default) = this conversation: run carries this chat's context, result lands here. Self-wakeup/\"continue later\"/loop = at|every + agentTurn + current.\n- \"isolated\" = fresh detached session (shows in `openclaw tasks`); standalone background work.\n- \"main\" = heartbeat lane; payload {kind:\"systemEvent\",text} (systemEvent default target).\n- \"session:<key>\" = named session.\n- agentTurn {kind:\"agentTurn\",message,model?,thinking?,timeoutSeconds?}; timeoutSeconds 0=none.\n- script {kind:\"script\",script,timeoutSeconds?,toolBudget?}: main|isolated only; needs cron.triggers.enabled.\n\nPACED LOOP: recurring job + pacing{min?,max?} durations (\"15m\",\"4h\"; at least one). Inside its run, job calls next_check in:\"<dur>\" to set the next delay (clamped to bounds, measured from run end; failed runs keep normal backoff). Adaptive polling: tighten when active, back off when quiet.\n\nTRIGGER (condition watcher on every/cron): {script,once?}; needs cron.triggers.enabled — if off, say so; never model-poll instead. Quiet headless check, no model; 30s/5 tool calls/16KB state. Read frozen trigger.state, return json({fire,message?,state?}) with NEW state; dedupe via state, never memory. fire:false saves state only. fire:true runs payload; message is that run's entire context — self-contained. Fire on failures/timeouts too; success-only watchers look healthy when broken. Script stays read-only; actions belong in payload. once:true disables after first fire. Code Mode: await tools.call(\"exec\",{command:\"...\"}).\n\nDELIVERY {mode:\"none\"|\"announce\"|\"webhook\",channel?,to?,threadId?,bestEffort?}: where detached run output goes. Omitted=announce (current=>this chat; isolated=>last route; set channel/to for a specific chat — no messaging tool inside the run). Silent watcher=>mode:\"none\". webhook posts finished-run event to URL in `to`.\n\nJob wakeMode (main jobs): \"now\"(default)|\"next-heartbeat\". Restricted cron-run sessions: self status/list/get/runs/remove + own next_check only. failureAlert {...}|false disables. jobId canonical (id=compat). contextMessages 0-10 embeds recent chat lines into reminder text.",
         "inputSchema": {
           "additionalProperties": true,
           "properties": {
@@ -647,6 +641,7 @@
                   "additionalProperties": true,
                   "properties": {
                     "allowUnsafeExternalContent": {
+                      "description": "Allow untrusted external content in prompt",
                       "type": "boolean"
                     },
                     "fallbacks": {
@@ -662,6 +657,7 @@
                       "type": "string"
                     },
                     "lightContext": {
+                      "description": "Lightweight bootstrap context (skip full workspace context)",
                       "type": "boolean"
                     },
                     "message": {
@@ -715,6 +711,23 @@
                       "description": "ISO-8601 time (kind=at)",
                       "type": "string"
                     },
+                    "batchMs": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "command": {
+                      "description": "Supervised source argv (kind=stream; requires cron.triggers.enabled)",
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "cwd": {
+                      "description": "Working directory (kind=stream)",
+                      "type": "string"
+                    },
                     "everyMs": {
                       "description": "Interval ms (kind=every)",
                       "minimum": 1,
@@ -726,7 +739,19 @@
                     },
                     "kind": {
                       "description": "Schedule kind",
-                      "enum": ["at", "every", "cron"],
+                      "enum": ["at", "every", "cron", "stream"],
+                      "type": "string"
+                    },
+                    "match": {
+                      "description": "Regex source (stream match mode)",
+                      "type": "string"
+                    },
+                    "maxBatchBytes": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "mode": {
+                      "enum": ["line", "match"],
                       "type": "string"
                     },
                     "staggerMs": {
@@ -753,7 +778,7 @@
                   "description": "Explicit session key, or null to clear it"
                 },
                 "sessionTarget": {
-                  "description": "main | isolated | current | session:<id>",
+                  "description": "main | isolated | current (agentTurn default) | session:<id>",
                   "type": "string"
                 },
                 "trigger": {
@@ -782,9 +807,21 @@
             "jobId": {
               "type": "string"
             },
+            "limit": {
+              "description": "Maximum jobs returned by action=\"list\"",
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            },
             "mode": {
+              "description": "Wake mode for action=\"wake\" (default next-heartbeat)",
               "enum": ["now", "next-heartbeat"],
               "type": "string"
+            },
+            "offset": {
+              "description": "Job offset for action=\"list\"; use nextOffset to load the next page",
+              "minimum": 0,
+              "type": "integer"
             },
             "patch": {
               "additionalProperties": true,
@@ -1010,6 +1047,7 @@
                   "additionalProperties": true,
                   "properties": {
                     "allowUnsafeExternalContent": {
+                      "description": "Allow untrusted external content in prompt",
                       "type": "boolean"
                     },
                     "fallbacks": {
@@ -1032,6 +1070,7 @@
                       "type": "string"
                     },
                     "lightContext": {
+                      "description": "Lightweight bootstrap context (skip full workspace context)",
                       "type": "boolean"
                     },
                     "message": {
@@ -1099,6 +1138,23 @@
                       "description": "ISO-8601 time (kind=at)",
                       "type": "string"
                     },
+                    "batchMs": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "command": {
+                      "description": "Supervised source argv (kind=stream; requires cron.triggers.enabled)",
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "cwd": {
+                      "description": "Working directory (kind=stream)",
+                      "type": "string"
+                    },
                     "everyMs": {
                       "description": "Interval ms (kind=every)",
                       "minimum": 1,
@@ -1110,7 +1166,19 @@
                     },
                     "kind": {
                       "description": "Schedule kind",
-                      "enum": ["at", "every", "cron"],
+                      "enum": ["at", "every", "cron", "stream"],
+                      "type": "string"
+                    },
+                    "match": {
+                      "description": "Regex source (stream match mode)",
+                      "type": "string"
+                    },
+                    "maxBatchBytes": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "mode": {
+                      "enum": ["line", "match"],
                       "type": "string"
                     },
                     "staggerMs": {
@@ -1137,7 +1205,7 @@
                   "description": "Explicit session key, or null to clear it"
                 },
                 "sessionTarget": {
-                  "description": "Session target",
+                  "description": "main | isolated | current (agentTurn default) | session:<id>",
                   "type": "string"
                 },
                 "trigger": {
@@ -1179,6 +1247,7 @@
               "type": "string"
             },
             "text": {
+              "description": "systemEvent text for action=\"wake\"",
               "type": "string"
             },
             "timeoutMs": {
@@ -1194,7 +1263,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Only explicit voice/speech/TTS intent or active TTS config; never ordinary text reply. Audio auto-delivered. After success follow reply instructions; no duplicate text/audio.",
+        "description": "Convert text to spoken audio (TTS) with the configured voice provider. Only explicit voice/speech/TTS intent or active TTS config; never ordinary text reply. Audio auto-delivered. After success follow reply instructions; no duplicate text/audio.",
         "inputSchema": {
           "properties": {
             "channel": {
@@ -1248,7 +1317,7 @@
       },
       {
         "deferLoading": true,
-        "description": "List visible sessions; filter kind/label/agentId/search/activity/archive. Use before history/send target selection.",
+        "description": "List visible sessions; filter kind/label/agentId/search/activity/archive. Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles. Use before history/send target selection.",
         "inputSchema": {
           "properties": {
             "activeMinutes": {
@@ -1436,7 +1505,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Search current web; normalized provider results.",
+        "description": "Search current web; normalized provider results. Supports freshness and date-range filters (freshness, date_after/date_before) and domain filtering (domain_filter).",
         "inputSchema": {
           "properties": {
             "count": {
@@ -1527,6 +1596,26 @@
           "type": "object"
         },
         "name": "web_fetch",
+        "type": "function"
+      }
+    ],
+    "type": "namespace"
+  },
+  {
+    "description": "",
+    "name": "openclaw_direct",
+    "tools": [
+      {
+        "description": "End turn after subagent spawn; results arrive next message.",
+        "inputSchema": {
+          "properties": {
+            "message": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "sessions_yield",
         "type": "function"
       }
     ],

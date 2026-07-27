@@ -1079,12 +1079,21 @@ describe("install-cli.sh", () => {
     }
   });
 
-  it("does not emit --before when default global npmrc config contains min-release-age", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-global-npmrc-"));
+  it.each([
+    {
+      name: "does not emit --before when default global npmrc config contains min-release-age",
+      source: "global" as const,
+    },
+    {
+      name: "does not emit --before when builtin npmrc config contains min-release-age",
+      source: "builtin" as const,
+    },
+  ])("$name", ({ source }) => {
+    const tmp = mkdtempSync(join(tmpdir(), `openclaw-install-cli-${source}-npmrc-`));
     const bin = join(tmp, "bin");
     const home = join(tmp, "home");
     const prefix = join(tmp, "prefix");
-    const npmrc = join(prefix, "etc", "npmrc");
+    const npmrc = source === "global" ? join(prefix, "etc", "npmrc") : join(tmp, "npmrc");
     const calls = join(tmp, "npm-calls.txt");
     const installArgs = join(tmp, "npm-install-args.txt");
     const installPrefix = join(tmp, "install-prefix");
@@ -1092,84 +1101,9 @@ describe("install-cli.sh", () => {
     mkdirSync(bin, { recursive: true });
     mkdirSync(home, { recursive: true });
     mkdirSync(nodeDir, { recursive: true });
-    mkdirSync(join(prefix, "etc"), { recursive: true });
-    writeFileSync(npmrc, "min-release-age=7\n");
-    const fakeNpm = join(bin, "npm");
-    writeFileSync(
-      fakeNpm,
-      [
-        "#!/bin/bash",
-        'printf "%s\\n" "$*" >> "$NPM_FAKE_CALLS"',
-        'if [[ "$1" == "config" && "$2" == "get" ]]; then',
-        '  if [[ "$3" == "min-release-age" ]]; then',
-        "    printf 'null\\n'",
-        "    exit 0",
-        "  fi",
-        '  if [[ "$3" == "globalconfig" ]]; then',
-        '    printf "%s\\n" "$NPM_FAKE_GLOBALCONFIG"',
-        "    exit 0",
-        "  fi",
-        '  if [[ "$3" == "before" ]]; then',
-        "    printf '2026-01-01T00:00:00.000Z\\n'",
-        "    exit 0",
-        "  fi",
-        "fi",
-        'printf "%s\\n" "$@" > "$NPM_FAKE_INSTALL_ARGS"',
-        "exit 0",
-        "",
-      ].join("\n"),
-    );
-    chmodSync(fakeNpm, 0o755);
-
-    try {
-      const result = runInstallCliShell(
-        [
-          "set -euo pipefail",
-          `cd ${JSON.stringify(process.cwd())}`,
-          `source ${JSON.stringify(SCRIPT_PATH)}`,
-          `npm_bin() { printf '%s\\n' ${JSON.stringify(fakeNpm)}; }`,
-          `node_dir() { printf '%s\\n' ${JSON.stringify(nodeDir)}; }`,
-          "emit_json() { :; }",
-          "log() { :; }",
-          `PREFIX=${JSON.stringify(installPrefix)}`,
-          "SET_NPM_PREFIX=0",
-          "OPENCLAW_VERSION=1.2.3",
-          "install_openclaw",
-        ].join("\n"),
-        {
-          HOME: home,
-          NPM_CONFIG_GLOBALCONFIG: undefined,
-          NPM_CONFIG_PREFIX: undefined,
-          npm_config_globalconfig: undefined,
-          npm_config_prefix: undefined,
-          NPM_FAKE_CALLS: calls,
-          NPM_FAKE_GLOBALCONFIG: npmrc,
-          NPM_FAKE_INSTALL_ARGS: installArgs,
-          PATH: `${bin}:${process.env.PATH}`,
-        },
-      );
-
-      expect(result.status).toBe(0);
-      expect(readFileSync(installArgs, "utf8")).toContain("--min-release-age=0\n");
-      expect(readFileSync(installArgs, "utf8")).not.toContain("--before=");
-      expect(readFileSync(calls, "utf8")).not.toContain("config get before");
-    } finally {
-      rmSync(tmp, { force: true, recursive: true });
+    if (source === "global") {
+      mkdirSync(join(prefix, "etc"), { recursive: true });
     }
-  });
-
-  it("does not emit --before when builtin npmrc config contains min-release-age", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-builtin-npmrc-"));
-    const bin = join(tmp, "bin");
-    const home = join(tmp, "home");
-    const npmrc = join(tmp, "npmrc");
-    const calls = join(tmp, "npm-calls.txt");
-    const installArgs = join(tmp, "npm-install-args.txt");
-    const installPrefix = join(tmp, "install-prefix");
-    const nodeDir = join(tmp, "node");
-    mkdirSync(bin, { recursive: true });
-    mkdirSync(home, { recursive: true });
-    mkdirSync(nodeDir, { recursive: true });
     writeFileSync(npmrc, "min-release-age=7\n");
     const fakeNpm = join(bin, "npm");
     writeFileSync(
@@ -1220,7 +1154,7 @@ describe("install-cli.sh", () => {
           npm_config_globalconfig: undefined,
           npm_config_prefix: undefined,
           NPM_FAKE_CALLS: calls,
-          NPM_FAKE_GLOBALCONFIG: join(tmp, "missing-global-npmrc"),
+          NPM_FAKE_GLOBALCONFIG: source === "global" ? npmrc : join(tmp, "missing-global-npmrc"),
           NPM_FAKE_INSTALL_ARGS: installArgs,
           PATH: `${bin}:${process.env.PATH}`,
         },

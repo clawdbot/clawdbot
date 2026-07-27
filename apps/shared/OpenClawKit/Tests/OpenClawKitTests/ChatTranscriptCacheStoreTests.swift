@@ -65,7 +65,7 @@ extension OpenClawChatSQLiteTranscriptCache {
         agentID: String? = nil,
         messages: [OpenClawChatMessage]) async
     {
-        await self.storeCanonicalTranscript(
+        await storeCanonicalTranscript(
             sessionKey: sessionKey,
             agentID: agentID,
             messages: messages,
@@ -534,6 +534,32 @@ struct ChatTranscriptCacheStoreTests {
         } == OpenClawClientDatabases.gatewayIdentityHash("gw-a"))
     }
 
+    @Test func `staged gateway removal uses exact registry identifier bytes`() async throws {
+        let directory = try makeDatabaseDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let composedGatewayID = "gateway-\u{00E9}"
+        let decomposedGatewayID = "gateway-e\u{0301}"
+        #expect(composedGatewayID == decomposedGatewayID)
+        do {
+            let databases = try OpenClawClientDatabases(directoryURL: directory)
+            let store = databases.store(gatewayID: composedGatewayID)
+            #expect(await store.enqueueCommand(outboxCommand(id: "remove", text: "pending")))
+            try databases.stageGatewayRemoval(gatewayID: composedGatewayID)
+            try databases.close()
+        }
+
+        let recovered = try OpenClawClientDatabases(
+            directoryURL: directory,
+            registeredGatewayIDs: [decomposedGatewayID])
+
+        #expect(await recovered.store(gatewayID: composedGatewayID).loadCommands().isEmpty)
+        #expect(try await recovered.stateQueue.read { db in
+            try String.fetchOne(
+                db,
+                sql: "SELECT gateway_hash FROM forgotten_gateways WHERE gateway_id IS NULL")
+        } == OpenClawClientDatabases.gatewayIdentityHash(composedGatewayID))
+    }
+
     @Test func `commit started recovery finishes even while gateway remains registered`() async throws {
         let directory = try makeDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -766,7 +792,13 @@ struct ChatTranscriptCacheStoreTests {
         #expect(identity.contract == "per-sender|work|main")
         #expect(try await reopened.stateQueue.read { db in
             try String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations")
-        } == ["client-state-v1"])
+        } == [
+            "client-state-v1",
+            "client-state-branch-ownership-v2",
+            "client-state-branch-revision-v3",
+            "client-state-agent-id-v4",
+            "client-state-outbox-attempt-scope-v5",
+        ])
     }
 }
 
@@ -914,6 +946,28 @@ struct ClientDatabaseLegacyImportTests {
         #expect(FileManager.default.fileExists(atPath: orphanedURL.path))
     }
 
+    @Test func `legacy import uses exact registry identifier bytes`() async throws {
+        let directory = try makeDatabaseDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let composedGatewayID = "gateway-\u{00E9}"
+        let decomposedGatewayID = "gateway-e\u{0301}"
+        #expect(composedGatewayID == decomposedGatewayID)
+        let legacyURL = OpenClawClientDatabases.legacyPerGatewayDatabaseURL(
+            gatewayID: composedGatewayID,
+            directoryURL: directory)
+        try createLegacyV2Database(
+            at: legacyURL,
+            gatewayID: composedGatewayID,
+            commandID: "unowned")
+
+        let databases = try OpenClawClientDatabases(
+            directoryURL: directory,
+            registeredGatewayIDs: [decomposedGatewayID])
+
+        #expect(await databases.store(gatewayID: composedGatewayID).loadCommands().isEmpty)
+        #expect(FileManager.default.fileExists(atPath: legacyURL.path))
+    }
+
     @Test func `preserved shared legacy database blocks targeted forget`() async throws {
         let root = try makeDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1032,6 +1086,204 @@ struct ClientDatabaseLegacyImportTests {
 }
 
 struct ChatCommandOutboxStoreTests {
+    @Test func `nil agent rows use the canonical empty scope owner`() async throws {
+        let directory = try makeDatabaseDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try OpenClawClientDatabases(directoryURL: directory).store(gatewayID: "gw-a")
+        let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: nil)
+        #expect(await store.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: scope))
+        #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
+            id: "nil-agent", sessionKey: "main", deliverySessionKey: "main",
+            routingContract: "legacy-unbound", agentID: nil, text: "deliver", thinking: "off",
+            createdAt: Date().timeIntervalSince1970, status: .queued, retryCount: 0, lastError: nil)))
+        let state = try #require(await store.branchState(for: scope))
+        #expect(state.hadPendingCommands)
+        #expect(await store.claimNextCommand()?.id == "nil-agent")
+        #expect(await store.loadCommands().first?.agentID == nil)
+    }
+
+    @Test func `parked accepted rows mint retry identity while queued rows keep it`() async throws {
+        let directory = try makeDatabaseDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try OpenClawClientDatabases(directoryURL: directory).store(gatewayID: "gw-a")
+        let sendingScope = OpenClawChatOutboxScope(sessionKey: "sending", agentID: "main")
+        #expect(await store.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: sendingScope))
+        let sendingState = try #require(await store.branchState(for: sendingScope))
+        #expect(await store.enqueueCommand(outboxCommand(id: "sending", sessionKey: "sending", text: "maybe accepted")))
+        let sending = try #require(await store.claimNextCommand())
+        _ = try #require(await store.reconcileBranchScope(
+            sendingScope, previousState: sendingState, activeLeafEntryID: "leaf-b",
+            branchLeafEntryIDs: ["leaf-b"], lastError: "branch changed"))
+        let parkedSending = try #require(await store.loadCommands().first(where: { $0.id == sending.id }))
+        #expect(await store.markCommandRetriedIfPresent(
+            id: parkedSending.id,
+            expectation: OpenClawChatOutboxRetryExpectation(
+                attemptVersion: parkedSending.attemptVersion,
+                retryCount: parkedSending.retryCount,
+                lastError: parkedSending.lastError),
+            agentID: "main", deliverySessionKey: "sending", routingContract: "per-sender|sending|main",
+            replacementID: "sending-retry") == .updated)
+        let retriedSending = try #require(await store.loadCommands().first(where: { $0.id == "sending-retry" }))
+        #expect(retriedSending.attemptVersion == 1)
+
+        let queuedScope = OpenClawChatOutboxScope(sessionKey: "queued", agentID: "main")
+        #expect(await store.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: queuedScope))
+        let queuedState = try #require(await store.branchState(for: queuedScope))
+        #expect(await store.enqueueCommand(outboxCommand(id: "queued", sessionKey: "queued", text: "not sent")))
+        _ = try #require(await store.reconcileBranchScope(
+            queuedScope, previousState: queuedState, activeLeafEntryID: "leaf-b",
+            branchLeafEntryIDs: ["leaf-b"], lastError: "branch changed"))
+        let parkedQueued = try #require(await store.loadCommands().first(where: { $0.id == "queued" }))
+        #expect(await store.markCommandRetriedIfPresent(
+            id: parkedQueued.id,
+            expectation: OpenClawChatOutboxRetryExpectation(
+                attemptVersion: parkedQueued.attemptVersion,
+                retryCount: parkedQueued.retryCount,
+                lastError: parkedQueued.lastError),
+            agentID: "main", deliverySessionKey: "queued", routingContract: "per-sender|queued|main",
+            replacementID: "unused") == .updated)
+        #expect(await store.loadCommands().contains(where: { $0.id == "queued" && $0.attemptVersion == 2 }))
+
+        let stickyDirectory = try makeDatabaseDirectory()
+        defer { try? FileManager.default.removeItem(at: stickyDirectory) }
+        let stickyStore = try OpenClawClientDatabases(directoryURL: stickyDirectory).store(gatewayID: "gw-a")
+        let requeuedScope = OpenClawChatOutboxScope(sessionKey: "requeued", agentID: "main")
+        #expect(await stickyStore.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: requeuedScope))
+        let requeuedState = try #require(await stickyStore.branchState(for: requeuedScope))
+        #expect(await stickyStore.enqueueCommand(outboxCommand(
+            id: "requeued",
+            sessionKey: "requeued",
+            text: "uncertain")))
+        let claimed = try #require(await stickyStore.claimNextCommand())
+        #expect(await stickyStore.markCommandQueued(
+            id: claimed.id,
+            attemptVersion: claimed.attemptVersion,
+            retryCount: 1,
+            lastError: "transport") == .updated)
+        _ = try #require(await stickyStore.reconcileBranchScope(
+            requeuedScope, previousState: requeuedState, activeLeafEntryID: "leaf-b",
+            branchLeafEntryIDs: ["leaf-b"], activeTranscriptEntryIDs: [], lastError: "branch changed"))
+        let parkedRequeued = try #require(await stickyStore.loadCommands().first(where: { $0.id == "requeued" }))
+        #expect(await stickyStore.markCommandRetriedIfPresent(
+            id: parkedRequeued.id,
+            expectation: OpenClawChatOutboxRetryExpectation(
+                attemptVersion: parkedRequeued.attemptVersion,
+                retryCount: parkedRequeued.retryCount,
+                lastError: parkedRequeued.lastError),
+            agentID: "main", deliverySessionKey: "requeued", routingContract: "per-sender|requeued|main",
+            replacementID: "requeued-retry") == .updated)
+        #expect(await stickyStore.loadCommands()
+            .contains(where: { $0.id == "requeued-retry" && $0.attemptVersion == 1 }))
+    }
+
+    @Test func `empty root reconcile permits first row and parks a wiped scope`() async throws {
+        let directory = try makeDatabaseDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try OpenClawClientDatabases(directoryURL: directory).store(gatewayID: "gw-a")
+        let root = OpenClawChatOutboxScope(sessionKey: "root", agentID: "main")
+        let rootState = try #require(await store.branchState(for: root))
+        _ = try #require(await store.reconcileBranchScope(
+            root, previousState: rootState, activeLeafEntryID: nil,
+            branchLeafEntryIDs: [], lastError: "branch changed"))
+        #expect(await store.branchState(for: root)?.lastActiveLeafEntryID == nil)
+        #expect(await store.enqueueCommand(outboxCommand(id: "first", sessionKey: "root", text: "first")))
+        #expect(await store.claimNextCommand()?.id == "first")
+
+        let wiped = OpenClawChatOutboxScope(sessionKey: "wiped", agentID: "main")
+        #expect(await store.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: wiped))
+        let wipedState = try #require(await store.branchState(for: wiped))
+        #expect(await store.enqueueCommand(outboxCommand(id: "wiped", sessionKey: "wiped", text: "park")))
+        _ = try #require(await store.reconcileBranchScope(
+            wiped, previousState: wipedState, activeLeafEntryID: nil,
+            branchLeafEntryIDs: [], lastError: "branch changed"))
+        #expect(await store.loadCommands().first(where: { $0.id == "wiped" })?.status == .failed)
+    }
+
+    @Test func `nonancestral parking gives failed uncertain rows a fresh retry identity`() async throws {
+        let directory = try makeDatabaseDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databases = try OpenClawClientDatabases(directoryURL: directory)
+        let store = databases.store(gatewayID: "gw-a")
+        let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "main")
+        #expect(await store.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: scope))
+        let state = try #require(await store.branchState(for: scope))
+        var failed = outboxCommand(id: "failed", text: "retry")
+        failed.status = .failed
+        failed.lastError = "transport"
+        #expect(await store.enqueueCommand(failed))
+        try await databases.stateQueue.write { db in
+            try db.execute(
+                sql: "UPDATE outbox_commands SET had_unacknowledged_send = 1 WHERE client_uuid = ?",
+                arguments: ["failed"])
+        }
+        _ = try #require(await store.reconcileBranchScope(
+            scope, previousState: state, activeLeafEntryID: "leaf-b",
+            branchLeafEntryIDs: ["leaf-b"], activeTranscriptEntryIDs: [], lastError: "branch changed"))
+        let parked = try #require(await store.loadCommands().first)
+        #expect(await store.markCommandRetriedIfPresent(
+            id: parked.id,
+            expectation: OpenClawChatOutboxRetryExpectation(
+                attemptVersion: parked.attemptVersion,
+                retryCount: parked.retryCount,
+                lastError: parked.lastError),
+            agentID: "main", deliverySessionKey: "main", routingContract: "per-sender|main|main",
+            replacementID: "failed-retry") == .updated)
+        #expect(await store.loadCommands().first?.id == "failed-retry")
+    }
+
+    @Test func `bulk branch parking invalidates sibling subscribers`() async throws {
+        let directory = try makeDatabaseDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databases = try OpenClawClientDatabases(directoryURL: directory)
+        let store = databases.store(gatewayID: "gw-a")
+        let sibling = databases.store(gatewayID: "gw-a")
+        let otherGateway = databases.store(gatewayID: "gw-b")
+        let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "main")
+        #expect(await store.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: scope))
+        #expect(await store.enqueueCommand(outboxCommand(id: "shared", text: "park me")))
+        let changes = sibling.changes()
+        let otherChanges = otherGateway.changes()
+        var iterator = changes.makeAsyncIterator()
+        _ = try #require(await store.confirmBranchChange(
+            scope, activeLeafEntryID: "leaf-b", lastError: "branch changed"))
+        #expect(await iterator.next() == .invalidated(gatewayID: "gw-a", scope: scope))
+        let crossGatewayDelivered = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                var iterator = otherChanges.makeAsyncIterator()
+                return await iterator.next() != nil
+            }
+            group.addTask {
+                try? await Task.sleep(for: .milliseconds(25))
+                return false
+            }
+            let result = await group.next() ?? true
+            group.cancelAll()
+            return result
+        }
+        #expect(crossGatewayDelivered == false)
+        #expect(await sibling.loadCommands().first?.status == .failed)
+    }
+
+    @Test func `retiring a store ends only its forwarded change streams`() async throws {
+        let directory = try makeDatabaseDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databases = try OpenClawClientDatabases(directoryURL: directory)
+        let retired = databases.store(gatewayID: "gw-a")
+        let sibling = databases.store(gatewayID: "gw-a")
+        var retiredIterator = retired.changes().makeAsyncIterator()
+        var siblingIterator = sibling.changes().makeAsyncIterator()
+
+        await retired.retire()
+        #expect(await retiredIterator.next() == nil)
+
+        let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: "main")
+        #expect(await sibling.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: scope))
+        #expect(await sibling.enqueueCommand(outboxCommand(id: "sibling", text: "park")))
+        _ = try #require(await sibling.confirmBranchChange(
+            scope, activeLeafEntryID: "leaf-b", lastError: "branch changed"))
+        #expect(await siblingIterator.next() == .invalidated(gatewayID: "gw-a", scope: scope))
+    }
+
     @Test func `commands and attachment blobs round trip in order`() async throws {
         let directory = try makeDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -1062,9 +1314,12 @@ struct ChatCommandOutboxStoreTests {
         let now = Date().timeIntervalSince1970
         #expect(await store.enqueueCommand(outboxCommand(id: "z-first", text: "one", createdAt: now)))
         #expect(await store.enqueueCommand(outboxCommand(id: "a-second", text: "two", createdAt: now)))
-        #expect(await store.claimNextCommand()?.id == "z-first")
+        let first = try #require(await store.claimNextCommand())
+        #expect(first.id == "z-first")
         #expect(await store.claimNextCommand() == nil)
-        #expect(await store.markCommandAwaitingConfirmation(id: "z-first") == .updated)
+        #expect(await store.markCommandAwaitingConfirmation(
+            id: "z-first",
+            attemptVersion: first.attemptVersion) == .updated)
         #expect(await store.claimNextCommand()?.id == "a-second")
     }
 
@@ -1126,11 +1381,17 @@ struct ChatCommandOutboxStoreTests {
         let store = try OpenClawClientDatabases(directoryURL: directory).store(gatewayID: "gw-a")
         #expect(await store.enqueueCommand(outboxCommand(id: "retry", text: "again", status: .failed)))
 
+        let failed = try #require(await store.loadCommands().first)
         #expect(await store.markCommandRetriedIfPresent(
             id: "retry",
+            expectation: OpenClawChatOutboxRetryExpectation(
+                attemptVersion: failed.attemptVersion,
+                retryCount: failed.retryCount,
+                lastError: failed.lastError),
             agentID: "Agent-B",
             deliverySessionKey: "agent:agent-b:main",
-            routingContract: "per-sender|main|agent-b") == .updated)
+            routingContract: "per-sender|main|agent-b",
+            replacementID: nil) == .updated)
         let command = try #require(await store.loadCommands().first)
         #expect(command.status == .queued)
         #expect(command.agentID == "agent-b")
@@ -1146,8 +1407,11 @@ struct ChatCommandOutboxStoreTests {
         let old = Date().timeIntervalSince1970 - OpenClawChatSQLiteTranscriptCache.outboxCommandMaxAge - 1
         #expect(await store.enqueueCommand(outboxCommand(id: "old-queued", text: "old", createdAt: old)))
         #expect(await store.enqueueCommand(outboxCommand(id: "old-ack", text: "old ack")))
-        #expect(await store.claimNextCommand()?.id == "old-ack")
-        #expect(await store.markCommandAwaitingConfirmation(id: "old-ack") == .updated)
+        let acknowledged = try #require(await store.claimNextCommand())
+        #expect(acknowledged.id == "old-ack")
+        #expect(await store.markCommandAwaitingConfirmation(
+            id: "old-ack",
+            attemptVersion: acknowledged.attemptVersion) == .updated)
         try await databases.stateQueue.write { db in
             try db.execute(
                 sql: "UPDATE outbox_commands SET created_at = ? WHERE gateway_id = ? AND client_uuid = ?",

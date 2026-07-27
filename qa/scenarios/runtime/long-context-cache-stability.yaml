@@ -3,12 +3,12 @@ title: Large tool-result prompt cache stability
 scenario:
   id: runtime-long-context-cache-stability
   surface: runtime
-  runtimeParityTier: soak
+  runtimePairLane: soak
   coverage:
     primary:
-      - runtime.reasoning-and-cache-controls
+      - agent-runtime.reasoning-and-cache-controls
     secondary:
-      - runtime.long-context
+      - session-memory.token-pressure-long-context
   objective: Exercise repeated same-session turns after a large tool result so prompt assembly and provider cache reuse remain stable.
   successCriteria:
     - The agent reads a large workspace fixture and returns the warmup marker from the capped read output.

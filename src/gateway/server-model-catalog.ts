@@ -1,34 +1,41 @@
+import { resolvePublishedModelCatalogOwner } from "../agents/prepared-model-catalog-owner.js";
+import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
 // Gateway catalog reads use the atomic prepared runtime generation.
-import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { getRuntimeConfig } from "../config/io.js";
+import type {
+  GatewayModelCatalogOwnerSnapshot,
+  GatewayModelCatalogSnapshot,
+} from "./server-model-catalog.types.js";
 
 export type GatewayModelChoice = import("../agents/model-catalog.js").ModelCatalogEntry;
+export type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
 
 type GatewayModelCatalogConfig = ReturnType<typeof getRuntimeConfig>;
-type LoadPreparedModelCatalogSnapshot = (params: {
+type LoadPublishedPreparedModelCatalogOwnerSnapshot = (params: {
   agentId?: string;
   agentDir?: string;
   config: GatewayModelCatalogConfig;
   readOnly?: boolean;
   workspaceDir?: string;
-}) => Promise<ModelCatalogSnapshot>;
+}) => Promise<PublishedModelCatalogOwnerCandidate>;
 type LoadGatewayModelCatalogParams = {
   agentId?: string;
   agentDir?: string;
   getConfig?: () => GatewayModelCatalogConfig;
-  loadPreparedModelCatalogSnapshot?: LoadPreparedModelCatalogSnapshot;
+  loadPublishedPreparedModelCatalogOwnerSnapshot?: LoadPublishedPreparedModelCatalogOwnerSnapshot;
   readOnly?: boolean;
   workspaceDir?: string;
 };
 
 async function resolveLoader(
   params?: LoadGatewayModelCatalogParams,
-): Promise<LoadPreparedModelCatalogSnapshot> {
-  if (params?.loadPreparedModelCatalogSnapshot) {
-    return params.loadPreparedModelCatalogSnapshot;
+): Promise<LoadPublishedPreparedModelCatalogOwnerSnapshot> {
+  if (params?.loadPublishedPreparedModelCatalogOwnerSnapshot) {
+    return params.loadPublishedPreparedModelCatalogOwnerSnapshot;
   }
-  const { loadPreparedModelCatalogSnapshot } = await import("../agents/prepared-model-catalog.js");
-  return loadPreparedModelCatalogSnapshot;
+  const { loadPublishedPreparedModelCatalogOwnerSnapshot } =
+    await import("../agents/prepared-model-catalog.js");
+  return loadPublishedPreparedModelCatalogOwnerSnapshot;
 }
 
 // Isolated gateway tests share process module state with lifecycle-owner tests.
@@ -42,18 +49,32 @@ export async function resetPreparedModelCatalogForTest(): Promise<void> {
   resetModelCatalogBuilderCacheForTest();
 }
 
+async function loadGatewayModelCatalogOwnerSnapshot(
+  params?: LoadGatewayModelCatalogParams,
+): Promise<GatewayModelCatalogOwnerSnapshot> {
+  const loadOwner = await resolveLoader(params);
+  return resolvePublishedModelCatalogOwner(
+    await loadOwner({
+      ...(params?.agentId ? { agentId: params.agentId } : {}),
+      ...(params?.agentDir ? { agentDir: params.agentDir } : {}),
+      config: (params?.getConfig ?? getRuntimeConfig)(),
+      readOnly: params?.readOnly !== false,
+      ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    }),
+  );
+}
+
 export async function loadGatewayModelCatalogSnapshot(
   params?: LoadGatewayModelCatalogParams,
-): Promise<ModelCatalogSnapshot> {
-  const config = (params?.getConfig ?? getRuntimeConfig)();
-  const loadSnapshot = await resolveLoader(params);
-  return await loadSnapshot({
-    ...(params?.agentId ? { agentId: params.agentId } : {}),
-    ...(params?.agentDir ? { agentDir: params.agentDir } : {}),
-    config,
-    readOnly: params?.readOnly !== false,
-    ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-  });
+): Promise<GatewayModelCatalogSnapshot> {
+  const owner = await loadGatewayModelCatalogOwnerSnapshot(params);
+  return {
+    ...owner.modelCatalog,
+    agentId: owner.agentId,
+    agentDir: owner.agentDir,
+    workspaceDir: owner.workspaceDir,
+    config: owner.config,
+  };
 }
 
 export async function loadGatewayModelCatalog(
