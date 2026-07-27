@@ -1,7 +1,10 @@
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
+import { withTrustedEnvProxyOriginScope } from "../infra/net/fetch-guard.js";
 import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
+import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "../infra/net/ssrf.js";
 import type { ProviderCatalogContext, ProviderCatalogResult } from "../plugins/types.js";
+import { withTrustedEnvProxyGuardedFetchMode } from "./fetch-runtime.js";
 import {
   buildOpenAICompatibleLiveModels,
   readLiveModelCatalogRecord,
@@ -12,14 +15,12 @@ import {
   getCachedLiveCatalogValue,
 } from "./provider-catalog-shared.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "./provider-model-shared.js";
-import {
-  fetchWithSsrFGuard,
-  type LookupFn,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
-  type SsrFPolicy,
-} from "./ssrf-runtime.js";
+import { fetchWithSsrFGuard, type LookupFn, type SsrFPolicy } from "./ssrf-runtime.js";
 
 export type LiveModelCatalogFetchGuard = typeof fetchWithSsrFGuard;
+
+const trustedEnvProxyLiveModelCatalogFetchGuard: LiveModelCatalogFetchGuard = (params) =>
+  fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode({ ...params, requireHttps: true }));
 
 export type LiveModelCatalogHeaderContext = {
   apiKey?: string;
@@ -322,18 +323,23 @@ async function fetchLiveProviderModelCatalogPage(
   },
 ): Promise<{ body: unknown; finalUrl: string; requestHeaders: Headers; rows: readonly unknown[] }> {
   const requestHeaders = buildHeaders(params, params.safeReplayHeaders);
-  const { response, finalUrl, release } = await params.fetchGuard({
-    url: params.url,
-    init: {
-      headers: requestHeaders,
-    },
-    signal: params.signal,
-    timeoutMs: params.timeoutMs,
-    policy: params.policy ?? ssrfPolicyFromHttpBaseUrlAllowedHostname(params.endpoint),
-    ...(params.lookupFn ? { lookupFn: params.lookupFn } : {}),
-    ...(params.requireHttps !== undefined ? { requireHttps: params.requireHttps } : {}),
-    auditContext: params.auditContext ?? `${params.providerId}-model-discovery`,
-  });
+  const { response, finalUrl, release } = await params.fetchGuard(
+    withTrustedEnvProxyOriginScope(
+      {
+        url: params.url,
+        init: {
+          headers: requestHeaders,
+        },
+        signal: params.signal,
+        timeoutMs: params.timeoutMs,
+        policy: params.policy ?? ssrfPolicyFromHttpBaseUrlAllowedHostname(params.endpoint),
+        ...(params.lookupFn ? { lookupFn: params.lookupFn } : {}),
+        ...(params.requireHttps !== undefined ? { requireHttps: params.requireHttps } : {}),
+        auditContext: params.auditContext ?? `${params.providerId}-model-discovery`,
+      },
+      [params.endpoint],
+    ),
+  );
   try {
     if (!response.ok) {
       await cancelUnreadResponseBody(response);
@@ -548,6 +554,20 @@ function resolveFixedLiveModelDiscoveryEndpoint(
   return effectiveBaseUrl === requiredBaseUrl ? endpoint.url : undefined;
 }
 
+function normalizeLiveModelDiscoveryBaseUrl(baseUrl: string): string {
+  return baseUrl.trim().replace(/\/+$/, "");
+}
+
+function usesHttpsLiveModelDiscoveryEndpoint(
+  baseUrl: string,
+  modelDiscovery: OpenAICompatibleModelDiscoveryOptions | undefined,
+): boolean {
+  const endpoint =
+    modelDiscovery?.endpointUrl?.url ??
+    resolveLiveModelDiscoveryEndpoint(baseUrl, modelDiscovery?.endpointPath ?? "models");
+  return tryParseUrl(endpoint)?.protocol === "https:";
+}
+
 export async function buildOpenAICompatibleLiveModelProviderConfig(params: {
   providerId: string;
   providerConfig: ModelProviderConfig;
@@ -596,16 +616,28 @@ export async function buildOpenAICompatibleLiveModelProviderConfig(params: {
 export async function buildOpenAICompatibleProviderCatalog(
   params: BuildOpenAICompatibleProviderCatalogParams,
 ): Promise<ProviderCatalogResult> {
+  // Capture the provider-owned origin inside the auth-gated builder call. This keeps
+  // canonical URLs persisted by onboarding proxy-eligible without building before auth.
+  let canonicalBaseUrl: string | undefined;
   const result = await buildSingleProviderApiKeyCatalog({
     ctx: params.ctx,
     providerId: params.providerId,
-    buildProvider: params.buildProvider,
+    buildProvider: async () => {
+      const provider = await params.buildProvider();
+      canonicalBaseUrl = normalizeLiveModelDiscoveryBaseUrl(provider.baseUrl);
+      return provider;
+    },
     allowExplicitBaseUrl: params.allowExplicitBaseUrl,
   });
   if (!result || !("provider" in result)) {
     return result;
   }
   const auth = params.ctx.resolveProviderApiKey(params.providerId);
+  const effectiveBaseUrl = normalizeLiveModelDiscoveryBaseUrl(result.provider.baseUrl);
+  const usesCanonicalHttpsBaseUrl =
+    effectiveBaseUrl.startsWith("https://") &&
+    effectiveBaseUrl === canonicalBaseUrl &&
+    usesHttpsLiveModelDiscoveryEndpoint(result.provider.baseUrl, params.modelDiscovery);
   return {
     provider: await buildOpenAICompatibleLiveModelProviderConfig({
       providerId: params.providerId,
@@ -613,6 +645,9 @@ export async function buildOpenAICompatibleProviderCatalog(
       apiKey: auth.apiKey,
       discoveryApiKey: auth.discoveryApiKey,
       modelDiscovery: params.modelDiscovery,
+      ...(usesCanonicalHttpsBaseUrl
+        ? { fetchGuard: trustedEnvProxyLiveModelCatalogFetchGuard }
+        : {}),
     }),
   };
 }

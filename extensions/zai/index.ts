@@ -2,11 +2,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   definePluginEntry,
   type ProviderAuthContext,
   type ProviderAuthMethod,
   type ProviderAuthMethodNonInteractiveContext,
+  type ProviderCatalogContext,
   type ProviderResolveDynamicModelContext,
   type ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
@@ -20,8 +22,11 @@ import {
   upsertAuthProfileWithLock,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { buildOpenAICompatibleProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { buildOpenAICompatibleLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import {
+  buildManifestModelProviderConfig,
+  buildSingleProviderApiKeyCatalog,
+} from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   buildProviderReplayFamilyHooks,
   resolveFamilyForwardCompatModel,
@@ -32,10 +37,18 @@ import {
   defaultToolStreamExtraParams,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { fetchZaiUsage } from "openclaw/plugin-sdk/provider-usage";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
 import { zaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import { buildZaiModelDefinition, resolveZaiBaseUrl } from "./model-definitions.js";
+import {
+  buildZaiModelDefinition,
+  resolveZaiBaseUrl,
+  ZAI_CN_BASE_URL,
+  ZAI_CODING_CN_BASE_URL,
+  ZAI_CODING_GLOBAL_BASE_URL,
+  ZAI_GLOBAL_BASE_URL,
+} from "./model-definitions.js";
 import { applyZaiConfig, applyZaiProviderConfig, resolveZaiModelId } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { isGlm52ModelId, resolveThinkingProfile } from "./provider-policy-api.js";
@@ -43,6 +56,12 @@ import { isGlm52ModelId, resolveThinkingProfile } from "./provider-policy-api.js
 const PROVIDER_ID = "zai";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
 const PROFILE_ID = "zai:default";
+const CANONICAL_ZAI_CATALOG_BASE_URLS = new Set([
+  ZAI_GLOBAL_BASE_URL,
+  ZAI_CN_BASE_URL,
+  ZAI_CODING_GLOBAL_BASE_URL,
+  ZAI_CODING_CN_BASE_URL,
+]);
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
 
 function buildZaiCatalogProvider() {
@@ -50,6 +69,39 @@ function buildZaiCatalogProvider() {
     providerId: PROVIDER_ID,
     catalog: manifest.modelCatalog.providers.zai,
   });
+}
+
+function usesCanonicalZaiCatalogBaseUrl(baseUrl: string): boolean {
+  return CANONICAL_ZAI_CATALOG_BASE_URLS.has(baseUrl.trim().replace(/\/+$/, ""));
+}
+
+async function resolveZaiCatalog(ctx: ProviderCatalogContext) {
+  const result = await buildSingleProviderApiKeyCatalog({
+    ctx,
+    providerId: PROVIDER_ID,
+    buildProvider: buildZaiCatalogProvider,
+    allowExplicitBaseUrl: true,
+  });
+  if (!result || !("provider" in result)) {
+    return result;
+  }
+  const auth = ctx.resolveProviderApiKey(PROVIDER_ID);
+  return {
+    provider: await buildOpenAICompatibleLiveModelProviderConfig({
+      providerId: PROVIDER_ID,
+      providerConfig: result.provider,
+      apiKey: auth.apiKey,
+      discoveryApiKey: auth.discoveryApiKey,
+      ...(usesCanonicalZaiCatalogBaseUrl(result.provider.baseUrl)
+        ? {
+            fetchGuard: (params) =>
+              fetchWithSsrFGuard(
+                withTrustedEnvProxyGuardedFetchMode({ ...params, requireHttps: true }),
+              ),
+          }
+        : {}),
+    }),
+  };
 }
 
 function resolveDeprecatedPiAgentAuthPath(env: NodeJS.ProcessEnv): string {
@@ -388,13 +440,7 @@ export default definePluginEntry({
       ],
       catalog: {
         order: "simple",
-        run: (ctx) =>
-          buildOpenAICompatibleProviderCatalog({
-            ctx,
-            providerId: PROVIDER_ID,
-            buildProvider: buildZaiCatalogProvider,
-            allowExplicitBaseUrl: true,
-          }),
+        run: resolveZaiCatalog,
       },
       staticCatalog: {
         order: "simple",

@@ -234,16 +234,19 @@ describe("nvidia provider catalog", () => {
       maxTokens: 8192,
       compat: { requiresStringContent: true },
     });
-    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledWith({
-      auditContext: "nvidia-featured-model-catalog",
-      init: { headers: expect.any(Headers) },
-      lookupFn: expect.any(Function),
-      policy: { allowedHostnames: ["assets.ngc.nvidia.com"] },
-      signal: undefined,
-      timeoutMs: 10_000,
-      url: NVIDIA_FEATURED_MODELS_URL,
-      requireHttps: true,
-    });
+    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        auditContext: "nvidia-featured-model-catalog",
+        init: { headers: expect.any(Headers) },
+        lookupFn: expect.any(Function),
+        mode: "trusted_env_proxy",
+        requireHttps: true,
+        policy: { allowedHostnames: ["assets.ngc.nvidia.com"] },
+        signal: undefined,
+        timeoutMs: 10_000,
+        url: NVIDIA_FEATURED_MODELS_URL,
+      }),
+    );
     expect(release).toHaveBeenCalledOnce();
   });
 

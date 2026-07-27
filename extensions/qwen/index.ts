@@ -1,7 +1,9 @@
 // Qwen plugin entrypoint registers its OpenClaw integration.
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { buildOpenAICompatibleLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { applyQwenNativeStreamingUsageCompat } from "./api.js";
 import { buildQwenMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import {
@@ -11,8 +13,13 @@ import {
   isQwenTokenPlanGlmModelId,
   isQwenTokenPlanThinkingOnlyModelId,
   QWEN_BASE_URL,
+  QWEN_CN_BASE_URL,
   QWEN_DEFAULT_MODEL_REF,
+  QWEN_STANDARD_CN_BASE_URL,
+  QWEN_STANDARD_GLOBAL_BASE_URL,
+  QWEN_TOKEN_PLAN_CN_BASE_URL,
   QWEN_TOKEN_PLAN_DEFAULT_MODEL_REF,
+  QWEN_TOKEN_PLAN_GLOBAL_BASE_URL,
   QWEN_TOKEN_PLAN_LEGACY_PROVIDER_ID,
   QWEN_TOKEN_PLAN_PROVIDER_ID,
   supportsQwenTokenPlanGlmMaxThinking,
@@ -30,6 +37,14 @@ import { buildQwenVideoGenerationProvider } from "./video-generation-provider.js
 
 const PROVIDER_ID = "qwen";
 const LEGACY_PROVIDER_ID = "modelstudio";
+const CANONICAL_QWEN_CATALOG_BASE_URLS = new Set([
+  QWEN_BASE_URL,
+  QWEN_CN_BASE_URL,
+  QWEN_STANDARD_CN_BASE_URL,
+  QWEN_STANDARD_GLOBAL_BASE_URL,
+  QWEN_TOKEN_PLAN_CN_BASE_URL,
+  QWEN_TOKEN_PLAN_GLOBAL_BASE_URL,
+]);
 const QWEN_TOKEN_PLAN_THINKING_LEVEL_IDS = [
   "off",
   "minimal",
@@ -45,6 +60,11 @@ const QWEN_TOKEN_PLAN_GLM_NO_MAX_THINKING_LEVEL_IDS = QWEN_TOKEN_PLAN_THINKING_L
 
 function normalizeProviderId(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function usesCanonicalQwenCatalogBaseUrl(baseUrl: string | undefined): boolean {
+  const normalizedBaseUrl = baseUrl?.trim().replace(/\/+$/, "");
+  return normalizedBaseUrl ? CANONICAL_QWEN_CATALOG_BASE_URLS.has(normalizedBaseUrl) : true;
 }
 
 function resolveConfiguredQwenBaseUrl(
@@ -257,6 +277,14 @@ export default defineSingleProviderPluginEntry({
             providerConfig: buildQwenProvider({ baseUrl }),
             apiKey: auth.apiKey,
             discoveryApiKey: auth.discoveryApiKey,
+            ...(usesCanonicalQwenCatalogBaseUrl(baseUrl)
+              ? {
+                  fetchGuard: (params) =>
+                    fetchWithSsrFGuard(
+                      withTrustedEnvProxyGuardedFetchMode({ ...params, requireHttps: true }),
+                    ),
+                }
+              : {}),
           }),
         };
       },
@@ -296,6 +324,14 @@ export default defineSingleProviderPluginEntry({
               providerConfig: buildQwenTokenPlanProvider({ baseUrl }),
               apiKey: auth.apiKey,
               discoveryApiKey: auth.discoveryApiKey,
+              ...(usesCanonicalQwenCatalogBaseUrl(baseUrl)
+                ? {
+                    fetchGuard: (params) =>
+                      fetchWithSsrFGuard(
+                        withTrustedEnvProxyGuardedFetchMode({ ...params, requireHttps: true }),
+                      ),
+                  }
+                : {}),
             }),
           };
         },

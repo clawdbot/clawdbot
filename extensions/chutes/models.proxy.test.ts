@@ -44,6 +44,7 @@ describe("Chutes model discovery proxy policy", () => {
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({
         mode: "trusted_env_proxy",
+        requireHttps: true,
         url: `${CHUTES_BASE_URL}/models`,
       }),
     );

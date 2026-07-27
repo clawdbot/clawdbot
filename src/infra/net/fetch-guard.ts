@@ -62,6 +62,8 @@ export const GUARDED_FETCH_MODE = {
 
 export type GuardedFetchMode = (typeof GUARDED_FETCH_MODE)[keyof typeof GUARDED_FETCH_MODE];
 
+const TRUSTED_ENV_PROXY_ORIGINS = Symbol("openclaw.trustedEnvProxyOrigins");
+
 export type GuardedFetchOptions = {
   url: string;
   fetchImpl?: FetchLike;
@@ -109,6 +111,7 @@ type GuardedFetchInternalOptions = GuardedFetchOptions & {
   resolveDispatcherPolicy?: (url: URL) => PinnedDispatcherPolicy | undefined;
   /** Preserve ambient Undici env-proxy routing for each eligible URL while keeping strict checks otherwise. */
   useEnvProxyForEligibleUrls?: boolean;
+  [TRUSTED_ENV_PROXY_ORIGINS]?: readonly string[];
 };
 
 type GuardedFetchConfiguredLocalOriginOptions = GuardedFetchOptions & {
@@ -177,6 +180,44 @@ export function withTrustedEnvProxyGuardedFetchMode(
   params: GuardedFetchPresetOptions,
 ): GuardedFetchOptions {
   return { ...params, mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY };
+}
+
+function normalizeTrustedEnvProxyOrigin(origin: string): string | undefined {
+  try {
+    const parsed = new URL(origin.trim());
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+    parsed.hostname = parsed.hostname.replace(/\.+$/, "");
+    return parsed.origin.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeTrustedEnvProxyOrigins(origins: readonly string[]): string[] {
+  return Array.from(
+    new Set(
+      origins
+        .map((origin) => normalizeTrustedEnvProxyOrigin(origin))
+        .filter((origin): origin is string => Boolean(origin)),
+    ),
+  ).toSorted();
+}
+
+/** Attach proxy-origin scope without selecting a transport mode. */
+export function withTrustedEnvProxyOriginScope(
+  params: GuardedFetchOptions,
+  origins: readonly string[],
+): GuardedFetchOptions {
+  const scoped = { ...params };
+  Object.defineProperty(scoped, TRUSTED_ENV_PROXY_ORIGINS, {
+    configurable: false,
+    enumerable: true,
+    value: normalizeTrustedEnvProxyOrigins(origins),
+    writable: false,
+  });
+  return scoped;
 }
 
 export function withTrustedExplicitProxyGuardedFetchMode(
@@ -492,6 +533,7 @@ async function fetchWithSsrFGuardInternal(
       ? Math.max(0, Math.floor(params.maxRedirects))
       : DEFAULT_MAX_REDIRECTS;
   const mode = resolveGuardedFetchMode(params);
+  const trustedEnvProxyOrigins = params[TRUSTED_ENV_PROXY_ORIGINS];
 
   const { signal, cleanup, refresh } = buildTimeoutAbortSignal({
     timeoutMs: params.timeoutMs,
@@ -533,7 +575,6 @@ async function fetchWithSsrFGuardInternal(
       await release();
       throw new Error("URL must use https");
     }
-
     let dispatcher: Dispatcher | null = null;
     // Resolve inside the redirect loop so exact-origin trust never carries across origins.
     const policyForUrl = resolveSsrFPolicyForUrl(parsedUrl, params.policy);
@@ -568,9 +609,16 @@ async function fetchWithSsrFGuardInternal(
       const canUseManagedProxy =
         isStrictManagedProxyActive &&
         (shouldUseEnvHttpProxyForUrl(parsedUrl.toString()) || shouldCheckManagedProxyBypass);
+      const usesTrustedEnvProxyMode = mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY;
+      // Origin-scoped callers opt in through an internal transport fact. SSRF
+      // policy stays independent so restrictive caller policies retain precedence.
       const canUseTrustedEnvProxy =
-        (mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY ||
+        (usesTrustedEnvProxyMode ||
           (params.useEnvProxyForEligibleUrls === true && !canUseManagedProxy)) &&
+        (trustedEnvProxyOrigins === undefined ||
+          trustedEnvProxyOrigins.includes(
+            normalizeTrustedEnvProxyOrigin(parsedUrl.toString()) ?? "",
+          )) &&
         !dispatcherPolicy &&
         shouldUseEnvHttpProxyForUrl(parsedUrl.toString());
       const canUseMockedFetchWithoutDns =

@@ -1,4 +1,5 @@
 // Xiaomi plugin entrypoint registers its OpenClaw integration.
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   OpenClawConfig,
@@ -25,6 +26,7 @@ import {
   buildProviderReplayFamilyHooks,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { PROVIDER_LABELS } from "openclaw/plugin-sdk/provider-usage";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   applyXiaomiConfig,
   applyXiaomiTokenPlanConfig,
@@ -34,6 +36,7 @@ import {
 import {
   buildXiaomiProvider,
   buildXiaomiTokenPlanProvider,
+  resolveXiaomiTokenPlanBaseUrl,
   XIAOMI_PROVIDER_ID,
   XIAOMI_TOKEN_PLAN_PROVIDER_ID,
   type XiaomiTokenPlanRegion,
@@ -50,6 +53,13 @@ const PAYG_ENV_VAR = "XIAOMI_API_KEY";
 const TOKEN_PLAN_FLAG_NAME = "--xiaomi-token-plan-api-key";
 const TOKEN_PLAN_OPTION_KEY = "xiaomiTokenPlanApiKey";
 const TOKEN_PLAN_ENV_VAR = "XIAOMI_TOKEN_PLAN_API_KEY";
+const CANONICAL_XIAOMI_CATALOG_BASE_URLS = new Set([
+  buildXiaomiProvider().baseUrl,
+  buildXiaomiTokenPlanProvider().baseUrl,
+  resolveXiaomiTokenPlanBaseUrl("ams"),
+  resolveXiaomiTokenPlanBaseUrl("cn"),
+  resolveXiaomiTokenPlanBaseUrl("sgp"),
+]);
 const XIAOMI_WIZARD_GROUP = {
   groupId: "xiaomi",
   groupLabel: "Xiaomi",
@@ -86,6 +96,10 @@ function hasConfiguredProviderEntry(ctx: ProviderCatalogContext, providerId: str
   return Boolean(configuredProvider && typeof configuredProvider === "object");
 }
 
+function usesCanonicalXiaomiCatalogBaseUrl(baseUrl: string): boolean {
+  return CANONICAL_XIAOMI_CATALOG_BASE_URLS.has(baseUrl.trim().replace(/\/+$/, ""));
+}
+
 async function resolveXiaomiCatalog(params: {
   ctx: ProviderCatalogContext;
   providerId: string;
@@ -107,15 +121,24 @@ async function resolveXiaomiCatalog(params: {
   if (params.requireBaseUrl === true && !explicitBaseUrl) {
     return null;
   }
+  const providerConfig = {
+    ...params.buildProvider(),
+    ...(explicitBaseUrl ? { baseUrl: explicitBaseUrl } : {}),
+  };
   return {
     provider: await buildOpenAICompatibleLiveModelProviderConfig({
       providerId: params.providerId,
-      providerConfig: {
-        ...params.buildProvider(),
-        ...(explicitBaseUrl ? { baseUrl: explicitBaseUrl } : {}),
-      },
+      providerConfig,
       apiKey: auth.apiKey,
       discoveryApiKey: auth.discoveryApiKey,
+      ...(usesCanonicalXiaomiCatalogBaseUrl(providerConfig.baseUrl)
+        ? {
+            fetchGuard: (fetchParams) =>
+              fetchWithSsrFGuard(
+                withTrustedEnvProxyGuardedFetchMode({ ...fetchParams, requireHttps: true }),
+              ),
+          }
+        : {}),
     }),
   };
 }

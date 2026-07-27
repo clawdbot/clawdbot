@@ -1,5 +1,6 @@
 // Nvidia provider module implements model/runtime integration.
 import { lookup as dnsLookup } from "node:dns/promises";
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { getCachedLiveProviderModelRows } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type {
@@ -7,6 +8,7 @@ import type {
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  fetchWithSsrFGuard,
   type LookupFn,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -130,6 +132,8 @@ async function loadNvidiaFeaturedModels(): Promise<ModelDefinitionConfig[] | nul
       // the guarded fixed-host fetch on the fast path.
       lookupFn: lookupNvidiaFeaturedModelHostname,
       auditContext: "nvidia-featured-model-catalog",
+      fetchGuard: (params) =>
+        fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode({ ...params, requireHttps: true })),
       shouldCacheRows: (modelRows) => parseNvidiaFeaturedModels(modelRows) !== null,
       readRows: (payload) => {
         if (!payload || typeof payload !== "object") {

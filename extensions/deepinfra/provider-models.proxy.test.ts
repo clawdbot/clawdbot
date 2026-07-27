@@ -43,6 +43,7 @@ describe("DeepInfra model discovery proxy policy", () => {
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({
         mode: "trusted_env_proxy",
+        requireHttps: true,
         url: "https://api.deepinfra.com/v1/openai/models?sort_by=openclaw&filter=with_meta",
       }),
     );

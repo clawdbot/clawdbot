@@ -1,4 +1,5 @@
 // Stepfun plugin entrypoint registers its OpenClaw integration.
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   definePluginEntry,
   type OpenClawConfig,
@@ -6,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { buildOpenAICompatibleLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   applyStepFunPlanConfig,
@@ -28,12 +30,22 @@ import {
 
 type StepFunRegion = "cn" | "intl";
 type StepFunSurface = "standard" | "plan";
+const CANONICAL_STEPFUN_CATALOG_BASE_URLS = new Set([
+  STEPFUN_STANDARD_CN_BASE_URL,
+  STEPFUN_STANDARD_INTL_BASE_URL,
+  STEPFUN_PLAN_CN_BASE_URL,
+  STEPFUN_PLAN_INTL_BASE_URL,
+]);
 
 function trimExplicitBaseUrl(ctx: ProviderCatalogContext, providerId: string): string | undefined {
   const explicitProvider = ctx.config.models?.providers?.[providerId];
   const baseUrl =
     typeof explicitProvider?.baseUrl === "string" ? explicitProvider.baseUrl.trim() : "";
   return baseUrl || undefined;
+}
+
+function usesCanonicalStepFunCatalogBaseUrl(baseUrl: string): boolean {
+  return CANONICAL_STEPFUN_CATALOG_BASE_URLS.has(baseUrl.trim().replace(/\/+$/, ""));
 }
 
 function inferRegionFromBaseUrl(baseUrl: string | undefined): StepFunRegion | undefined {
@@ -116,6 +128,14 @@ async function resolveStepFunCatalog(
       providerConfig,
       apiKey,
       discoveryApiKey: auth.discoveryApiKey,
+      ...(usesCanonicalStepFunCatalogBaseUrl(baseUrl)
+        ? {
+            fetchGuard: (fetchParams) =>
+              fetchWithSsrFGuard(
+                withTrustedEnvProxyGuardedFetchMode({ ...fetchParams, requireHttps: true }),
+              ),
+          }
+        : {}),
     }),
   };
 }

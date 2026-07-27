@@ -5,7 +5,7 @@ import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
 import {
   fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isHuggingfaceModelDiscoveryTestEnvironment } from "./model-discovery-env.js";
@@ -142,6 +142,7 @@ export async function discoverHuggingfaceModels(
     const requestTimeoutMs = resolveTimerTimeoutMs(timeoutMs, HUGGINGFACE_DISCOVERY_TIMEOUT_MS);
     const { response, release } = await fetchWithSsrFGuard(
       withTrustedEnvProxyGuardedFetchMode({
+        requireHttps: true,
         url: `${HUGGINGFACE_BASE_URL}/models`,
         init: {
           signal: AbortSignal.timeout(requestTimeoutMs),
@@ -151,8 +152,11 @@ export async function discoverHuggingfaceModels(
           },
         },
         timeoutMs: requestTimeoutMs,
-        policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(HUGGINGFACE_BASE_URL),
+        policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(HUGGINGFACE_BASE_URL),
         auditContext: "huggingface-model-discovery",
+        // Discovery is advisory and authenticated. Reject redirects rather
+        // than carrying this unscoped proxy request to another origin.
+        maxRedirects: 0,
       }),
     );
     try {

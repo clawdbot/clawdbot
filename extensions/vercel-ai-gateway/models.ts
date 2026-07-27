@@ -224,7 +224,8 @@ export async function discoverVercelAiGatewayModels(): Promise<ModelDefinitionCo
     timeoutMs: VERCEL_AI_GATEWAY_DISCOVERY_TIMEOUT_MS,
     ttlMs: VERCEL_AI_GATEWAY_DISCOVERY_CACHE_TTL_MS,
     auditContext: "vercel-ai-gateway.models",
-    fetchGuard: (params) => fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode(params)),
+    fetchGuard: (params) =>
+      fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode({ ...params, requireHttps: true })),
     projectRows: (rows) =>
       rows
         .map(asVercelGatewayModelShape)

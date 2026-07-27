@@ -120,7 +120,8 @@ export async function discoverChutesModels(accessToken?: string): Promise<ModelD
     }),
     policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(CHUTES_BASE_URL),
     auditContext: "chutes-model-discovery",
-    fetchGuard: (params) => fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode(params)),
+    fetchGuard: (params) =>
+      fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode({ ...params, requireHttps: true })),
     fallbackToAnonymousOnUnauthorized: true,
     projectRows: projectChutesModels,
   });

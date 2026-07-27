@@ -1,4 +1,5 @@
 // Google provider module implements model/runtime integration.
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   getCachedLiveProviderModelRows,
   type LiveModelCatalogFetchGuard,
@@ -7,6 +8,7 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isGoogleTextGenerationModelId } from "./provider-models.js";
 
 const GOOGLE_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
@@ -193,7 +195,12 @@ export async function buildGoogleLiveCatalogProvider(params: {
       endpoint: GOOGLE_GEMINI_MODELS_ENDPOINT,
       apiKey: params.apiKey,
       discoveryApiKey: params.discoveryApiKey,
-      fetchGuard: params.fetchGuard,
+      fetchGuard:
+        params.fetchGuard ??
+        ((guardParams) =>
+          fetchWithSsrFGuard(
+            withTrustedEnvProxyGuardedFetchMode({ ...guardParams, requireHttps: true }),
+          )),
       signal: params.signal,
       ttlMs: GOOGLE_GEMINI_MODELS_CACHE_TTL_MS,
       auditContext: "google-model-discovery",

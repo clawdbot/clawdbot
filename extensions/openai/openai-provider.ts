@@ -1,3 +1,4 @@
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 // Openai provider module implements model/runtime integration.
 import type {
   ProviderResolveDynamicModelContext,
@@ -18,6 +19,7 @@ import {
   type ModelProviderConfig,
   type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -290,7 +292,12 @@ async function buildOpenAILiveProviderConfig(
     },
     apiKey: params.apiKey,
     discoveryApiKey: params.discoveryApiKey,
-    fetchGuard: params.fetchGuard,
+    fetchGuard:
+      params.fetchGuard ??
+      ((guardParams) =>
+        fetchWithSsrFGuard(
+          withTrustedEnvProxyGuardedFetchMode({ ...guardParams, requireHttps: true }),
+        )),
     signal: params.signal,
     ttlMs: OPENAI_MODELS_CACHE_TTL_MS,
     auditContext: "openai-model-discovery",
@@ -557,7 +564,12 @@ async function buildOpenAICodexLiveProviderConfig(params: {
       providerId: PROVIDER_ID,
       endpoint: OPENAI_CODEX_MODELS_ENDPOINT,
       discoveryApiKey: params.discoveryApiKey,
-      fetchGuard: params.fetchGuard,
+      fetchGuard:
+        params.fetchGuard ??
+        ((guardParams) =>
+          fetchWithSsrFGuard(
+            withTrustedEnvProxyGuardedFetchMode({ ...guardParams, requireHttps: true }),
+          )),
       signal: params.signal,
       ttlMs: OPENAI_CODEX_MODELS_CACHE_TTL_MS,
       auditContext: "openai-codex-model-discovery",

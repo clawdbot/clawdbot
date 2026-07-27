@@ -1,3 +1,4 @@
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 /**
  * Arcee AI provider plugin entry. It supports direct Arcee auth and OpenRouter
  * routing while normalizing OpenRouter model ids and base URLs.
@@ -10,6 +11,7 @@ import {
   type ProviderCatalogContext,
 } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   applyArceeConfig,
   applyArceeOpenRouterConfig,
@@ -83,6 +85,10 @@ async function resolveArceeCatalog(ctx: ProviderCatalogContext) {
         providerConfig: buildArceeProvider(),
         apiKey: directAuth.apiKey,
         discoveryApiKey: directAuth.discoveryApiKey,
+        fetchGuard: (params) =>
+          fetchWithSsrFGuard(
+            withTrustedEnvProxyGuardedFetchMode({ ...params, requireHttps: true }),
+          ),
       }),
     };
   }

@@ -430,7 +430,8 @@ export async function discoverDeepInfraSurfaces(options?: {
       buildRequestHeaders: () => ({ Accept: "application/json" }),
       auditContext: "deepinfra-model-discovery",
       shouldCacheRows: hasDeepInfraSurfaceModelRows,
-      fetchGuard: (params) => fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode(params)),
+      fetchGuard: (params) =>
+        fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode({ ...params, requireHttps: true })),
     });
     if (data.length === 0) {
       log.warn("No models found from DeepInfra agent-projection endpoint, using static catalog");

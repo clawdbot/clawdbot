@@ -1,5 +1,6 @@
 // Opencode Zen provider module implements model/runtime integration.
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   buildLiveModelProviderConfig,
@@ -11,6 +12,7 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 const PROVIDER_ID = "opencode";
 
@@ -518,7 +520,12 @@ export async function buildOpencodeZenLiveProviderConfig(
     models: OPENCODE_ZEN_MODELS,
     apiKey: params.apiKey,
     discoveryApiKey: params.discoveryApiKey,
-    fetchGuard: params.fetchGuard,
+    fetchGuard:
+      params.fetchGuard ??
+      ((guardParams) =>
+        fetchWithSsrFGuard(
+          withTrustedEnvProxyGuardedFetchMode({ ...guardParams, requireHttps: true }),
+        )),
     signal: params.signal,
     timeoutMs: OPENCODE_ZEN_MODELS_TIMEOUT_MS,
     ttlMs: OPENCODE_ZEN_MODELS_CACHE_TTL_MS,

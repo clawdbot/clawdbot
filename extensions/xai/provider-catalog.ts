@@ -1,4 +1,5 @@
 // Xai provider module implements model/runtime integration.
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   buildLiveModelProviderConfig,
   type LiveModelCatalogFetchGuard,
@@ -7,6 +8,7 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   buildXaiCatalogModels,
   resolveXaiCatalogEntry,
@@ -67,7 +69,12 @@ export async function buildLiveXaiProvider(params: {
     models: buildXaiCatalogModels(),
     apiKey: params.apiKey,
     discoveryApiKey: params.discoveryApiKey,
-    fetchGuard: params.fetchGuard,
+    fetchGuard:
+      params.fetchGuard ??
+      ((guardParams) =>
+        fetchWithSsrFGuard(
+          withTrustedEnvProxyGuardedFetchMode({ ...guardParams, requireHttps: true }),
+        )),
     signal: params.signal,
     ttlMs: XAI_MODELS_CACHE_TTL_MS,
     auditContext: "xai-model-discovery",
@@ -187,7 +194,12 @@ export async function buildLiveXaiOAuthProvider(params: {
     },
     models: fallback.models,
     discoveryApiKey: params.discoveryApiKey,
-    fetchGuard: params.fetchGuard,
+    fetchGuard:
+      params.fetchGuard ??
+      ((guardParams) =>
+        fetchWithSsrFGuard(
+          withTrustedEnvProxyGuardedFetchMode({ ...guardParams, requireHttps: true }),
+        )),
     signal: params.signal,
     ttlMs: XAI_GROK_OAUTH_MODELS_CACHE_TTL_MS,
     auditContext: "xai-grok-oauth-model-discovery",

@@ -1,9 +1,11 @@
 // Volcengine plugin entrypoint registers its OpenClaw integration.
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { buildOpenAICompatibleLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { readManifestProviderDefaultModelRef } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { ensureModelAllowlistEntry } from "openclaw/plugin-sdk/provider-onboard";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { applyVolcengineToolSchemaCompat } from "./api.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { VOLCENGINE_PROVIDER_CATALOG_ENTRIES } from "./provider-catalog.js";
@@ -72,6 +74,10 @@ export default definePluginEntry({
                         providerConfig: buildProvider(),
                         apiKey,
                         discoveryApiKey: auth.discoveryApiKey,
+                        fetchGuard: (params) =>
+                          fetchWithSsrFGuard(
+                            withTrustedEnvProxyGuardedFetchMode({ ...params, requireHttps: true }),
+                          ),
                       }),
                     ] as const,
                 ),

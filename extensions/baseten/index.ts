@@ -1,8 +1,10 @@
 /** Baseten provider plugin entrypoint. */
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { buildOpenAICompatibleLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   BASETEN_DEFAULT_MODEL_REF,
   projectBasetenLiveModels,
@@ -60,6 +62,10 @@ export default defineSingleProviderPluginEntry({
             providerConfig: buildStaticBasetenProvider(),
             apiKey,
             discoveryApiKey,
+            fetchGuard: (guardParams) =>
+              fetchWithSsrFGuard(
+                withTrustedEnvProxyGuardedFetchMode({ ...guardParams, requireHttps: true }),
+              ),
             modelDiscovery: {
               timeoutMs: 10_000,
               ttlMs: 5 * 60 * 1000,

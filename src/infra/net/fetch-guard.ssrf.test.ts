@@ -1854,6 +1854,33 @@ describe("fetchWithSsrFGuard hardening", () => {
     });
   });
 
+  it("preserves env-proxy routing across redirects in generic trusted proxy mode", async () => {
+    clearProxyEnv();
+    vi.stubEnv("http_proxy", "http://127.0.0.1:7890");
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(redirectResponse("https://redirected.example/resource"))
+      .mockResolvedValueOnce(okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://public.example/resource",
+      fetchImpl,
+      lookupFn: createPublicLookup(),
+      mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+      policy: { allowedOrigins: ["https://public.example"] },
+    });
+
+    expect(envHttpProxyAgentCtor).toHaveBeenCalledTimes(2);
+    expect(agentCtor).not.toHaveBeenCalled();
+    await result.release();
+  });
+
   it("keeps DNS pinning in trusted proxy mode when only ALL_PROXY is configured without policy allowlist", async () => {
     clearProxyEnv();
     vi.stubEnv("ALL_PROXY", "http://127.0.0.1:7890");
