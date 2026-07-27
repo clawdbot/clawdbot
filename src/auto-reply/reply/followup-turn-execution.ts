@@ -148,6 +148,10 @@ export async function executeFollowupTurn(params: {
   const progressOpts: InternalGetReplyOptions = {
     ...sourceOpts,
     runId: turn.runId,
+    onAgentRunStart: (runId) => {
+      params.onExecutionStarted?.();
+      sourceOpts?.onAgentRunStart?.(runId);
+    },
     onBlockReply: undefined,
     onPartialReply: undefined,
     onAssistantMessageStart: undefined,
@@ -262,7 +266,6 @@ export async function executeFollowupTurn(params: {
     };
   } else {
     try {
-      params.onExecutionStarted?.();
       execution = await executeAgentTurn({
         commandBody: turn.queued.prompt,
         transcriptCommandBody: turn.queued.transcriptPrompt,

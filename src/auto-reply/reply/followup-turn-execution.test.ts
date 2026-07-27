@@ -93,10 +93,22 @@ describe("executeFollowupTurn", () => {
   it("normalizes queued route facts into the canonical execution call", async () => {
     const turn = createTurn();
     const typing = createTypingController();
+    const onExecutionStarted = vi.fn();
+    const onAgentRunStart = vi.fn();
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      params.opts?.onAgentRunStart?.("run-1");
+      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+    });
 
     await executeFollowupTurn({
       turn,
-      defaults: { typing, typingMode: "instant", defaultModel: "claude" },
+      defaults: {
+        typing,
+        typingMode: "instant",
+        defaultModel: "claude",
+        opts: { onAgentRunStart },
+      },
+      onExecutionStarted,
       onToolResult: vi.fn(async () => {}),
       onCompactionNoticePayload: vi.fn(async () => {}),
     });
@@ -122,6 +134,8 @@ describe("executeFollowupTurn", () => {
       SenderId: "user-1",
     });
     expect(call.sessionCtx.media).toEqual([{ kind: "audio", contentType: "audio/ogg" }]);
+    expect(onExecutionStarted).toHaveBeenCalledOnce();
+    expect(onAgentRunStart).toHaveBeenCalledWith("run-1");
   });
 
   it("ignores verbosity loaded from a replacement session generation", async () => {
