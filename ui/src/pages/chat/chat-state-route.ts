@@ -78,10 +78,19 @@ export function selectedChatSessionRow(state: ChatPageHost) {
     return row;
   }
   const selectedAgentId = resolveUiSelectedGlobalAgentId(state);
-  const mismatchedOwner = [state.sessionsResultAgentId, row.observerDigest?.agentId].some(
-    (agentId) => agentId && normalizeAgentId(agentId) !== selectedAgentId,
-  );
-  return mismatchedOwner ? undefined : row;
+  if (
+    state.sessionsResultAgentId &&
+    normalizeAgentId(state.sessionsResultAgentId) !== selectedAgentId
+  ) {
+    return undefined;
+  }
+  if (
+    row.observerDigest?.agentId &&
+    normalizeAgentId(row.observerDigest.agentId) !== selectedAgentId
+  ) {
+    return { ...row, observerDigest: undefined };
+  }
+  return row;
 }
 
 function saveChatQueueForSession(state: ChatPageHost, sessionKey: string) {

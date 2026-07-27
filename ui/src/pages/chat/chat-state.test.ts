@@ -239,6 +239,15 @@ describe("ChatStateController render lifecycle", () => {
     expect(state.observerDigest?.headline).toBe("Reconnected live status");
     expect(requestUpdate).toHaveBeenCalledOnce();
 
+    const projectedRow = state.sessionsResult?.sessions[0];
+    if (projectedRow?.observerDigest) {
+      projectedRow.observerDigest.agentId = "main";
+    }
+    const sanitized = selectedChatSessionRow(state);
+    expect(sanitized?.key).toBe("global");
+    expect(sanitized?.activeRunIds).toEqual(["run-work"]);
+    expect(sanitized?.observerDigest).toBeUndefined();
+
     state.sessionsResultAgentId = "main";
     expect(selectedChatSessionRow(state)).toBeUndefined();
   });
