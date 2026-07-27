@@ -120,6 +120,9 @@ function createFollowupSessionOwner(params: {
     }
     if (nextEntry && params.key && params.store) {
       const storedEntry = params.store[params.key];
+      if (!storedEntry && params.expectedStoreEntry) {
+        return;
+      }
       if (
         !storedEntry ||
         (matchesGeneration(storedEntry) && nextEntry.updatedAt >= storedEntry.updatedAt)

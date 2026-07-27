@@ -363,48 +363,50 @@ async function sendFollowupPayloads(params: {
     await typing.signalTextDelta(payload.text);
     if (route !== "origin") {
       await defaults.opts?.onBlockReply?.(payload);
-      continue;
-    }
-    if (!isRoutableChannel(originatingChannel) || !originatingTo) {
-      continue;
-    }
-    const metadata = getReplyPayloadMetadata(payload);
-    const result = await routeReply({
-      payload,
-      channel: originatingChannel,
-      to: originatingTo,
-      sessionKey: turn.queued.run.sessionKey,
-      accountId: turn.queued.originatingAccountId,
-      requesterSenderId: turn.queued.run.senderId,
-      requesterSenderName: turn.queued.run.senderName,
-      requesterSenderUsername: turn.queued.run.senderUsername,
-      requesterSenderE164: turn.queued.run.senderE164,
-      threadId: turn.queued.originatingThreadId,
-      cfg: turn.config,
-      mirror:
-        metadata?.assistantMessageIndex !== undefined || metadata?.assistantTranscriptOwned === true
-          ? false
-          : params.mirror,
-      replyKind: params.kind,
-      runId: params.runId,
-    });
-    if (!result.ok) {
-      logVerbose(`followup queue: route-reply failed: ${result.error ?? "unknown error"}`);
-      const provider = resolveOriginMessageProvider({ provider: turn.queued.run.messageProvider });
-      const origin = resolveOriginMessageProvider({ originatingChannel });
-      if (origin && origin === provider && defaults.opts?.onBlockReply) {
-        await defaults.opts.onBlockReply(payload);
-      } else if (defaults.opts?.onBlockReply) {
-        crossChannelFailure = true;
-      } else {
-        defaultRuntime.error?.(
-          `followup queue: route-reply failed: ${result.error ?? "unknown error"}`,
-        );
+    } else if (isRoutableChannel(originatingChannel) && originatingTo) {
+      const metadata = getReplyPayloadMetadata(payload);
+      const result = await routeReply({
+        payload,
+        channel: originatingChannel,
+        to: originatingTo,
+        sessionKey: turn.queued.run.sessionKey,
+        accountId: turn.queued.originatingAccountId,
+        requesterSenderId: turn.queued.run.senderId,
+        requesterSenderName: turn.queued.run.senderName,
+        requesterSenderUsername: turn.queued.run.senderUsername,
+        requesterSenderE164: turn.queued.run.senderE164,
+        threadId: turn.queued.originatingThreadId,
+        cfg: turn.config,
+        mirror:
+          metadata?.assistantMessageIndex !== undefined ||
+          metadata?.assistantTranscriptOwned === true
+            ? false
+            : params.mirror,
+        replyKind: params.kind,
+        runId: params.runId,
+      });
+      if (!result.ok) {
+        logVerbose(`followup queue: route-reply failed: ${result.error ?? "unknown error"}`);
+        const provider = resolveOriginMessageProvider({
+          provider: turn.queued.run.messageProvider,
+        });
+        const origin = resolveOriginMessageProvider({ originatingChannel });
+        if (origin && origin === provider && defaults.opts?.onBlockReply) {
+          await defaults.opts.onBlockReply(payload);
+        } else if (defaults.opts?.onBlockReply) {
+          crossChannelFailure = true;
+        } else {
+          defaultRuntime.error?.(
+            `followup queue: route-reply failed: ${result.error ?? "unknown error"}`,
+          );
+        }
+      } else if (!result.suppressed) {
+        const provider = resolveOriginMessageProvider({
+          provider: turn.queued.run.messageProvider,
+        });
+        const origin = resolveOriginMessageProvider({ originatingChannel });
+        deliveredCrossChannelOrigin ||= Boolean(origin && provider && origin !== provider);
       }
-    } else if (!result.suppressed) {
-      const provider = resolveOriginMessageProvider({ provider: turn.queued.run.messageProvider });
-      const origin = resolveOriginMessageProvider({ originatingChannel });
-      deliveredCrossChannelOrigin ||= Boolean(origin && provider && origin !== provider);
     }
   }
   if (crossChannelFailure && !deliveredCrossChannelOrigin && defaults.opts?.onBlockReply) {

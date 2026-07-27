@@ -459,6 +459,29 @@ describe("admitFollowupTurn", () => {
     }
   });
 
+  it("does not republish a generation deleted after admission", async () => {
+    const operation = createOperation();
+    const initialEntry: SessionEntry = {
+      sessionId: "queued-session",
+      lifecycleRevision: "admitted",
+      updatedAt: 1,
+    };
+    const sessionStore: Record<string, SessionEntry> = { main: initialEntry };
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
+
+    const result = await admitFollowupTurn({
+      queued: createRun(),
+      defaults: createDefaults({ sessionEntry: initialEntry, sessionStore }),
+    });
+
+    expect(result.kind).toBe("admitted");
+    if (result.kind === "admitted") {
+      delete sessionStore.main;
+      result.turn.session.publish({ ...initialEntry, updatedAt: 2 });
+      expect(sessionStore.main).toBeUndefined();
+    }
+  });
+
   it("creates an owned session-store view when only persisted state is available", async () => {
     const operation = createOperation();
     const admittedEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
