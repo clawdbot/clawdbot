@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writePersistedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -13,6 +13,12 @@ import {
 
 describe("auth profile migration isolation", () => {
   const roots: string[] = [];
+
+  beforeEach(() => {
+    clearSecretsRuntimeSnapshot();
+    closeOpenClawAgentDatabasesForTest();
+    vi.unstubAllEnvs();
+  });
 
   afterEach(async () => {
     clearSecretsRuntimeSnapshot();
