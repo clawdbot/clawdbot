@@ -39459,7 +39459,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 460,
+      "line": 470,
       "path": "apps/macos/Sources/OpenClawMacCLI/WizardCommand.swift",
       "source": " [\\(initial)]",
       "surface": "apple",
@@ -39467,7 +39467,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 507,
+      "line": 517,
       "path": "apps/macos/Sources/OpenClawMacCLI/WizardCommand.swift",
       "source": " — \\(option.hint!)",
       "surface": "apple",
@@ -39475,7 +39475,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 514,
+      "line": 524,
       "path": "apps/macos/Sources/OpenClawMacCLI/WizardCommand.swift",
       "source": " [\\(initialIndices.map(String.init).joined(separator: \",\"))]",
       "surface": "apple",
