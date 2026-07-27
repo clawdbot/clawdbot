@@ -508,9 +508,7 @@ class ChatController internal constructor(
       clearOptimisticMessages = false,
       preserveDisconnectedOwnership = true,
     )
-    pendingToolCallsById.clear()
-    publishPendingToolCalls()
-    _streamingAssistantText.value = null
+    clearLiveRunUi()
     // Older gateways cannot restate plan state, so reconnect retains it until
     // recovery proves another run, a terminal state, or an explicit empty snapshot.
     _historyLoading.value = false
@@ -617,9 +615,7 @@ class ChatController internal constructor(
       if (retireRunState) {
         restoreRunStateOnReconnect = false
         clearPendingRuns()
-        pendingToolCallsById.clear()
-        publishPendingToolCalls()
-        _streamingAssistantText.value = null
+        clearLiveRunUi()
       }
       clearPlanSteps()
       appliedMainSessionKey = "main"
@@ -2183,9 +2179,7 @@ class ChatController internal constructor(
     _healthOk.value = false
     clearLiveHistoryMarker()
     clearPendingRuns()
-    pendingToolCallsById.clear()
-    publishPendingToolCalls()
-    _streamingAssistantText.value = null
+    clearLiveRunUi()
     clearPlanSteps()
     _sessionId.value = null
     _historyLoading.value = markLoading
@@ -2505,9 +2499,7 @@ class ChatController internal constructor(
             settleProjectedRun(actualRunId)
             if (ack.isTerminalSuccess) {
               if (isCapturedOwnerCurrent()) {
-                pendingToolCallsById.clear()
-                publishPendingToolCalls()
-                _streamingAssistantText.value = null
+                clearLiveRunUi()
                 clearPlanSteps()
                 refreshCurrentHistoryBestEffort(runIdsToReconcile = setOf(actualRunId))
               }
@@ -2516,9 +2508,7 @@ class ChatController internal constructor(
               // Terminal timeout/error means the gateway did not accept a runnable turn.
               // Surface failed acceptance instead of letting a cleared composer look successful.
               if (isCapturedOwnerCurrent()) {
-                pendingToolCallsById.clear()
-                publishPendingToolCalls()
-                _streamingAssistantText.value = null
+                clearLiveRunUi()
                 clearPlanSteps()
                 updateLocalizedErrorText(nativeText("Chat failed before the run started; try again."))
               }
@@ -2871,9 +2861,7 @@ class ChatController internal constructor(
         // retain local ownership until the recovery snapshot can reconcile it.
         resetSwarmProgress()
         if (isSwarmEnabled()) refreshSwarmSessions()
-        pendingToolCallsById.clear()
-        publishPendingToolCalls()
-        _streamingAssistantText.value = null
+        clearLiveRunUi()
         refreshQuestions()
         refreshHistoryForRecovery()
       }
@@ -5154,9 +5142,7 @@ class ChatController internal constructor(
           val hasNewerRun =
             synchronized(pendingRuns) { pendingRuns.isNotEmpty() } || unresolvedRepliesByRunId.isNotEmpty()
           if (!hasNewerRun) {
-            pendingToolCallsById.clear()
-            publishPendingToolCalls()
-            _streamingAssistantText.value = null
+            clearLiveRunUi()
             clearPlanStepsFor(runId)
             updateLocalizedErrorText(
               if (state == "error") {
@@ -5188,9 +5174,7 @@ class ChatController internal constructor(
         } else {
           clearPendingRuns(clearOptimisticMessages = false)
         }
-        pendingToolCallsById.clear()
-        publishPendingToolCalls()
-        _streamingAssistantText.value = null
+        clearLiveRunUi()
         clearPlanStepsFor(runId)
         val terminalRunIds = runId?.let(::setOf) ?: unresolvedRepliesByRunId.keys.toSet()
         refreshCurrentHistoryBestEffort(
@@ -5413,9 +5397,7 @@ class ChatController internal constructor(
       "error" -> {
         updateLocalizedErrorText(nativeText("Event stream interrupted; try refreshing."))
         clearPendingRuns()
-        pendingToolCallsById.clear()
-        publishPendingToolCalls()
-        _streamingAssistantText.value = null
+        clearLiveRunUi()
         clearPlanSteps()
       }
     }
@@ -5439,6 +5421,12 @@ class ChatController internal constructor(
   private fun publishPendingToolCalls() {
     _pendingToolCalls.value =
       pendingToolCallsById.values.sortedBy { it.startedAtMs }
+  }
+
+  private fun clearLiveRunUi() {
+    pendingToolCallsById.clear()
+    publishPendingToolCalls()
+    _streamingAssistantText.value = null
   }
 
   private fun clearPlanSteps() {
@@ -5586,9 +5574,7 @@ class ChatController internal constructor(
 
   private fun clearTransientRunUiIfIdle(preservePlan: Boolean = false) {
     if (synchronized(pendingRuns) { pendingRuns.isNotEmpty() }) return
-    pendingToolCallsById.clear()
-    publishPendingToolCalls()
-    _streamingAssistantText.value = null
+    clearLiveRunUi()
     if (!preservePlan) clearPlanSteps()
   }
 

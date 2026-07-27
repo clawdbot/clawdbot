@@ -7,6 +7,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { isCronTimeoutErrorText } from "../execution-error-constants.js";
 
 function requireCronAgentId(agentId: string | undefined): string {
   if (!agentId?.trim()) {
@@ -41,7 +42,7 @@ import {
 } from "../task-run-detail.js";
 import { cronRunLogEntryFromEvent } from "../task-run-event-codec.js";
 import type { CronJob, CronRunErrorClassification, CronRunStatus } from "../types.js";
-import { normalizeCronRunErrorText, timeoutErrorMessage } from "./execution-errors.js";
+import { normalizeCronRunErrorText } from "./execution-errors.js";
 import type { CronEvent, CronServiceState } from "./state.js";
 import { CRON_TASK_RUNNING_PROGRESS_SUMMARY } from "./task-ledger.js";
 
@@ -301,7 +302,7 @@ export function tryFinishCronTaskRunWithoutHistory(
       status:
         result.status === "ok" || result.status === "skipped"
           ? "succeeded"
-          : error === timeoutErrorMessage()
+          : isCronTimeoutErrorText(error)
             ? "timed_out"
             : "failed",
       endedAt: result.endedAt,

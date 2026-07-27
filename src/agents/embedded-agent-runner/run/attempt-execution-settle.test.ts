@@ -66,7 +66,7 @@ function createFixture() {
     abortable: (promise: Promise<unknown>) => promise,
     cache: {
       observabilityEnabled: true,
-      promptToolNames: new Set(["read"]),
+      promptTools: [{ name: "read" }],
     },
     history: {
       contextEnginePromptAuthority: "assembled",

@@ -350,6 +350,72 @@ describe("session catalog Gateway methods", () => {
     });
   });
 
+  it("shares one lazy Gateway node snapshot across catalog providers", async () => {
+    const previousNodesRuntime = gatewaySubagentState.nodes;
+    const dispatchNodeList = vi.fn(async () => ({
+      nodes: [{ nodeId: "shared-node", connected: true }],
+    }));
+    gatewaySubagentState.nodes = {
+      list: dispatchNodeList,
+      invoke: vi.fn(async () => undefined),
+    };
+    try {
+      const catalogUsingNodes = (id: string) =>
+        provider(id, {
+          list: vi.fn(async ({ listNodes }) => {
+            expect(await listNodes?.()).toEqual({
+              nodes: [{ nodeId: "shared-node", connected: true }],
+            });
+            return [];
+          }),
+        });
+      hoisted.activeRegistry.sessionCatalogs = [
+        { provider: catalogUsingNodes("zeta") },
+        { provider: catalogUsingNodes("alpha") },
+      ];
+
+      await call("sessions.catalog.list", {});
+
+      expect(dispatchNodeList).toHaveBeenCalledOnce();
+    } finally {
+      gatewaySubagentState.nodes = previousNodesRuntime;
+    }
+  });
+
+  it("keeps catalog-filtered Gateway node snapshots lazy", async () => {
+    const previousNodesRuntime = gatewaySubagentState.nodes;
+    const dispatchNodeList = vi.fn(async () => ({ nodes: [] }));
+    gatewaySubagentState.nodes = {
+      list: dispatchNodeList,
+      invoke: vi.fn(async () => undefined),
+    };
+    try {
+      const selectedList = vi.fn(async () => []);
+      hoisted.activeRegistry.sessionCatalogs = [
+        {
+          provider: provider("selected", { list: selectedList }),
+        },
+        {
+          provider: provider("unselected", {
+            list: vi.fn(async ({ listNodes }) => {
+              await listNodes?.();
+              return [];
+            }),
+          }),
+        },
+      ];
+
+      await call("sessions.catalog.list", { catalogId: "selected" });
+
+      expect(selectedList).toHaveBeenCalledWith(
+        expect.objectContaining({ listNodes: expect.any(Function) }),
+      );
+      expect(dispatchNodeList).not.toHaveBeenCalled();
+    } finally {
+      gatewaySubagentState.nodes = previousNodesRuntime;
+    }
+  });
+
   it("uses the pinned Gateway catalog runtime after active registry churn", async () => {
     const previousNodesRuntime = gatewaySubagentState.nodes;
     const listNodes = vi.fn(async () => ({ nodes: [] }));

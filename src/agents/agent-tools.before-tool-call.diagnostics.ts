@@ -468,23 +468,29 @@ export function emitToolBlockedSecurityEvent(params: {
   paramsSummary?: DiagnosticToolParamsSummary;
 }): void {
   const control =
-    params.deniedReason === "tool-loop"
+    params.deniedReason === "client-voice-confirmation"
       ? ({
-          policyId: "tool-loop-detection",
-          controlId: "tool-loop-detection",
-          family: "authorization",
+          policyId: "talk-client-voice-confirmation",
+          controlId: "talk-client-voice-confirmation",
+          family: "approval",
         } as const)
-      : params.deniedReason === "plugin-approval"
+      : params.deniedReason === "tool-loop"
         ? ({
-            policyId: "plugin-tool-approval",
-            controlId: "plugin-tool-approval",
-            family: "approval",
+            policyId: "tool-loop-detection",
+            controlId: "tool-loop-detection",
+            family: "authorization",
           } as const)
-        : ({
-            policyId: "plugin-before-tool-call",
-            controlId: "before-tool-call",
-            family: "approval",
-          } as const);
+        : params.deniedReason === "plugin-approval"
+          ? ({
+              policyId: "plugin-tool-approval",
+              controlId: "plugin-tool-approval",
+              family: "approval",
+            } as const)
+          : ({
+              policyId: "plugin-before-tool-call",
+              controlId: "before-tool-call",
+              family: "approval",
+            } as const);
   emitTrustedSecurityEvent({
     category: "tool",
     action: "tool.execution.blocked",
@@ -584,6 +590,47 @@ export function shouldEmitLoopWarning(
   return true;
 }
 
+/** Reconcile loop liveness with the final post-policy arguments before execution. */
+export async function reconcileLoopCallExecutionParams(args: {
+  ctx?: HookContext;
+  toolName: string;
+  toolParams: unknown;
+  toolCallId?: string;
+}): Promise<void> {
+  if ((!args.ctx?.sessionKey && !args.ctx?.sessionId) || args.ctx.loopDetection?.enabled !== true) {
+    return;
+  }
+  try {
+    const {
+      getDiagnosticSessionState,
+      markDiagnosticArgumentChurnObservation,
+      reconcileToolCallExecutionParams,
+      resolveToolLoopWarningThreshold,
+    } = await loadBeforeToolCallRuntime();
+    const sessionState = getDiagnosticSessionState({
+      sessionKey: args.ctx.sessionKey,
+      sessionId: args.ctx.sessionId,
+    });
+    const churn = reconcileToolCallExecutionParams(sessionState, {
+      toolName: args.toolName,
+      toolParams: args.toolParams,
+      toolCallId: args.toolCallId,
+      runId: args.ctx.runId,
+      warningThreshold: resolveToolLoopWarningThreshold(),
+    });
+    markDiagnosticArgumentChurnObservation({
+      sessionKey: args.ctx.sessionKey,
+      sessionId: args.ctx.sessionId,
+      runId: args.ctx.runId,
+      active: churn.active,
+    });
+  } catch (err) {
+    log.warn(
+      `tool loop execution-param reconciliation failed: tool=${args.toolName} error=${String(err)}`,
+    );
+  }
+}
+
 export async function recordLoopOutcome(args: {
   ctx?: HookContext;
   toolName: string;
@@ -599,7 +646,12 @@ export async function recordLoopOutcome(args: {
   }
   let recordedOutcome: ToolOutcomeObservation | undefined;
   try {
-    const { getDiagnosticSessionState, recordToolCallOutcome } = await loadBeforeToolCallRuntime();
+    const {
+      getArgumentChurnNoProgressStreak,
+      getDiagnosticSessionState,
+      markDiagnosticArgumentChurnObservation,
+      recordToolCallOutcome,
+    } = await loadBeforeToolCallRuntime();
     const sessionState = getDiagnosticSessionState({
       sessionKey: args.ctx.sessionKey,
       sessionId: args.ctx.sessionId,
@@ -612,6 +664,20 @@ export async function recordLoopOutcome(args: {
       error: args.error,
       config: args.ctx.loopDetection,
       ...(args.ctx.runId && { runId: args.ctx.runId }),
+    });
+    const churnContinues =
+      record !== undefined &&
+      getArgumentChurnNoProgressStreak(
+        (sessionState.toolCallHistory ?? []).filter((call) => call.runId === record.runId),
+        record.toolName,
+        record.argsHash,
+      ).count > 0;
+    markDiagnosticArgumentChurnObservation({
+      sessionKey: args.ctx.sessionKey,
+      sessionId: args.ctx.sessionId,
+      runId: args.ctx.runId,
+      active: churnContinues,
+      existingOnly: true,
     });
     if (record?.resultHash && args.ctx.onToolOutcome) {
       recordedOutcome = {

@@ -695,6 +695,7 @@ async function evaluateSystemRunPolicyPhase(
     const autoReviewArgv =
       segments.length === 1 &&
       autoReviewSegment !== undefined &&
+      autoReviewSegment.resolution?.policyBlocked !== true &&
       // Check the reviewed inner command so safe node transport remains usable.
       !isBlockedShellWrapperCommand(autoReviewSegment.argv) &&
       directAutoReviewArgvMatchesRequest &&

@@ -13,7 +13,10 @@ import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-h
 import * as cronStoreModule from "../store.js";
 import { loadCronJobsStoreWithConfigJobs, loadCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
-import { add, list, remove, run, start, stop, update } from "./ops.js";
+import { start, stop } from "./ops-lifecycle.js";
+import { add, remove, update } from "./ops-mutations.js";
+import { list } from "./ops-read.js";
+import { run } from "./ops-run.js";
 import { createCronServiceState, type CronEvent } from "./state.js";
 import { tryCreateCronTaskRun, tryFinishCronTaskRun } from "./task-runs.js";
 import { runMissedJobs } from "./timer.js";
@@ -627,6 +630,99 @@ describe("cron service ops seam coverage", () => {
       stop(state);
     });
   });
+
+  it.each([
+    { deleteAfterRun: false, status: "ok" as const, overdue: false },
+    { deleteAfterRun: false, status: "error" as const, overdue: false },
+    { deleteAfterRun: false, status: "skipped" as const, overdue: false },
+    { deleteAfterRun: true, status: "ok" as const, overdue: false },
+    { deleteAfterRun: true, status: "error" as const, overdue: false },
+    { deleteAfterRun: true, status: "skipped" as const, overdue: false },
+    { deleteAfterRun: false, status: "ok" as const, overdue: true },
+    { deleteAfterRun: false, status: "error" as const, overdue: true },
+    { deleteAfterRun: false, status: "skipped" as const, overdue: true },
+    { deleteAfterRun: true, status: "ok" as const, overdue: true },
+    { deleteAfterRun: true, status: "error" as const, overdue: true },
+    { deleteAfterRun: true, status: "skipped" as const, overdue: true },
+  ])(
+    "recovers a rescheduled one-shot after a finalized $status run (deleteAfterRun=$deleteAfterRun, overdue=$overdue)",
+    async ({ deleteAfterRun, status, overdue }) => {
+      const { storePath } = await makeStorePath();
+      const now = Date.parse("2026-03-23T12:00:00.000Z");
+      const startedAt = now - 30_000;
+      const endedAt = startedAt + 4_000;
+      const replacementAt = overdue ? now - 5_000 : now + 3_600_000;
+
+      await withStateDirForStorePath(storePath, async () => {
+        const replacement = createDueIsolatedJob(now);
+        replacement.id = `startup-rescheduled-finalized-one-shot-${deleteAfterRun}`;
+        replacement.name = "startup rescheduled finalized one-shot";
+        replacement.deleteAfterRun = deleteAfterRun;
+        replacement.schedule = { kind: "at", at: new Date(replacementAt).toISOString() };
+        replacement.updatedAtMs = now - 10_000;
+        replacement.state = { runningAtMs: startedAt, nextRunAtMs: replacementAt };
+        await writeCronStoreSnapshot({ storePath, jobs: [replacement] });
+
+        const original = structuredClone(replacement);
+        original.schedule = { kind: "at", at: new Date(startedAt).toISOString() };
+        original.updatedAtMs = startedAt;
+        original.state.nextRunAtMs = startedAt;
+
+        const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+        const state = createCronServiceState({
+          storePath,
+          cronEnabled: true,
+          log: logger,
+          nowMs: () => now,
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeat: vi.fn(),
+          runIsolatedAgentJob,
+        });
+        const taskRunId = tryCreateCronTaskRun({ state, job: original, startedAt });
+        if (!taskRunId) {
+          throw new Error("expected cron task run");
+        }
+        tryFinishCronTaskRun(state, {
+          taskRunId,
+          job: original,
+          event: {
+            jobId: original.id,
+            action: "finished",
+            job: original,
+            status,
+            ...(status === "error" ? { error: "original failed before restart" } : {}),
+            summary: "original completed before restart",
+            runAtMs: startedAt,
+            durationMs: endedAt - startedAt,
+          },
+        });
+
+        try {
+          await start(state);
+
+          const persisted = await loadCronStore(storePath);
+          const restored = persisted.jobs.find((job) => job.id === replacement.id);
+          expect(restored?.enabled).toBe(true);
+          if (overdue) {
+            expect(restored?.state.nextRunAtMs).toBeGreaterThan(now);
+            expect(restored?.state.startupCatchupAtMs).toBe(restored?.state.nextRunAtMs);
+          } else {
+            expect(restored?.state.nextRunAtMs).toBe(replacementAt);
+            expect(restored?.state.startupCatchupAtMs).toBeUndefined();
+          }
+          expect(restored?.state.runningAtMs).toBeUndefined();
+          expect(restored?.state.lastRunAtMs).toBe(startedAt);
+          expect(restored?.state.lastRunStatus).toBe(status);
+          expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+          expect(findTaskByRunId(taskRunId)?.status).toBe(
+            status === "error" ? "failed" : "succeeded",
+          );
+        } finally {
+          stop(state);
+        }
+      });
+    },
+  );
 
   it("restores finalized failure-alert cooldown without redelivery", async () => {
     const { storePath } = await makeStorePath();

@@ -4577,34 +4577,31 @@ extension TalkModeManager {
     }
 
     static func configureAudioSession(preferredInputDeviceID: String? = nil) throws {
-        let session = AVAudioSession.sharedInstance()
-        let forceSpeaker = TalkDefaults.speakerphoneEnabled()
-        let options = TalkAudioRoute.categoryOptions(speakerphoneEnabled: forceSpeaker)
         // Prefer `.spokenAudio` for STT; it tends to preserve speech energy better than `.voiceChat`.
-        try session.setCategory(.playAndRecord, mode: .spokenAudio, options: options)
-        try? session.setPreferredSampleRate(48000)
-        try? session.setPreferredIOBufferDuration(0.02)
-        try session.setActive(true, options: [])
-        if TalkAudioRoute.shouldForceSpeaker(
-            preferenceEnabled: forceSpeaker,
-            outputPortTypes: session.currentRoute.outputs.map(\.portType))
-        {
-            try? session.overrideOutputAudioPort(.speaker)
-        } else {
-            try? session.overrideOutputAudioPort(.none)
-        }
-        // A speaker override also forces the built-in microphone; apply an explicit input last.
-        self.applyPreferredInput(preferredInputDeviceID, to: session)
-        GatewayDiagnostics.log("talk audio: session speakerphone=\(forceSpeaker) \(Self.describeAudioSession())")
+        try self.configureAudioSession(
+            mode: .spokenAudio,
+            preferredInputDeviceID: preferredInputDeviceID,
+            diagnosticsPrefix: "talk audio")
     }
 
     static func configureRealtimeAudioSession(preferredInputDeviceID: String? = nil) throws {
+        // Realtime Talk is full duplex. `.voiceChat` enables iOS voice processing so speaker
+        // output is less likely to be captured as fresh microphone input.
+        try self.configureAudioSession(
+            mode: .voiceChat,
+            preferredInputDeviceID: preferredInputDeviceID,
+            diagnosticsPrefix: "talk realtime audio")
+    }
+
+    private static func configureAudioSession(
+        mode: AVAudioSession.Mode,
+        preferredInputDeviceID: String?,
+        diagnosticsPrefix: String) throws
+    {
         let session = AVAudioSession.sharedInstance()
         let forceSpeaker = TalkDefaults.speakerphoneEnabled()
         let options = TalkAudioRoute.categoryOptions(speakerphoneEnabled: forceSpeaker)
-        // Realtime Talk is full duplex. `.voiceChat` enables iOS voice processing so speaker
-        // output is less likely to be captured as fresh microphone input.
-        try session.setCategory(.playAndRecord, mode: .voiceChat, options: options)
+        try session.setCategory(.playAndRecord, mode: mode, options: options)
         try? session.setPreferredSampleRate(48000)
         try? session.setPreferredIOBufferDuration(0.02)
         try session.setActive(true, options: [])
@@ -4619,7 +4616,7 @@ extension TalkModeManager {
         // A speaker override also forces the built-in microphone; apply an explicit input last.
         self.applyPreferredInput(preferredInputDeviceID, to: session)
         GatewayDiagnostics.log(
-            "talk realtime audio: session speakerphone=\(forceSpeaker) \(Self.describeAudioSession())")
+            "\(diagnosticsPrefix): session speakerphone=\(forceSpeaker) \(Self.describeAudioSession())")
     }
 
     private static func applyPreferredInput(_ deviceID: String?, to session: AVAudioSession) {

@@ -155,4 +155,40 @@ describe("update cli option collisions", () => {
 
     assert();
   });
+
+  it.each([
+    {
+      name: "status",
+      argv: ["update", "status", "--timeout", ""],
+      handler: updateStatusCommand,
+    },
+    {
+      name: "wizard",
+      argv: ["update", "wizard", "--timeout", ""],
+      handler: updateWizardCommand,
+    },
+    {
+      name: "repair",
+      argv: ["update", "repair", "--timeout", ""],
+      handler: updateFinalizeCommand,
+    },
+    {
+      name: "finalize",
+      argv: ["update", "finalize", "--timeout", ""],
+      handler: updateFinalizeCommand,
+    },
+    {
+      name: "status with a valid inherited parent timeout",
+      argv: ["update", "--timeout", "9", "status", "--timeout", ""],
+      handler: updateStatusCommand,
+    },
+  ])("preserves an explicitly empty $name timeout for validation", async ({ argv, handler }) => {
+    await runRegisteredCli({
+      register: registerUpdateCli as (program: Command) => void,
+      argv,
+    });
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(firstCallOptions(handler)).toMatchObject({ timeout: "" });
+  });
 });

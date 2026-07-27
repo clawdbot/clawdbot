@@ -1727,8 +1727,13 @@ describe("scripts/test-projects changed-target routing", () => {
       ["scripts/gh-read", ["test/scripts/gh-read.test.ts"]],
       [
         "scripts/pr",
-        ["test/scripts/pr-operation-lock.test.ts", "test/scripts/pr-wrappers.test.ts"],
+        [
+          "test/scripts/pr-merge.test.ts",
+          "test/scripts/pr-operation-lock.test.ts",
+          "test/scripts/pr-wrappers.test.ts",
+        ],
       ],
+      ["scripts/pr-lib/merge.sh", ["test/scripts/pr-merge.test.ts"]],
       ["scripts/pr-lib/operation-lock.sh", ["test/scripts/pr-operation-lock.test.ts"]],
       ["scripts/pr-lib/process-group-runner.mjs", ["test/scripts/pr-operation-lock.test.ts"]],
       ["scripts/pr-merge", ["test/scripts/pr-wrappers.test.ts"]],
@@ -3635,6 +3640,33 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes isolated ui test targets to the isolated project", () => {
+    expect(buildVitestRunPlans(["ui/src/pages/workboard/view.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.ui-isolated.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/pages/workboard/view.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("adds the isolated project for broad ui targets", () => {
+    const plans = buildVitestRunPlans(["ui/src"]);
+
+    expect(plans.map((plan) => plan.config)).toEqual([
+      "test/vitest/vitest.ui.config.ts",
+      "test/vitest/vitest.ui-isolated.config.ts",
+    ]);
+    expect(plans[1]?.includePatterns).toContain("ui/src/pages/workboard/view.test.ts");
+  });
+
+  it("rejects broad ui watch targets that cross shared and isolated projects", () => {
+    expect(() => buildVitestRunPlans(["--watch", "ui/src"])).toThrow(
+      "watch mode with mixed test suites is not supported",
+    );
+  });
+
   it("keeps explicit non-renderer ui test targets scoped", () => {
     expect(
       buildVitestRunPlans([
@@ -4349,6 +4381,12 @@ describe("scripts/test-projects full-suite sharding", () => {
     expect(fullSuiteMatches.get("src/tui/tui-pty-harness.e2e.test.ts")).toEqual([
       "test/vitest/vitest.tui-pty.config.ts",
     ]);
+  });
+
+  it("covers Codex attempt client prewarming in full-suite routing", () => {
+    expect(
+      fullSuiteMatches.get("extensions/codex/src/app-server/run-attempt-client-prewarm.test.ts"),
+    ).toEqual(["test/vitest/vitest.extension-codex-app-server-attempt-light.config.ts"]);
   });
 
   it("uses the global host worker budget for roomy local hosts", () => {

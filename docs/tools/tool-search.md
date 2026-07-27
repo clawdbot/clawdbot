@@ -58,12 +58,12 @@ run:
 2. List eligible OpenClaw and plugin tools.
 3. List eligible MCP tools through the session MCP runtime.
 4. Add eligible client tools supplied for the current run.
-5. Keep direct-only tools model-visible and index compact descriptors for the
-   remaining catalog-eligible tools.
+5. Keep core coding primitives and direct-only tools model-visible and index
+   compact descriptors for the remaining catalog-eligible tools.
 6. Add a deterministic, bounded, policy-filtered capability directory to the
    cache-stable system-prompt prefix.
 7. Expose the OpenClaw code bridge, the structured fallback tools, or the
-   compact directory surface alongside those direct-only tools.
+   compact directory surface alongside those stable, directly callable tools.
 
 At execution time every real tool call returns to OpenClaw. The isolated Node
 runtime does not hold plugin implementations, MCP client objects, or secrets.
@@ -80,9 +80,9 @@ normal policy, approval, hook, logging, and result handling still apply.
   structured tools for providers that should not receive code, alongside the
   capability directory and direct-only tools.
 - `directory`: exposes `tool_search`, `tool_describe`, and `tool_call` plus a
-  bounded prompt directory. Unlike the other modes, OpenClaw can also expose a
-  small bounded set of likely or required tool schemas directly for the
-  current turn. Direct-only tools remain visible in this mode too.
+  bounded, cache-stable prompt directory. Core coding primitives, direct-only
+  tools, and tools required by the run's delivery policy remain visible; other
+  schemas stay deferred.
 
 All modes use the same policy-filtered catalog and normal OpenClaw execution
 path. Tools marked `catalogMode: "direct-only"` stay outside that catalog and
@@ -114,8 +114,8 @@ Tool Search changes the shape:
 - Tool Search tools mode: the model sees three compact structured fallback
   tools, the same capability directory, and any direct-only tools
 - Tool Search directory mode: the model sees a bounded directory plus
-  search/describe/call controls and a small bounded set of likely or required
-  schemas, plus any direct-only tools
+  search/describe/call controls, policy-required direct tools, and any
+  direct-only tools
 - during the turn: the model can load remaining schemas as needed
 
 Direct tool exposure is still the right default for small catalogs. Tool Search
@@ -220,12 +220,14 @@ Directory mode exposes:
 - `tool_describe`
 - `tool_call`
 
-It also keeps client-provided tools and all direct-only tools directly visible,
-and may expose a small bounded set of likely or required catalog tool schemas
-directly for the current turn. If the bounded directory omits entries, use
-`tool_search` to find them. If the model requests an exact hidden directory
-tool name directly, OpenClaw hydrates it from the authorized catalog before
-normal execution.
+It also keeps core file and shell primitives, client-provided tools, direct-only
+tools, and policy-required delivery tools directly visible. Other authorized
+tool schemas stay deferred rather than changing with each user prompt. MCP tools
+cannot impersonate a directly visible core or policy-required delivery tool. If
+the bounded directory omits entries, use `tool_search` to find them and
+`tool_describe` to retrieve their full schemas. If the model requests an exact
+hidden directory tool name directly, OpenClaw resolves it from the authorized
+catalog before normal execution.
 Directory-mode client tool names must not collide with OpenClaw, plugin, or MCP
 tool names because exact deferred dispatch uses those names.
 

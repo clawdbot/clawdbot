@@ -4,10 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  clearCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "./current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import type { PluginCandidate } from "./discovery.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
@@ -574,6 +572,39 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expect(readDirectory).not.toHaveBeenCalled();
     expect(readFile).not.toHaveBeenCalled();
     expect(statFile).not.toHaveBeenCalled();
+  });
+
+  it("retains only the current process-lifecycle registry graph", () => {
+    const tempRoot = makeTempDir();
+    const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+    const firstWorkspace = path.join(tempRoot, "first-workspace");
+    const secondWorkspace = path.join(tempRoot, "second-workspace");
+
+    const first = loadPluginRegistrySnapshotWithMetadata({
+      config: {},
+      env,
+      workspaceDir: firstWorkspace,
+    });
+    const second = loadPluginRegistrySnapshotWithMetadata({
+      config: {},
+      env,
+      workspaceDir: secondWorkspace,
+    });
+    const refreshedFirst = loadPluginRegistrySnapshotWithMetadata({
+      config: {},
+      env,
+      workspaceDir: firstWorkspace,
+    });
+
+    expect(second).not.toBe(first);
+    expect(refreshedFirst).not.toBe(first);
+    expect(
+      loadPluginRegistrySnapshotWithMetadata({
+        config: {},
+        env,
+        workspaceDir: firstWorkspace,
+      }),
+    ).toBe(refreshedFirst);
   });
 
   it("refreshes workspace plugin discovery on explicit metadata invalidation", () => {

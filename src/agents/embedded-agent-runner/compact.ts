@@ -16,11 +16,9 @@ import { hasMeaningfulConversationContent } from "../compaction-real-conversatio
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { coerceToFailoverError } from "../failover-error.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
-import {
-  isFallbackSummaryError,
-  resolveModelCandidateChain,
-  runWithModelFallback,
-} from "../model-fallback.js";
+import { isFallbackSummaryError } from "../model-fallback-attempt.js";
+import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
+import { runWithModelFallback } from "../model-fallback-runner.js";
 import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.js";
 import {
   applyAgentRunSessionTargetIdentity,

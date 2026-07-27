@@ -241,11 +241,6 @@ export const en: TranslationMap = {
       channelSchemaUnavailable: "Channel config schema unavailable.",
       loadingSchema: "Loading config schema…",
     },
-    health: {
-      title: "Channel health",
-      subtitle: "Channel status snapshots from the gateway.",
-      noSnapshotYet: "No snapshot yet.",
-    },
     generic: {
       subtitle: "Channel status and configuration.",
     },

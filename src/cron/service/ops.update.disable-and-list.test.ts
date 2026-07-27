@@ -3,7 +3,8 @@ import {
   noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
-import { add, list, update } from "./ops.js";
+import { add, update } from "./ops-mutations.js";
+import { list } from "./ops-read.js";
 import { createCronServiceState } from "./state.js";
 
 const fixtures = setupCronRegressionFixtures({ prefix: "cron-disable-list-" });

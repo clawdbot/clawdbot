@@ -1446,16 +1446,70 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(summary).not.toContain("N/A (identifier policy off).");
   });
 
-  it("uses structured instructions when summarizing dropped history chunks", async () => {
+  it("cancels without advancing the boundary when dropped history cannot be summarized", async () => {
     mockSummarizeInStages.mockReset();
-    mockSummarizeInStages.mockResolvedValue(summaryResult("mock summary"));
+    mockSummarizeInStages
+      .mockRejectedValueOnce(new Error("dropped prefix unavailable"))
+      .mockResolvedValue(summaryResult("later summary must not run"));
 
     const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture();
     setCompactionSafeguardRuntime(sessionManager, {
       model,
       maxHistoryShare: 0.1,
-      recentTurnsPreserve: 12,
+      recentTurnsPreserve: 0,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock: vi.fn().mockResolvedValue("test-key"),
+    });
+    const messagesToSummarize: AgentMessage[] = Array.from({ length: 4 }, (_unused, index) => ({
+      role: "user",
+      content: `msg-${index}-${"x".repeat(120_000)}`,
+      timestamp: index + 1,
+    }));
+    const transcriptBefore = structuredClone(messagesToSummarize);
+    const event = {
+      preparation: {
+        messagesToSummarize,
+        turnPrefixMessages: [],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 400_000,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "Keep security caveats.",
+      signal: new AbortController().signal,
+    };
+
+    const result = await compactionHandler(event, mockContext);
+
+    expect(result).toEqual({ cancel: true });
+    expect(result).not.toHaveProperty("compaction");
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+    expect(messagesToSummarize).toStrictEqual(transcriptBefore);
+    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBe(
+      "Compaction safeguard could not summarize the session: " +
+        "Failed to summarize dropped messages. | dropped prefix unavailable",
+    );
+  });
+
+  it("incorporates a successful dropped-history summary into the main summary", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages
+      .mockResolvedValueOnce(summaryResult("dropped history summary"))
+      .mockResolvedValueOnce(summaryResult("main history summary"));
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      maxHistoryShare: 0.1,
+      recentTurnsPreserve: 0,
     });
 
     const compactionHandler = createCompactionHandler();
@@ -1469,6 +1523,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
       content: `msg-${index}-${"x".repeat(120_000)}`,
       timestamp: index + 1,
     }));
+    const transcriptBefore = structuredClone(messagesToSummarize);
     const event = {
       preparation: {
         messagesToSummarize,
@@ -1490,17 +1545,76 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     const result = (await compactionHandler(event, mockContext)) as {
       cancel?: boolean;
-      compaction?: { summary?: string };
+      compaction?: { summary?: string; firstKeptEntryId?: string };
     };
 
     expect(result.cancel).not.toBe(true);
-    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+    expect(result.compaction?.summary).toContain("main history summary");
+    expect(result.compaction?.firstKeptEntryId).toBe("entry-1");
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
     const droppedCall = requireRecord(mockCallArg(mockSummarizeInStages));
     expect(droppedCall?.customInstructions).toContain(
       "Produce a compact, factual summary with these exact section headings:",
     );
     expect(droppedCall?.customInstructions).toContain("## Decisions");
     expect(droppedCall?.customInstructions).toContain("Keep security caveats.");
+    const mainCall = requireRecord(mockCallArg(mockSummarizeInStages, 1));
+    expect(JSON.stringify(mainCall?.messages)).toContain("dropped history summary");
+    expect(messagesToSummarize).toStrictEqual(transcriptBefore);
+  });
+
+  it("propagates caller abort while summarizing dropped history", async () => {
+    mockSummarizeInStages.mockReset();
+    const controller = new AbortController();
+    const abortError = Object.assign(new Error("This operation was aborted"), {
+      name: "AbortError",
+    });
+    const lateSummarizationError = new Error("transport failed after cancellation");
+    mockSummarizeInStages
+      .mockImplementationOnce(async () => {
+        controller.abort(abortError);
+        throw lateSummarizationError;
+      })
+      .mockResolvedValue(summaryResult("later summary must not run"));
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      maxHistoryShare: 0.1,
+      recentTurnsPreserve: 0,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock: vi.fn().mockResolvedValue("test-key"),
+    });
+    const messagesToSummarize: AgentMessage[] = Array.from({ length: 4 }, (_unused, index) => ({
+      role: "user",
+      content: `msg-${index}-${"x".repeat(120_000)}`,
+      timestamp: index + 1,
+    }));
+    const transcriptBefore = structuredClone(messagesToSummarize);
+    const event = {
+      preparation: {
+        messagesToSummarize,
+        turnPrefixMessages: [],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 400_000,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: controller.signal,
+    };
+
+    await expect(compactionHandler(event, mockContext)).rejects.toBe(abortError);
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeNull();
+    expect(messagesToSummarize).toStrictEqual(transcriptBefore);
   });
 
   it("caps summarization reserve tokens to the model output limit", async () => {
