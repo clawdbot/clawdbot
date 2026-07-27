@@ -1,0 +1,35 @@
+[Unit]
+Description=OpenClaw PropertyManager API WSGI Service
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/ai/projects/openclaw/tools/property_manager/api
+Environment=PYTHONUNBUFFERED=1
+Environment=OPENCLAW_ENVIRONMENT=development
+Environment=PROPERTYMANAGER_API_PORT=5062
+Environment=PROPERTYMANAGER_DB_NAME=openclaw_ai_dev
+Environment=PROPERTYMANAGER_DB_USER=openclaw_ai
+Environment=PROPERTYMANAGER_DB_VIA_DOCKER=1
+Environment=PROPERTYMANAGER_POSTGRES_CONTAINER=openclaw-ai-postgres-dev
+Environment=PROPERTYMANAGER_ATTACHMENTS_ROOT=%h/.local/share/openclaw-dev/propertymanager/attachments
+ExecStart=%h/ai/projects/openclaw/tools/property_manager/api/run_wsgi.sh
+ExecReload=/bin/kill -s HUP $MAINPID
+KillSignal=SIGQUIT
+KillMode=control-group
+TimeoutStopSec=45
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+UMask=0027
+
+[Install]
+WantedBy=default.target

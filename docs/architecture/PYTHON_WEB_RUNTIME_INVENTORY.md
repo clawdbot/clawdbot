@@ -30,7 +30,7 @@ deployment.
 | Application         | Framework          | Development runtime              | Production runtime                        | Port        | Status                        |
 | ------------------- | ------------------ | -------------------------------- | ----------------------------------------- | ----------- | ----------------------------- |
 | OpenClaw Dashboard  | Flask / WSGI       | Gunicorn, two `gthread` workers  | Gunicorn, two `gthread` workers           | 5051        | Compliant                     |
-| PropertyManager API | Flask / WSGI       | Not active during inventory      | Flask built-in debug server with reloader | 5062        | Migration required            |
+| PropertyManager API | Flask / WSGI       | Gunicorn, two `gthread` workers  | Flask built-in debug server with reloader | 5062        | Dev migrated; prod unchanged  |
 | OpenClaw Gateway    | Node.js            | Node.js service                  | Node.js service                           | 18789/18790 | Not a Python WSGI/ASGI target |
 | Control UI          | Vite build tooling | Development/preview tooling only | Served through the OpenClaw stack         | n/a         | Not a Python WSGI/ASGI target |
 
@@ -115,3 +115,29 @@ The PropertyManager migration is ready for operator testing only when:
 
 The dashboard requires no further server replacement. The next implementation
 phase should focus only on PropertyManager API reliability.
+
+## Development Implementation Checkpoint
+
+The development runtime now includes:
+
+- a side-effect-free `wsgi:application` entry point;
+- pinned Flask, Gunicorn, and PostgreSQL adapter dependencies;
+- two bounded `gthread` workers with graceful shutdown and recycling;
+- a supervised user service with restart protection and process hardening;
+- a development database-name guard that refuses databases without a `_dev`
+  suffix;
+- development-only attachment storage outside the production storage mount;
+- focused tests for WSGI import, health, Gunicorn policy, launch behavior, and
+  service hardening.
+
+Development verification proved HTTP health, worker replacement, and complete
+service recovery after a master-process crash.
+
+CRUD integration remains intentionally blocked. The current development
+database contains no `propertymanager` schema, and the checked-in initial
+migration does not contain all fields and tables used by the current
+uncommitted iPhone/API work. An authoritative matching migration must be
+provided and reviewed before database initialization or operator testing.
+
+Production still uses Flask's built-in debug server. No production runtime was
+changed by this development checkpoint.
