@@ -15,6 +15,7 @@ const hoisted = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
+  readSessionTranscriptVisibleMessageDelta: vi.fn(),
   visitSessionMessagesAsync: vi.fn(),
 }));
 
@@ -43,6 +44,7 @@ vi.mock("../session-transcript-readers.js", async () => {
   );
   return {
     ...actual,
+    readSessionTranscriptVisibleMessageDelta: hoisted.readSessionTranscriptVisibleMessageDelta,
     visitSessionMessagesAsync: hoisted.visitSessionMessagesAsync,
   };
 });
@@ -105,6 +107,15 @@ function assistantToolCall(name: string, args: Record<string, unknown>) {
   };
 }
 
+function visibleMessageEvent(message: unknown, seq: number) {
+  return {
+    event: { id: `event-${String(seq)}`, message },
+    eventSeq: seq,
+    parentId: seq > 1 ? `event-${String(seq - 1)}` : null,
+    seq,
+  };
+}
+
 function writeWorkspaceFile(root: string, filePath: string, content: string) {
   const resolved = path.join(root, filePath);
   fs.mkdirSync(path.dirname(resolved), { recursive: true });
@@ -118,8 +129,23 @@ function hashContent(content: string): string {
 describe("sessions.files RPC handlers", () => {
   let workspaceRoot: string;
 
+  function useSqliteSession(sessionId: string): void {
+    const storePath = path.join(workspaceRoot, `${sessionId}.sqlite`);
+    hoisted.loadSessionEntry.mockReturnValue({
+      canonicalKey: "agent:main:main",
+      cfg: {},
+      storePath,
+      entry: {
+        sessionId,
+        sessionFile: `sqlite:main:${sessionId}:${storePath}`,
+        spawnedCwd: workspaceRoot,
+      },
+    });
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
+    hoisted.readSessionTranscriptVisibleMessageDelta.mockReset();
     const tempRoot = fs.realpathSync(os.tmpdir());
     workspaceRoot = fs.mkdtempSync(path.join(tempRoot, "openclaw-session-files-test-"));
     hoisted.resolveDefaultAgentId.mockReturnValue("main");
@@ -187,6 +213,162 @@ describe("sessions.files RPC handlers", () => {
       await invokeSessionFilesHandler("sessions.files.list", { sessionKey: "agent:main:main" }),
     );
     expect(gitPayload.gitCheckout).toBe(true);
+  });
+
+  it("folds only appended SQLite messages after the cached cursor", async () => {
+    useSqliteSession("sess-incremental");
+    hoisted.readSessionTranscriptVisibleMessageDelta.mockImplementation((_scope, limits) => {
+      if (limits.cursor === undefined) {
+        return {
+          kind: "page",
+          cursor: "cursor-1",
+          events: [visibleMessageEvent(assistantToolCall("read", { path: "ui/chat.ts" }), 1)],
+          hasMore: false,
+          serializedBytes: 100,
+        };
+      }
+      if (limits.cursor === "cursor-1") {
+        return {
+          kind: "page",
+          cursor: "cursor-2",
+          events: [visibleMessageEvent(assistantToolCall("edit", { path: "ui/chat.ts" }), 2)],
+          hasMore: false,
+          serializedBytes: 100,
+        };
+      }
+      throw new Error(`unexpected cursor: ${String(limits.cursor)}`);
+    });
+
+    const first = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+    const second = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+
+    expect(first.files).toEqual([expect.objectContaining({ path: "ui/chat.ts", kind: "read" })]);
+    expect(second.files).toEqual([
+      expect.objectContaining({ path: "ui/chat.ts", kind: "modified" }),
+    ]);
+    expect(hoisted.readSessionTranscriptVisibleMessageDelta).toHaveBeenCalledTimes(2);
+    expect(hoisted.readSessionTranscriptVisibleMessageDelta.mock.calls[1]?.[1]).toMatchObject({
+      cursor: "cursor-1",
+    });
+    expect(hoisted.visitSessionMessagesAsync).not.toHaveBeenCalled();
+  });
+
+  it("rebuilds the SQLite fold from the bootstrap cursor after a reset", async () => {
+    useSqliteSession("sess-reset");
+    hoisted.readSessionTranscriptVisibleMessageDelta.mockImplementation((_scope, limits) => {
+      if (limits.cursor === undefined) {
+        return {
+          kind: "page",
+          cursor: "generation-1",
+          events: [visibleMessageEvent(assistantToolCall("read", { path: "src/readme.md" }), 1)],
+          hasMore: false,
+          serializedBytes: 100,
+        };
+      }
+      if (limits.cursor === "generation-1") {
+        return {
+          kind: "reset",
+          cursor: "generation-2-bootstrap",
+          reason: "generation_mismatch",
+        };
+      }
+      if (limits.cursor === "generation-2-bootstrap") {
+        return {
+          kind: "page",
+          cursor: "generation-2-final",
+          events: [visibleMessageEvent(assistantToolCall("edit", { path: "ui/chat.ts" }), 1)],
+          hasMore: false,
+          serializedBytes: 100,
+        };
+      }
+      throw new Error(`unexpected cursor: ${String(limits.cursor)}`);
+    });
+
+    const beforeReset = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+    const afterReset = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+
+    expect(beforeReset.files).toEqual([
+      expect.objectContaining({ path: "src/readme.md", kind: "read" }),
+    ]);
+    expect(afterReset.files).toEqual([
+      expect.objectContaining({ path: "ui/chat.ts", kind: "modified" }),
+    ]);
+    expect(hoisted.readSessionTranscriptVisibleMessageDelta).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps JSONL transcripts on the full visitor path", async () => {
+    expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+
+    expect(hoisted.visitSessionMessagesAsync).toHaveBeenCalledTimes(1);
+    expect(hoisted.readSessionTranscriptVisibleMessageDelta).not.toHaveBeenCalled();
+  });
+
+  it("matches a fresh full scan for the same transcript", async () => {
+    const messages = [
+      assistantToolCall("read", { path: "ui/chat.ts" }),
+      assistantToolCall("edit", { path: "ui/chat.ts" }),
+      assistantToolCall("read", { path: "src/readme.md" }),
+      assistantToolCall("apply_patch", {
+        input: "*** Begin Patch\n*** Update File: package.json\n*** End Patch\n",
+      }),
+    ];
+    useSqliteSession("sess-parity");
+    hoisted.readSessionTranscriptVisibleMessageDelta.mockReturnValue({
+      kind: "page",
+      cursor: "parity-final",
+      events: messages.map(visibleMessageEvent),
+      hasMore: false,
+      serializedBytes: 400,
+    });
+
+    const incremental = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+    hoisted.loadSessionEntry.mockReturnValue({
+      canonicalKey: "agent:main:main",
+      cfg: {},
+      storePath: path.join(workspaceRoot, ".sessions.json"),
+      entry: {
+        sessionId: "sess-parity",
+        sessionFile: "sess-parity.jsonl",
+        spawnedCwd: workspaceRoot,
+      },
+    });
+    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
+      messages.forEach((message, index) => visit(message, index + 1));
+      return messages.length;
+    });
+
+    const fullScan = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+
+    expect(incremental.files).toEqual(fullScan.files);
+    expect(hoisted.visitSessionMessagesAsync).toHaveBeenCalledTimes(1);
   });
 
   it("reveals the same workspace root returned by sessions.files.list", async () => {
