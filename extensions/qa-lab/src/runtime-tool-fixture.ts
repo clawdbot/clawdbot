@@ -63,7 +63,7 @@ const RUNTIME_PATCH_HAPPY_CONTENTS = "runtime patch\n";
 const RUNTIME_PATCH_DENIED_FILENAME = "runtime-tool-fixture-denied.txt";
 const RUNTIME_PATCH_DENIED_CONTENTS = "runtime-tool-fixture-denied-original\n";
 const RUNTIME_PATCH_WORKSPACE_DENIAL_RE =
-  /(?:path\s+escapes\s+(?:the\s+)?(?:sandbox|workspace)(?:\s+root)?|outside(?:\s+of)?\s+(?:the\s+)?(?:sandbox|workspace|allowed\s+(?:sandbox|workspace|root)|writable\s+roots?)(?:\s+root)?|workspace[- ]only|permission\s+denied|operation\s+not\s+permitted|\bos\s+error\s+1\b|\b(?:EACCES|EPERM)\b)/iu;
+  /(?:path\s+escapes\s+(?:the\s+)?(?:sandbox|workspace)(?:\s+root)?|outside(?:\s+of)?\s+(?:the\s+)?(?:project|sandbox|workspace|allowed\s+(?:sandbox|workspace|root)|writable\s+roots?)(?:\s+root)?|workspace[- ]only|permission\s+denied|operation\s+not\s+permitted|\bos\s+error\s+1\b|\b(?:EACCES|EPERM)\b)/iu;
 
 function runtimeParitySessionKeyDetails(...sessionKeys: string[]) {
   return sessionKeys.map(
@@ -183,7 +183,10 @@ function formatRuntimePatchFailureOutput(request: QaRuntimeToolFixtureRequest): 
             /\b(?:bearer\s+[a-z\d._~+/-]+=*|(?:api[_-]?key|access[_-]?token|authorization|password|secret)\s*[:=]\s*["']?[^\s"',;]+)/giu,
             "[REDACTED]",
           )
-          .replace(/\b(?:sk|sess|ghp|gho|github_pat|xox[baprs])[-_][a-z\d_-]{8,}\b/giu, "[REDACTED]")
+          .replace(
+            /\b(?:sk|sess|ghp|gho|github_pat|xox[baprs])[-_][a-z\d_-]{8,}\b/giu,
+            "[REDACTED]",
+          )
           .slice(0, 240)
       : undefined;
   return JSON.stringify({ text, structuredError: request.toolOutputStructuredError === true });
@@ -422,7 +425,7 @@ function readBooleanTrue(value: unknown) {
 }
 
 const FAILURE_LIKE_TOOL_RESULT_RE =
-  /\b(?:denied|enoent|error|exception|fail(?:ed|ure)?|forbidden|invalid|missing|not found|permission)\b/iu;
+  /\b(?:denied|enoent|error|exception|fail(?:ed|ure)?|forbidden|invalid|missing|not found|permission|reject(?:ed|ion)?)\b/iu;
 
 const REQUIRED_FIELD_TOOL_RESULT_RE =
   /(?:^|[\n:,({[]\s*)["']?[A-Z_][A-Z0-9_.[\]-]*["']?\s+(?:is\s+)?required\b/iu;

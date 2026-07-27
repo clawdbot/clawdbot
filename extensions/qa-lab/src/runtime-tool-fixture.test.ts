@@ -725,6 +725,7 @@ describe("runtime tool fixture", () => {
   it.each([
     "apply_patch failed: path escapes sandbox root",
     "Operation not permitted (os error 1)",
+    "patch rejected: writing outside of the project; rejected by user approval settings",
   ])("verifies native Codex patch success and workspace denial: %s", async (failureOutput) => {
     const env = await makeEnv();
     env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME = "codex";
@@ -1122,6 +1123,7 @@ describe("runtime tool fixture", () => {
     "Operation not permitted",
     "Operation not permitted (os error 1)",
     "EPERM: sandbox denied the requested patch",
+    "patch rejected: writing outside of the project; rejected by user approval settings",
   ])("accepts native sandbox denial as a mock patch failure: %s", async (failureOutput) => {
     await expect(
       runMockRuntimeToolFixtureWithOutputs({
