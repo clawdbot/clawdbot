@@ -14,6 +14,7 @@ import type {
   RuntimeId,
   RuntimeParityDrift,
   RuntimeParityResult,
+  RuntimeParityUsage,
   RuntimeParityUsagePolicy,
 } from "./runtime-parity.js";
 import {
@@ -70,6 +71,17 @@ export type QaRuntimeParitySuiteSummary = Omit<QaParitySuiteSummary, "scenarios"
   scenarios: QaRuntimeParitySuiteScenario[];
 };
 
+type QaRuntimeParityCacheUsage = {
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  grossInputTokens: number;
+  uncachedInputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteTokens: number;
+  cacheHitPercent: number | null;
+};
+
 type QaRuntimeParityScenarioReport = {
   name: string;
   status: "pass" | "fail";
@@ -80,6 +92,8 @@ type QaRuntimeParityScenarioReport = {
   codexStatus: "pass" | "fail" | "missing";
   openclawTokens: number;
   codexTokens: number;
+  openclawUsage: QaRuntimeParityCacheUsage | null;
+  codexUsage: QaRuntimeParityCacheUsage | null;
   openclawToolCalls: number;
   codexToolCalls: number;
   openclawWallClockMs: number | null;
@@ -99,10 +113,69 @@ type QaRuntimeParityReport = {
   driftCounts: Record<RuntimeParityDrift, number>;
   scenarios: QaRuntimeParityScenarioReport[];
   timing: QaRuntimeTiming;
+  usage: {
+    openclaw: QaRuntimeParityCacheUsage | null;
+    codex: QaRuntimeParityCacheUsage | null;
+  };
   pass: boolean;
   failures: string[];
   notes: string[];
 };
+
+function summarizeRuntimeParityCacheUsage(
+  usage: Pick<
+    RuntimeParityUsage,
+    "inputTokens" | "outputTokens" | "totalTokens" | "cacheRead" | "cacheWrite"
+  >,
+): QaRuntimeParityCacheUsage {
+  const cachedInputTokens = usage.cacheRead ?? 0;
+  const cacheWriteTokens = usage.cacheWrite ?? 0;
+  const uncachedInputTokens = usage.inputTokens + cacheWriteTokens;
+  const grossInputTokens = uncachedInputTokens + cachedInputTokens;
+  return {
+    totalTokens: usage.totalTokens,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    grossInputTokens,
+    uncachedInputTokens,
+    cachedInputTokens,
+    cacheWriteTokens,
+    cacheHitPercent: grossInputTokens > 0 ? (cachedInputTokens / grossInputTokens) * 100 : null,
+  };
+}
+
+function aggregateRuntimeParityCacheUsage(
+  scenarios: readonly QaRuntimeParityScenarioReport[],
+  runtime: RuntimeId,
+): QaRuntimeParityCacheUsage | null {
+  const captures = scenarios.flatMap((scenario) => {
+    const usage = runtime === "openclaw" ? scenario.openclawUsage : scenario.codexUsage;
+    return usage ? [usage] : [];
+  });
+  if (captures.length === 0) {
+    return null;
+  }
+  return summarizeRuntimeParityCacheUsage(
+    captures.reduce<RuntimeParityUsage>(
+      (total, capture) => ({
+        inputTokens: total.inputTokens + capture.inputTokens,
+        outputTokens: total.outputTokens + capture.outputTokens,
+        totalTokens: total.totalTokens + capture.totalTokens,
+        cacheRead: (total.cacheRead ?? 0) + capture.cachedInputTokens,
+        cacheWrite: (total.cacheWrite ?? 0) + capture.cacheWriteTokens,
+      }),
+      { inputTokens: 0, outputTokens: 0, totalTokens: 0, cacheRead: 0, cacheWrite: 0 },
+    ),
+  );
+}
+
+function formatRuntimeCacheHitPercent(value: number | null | undefined): string {
+  return value === null || value === undefined ? "N/A" : `${value.toFixed(1)}%`;
+}
+
+function formatRuntimeCacheCount(value: number | undefined): string {
+  return value === undefined ? "N/A" : String(value);
+}
 
 type QaAgenticParityMetrics = {
   totalScenarios: number;
@@ -678,6 +751,8 @@ export function buildQaRuntimeParityReport(params: {
         codexStatus: "missing",
         openclawTokens: 0,
         codexTokens: 0,
+        openclawUsage: null,
+        codexUsage: null,
         openclawToolCalls: 0,
         codexToolCalls: 0,
         openclawWallClockMs: null,
@@ -703,6 +778,14 @@ export function buildQaRuntimeParityReport(params: {
       codexStatus,
       openclawTokens: openclawCell.usage.totalTokens,
       codexTokens: codexCell.usage.totalTokens,
+      openclawUsage:
+        runtimeParityUsage.expectation === "not-applicable"
+          ? null
+          : summarizeRuntimeParityCacheUsage(openclawCell.usage),
+      codexUsage:
+        runtimeParityUsage.expectation === "not-applicable"
+          ? null
+          : summarizeRuntimeParityCacheUsage(codexCell.usage),
       openclawToolCalls: openclawCell.toolCalls.length,
       codexToolCalls: codexCell.toolCalls.length,
       openclawWallClockMs: openclawCell.wallClockMs,
@@ -742,11 +825,16 @@ export function buildQaRuntimeParityReport(params: {
     driftCounts,
     scenarios,
     timing: summarizeRuntimeParityTiming(scenarios),
+    usage: {
+      openclaw: aggregateRuntimeParityCacheUsage(scenarios, "openclaw"),
+      codex: aggregateRuntimeParityCacheUsage(scenarios, "codex"),
+    },
     pass: failures.length === 0 && failedScenarios === 0,
     failures,
     notes: [
       "Runtime parity fails runtime, transport, and failure-mode drift; structural and tool-shape drift is recorded as advisory when both runtimes complete.",
       "Token totals here are assistant-message usage captured from the normalized transcript, not provider transport payloads.",
+      "Cache-hit percentages use cached input divided by cached, uncached, and cache-write input; output tokens are excluded from the denominator.",
       "Wall-clock timings cover each complete QA runtime cell, including gateway, model, and tool execution; they are not provider-reported turn durations.",
     ],
   };
@@ -774,6 +862,13 @@ export function renderQaRuntimeParityMarkdownReport(report: QaRuntimeParityRepor
     `| Tool-result-shape drift | ${report.driftCounts["tool-result-shape"]} |`,
     `| Structural drift | ${report.driftCounts.structural} |`,
     `| Failure-mode drift | ${report.driftCounts["failure-mode"]} |`,
+    "",
+    "## Prompt Cache",
+    "",
+    "| Runtime | Gross input | Uncached input | Cached input | Cache writes | Output | Total tokens | Cache hit |",
+    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    `| openclaw | ${formatRuntimeCacheCount(report.usage.openclaw?.grossInputTokens)} | ${formatRuntimeCacheCount(report.usage.openclaw?.uncachedInputTokens)} | ${formatRuntimeCacheCount(report.usage.openclaw?.cachedInputTokens)} | ${formatRuntimeCacheCount(report.usage.openclaw?.cacheWriteTokens)} | ${formatRuntimeCacheCount(report.usage.openclaw?.outputTokens)} | ${formatRuntimeCacheCount(report.usage.openclaw?.totalTokens)} | ${formatRuntimeCacheHitPercent(report.usage.openclaw?.cacheHitPercent)} |`,
+    `| codex | ${formatRuntimeCacheCount(report.usage.codex?.grossInputTokens)} | ${formatRuntimeCacheCount(report.usage.codex?.uncachedInputTokens)} | ${formatRuntimeCacheCount(report.usage.codex?.cachedInputTokens)} | ${formatRuntimeCacheCount(report.usage.codex?.cacheWriteTokens)} | ${formatRuntimeCacheCount(report.usage.codex?.outputTokens)} | ${formatRuntimeCacheCount(report.usage.codex?.totalTokens)} | ${formatRuntimeCacheHitPercent(report.usage.codex?.cacheHitPercent)} |`,
     "",
     "## Runtime Timing",
     "",
@@ -810,6 +905,9 @@ export function renderQaRuntimeParityMarkdownReport(report: QaRuntimeParityRepor
     );
     lines.push(
       `- wall time: openclaw ${formatRuntimeWallClockMs(scenario.openclawWallClockMs)}; codex ${formatRuntimeWallClockMs(scenario.codexWallClockMs)}; ${formatRuntimeSpeedComparison(scenario)}`,
+    );
+    lines.push(
+      `- prompt cache: openclaw ${formatRuntimeCacheHitPercent(scenario.openclawUsage?.cacheHitPercent)} (${formatRuntimeCacheCount(scenario.openclawUsage?.cachedInputTokens)} cached, ${formatRuntimeCacheCount(scenario.openclawUsage?.uncachedInputTokens)} uncached input); codex ${formatRuntimeCacheHitPercent(scenario.codexUsage?.cacheHitPercent)} (${formatRuntimeCacheCount(scenario.codexUsage?.cachedInputTokens)} cached, ${formatRuntimeCacheCount(scenario.codexUsage?.uncachedInputTokens)} uncached input)`,
     );
     if (scenario.runtimeParityUsage.expectation === "not-applicable") {
       lines.push(`- assistant-message usage: N/A (${scenario.runtimeParityUsage.reason})`);
