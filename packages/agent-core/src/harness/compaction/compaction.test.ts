@@ -333,6 +333,64 @@ describe("session-entry compaction budgeting", () => {
     ).toEqual({ ok: true, value: undefined });
   });
 
+  it("does not normalize the keep budget from non-finite provider usage", () => {
+    const entries = [
+      createMessageEntry({ role: "user", content: "hello", timestamp: 1 }, 0),
+      createMessageEntry(createAssistant("done", createUsage(Number.POSITIVE_INFINITY), 2), 1),
+    ];
+
+    expect(
+      prepareCompaction(entries, {
+        enabled: true,
+        reserveTokens: 0,
+        keepRecentTokens: 10_000,
+      }),
+    ).toEqual({ ok: true, value: undefined });
+  });
+
+  it("advances the boundary when provider usage exceeds transcript estimates", () => {
+    const entries: SessionTreeEntry[] = [
+      createMessageEntry({ role: "user", content: `task ${"x".repeat(3_000)}`, timestamp: 1 }, 0),
+    ];
+    for (let turn = 0; turn < 30; turn++) {
+      entries.push(
+        createMessageEntry(
+          createAssistant(`step ${turn}`, createUsage(20_000 + turn * 1_000), 2 + turn * 2),
+          entries.length,
+        ),
+      );
+      entries.push(
+        createMessageEntry(
+          {
+            role: "toolResult",
+            toolCallId: `call-${turn}`,
+            toolName: "read",
+            content: [{ type: "text", text: `tool output ${turn} `.repeat(40) }],
+            isError: false,
+            timestamp: 3 + turn * 2,
+          },
+          entries.length,
+        ),
+      );
+    }
+
+    const result = prepareCompaction(entries, {
+      enabled: true,
+      reserveTokens: 16_384,
+      keepRecentTokens: 20_000,
+    });
+
+    expect(result.ok && result.value).toBeTruthy();
+    if (!result.ok || !result.value) {
+      throw new Error("expected usage pressure to produce a compaction boundary");
+    }
+    expect(result.value.tokensBefore).toBe(49_150);
+    expect(result.value.firstKeptEntryId).not.toBe("entry-0");
+    expect(
+      result.value.messagesToSummarize.length + result.value.turnPrefixMessages.length,
+    ).toBeGreaterThan(0);
+  });
+
   it("keeps reset-filtered tool rows out of later compaction input", () => {
     const entries: SessionTreeEntry[] = [
       createMessageEntry({ role: "user", content: "discarded", timestamp: 1 }, 0),

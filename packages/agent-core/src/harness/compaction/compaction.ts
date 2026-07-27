@@ -769,7 +769,18 @@ export function prepareCompaction(
   }
   const boundaryEnd = effectiveEntries.length;
 
-  const tokensBefore = estimateContextTokens(buildSessionContext(pathEntries).messages).tokens;
+  const contextMessages = buildSessionContext(pathEntries).messages;
+  const tokensBefore = estimateContextTokens(contextMessages).tokens;
+  const estimatedContextTokens = contextMessages.reduce(
+    (total, message) => total + estimateTokens(message),
+    0,
+  );
+  // Provider usage and transcript estimates must use compatible units here;
+  // otherwise a high usage-to-estimate ratio can make every cut a no-op.
+  const usageToEstimateRatio =
+    estimatedContextTokens > 0 && Number.isFinite(tokensBefore)
+      ? Math.max(1, tokensBefore / estimatedContextTokens)
+      : 1;
   const resetPreludeTokens = resetPreludeMessages.reduce(
     (total, message) => total + estimateTokens(message),
     0,
@@ -778,7 +789,7 @@ export function prepareCompaction(
   // other model-visible boundary context so a large kept tail moves the cut earlier.
   const keepRecentTokens = Math.min(
     Number.MAX_SAFE_INTEGER,
-    settings.keepRecentTokens + resetPreludeTokens,
+    settings.keepRecentTokens / usageToEstimateRatio + resetPreludeTokens,
   );
 
   const cutPoint = findCutPoint(effectiveEntries, boundaryStart, boundaryEnd, keepRecentTokens);
