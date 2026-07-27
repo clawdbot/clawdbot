@@ -348,7 +348,7 @@ describe("subagent registry lifecycle hardening", () => {
       reason: SUBAGENT_ENDED_REASON_ERROR,
       triggerCleanup: false,
       recoverInterrupted: true,
-    };
+    } satisfies SubagentCompletionParams;
 
     await controller.completeSubagentRun(completion);
     await controller.completeSubagentRun(completion);
@@ -381,7 +381,7 @@ describe("subagent registry lifecycle hardening", () => {
         endedAt: 4_000,
         outcome,
       },
-      completion: { resultText: null, capturedAt: 4_000 },
+      completion: { required: false, resultText: null, capturedAt: 4_000 },
     });
     const emitSubagentProgressEndedForRun = vi.fn(async () => {});
     const controller = createLifecycleController({ entry, emitSubagentProgressEndedForRun });
