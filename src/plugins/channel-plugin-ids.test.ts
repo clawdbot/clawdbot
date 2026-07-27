@@ -444,7 +444,7 @@ function createStartupConfig(params: {
   };
   const hasSlots = Object.keys(slotsConfig).length > 0;
   const includeSlots =
-    hasSlots && (!params.allowPluginIds?.length || !!params.enabledPluginIds?.length);
+    hasSlots && (!params.allowPluginIds?.length || Boolean(params.enabledPluginIds?.length));
   const config: Record<string, unknown> = {};
 
   if (params.noConfiguredChannels) {
