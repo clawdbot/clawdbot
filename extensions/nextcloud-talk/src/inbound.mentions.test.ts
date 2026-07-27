@@ -107,6 +107,19 @@ describe("parseStructuredNextcloudTalkBody", () => {
     expect(result.commandText).toBe("_ /reset");
   });
 
+  it("treats parameter keys and display names as literal text", () => {
+    const raw = JSON.stringify({
+      message: "See {file[0]} and {user+1}",
+      parameters: {
+        "file[0]": { type: "file", name: "$& report" },
+        "user+1": { type: "user", id: "alice", name: "$` Alice $'" },
+      },
+    });
+    const result = parseStructuredNextcloudTalkBody(raw);
+    expect(result.text).toBe("See $& report and $` Alice $'");
+    expect(result.commandText).toBe("See _ and _");
+  });
+
   it("falls back to raw body text when JSON has no message field", () => {
     const raw = JSON.stringify({ parameters: {} });
     const result = parseStructuredNextcloudTalkBody(raw);

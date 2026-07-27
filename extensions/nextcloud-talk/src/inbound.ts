@@ -119,7 +119,7 @@ export function parseStructuredNextcloudTalkBody(
     const text = mentionEntries
       .reduce((acc, entry) => {
         const replacement = botMentionKeys.has(entry.key) ? "" : (entry.name ?? "");
-        return acc.replace(new RegExp(`\\{${entry.key}\\}`, "g"), replacement);
+        return acc.replaceAll(`{${entry.key}}`, () => replacement);
       }, rawMessage)
       .trim();
     // Rich-object names are server-provided metadata. Use a neutral marker for
@@ -127,10 +127,7 @@ export function parseStructuredNextcloudTalkBody(
     const commandText = mentionEntries
       .reduce(
         (acc, entry) =>
-          acc.replace(
-            new RegExp(`\\{${entry.key}\\}`, "g"),
-            botMentionKeys.has(entry.key) ? "" : "_",
-          ),
+          acc.replaceAll(`{${entry.key}}`, () => (botMentionKeys.has(entry.key) ? "" : "_")),
         rawMessage,
       )
       .trim();
