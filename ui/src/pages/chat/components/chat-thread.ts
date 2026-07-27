@@ -1130,19 +1130,16 @@ function trackTranscriptRenderDependencies(
 
 function guardChatRenderItems(
   state: ChatThreadState,
-  // Turn status ownership is decided by sibling rows, not by the owning row's
-  // own content: an unchanged reply that gains or loses the embedded working
-  // row / recap must re-render, or the stale copy stacks with the new owner.
-  statusOwnership: (item: ChatRenderItem) => string,
+  // Live run status is not derivable from a row's own item identity: ownership
+  // is decided by sibling rows, and the usage counter ticks on run patches that
+  // touch nothing else. Rows showing status must re-render on both, or the
+  // memoized copy stacks a second claw row or freezes the token count.
+  liveStatus: (item: ChatRenderItem) => string,
   render: (item: ChatRenderItem) => unknown,
 ) {
   return (item: ChatRenderItem) =>
     guard(
-      [
-        ...chatRenderItemGuardDependencies(item),
-        state.transcriptRenderContext,
-        statusOwnership(item),
-      ],
+      [...chatRenderItemGuardDependencies(item), state.transcriptRenderContext, liveStatus(item)],
       () => render(item),
     );
 }
@@ -1317,19 +1314,28 @@ function renderChatThreadContents(
       turnRecap: turnRecapByGroupKey.get(item.key),
     });
   };
-  const statusOwnershipSignature = (item: ChatRenderItem): string => {
+  // Only the working indicator shows live usage, so rows without one keep
+  // memoizing across usage patches.
+  const workingUsageKey = `usage:${props.runOutputTokens ?? ""}`;
+  const liveStatusSignature = (item: ChatRenderItem): string => {
+    if (item.kind === "stream-run") {
+      return item.parts.some((part) => part.kind === "reading-indicator") ? workingUsageKey : "";
+    }
     if (item.kind !== "group") {
       return "";
     }
     const continuation = activeContinuationByGroupKey.get(item.key);
     const recap = turnRecapByGroupKey.get(item.key);
-    // Part keys stand in for the continuation: its options mirror props that
-    // already invalidate every row through the shared render context.
-    return `${continuation?.parts.map((part) => part.key).join(" ") ?? ""}|${
-      recap ? `${recap.runtimeMs}:${recap.outputTokens ?? ""}` : ""
-    }`;
+    // Part keys stand in for the rest of the continuation: its remaining
+    // options mirror props that already invalidate every row through the
+    // shared render context.
+    const continuationKey = continuation
+      ? `${continuation.parts.map((part) => part.key).join(" ")}${workingUsageKey}`
+      : "";
+    const recapKey = recap ? `${recap.runtimeMs}:${recap.outputTokens ?? ""}` : "";
+    return `${continuationKey}|${recapKey}`;
   };
-  const renderItem = guardChatRenderItems(state, statusOwnershipSignature, (item) => {
+  const renderItem = guardChatRenderItems(state, liveStatusSignature, (item) => {
     if (item.kind === "divider") {
       return renderChatDivider(item, props.onOpenSessionCheckpoints);
     }
