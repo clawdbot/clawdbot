@@ -97,7 +97,10 @@ export async function executeFollowupTurn(params: {
     return level === "on" || level === "full" ? level : "off";
   };
   const shouldEmitToolResult = () =>
-    progressAllowed() && (currentVerboseLevel() === "on" || currentVerboseLevel() === "full");
+    progressAllowed() &&
+    (defaults.opts?.forceToolResultProgress === true ||
+      currentVerboseLevel() === "on" ||
+      currentVerboseLevel() === "full");
   const shouldEmitToolOutput = () => progressAllowed() && currentVerboseLevel() === "full";
   const shouldEmitToolLifecycle = () =>
     progressAllowed() &&

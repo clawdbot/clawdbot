@@ -7,6 +7,7 @@ import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
@@ -48,6 +49,18 @@ export type FollowupRunnerParams = {
   agentCfgContextTokens?: number;
   toolProgressDetail?: "explain" | "raw";
 };
+
+export async function settleQueuedFollowupPresentation(
+  defaults: FollowupRunnerParams,
+): Promise<void> {
+  try {
+    await defaults.opts?.onQueuedFollowupSettled?.();
+  } catch (error) {
+    defaultRuntime.error?.(
+      `followup queue: queued presentation cleanup failed: ${formatErrorMessage(error)}`,
+    );
+  }
+}
 
 type FollowupSessionOwner =
   | {
@@ -296,6 +309,7 @@ export async function admitFollowupTurn(params: {
   }
   const operation = admission.operation;
   operation.retainFailureUntilComplete();
+  let queuedFollowupAdmitted = false;
   try {
     await admitFollowupRunLifecycle(params.queued);
     if (isFollowupRunAborted(params.queued)) {
@@ -304,6 +318,7 @@ export async function admitFollowupTurn(params: {
 
     // Queue drains retain the latest live runner closure per key. Keep local dispatcher
     // callbacks in that closure so retried non-routable items use the newest transport owner.
+    queuedFollowupAdmitted = true;
     await params.defaults.opts?.onQueuedFollowupAdmitted?.();
     if (operation.sessionId !== run.sessionId) {
       run = {
@@ -646,6 +661,9 @@ export async function admitFollowupTurn(params: {
     }
     return { kind: "admitted", turn };
   } catch (error) {
+    if (queuedFollowupAdmitted) {
+      await settleQueuedFollowupPresentation(params.defaults);
+    }
     operation.complete();
     throw error instanceof Error ? error : new Error(formatErrorMessage(error));
   }

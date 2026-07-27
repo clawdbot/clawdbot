@@ -193,6 +193,29 @@ describe("admitFollowupTurn", () => {
     );
   });
 
+  it("settles presentation and releases the reply operation when dispatcher setup fails", async () => {
+    const operation = createOperation();
+    const failure = new Error("dispatcher reset failed");
+    const onQueuedFollowupSettled = vi.fn(async () => {});
+    state.admitReply.mockResolvedValue({ status: "owned", operation });
+
+    await expect(
+      admitFollowupTurn({
+        queued: createRun(),
+        defaults: createDefaults({
+          opts: {
+            onQueuedFollowupAdmitted: vi.fn(async () => {
+              throw failure;
+            }),
+            onQueuedFollowupSettled,
+          },
+        }),
+      }),
+    ).rejects.toBe(failure);
+    expect(onQueuedFollowupSettled).toHaveBeenCalledOnce();
+    expect(operation.complete).toHaveBeenCalledOnce();
+  });
+
   it("prefers the admitted snapshot over unchanged stale in-memory state", async () => {
     const operation = createOperation("admitted-session");
     const queuedEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
@@ -250,26 +273,6 @@ describe("admitFollowupTurn", () => {
       expect(result.turn.queued.run.cliSessionBindingFacts).toBeUndefined();
       expect(result.turn.queued.run.autoFallbackPrimaryProbe).toBeUndefined();
     }
-  });
-
-  it("releases the reply operation when post-admission dispatcher setup fails", async () => {
-    const operation = createOperation();
-    const failure = new Error("dispatcher reset failed");
-    state.admitReply.mockResolvedValue({ status: "owned", operation });
-
-    await expect(
-      admitFollowupTurn({
-        queued: createRun(),
-        defaults: createDefaults({
-          opts: {
-            onQueuedFollowupAdmitted: vi.fn(async () => {
-              throw failure;
-            }),
-          },
-        }),
-      }),
-    ).rejects.toBe(failure);
-    expect(operation.complete).toHaveBeenCalledOnce();
   });
 
   it("does not pass stale enqueue-time state into a rotated session generation", async () => {
