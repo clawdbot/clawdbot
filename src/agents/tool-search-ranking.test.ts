@@ -86,6 +86,12 @@ describe("tokenizeQuery", () => {
     );
   });
 
+  it("keeps capability verbs that name real operations", () => {
+    // "get" looks like filler but names operations ("get_weather"); dropping it
+    // would reduce "get issue" to "issue" and let delete/update entries win.
+    expect(tokenizeQuery("get").map((term) => term.term)).not.toEqual([]);
+  });
+
   it("drops stopwords so they cannot carry a match", () => {
     expect(tokenizeQuery("the and with")).toEqual([]);
   });
@@ -234,6 +240,27 @@ describe("ToolSearchRuntime.search", () => {
   ])("finds $expected for $query ($why)", async ({ query, expected }) => {
     const hits = await runtime().search(query);
     expect(hits.map((hit) => hit.name)).toContain(expected);
+  });
+
+  it("ranks an exact tool name first even when a shorter entry mentions it", async () => {
+    const catalog = [
+      entry({ name: "issue_create", description: "Open a new issue" }),
+      entry({ id: "b", name: "notes", description: "Notes about issue_create and other tools" }),
+    ];
+    const ctx = {
+      catalogRef: { current: { entries: catalog, searchCount: 0, describeCount: 0, callCount: 0 } },
+    };
+    const search = new ToolSearchRuntime(ctx as never, {
+      enabled: true,
+      mode: "directory",
+      codeTimeoutMs: 1000,
+      searchDefaultLimit: 10,
+      maxSearchLimit: 50,
+    });
+
+    // Querying a known name is a request for that tool, not a description of one.
+    const hits = await search.search("issue_create");
+    expect(hits[0]?.name).toBe("issue_create");
   });
 
   it("does not match a term that only appears inside another word", async () => {

@@ -13,6 +13,10 @@ const BM25_B = 0.75;
  * Terms carrying no discriminating signal in a tool catalog. IDF already damps
  * these; dropping them keeps a query like "read a file and post it" from
  * scoring on "a"/"it" when a tool description happens to repeat them.
+ *
+ * Capability verbs stay out of this list even when they look like filler:
+ * "get" names real operations ("get_weather"), and discarding it would reduce
+ * "get issue" to "issue" and let a shorter delete/update entry outrank it.
  */
 const STOPWORDS = new Set([
   "a",
@@ -28,7 +32,6 @@ const STOPWORDS = new Set([
   "do",
   "for",
   "from",
-  "get",
   "had",
   "has",
   "have",

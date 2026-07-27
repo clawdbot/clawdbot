@@ -316,15 +316,22 @@ export class ToolSearchRuntime {
     catalog.searchCount += 1;
     const limit = readToolSearchLimit(options?.limit, this.config);
     const entries = visibleCatalogEntries(catalog, options);
+    // A query that is exactly a tool name or id is a request for that tool, not
+    // a description of one. BM25 alone can rank a shorter entry that merely
+    // mentions the word above it, and the limit then drops the tool asked for.
+    const exact = query.trim().toLowerCase();
     const index = buildLexicalIndex(
       entries.map((entry) => ({
         value: entry,
         terms: tokenizeDocument(toolSearchEntryText(entry)),
       })),
     );
+    const isExact = (entry: ToolSearchCatalogEntry) =>
+      entry.name.toLowerCase() === exact || entry.id.toLowerCase() === exact;
     return scoreLexical(index, tokenizeQuery(query))
       .toSorted(
         (a, b) =>
+          Number(isExact(b.value)) - Number(isExact(a.value)) ||
           Number(b.matchedLiteral) - Number(a.matchedLiteral) ||
           b.score - a.score ||
           a.value.id.localeCompare(b.value.id),
