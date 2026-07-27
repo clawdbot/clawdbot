@@ -11,6 +11,8 @@ import {
 } from "./watch-settle.js";
 
 export abstract class QmdManagerLifecycle extends QmdManagerSync {
+  private closePromise: Promise<void> | null = null;
+
   protected ensureWatcher(): void {
     if (!this.syncSettings?.watch || this.watcher || this.closed) {
       return;
@@ -120,9 +122,24 @@ export abstract class QmdManagerLifecycle extends QmdManagerSync {
   }
 
   async close(): Promise<void> {
-    if (this.closed) {
+    const existingClose = this.closePromise;
+    if (existingClose) {
+      await existingClose;
       return;
     }
+    const closeOperation = this.closeOnce();
+    this.closePromise = closeOperation;
+    try {
+      await closeOperation;
+    } catch (err) {
+      if (this.closePromise === closeOperation) {
+        this.closePromise = null;
+      }
+      throw err;
+    }
+  }
+
+  private async closeOnce(): Promise<void> {
     this.closed = true;
     this.resolveCloseSignal();
     this.closeAbortController.abort(new Error("qmd manager closed"));

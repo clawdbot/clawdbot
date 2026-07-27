@@ -4,6 +4,7 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { publishSqliteSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import { normalizeSqliteNumber } from "./session-accessor.sqlite-normalize.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
@@ -69,7 +70,7 @@ export function ensureTranscriptSessionRoot(
   updatedAt: number,
 ): void {
   const db = getSessionKysely(database.db);
-  executeSqliteQuerySync(
+  const insertedNode = executeSqliteQuerySync(
     database.db,
     db
       .insertInto("session_nodes")
@@ -81,6 +82,9 @@ export function ensureTranscriptSessionRoot(
       })
       .onConflict((conflict) => conflict.column("session_key").doNothing()),
   );
+  if ((insertedNode.numAffectedRows ?? 0n) > 0n) {
+    publishSqliteSessionEntryCacheInvalidation(database);
+  }
   executeSqliteQuerySync(
     database.db,
     db

@@ -3,23 +3,25 @@
 import { describe, expect, it } from "vitest";
 import { preserveOptimisticTailMessages } from "./history-merge.ts";
 
+function createHistoryMessage(
+  role: "assistant" | "user",
+  text: string,
+  metadata?: Record<string, unknown>,
+  timestamp?: number,
+) {
+  return {
+    role,
+    content: [{ type: "text", text }],
+    ...(timestamp === undefined ? {} : { timestamp }),
+    ...(metadata === undefined ? {} : { __openclaw: metadata }),
+  };
+}
+
 describe("preserveOptimisticTailMessages", () => {
   it("keeps optimistic tail messages while history is stale", () => {
-    const persistedUser = {
-      role: "user",
-      content: [{ type: "text", text: "first" }],
-      __openclaw: { seq: 1 },
-    };
-    const optimisticUser = {
-      role: "user",
-      content: [{ type: "text", text: "latest ask" }],
-      timestamp: 10,
-    };
-    const optimisticAssistant = {
-      role: "assistant",
-      content: [{ type: "text", text: "latest answer" }],
-      timestamp: 11,
-    };
+    const persistedUser = createHistoryMessage("user", "first", { seq: 1 });
+    const optimisticUser = createHistoryMessage("user", "latest ask", undefined, 10);
+    const optimisticAssistant = createHistoryMessage("assistant", "latest answer", undefined, 11);
 
     expect(
       preserveOptimisticTailMessages(
@@ -30,22 +32,22 @@ describe("preserveOptimisticTailMessages", () => {
   });
 
   it("keeps a new same-text user turn while history still ends at the earlier turn", () => {
-    const persistedUser = {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-      timestamp: 10,
-      __openclaw: {
+    const persistedUser = createHistoryMessage(
+      "user",
+      "continue",
+      {
         id: "first-user-message",
         idempotencyKey: "first-run:user",
         seq: 1,
       },
-    };
-    const optimisticUser = {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-      timestamp: 20,
-      __openclaw: { idempotencyKey: "second-run:user" },
-    };
+      10,
+    );
+    const optimisticUser = createHistoryMessage(
+      "user",
+      "continue",
+      { idempotencyKey: "second-run:user" },
+      20,
+    );
 
     expect(
       preserveOptimisticTailMessages([persistedUser], [persistedUser, optimisticUser]),
@@ -53,21 +55,11 @@ describe("preserveOptimisticTailMessages", () => {
   });
 
   it("finds an earlier authoritative duplicate before preserving a distinct pending turn", () => {
-    const firstRepeatedUser = {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-      __openclaw: { seq: 1 },
-    };
-    const secondRepeatedUser = {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-      __openclaw: { seq: 2 },
-    };
-    const optimisticUser = {
-      role: "user",
-      content: [{ type: "text", text: "a distinct pending turn" }],
-      __openclaw: { idempotencyKey: "third-run:user" },
-    };
+    const firstRepeatedUser = createHistoryMessage("user", "continue", { seq: 1 });
+    const secondRepeatedUser = createHistoryMessage("user", "continue", { seq: 2 });
+    const optimisticUser = createHistoryMessage("user", "a distinct pending turn", {
+      idempotencyKey: "third-run:user",
+    });
 
     expect(
       preserveOptimisticTailMessages(
@@ -78,21 +70,17 @@ describe("preserveOptimisticTailMessages", () => {
   });
 
   it("does not revive an unmatched pending turn beyond unrelated authoritative history", () => {
-    const sharedUser = {
-      role: "user",
-      content: [{ type: "text", text: "shared earlier turn" }],
-      __openclaw: { id: "shared-user", seq: 1 },
-    };
-    const laterUser = {
-      role: "user",
-      content: [{ type: "text", text: "different authoritative turn" }],
-      __openclaw: { id: "later-user", seq: 2 },
-    };
-    const optimisticUser = {
-      role: "user",
-      content: [{ type: "text", text: "unmatched pending turn" }],
-      __openclaw: { idempotencyKey: "pending-run:user" },
-    };
+    const sharedUser = createHistoryMessage("user", "shared earlier turn", {
+      id: "shared-user",
+      seq: 1,
+    });
+    const laterUser = createHistoryMessage("user", "different authoritative turn", {
+      id: "later-user",
+      seq: 2,
+    });
+    const optimisticUser = createHistoryMessage("user", "unmatched pending turn", {
+      idempotencyKey: "pending-run:user",
+    });
 
     expect(
       preserveOptimisticTailMessages([sharedUser, laterUser], [sharedUser, optimisticUser]),
@@ -100,26 +88,16 @@ describe("preserveOptimisticTailMessages", () => {
   });
 
   it("does not anchor a native transcript to a colliding imported source-local id", () => {
-    const nativeUser = {
-      role: "user",
-      content: [{ type: "text", text: "native transcript" }],
-      __openclaw: { id: "source-local-id" },
-    };
-    const importedUser = {
-      role: "user",
-      content: [{ type: "text", text: "imported transcript" }],
-      __openclaw: {
-        id: "source-local-id",
-        externalId: "source-local-id",
-        importedFrom: "claude-cli",
-        cliSessionId: "imported-session",
-      },
-    };
-    const optimisticUser = {
-      role: "user",
-      content: [{ type: "text", text: "unmatched pending turn" }],
-      __openclaw: { idempotencyKey: "pending-run:user" },
-    };
+    const nativeUser = createHistoryMessage("user", "native transcript", { id: "source-local-id" });
+    const importedUser = createHistoryMessage("user", "imported transcript", {
+      id: "source-local-id",
+      externalId: "source-local-id",
+      importedFrom: "claude-cli",
+      cliSessionId: "imported-session",
+    });
+    const optimisticUser = createHistoryMessage("user", "unmatched pending turn", {
+      idempotencyKey: "pending-run:user",
+    });
 
     expect(
       preserveOptimisticTailMessages([nativeUser, importedUser], [nativeUser, optimisticUser]),
@@ -127,38 +105,24 @@ describe("preserveOptimisticTailMessages", () => {
   });
 
   it("does not invent an imported source identity from an incomplete source tuple", () => {
-    const firstImportedUser = {
-      role: "user",
-      content: [{ type: "text", text: "repeated imported turn" }],
-      __openclaw: {
-        id: "source-local-id",
-        externalId: "source-local-id",
-        importedFrom: "claude-cli",
-      },
-    };
-    const secondImportedUser = {
-      role: "user",
-      content: [{ type: "text", text: "repeated imported turn" }],
-      __openclaw: {
-        id: "source-local-id",
-        externalId: "source-local-id",
-        importedFrom: "claude-cli",
-      },
-    };
-    const previousImportedUser = {
-      role: "user",
-      content: [{ type: "text", text: "repeated imported turn" }],
-      __openclaw: {
-        id: "source-local-id",
-        externalId: "source-local-id",
-        importedFrom: "claude-cli",
-      },
-    };
-    const optimisticUser = {
-      role: "user",
-      content: [{ type: "text", text: "unmatched pending turn" }],
-      __openclaw: { idempotencyKey: "pending-run:user" },
-    };
+    const firstImportedUser = createHistoryMessage("user", "repeated imported turn", {
+      id: "source-local-id",
+      externalId: "source-local-id",
+      importedFrom: "claude-cli",
+    });
+    const secondImportedUser = createHistoryMessage("user", "repeated imported turn", {
+      id: "source-local-id",
+      externalId: "source-local-id",
+      importedFrom: "claude-cli",
+    });
+    const previousImportedUser = createHistoryMessage("user", "repeated imported turn", {
+      id: "source-local-id",
+      externalId: "source-local-id",
+      importedFrom: "claude-cli",
+    });
+    const optimisticUser = createHistoryMessage("user", "unmatched pending turn", {
+      idempotencyKey: "pending-run:user",
+    });
 
     expect(
       preserveOptimisticTailMessages(
@@ -169,21 +133,16 @@ describe("preserveOptimisticTailMessages", () => {
   });
 
   it("does not substitute a different same-sequence projection for a missing canonical id", () => {
-    const unrelatedProjection = {
-      role: "user",
-      content: [{ type: "text", text: "different sequence projection" }],
-      __openclaw: { seq: 7 },
-    };
-    const previousProjection = {
-      role: "user",
-      content: [{ type: "text", text: "original sequence projection" }],
-      __openclaw: { id: "missing-canonical-id", seq: 7 },
-    };
-    const optimisticUser = {
-      role: "user",
-      content: [{ type: "text", text: "unmatched pending turn" }],
-      __openclaw: { idempotencyKey: "pending-run:user" },
-    };
+    const unrelatedProjection = createHistoryMessage("user", "different sequence projection", {
+      seq: 7,
+    });
+    const previousProjection = createHistoryMessage("user", "original sequence projection", {
+      id: "missing-canonical-id",
+      seq: 7,
+    });
+    const optimisticUser = createHistoryMessage("user", "unmatched pending turn", {
+      idempotencyKey: "pending-run:user",
+    });
 
     expect(
       preserveOptimisticTailMessages([unrelatedProjection], [previousProjection, optimisticUser]),
@@ -191,25 +150,15 @@ describe("preserveOptimisticTailMessages", () => {
   });
 
   it("keeps import provenance without an external id out of native identity", () => {
-    const nativeUser = {
-      role: "user",
-      content: [{ type: "text", text: "native transcript" }],
-      __openclaw: { id: "source-local-id" },
-    };
-    const importedUser = {
-      role: "user",
-      content: [{ type: "text", text: "imported transcript" }],
-      __openclaw: {
-        id: "source-local-id",
-        importedFrom: "claude-cli",
-        cliSessionId: "imported-session",
-      },
-    };
-    const optimisticUser = {
-      role: "user",
-      content: [{ type: "text", text: "unmatched pending turn" }],
-      __openclaw: { idempotencyKey: "pending-run:user" },
-    };
+    const nativeUser = createHistoryMessage("user", "native transcript", { id: "source-local-id" });
+    const importedUser = createHistoryMessage("user", "imported transcript", {
+      id: "source-local-id",
+      importedFrom: "claude-cli",
+      cliSessionId: "imported-session",
+    });
+    const optimisticUser = createHistoryMessage("user", "unmatched pending turn", {
+      idempotencyKey: "pending-run:user",
+    });
 
     expect(
       preserveOptimisticTailMessages([nativeUser, importedUser], [nativeUser, optimisticUser]),
@@ -217,21 +166,17 @@ describe("preserveOptimisticTailMessages", () => {
   });
 
   it("does not use display text as authority for an incomplete imported identity", () => {
-    const previousImportedUser = {
-      role: "user",
-      content: [{ type: "text", text: "repeated imported turn" }],
-      __openclaw: { externalId: "first-import", importedFrom: "claude-cli" },
-    };
-    const otherImportedUser = {
-      role: "user",
-      content: [{ type: "text", text: "repeated imported turn" }],
-      __openclaw: { externalId: "different-import", importedFrom: "claude-cli" },
-    };
-    const optimisticUser = {
-      role: "user",
-      content: [{ type: "text", text: "unmatched pending turn" }],
-      __openclaw: { idempotencyKey: "pending-run:user" },
-    };
+    const previousImportedUser = createHistoryMessage("user", "repeated imported turn", {
+      externalId: "first-import",
+      importedFrom: "claude-cli",
+    });
+    const otherImportedUser = createHistoryMessage("user", "repeated imported turn", {
+      externalId: "different-import",
+      importedFrom: "claude-cli",
+    });
+    const optimisticUser = createHistoryMessage("user", "unmatched pending turn", {
+      idempotencyKey: "pending-run:user",
+    });
 
     expect(
       preserveOptimisticTailMessages([otherImportedUser], [previousImportedUser, optimisticUser]),
@@ -239,21 +184,14 @@ describe("preserveOptimisticTailMessages", () => {
   });
 
   it("does not discard a canonical id when a sequence has the same visible text", () => {
-    const unrelatedProjection = {
-      role: "user",
-      content: [{ type: "text", text: "repeated projection" }],
-      __openclaw: { seq: 7 },
-    };
-    const previousProjection = {
-      role: "user",
-      content: [{ type: "text", text: "repeated projection" }],
-      __openclaw: { id: "missing-canonical-id", seq: 7 },
-    };
-    const optimisticUser = {
-      role: "user",
-      content: [{ type: "text", text: "unmatched pending turn" }],
-      __openclaw: { idempotencyKey: "pending-run:user" },
-    };
+    const unrelatedProjection = createHistoryMessage("user", "repeated projection", { seq: 7 });
+    const previousProjection = createHistoryMessage("user", "repeated projection", {
+      id: "missing-canonical-id",
+      seq: 7,
+    });
+    const optimisticUser = createHistoryMessage("user", "unmatched pending turn", {
+      idempotencyKey: "pending-run:user",
+    });
 
     expect(
       preserveOptimisticTailMessages([unrelatedProjection], [previousProjection, optimisticUser]),
@@ -261,20 +199,9 @@ describe("preserveOptimisticTailMessages", () => {
   });
 
   it("does not revive an identity-free tail past a distinct same-text history turn", () => {
-    const firstUser = {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-      __openclaw: { id: "first-user", seq: 1 },
-    };
-    const secondUser = {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-      __openclaw: { id: "second-user", seq: 2 },
-    };
-    const identityFreeTail = {
-      role: "user",
-      content: [{ type: "text", text: "identity-free pending turn" }],
-    };
+    const firstUser = createHistoryMessage("user", "continue", { id: "first-user", seq: 1 });
+    const secondUser = createHistoryMessage("user", "continue", { id: "second-user", seq: 2 });
+    const identityFreeTail = createHistoryMessage("user", "identity-free pending turn");
 
     expect(
       preserveOptimisticTailMessages([firstUser, secondUser], [firstUser, identityFreeTail]),
@@ -282,25 +209,17 @@ describe("preserveOptimisticTailMessages", () => {
   });
 
   it("does not display-match a native legacy row to an imported transcript", () => {
-    const previousNativeUser = {
-      role: "user",
-      content: [{ type: "text", text: "same visible turn" }],
-      __openclaw: { senderId: "native-user" },
-    };
-    const importedUser = {
-      role: "user",
-      content: [{ type: "text", text: "same visible turn" }],
-      __openclaw: {
-        externalId: "external-user",
-        importedFrom: "claude-cli",
-        cliSessionId: "external-session",
-      },
-    };
-    const optimisticUser = {
-      role: "user",
-      content: [{ type: "text", text: "unmatched pending turn" }],
-      __openclaw: { idempotencyKey: "pending-run:user" },
-    };
+    const previousNativeUser = createHistoryMessage("user", "same visible turn", {
+      senderId: "native-user",
+    });
+    const importedUser = createHistoryMessage("user", "same visible turn", {
+      externalId: "external-user",
+      importedFrom: "claude-cli",
+      cliSessionId: "external-session",
+    });
+    const optimisticUser = createHistoryMessage("user", "unmatched pending turn", {
+      idempotencyKey: "pending-run:user",
+    });
 
     expect(
       preserveOptimisticTailMessages([importedUser], [previousNativeUser, optimisticUser]),
@@ -308,21 +227,18 @@ describe("preserveOptimisticTailMessages", () => {
   });
 
   it("does not replay a send that history already persisted before its current anchor", () => {
-    const persistedUser = {
-      role: "user",
-      content: [{ type: "text", text: "already persisted prompt" }],
-      __openclaw: { id: "persisted-user", seq: 1, idempotencyKey: "persisted-run:user" },
-    };
-    const persistedAssistant = {
-      role: "assistant",
-      content: [{ type: "text", text: "already persisted answer" }],
-      __openclaw: { id: "persisted-assistant", seq: 2 },
-    };
-    const staleOptimisticUser = {
-      role: "user",
-      content: [{ type: "text", text: "already persisted prompt" }],
-      __openclaw: { idempotencyKey: "persisted-run:user" },
-    };
+    const persistedUser = createHistoryMessage("user", "already persisted prompt", {
+      id: "persisted-user",
+      seq: 1,
+      idempotencyKey: "persisted-run:user",
+    });
+    const persistedAssistant = createHistoryMessage("assistant", "already persisted answer", {
+      id: "persisted-assistant",
+      seq: 2,
+    });
+    const staleOptimisticUser = createHistoryMessage("user", "already persisted prompt", {
+      idempotencyKey: "persisted-run:user",
+    });
 
     expect(
       preserveOptimisticTailMessages(
@@ -341,11 +257,9 @@ describe("preserveOptimisticTailMessages", () => {
       content: [{ type: "status", value: "different marker" }],
       __openclaw: { id: "later-marker", seq: 2 },
     };
-    const optimisticUser = {
-      role: "user",
-      content: [{ type: "text", text: "unmatched pending turn" }],
-      __openclaw: { idempotencyKey: "pending-run:user" },
-    };
+    const optimisticUser = createHistoryMessage("user", "unmatched pending turn", {
+      idempotencyKey: "pending-run:user",
+    });
 
     expect(
       preserveOptimisticTailMessages([firstMarker, laterMarker], [firstMarker, optimisticUser]),
@@ -353,21 +267,14 @@ describe("preserveOptimisticTailMessages", () => {
   });
 
   it("does not duplicate a repeated turn whose persisted row has no send identity", () => {
-    const firstUser = {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-      __openclaw: { id: "first-user", seq: 1 },
-    };
-    const persistedRepeatedUser = {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-      __openclaw: { id: "persisted-repeated-user", seq: 2 },
-    };
-    const optimisticRepeatedUser = {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-      __openclaw: { idempotencyKey: "repeated-run:user" },
-    };
+    const firstUser = createHistoryMessage("user", "continue", { id: "first-user", seq: 1 });
+    const persistedRepeatedUser = createHistoryMessage("user", "continue", {
+      id: "persisted-repeated-user",
+      seq: 2,
+    });
+    const optimisticRepeatedUser = createHistoryMessage("user", "continue", {
+      idempotencyKey: "repeated-run:user",
+    });
 
     expect(
       preserveOptimisticTailMessages(
@@ -378,25 +285,19 @@ describe("preserveOptimisticTailMessages", () => {
   });
 
   it("does not replay an assistant tail after consuming its already-persisted user", () => {
-    const persistedUser = {
-      role: "user",
-      content: [{ type: "text", text: "already persisted prompt" }],
-      __openclaw: { id: "persisted-user", seq: 1, idempotencyKey: "persisted-run:user" },
-    };
-    const persistedAssistant = {
-      role: "assistant",
-      content: [{ type: "text", text: "already persisted answer" }],
-      __openclaw: { id: "persisted-assistant", seq: 2 },
-    };
-    const staleOptimisticUser = {
-      role: "user",
-      content: [{ type: "text", text: "already persisted prompt" }],
-      __openclaw: { idempotencyKey: "persisted-run:user" },
-    };
-    const staleOptimisticAssistant = {
-      role: "assistant",
-      content: [{ type: "text", text: "stale streamed assistant" }],
-    };
+    const persistedUser = createHistoryMessage("user", "already persisted prompt", {
+      id: "persisted-user",
+      seq: 1,
+      idempotencyKey: "persisted-run:user",
+    });
+    const persistedAssistant = createHistoryMessage("assistant", "already persisted answer", {
+      id: "persisted-assistant",
+      seq: 2,
+    });
+    const staleOptimisticUser = createHistoryMessage("user", "already persisted prompt", {
+      idempotencyKey: "persisted-run:user",
+    });
+    const staleOptimisticAssistant = createHistoryMessage("assistant", "stale streamed assistant");
 
     expect(
       preserveOptimisticTailMessages(
@@ -407,21 +308,19 @@ describe("preserveOptimisticTailMessages", () => {
   });
 
   it("preserves a distinct keyed repeated turn after an anchor with different text", () => {
-    const setupUser = {
-      role: "user",
-      content: [{ type: "text", text: "setup" }],
-      __openclaw: { id: "setup-user", seq: 1, idempotencyKey: "setup-run:user" },
-    };
-    const secondUser = {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-      __openclaw: { id: "second-user", seq: 2, idempotencyKey: "second-run:user" },
-    };
-    const thirdUser = {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-      __openclaw: { idempotencyKey: "third-run:user" },
-    };
+    const setupUser = createHistoryMessage("user", "setup", {
+      id: "setup-user",
+      seq: 1,
+      idempotencyKey: "setup-run:user",
+    });
+    const secondUser = createHistoryMessage("user", "continue", {
+      id: "second-user",
+      seq: 2,
+      idempotencyKey: "second-run:user",
+    });
+    const thirdUser = createHistoryMessage("user", "continue", {
+      idempotencyKey: "third-run:user",
+    });
 
     expect(preserveOptimisticTailMessages([setupUser, secondUser], [setupUser, thirdUser])).toEqual(
       [setupUser, secondUser, thirdUser],
@@ -429,21 +328,17 @@ describe("preserveOptimisticTailMessages", () => {
   });
 
   it("anchors an updated display projection by its authoritative transcript id", () => {
-    const previousUser = {
-      role: "user",
-      content: [{ type: "text", text: "original projection" }],
-      __openclaw: { id: "persisted-user", seq: 3 },
-    };
-    const authoritativeUser = {
-      role: "user",
-      content: [{ type: "text", text: "updated projection" }],
-      __openclaw: { id: "persisted-user", seq: 3 },
-    };
-    const optimisticUser = {
-      role: "user",
-      content: [{ type: "text", text: "still pending" }],
-      __openclaw: { idempotencyKey: "pending-run:user" },
-    };
+    const previousUser = createHistoryMessage("user", "original projection", {
+      id: "persisted-user",
+      seq: 3,
+    });
+    const authoritativeUser = createHistoryMessage("user", "updated projection", {
+      id: "persisted-user",
+      seq: 3,
+    });
+    const optimisticUser = createHistoryMessage("user", "still pending", {
+      idempotencyKey: "pending-run:user",
+    });
 
     expect(
       preserveOptimisticTailMessages([authoritativeUser], [previousUser, optimisticUser]),
@@ -451,25 +346,18 @@ describe("preserveOptimisticTailMessages", () => {
   });
 
   it("distinguishes same-sequence projections by their authoritative transcript ids", () => {
-    const firstProjection = {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-      __openclaw: { id: "first-projection", seq: 7 },
-    };
-    const persistedSecondProjection = {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-      __openclaw: {
-        id: "second-projection",
-        idempotencyKey: "second-run:user",
-        seq: 7,
-      },
-    };
-    const optimisticSecondProjection = {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-      __openclaw: { idempotencyKey: "second-run:user" },
-    };
+    const firstProjection = createHistoryMessage("user", "continue", {
+      id: "first-projection",
+      seq: 7,
+    });
+    const persistedSecondProjection = createHistoryMessage("user", "continue", {
+      id: "second-projection",
+      idempotencyKey: "second-run:user",
+      seq: 7,
+    });
+    const optimisticSecondProjection = createHistoryMessage("user", "continue", {
+      idempotencyKey: "second-run:user",
+    });
 
     expect(
       preserveOptimisticTailMessages(
@@ -480,20 +368,15 @@ describe("preserveOptimisticTailMessages", () => {
   });
 
   it("keeps transcript projections with the same entry identity in their own roles", () => {
-    const persistedUser = {
-      role: "user",
-      content: [{ type: "text", text: "show the source reply" }],
-      __openclaw: { id: "shared-transcript-entry", seq: 7 },
-    };
-    const persistedAssistantMirror = {
-      role: "assistant",
-      content: [{ type: "text", text: "source reply" }],
-      __openclaw: { id: "shared-transcript-entry", seq: 7 },
-    };
-    const optimisticAssistant = {
-      role: "assistant",
-      content: [{ type: "text", text: "source reply" }],
-    };
+    const persistedUser = createHistoryMessage("user", "show the source reply", {
+      id: "shared-transcript-entry",
+      seq: 7,
+    });
+    const persistedAssistantMirror = createHistoryMessage("assistant", "source reply", {
+      id: "shared-transcript-entry",
+      seq: 7,
+    });
+    const optimisticAssistant = createHistoryMessage("assistant", "source reply");
 
     expect(
       preserveOptimisticTailMessages(
@@ -504,30 +387,19 @@ describe("preserveOptimisticTailMessages", () => {
   });
 
   it("scopes imported external identities to their provider and CLI session", () => {
-    const firstImportedUser = {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-      __openclaw: {
-        id: "shared-external-id",
-        externalId: "shared-external-id",
-        importedFrom: "claude-cli",
-        cliSessionId: "first-session",
-      },
-    };
-    const secondImportedUser = {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-      __openclaw: {
-        id: "shared-external-id",
-        externalId: "shared-external-id",
-        importedFrom: "claude-cli",
-        cliSessionId: "second-session",
-      },
-    };
-    const optimisticSecondUser = {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-    };
+    const firstImportedUser = createHistoryMessage("user", "continue", {
+      id: "shared-external-id",
+      externalId: "shared-external-id",
+      importedFrom: "claude-cli",
+      cliSessionId: "first-session",
+    });
+    const secondImportedUser = createHistoryMessage("user", "continue", {
+      id: "shared-external-id",
+      externalId: "shared-external-id",
+      importedFrom: "claude-cli",
+      cliSessionId: "second-session",
+    });
+    const optimisticSecondUser = createHistoryMessage("user", "continue");
 
     expect(
       preserveOptimisticTailMessages(
@@ -544,21 +416,13 @@ describe("preserveOptimisticTailMessages", () => {
       importedFrom: "claude-cli",
       cliSessionId: "cli-session",
     };
-    const previousImportedUser = {
-      role: "user",
-      content: [{ type: "text", text: "original imported text" }],
-      __openclaw: metadata,
-    };
-    const authoritativeImportedUser = {
-      role: "user",
-      content: [{ type: "text", text: "updated imported text" }],
-      __openclaw: { ...metadata },
-    };
-    const optimisticUser = {
-      role: "user",
-      content: [{ type: "text", text: "pending after import" }],
-      __openclaw: { idempotencyKey: "pending-run:user" },
-    };
+    const previousImportedUser = createHistoryMessage("user", "original imported text", metadata);
+    const authoritativeImportedUser = createHistoryMessage("user", "updated imported text", {
+      ...metadata,
+    });
+    const optimisticUser = createHistoryMessage("user", "pending after import", {
+      idempotencyKey: "pending-run:user",
+    });
 
     expect(
       preserveOptimisticTailMessages(
@@ -569,26 +433,12 @@ describe("preserveOptimisticTailMessages", () => {
   });
 
   it("does not guess between repeated history rows without authoritative identity", () => {
-    const firstLegacyUser = {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-      __openclaw: { senderId: "alice" },
-    };
-    const secondLegacyUser = {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-      __openclaw: { senderId: "alice" },
-    };
-    const previousLegacyUser = {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-      __openclaw: { senderId: "alice" },
-    };
-    const optimisticUser = {
-      role: "user",
-      content: [{ type: "text", text: "unproven pending turn" }],
-      __openclaw: { idempotencyKey: "pending-run:user" },
-    };
+    const firstLegacyUser = createHistoryMessage("user", "continue", { senderId: "alice" });
+    const secondLegacyUser = createHistoryMessage("user", "continue", { senderId: "alice" });
+    const previousLegacyUser = createHistoryMessage("user", "continue", { senderId: "alice" });
+    const optimisticUser = createHistoryMessage("user", "unproven pending turn", {
+      idempotencyKey: "pending-run:user",
+    });
 
     expect(
       preserveOptimisticTailMessages(
@@ -599,21 +449,15 @@ describe("preserveOptimisticTailMessages", () => {
   });
 
   it("uses an unambiguous display match when transcript identity is unavailable", () => {
-    const previousLegacyUser = {
-      role: "user",
-      content: [{ type: "text", text: "unique legacy message" }],
-      __openclaw: { senderId: "alice" },
-    };
-    const authoritativeLegacyUser = {
-      role: "user",
-      content: [{ type: "text", text: "unique legacy message" }],
-      __openclaw: { senderId: "alice" },
-    };
-    const optimisticUser = {
-      role: "user",
-      content: [{ type: "text", text: "pending after legacy history" }],
-      __openclaw: { idempotencyKey: "pending-run:user" },
-    };
+    const previousLegacyUser = createHistoryMessage("user", "unique legacy message", {
+      senderId: "alice",
+    });
+    const authoritativeLegacyUser = createHistoryMessage("user", "unique legacy message", {
+      senderId: "alice",
+    });
+    const optimisticUser = createHistoryMessage("user", "pending after legacy history", {
+      idempotencyKey: "pending-run:user",
+    });
 
     expect(
       preserveOptimisticTailMessages(
@@ -624,21 +468,19 @@ describe("preserveOptimisticTailMessages", () => {
   });
 
   it("preserves a repeated optimistic prompt distinguished by its send identity", () => {
-    const firstUser = {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-      __openclaw: { id: "first-user", idempotencyKey: "first-run:user", seq: 1 },
-    };
-    const secondUser = {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-      __openclaw: { id: "second-user", idempotencyKey: "second-run:user", seq: 2 },
-    };
-    const optimisticThirdUser = {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-      __openclaw: { idempotencyKey: "third-run:user" },
-    };
+    const firstUser = createHistoryMessage("user", "continue", {
+      id: "first-user",
+      idempotencyKey: "first-run:user",
+      seq: 1,
+    });
+    const secondUser = createHistoryMessage("user", "continue", {
+      id: "second-user",
+      idempotencyKey: "second-run:user",
+      seq: 2,
+    });
+    const optimisticThirdUser = createHistoryMessage("user", "continue", {
+      idempotencyKey: "third-run:user",
+    });
 
     expect(
       preserveOptimisticTailMessages([firstUser, secondUser], [firstUser, optimisticThirdUser]),
@@ -646,21 +488,17 @@ describe("preserveOptimisticTailMessages", () => {
   });
 
   it("does not revive a pending tail from an unrelated older history snapshot", () => {
-    const olderHistoryUser = {
-      role: "user",
-      content: [{ type: "text", text: "older snapshot" }],
-      __openclaw: { id: "older-user", seq: 1 },
-    };
-    const currentHistoryUser = {
-      role: "user",
-      content: [{ type: "text", text: "current snapshot" }],
-      __openclaw: { id: "current-user", seq: 2 },
-    };
-    const optimisticUser = {
-      role: "user",
-      content: [{ type: "text", text: "pending on the current snapshot" }],
-      __openclaw: { idempotencyKey: "pending-run:user" },
-    };
+    const olderHistoryUser = createHistoryMessage("user", "older snapshot", {
+      id: "older-user",
+      seq: 1,
+    });
+    const currentHistoryUser = createHistoryMessage("user", "current snapshot", {
+      id: "current-user",
+      seq: 2,
+    });
+    const optimisticUser = createHistoryMessage("user", "pending on the current snapshot", {
+      idempotencyKey: "pending-run:user",
+    });
 
     expect(
       preserveOptimisticTailMessages([olderHistoryUser], [currentHistoryUser, optimisticUser]),
@@ -668,15 +506,11 @@ describe("preserveOptimisticTailMessages", () => {
   });
 
   it("never preserves a hidden optimistic tail", () => {
-    const persistedUser = {
-      role: "user",
-      content: [{ type: "text", text: "visible prompt" }],
-      __openclaw: { id: "visible-user", seq: 1 },
-    };
-    const hiddenAssistant = {
-      role: "assistant",
-      content: [{ type: "text", text: "NO_REPLY" }],
-    };
+    const persistedUser = createHistoryMessage("user", "visible prompt", {
+      id: "visible-user",
+      seq: 1,
+    });
+    const hiddenAssistant = createHistoryMessage("assistant", "NO_REPLY");
 
     expect(
       preserveOptimisticTailMessages(
@@ -688,26 +522,21 @@ describe("preserveOptimisticTailMessages", () => {
   });
 
   it("keeps a repeated user turn after the previous persisted assistant reply", () => {
-    const persistedUser = {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-      __openclaw: {
-        id: "first-user-message",
-        idempotencyKey: "first-run:user",
-        seq: 1,
-      },
-    };
-    const persistedAssistant = {
-      role: "assistant",
-      content: [{ type: "text", text: "first answer" }],
-      __openclaw: { id: "first-assistant-message", seq: 2 },
-    };
-    const optimisticUser = {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-      timestamp: 20,
-      __openclaw: { idempotencyKey: "second-run:user" },
-    };
+    const persistedUser = createHistoryMessage("user", "continue", {
+      id: "first-user-message",
+      idempotencyKey: "first-run:user",
+      seq: 1,
+    });
+    const persistedAssistant = createHistoryMessage("assistant", "first answer", {
+      id: "first-assistant-message",
+      seq: 2,
+    });
+    const optimisticUser = createHistoryMessage(
+      "user",
+      "continue",
+      { idempotencyKey: "second-run:user" },
+      20,
+    );
 
     expect(
       preserveOptimisticTailMessages(
@@ -718,31 +547,27 @@ describe("preserveOptimisticTailMessages", () => {
   });
 
   it("does not duplicate a repeated user turn after its own history entry arrives", () => {
-    const persistedFirstUser = {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-      __openclaw: {
-        id: "first-user-message",
-        idempotencyKey: "first-run:user",
-        seq: 1,
-      },
-    };
-    const optimisticSecondUser = {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-      timestamp: 20,
-      __openclaw: { idempotencyKey: "second-run:user" },
-    };
-    const persistedSecondUser = {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-      timestamp: 20,
-      __openclaw: {
+    const persistedFirstUser = createHistoryMessage("user", "continue", {
+      id: "first-user-message",
+      idempotencyKey: "first-run:user",
+      seq: 1,
+    });
+    const optimisticSecondUser = createHistoryMessage(
+      "user",
+      "continue",
+      { idempotencyKey: "second-run:user" },
+      20,
+    );
+    const persistedSecondUser = createHistoryMessage(
+      "user",
+      "continue",
+      {
         id: "second-user-message",
         idempotencyKey: "second-run:user",
         seq: 2,
       },
-    };
+      20,
+    );
 
     expect(
       preserveOptimisticTailMessages(
@@ -753,21 +578,16 @@ describe("preserveOptimisticTailMessages", () => {
   });
 
   it("drops streamed assistant tail when final history has caught up past the shared user", () => {
-    const persistedUser = {
-      role: "user",
-      content: [{ type: "text", text: "latest ask" }],
-      __openclaw: { seq: 1 },
-    };
-    const streamedAssistant = {
-      role: "assistant",
-      content: [{ type: "text", text: "partial streamed answer" }],
-      timestamp: 10,
-    };
-    const historyAssistant = {
-      role: "assistant",
-      content: [{ type: "text", text: "complete persisted answer" }],
-      __openclaw: { seq: 2 },
-    };
+    const persistedUser = createHistoryMessage("user", "latest ask", { seq: 1 });
+    const streamedAssistant = createHistoryMessage(
+      "assistant",
+      "partial streamed answer",
+      undefined,
+      10,
+    );
+    const historyAssistant = createHistoryMessage("assistant", "complete persisted answer", {
+      seq: 2,
+    });
 
     expect(
       preserveOptimisticTailMessages(
@@ -778,17 +598,13 @@ describe("preserveOptimisticTailMessages", () => {
   });
 
   it("keeps an idempotency-marked queued turn while history is stale", () => {
-    const persistedUser = {
-      role: "user",
-      content: [{ type: "text", text: "first" }],
-      __openclaw: { seq: 1 },
-    };
-    const materializedQueuedUser = {
-      role: "user",
-      content: [{ type: "text", text: "steered follow-up" }],
-      timestamp: 10,
-      __openclaw: { idempotencyKey: "steer-run:user" },
-    };
+    const persistedUser = createHistoryMessage("user", "first", { seq: 1 });
+    const materializedQueuedUser = createHistoryMessage(
+      "user",
+      "steered follow-up",
+      { idempotencyKey: "steer-run:user" },
+      10,
+    );
 
     expect(
       preserveOptimisticTailMessages([persistedUser], [persistedUser, materializedQueuedUser]),

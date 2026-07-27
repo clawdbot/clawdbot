@@ -23,7 +23,12 @@ afterEach(() => {
   }
 });
 
-function fixtureProvider(prefix: string, count: number) {
+function fixtureProvider(
+  prefix: string,
+  count: number,
+): {
+  models: Array<{ id: string; cost?: { input: number; output: number } }>;
+} {
   return { models: Array.from({ length: count }, (_, index) => ({ id: `${prefix}-${index}` })) };
 }
 
@@ -56,6 +61,7 @@ describe("publish model catalog", () => {
       providers: 2,
       models: 200,
       costModels: 0,
+      pricingEntries: 0,
     });
     expect(MODEL_CATALOG_MIN_MODELS).toBe(200);
   });
@@ -123,11 +129,12 @@ describe("publish model catalog", () => {
     expect(fs.existsSync(out)).toBe(false);
   });
 
-  it("enriches only existing models with OpenRouter flat and LiteLLM tier pricing", async () => {
+  it("enriches catalog models and emits unmatched hosted pricing keys", async () => {
     const anthropic = fixtureProvider("claude", 100);
     anthropic.models[0] = { id: "claude-3-5-sonnet" };
     const openai = fixtureProvider("gpt", 100);
     openai.models[0] = { id: "gpt-special" };
+    openai.models[1] = { id: "zero-upstream", cost: { input: 5, output: 6 } };
     const manifests = [
       {
         pluginId: "anthropic",
@@ -143,6 +150,31 @@ describe("publish model catalog", () => {
         pluginId: "openai",
         manifestPath: "openai.json",
         manifest: { modelCatalog: { providers: { openai } } },
+      },
+      {
+        pluginId: "openrouter",
+        manifestPath: "openrouter.json",
+        manifest: {
+          modelPricing: {
+            providers: {
+              openrouter: {
+                openRouter: { passthroughProviderModel: true },
+                liteLLM: false,
+              },
+            },
+          },
+        },
+      },
+      {
+        pluginId: "mapped",
+        manifestPath: "mapped.json",
+        manifest: {
+          modelPricing: {
+            providers: {
+              mapped: { openRouter: { provider: "approved-source" }, liteLLM: false },
+            },
+          },
+        },
       },
     ];
     const bundle = await assembleModelCatalogBundle({
@@ -165,6 +197,8 @@ describe("publish model catalog", () => {
             },
             { id: "openai/gpt-2", pricing: { prompt: "-1", completion: "0.000004" } },
             { id: "unknown/new-model", pricing: { prompt: "1", completion: "1" } },
+            { id: "custom/secondary-wins", pricing: { prompt: "0", completion: "0" } },
+            { id: "mapped/wrong-source", pricing: { prompt: "0.000013", completion: "0.000014" } },
           ],
         });
       }
@@ -184,18 +218,63 @@ describe("publish model catalog", () => {
           output_cost_per_token: 0.000004,
         },
         "unknown/new-model": { input_cost_per_token: 1, output_cost_per_token: 1 },
+        "external-model": {
+          litellm_provider: "custom",
+          input_cost_per_token: 0.000007,
+          output_cost_per_token: 0.000008,
+        },
+        "forbidden-model": {
+          litellm_provider: "openrouter",
+          input_cost_per_token: 0.000009,
+          output_cost_per_token: 0.00001,
+        },
+        "secondary-wins": {
+          litellm_provider: "custom",
+          input_cost_per_token: 0.000011,
+          output_cost_per_token: 0.000012,
+        },
+        "zero-upstream": {
+          litellm_provider: "openai",
+          input_cost_per_token: 0,
+          output_cost_per_token: 0,
+        },
       });
     };
 
-    await expect(enrichModelCatalogPricing({ bundle, manifests, fetchImpl })).resolves.toBe(2);
+    await expect(enrichModelCatalogPricing({ bundle, manifests, fetchImpl })).resolves.toEqual({
+      modelsEnriched: 2,
+      pricingEntries: 11,
+    });
     expect(bundle.providers.anthropic?.models[0]?.cost).toMatchObject({ input: 1, output: 2 });
     expect(bundle.providers.openai?.models[0]?.cost).toMatchObject({
       input: 3,
       output: 4,
       tieredPricing: [{ input: 5, output: 6, range: [1000] }],
     });
+    expect(bundle.providers.openai?.models[1]?.cost).toEqual({ input: 5, output: 6 });
     expect(bundle.providers.openai?.models[2]?.cost).toBeUndefined();
-    expect(summarizeModelCatalogBundle(bundle)).toMatchObject({ models: 200, costModels: 2 });
+    expect(bundle.pricing).toEqual({
+      "anthropic/claude-3.5-sonnet": { input: 1, output: 2 },
+      "custom/external-model": { input: 7, output: 8 },
+      "custom/secondary-wins": { input: 11, output: 12 },
+      "external-model": { input: 7, output: 8 },
+      "forbidden-model": { input: 9, output: 10 },
+      "openrouter/anthropic/claude-3.5-sonnet": { input: 1, output: 2 },
+      "openrouter/mapped/wrong-source": { input: 13, output: 14 },
+      "openrouter/openai/gpt-special": { input: 3, output: 4 },
+      "openrouter/unknown/new-model": { input: 1_000_000, output: 1_000_000 },
+      "secondary-wins": { input: 11, output: 12 },
+      "unknown/new-model": { input: 1_000_000, output: 1_000_000 },
+    });
+    expect(bundle.pricing).not.toHaveProperty("openrouter/forbidden-model");
+    expect(bundle.pricing).not.toHaveProperty("mapped/wrong-source");
+    expect(bundle.pricing).not.toHaveProperty("gpt-special");
+    expect(bundle.pricing).not.toHaveProperty("openai/gpt-special");
+    expect(summarizeModelCatalogBundle(bundle)).toMatchObject({
+      models: 200,
+      costModels: 3,
+      pricingEntries: 11,
+    });
     expect(Object.hasOwn(bundle.providers, "unknown")).toBe(false);
   });
 
@@ -236,7 +315,7 @@ describe("publish model catalog", () => {
             return new Response("not-json", { status: 200 });
           },
         }),
-      ).resolves.toBe(0);
+      ).resolves.toEqual({ modelsEnriched: 0, pricingEntries: 0 });
     } finally {
       stderr.mockRestore();
     }
@@ -255,10 +334,12 @@ describe("publish model catalog", () => {
     const left = {
       ...base,
       providers: { zeta: { models: [{ id: "b" }, { id: "a" }] }, alpha: { models: [{ id: "c" }] } },
+      pricing: { "z/model": { input: 2, output: 3 }, "a/model": { input: 1, output: 2 } },
     };
     const right = {
       ...base,
       providers: { alpha: { models: [{ id: "c" }] }, zeta: { models: [{ id: "a" }, { id: "b" }] } },
+      pricing: { "a/model": { output: 2, input: 1 }, "z/model": { output: 3, input: 2 } },
     };
     expect(serializeModelCatalogBundle(left)).toBe(serializeModelCatalogBundle(right));
   });

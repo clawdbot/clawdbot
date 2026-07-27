@@ -1,6 +1,5 @@
 import {
   activeChatRunStartupStatus,
-  areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
   cancelQuestionPrompt,
   chatPullRequestId,
@@ -29,6 +28,7 @@ import {
   renderChat,
   renderChatControls,
   resolveActiveRunOutputTokens,
+  resolveChatProjectionRunId,
   resolveAssistantAttachmentAuthToken,
   resolveChatAgentId,
   resolveChatAvatarUrl,
@@ -38,6 +38,7 @@ import {
   resolveChatPaneObserverRunId,
   revealSessionWorkspaceFile,
   scopedAgentParamsForSession,
+  selectedChatSessionRow,
   submitQuestionPrompt,
   switchChatFastMode,
   switchChatModel,
@@ -77,12 +78,13 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
     if (!state) {
       return html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
     }
-    const selectedSession = state.sessionsResult?.sessions.find((row) =>
-      areUiSessionKeysEquivalent(row.key, state.sessionKey),
-    );
+    const selectedSession = selectedChatSessionRow(state);
     const projectedObserverDigest: SessionObserverDigest | null = selectedSession?.observerDigest
       ? {
           sessionKey: selectedSession.key,
+          ...(selectedSession.observerDigest.agentId
+            ? { agentId: selectedSession.observerDigest.agentId }
+            : {}),
           runId: selectedSession.observerDigest.runId,
           revision: selectedSession.observerDigest.revision,
           updatedAt: selectedSession.observerDigest.updatedAt,
@@ -230,6 +232,13 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       usageByRun: state.chatRunUsageById,
     });
     const loadSidebarFullMessage = createSidebarFullMessageLoader(state, Boolean(catalogKey));
+    const projectionRunId = resolveChatProjectionRunId({
+      localRunId: state.chatRunId,
+      activeRunIds: selectedSession?.activeRunIds,
+      queue: state.chatQueue,
+    });
+    const attachmentReads = this.chatState.attachmentReads;
+    const attachmentReadSignal = attachmentReads.readSignal;
     const props: ChatProps = {
       transcript: this.transcript,
       paneId: this.paneId,
@@ -296,6 +305,7 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       streamSegments: catalogKey ? [] : state.chatStreamSegments,
       stream: catalogKey ? null : state.chatStream,
       streamStartedAt: catalogKey ? null : state.chatStreamStartedAt,
+      runId: catalogKey ? null : projectionRunId,
       runOutputTokens: catalogKey ? null : runOutputTokens,
       assistantAvatarUrl: resolveChatAvatarUrl(state),
       sendShortcut: state.settings.chatSendShortcut,
@@ -462,6 +472,10 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       onScrollToBottom: state.scrollToBottom,
       attachments: state.chatAttachments,
       getAttachments: () => state.chatAttachments,
+      pendingAttachmentReads: attachmentReads.pendingReads,
+      getPendingAttachmentReads: () => attachmentReads.pendingReads,
+      readSignal: attachmentReadSignal,
+      onPendingReadsChange: (delta) => attachmentReads.updatePending(attachmentReadSignal, delta),
       onAttachmentsChange: (next) => {
         state.chatAttachments = next;
         state.requestUpdate?.();
@@ -557,7 +571,7 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
             observer: {
               activeRunId: observerRunId,
               digests: this.observerDigestHistory.get(
-                this.resolveBoardSessionKey(board.snapshot.sessionKey),
+                this.resolveObserverDigestHistoryKey(board.snapshot.sessionKey),
               ),
               lastReadAt: selectedSession?.lastReadAt,
             },

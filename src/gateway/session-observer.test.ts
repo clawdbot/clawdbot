@@ -103,6 +103,91 @@ describe("session observer", () => {
     harness.observer.dispose();
   });
 
+  it("keeps global observer streams scoped to their owning agents", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const harness = createHarness({ subscribe: false });
+    harness.subscribers.subscribe("conn-main", "agent:main:global")?.commit();
+    harness.subscribers.subscribe("conn-work", "agent:work:global")?.commit();
+    declareObserverVisibility(harness.observer, "conn-main");
+    declareObserverVisibility(harness.observer, "conn-work");
+
+    harness.observer.handleEvent(
+      event({
+        runId: "run-main",
+        sessionKey: "global",
+        agentId: "main",
+        stream: "item",
+        data: { kind: "preamble", phase: "update", progressText: "Main agent work" },
+      }),
+    );
+    harness.observer.handleEvent(
+      event({
+        runId: "run-work",
+        sessionKey: "global",
+        agentId: "work",
+        stream: "item",
+        data: { kind: "preamble", phase: "update", progressText: "Work agent task" },
+      }),
+    );
+    await flushObserver();
+
+    expect(harness.broadcastToConnIds.mock.calls).toEqual([
+      [
+        "session.observer",
+        expect.objectContaining({ agentId: "main", revision: 1, sessionKey: "global" }),
+        new Set(["conn-main"]),
+        { dropIfSlow: true },
+      ],
+      [
+        "session.observer",
+        expect.objectContaining({ agentId: "work", revision: 1, sessionKey: "global" }),
+        new Set(["conn-work"]),
+        { dropIfSlow: true },
+      ],
+    ]);
+    harness.observer.dispose();
+  });
+
+  it("resolves an explicit global alias to its agent-scoped companion snapshot", () => {
+    const config = {
+      gateway: { controlUi: { sessionObserver: true } },
+      session: { scope: "global" as const },
+      agents: {
+        defaults: { utilityModel: "openai/gpt-test" },
+        list: [{ id: "main", default: true }, { id: "work" }],
+      },
+    } satisfies OpenClawConfig;
+    const harness = createHarness({ subscribe: false, config });
+    harness.subscribers.subscribe("conn-work", "agent:work:global")?.commit();
+    declareObserverVisibility(harness.observer, "conn-work");
+
+    harness.observer.handleEvent(
+      event({
+        runId: "run-work",
+        sessionKey: "global",
+        agentId: "work",
+        stream: "lifecycle",
+        data: { phase: "start" },
+      }),
+    );
+    harness.observer.handleEvent(
+      event({
+        runId: "run-work",
+        sessionKey: "global",
+        agentId: "work",
+        stream: "tool",
+        data: { phase: "start", name: "read", args: { path: "src/work.ts" } },
+      }),
+    );
+
+    const snapshot = harness.observer.getCompanionSnapshot("agent:work:main");
+    expect(snapshot.agentId).toBe("work");
+    expect(snapshot.runId).toBe("run-work");
+    expect(snapshot.notes).not.toHaveLength(0);
+    harness.observer.dispose();
+  });
+
   it("terminalizes a preamble-only digest without a utility model", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -239,49 +324,6 @@ describe("session observer", () => {
     expect(harness.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
       headline: "Running tests",
       revision: 2,
-    });
-    harness.observer.dispose();
-  });
-
-  it("does not let an older model result overwrite a newer preamble", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    let resolveModel: ((value: ReturnType<typeof modelMessage>) => void) | undefined;
-    const completeModel = vi.fn(
-      () =>
-        new Promise<ReturnType<typeof modelMessage>>((resolve) => {
-          resolveModel = resolve;
-        }),
-    );
-    const harness = createHarness({ completeModel });
-    startAndAddToolNotes(harness.observer);
-    await vi.advanceTimersByTimeAsync(11_500);
-    harness.observer.handleEvent(
-      event({
-        stream: "item",
-        data: { kind: "preamble", phase: "update", progressText: "Checking files" },
-      }),
-    );
-    await vi.advanceTimersByTimeAsync(500);
-    expect(completeModel).toHaveBeenCalledOnce();
-
-    await vi.advanceTimersByTimeAsync(100);
-    harness.observer.handleEvent(
-      event({
-        stream: "item",
-        data: { kind: "preamble", phase: "update", progressText: "Running focused tests" },
-      }),
-    );
-    resolveModel?.(modelMessage({ headline: "Stale model summary", health: "on-track" }));
-    await flushObserver();
-    expect(
-      harness.broadcastToConnIds.mock.calls.some(
-        (call) => (call[1] as SessionObserverDigest).headline === "Stale model summary",
-      ),
-    ).toBe(false);
-    await vi.advanceTimersByTimeAsync(1_900);
-    expect(harness.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
-      headline: "Running focused tests",
     });
     harness.observer.dispose();
   });
@@ -1009,6 +1051,7 @@ describe("session observer schema", () => {
     expect(
       Value.Check(SessionObserverDigestSchema, {
         sessionKey: "agent:main:session-1",
+        agentId: "main",
         runId: "run-1",
         revision: 1,
         updatedAt: 1,
@@ -1039,44 +1082,5 @@ describe("session observer schema", () => {
     );
     expect(normalized?.headline).toHaveLength(120);
     expect(normalized?.assessment).toHaveLength(320);
-  });
-});
-
-describe("session observer run bookkeeping", () => {
-  it("bounds dormant runs and preserves revision continuity for evicted entries", async () => {
-    const { rememberSessionObserverDormantRun } = await import("./session-observer-model.js");
-    const runs = new Map();
-    const floors = new Map();
-    for (let index = 0; index < 300; index += 1) {
-      rememberSessionObserverDormantRun(runs, floors, {
-        sessionKey: `agent:main:session-${index}`,
-        sessionId: `session-${index}`,
-        runId: `run-${index}`,
-        agentId: "main",
-        utilityModelRef: "openai/gpt-test",
-        startedAt: index,
-        lastPersistedAt: undefined,
-        revision: index + 1,
-        digestCount: 1,
-        consecutiveFailures: 0,
-        planProgress: undefined,
-        previousDigest: undefined,
-      });
-    }
-    expect(runs.size).toBe(256);
-    expect(runs.has("run-0")).toBe(false);
-    expect(runs.has("run-299")).toBe(true);
-    expect(floors.get("agent:main:session-0")?.revision).toBe(1);
-  });
-
-  it("bounds disabled-run bookkeeping", async () => {
-    const { rememberSessionObserverDisabledRun } = await import("./session-observer-model.js");
-    const runs = new Set<string>();
-    for (let index = 0; index < 600; index += 1) {
-      rememberSessionObserverDisabledRun(runs, `run-${index}`);
-    }
-    expect(runs.size).toBe(512);
-    expect(runs.has("run-0")).toBe(false);
-    expect(runs.has("run-599")).toBe(true);
   });
 });

@@ -21,13 +21,10 @@ import type { MattermostMonitorContext } from "./monitor-types.js";
 import {
   createMattermostReplyDeliveryBarrier,
   deliverMattermostReplyPayload,
+  toMattermostChannelDeliveryResult,
 } from "./reply-delivery.js";
 import type { ChatType, ReplyPayload } from "./runtime-api.js";
-import {
-  buildModelsProviderData,
-  createChannelMessageReplyPipeline,
-  logTypingFailure,
-} from "./runtime-api.js";
+import { buildModelsProviderData, logTypingFailure } from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
 
 type RunModelPickerCommandParams = {
@@ -120,12 +117,53 @@ export function createMattermostModelPickerInteractionHandler(
       account.accountId,
       { fallbackLimit: account.textChunkLimit ?? 4000 },
     );
-    const { onModelSelected, typingCallbacks, ...replyPipeline } =
-      createChannelMessageReplyPipeline({
-        cfg,
+    const deliveryBarrier = createMattermostReplyDeliveryBarrier({
+      isDirect: params.kind === "direct",
+      dmRetryOptions: account.config.dmChannelRetry,
+    });
+    await core.channel.inbound.dispatch({
+      cfg,
+      channel: "mattermost",
+      accountId: account.accountId,
+      route: {
         agentId: params.route.agentId,
-        channel: "mattermost",
-        accountId: account.accountId,
+        dmScope: params.route.dmScope,
+        sessionKey: params.sessionKey,
+      },
+      ctxPayload,
+      delivery: {
+        // Picker-triggered confirmations should stay immediate.
+        deliver: async (payload: ReplyPayload) => {
+          const trimmedPayload = {
+            ...payload,
+            text: core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode).trim(),
+          };
+          return toMattermostChannelDeliveryResult(
+            await deliverMattermostReplyPayload({
+              core,
+              cfg,
+              payload: trimmedPayload,
+              to,
+              accountId: account.accountId,
+              agentId: params.route.agentId,
+              replyToId: resolveMattermostReplyRootId({
+                kind: params.kind,
+                threadRootId: params.effectiveReplyToId,
+                replyToId: trimmedPayload.replyToId,
+              }),
+              textLimit,
+              // The picker path already converts and trims text before delivery.
+              tableMode: "off",
+              sendMessage: sendMessageMattermost,
+              onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
+            }),
+          );
+        },
+        onError: (err, info) => {
+          runtime.error?.(`mattermost model picker ${info.kind} reply failed: ${String(err)}`);
+        },
+      },
+      replyPipeline: {
         typing: {
           start: () => sendTypingIndicator(params.channelId, params.effectiveReplyToId),
           onStartError: (err) => {
@@ -137,52 +175,14 @@ export function createMattermostModelPickerInteractionHandler(
             });
           },
         },
-      });
-    const deliveryBarrier = createMattermostReplyDeliveryBarrier({
-      isDirect: params.kind === "direct",
-      dmRetryOptions: account.config.dmChannelRetry,
-    });
-    await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-      ctx: ctxPayload,
-      cfg,
+      },
       dispatcherOptions: {
-        ...replyPipeline,
         resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
         onDeliverySettled: deliveryBarrier.markDeliverySettled,
-        // Picker-triggered confirmations should stay immediate.
-        deliver: async (payload: ReplyPayload) => {
-          const trimmedPayload = {
-            ...payload,
-            text: core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode).trim(),
-          };
-          await deliverMattermostReplyPayload({
-            core,
-            cfg,
-            payload: trimmedPayload,
-            to,
-            accountId: account.accountId,
-            agentId: params.route.agentId,
-            replyToId: resolveMattermostReplyRootId({
-              kind: params.kind,
-              threadRootId: params.effectiveReplyToId,
-              replyToId: trimmedPayload.replyToId,
-            }),
-            textLimit,
-            // The picker path already converts and trims text before delivery.
-            tableMode: "off",
-            sendMessage: sendMessageMattermost,
-            onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
-          });
-        },
-        onError: (err, info) => {
-          runtime.error?.(`mattermost model picker ${info.kind} reply failed: ${String(err)}`);
-        },
-        typingCallbacks,
       },
       replyOptions: {
         disableBlockStreaming:
           typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
-        onModelSelected,
       },
     });
   };

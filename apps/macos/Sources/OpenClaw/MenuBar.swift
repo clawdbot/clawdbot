@@ -121,6 +121,7 @@ struct OpenClawApp: App {
                 }
                 .keyboardShortcut(",", modifiers: .command)
             }
+            DashboardGatewayCommands(dashboardManager: DashboardManager.shared)
             SidebarCommands()
             CommandMenu("Navigate") {
                 Button("Back") {

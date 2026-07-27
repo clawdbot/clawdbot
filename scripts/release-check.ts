@@ -84,7 +84,6 @@ const rootPackageExcludedExtensionPrefixes = [...rootPackageExcludedExtensionDir
   (extensionId) => `dist/extensions/${extensionId}/`,
 );
 const requiredPathGroups = [
-  "npm-shrinkwrap.json",
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   ["dist/index.js", "dist/index.mjs"],
   ["dist/entry.js", "dist/entry.mjs"],

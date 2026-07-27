@@ -1609,7 +1609,7 @@ describe("memory-core dreaming phases", () => {
           role: "user",
           timestamp: "2026-04-16T18:01:00.000Z",
           content:
-            "System (untrusted): [2026-04-16 11:01:00 PDT] Exec completed (quiet-fo, code 0) :: Converted: 1",
+            "System: [2026-04-16 11:01:00 PDT] Exec completed (quiet-fo, code 0) :: Converted: 1",
         },
         {
           role: "assistant",
@@ -1677,7 +1677,7 @@ describe("memory-core dreaming phases", () => {
     );
     expect(corpus).toContain("User: What changed in the sync?");
     expect(corpus).toContain("Assistant: One new session was converted.");
-    expect(corpus).not.toContain("System (untrusted):");
+    expect(corpus).not.toContain("System: [2026-04-16 11:01:00 PDT]");
     expect(corpus).toContain("Assistant: Handled internally.");
   });
 

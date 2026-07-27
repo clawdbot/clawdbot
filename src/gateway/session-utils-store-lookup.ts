@@ -13,6 +13,7 @@ import {
   listSessionEntries as listAccessorSessionEntries,
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
 } from "../config/sessions/session-accessor.js";
+import type { SessionEntryListScope } from "../config/sessions/session-accessor.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   DEFAULT_AGENT_ID,
@@ -112,11 +113,15 @@ function loadGatewaySessionLookupStore(
   storePath: string,
   clone: boolean | undefined,
   agentId?: string,
-  options: { readOnly?: boolean; cache?: GatewaySessionStoreCache } = {},
+  options: {
+    readOnly?: boolean;
+    cache?: GatewaySessionStoreCache;
+    projection?: SessionEntryListScope["projection"];
+  } = {},
 ): Record<string, SessionEntry> {
   const cache = options.cache;
   const cacheKey = cache
-    ? `${storePath}\u0000${agentId ?? ""}\u0000${clone === false ? "0" : "1"}\u0000${options.readOnly ? "1" : "0"}`
+    ? `${storePath}\u0000${agentId ?? ""}\u0000${clone === false ? "0" : "1"}\u0000${options.readOnly ? "1" : "0"}\u0000${options.projection ?? "full"}`
     : "";
   if (cache) {
     const cached = cache.get(cacheKey);
@@ -133,7 +138,7 @@ function loadGatewaySessionLookupStoreUncached(
   storePath: string,
   clone: boolean | undefined,
   agentId?: string,
-  options: { readOnly?: boolean } = {},
+  options: { readOnly?: boolean; projection?: SessionEntryListScope["projection"] } = {},
 ): Record<string, SessionEntry> {
   try {
     const listEntries = options.readOnly
@@ -143,6 +148,7 @@ function loadGatewaySessionLookupStoreUncached(
       listEntries({
         ...(agentId ? { agentId } : {}),
         ...(clone === false ? { clone: false } : {}),
+        ...(options.projection ? { projection: options.projection } : {}),
         storePath,
       }).map(({ sessionKey, entry }) => [sessionKey, entry]),
     );
@@ -158,6 +164,7 @@ function resolveGatewaySessionStoreLookup(params: {
   agentId: string;
   clone?: boolean;
   initialStore?: Record<string, SessionEntry>;
+  projection?: SessionEntryListScope["projection"];
   readOnly?: boolean;
   storeCache?: GatewaySessionStoreCache;
 }): {
@@ -183,6 +190,7 @@ function resolveGatewaySessionStoreLookup(params: {
   const loadStore = (target: SessionStoreTarget) =>
     loadGatewaySessionLookupStore(target.storePath, params.clone, target.agentId, {
       readOnly: params.readOnly || !configured,
+      ...(params.projection ? { projection: params.projection } : {}),
       ...(params.storeCache ? { cache: params.storeCache } : {}),
     });
   const firstCandidate = candidates[0] ?? fallback;
@@ -230,6 +238,7 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
   cfg: OpenClawConfig;
   key: string;
   clone?: boolean;
+  projection?: SessionEntryListScope["projection"];
   readOnly?: boolean;
   storeCache?: GatewaySessionStoreCache;
 }): GatewaySessionStoreTargetWithStore | null {
@@ -268,6 +277,7 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
     }
     const store = loadGatewaySessionLookupStore(target.storePath, params.clone, target.agentId, {
       readOnly: true,
+      ...(params.projection ? { projection: params.projection } : {}),
       ...(params.storeCache ? { cache: params.storeCache } : {}),
     });
     const match = findFreshestStoreMatch(store, ...lookupSeeds);
@@ -304,6 +314,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
   key: string;
   agentId?: string;
   clone?: boolean;
+  projection?: SessionEntryListScope["projection"];
   readOnly?: boolean;
   store?: Record<string, SessionEntry>;
   storeCache?: GatewaySessionStoreCache;
@@ -314,6 +325,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
     key,
     clone: params.clone,
     readOnly: params.readOnly,
+    ...(params.projection ? { projection: params.projection } : {}),
     ...(params.storeCache ? { storeCache: params.storeCache } : {}),
   });
   if (explicitDeletedMainTarget) {
@@ -337,6 +349,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
     // owners may materialize the process-lifetime incognito database.
     const store = loadGatewaySessionLookupStore(storePath, params.clone, agentId, {
       readOnly: true,
+      ...(params.projection ? { projection: params.projection } : {}),
       ...(params.storeCache ? { cache: params.storeCache } : {}),
     });
     return {
@@ -355,6 +368,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
     clone: params.clone,
     readOnly: params.readOnly,
     initialStore: params.store,
+    ...(params.projection ? { projection: params.projection } : {}),
     ...(params.storeCache ? { storeCache: params.storeCache } : {}),
   });
   if (canonicalKey === "global" || canonicalKey === "unknown") {

@@ -25,6 +25,21 @@ export type ModelCatalogBundleSummary = {
   providers: number;
   models: number;
   costModels: number;
+  pricingEntries: number;
+};
+
+export type PublishedModelPricing = {
+  input: number;
+  output: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  tieredPricing?: Array<{
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    range: [number] | [number, number];
+  }>;
 };
 
 export type PublishedModelCatalogBundle = {
@@ -39,6 +54,7 @@ export type PublishedModelCatalogBundle = {
       [key: string]: unknown;
     }
   >;
+  pricing?: Record<string, PublishedModelPricing>;
 };
 
 export function parsePublishModelCatalogArgs(args: string[]): PublishModelCatalogArgs;
@@ -59,5 +75,6 @@ export function enrichModelCatalogPricing(options: {
   bundle: PublishedModelCatalogBundle;
   manifests: ModelCatalogManifestInput[];
   fetchImpl?: typeof fetch;
-}): Promise<number>;
+  validateBundle?: (bundle: unknown) => PublishedModelCatalogBundle;
+}): Promise<{ modelsEnriched: number; pricingEntries: number }>;
 export function serializeModelCatalogBundle(bundle: PublishedModelCatalogBundle): string;

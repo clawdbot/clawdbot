@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ControlUiSessionPullRequest } from "../../../src/gateway/control-ui-contract.js";
+import type {
+  ControlUiSessionPullRequest,
+  ControlUiSessionPullRequests,
+} from "../../../src/gateway/control-ui-contract.js";
 import {
   fetchSessionMenuWork,
   fetchSessionPullRequestIndicatorState,
@@ -15,6 +18,21 @@ function pullRequest(overrides: Partial<ControlUiSessionPullRequest>): ControlUi
     url: "https://github.com/openclaw/openclaw/pull/1",
     state: "open",
     ...overrides,
+  };
+}
+
+function sessionMenuClient(request: (method: string, params: unknown) => Promise<unknown>) {
+  return {
+    request: request as never,
+    requestSessionPullRequests: (params: {
+      sessionKey: string;
+      agentId?: string;
+      refresh?: boolean;
+    }) =>
+      request(
+        "controlUi.sessionPullRequests",
+        params,
+      ) as Promise<ControlUiSessionPullRequests | null>,
   };
 }
 
@@ -42,7 +60,7 @@ describe("session pull request indicators", () => {
     const request = vi.fn(() => Promise.resolve({ pullRequests, rateLimited: false }));
     await expect(
       fetchSessionPullRequestIndicatorState({
-        client: { request: request as never },
+        client: sessionMenuClient(request),
         pullRequestsAvailable: true,
         sessionKey: "agent:main:demo",
       }),
@@ -53,7 +71,7 @@ describe("session pull request indicators", () => {
     const request = vi.fn(() => Promise.resolve({ pullRequests: [], rateLimited: true }));
     await expect(
       fetchSessionPullRequestIndicatorState({
-        client: { request: request as never },
+        client: sessionMenuClient(request),
         pullRequestsAvailable: true,
         sessionKey: "agent:main:demo",
       }),
@@ -67,7 +85,7 @@ describe("session pull request indicators", () => {
 
     await expect(
       fetchSessionPullRequestIndicatorState({
-        client: { request: request as never },
+        client: sessionMenuClient(request),
         pullRequestsAvailable: true,
         sessionKey: "agent:main:demo",
         agentId: "main",
@@ -107,7 +125,7 @@ describe("fetchSessionMenuWork", () => {
 
     await expect(
       fetchSessionMenuWork({
-        client: { request: request as never },
+        client: sessionMenuClient(request),
         pullRequestsAvailable: true,
         sessionKey: "agent:main:demo",
         agentId: "main",
@@ -127,7 +145,7 @@ describe("fetchSessionMenuWork", () => {
     const failing = vi.fn(() => Promise.reject(new Error("offline")));
     await expect(
       fetchSessionMenuWork({
-        client: { request: failing as never },
+        client: sessionMenuClient(failing),
         pullRequestsAvailable: true,
         sessionKey: "agent:main:demo",
         worktreeId: "wt-1",
@@ -139,7 +157,7 @@ describe("fetchSessionMenuWork", () => {
     );
     await expect(
       fetchSessionMenuWork({
-        client: { request: request as never },
+        client: sessionMenuClient(request),
         pullRequestsAvailable: false,
         sessionKey: "agent:main:demo",
         worktreeId: "wt-1",

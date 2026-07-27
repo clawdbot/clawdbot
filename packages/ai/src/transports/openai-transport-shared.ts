@@ -6,6 +6,9 @@ import {
   type OpenAICompletionsToolChoice,
   type OpenAIReasoningEffort,
 } from "../internal/openai.js";
+import { transportAbortError } from "./transport-stream-shared.js";
+
+export { sortPromptCacheToolsByName as sortTransportToolsByName } from "../utils/prompt-cache-stability.js";
 
 const MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
 const MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
@@ -94,7 +97,7 @@ type ModelStreamCooperativeScheduler = {
 
 export function throwIfModelStreamAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
-    throw new Error("Request was aborted");
+    throw transportAbortError(signal);
   }
 }
 
@@ -144,26 +147,4 @@ export function resolvePromptCacheKey(
     return undefined;
   }
   return clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId);
-}
-
-function compareTransportToolText(left: string | undefined, right: string | undefined): number {
-  const leftText = left ?? "";
-  const rightText = right ?? "";
-  if (leftText < rightText) {
-    return -1;
-  }
-  if (leftText > rightText) {
-    return 1;
-  }
-  return 0;
-}
-
-export function sortTransportToolsByName<T extends { name?: string; description?: string }>(
-  tools: readonly T[],
-): T[] {
-  return tools.toSorted(
-    (left, right) =>
-      compareTransportToolText(left.name, right.name) ||
-      compareTransportToolText(left.description, right.description),
-  );
 }

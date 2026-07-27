@@ -32,7 +32,6 @@ function makeSettings(gatewayUrl: string, overrides: Partial<UiSettings> = {}): 
     navCollapsed: false,
     navWidth: 258,
     sidebarEntries: [],
-    sessionSectionOrder: [],
     ...overrides,
   };
 }
@@ -86,30 +85,6 @@ describe("sidebar preference persistence", () => {
 
     expect(loadSettings().sidebarEntries).toEqual(["route:cron", "route:plugins"]);
     expect(loadSettings().navWidth).toBe(258);
-  });
-
-  it("persists only valid deduplicated session section tokens", () => {
-    setTestLocation({
-      protocol: "https:",
-      host: "gateway.example:8443",
-      pathname: "/",
-    });
-    const gwUrl = expectedGatewayUrl("");
-    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
-    localStorage.setItem(
-      scopedKey,
-      JSON.stringify({
-        ...makeSettings(gwUrl),
-        sessionSectionOrder: ["category: Alpha ", "work", "bogus", "category:", "work", 7],
-      }),
-    );
-
-    expect(loadSettings().sessionSectionOrder).toEqual(["category:Alpha", "work"]);
-    saveSettings(loadSettings());
-    expect(
-      (JSON.parse(localStorage.getItem(scopedKey) ?? "{}") as Record<string, unknown>)
-        .sessionSectionOrder,
-    ).toEqual(["category:Alpha", "work"]);
   });
 
   it("migrates the legacy route-only list once and writes only sidebarEntries", () => {

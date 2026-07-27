@@ -166,7 +166,7 @@ export type AgentDefaultsConfig = {
   /**
    * List of optional bootstrap filenames to skip writing to the workspace root.
    * Applies to: SOUL.md, USER.md, IDENTITY.md ("HEARTBEAT.md" is accepted but a no-op).
-   * Required workspace setup such as AGENTS.md and TOOLS.md still runs.
+   * Required workspace setup such as AGENTS.md still runs.
    * Example: ["SOUL.md", "USER.md", "IDENTITY.md"]
    */
   skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
@@ -332,7 +332,7 @@ export type AgentDefaultsConfig = {
   systemAgent?: {
     agentId?: string;
   };
-  /** Max concurrent agent runs across all conversations. Default: 4. */
+  /** Max concurrent agent runs across all conversations. Default: min(16, max(8, available CPU parallelism)). */
   maxConcurrent?: number;
   /** Sub-agent defaults (spawned via sessions_spawn). */
   subagents?: {

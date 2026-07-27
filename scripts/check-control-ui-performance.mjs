@@ -14,7 +14,9 @@ const DEFAULT_STARTUP_BUDGET_BASELINE_PATH = path.resolve(
 );
 
 // This absorbs measured local-to-Linux gzip variance, but landed changes can
-// still consume the tolerance. The fixed JS ceiling bounds cumulative creep.
+// still consume the tolerance. Local zlib emits smaller streams than CI's Linux
+// builder, so baseline updates must use CI bytes via --startup-js-bytes. The
+// fixed JS ceiling bounds cumulative creep.
 export const CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES = 1024;
 
 // Small, explicit headroom over the optimized baseline. Budget changes should
@@ -179,7 +181,7 @@ function formatAssetSummary(summary) {
 
 function formatViolation(violation) {
   if (violation.baseline !== undefined && violation.tolerance !== undefined) {
-    return `${violation.metric}: ${violation.actual} B exceeds baseline ${violation.baseline} B + tolerance ${violation.tolerance} B (limit ${violation.limit} B); intentionally raise the baseline with node scripts/check-control-ui-performance.mjs --update-baseline --reason "<reason>"`;
+    return `${violation.metric}: ${violation.actual} B exceeds baseline ${violation.baseline} B + tolerance ${violation.tolerance} B (limit ${violation.limit} B); intentionally raise the baseline with node scripts/check-control-ui-performance.mjs --update-baseline --startup-js-bytes ${violation.actual} --reason "<reason>"`;
   }
   const actual =
     violation.unit === "bytes"
@@ -293,6 +295,15 @@ function writeControlUiStartupBudgetBaseline(baselinePath, startupJsGzipBytes, r
   return baseline;
 }
 
+function validateExplicitStartupJsBytes(startupJsBytes, currentBaseline) {
+  const delta = Math.abs(startupJsBytes - currentBaseline.startupJsGzipBytes);
+  if (delta > STARTUP_JS_BASELINE_RATCHET_BYTES) {
+    throw new Error(
+      `startup JS gzip baseline update: ${startupJsBytes} B differs from current baseline ${currentBaseline.startupJsGzipBytes} B by ${delta} B, exceeding the ${STARTUP_JS_BASELINE_RATCHET_BYTES} B ratchet`,
+    );
+  }
+}
+
 export function runControlUiPerformanceCheck(
   distDir,
   budgets = CONTROL_UI_PERFORMANCE_BUDGETS,
@@ -316,6 +327,7 @@ function main(argv = process.argv.slice(2)) {
   let json = false;
   let updateBaseline = false;
   let reason;
+  let startupJsBytes;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--json") {
@@ -328,6 +340,16 @@ function main(argv = process.argv.slice(2)) {
         throw new Error("--reason requires a non-empty value");
       }
       index += 1;
+    } else if (arg === "--startup-js-bytes") {
+      const value = argv[index + 1];
+      if (!value || !/^[1-9]\d*$/u.test(value)) {
+        throw new Error("--startup-js-bytes requires a positive integer");
+      }
+      startupJsBytes = Number(value);
+      if (!Number.isSafeInteger(startupJsBytes)) {
+        throw new Error("--startup-js-bytes requires a positive integer");
+      }
+      index += 1;
     } else {
       throw new Error(`Unknown option: ${arg}`);
     }
@@ -335,15 +357,25 @@ function main(argv = process.argv.slice(2)) {
   if (reason !== undefined && !updateBaseline) {
     throw new Error("--reason requires --update-baseline");
   }
+  if (startupJsBytes !== undefined && !updateBaseline) {
+    throw new Error("--startup-js-bytes requires --update-baseline");
+  }
   if (json && updateBaseline) {
     throw new Error("--json cannot be combined with --update-baseline");
   }
   const distDir = path.resolve(SCRIPT_DIR, "../dist/control-ui");
   if (updateBaseline) {
-    const metrics = collectControlUiPerformanceMetrics(distDir);
+    if (startupJsBytes !== undefined) {
+      const currentBaseline = readControlUiStartupBudgetBaseline(
+        DEFAULT_STARTUP_BUDGET_BASELINE_PATH,
+      );
+      validateExplicitStartupJsBytes(startupJsBytes, currentBaseline);
+    }
+    const nextStartupJsBytes =
+      startupJsBytes ?? collectControlUiPerformanceMetrics(distDir).startup.js.gzipBytes;
     const baseline = writeControlUiStartupBudgetBaseline(
       DEFAULT_STARTUP_BUDGET_BASELINE_PATH,
-      metrics.startup.js.gzipBytes,
+      nextStartupJsBytes,
       reason ?? "manual baseline update",
     );
     process.stdout.write(

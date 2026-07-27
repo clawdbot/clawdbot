@@ -9,7 +9,7 @@ import type { EmbeddedAgentRunMeta } from "../agents/embedded-agent.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
-import { writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import { writeRuntimeJson, writeRuntimeStdout, type RuntimeEnv } from "../runtime.js";
 
 const AGENT_EXEC_MESSAGE_MAX_BYTES = 4 * 1024 * 1024;
 const AGENT_EXEC_DEFAULT_TIMEOUT_SECONDS = 600;
@@ -365,7 +365,7 @@ function writeAgentExecOutput(
   if (json) {
     writeRuntimeJson(runtime, envelope);
   } else if (envelope.final) {
-    runtime.log(envelope.final);
+    writeRuntimeStdout(runtime, envelope.final);
   }
   if (!envelope.ok && envelope.error) {
     runtime.error(envelope.error.message);

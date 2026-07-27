@@ -63,6 +63,7 @@ const allowedAttrs = [
   "class",
   "disabled",
   "href",
+  "open",
   "rel",
   "target",
   "title",
@@ -572,15 +573,19 @@ export function toStreamingMarkdownHtml(
   }
   const input = formatTruncatedMarkdownInput(trimmedInput);
 
-  const { boundary, tailHasOpenFence } = splitStableStreamingMarkdown(input);
+  const { boundary, tailRepairStart } = splitStableStreamingMarkdown(input);
   const stableMarkdown = input.slice(0, boundary);
   const streamingTail = input.slice(boundary);
   const stableHtml = boundary > 0 ? toSanitizedMarkdownHtml(stableMarkdown, options) : "";
   if (!streamingTail.trim()) {
     return stableHtml;
   }
-  const tailHtml = tailHasOpenFence
-    ? renderSanitizedMarkdown(streamingTail, renderOptions)
-    : renderSanitizedMarkdown(repairStreamingMarkdownTail(streamingTail), renderOptions);
+  const tailHtml =
+    tailRepairStart === null
+      ? renderSanitizedMarkdown(streamingTail, renderOptions)
+      : renderSanitizedMarkdown(
+          repairStreamingMarkdownTail(streamingTail, tailRepairStart - boundary),
+          renderOptions,
+        );
   return `${stableHtml}${tailHtml}`;
 }

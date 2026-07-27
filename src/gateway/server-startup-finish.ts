@@ -412,10 +412,8 @@ export async function finishGatewayStartup(params: {
         startCron: false,
         logCron,
         log,
-        pluginLookUpTable,
       });
       runtimeState.heartbeatRunner = activated.heartbeatRunner;
-      runtimeState.stopModelPricingRefresh = activated.stopModelPricingRefresh;
     });
   };
   ({

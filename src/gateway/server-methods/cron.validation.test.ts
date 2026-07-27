@@ -575,6 +575,31 @@ describe("cron method validation", () => {
     });
   });
 
+  it("trims whitespace around cron.get job ids before lookup", async () => {
+    const job = createCronJob({ id: "cron-42" });
+    const { context, respond } = await invokeCronGet({ jobId: " cron-42 " }, job);
+
+    expect(context.cron.readJob).toHaveBeenCalledWith("cron-42");
+    expectCronReadSuccess(respond, job);
+  });
+
+  it("trims whitespace around cron.run job ids before lookup", async () => {
+    const job = createCronJob({ id: "cron-42" });
+    const { context, respond } = await invokeCron(
+      "cron.run",
+      { id: " cron-42 " },
+      { currentJob: job },
+    );
+
+    expect(context.cron.readJob).toHaveBeenCalledWith("cron-42");
+    expect(context.cron.enqueueRun).toHaveBeenCalledWith("cron-42", "force");
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true, enqueued: true, runId: "run-1" }),
+      undefined,
+    );
+  });
+
   it("returns a single cron job for cron.get", async () => {
     const job = createCronJob({ id: "cron-42", name: "single job" });
 
@@ -1834,6 +1859,20 @@ describe("cron method validation", () => {
         ownerAccountId: "default",
       },
     });
+    expectCronSuccess(respond);
+  });
+
+  it("trims whitespace around legacy cron.update job ids before lookup", async () => {
+    const { context, respond } = await invokeCronUpdate(
+      {
+        jobId: " cron-1 ",
+        patch: { enabled: false },
+      },
+      createCronJob(),
+    );
+
+    expect(context.cron.readJob).toHaveBeenCalledWith("cron-1");
+    expect(context.cron.update).toHaveBeenCalledWith("cron-1", { enabled: false });
     expectCronSuccess(respond);
   });
 
@@ -3251,6 +3290,18 @@ describe("cron method validation", () => {
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
       messageIncludes: "scope all is not allowed by caller scope",
+    });
+  });
+
+  it("does not widen a whitespace-only cron.runs selector to all history", async () => {
+    const context = createCronContext();
+
+    const { respond } = await invokeCron("cron.runs", { id: "   " }, { context });
+
+    expect(context.cron.list).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "invalid cron.runs params: missing id",
     });
   });
 

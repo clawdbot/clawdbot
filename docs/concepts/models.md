@@ -231,10 +231,11 @@ The hosted file is published from the public
 Its scheduled workflow refreshes from OpenClaw's shipped plugin manifests and
 pricing sources; every catalog content change is preserved as a public commit.
 
-Run `openclaw models refresh` for an immediate check, or disable every hosted
-catalog request with `models.catalogRefresh.enabled: false`. A self-hosted mirror
-can be selected with an HTTPS `models.catalogRefresh.url` (or localhost HTTP
-for testing); see
+Run `openclaw models refresh` for an immediate metadata and pricing check, or
+disable every hosted catalog request with `models.catalogRefresh.enabled:
+false`. When disabled, pricing stays at bundled and explicitly configured
+values. A self-hosted mirror can be selected with an HTTPS
+`models.catalogRefresh.url` (or localhost HTTP for testing); see
 [configuration reference](/gateway/configuration-reference#models).
 
 Custom providers configured under `models.providers` are written into `models.json` under the agent directory (default `~/.openclaw/agents/<agentId>/agent/models.json`). Provider-plugin catalogs are stored separately as generated plugin-owned catalog shards and load automatically. This file is merged with config by default; set `models.mode: "replace"` to use only your configured providers.

@@ -64,8 +64,6 @@ The `models` root also owns global model-catalog behavior.
 ```json5
 {
   models: {
-    // Optional. Default: true. Requires a Gateway restart when changed.
-    pricing: { enabled: false },
     // Optional. Hosted catalog updates default on.
     catalogRefresh: {
       enabled: true,
@@ -81,18 +79,20 @@ The `models` root also owns global model-catalog behavior.
   local model servers. OpenClaw probes the configured health endpoint, starts
   the absolute `command` when needed, waits for readiness, then sends the model
   request. See [Local model services](/gateway/local-model-services).
-- `models.pricing.enabled`: controls the background pricing bootstrap that
-  starts after sidecars and channels reach the Gateway ready path. When `false`,
-  the Gateway skips OpenRouter and LiteLLM pricing-catalog fetches; configured
-  `models.providers.*.models[].cost` values still work for local cost estimates.
 - `models.catalogRefresh.enabled`: controls the hosted model catalog refresh
   (default: `true`). Set it to `false` to prevent all remote catalog requests;
-  only catalog data shipped in the installed release is then used.
+  model metadata and pricing then stay at the values shipped in the installed
+  release or declared under `models.providers.*.models[].cost`.
 - `models.catalogRefresh.url`: optional HTTPS mirror override (plain HTTP is
   accepted only for explicit localhost testing). The Gateway
   checks in the background at startup and every six hours. A downloaded catalog
   applies on the next Gateway restart; a release whose bundled catalog is newer
   always wins.
+
+Pricing updates ship in the same hosted catalog file as model metadata. The
+retired `models.pricing` toggle is removed automatically by `openclaw doctor
+--fix`; use `models.catalogRefresh.enabled: false` when OpenClaw must avoid all
+hosted catalog traffic.
 
 ## MCP
 
@@ -529,7 +529,6 @@ See [Plugins](/tools/plugin).
       chatPersistCommentary: true, // Keep commentary after runs in Control UI; does not deliver it to channels
       chatSendShortcut: "enter", // enter | modifier-enter
       chatFollowUpMode: "steer", // steer | queue; omit to use the server queue mode
-      sessionSectionOrder: ["category:Research", "ungrouped", "groups", "work"],
       showAdvancedSettings: false, // Expand every Advanced group in Settings
     },
   },
@@ -546,9 +545,6 @@ See [Plugins](/tools/plugin).
   commentary visible during a run but removes it at completion and prevents new
   Codex commentary from entering the durable transcript mirror. Messaging-channel
   delivery remains separate and unchanged.
-  `sessionSectionOrder` interleaves custom session groups (`category:<name>`) with
-  the built-in `ungrouped`, `groups`, and `work` sidebar sections. An empty or
-  omitted list keeps the default custom-groups-first order.
   `showAdvancedSettings` defaults to `false`; Settings search may temporarily
   open one matching advanced group without changing this preference.
   Presentation-only preferences such as text scale, chat width, and live

@@ -148,6 +148,8 @@ function createCodeModeExecDescription(
     mcpGuidance +
     swarmGuidance +
     ' The `language` field accepts only "javascript" or "typescript"; do not pass "bash", "shell", or other values.' +
+    " Both `code` and `command` contain JavaScript or TypeScript, never a shell command. " +
+    "For shell or file operations, call the exact catalog tool from guest JavaScript; do not retry failed shell source." +
     (namespacePrompt ? `\n\n${namespacePrompt}` : "") +
     (catalogIndex ? `\n\n${catalogIndex}` : "")
   );
@@ -167,7 +169,8 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       ),
       command: Type.Optional(
         Type.String({
-          description: "Alias for code, provided for exec-compatible hook policies.",
+          description:
+            "Alias for JavaScript or TypeScript code, provided for exec-compatible hook policies. Not a shell command.",
         }),
       ),
       language: optionalStringEnum(["javascript", "typescript"] as const, {

@@ -34,7 +34,6 @@ export type ApplicationNavigationPreferencesSnapshot = {
   navCollapsed: boolean;
   navWidth: number;
   sidebarEntries: readonly string[];
-  sessionSectionOrder: readonly string[];
   pinnedAgentIds: readonly string[];
 };
 
@@ -70,6 +69,7 @@ export type ApplicationInitialUserMessage = {
 
 type InitialUserMessageHandoff = {
   message: ApplicationInitialUserMessage;
+  /** Logical Gateway client; per-transport hello objects rotate on reconnect. */
   owner: object;
   sessionKey: string;
 };

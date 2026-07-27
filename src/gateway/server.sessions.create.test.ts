@@ -62,6 +62,72 @@ const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+test("sessions.create and sessions.delete preserve every concurrent session lifecycle", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionCount = 24;
+
+  const created = await Promise.all(
+    Array.from({ length: sessionCount }, (_, index) =>
+      directSessionReq<{ key: string; sessionId: string }>("sessions.create", {
+        agentId: "main",
+        label: `Concurrent session ${index}`,
+      }),
+    ),
+  );
+
+  expect(created.every((result) => result.ok)).toBe(true);
+  const sessionKeys = created.map((result) =>
+    requireNonEmptyString(result.payload?.key, "concurrent session key"),
+  );
+  const sessionIds = created.map((result) =>
+    requireNonEmptyString(result.payload?.sessionId, "concurrent session id"),
+  );
+  expect(new Set(sessionKeys).size).toBe(sessionCount);
+  expect(new Set(sessionIds).size).toBe(sessionCount);
+  for (const [index, sessionKey] of sessionKeys.entries()) {
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      sessionId: sessionIds[index],
+      label: `Concurrent session ${index}`,
+    });
+  }
+
+  const deleted = await Promise.all(
+    sessionKeys.map((key) =>
+      directSessionReq<{ deleted: boolean }>("sessions.delete", {
+        key,
+        deleteTranscript: false,
+      }),
+    ),
+  );
+
+  expect(deleted.every((result) => result.ok && result.payload?.deleted === true)).toBe(true);
+  for (const sessionKey of sessionKeys) {
+    expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
+  }
+});
+
+test("concurrent sessions.create requests adopt one canonical keyed session", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const key = "agent:main:dashboard:concurrent-keyed-session";
+
+  const created = await Promise.all(
+    Array.from({ length: 16 }, () =>
+      directSessionReq<{ key: string; sessionId: string }>("sessions.create", {
+        agentId: "main",
+        key,
+      }),
+    ),
+  );
+
+  expect(created.every((result) => result.ok)).toBe(true);
+  expect(new Set(created.map((result) => result.payload?.key))).toEqual(new Set([key]));
+  const sessionIds = new Set(created.map((result) => result.payload?.sessionId));
+  expect(sessionIds.size).toBe(1);
+  expect(loadSessionEntry({ sessionKey: key, storePath })?.sessionId).toBe(
+    created[0]?.payload?.sessionId,
+  );
+});
+
 test("sessions.create keeps incognito rows process-local through list, spawn, reset, and delete", async () => {
   const { storePath } = await createSessionStoreDir();
   try {
@@ -430,6 +496,30 @@ test("createGatewaySession rechecks admin scope after incognito inheritance reso
   }
 });
 
+test("createGatewaySession persists a generated title only for a new session", async () => {
+  await createSessionStoreDir();
+  const { createGatewaySession } = await import("./session-create-service.js");
+  const key = "agent:main:dashboard:generated-worktree-title";
+  const base = {
+    cfg: getRuntimeConfig(),
+    agentId: "main",
+    key,
+    commandSource: "test",
+  };
+
+  const created = await createGatewaySession({
+    ...base,
+    generatedDisplayName: "Readable Worktree Names",
+  });
+  expect(created).toMatchObject({ ok: true, entry: { displayName: "Readable Worktree Names" } });
+
+  const reused = await createGatewaySession({
+    ...base,
+    generatedDisplayName: "Replacement Title",
+  });
+  expect(reused).toMatchObject({ ok: true, entry: { displayName: "Readable Worktree Names" } });
+});
+
 test("incognito operator RPCs treat identityless connections as owner-equivalent", async () => {
   const { dir } = await createSessionStoreDir();
   const admin = await openClient({
@@ -678,14 +768,14 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
       worktree: { id: string; path: string; branch: string };
     }>(
       "sessions.create",
-      { agentId: "main", worktree: true },
+      { agentId: "main", label: "Release planning", worktree: true },
       { client: { connect: { scopes: ["operator.admin"] } } as never },
     );
 
     expect(created.ok).toBe(true);
     const key = requireNonEmptyString(created.payload?.key, "created session key");
     const worktree = created.payload?.worktree;
-    expect(worktree?.branch).toMatch(/^openclaw\/wt-[a-f0-9]{8}$/);
+    expect(worktree?.branch).toBe("openclaw/release-planning");
     expect(created.payload?.entry.spawnedCwd).toBe(worktree?.path);
     worktreeId = worktree?.id;
     expect(findLiveRegistryWorktreeByOwner(process.env, "session", key)).toMatchObject({
@@ -1139,7 +1229,7 @@ test("sessions.create preserves a linked-worktree subdirectory", async () => {
     worktreeId = worktree?.id;
     // The managed worktree anchors at the repo root even when the workspace is nested;
     // the session cwd points at the equivalent subdirectory inside the worktree.
-    expect(worktree?.branch).toMatch(/^openclaw\/wt-[a-f0-9]{8}$/);
+    expect(worktree?.branch).toMatch(/^openclaw\/[a-z0-9]+(?:-[a-z0-9]+)+$/);
     expect(created.payload?.entry.spawnedCwd).toBe(
       path.join(requireNonEmptyString(worktree?.path, "worktree path"), "packages", "app"),
     );
@@ -2549,6 +2639,125 @@ test("sessions.create sends selected global initial tasks to the requested agent
   ws.close();
 });
 
+test("sessions.create gives plugin runtimes an owned root without linking operator sessions", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: { main: sessionStoreEntry("operator-owned-main") },
+  });
+  const pluginClient = {
+    connect: { scopes: ["operator.write"] },
+    internal: { pluginRuntimeOwnerId: "memory-core" },
+  } as never;
+
+  const created = await directSessionReq<{
+    key: string;
+    entry: { parentSessionKey?: string; pluginOwnerId?: string };
+  }>("sessions.create", { agentId: "main" }, { client: pluginClient });
+
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  const key = requireNonEmptyString(created.payload?.key, "plugin-owned root session key");
+  expect(created.payload?.entry).toMatchObject({ pluginOwnerId: "memory-core" });
+  expect(created.payload?.entry.parentSessionKey).toBeUndefined();
+  expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
+    pluginOwnerId: "memory-core",
+  });
+
+  const patched = await directSessionReq(
+    "sessions.patch",
+    { key, label: "Plugin-owned root" },
+    { client: pluginClient },
+  );
+
+  expect(patched.ok, JSON.stringify(patched.error)).toBe(true);
+  expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
+    label: "Plugin-owned root",
+    pluginOwnerId: "memory-core",
+  });
+});
+
+test.each([
+  {
+    name: "forking a foreign plugin transcript",
+    params: { parentSessionKey: "agent:main:dashboard:foreign-owned", fork: true },
+    action: "fork",
+    target: "agent:main:dashboard:foreign-owned",
+  },
+  {
+    name: "linking a foreign plugin parent",
+    params: { parentSessionKey: "agent:main:dashboard:foreign-owned" },
+    action: "link",
+    target: "agent:main:dashboard:foreign-owned",
+  },
+  {
+    name: "forking an operator-owned transcript",
+    params: { parentSessionKey: "agent:main:dashboard:operator-owned", fork: true },
+    action: "fork",
+    target: "agent:main:dashboard:operator-owned",
+  },
+  {
+    name: "adopting a foreign plugin session",
+    params: { key: "agent:main:dashboard:foreign-owned" },
+    action: "adopt",
+    target: "agent:main:dashboard:foreign-owned",
+  },
+  {
+    name: "adopting an operator-owned session",
+    params: { key: "agent:main:dashboard:operator-owned" },
+    action: "adopt",
+    target: "agent:main:dashboard:operator-owned",
+  },
+])("sessions.create prevents plugin runtimes from $name", async ({ params, action, target }) => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      "agent:main:dashboard:foreign-owned": sessionStoreEntry("foreign-session", {
+        pluginOwnerId: "other-plugin",
+      }),
+      "agent:main:dashboard:operator-owned": sessionStoreEntry("operator-session"),
+    },
+  });
+  const pluginClient = {
+    connect: { scopes: ["operator.write"] },
+    internal: { pluginRuntimeOwnerId: "memory-core" },
+  } as never;
+
+  const created = await directSessionReq("sessions.create", params, { client: pluginClient });
+
+  expect(created.ok).toBe(false);
+  expect(created.error).toMatchObject({
+    code: "INVALID_REQUEST",
+    message: `Plugin "memory-core" cannot ${action} session "${target}" because it did not create it.`,
+  });
+  expect(loadSessionEntry({ sessionKey: target, storePath })).toBeDefined();
+});
+
+test("sessions.create allows plugin runtimes to link their own parent session", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const parentSessionKey = "agent:main:dashboard:memory-core-parent";
+  await writeSessionStore({
+    entries: {
+      [parentSessionKey]: sessionStoreEntry("memory-core-parent", {
+        pluginOwnerId: "memory-core",
+      }),
+    },
+  });
+  const pluginClient = {
+    connect: { scopes: ["operator.write"] },
+    internal: { pluginRuntimeOwnerId: "memory-core" },
+  } as never;
+
+  const created = await directSessionReq<{
+    key: string;
+    entry: { parentSessionKey?: string };
+  }>("sessions.create", { parentSessionKey }, { client: pluginClient });
+
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.entry.parentSessionKey).toBe(parentSessionKey);
+  expect(loadSessionEntry({ sessionKey: parentSessionKey, storePath })?.pluginOwnerId).toBe(
+    "memory-core",
+  );
+});
+
 test("sessions.create rejects unknown parentSessionKey", async () => {
   await createSessionStoreDir();
 
@@ -2927,6 +3136,138 @@ test("sessions.create resolves an agent-qualified fork from the parent store", a
         }),
       ]),
     );
+  } finally {
+    testState.sessionStorePath = undefined;
+    testState.sessionConfig = undefined;
+    testState.agentsConfig = undefined;
+  }
+});
+
+test("sessions.create completes simultaneous opposite-direction cross-agent forks", async () => {
+  const { dir } = await createSessionStoreDir();
+  const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
+  const mainStorePath = storeTemplate.replace("{agentId}", "main");
+  const workStorePath = storeTemplate.replace("{agentId}", "work");
+  testState.sessionStorePath = storeTemplate;
+  testState.sessionConfig = { scope: "per-sender" };
+  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+
+  try {
+    const mainDir = path.dirname(mainStorePath);
+    const workDir = path.dirname(workStorePath);
+    await Promise.all([
+      fs.mkdir(mainDir, { recursive: true }),
+      fs.mkdir(workDir, { recursive: true }),
+    ]);
+    const [mainParent, workParent] = await Promise.all([
+      createCheckpointFixture(mainDir),
+      createCheckpointFixture(workDir),
+    ]);
+    await Promise.all([
+      writeSessionStore({
+        storePath: mainStorePath,
+        agentId: "main",
+        entries: {
+          main: sessionStoreEntry(mainParent.sessionId, {
+            sessionFile: mainParent.sessionFile,
+          }),
+        },
+      }),
+      writeSessionStore({
+        storePath: workStorePath,
+        agentId: "work",
+        entries: {
+          main: sessionStoreEntry(workParent.sessionId, {
+            sessionFile: workParent.sessionFile,
+          }),
+        },
+      }),
+    ]);
+    await Promise.all([
+      seedSessionTranscript({
+        agentId: "main",
+        sessionId: mainParent.sessionId,
+        sessionKey: "agent:main:main",
+        storePath: mainStorePath,
+        messages: [{ role: "user", content: "main parent context" }],
+      }),
+      seedSessionTranscript({
+        agentId: "work",
+        sessionId: workParent.sessionId,
+        sessionKey: "agent:work:main",
+        storePath: workStorePath,
+        messages: [{ role: "user", content: "work parent context" }],
+      }),
+    ]);
+
+    const requests = Array.from({ length: 12 }, (_, index) =>
+      index % 2 === 0
+        ? {
+            agentId: "main",
+            parentSessionKey: "agent:work:main",
+            parentSessionId: workParent.sessionId,
+            storePath: mainStorePath,
+          }
+        : {
+            agentId: "work",
+            parentSessionKey: "agent:main:main",
+            parentSessionId: mainParent.sessionId,
+            storePath: workStorePath,
+          },
+    );
+    const created = await Promise.all(
+      requests.map((request) =>
+        directSessionReq<{
+          key: string;
+          sessionId: string;
+          entry: {
+            parentSessionKey?: string;
+            forkSource?: { sessionKey: string; sessionId: string };
+            forkedFromParent?: boolean;
+          };
+        }>("sessions.create", {
+          agentId: request.agentId,
+          parentSessionKey: request.parentSessionKey,
+          fork: true,
+        }),
+      ),
+    );
+
+    expect(
+      created.every((result) => result.ok),
+      JSON.stringify(created.filter((result) => !result.ok)),
+    ).toBe(true);
+    expect(new Set(created.map((result) => result.payload?.key)).size).toBe(requests.length);
+    expect(new Set(created.map((result) => result.payload?.sessionId)).size).toBe(requests.length);
+    for (const [index, result] of created.entries()) {
+      const request = requests[index];
+      if (!request) {
+        throw new Error(`missing cross-agent fork request ${index}`);
+      }
+      expect(result.payload?.entry).toMatchObject({
+        forkSource: {
+          sessionKey: request.parentSessionKey,
+          sessionId: request.parentSessionId,
+        },
+        forkedFromParent: true,
+        parentSessionKey: request.parentSessionKey,
+      });
+      const key = requireNonEmptyString(result.payload?.key, "cross-agent fork session key");
+      expect(
+        loadSessionEntry({
+          agentId: request.agentId,
+          sessionKey: key,
+          storePath: request.storePath,
+        }),
+      ).toMatchObject({
+        forkSource: {
+          sessionKey: request.parentSessionKey,
+          sessionId: request.parentSessionId,
+        },
+        parentSessionKey: request.parentSessionKey,
+        sessionId: result.payload?.sessionId,
+      });
+    }
   } finally {
     testState.sessionStorePath = undefined;
     testState.sessionConfig = undefined;

@@ -23,7 +23,7 @@
       "cerebras": {
         "baseUrl": "https://api.cerebras.ai/v1",
         "api": "openai-completions",
-        "defaultModel": "gpt-oss-120b",
+        "defaultModel": "gemma-4-31b",
         "models": [
           {
             "id": "zai-glm-4.7",

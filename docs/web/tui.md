@@ -219,6 +219,7 @@ Tips:
 
 - On connect, the TUI loads the latest history (default 200 messages).
 - Streaming responses update in place until finalized.
+- Messages sent to the same session from another client appear automatically.
 - The TUI also listens to agent tool events for richer tool cards.
 
 ## Connection details

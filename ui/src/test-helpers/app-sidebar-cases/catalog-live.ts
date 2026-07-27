@@ -24,7 +24,11 @@ describe("AppSidebar session catalog pagination", () => {
       const request = vi
         .fn()
         .mockRejectedValueOnce(
-          new GatewayRequestError({ code: "INVALID_REQUEST", message: "invalid params" }),
+          new GatewayRequestError({
+            code: "INVALID_REQUEST",
+            message:
+              "invalid sessions.catalog.list params: at root: unexpected property 'progressId'",
+          }),
         )
         .mockResolvedValue(catalogPage([]));
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
@@ -68,7 +72,11 @@ describe("AppSidebar session catalog pagination", () => {
       const legacyRequest = vi
         .fn()
         .mockRejectedValueOnce(
-          new GatewayRequestError({ code: "INVALID_REQUEST", message: "invalid params" }),
+          new GatewayRequestError({
+            code: "INVALID_REQUEST",
+            message:
+              "invalid sessions.catalog.list params: at root: unexpected property 'progressId'",
+          }),
         )
         .mockReturnValueOnce(legacyFallback.promise);
       const legacyGateway = createGatewayHarness({

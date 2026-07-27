@@ -1,5 +1,7 @@
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime";
 import type { OpenClawPluginApi } from "./api.js";
+import { isMemoryMachineOutput } from "./cli-output-mode.js";
 import type { Embeddings } from "./embeddings.js";
 import {
   MEMORY_QUERY_COLUMNS,
@@ -124,7 +126,7 @@ export function registerMemoryCli(
           const entries = await db.list(agentId, limit, {
             orderByCreatedAt: Boolean(opts.orderByCreatedAt),
           });
-          console.log(JSON.stringify(entries, null, 2));
+          defaultRuntime.writeJson(entries);
         });
 
       memory
@@ -134,18 +136,39 @@ export function registerMemoryCli(
         .option("--agent <id>", "Agent id (default: configured default agent)")
         .option("--limit <n>", "Max results", "5")
         .action(async (query, opts) => {
-          const agentId = resolveCliAgentId(opts.agent);
-          const vector = await embeddings.embed(normalizeRecallQuery(query, recallMaxChars));
-          const limit = parsePositiveIntegerOption(opts.limit, "--limit");
-          const results = await db.search(agentId, vector, limit, 0.3);
-          const output = results.map((r) => ({
-            id: r.entry.id,
-            text: r.entry.text,
-            category: r.entry.category,
-            importance: r.entry.importance,
-            score: r.score,
-          }));
-          console.log(JSON.stringify(output, null, 2));
+          let operationError: unknown;
+          let operationFailed = false;
+          try {
+            const agentId = resolveCliAgentId(opts.agent);
+            const vector = await embeddings.embed(normalizeRecallQuery(query, recallMaxChars));
+            const limit = parsePositiveIntegerOption(opts.limit, "--limit");
+            const results = await db.search(agentId, vector, limit, 0.3);
+            const output = results.map((r) => ({
+              id: r.entry.id,
+              text: r.entry.text,
+              category: r.entry.category,
+              importance: r.entry.importance,
+              score: r.score,
+            }));
+            defaultRuntime.writeJson(output);
+          } catch (err) {
+            operationError = err;
+            operationFailed = true;
+          }
+          let closeError: unknown;
+          let closeFailed = false;
+          try {
+            await embeddings.close?.();
+          } catch (err) {
+            closeError = err;
+            closeFailed = true;
+          }
+          if (operationFailed) {
+            throw operationError;
+          }
+          if (closeFailed) {
+            throw closeError;
+          }
         });
 
       memory
@@ -189,7 +212,7 @@ export function registerMemoryCli(
               }
             }
           }
-          console.log(JSON.stringify(rows, null, 2));
+          defaultRuntime.writeJson(rows);
         });
 
       memory
@@ -202,6 +225,16 @@ export function registerMemoryCli(
           console.log(`Total memories: ${count}`);
         });
     },
-    { commands: ["ltm"] },
+    {
+      commands: ["ltm"],
+      descriptors: [
+        {
+          name: "ltm",
+          description: "LanceDB memory plugin commands",
+          hasSubcommands: true,
+          machineOutput: isMemoryMachineOutput,
+        },
+      ],
+    },
   );
 }

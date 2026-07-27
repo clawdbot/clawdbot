@@ -203,6 +203,8 @@ struct DashboardManagerGatewayTargetTests {
         let frame = NSRect(x: 180, y: 180, width: 960, height: 720)
         controller.window?.setFrame(frame, display: false)
         controller.show()
+        // CI display bounds clamp window frames during show, so preserve the post-clamp source frame.
+        let sourceFrame = try #require(controller.window).frame
         let entries = DashboardGatewayTestEntries.withProfiles(["studio"])
         let manager = DashboardManager._testMake(gatewayEntriesProvider: { entries })
         manager.configure(updater: DashboardGatewayTestUpdater())
@@ -214,12 +216,13 @@ struct DashboardManagerGatewayTargetTests {
 
         #expect(manager._testController() === controller)
         #expect(manager._testMainTarget() == .profile("studio"))
-        #expect(controller.window?.frame == frame)
+        #expect(controller.window?.frame == sourceFrame)
         let auxiliaryWindows = manager._testAuxiliaryWindows()
         #expect(auxiliaryWindows.count == 1)
         let auxiliary = try #require(auxiliaryWindows.first)
         #expect(auxiliary.target == .primary)
         #expect(auxiliary.controller !== controller)
+        #expect(auxiliary.controller.window !== controller.window)
         #expect(auxiliary.controller.window?.frameAutosaveName != controller.window?.frameAutosaveName)
         #expect(!auxiliary.controller._testUpdateBridgeAvailable)
     }
@@ -256,6 +259,62 @@ struct DashboardManagerGatewayTargetTests {
 
         #expect(manager._testMainTarget() == .profile("second"))
         #expect(manager._testController()?.currentURL.port == 60003)
+    }
+
+    @Test func `main menu switch replaces the frontmost dashboard in place`() async throws {
+        let sourceURL = try #require(URL(string: "http://127.0.0.1:60001/#token=current"))
+        let controller = DashboardWindowController(
+            url: sourceURL,
+            auth: DashboardWindowAuth(
+                gatewayUrl: "ws://127.0.0.1:60001/",
+                token: "current",
+                password: nil),
+            windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)")
+        let frame = NSRect(x: 190, y: 190, width: 940, height: 700)
+        controller.window?.setFrame(frame, display: false)
+        controller.show()
+        // CI display bounds clamp window frames during show, so compare replacement against the actual source frame.
+        let sourceFrame = try #require(controller.window).frame
+        let entries = DashboardGatewayTestEntries.withProfiles(["studio"])
+        let manager = DashboardManager._testMake(
+            profileEndpointProvider: { profileID in
+                let url = try #require(URL(string: "ws://127.0.0.1:60002"))
+                return GatewayConnection.EndpointSnapshot(
+                    config: (url: url, token: profileID, password: nil),
+                    routeAuthority: nil)
+            },
+            gatewayEntriesProvider: { entries })
+        manager._testSetController(controller)
+        defer { manager.close() }
+
+        await manager._testSwitchFrontmostDashboard(to: .profile("studio"))
+
+        #expect(manager._testMainTarget() == .profile("studio"))
+        #expect(manager.frontmostDashboardTarget == .profile("studio"))
+        #expect(manager._testController() !== controller)
+        #expect(manager._testController()?.currentURL.port == 60002)
+        #expect(manager._testController()?.window?.frame == sourceFrame)
+    }
+
+    @Test func `main menu switch opens requested gateway when no dashboard exists`() async {
+        let entries = DashboardGatewayTestEntries.withProfiles(["studio"])
+        let manager = DashboardManager._testMake(
+            profileEndpointProvider: { profileID in
+                let url = try #require(URL(string: "ws://127.0.0.1:60002"))
+                return GatewayConnection.EndpointSnapshot(
+                    config: (url: url, token: profileID, password: nil),
+                    routeAuthority: nil)
+            },
+            gatewayEntriesProvider: { entries })
+        defer { manager.close() }
+
+        await manager._testSwitchFrontmostDashboard(to: .profile("studio"))
+
+        let windows = manager._testAuxiliaryWindows()
+        #expect(windows.count == 1)
+        #expect(windows.first?.target == .profile("studio"))
+        #expect(windows.first?.controller.isWindowOpen == true)
+        #expect(manager.frontmostDashboardTarget == .profile("studio"))
     }
 }
 
