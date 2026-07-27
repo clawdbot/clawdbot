@@ -252,6 +252,31 @@ describe("tasks gateway handlers", () => {
     expect(page3.payload?.nextCursor).toBeUndefined();
   });
 
+  it("clones only the requested task page", async () => {
+    for (let index = 0; index < 6; index++) {
+      createTaskRecord({
+        runtime: "cli",
+        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        task: `Task ${index}`,
+        status: "succeeded",
+        deliveryStatus: "not_applicable",
+        detail: { index },
+      });
+    }
+    const cloneSpy = vi.spyOn(globalThis, "structuredClone");
+    try {
+      const { payload } = await runTaskHandler("tasks.list", { limit: 2 });
+
+      expect(payload?.tasks).toHaveLength(2);
+      expect(payload?.nextCursor).toBe("2");
+      expect(cloneSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      cloneSpy.mockRestore();
+    }
+  });
+
   it("treats explicit task agentId as authoritative over the session-key fallback", async () => {
     // Cross-agent subagent task: the registry derives agentId=worker from the
     // child session key, while owner/requester keys belong to main. tasks.list

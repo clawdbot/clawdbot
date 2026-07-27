@@ -12,7 +12,7 @@ import {
   validateTasksListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { getTaskById, listTaskRecordsUnsorted } from "../../tasks/runtime-internal.js";
+import { getTaskById, listTaskRecordPage } from "../../tasks/runtime-internal.js";
 import { cancelDetachedTaskRunById } from "../../tasks/task-executor.js";
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
 import { mapTaskSummary, taskUpdatedAt } from "./task-summary.js";
@@ -109,31 +109,32 @@ export const tasksHandlers: GatewayRequestHandlers = {
     }
     const statusFilter = normalizeTaskStatusFilter(params.status);
     const limit = Math.min(params.limit ?? DEFAULT_TASKS_LIST_LIMIT, MAX_TASKS_LIST_LIMIT);
-    // The ledger view pages by last activity so an old long-running task that
-    // just finished still surfaces on the first page instead of hiding behind
-    // newer-created records. Start from a cloned insertion-order snapshot so
-    // this sort does not first pay for the registry's discarded createdAt sort.
-    const filtered = listTaskRecordsUnsorted()
-      .filter((task) => {
+    // The ledger pages by last activity so an old long-running task that just
+    // finished still surfaces first. Selection stays inside the registry so
+    // only the bounded wire page pays for defensive record cloning.
+    const page = listTaskRecordPage({
+      offset: cursor,
+      limit,
+      matches: (task) => {
         if (statusFilter && !statusFilter.has(task.status)) {
           return false;
         }
         return (
           taskMatchesAgent(task, params.agentId) && taskMatchesSession(task, params.sessionKey)
         );
-      })
-      .toSorted((left, right) => {
+      },
+      compare: (left, right) => {
         const updatedDiff = taskUpdatedAt(right) - taskUpdatedAt(left);
         if (updatedDiff !== 0) {
           return updatedDiff;
         }
         return left.taskId < right.taskId ? -1 : left.taskId > right.taskId ? 1 : 0;
-      });
-    const page = filtered.slice(cursor, cursor + limit);
-    const nextOffset = cursor + page.length;
+      },
+    });
+    const nextOffset = cursor + page.tasks.length;
     respond(true, {
-      tasks: page.map((task) => mapTaskSummary(task)),
-      ...(nextOffset < filtered.length ? { nextCursor: String(nextOffset) } : {}),
+      tasks: page.tasks.map((task) => mapTaskSummary(task)),
+      ...(page.hasMore ? { nextCursor: String(nextOffset) } : {}),
     });
   },
   "tasks.get": ({ params, respond }) => {

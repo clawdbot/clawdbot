@@ -39,6 +39,23 @@ export function listTaskRecordsUnsorted(): TaskRecord[] {
   return snapshotTaskRecords(tasks);
 }
 
+export function listTaskRecordPage(params: {
+  offset: number;
+  limit: number;
+  matches: (task: TaskRecord) => boolean;
+  compare: (left: TaskRecord, right: TaskRecord) => number;
+}): { tasks: TaskRecord[]; hasMore: boolean } {
+  ensureTaskRegistryReady();
+  // Select against authoritative records, then clone only the bounded page.
+  // Cloning the full retained history before filtering defeats the gateway limit.
+  const matching = [...tasks.values()].filter(params.matches).toSorted(params.compare);
+  const selected = matching.slice(params.offset, params.offset + params.limit);
+  return {
+    tasks: selected.map((task) => cloneTaskRecord(task)),
+    hasMore: params.offset + selected.length < matching.length,
+  };
+}
+
 export function listTaskRecords(): TaskRecord[] {
   ensureTaskRegistryReady();
   return [...tasks.values()]
