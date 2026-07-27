@@ -13,6 +13,7 @@ import {
 import { startQaGatewayChild } from "../../../../extensions/qa-lab/src/gateway-child.js";
 import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
 import { GatewayClient, type GatewayClientOptions } from "../../../../src/gateway/client.js";
+import type { DiagnosticStabilitySnapshot } from "../../../../src/logging/diagnostic-stability.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -542,7 +543,29 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
     });
     assertControlResult(cancel, { mode: "cancel", active: true, aborted: true });
     await consultRequest;
-    return `real Gateway pid=${gateway.pid ?? "unknown"}; persistent WebChat connection created Talk session and completed status, steer, follow-up, cancel RPCs`;
+    const queuedDiagnostics = await client.request<DiagnosticStabilitySnapshot>(
+      "diagnostics.stability",
+      { type: "message.queued", limit: 20 },
+    );
+    const steeringQueueDepths = queuedDiagnostics.events
+      .filter((event) => event.source === "embedded-agent-runner")
+      .map((event) => event.queueDepth);
+    if (JSON.stringify(steeringQueueDepths) !== JSON.stringify([1, 1])) {
+      throw new Error(
+        `active-run steering changed diagnostic backlog: ${JSON.stringify(queuedDiagnostics.events)}`,
+      );
+    }
+    const stateDiagnostics = await client.request<DiagnosticStabilitySnapshot>(
+      "diagnostics.stability",
+      { type: "session.state", limit: 20 },
+    );
+    const finalState = stateDiagnostics.events.at(-1);
+    if (finalState?.outcome !== "idle" || finalState.queueDepth !== 0) {
+      throw new Error(
+        `Talk run did not finish with empty diagnostic backlog: ${JSON.stringify(stateDiagnostics.events)}`,
+      );
+    }
+    return `real Gateway pid=${gateway.pid ?? "unknown"}; persistent WebChat connection completed status, steer, follow-up, cancel RPCs; steeringQueueDepths=${steeringQueueDepths.join(",")}; finalState=${finalState.outcome}; finalQueueDepth=${finalState.queueDepth}`;
   } finally {
     client?.stop();
     await gateway?.stop().catch(() => undefined);
