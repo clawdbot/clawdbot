@@ -12,6 +12,7 @@ import { clearPluginOwnedSessionState } from "./plugin-host-cleanup.js";
 import {
   listSqliteSessionEntries,
   listSqliteSessionEntriesReadOnly,
+  listSqliteSessionEntryKeysReadOnly,
   loadExactSqliteSessionEntry,
   loadExactSqliteSessionEntryReadOnly,
   loadSqliteSessionEntry,
@@ -354,6 +355,11 @@ export function listSessionEntriesReadOnly(
   scope: SessionEntryListScope = {},
 ): SessionEntrySummary[] {
   return listSqliteSessionEntriesReadOnly(scope);
+}
+
+/** Lists persisted session keys only; the fallback probe for case-variant keys. */
+export function listSessionEntryKeysReadOnly(scope: SessionEntryListScope = {}): string[] {
+  return listSqliteSessionEntryKeysReadOnly(scope);
 }
 
 /**

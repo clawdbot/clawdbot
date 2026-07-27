@@ -123,6 +123,7 @@ export {
   clearPluginOwnedSessionState,
   listSessionEntries,
   listSessionEntriesReadOnly,
+  listSessionEntryKeysReadOnly,
   loadExactSessionEntry,
   loadExactSessionEntryReadOnly,
   loadSessionEntry,

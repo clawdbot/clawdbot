@@ -4,9 +4,8 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
-  listSessionEntriesReadOnly,
+  listSessionEntryKeysReadOnly,
   loadExactSessionEntryReadOnly,
-  type SessionEntrySummary,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -45,35 +44,18 @@ export function resolveStoreEntryForSessionKey(params: {
       return { storeSessionKey: lower, entry: lowered.entry };
     }
   }
-  const entries = listSessionEntriesReadOnly(scope);
-  const storeSessionKey = resolveStoreSessionKey(entries, normalized);
+  // Both direct probes missed, so only a legacy case-variant key can match.
+  // Scan persisted keys without parsing any entry_json, then probe the winner.
+  const variant = listSessionEntryKeysReadOnly(scope).find(
+    (candidate) => normalizeLowercaseStringOrEmpty(candidate) === lower,
+  );
+  if (variant === undefined) {
+    return { storeSessionKey: lower };
+  }
   return {
-    storeSessionKey,
-    entry: entries.find((candidate) => candidate.sessionKey === storeSessionKey)?.entry,
+    storeSessionKey: variant,
+    entry: loadExactSessionEntryReadOnly({ ...scope, sessionKey: variant })?.entry,
   };
-}
-
-function resolveStoreSessionKey(
-  entries: readonly SessionEntrySummary[],
-  sessionKey: string,
-): string {
-  const normalized = sessionKey.trim();
-  if (!normalized) {
-    return "";
-  }
-  if (entries.some((entry) => entry.sessionKey === normalized)) {
-    return normalized;
-  }
-  const lower = normalizeLowercaseStringOrEmpty(normalized);
-  if (entries.some((entry) => entry.sessionKey === lower)) {
-    return lower;
-  }
-  for (const entry of entries) {
-    if (normalizeLowercaseStringOrEmpty(entry.sessionKey) === lower) {
-      return entry.sessionKey;
-    }
-  }
-  return lower;
 }
 
 /** Resolves the session store path that owns an ACP session key. */

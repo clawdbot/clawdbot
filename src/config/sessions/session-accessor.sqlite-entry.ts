@@ -110,6 +110,21 @@ export function loadExactSqliteSessionEntry(
   return row ? { sessionKey, entry: row.entry } : undefined;
 }
 
+/** Lists persisted session keys only, skipping entry_json parsing entirely. */
+export function listSqliteSessionEntryKeysReadOnly(
+  scope: Partial<Omit<SessionAccessScope, "sessionKey">> = {},
+): string[] {
+  const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
+  const result = withOpenClawAgentDatabaseReadOnly((database) => {
+    const db = getSessionKysely(database.db);
+    return executeSqliteQuerySync(
+      database.db,
+      db.selectFrom("session_nodes").select(["session_key"]).orderBy("session_key", "asc"),
+    ).rows.map((row) => row.session_key);
+  }, toDatabaseOptions(resolved));
+  return result.found ? result.value : [];
+}
+
 /** Exact persisted-key probe on the read-only handle, for per-row hot paths. */
 export function loadExactSqliteSessionEntryReadOnly(
   scope: SessionAccessScope,
