@@ -298,6 +298,76 @@ describe("executeFollowupTurn", () => {
     expect(warningSuppressed).toBe(true);
   });
 
+  it("tracks a full-verbosity failed command before suppressing duplicate warnings", async () => {
+    const onCommandOutput = vi.fn(async () => true);
+    let warningSuppressed: boolean | undefined;
+    const turn = createTurn({
+      session: {
+        kind: "session",
+        key: "main",
+        current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel: "full" }),
+        publish: () => undefined,
+        adopt: () => undefined,
+      },
+    });
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      await params.opts?.onCommandOutput?.({ status: "failed", exitCode: 1 });
+      warningSuppressed = params.opts?.shouldSuppressToolErrorWarnings?.();
+      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+    });
+
+    const result = await executeFollowupTurn({
+      turn,
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+        opts: { onCommandOutput },
+      },
+      onToolResult: vi.fn(async () => {}),
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+    await result.progress.drain();
+
+    expect(onCommandOutput).toHaveBeenCalledOnce();
+    expect(warningSuppressed).toBe(true);
+  });
+
+  it("does not suppress warnings for hidden verbose-off tool errors", async () => {
+    const turn = createTurn({
+      session: {
+        kind: "session",
+        key: "main",
+        current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel: "off" }),
+        publish: () => undefined,
+        adopt: () => undefined,
+      },
+    });
+    turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
+    let warningSuppressed: boolean | undefined;
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      await params.opts?.onToolResult?.({ text: "hidden failure", isError: true });
+      warningSuppressed = params.opts?.shouldSuppressToolErrorWarnings?.();
+      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+    });
+    const onToolResult = vi.fn(async () => {});
+
+    const result = await executeFollowupTurn({
+      turn,
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+      },
+      onToolResult,
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+    await result.progress.drain();
+
+    expect(onToolResult).not.toHaveBeenCalled();
+    expect(warningSuppressed).toBe(false);
+  });
+
   it("drains detached progress before the caller can project a final", async () => {
     const order: string[] = [];
     let releaseProgress!: () => void;

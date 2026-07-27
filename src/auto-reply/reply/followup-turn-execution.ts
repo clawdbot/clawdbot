@@ -155,7 +155,6 @@ export async function executeFollowupTurn(params: {
             const visible = (await sourceOpts.onCommandOutput?.(output)) !== false;
             if (
               visible &&
-              currentVerboseLevel() === "on" &&
               (output.status === "failed" ||
                 output.status === "error" ||
                 (typeof output.exitCode === "number" && output.exitCode !== 0))
@@ -173,7 +172,6 @@ export async function executeFollowupTurn(params: {
             const visible = (await sourceOpts.onItemEvent?.(item)) !== false;
             if (
               visible &&
-              currentVerboseLevel() === "on" &&
               (item.phase === "error" || item.status === "failed" || item.status === "error")
             ) {
               visibleToolError = true;
@@ -212,14 +210,15 @@ export async function executeFollowupTurn(params: {
         if (!progressAllowed()) {
           return;
         }
+        const toolResultProgressVisible = shouldEmitToolResult();
         if (
           turn.queued.run.sourceReplyDeliveryMode === "message_tool_only" &&
-          !shouldEmitToolResult()
+          !toolResultProgressVisible
         ) {
           return;
         }
         await params.onToolResult(payload, { runId: turn.runId });
-        if (payload.isError === true && currentVerboseLevel() === "on") {
+        if (payload.isError === true && toolResultProgressVisible) {
           visibleToolError = true;
         }
       });

@@ -87,6 +87,8 @@ type FollowupAdmissionResult =
       operation?: ReplyOperation;
     };
 
+class FollowupSessionGenerationInvalidatedError extends Error {}
+
 function createFollowupSessionOwner(params: {
   admittedSessionId: string;
   entry?: SessionEntry;
@@ -126,11 +128,31 @@ function createFollowupSessionOwner(params: {
     }
   };
   const adopt = (entry: SessionEntry) => {
-    ownedSessionId = entry.sessionId;
-    ownedLifecycleRevision = entry.lifecycleRevision;
-    currentEntry = entry;
-    if (params.key && params.store) {
-      params.store[params.key] = entry;
+    const storedEntry = params.key ? params.store?.[params.key] : undefined;
+    const storedMatchesOwnedGeneration = Boolean(matchesGeneration(storedEntry));
+    const storedMatchesAdoptedGeneration = Boolean(
+      storedEntry &&
+      storedEntry.sessionId === entry.sessionId &&
+      storedEntry.lifecycleRevision === entry.lifecycleRevision,
+    );
+    if (storedEntry && !storedMatchesOwnedGeneration && !storedMatchesAdoptedGeneration) {
+      throw new FollowupSessionGenerationInvalidatedError(
+        "Follow-up session generation was replaced during admission",
+      );
+    }
+    const adoptedEntry =
+      storedMatchesAdoptedGeneration && storedEntry && storedEntry.updatedAt >= entry.updatedAt
+        ? storedEntry
+        : entry;
+    ownedSessionId = adoptedEntry.sessionId;
+    ownedLifecycleRevision = adoptedEntry.lifecycleRevision;
+    currentEntry = adoptedEntry;
+    if (
+      params.key &&
+      params.store &&
+      (!storedEntry || storedMatchesOwnedGeneration || adoptedEntry !== storedEntry)
+    ) {
+      params.store[params.key] = adoptedEntry;
     }
   };
   if (
@@ -300,7 +322,7 @@ export async function admitFollowupTurn(params: {
       owner: session,
       store: params.defaults.sessionStore,
     });
-    const sendPolicy = resolveSendPolicy({
+    let sendPolicy = resolveSendPolicy({
       cfg: config,
       entry: activeEntry,
       sessionKey: run.runtimePolicySessionKey ?? replySessionKey,
@@ -308,7 +330,7 @@ export async function admitFollowupTurn(params: {
         queued.originatingChannel ?? run.messageProvider ?? sessionDeliveryChannel(activeEntry),
       chatType: queued.originatingChatType ?? run.chatType ?? activeEntry?.chatType,
     });
-    const currentInboundContext =
+    let currentInboundContext =
       params.defaults.opts?.isHeartbeat === true
         ? queued.currentInboundContext
         : refreshActiveGoalContext(queued.currentInboundContext, activeEntry);
@@ -363,6 +385,7 @@ export async function admitFollowupTurn(params: {
       );
       if (activeEntry && generationRotated) {
         session.adopt(activeEntry);
+        activeEntry = session.current() ?? activeEntry;
         operation.updateSessionId(activeEntry.sessionId);
         turn.queued = {
           ...turn.queued,
@@ -381,12 +404,33 @@ export async function admitFollowupTurn(params: {
             modelSelectionLocked: activeEntry.modelSelectionLocked === true,
           },
         };
+        sendPolicy = resolveSendPolicy({
+          cfg: config,
+          entry: activeEntry,
+          sessionKey: turn.queued.run.runtimePolicySessionKey ?? replySessionKey,
+          channel:
+            turn.queued.originatingChannel ??
+            turn.queued.run.messageProvider ??
+            sessionDeliveryChannel(activeEntry),
+          chatType:
+            turn.queued.originatingChatType ?? turn.queued.run.chatType ?? activeEntry.chatType,
+        });
+        currentInboundContext =
+          params.defaults.opts?.isHeartbeat === true
+            ? params.queued.currentInboundContext
+            : refreshActiveGoalContext(params.queued.currentInboundContext, activeEntry);
+        turn.sendPolicy = sendPolicy;
+        turn.currentInboundContext = currentInboundContext;
+        turn.queued = { ...turn.queued, currentInboundContext };
       } else {
         session.publish(activeEntry);
       }
       turn.preflightCompactionApplied =
         generationRotated || (activeEntry?.compactionCount ?? 0) > previousCompactionCount;
     } catch (error) {
+      if (error instanceof FollowupSessionGenerationInvalidatedError) {
+        throw error;
+      }
       operation.fail("run_failed", error);
       const admittedVerboseLevel = session.current()?.verboseLevel ?? turn.queued.run.verboseLevel;
       const text = buildPreflightCompactionFailureText(formatErrorMessage(error), {

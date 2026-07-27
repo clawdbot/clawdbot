@@ -292,6 +292,14 @@ describe("admitFollowupTurn", () => {
       result.turn.session.adopt(replacement);
       result.turn.session.publish(initialEntry);
       expect(result.turn.session.current()).toBe(replacement);
+      const newerSameGeneration = {
+        ...replacement,
+        updatedAt: 4,
+      };
+      result.turn.session.adopt(newerSameGeneration);
+      result.turn.session.publish(replacement);
+      expect(result.turn.session.current()).toBe(newerSameGeneration);
+
       const concurrentEntry = {
         ...initialEntry,
         lifecycleRevision: "revision-c",
@@ -300,16 +308,6 @@ describe("admitFollowupTurn", () => {
       sessionStore.main = concurrentEntry;
       result.turn.session.publish(replacement);
       expect(sessionStore.main).toBe(concurrentEntry);
-
-      const newerSameGeneration = {
-        ...replacement,
-        updatedAt: 4,
-      };
-      result.turn.session.adopt(newerSameGeneration);
-      result.turn.session.publish(replacement);
-      expect(result.turn.session.current()).toBe(newerSameGeneration);
-      sessionStore.main = replacement;
-      expect(result.turn.session.current()).toBe(newerSameGeneration);
     }
   });
 
@@ -424,6 +422,108 @@ describe("admitFollowupTurn", () => {
       expect(result.turn.preflightCompactionApplied).toBe(true);
     }
     expect(operation.updateSessionId).toHaveBeenCalledWith("compacted-session");
+  });
+
+  it("adopts a generation already published by owned preflight compaction", async () => {
+    const operation = createOperation();
+    const initialEntry: SessionEntry = {
+      sessionId: "queued-session",
+      lifecycleRevision: "initial",
+      updatedAt: 1,
+    };
+    const rotatedEntry: SessionEntry = {
+      sessionId: "compacted-session",
+      lifecycleRevision: "compacted",
+      updatedAt: 2,
+    };
+    const publishedEntry: SessionEntry = {
+      ...rotatedEntry,
+      verboseLevel: "full",
+      updatedAt: 3,
+    };
+    const sessionStore = { main: initialEntry };
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
+    state.loadEntry.mockReturnValue(initialEntry);
+    state.preflight.mockImplementation(async () => {
+      sessionStore.main = publishedEntry;
+      return rotatedEntry;
+    });
+
+    const result = await admitFollowupTurn({
+      queued: createRun(),
+      defaults: createDefaults({ sessionStore, sessionEntry: initialEntry }),
+    });
+
+    expect(result).toMatchObject({ kind: "admitted" });
+    if (result.kind === "admitted") {
+      expect(result.turn.session.current()).toBe(publishedEntry);
+    }
+    expect(state.resolveSendPolicy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ entry: publishedEntry }),
+    );
+  });
+
+  it("restores the item when preflight adoption races a replacement generation", async () => {
+    const operation = createOperation();
+    const initialEntry: SessionEntry = {
+      sessionId: "queued-session",
+      lifecycleRevision: "initial",
+      updatedAt: 1,
+    };
+    const rotatedEntry: SessionEntry = {
+      sessionId: "compacted-session",
+      lifecycleRevision: "compacted",
+      updatedAt: 2,
+    };
+    const replacementEntry: SessionEntry = {
+      sessionId: "replacement-session",
+      lifecycleRevision: "replacement",
+      updatedAt: 3,
+    };
+    const sessionStore = { main: initialEntry };
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
+    state.loadEntry.mockReturnValue(initialEntry);
+    state.preflight.mockImplementation(async () => {
+      sessionStore.main = replacementEntry;
+      return rotatedEntry;
+    });
+
+    await expect(
+      admitFollowupTurn({
+        queued: createRun(),
+        defaults: createDefaults({ sessionStore, sessionEntry: initialEntry }),
+      }),
+    ).rejects.toThrow("Follow-up session generation was replaced during admission");
+    expect(operation.complete).toHaveBeenCalledOnce();
+    expect(state.buildPreflightFailureText).not.toHaveBeenCalled();
+  });
+
+  it("refreshes send policy and goal context after preflight rotates the generation", async () => {
+    const operation = createOperation();
+    const initialEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
+    const rotatedEntry: SessionEntry = { sessionId: "compacted-session", updatedAt: 2 };
+    const sessionStore = { main: initialEntry };
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
+    state.loadEntry.mockReturnValue(initialEntry);
+    state.refreshGoal.mockImplementation((_context, entry) => ({ text: entry?.sessionId }));
+    state.preflight.mockImplementation(async () => {
+      state.sendPolicy = "deny";
+      return rotatedEntry;
+    });
+
+    const result = await admitFollowupTurn({
+      queued: createRun({ currentInboundContext: { text: "stale" } }),
+      defaults: createDefaults({ sessionStore, sessionEntry: initialEntry }),
+    });
+
+    expect(result).toMatchObject({
+      kind: "admitted",
+      turn: {
+        sendPolicy: "deny",
+        currentInboundContext: { text: "compacted-session" },
+        queued: { currentInboundContext: { text: "compacted-session" } },
+      },
+    });
   });
 
   it("returns a source-suppression-deliverable preflight failure", async () => {

@@ -472,6 +472,21 @@ describe("resolveFollowupDeliveryDecision", () => {
     ).toEqual({ kind: "suppress", reason: "send-policy" });
   });
 
+  it("suppresses a settled result whose accepted abort still requires accounting", () => {
+    const execution = createSettledExecution("late reply");
+    if (execution.outcome.kind === "settled") {
+      execution.outcome.abortReason = "user";
+    }
+
+    expect(
+      resolveFollowupDeliveryDecision({
+        turn: createTurn(),
+        execution,
+        accounting: createAccounting([{ text: "late reply" }]),
+      }),
+    ).toEqual({ kind: "suppress", reason: "aborted" });
+  });
+
   it("does not leak rejected private text in message-tool-only mode", () => {
     const turn = createTurn();
     turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";

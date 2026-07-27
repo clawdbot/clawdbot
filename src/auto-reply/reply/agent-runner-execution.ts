@@ -558,12 +558,11 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
         },
       };
     }
-    if (isReplyOperationRestartAbort(executionParams.replyOperation)) {
-      return { runId, outcome: { kind: "aborted", reason: "restart" } };
-    }
-    if (isReplyOperationUserAbort(executionParams.replyOperation)) {
-      return { runId, outcome: { kind: "aborted", reason: "user" } };
-    }
+    const abortReason = isReplyOperationRestartAbort(executionParams.replyOperation)
+      ? "restart"
+      : isReplyOperationUserAbort(executionParams.replyOperation)
+        ? "user"
+        : undefined;
     const provider =
       internal.fallbackProvider ??
       internal.result.meta?.agentMeta?.provider ??
@@ -577,6 +576,7 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
       outcome: {
         kind: "settled",
         status: internal.terminalFailurePayload ? "failed" : "ok",
+        ...(abortReason ? { abortReason } : {}),
         result: internal.result,
         resolved: { provider, model },
         fallback: {

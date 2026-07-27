@@ -207,7 +207,10 @@ export function resolveFollowupDeliveryDecision(params: {
   if (turn.queued.currentInboundEventKind === "room_event") {
     return { kind: "suppress", reason: "room-event" };
   }
-  if (execution.outcome.kind === "aborted") {
+  if (
+    execution.outcome.kind === "aborted" ||
+    (execution.outcome.kind === "settled" && execution.outcome.abortReason)
+  ) {
     return { kind: "suppress", reason: "aborted" };
   }
   const sourcePolicy = resolveSourceReplyVisibilityPolicy({

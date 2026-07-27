@@ -47,6 +47,7 @@ export type AgentTurnInternalResult =
 export type SettledAgentTurn = {
   kind: "settled";
   status: "ok" | "failed";
+  abortReason?: "user" | "restart";
   result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
   resolved: { provider: string; model: string };
   fallback: { exhausted: boolean; attempts: RuntimeFallbackAttempt[] };

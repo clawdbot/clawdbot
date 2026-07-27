@@ -32,21 +32,31 @@ describe("executeAgentTurn contract", () => {
     });
   });
 
-  it("rejects a late completed result after user abort was accepted", async () => {
+  it("retains a late completed result for accounting after user abort was accepted", async () => {
     state.runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "late reply" }],
       meta: { durationMs: 1 },
     });
     const { replyOperation } = createMockReplyOperation();
-    const abortedOperation = {
+    let operationResult: typeof replyOperation.result = null;
+    const lateAbortedOperation = {
       ...replyOperation,
-      result: { kind: "aborted", code: "aborted_by_user" } as const,
+      get result() {
+        return operationResult;
+      },
+      freezeAbort: () => {
+        operationResult = { kind: "aborted", code: "aborted_by_user" };
+      },
     };
 
     const result = await executeAgentTurn(
-      createMinimalRunAgentTurnParams({ replyOperation: abortedOperation }),
+      createMinimalRunAgentTurnParams({ replyOperation: lateAbortedOperation }),
     );
 
-    expect(result.outcome).toEqual({ kind: "aborted", reason: "user" });
+    expect(result.outcome).toMatchObject({
+      kind: "settled",
+      abortReason: "user",
+      result: { payloads: [{ text: "late reply" }] },
+    });
   });
 });
