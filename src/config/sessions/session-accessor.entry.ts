@@ -13,6 +13,7 @@ import {
   listSqliteSessionEntries,
   listSqliteSessionEntriesReadOnly,
   loadExactSqliteSessionEntry,
+  loadExactSqliteSessionEntryReadOnly,
   loadSqliteSessionEntry,
   loadSqliteSessionEntryReadOnly,
   patchSqliteSessionEntry,
@@ -328,6 +329,13 @@ export function loadSessionEntryReadOnly(scope: SessionAccessScope): SessionEntr
  */
 export function loadExactSessionEntry(scope: SessionAccessScope): ExactSessionEntry | undefined {
   return loadExactSqliteSessionEntry(scope);
+}
+
+/** Exact persisted-key probe on the read-only handle; see loadExactSessionEntry. */
+export function loadExactSessionEntryReadOnly(
+  scope: SessionAccessScope,
+): ExactSessionEntry | undefined {
+  return loadExactSqliteSessionEntryReadOnly(scope);
 }
 
 /** Lists entries from the resolved store, preserving the persisted key for each row. */

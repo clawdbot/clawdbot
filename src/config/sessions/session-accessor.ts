@@ -124,6 +124,7 @@ export {
   listSessionEntries,
   listSessionEntriesReadOnly,
   loadExactSessionEntry,
+  loadExactSessionEntryReadOnly,
   loadSessionEntry,
   loadSessionEntryReadOnly,
   openSessionEntryReadView,

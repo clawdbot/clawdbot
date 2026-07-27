@@ -110,6 +110,22 @@ export function loadExactSqliteSessionEntry(
   return row ? { sessionKey, entry: row.entry } : undefined;
 }
 
+/** Exact persisted-key probe on the read-only handle, for per-row hot paths. */
+export function loadExactSqliteSessionEntryReadOnly(
+  scope: SessionAccessScope,
+): ExactSessionEntry | undefined {
+  const sessionKey = scope.sessionKey.trim();
+  if (!sessionKey) {
+    return undefined;
+  }
+  const resolved = resolveSqliteScope(scope);
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) => readExactSessionEntryRow(database, sessionKey)?.entry,
+    toDatabaseOptions(resolved),
+  );
+  return result.found && result.value ? { sessionKey, entry: result.value } : undefined;
+}
+
 /** Resolves the persisted session key for a SQLite transcript session id. */
 export function resolveSqliteSessionKeyBySessionId(
   scope: Pick<SessionTranscriptReadScope, "agentId" | "env" | "sessionId" | "storePath">,
