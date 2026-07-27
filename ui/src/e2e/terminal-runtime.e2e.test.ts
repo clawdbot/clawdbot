@@ -55,15 +55,28 @@ describeControlUiE2e("Control UI terminal runtime isolation", () => {
 
     try {
       await page.goto(server.baseUrl);
+      // addScriptTag resolves before the module body runs, so the global is not
+      // observable yet; wait for the assignment instead of racing page.evaluate.
+      await page.addScriptTag({
+        content: `globalThis.openclawTerminalRuntimeModule = import(${JSON.stringify(moduleUrl)});`,
+        type: "module",
+      });
+      await page.waitForFunction(() =>
+        Boolean(
+          (globalThis as unknown as { openclawTerminalRuntimeModule?: unknown })
+            .openclawTerminalRuntimeModule,
+        ),
+      );
       const sentinel = "CLOSE_RESET_SENTINEL";
       const result = await page.evaluate(
-        async ({ moduleUrl, staleText }) => {
-          const importBrowserModule = new Function("moduleUrl", "return import(moduleUrl)") as (
-            url: string,
-          ) => Promise<{
-            createIsolatedGhosttyTerminal: BrowserTerminalFactory;
-          }>;
-          const runtimeModule = await importBrowserModule(moduleUrl);
+        async ({ staleText }) => {
+          const runtimeModule = await (
+            window as unknown as Window & {
+              openclawTerminalRuntimeModule: Promise<{
+                createIsolatedGhosttyTerminal: BrowserTerminalFactory;
+              }>;
+            }
+          ).openclawTerminalRuntimeModule;
           const createTerminal = async () => {
             const host = document.createElement("div");
             host.style.height = "400px";
@@ -100,7 +113,7 @@ describeControlUiE2e("Control UI terminal runtime isolation", () => {
           second.host.remove();
           return { finalSecondLine, firstLine, initialSecondLine };
         },
-        { moduleUrl, staleText: sentinel },
+        { staleText: sentinel },
       );
 
       expect(result.firstLine).toContain(sentinel);

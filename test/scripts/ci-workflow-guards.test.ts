@@ -4294,7 +4294,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(uiTest.run).toContain("pnpm --dir ui test");
   });
 
-  it("gates current Control UI changes on the mocked new-session Chromium E2E", () => {
+  it("gates current Control UI changes on the full mocked Chromium E2E suite", () => {
     const workflow = readCiWorkflow();
     const ui = workflow.jobs["checks-ui"];
     const uiE2e = workflow.jobs["checks-ui-e2e"];
@@ -4305,7 +4305,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'",
     );
     expect(uiE2e["runs-on"]).toBe(ui["runs-on"]);
-    expect(uiE2e["timeout-minutes"]).toBe(30);
+    // The full suite runs one file at a time (fileParallelism: false), so it
+    // needs a wider budget than the single-file gate this job replaced.
+    expect(uiE2e["timeout-minutes"]).toBe(45);
 
     const uiSetup = expectDefined(
       ui.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
@@ -4325,10 +4327,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(chromiumInstall.run).toBe("node scripts/ensure-playwright-chromium.mjs");
 
     const scenario = expectDefined(
-      uiE2e.steps.find((step: WorkflowStep) => step.name === "Test Control UI new-session E2E"),
-      "Control UI new-session E2E regression",
+      uiE2e.steps.find((step: WorkflowStep) => step.name === "Test Control UI end-to-end"),
+      "Control UI E2E suite",
     );
-    expect(scenario.run).toBe("pnpm test:ui:e2e ui/src/e2e/new-session-page.e2e.test.ts");
+    expect(scenario.run).toBe("pnpm test:ui:e2e");
     expect(JSON.stringify(uiE2e)).not.toContain("OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM");
   });
 
