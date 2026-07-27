@@ -50,10 +50,81 @@ type ChatMetadataRefreshOptions = {
   requestVersion?: number;
 };
 
+type SharedChatMetadataRequest = {
+  promise: Promise<ChatMetadataResult>;
+};
+
+type SharedChatMetadataRegistry = {
+  ownerRequestCounts: WeakMap<object, Map<string, number>>;
+  requests: Map<string, SharedChatMetadataRequest>;
+};
+
 const EMPTY_CHAT_METADATA_APPLY_RESULT: ChatMetadataApplyResult = {
   commands: false,
   models: false,
 };
+
+const sharedChatMetadataRequests = new WeakMap<GatewayBrowserClient, SharedChatMetadataRegistry>();
+
+function updateChatMetadataOwnerRequestCount(
+  registry: SharedChatMetadataRegistry,
+  owner: object,
+  requestKey: string,
+  delta: 1 | -1,
+) {
+  let counts = registry.ownerRequestCounts.get(owner);
+  const nextCount = (counts?.get(requestKey) ?? 0) + delta;
+  if (nextCount <= 0) {
+    counts?.delete(requestKey);
+    if (counts?.size === 0) {
+      registry.ownerRequestCounts.delete(owner);
+    }
+    return;
+  }
+  if (!counts) {
+    counts = new Map();
+    registry.ownerRequestCounts.set(owner, counts);
+  }
+  counts.set(requestKey, nextCount);
+}
+
+function requestSharedChatMetadata(
+  host: ChatPageHost,
+  client: GatewayBrowserClient,
+  agentId: string | null | undefined,
+): Promise<ChatMetadataResult> {
+  let registry = sharedChatMetadataRequests.get(client);
+  if (!registry) {
+    registry = {
+      ownerRequestCounts: new WeakMap(),
+      requests: new Map(),
+    };
+    sharedChatMetadataRequests.set(client, registry);
+  }
+  const requests = registry.requests;
+  const requestKey = `${host.connectionEpoch}\0${agentId ?? ""}`;
+  let shared = requests.get(requestKey);
+  const owner = host as object;
+  const existingOwner = (registry.ownerRequestCounts.get(owner)?.get(requestKey) ?? 0) > 0;
+  if (!shared || existingOwner) {
+    const promise = client
+      .request<ChatMetadataResult>("chat.metadata", agentId ? { agentId } : {})
+      .finally(() => {
+        if (requests?.get(requestKey)?.promise === promise) {
+          requests.delete(requestKey);
+        }
+      });
+    shared = { promise };
+    requests.set(requestKey, shared);
+  }
+  updateChatMetadataOwnerRequestCount(registry, owner, requestKey, 1);
+  // Panes may share one exact RPC, but each host still applies the payload under
+  // its own metadata version, connection, and selected-agent ownership checks.
+  // Owner counts outlive displaced map entries so overlapping refreshes never reuse stale work.
+  return shared.promise.finally(() => {
+    updateChatMetadataOwnerRequestCount(registry, owner, requestKey, -1);
+  });
+}
 
 function scheduleChatMetadataRefresh(callback: () => void) {
   const requestIdleCallback =
@@ -173,10 +244,7 @@ export async function refreshChatMetadata(
       return EMPTY_CHAT_METADATA_APPLY_RESULT;
     }
 
-    const result = await client.request<ChatMetadataResult>(
-      "chat.metadata",
-      agentId ? { agentId } : {},
-    );
+    const result = await requestSharedChatMetadata(host, client, agentId);
     if (!ownsChatMetadataRequest(request)) {
       return EMPTY_CHAT_METADATA_APPLY_RESULT;
     }
@@ -272,21 +340,40 @@ async function refreshChat(
   });
   const startupMetadataRefresh =
     opts?.startup === true && opts.onStartupMetadata && refreshedClient
-      ? historyLoad.then((history) => {
-          if (
-            host.client !== refreshedClient ||
-            !host.connected ||
-            host.sessionKey !== refreshedSessionKey ||
-            resolveAgentIdForSession(host) !== refreshedAgentId
-          ) {
-            return;
-          }
-          return opts.onStartupMetadata?.({
-            client: refreshedClient,
-            agentId: refreshedAgentId,
-            metadata: history?.metadata,
-          });
-        })
+      ? historyLoad.then(
+          (history) => {
+            if (
+              host.client !== refreshedClient ||
+              !host.connected ||
+              host.sessionKey !== refreshedSessionKey ||
+              resolveAgentIdForSession(host) !== refreshedAgentId
+            ) {
+              return;
+            }
+            return opts.onStartupMetadata?.({
+              client: refreshedClient,
+              agentId: refreshedAgentId,
+              metadata: history?.metadata,
+            });
+          },
+          () => {
+            // Unexpected history failures must still settle startup metadata so the
+            // metadata fallback can run and release its loading state.
+            if (
+              host.client !== refreshedClient ||
+              !host.connected ||
+              host.sessionKey !== refreshedSessionKey ||
+              resolveAgentIdForSession(host) !== refreshedAgentId
+            ) {
+              return;
+            }
+            return opts.onStartupMetadata?.({
+              client: refreshedClient,
+              agentId: refreshedAgentId,
+              metadata: undefined,
+            });
+          },
+        )
       : Promise.resolve();
   flushChatQueueAfterIdleSessionReconciliation(
     host,

@@ -42,6 +42,17 @@ import {
 import { scheduleControlUiAfterPaint } from "./performance.ts";
 import { openSlot } from "./sidebar-layout.ts";
 
+function createDeferred<T>() {
+  let resolve: ((value: T) => void) | undefined;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  if (!resolve) {
+    throw new Error("Expected deferred callback to be initialized");
+  }
+  return { promise, resolve };
+}
+
 beforeEach(() => {
   vi.spyOn(assistantIdentity, "loadLocalAssistantIdentity").mockReturnValue({
     avatar: "data:image/png;base64,bG9jYWw=",
@@ -1852,6 +1863,109 @@ describe("refreshChatMetadata", () => {
       { id: "work-model", name: "Work Model", provider: "openai", available: true },
     ]);
     expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("coalesces matching metadata requests across chat pane states", async () => {
+    let resolveMetadata:
+      | ((value: {
+          commands: never[];
+          models: Array<{ id: string; name: string; provider: string; available: boolean }>;
+        }) => void)
+      | undefined;
+    const metadata = new Promise<{
+      commands: never[];
+      models: Array<{ id: string; name: string; provider: string; available: boolean }>;
+    }>((resolve) => {
+      resolveMetadata = resolve;
+    });
+    const request = vi.fn(async () => await metadata);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const firstState = createMetadataState(request, { client, connectionEpoch: 1 });
+    const secondState = createMetadataState(request, { client, connectionEpoch: 1 });
+
+    const firstRefresh = refreshChatMetadata(firstState);
+    const secondRefresh = refreshChatMetadata(secondState);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    resolveMetadata?.({
+      commands: [],
+      models: [{ id: "shared-model", name: "Shared Model", provider: "openai", available: true }],
+    });
+    await Promise.all([firstRefresh, secondRefresh]);
+
+    expect(firstState.chatModelCatalog).toEqual([
+      { id: "shared-model", name: "Shared Model", provider: "openai", available: true },
+    ]);
+    expect(secondState.chatModelCatalog).toEqual(firstState.chatModelCatalog);
+  });
+
+  it("keeps displaced metadata ownership across overlapping pane refreshes", async () => {
+    type MetadataResult = {
+      commands: never[];
+      models: Array<{ id: string; name: string; provider: string; available: boolean }>;
+    };
+    const sharedMetadata = createDeferred<MetadataResult>();
+    const firstFreshMetadata = createDeferred<MetadataResult>();
+    const secondFreshMetadata = createDeferred<MetadataResult>();
+    const metadataResults = [sharedMetadata, firstFreshMetadata, secondFreshMetadata];
+    let requestCount = 0;
+    const request = vi.fn(async () => await metadataResults[requestCount++].promise);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const firstState = createMetadataState(request, { client, connectionEpoch: 1 });
+    const secondState = createMetadataState(request, { client, connectionEpoch: 1 });
+
+    const firstSharedRefresh = refreshChatMetadata(firstState);
+    const secondSharedRefresh = refreshChatMetadata(secondState);
+    const firstFreshRefresh = refreshChatMetadata(firstState);
+    const secondFreshRefresh = refreshChatMetadata(secondState);
+
+    expect(request).toHaveBeenCalledTimes(3);
+    firstFreshMetadata.resolve({
+      commands: [],
+      models: [
+        {
+          id: "first-fresh",
+          name: "First Fresh",
+          provider: "openai",
+          available: true,
+        },
+      ],
+    });
+    secondFreshMetadata.resolve({
+      commands: [],
+      models: [
+        {
+          id: "second-fresh",
+          name: "Second Fresh",
+          provider: "openai",
+          available: true,
+        },
+      ],
+    });
+    sharedMetadata.resolve({
+      commands: [],
+      models: [{ id: "shared-stale", name: "Shared Stale", provider: "openai", available: true }],
+    });
+    await Promise.all([
+      firstSharedRefresh,
+      secondSharedRefresh,
+      firstFreshRefresh,
+      secondFreshRefresh,
+    ]);
+
+    expect(firstState.chatModelCatalog?.[0]?.id).toBe("first-fresh");
+    expect(secondState.chatModelCatalog?.[0]?.id).toBe("second-fresh");
+  });
+
+  it("keeps metadata requests separate across pane connection epochs", async () => {
+    const request = vi.fn().mockResolvedValue({ commands: [], models: [] });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const firstState = createMetadataState(request, { client, connectionEpoch: 1 });
+    const secondState = createMetadataState(request, { client, connectionEpoch: 2 });
+
+    await Promise.all([refreshChatMetadata(firstState), refreshChatMetadata(secondState)]);
+
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("ignores metadata after switching to a different agent", async () => {
