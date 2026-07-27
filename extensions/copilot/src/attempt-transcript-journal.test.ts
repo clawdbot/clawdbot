@@ -213,8 +213,64 @@ describe("Copilot attempt transcript journal", () => {
 
     await journal.persistInitialUser();
 
-    expect(journal.snapshot().messagesSnapshot).toEqual([]);
+    expect(journal.snapshot()).toMatchObject({ messagesSnapshot: [], replayInvalid: true });
     expect(recorder.markBlocked).toHaveBeenCalledOnce();
+  });
+
+  it("marks empty transformed user content replay-incomplete", async () => {
+    const { journal, session } = await createFixture();
+    await journal.persistInitialUser();
+    session.emit(
+      event("user.message", "transformed-empty-user", {
+        content: "provider-visible original",
+        transformedContent: "",
+      }),
+    );
+
+    await journal.barrier("empty transformed user");
+
+    expect(journal.snapshot().replayInvalid).toBe(true);
+  });
+
+  it("marks durable system and developer prompts replay-incomplete", async () => {
+    for (const role of ["system", "developer"] as const) {
+      const { journal, session } = await createFixture();
+      await journal.persistInitialUser();
+      session.emit(event("system.message", `${role}-message`, { content: "injected", role }));
+
+      await journal.barrier(`${role} message`);
+
+      expect(journal.snapshot().replayInvalid).toBe(true);
+    }
+  });
+
+  it("marks a hook-suppressed standalone assistant replay-incomplete", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_message_write",
+          handler: (input: unknown) =>
+            (input as { message: AgentMessage }).message.role === "assistant"
+              ? { block: true }
+              : undefined,
+        },
+      ]),
+    );
+    const { journal, session, target } = await createFixture();
+    await journal.persistInitialUser();
+    session.emit(event("user.message", "initial-user", { content: "inspect" }));
+    session.emit(
+      event("assistant.message", "blocked-assistant", {
+        content: "provider-visible response",
+        messageId: "blocked-assistant",
+      }),
+    );
+    await journal.barrier("blocked assistant");
+
+    expect(journal.snapshot().replayInvalid).toBe(true);
+    expect(
+      transcriptMessages(await readSessionTranscriptEvents(target)).map((row) => row.message.role),
+    ).toEqual(["user"]);
   });
 
   it("commits a hidden tool turn to SQLite in assistant request order", async () => {

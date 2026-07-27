@@ -164,7 +164,8 @@ export function attachEventBridge(
       return;
     }
     const source = readString(event.data.source);
-    const transformedContent = readString(event.data.transformedContent);
+    const transformedContent =
+      typeof event.data.transformedContent === "string" ? event.data.transformedContent : undefined;
     const openClawMeta = projectSdkUserMetadata(event.data.attachments, source);
     const idempotencyKey = `copilot-sdk:${options.getSdkSessionId() ?? "unknown"}:${event.id}`;
     // `source` is open-ended provenance, not a visibility enum. Hide the one
@@ -186,6 +187,15 @@ export function attachEventBridge(
         ...(openClawMeta ? { __openclaw: openClawMeta } : {}),
       } as Extract<AgentMessage, { role: "user" }>,
     });
+  });
+
+  registerListener(session, unsubscribeFns, "system.message", (event) => {
+    if (!isRootSessionEvent(event) || event.ephemeral === true) {
+      return;
+    }
+    // System/developer prompts affect native history but AgentMessage has no
+    // lossless canonical role for them, so keep native replay fail-closed.
+    options.transcriptProjection?.journal.markReplayIncomplete();
   });
 
   registerListener(session, unsubscribeFns, "assistant.message_delta", (event) => {

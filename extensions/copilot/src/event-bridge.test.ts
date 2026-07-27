@@ -11,6 +11,7 @@ const MODEL_REF = {
 } as const;
 const REGISTERED_EVENT_TYPES = [
   "user.message",
+  "system.message",
   "assistant.message_delta",
   "assistant.reasoning_delta",
   "assistant.message",

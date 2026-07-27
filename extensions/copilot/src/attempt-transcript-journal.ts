@@ -248,6 +248,7 @@ export function createAttemptTranscriptJournal(params: {
         });
         replaceTailUser(currentUser);
         if (!outcome) {
+          replayInvalid = true;
           recorder.markBlocked();
           return;
         }
@@ -283,6 +284,9 @@ export function createAttemptTranscriptJournal(params: {
           return;
         }
         const outcome = await append(write);
+        if (!outcome) {
+          replayInvalid = true;
+        }
         await publish(accept(outcome));
       });
     },
@@ -318,6 +322,9 @@ export function createAttemptTranscriptJournal(params: {
           return;
         }
         const outcome = await append(write);
+        if (!outcome) {
+          replayInvalid = true;
+        }
         ownAssistant(key, Boolean(outcome));
         await publish(accept(outcome));
       });
@@ -361,6 +368,9 @@ export function createAttemptTranscriptJournal(params: {
         pendingTools = undefined;
         for (const write of deferredUserWrites.splice(0)) {
           const outcome = await append(write);
+          if (!outcome) {
+            replayInvalid = true;
+          }
           const didAppend = accept(outcome);
           appended ||= didAppend;
         }
