@@ -369,6 +369,9 @@ export type AgentFileEntry = {
   name: string;
   path: string;
   missing: boolean;
+  // Absence is a normal workspace state (optional profile files, MEMORY.md before
+  // anything is written); the editor offers these for creation instead of flagging them.
+  expectedAbsent?: boolean;
   size?: number;
   updatedAtMs?: number;
   content?: string;

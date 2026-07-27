@@ -3723,6 +3723,21 @@ td.data-table-key-col {
   opacity: 0.5;
 }
 
+.agent-tab-add {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  background: transparent;
+}
+
+.agent-tab-add:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
 .agent-tab-badge {
   margin-left: 4px;
   font-size: 12px; /* was 9px */

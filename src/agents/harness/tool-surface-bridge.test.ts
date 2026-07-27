@@ -101,6 +101,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
       TOOL_DESCRIBE_RAW_TOOL_NAME,
       TOOL_CALL_RAW_TOOL_NAME,
       "exec",
+      "read",
     ]);
     runtime.cleanup();
   });
@@ -114,11 +115,12 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
       };
       const runtime = createRuntime(config);
 
+      // Compaction still applies to non-core tools; core coding tools stay visible.
       expect(
         runtime
           .compactTools(tools([TOOL_SEARCH_CODE_MODE_TOOL_NAME, "exec", "read"]))
           .tools.map((tool) => tool.name),
-      ).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME]);
+      ).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME, "exec", "read"]);
       runtime.cleanup();
     } finally {
       testing.setToolSearchCodeModeSupportedForTest(undefined);
