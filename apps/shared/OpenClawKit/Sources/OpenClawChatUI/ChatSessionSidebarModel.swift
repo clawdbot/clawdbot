@@ -218,8 +218,15 @@ public enum ChatSessionSidebarModel {
     /// replacement run that reused the same session key.
     public static func applying(
         observerDigest digest: SessionObserverDigest,
-        to sessions: [OpenClawChatSessionEntry]) -> [OpenClawChatSessionEntry]
+        to sessions: [OpenClawChatSessionEntry],
+        activeAgentId: String? = nil) -> [OpenClawChatSessionEntry]
     {
+        if digest.sessionkey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "global",
+           let digestAgentId = self.normalized(digest.agentid)?.lowercased(),
+           digestAgentId != self.normalized(activeAgentId)?.lowercased()
+        {
+            return sessions
+        }
         guard let index = sessions.firstIndex(where: { $0.key == digest.sessionkey }) else { return sessions }
         var session = sessions[index]
         let candidate = OpenClawChatSessionObserverDigest(digest)

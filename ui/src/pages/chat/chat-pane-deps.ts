@@ -135,10 +135,12 @@ export {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
   canonicalUiSessionKeyForPersistence,
+  normalizeAgentId,
   normalizeSessionKeyForUiComparison,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
   resolveUiConfiguredMainKey,
+  resolveUiGlobalAliasAgentId,
   uiSessionEventMatches,
 } from "../../lib/sessions/session-key.ts";
 export { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
@@ -206,6 +208,7 @@ export {
   retryChatComposerMemoryFallback,
   resolveChatAgentId,
   resolveChatAvatarUrl,
+  selectedChatSessionRow,
   saveRouteSessionSettings,
   type ChatPageHost,
 } from "./chat-state.ts";

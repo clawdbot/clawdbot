@@ -5255,7 +5255,12 @@ class ChatController internal constructor(
 
   private fun handleSessionObserverEvent(payloadJson: String) {
     val digest = runCatching { json.decodeFromString<SessionObserverDigest>(payloadJson) }.getOrNull() ?: return
-    _sessions.value = applySessionObserverDigest(_sessions.value, digest)
+    _sessions.value =
+      applySessionObserverDigest(
+        _sessions.value,
+        digest,
+        activeAgentId = resolveAgentIdForSessionKey(_sessionKey.value),
+      )
   }
 
   private fun scheduleSessionsChangedBranchReconciliation(
@@ -6793,8 +6798,19 @@ internal fun mergeChatSessionEntry(
 internal fun applySessionObserverDigest(
   sessions: List<ChatSessionEntry>,
   digest: SessionObserverDigest,
+  activeAgentId: String? = null,
 ): List<ChatSessionEntry> {
-  val index = sessions.indexOfFirst { it.key == digest.sessionKey }
+  val digestAgentId = digest.agentId?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+  val selectedAgentId = activeAgentId?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+  val index =
+    sessions.indexOfFirst {
+      it.key == digest.sessionKey &&
+        (
+          digest.sessionKey != "global" ||
+            digestAgentId == null ||
+            selectedAgentId == digestAgentId
+        )
+    }
   if (index < 0) return sessions
   val session = sessions[index]
   val runId = digest.runId?.trim()?.takeIf { it.isNotEmpty() } ?: return sessions

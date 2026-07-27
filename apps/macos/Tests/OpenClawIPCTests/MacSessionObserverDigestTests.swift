@@ -49,4 +49,58 @@ struct MacSessionObserverDigestTests {
         #expect(updated[0].observerDigest?.headline == "On track")
         #expect(ChatSessionSidebarModel.subtitle(for: updated[0], workSubtitle: "Work") == "On track")
     }
+
+    @Test func `native chat sidebar rejects another agent global digest`() {
+        let session = OpenClawChatSessionEntry(
+            key: "global",
+            kind: "global",
+            displayName: nil,
+            surface: nil,
+            subject: nil,
+            room: nil,
+            space: nil,
+            updatedAt: 100,
+            sessionId: nil,
+            systemSent: nil,
+            abortedLastRun: nil,
+            thinkingLevel: nil,
+            verboseLevel: nil,
+            inputTokens: nil,
+            outputTokens: nil,
+            totalTokens: nil,
+            modelProvider: nil,
+            model: nil,
+            contextTokens: nil,
+            status: "running",
+            hasActiveRun: true,
+            activeRunIds: ["run-work"])
+        let other = SessionObserverDigest(
+            sessionkey: "global",
+            agentid: "main",
+            runid: "run-work",
+            revision: 1,
+            updatedat: 200,
+            headline: "Wrong owner",
+            health: .stuck)
+        let selected = SessionObserverDigest(
+            sessionkey: "global",
+            agentid: "work",
+            runid: "run-work",
+            revision: 1,
+            updatedat: 200,
+            headline: "Selected owner",
+            health: .onTrack)
+
+        let rejected = ChatSessionSidebarModel.applying(
+            observerDigest: other,
+            to: [session],
+            activeAgentId: "work")
+        let accepted = ChatSessionSidebarModel.applying(
+            observerDigest: selected,
+            to: rejected,
+            activeAgentId: "work")
+
+        #expect(rejected[0].observerDigest == nil)
+        #expect(accepted[0].observerDigest?.headline == "Selected owner")
+    }
 }

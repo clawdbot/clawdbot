@@ -61,6 +61,7 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
       data: { phase: "end", startedAt: 0, endedAt: 30_000 },
     });
     delete contextlessTerminal.sessionKey;
+    delete contextlessTerminal.agentId;
 
     harness.observer.handleEvent(contextlessTerminal);
     harness.observer.handleEvent(
@@ -84,6 +85,7 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
       data: { phase: "end", startedAt: 0, endedAt: 30_000 },
     });
     delete contextlessTerminal.sessionKey;
+    delete contextlessTerminal.agentId;
 
     harness.observer.handleEvent(contextlessTerminal);
     await flushObserver();

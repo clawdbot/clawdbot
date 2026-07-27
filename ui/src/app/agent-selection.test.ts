@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
-import { createAgentSelectionCapability } from "./agent-selection.ts";
+import { createAgentSelectionCapability, selectApplicationSession } from "./agent-selection.ts";
 
 function createGateway(assistantAgentId: string | null = "Main") {
   let snapshot = { client: null as GatewayBrowserClient | null, assistantAgentId };
@@ -85,10 +85,9 @@ describe("agent selection", () => {
     expect(selection.state.scopeId).toBeNull();
   });
 
-  it("resets selection and scope together for a new gateway client", () => {
-    const harness = createGateway();
+  it("adopts the Gateway default when the cold-start selection is unresolved", () => {
+    const harness = createGateway("");
     const selection = createAgentSelectionCapability(harness.gateway, createRoster().roster);
-    selection.setScope(null);
 
     harness.publish({
       client: { request() {} } as unknown as GatewayBrowserClient,
@@ -118,6 +117,23 @@ describe("agent selection", () => {
     gateway.publish({ client, assistantAgentId: null });
     selection.set("Research");
     gateway.publish({ client, assistantAgentId: "Roboclaw" });
+
+    expect(selection.state).toEqual({ selectedId: "research", scopeId: "research" });
+  });
+
+  it("keeps an explicit session owner across a Gateway reconnect", () => {
+    const harness = createGateway();
+    const selection = createAgentSelectionCapability(harness.gateway, createRoster().roster);
+    harness.publish({
+      client: { request() {} } as unknown as GatewayBrowserClient,
+      assistantAgentId: "Main",
+    });
+    selection.set("Research");
+
+    harness.publish({
+      client: { request() {} } as unknown as GatewayBrowserClient,
+      assistantAgentId: "Main",
+    });
 
     expect(selection.state).toEqual({ selectedId: "research", scopeId: "research" });
   });
@@ -154,5 +170,44 @@ describe("agent selection", () => {
     });
 
     expect(selection.state).toEqual({ selectedId: "roboclaw", scopeId: "roboclaw" });
+  });
+});
+
+describe("application session selection", () => {
+  it("selects the encoded agent before changing the Gateway session", () => {
+    const calls: string[] = [];
+
+    selectApplicationSession({
+      selection: { set: (agentId) => calls.push(`agent:${agentId}`) },
+      gateway: { setSessionKey: (sessionKey) => calls.push(`session:${sessionKey}`) },
+      sessionKey: "agent:Research:work",
+    });
+
+    expect(calls).toEqual(["agent:research", "session:agent:Research:work"]);
+  });
+
+  it("uses explicit ownership for a canonical global session", () => {
+    const calls: string[] = [];
+
+    selectApplicationSession({
+      selection: { set: (agentId) => calls.push(`agent:${agentId}`) },
+      gateway: { setSessionKey: (sessionKey) => calls.push(`session:${sessionKey}`) },
+      sessionKey: "global",
+      agentId: "Research",
+    });
+
+    expect(calls).toEqual(["agent:research", "session:global"]);
+  });
+
+  it("preserves the encoded owner of an explicit global-session alias", () => {
+    const calls: string[] = [];
+
+    selectApplicationSession({
+      selection: { set: (agentId) => calls.push(`agent:${agentId}`) },
+      gateway: { setSessionKey: (sessionKey) => calls.push(`session:${sessionKey}`) },
+      sessionKey: "agent:Research:main",
+    });
+
+    expect(calls).toEqual(["agent:research", "session:agent:Research:main"]);
   });
 });

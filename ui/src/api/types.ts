@@ -544,7 +544,7 @@ export type GatewaySessionRow = {
   agentStatus?: SessionAgentStatus;
   observerDigest?: Pick<
     SessionObserverDigest,
-    "runId" | "headline" | "health" | "updatedAt" | "revision"
+    "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
   >;
   lastActivityAt?: number;
   archived?: boolean;

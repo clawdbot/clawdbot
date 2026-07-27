@@ -115,6 +115,35 @@ class SessionObserverDigestTest {
   }
 
   @Test
+  fun globalObserverEventsRequireTheSelectedAgent() {
+    val running =
+      ChatSessionEntry(
+        key = "global",
+        updatedAtMs = 100,
+        hasActiveRun = true,
+        activeRunIds = listOf("run-work"),
+        status = "running",
+      )
+    val wrongOwner =
+      SessionObserverDigest(
+        sessionKey = "global",
+        agentId = "main",
+        runId = "run-work",
+        revision = 1,
+        updatedAt = 200,
+        headline = "Wrong owner",
+        health = "stuck",
+      )
+    val selectedOwner = wrongOwner.copy(agentId = "work", headline = "Selected owner")
+
+    val rejected = applySessionObserverDigest(listOf(running), wrongOwner, activeAgentId = "work")
+    val accepted = applySessionObserverDigest(rejected, selectedOwner, activeAgentId = "work")
+
+    assertNull(rejected.single().observerDigest)
+    assertEquals("Selected owner", accepted.single().observerDigest?.headline)
+  }
+
+  @Test
   fun subtitlePrecedenceAndUnreadFinalRuleMatchTheWebSidebar() {
     val liveDigest = digest(runId = "run-1", revision = 1, updatedAt = 200, headline = "Observer")
     val agentStatus = ChatSessionAgentStatus(note = "Agent note", expiresAt = 10_000)
