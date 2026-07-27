@@ -513,7 +513,7 @@ export async function createMattermostDirectChannelWithRetry(
   );
 }
 
-function isRetryableError(error: Error): boolean {
+export function isRetryableError(error: Error): boolean {
   const candidates = collectErrorGraphCandidates(error, (current) => [
     current.cause,
     current.reason,

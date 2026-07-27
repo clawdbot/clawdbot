@@ -37,6 +37,10 @@ import {
   formatMattermostInboundMediaText,
   formatMattermostPendingMediaText,
 } from "./monitor-resources.js";
+import {
+  createMattermostThreadBackfill,
+  createSessionIdResolver,
+} from "./monitor-thread-backfill.js";
 import { dispatchMattermostInboundTurn } from "./monitor-turn.js";
 import type { MattermostMonitorContext } from "./monitor-types.js";
 import type { MattermostEventPayload } from "./monitor-websocket.js";
@@ -57,6 +61,15 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
     0,
     cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
   );
+  // Recovery state lives exactly as long as the history map it repairs, so a
+  // restart resets both together.
+  const threadBackfill = createMattermostThreadBackfill({
+    client: monitor.client,
+    channelHistories,
+    historyLimit,
+    resolveSessionId: createSessionIdResolver(cfg.session?.store),
+    logVerboseMessage: (message) => monitor.logVerboseMessage(message),
+  });
 
   return async (
     post: MattermostPost,
@@ -362,6 +375,18 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       previousTimestamp,
       envelope: envelopeOptions,
     });
+    // A thread whose in-memory window did not survive a restart or a session
+    // clear is rebuilt from the server before the pending context is composed,
+    // so the agent sees the conversation the user is actually looking at.
+    if (historyKey && effectiveReplyToId) {
+      await threadBackfill.ensureThreadHistory({
+        historyKey,
+        threadRootId: effectiveReplyToId,
+        currentPostId: post.id,
+        agentId: route.agentId,
+      });
+    }
+
     let combinedBody = body;
     if (historyKey) {
       const channelHistory = createChannelHistoryWindow({ historyMap: channelHistories });
