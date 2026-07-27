@@ -313,7 +313,8 @@ async function promptWebToolsConfig(
     }
 
     if (configureManagedProvider) {
-      const { resolveSearchProviderOptions, setupSearch } = await import("./onboard-search.js");
+      const { resolveSearchProviderOptions, runSearchSetupFlow } =
+        await import("../flows/search-setup.js");
       const searchProviderOptions = resolveSearchProviderOptions(nextConfig);
       if (searchProviderOptions.length === 0) {
         note(
@@ -331,7 +332,7 @@ async function promptWebToolsConfig(
           };
         }
       } else {
-        workingConfig = await setupSearch(workingConfig, runtime, prompter, {
+        workingConfig = await runSearchSetupFlow(workingConfig, runtime, prompter, {
           preserveDisabledSearchState: false,
         });
         const selectedSearch = workingConfig.tools?.web?.search;
