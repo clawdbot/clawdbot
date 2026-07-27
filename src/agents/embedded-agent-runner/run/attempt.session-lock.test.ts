@@ -218,6 +218,10 @@ describe("createEmbeddedAttemptSessionLockController", () => {
       await vi.advanceTimersByTimeAsync(5_000);
 
       await expect(disposal).resolves.toBeUndefined();
+      await expect(controller.releaseForPrompt()).rejects.toThrow(
+        "attempt disposed before prompt submission",
+      );
+      await expect(controller.reacquireAfterPrompt()).resolves.toBeUndefined();
     } finally {
       vi.useRealTimers();
     }

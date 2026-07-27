@@ -190,7 +190,10 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     publishOwnedSessionFileSnapshot: () => false,
     publishValidatedSessionFileSnapshot: () => false,
     readTrustedCurrentSessionFileSnapshot: async () => undefined,
-    releaseForPrompt: async () =>
+    releaseForPrompt: async () => {
+      if (disposed) {
+        throw new Error("attempt disposed before prompt submission");
+      }
       await serializeLifecycle(() => {
         if (disposed) {
           throw new Error("attempt disposed before prompt submission");
@@ -207,7 +210,8 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         promptSettled = new Promise<void>((resolve) => {
           settlePrompt = resolve;
         });
-      }),
+      });
+    },
     releaseHeldLockForAbort: async (options) => {
       promptAborted = true;
       promptSubmissionBlocked ||= options?.terminal !== false;
@@ -220,7 +224,10 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       }
       return run();
     },
-    reacquireAfterPrompt: async () =>
+    reacquireAfterPrompt: async () => {
+      if (disposed) {
+        return;
+      }
       await serializeLifecycle(async () => {
         try {
           if (disposed || cleanupStarted || (promptAborted && !promptReleaseNeedsReload)) {
@@ -230,7 +237,8 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         } finally {
           settlePromptRelease();
         }
-      }),
+      });
+    },
     waitForSessionEvents: async () => {},
     withSessionWriteLock: async (run) => {
       if (disposed) {
