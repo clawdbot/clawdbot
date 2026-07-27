@@ -224,7 +224,7 @@ function rememberReusableCatalog(key: string | undefined, catalog: ToolSearchCat
   }
 }
 
-export function classifyTool(tool: CatalogTool): {
+function classifyTool(tool: CatalogTool): {
   source: CatalogSource;
   sourceName?: string;
   mcp?: PluginToolMcpMeta;
