@@ -22,7 +22,10 @@ import {
   resolveEffectiveCompactionMode,
 } from "../agent-settings.js";
 import { resolveCliBackendConfig as resolveCliBackendConfigImpl } from "../cli-backends.js";
-import { classifyCompactionReason } from "../embedded-agent-runner/compact-reasons.js";
+import {
+  isBenignCompactionSkipReason,
+  isBenignCompactionSkipResult,
+} from "../embedded-agent-runner/compact-reasons.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../embedded-agent-runner/compaction-runtime-context.js";
 import {
   compactContextEngineWithSafetyTimeout,
@@ -206,15 +209,6 @@ function isUnsupportedNativeHarnessCompaction(
   return result?.ok === false && result.failure?.reason === "unsupported_harness_compaction";
 }
 
-function isBenignCliCompactionNoopReason(reason: string | undefined): boolean {
-  const classification = classifyCompactionReason(reason);
-  return (
-    classification === "below_threshold" ||
-    classification === "already_compacted_recently" ||
-    classification === "no_compactable_entries"
-  );
-}
-
 function isIntentionalNativeAutoCompactionSkip(
   result: EmbeddedAgentCompactResult | undefined,
 ): boolean {
@@ -389,7 +383,7 @@ async function compactCliTranscript(params: {
     );
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    if (isBenignCliCompactionNoopReason(reason)) {
+    if (isBenignCompactionSkipReason(reason)) {
       log.info(
         `CLI transcript compaction skipped for ${params.provider}/${params.model}: ${reason}`,
       );
@@ -402,9 +396,9 @@ async function compactCliTranscript(params: {
     };
   }
 
-  if (!compactResult.compacted) {
+  if (!compactResult.ok || !compactResult.compacted) {
     const reason = compactResult.reason;
-    if (isBenignCliCompactionNoopReason(reason)) {
+    if (isBenignCompactionSkipResult(compactResult)) {
       log.info(
         `CLI transcript compaction skipped for ${params.provider}/${params.model}: ${reason}`,
       );
@@ -552,9 +546,9 @@ async function compactNativeHarnessCliTranscript(params: {
     };
   }
 
-  if (!result?.compacted) {
+  if (!result?.ok || !result.compacted) {
     const reason = result?.reason;
-    if (isBenignCliCompactionNoopReason(reason)) {
+    if (result && isBenignCompactionSkipResult(result)) {
       log.info(
         `CLI native harness compaction skipped for ${params.provider}/${params.model}: ${reason}`,
       );
