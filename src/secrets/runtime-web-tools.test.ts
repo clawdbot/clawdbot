@@ -1160,16 +1160,12 @@ describe("runtime web tools resolution", () => {
     });
 
     // Perplexity's credential should NOT be marked inactive because its plugin
-    // manifest declares standalone tools. The raw SecretRef is preserved (only the
-    // selected provider's credential is resolved by the web tools runtime).
+    // manifest declares standalone tools, and it must be resolved so standalone
+    // tools receive a usable runtime value.
     expect(context.warnings.map((w) => w.code)).not.toContain(
       "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
     );
-    expect(readProviderKey(resolvedConfig, "perplexity")).toEqual({
-      source: "env",
-      provider: "default",
-      id: "PERPLEXITY_API_KEY_REF",
-    });
+    expect(readProviderKey(resolvedConfig, "perplexity")).toBe("perplexity-key");
   });
 
   it("marks non-standalone-tool provider credentials inactive when not selected", async () => {

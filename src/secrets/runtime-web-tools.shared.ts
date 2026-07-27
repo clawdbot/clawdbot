@@ -2,22 +2,28 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
-import { setPathExistingStrict } from "./path-utils.js";
 import type { SecretDegradationReason } from "./runtime-degraded-state.js";
 import { digestRuntimeWebOwnerContract } from "./runtime-owner-contract.js";
 import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
 import { pushInactiveSurfaceWarning, pushWarning } from "./runtime-shared.js";
 import {
   RuntimeWebProviderUnavailableError,
-  type RuntimeWebResolveSecretInputParams,
+  type RuntimeWebProviderMetadataBase,
+  type RuntimeWebProviderSelectionParams,
   type RuntimeWebProviderSelectionResult,
   type RuntimeWebUnavailableProvider,
   type RuntimeWebWarningCode,
   type SecretResolutionResult,
 } from "./runtime-web-tools-selection.types.js";
+import {
+  resolveStandaloneProviderCredentials,
+  setResolvedCredentialPath,
+} from "./runtime-web-tools-standalone.js";
 import type { RuntimeWebDiagnostic } from "./runtime-web-tools.types.js";
 export { isRecord } from "./shared.js";
 export {
+  type RuntimeWebProviderMetadataBase,
+  type RuntimeWebProviderSelectionParams,
   type RuntimeWebProviderSelectionResult,
   type RuntimeWebSecretOwner,
   type RuntimeWebUnavailableProvider,
@@ -30,83 +36,6 @@ const loadResolveManifestContractOwnerPluginId = createLazyRuntimeNamedExport(
   () => import("./runtime-web-tools-manifest.runtime.js"),
   "resolveManifestContractOwnerPluginId",
 );
-
-/** Metadata fields shared by runtime web search and fetch provider selection. */
-type RuntimeWebProviderMetadataBase<TSource extends string> = {
-  providerConfigured?: string;
-  providerSource: "configured" | "auto-detect" | "none";
-  selectedProvider?: string;
-  selectedProviderKeySource?: TSource;
-  diagnostics: RuntimeWebDiagnostic[];
-};
-
-/**
- * Parameters shared by web search/fetch provider selection after provider surface discovery.
- */
-type RuntimeWebProviderSelectionParams<
-  TProvider extends {
-    id: string;
-    requiresCredential?: boolean;
-  },
-  TToolConfig extends Record<string, unknown> | undefined,
-  TSource extends string,
-  TMetadata extends RuntimeWebProviderMetadataBase<TSource>,
-> = {
-  scopePath: string;
-  toolConfig: TToolConfig;
-  enabled: boolean;
-  providers: TProvider[];
-  configuredProvider?: string;
-  metadata: TMetadata;
-  diagnostics: RuntimeWebDiagnostic[];
-  sourceConfig: OpenClawConfig;
-  resolvedConfig: OpenClawConfig;
-  context: ResolverContext;
-  defaults: SecretDefaults | undefined;
-  /** Allow keyless providers to be selected when no provider is explicitly configured. */
-  allowKeylessAutoSelect: boolean;
-  /** Defer keyless providers until credential-bearing auto-detect candidates are exhausted. */
-  deferKeylessFallback: boolean;
-  /**
-   * Provider IDs whose credentials stay active even when not selected because
-   * they have enabled standalone tools that need the same credential.
-   */
-  standaloneToolProviderIds?: ReadonlySet<string>;
-  /** Keep cold-start preparation alive when no configured provider ref can resolve. */
-  allowUnavailableProviders?: boolean;
-  onUnavailableProviders?: (error: RuntimeWebProviderUnavailableError) => void;
-  noFallbackCode: RuntimeWebWarningCode;
-  autoDetectSelectedCode: RuntimeWebWarningCode;
-  /** Reads the primary credential location for a provider from source config. */
-  readConfiguredCredential: (params: {
-    provider: TProvider;
-    config: OpenClawConfig;
-    toolConfig: TToolConfig;
-  }) => unknown;
-  readConfiguredCredentialFallback?: (params: {
-    provider: TProvider;
-    config: OpenClawConfig;
-    toolConfig: TToolConfig;
-  }) => { path: string; value: unknown } | undefined;
-  /** Resolves inline/env/SecretRef credentials and reports the winning source. */
-  resolveSecretInput: (
-    params: RuntimeWebResolveSecretInputParams,
-  ) => Promise<SecretResolutionResult<TSource>>;
-  /** Writes the selected credential into the resolved runtime config snapshot. */
-  setResolvedCredential: (params: {
-    resolvedConfig: OpenClawConfig;
-    provider: TProvider;
-    value: string;
-  }) => void;
-  inactivePathsForProvider: (provider: TProvider) => string[];
-  hasConfiguredSecretRef: (value: unknown, defaults: SecretDefaults | undefined) => boolean;
-  mergeRuntimeMetadata?: (params: {
-    provider: TProvider;
-    metadata: TMetadata;
-    toolConfig: TToolConfig;
-    selectedResolution?: SecretResolutionResult<TSource>;
-  }) => Promise<void>;
-};
 
 function pushInactiveProviderCredentialWarnings<
   TProvider extends { id: string; requiresCredential?: boolean },
@@ -176,29 +105,6 @@ export function hasConfiguredSecretRef(
 
 function getProviderEnvVars(provider: object): string[] {
   return "envVars" in provider && Array.isArray(provider.envVars) ? provider.envVars : [];
-}
-
-function setResolvedCredentialPath(params: {
-  resolvedConfig: OpenClawConfig;
-  path: string;
-  value: string;
-}): void {
-  const pathSegments = params.path
-    .split(".")
-    .map((segment) => segment.trim())
-    .filter((segment) => segment.length > 0);
-  if (pathSegments.length === 0) {
-    return;
-  }
-  try {
-    setPathExistingStrict(
-      params.resolvedConfig as Record<string, unknown>,
-      pathSegments,
-      params.value,
-    );
-  } catch {
-    // Env-only provider defaults may not have a config path to mirror.
-  }
 }
 
 /**
@@ -714,6 +620,14 @@ export async function resolveRuntimeWebProviderSelection<
         });
       }
     }
+  }
+
+  if (params.enabled) {
+    await resolveStandaloneProviderCredentials({
+      selection: params,
+      selectedProvider,
+      unavailableProviders,
+    });
   }
 
   if (params.enabled && !params.configuredProvider && params.metadata.selectedProvider) {

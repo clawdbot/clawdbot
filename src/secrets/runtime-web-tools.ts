@@ -38,6 +38,8 @@ import { hasCredentialBearingObjectValue } from "./runtime-secret-scan.js";
 import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
 import { getActiveSecretsRuntimeSnapshot } from "./runtime-state.js";
 import { runtimeWebSecretOwnerId } from "./runtime-web-secret-owner.js";
+import type { RuntimeWebProviderSelectionParams } from "./runtime-web-tools-selection.types.js";
+import { resolveMissingStandaloneProviderCredentials } from "./runtime-web-tools-standalone.js";
 import {
   hasConfiguredSecretRef,
   isRecord,
@@ -808,26 +810,6 @@ export async function resolveRuntimeWebTools(params: {
       diagnostics,
     });
   }
-  const rawProvider = normalizeLowercaseStringOrEmpty(search?.provider);
-  let configuredBundledWebSearchPluginIdHint: string | undefined;
-  if (hasPluginWebSearchConfig && !(await getHasCustomWebSearchRisk())) {
-    if (rawProvider) {
-      configuredBundledWebSearchPluginIdHint = inferExactBundledPluginScopedWebToolConfigOwner({
-        config: params.sourceConfig,
-        key: "webSearch",
-        pluginId: rawProvider,
-      });
-    }
-    configuredBundledWebSearchPluginIdHint ??= inferSingleBundledPluginScopedWebToolConfigOwner(
-      params.sourceConfig,
-      "webSearch",
-    );
-  }
-  const searchMetadata: RuntimeWebSearchMetadata = {
-    providerSource: "none",
-    diagnostics: [],
-  };
-
   // Providers whose plugins declare standalone tools (contracts.tools) need their
   // credentials to stay active even when a different web search/fetch provider is
   // selected, because the standalone tools share the same configured credential path.
@@ -845,6 +827,28 @@ export async function resolveRuntimeWebTools(params: {
       })
       .map((p) => p.id),
   );
+
+  const rawProvider = normalizeLowercaseStringOrEmpty(search?.provider);
+  let configuredBundledWebSearchPluginIdHint: string | undefined;
+  if (hasPluginWebSearchConfig && !(await getHasCustomWebSearchRisk())) {
+    // When standalone-tool plugins are enabled, load the full provider surface so
+    // those providers can be resolved even though a different provider is selected.
+    if (rawProvider && standalonePluginIds.size === 0) {
+      configuredBundledWebSearchPluginIdHint = inferExactBundledPluginScopedWebToolConfigOwner({
+        config: params.sourceConfig,
+        key: "webSearch",
+        pluginId: rawProvider,
+      });
+    }
+    configuredBundledWebSearchPluginIdHint ??= inferSingleBundledPluginScopedWebToolConfigOwner(
+      params.sourceConfig,
+      "webSearch",
+    );
+  }
+  const searchMetadata: RuntimeWebSearchMetadata = {
+    providerSource: "none",
+    diagnostics: [],
+  };
 
   if (search || hasPluginWebSearchConfig) {
     const searchSurface = await resolveRuntimeWebProviderSurface({
@@ -890,7 +894,12 @@ export async function resolveRuntimeWebTools(params: {
       }
     }
 
-    const searchSelection = await resolveRuntimeWebProviderSelection({
+    const searchSelectionParams: RuntimeWebProviderSelectionParams<
+      PluginWebSearchProviderEntry,
+      typeof search,
+      SecretResolutionSource,
+      RuntimeWebSearchMetadata
+    > = {
       scopePath: "tools.web.search",
       toolConfig: search,
       enabled: searchSurface.enabled,
@@ -970,7 +979,28 @@ export async function resolveRuntimeWebTools(params: {
           }),
         );
       },
-    });
+    };
+    const searchSelection = await resolveRuntimeWebProviderSelection(searchSelectionParams);
+    const missingSearchStandalonePluginIds = new Set(
+      [...standalonePluginIds].filter(
+        (pluginId) => !searchSurface.providers.some((provider) => provider.pluginId === pluginId),
+      ),
+    );
+    if (searchSurface.enabled && missingSearchStandalonePluginIds.size > 0) {
+      await resolveMissingStandaloneProviderCredentials({
+        selection: searchSelectionParams,
+        configuredProvider: searchSurface.configuredProvider,
+        missingStandalonePluginIds: missingSearchStandalonePluginIds,
+        resolveProviders: async (pluginId) =>
+          resolveBundledWebSearchProviders({
+            sourceConfig: params.sourceConfig,
+            context: params.context,
+            configuredBundledPluginId: pluginId,
+            hasCustomWebSearchPluginRisk: await getHasCustomWebSearchRisk(),
+          }),
+        unavailableProviders: searchSelection.unavailableProviders,
+      });
+    }
     attachWebProviderFailures(searchSelection.unavailableProviders, providerFailuresByRefKey);
     collectUnavailableWebProviders({
       kind: "search",
@@ -1036,7 +1066,12 @@ export async function resolveRuntimeWebTools(params: {
       }
     }
 
-    const fetchSelection = await resolveRuntimeWebProviderSelection({
+    const fetchSelectionParams: RuntimeWebProviderSelectionParams<
+      PluginWebFetchProviderEntry,
+      typeof fetch,
+      SecretResolutionSource,
+      RuntimeWebFetchMetadata
+    > = {
       scopePath: "tools.web.fetch",
       toolConfig: fetch,
       enabled: fetchSurface.enabled,
@@ -1117,7 +1152,28 @@ export async function resolveRuntimeWebTools(params: {
           }),
         );
       },
-    });
+    };
+    const fetchSelection = await resolveRuntimeWebProviderSelection(fetchSelectionParams);
+    const missingFetchStandalonePluginIds = new Set(
+      [...standalonePluginIds].filter(
+        (pluginId) => !fetchSurface.providers.some((provider) => provider.pluginId === pluginId),
+      ),
+    );
+    if (fetchSurface.enabled && missingFetchStandalonePluginIds.size > 0) {
+      await resolveMissingStandaloneProviderCredentials({
+        selection: fetchSelectionParams,
+        configuredProvider: fetchSurface.configuredProvider,
+        missingStandalonePluginIds: missingFetchStandalonePluginIds,
+        resolveProviders: async (pluginId) =>
+          resolveBundledWebFetchProviders({
+            sourceConfig: params.sourceConfig,
+            context: params.context,
+            configuredBundledPluginId: pluginId,
+            hasCustomWebFetchPluginRisk: await getHasCustomWebFetchRisk(),
+          }),
+        unavailableProviders: fetchSelection.unavailableProviders,
+      });
+    }
     attachWebProviderFailures(fetchSelection.unavailableProviders, providerFailuresByRefKey);
     collectUnavailableWebProviders({
       kind: "fetch",
