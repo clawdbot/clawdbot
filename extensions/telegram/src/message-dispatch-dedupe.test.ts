@@ -200,7 +200,7 @@ describe("Telegram message dispatch replay guard", () => {
     }
   });
 
-  it("does not let a legacy unscoped row suppress a bot-scoped message", async () => {
+  it("starts a fresh dedupe window when legacy rows lack bot identity", async () => {
     const legacy = createLegacyReplayGuard();
     const legacyClaim = await legacy.claim({ accountId: "default", msg: message() });
     if (legacyClaim.kind !== "claimed") {

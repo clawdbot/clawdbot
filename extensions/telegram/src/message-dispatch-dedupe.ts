@@ -63,6 +63,8 @@ function buildTelegramMessageDispatchStoredReplayKey(params: {
   if (chatId == null || typeof messageId !== "number" || messageId <= 0) {
     return null;
   }
+  // Legacy keys omitted bot identity, so they cannot be attributed safely after
+  // state is reused for another bot. This shape intentionally starts a fresh TTL window.
   return JSON.stringify([
     "account",
     params.accountId,
