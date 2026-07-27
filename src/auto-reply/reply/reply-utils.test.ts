@@ -222,6 +222,24 @@ describe("normalizeReplyPayload", () => {
     );
   });
 
+  it.each([
+    ["NO_REPLY\n✅ Done", "✅ Done"],
+    ["NO_REPLY\n- Done", "- Done"],
+    ["NO_REPLY\r\n: explanation", ": explanation"],
+    ["NO_REPLY NO_REPLY\nVisible reply", "Visible reply"],
+  ])("strips only newline-separated leading silent tokens: %j", (text, expected) => {
+    expect(expectNormalizedReply(normalizeReplyPayload({ text })).text).toBe(expected);
+  });
+
+  it.each([
+    "NO_REPLY The user is saying hello",
+    "No_RePlY  The user is saying hello",
+    "NO_REPLY NO_REPLY The user is saying hello",
+    "NO_REPLY\nNO_REPLY The user is saying hello",
+  ])("preserves same-line substantive silent-token mentions: %j", (text) => {
+    expect(expectNormalizedReply(normalizeReplyPayload({ text })).text).toBe(text);
+  });
+
   it("strips glued leading NO_REPLY text case-insensitively", () => {
     const result = normalizeReplyPayload({
       text: "no_replyThe user is saying hello",

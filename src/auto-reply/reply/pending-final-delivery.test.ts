@@ -45,6 +45,24 @@ describe("sanitizePendingFinalDeliveryText", () => {
     expect(sanitizePendingFinalDeliveryText("HEARTBEAT_OK NO_REPLY")).toBe("HEARTBEAT_OK");
   });
 
+  it.each([
+    ["NO_REPLY\n✅ Done", "✅ Done"],
+    ["NO_REPLY\n- Done", "- Done"],
+    ["NO_REPLY\r\n: explanation", ": explanation"],
+    ["NO_REPLY NO_REPLY\nVisible reply", "Visible reply"],
+  ])("strips only newline-separated leading silent tokens: %j", (text, expected) => {
+    expect(sanitizePendingFinalDeliveryText(text)).toBe(expected);
+  });
+
+  it.each([
+    "NO_REPLY The user is saying hello",
+    "No_RePlY  The user is saying hello",
+    "NO_REPLY NO_REPLY The user is saying hello",
+    "NO_REPLY\nNO_REPLY The user is saying hello",
+  ])("preserves same-line substantive silent-token mentions: %j", (text) => {
+    expect(sanitizePendingFinalDeliveryText(text)).toBe(text);
+  });
+
   it("preserves heartbeat ack text for ack-aware classification", () => {
     expect(sanitizePendingFinalDeliveryText("HEARTBEAT_OK short")).toBe("HEARTBEAT_OK short");
   });

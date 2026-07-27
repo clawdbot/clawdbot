@@ -281,8 +281,23 @@ describe("startsWithSilentToken", () => {
 
   it("matches newline-separated leading silent tokens before word-start content", () => {
     expect(startsWithSilentToken("NO_REPLY\n\nThe user is saying")).toBe(true);
-    expect(startsWithSilentToken("No_RePlY  The user is saying")).toBe(true);
-    expect(startsWithSilentToken("NO_REPLY NO_REPLY The user is saying")).toBe(true);
+    expect(startsWithSilentToken("No_RePlY\r\nThe user is saying")).toBe(true);
+    expect(startsWithSilentToken("NO_REPLY NO_REPLY\nThe user is saying")).toBe(true);
+  });
+
+  it("matches substantive punctuation and emoji after a newline-separated token", () => {
+    expect(startsWithSilentToken("NO_REPLY\n✅ Done")).toBe(true);
+    expect(startsWithSilentToken("NO_REPLY\n- Done")).toBe(true);
+    expect(startsWithSilentToken("NO_REPLY\n: explanation")).toBe(true);
+    expect(startsWithSilentToken("NO_REPLY\n**Done**")).toBe(true);
+  });
+
+  it("preserves same-line substantive silent-token mentions", () => {
+    expect(startsWithSilentToken("NO_REPLY The user is saying")).toBe(false);
+    expect(startsWithSilentToken("No_RePlY  The user is saying")).toBe(false);
+    expect(startsWithSilentToken("NO_REPLY NO_REPLY The user is saying")).toBe(false);
+    expect(startsWithSilentToken("\nNO_REPLY The user is saying")).toBe(false);
+    expect(startsWithSilentToken("NO_REPLY\nNO_REPLY The user is saying")).toBe(false);
   });
 
   it("does not mistake a repeated silent token for visible reply content", () => {

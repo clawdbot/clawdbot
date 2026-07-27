@@ -243,13 +243,11 @@ function getSilentLeadingAttachedRegex(token: string): RegExp {
     return cached;
   }
   const escaped = escapeRegExp(token);
-  // Match one or more leading occurrences of the token before word-start content,
-  // including newline-separated model output, without treating punctuation-start
-  // text like `NO_REPLY: explanation` as a silent prefix.
-  const regex = new RegExp(
-    `^\\s*(?:${escaped}\\s+)*${escaped}(?=\\s*(?!${escaped}(?![\\p{L}\\p{N}]))[\\p{L}\\p{N}])`,
-    "iu",
-  );
+  // Match one or more leading occurrences of the token where the final token
+  // is glued directly to visible word-start content (for example
+  // `NO_REPLYhello`), without treating punctuation-start text like
+  // `NO_REPLY: explanation` as a silent prefix.
+  const regex = new RegExp(`^\\s*(?:${escaped}\\s+)*${escaped}(?=[\\p{L}\\p{N}])`, "iu");
   silentLeadingAttachedRegexByToken.set(token, regex);
   return regex;
 }
@@ -260,8 +258,9 @@ function getSilentLeadingRegex(token: string): RegExp {
     return cached;
   }
   const escaped = escapeRegExp(token);
-  // Match one or more leading occurrences of the token, each optionally followed by whitespace
-  const regex = new RegExp(`^(?:\\s*${escaped})+\\s*`, "i");
+  // Keep the final separator distinct: an earlier blank line or spacing
+  // between repeated tokens must not turn same-line text into a control reply.
+  const regex = new RegExp(`^\\s*${escaped}((?:\\s*${escaped})*)(\\s*)`, "i");
   silentLeadingRegexByToken.set(token, regex);
   return regex;
 }
@@ -286,7 +285,16 @@ export function startsWithSilentToken(
   if (!text) {
     return false;
   }
-  return getSilentLeadingAttachedRegex(token).test(text);
+  if (getSilentLeadingAttachedRegex(token).test(text)) {
+    return true;
+  }
+  const leading = getSilentLeadingRegex(token).exec(text);
+  // Only a newline after the final token makes separated content a control
+  // reply; preserving same-line token mentions prevents silent message loss.
+  if (!leading || !/[\r\n]/.test(leading[2] ?? "")) {
+    return false;
+  }
+  return text.slice(leading[0].length).trimStart().length > 0;
 }
 
 export function isSilentReplyPrefixText(
