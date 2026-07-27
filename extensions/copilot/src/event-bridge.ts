@@ -661,6 +661,7 @@ export function attachEventBridge(
     if (!apiCallId) {
       if (projectedAssistantMessageIdsWithoutApiCall.has(event.data.messageId)) {
         options.transcriptProjection?.journal.markReplayIncomplete();
+        lastAssistantProjection = { chunks: [chunk] };
         return;
       }
       projectedAssistantMessageIdsWithoutApiCall.add(event.data.messageId);

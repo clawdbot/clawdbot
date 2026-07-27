@@ -745,6 +745,12 @@ describe("Copilot attempt transcript journal", () => {
       role: "assistant",
       content: [{ type: "text", text: "checking" }],
     });
+    expect(
+      bridge.buildAssistantMessage({
+        modelRef: { api: "openai-responses", id: "gpt-5", provider: "github-copilot" },
+        now: () => 3,
+      })?.content,
+    ).toEqual([{ type: "text", text: "checking now" }]);
     expect(journal.snapshot().replayInvalid).toBe(true);
   });
 
