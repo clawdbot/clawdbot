@@ -12,6 +12,7 @@ import {
   upsertConversationIdentity,
 } from "./session-accessor.sqlite-conversation.js";
 import {
+  captureSqliteSessionEntryCachePublicationToken,
   publishSqliteSessionEntryCacheDelete,
   publishSqliteSessionEntryCacheWrite,
 } from "./session-accessor.sqlite-entry-cache.js";
@@ -306,6 +307,7 @@ export function deleteSqliteSessionEntryRows(
   database: OpenClawAgentDatabase,
   sessionKey: string,
 ): void {
+  const cachePublicationToken = captureSqliteSessionEntryCachePublicationToken(database);
   const db = getSessionKysely(database.db);
   const windows = executeSqliteQuerySync(
     database.db,
@@ -356,14 +358,14 @@ export function deleteSqliteSessionEntryRows(
       sessionKey,
       updatedAt: remainingWindow.updated_at,
     });
-    publishSqliteSessionEntryCacheDelete(database, sessionKey);
+    publishSqliteSessionEntryCacheDelete(database, sessionKey, cachePublicationToken);
     return;
   }
   executeSqliteQuerySync(
     database.db,
     db.deleteFrom("session_nodes").where("session_key", "=", sessionKey),
   );
-  publishSqliteSessionEntryCacheDelete(database, sessionKey);
+  publishSqliteSessionEntryCacheDelete(database, sessionKey, cachePublicationToken);
 }
 
 /** Remove the logical entry while retaining its node-owned transcript windows. */
@@ -474,6 +476,7 @@ export function deleteLegacySessionEntryRows(
   if (legacyKeys.length === 0) {
     return;
   }
+  const cachePublicationToken = captureSqliteSessionEntryCachePublicationToken(database);
   const db = getSessionKysely(database.db);
   for (const legacyKey of legacyKeys) {
     if (legacyKey === sessionKey) {
@@ -485,7 +488,7 @@ export function deleteLegacySessionEntryRows(
       database.db,
       db.deleteFrom("session_nodes").where("session_key", "=", legacyKey),
     );
-    publishSqliteSessionEntryCacheDelete(database, legacyKey);
+    publishSqliteSessionEntryCacheDelete(database, legacyKey, cachePublicationToken);
   }
 }
 
@@ -517,6 +520,7 @@ export function writeSessionEntry(
   entry: SessionEntry,
   options: { previousEntry?: SessionEntry | null } = {},
 ): void {
+  const cachePublicationToken = captureSqliteSessionEntryCachePublicationToken(database);
   const db = getSessionKysely(database.db);
   const normalizedEntry = normalizeSqliteSessionEntryTimestamp(entry);
   const updatedAt = normalizedEntry.updatedAt;
@@ -641,7 +645,7 @@ export function writeSessionEntry(
       updatedAt,
     });
   }
-  publishSqliteSessionEntryCacheWrite(database, sessionKey, normalizedEntry);
+  publishSqliteSessionEntryCacheWrite(database, sessionKey, normalizedEntry, cachePublicationToken);
 }
 
 /** Resolves the parent fork decision using SQLite transcript rows when totals are stale. */

@@ -49,8 +49,13 @@ function readDataVersion(database: DatabaseSync): number {
   return row.data_version;
 }
 
-describe("SQLite data_version", () => {
-  it("changes for another WAL connection's commit but not the connection's own commit", () => {
+function readTotalChanges(database: DatabaseSync): number {
+  const row = database.prepare("SELECT total_changes() AS value").get() as { value: number };
+  return row.value;
+}
+
+describe("SQLite entry cache validity counters", () => {
+  it("separately tracks same-connection and other-connection commits", () => {
     const databasePath = path.join(tempDirs.make("openclaw-data-version-"), "probe.sqlite");
     const first = new DatabaseSync(databasePath);
     const firstMaintenance = configureSqliteConnectionPragmas(first, {
@@ -75,13 +80,18 @@ describe("SQLite data_version", () => {
       expect(second.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
 
       const firstVersion = readDataVersion(first);
+      const firstChanges = readTotalChanges(first);
       first.exec("BEGIN IMMEDIATE; INSERT INTO probe VALUES ('first'); COMMIT;");
       expect(readDataVersion(first)).toBe(firstVersion);
+      expect(readTotalChanges(first)).toBe(firstChanges + 1);
 
       const secondVersion = readDataVersion(second);
+      const secondChanges = readTotalChanges(second);
       second.exec("BEGIN IMMEDIATE; INSERT INTO probe VALUES ('second'); COMMIT;");
       expect(readDataVersion(second)).toBe(secondVersion);
+      expect(readTotalChanges(second)).toBe(secondChanges + 1);
       expect(readDataVersion(first)).not.toBe(firstVersion);
+      expect(readTotalChanges(first)).toBe(firstChanges + 1);
     } finally {
       secondMaintenance.close();
       second.close();
@@ -153,6 +163,41 @@ describe("SQLite session entry cache", () => {
     }
   });
 
+  it("reloads after a raw insert on the cached connection", async () => {
+    const scope = createSessionScope("same-connection-insert");
+    await upsertSessionEntry(scope, {
+      label: "existing",
+      sessionId: "same-connection-existing",
+      updatedAt: 1,
+    });
+    listSessionEntries(scope);
+
+    const database = openOpenClawAgentDatabase(scope);
+    const insertedKey = "agent:main:same-connection-inserted";
+    const insertedEntry = {
+      label: "inserted",
+      sessionId: "same-connection-inserted",
+      updatedAt: 2,
+    };
+    database.db
+      .prepare(
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+      )
+      .run(
+        insertedKey,
+        insertedEntry.sessionId,
+        JSON.stringify(insertedEntry),
+        insertedEntry.updatedAt,
+      );
+
+    parseSessionEntryCalls.mockClear();
+    const entries = listSessionEntries(scope);
+
+    expect(entries.map((row) => row.sessionKey)).toEqual([scope.sessionKey, insertedKey]);
+    expect(entries[1]?.entry).toMatchObject(insertedEntry);
+    expect(parseSessionEntryCalls).toHaveBeenCalledTimes(2);
+  });
+
   it("writes through a same-process upsert without reloading the store", async () => {
     const scope = createSessionScope("write-through");
     await upsertSessionEntry(scope, { label: "before", sessionId: "write-through", updatedAt: 1 });
@@ -163,6 +208,36 @@ describe("SQLite session entry cache", () => {
 
     expect(listSessionEntries(scope)[0]?.entry.label).toBe("after");
     expect(parseSessionEntryCalls).not.toHaveBeenCalled();
+  });
+
+  it("does not let a tracked write mask an earlier raw connection write", async () => {
+    const scope = createSessionScope("raw-before-tracked");
+    const trackedScope = { ...scope, sessionKey: "agent:main:tracked-after-raw" };
+    await upsertSessionEntry(scope, { label: "raw-before", sessionId: "raw", updatedAt: 1 });
+    await upsertSessionEntry(trackedScope, {
+      label: "tracked-before",
+      sessionId: "tracked",
+      updatedAt: 1,
+    });
+    listSessionEntries(scope);
+
+    const database = openOpenClawAgentDatabase(scope);
+    const rawEntry = { label: "raw-after", sessionId: "raw", updatedAt: Date.now() };
+    database.db
+      .prepare("UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?")
+      .run(JSON.stringify(rawEntry), rawEntry.updatedAt, scope.sessionKey);
+    await upsertSessionEntry(trackedScope, { label: "tracked-after", updatedAt: 2 });
+
+    parseSessionEntryCalls.mockClear();
+    const entries = listSessionEntries(scope);
+    const entriesBySessionId = new Map(entries.map((row) => [row.entry.sessionId, row.entry]));
+
+    expect(entriesBySessionId.get("raw")).toMatchObject(rawEntry);
+    expect(entriesBySessionId.get("tracked")).toMatchObject({
+      label: "tracked-after",
+      sessionId: "tracked",
+    });
+    expect(parseSessionEntryCalls).toHaveBeenCalledTimes(2);
   });
 
   it("invalidates cached keys when transcript creation inserts a placeholder node", async () => {
@@ -192,7 +267,7 @@ describe("SQLite session entry cache", () => {
     ]);
   });
 
-  it("bypasses the cache in a transaction without publishing rolled-back state", async () => {
+  it("bypasses the cache in a transaction and reloads persisted state after rollback", async () => {
     const scope = createSessionScope("transaction-rollback");
     await upsertSessionEntry(scope, { label: "before", sessionId: "rollback", updatedAt: 1 });
     const borrowedBefore = openSessionEntryReadView(scope).get(scope.sessionKey);
@@ -214,9 +289,9 @@ describe("SQLite session entry cache", () => {
 
     parseSessionEntryCalls.mockClear();
     const borrowedAfter = openSessionEntryReadView(scope).get(scope.sessionKey);
-    expect(borrowedAfter).toBe(borrowedBefore);
+    expect(borrowedAfter).not.toBe(borrowedBefore);
     expect(borrowedAfter?.label).toBe("before");
-    expect(parseSessionEntryCalls).not.toHaveBeenCalled();
+    expect(parseSessionEntryCalls).toHaveBeenCalledTimes(1);
   });
 
   it("isolates cloned results while borrowed views retain stable references", async () => {
@@ -236,7 +311,7 @@ describe("SQLite session entry cache", () => {
     expect(view.entries()[0]?.entry).toBe(first);
   });
 
-  it("honors latest reads even after an untracked own-connection write", async () => {
+  it("honors latest reads after an untracked own-connection write", async () => {
     const scope = createSessionScope("latest");
     await upsertSessionEntry(scope, { label: "cached", sessionId: "latest", updatedAt: 1 });
     expect(loadSessionEntry(scope)?.label).toBe("cached");
@@ -247,7 +322,7 @@ describe("SQLite session entry cache", () => {
       .prepare("UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?")
       .run(JSON.stringify(updated), updated.updatedAt, scope.sessionKey);
 
-    expect(loadSessionEntry(scope)?.label).toBe("cached");
+    expect(loadSessionEntry(scope)?.label).toBe("latest");
     expect(loadSessionEntry({ ...scope, readConsistency: "latest" })?.label).toBe("latest");
   });
 });
