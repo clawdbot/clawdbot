@@ -144,6 +144,38 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     }
   });
 
+  it("keeps policy-required message delivery directly visible in structured mode", () => {
+    const runtime = createAgentHarnessToolSurfaceRuntime({
+      config: { tools: { toolSearch: { enabled: true, mode: "tools" } } },
+      executeTool: async () => ({ content: [], details: {} }),
+      sourceReplyDeliveryMode: "message_tool_only",
+      modelToolsEnabled: true,
+    });
+
+    try {
+      expect(
+        runtime
+          .compactTools(
+            tools([
+              TOOL_SEARCH_RAW_TOOL_NAME,
+              TOOL_DESCRIBE_RAW_TOOL_NAME,
+              TOOL_CALL_RAW_TOOL_NAME,
+              "web_search",
+              "message",
+            ]),
+          )
+          .tools.map((tool) => tool.name),
+      ).toEqual([
+        TOOL_SEARCH_RAW_TOOL_NAME,
+        TOOL_DESCRIBE_RAW_TOOL_NAME,
+        TOOL_CALL_RAW_TOOL_NAME,
+        "message",
+      ]);
+    } finally {
+      runtime.cleanup();
+    }
+  });
+
   it("keeps policy-required message delivery directly visible in directory mode", () => {
     const runtime = createAgentHarnessToolSurfaceRuntime({
       config: { tools: { toolSearch: { enabled: true, mode: "directory" } } },

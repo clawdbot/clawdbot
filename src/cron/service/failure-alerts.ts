@@ -97,10 +97,9 @@ export function resolveFailureAlert(
     : undefined;
   // Webhook destinations have no chat-channel identity. Announce destinations
   // must stay on their original channel when a job overrides its route.
-  const globalTo =
-    mode === "webhook" || !jobChannel || jobChannel === globalChannel
-      ? configuredGlobalTo
-      : undefined;
+  const inheritsGlobalRoute =
+    inheritsGlobalMode && (mode === "webhook" || !jobChannel || jobChannel === globalChannel);
+  const globalTo = inheritsGlobalRoute ? configuredGlobalTo : undefined;
   const deliveryTo = normalizeTo(job.delivery?.to);
   const deliveryChannel = resolveFailureAlertChannel(job.delivery?.channel, deliveryTo);
   const channel = jobChannel ?? globalChannel ?? deliveryChannel ?? "last";
@@ -121,7 +120,7 @@ export function resolveFailureAlert(
     channel,
     to: mode === "webhook" ? explicitTo : (explicitTo ?? compatibleDeliveryTo),
     mode,
-    accountId: jobConfig?.accountId ?? globalConfig?.accountId,
+    accountId: jobConfig?.accountId ?? (inheritsGlobalRoute ? globalConfig?.accountId : undefined),
     includeSkipped: jobConfig?.includeSkipped ?? globalConfig?.includeSkipped ?? false,
   };
 }

@@ -83,7 +83,7 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
     const effectiveRunId = subscription?.runId;
     const events: WorkboardNotification[] = [];
     for (const card of await this.list({ boardId: effectiveBoardId })) {
-      if (effectiveCardId && card.id !== effectiveCardId) {
+      if (card.metadata?.archivedAt || (effectiveCardId && card.id !== effectiveCardId)) {
         continue;
       }
       const stale = card.metadata?.stale;
