@@ -473,44 +473,6 @@ for the full example.
     or session state, `openclaw doctor --fix` rewrites them to `openai/*` with
     the Codex runtime unless OpenClaw is explicitly configured.
 
-    ### Trusted loopback credential proxies
-
-    A trusted local credential broker can preserve the native `openai/*`
-    catalog and Responses transport while handling upstream authentication on
-    loopback. Configure the broker's Codex base URL under provider parameters:
-
-    ```json5
-    {
-      models: {
-        providers: {
-          openai: {
-            params: {
-              codexProxyBaseUrl: "http://127.0.0.1:7862/backend-api/codex",
-            },
-          },
-        },
-      },
-    }
-    ```
-
-    Token or OAuth profile model discovery uses
-    `<codexProxyBaseUrl>/models`, and Codex Responses models use
-    `<codexProxyBaseUrl>/responses`. OpenAI API-key profiles keep using the
-    Platform API route. The proxy URL must use the exact `127.0.0.1` or `[::1]`
-    loopback literal and end in `/codex`; OpenClaw rejects other URLs before
-    sending the profile token.
-
-    OpenClaw sends the selected token or OAuth credential only to the local
-    model-discovery and Responses proxy routes. To keep upstream OAuth material
-    outside OpenClaw, configure the profile with an opaque proxy capability
-    instead of the upstream OAuth token. The local proxy then owns upstream
-    authentication, account headers, refresh, and revocation.
-
-    Proxy capabilities are not used for OpenAI usage reporting or image
-    generation because this contract exposes no usage or image route. Select an
-    API-key profile for image generation; API-key profiles keep using the
-    Platform API.
-
     ### Context window defaults and long-context opt-in
 
     OpenClaw treats native model capacity and the active runtime budget as
