@@ -96,7 +96,14 @@ export function createFollowupRunner(
           });
         },
       });
-      await execution.progress.drain();
+      try {
+        await execution.progress.drain();
+      } catch (error) {
+        // Execution already settled; replaying the queued prompt could duplicate side effects.
+        defaultRuntime.error?.(
+          `followup queue: progress presentation failed after execution: ${formatErrorMessage(error)}`,
+        );
+      }
       if (
         execution.execution.outcome.kind === "settled" &&
         hasCompletedSourceReplyDeliveryEvidence(execution.execution.outcome.result)

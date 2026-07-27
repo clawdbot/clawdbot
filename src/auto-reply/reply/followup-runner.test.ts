@@ -229,6 +229,29 @@ describe("createFollowupRunner", () => {
     expect(state.clearRunContext).toHaveBeenCalledWith("run-1");
   });
 
+  it("does not replay a settled turn when progress presentation fails", async () => {
+    const typing = createTypingController();
+    const turn = createTurn();
+    const execution = createRejectedExecution();
+    execution.progress.drain = vi.fn(async () => {
+      throw new Error("presentation failed");
+    });
+    state.admit.mockResolvedValue({ kind: "admitted", turn });
+    state.execute.mockResolvedValue(execution);
+    state.account.mockResolvedValue(undefined);
+    state.resolveDecision.mockReturnValue({ kind: "suppress", reason: "silent" });
+    state.deliver.mockResolvedValue(undefined);
+
+    await createFollowupRunner({ typing, typingMode: "instant", defaultModel: "claude" })(
+      turn.queued,
+    );
+
+    expect(state.execute).toHaveBeenCalledOnce();
+    expect(state.account).toHaveBeenCalledOnce();
+    expect(state.deliver).toHaveBeenCalledOnce();
+    expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
+  });
+
   it("reports a completed message-tool source delivery before final projection", async () => {
     const typing = createTypingController();
     const onObservedReplyDelivery = vi.fn(async () => {});

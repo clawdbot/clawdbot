@@ -359,7 +359,7 @@ async function sendFollowupPayloads(params: {
             ? "origin"
             : "dispatcher";
     await typing.signalTextDelta(payload.text);
-    if (route === "dispatcher") {
+    if (route !== "origin") {
       await defaults.opts?.onBlockReply?.(payload);
       continue;
     }
