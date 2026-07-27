@@ -137,6 +137,23 @@ function ensureColumn(db: DatabaseSync, tableName: string, columnName: string, d
   db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${definition}`);
 }
 
+function ensureStatusTransitionsTable(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS workboard_card_status_transitions (
+      id TEXT PRIMARY KEY,
+      card_id TEXT NOT NULL REFERENCES workboard_cards(id) ON DELETE CASCADE,
+      ordinal INTEGER NOT NULL,
+      from_status TEXT NOT NULL,
+      to_status TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      sequence INTEGER NOT NULL,
+      revision INTEGER NOT NULL,
+      session_key TEXT,
+      run_id TEXT
+    ) STRICT;
+  `);
+}
+
 const WORKBOARD_SCHEMA_SQL = `
     CREATE TABLE IF NOT EXISTS workboard_schema_migrations (
       id TEXT PRIMARY KEY,
@@ -373,6 +390,7 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
     "lifecycle_status_source_updated_at",
     "lifecycle_status_source_updated_at INTEGER",
   );
+  ensureStatusTransitionsTable(db);
   const migrationId = `schema-${SCHEMA_VERSION}`;
   const current = db
     .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = ?")
