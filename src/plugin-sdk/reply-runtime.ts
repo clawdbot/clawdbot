@@ -42,12 +42,14 @@ export {
   dispatchReplyWithDispatcher,
 } from "../auto-reply/reply/provider-dispatcher.js";
 export {
+  captureReplyDispatchDeliveryOutcome,
   createReplyDispatcher,
   createReplyDispatcherWithTyping,
 } from "../auto-reply/reply/reply-dispatcher.js";
 export type {
   ReplyDispatchBeforeDeliverOptions,
   ReplyDispatchKind,
+  ReplyDispatchRuntimeInfo,
   ReplyDispatcher,
   ReplyFollowupAdmissionBarrierTimeoutPolicy,
 } from "../auto-reply/reply/reply-dispatcher.types.js";

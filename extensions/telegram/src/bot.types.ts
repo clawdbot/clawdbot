@@ -3,7 +3,26 @@ import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-con
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramBotInfo } from "./bot-info.js";
+import type {
+  CurrentDmRecoveryFreshness,
+  CurrentDmRecoveryScheduler,
+  CurrentDmRecoveryStore,
+} from "./current-dm-recovery-coordinator.js";
 import type { TelegramTransport } from "./fetch.js";
+
+export type TelegramCurrentDmRecoveryOptions = {
+  /** Explicit feature gate. Omission or false leaves Recovery completely disabled. */
+  enabled: true;
+  /** Durable ingress ownership generation supplied by the Telegram host. */
+  ingressGeneration: number;
+  /** Generation of the feature gate/config snapshot authorizing this turn. */
+  featureGateGeneration: number;
+  store: CurrentDmRecoveryStore;
+  scheduler: CurrentDmRecoveryScheduler;
+  checkFreshness: (
+    identity: import("./current-dm-recovery-coordinator.js").CurrentDmRecoveryIdentity,
+  ) => CurrentDmRecoveryFreshness | Promise<CurrentDmRecoveryFreshness>;
+};
 
 export type TelegramBotOptions = {
   token: string;
@@ -35,5 +54,7 @@ export type TelegramBotOptions = {
   };
   /** Pre-resolved Telegram transport to reuse across bot instances. If not provided, creates a new one. */
   telegramTransport?: TelegramTransport;
+  /** Narrow, disabled-by-default host wiring for the exact current main Telegram DM. */
+  currentDmRecovery?: TelegramCurrentDmRecoveryOptions;
   telegramDeps?: TelegramBotDeps;
 };

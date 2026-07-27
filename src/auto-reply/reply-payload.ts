@@ -267,6 +267,8 @@ export type ReplyPayloadMetadata = {
   heartbeatTerminalToolFailure?: {
     toolName: string;
   };
+  /** This exact final payload is owned by the Telegram current-DM Recovery lifecycle. */
+  telegramCurrentDmRecoverySemanticFinal?: boolean;
 };
 
 const replyPayloadMetadata = new WeakMap<object, ReplyPayloadMetadata>();
@@ -295,6 +297,18 @@ export function isReplyPayloadNonTerminalToolErrorWarning(payload: object): bool
 export function copyReplyPayloadMetadata<T extends object>(source: object, payload: T): T {
   const metadata = getReplyPayloadMetadata(source);
   return metadata ? setReplyPayloadMetadata(payload, metadata) : payload;
+}
+
+export function markReplyPayloadAsTelegramCurrentDmRecoverySemanticFinal<T extends object>(
+  payload: T,
+): T {
+  return setReplyPayloadMetadata(payload, {
+    telegramCurrentDmRecoverySemanticFinal: true,
+  });
+}
+
+export function isTelegramCurrentDmRecoverySemanticFinal(payload: object): boolean {
+  return getReplyPayloadMetadata(payload)?.telegramCurrentDmRecoverySemanticFinal === true;
 }
 
 /** Marks a host-owned payload as deliverable even when normal source replies are suppressed. */

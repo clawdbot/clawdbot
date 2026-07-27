@@ -47,6 +47,7 @@ type ReplyDispatchDeliveryOutcomeTracker = {
   promise: Promise<ReplyDispatchDeliveryOutcome>;
   resolve: (outcome: ReplyDispatchDeliveryOutcome) => void;
   tracked: boolean;
+  aliases: Set<ReplyPayload>;
 };
 
 type ReplyDispatchDeliverer = (
@@ -61,7 +62,55 @@ const DEFAULT_HUMAN_DELAY_MAX_MS = 2500;
 const DEFAULT_BEFORE_DELIVER_TIMEOUT_MS = 15_000;
 const silentReplyLogger = createSubsystemLogger("silent-reply/dispatcher");
 const beforeDeliverCancelledHooks = new WeakMap<ReplyDispatcher, ReplyDispatchCancelHandler[]>();
-const deliveryOutcomeTrackers = new WeakMap<ReplyPayload, ReplyDispatchDeliveryOutcomeTracker>();
+const deliveryOutcomeTrackers = new WeakMap<
+  ReplyPayload,
+  Set<ReplyDispatchDeliveryOutcomeTracker>
+>();
+const deliveryOutcomeAliasGroups = new WeakMap<ReplyPayload, Set<ReplyPayload>>();
+
+function mergeReplyDispatchDeliveryOutcomeTrackers(
+  ...payloads: Array<ReplyPayload | null | undefined>
+): void {
+  const directAliases = payloads.filter((payload): payload is ReplyPayload => payload != null);
+  const aliases = new Set<ReplyPayload>(directAliases);
+  for (const payload of directAliases) {
+    for (const alias of deliveryOutcomeAliasGroups.get(payload) ?? []) {
+      aliases.add(alias);
+    }
+  }
+  const trackers = new Set<ReplyDispatchDeliveryOutcomeTracker>();
+  for (const payload of aliases) {
+    for (const tracker of deliveryOutcomeTrackers.get(payload) ?? []) {
+      trackers.add(tracker);
+    }
+  }
+  if (trackers.size === 0) {
+    return;
+  }
+  for (const payload of aliases) {
+    const existing = deliveryOutcomeTrackers.get(payload) ?? new Set();
+    for (const tracker of trackers) {
+      existing.add(tracker);
+      tracker.aliases.add(payload);
+    }
+    deliveryOutcomeTrackers.set(payload, existing);
+    deliveryOutcomeAliasGroups.set(payload, aliases);
+  }
+}
+
+function claimReplyDispatchDeliveryOutcomeTracker(
+  tracker: ReplyDispatchDeliveryOutcomeTracker,
+): void {
+  tracker.tracked = true;
+  for (const alias of tracker.aliases) {
+    const trackers = deliveryOutcomeTrackers.get(alias);
+    trackers?.delete(tracker);
+    if (trackers?.size === 0) {
+      deliveryOutcomeTrackers.delete(alias);
+    }
+  }
+  tracker.aliases.clear();
+}
 
 type ReplyDispatchBeforeDeliverStage = {
   hook: ReplyDispatchBeforeDeliver;
@@ -167,13 +216,16 @@ export function composeReplyDispatchBeforeDeliver(
     return undefined;
   }
   const composed: ReplyDispatchBeforeDeliver = async (payload, info) => {
+    const root = payload;
     let current: ReplyPayload | null = payload;
     for (const stage of stages) {
       if (!current) {
         return null;
       }
       const next = await runReplyDispatchBeforeDeliverStage(stage, current, info);
+      mergeReplyDispatchDeliveryOutcomeTrackers(root, current, next);
       current = next ? copyReplyPayloadMetadata(current, next) : null;
+      mergeReplyDispatchDeliveryOutcomeTrackers(root, current);
     }
     return current;
   };
@@ -214,8 +266,11 @@ export function captureReplyDispatchDeliveryOutcome(payload: ReplyPayload): {
     }),
     resolve: (outcome) => resolveOutcome(outcome),
     tracked: false,
+    aliases: new Set([payload]),
   };
-  deliveryOutcomeTrackers.set(payload, tracker);
+  const trackers = deliveryOutcomeTrackers.get(payload) ?? new Set();
+  trackers.add(tracker);
+  deliveryOutcomeTrackers.set(payload, trackers);
   return { promise: tracker.promise, isTracked: () => tracker.tracked };
 }
 
@@ -284,6 +339,8 @@ export type ReplyDispatcherOptions = {
   /** Owner-declared deadline for the constructor before-delivery callback. */
   beforeDeliverOptions?: ReplyDispatchBeforeDeliverOptions;
   onBeforeDeliverCancelled?: ReplyDispatchCancelHandler;
+  /** Observe the native dispatcher after construction and before model dispatch begins. */
+  onDispatcherReady?: (dispatcher: ReplyDispatcher) => void;
   /** Observe each queued payload settling, including cancellation and delivery failure. */
   onDeliverySettled?: (info: ReplyDispatchRuntimeInfo) => void;
   /** Resolve an owner activity policy for holding queued follow-ups behind delivery. */
@@ -433,10 +490,23 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     }
     queuedCounts[kind] += 1;
     pending += 1;
-    const deliveryOutcomeTracker = deliveryOutcomeTrackers.get(payload);
-    if (deliveryOutcomeTracker) {
-      deliveryOutcomeTracker.tracked = true;
-    }
+    const deliveryOutcomeTrackersForSend = new Set<ReplyDispatchDeliveryOutcomeTracker>();
+    const deliveryOutcomeAliases = new Set<ReplyPayload>([payload, normalized]);
+    const adoptDeliveryOutcomeTracker = (candidate: ReplyPayload | null | undefined) => {
+      if (!candidate) {
+        return;
+      }
+      const aliases = deliveryOutcomeAliasGroups.get(candidate) ?? [candidate];
+      for (const alias of aliases) {
+        deliveryOutcomeAliases.add(alias);
+        for (const tracker of deliveryOutcomeTrackers.get(alias) ?? []) {
+          claimReplyDispatchDeliveryOutcomeTracker(tracker);
+          deliveryOutcomeTrackersForSend.add(tracker);
+        }
+      }
+    };
+    adoptDeliveryOutcomeTracker(payload);
+    adoptDeliveryOutcomeTracker(normalized);
 
     // Determine if we should add human-like delay (only for block replies after the first).
     const shouldDelay = kind === "block" && sentFirstBlock;
@@ -461,17 +531,25 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           try {
             deliverPayload = await beforeDeliver(normalized, dispatchInfo);
           } catch (err: unknown) {
+            adoptDeliveryOutcomeTracker(normalized);
             await notifyBeforeDeliverCancelled(normalized, dispatchInfo);
+            adoptDeliveryOutcomeTracker(normalized);
             throw err;
           }
           if (!deliverPayload) {
+            adoptDeliveryOutcomeTracker(normalized);
             deliveryOutcome = "cancelled";
             cancelledCounts[kind] += 1;
             await notifyBeforeDeliverCancelled(normalized, dispatchInfo);
+            adoptDeliveryOutcomeTracker(normalized);
             return;
           }
           deliverPayload = copyReplyPayloadMetadata(normalized, deliverPayload);
         }
+        // Lifecycle owners may attach one or more payload-level trackers from
+        // before-delivery hooks, including to a replacement payload.
+        adoptDeliveryOutcomeTracker(normalized);
+        adoptDeliveryOutcomeTracker(deliverPayload);
         deliveryStarted = true;
         await options.deliver(deliverPayload, dispatchInfo);
         deliveryOutcome = "delivered";
@@ -487,8 +565,12 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       })
       .finally(() => {
         const dispatchInfo = buildReplyDispatchRuntimeInfo(normalized, kind);
-        deliveryOutcomeTracker?.resolve(deliveryOutcome);
-        deliveryOutcomeTrackers.delete(payload);
+        for (const tracker of deliveryOutcomeTrackersForSend) {
+          tracker.resolve(deliveryOutcome);
+        }
+        for (const alias of deliveryOutcomeAliases) {
+          deliveryOutcomeAliasGroups.delete(alias);
+        }
         try {
           options.onDeliverySettled?.(dispatchInfo);
         } catch (err: unknown) {
@@ -608,6 +690,7 @@ export function createReplyDispatcherWithTyping(
     },
   });
 
+  options.onDispatcherReady?.(dispatcher);
   return {
     dispatcher,
     replyOptions: {

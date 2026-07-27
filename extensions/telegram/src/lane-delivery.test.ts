@@ -208,6 +208,32 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.lanes.answer.finalized).toBe(true);
   });
 
+  it("routes a Recovery-owned semantic final through one durable send", async () => {
+    const harness = createHarness({ answerMessageId: 999 });
+    harness.lanes.answer.hasStreamedMessage = true;
+    harness.lanes.answer.lastPartialText = "working";
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: HELLO_FINAL,
+      payload: { text: HELLO_FINAL },
+      infoKind: "final",
+      semanticFinal: true,
+    });
+
+    expect(result.kind).toBe("sent");
+    expect(harness.stopDraftLane).not.toHaveBeenCalled();
+    expect(harness.clearDraftLane).toHaveBeenCalledTimes(1);
+    expect(harness.sendPayload).toHaveBeenCalledTimes(1);
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      { text: HELLO_FINAL },
+      expect.objectContaining({
+        durable: true,
+        semanticFinal: true,
+      }),
+    );
+  });
+
   it("keeps reasoning block text in an updatable draft lane", async () => {
     const harness = createHarness();
     harness.reasoning.setMessageId(777);

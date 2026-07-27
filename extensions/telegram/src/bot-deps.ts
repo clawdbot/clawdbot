@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { buildModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import { captureReplyDispatchDeliveryOutcome } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
@@ -28,6 +29,7 @@ import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { syncTelegramMenuCommands } from "./bot-native-command-menu.js";
 import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
+import { startCurrentDmRecoveryCoordinator } from "./current-dm-recovery-coordinator.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import {
   resolveTelegramApproval,
@@ -54,6 +56,8 @@ export type TelegramBotDeps = {
   upsertChannelPairingRequest: typeof upsertChannelPairingRequest;
   enqueueSystemEvent: typeof enqueueSystemEvent;
   dispatchReplyWithBufferedBlockDispatcher: typeof dispatchReplyWithBufferedBlockDispatcher;
+  captureReplyDispatchDeliveryOutcome?: typeof captureReplyDispatchDeliveryOutcome;
+  startCurrentDmRecoveryCoordinator?: typeof startCurrentDmRecoveryCoordinator;
   loadWebMedia?: typeof loadWebMedia;
   buildModelsProviderData: typeof buildModelsProviderData;
   listSkillCommandsForAgents: typeof listSkillCommandsForAgents;
@@ -118,6 +122,12 @@ export const defaultTelegramBotDeps: TelegramBotDeps = {
   },
   get dispatchReplyWithBufferedBlockDispatcher() {
     return dispatchReplyWithBufferedBlockDispatcher;
+  },
+  get captureReplyDispatchDeliveryOutcome() {
+    return captureReplyDispatchDeliveryOutcome;
+  },
+  get startCurrentDmRecoveryCoordinator() {
+    return startCurrentDmRecoveryCoordinator;
   },
   get loadWebMedia() {
     return loadWebMedia;

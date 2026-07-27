@@ -1,5 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it } from "vitest";
+import {
+  captureReplyDispatchDeliveryOutcome,
+  createReplyDispatcher,
+} from "openclaw/plugin-sdk/reply-runtime";
+import { expect, it, vi } from "vitest";
 import {
   describeTelegramDispatch,
   createContext,
@@ -25,6 +29,159 @@ import type {
 } from "./bot-message-dispatch.test-harness.js";
 
 describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
+  it("does not accept a Recovery-owned semantic final when durable delivery sends nothing", async () => {
+    const coordinator = {
+      noteActivity: vi.fn(async () => undefined),
+      markFinalAccepted: vi.fn(async () => undefined),
+      cancel: vi.fn(async () => undefined),
+      markError: vi.fn(async () => undefined),
+      getState: vi.fn(),
+    };
+    const startCurrentDmRecoveryCoordinator = vi.fn(async () => coordinator);
+    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+      status: "handled_no_send",
+      reason: "test-no-visible-send",
+    });
+    const getSessionEntry = vi.fn(() => ({ sessionId: "session-1", updatedAt: 1 }));
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        expect(replyOptions.onAgentRunStart).toBeTypeOf("function");
+        expect(dispatcherOptions.onDispatcherReady).toBeTypeOf("function");
+        replyOptions.onAgentRunStart?.("run-1");
+        const dispatcher = createReplyDispatcher(dispatcherOptions);
+        // The extension test SDK shim does not invoke this newly added core callback yet.
+        // Invoke the production callback explicitly so this remains a cross-layer delivery test.
+        dispatcherOptions.onDispatcherReady?.(dispatcher);
+        expect(getSessionEntry).toHaveBeenCalledTimes(2);
+        expect(startCurrentDmRecoveryCoordinator).toHaveBeenCalledOnce();
+        expect(dispatcher.sendFinalReply({ text: "Recovery final" })).toBe(true);
+        await dispatcher.waitForIdle();
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext({
+        chatId: 5_397_261_498,
+        ctxPayload: {
+          SessionKey: "agent:main:telegram:direct:5397261498",
+          ChatType: "direct",
+          SenderId: "5397261498",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        primaryCtx: {
+          update: { update_id: 789 },
+          message: { chat: { id: 5_397_261_498, type: "private" } },
+        } as unknown as TelegramMessageContext["primaryCtx"],
+        msg: {
+          chat: { id: 5_397_261_498, type: "private" },
+          message_id: 456,
+          message_thread_id: undefined,
+        } as unknown as TelegramMessageContext["msg"],
+        replyThreadId: undefined,
+        route: {
+          agentId: "main",
+          accountId: "default",
+          sessionKey: "agent:main:telegram:direct:5397261498",
+        },
+        threadSpec: { scope: "dm" },
+      }),
+      currentDmRecovery: {
+        enabled: true,
+        ingressGeneration: 1,
+        featureGateGeneration: 1,
+        store: {} as never,
+        scheduler: {} as never,
+        checkFreshness: async () => ({ fresh: true }),
+      },
+      streamMode: "off",
+      telegramDeps: {
+        ...telegramDepsForTest,
+        captureReplyDispatchDeliveryOutcome,
+        startCurrentDmRecoveryCoordinator,
+        getSessionEntry,
+      },
+    });
+
+    expect(getSessionEntry).toHaveBeenCalledTimes(2);
+    expect(startCurrentDmRecoveryCoordinator).toHaveBeenCalledOnce();
+    expect(deliverInboundReplyWithMessageSendContext).toHaveBeenCalledOnce();
+    expect(coordinator.markFinalAccepted).not.toHaveBeenCalled();
+    expect(coordinator.markError).toHaveBeenCalledOnce();
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("does not accept an unsupported reasoning-only final as Recovery-owned", async () => {
+    const coordinator = {
+      noteActivity: vi.fn(async () => undefined),
+      markFinalAccepted: vi.fn(async () => undefined),
+      cancel: vi.fn(async () => undefined),
+      markError: vi.fn(async () => undefined),
+      getState: vi.fn(),
+    };
+    const startCurrentDmRecoveryCoordinator = vi.fn(async () => coordinator);
+    const getSessionEntry = vi.fn(() => ({ sessionId: "session-1", updatedAt: 1 }));
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        replyOptions.onAgentRunStart?.("run-1");
+        const dispatcher = createReplyDispatcher(dispatcherOptions);
+        dispatcherOptions.onDispatcherReady?.(dispatcher);
+        expect(
+          dispatcher.sendFinalReply({ text: "<think>hidden</think>", isReasoning: true }),
+        ).toBe(true);
+        await dispatcher.waitForIdle();
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext({
+        chatId: 5_397_261_498,
+        ctxPayload: {
+          SessionKey: "agent:main:telegram:direct:5397261498",
+          ChatType: "direct",
+          SenderId: "5397261498",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        primaryCtx: {
+          update: { update_id: 790 },
+          message: { chat: { id: 5_397_261_498, type: "private" } },
+        } as unknown as TelegramMessageContext["primaryCtx"],
+        msg: {
+          chat: { id: 5_397_261_498, type: "private" },
+          message_id: 457,
+          message_thread_id: undefined,
+        } as unknown as TelegramMessageContext["msg"],
+        replyThreadId: undefined,
+        route: {
+          agentId: "main",
+          accountId: "default",
+          sessionKey: "agent:main:telegram:direct:5397261498",
+        },
+        threadSpec: { scope: "dm" },
+      }),
+      currentDmRecovery: {
+        enabled: true,
+        ingressGeneration: 1,
+        featureGateGeneration: 1,
+        store: {} as never,
+        scheduler: {} as never,
+        checkFreshness: async () => ({ fresh: true }),
+      },
+      streamMode: "off",
+      telegramDeps: {
+        ...telegramDepsForTest,
+        captureReplyDispatchDeliveryOutcome,
+        startCurrentDmRecoveryCoordinator,
+        getSessionEntry,
+      },
+    });
+
+    expect(startCurrentDmRecoveryCoordinator).toHaveBeenCalledOnce();
+    expect(deliverInboundReplyWithMessageSendContext).not.toHaveBeenCalled();
+    expect(coordinator.markFinalAccepted).not.toHaveBeenCalled();
+    expect(coordinator.markError).toHaveBeenCalledOnce();
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("queues final Telegram replies through outbound delivery when available", async () => {
     deliverInboundReplyWithMessageSendContext.mockResolvedValue({
       status: "handled_visible",

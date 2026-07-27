@@ -64,7 +64,7 @@ export function createTelegramDeliveryController(params: {
   isDispatchSuperseded: () => boolean;
   loadFreshSessionEntry: FreshTelegramSessionEntryLoader;
   mediaLocalRoots: readonly string[];
-  opts: Pick<TelegramBotOptions, "token" | "mediaMaxMb">;
+  opts: Pick<TelegramBotOptions, "token" | "mediaMaxMb" | "currentDmRecovery">;
   progress: TelegramProgressController;
   draftReplyToMessageId?: number;
   replyQuoteByMessageId: TelegramNativeQuoteCandidateByMessageId;
@@ -222,6 +222,7 @@ export function createTelegramDeliveryController(params: {
       silent?: boolean;
       mirrorTranscript?: boolean;
       promptContextSequence?: TelegramPromptContextProjectionSequence;
+      semanticFinal?: boolean;
       textMode?: "html";
     },
   ) => {
@@ -301,8 +302,17 @@ export function createTelegramDeliveryController(params: {
       }
       if (durable.status === "handled_no_send") {
         await projectionSequence.fail();
+        if (options?.semanticFinal) {
+          throw new Error(
+            "Telegram Recovery semantic final durable delivery sent no visible reply.",
+          );
+        }
         return false;
       }
+    }
+    if (options?.semanticFinal) {
+      await projectionSequence.fail();
+      throw new Error("Telegram Recovery semantic final requires durable delivery support.");
     }
     try {
       const result = await (params.telegramDeps.deliverReplies ?? deliverReplies)({
@@ -429,6 +439,7 @@ export function createTelegramDeliveryController(params: {
     payload: ReplyPayload,
     text: string,
     promptContextSequence: TelegramPromptContextProjectionSequence,
+    semanticFinal: boolean,
   ): Promise<LaneDeliveryResult> => {
     const afterAcceptedDraft = params.draft.answerLane.stream?.hasConsumedReplyTarget?.() === true;
     if (payload.isError === true) {
@@ -438,6 +449,7 @@ export function createTelegramDeliveryController(params: {
         afterAcceptedDraft,
         durable: true,
         promptContextSequence,
+        semanticFinal,
       });
       if (!delivered) {
         return { kind: "skipped" };
@@ -451,6 +463,7 @@ export function createTelegramDeliveryController(params: {
       afterAcceptedDraft,
       durable: true,
       promptContextSequence,
+      semanticFinal,
     });
     if (barLine) {
       await params.progress.applyCollapseSummary(barLine, postCosmeticSummaryBar);
@@ -469,6 +482,7 @@ export function createTelegramDeliveryController(params: {
     answerPayload: ReplyPayload,
     text: string,
     buttons?: TelegramInlineButtons,
+    semanticFinal = false,
   ): Promise<LaneDeliveryResult> => {
     const transcriptFinal = await resolveCurrentTurnTranscriptFinal();
     const finalText = await resolveTranscriptBackedChannelFinalText({
@@ -488,6 +502,7 @@ export function createTelegramDeliveryController(params: {
         answerPayload,
         finalText,
         promptContextSequence,
+        semanticFinal,
       );
     } else {
       if (isFollowUp) {
@@ -503,6 +518,7 @@ export function createTelegramDeliveryController(params: {
         buttons,
         allowStream: !usesNativeTelegramQuote(answerPayload),
         promptContextSequence,
+        semanticFinal,
       });
       if (!isFollowUp && result.kind !== "skipped") {
         params.progress.markFinalDelivered();

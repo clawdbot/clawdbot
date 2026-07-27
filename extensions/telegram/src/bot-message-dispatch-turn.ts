@@ -17,8 +17,14 @@ import type { TelegramDeliveryController } from "./bot-message-dispatch-delivery
 import type { TelegramDraftController } from "./bot-message-dispatch-draft.js";
 import type { TelegramProgressController } from "./bot-message-dispatch-progress.js";
 import type { TelegramReplyDelivery } from "./bot-message-dispatch-reply.js";
+import type { FreshTelegramSessionEntryLoader } from "./bot-message-dispatch.types.js";
 import type { TelegramDispatchTurnState } from "./bot-message-dispatch.types.js";
+import type { TelegramCurrentDmRecoveryOptions } from "./bot.types.js";
 import type { TelegramStreamMode } from "./bot/types.js";
+import {
+  applyCurrentDmRecoveryBeforeDeliver,
+  createCurrentDmRecoveryHost,
+} from "./current-dm-recovery-host.js";
 import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-delivery.js";
 
 const TELEGRAM_MAX_CONSECUTIVE_TYPING_FAILURES = 5;
@@ -44,6 +50,8 @@ export async function runTelegramDispatchTurn(params: {
   streamMode: TelegramStreamMode;
   telegramCfg: TelegramAccountConfig;
   telegramDeps: TelegramBotDeps;
+  currentDmRecovery?: TelegramCurrentDmRecoveryOptions;
+  loadFreshSessionEntry: FreshTelegramSessionEntryLoader;
 }) {
   const { context } = params;
   const isRoomEvent = context.ctxPayload.InboundEventKind === "room_event";
@@ -59,6 +67,9 @@ export async function runTelegramDispatchTurn(params: {
     );
   const endDeliveryCorrelation = beginDeliveryCorrelation();
   let splitReasoningOnNextStream = false;
+  let recovery: ReturnType<typeof createCurrentDmRecoveryHost>;
+  let abortSignal: AbortSignal | undefined;
+  let onAbort: (() => void) | undefined;
 
   try {
     const { onModelSelected, ...replyPipeline } = (
@@ -88,6 +99,22 @@ export async function runTelegramDispatchTurn(params: {
         logVerbose(`telegram reply error callback failed: ${String(callbackError)}`);
       });
     };
+    recovery = createCurrentDmRecoveryHost({
+      context,
+      options: params.currentDmRecovery,
+      telegramDeps: params.telegramDeps,
+      resolveSessionId: () => {
+        params.loadFreshSessionEntry.clear();
+        return params.loadFreshSessionEntry(context.route.agentId, context.route.sessionKey).entry
+          ?.sessionId;
+      },
+      onSemanticFinalOwned: () => {
+        params.state.recoverySemanticFinalOwned = true;
+      },
+    });
+    abortSignal = params.turnAdoptionLifecycle?.abortSignal;
+    onAbort = () => recovery?.cancel();
+    abortSignal?.addEventListener("abort", onAbort, { once: true });
     const turnResult = await runChannelInboundEvent({
       channel: "telegram",
       accountId: context.route.accountId,
@@ -125,9 +152,11 @@ export async function runTelegramDispatchTurn(params: {
           },
           dispatcherOptions: {
             ...replyPipeline,
-            beforeDeliver: async (payload) => payload,
+            beforeDeliver: async (payload, info) =>
+              applyCurrentDmRecoveryBeforeDeliver(recovery, payload, info),
             onBeforeDeliverCancelled: params.reply.onBeforeDeliverCancelled,
             onSkip: params.reply.onSkip,
+            onDispatcherReady: recovery?.onDispatcherReady,
           },
           replyOptions: {
             skillFilter: context.skillFilter,
@@ -146,6 +175,7 @@ export async function runTelegramDispatchTurn(params: {
             queuedDeliveryCorrelations: isRoomEvent
               ? [{ begin: beginDeliveryCorrelation }]
               : undefined,
+            onAgentRunStart: recovery?.onAgentRunStart,
             suppressTyping: isRoomEvent,
             onPartialReply:
               params.draft.answerLane.stream || params.draft.reasoningLane.stream
@@ -163,6 +193,7 @@ export async function runTelegramDispatchTurn(params: {
             onReasoningStream: params.draft.reasoningLane.stream
               ? (payload) =>
                   params.draft.enqueueEvent(async () => {
+                    recovery?.noteActivity();
                     if (splitReasoningOnNextStream) {
                       params.draft.repositionLaneForNewMessage(params.draft.reasoningLane);
                       splitReasoningOnNextStream = false;
@@ -172,12 +203,14 @@ export async function runTelegramDispatchTurn(params: {
               : params.draft.streamReasoningInProgressDraft
                 ? (payload) =>
                     params.draft.enqueueEvent(async () => {
+                      recovery?.noteActivity();
                       await params.progress.pushReasoningProgress(payload);
                     })
                 : undefined,
             onReasoningProgress: params.draft.answerLane.stream
               ? (payload) =>
                   params.draft.enqueueEvent(async () => {
+                    recovery?.noteActivity();
                     await params.progress.pushThinkingTokenProgress(payload.progressTokens);
                   })
               : undefined,
@@ -233,11 +266,24 @@ export async function runTelegramDispatchTurn(params: {
                 : undefined,
             progressPreambleEnabled: params.progress.progressPreambleEnabled,
             reasoningPayloadsEnabled: params.draft.durableReasoningPayloadsEnabled,
-            onToolStart: params.progress.handleToolStart,
-            onItemEvent: params.progress.handleItemEvent,
-            onPlanUpdate: params.progress.handlePlanUpdate,
-            onApprovalEvent: params.progress.handleApprovalEvent,
+            onToolStart: async (payload) => {
+              recovery?.noteActivity();
+              await params.progress.handleToolStart(payload);
+            },
+            onItemEvent: async (payload) => {
+              recovery?.noteActivity();
+              await params.progress.handleItemEvent(payload);
+            },
+            onPlanUpdate: async (payload) => {
+              recovery?.noteActivity();
+              await params.progress.handlePlanUpdate(payload);
+            },
+            onApprovalEvent: async (payload) => {
+              recovery?.noteActivity();
+              await params.progress.handleApprovalEvent(payload);
+            },
             onToolResult: async (payload) => {
+              recovery?.noteActivity();
               const text = payload.text?.trim();
               if (!text) {
                 return;
@@ -253,8 +299,14 @@ export async function runTelegramDispatchTurn(params: {
                 await params.delivery.sendPayload(payload);
               }
             },
-            onCommandOutput: params.progress.handleCommandOutput,
-            onPatchSummary: params.progress.handlePatchSummary,
+            onCommandOutput: async (payload) => {
+              recovery?.noteActivity();
+              await params.progress.handleCommandOutput(payload);
+            },
+            onPatchSummary: async (payload) => {
+              recovery?.noteActivity();
+              await params.progress.handlePatchSummary(payload);
+            },
             onCompactionStart: params.statusReactionController
               ? async () => {
                   await params.statusReactionController?.setCompacting();
@@ -280,8 +332,17 @@ export async function runTelegramDispatchTurn(params: {
     }
     params.state.suppressSilentReplyFallback =
       turnResult.dispatchResult.sourceReplyDeliveryMode === "message_tool_only";
+    if (!recovery?.ownsSemanticFinal()) {
+      recovery?.markError();
+    }
     return true;
+  } catch (err) {
+    recovery?.markError();
+    throw err;
   } finally {
+    if (onAbort) {
+      abortSignal?.removeEventListener("abort", onAbort);
+    }
     endDeliveryCorrelation();
   }
 }

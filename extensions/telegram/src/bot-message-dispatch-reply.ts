@@ -8,6 +8,7 @@ import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-ru
 import {
   isFastModeAutoProgressPayload,
   isReplyPayloadNonTerminalToolErrorWarning,
+  isTelegramCurrentDmRecoverySemanticFinal,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
@@ -137,6 +138,7 @@ export function createTelegramReplyDelivery(params: {
         buffered.payload,
         buffered.text,
         resolvePayloadTelegramInlineButtons(buffered.payload),
+        isTelegramCurrentDmRecoverySemanticFinal(buffered.payload),
       );
       if (settlement) {
         settlement.resolve({
@@ -179,6 +181,8 @@ export function createTelegramReplyDelivery(params: {
     if (params.fence.isSuperseded()) {
       return await settleTerminalNoVisibleDelivery(info, { abandonBufferedFinal: true });
     }
+    const semanticFinal =
+      info.kind === "final" && isTelegramCurrentDmRecoverySemanticFinal(payload);
     const normalizedPayload = params.delivery.normalizeDeliveryPayload(payload);
     if (!normalizedPayload) {
       return await settleTerminalNoVisibleDelivery(info);
@@ -367,6 +371,7 @@ export function createTelegramReplyDelivery(params: {
               effectivePayload,
               segment.update.text,
               telegramButtons,
+              semanticFinal,
             )
           : await params.delivery.deliverLaneText({
               laneName: segment.lane,
@@ -425,7 +430,12 @@ export function createTelegramReplyDelivery(params: {
             : effectivePayload;
         delivered = await params.delivery.sendPayload(payloadWithoutReasoning, {
           durable: info.kind === "final",
+          semanticFinal,
         });
+      } else if (semanticFinal) {
+        throw new Error(
+          "Telegram Recovery semantic final was suppressed as reasoning-only without a visible reply.",
+        );
       }
       if (info.kind === "final" && delivered) {
         params.progress.markFinalDelivered();
@@ -448,6 +458,7 @@ export function createTelegramReplyDelivery(params: {
     }
     const delivered = await params.delivery.sendPayload(effectivePayload, {
       durable: info.kind === "final",
+      semanticFinal,
     });
     if (info.kind === "final" && delivered) {
       params.progress.markFinalDelivered();

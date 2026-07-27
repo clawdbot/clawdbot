@@ -65,7 +65,10 @@ type TelegramMessageProcessorDeps = Omit<
 > & {
   runtime: RuntimeEnv;
   telegramDeps: TelegramBotDeps;
-  opts: Pick<TelegramBotOptions, "token" | "allowFrom" | "groupAllowFrom" | "replyToMode">;
+  opts: Pick<
+    TelegramBotOptions,
+    "token" | "allowFrom" | "groupAllowFrom" | "replyToMode" | "currentDmRecovery"
+  >;
 };
 
 export type TelegramMessageProcessorTurnContext = {

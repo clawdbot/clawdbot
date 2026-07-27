@@ -661,6 +661,7 @@ export function createRuntime(): Parameters<typeof dispatchTelegramMessage>[0]["
 export async function dispatchWithContext(params: {
   context: TelegramMessageContext;
   cfg?: Parameters<typeof dispatchTelegramMessage>[0]["cfg"];
+  currentDmRecovery?: Parameters<typeof dispatchTelegramMessage>[0]["opts"]["currentDmRecovery"];
   telegramCfg?: Parameters<typeof dispatchTelegramMessage>[0]["telegramCfg"];
   streamMode?: Parameters<typeof dispatchTelegramMessage>[0]["streamMode"];
   telegramDeps?: TelegramBotDeps;
@@ -683,7 +684,10 @@ export async function dispatchWithContext(params: {
     textLimit: params.textLimit ?? 4096,
     telegramCfg: params.telegramCfg ?? {},
     telegramDeps: params.telegramDeps ?? telegramDepsForTest,
-    opts: { token: "token" },
+    opts: {
+      token: "token",
+      ...(params.currentDmRecovery ? { currentDmRecovery: params.currentDmRecovery } : {}),
+    },
     retryDispatchErrors: params.retryDispatchErrors,
     suppressFailureFallback: params.suppressFailureFallback,
     turnAdoptionLifecycle: params.turnAdoptionLifecycle,

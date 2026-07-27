@@ -444,6 +444,8 @@ export const dispatchTelegramMessage = async ({
         streamMode,
         telegramCfg,
         telegramDeps,
+        currentDmRecovery: opts.currentDmRecovery,
+        loadFreshSessionEntry,
       });
     } catch (err) {
       state.dispatchError = err;
@@ -487,6 +489,7 @@ export const dispatchTelegramMessage = async ({
   const shouldSendFailureFallback =
     !isRoomEvent &&
     !suppressFailureFallback &&
+    !state.recoverySemanticFinalOwned &&
     !progress.finalAnswerDelivered() &&
     (state.dispatchError ||
       deliverySummary.skippedNonSilent > 0 ||
@@ -536,11 +539,13 @@ export const dispatchTelegramMessage = async ({
 
   const hasFinalResponse =
     progress.finalAnswerDelivered() ||
+    state.recoverySemanticFinalOwned === true ||
     sentFallback ||
     state.suppressSilentReplyFallback ||
     state.queuedFinal;
   const hasVisibleResponse =
     deliverySummary.delivered ||
+    state.recoverySemanticFinalOwned === true ||
     sentFallback ||
     state.suppressSilentReplyFallback ||
     state.queuedFinal;

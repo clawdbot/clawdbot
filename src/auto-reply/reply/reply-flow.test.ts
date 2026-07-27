@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
+  captureReplyDispatchDeliveryOutcome,
   composeReplyDispatchBeforeDeliver,
   createReplyDispatcher,
   waitForReplyDispatcherIdle,
@@ -26,6 +27,199 @@ function createDeferred<T>() {
 }
 
 describe("createReplyDispatcher", () => {
+  it("tracks a payload outcome attached by beforeDeliver", async () => {
+    let outcome: ReturnType<typeof captureReplyDispatchDeliveryOutcome> | undefined;
+    const dispatcher = createReplyDispatcher({
+      beforeDeliver: async (payload) => {
+        outcome = captureReplyDispatchDeliveryOutcome(payload);
+        return payload;
+      },
+      deliver: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(dispatcher.sendFinalReply({ text: "final" })).toBe(true);
+    await dispatcher.waitForIdle();
+
+    expect(outcome?.isTracked()).toBe(true);
+    await expect(outcome?.promise).resolves.toBe("delivered");
+  });
+
+  it("settles a payload outcome captured by beforeDeliver when delivery is cancelled", async () => {
+    let outcome: ReturnType<typeof captureReplyDispatchDeliveryOutcome> | undefined;
+    const dispatcher = createReplyDispatcher({
+      beforeDeliver: async (payload) => {
+        outcome = captureReplyDispatchDeliveryOutcome(payload);
+        return null;
+      },
+      deliver: vi.fn(),
+    });
+
+    expect(dispatcher.sendFinalReply({ text: "cancelled" })).toBe(true);
+    await dispatcher.waitForIdle();
+
+    expect(outcome?.isTracked()).toBe(true);
+    await expect(outcome?.promise).resolves.toBe("cancelled");
+  });
+
+  it("settles a payload outcome captured by beforeDeliver when the hook fails", async () => {
+    let outcome: ReturnType<typeof captureReplyDispatchDeliveryOutcome> | undefined;
+    const dispatcher = createReplyDispatcher({
+      beforeDeliver: async (payload) => {
+        outcome = captureReplyDispatchDeliveryOutcome(payload);
+        throw new Error("before-deliver failed");
+      },
+      deliver: vi.fn(),
+    });
+
+    expect(dispatcher.sendFinalReply({ text: "failed" })).toBe(true);
+    await dispatcher.waitForIdle();
+
+    expect(outcome?.isTracked()).toBe(true);
+    await expect(outcome?.promise).resolves.toBe("failed-before-deliver");
+  });
+
+  it("settles and cleans trackers attached to both original and replacement payloads", async () => {
+    const original = { text: "original" };
+    const replacement = { text: "replacement" };
+    const originalOutcome = captureReplyDispatchDeliveryOutcome(original);
+    let replacementOutcome: ReturnType<typeof captureReplyDispatchDeliveryOutcome> | undefined;
+    const dispatcher = createReplyDispatcher({
+      beforeDeliver: async () => {
+        replacementOutcome = captureReplyDispatchDeliveryOutcome(replacement);
+        return replacement;
+      },
+      deliver: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(dispatcher.sendFinalReply(original)).toBe(true);
+    await dispatcher.waitForIdle();
+
+    expect(originalOutcome.isTracked()).toBe(true);
+    expect(replacementOutcome?.isTracked()).toBe(true);
+    await expect(originalOutcome.promise).resolves.toBe("delivered");
+    await expect(replacementOutcome?.promise).resolves.toBe("delivered");
+
+    const freshOutcome = captureReplyDispatchDeliveryOutcome(replacement);
+    const secondDispatcher = createReplyDispatcher({
+      deliver: vi.fn().mockResolvedValue(undefined),
+    });
+    expect(secondDispatcher.sendFinalReply(replacement)).toBe(true);
+    await secondDispatcher.waitForIdle();
+    expect(freshOutcome.isTracked()).toBe(true);
+    await expect(freshOutcome.promise).resolves.toBe("delivered");
+  });
+
+  it("cleans tracker aliases for every intermediate beforeDeliver replacement", async () => {
+    const original = { text: "original" };
+    const intermediate = { text: "intermediate" };
+    const finalReplacement = { text: "final replacement" };
+    const originalOutcome = captureReplyDispatchDeliveryOutcome(original);
+    let intermediateOutcome: ReturnType<typeof captureReplyDispatchDeliveryOutcome> | undefined;
+    let finalOutcome: ReturnType<typeof captureReplyDispatchDeliveryOutcome> | undefined;
+    const dispatcher = createReplyDispatcher({
+      beforeDeliver: async () => {
+        intermediateOutcome = captureReplyDispatchDeliveryOutcome(intermediate);
+        return intermediate;
+      },
+      deliver: vi.fn().mockResolvedValue(undefined),
+    });
+    dispatcher.appendBeforeDeliver(async () => {
+      finalOutcome = captureReplyDispatchDeliveryOutcome(finalReplacement);
+      return finalReplacement;
+    });
+
+    expect(dispatcher.sendFinalReply(original)).toBe(true);
+    await dispatcher.waitForIdle();
+
+    await expect(originalOutcome.promise).resolves.toBe("delivered");
+    await expect(intermediateOutcome?.promise).resolves.toBe("delivered");
+    await expect(finalOutcome?.promise).resolves.toBe("delivered");
+
+    const freshIntermediateOutcome = captureReplyDispatchDeliveryOutcome(intermediate);
+    const secondDispatcher = createReplyDispatcher({
+      deliver: vi.fn().mockResolvedValue(undefined),
+    });
+    expect(secondDispatcher.sendFinalReply(intermediate)).toBe(true);
+    await secondDispatcher.waitForIdle();
+    expect(freshIntermediateOutcome.isTracked()).toBe(true);
+    await expect(freshIntermediateOutcome.promise).resolves.toBe("delivered");
+  });
+
+  it("settles a tracker captured by an earlier hook when a later replacement fails delivery", async () => {
+    let outcome: ReturnType<typeof captureReplyDispatchDeliveryOutcome> | undefined;
+    const dispatcher = createReplyDispatcher({
+      beforeDeliver: async (payload) => {
+        outcome = captureReplyDispatchDeliveryOutcome(payload);
+        return payload;
+      },
+      deliver: vi.fn().mockRejectedValue(new Error("provider failed")),
+    });
+    dispatcher.appendBeforeDeliver((payload) => ({ ...payload, text: "replacement" }));
+
+    expect(dispatcher.sendFinalReply({ text: "original" })).toBe(true);
+    await dispatcher.waitForIdle();
+
+    expect(outcome?.isTracked()).toBe(true);
+    await expect(outcome?.promise).resolves.toBe("failed-deliver");
+  });
+
+  it("keeps overlapping sends of the same payload object isolated", async () => {
+    const shared = { text: "shared" };
+    const firstDeliveryStarted = createDeferred<void>();
+    const releaseFirstDelivery = createDeferred<void>();
+    let firstOutcome: ReturnType<typeof captureReplyDispatchDeliveryOutcome> | undefined;
+    const firstDispatcher = createReplyDispatcher({
+      beforeDeliver: async () => {
+        firstOutcome = captureReplyDispatchDeliveryOutcome(shared);
+        return shared;
+      },
+      deliver: vi.fn(async () => {
+        firstDeliveryStarted.resolve();
+        await releaseFirstDelivery.promise;
+        throw new Error("first provider failed");
+      }),
+    });
+
+    expect(firstDispatcher.sendFinalReply({ text: "first" })).toBe(true);
+    await firstDeliveryStarted.promise;
+
+    const secondOutcome = captureReplyDispatchDeliveryOutcome(shared);
+    const secondDispatcher = createReplyDispatcher({
+      deliver: vi.fn().mockResolvedValue(undefined),
+    });
+    expect(secondDispatcher.sendFinalReply(shared)).toBe(true);
+    await secondDispatcher.waitForIdle();
+
+    releaseFirstDelivery.resolve();
+    await firstDispatcher.waitForIdle();
+
+    expect(firstOutcome?.isTracked()).toBe(true);
+    expect(secondOutcome.isTracked()).toBe(true);
+    await expect(firstOutcome?.promise).resolves.toBe("failed-deliver");
+    await expect(secondOutcome.promise).resolves.toBe("delivered");
+  });
+
+  it("shares one delivery outcome across pre-enqueue and beforeDeliver observers", async () => {
+    const payload = { text: "final" };
+    const preEnqueueOutcome = captureReplyDispatchDeliveryOutcome(payload);
+    let beforeDeliverOutcome: ReturnType<typeof captureReplyDispatchDeliveryOutcome> | undefined;
+    const dispatcher = createReplyDispatcher({
+      beforeDeliver: async (normalized) => {
+        beforeDeliverOutcome = captureReplyDispatchDeliveryOutcome(normalized);
+        return normalized;
+      },
+      deliver: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(dispatcher.sendFinalReply(payload)).toBe(true);
+    await dispatcher.waitForIdle();
+
+    expect(preEnqueueOutcome.isTracked()).toBe(true);
+    expect(beforeDeliverOutcome?.isTracked()).toBe(true);
+    await expect(preEnqueueOutcome.promise).resolves.toBe("delivered");
+    await expect(beforeDeliverOutcome?.promise).resolves.toBe("delivered");
+  });
+
   it("drops empty payloads and exact silent tokens without media", async () => {
     const deliver = vi.fn().mockResolvedValue(undefined);
     const dispatcher = createReplyDispatcher({ deliver });

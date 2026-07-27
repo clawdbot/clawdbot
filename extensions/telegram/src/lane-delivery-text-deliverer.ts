@@ -54,6 +54,7 @@ type CreateLaneTextDelivererParams = {
       afterAcceptedDraft?: boolean;
       durable?: boolean;
       promptContextSequence?: TelegramPromptContextProjectionSequence;
+      semanticFinal?: boolean;
       textMode?: "html";
     },
   ) => Promise<boolean>;
@@ -86,6 +87,7 @@ type DeliverLaneTextParams = {
   durable?: boolean;
   allowStream?: boolean;
   promptContextSequence?: TelegramPromptContextProjectionSequence;
+  semanticFinal?: boolean;
 };
 
 function result(
@@ -382,6 +384,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     durable: requestedDurable,
     allowStream = true,
     promptContextSequence: suppliedPromptContextSequence,
+    semanticFinal = false,
   }: DeliverLaneTextParams): Promise<LaneDeliveryResult> => {
     const lane = params.lanes[laneName];
     const promptContextSequence =
@@ -391,7 +394,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     const finalizePreview = requestedFinalizePreview ?? isDurableFinal;
     const durable = requestedDurable ?? isDurableFinal;
     const streamed =
-      allowStream && !reply.hasMedia
+      !semanticFinal && allowStream && !reply.hasMedia
         ? await streamText(
             laneName,
             lane,
@@ -408,6 +411,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     }
 
     if (
+      !semanticFinal &&
       finalizePreview &&
       reply.hasMedia &&
       lane.stream &&
@@ -467,6 +471,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         afterAcceptedDraft,
         durable,
         promptContextSequence,
+        semanticFinal,
         ...(retainedFinalContent?.sourceTextMode === "html" ? { textMode: "html" } : {}),
       },
     );

@@ -23,7 +23,7 @@ export type DispatchTelegramMessageParams = {
   textLimit: number;
   telegramCfg: TelegramAccountConfig;
   telegramDeps?: TelegramBotDeps;
-  opts: Pick<TelegramBotOptions, "token" | "mediaMaxMb">;
+  opts: Pick<TelegramBotOptions, "token" | "mediaMaxMb" | "currentDmRecovery">;
   retryDispatchErrors?: boolean;
   suppressFailureFallback?: boolean;
   /**
@@ -68,5 +68,6 @@ export type TelegramDispatchTurnState = {
   queuedFinal: boolean;
   suppressSilentReplyFallback: boolean;
   hadErrorReplyFailureOrSkip: boolean;
+  recoverySemanticFinalOwned?: boolean;
   dispatchError?: unknown;
 };
