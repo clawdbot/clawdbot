@@ -156,7 +156,7 @@ async function runFixture(
     } else {
       await processTransportStream(
         eventStream(events),
-        output as Parameters<typeof processTransportStream>[1],
+        output as unknown as Parameters<typeof processTransportStream>[1],
         { push: (event) => captured.push(event as AssistantMessageEvent) },
         model,
       );
