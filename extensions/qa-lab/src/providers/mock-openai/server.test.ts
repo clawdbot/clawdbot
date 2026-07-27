@@ -4110,9 +4110,46 @@ describe("qa mock openai server", () => {
 
     expect(response.status).toBe(200);
     const body = await response.text();
-    expect(body).toContain("response.custom_tool_call_input.delta");
-    expect(body).toContain('"type":"custom_tool_call"');
-    expect(body).toContain("runtime-tool-fixture-patch.txt");
+    const events = body
+      .split("\n")
+      .filter((line) => line.startsWith("data: {"))
+      .map(
+        (line) =>
+          JSON.parse(line.slice("data: ".length)) as {
+            type: string;
+            response?: { id?: string; output?: Array<Record<string, unknown>> };
+            item?: Record<string, unknown>;
+            item_id?: string;
+            call_id?: string;
+            delta?: string;
+          },
+      );
+    expect(events.map((event) => event.type)).toEqual([
+      "response.created",
+      "response.output_item.added",
+      "response.custom_tool_call_input.delta",
+      "response.output_item.done",
+      "response.completed",
+    ]);
+    const [created, added, delta, done, completed] = events;
+    expect(created?.response?.id).toBe(completed?.response?.id);
+    expect(added?.item).toMatchObject({
+      type: "custom_tool_call",
+      name: "apply_patch",
+      input: "",
+      status: "in_progress",
+    });
+    expect(done?.item).toMatchObject({
+      type: "custom_tool_call",
+      name: "apply_patch",
+      status: "completed",
+    });
+    expect(done?.item?.id).toEqual(expect.stringMatching(/^ctc_mock_apply_patch_/));
+    expect(delta?.item_id).toBe(done?.item?.id);
+    expect(delta?.call_id).toBe(done?.item?.call_id);
+    expect(delta?.delta).toBe(done?.item?.input);
+    expect(delta?.delta).toContain("runtime-tool-fixture-patch.txt");
+    expect(completed?.response?.output).toEqual([done?.item]);
   });
 
   it.each([
@@ -4617,6 +4654,49 @@ describe("qa mock openai server", () => {
     expect(body.data.map((entry) => entry.id)).toEqual(
       expect.arrayContaining(["gpt-5.5", "gpt-5.5-alt", "gpt-image-1"]),
     );
+  });
+
+  it("advertises directly executable native Codex metadata alongside OpenAI models", async () => {
+    const server = await startMockServer({
+      modelRefs: ["mock-openai/gpt-5.6-luna", "mock-openai/gpt-5.6-luna-alt"],
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/models?client_version=0.142.0`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      data: Array<{ id: string; object: string }>;
+      models: Array<Record<string, unknown>>;
+    };
+    expect(body.data).toEqual(
+      expect.arrayContaining([
+        { id: "gpt-5.6-luna", object: "model" },
+        { id: "gpt-5.6-luna-alt", object: "model" },
+      ]),
+    );
+    expect(body.models).toHaveLength(2);
+    expect(body.models).toEqual([
+      expect.objectContaining({
+        slug: "gpt-5.6-luna",
+        display_name: "gpt-5.6-luna",
+        apply_patch_tool_type: "freeform",
+        tool_mode: "direct",
+        shell_type: "shell_command",
+        visibility: "list",
+        supported_in_api: true,
+        base_instructions: expect.any(String),
+        truncation_policy: { mode: "tokens", limit: 10_000 },
+        supported_reasoning_levels: expect.arrayContaining([
+          { effort: "medium", description: "Balanced QA reasoning" },
+        ]),
+        experimental_supported_tools: [],
+        input_modalities: ["text", "image"],
+      }),
+      expect.objectContaining({
+        slug: "gpt-5.6-luna-alt",
+        apply_patch_tool_type: "freeform",
+        tool_mode: "direct",
+      }),
+    ]);
   });
 
   it("serves deterministic OpenAI-compatible audio transcription responses", async () => {

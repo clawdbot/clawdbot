@@ -245,6 +245,23 @@ async function formatRuntimePatchMutationDiagnostics(params: {
     .readdir(params.env.gateway.tempRoot)
     .then((entries) => entries.toSorted().slice(0, 16))
     .catch(() => [] as string[]);
+  const gatewayPatchLogs = (params.env.gateway.logs?.() ?? "")
+    .split(/\r?\n/u)
+    .filter((line) =>
+      /custom tool call output is missing|apply[._ -]?patch|failed to parse responseitem|duplicate|tool registration/iu.test(
+        line,
+      ),
+    )
+    .slice(-6)
+    .map((line) =>
+      line
+        .replace(
+          /\b(?:bearer\s+[a-z\d._~+/-]+=*|(?:api[_-]?key|access[_-]?token|authorization|password|secret)\s*[:=]\s*["']?[^\s"',;]+)/giu,
+          "[REDACTED]",
+        )
+        .replace(/\b(?:sk|sess|ghp|gho|github_pat|xox[baprs])[-_][a-z\d_-]{8,}\b/giu, "[REDACTED]")
+        .slice(0, 200),
+    );
   const mockRequests = params.env.mock
     ? await params.deps
         .fetchJson(qaMockRequestsAfterUrl(params.env.mock.baseUrl, params.requestCursor))
@@ -272,6 +289,9 @@ async function formatRuntimePatchMutationDiagnostics(params: {
     `workspace=${params.env.gateway.workspaceDir}`,
     `workspaceEntries=${JSON.stringify(workspaceEntries)}`,
     `tempRootEntries=${JSON.stringify(tempRootEntries)}`,
+    ...(gatewayPatchLogs.length > 0
+      ? [`gatewayPatchLogs=${JSON.stringify(gatewayPatchLogs)}`]
+      : []),
     ...(params.env.mock ? [`mockPatchRequests=${JSON.stringify(mockRequests)}`] : []),
   ].join("; ");
 }

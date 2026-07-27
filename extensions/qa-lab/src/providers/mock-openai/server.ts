@@ -4,7 +4,10 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { closeQaHttpServer } from "../../bus-server.js";
 import { parseQaDebugRequestCursor } from "../shared/debug-request-cursor.js";
 import { writeJson } from "../shared/http-json.js";
-import { listMockOpenAiServerModelIds } from "../shared/mock-model-config.js";
+import {
+  listMockCodexModelInfos,
+  listMockOpenAiServerModelIds,
+} from "../shared/mock-model-config.js";
 import { buildMessagesPayload } from "./mock-anthropic-messages.js";
 import { buildAssistantText } from "./mock-openai-assistant-text.js";
 import {
@@ -1347,6 +1350,7 @@ export async function startQaMockOpenAiServer(params?: {
             id,
             object: "model",
           })),
+          models: listMockCodexModelInfos(params?.modelRefs),
         });
         return;
       }
