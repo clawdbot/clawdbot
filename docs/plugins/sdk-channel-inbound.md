@@ -149,7 +149,8 @@ By default, routed turns record inbound metadata against
 native command intentionally executes in one command session while updating a
 different provider-routed target session. The override affects inbound metadata,
 transcript-context merge, and record-stage diagnostics; it does not change dispatch
-routing or hook correlation.
+routing or hook correlation. An explicit override must be non-empty and contain no
+surrounding whitespace.
 
 Reject `deliver` or `finalization` when native delivery fails. If no provider
 send was attempted, throw `PlatformMessageNotDispatchedError` from

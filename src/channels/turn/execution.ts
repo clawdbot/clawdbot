@@ -64,6 +64,23 @@ function isSystemChannelTurn(ctx: FinalizedMsgContext): boolean {
   );
 }
 
+function resolveRecordSessionKey<TDispatchResult>(
+  params: PreparedChannelTurn<TDispatchResult>,
+): string {
+  const explicitSessionKey = params.record?.sessionKey;
+  if (explicitSessionKey === undefined) {
+    return params.ctxPayload.SessionKey ?? params.routeSessionKey;
+  }
+  const normalizedSessionKey = explicitSessionKey.trim();
+  if (!normalizedSessionKey) {
+    throw new Error("Channel turn record.sessionKey must be non-empty.");
+  }
+  if (normalizedSessionKey !== explicitSessionKey) {
+    throw new Error("Channel turn record.sessionKey must not include surrounding whitespace.");
+  }
+  return explicitSessionKey;
+}
+
 function maybeWarnZeroCountVisibleDispatch<TDispatchResult>(
   params: Pick<
     PreparedChannelTurn<TDispatchResult>,
@@ -219,8 +236,7 @@ async function runPreparedChannelTurnCoreInTrace<
   }
   // Native commands can execute in an isolated command session while updating the
   // provider-routed target session. Keep that record target separate from dispatch.
-  const recordSessionKey =
-    params.record?.sessionKey ?? params.ctxPayload.SessionKey ?? params.routeSessionKey;
+  const recordSessionKey = resolveRecordSessionKey(params);
   if (params.ctxPayload.SessionTranscriptContext) {
     const { mergeSessionTranscriptContext } =
       await import("../inbound-event/session-transcript-context.runtime.js");

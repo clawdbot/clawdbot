@@ -95,7 +95,11 @@ const dispatchChannelInboundTurnMock = vi.fn<DispatchChannelInboundTurnFn>(async
     sessionKey: plan.record?.sessionKey ?? plan.ctxPayload.SessionKey ?? plan.route.sessionKey,
     ctx: plan.ctxPayload,
   });
-  void Promise.resolve(recordTask).catch((error: unknown) => plan.record?.onRecordError?.(error));
+  const trackedRecordTask = Promise.resolve(recordTask).catch((error: unknown) =>
+    plan.record?.onRecordError?.(error),
+  );
+  plan.record?.trackSessionMetaTask?.(trackedRecordTask);
+  await plan.afterRecord?.();
   const deliver = async (
     payload: Parameters<
       DispatchReplyWithBufferedBlockDispatcherParams["dispatcherOptions"]["deliver"]
@@ -1215,7 +1219,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
   });
 
-  it("starts routed session metadata persistence without blocking command dispatch", async () => {
+  it("awaits routed session metadata persistence before command dispatch", async () => {
     const deferred = createDeferred<void>();
     sessionMocks.recordSessionMetaFromInbound.mockReturnValue(deferred.promise);
 
@@ -1226,12 +1230,11 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     await vi.waitFor(() => {
       expect(sessionMocks.recordSessionMetaFromInbound).toHaveBeenCalledTimes(1);
     });
-    await vi.waitFor(() => {
-      expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
-    });
+    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
 
     deferred.resolve();
     await runPromise;
+    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
 
     const dispatcherOptions = requireRecord(
       requireRecord(

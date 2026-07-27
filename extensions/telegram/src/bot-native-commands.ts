@@ -1660,6 +1660,7 @@ export const registerTelegramNativeCommands = ({
         };
 
         const { deliverReplies } = await loadTelegramNativeCommandDeliveryRuntime();
+        let recordSessionMetaTask: Promise<unknown> | undefined;
 
         const turnPlan: ChannelInboundTurnPlan<"provider_message_sending"> = {
           cfg: runtimeCfg,
@@ -1672,10 +1673,18 @@ export const registerTelegramNativeCommands = ({
           ctxPayload,
           record: {
             sessionKey: commandTargetSessionKey,
+            trackSessionMetaTask: (task) => {
+              recordSessionMetaTask = task;
+            },
             onRecordError: (err) =>
               runtime.error?.(
                 danger(`telegram slash: failed updating session meta: ${String(err)}`),
               ),
+          },
+          // Native commands historically persisted target metadata before dispatch.
+          // Preserve that ordering while the shared recorder owns the write.
+          afterRecord: async () => {
+            await recordSessionMetaTask;
           },
           replyPipeline: {},
           dispatcherOptions: {
