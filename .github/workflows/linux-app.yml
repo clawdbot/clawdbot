@@ -70,6 +70,10 @@ jobs:
         working-directory: apps/linux/src-tauri
         run: cargo +stable fmt --check
 
+      - name: Run Rust tests
+        working-directory: apps/linux/src-tauri
+        run: cargo +stable test --locked --all-targets
+
       - name: Build Linux companion bundles
         working-directory: apps/linux/src-tauri
         env:
@@ -90,8 +94,8 @@ jobs:
             apps/linux/src-tauri/target/release/bundle/deb/*.deb
             apps/linux/src-tauri/target/release/bundle/appimage/*.AppImage
 
-  check-macos:
-    name: Check macOS companion
+  test-macos:
+    name: Test macOS companion
     # This app also ships macOS desktop-test bundles, but the only job that
     # compiles them (linux-app-release.yml build_macos) runs behind a manual
     # dispatch input. Without a per-PR check, a macOS-gated Tauri API can break
@@ -126,6 +130,10 @@ jobs:
           restore-keys: |
             macos-app-${{ runner.os }}-
 
-      - name: Check macOS companion
+      - name: Test macOS companion
         working-directory: apps/linux/src-tauri
-        run: cargo +stable check --locked --all-targets
+        # `test` rather than `check`: it additionally links and runs the
+        # binaries, which is the only way macOS link-time breakage (a missing
+        # Swift runtime rpath, say) shows up at all. `--all-targets` keeps the
+        # compile coverage `check --all-targets` used to give.
+        run: cargo +stable test --locked --all-targets

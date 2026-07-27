@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
 import type { AgentExecutionAuthBinding } from "../../execution-auth-binding.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
@@ -34,6 +35,12 @@ import {
 } from "./incomplete-turn.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import {
+  isEmbeddedRunTerminalAbort,
+  isEmbeddedRunTerminalInterrupted,
+  isEmbeddedRunTerminalTimeout,
+  type EmbeddedRunTerminalState,
+} from "./terminal-outcome.js";
+import {
   MAX_BEFORE_AGENT_FINALIZE_REVISIONS,
   type EmbeddedRunTerminalRetryState,
 } from "./terminal-retry-state.js";
@@ -65,19 +72,20 @@ export function resolveSettledTurnFinalizationRequest(input: {
   payloadsWithToolMedia: EmbeddedAgentRunResult["payloads"];
   recoveredFinalAssistantPayloadsAfterPromptTimeout?: EmbeddedAgentRunResult["payloads"];
   hasTerminalToolPresentation: boolean;
-  terminalAborted: boolean;
-  terminalTimedOut: boolean;
-  promptError: unknown;
+  terminalState: EmbeddedRunTerminalState;
   settledTurnFinalizationAvailable: boolean;
 }): string | null {
   if (!input.settledTurnFinalizationAvailable) {
     return null;
   }
+  const terminalAborted = isEmbeddedRunTerminalAbort(input.terminalState.outcome);
+  const terminalTimedOut = isEmbeddedRunTerminalTimeout(input.terminalState.outcome);
+  const { promptError } = projectAgentRunAttemptTerminal(input.attempt.terminal);
   const silentToolResultReplyPayload = resolveSilentToolResultReplyPayload({
     isCronTrigger: input.runParams.trigger === "cron",
     payloadCount: input.payloadsWithToolMedia?.length ?? 0,
-    aborted: input.terminalAborted,
-    timedOut: input.terminalTimedOut,
+    aborted: terminalAborted,
+    timedOut: terminalTimedOut,
     attempt: input.attempt,
   });
   const payloadCount = input.recoveredFinalAssistantPayloadsAfterPromptTimeout
@@ -91,8 +99,8 @@ export function resolveSettledTurnFinalizationRequest(input: {
     allowEmptyAssistantReplyAsSilent: input.runParams.allowEmptyAssistantReplyAsSilent,
     onlyExplicitSilentReply: false,
     payloadCount,
-    aborted: input.terminalAborted,
-    timedOut: input.terminalTimedOut,
+    aborted: terminalAborted,
+    timedOut: terminalTimedOut,
     attempt: input.attempt,
   });
   if (emptyAssistantReplyIsSilent) {
@@ -111,9 +119,9 @@ export function resolveSettledTurnFinalizationRequest(input: {
           input.runParams.trigger === "manual")),
     payloadCount,
     hasTerminalToolPresentation: input.hasTerminalToolPresentation,
-    aborted: input.terminalAborted,
-    promptError: input.promptError,
-    timedOut: input.terminalTimedOut,
+    aborted: terminalAborted,
+    promptError,
+    timedOut: terminalTimedOut,
     attempt: input.attempt,
   });
 }
@@ -128,12 +136,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   executionContract: Parameters<
     typeof resolveReasoningOnlyRetryInstruction
   >[0]["executionContract"];
-  terminalAborted: boolean;
-  terminalTimedOut: boolean;
-  terminalInterrupted: boolean;
-  externalAbort: boolean;
-  signalOwnedInterruption: boolean;
-  promptError: unknown;
+  terminalState: EmbeddedRunTerminalState;
   payloadsWithToolMedia: EmbeddedAgentRunResult["payloads"];
   recoveredFinalAssistantPayloadsAfterPromptTimeout?: EmbeddedAgentRunResult["payloads"];
   finalAssistantVisibleText?: string;
@@ -178,11 +181,16 @@ export async function resolveEmbeddedRunTerminal(input: {
   contextRecoveryState: EmbeddedRunContextRecoveryState;
 }): Promise<TerminalResolution> {
   const { runParams, attempt, retryState } = input;
+  const { externalAbort, promptError } = projectAgentRunAttemptTerminal(attempt.terminal);
+  const terminalAborted = isEmbeddedRunTerminalAbort(input.terminalState.outcome);
+  const terminalTimedOut = isEmbeddedRunTerminalTimeout(input.terminalState.outcome);
+  const terminalInterrupted = isEmbeddedRunTerminalInterrupted(input.terminalState.outcome);
+  const { signalOwnedInterruption } = input.terminalState;
   const silentToolResultReplyPayload = resolveSilentToolResultReplyPayload({
     isCronTrigger: runParams.trigger === "cron",
     payloadCount: input.payloadsWithToolMedia?.length ?? 0,
-    aborted: input.terminalAborted,
-    timedOut: input.terminalTimedOut,
+    aborted: terminalAborted,
+    timedOut: terminalTimedOut,
     attempt,
   });
   const payloadsForTerminalPath = input.recoveredFinalAssistantPayloadsAfterPromptTimeout
@@ -200,8 +208,8 @@ export async function resolveEmbeddedRunTerminal(input: {
     allowEmptyAssistantReplyAsSilent: runParams.allowEmptyAssistantReplyAsSilent,
     onlyExplicitSilentReply: settledTurnFinalizationAttempted,
     payloadCount,
-    aborted: input.terminalAborted,
-    timedOut: input.terminalTimedOut,
+    aborted: terminalAborted,
+    timedOut: terminalTimedOut,
     attempt,
   });
   const nextReasoningOnlyRetryInstruction =
@@ -212,8 +220,8 @@ export async function resolveEmbeddedRunTerminal(input: {
           modelId: input.activeErrorContext.model,
           modelApi: input.modelApi,
           executionContract: input.executionContract,
-          aborted: input.terminalAborted,
-          timedOut: input.terminalTimedOut,
+          aborted: terminalAborted,
+          timedOut: terminalTimedOut,
           attempt,
         });
   const nextEmptyResponseRetryInstruction =
@@ -225,8 +233,8 @@ export async function resolveEmbeddedRunTerminal(input: {
           modelApi: input.modelApi,
           executionContract: input.executionContract,
           payloadCount,
-          aborted: input.terminalAborted,
-          timedOut: input.terminalTimedOut,
+          aborted: terminalAborted,
+          timedOut: terminalTimedOut,
           attempt,
         });
   if (
@@ -250,9 +258,9 @@ export async function resolveEmbeddedRunTerminal(input: {
     !settledTurnFinalizationAttempted &&
     shouldRetryMissingAssistantTurn({
       payloadCount,
-      aborted: input.terminalAborted,
-      promptError: input.promptError,
-      timedOut: input.terminalTimedOut,
+      aborted: terminalAborted,
+      promptError,
+      timedOut: terminalTimedOut,
       attempt,
     }) &&
     retryState.missingAssistantAttempts < MAX_MISSING_ASSISTANT_RETRIES
@@ -284,16 +292,16 @@ export async function resolveEmbeddedRunTerminal(input: {
     ? null
     : resolveIncompleteTurnPayloadText({
         payloadCount,
-        aborted: input.terminalAborted,
-        externalAbort: input.externalAbort || input.signalOwnedInterruption,
-        timedOut: input.terminalTimedOut,
+        aborted: terminalAborted,
+        externalAbort: externalAbort || signalOwnedInterruption,
+        timedOut: terminalTimedOut,
         hadPotentialSideEffects: input.replayState.hadPotentialSideEffects,
         attempt,
       });
   const incompleteTurnFallbackSafe = Boolean(
     incompleteTurnText &&
-    !input.terminalInterrupted &&
-    !input.promptError &&
+    !terminalInterrupted &&
+    !promptError &&
     !attempt.lastToolError &&
     !hasAttemptTerminalState(attempt) &&
     !input.replayState.hadPotentialSideEffects,
@@ -306,8 +314,8 @@ export async function resolveEmbeddedRunTerminal(input: {
     !settledTurnFinalizationAttempted &&
     input.attemptCompactionCount > 0 &&
     payloadCount === 0 &&
-    !input.terminalInterrupted &&
-    !input.promptError &&
+    !terminalInterrupted &&
+    !promptError &&
     !attempt.clientToolCalls &&
     !attempt.yieldDetected &&
     !attempt.didSendDeterministicApprovalPrompt &&
@@ -380,8 +388,8 @@ export async function resolveEmbeddedRunTerminal(input: {
   if (
     beforeFinalizeRevisionReason &&
     !settledTurnFinalizationAttempted &&
-    !input.terminalInterrupted &&
-    !input.promptError &&
+    !terminalInterrupted &&
+    !promptError &&
     !attempt.clientToolCalls &&
     !attempt.yieldDetected &&
     !emptyAssistantReplyIsSilent
@@ -416,11 +424,13 @@ async function surfaceIncompleteTurn(
     terminalToolPresentation?: string;
   },
 ): Promise<TerminalResolution> {
+  const terminalAborted = isEmbeddedRunTerminalAbort(input.terminalState.outcome);
+  const terminalTimedOut = isEmbeddedRunTerminalTimeout(input.terminalState.outcome);
   const replayInvalid = input.resolveReplayInvalid(input.text);
   const livenessState = resolveRunLivenessState({
     payloadCount: input.payloadCount,
-    aborted: input.terminalAborted,
-    timedOut: input.terminalTimedOut,
+    aborted: terminalAborted,
+    timedOut: terminalTimedOut,
     attempt: input.attempt,
     incompleteTurnText: input.text,
   });
@@ -446,7 +456,7 @@ async function surfaceIncompleteTurn(
       meta: {
         durationMs: Date.now() - input.startedAtMs,
         agentMeta: input.agentMeta,
-        aborted: input.terminalAborted,
+        aborted: terminalAborted,
         systemPromptReport: input.attempt.systemPromptReport,
         finalPromptText: input.attempt.finalPromptText,
         finalAssistantVisibleText: input.finalAssistantVisibleText,
@@ -475,8 +485,10 @@ function completeEmbeddedRun(
     emptyAssistantReplyIsSilent: boolean;
   },
 ): TerminalResolution {
+  const terminalAborted = isEmbeddedRunTerminalAbort(input.terminalState.outcome);
+  const terminalTimedOut = isEmbeddedRunTerminalTimeout(input.terminalState.outcome);
   log.debug(
-    `embedded run done: runId=${input.runParams.runId} sessionId=${input.runParams.sessionId} durationMs=${Date.now() - input.startedAtMs} aborted=${input.terminalAborted}`,
+    `embedded run done: runId=${input.runParams.runId} sessionId=${input.runParams.sessionId} durationMs=${Date.now() - input.startedAtMs} aborted=${terminalAborted}`,
   );
   markEmbeddedRunAuthProfileSuccess({
     authProfileStateMode: input.runParams.authProfileStateMode,
@@ -507,8 +519,8 @@ function completeEmbeddedRun(
     ? "paused"
     : resolveRunLivenessState({
         payloadCount: input.payloadCount,
-        aborted: input.terminalAborted,
-        timedOut: input.terminalTimedOut,
+        aborted: terminalAborted,
+        timedOut: terminalTimedOut,
         attempt: input.attempt,
         incompleteTurnText: null,
       });
@@ -542,7 +554,7 @@ function completeEmbeddedRun(
       meta: {
         durationMs: Date.now() - input.startedAtMs,
         agentMeta: input.agentMeta,
-        aborted: input.terminalAborted,
+        aborted: terminalAborted,
         systemPromptReport: input.attempt.systemPromptReport,
         finalPromptText: input.attempt.finalPromptText,
         finalAssistantVisibleText: input.finalAssistantVisibleText,

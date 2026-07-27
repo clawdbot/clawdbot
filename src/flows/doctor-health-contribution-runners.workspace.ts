@@ -122,6 +122,15 @@ export async function runHeartbeatScratchMigrationHealth(
   });
 }
 
+export async function runToolsMdMigrationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeMigrateToolsMd } = await import("../commands/doctor-tools-md-migration.js");
+  await maybeMigrateToolsMd({
+    cfg: ctx.cfg,
+    shouldRepair: ctx.prompter.shouldRepair,
+    env: ctx.env,
+  });
+}
+
 export async function runHeartbeatTaskMigrationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeMigrateHeartbeatTasksToCron } =
     await import("../commands/doctor-heartbeat-task-migration.js");

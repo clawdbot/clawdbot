@@ -30,6 +30,7 @@ import {
   type SessionArchivedFilter,
 } from "../../lib/sessions/index.ts";
 import {
+  resolveSessionPreferredFaceForKey,
   resolveSessionNavigationAgentId,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
@@ -1395,16 +1396,19 @@ class SessionsPage extends OpenClawLightDomElement {
             this.selectedKeys = new Set();
           },
           onDeleteSelected: () => void this.deleteSelected(),
-          onNavigateToChat: (sessionKey) =>
-            context.navigate("chat", {
+          onNavigateToChat: (sessionKey) => {
+            const face = resolveSessionPreferredFaceForKey(context, sessionKey);
+            context.navigate(face, {
               ...sessionNavigationTarget({
                 context,
-                face: "chat",
+                face,
                 sessionKey,
                 agentId: this.sessionPathAgentId(sessionKey, context),
+                preferenceDerivedFace: true,
               }).options,
               hash: "",
-            }),
+            });
+          },
           onOpenSessionMenu: (row, position, trigger) =>
             this.openSessionMenu(row, position, trigger),
           onToggleDetails: (sessionKey) => void this.toggleSessionDetails(sessionKey),

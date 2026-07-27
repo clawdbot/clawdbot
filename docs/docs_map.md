@@ -69,6 +69,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Heartbeat task migration
   - H3: Stream sources
   - H3: Dynamic cadence (pacing)
+  - H3: /loop chat shortcut
   - H3: Day-of-month and day-of-week use OR logic
   - H2: Event triggers (condition watchers)
   - H2: Payloads
@@ -8786,7 +8787,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Soul (required)
   - H2: Shared spaces (recommended)
   - H2: Memory system (recommended)
-  - H2: Tools and skills
+  - H2: Tools
+  - H3: Local notes
   - H2: Backup tip (recommended)
   - H2: What OpenClaw does
   - H2: Core skills (enable in Settings → Skills)
@@ -9062,6 +9064,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Existing solutions preflight
   - H2: Daily memory (recommended)
   - H2: Heartbeats (optional)
+  - H2: Tools
   - H2: Customize
   - H2: C-3PO Origin Memory
   - H3: Birth Day: 2026-01-09
@@ -9136,24 +9139,11 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Continuity
   - H2: Related
 
-## reference/templates/TOOLS.dev.md
-
-- Route: /reference/templates/TOOLS.dev
-- Headings:
-  - H1: TOOLS.md - User Tool Notes (editable)
-  - H2: Examples
-  - H3: imsg
-  - H3: sag
-  - H2: Related
-
 ## reference/templates/TOOLS.md
 
 - Route: /reference/templates/TOOLS
 - Headings:
-  - H1: TOOLS.md - Local Notes
-  - H2: Examples
-  - H2: Why Separate?
-  - H2: Related
+  - H1: TOOLS.md is retired
 
 ## reference/templates/USER.dev.md
 
@@ -10477,6 +10467,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Bundled plugin commands
   - H3: Skill commands
   - H2: /tools: what the agent can use now
+  - H2: /loop: recurring conversation work
   - H2: /model: model selection
   - H2: /config: on-disk config writes
   - H2: /mcp: MCP server config
@@ -10807,6 +10798,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /web/dashboards
 - Headings:
+  - H2: Find your dashboards
   - H2: Build a dashboard by asking
   - H2: The board
   - H2: What widgets are allowed to do

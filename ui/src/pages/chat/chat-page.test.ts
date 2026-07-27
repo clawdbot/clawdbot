@@ -131,13 +131,14 @@ function getDropIndicator(page: ChatPage) {
 function setNavigationContext(page: ChatPage) {
   const navigate = vi.fn();
   const replace = vi.fn();
+  const patch = vi.fn(async () => null);
   const agentSelectionState = { selectedId: "main" };
   const setAgent = vi.fn((agentId: string) => {
     agentSelectionState.selectedId = agentId;
   });
   const context = {
     basePath: "",
-    sessions: { state: { result: null }, subscribe: () => () => undefined },
+    sessions: { state: { result: null }, subscribe: () => () => undefined, patch },
     agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
     gateway: { snapshot: { hello: null } },
     navigate,
@@ -145,7 +146,7 @@ function setNavigationContext(page: ChatPage) {
     agentSelection: { state: agentSelectionState, set: setAgent },
   } as unknown as ApplicationContext;
   (page as unknown as { context: ApplicationContext }).context = context;
-  return { context, navigate, replace, setAgent };
+  return { context, navigate, replace, setAgent, patch };
 }
 
 function stubMatchMedia(matches: boolean) {
@@ -407,6 +408,30 @@ describe("chat page split layout host", () => {
     );
   });
 
+  it("replaces into the canonical face namespace without adding history", async () => {
+    const page = new ChatPage();
+    const navigation = setNavigationContext(page);
+    // The loader resolved this session to its stored dashboard face while the route was
+    // matched under /chat, so the replacement has to be routed by the resolved face.
+    page.data = {
+      sessionKey: WORK_SESSION_KEY,
+      face: "dashboard",
+      canonicalLocation: {
+        pathname: "/dashboard/main/deploy-monitor-12345678",
+        search: "",
+        hash: "",
+      },
+    };
+    document.body.append(page);
+    await page.updateComplete;
+
+    expect(navigation.replace).toHaveBeenCalledWith("dashboard", {
+      pathname: "/dashboard/main/deploy-monitor-12345678",
+      search: "",
+      hash: "",
+    });
+  });
+
   it("keeps catalog identity when consuming a route draft", async () => {
     const page = new ChatPage();
     const navigation = setNavigationContext(page);
@@ -482,6 +507,11 @@ describe("chat page split layout host", () => {
     expect(navigation.navigate).toHaveBeenCalledWith("dashboard", {
       pathname: "/dashboard/main/1234567890",
     });
+    expect(navigation.patch).toHaveBeenCalledWith(
+      WORK_SESSION_KEY,
+      { boardFace: "dashboard" },
+      { agentId: "main" },
+    );
   });
 
   it("passes an empty session key while route data is still unresolved", async () => {

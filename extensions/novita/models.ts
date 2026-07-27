@@ -1,8 +1,5 @@
 // Novita plugin module implements models behavior.
-import {
-  buildManifestModelDefinition,
-  readManifestProviderDefaultModelRef,
-} from "openclaw/plugin-sdk/provider-catalog-shared";
+import { buildManifestModelDefinition } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
@@ -16,4 +13,3 @@ export const NOVITA_MODEL_CATALOG: ModelDefinitionConfig[] = NOVITA_MANIFEST_CAT
     decorate: (model) => ({ ...model, api: "openai-completions" }),
   }),
 );
-export const NOVITA_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(manifest, "novita")!;

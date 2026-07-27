@@ -11,6 +11,7 @@ export type ControlUiSessionPathTarget =
       kind: "literal";
       agentId: string;
       sessionKey: string;
+      slugCandidate?: string;
     };
 
 const SHORT_SESSION_REF_RE = /^(?:.*-)?([0-9a-f]{8,32})$/iu;
@@ -127,7 +128,7 @@ export function parseControlUiSessionPath(
     const shortId = segment.match(SHORT_SESSION_REF_RE)?.[1]?.toLowerCase();
     return shortId
       ? { namespace, kind: "short", agentId, shortId }
-      : { namespace, kind: "literal", agentId, sessionKey };
+      : { namespace, kind: "literal", agentId, sessionKey, slugCandidate: segment };
   }
   return null;
 }

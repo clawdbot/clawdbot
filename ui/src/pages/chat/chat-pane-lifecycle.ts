@@ -1,6 +1,8 @@
 import {
   BROWSER_ANNOTATION_EVENT,
+  CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
   WIDGET_PROMPT_EVENT,
+  admitInitialTurnHandoff,
   admitInitialUserMessageHandoff,
   areUiSessionKeysEquivalent,
   chatAttachmentFromDataUrl,
@@ -347,17 +349,33 @@ export abstract class ChatPaneLifecycle extends ChatPaneReset {
         ? this.sessionKey
         : resolveSessionKey(this.sessionKey, this.context.gateway.snapshot.hello);
       if (nextSessionKey) {
+        // Availability belongs to one activation. The replacement probe starts
+        // after its transcript commit in deferSessionHydrationUntilTranscript.
         this.sessionDiscussionStates.delete(nextSessionKey);
-        // Resolve availability before the action renders: the methods are
-        // advertised even without a provider, so an unprobed session would
-        // otherwise show a dead Discussion button on provider-less installs.
-        void this.probeSessionDiscussion(nextSessionKey);
       }
       if (nextSessionKey && nextSessionKey !== this.state.sessionKey) {
         this.switchPaneSession(nextSessionKey);
       } else if (catalogKey && this.catalogRequestedSessionKey !== this.sessionKey) {
         this.catalogLoadGeneration += 1;
         this.openCatalogSession(catalogKey, this.state);
+      } else if (nextSessionKey) {
+        // A pane routed straight onto the created session never runs the switch
+        // path, so its one-shot handoffs would expire unclaimed: the rejected turn
+        // would vanish instead of offering a retry, and the accepted prompt would
+        // stay hidden until the transcript bootstrap resolved.
+        const rejectedTurn = admitInitialTurnHandoff(this.state, nextSessionKey);
+        const acceptedPrompt = admitInitialUserMessageHandoff(
+          this.state.initialUserMessage,
+          this.state,
+          nextSessionKey,
+        );
+        if (rejectedTurn) {
+          this.state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
+          this.state.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
+        }
+        if (rejectedTurn || acceptedPrompt) {
+          this.requestUpdate();
+        }
       }
       this.chatState.restoreCreatedSessionComposer(nextSessionKey);
     }
@@ -402,9 +420,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneReset {
       session: selectedSessionRow,
       digest: null,
     });
-    if (this.state?.sessionKey) {
-      this.hydrateSessionCompanion(this.state.sessionKey);
-    }
     if (this.state?.observerDigest || selectedSessionRow?.observerDigest || observerRunId) {
       this.ensureSessionRail();
     }
@@ -417,6 +432,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneReset {
     this.paneResizeObserver?.disconnect();
     this.paneResizeObserver = null;
     this.connectionGeneration += 1;
+    this.deferredSessionHydrationRequestVersion += 1;
     this.sessionDiscussionPanels.clear();
     this.sessionCompanionHydrationKey = "";
     this.taskSuggestionsRequestVersion += 1;

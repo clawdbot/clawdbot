@@ -3,21 +3,28 @@ import {
   definePluginEntry,
   type OpenClawPluginApi,
   type ProviderAuthContext,
+  type ProviderAuthMethod,
   type ProviderAuthMethodNonInteractiveContext,
   type ProviderAuthResult,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
+import {
+  CUSTOM_LOCAL_AUTH_MARKER,
+  normalizeOptionalSecretInput,
+} from "openclaw/plugin-sdk/provider-auth";
 import { lmstudioMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import {
   LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
+  LMSTUDIO_DEFAULT_INFERENCE_BASE_URL,
+  LMSTUDIO_DOCKER_HOST_INFERENCE_BASE_URL,
   LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
   LMSTUDIO_PROVIDER_LABEL,
 } from "./src/defaults.js";
 import {
   normalizeLmstudioConfiguredCatalogEntries,
   normalizeLmstudioProviderConfig,
+  resolveLmstudioInferenceBase,
 } from "./src/models.js";
 import { shouldUseLmstudioSyntheticAuth } from "./src/provider-auth.js";
 import { wrapLmstudioInferencePreload } from "./src/stream.js";
@@ -25,6 +32,79 @@ import { wrapLmstudioInferencePreload } from "./src/stream.js";
 const PROVIDER_ID = "lmstudio";
 // Intentional: dynamic models are cached per LM Studio endpoint (`baseUrl`) only.
 const cachedDynamicModels = new Map<string, ProviderRuntimeModel[]>();
+
+type LmstudioNonInteractiveValidationContext = Parameters<
+  NonNullable<ProviderAuthMethod["validateNonInteractive"]>
+>[0];
+
+async function validateLmstudioNonInteractive(
+  ctx: LmstudioNonInteractiveValidationContext,
+): Promise<boolean> {
+  const configuredBaseUrl = normalizeOptionalSecretInput(ctx.opts.customBaseUrl);
+  const dockerSetup = ["1", "true", "yes", "on"].includes(
+    process.env.OPENCLAW_DOCKER_SETUP?.trim().toLowerCase() ?? "",
+  );
+  const baseUrl = resolveLmstudioInferenceBase(
+    configuredBaseUrl ||
+      (dockerSetup ? LMSTUDIO_DOCKER_HOST_INFERENCE_BASE_URL : LMSTUDIO_DEFAULT_INFERENCE_BASE_URL),
+  );
+  const providerApiKey = normalizeOptionalSecretInput(ctx.opts.lmstudioApiKey);
+  const resolvedApiKey = await ctx.resolveApiKey({
+    provider: PROVIDER_ID,
+    flagValue: providerApiKey ?? normalizeOptionalSecretInput(ctx.opts.customApiKey),
+    flagName: providerApiKey === undefined ? "--custom-api-key" : "--lmstudio-api-key",
+    envVar: LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
+    envVarName: LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
+    required: false,
+  });
+
+  // A reset preflight may inspect the model catalog but must never invoke
+  // setup, write credentials, load a model, or mutate the model server.
+  const { fetchLmstudioModels } = await import("./src/models.fetch.js");
+  const discovery = await fetchLmstudioModels({
+    baseUrl,
+    apiKey: resolvedApiKey?.key ?? LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
+    timeoutMs: 5000,
+  });
+  if (!discovery.reachable) {
+    ctx.runtime.error(
+      `LM Studio could not be reached at ${baseUrl}.\nStart LM Studio (or run lms server start) and re-run setup.`,
+    );
+    ctx.runtime.exit(1);
+    return false;
+  }
+  if (discovery.status !== undefined && discovery.status >= 400) {
+    ctx.runtime.error(
+      `LM Studio returned HTTP ${discovery.status} while listing models at ${baseUrl}.\nCheck the base URL and API key, then re-run setup.`,
+    );
+    ctx.runtime.exit(1);
+    return false;
+  }
+
+  const availableModels = discovery.models
+    .filter((model) => model.type === "llm")
+    .map((model) => model.key?.trim())
+    .filter((model): model is string => Boolean(model));
+  // Setup matches the requested wire key unchanged. Accepting provider-
+  // qualified refs here would permit reset before setup rejects the model.
+  const requestedModel = normalizeOptionalSecretInput(ctx.opts.customModelId);
+  if (requestedModel && !availableModels.includes(requestedModel)) {
+    ctx.runtime.error(
+      `LM Studio model ${requestedModel} was not found at ${baseUrl}.\nAvailable models: ${availableModels.join(", ")}`,
+    );
+    ctx.runtime.exit(1);
+    return false;
+  }
+  if (availableModels.length === 0) {
+    ctx.runtime.error(
+      `No LM Studio LLM models were found at ${baseUrl}.\nLoad at least one model in LM Studio (or run lms load), then re-run setup.`,
+    );
+    ctx.runtime.exit(1);
+    return false;
+  }
+
+  return true;
+}
 
 function resolveLmstudioAugmentedCatalogEntries(config: OpenClawConfig | undefined) {
   if (!config) {
@@ -94,6 +174,7 @@ export default definePluginEntry({
               allowSecretRefPrompt: ctx.allowSecretRefPrompt,
             });
           },
+          validateNonInteractive: validateLmstudioNonInteractive,
           runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) => {
             const providerSetup = await loadProviderSetup();
             return await providerSetup.configureLmstudioNonInteractive(ctx);

@@ -300,6 +300,7 @@ describe("method scope resolution", () => {
       resolveLeastPrivilegeOperatorScopesForMethod("sessions.patch", {
         key: "agent:main:ios-1",
         label: "Trip planning",
+        boardFace: "dashboard",
         icon: "name:spark",
         pinned: true,
         archived: false,

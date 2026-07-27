@@ -79,4 +79,37 @@ describe("session list requests", () => {
     expect(request.mock.calls[2]?.[1]).not.toHaveProperty("activeMinutes");
     sessions.dispose();
   });
+
+  it("forwards the server-side face filter", async () => {
+    const result: SessionsListResult = {
+      ts: 1,
+      path: "(multiple)",
+      count: 0,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [],
+    };
+    const request = vi.fn(async () => result);
+    const sessions = createSessionCapability({
+      snapshot: {
+        client: { request } as unknown as GatewayBrowserClient,
+        phase: "connected" as const,
+        sessionKey: "agent:main:main",
+        assistantAgentId: "main",
+        hello: null,
+      },
+      subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
+    });
+
+    await sessions.list({ boardFace: "dashboard" });
+
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      configuredAgentsOnly: true,
+      boardFace: "dashboard",
+      includeGlobal: true,
+      includeUnknown: true,
+      limit: 50,
+    });
+    sessions.dispose();
+  });
 });

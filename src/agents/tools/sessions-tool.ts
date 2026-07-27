@@ -185,7 +185,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
     label: "Sessions",
     name: "sessions",
     description:
-      "Session settings and groups. patch/group_list/group_set/group_rename/group_delete.",
+      "Session settings and groups: patch label/icon/status, pin, archive/restore, model/thinking override; group_list/group_set/group_rename/group_delete.",
     parameters: SessionsToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;

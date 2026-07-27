@@ -8,7 +8,6 @@ import {
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   missingScopeErrorShape,
   type TalkSpeakParams,
   validateTalkCatalogParams,
@@ -74,6 +73,7 @@ import {
   resolveConfiguredRealtimeTranscriptionProvider,
 } from "./talk-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 type TalkSpeakReason =
   | "talk_unconfigured"
@@ -713,15 +713,7 @@ export const talkHandlers: GatewayRequestHandlers = {
   ...talkClientHandlers,
   "talk.catalog": async ({ params, respond, context }) => {
     const catalogParams = params ?? {};
-    if (!validateTalkCatalogParams(catalogParams)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid talk.catalog params: ${formatValidationErrors(validateTalkCatalogParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(catalogParams, validateTalkCatalogParams, "talk.catalog", respond)) {
       return;
     }
 
@@ -732,15 +724,7 @@ export const talkHandlers: GatewayRequestHandlers = {
     }
   },
   "talk.config": async ({ params, respond, client, context }) => {
-    if (!validateTalkConfigParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid talk.config params: ${formatValidationErrors(validateTalkConfigParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateTalkConfigParams, "talk.config", respond)) {
       return;
     }
 
@@ -783,15 +767,7 @@ export const talkHandlers: GatewayRequestHandlers = {
     respond(true, { config: configPayload }, undefined);
   },
   "talk.speak": async ({ params, respond, context }) => {
-    if (!validateTalkSpeakParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid talk.speak params: ${formatValidationErrors(validateTalkSpeakParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateTalkSpeakParams, "talk.speak", respond)) {
       return;
     }
 
@@ -889,15 +865,7 @@ export const talkHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (!validateTalkModeParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid talk.mode params: ${formatValidationErrors(validateTalkModeParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateTalkModeParams, "talk.mode", respond)) {
       return;
     }
     const payload = {

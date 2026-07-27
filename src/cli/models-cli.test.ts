@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   modelsAuthAddCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthListCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthLoginCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAuthLogoutCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthPasteApiKeyCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthPasteTokenCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthSetupTokenCommand: vi.fn().mockResolvedValue(undefined),
@@ -21,6 +22,7 @@ const {
   modelsAuthAddCommand,
   modelsAuthListCommand,
   modelsAuthLoginCommand,
+  modelsAuthLogoutCommand,
   modelsAuthPasteApiKeyCommand,
   modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand,
@@ -44,6 +46,9 @@ vi.mock("../commands/models/auth.js", () => ({
 }));
 vi.mock("../commands/models/auth-list.js", () => ({
   modelsAuthListCommand: mocks.modelsAuthListCommand,
+}));
+vi.mock("../commands/models/auth-logout.js", () => ({
+  modelsAuthLogoutCommand: mocks.modelsAuthLogoutCommand,
 }));
 vi.mock("../commands/models/auth-order.js", () => ({
   modelsAuthOrderClearCommand: mocks.noopAsync,
@@ -82,6 +87,7 @@ describe("models cli", () => {
     modelsAuthAddCommand.mockClear();
     modelsAuthListCommand.mockClear();
     modelsAuthLoginCommand.mockClear();
+    modelsAuthLogoutCommand.mockClear();
     modelsAuthPasteApiKeyCommand.mockClear();
     modelsAuthPasteTokenCommand.mockClear();
     modelsAuthSetupTokenCommand.mockClear();
@@ -172,6 +178,12 @@ describe("models cli", () => {
       args: ["models", "auth", "--agent", "poe", "login", "--provider", "openai"],
       command: modelsAuthLoginCommand,
       expected: { agent: "poe", provider: "openai" },
+    },
+    {
+      label: "logout",
+      args: ["models", "auth", "--agent", "poe", "logout", "openai:manual", "--yes"],
+      command: modelsAuthLogoutCommand,
+      expected: { agent: "poe", profileId: "openai:manual", yes: true },
     },
     {
       label: "setup-token",

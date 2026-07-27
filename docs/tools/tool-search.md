@@ -120,7 +120,25 @@ client-provided app tools.
 
 `openclaw.tools.search(query, options?)`
 
-Searches the effective catalog for the current run. Results are compact and safe
+Searches the effective catalog for the current run.
+
+Queries must be written in English. Ranking is lexical (Okapi BM25 over tool
+names, descriptions, and first-party parameter names and descriptions), with
+light English stemming so `scheduling` reaches a tool described as `Schedule a
+recurring task`, and a small intent expansion so `look up the price` reaches one
+described as `Search the web`. Tool names and descriptions are written in English,
+so a query in another language will usually match nothing. It is not rejected —
+a catalog may legitimately describe a tool in another script — but it is also no
+longer answered with an arbitrary slice of the catalog presented as if it were
+ranked, which is what the previous scorer did whenever a query produced no
+usable terms. Both `tool_search` and the code-mode bridge state this
+requirement in their model-facing descriptions.
+
+Untrusted parameter schemas are never indexed. MCP and client tools are matched
+on name and description only, which is the same boundary that defers their input
+signatures as `input: "unknown"`.
+
+Results are compact and safe
 to put back into prompt context. Each hit includes a bounded TypeScript-style
 `input` signature, such as `{ id: string; mode?: "drip" | "flood" }`, so the
 model can skip `describe` when that signature is sufficient. A trusted
@@ -148,9 +166,19 @@ const calendarCreate = await openclaw.tools.describe("mcp:calendar:create_event"
 
 Calls a selected tool through OpenClaw and returns the raw `{ tool, result }`
 envelope. JSON-returning tools normally place their value in
-`result.details`. If a trusted tool declares `outputSchema`, OpenClaw compiles
-the schema before execution and validates final `details` after normal tool
-hooks before returning the catalog call.
+`result.details`. OpenClaw validates a trusted core or plugin tool's declared
+input schema before execution. Missing required arguments, incorrect types,
+and forbidden properties return actionable tool errors instead of executing
+the tool; misspelled properties include a suggested parameter when available.
+If a trusted tool also declares `outputSchema`, OpenClaw compiles that schema
+before execution and validates final `details` after normal tool hooks before
+returning the catalog call. MCP and client-owned schemas remain deferred to
+their owning execution boundary.
+
+In structured mode, `tool_call` also repairs flattened target arguments from
+local models. It preserves target fields such as `id` and `name`, and rejects
+ambiguous tool selectors instead of calling the wrong tool. Nest target
+arguments under `args` when a target field matches another cataloged tool.
 
 ```js
 await openclaw.tools.call(calendarCreate.id, {

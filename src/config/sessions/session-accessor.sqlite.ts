@@ -15,6 +15,7 @@ export {
   recordSqliteInboundSessionMeta,
   replaceSqliteSessionEntry,
   replaceSqliteSessionEntrySync,
+  resolveSqliteSessionEntry,
   resolveSqliteSessionKeyBySessionId,
   updateSqliteSessionLastRoute,
   upsertSqliteSessionEntry,

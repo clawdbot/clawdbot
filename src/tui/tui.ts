@@ -1375,11 +1375,13 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     handleAgentEvent,
     handleBtwEvent,
     handleSessionsChangedEvent,
+    handleSessionMessageEvent,
     pauseStreamingWatchdog,
     reconnectStreamingWatchdog,
     consumeCompletedRunForPendingSend,
     isRunObserved,
     flushPendingHistoryRefreshIfIdle,
+    dispose: disposeEventHandlers,
   } = createEventHandlers({
     chatLog,
     btw,
@@ -1417,6 +1419,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       exitReason: result?.exitReason ?? "exit",
       ...(result?.systemAgentMessage ? { systemAgentMessage: result.systemAgentMessage } : {}),
     };
+    disposeEventHandlers();
     pluginApprovals?.dispose();
     taskSuggestions?.dispose();
     beginTuiShutdown({
@@ -1616,6 +1619,9 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     if (evt.event === "sessions.changed") {
       handleSessionsChangedEvent(evt.payload);
     }
+    if (evt.event === "session.message") {
+      handleSessionMessageEvent(evt.payload);
+    }
   };
 
   client.onConnected = () => {
@@ -1742,6 +1748,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   client.start();
   await new Promise<void>((resolve) => {
     const finish = () => {
+      disposeEventHandlers();
       pluginApprovals?.dispose();
       taskSuggestions?.dispose();
       if (isLocalMode) {

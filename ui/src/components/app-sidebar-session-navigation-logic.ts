@@ -19,7 +19,10 @@ import {
   filterVisibleSessionRows,
   resolveSessionNavigation,
 } from "../lib/sessions/index.ts";
-import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
+import {
+  resolveSessionPreferredFace,
+  sessionNavigationTarget,
+} from "../lib/sessions/route-navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
@@ -123,12 +126,13 @@ export function buildSidebarSessionNavigationState(input: {
       meta: formatSidebarTimestamp(row.updatedAt),
       subtitle: resolveSessionWorkSubtitle(row),
       href: sessionNavigationTarget({
-        face: "chat",
+        face: resolveSessionPreferredFace(row),
         sessionKey: row.key,
         fallbackAgentId: navigation.selectedAgentId,
         basePath: context?.basePath ?? "",
         row,
         mainKey,
+        preferenceDerivedFace: true,
       }).href,
       active: row.key === navigation.activeRowKey,
       visuallyActive: input.highlightCurrentSession && row.key === navigation.currentSessionKey,
@@ -142,6 +146,7 @@ export function buildSidebarSessionNavigationState(input: {
       draftOwnedBySelf: isSidebarDraftOwnedBySelf(row, context?.gateway.snapshot.selfUser?.id),
       icon: row.icon,
       category: normalizeOptionalString(row.category),
+      boardFace: row.boardFace,
       channel: channelInfo.channel,
       channelSession: channelInfo.channelSession,
       workSession:
