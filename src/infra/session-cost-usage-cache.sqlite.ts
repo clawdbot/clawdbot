@@ -1,5 +1,4 @@
 import os from "node:os";
-import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
@@ -258,18 +257,23 @@ function systemBootTimeMs(): number | undefined {
   }
 }
 
+// Nonces minted by this process for locks it currently holds. Only an entry here
+// proves a lock on our own PID is ours; a timestamp cannot, because a supervisor
+// can restart a crashed gateway into the same PID within milliseconds.
+const ownedRefreshLockNonces = new Set<string>();
+
 // A live PID is not proof of ownership. Supervised gateways restart into the same
 // low PID (PID 1/9 under a container init), so a lock leaked by a previous
 // incarnation keeps matching `process.kill(pid, 0)` and would pin refreshes off
-// forever. `startedAt` is what separates incarnations, so compare against the
-// clocks we can trust and fail toward "held" whenever a check is inconclusive.
+// forever. Fail toward "held" whenever a check is inconclusive.
 function isRefreshLockOwnerAlive(lock: SessionCostUsageRefreshLock): boolean {
   if (!isProcessRunning(lock.pid)) {
     return false;
   }
   if (lock.pid === process.pid) {
-    // Our own PID: the lock is ours only if it was written after we started.
-    return lock.startedAt >= performance.timeOrigin - REFRESH_LOCK_CLOCK_TOLERANCE_MS;
+    // Our own PID: only a nonce we minted proves we are the owner. An earlier
+    // incarnation that happened to hold this PID cannot have produced one.
+    return ownedRefreshLockNonces.has(lock.ownerNonce);
   }
   // Another PID: an owner that predates the last boot cannot still hold the lock.
   const bootTimeMs = systemBootTimeMs();
@@ -357,10 +361,14 @@ export function acquireSessionCostUsageRefreshLock(
     },
     { operationLabel: "session-cost-usage.refresh-lock.acquire" },
   );
+  if (acquired) {
+    ownedRefreshLockNonces.add(lock.ownerNonce);
+  }
   return {
     acquired,
     release: () => {
       if (acquired) {
+        ownedRefreshLockNonces.delete(lock.ownerNonce);
         deleteCacheValueIfUnchanged({
           agentId,
           databasePath,

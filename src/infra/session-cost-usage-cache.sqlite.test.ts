@@ -124,6 +124,29 @@ describe("session cost usage SQLite cache", () => {
     });
   });
 
+  it("reclaims a reused-PID lock even when the restart followed the crash immediately", () => {
+    const stateDir = makeTempDir(tempDirs, "openclaw-usage-cache-fast-restart-");
+
+    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+      const agentId = "worker-1";
+      const databasePath = resolveOpenClawAgentSqlitePath({ agentId });
+      // Supervisors restart a crashed gateway in milliseconds, so the leaked row
+      // can predate this process by less than any clock-skew tolerance. Ownership
+      // must not be decided by comparing timestamps that close together.
+      writeRefreshLockRow(agentId, {
+        pid: process.pid,
+        startedAt: Math.round(performance.timeOrigin) - 100,
+        ownerNonce: "previous-incarnation-nonce",
+      });
+
+      expect(isSessionCostUsageRefreshRunning(agentId, databasePath)).toBe(false);
+
+      const lock = acquireSessionCostUsageRefreshLock(agentId, databasePath);
+      expect(lock.acquired).toBe(true);
+      lock.release();
+    });
+  });
+
   it("treats a refresh lock predating the last boot as stale", () => {
     const stateDir = makeTempDir(tempDirs, "openclaw-usage-cache-preboot-lock-");
 
