@@ -3,7 +3,13 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  pinActivePluginHttpRouteRegistry,
+  pinActivePluginSessionExtensionRegistry,
+  releasePinnedPluginHttpRouteRegistry,
+  releasePinnedPluginSessionExtensionRegistry,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import {
   authorizeOperatorScopesForMethod,
   isGatewayMethodClassified,
@@ -35,6 +41,8 @@ function setPluginGatewayMethodScope(
 }
 
 afterEach(() => {
+  releasePinnedPluginHttpRouteRegistry();
+  releasePinnedPluginSessionExtensionRegistry();
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
@@ -293,6 +301,50 @@ describe("method scope resolution", () => {
         actionId: "approve",
       }),
     ).toEqual({ allowed: false, missingScope: "operator.approvals" });
+  });
+
+  it("keeps session action scopes pinned when an agent replaces the active registry", () => {
+    const gatewayRegistry = createEmptyPluginRegistry();
+    gatewayRegistry.sessionActions = [
+      {
+        pluginId: "scope-plugin",
+        pluginName: "Scope Plugin",
+        source: "gateway",
+        action: {
+          id: "approve",
+          requiredScopes: ["operator.approvals"],
+          handler: () => ({ result: { owner: "gateway" } }),
+        },
+      },
+    ];
+    setActivePluginRegistry(gatewayRegistry);
+    pinActivePluginSessionExtensionRegistry(gatewayRegistry);
+
+    const scopedRegistry = createEmptyPluginRegistry();
+    scopedRegistry.sessionActions = [
+      {
+        pluginId: "scope-plugin",
+        pluginName: "Scope Plugin",
+        source: "agent",
+        action: {
+          id: "approve",
+          requiredScopes: ["operator.read"],
+          handler: () => ({ result: { owner: "agent" } }),
+        },
+      },
+    ];
+    setActivePluginRegistry(scopedRegistry);
+
+    const params = { pluginId: "scope-plugin", actionId: "approve" };
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction", params)).toEqual([
+      "operator.approvals",
+    ]);
+    expect(
+      authorizeOperatorScopesForMethod("plugins.sessionAction", ["operator.read"], params),
+    ).toEqual({ allowed: false, missingScope: "operator.approvals" });
+    expect(
+      authorizeOperatorScopesForMethod("plugins.sessionAction", ["operator.approvals"], params),
+    ).toEqual({ allowed: true });
   });
 
   it("resolves sessions.patch to write scope for chat-organization fields only", () => {
@@ -593,6 +645,40 @@ describe("method scope resolution", () => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod("browser.request")).toEqual([
       "operator.admin",
     ]);
+  });
+
+  it("keeps gateway method scopes pinned when an agent replaces the active registry", () => {
+    const method = "fixture.gateway.inspect";
+    const gatewayRegistry = createEmptyPluginRegistry();
+    gatewayRegistry.gatewayHandlers[method] = pluginHandler;
+    gatewayRegistry.gatewayMethodDescriptors.push(
+      createPluginGatewayMethodDescriptor({
+        pluginId: "gateway-fixture",
+        name: method,
+        handler: pluginHandler,
+        scope: "operator.admin",
+      }),
+    );
+    setActivePluginRegistry(gatewayRegistry);
+    pinActivePluginHttpRouteRegistry(gatewayRegistry);
+
+    const scopedRegistry = createEmptyPluginRegistry();
+    scopedRegistry.gatewayHandlers[method] = pluginHandler;
+    scopedRegistry.gatewayMethodDescriptors.push(
+      createPluginGatewayMethodDescriptor({
+        pluginId: "agent-fixture",
+        name: method,
+        handler: pluginHandler,
+        scope: "operator.read",
+      }),
+    );
+    setActivePluginRegistry(scopedRegistry);
+
+    expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual(["operator.admin"]);
+    expect(authorizeOperatorScopesForMethod(method, ["operator.read"])).toEqual({
+      allowed: false,
+      missingScope: "operator.admin",
+    });
   });
 
   it("keeps reserved admin namespaces admin-only even if a plugin scope is narrower", () => {

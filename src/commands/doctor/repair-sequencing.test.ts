@@ -288,7 +288,7 @@ describe("doctor repair sequencing", () => {
       changes: [],
       warnings: [],
     });
-    mocks.collectActiveToolSchemaProjectionWarnings.mockReturnValue([]);
+    mocks.collectActiveToolSchemaProjectionWarnings.mockResolvedValue([]);
     mocks.collectChannelDoctorCompatibilityMutations.mockReturnValue([]);
     mocks.resolveAuthProfileOrder.mockReturnValue([]);
     mocks.resolveProfileUnusableUntilForDisplay.mockReturnValue(null);
@@ -615,7 +615,7 @@ describe("doctor repair sequencing", () => {
   });
 
   it("emits active tool schema projection warnings during doctor repair", async () => {
-    mocks.collectActiveToolSchemaProjectionWarnings.mockReturnValueOnce([
+    mocks.collectActiveToolSchemaProjectionWarnings.mockResolvedValueOnce([
       '- agents.main: active tool "fuzzplugin_move_angles" from plugin "fuzzplugin" has unsupported runtime input schema.',
     ]);
 

@@ -982,7 +982,6 @@ src/tui/embedded-backend.ts
 src/tui/tui-command-handlers.test.ts
 src/tui/tui-command-handlers.ts
 src/tui/tui-event-handlers.test.ts
-src/tui/tui-event-handlers.ts
 src/tui/tui-pty-local.e2e.test.ts
 src/tui/tui-session-actions.test.ts
 src/tui/tui.ts

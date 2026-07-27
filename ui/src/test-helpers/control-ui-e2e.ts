@@ -436,6 +436,7 @@ function installControlUiMockGateway(input: {
   const requests: BrowserRequest[] = [];
   const methodResponseSequenceIndexes = new Map<string, number>();
   const sessionPatches = new Map<string, Record<string, unknown>>();
+  const createdSessions = new Map<string, Record<string, unknown>>();
   const sessionMessageSubscriptions = new Set<string>();
   const sockets: Array<{ readonly url: string }> = [];
   let deviceAuthMigrationPending = scenario.deviceAuthMigrationPending;
@@ -716,6 +717,26 @@ function installControlUiMockGateway(input: {
     sessionPatches.set(params.key, patch);
   }
 
+  function recordCreatedSession(params: unknown, response: unknown): void {
+    if (!isRecord(response) || typeof response.key !== "string" || !response.key.trim()) {
+      return;
+    }
+    const key = response.key;
+    const label = isRecord(params) && typeof params.label === "string" ? params.label.trim() : "";
+    const {
+      displayName: _defaultDisplayName,
+      label: _defaultLabel,
+      ...defaultSession
+    } = sessionRow();
+    createdSessions.set(key, {
+      ...defaultSession,
+      key,
+      ...(label ? { displayName: label, label } : {}),
+      hasActiveRun: response.runStarted === true,
+      status: response.runStarted === true ? "running" : "done",
+    });
+  }
+
   function applySessionPatches(response: unknown, params: unknown): unknown {
     if (!isRecord(response) || !Array.isArray(response.sessions)) {
       return response;
@@ -726,12 +747,23 @@ function installControlUiMockGateway(input: {
         : isRecord(params) && params.archived === true
           ? "archived"
           : "active";
-    const sessions = response.sessions.map((row) => {
+    const knownSessionKeys = new Set(
+      response.sessions.flatMap((row) =>
+        isRecord(row) && typeof row.key === "string" ? [row.key] : [],
+      ),
+    );
+    // A successful sessions.create commits before its response. Route
+    // resolution must see that same session in the next sessions.list.
+    const sourceSessions = [
+      ...response.sessions,
+      ...[...createdSessions].flatMap(([key, row]) => (knownSessionKeys.has(key) ? [] : [row])),
+    ];
+    const sessions = sourceSessions.map((row) => {
       if (!isRecord(row) || typeof row.key !== "string") {
         return row;
       }
       const patch = sessionPatches.get(row.key);
-      const next = patch ? { ...row, ...patch } : { ...row };
+      const next = Object.assign({}, row, patch);
       // Replay group renames/deletes over static fixtures: the real gateway
       // rewrites member categories server-side before the next sessions.list.
       let category = typeof next.category === "string" ? next.category : undefined;
@@ -748,7 +780,11 @@ function installControlUiMockGateway(input: {
       return next;
     });
     if (!scenario.sessionArchiveFiltering) {
-      return { ...response, sessions };
+      return {
+        ...response,
+        ...(createdSessions.size > 0 ? { count: sessions.length } : {}),
+        sessions,
+      };
     }
     const filteredSessions = sessions.filter(
       (row) =>
@@ -928,6 +964,9 @@ function installControlUiMockGateway(input: {
     }
     const configured = configuredResponse(method, params);
     if (configured.found) {
+      if (method === "sessions.create") {
+        recordCreatedSession(params, configured.value);
+      }
       return method === "sessions.list"
         ? applySessionPatches(configured.value, params)
         : configured.value;
@@ -1359,10 +1398,14 @@ function installControlUiMockGateway(input: {
       if (!response) {
         throw new Error(`Deferred mock Gateway response disappeared for ${method}`);
       }
+      const resolvedPayload = payload ?? buildResponse(response.method, response.params);
+      if (response.method === "sessions.create") {
+        recordCreatedSession(response.params, resolvedPayload);
+      }
       response.socket.deliver({
         id: response.id,
         ok: true,
-        payload: payload ?? buildResponse(response.method, response.params),
+        payload: resolvedPayload,
         type: "res",
       });
     },

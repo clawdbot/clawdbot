@@ -23,6 +23,7 @@ import {
   isSessionLifecycleMutationActive,
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
+  SESSION_ARCHIVE_ACTIVE_RUN_ERROR,
 } from "../../sessions/session-lifecycle-admission.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
@@ -115,7 +116,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "Cannot archive a session with an active run."),
+        errorShape(ErrorCodes.INVALID_REQUEST, SESSION_ARCHIVE_ACTIVE_RUN_ERROR),
       );
       return;
     }
@@ -151,6 +152,13 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       ) {
         return null;
       }
+      // applyPatch runs under runExclusiveSessionLifecycleMutation for every
+      // patch, so expected identities also guard non-archive metadata writes.
+      const expectedSessionChanged =
+        (p.expectedSessionId !== undefined &&
+          currentLifecycleEntry?.sessionId !== p.expectedSessionId) ||
+        (p.expectedLifecycleRevision !== undefined &&
+          currentLifecycleEntry?.lifecycleRevision !== p.expectedLifecycleRevision);
       // A reset queued ahead of archive can rotate the row before this mutation starts.
       // Never apply stale destructive intent to the replacement session identity.
       const lifecycleEntryRemoved =
@@ -162,7 +170,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
           : currentLifecycleEntry !== undefined &&
             (currentLifecycleEntry.sessionId !== lifecycleEntry.sessionId ||
               currentLifecycleEntry.lifecycleRevision !== lifecycleEntry.lifecycleRevision));
-      if (lifecycleEntryRemoved || archiveTargetChanged) {
+      if (expectedSessionChanged || lifecycleEntryRemoved || archiveTargetChanged) {
         respond(
           false,
           undefined,
@@ -196,7 +204,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
           respond(
             false,
             undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "Cannot archive a session with an active run."),
+            errorShape(ErrorCodes.INVALID_REQUEST, SESSION_ARCHIVE_ACTIVE_RUN_ERROR),
           );
           return null;
         }

@@ -127,7 +127,7 @@
     "type": "function"
   },
   {
-    "description": "List ids allowed for `sessions_spawn(runtime:\"subagent\")`.",
+    "description": "List configured agent ids with name/model/runtime metadata, allowed as `sessions_spawn(runtime:\"subagent\")` targets.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {},
@@ -138,7 +138,7 @@
     "type": "function"
   },
   {
-    "description": "Spawn clean child; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot; `mode=\"session\"` persistent/thread-bound only on supporting requester channel. `visible=true`: persistent dashboard session; subagent only; omit `mode` (no `mode=\"run\"`), `thread`, `thinking`, `lightContext`, `attachments`, `attachAs`; inherited tool allow/denylist blocks it at spawn with no config override. Session listing/addressing obeys `tools.sessions.visibility` (`tree` default: current + own spawn subtree). Inherits parent workspace. Native task arrives as first `[Subagent Task]`. Native transcript needed: `context=\"fork\"`; else omit/isolated. Use fresh child for sidecar/parallel batch reads, multi-step search, data collection; avoid quick lookup/single read unless policy prefers. After spawn, do non-overlap work. Run result returns; session output stays thread.",
+    "description": "Spawn clean child; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot; `mode=\"session\"` persistent/thread-bound only on supporting requester channel. `agentId` targets a configured agent (see agents_list); `model` overrides its model; `cleanup` delete|keep hidden child session; `sandbox` inherit|require. `visible=true`: persistent dashboard session; subagent only; omit `mode` (no `mode=\"run\"`), `thread`, `thinking`, `lightContext`, `attachments`, `attachAs`; inherited tool allow/denylist blocks it at spawn with no config override; may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`. Session listing/addressing obeys `tools.sessions.visibility` (`tree` default: current + own spawn subtree). Inherits parent workspace. Native task arrives as first `[Subagent Task]`. Native transcript needed: `context=\"fork\"`; else omit/isolated. Use fresh child for sidecar/parallel batch reads, multi-step search, data collection; avoid quick lookup/single read unless policy prefers. After spawn, do non-overlap work. Run result returns; session output stays thread.",
     "inputSchema": {
       "properties": {
         "agentId": {
@@ -217,6 +217,7 @@
           "type": "integer"
         },
         "sandbox": {
+          "description": "\"inherit\" parent sandbox policy; \"require\" fails unless child is sandboxed.",
           "enum": ["inherit", "require"],
           "type": "string"
         },
@@ -277,7 +278,7 @@
     "tools": [
       {
         "deferLoading": true,
-        "description": "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing, notify, camera/photos/screen/location/notifications, executable lookup (which + bins), generic invoke. Files: file_fetch.",
+        "description": "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke. Files: file_fetch.",
         "inputSchema": {
           "properties": {
             "action": {
@@ -1268,7 +1269,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Only explicit voice/speech/TTS intent or active TTS config; never ordinary text reply. Audio auto-delivered. After success follow reply instructions; no duplicate text/audio.",
+        "description": "Convert text to spoken audio (TTS) with the configured voice provider. Only explicit voice/speech/TTS intent or active TTS config; never ordinary text reply. Audio auto-delivered. After success follow reply instructions; no duplicate text/audio.",
         "inputSchema": {
           "properties": {
             "channel": {
@@ -1322,7 +1323,7 @@
       },
       {
         "deferLoading": true,
-        "description": "List visible sessions; filter kind/label/agentId/search/activity/archive. Use before history/send target selection.",
+        "description": "List visible sessions; filter kind/label/agentId/search/activity/archive. Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles. Use before history/send target selection.",
         "inputSchema": {
           "properties": {
             "activeMinutes": {
@@ -1510,7 +1511,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Search current web; normalized provider results.",
+        "description": "Search current web; normalized provider results. Supports freshness and date-range filters (freshness, date_after/date_before) and domain filtering (domain_filter).",
         "inputSchema": {
           "properties": {
             "count": {

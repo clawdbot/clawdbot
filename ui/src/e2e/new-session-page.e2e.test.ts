@@ -113,20 +113,36 @@ async function navigateInApp(page: Page, routeId: string, search = "") {
 }
 
 /**
- * The chat route pushes its base path and then commits the session path. A
- * navigation issued inside that window is replaced by the committed route and
- * rejected as notFound, so wait for the path to settle before leaving again.
+ * Chat first pushes its base path and then commits the canonical session path.
+ * A repeated URL alone cannot prove that the router has finished, so require
+ * the successful active match and browser location to agree before leaving.
  */
 async function waitForCommittedChatRoute(page: Page) {
-  await page.waitForURL((url) => url.pathname.startsWith("/chat"));
-  let previous = "";
+  await page.waitForURL((url) => url.pathname.startsWith("/chat/"));
   await expect
-    .poll(() => {
-      const current = new URL(page.url()).pathname;
-      const settled = current === previous;
-      previous = current;
-      return settled;
-    })
+    .poll(() =>
+      page.evaluate(() => {
+        const app = document.querySelector("openclaw-app") as HTMLElement & {
+          runtime?: {
+            router: {
+              getState: () => {
+                status: string;
+                resolvedLocation: { pathname: string } | null;
+                matches: { routeId: string }[];
+                pendingMatches: unknown[];
+              };
+            };
+          };
+        };
+        const state = app.runtime?.router.getState();
+        return (
+          state?.status === "success" &&
+          state.matches[0]?.routeId === "chat" &&
+          state.resolvedLocation?.pathname === window.location.pathname &&
+          state.pendingMatches.length === 0
+        );
+      }),
+    )
     .toBe(true);
 }
 
@@ -268,10 +284,10 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     const sessionKey = "agent:main:visible-initial-prompt";
     const message = "keep this prompt visible while the agent works";
     const activeOutputTimestamp = Date.now() + 60_000;
-    await installMockGateway(page, {
+    const gateway = await installMockGateway(page, {
       methodResponses: {
         "sessions.create": { key: sessionKey, runStarted: true },
-        "chat.history": {
+        "chat.startup": {
           messages: [
             {
               role: "assistant",
@@ -307,8 +323,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
-      // The transcript fetch rides chat.startup or chat.history depending on what
-      // the Gateway advertises, so wait on the rendered rows instead of the method.
+      await gateway.waitForRequest("chat.startup");
       await page.getByText("SKILL.md", { exact: true }).waitFor();
 
       await expect.poll(() => page.locator(".chat-group.user").textContent()).toContain(message);
@@ -337,7 +352,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     const gateway = await installMockGateway(page, {
       methodResponses: {
         "sessions.create": { key: sessionKey, runStarted: true },
-        "chat.history": {
+        "chat.startup": {
           messages: [],
           sessionId: "reconnected-initial-prompt",
           sessionInfo: { hasActiveRun: true, key: sessionKey, status: "running" },
@@ -351,6 +366,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
+      await gateway.waitForRequest("chat.startup");
       await expect.poll(() => page.locator(".chat-group.user").textContent()).toContain(message);
 
       const socketsBeforeReconnect = await gateway.getSocketCount();
@@ -404,8 +420,6 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     const sessionKey = "agent:main:single-image-prompt";
     const message = "testing if dual prompts show";
     const gateway = await installMockGateway(page, {
-      // The transcript bootstrap rides chat.startup while the Gateway advertises it,
-      // so that is the request this scenario holds open to observe reconciliation.
       deferredMethods: ["chat.startup"],
       methodResponses: {
         "sessions.create": {
@@ -414,7 +428,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
           runStarted: true,
           messageSeq: 1,
         },
-        "chat.history": {
+        "chat.startup": {
           messages: [
             {
               role: "user",
@@ -447,6 +461,8 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
+      await gateway.waitForRequest("chat.startup");
+
       const userRow = page.locator(".chat-group.user");
       const userImage = userRow.locator("img.chat-message-image");
       await expect.poll(() => userRow.count()).toBe(1);
@@ -987,6 +1003,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await gateway.deferNext("chat.metadata");
       await gateway.deferNext("worktrees.branches");
       await navigateInApp(page, "new-session");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
       await expect
         .poll(async () => (await gateway.getRequests("chat.metadata")).length)
         .toBe(metadataRequests + 1);
@@ -1131,6 +1148,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
       workspaceGit: true,
       methodResponses: {
         "agents.list": {
@@ -1242,6 +1260,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
       workspaceGit: true,
       methodResponses: {
         "agents.list": {
