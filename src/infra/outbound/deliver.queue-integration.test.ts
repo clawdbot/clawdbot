@@ -226,6 +226,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
       id: deliveryIntentId,
       recoveryState: "unknown_after_send",
+      retryCount: 1,
     });
 
     await drainMatrixReconnect({ deliver, stateDir: tmpDir });
@@ -263,6 +264,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
       id: deliveryIntentId,
       recoveryState: "unknown_after_send",
+      retryCount: 1,
     });
     expect(
       getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
@@ -587,6 +589,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
       id: deliveryIntentId,
       recoveryState: "unknown_after_send",
+      retryCount: 1,
     });
     expect(
       getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
@@ -600,6 +603,41 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
       getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
     ).not.toBe("completed");
   });
+
+  it.each(["abort", "permanent rejection"] as const)(
+    "never creates a successful stable receipt after platform %s",
+    async (failureKind) => {
+      process.env.OPENCLAW_STATE_DIR = tmpDir;
+      const cause =
+        failureKind === "abort"
+          ? Object.assign(new Error("stable delivery aborted"), { name: "AbortError" })
+          : new PlatformMessageNotDispatchedError("stable payload permanently rejected", {
+              cause: new Error("invalid payload"),
+              retryable: false,
+            });
+      const sendMatrix = vi.fn().mockRejectedValue(cause);
+      const deliveryIntentId = `cron-direct-delivery:v1:${failureKind.replaceAll(" ", "-")}-no-receipt`;
+
+      await expect(
+        deliverOutboundPayloads({
+          cfg: {} as OpenClawConfig,
+          channel: "matrix",
+          to: "!room:example",
+          payloads: [{ text: "never falsely report this recipient delivery" }],
+          deps: { matrix: sendMatrix },
+          queuePolicy: "required",
+          deliveryIntentId,
+          completionRetention: boundedCronCompletionRetention,
+          reusePendingDeliveryIntent: true,
+        }),
+      ).rejects.toThrow(cause.message);
+
+      expect(sendMatrix).toHaveBeenCalledOnce();
+      expect(
+        getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
+      ).not.toBe("completed");
+    },
+  );
 
   it("retries a stable delivery intent only after a proven pre-dispatch failure", async () => {
     process.env.OPENCLAW_STATE_DIR = tmpDir;

@@ -402,10 +402,8 @@ async function moveEntryToFailedWithLogging(
 ): Promise<boolean> {
   markDurableDeliveryFailedBestEffort(entry, log);
   try {
-    const attemptId = entry.completionRetention
-      ? (entry.platformSendAttemptId ?? entry.producerClaimId)
-      : undefined;
-    await (attemptId
+    const attemptId = recoveryPlatformAttemptId(entry);
+    await (attemptId !== undefined
       ? moveToFailed(entry.id, stateDir, attemptId)
       : moveToFailed(entry.id, stateDir));
     return true;
@@ -418,11 +416,12 @@ async function moveEntryToFailedWithLogging(
 function recoveryPlatformAttemptId(
   entry: QueuedDelivery,
   claimedAttemptId?: string,
-): string | undefined {
-  return (
-    claimedAttemptId ??
-    (entry.completionRetention ? (entry.platformSendAttemptId ?? entry.producerClaimId) : undefined)
-  );
+): string | null | undefined {
+  return claimedAttemptId !== undefined
+    ? claimedAttemptId
+    : typeof entry.completionRetention === "object"
+      ? (entry.platformSendAttemptId ?? entry.producerClaimId ?? null)
+      : undefined;
 }
 
 async function ackRecoveredDelivery(
@@ -432,7 +431,7 @@ async function ackRecoveredDelivery(
   claimedAttemptId?: string,
 ): Promise<void> {
   const attemptId = recoveryPlatformAttemptId(entry, claimedAttemptId);
-  if (attemptId) {
+  if (attemptId !== undefined) {
     await ackDelivery(entry.id, stateDir, {
       ...options,
       expectedPlatformSendAttemptId: attemptId,
@@ -452,7 +451,7 @@ async function recordRecoveredFailure(
   claimedAttemptId?: string,
 ): Promise<void> {
   const attemptId = recoveryPlatformAttemptId(entry, claimedAttemptId);
-  if (attemptId) {
+  if (attemptId !== undefined) {
     await record(entry.id, error, stateDir, attemptId);
   } else {
     await record(entry.id, error, stateDir);
@@ -523,7 +522,9 @@ async function resolveCompletedOwnerBeforeRecovery(opts: {
   }
   if (operation.status === "suppressed") {
     try {
-      await ackRecoveredDelivery(opts.entry, opts.stateDir);
+      await (typeof opts.entry.completionRetention === "object"
+        ? ackRecoveredDelivery(opts.entry, opts.stateDir, { suppressCompletionReceipt: true })
+        : ackRecoveredDelivery(opts.entry, opts.stateDir));
     } catch (error) {
       const errMsg = `failed to ack owner-suppressed delivery: ${formatErrorMessage(error)}`;
       opts.onFailed?.(opts.entry, errMsg);
@@ -535,7 +536,9 @@ async function resolveCompletedOwnerBeforeRecovery(opts: {
   }
   if (operation.status === "rejected") {
     try {
-      await ackRecoveredDelivery(opts.entry, opts.stateDir);
+      await (typeof opts.entry.completionRetention === "object"
+        ? ackRecoveredDelivery(opts.entry, opts.stateDir, { suppressCompletionReceipt: true })
+        : ackRecoveredDelivery(opts.entry, opts.stateDir));
     } catch (error) {
       const errMsg = `failed to ack owner-rejected delivery: ${formatErrorMessage(error)}`;
       opts.onFailed?.(opts.entry, errMsg);
@@ -575,7 +578,7 @@ async function persistRecoveredPostSendState(opts: {
 }): Promise<"marked" | "acked" | "failed"> {
   try {
     const attemptId = recoveryPlatformAttemptId(opts.entry, opts.producerClaimId);
-    if (attemptId) {
+    if (attemptId !== undefined) {
       await markDeliveryPlatformOutcomeUnknown(opts.entry.id, opts.stateDir, attemptId);
     } else {
       await markDeliveryPlatformOutcomeUnknown(opts.entry.id, opts.stateDir);
@@ -721,7 +724,7 @@ async function drainQueuedEntry(opts: {
       try {
         markDurableDeliveryFailedBestEffort(entry, opts.log);
         const attemptId = recoveryPlatformAttemptId(entry);
-        await (attemptId
+        await (attemptId !== undefined
           ? moveToFailed(entry.id, opts.stateDir, attemptId)
           : moveToFailed(entry.id, opts.stateDir));
         emitQueuedAuditTerminals(entry, () => queuedUnknownAuditTerminals(entry));
@@ -760,7 +763,7 @@ async function drainQueuedEntry(opts: {
   // Stable producer rows can be observed between enqueue and live ownership.
   // Fence recovery at the same SQLite claim before consuming an attempt or
   // crossing provider I/O; an active live producer keeps its original lease.
-  const requiresProducerClaim = entry.completionRetention !== undefined;
+  const requiresProducerClaim = typeof entry.completionRetention === "object";
   const producerClaimId = requiresProducerClaim
     ? await claimDeliveryPlatformSendAttempt(
         entry.id,
@@ -817,7 +820,7 @@ async function drainQueuedEntry(opts: {
     });
     const results = isOutboundDeliveryResultArray(result) ? result : [];
     if (
-      entry.completionRetention &&
+      typeof entry.completionRetention === "object" &&
       payloadOutcomes.some(
         (outcome) =>
           outcome.status === "suppressed" && outcome.reason === "adapter_returned_no_identity",
@@ -1095,7 +1098,7 @@ export async function drainPendingDeliveries(opts: {
           try {
             markDurableDeliveryFailedBestEffort(currentEntry, opts.log);
             const attemptId = recoveryPlatformAttemptId(currentEntry);
-            await (attemptId
+            await (attemptId !== undefined
               ? moveToFailed(currentEntry.id, opts.stateDir, attemptId)
               : moveToFailed(currentEntry.id, opts.stateDir));
           } catch (err) {

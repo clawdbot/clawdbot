@@ -21,7 +21,7 @@ export function transitionOwnedDeliveryQueueEntry(
     queueName: string;
     id: string;
     stateDir?: string;
-    platformSendAttemptId: string;
+    platformSendAttemptId: string | null;
   },
   transition: (entry: DeliveryQueueEntryState) => void,
 ): boolean {
@@ -32,10 +32,14 @@ export function transitionOwnedDeliveryQueueEntry(
     database.db,
     () => {
       const entry = loadDeliveryQueueEntry(params.queueName, params.id, params.stateDir);
+      if (!entry) {
+        return false;
+      }
       if (
-        !entry ||
-        (entry.platformSendAttemptId !== params.platformSendAttemptId &&
-          entry.producerClaimId !== params.platformSendAttemptId)
+        params.platformSendAttemptId === null
+          ? entry.platformSendAttemptId !== undefined || entry.producerClaimId !== undefined
+          : entry.platformSendAttemptId !== params.platformSendAttemptId &&
+            entry.producerClaimId !== params.platformSendAttemptId
       ) {
         return false;
       }

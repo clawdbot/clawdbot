@@ -84,10 +84,33 @@ describe("delivery-queue storage", () => {
           id,
           stateDir,
         );
+        const unclaimedSnapshot = await loadPendingDelivery(id, stateDir);
+        if (!unclaimedSnapshot) {
+          throw new Error("test invariant: the unclaimed bounded row must be readable");
+        }
         const firstAttemptId = await claimDeliveryPlatformSendAttempt(id, stateDir);
         if (!firstAttemptId) {
           throw new Error("test invariant: first platform owner must claim the durable row");
         }
+        const lostClaim = `Stable delivery platform claim was lost: ${id}`;
+        // Admission snapshots taken before ownership must CAS the unclaimed
+        // state; a producer that claimed meanwhile retains its media and row.
+        await expect(
+          ackDelivery(id, stateDir, { expectedPlatformSendAttemptId: null }),
+        ).rejects.toThrow(lostClaim);
+        await expect(moveToFailed(id, stateDir, null)).rejects.toThrow(lostClaim);
+        await expect(
+          failPendingDelivery(
+            {
+              id,
+              expectedStatus: "pending",
+              lastError: "stale preclaim admission",
+              entry: unclaimedSnapshot,
+            },
+            stateDir,
+          ),
+        ).resolves.toEqual({ status: "not_pending" });
+        expect(await fs.readFile(artifact, "utf8")).toBe("newer owner still needs these bytes");
         await markDeliveryPlatformSendAttemptStarted(
           id,
           stateDir,
@@ -111,7 +134,6 @@ describe("delivery-queue storage", () => {
           secondAttemptId,
         );
 
-        const lostClaim = `Stable delivery platform claim was lost: ${id}`;
         await expect(
           ackDelivery(id, stateDir, { expectedPlatformSendAttemptId: firstAttemptId }),
         ).rejects.toThrow(lostClaim);

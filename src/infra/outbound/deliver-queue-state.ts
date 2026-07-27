@@ -71,11 +71,17 @@ export async function persistQueuedPostSendState(params: {
   producerClaimId?: string;
 }): Promise<QueuedPostSendState> {
   try {
-    await markDeliveryPlatformOutcomeUnknown(
-      params.queueId,
-      params.stateDir,
-      params.producerClaimId,
-    );
+    if (params.producerClaimId) {
+      await markDeliveryPlatformOutcomeUnknown(
+        params.queueId,
+        params.stateDir,
+        params.producerClaimId,
+      );
+    } else if (params.stateDir !== undefined) {
+      await markDeliveryPlatformOutcomeUnknown(params.queueId, params.stateDir);
+    } else {
+      await markDeliveryPlatformOutcomeUnknown(params.queueId);
+    }
     return "marked";
   } catch (markErr: unknown) {
     if (params.producerClaimId) {
@@ -95,22 +101,21 @@ export async function persistQueuedPostSendState(params: {
     try {
       // The platform already returned a result. If state marking is unavailable,
       // deleting the intent is safer than leaving it replayable.
-      await ackDelivery(params.queueId, params.stateDir, {
-        ...(params.producerClaimId
-          ? { expectedPlatformSendAttemptId: params.producerClaimId }
-          : {}),
-      });
+      if (params.stateDir !== undefined) {
+        await ackDelivery(params.queueId, params.stateDir);
+      } else {
+        await ackDelivery(params.queueId);
+      }
       return "acked";
     } catch (ackErr: unknown) {
       const error = `post-send state persistence failed: marker=${formatErrorMessage(markErr)}; ack=${formatErrorMessage(ackErr)}`;
       // Keep the evidence in the same canonical row if both primary state
       // transitions fail; a generic failure update would make it replayable.
-      await failDeliveryAfterPlatformSend(
-        params.queueId,
-        error,
-        params.stateDir,
-        params.producerClaimId,
-      );
+      if (params.stateDir !== undefined) {
+        await failDeliveryAfterPlatformSend(params.queueId, error, params.stateDir);
+      } else {
+        await failDeliveryAfterPlatformSend(params.queueId, error);
+      }
       return "failed";
     }
   }

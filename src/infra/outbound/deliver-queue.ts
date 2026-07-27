@@ -706,7 +706,9 @@ async function deliverOutboundPayloadsWithQueueCleanup(
     }
     if (queueId) {
       if (isDeliveryAbortError(err)) {
-        const acked = await ackOwnedQueue()
+        const acked = await (
+          producerClaimId ? ackOwnedQueue({ suppressCompletionReceipt: true }) : ackOwnedQueue()
+        )
           .then(() => true)
           .catch(() => false);
         if (acked) {
@@ -770,7 +772,9 @@ async function deliverOutboundPayloadsWithQueueCleanup(
                 rejectDurableDelivery(params.deliveryCompletion, permanentRejection.message);
                 ownerRejected = true;
               }
-              await ackOwnedQueue();
+              await (producerClaimId
+                ? ackOwnedQueue({ suppressCompletionReceipt: true })
+                : ackOwnedQueue());
               queueAcked = true;
             } catch (rejectionError) {
               log.warn(

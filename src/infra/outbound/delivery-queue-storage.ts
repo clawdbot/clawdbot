@@ -245,7 +245,7 @@ type AckDeliveryOptions = {
   /** An intentionally suppressed pre-send batch must not become a success receipt. */
   suppressCompletionReceipt?: boolean;
   /** Prevent an older provider attempt from settling a replacement owner. */
-  expectedPlatformSendAttemptId?: string;
+  expectedPlatformSendAttemptId?: string | null;
 };
 
 function lostPlatformClaim(id: string): Error {
@@ -270,13 +270,13 @@ export async function ackDelivery(
       deleteDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
     }
   };
-  if (options?.expectedPlatformSendAttemptId) {
+  if (options && "expectedPlatformSendAttemptId" in options) {
     const settled = transitionOwnedDeliveryQueueEntry(
       {
         queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
         id,
         stateDir,
-        platformSendAttemptId: options.expectedPlatformSendAttemptId,
+        platformSendAttemptId: options.expectedPlatformSendAttemptId ?? null,
       },
       (entry) => settle(entry as QueuedDelivery),
     );
@@ -298,7 +298,7 @@ export async function failDelivery(
   id: string,
   error: string,
   stateDir?: string,
-  expectedPlatformSendAttemptId?: string,
+  expectedPlatformSendAttemptId?: string | null,
 ): Promise<void> {
   updateQueuedDelivery(
     id,
@@ -318,7 +318,7 @@ export async function failDeliveryBeforePlatformSend(
   id: string,
   error: string,
   stateDir?: string,
-  expectedPlatformSendAttemptId?: string,
+  expectedPlatformSendAttemptId?: string | null,
 ): Promise<void> {
   updateQueuedDelivery(
     id,
@@ -344,7 +344,7 @@ export async function failDeliveryAfterPlatformSend(
   id: string,
   error: string,
   stateDir?: string,
-  expectedPlatformSendAttemptId?: string,
+  expectedPlatformSendAttemptId?: string | null,
 ): Promise<void> {
   updateQueuedDelivery(
     id,
@@ -399,9 +399,9 @@ function updateQueuedDelivery(
   id: string,
   stateDir: string | undefined,
   update: (entry: QueuedDelivery) => QueuedDelivery,
-  expectedPlatformSendAttemptId?: string,
+  expectedPlatformSendAttemptId?: string | null,
 ): void {
-  if (expectedPlatformSendAttemptId) {
+  if (expectedPlatformSendAttemptId !== undefined) {
     const updated = transitionOwnedDeliveryQueueEntry(
       {
         queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
@@ -459,7 +459,7 @@ export async function markDeliveryPlatformSendDispatched(
   id: string,
   stateDir?: string,
   route?: { replyToId?: string | null },
-  expectedPlatformSendAttemptId?: string,
+  expectedPlatformSendAttemptId?: string | null,
 ): Promise<void> {
   updateQueuedDelivery(
     id,
@@ -479,7 +479,7 @@ export async function markDeliveryPlatformSendDispatched(
 export async function markDeliveryPlatformOutcomeUnknown(
   id: string,
   stateDir?: string,
-  expectedPlatformSendAttemptId?: string,
+  expectedPlatformSendAttemptId?: string | null,
 ): Promise<void> {
   updateQueuedDelivery(
     id,
@@ -516,12 +516,12 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
 export async function moveToFailed(
   id: string,
   stateDir?: string,
-  expectedPlatformSendAttemptId?: string,
+  expectedPlatformSendAttemptId?: string | null,
 ): Promise<void> {
   // Dead-lettered rows are retained but never replayed: recovery loads the
   // pending set only, so a failed row's media has no remaining reader.
   let spoolPaths: string[];
-  if (expectedPlatformSendAttemptId) {
+  if (expectedPlatformSendAttemptId !== undefined) {
     spoolPaths = [];
     const moved = transitionOwnedDeliveryQueueEntry(
       {
@@ -558,10 +558,11 @@ export async function failPendingDelivery(
   stateDir?: string,
 ): Promise<FailPendingDeliveryResult> {
   let result: FailPendingDeliveryResult = { status: "not_pending" };
-  const attemptId = params.entry.completionRetention
-    ? (params.entry.platformSendAttemptId ?? params.entry.producerClaimId)
-    : undefined;
-  if (attemptId) {
+  const attemptId =
+    typeof params.entry.completionRetention === "object"
+      ? (params.entry.platformSendAttemptId ?? params.entry.producerClaimId ?? null)
+      : undefined;
+  if (attemptId !== undefined) {
     transitionOwnedDeliveryQueueEntry(
       {
         queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
