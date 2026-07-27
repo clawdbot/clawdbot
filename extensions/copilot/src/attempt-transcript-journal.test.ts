@@ -96,7 +96,7 @@ async function createFixture(trigger?: string) {
     timeoutMs: 1000,
     trigger,
     userTurnTranscriptRecorder: recorder,
-  } as AttemptParamsLike;
+  } as unknown as AttemptParamsLike;
   const session = createFakeSession();
   const journal = createAttemptTranscriptJournal({
     abortSession: () => session.abort(),

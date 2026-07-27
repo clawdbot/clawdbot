@@ -2888,7 +2888,7 @@ describe("runCopilotAttempt", () => {
             | ((message: unknown) => unknown)
             | undefined;
           const message = prepare ? prepare(params.message) : params.message;
-          return { appended: true, message, messageId: "user-event" };
+          return { appended: true, message: message as object, messageId: "user-event" };
         },
       );
       const sdk = makeFakeSdk({
@@ -3018,8 +3018,10 @@ describe("runCopilotAttempt", () => {
         createMockPluginRegistry([
           {
             hookName: "before_message_write",
-            handler: ({ message }: { message: AgentMessage }) =>
-              message.role === "assistant" ? { block: true } : undefined,
+            handler: (event: unknown) =>
+              (event as { message: AgentMessage }).message.role === "assistant"
+                ? { block: true }
+                : undefined,
           },
         ]),
       );
@@ -3054,8 +3056,10 @@ describe("runCopilotAttempt", () => {
         createMockPluginRegistry([
           {
             hookName: "before_message_write",
-            handler: ({ message }: { message: AgentMessage }) =>
-              message.role === "toolResult" ? { block: true } : undefined,
+            handler: (event: unknown) =>
+              (event as { message: AgentMessage }).message.role === "toolResult"
+                ? { block: true }
+                : undefined,
           },
         ]),
       );
@@ -3096,7 +3100,12 @@ describe("runCopilotAttempt", () => {
         createMockPluginRegistry([
           {
             hookName: "before_message_write",
-            handler: ({ message }: { message: AgentMessage & { idempotencyKey?: string } }) => {
+            handler: (event: unknown) => {
+              const message = (
+                event as {
+                  message: AgentMessage & { idempotencyKey?: string };
+                }
+              ).message;
               const replacement = { ...message };
               delete replacement.idempotencyKey;
               return { message: replacement };
@@ -3146,10 +3155,11 @@ describe("runCopilotAttempt", () => {
         "user",
         "assistant",
       ]);
-      expect(result.messagesSnapshot.slice(0, 2).map((message) => message.content)).toEqual([
-        "older unanswered turn",
-        "new turn",
-      ]);
+      expect(
+        result.messagesSnapshot
+          .slice(0, 2)
+          .map((message) => (message as { content?: unknown }).content),
+      ).toEqual(["older unanswered turn", "new turn"]);
     });
 
     it("replaces equivalent string and text-block current-user representations", async () => {
