@@ -20,6 +20,7 @@ import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
+import { isSessionWriteLockTimeoutError } from "../../agents/session-write-lock-error.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
@@ -188,6 +189,16 @@ export async function handleAgentExecutionError(params: {
         }),
       }),
     };
+  }
+  if (isSessionWriteLockTimeoutError(err)) {
+    const message = formatErrorMessage(err);
+    defaultRuntime.error(
+      `Embedded agent hit a session write lock before reply; suppressing user-facing failure while the owning turn can finish: ${message}`,
+    );
+    takePendingLifecycleTerminal()?.emit("error", err);
+    turn.replyOperation?.fail("run_failed", err);
+    await params.modelPatch.fail(err);
+    return { kind: "final", payload: { text: SILENT_REPLY_TOKEN } };
   }
   const message = formatErrorMessage(err);
   params.timing.logIfSlow({

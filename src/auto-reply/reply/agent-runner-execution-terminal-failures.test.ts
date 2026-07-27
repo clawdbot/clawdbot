@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../../agents/failover-error.js";
 import { AgentHarnessSessionSupersededError } from "../../agents/harness/errors.js";
+import { SessionWriteLockTimeoutError } from "../../agents/session-write-lock-error.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
