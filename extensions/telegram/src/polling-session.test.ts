@@ -234,7 +234,7 @@ function installTelegramIngressQueueRuntime(resolveStateDir: () => string): void
         options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
       ) => createChannelIngressQueue({ ...options, channelId: "telegram" }),
     },
-  } as unknown as TelegramRuntime);
+  } as TelegramRuntime);
 }
 
 function mockObjectArg(
@@ -1127,45 +1127,42 @@ describe("TelegramPollingSession", () => {
     });
   });
 
-  it("persists the update offset only after the update is durably spooled", async () => {
+  it("spools, persists the actual update id, then acknowledges", async () => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();
-      const persistUpdateId = vi.fn(async () => undefined);
-      const log: string[] = [];
-      const handleUpdate = vi.fn(async () => undefined);
+      const persistUpdateId = vi.fn(async (updateId: number) => {
+        expect(updateId).toBe(42);
+        expect(await pendingUpdateIds(tempDir, "all")).toEqual([42]);
+      });
       const worker = createListeningIngressWorker();
       const { runPromise } = startIsolatedIngressSession({
         abort,
         spoolDir: tempDir,
-        handleUpdate,
+        handleUpdate: vi.fn(async () => undefined),
         createWorker: worker.createWorker,
+        drainIntervalMs: 60_000,
+        getLastUpdateId: () => 40,
         persistUpdateId,
-        log: (line) => log.push(line),
       });
       try {
         await waitForTelegramTestState(() => expect(worker.hasListener()).toBe(true));
         worker.emit({
           type: "update",
-          requestId: "offset-1",
+          requestId: "offset-gap",
           update: { update_id: 42, message: { text: "hello" } },
           queued: 1,
         });
         await waitForTelegramTestState(() =>
-          expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("offset-1", {
+          expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("offset-gap", {
             ok: true,
             updateId: 42,
           }),
         );
-        await waitForTelegramTestState(() =>
-          expect(handleUpdate).toHaveBeenCalledWith({ update_id: 42, message: { text: "hello" } }),
+        expect(
+          expectDefined(persistUpdateId.mock.invocationCallOrder[0], "offset persistence order"),
+        ).toBeLessThan(
+          expectDefined(worker.ackSpooledUpdate.mock.invocationCallOrder[0], "worker ack order"),
         );
-        expect(persistUpdateId).toHaveBeenCalledWith(42);
-        expect(
-          log.some((line) => line.includes("isolated polling update spooled updateId=42")),
-        ).toBe(true);
-        expect(
-          log.some((line) => line.includes("isolated polling offset persisted updateId=42")),
-        ).toBe(true);
       } finally {
         abort.abort();
         await runPromise;
@@ -1173,82 +1170,36 @@ describe("TelegramPollingSession", () => {
     });
   });
 
-  it("persists offsets in contiguous order even when out-of-order spools complete first", async () => {
+  it("acknowledges a durable update when offset persistence fails", async () => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();
-      const persistUpdateId = vi.fn(async () => undefined);
-      const log: string[] = [];
-      let release41: (() => void) | undefined;
-      const gate41 = new Promise<void>((resolve) => {
-        release41 = resolve;
-      });
-
-      setTelegramRuntime({
-        state: {
-          resolveStateDir: () => tempDir,
-          openChannelIngressQueue: (
-            options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
-          ) => {
-            const queue = createChannelIngressQueue({ ...options, channelId: "telegram" });
-            return {
-              ...queue,
-              enqueue: async (
-                eventId: string,
-                payload: unknown,
-                meta?: { metadata?: unknown; receivedAt?: number; laneKey?: string },
-              ) => {
-                const payloadRecord = payload as { updateId?: number };
-                if (payloadRecord.updateId === 41) {
-                  await gate41;
-                }
-                return queue.enqueue(eventId, payload as never, meta as never);
-              },
-            };
-          },
-        },
-      } as unknown as TelegramRuntime);
-
-      const handleUpdate = vi.fn(async () => undefined);
+      const log = vi.fn();
       const worker = createListeningIngressWorker();
       const { runPromise } = startIsolatedIngressSession({
         abort,
         spoolDir: tempDir,
-        handleUpdate,
+        handleUpdate: vi.fn(async () => undefined),
         createWorker: worker.createWorker,
-        persistUpdateId,
-        log: (line) => log.push(line),
-        getLastUpdateId: () => 40,
+        log,
+        persistUpdateId: vi.fn(async () => {
+          throw new Error("offset store unavailable");
+        }),
       });
       try {
         await waitForTelegramTestState(() => expect(worker.hasListener()).toBe(true));
         worker.emit({
           type: "update",
-          requestId: "out-of-order-41",
-          update: { update_id: 41, message: { text: "first" } },
+          requestId: "offset-failure",
+          update: { update_id: 43, message: { text: "hello" } },
           queued: 1,
         });
-        worker.emit({
-          type: "update",
-          requestId: "out-of-order-42",
-          update: { update_id: 42, message: { text: "second" } },
-          queued: 1,
-        });
-
-        // 42 should spool and ack, but offset should not advance past 41.
         await waitForTelegramTestState(() =>
-          expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("out-of-order-42", {
+          expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("offset-failure", {
             ok: true,
-            updateId: 42,
+            updateId: 43,
           }),
         );
-        expect(persistUpdateId).not.toHaveBeenCalled();
-
-        // Now let 41 spool. The durable boundary can advance through 42.
-        release41?.();
-        await waitForTelegramTestState(() => expect(persistUpdateId).toHaveBeenCalledWith(42));
-        expect(
-          log.some((line) => line.includes("isolated polling offset persisted updateId=42")),
-        ).toBe(true);
+        expectLogIncludes(log, "isolated polling offset persist failed updateId=43");
       } finally {
         abort.abort();
         await runPromise;
@@ -1256,135 +1207,33 @@ describe("TelegramPollingSession", () => {
     });
   });
 
-  it("does not persist a higher offset while a lower update id has not spooled", async () => {
+  it("does not persist or acknowledge success when spooling fails", async () => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();
       const persistUpdateId = vi.fn(async () => undefined);
-      let shouldFail41 = true;
-
-      setTelegramRuntime({
-        state: {
-          resolveStateDir: () => tempDir,
-          openChannelIngressQueue: (
-            options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
-          ) => {
-            const queue = createChannelIngressQueue({ ...options, channelId: "telegram" });
-            return {
-              ...queue,
-              enqueue: async (
-                eventId: string,
-                payload: unknown,
-                meta?: { metadata?: unknown; receivedAt?: number; laneKey?: string },
-              ) => {
-                const payloadRecord = payload as { updateId?: number };
-                if (payloadRecord.updateId === 41 && shouldFail41) {
-                  throw new Error("forced spool failure for 41");
-                }
-                return queue.enqueue(eventId, payload as never, meta as never);
-              },
-            };
-          },
-        },
-      } as unknown as TelegramRuntime);
-
-      const handleUpdate = vi.fn(async () => undefined);
       const worker = createListeningIngressWorker();
-      const { runPromise } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        handleUpdate,
-        createWorker: worker.createWorker,
-        persistUpdateId,
-        getLastUpdateId: () => 40,
-      });
-      try {
-        await waitForTelegramTestState(() => expect(worker.hasListener()).toBe(true));
-
-        worker.emit({
-          type: "update",
-          requestId: "blocked-41",
-          update: { update_id: 41, message: { text: "first" } },
-          queued: 1,
-        });
-        worker.emit({
-          type: "update",
-          requestId: "blocked-42",
-          update: { update_id: 42, message: { text: "second" } },
-          queued: 1,
-        });
-
-        await waitForTelegramTestState(() =>
-          expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("blocked-42", {
-            ok: true,
-            updateId: 42,
-          }),
-        );
-        expect(persistUpdateId).not.toHaveBeenCalled();
-
-        shouldFail41 = false;
-        worker.emit({
-          type: "update",
-          requestId: "retry-41",
-          update: { update_id: 41, message: { text: "first" } },
-          queued: 1,
-        });
-        await waitForTelegramTestState(() => expect(persistUpdateId).toHaveBeenCalledWith(42));
-      } finally {
-        abort.abort();
-        await runPromise;
-      }
-    });
-  });
-
-  it("does not persist the update offset when spooling fails", async () => {
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const persistUpdateId = vi.fn(async () => undefined);
-      const log: string[] = [];
-      setTelegramRuntime({
-        state: {
-          resolveStateDir: () => tempDir,
-          openChannelIngressQueue: (
-            options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
-          ) => {
-            const queue = createChannelIngressQueue({ ...options, channelId: "telegram" });
-            return {
-              ...queue,
-              enqueue: async () => {
-                throw new Error("spool write failure");
-              },
-            };
-          },
-        },
-      } as unknown as TelegramRuntime);
-      const worker = createListeningIngressWorker();
-
       const { runPromise } = startIsolatedIngressSession({
         abort,
         spoolDir: tempDir,
         handleUpdate: vi.fn(async () => undefined),
         createWorker: worker.createWorker,
         persistUpdateId,
-        log: (line) => log.push(line),
       });
       try {
         await waitForTelegramTestState(() => expect(worker.hasListener()).toBe(true));
         worker.emit({
           type: "update",
-          requestId: "offset-fail-1",
-          update: { update_id: 99, message: { text: "hello" } },
+          requestId: "spool-failure",
+          update: { message: { text: "missing update id" } },
           queued: 1,
         });
         await waitForTelegramTestState(() =>
-          expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("offset-fail-1", {
+          expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("spool-failure", {
             ok: false,
-            message: "spool write failure",
+            message: "Telegram update missing numeric update_id.",
           }),
         );
         expect(persistUpdateId).not.toHaveBeenCalled();
-        expect(
-          log.some((line) => line.includes("isolated polling update spool failed updateId=99")),
-        ).toBe(true);
       } finally {
         abort.abort();
         await runPromise;
@@ -1464,7 +1313,7 @@ describe("TelegramPollingSession", () => {
             };
           },
         },
-      } as unknown as TelegramRuntime);
+      } as TelegramRuntime);
 
       await writeTelegramSpooledUpdate({
         spoolDir: tempDir,
