@@ -1,4 +1,5 @@
 // Signal tests cover send plugin behavior.
+import http from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -765,5 +766,141 @@ describe("sendMessageSignal receipts", () => {
     ).rejects.toThrow("Signal HTTP timed out");
 
     expect(signalRpcRequestMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Signal native JSON-RPC recipient delivery", () => {
+  it("rejects real per-recipient failures and preserves successful send receipts", async () => {
+    const failureTypes = [
+      "NETWORK_FAILURE",
+      "UNREGISTERED_FAILURE",
+      "IDENTITY_FAILURE",
+      "RATE_LIMIT_FAILURE",
+      "INVALID_PRE_KEY_FAILURE",
+    ];
+    const responses: Array<{
+      timestamp: number;
+      results?: Array<{ type?: string; success?: boolean; message?: string }>;
+    }> = [
+      ...failureTypes.map((type) => ({ timestamp: 1234567890, results: [{ type }] })),
+      {
+        timestamp: 1234567890,
+        results: [{ success: false, message: "recipient is not registered" }],
+      },
+      { timestamp: 1234567891, results: [{ type: "SUCCESS" }] },
+      { timestamp: 1234567892 },
+    ];
+    const requests: Array<{
+      method: string | undefined;
+      path: string | undefined;
+      contentType: string | undefined;
+      jsonrpc: unknown;
+      rpcMethod: unknown;
+      account: unknown;
+      recipient: unknown;
+      message: unknown;
+    }> = [];
+    const server = http.createServer((request, response) => {
+      let body = "";
+      request.setEncoding("utf8");
+      request.on("data", (chunk: string) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        const envelope = JSON.parse(body) as {
+          id?: string;
+          jsonrpc?: string;
+          method?: string;
+          params?: { account?: string; recipient?: string[]; message?: string };
+        };
+        requests.push({
+          method: request.method,
+          path: request.url,
+          contentType: request.headers["content-type"],
+          jsonrpc: envelope.jsonrpc,
+          rpcMethod: envelope.method,
+          account: envelope.params?.account,
+          recipient: envelope.params?.recipient,
+          message: envelope.params?.message,
+        });
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: envelope.id,
+            result: responses.shift(),
+          }),
+        );
+      });
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const { port } = server.address() as { port: number };
+    const cfg = {
+      channels: {
+        signal: {
+          accounts: {
+            default: {
+              transport: {
+                kind: "external-native",
+                url: `http://127.0.0.1:${port}`,
+              },
+              account: "+15550001111",
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    signalRpcRequestMock.mockClear();
+    vi.doUnmock("./client-adapter.js");
+    vi.resetModules();
+    const { sendMessageSignal: sendMessageSignalWithRealRpc } = await import("./send.js");
+
+    try {
+      for (const failureType of failureTypes) {
+        await expect(
+          sendMessageSignalWithRealRpc("+15551234567", "hello over real rpc", { cfg }),
+        ).rejects.toThrow(`Signal send failed for 1 recipient: ${failureType}`);
+      }
+      await expect(
+        sendMessageSignalWithRealRpc("+15551234567", "hello over real rpc", { cfg }),
+      ).rejects.toThrow("Signal send failed for 1 recipient: recipient is not registered");
+
+      await expect(
+        sendMessageSignalWithRealRpc("+15551234567", "hello over real rpc", { cfg }),
+      ).resolves.toMatchObject({
+        messageId: "1234567891",
+        timestamp: 1234567891,
+        receipt: { primaryPlatformMessageId: "1234567891" },
+      });
+      await expect(
+        sendMessageSignalWithRealRpc("+15551234567", "hello over real rpc", { cfg }),
+      ).resolves.toMatchObject({
+        messageId: "1234567892",
+        timestamp: 1234567892,
+        receipt: { primaryPlatformMessageId: "1234567892" },
+      });
+
+      expect(signalRpcRequestMock).not.toHaveBeenCalled();
+      expect(requests).toEqual(
+        Array.from({ length: 8 }, () => ({
+          method: "POST",
+          path: "/api/v1/rpc",
+          contentType: "application/json",
+          jsonrpc: "2.0",
+          rpcMethod: "send",
+          account: "+15550001111",
+          recipient: ["+15551234567"],
+          message: "hello over real rpc",
+        })),
+      );
+      expect(responses).toHaveLength(0);
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
   });
 });
