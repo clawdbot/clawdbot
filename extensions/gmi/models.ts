@@ -1,8 +1,5 @@
 // Gmi plugin module implements models behavior.
-import {
-  buildManifestModelDefinition,
-  readManifestProviderDefaultModelRef,
-} from "openclaw/plugin-sdk/provider-catalog-shared";
+import { buildManifestModelDefinition } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
@@ -15,4 +12,3 @@ export const GMI_MODEL_CATALOG: ModelDefinitionConfig[] = GMI_MANIFEST_CATALOG.m
     decorate: (model) => ({ ...model, api: "openai-completions" }),
   }),
 );
-export const GMI_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(manifest, "gmi")!;

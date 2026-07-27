@@ -313,7 +313,13 @@ export function createContext(
     gateway,
     sessions,
     agents: {
-      state: { agentsList },
+      state: {
+        client: gateway.snapshot.client,
+        connected: gateway.snapshot.phase === "connected",
+        agentsLoading: false,
+        agentsError: null,
+        agentsList,
+      },
       subscribe: () => () => undefined,
     },
     agentSelection: {
