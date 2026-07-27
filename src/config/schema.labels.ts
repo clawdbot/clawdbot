@@ -882,6 +882,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "talk.realtime.vadThreshold": "Talk Realtime VAD Threshold",
   "talk.realtime.silenceDurationMs": "Talk Realtime Silence Duration (ms)",
   "talk.realtime.prefixPaddingMs": "Talk Realtime Prefix Padding (ms)",
+  "talk.realtime.emptyFinalGraceMs": "Talk Realtime Empty Final Grace (ms)",
   "talk.realtime.reasoningEffort": "Talk Realtime Reasoning Effort",
   "talk.realtime.brain": "Talk Realtime Brain",
   "talk.realtime.consultRouting": "Talk Realtime Consult Routing",

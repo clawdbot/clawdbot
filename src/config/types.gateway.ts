@@ -72,6 +72,11 @@ export type TalkRealtimeConfig = {
   silenceDurationMs?: number;
   /** Milliseconds of audio retained before detected speech begins. */
   prefixPaddingMs?: number;
+  /**
+   * Milliseconds a realtime consult keeps waiting for real final text after an
+   * empty `final` chat event before it answers with the no-text placeholder.
+   */
+  emptyFinalGraceMs?: number;
   /** Provider-specific realtime reasoning effort. */
   reasoningEffort?: string;
   /** Tool/agent strategy for realtime sessions. */

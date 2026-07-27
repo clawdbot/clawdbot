@@ -1,5 +1,8 @@
 // Defines user-facing config field help text for docs and UI surfaces.
-import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
+import {
+  DEFAULT_TALK_EMPTY_FINAL_GRACE_MS,
+  describeTalkSilenceTimeoutDefaults,
+} from "./talk-defaults.js";
 import { CLOUD_WORKER_FIELD_HELP } from "./zod-schema.cloud-workers.js";
 
 export const CORE_FIELD_HELP: Record<string, string> = {
@@ -197,6 +200,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Milliseconds of silence before a realtime Talk user turn is committed.",
   "talk.realtime.prefixPaddingMs":
     "Milliseconds of audio retained before realtime voice activity is detected.",
+  "talk.realtime.emptyFinalGraceMs": `Milliseconds a realtime Talk consult keeps waiting for real reply text after an empty final event before it answers "OpenClaw finished with no text." (default: ${DEFAULT_TALK_EMPTY_FINAL_GRACE_MS}). Set 0 to answer immediately.`,
   "talk.realtime.reasoningEffort":
     "Provider-specific reasoning effort for realtime Talk sessions, such as minimal, low, medium, or high.",
   "talk.realtime.brain":

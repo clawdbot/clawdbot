@@ -217,6 +217,7 @@ const TalkRealtimeSchema = z
     vadThreshold: z.number().min(0).max(1).optional(),
     silenceDurationMs: z.number().int().positive().optional(),
     prefixPaddingMs: z.number().int().nonnegative().optional(),
+    emptyFinalGraceMs: z.number().int().nonnegative().optional(),
     reasoningEffort: z.string().min(1).optional(),
     brain: z.enum(["agent-consult", "direct-tools", "none"]).optional(),
     consultRouting: z.enum(["provider-direct", "force-agent-consult"]).optional(),

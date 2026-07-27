@@ -569,6 +569,7 @@ const TalkRealtimeConfigSchema = closedObject({
   vadThreshold: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
   silenceDurationMs: Type.Optional(Type.Integer({ minimum: 1 })),
   prefixPaddingMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  emptyFinalGraceMs: Type.Optional(Type.Integer({ minimum: 0 })),
   reasoningEffort: Type.Optional(Type.String({ minLength: 1 })),
   brain: Type.Optional(TalkBrainSchema),
   consultRouting: Type.Optional(

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, vi } from "vitest";
+import { DEFAULT_TALK_EMPTY_FINAL_GRACE_MS } from "../../../../src/config/talk-defaults.ts";
 import {
   steerRealtimeTalkActiveConsult,
   submitRealtimeTalkConsult,
@@ -12,6 +13,56 @@ function requireFirstMockCall(calls: readonly unknown[][], label: string): unkno
     throw new Error(`expected ${label} call`);
   }
   return call;
+}
+
+/**
+ * Gateway client that answers one consult with an empty `final`, a completed
+ * `agent.wait`, and optionally a later final that carries the real reply text.
+ * Fake timers drive the delays, so callers control the empty-final race.
+ */
+function emptyFinalConsultClient(
+  options: { lateFinalText?: string; lateFinalDelayMs?: number } = {},
+) {
+  let listener: ((event: { event: string; payload?: unknown }) => void) | undefined;
+  const request = vi.fn(async (method: string) => {
+    if (method === "talk.client.toolCall") {
+      window.setTimeout(() => {
+        listener?.({
+          event: "chat",
+          payload: { runId: "run-1", state: "final", message: undefined },
+        });
+        if (options.lateFinalText !== undefined) {
+          window.setTimeout(() => {
+            listener?.({
+              event: "chat",
+              payload: {
+                runId: "run-1",
+                state: "final",
+                message: {
+                  role: "assistant",
+                  provider: "openclaw",
+                  model: "delivery-mirror",
+                  text: options.lateFinalText,
+                },
+              },
+            });
+          }, options.lateFinalDelayMs ?? 0);
+        }
+      }, 0);
+      return { runId: "run-1" };
+    }
+    if (method === "agent.wait") {
+      return { runId: "run-1", status: "ok" };
+    }
+    throw new Error(`unexpected request: ${method}`);
+  });
+  const addEventListener = vi.fn((callback: typeof listener) => {
+    listener = callback;
+    return () => {
+      listener = undefined;
+    };
+  });
+  return { request, addEventListener };
 }
 
 describe("RealtimeTalkSession consult handoff", () => {
@@ -348,52 +399,100 @@ describe("RealtimeTalkSession consult handoff", () => {
   });
 
   it("submits the no-text fallback after an empty final and completed Gateway run", async () => {
-    let listener: ((event: { event: string; payload?: unknown }) => void) | undefined;
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.client.toolCall") {
-        setImmediate(() => {
-          listener?.({
-            event: "chat",
-            payload: {
-              runId: "run-1",
-              state: "final",
-              message: undefined,
-            },
-          });
-        });
-        return { runId: "run-1" };
-      }
-      if (method === "agent.wait") {
-        return { runId: "run-1", status: "ok" };
-      }
-      throw new Error(`unexpected request: ${method}`);
-    });
-    const addEventListener = vi.fn((callback: typeof listener) => {
-      listener = callback;
-      return () => {
-        listener = undefined;
-      };
-    });
-    const submit = vi.fn();
+    vi.useFakeTimers();
+    try {
+      const { request, addEventListener } = emptyFinalConsultClient();
+      const submit = vi.fn();
 
-    await submitRealtimeTalkConsult({
-      ctx: {
-        client: { request, addEventListener },
-        sessionKey: "agent:main:main",
-        callbacks: {},
-      } as never,
-      callId: "call-1",
-      args: { question: "Check status" },
-      submit,
-    });
+      const consult = submitRealtimeTalkConsult({
+        ctx: {
+          client: { request, addEventListener },
+          sessionKey: "agent:main:main",
+          callbacks: {},
+        } as never,
+        callId: "call-1",
+        args: { question: "Check status" },
+        submit,
+      });
 
-    expect(request).toHaveBeenCalledWith("agent.wait", {
-      runId: "run-1",
-      timeoutMs: 120_000,
-    });
-    expect(submit).toHaveBeenCalledWith("call-1", {
-      result: "OpenClaw finished with no text.",
-    });
+      await vi.advanceTimersByTimeAsync(DEFAULT_TALK_EMPTY_FINAL_GRACE_MS - 1);
+      expect(submit).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await consult;
+
+      expect(request).toHaveBeenCalledWith("agent.wait", {
+        runId: "run-1",
+        timeoutMs: 120_000,
+      });
+      expect(submit).toHaveBeenCalledWith("call-1", {
+        result: "OpenClaw finished with no text.",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("prefers a late final-with-text arriving inside the default empty-final grace window", async () => {
+    vi.useFakeTimers();
+    try {
+      const { request, addEventListener } = emptyFinalConsultClient({
+        lateFinalText: "The slow answer still wins.",
+        lateFinalDelayMs: 30_000,
+      });
+      const submit = vi.fn();
+
+      const consult = submitRealtimeTalkConsult({
+        ctx: {
+          client: { request, addEventListener },
+          sessionKey: "agent:main:main",
+          callbacks: {},
+        } as never,
+        callId: "call-1",
+        args: { question: "Check status" },
+        submit,
+      });
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      await consult;
+
+      expect(submit).toHaveBeenCalledTimes(1);
+      expect(submit).toHaveBeenCalledWith("call-1", {
+        result: "The slow answer still wins.",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("honors a configured empty-final grace window instead of the default", async () => {
+    vi.useFakeTimers();
+    try {
+      const { request, addEventListener } = emptyFinalConsultClient();
+      const submit = vi.fn();
+
+      const consult = submitRealtimeTalkConsult({
+        ctx: {
+          client: { request, addEventListener },
+          sessionKey: "agent:main:main",
+          callbacks: {},
+          emptyFinalGraceMs: 1_000,
+        } as never,
+        callId: "call-1",
+        args: { question: "Check status" },
+        submit,
+      });
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect(submit).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await consult;
+
+      expect(submit).toHaveBeenCalledWith("call-1", {
+        result: "OpenClaw finished with no text.",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each([

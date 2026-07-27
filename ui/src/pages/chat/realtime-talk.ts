@@ -70,10 +70,15 @@ type RealtimeTalkConfigResult = {
     talk?: {
       realtime?: {
         transport?: unknown;
+        emptyFinalGraceMs?: unknown;
       };
     };
   };
 };
+
+function normalizeEmptyFinalGraceMs(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
 
 function normalizeLaunchTransport(value: unknown): RealtimeTalkLaunchTransport | undefined {
   if (typeof value !== "string") {
@@ -145,6 +150,7 @@ export class RealtimeTalkSession {
   private acceptingTranscripts = false;
   private serverOwnedVoiceSession = false;
   private transcriptWrites: Promise<void> = Promise.resolve();
+  private talkConfigRead: Promise<RealtimeTalkConfigResult> | null = null;
 
   constructor(
     private readonly client: GatewayBrowserClient,
@@ -157,7 +163,10 @@ export class RealtimeTalkSession {
   async start(): Promise<void> {
     this.closed = false;
     this.callbacks.onStatus?.("connecting");
-    const providerVideoCapable = await this.resolveVideoCapability();
+    const [providerVideoCapable, emptyFinalGraceMs] = await Promise.all([
+      this.resolveVideoCapability(),
+      this.resolveEmptyFinalGraceMs(),
+    ]);
     if (this.closed) {
       return;
     }
@@ -207,11 +216,28 @@ export class RealtimeTalkSession {
       videoDeviceId: this.localOptions.videoDeviceId,
       consultThinkingLevel: session.consultThinkingLevel,
       consultFastMode: session.consultFastMode,
+      emptyFinalGraceMs,
     });
     this.callbacks.onVideoCapability?.(
       providerVideoCapable && typeof this.transport.setVideoEnabled === "function",
     );
     await this.transport.start();
+  }
+
+  // One Gateway config read per session: the transport fallback and the consult
+  // empty-final grace window share it instead of re-asking per use.
+  private readTalkConfig(): Promise<RealtimeTalkConfigResult> {
+    this.talkConfigRead ??= this.client.request<RealtimeTalkConfigResult>("talk.config", {});
+    return this.talkConfigRead;
+  }
+
+  private async resolveEmptyFinalGraceMs(): Promise<number | undefined> {
+    try {
+      const result = await this.readTalkConfig();
+      return normalizeEmptyFinalGraceMs(result.config?.talk?.realtime?.emptyFinalGraceMs);
+    } catch {
+      return undefined;
+    }
   }
 
   private async resolveVideoCapability(): Promise<boolean> {
@@ -255,7 +281,7 @@ export class RealtimeTalkSession {
       if (!transport) {
         let result: RealtimeTalkConfigResult;
         try {
-          result = await this.client.request<RealtimeTalkConfigResult>("talk.config", {});
+          result = await this.readTalkConfig();
         } catch {
           throw error;
         }

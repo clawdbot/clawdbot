@@ -56,6 +56,7 @@ describe("talk normalization", () => {
         vadThreshold: 0.45,
         silenceDurationMs: 650,
         prefixPaddingMs: 250,
+        emptyFinalGraceMs: 30_000,
         reasoningEffort: " low ",
         brain: "agent-consult",
         consultRouting: "force-agent-consult",
@@ -86,6 +87,7 @@ describe("talk normalization", () => {
         vadThreshold: 0.45,
         silenceDurationMs: 650,
         prefixPaddingMs: 250,
+        emptyFinalGraceMs: 30_000,
         reasoningEffort: "low",
         brain: "agent-consult",
         consultRouting: "force-agent-consult",
@@ -100,6 +102,7 @@ describe("talk normalization", () => {
         vadThreshold: 1.5,
         silenceDurationMs: 0,
         prefixPaddingMs: -1,
+        emptyFinalGraceMs: -1,
         reasoningEffort: "   ",
       },
     } as never);

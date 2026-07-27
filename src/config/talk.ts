@@ -150,6 +150,10 @@ function normalizeTalkRealtimeConfig(value: unknown): TalkRealtimeConfig | undef
   if (prefixPaddingMs !== undefined) {
     normalized.prefixPaddingMs = prefixPaddingMs;
   }
+  const emptyFinalGraceMs = normalizeNonNegativeInteger(source.emptyFinalGraceMs);
+  if (emptyFinalGraceMs !== undefined) {
+    normalized.emptyFinalGraceMs = emptyFinalGraceMs;
+  }
   const reasoningEffort = normalizeOptionalString(source.reasoningEffort);
   if (reasoningEffort) {
     normalized.reasoningEffort = reasoningEffort;

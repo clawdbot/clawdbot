@@ -1,4 +1,5 @@
 // Control UI chat module implements realtime talk shared behavior.
+import { DEFAULT_TALK_EMPTY_FINAL_GRACE_MS } from "../../../../src/config/talk-defaults.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../../../src/talk/agent-consult-tool.js";
 import {
   buildRealtimeVoiceAgentCancelProviderResult,
@@ -121,6 +122,8 @@ export type RealtimeTalkTransportContext = {
   videoDeviceId?: string;
   consultThinkingLevel?: string;
   consultFastMode?: boolean;
+  /** Configured `talk.realtime.emptyFinalGraceMs`; unset uses the shipped default. */
+  emptyFinalGraceMs?: number;
 };
 
 export function createRealtimeTalkEventEmitter(
@@ -225,7 +228,7 @@ type AgentWaitResult = {
   yielded?: boolean;
 };
 
-const EMPTY_FINAL_FALLBACK_GRACE_MS = 500;
+const CONSULT_RESULT_TIMEOUT_MS = 120_000;
 
 function extractTextFromMessage(message: unknown): string {
   if (!message || typeof message !== "object") {
@@ -283,6 +286,7 @@ function waitForChatResult(params: {
   client: GatewayBrowserClient;
   runId: string;
   timeoutMs: number;
+  emptyFinalGraceMs: number;
   emitTalkEvent?: (input: RealtimeTalkEventInput) => void;
   signal?: AbortSignal;
 }): Promise<string> {
@@ -340,9 +344,12 @@ function waitForChatResult(params: {
           if (result?.status === "timeout") {
             return;
           }
+          // The chat listener stays subscribed through this window, so a late
+          // final-with-text still wins the race and the placeholder only reaches
+          // the voice model when the run really produced nothing.
           emptyFinalFallbackTimer = window.setTimeout(() => {
             settleResolve("OpenClaw finished with no text.");
-          }, EMPTY_FINAL_FALLBACK_GRACE_MS);
+          }, params.emptyFinalGraceMs);
         })
         .catch((error: unknown) => {
           settleReject(error instanceof Error ? error : new Error(String(error)));
@@ -602,7 +609,8 @@ export async function submitRealtimeTalkConsult(params: {
     const result = await waitForChatResult({
       client: ctx.client,
       runId,
-      timeoutMs: 120_000,
+      timeoutMs: CONSULT_RESULT_TIMEOUT_MS,
+      emptyFinalGraceMs: ctx.emptyFinalGraceMs ?? DEFAULT_TALK_EMPTY_FINAL_GRACE_MS,
       emitTalkEvent: params.emitTalkEvent,
       signal: params.signal,
     });

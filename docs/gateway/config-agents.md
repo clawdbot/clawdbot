@@ -1476,6 +1476,7 @@ Defaults for Talk mode (macOS/iOS/Android and the browser Control UI).
       vadThreshold: 0.5,
       silenceDurationMs: 500,
       prefixPaddingMs: 300,
+      emptyFinalGraceMs: 60000,
       reasoningEffort: "medium",
       brain: "agent-consult", // agent-consult | direct-tools | none
     },
@@ -1500,6 +1501,7 @@ Defaults for Talk mode (macOS/iOS/Android and the browser Control UI).
 - `realtime.vadThreshold` sets the provider voice-activity threshold from `0` (most sensitive) to `1` (least sensitive). Unset keeps the provider default.
 - `realtime.silenceDurationMs` sets the positive whole-number silence window before the provider commits a realtime user turn. Unset keeps the provider default.
 - `realtime.prefixPaddingMs` sets the non-negative whole-number amount of audio retained before detected speech begins. Unset keeps the provider default.
+- `realtime.emptyFinalGraceMs` sets how long a Control UI realtime consult keeps waiting for real reply text after the run reports an empty final before it answers `"OpenClaw finished with no text."`. Unset keeps the 60000 ms default; `0` answers immediately. Lower it only if you prefer a fast placeholder over slow agent answers, because the placeholder is spoken aloud.
 - `realtime.reasoningEffort` sets the provider-specific reasoning level for realtime sessions. Unset keeps the provider default.
 - `realtime.consultRouting`: `"provider-direct"` (default) preserves direct provider replies when the realtime provider produces a final user transcript without `openclaw_agent_consult`. `"force-agent-consult"` routes the finalized request through OpenClaw instead.
 

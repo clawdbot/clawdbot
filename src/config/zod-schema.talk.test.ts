@@ -15,6 +15,25 @@ describe("OpenClawSchema talk validation", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts a non-negative integer talk.realtime.emptyFinalGraceMs", () => {
+    expect(OpenClawSchema.safeParse({ talk: { realtime: { emptyFinalGraceMs: 0 } } }).success).toBe(
+      true,
+    );
+    expect(
+      OpenClawSchema.safeParse({ talk: { realtime: { emptyFinalGraceMs: 60_000 } } }).success,
+    ).toBe(true);
+  });
+
+  it("rejects a negative talk.realtime.emptyFinalGraceMs", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        talk: {
+          realtime: { emptyFinalGraceMs: -1 },
+        },
+      }),
+    ).toThrow(/emptyFinalGraceMs/i);
+  });
+
   it("rejects invalid talk.consultThinkingLevel", () => {
     expect(() =>
       OpenClawSchema.parse({
