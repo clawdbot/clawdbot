@@ -40,10 +40,13 @@ observations, session summaries, and raw context that may still be useful
 later. These are indexed for `memory_search` and `memory_get`, but are not
 injected into the bootstrap prompt on every turn.
 
-Over time, the agent distills useful material from daily notes into
-`MEMORY.md` and removes stale long-term entries. Generated workspace
-instructions and the heartbeat flow do this periodically; you do not need to
-manually edit `MEMORY.md` for every detail.
+Over time, useful material from daily notes can be distilled into `MEMORY.md`
+and stale long-term entries removed — but this does not happen on its own in a
+default install. The generated workspace instructions encourage the agent to
+record durable facts as it works. You can make consolidation routine with a
+[scheduled job](/automation/cron-jobs) that reviews recent daily notes, or by
+enabling the optional [dreaming](/concepts/memory#dreaming) pass. The default
+heartbeat prompt performs no memory maintenance on its own.
 
 If `MEMORY.md` grows past the bootstrap file budget, OpenClaw keeps the file on
 disk intact but truncates the copy injected into context. Treat that as a

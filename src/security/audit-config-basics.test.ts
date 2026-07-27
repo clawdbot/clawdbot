@@ -49,21 +49,17 @@ describe("security audit config basics", () => {
         profile: "minimal",
       },
       agents: {
-        list: [
-          {
-            id: "owner",
+        entries: {
+          owner: {
             tools: { profile: "full" },
           },
-        ],
+        },
       },
     });
 
-    expect(
-      findings.some(
-        (finding) =>
-          finding.checkId === "tools.profile_minimal_overridden" && finding.severity === "warn",
-      ),
-    ).toBe(true);
+    const finding = findings.find((entry) => entry.checkId === "tools.profile_minimal_overridden");
+    expect(finding?.severity).toBe("warn");
+    expect(finding?.detail).toContain("agents.entries.owner=full");
   });
 
   it("flags tools.elevated allowFrom wildcard as critical", async () => {

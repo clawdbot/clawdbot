@@ -1,4 +1,4 @@
-import { html, nothing, svg } from "lit";
+import { html, nothing, svg, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import type { BrowserPanelController } from "./browser-panel-controller.ts";
@@ -321,17 +321,12 @@ export function renderBrowserPanelChrome(
   width: number,
   onDockChange: (dock: BrowserPanelDock) => void,
   onClose: () => void,
-  onResize: (event: PointerEvent) => void,
+  resizer: TemplateResult | typeof nothing,
 ) {
   const style = dock === "bottom" ? `height:${height}px` : `width:${width}px`;
   return html`
     <section class="bp bp--${dock}" style=${style} aria-label=${t("browser.title")}>
-      <div
-        class="bp-resizer bp-resizer--${dock}"
-        @pointerdown=${onResize}
-        role="separator"
-        aria-label=${t("browser.resize")}
-      ></div>
+      ${resizer}
       <header class="bp-header">
         ${renderTabStrip(controller)}
         ${renderHeaderActions(controller, dock, onDockChange, onClose)}

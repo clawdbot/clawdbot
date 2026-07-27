@@ -89,6 +89,11 @@ export type SessionTranscriptEventRow = {
 };
 
 export type {
+  ForkSessionEntryFromParentTargetParams,
+  ForkSessionEntryFromParentTargetResult,
+  ForkSessionFromParentTranscriptParams,
+  ForkSessionFromParentTranscriptResult,
+  SessionParentForkDecision,
   SessionTranscriptRawDeltaLimits,
   SessionTranscriptRawDeltaResult,
   SessionTranscriptVisibleMessageDeltaLimits,
@@ -171,87 +176,6 @@ type SessionEntryReplacement = {
 export type SessionEntryReplacementUpdate<T> = {
   replacements?: Iterable<SessionEntryReplacement>;
   result: T;
-};
-
-export type SessionParentForkDecision =
-  | {
-      status: "fork";
-      maxTokens: number;
-      parentTokens?: number;
-    }
-  | {
-      status: "skip";
-      reason: "parent-too-large";
-      maxTokens: number;
-      parentTokens: number;
-      message: string;
-    };
-
-type ParentForkedSessionTranscript = {
-  sessionFile: string;
-  sessionId: string;
-};
-
-export type ForkSessionFromParentTranscriptResult =
-  | {
-      status: "created";
-      transcript: ParentForkedSessionTranscript;
-    }
-  | { status: "missing-parent" }
-  | { status: "failed" };
-
-export type ForkSessionFromParentTranscriptParams = {
-  agentId?: string;
-  parentEntry: SessionEntry;
-  parentSessionKey: string;
-  sessionKey: string;
-  storePath: string;
-
-  /** Stable target identity for lifecycle-owned hidden or resumable sessions. */
-  targetSessionId?: string;
-
-  /** Cross-agent forks land the child transcript in the target agent's store. */
-  targetStorePath?: string;
-};
-
-export type ForkSessionEntryFromParentTargetResult =
-  | {
-      status: "forked";
-      fork: ParentForkedSessionTranscript;
-      parentEntry: SessionEntry;
-      sessionEntry: SessionEntry;
-      decision: Extract<SessionParentForkDecision, { status: "fork" }>;
-    }
-  | {
-      status: "skipped";
-      reason: "existing-entry" | "decision-skip";
-      parentEntry?: SessionEntry;
-      sessionEntry: SessionEntry;
-      decision?: SessionParentForkDecision;
-    }
-  | { status: "missing-entry" }
-  | { status: "missing-parent" }
-  | { status: "failed" };
-
-export type ForkSessionEntryFromParentTargetParams = {
-  agentId?: string;
-  decisionSkipPatch?: (params: {
-    decision: Extract<SessionParentForkDecision, { status: "skip" }>;
-    entry: SessionEntry;
-    parentEntry: SessionEntry;
-  }) => Partial<SessionEntry> | null;
-  fallbackEntry?: SessionEntry;
-  parentTarget: SessionLifecycleStoreTarget;
-  patch?: (params: {
-    entry: SessionEntry;
-    parentEntry: SessionEntry;
-    fork: ParentForkedSessionTranscript;
-    decision: Extract<SessionParentForkDecision, { status: "fork" }>;
-  }) => Partial<SessionEntry>;
-  sessionTarget: SessionLifecycleStoreTarget;
-  skipForkWhen?: (entry: SessionEntry) => boolean;
-  skipPatch?: (entry: SessionEntry) => Partial<SessionEntry> | null;
-  storePath: string;
 };
 
 export type ResetSessionEntryLifecycleParams = {

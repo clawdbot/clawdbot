@@ -453,9 +453,6 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "board.prompt.authorize", scope: "operator.read", since: "2026.7" },
   { name: "board.data.read", scope: "operator.read", since: "2026.7" },
   { name: "board.action", scope: "operator.write", since: "2026.7" },
-  // Exact session subscription gates the already-sanitized observer context;
-  // the answer is ephemeral and never mutates the run or its transcript.
-  { name: "sessions.observer.ask", scope: "operator.read", since: "2026.7" },
   { name: "sessions.observer.visibility", scope: "operator.read", since: "2026.7" },
   // Additive phase-2 collaboration methods append so older advertised indices stay stable.
   { name: "session.visibility.set", scope: "operator.write", since: "2026.7" },
@@ -466,6 +463,16 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "session.suggestions.list", scope: "operator.read", since: "2026.7" },
   { name: "session.suggestions.resolve", scope: "operator.write", since: "2026.7" },
   { name: "session.typing", scope: "operator.write", since: "2026.7" },
+  // Companion state is process-local and its runner is hard-restricted to
+  // read-only workspace and exact-session tools.
+  { name: "sessions.companion.ask", scope: "operator.read", since: "2026.7" },
+  { name: "sessions.companion.state", scope: "operator.read", since: "2026.7" },
+  {
+    name: "sessions.companion.reset",
+    scope: "operator.write",
+    since: "2026.7",
+    controlPlaneWrite: true,
+  },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

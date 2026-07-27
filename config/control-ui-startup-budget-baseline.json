@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 318587,
-  "reason": "move presentation preferences to browser-local state",
-  "updatedAt": "2026-07-23"
+  "startupJsGzipBytes": 324587,
+  "reason": "multi-gateway footer subtitle plus accumulated main drift (PR #114059), then the Memory settings surface: its i18n strings plus the rendering-free memory-schema facts settings search reads at startup",
+  "updatedAt": "2026-07-26"
 }

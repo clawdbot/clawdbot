@@ -17,7 +17,7 @@ const mocks = vi.hoisted(() => ({
   findAgentEntryIndex: vi.fn((_list?: unknown, _agentId?: string) => -1),
   applyAgentConfig: vi.fn((_cfg: unknown, _opts: unknown) => ({})),
   pruneAgentConfig: vi.fn(() => ({ config: {}, removedBindings: 0 })),
-  writeConfigFile: vi.fn(async (_nextConfig?: unknown) => {}),
+  writeConfigFile: vi.fn(async (_nextConfig?: unknown, _writeOptions?: unknown) => {}),
   omitConfigMutationResult: false,
   ensureAgentWorkspace: vi.fn(
     async (params?: { dir?: string }): Promise<{ dir: string; identityPathCreated: boolean }> => ({
@@ -112,6 +112,7 @@ vi.mock("../../config/config.js", async () => {
       snapshot: { sourceConfig: mocks.loadConfigReturn },
     }),
     mutateConfigFileWithRetry: async (params: {
+      writeOptions?: unknown;
       mutate: (draft: Record<string, unknown>, context: unknown) => unknown;
     }) => {
       const draft = structuredClone(mocks.loadConfigReturn);
@@ -120,7 +121,7 @@ vi.mock("../../config/config.js", async () => {
         previousHash: "test-hash",
         attempt: 0,
       });
-      await mocks.writeConfigFile(draft);
+      await mocks.writeConfigFile(draft, params.writeOptions);
       return {
         path: "/tmp/openclaw/config.json",
         previousHash: "test-hash",
@@ -2746,6 +2747,9 @@ describe("agents.delete", () => {
       ]),
     );
     expect(mocks.writeConfigFile).toHaveBeenCalled();
+    expect(mocks.writeConfigFile).toHaveBeenCalledWith(expect.anything(), {
+      allowedAgentRosterRemovals: ["test-agent"],
+    });
     expect(mocks.movePathToTrash).toHaveBeenCalled();
   });
 
@@ -2933,6 +2937,27 @@ describe("agents.files.list", () => {
   it("includes BOOTSTRAP.md when setup has not completed", async () => {
     const names = await listAgentFileNames();
     expect(names).toContain("BOOTSTRAP.md");
+  });
+
+  it("does not expose retired HEARTBEAT.md workspace files", async () => {
+    const names = await listAgentFileNames();
+    expect(names).not.toContain("HEARTBEAT.md");
+  });
+
+  it("rejects writes to retired HEARTBEAT.md workspace files", async () => {
+    const { respond, promise } = makeCall("agents.files.set", {
+      agentId: "main",
+      name: "HEARTBEAT.md",
+      content: "legacy checklist",
+    });
+    await promise;
+
+    expectRecordFields(expectRespondErrorContaining(respond, "unsupported file"), {
+      code: "INVALID_REQUEST",
+      message: 'unsupported file "HEARTBEAT.md"',
+    });
+    expect(mocks.fsMkdir).not.toHaveBeenCalled();
+    expect(mocks.rootWrite).not.toHaveBeenCalled();
   });
 
   it("hides BOOTSTRAP.md when workspace setup is complete", async () => {

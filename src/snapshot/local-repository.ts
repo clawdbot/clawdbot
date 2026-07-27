@@ -572,11 +572,20 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
         );
       }
       const snapshotPath = path.join(this.#repositoryPath, entry.name);
-      if (await isIncompleteSnapshotDirectory(snapshotPath)) {
+      const snapshotState = await classifySnapshotDirectory(snapshotPath);
+      if (snapshotState === "incomplete") {
         continue;
       }
-      await assertExactSnapshotContents(snapshotPath);
-      const manifest = await readSnapshotManifest(snapshotPath);
+      const manifest =
+        snapshotState === "complete-pending"
+          ? await recoverCompletePendingSnapshot({
+              allowedDatabaseRoles: this.#allowedDatabaseRoles,
+              repositoryIdentity: repositoryStat,
+              repositoryPath: this.#repositoryPath,
+              snapshotPath,
+              validationRootPath: this.#validationRootPath,
+            })
+          : await readVerifiedSnapshotManifest(snapshotPath);
       assertAllowedDatabaseRole(manifest, this.#allowedDatabaseRoles);
       snapshots.push({
         ref: { path: snapshotPath },
@@ -601,6 +610,18 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
     assertDirectory(repositoryStat, this.#repositoryPath, "SQLite snapshot repository");
     const snapshotStat = await fs.lstat(snapshotDir);
     assertDirectory(snapshotStat, snapshotDir, "SQLite snapshot");
+    if (await lstatIfExists(path.join(snapshotDir, SNAPSHOT_PENDING_FILENAME))) {
+      const snapshotState = await classifySnapshotDirectory(snapshotDir);
+      if (snapshotState === "complete-pending") {
+        await recoverCompletePendingSnapshot({
+          allowedDatabaseRoles: this.#allowedDatabaseRoles,
+          repositoryIdentity: repositoryStat,
+          repositoryPath: this.#repositoryPath,
+          snapshotPath: snapshotDir,
+          validationRootPath: this.#validationRootPath,
+        });
+      }
+    }
     return snapshotDir;
   }
 }
@@ -1026,7 +1047,9 @@ async function assertSnapshotContents(snapshotDir: string, expected: Set<string>
   }
 }
 
-async function isIncompleteSnapshotDirectory(snapshotDir: string): Promise<boolean> {
+type SnapshotDirectoryState = "committed" | "complete-pending" | "incomplete";
+
+async function classifySnapshotDirectory(snapshotDir: string): Promise<SnapshotDirectoryState> {
   const entries = await fs.readdir(snapshotDir, { withFileTypes: true });
   const knownEntries = new Set([
     SNAPSHOT_MANIFEST_FILENAME,
@@ -1041,7 +1064,94 @@ async function isIncompleteSnapshotDirectory(snapshotDir: string): Promise<boole
     }
   }
   const names = new Set(entries.map((entry) => entry.name));
-  return names.size === 0 || names.has(SNAPSHOT_PENDING_FILENAME);
+  if (names.size === 0) {
+    return "incomplete";
+  }
+  if (!names.has(SNAPSHOT_PENDING_FILENAME)) {
+    return "committed";
+  }
+  const complete = names.has(SNAPSHOT_MANIFEST_FILENAME) && names.has(SNAPSHOT_SQLITE_FILENAME);
+  return complete ? "complete-pending" : "incomplete";
+}
+
+async function recoverCompletePendingSnapshot(params: {
+  allowedDatabaseRoles: readonly SnapshotDatabaseIdentity["role"][] | undefined;
+  repositoryIdentity: Stats;
+  repositoryPath: string;
+  snapshotPath: string;
+  validationRootPath: string;
+}): Promise<SnapshotManifest> {
+  const trustedRepositoryPath = await assertTrustedStagingRoot(
+    params.repositoryIdentity,
+    params.repositoryPath,
+  );
+  await assertDirectoryIdentity(trustedRepositoryPath, params.repositoryIdentity);
+  const snapshotDirectory = await pinDirectory(params.snapshotPath, {
+    label: "SQLite pending snapshot directory",
+  });
+  try {
+    const snapshotIdentity = snapshotDirectory.receipt.identity;
+    await assertPrivateStagingDirectory(snapshotIdentity, params.snapshotPath);
+    await snapshotDirectory.assertCurrent();
+    const snapshotState = await classifySnapshotDirectory(params.snapshotPath);
+    if (snapshotState === "incomplete") {
+      throw new Error(`SQLite snapshot is incomplete: ${params.snapshotPath}`);
+    }
+    const manifest = await readSnapshotManifest(params.snapshotPath);
+    assertAllowedDatabaseRole(manifest, params.allowedDatabaseRoles);
+    const artifact = await hashSnapshotArtifact(params.snapshotPath);
+    const artifactPath = path.join(params.snapshotPath, SNAPSHOT_SQLITE_FILENAME);
+    assertArtifactMatchesManifest(artifactPath, artifact, manifest);
+    await verifySnapshotDatabaseFile(
+      artifactPath,
+      artifact.stat,
+      manifest,
+      params.validationRootPath,
+    );
+    requireDirectorySync(await snapshotDirectory.sync(), "SQLite pending snapshot directory");
+
+    const pendingPath = path.join(params.snapshotPath, SNAPSHOT_PENDING_FILENAME);
+    const pendingIdentity = lstatIfExistsSync(pendingPath);
+    if (pendingIdentity) {
+      if (
+        pendingIdentity.isSymbolicLink() ||
+        !pendingIdentity.isFile() ||
+        pendingIdentity.nlink > 1
+      ) {
+        throw new Error(`SQLite snapshot pending marker is unsafe: ${pendingPath}`);
+      }
+      await snapshotDirectory.assertCurrent();
+      const currentPendingIdentity = lstatIfExistsSync(pendingPath);
+      if (currentPendingIdentity) {
+        if (!sameFileIdentity(pendingIdentity, currentPendingIdentity)) {
+          throw new Error(`SQLite snapshot pending marker changed: ${pendingPath}`);
+        }
+        try {
+          fsSync.unlinkSync(pendingPath);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+            throw error;
+          }
+        }
+      }
+    }
+
+    // Both durable payload files already exist. Removing the exact marker and
+    // syncing this directory completes the interrupted repository commit.
+    // A concurrent recovery may win the unlink; syncing here still commits it.
+    requireDirectorySync(await snapshotDirectory.sync(), "SQLite pending snapshot directory");
+    await snapshotDirectory.assertCurrent();
+    const committedManifest = await readVerifiedSnapshotManifest(params.snapshotPath);
+    if (!isDeepStrictEqual(committedManifest, manifest)) {
+      throw new Error(`SQLite snapshot manifest changed during recovery: ${params.snapshotPath}`);
+    }
+    const committedArtifact = await hashSnapshotArtifact(params.snapshotPath);
+    assertArtifactMatchesManifest(artifactPath, committedArtifact, committedManifest);
+    await assertDirectoryIdentity(trustedRepositoryPath, params.repositoryIdentity);
+    return committedManifest;
+  } finally {
+    await snapshotDirectory.close().catch(() => undefined);
+  }
 }
 
 async function assertFreshRestorePathsAbsent(databasePath: string): Promise<void> {
@@ -1073,6 +1183,17 @@ function assertNoSqliteSidecarsSync(databasePath: string): void {
 async function lstatIfExists(pathname: string): Promise<Stats | undefined> {
   try {
     return await fs.lstat(pathname);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function lstatIfExistsSync(pathname: string): Stats | undefined {
+  try {
+    return fsSync.lstatSync(pathname);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return undefined;

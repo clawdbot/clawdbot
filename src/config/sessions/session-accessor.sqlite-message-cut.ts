@@ -49,6 +49,8 @@ import type { SessionEntry } from "./types.js";
 
 type MessageCut = {
   editorText?: string;
+  editorAttachments?: Array<{ mimeType: string; data: string }>;
+  editorMediaRefs?: Array<{ path: string; contentType: string }>;
   parentId: string | null;
   prefix: TranscriptEvent[];
 };
@@ -251,6 +253,12 @@ function mutateSqliteSessionAtMessageInTransaction(
     key: params.targetKey,
     entry: nextEntry,
     ...(cut && !("status" in cut) && cut.editorText ? { editorText: cut.editorText } : {}),
+    ...(cut && !("status" in cut) && cut.editorAttachments
+      ? { editorAttachments: cut.editorAttachments }
+      : {}),
+    ...(cut && !("status" in cut) && cut.editorMediaRefs
+      ? { editorMediaRefs: cut.editorMediaRefs }
+      : {}),
   };
 }
 
@@ -369,8 +377,12 @@ function resolveMessageCut(
         : node.entry,
     );
   }
+  const editorAttachments = extractEditorAttachments(message.content);
+  const editorMediaRefs = extractEditorMediaRefs(message);
   return {
     editorText: extractEditorText(message.content),
+    ...(editorAttachments ? { editorAttachments } : {}),
+    ...(editorMediaRefs ? { editorMediaRefs } : {}),
     parentId: target.parentId,
     prefix,
   };
@@ -451,6 +463,49 @@ function extractEditorText(content: unknown): string | undefined {
     })
     .join("");
   return text || undefined;
+}
+
+// Gateway-written inline images are already size-capped at send time; these bounds
+// only keep a corrupted transcript from ballooning the rewind/fork response.
+const EDITOR_ATTACHMENT_LIMIT = 10;
+const EDITOR_ATTACHMENT_MAX_BASE64_CHARS = Math.ceil((5 * 1024 * 1024) / 3) * 4;
+
+function extractEditorAttachments(
+  content: unknown,
+): Array<{ mimeType: string; data: string }> | undefined {
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const attachments = content.flatMap((block) => {
+    const record = asRecord(block);
+    return record?.type === "image" &&
+      typeof record.data === "string" &&
+      record.data.trim() &&
+      record.data.length <= EDITOR_ATTACHMENT_MAX_BASE64_CHARS &&
+      typeof record.mimeType === "string" &&
+      record.mimeType.startsWith("image/")
+      ? [{ mimeType: record.mimeType, data: record.data }]
+      : [];
+  });
+  return attachments.length > 0 ? attachments.slice(0, EDITOR_ATTACHMENT_LIMIT) : undefined;
+}
+
+function extractEditorMediaRefs(
+  message: Record<string, unknown>,
+): Array<{ path: string; contentType: string }> | undefined {
+  const media = asRecord(message["__openclaw"])?.media;
+  if (!Array.isArray(media)) {
+    return undefined;
+  }
+  const refs = media.flatMap((entry) => {
+    const record = asRecord(entry);
+    const mediaPath = typeof record?.path === "string" ? record.path.trim() : "";
+    const contentType = record?.contentType;
+    return mediaPath && typeof contentType === "string" && contentType.startsWith("image/")
+      ? [{ path: mediaPath, contentType }]
+      : [];
+  });
+  return refs.length > 0 ? refs : undefined;
 }
 
 function isSessionHeader(event: unknown): boolean {

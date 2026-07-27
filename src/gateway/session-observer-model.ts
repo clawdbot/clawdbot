@@ -203,7 +203,7 @@ export type SessionObserverDeps = {
     /** Evaluated inside the entry updater so run rollover cannot commit a
      * digest from a replaced run between acceptance and the async write. */
     stillCurrent?: () => boolean;
-  }) => Promise<boolean>;
+  }) => Promise<boolean | null>;
   now?: () => number;
   setTimeoutFn?: typeof setTimeout;
   clearTimeoutFn?: typeof clearTimeout;
@@ -250,7 +250,7 @@ const ModelDigestSchema = z
   })
   .strict();
 
-export function sanitizeSessionObserverModelText(value: string, maxChars: number): string {
+function sanitizeSessionObserverModelText(value: string, maxChars: number): string {
   const normalized = redactToolPayloadText(value).replace(/\s+/gu, " ").trim();
   return truncateUtf16Safe(normalized, maxChars);
 }
@@ -267,11 +267,13 @@ export async function defaultPersistDigest(params: {
   agentId: string;
   digest: SessionObserverDigest;
   stillCurrent?: () => boolean;
-}): Promise<boolean> {
+}): Promise<boolean | null> {
+  let missingEntry = false;
   const result = await patchSessionEntry(
     { sessionKey: params.sessionKey, agentId: params.agentId },
     (entry, context) => {
       if (!context.existingEntry) {
+        missingEntry = true;
         return null;
       }
       if (params.stillCurrent?.() === false) {
@@ -287,7 +289,10 @@ export async function defaultPersistDigest(params: {
     },
     { preserveActivity: true },
   );
-  return result != null;
+  if (result) {
+    return true;
+  }
+  return missingEntry ? null : false;
 }
 
 export function isTerminalLifecycleEvent(event: AgentEventPayload): boolean {
@@ -340,13 +345,16 @@ export async function synthesizeSessionObserverTerminalDigest(params: {
         return false;
       }
       try {
-        return await params.persistDigest({
+        // null means the store entry is gone (unpersistable session) — treat as
+        // a terminal false rather than a retryable failure.
+        const persisted = await params.persistDigest({
           sessionKey,
           sessionId,
           agentId,
           digest: candidate,
           stillCurrent: params.stillCurrent,
         });
+        return persisted === true;
       } catch (error) {
         lastError = error;
       }

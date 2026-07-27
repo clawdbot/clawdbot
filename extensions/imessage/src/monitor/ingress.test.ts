@@ -2,16 +2,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  buildIMessageFlushIngressLifecycle,
-  createIMessageDurableIngress,
-  type IMessageIngressLifecycle,
-} from "./ingress.js";
+import { createIMessageDurableIngress, type IMessageIngressLifecycle } from "./ingress.js";
 
 type IMessageIngressQueue = NonNullable<
   Parameters<typeof createIMessageDurableIngress>[0]["queue"]
@@ -399,7 +396,7 @@ describe("iMessage durable ingress", () => {
   it("fans merged adoption to every constituent claim", async () => {
     const first = lifecycle();
     const second = lifecycle();
-    const merged = buildIMessageFlushIngressLifecycle([first, second]);
+    const merged = fanInChannelIngressLifecycles([first, second]);
 
     await merged.lifecycle?.onAdopted();
 
@@ -410,7 +407,7 @@ describe("iMessage durable ingress", () => {
   it("completes every constituent claim when a flush has no dispatch", async () => {
     const first = lifecycle();
     const second = lifecycle();
-    const merged = buildIMessageFlushIngressLifecycle([first, second]);
+    const merged = fanInChannelIngressLifecycles([first, second]);
 
     await merged.settle();
 

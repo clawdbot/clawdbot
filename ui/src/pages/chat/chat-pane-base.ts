@@ -1,11 +1,19 @@
+import type {
+  NativeGatewaysCapability,
+  NativeGatewaysSnapshot,
+} from "../../app/native-gateways.runtime.ts";
 import {
   consume,
   applicationContext,
   property,
   litState,
   createQuestionPromptState,
+  ChatSessionCompanionThreads,
   listQuestionPrompts,
-  requestSessionObserverAnswer,
+  parseCatalogSessionKey,
+  requestSessionCompanionAnswer,
+  requestSessionCompanionState,
+  resetSessionCompanion,
   sendSessionObserverVisibility,
   PollController,
   SubscriptionsController,
@@ -34,11 +42,14 @@ import {
   type SessionCatalogHost,
   type SessionCatalogSession,
   type SessionDiscussionState,
+  type SessionDiscussionPanelConfig,
+  type SessionRailMode,
   type SessionSharingRole,
   type SessionSuggestion,
   type SwarmRosterHydrator,
   type TaskSuggestion,
   type BoardChatDockSize,
+  type BoardFace,
 } from "./chat-pane-deps.ts";
 import {
   boardChatDockLayout,
@@ -64,6 +75,8 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) active = false;
   @property({ attribute: false }) draft?: string;
+  @property({ attribute: false }) routeFace: BoardFace = "chat";
+  @property({ attribute: false }) onFaceChange?: (face: BoardFace) => void;
   @property({ attribute: false }) onFocusPane?: (paneId: string) => void;
   @property({ attribute: false }) onPaneSessionChange?: (
     paneId: string,
@@ -73,6 +86,9 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @property({ attribute: false }) paneTitle = "";
   @property({ attribute: false }) narrow = false;
   @property({ attribute: false }) mergedChrome = false;
+  @property({ attribute: false }) nativeGateways?: NativeGatewaysCapability | null;
+  @property({ attribute: false }) gatewaysSnapshot?: NativeGatewaysSnapshot | null;
+  @property({ attribute: false }) onboarding = false;
   @property({ attribute: false }) onOpenSplitView?: () => void;
   @property({ attribute: false }) onSplitDown?: (paneId: string) => void;
   @property({ attribute: false }) onSplitRight?: (paneId: string) => void;
@@ -109,21 +125,95 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   } | null = null;
   @litState() protected boardChatDockSize: BoardChatDockSize = boardChatDockLayout.load();
   @litState() protected resetConfirmationOpen = false;
-  @litState() protected observerHudReady = customElements.get("openclaw-chat-observer-hud") != null;
-  protected observerHudLoad: Promise<void> | null = null;
-  protected readonly askSessionObserver = (sessionKey: string, question: string) => {
-    const state = this.state;
-    if (!state?.connected || !state.client) {
-      return Promise.reject(new Error("Gateway is disconnected"));
-    }
-    return requestSessionObserverAnswer(state.client, sessionKey, question);
-  };
+  @litState() protected sessionRailReady = customElements.get("openclaw-chat-session-rail") != null;
+  @litState() protected sessionRailMode: SessionRailMode = "hidden";
+  protected sessionRailModeSessionKey = "";
+  protected sessionRailLoad: Promise<void> | null = null;
+  protected sessionRailOpenRequest = 0;
+  protected sessionRailOpenSessionKey = "";
+  protected sessionCompanionHydrationKey = "";
+  protected readonly sessionCompanionThreads = new ChatSessionCompanionThreads(() => {
+    this.requestUpdate();
+  });
   protected readonly setSessionObserverVisibility = (visible: boolean) => {
     const state = this.state;
     if (state?.connected && state.client) {
       void sendSessionObserverVisibility(state.client, visible).catch(() => undefined);
     }
     this.requestUpdate();
+  };
+
+  protected ensureSessionRail() {
+    if (this.sessionRailReady || this.sessionRailLoad) {
+      return;
+    }
+    this.sessionRailLoad = import("./components/chat-session-rail.ts")
+      .then(() => {
+        if (this.isConnected) {
+          this.sessionRailReady = true;
+        }
+      })
+      .finally(() => {
+        this.sessionRailLoad = null;
+      });
+  }
+
+  protected openSessionRail(): void {
+    this.sessionRailOpenSessionKey = this.state?.sessionKey ?? "";
+    this.ensureSessionRail();
+    this.sessionRailOpenRequest += 1;
+    this.requestUpdate();
+  }
+
+  protected readonly submitSessionCompanionQuestion = async (question: string) => {
+    const state = this.state;
+    if (!state || !state.sessionKey) {
+      return;
+    }
+    const sessionKey = state.sessionKey;
+    this.openSessionRail();
+    if (!state.connected || !state.client) {
+      this.sessionCompanionThreads.setDraft(sessionKey, question);
+      return;
+    }
+    await this.sessionCompanionThreads.submit(sessionKey, question, (key, value) =>
+      requestSessionCompanionAnswer(state.client!, key, value),
+    );
+  };
+
+  protected readonly prefillSessionCompanionQuestion = (question: string) => {
+    const sessionKey = this.state?.sessionKey;
+    if (!sessionKey) {
+      return;
+    }
+    this.sessionCompanionThreads.setDraft(sessionKey, question);
+    this.openSessionRail();
+  };
+
+  protected hydrateSessionCompanion(sessionKey: string): void {
+    const state = this.state;
+    if (!state?.connected || !state.client || !sessionKey || parseCatalogSessionKey(sessionKey)) {
+      return;
+    }
+    const hydrationKey = `${this.connectionGeneration}\0${sessionKey}`;
+    if (this.sessionCompanionHydrationKey === hydrationKey) {
+      return;
+    }
+    this.sessionCompanionHydrationKey = hydrationKey;
+    this.ensureSessionRail();
+    void this.sessionCompanionThreads.hydrate(sessionKey, (key) =>
+      requestSessionCompanionState(state.client!, key),
+    );
+  }
+
+  protected readonly clearSessionCompanion = async () => {
+    const state = this.state;
+    if (!state?.connected || !state.client || !state.sessionKey) {
+      return;
+    }
+    await this.sessionCompanionThreads
+      .reset(state.sessionKey, (key) => resetSessionCompanion(state.client!, key))
+      .catch(() => undefined);
   };
   protected resetConfirmation:
     | {
@@ -140,6 +230,14 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected readonly sessionDiscussionStates = new Map<string, SessionDiscussionState>();
   protected readonly sessionDiscussionOpenUrls = new Map<string, string | null>();
   protected readonly sessionDiscussionProbes = new Set<string>();
+  protected readonly sessionDiscussionPanels = new Map<
+    string,
+    {
+      generation: number;
+      canOpen: boolean;
+      config: SessionDiscussionPanelConfig;
+    }
+  >();
   protected headerRenameInitialLabel: string | null = null;
   protected headerRenameInitialValue = "";
   protected headerRenameSessionKey = "";
@@ -226,6 +324,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
         () => this.context?.runtimeConfig,
         (runtimeConfig, notify) =>
           runtimeConfig.subscribe(() => {
+            this.refreshSwarmRoster();
             this.refreshBuiltinBoardSnapshot();
             notify();
           }),
@@ -245,6 +344,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   }
 
   protected abstract refreshSessionPullRequests(options?: { refresh?: boolean }): Promise<void>;
+  protected abstract refreshSwarmRoster(): void;
   protected abstract refreshBuiltinBoardSnapshot(): void;
   protected abstract resolveBoardProvider(): BoardProvider;
   protected abstract handleBoardCommand(event: BoardCommandEvent): void;

@@ -59,7 +59,6 @@ type RunLifecycleHost = Omit<
   chatStream?: string | null;
   chatStreamStartedAt?: number | null;
   chatRunStartup?: ChatRunStartupState | null;
-  chatSideResultTerminalRuns?: Set<string>;
   compactionStatus?: CompactionStatus | null;
   compactionClearTimer?: TimerHandle | number | null;
   fallbackStatus?: FallbackStatus | null;
@@ -84,7 +83,6 @@ type ReconcileOptions = {
   clearChatStream?: boolean;
   clearIndicators?: boolean;
   clearToolStream?: boolean;
-  clearSideResultTerminalRuns?: boolean;
   clearRunStatus?: boolean;
   publishRunStatus?: boolean;
   armLocalTerminalReconcile?: boolean;
@@ -435,9 +433,6 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
   }
   if (options.clearLocalRun) {
     host.chatRunId = null;
-  }
-  if (options.clearSideResultTerminalRuns) {
-    host.chatSideResultTerminalRuns?.clear();
   }
   if (options.clearToolStream && canResetToolStream(host)) {
     resetToolStream(host);

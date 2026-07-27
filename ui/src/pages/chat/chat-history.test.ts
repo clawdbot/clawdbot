@@ -95,8 +95,17 @@ describe("rewindChatHistory", () => {
     state.handleChatDraftChange = vi.fn((next: string) => {
       state.chatMessage = next;
     });
+    state.chatAttachments = [{ id: "old", mimeType: "image/jpeg", dataUrl: "data:old" }];
     state.sessions = {
-      rewind: vi.fn().mockResolvedValue({ editorText: "edit this" }),
+      rewind: vi.fn().mockResolvedValue({
+        editorText: "edit this",
+        editorAttachments: [
+          { mimeType: "image/png", data: "aW1hZ2U=" },
+          { mimeType: "application/pdf", data: "aW1hZ2U=" },
+          { mimeType: "image/png", data: "not base64!!" },
+          { mimeType: "image/png", data: "A" },
+        ],
+      }),
       setModelOverride: vi.fn(),
     };
     cacheChatSessionSnapshot(
@@ -117,8 +126,24 @@ describe("rewindChatHistory", () => {
       "user-entry",
       expect.any(Object),
     );
-    expect(result).toEqual({ editorText: "edit this" });
+    expect(result).toEqual({
+      editorText: "edit this",
+      editorAttachments: [
+        { mimeType: "image/png", data: "aW1hZ2U=" },
+        { mimeType: "application/pdf", data: "aW1hZ2U=" },
+        { mimeType: "image/png", data: "not base64!!" },
+        { mimeType: "image/png", data: "A" },
+      ],
+    });
     expect(state.chatMessage).toBe("edit this");
+    expect(state.chatAttachments).toEqual([
+      {
+        id: expect.stringMatching(/^att-/),
+        mimeType: "image/png",
+        dataUrl: "data:image/png;base64,aW1hZ2U=",
+      },
+    ]);
+    expect(state.chatAttachments[0]?.id).not.toBe("old");
     expect(state.chatMessages).toEqual([{ role: "assistant", content: "kept prefix" }]);
     expect(
       readChatMessagesFromCache(state.chatMessagesBySession, state, {

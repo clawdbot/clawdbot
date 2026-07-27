@@ -39,7 +39,7 @@ export type TelegramMessageContextOptions = {
 };
 
 export type TelegramPromptContextEntry = NonNullable<
-  MsgContext["UntrustedStructuredContext"]
+  MsgContext["ChannelStructuredContext"]
 >[number];
 
 export type TelegramAmbientTranscriptWatermark = {

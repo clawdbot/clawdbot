@@ -487,7 +487,7 @@ function listAuditAgentToolContexts(cfg: OpenClawConfig): AuditAgentToolContext[
       continue;
     }
     contexts.push({
-      label: `agents.list.${agent.id}`,
+      label: `agents.entries.${agent.id}`,
       agentId: agent.id,
       tools: agent.tools,
     });
@@ -824,7 +824,7 @@ export function collectSandboxDockerNoopFindings(cfg: OpenClawConfig): SecurityA
       continue;
     }
     if (resolveSandboxConfigForAgent(cfg, entry.id).mode === "off") {
-      configuredPaths.push(`agents.list.${entry.id}.sandbox.docker`);
+      configuredPaths.push(`agents.entries.${entry.id}.sandbox.docker`);
     }
   }
 
@@ -865,7 +865,7 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
     const agentDocker = entry.sandbox?.docker;
     if (agentDocker && typeof agentDocker === "object") {
       configs.push({
-        source: `agents.list.${entry.id}.sandbox.docker`,
+        source: `agents.entries.${entry.id}.sandbox.docker`,
         docker: agentDocker as Record<string, unknown>,
       });
     }
@@ -1083,7 +1083,7 @@ export function collectMinimalProfileOverrideFindings(cfg: OpenClawConfig): Secu
     title: "Global tools.profile=minimal is overridden by agent profiles",
     detail:
       "Global minimal profile is set, but these agent profiles take precedence:\n" +
-      overrides.map((entry) => `- agents.list.${entry}`).join("\n"),
+      overrides.map((entry) => `- agents.entries.${entry}`).join("\n"),
     remediation:
       'Set those agents to `tools.profile="minimal"` (or remove the agent override) if you want minimal tools enforced globally.',
   });

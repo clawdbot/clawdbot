@@ -1,9 +1,13 @@
-// Qa Lab tests cover auth store plugin behavior.
+// Qa Lab tests cover the SQLite-backed auth store plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import {
+  loadAuthProfileStoreWithoutExternalProfiles,
+  saveAuthProfileStore,
+} from "openclaw/plugin-sdk/agent-runtime";
 import { afterEach, describe, expect, it } from "vitest";
-import { writeQaAuthProfiles } from "./auth-store.js";
+import { readQaAuthProfiles, writeQaAuthProfiles } from "./auth-store.js";
 
 const tempDirs: string[] = [];
 
@@ -20,7 +24,7 @@ describe("QA auth profile store", () => {
     );
   });
 
-  it("writes a new auth profile file when none exists", async () => {
+  it("writes new auth profiles to SQLite without creating legacy JSON", async () => {
     const agentDir = await createTempDir();
 
     await writeQaAuthProfiles({
@@ -34,12 +38,15 @@ describe("QA auth profile store", () => {
       },
     });
 
-    await expect(fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8")).resolves.toContain(
-      "qa-mock-openai",
-    );
+    expect(readQaAuthProfiles(agentDir).profiles["qa-mock-openai"]).toMatchObject({
+      provider: "openai",
+    });
+    await expect(fs.stat(path.join(agentDir, "auth-profiles.json"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
-  it("does not replace corrupt auth profile files", async () => {
+  it("refuses to bypass a pending legacy auth source", async () => {
     const agentDir = await createTempDir();
     const authPath = path.join(agentDir, "auth-profiles.json");
     await fs.writeFile(authPath, "{not-json", "utf8");
@@ -55,164 +62,34 @@ describe("QA auth profile store", () => {
           },
         },
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow("requires legacy credential migration");
     await expect(fs.readFile(authPath, "utf8")).resolves.toBe("{not-json");
   });
 
-  it("does not merge malformed auth profile shapes", async () => {
+  it("merges canonical API-key, token, and OAuth profile shapes", async () => {
     const agentDir = await createTempDir();
-    const authPath = path.join(agentDir, "auth-profiles.json");
-    const original = JSON.stringify({ version: 1, profiles: { broken: "token" } });
-    await fs.writeFile(authPath, original, "utf8");
-
-    await expect(
-      writeQaAuthProfiles({
-        agentDir,
-        profiles: {
-          "qa-mock-openai": {
-            type: "api_key",
-            provider: "openai",
-            key: "qa-mock-not-a-real-key",
-          },
-        },
-      }),
-    ).rejects.toThrow("Invalid QA auth profiles file");
-    await expect(fs.readFile(authPath, "utf8")).resolves.toBe(original);
-  });
-
-  it("preserves existing ref-backed auth profile shapes", async () => {
-    const agentDir = await createTempDir();
-    const authPath = path.join(agentDir, "auth-profiles.json");
-    await fs.writeFile(
-      authPath,
-      `${JSON.stringify({
-        version: 1,
-        profiles: {
-          existing: {
-            type: "api_key",
-            provider: "openai",
-            keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-          },
-        },
-      })}\n`,
-      "utf8",
-    );
-
     await writeQaAuthProfiles({
       agentDir,
       profiles: {
-        "qa-mock-anthropic": {
-          type: "api_key",
-          provider: "anthropic",
-          key: "qa-mock-not-a-real-key",
-        },
-      },
-    });
-
-    const written = JSON.parse(await fs.readFile(authPath, "utf8")) as {
-      profiles?: Record<string, unknown>;
-    };
-    expect(written.profiles?.existing).toEqual({
-      type: "api_key",
-      provider: "openai",
-      keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-    });
-    expect(written.profiles?.["qa-mock-anthropic"]).toMatchObject({
-      type: "api_key",
-      provider: "anthropic",
-    });
-  });
-
-  it("preserves existing token and oauth auth profile shapes", async () => {
-    const agentDir = await createTempDir();
-    const authPath = path.join(agentDir, "auth-profiles.json");
-    await fs.writeFile(
-      authPath,
-      `${JSON.stringify({
-        version: 1,
-        profiles: {
-          tokenProfile: {
-            type: "token",
-            provider: "github",
-            token: { source: "file", provider: "vault", id: "github/token" },
-          },
-          oauthProfile: {
-            type: "oauth",
-            provider: "chatgpt",
-            access: "qa-access-token",
-            refresh: "qa-refresh-token",
-            expires: 1_900_000_000_000,
-          },
-          legacyOAuthProfile: {
-            type: "oauth",
-            provider: "openai",
-            expires: 1_900_000_000_000,
-            oauthRef: {
-              source: "openclaw-credentials",
-              provider: "openai",
-              id: "0123456789abcdef0123456789abcdef",
-            },
-          },
-        },
-      })}\n`,
-      "utf8",
-    );
-
-    await writeQaAuthProfiles({
-      agentDir,
-      profiles: {
-        "qa-mock-openai": {
+        existing: {
           type: "api_key",
           provider: "openai",
-          key: "qa-mock-not-a-real-key",
+          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        },
+        tokenProfile: {
+          type: "token",
+          provider: "github",
+          tokenRef: { source: "file", provider: "vault", id: "github/token" },
+        },
+        oauthProfile: {
+          type: "oauth",
+          provider: "chatgpt",
+          access: "qa-access-token",
+          refresh: "qa-refresh-token",
+          expires: 1_900_000_000_000,
         },
       },
     });
-
-    const written = JSON.parse(await fs.readFile(authPath, "utf8")) as {
-      profiles?: Record<string, unknown>;
-    };
-    expect(written.profiles?.tokenProfile).toEqual({
-      type: "token",
-      provider: "github",
-      token: { source: "file", provider: "vault", id: "github/token" },
-    });
-    expect(written.profiles?.oauthProfile).toEqual({
-      type: "oauth",
-      provider: "chatgpt",
-      access: "qa-access-token",
-      refresh: "qa-refresh-token",
-      expires: 1_900_000_000_000,
-    });
-    expect(written.profiles?.legacyOAuthProfile).toEqual({
-      type: "oauth",
-      provider: "openai",
-      expires: 1_900_000_000_000,
-      oauthRef: {
-        source: "openclaw-credentials",
-        provider: "openai",
-        id: "0123456789abcdef0123456789abcdef",
-      },
-    });
-  });
-
-  it("preserves existing providerless secret refs", async () => {
-    const agentDir = await createTempDir();
-    const authPath = path.join(agentDir, "auth-profiles.json");
-    await fs.writeFile(
-      authPath,
-      `${JSON.stringify({
-        version: 1,
-        profiles: {
-          existing: {
-            type: "api_key",
-            provider: "openai",
-            keyRef: { source: "env", id: "OPENAI_API_KEY" },
-          },
-        },
-      })}\n`,
-      "utf8",
-    );
 
     await writeQaAuthProfiles({
       agentDir,
@@ -225,52 +102,44 @@ describe("QA auth profile store", () => {
       },
     });
 
-    const written = JSON.parse(await fs.readFile(authPath, "utf8")) as {
-      profiles?: Record<string, unknown>;
-    };
-    expect(written.profiles?.existing).toEqual({
-      type: "api_key",
-      provider: "openai",
-      keyRef: { source: "env", id: "OPENAI_API_KEY" },
+    expect(readQaAuthProfiles(agentDir).profiles).toMatchObject({
+      existing: { type: "api_key", provider: "openai" },
+      tokenProfile: { type: "token", provider: "github" },
+      oauthProfile: { type: "oauth", provider: "chatgpt" },
+      "qa-mock-anthropic": { type: "api_key", provider: "anthropic" },
     });
   });
 
-  it("preserves existing legacy api key alias profiles", async () => {
+  it("can replace an existing profile set for deterministic fixture seeding", async () => {
     const agentDir = await createTempDir();
-    const authPath = path.join(agentDir, "auth-profiles.json");
-    await fs.writeFile(
-      authPath,
-      `${JSON.stringify({
+    saveAuthProfileStore(
+      {
         version: 1,
         profiles: {
-          existing: {
-            mode: "api_key",
-            provider: "openai",
-            apiKey: "qa-existing-key",
-          },
+          stale: { type: "api_key", provider: "openai", key: "qa-stale-not-a-real-key" },
         },
-      })}\n`,
-      "utf8",
+        order: { openai: ["stale"] },
+        lastGood: { openai: "stale" },
+        usageStats: { stale: { cooldownUntil: Date.now() + 60_000 } },
+      },
+      agentDir,
+      { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
 
     await writeQaAuthProfiles({
       agentDir,
       profiles: {
-        "qa-mock-anthropic": {
-          type: "api_key",
-          provider: "anthropic",
-          key: "qa-mock-not-a-real-key",
-        },
+        current: { type: "api_key", provider: "anthropic", key: "qa-current-not-a-real-key" },
       },
+      replace: true,
     });
 
-    const written = JSON.parse(await fs.readFile(authPath, "utf8")) as {
-      profiles?: Record<string, unknown>;
-    };
-    expect(written.profiles?.existing).toEqual({
-      mode: "api_key",
-      provider: "openai",
-      apiKey: "qa-existing-key",
+    expect(Object.keys(readQaAuthProfiles(agentDir).profiles)).toEqual(["current"]);
+    const replaced = loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
+      inheritedAuthDir: agentDir,
     });
+    expect(replaced.order).toBeUndefined();
+    expect(replaced.lastGood).toBeUndefined();
+    expect(replaced.usageStats).toBeUndefined();
   });
 });

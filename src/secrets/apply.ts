@@ -46,10 +46,8 @@ import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { isNonEmptyString, isRecord, writeTextFileAtomic } from "./shared.js";
 import {
   listAuthProfileStoreAgentDirs,
-  listLegacyAuthJsonPaths,
   listSecretsDotEnvPaths,
   parseEnvAssignmentValue,
-  readJsonObjectIfExists,
 } from "./storage-scan.js";
 
 type FileSnapshot = {
@@ -77,7 +75,6 @@ type ProjectedState = {
   configWriteOptions: ConfigWriteOptions;
   authStoreByPath: Map<string, Record<string, unknown>>;
   authStoreAgentDirByPath: Map<string, string>;
-  authJsonByPath: Map<string, Record<string, unknown>>;
   envRawByPath: Map<string, string>;
   changedFiles: Set<string>;
   warnings: string[];
@@ -334,12 +331,6 @@ async function projectPlanState(params: {
     enabled: options.scrubAuthProfilesForProviderTargets,
   });
 
-  const authJsonByPath = scrubLegacyAuthJsonStores({
-    stateDir,
-    changedFiles,
-    enabled: options.scrubLegacyAuthJson,
-  });
-
   const envRawByPath = scrubEnvFiles({
     configPath,
     stateDir,
@@ -366,7 +357,6 @@ async function projectPlanState(params: {
     configWriteOptions: writeOptions,
     authStoreByPath,
     authStoreAgentDirByPath: targetMutations.authStoreAgentDirByPath,
-    authJsonByPath,
     envRawByPath,
     changedFiles,
     warnings,
@@ -701,40 +691,6 @@ function applyAuthProfileTargetMutation(params: {
   return changed;
 }
 
-function scrubLegacyAuthJsonStores(params: {
-  stateDir: string;
-  changedFiles: Set<string>;
-  enabled: boolean;
-}): Map<string, Record<string, unknown>> {
-  const authJsonByPath = new Map<string, Record<string, unknown>>();
-  if (!params.enabled) {
-    return authJsonByPath;
-  }
-  for (const authJsonPath of listLegacyAuthJsonPaths(params.stateDir)) {
-    const parsedResult = readJsonObjectIfExists(authJsonPath);
-    const parsed = parsedResult.value;
-    if (!parsed) {
-      continue;
-    }
-    let mutated = false;
-    const nextParsed = structuredClone(parsed);
-    for (const [providerId, value] of Object.entries(nextParsed)) {
-      if (!isRecord(value)) {
-        continue;
-      }
-      if (value.type === "api_key" && isNonEmptyString(value.key)) {
-        delete nextParsed[providerId];
-        mutated = true;
-      }
-    }
-    if (mutated) {
-      authJsonByPath.set(authJsonPath, nextParsed);
-      params.changedFiles.add(authJsonPath);
-    }
-  }
-  return authJsonByPath;
-}
-
 function scrubEnvFiles(params: {
   configPath: string;
   stateDir: string;
@@ -861,14 +817,6 @@ function restoreFileSnapshot(pathname: string, snapshot: FileSnapshot): void {
   writeTextFileAtomic(pathname, snapshot.content, snapshot.mode || 0o600);
 }
 
-function toJsonWrite(pathname: string, value: Record<string, unknown>): ApplyWrite {
-  return {
-    path: pathname,
-    content: `${JSON.stringify(value, null, 2)}\n`,
-    mode: 0o600,
-  };
-}
-
 /** Applies or dry-runs a validated secrets plan across config, auth stores, and scrub targets. */
 /** Applies a normalized secrets plan, or reports file/auth-store changes in dry-run mode. */
 export async function runSecretsApply(params: {
@@ -941,10 +889,6 @@ export async function runSecretsApply(params: {
 
   capture(projected.configPath);
   const writes: ApplyWrite[] = [];
-  for (const [pathname, value] of projected.authJsonByPath.entries()) {
-    capture(pathname);
-    writes.push(toJsonWrite(pathname, value));
-  }
   for (const [pathname, raw] of projected.envRawByPath.entries()) {
     capture(pathname);
     writes.push({

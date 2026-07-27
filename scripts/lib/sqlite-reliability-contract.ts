@@ -1,5 +1,18 @@
 export type ProfileId = "smoke" | "default" | "large";
 
+export type IndexRepairJournalMode = "delete" | "wal";
+
+export const INDEX_REPAIR_INDEX_NAME = "idx_openclaw_reliability_records_identity";
+export const INDEX_REPAIR_SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS openclaw_reliability_index_records (
+    id INTEGER PRIMARY KEY,
+    identity TEXT NOT NULL,
+    payload TEXT NOT NULL
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS ${INDEX_REPAIR_INDEX_NAME}
+    ON openclaw_reliability_index_records(identity);
+`;
+
 export type ProfileConfig = {
   iterations: number;
   maxWalBytes: number;
@@ -40,6 +53,30 @@ export type ReliabilityReport = {
     writerRestarted: true;
   };
   iterations: number;
+  indexRepairInterruptionProof: {
+    rollbackJournal: {
+      exit: {
+        code: number | null;
+        signal: NodeJS.Signals | null;
+      };
+      journalBytesObserved: number;
+      repairedIndexes: string[];
+      recoveryVerified: true;
+      rowsPreserved: number;
+      walBytesObserved: number;
+    };
+    wal: {
+      exit: {
+        code: number | null;
+        signal: NodeJS.Signals | null;
+      };
+      journalBytesObserved: number;
+      repairedIndexes: string[];
+      recoveryVerified: true;
+      rowsPreserved: number;
+      walBytesObserved: number;
+    };
+  };
   maintenanceProof: {
     bloatBytes: number;
     compaction: {
@@ -135,13 +172,13 @@ export type ReliabilityReport = {
         visibleSnapshotsAfterCrash: number;
       };
       pending: {
-        crashSnapshotVerifiedAfterCrash: false;
-        crashSnapshotVisibleAfterCrash: false;
+        crashSnapshotVerifiedAfterCrash: true;
+        crashSnapshotVisibleAfterCrash: true;
         exit: {
           code: number | null;
           signal: NodeJS.Signals | null;
         };
-        incompleteEntries: 1;
+        incompleteEntries: 0;
         payload: {
           bytes: number;
           idSum: number;

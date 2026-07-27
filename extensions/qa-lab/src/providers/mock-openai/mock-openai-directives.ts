@@ -113,7 +113,7 @@ export function shouldUseWhatsAppContactMarker(prompt: string) {
 }
 
 export function shouldUseWhatsAppStickerMarker(prompt: string) {
-  const label = "WhatsApp media (untrusted metadata):";
+  const label = "WhatsApp media:";
   let searchFrom = 0;
   for (;;) {
     const labelIndex = prompt.indexOf(label, searchFrom);
@@ -131,7 +131,7 @@ export function shouldUseWhatsAppStickerMarker(prompt: string) {
           return true;
         }
       } catch {
-        // Ignore malformed untrusted metadata and continue to the next matching block.
+        // Ignore malformed metadata and continue to the next matching block.
       }
       searchFrom = fenceEnd + 3;
       continue;

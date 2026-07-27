@@ -131,6 +131,26 @@ export function readSqliteTranscriptSnapshot(
   };
 }
 
+/** Reads transcript event rows without parsing JSON (tolerant of malformed rows). Used by migrations. */
+export function readSqliteTranscriptEventRows(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+): SqliteTranscriptSnapshotRow[] {
+  const db = getSessionKysely(database.db);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("transcript_events")
+      .select(["event_json", "seq"])
+      .where("session_id", "=", sessionId)
+      .orderBy("seq", "asc"),
+  ).rows;
+  return rows.map((row) => ({
+    eventJson: row.event_json,
+    seq: normalizeSqliteNumber(row.seq),
+  }));
+}
+
 function sqliteTranscriptJsonlByteSize() {
   return /* kysely-allow-raw: JSONL size includes event bytes plus newline separators. */ sql<number>`COALESCE(SUM(LENGTH(CAST(event_json AS BLOB))), 0)
     + CASE WHEN COUNT(*) > 0 THEN COUNT(*) - 1 ELSE 0 END`.as("size_bytes");

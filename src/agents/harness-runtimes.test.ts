@@ -30,6 +30,18 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
     expect(collectConfiguredAgentHarnessRuntimes(config)).toEqual(["codex"]);
   });
 
+  it("requires Codex when OpenAI is only a default model fallback", () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { fallbacks: ["openai/gpt-5.5"] },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(collectConfiguredAgentHarnessRuntimes(config)).toEqual(["codex"]);
+  });
+
   it("can ignore implicit OpenAI Codex runtime preferences", () => {
     const config = {
       agents: {

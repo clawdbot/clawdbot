@@ -12,10 +12,7 @@ import {
   finalizeInboundContext as finalizeCoreInboundContext,
   type FinalizeInboundContextOptions,
 } from "../../auto-reply/reply/inbound-context.js";
-import {
-  normalizeInboundTextNewlines,
-  sanitizeInboundSystemTags,
-} from "../../auto-reply/reply/inbound-text.js";
+import { normalizeInboundTextNewlines } from "../../auto-reply/reply/inbound-text.js";
 import type {
   FinalizedMsgContext,
   MentionSource,
@@ -108,9 +105,10 @@ export type BuildChannelInboundEventContextParams = {
 export type BuildChannelInboundEventContextAsyncParams = BuildChannelInboundEventContextParams &
   ChannelInboundSupplementalResolutionOptions;
 
-type UntrustedStructuredContextEntries = NonNullable<
-  FinalizedMsgContext["UntrustedStructuredContext"]
->;
+type ChannelStructuredContextEntries = NonNullable<FinalizedMsgContext["ChannelStructuredContext"]>;
+type ChannelStructuredContextResolution =
+  | { kind: "absent" }
+  | { kind: "present"; entries: ChannelStructuredContextEntries };
 
 export type BuiltChannelInboundEventContext = FinalizedMsgContext & {
   Body: string;
@@ -336,15 +334,19 @@ function finalizePreparedChannelInboundContext<T extends Record<string, unknown>
     ...(params.media ? { media: [...params.media] } : {}),
     ...mediaPayload,
   };
-  const untrustedStructuredContext = resolveUntrustedStructuredContext({
+  const channelStructuredContext = resolveChannelStructuredContext({
     supplemental: params.supplemental,
     extra: baseContext,
   });
+  const structuredContextField =
+    channelStructuredContext.kind === "present"
+      ? { ChannelStructuredContext: channelStructuredContext.entries }
+      : {};
   const finalize = params.finalize ?? finalizeCoreInboundContext;
   const context = finalize(
     {
       ...baseContext,
-      UntrustedStructuredContext: untrustedStructuredContext,
+      ...structuredContextField,
     },
     params.finalizeOptions,
   ) as T & FinalizedMsgContext;
@@ -411,23 +413,28 @@ function normalizeUntrustedGroupPrompt(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = sanitizeInboundSystemTags(normalizeInboundTextNewlines(value));
+  const normalized = normalizeInboundTextNewlines(value);
   return normalized.trim().length > 0 ? normalized : undefined;
 }
 
-function resolveUntrustedStructuredContext(params: {
+function resolveChannelStructuredContext(params: {
   supplemental?: SupplementalContextFacts;
   extra?: Record<string, unknown>;
-}): UntrustedStructuredContextEntries | undefined {
-  const entries: UntrustedStructuredContextEntries = [];
-  const extraEntries = params.extra?.UntrustedStructuredContext;
+}): ChannelStructuredContextResolution {
+  const entries: ChannelStructuredContextEntries = [];
+  const extraEntries =
+    params.extra?.ChannelStructuredContext ?? params.extra?.UntrustedStructuredContext;
   if (Array.isArray(extraEntries)) {
-    entries.push(...(extraEntries as UntrustedStructuredContextEntries));
+    entries.push(...(extraEntries as ChannelStructuredContextEntries));
   }
-  entries.push(...(params.supplemental?.untrustedContext ?? []));
+  const supplementalEntries =
+    params.supplemental?.channelStructuredContext ?? params.supplemental?.untrustedContext;
+  if (supplementalEntries !== undefined) {
+    entries.push(...supplementalEntries);
+  }
 
   // User-controlled group prompt metadata must stay out of GroupSystemPrompt.
-  // Keeping it with untrusted context prevents spoofed system markers from gaining prompt authority.
+  // Keeping it with untrusted context preserves its user-role boundary.
   const groupPrompt = normalizeUntrustedGroupPrompt(
     params.supplemental?.untrustedGroupSystemPrompt,
   );
@@ -439,7 +446,9 @@ function resolveUntrustedStructuredContext(params: {
     });
   }
 
-  return entries.length > 0 ? entries : undefined;
+  const contextProvided =
+    extraEntries !== undefined || supplementalEntries !== undefined || groupPrompt !== undefined;
+  return contextProvided ? { kind: "present", entries } : { kind: "absent" };
 }
 
 function resolveChannelCommandContext(params: {

@@ -1,7 +1,6 @@
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { SIDEBAR_NAV_ROUTES } from "../app-navigation.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
-import { pathForRoute } from "../app-route-paths.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import {
@@ -19,8 +18,8 @@ import {
   compareSessionRowsByUpdatedAt,
   filterVisibleSessionRows,
   resolveSessionNavigation,
-  searchForSession,
 } from "../lib/sessions/index.ts";
+import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
@@ -71,6 +70,7 @@ export function buildSidebarSessionNavigationState(input: {
   context: ApplicationContext<RouteId> | undefined;
   routeSessionKey: string;
   sessionsResult: SessionsListResult | null;
+  activeSession?: GatewaySessionRow | null;
   sessionsAgentId: string | null;
   showCron: boolean;
   statusFilter: SidebarSessionStatusFilter;
@@ -83,8 +83,15 @@ export function buildSidebarSessionNavigationState(input: {
   resolveAgentStatusNote: (row: GatewaySessionRow) => string | undefined;
 }): SidebarSessionNavigationState {
   const { context } = input;
+  const mainKey = context
+    ? resolveUiConfiguredMainKey({
+        agentsList: context.agents.state.agentsList,
+        hello: context.gateway.snapshot.hello,
+      })
+    : undefined;
   const navigation = resolveSessionNavigation({
     result: input.sessionsResult,
+    activeSession: input.activeSession,
     resultAgentId: input.sessionsAgentId,
     sessionKey: input.routeSessionKey,
     assistantAgentId:
@@ -106,6 +113,7 @@ export function buildSidebarSessionNavigationState(input: {
     }
     return {
       key: row.key,
+      displayName: row.displayName,
       incognito: row.incognito === true,
       createdActor: row.createdActor,
       archivedBy: row.archivedBy,
@@ -114,7 +122,14 @@ export function buildSidebarSessionNavigationState(input: {
       label: resolveSessionDisplayName(row.key, row, { includeSubagentPrefix: false }),
       meta: formatSidebarTimestamp(row.updatedAt),
       subtitle: resolveSessionWorkSubtitle(row),
-      href: `${pathForRoute("chat", context?.basePath ?? "")}${searchForSession(row.key)}`,
+      href: sessionNavigationTarget({
+        face: "chat",
+        sessionKey: row.key,
+        fallbackAgentId: navigation.selectedAgentId,
+        basePath: context?.basePath ?? "",
+        row,
+        mainKey,
+      }).href,
       active: row.key === navigation.activeRowKey,
       visuallyActive: input.highlightCurrentSession && row.key === navigation.currentSessionKey,
       hasActiveRun: row.archived !== true && Boolean(row.hasActiveRun),
@@ -188,6 +203,8 @@ export function partitionSidebarVisibleSections(input: {
   rows: SidebarRecentSession[];
   grouping: SidebarSessionsGrouping;
   knownGroups: string[] | undefined;
+  catalogIds?: readonly string[];
+  sectionOrder?: readonly string[];
   collapsedSections: ReadonlySet<string>;
   hideEmptyCreatorFilteredGroup: (category: string | undefined, rowCount: number) => boolean;
   visibleSessionLimits: ReadonlyMap<string, number>;
@@ -197,6 +214,8 @@ export function partitionSidebarVisibleSections(input: {
   const sections = groupSidebarSessionRows(input.rows, {
     grouping: input.grouping,
     knownGroups: input.knownGroups,
+    sectionOrder: input.sectionOrder,
+    catalogIds: input.catalogIds,
   }).filter(
     (section) =>
       section.id !== "pinned" &&

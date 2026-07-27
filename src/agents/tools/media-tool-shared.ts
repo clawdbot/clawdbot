@@ -23,6 +23,10 @@ import { listAvailableManifestContractValues } from "../../plugins/manifest-cont
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { normalizeModelRef } from "../model-selection.js";
 import {
+  resolveSandboxedBridgeMediaPath,
+  type SandboxedBridgeMediaPathConfig,
+} from "../sandbox-media-paths.js";
+import {
   ToolInputError,
   readPositiveIntegerParam,
   readStringArrayParam,
@@ -70,6 +74,13 @@ type MediaReferenceDetailEntry = {
 type TaskRunDetailHandle = {
   taskId: string;
   runId: string;
+};
+
+type MediaToolLocalRootOptions = {
+  workspaceOnly?: boolean;
+  cfg?: OpenClawConfig;
+  channelId?: string | null;
+  accountId?: string | null;
 };
 
 export const REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS = 120_000;
@@ -577,12 +588,7 @@ export function buildTaskRunDetails(
  */
 export function resolveMediaToolLocalRoots(
   workspaceDirRaw: string | undefined,
-  options?: {
-    workspaceOnly?: boolean;
-    cfg?: OpenClawConfig;
-    channelId?: string | null;
-    accountId?: string | null;
-  },
+  options?: MediaToolLocalRootOptions,
   _mediaSources?: readonly string[],
 ): string[] {
   const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw);
@@ -593,6 +599,44 @@ export function resolveMediaToolLocalRoots(
   // access, not broad host-local file reads.
   const roots = getDefaultLocalRoots();
   return uniqueStrings([...roots, ...(workspaceDir ? [workspaceDir] : [])]);
+}
+
+/**
+ * Resolves the common filesystem access shape for media-tool references.
+ */
+export async function resolveMediaToolReferenceAccess(params: {
+  input: string;
+  isDataUrl: boolean;
+  workspaceDir?: string;
+  sandbox?: SandboxedBridgeMediaPathConfig | null;
+  rootOptions?: MediaToolLocalRootOptions;
+}): Promise<{ resolvedPath: string | null; localRoots: string[]; rewrittenFrom?: string }> {
+  const pathInfo: { resolved: string; rewrittenFrom?: string } = params.isDataUrl
+    ? { resolved: "" }
+    : params.sandbox
+      ? await resolveSandboxedBridgeMediaPath({
+          sandbox: params.sandbox,
+          mediaPath: params.input,
+          inboundFallbackDir: "media/inbound",
+        })
+      : {
+          resolved: params.input.startsWith("file://")
+            ? params.input.slice("file://".length)
+            : params.input,
+        };
+  const resolvedPath = params.isDataUrl ? null : pathInfo.resolved;
+  const rootOptions = params.rootOptions ?? {
+    workspaceOnly: params.sandbox?.workspaceOnly === true,
+  };
+  return {
+    resolvedPath,
+    localRoots: resolveMediaToolLocalRoots(
+      params.workspaceDir,
+      rootOptions,
+      resolvedPath ? [resolvedPath] : undefined,
+    ),
+    ...(pathInfo.rewrittenFrom ? { rewrittenFrom: pathInfo.rewrittenFrom } : {}),
+  };
 }
 
 /**

@@ -37,6 +37,7 @@ import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
   type ChannelKind,
+  isNoopGatewayReloadPlan,
   resolveConfigReloadMetadata,
 } from "./config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
@@ -282,11 +283,6 @@ describe("buildGatewayReloadPlan", () => {
       reason: "gateway.auth.token",
     },
     {
-      path: "models.pricing.enabled",
-      restart: true,
-      reason: "models.pricing.enabled",
-    },
-    {
       path: "agents.defaults.model",
       restart: false,
       hot: "agents.defaults.model",
@@ -377,6 +373,7 @@ describe("buildGatewayReloadPlan", () => {
       expect(plan.restartReasons).toStrictEqual([]);
       expect(plan.hotReasons).toStrictEqual([]);
       expect(plan.noopPaths).toEqual([path]);
+      expect(isNoopGatewayReloadPlan(plan)).toBe(true);
     },
   );
 
@@ -481,6 +478,7 @@ describe("buildGatewayReloadPlan", () => {
 
     expect(plan.restartChannels).toEqual(expectedChannels);
     expect(plan.restartChannelAccounts).toEqual(expectedAccounts);
+    expect(isNoopGatewayReloadPlan(plan)).toBe(false);
   });
 
   it("restarts every channel whose config prefix matches", () => {

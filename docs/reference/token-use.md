@@ -21,7 +21,7 @@ OpenClaw assembles its own system prompt on every run. It includes:
   override at `agents.entries.*.skillsLimits.maxSkillsPromptChars`.
 - Self-update instructions
 - Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`,
-  `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` when new, plus
+  `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md` when new, plus
   `MEMORY.md` when present). Large injected files are truncated by
   `agents.defaults.bootstrapMaxChars` (default: `20000`); total bootstrap
   injection is capped by `agents.defaults.bootstrapTotalMaxChars` (default:
@@ -183,11 +183,10 @@ auth: non-API-key providers such as `aws-sdk` can show estimated cost when
 their configured model entry includes local pricing and the provider
 returns usage metadata.
 
-After sidecars and channels reach the Gateway ready path, OpenClaw starts an
-optional background pricing bootstrap for configured model refs that do not
-already have local pricing. That bootstrap fetches remote OpenRouter and
-LiteLLM pricing catalogs. Set `models.pricing.enabled: false` to skip those
-catalog fetches on offline or restricted networks; explicit
+Pricing updates ship in the hosted model catalog alongside model metadata.
+OpenClaw does not fetch OpenRouter or LiteLLM directly. Set
+`models.catalogRefresh.enabled: false` to disable hosted catalog traffic on
+offline or restricted networks; bundled pricing and explicit
 `models.providers.*.models[].cost` entries still drive local cost estimates.
 
 ## Cache TTL and pruning impact

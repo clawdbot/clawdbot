@@ -291,6 +291,7 @@ export async function writeConfigFile(
     explicitSetValueSource: options.explicitSetPaths
       ? (options.explicitSetValueSource ?? cfg)
       : undefined,
+    allowedAgentRosterRemovals: options.allowedAgentRosterRemovals,
     allowIncludeAncestorExplicitSetPaths: options.allowIncludeAncestorExplicitSetPaths,
     afterWrite: options.afterWrite,
     allowDestructiveWrite: options.allowDestructiveWrite,

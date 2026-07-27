@@ -1427,6 +1427,7 @@ describe("gateway server chat", () => {
               model: {
                 primary: "minimax/MiniMax-M2.7-highspeed",
               },
+              tools: { swarm: { enabled: true } },
             },
           },
         },
@@ -1451,9 +1452,11 @@ describe("gateway server chat", () => {
       const metadata = await rpcReq<{
         commands?: Array<{ name?: string; textAliases?: string[] }>;
         models?: Array<{ id?: string; provider?: string }>;
+        swarmEnabled?: boolean;
       }>(ws, "chat.metadata", { agentId: "work" });
 
       expect(metadata.ok).toBe(true);
+      expect(metadata.payload?.swarmEnabled).toBe(true);
       expect(metadata.payload?.models).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -4441,7 +4444,7 @@ describe("gateway server chat", () => {
             message: {
               role: "user",
               content:
-                'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui"}\n```\n\n[Thu 2026-03-26 16:29 GMT] hi',
+                'Sender: ⟦openclaw:ctx⟧\n```json\n{"label":"openclaw-control-ui"}\n```\n\n[Thu 2026-03-26 16:29 GMT] hi',
             },
           }),
           JSON.stringify({

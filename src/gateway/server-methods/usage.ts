@@ -483,6 +483,11 @@ const resolveDateRange = (
 
   const startDateParts = parseDateParts(params.startDate);
   const endDateParts = parseDateParts(params.endDate);
+  // Explicit date windows are atomic. A single boundary must not silently
+  // fall through to the unrelated default 30-day range.
+  if ((startDateParts === undefined) !== (endDateParts === undefined)) {
+    return { ok: false, error: "startDate and endDate must be provided together" };
+  }
 
   if (startDateParts && endDateParts) {
     const startMs = datePartsToStartMs(startDateParts, interpretation);

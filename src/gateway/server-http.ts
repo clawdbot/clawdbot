@@ -62,6 +62,7 @@ import {
   type GatewayIngressWebSocket,
   type GatewayWsClient,
 } from "./server/ws-types.js";
+import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 import { matchUserProfileAvatarPath } from "./user-profiles-http-path.js";
 
 type PluginHttpRequestHandler = (
@@ -583,8 +584,7 @@ export function createGatewayHttpServer(opts: {
         (await getControlUiModule()).handleControlUiHttpRequest(req, res, {
           basePath: controlUiBasePath,
           config: configSnapshot,
-          terminalEnabled:
-            opts.isTerminalEnabled?.() ?? configSnapshot.gateway?.terminal?.enabled === true,
+          terminalEnabled: opts.isTerminalEnabled?.() ?? isTerminalConfigEnabled(configSnapshot),
           agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
           root: controlUiRoot,
           auth: resolvedAuthValue,
@@ -832,7 +832,7 @@ export function createGatewayHttpServer(opts: {
               basePath: controlUiBasePath,
               config: configSnapshot,
               terminalEnabled:
-                opts.isTerminalEnabled?.() ?? configSnapshot.gateway?.terminal?.enabled === true,
+                opts.isTerminalEnabled?.() ?? isTerminalConfigEnabled(configSnapshot),
               agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
               root: controlUiRoot,
               auth: resolvedAuthValue,

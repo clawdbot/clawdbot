@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
+import { resolveLegacyOAuthPath } from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { resolveOAuthPath } from "../config/paths.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -224,31 +224,7 @@ describe("secrets runtime fast path", () => {
     expect(resolveRuntimeWebToolsMock).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
-    {
-      name: "oauth credentials file",
-      setup: (env: NodeJS.ProcessEnv, _mainAgentDir: string, _agentDir: string) => {
-        const credentialsPath = resolveOAuthPath(env);
-        mkdirSync(path.dirname(credentialsPath), { recursive: true });
-        writeFileSync(
-          credentialsPath,
-          `${JSON.stringify({
-            openai: {
-              access: "access-token",
-              refresh: "refresh-token",
-              expires: Date.now() + 60_000,
-            },
-          })}\n`,
-        );
-      },
-    },
-    {
-      name: "inherited main auth store",
-      setup: (_env: NodeJS.ProcessEnv, mainAgentDir: string, _agentDir: string) => {
-        writeAuthProfileStore(mainAgentDir);
-      },
-    },
-  ])("skips the startup-only fast path when $name exists", async ({ setup }) => {
+  it("skips the startup-only fast path when the inherited main auth store exists", async () => {
     const { prepareSecretsRuntimeFastPathSnapshot } = await import("./runtime-fast-path.js");
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-runtime-fast-path-"));
     const env: NodeJS.ProcessEnv = {
@@ -258,7 +234,7 @@ describe("secrets runtime fast path", () => {
     const mainAgentDir = path.join(root, "agents", "main", "agent");
     const agentDir = path.join(root, "custom-agent");
     mkdirSync(agentDir, { recursive: true });
-    setup(env, mainAgentDir, agentDir);
+    writeAuthProfileStore(mainAgentDir);
 
     try {
       const snapshot = prepareSecretsRuntimeFastPathSnapshot({
@@ -271,6 +247,30 @@ describe("secrets runtime fast path", () => {
       });
 
       expect(snapshot).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("detects retired OAuth before entering the secrets fast path", async () => {
+    const { assertAuthProfileMigrationReady, hasLegacyAuthProfileSourcesForStartup } =
+      await import("../agents/auth-profiles/legacy-source-diagnostic.js");
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-runtime-legacy-preflight-"));
+    const env: NodeJS.ProcessEnv = { HOME: root, OPENCLAW_STATE_DIR: root };
+    const credentialsPath = resolveLegacyOAuthPath(env);
+    mkdirSync(path.dirname(credentialsPath), { recursive: true });
+    writeFileSync(credentialsPath, '{"openai":{"access":"fake"}}\n');
+
+    try {
+      expect(
+        hasLegacyAuthProfileSourcesForStartup({
+          agentDirs: [path.join(root, "custom-agent")],
+          env,
+        }),
+      ).toBe(true);
+      expect(() =>
+        assertAuthProfileMigrationReady(path.join(root, "agents", "main", "agent")),
+      ).toThrow("requires legacy credential migration");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
