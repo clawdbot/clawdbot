@@ -2517,26 +2517,44 @@ describe("WorkboardStore", () => {
     });
   });
 
-  it("diagnoses and clears a legacy aggregate deadlock", async () => {
+  it("preserves legacy hard links and records the omission-compatible intent", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const parent = await store.create({ title: "Aggregate", status: "todo" });
-    const result = await store.decompose(parent.id, {
-      completeParent: false,
-      children: [{ title: "Legacy child" }],
-    });
-    const child = result.children[0]!;
+    const child = await store.create({ title: "Legacy child", status: "todo" });
     await store.linkCards(parent.id, child.id);
+    await store.update(child.id, { createdByCardId: parent.id });
+    const latestParent = await store.get(parent.id);
+    await store.update(parent.id, {
+      metadata: {
+        ...latestParent?.metadata,
+        automation: {
+          ...latestParent?.metadata?.automation,
+          createdCardIds: [child.id],
+        },
+      },
+    });
 
     const before = await store.diagnostics();
     expect(before.diagnostics.flatMap((row) => row.diagnostics)).toEqual(
       expect.arrayContaining([expect.objectContaining({ kind: "aggregate_deadlock" })]),
     );
 
-    await store.repairDecomposition(parent.id, { apply: true });
-    const after = await store.diagnostics();
-    expect(after.diagnostics.flatMap((row) => row.diagnostics)).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ kind: "aggregate_deadlock" })]),
-    );
+    await expect(store.repairDecomposition(parent.id, { apply: true })).resolves.toMatchObject({
+      candidateChildIds: [],
+      repairedChildIds: [],
+      skippedChildIds: [child.id],
+    });
+    await expect(store.get(parent.id)).resolves.toMatchObject({
+      metadata: { automation: { decompositionMode: "hard" } },
+    });
+    await expect(store.get(child.id)).resolves.toMatchObject({
+      metadata: { automation: { decompositionMode: "hard" } },
+    });
+    await expect(store.get(parent.id)).resolves.toMatchObject({
+      metadata: {
+        links: expect.arrayContaining([expect.objectContaining({ type: "child", targetCardId: child.id })]),
+      },
+    });
   });
 
   it("does not drop concurrent updates while refreshing diagnostics", async () => {
@@ -3229,6 +3247,7 @@ describe("WorkboardStore", () => {
 
     const result = await store.decompose(specified.id, {
       summary: "Split into implementation and review.",
+      decompositionMode: "orchestration",
       children: [
         { title: "Implement SQLite persistence", priority: "high" },
         { title: "Review Workboard flows", agentId: "reviewer" },
@@ -3335,6 +3354,7 @@ describe("WorkboardStore", () => {
     const result = await store.decompose(parent.id, {
       completeParent: false,
       summary: "Split and keep parent open.",
+      decompositionMode: "orchestration",
       children: [{ title: "Child" }],
     });
 
@@ -3358,6 +3378,26 @@ describe("WorkboardStore", () => {
         summary: "Children recorded.",
       }),
     ).resolves.toMatchObject({ status: "done" });
+  });
+
+  it("preserves hard dependency semantics when decomposition mode is omitted", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Parent", status: "running" });
+
+    const result = await store.decompose(parent.id, {
+      completeParent: false,
+      children: [{ title: "Child" }],
+    });
+
+    expect(result.children[0]?.metadata?.automation).toMatchObject({
+      createdByCardId: parent.id,
+      decompositionMode: "hard",
+    });
+    expect(result.children[0]?.metadata?.links).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "parent", targetCardId: parent.id }),
+      ]),
+    );
   });
 
   it("retains hard dependency semantics when explicitly requested", async () => {
@@ -3419,6 +3459,7 @@ describe("WorkboardStore", () => {
     const parent = await store.create({ title: "Aggregate", status: "todo" });
     const result = await store.decompose(parent.id, {
       completeParent: false,
+      decompositionMode: "orchestration",
       children: [{ title: "Legacy child" }],
     });
     const child = result.children[0]!;

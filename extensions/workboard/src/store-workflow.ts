@@ -40,7 +40,6 @@ import type {
   WorkboardProofInput,
   WorkboardReassignInput,
   WorkboardReclaimInput,
-  WorkboardRepairDecompositionInput,
   WorkboardSpecifyInput,
 } from "./store-inputs.js";
 import {
@@ -57,7 +56,7 @@ import {
   normalizeStringList,
   removeUndefinedMetadataFields,
 } from "./store-normalizers.js";
-import { WorkboardPromoteStore } from "./store-promote.js";
+import { WorkboardRepairStore } from "./store-repair.js";
 
 function assertClaimIdentity(claim: WorkboardClaim, input: WorkboardHeartbeatInput): void {
   const token = normalizeOptionalString(input.token);
@@ -70,7 +69,7 @@ function assertClaimIdentity(claim: WorkboardClaim, input: WorkboardHeartbeatInp
   }
 }
 
-export class WorkboardWorkflowStore extends WorkboardPromoteStore {
+export class WorkboardWorkflowStore extends WorkboardRepairStore {
   async claim(
     id: string,
     input: WorkboardClaimInput,
@@ -559,7 +558,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         throw new Error("at most 20 children can be created at once.");
       }
       const parentAutomation = parent.metadata?.automation;
-      const decompositionMode = normalizeDecompositionMode(input.decompositionMode);
+      const decompositionMode = normalizeDecompositionMode(input.decompositionMode, "hard");
       const existingCardIds = new Set((await this.list()).map((card) => card.id));
       const children: WorkboardCard[] = [];
       const reusedChildSnapshots = new Map<string, WorkboardCard>();
@@ -654,54 +653,4 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     });
   }
 
-  async repairDecomposition(
-    parentId: string,
-    input: WorkboardRepairDecompositionInput = {},
-    scope?: WorkboardMutationScope,
-  ): Promise<{
-    parentId: string;
-    dryRun: boolean;
-    candidateChildIds: string[];
-    repairedChildIds: string[];
-    skippedChildIds: string[];
-  }> {
-    return await this.enqueueMutation(async () => {
-      const parent = await this.get(parentId);
-      if (!parent) {
-        throw new Error(`card not found: ${parentId}`);
-      }
-      const dryRun = input.apply !== true;
-      const candidateChildIds: string[] = [];
-      const repairedChildIds: string[] = [];
-      const skippedChildIds: string[] = [];
-      if (parent.metadata?.automation?.decompositionMode === "hard") {
-        return { parentId, dryRun, candidateChildIds, repairedChildIds, skippedChildIds };
-      }
-      const createdCardIds = parent.metadata?.automation?.createdCardIds ?? [];
-      for (const childId of createdCardIds) {
-        const child = await this.get(childId);
-        const proven =
-          child?.metadata?.automation?.createdByCardId === parent.id &&
-          child.metadata?.automation?.decompositionMode !== "hard";
-        const hasReciprocalDependency =
-          proven &&
-          (parent.metadata?.links ?? []).some(
-            (link) => link.type === "child" && link.targetCardId === child.id,
-          ) &&
-          (child.metadata?.links ?? []).some(
-            (link) => link.type === "parent" && link.targetCardId === parent.id,
-          );
-        if (!hasReciprocalDependency) {
-          skippedChildIds.push(childId);
-          continue;
-        }
-        candidateChildIds.push(childId);
-        if (!dryRun) {
-          await this.unlinkDependencyDirect(parent.id, childId, Date.now(), scope);
-          repairedChildIds.push(childId);
-        }
-      }
-      return { parentId, dryRun, candidateChildIds, repairedChildIds, skippedChildIds };
-    });
-  }
 }
