@@ -580,6 +580,11 @@ export const en: TranslationMap = {
       "The Gateway changed while this thread was starting. Check recent threads before starting this task again.",
     catalogUnavailable: "This thread target is unavailable.",
   },
+  dashboardsPage: {
+    emptyTitle: "No dashboards yet",
+    emptyDescription: "Open a thread and switch to the Dashboard face to add it here.",
+    loadError: "Could not load dashboards: {error}",
+  },
   sessionsView: {
     deletePreservedWorktrees:
       "{count} thread worktree(s) with uncommitted or unpushed work were kept ({branches}). Manage them under Settings -> Worktrees.",
@@ -1798,6 +1803,7 @@ export const en: TranslationMap = {
     skillWorkshop: "Skill Workshop",
     nodes: "Devices",
     chat: "Chat",
+    dashboards: "Dashboards",
     custodian: "OpenClaw",
     config: "Config",
     profile: "Profile",
@@ -1835,6 +1841,7 @@ export const en: TranslationMap = {
     skillWorkshop: "Review, refine, and apply proposals before they become live skills.",
     nodes: "Paired devices, pairing approvals, and exec bindings.",
     chat: "Gateway chat for quick interventions.",
+    dashboards: "Threads that open on their dashboard face.",
     custodian: "System setup and care.",
     config: "Model defaults, language, and gateway host.",
     profile: "Your agent's stats, streaks, and life in the reef.",

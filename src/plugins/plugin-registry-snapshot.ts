@@ -2,7 +2,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
@@ -38,8 +37,6 @@ import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { getPackageManifestMetadata, type PackageManifest } from "./manifest.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
-import { fileFingerprint } from "./plugin-snapshot-fingerprint.js";
-import { resolvePluginCacheInputs } from "./roots.js";
 
 export type PluginRegistrySnapshot = InstalledPluginIndex;
 export type PluginRegistryRecord = InstalledPluginIndexRecord;
@@ -131,73 +128,17 @@ function resolvePluginRegistrySnapshotMemoKey(
   if (!canMemoizePluginRegistrySnapshot(params)) {
     return undefined;
   }
-  const persistedReadsEnabled = params.preferPersisted !== false;
-  const persistedRegistryFingerprint = persistedReadsEnabled
-    ? hashJson(
-        readPersistedInstalledPluginIndexSync({
-          env,
-          ...(params.stateDir ? { stateDir: params.stateDir } : {}),
-        }),
-      )
-    : "disabled";
   return hashJson({
     config: params.config ?? null,
     cwd: process.cwd(),
     env: pickRegistrySnapshotMemoEnv(env),
     hostContractVersion: resolveCompatibilityHostVersion(env),
     preferPersisted: params.preferPersisted ?? null,
-    // Plugin manifests are process-stable inside the Gateway, while the persisted
-    // registry envelope can change through explicit refresh/install flows.
-    registry: persistedRegistryFingerprint,
-    pluginRoots: fingerprintPluginSourceRoots(params, env),
+    // Install, reload, and persisted-index writes clear this memo explicitly.
+    // Polling roots or SQLite here would put discovery back on every hot lookup.
     stateDir: params.stateDir ? resolveUserPath(params.stateDir, env) : null,
     workspaceDir: params.workspaceDir ? resolveUserPath(params.workspaceDir, env) : null,
   });
-}
-
-function fingerprintPluginSourceRoots(
-  params: LoadPluginRegistryParams,
-  env: NodeJS.ProcessEnv,
-): unknown {
-  const workspaceDir = params.workspaceDir ? resolveUserPath(params.workspaceDir, env) : undefined;
-  const cacheInputs = resolvePluginCacheInputs({
-    workspaceDir,
-    loadPaths: normalizePluginsConfig(params.config?.plugins).loadPaths,
-    env,
-  });
-  return {
-    global: sourceRootFingerprint(cacheInputs.roots.global),
-    loadPaths: cacheInputs.loadPaths.map((entry) => sourceRootFingerprint(entry)),
-    stock: cacheInputs.roots.stock ? sourceRootFingerprint(cacheInputs.roots.stock) : null,
-    workspace: cacheInputs.roots.workspace
-      ? sourceRootFingerprint(cacheInputs.roots.workspace)
-      : null,
-  };
-}
-
-function sourceRootFingerprint(rootPath: string): unknown {
-  return {
-    root: fileFingerprint(rootPath),
-    // Directory mtimes can be too coarse on some Linux filesystems. Include only
-    // immediate child names/kinds so same-tick plugin installs invalidate the
-    // process memo without rereading manifests on hot registry lookups.
-    children: directoryChildFingerprint(rootPath),
-  };
-}
-
-function directoryChildFingerprint(directoryPath: string): unknown {
-  try {
-    return fs
-      .readdirSync(directoryPath, { withFileTypes: true })
-      .map((entry) => [entry.name, entry.isDirectory() ? "dir" : entry.isFile() ? "file" : "other"])
-      .toSorted(([left], [right]) =>
-        expectDefined(left, "plugin registry snapshot left").localeCompare(
-          expectDefined(right, "plugin registry snapshot right"),
-        ),
-      );
-  } catch {
-    return "unreadable";
-  }
 }
 
 function findPluginRegistrySnapshotMemo(

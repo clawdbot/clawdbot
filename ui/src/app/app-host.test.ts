@@ -469,6 +469,8 @@ describe("OpenClaw shell server preferences", () => {
       gateway: { connection: { gatewayUrl: "ws://sidebar.test" } },
       navigation: { update: updateNavigation },
       theme: { refresh: refreshTheme },
+      // reconcileServerUiPrefs only accepts the current context's capability.
+      runtimeConfig,
     } as unknown as ApplicationContext;
     const shell = document.createElement(
       "openclaw-app-shell",

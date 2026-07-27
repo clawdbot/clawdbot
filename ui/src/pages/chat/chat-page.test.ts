@@ -131,13 +131,14 @@ function getDropIndicator(page: ChatPage) {
 function setNavigationContext(page: ChatPage) {
   const navigate = vi.fn();
   const replace = vi.fn();
+  const patch = vi.fn(async () => null);
   const agentSelectionState = { selectedId: "main" };
   const setAgent = vi.fn((agentId: string) => {
     agentSelectionState.selectedId = agentId;
   });
   const context = {
     basePath: "",
-    sessions: { state: { result: null }, subscribe: () => () => undefined },
+    sessions: { state: { result: null }, subscribe: () => () => undefined, patch },
     agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
     gateway: { snapshot: { hello: null } },
     navigate,
@@ -145,7 +146,7 @@ function setNavigationContext(page: ChatPage) {
     agentSelection: { state: agentSelectionState, set: setAgent },
   } as unknown as ApplicationContext;
   (page as unknown as { context: ApplicationContext }).context = context;
-  return { context, navigate, replace, setAgent };
+  return { context, navigate, replace, setAgent, patch };
 }
 
 function stubMatchMedia(matches: boolean) {
@@ -482,6 +483,11 @@ describe("chat page split layout host", () => {
     expect(navigation.navigate).toHaveBeenCalledWith("dashboard", {
       pathname: "/dashboard/main/1234567890",
     });
+    expect(navigation.patch).toHaveBeenCalledWith(
+      WORK_SESSION_KEY,
+      { boardFace: "dashboard" },
+      { agentId: "main" },
+    );
   });
 
   it("passes an empty session key while route data is still unresolved", async () => {

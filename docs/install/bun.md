@@ -7,24 +7,20 @@ title: "Bun"
 ---
 
 <Warning>
-Bun cannot run the OpenClaw CLI or Gateway because it does not provide the required `node:sqlite` API. Install a supported Node version for all OpenClaw runtime commands.
+Bun releases up to 1.3.x cannot run the OpenClaw CLI or Gateway because they do not provide the required `node:sqlite` API. OpenClaw feature-probes the runtime: Bun builds that ship `node:sqlite` (1.4.0 canary and later) can run the CLI and Gateway experimentally, while older Bun versions are rejected at startup. Node remains the supported and recommended runtime for all OpenClaw runtime commands.
 </Warning>
 
-Bun remains usable as an optional dependency installer and package-script runner. The default package manager remains `pnpm`, which is fully supported and used by docs tooling. Bun cannot use `pnpm-lock.yaml` and ignores it.
+Bun remains usable as an optional package-script runner. The default package manager remains `pnpm`, which is fully supported and used by docs tooling. Bun cannot use `pnpm-lock.yaml` and ignores it, and current Bun versions fail to resolve this repo's `pnpm-workspace.yaml` layout during `bun install`, so dependency installs should use `pnpm install`.
 
 ## Install
 
 <Steps>
   <Step title="Install dependencies">
     ```sh
-    bun install
+    pnpm install
     ```
 
-    `bun.lock` / `bun.lockb` are gitignored, so there is no repo churn. To skip lockfile writes entirely:
-
-    ```sh
-    bun install --no-save
-    ```
+    Current Bun versions (including 1.4 canary) cannot resolve this repo's pnpm workspace layout, so `bun install` fails during workspace resolution. Use `pnpm install`.
 
   </Step>
   <Step title="Build and test">
@@ -33,7 +29,7 @@ Bun remains usable as an optional dependency installer and package-script runner
     bun run vitest run
     ```
 
-    Commands that launch OpenClaw itself must still run through Node.
+    Commands that launch OpenClaw itself should still run through Node; Bun runtimes that provide `node:sqlite` (1.4.0 canary and later) can run them experimentally.
 
   </Step>
 </Steps>
