@@ -265,6 +265,8 @@ export class NativeHookRelayAdmissionController {
       }
       shared.waiters -= 1;
       if (shared.waiters === 0 && this.inFlight.get(key) === shared) {
+        // Make the key reusable before abort rejection can reach the final waiter.
+        this.inFlight.delete(key);
         shared.abortController.abort(new NativeHookRelayAdmissionCancelledError());
       }
     }

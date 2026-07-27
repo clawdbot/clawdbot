@@ -234,4 +234,45 @@ describe("NativeHookRelayAdmissionController", () => {
       cancelled: 1,
     });
   });
+
+  it("allows an immediate retry after the final connected waiter leaves", async () => {
+    const controller = new NativeHookRelayAdmissionController({
+      maxActive: 1,
+      maxQueued: 0,
+    });
+    const started = deferred();
+    const abortController = new AbortController();
+    const firstOperation = vi.fn(async (signal?: AbortSignal) => {
+      started.resolve();
+      await new Promise<void>((_resolve, reject) => {
+        signal?.addEventListener(
+          "abort",
+          () => reject(new NativeHookRelayAdmissionCancelledError()),
+          { once: true },
+        );
+      });
+    });
+    const first = controller.run(firstOperation, {
+      key: "permission:call-1",
+      signal: abortController.signal,
+    });
+
+    await started.promise;
+    abortController.abort();
+    await expect(first).rejects.toBeInstanceOf(NativeHookRelayAdmissionCancelledError);
+
+    const retryOperation = vi.fn(async () => "allowed");
+    await expect(controller.run(retryOperation, { key: "permission:call-1" })).resolves.toBe(
+      "allowed",
+    );
+    expect(firstOperation).toHaveBeenCalledOnce();
+    expect(retryOperation).toHaveBeenCalledOnce();
+    expect(controller.snapshot()).toMatchObject({
+      active: 0,
+      accepted: 2,
+      completed: 2,
+      cancelled: 1,
+      coalesced: 0,
+    });
+  });
 });
