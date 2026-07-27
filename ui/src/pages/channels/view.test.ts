@@ -151,7 +151,10 @@ const CHANNEL_TIER_HINTS = {
   "channels.whatsapp.retry.attempts": { advanced: true },
 };
 
-function renderWhatsAppConfigForm(showAdvancedSettings: boolean) {
+function renderWhatsAppConfigForm(
+  showAdvancedSettings: boolean,
+  hints: Record<string, { advanced: boolean }> = CHANNEL_TIER_HINTS,
+) {
   const whatsapp = createWhatsAppStatus();
   const props = createProps({
     ts: Date.now(),
@@ -163,7 +166,7 @@ function renderWhatsAppConfigForm(showAdvancedSettings: boolean) {
   });
   const onShowAdvancedSettings = vi.fn();
   props.configSchema = CHANNEL_TIER_SCHEMA;
-  props.configUiHints = CHANNEL_TIER_HINTS;
+  props.configUiHints = hints;
   props.configForm = { channels: { whatsapp: { enabled: true, timeoutMs: 5000 } } };
   props.showAdvancedSettings = showAdvancedSettings;
   props.onShowAdvancedSettings = onShowAdvancedSettings;
@@ -193,6 +196,18 @@ describe("channel config advanced tier", () => {
     expect(container.textContent).toContain("Enabled");
     expect(container.textContent).toContain("Timeout Ms");
     expect(container.querySelector(".config-advanced-ghost")).toBeNull();
+
+    const collapse = container.querySelector<HTMLButtonElement>(".config-advanced-divider__toggle");
+    expect(collapse).toBeInstanceOf(HTMLButtonElement);
+    collapse!.click();
+    expect(onShowAdvancedSettings).toHaveBeenCalledWith(false);
+  });
+
+  it("keeps the collapse control for channels whose settings are all advanced", () => {
+    const { container, onShowAdvancedSettings } = renderWhatsAppConfigForm(true, {
+      ...CHANNEL_TIER_HINTS,
+      "channels.whatsapp.enabled": { advanced: true },
+    });
 
     const collapse = container.querySelector<HTMLButtonElement>(".config-advanced-divider__toggle");
     expect(collapse).toBeInstanceOf(HTMLButtonElement);

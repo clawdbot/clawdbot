@@ -68,6 +68,9 @@ export function renderConfigTierGroups(params: {
     path: params.path.map(String),
     hints: params.hints,
   });
+  // An advanced-only schema needs no separator, but a surface whose only
+  // collapse control lives on the divider would otherwise strand the tier open.
+  const showDivider = Boolean(split.common) || Boolean(params.onHideAdvanced);
   return html`
     ${split.common
       ? html`<div class="settings-group">${params.renderTier(split.common)}</div>`
@@ -75,7 +78,7 @@ export function renderConfigTierGroups(params: {
     ${split.advanced && split.advancedLeafCount > 0
       ? params.revealAdvanced
         ? html`
-            ${split.common ? renderAdvancedDivider(params.onHideAdvanced) : nothing}
+            ${showDivider ? renderAdvancedDivider(params.onHideAdvanced) : nothing}
             <div class="settings-group">${params.renderTier(split.advanced)}</div>
           `
         : html`
