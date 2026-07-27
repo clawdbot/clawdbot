@@ -1451,6 +1451,50 @@ describe("microsoft-foundry plugin", () => {
     });
   });
 
+  it.each([
+    ["gpt-5.6-sol", 1_050_000],
+    ["gpt-5.6-terra", 1_050_000],
+    ["gpt-5.6-luna", 1_050_000],
+    ["gpt-5.5", 1_050_000],
+    ["gpt-5.4", 1_050_000],
+    ["gpt-5.4-pro", 1_050_000],
+    ["gpt-5.4-mini", 400_000],
+    ["gpt-5.4-nano", 400_000],
+    ["gpt-5.3-codex", 400_000],
+    ["gpt-5.2", 400_000],
+    ["gpt-5.2-codex", 400_000],
+    ["gpt-5.1", 400_000],
+    ["gpt-5.1-codex", 400_000],
+    ["gpt-5.1-codex-mini", 400_000],
+    ["gpt-5.1-codex-max", 400_000],
+    ["gpt-5", 400_000],
+    ["gpt-5-mini", 400_000],
+    ["gpt-5-nano", 400_000],
+    ["gpt-5-codex", 400_000],
+  ] as const)(
+    "uses documented Foundry GPT token limits for deployment aliases backed by %s",
+    (modelNameHint, contextWindow) => {
+      const result = buildFoundryAuthResult({
+        profileId: "microsoft-foundry:entra",
+        apiKey: "__entra_id_dynamic__",
+        endpoint: "https://example.services.ai.azure.com",
+        modelId: `prod-${modelNameHint}`,
+        modelNameHint,
+        api: "openai-responses",
+        authMethod: "entra-id",
+      });
+
+      expect(result.configPatch?.models?.providers?.["microsoft-foundry"]?.models[0]).toMatchObject(
+        {
+          id: `prod-${modelNameHint}`,
+          name: modelNameHint,
+          contextWindow,
+          maxTokens: 128_000,
+        },
+      );
+    },
+  );
+
   it("keeps older Foundry Claude deployments out of Fable-class thinking limits", () => {
     const result = buildFoundryAuthResult({
       profileId: "microsoft-foundry:entra",
