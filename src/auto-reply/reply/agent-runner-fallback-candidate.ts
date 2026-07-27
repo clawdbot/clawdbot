@@ -61,6 +61,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         cfg: selection.cfg,
         provider: selection.provider,
         model: selection.model,
+        requestedRouteResolution: selection.requestedRouteResolution,
         agentDir: selection.agentDir,
         fallbacksOverride: selection.fallbacksOverride,
       },

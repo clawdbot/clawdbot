@@ -1083,6 +1083,7 @@ export function createFollowupRunner(params: {
             providerOverride: undefined,
             modelOverride: undefined,
             modelOverrideSource: undefined,
+            modelOverrideRouteResolution: undefined,
             modelOverrideFallbackOriginProvider: undefined,
             modelOverrideFallbackOriginModel: undefined,
             ...(shouldClearAuthProfile
@@ -1124,6 +1125,7 @@ export function createFollowupRunner(params: {
             cfg: selection.cfg,
             provider: selection.provider,
             model: selection.model,
+            requestedRouteResolution: selection.requestedRouteResolution,
             agentDir: selection.agentDir,
             fallbacksOverride: selection.fallbacksOverride,
           },

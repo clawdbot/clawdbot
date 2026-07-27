@@ -87,6 +87,19 @@ describe.each([
       revision: 1,
       sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
     });
+    expect(store.getSnapshotWithHtmlDocuments("agent:main:board")).toMatchObject({
+      snapshot: { revision: 1 },
+      htmlDocuments: new Map([
+        [
+          "weather",
+          expect.objectContaining({
+            html: "<p>one</p>",
+            revision: 1,
+            sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+          }),
+        ],
+      ]),
+    });
 
     // Legacy clients omit heightMode on resize; explicit user sizing must pin.
     const resized = store.applyOps("agent:main:board", [
