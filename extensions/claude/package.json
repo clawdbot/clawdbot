@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "@zeroaltitude/openclaw-claude-bridge": "0.7.0",
+    "@zeroaltitude/openclaw-claude-bridge": "0.7.1",
     "zod": "4.4.3"
   },
   "devDependencies": {
