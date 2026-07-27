@@ -11,6 +11,14 @@ type DetailsNode =
 
 const DETAILS_TAG_RE = /<\s*(\/?)\s*(details|summary)(?=\s|>)[^>]*>/gi;
 
+function isEscapedMarkdownCharacter(text: string, index: number): boolean {
+  let backslashes = 0;
+  for (let cursor = index - 1; cursor >= 0 && text.charAt(cursor) === "\\"; cursor -= 1) {
+    backslashes += 1;
+  }
+  return backslashes % 2 === 1;
+}
+
 function appendNode(target: DetailsNode[], node: DetailsNode): void {
   const previous = target.at(-1);
   if (typeof previous === "string" && typeof node === "string") {
@@ -156,7 +164,7 @@ export function flattenMarkdownDetails(text: string): string {
   let cursor = 0;
   for (const match of text.matchAll(DETAILS_TAG_RE)) {
     const start = match.index ?? 0;
-    if (isInsideCode(start, codeRegions)) {
+    if (isEscapedMarkdownCharacter(text, start) || isInsideCode(start, codeRegions)) {
       continue;
     }
 

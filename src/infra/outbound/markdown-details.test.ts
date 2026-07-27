@@ -112,4 +112,9 @@ describe("flattenMarkdownDetails", () => {
     const markdown = "<details-widget>body</details-widget>";
     expect(flattenMarkdownDetails(markdown)).toBe(markdown);
   });
+
+  it("leaves backslash-escaped disclosure tags unchanged", () => {
+    const markdown = "\\<details>literal\\</details>";
+    expect(flattenMarkdownDetails(markdown)).toBe(markdown);
+  });
 });
