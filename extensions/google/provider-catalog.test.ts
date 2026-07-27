@@ -122,6 +122,7 @@ describe("google provider catalog", () => {
         contextWindow: 1_048_576,
         maxTokens: 65_536,
         input: ["text", "image"],
+        compat: { codeMode: "preferred" },
       }),
       expect.objectContaining({
         id: "gemini-3.6-flash",
@@ -130,6 +131,7 @@ describe("google provider catalog", () => {
         contextWindow: 1_048_576,
         maxTokens: 65_536,
         input: ["text", "image"],
+        compat: { codeMode: "preferred" },
       }),
       expect.objectContaining({
         id: "gemma-3-1b-it",
@@ -142,6 +144,11 @@ describe("google provider catalog", () => {
         input: ["text", "image"],
       }),
     ]);
+    expect(
+      provider.models
+        .filter((model) => model.id.startsWith("gemma-"))
+        .every((model) => model.compat === undefined),
+    ).toBe(true);
     const request = vi.mocked(fetchGuard).mock.calls[0]?.[0];
     expect(request?.url).toBe(
       "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000",

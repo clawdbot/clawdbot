@@ -4524,6 +4524,8 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       ".github/release/clawhub-cli/package-lock.json",
       ".gitignore",
       "apps/android/.gitignore",
+      "docs/reference/templates/IDENTITY.md",
+      "docs/reference/templates/USER.md",
       "extensions/qa-lab/src/mantis/cli.ts",
     ]) {
       const result = spawnSync("git", ["check-ignore", "--no-index", path], {
