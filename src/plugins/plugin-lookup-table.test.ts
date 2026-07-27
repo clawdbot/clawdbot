@@ -5,9 +5,19 @@ import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry.js";
 
-const listPotentialConfiguredChannelIds = vi.hoisted(() => vi.fn());
-const listExplicitlyDisabledChannelIdsForConfig = vi.hoisted(() => vi.fn());
-const loadPluginManifestRegistryForInstalledIndex = vi.hoisted(() => vi.fn());
+const {
+  listPotentialConfiguredChannelIds,
+  listExplicitlyDisabledChannelIdsForConfig,
+  loadPluginManifestRegistryForInstalledIndex,
+} = vi.hoisted(() => {
+  // Shared plugin workers must load the lookup graph under this file's manifest mocks.
+  vi.resetModules();
+  return {
+    listPotentialConfiguredChannelIds: vi.fn(),
+    listExplicitlyDisabledChannelIdsForConfig: vi.fn(),
+    loadPluginManifestRegistryForInstalledIndex: vi.fn(),
+  };
+});
 
 vi.mock("../channels/config-presence.js", () => ({
   hasMeaningfulChannelConfig: (value: unknown) =>

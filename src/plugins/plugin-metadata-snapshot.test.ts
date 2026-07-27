@@ -18,6 +18,8 @@ const {
   loadPluginManifestRegistry,
   loadPluginManifestRegistryForInstalledIndex,
 } = vi.hoisted(() => {
+  // Shared plugin workers must load this graph after this file's mocks are installed.
+  vi.resetModules();
   return {
     loadPluginRegistrySnapshotWithMetadata: vi.fn(),
     loadPluginManifestRegistry: vi.fn(),
