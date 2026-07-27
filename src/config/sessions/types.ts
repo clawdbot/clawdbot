@@ -447,6 +447,8 @@ export type SessionEntry = SessionRestartRecoveryState &
      * Resets only preserve user-driven overrides.
      */
     modelOverrideSource?: "auto" | "user";
+    /** Present only when providerOverride/modelOverride are a canonical route pair. */
+    modelOverrideRouteResolution?: "resolved";
     /** Selected model that produced the current auto fallback override. */
     modelOverrideFallbackOriginProvider?: string;
     modelOverrideFallbackOriginModel?: string;

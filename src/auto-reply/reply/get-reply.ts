@@ -846,6 +846,7 @@ export async function getReplyFromConfig(
     resolvedBlockStreamingBreak,
     provider: resolvedProvider,
     model: resolvedModel,
+    requestedRouteResolution,
     modelState,
     contextTokens,
     inlineStatusRequested,
@@ -1073,6 +1074,9 @@ export async function getReplyFromConfig(
       modelState: runModelState,
       provider: runProvider,
       model: runModel,
+      requestedRouteResolution: runAutoFallbackPrimaryProbe
+        ? runModelState.requestedRouteResolution
+        : requestedRouteResolution,
       perMessageQueueMode,
       perMessageQueueOptions,
       typing,

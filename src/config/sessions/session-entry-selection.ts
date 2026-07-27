@@ -23,6 +23,9 @@ export function inheritSessionSelection(
     ...(parentEntry.modelOverrideSource
       ? { modelOverrideSource: parentEntry.modelOverrideSource }
       : {}),
+    ...(parentEntry.modelOverrideRouteResolution
+      ? { modelOverrideRouteResolution: parentEntry.modelOverrideRouteResolution }
+      : {}),
     ...(parentEntry.agentRuntimeOverride
       ? { agentRuntimeOverride: parentEntry.agentRuntimeOverride }
       : {}),

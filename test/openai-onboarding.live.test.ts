@@ -10,6 +10,10 @@ import { extractAgentReplyTexts } from "../scripts/e2e/lib/agent-turn-output.mjs
 import { terminateManagedChild } from "../scripts/lib/managed-child-process.mjs";
 import { readPersistedAuthProfileStoreRaw } from "../src/agents/auth-profiles/sqlite.js";
 import { isLiveTestEnabled } from "../src/agents/live-test-helpers.js";
+import {
+  loadTranscriptEvents,
+  resolveTranscriptSessionKeyBySessionId,
+} from "../src/config/sessions/session-accessor.js";
 import { createOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
 import { getDeterministicFreePortBlock } from "../src/test-utils/ports.js";
 
@@ -87,6 +91,39 @@ function summarizeAgentOutput(stdout: string): string {
   } catch {
     return JSON.stringify({ outputBytes: Buffer.byteLength(stdout), validJson: false });
   }
+}
+
+function hasPersistedTranscriptMessage(
+  events: unknown[],
+  role: "user" | "assistant",
+  expectedText: string,
+): boolean {
+  return events.some((event) => {
+    if (typeof event !== "object" || event === null) {
+      return false;
+    }
+    const record = event as { type?: unknown; message?: unknown };
+    if (record.type !== "message" || typeof record.message !== "object" || !record.message) {
+      return false;
+    }
+    const message = record.message as { role?: unknown; content?: unknown };
+    if (message.role !== role) {
+      return false;
+    }
+    if (typeof message.content === "string") {
+      return message.content.includes(expectedText);
+    }
+    return (
+      Array.isArray(message.content) &&
+      message.content.some(
+        (part: unknown) =>
+          typeof part === "object" &&
+          part !== null &&
+          typeof (part as { text?: unknown }).text === "string" &&
+          (part as { text: string }).text.includes(expectedText),
+      )
+    );
+  });
 }
 
 async function waitForIsolatedGatewayReady(gateway: ChildProcess, port: number): Promise<void> {
@@ -265,15 +302,17 @@ describeLive("fresh OpenAI onboarding live", () => {
       await waitForIsolatedGatewayReady(gateway, gatewayPort);
       await runOpenClaw(["health", "--json"], state.env);
 
+      const gatewaySessionId = "openai-onboarding-live-gateway";
+      const gatewayPrompt = `Return exactly ${replyMarker} and no other text.`;
       const gatewayStdout = await runOpenClaw(
         [
           "agent",
           "--agent",
           "main",
           "--session-id",
-          "openai-onboarding-live-gateway",
+          gatewaySessionId,
           "--message",
-          `Return exactly ${replyMarker} and no other text.`,
+          gatewayPrompt,
           "--thinking",
           "off",
           "--json",
@@ -284,6 +323,19 @@ describeLive("fresh OpenAI onboarding live", () => {
         extractAgentReplyTexts(gatewayStdout).some((reply) => reply.includes(replyMarker)),
         `gateway-backed OpenAI agent turn returned ${summarizeAgentOutput(gatewayStdout)}`,
       ).toBe(true);
+      const transcriptScope = {
+        agentId: "main",
+        env: state.env,
+        sessionId: gatewaySessionId,
+      };
+      const persistedSessionKey = resolveTranscriptSessionKeyBySessionId(transcriptScope);
+      expect(typeof persistedSessionKey === "string" && persistedSessionKey.length > 0).toBe(true);
+      const persistedEvents = await loadTranscriptEvents({
+        ...transcriptScope,
+        ...(persistedSessionKey ? { sessionKey: persistedSessionKey } : {}),
+      });
+      expect(hasPersistedTranscriptMessage(persistedEvents, "user", gatewayPrompt)).toBe(true);
+      expect(hasPersistedTranscriptMessage(persistedEvents, "assistant", replyMarker)).toBe(true);
       assertOpenAiEnvProfile(state.agentDir());
     } finally {
       await stopIsolatedGateway(gateway);
