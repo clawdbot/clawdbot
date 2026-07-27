@@ -178,7 +178,7 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
           },
         },
         env: {},
-        resolveProviderApiKey: () => resolvedAuth,
+        resolveProviderApiKey: () => resolvedAuth ?? {},
       },
       pluginConfig: {},
       buildProvider: async () => {
