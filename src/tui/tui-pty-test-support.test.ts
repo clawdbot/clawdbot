@@ -72,6 +72,33 @@ describe("TUI PTY test support", () => {
   });
 
   it.each([
+    { chunkSize: "1", chunks: ["A", "👋", "B"] },
+    { chunkSize: "2", chunks: ["A👋", "B"] },
+  ])(
+    "preserves Unicode characters with fixture-specific $chunkSize-character input chunks",
+    async ({ chunkSize, chunks }) => {
+      const write = vi.fn();
+      const pty = createMockPty({ write });
+      nodePtyMocks.spawn.mockReturnValue(pty);
+
+      const run = startPty("node", [], {
+        cwd: process.cwd(),
+        env: {
+          OPENCLAW_TUI_PTY_TYPE_CHUNK_SIZE: chunkSize,
+          OPENCLAW_TUI_PTY_TYPE_DELAY_MS: "1",
+        },
+        exitTimeoutMs: 1_000,
+        outputTimeoutMs: 1_000,
+      });
+
+      await run.write("A👋B");
+
+      expect(write).toHaveBeenCalledTimes(chunks.length);
+      expect(write.mock.calls.map(([chunk]) => chunk)).toEqual(chunks);
+    },
+  );
+
+  it.each([
     {
       label: "split ANSI control sequences",
       chunks: ["\u001b[38;2;155;163;178minto live     \r\n\u001b[", "0mworkspace"],

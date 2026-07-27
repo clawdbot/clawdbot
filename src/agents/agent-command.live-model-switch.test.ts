@@ -110,7 +110,7 @@ const state = vi.hoisted(() => ({
   trajectoryRecorderParamsMock: vi.fn(),
 }));
 
-vi.mock("./model-fallback.js", () => ({
+vi.mock("./model-fallback-runner.js", () => ({
   runWithModelFallback: (params: unknown) => state.runWithModelFallbackMock(params),
 }));
 

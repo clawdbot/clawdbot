@@ -32,7 +32,7 @@ function inheritedUpdateTimeout(
   command?: Command,
 ): string | undefined {
   const timeout = opts.timeout as string | undefined;
-  if (timeout) {
+  if (timeout !== undefined) {
     return timeout;
   }
   return inheritOptionFromParent<string>(command, "timeout");

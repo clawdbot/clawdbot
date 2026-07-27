@@ -89,7 +89,11 @@ export type BeforeToolCallPolicyDiagnosticState = {
   }>;
 };
 
-export type HookBlockedReason = "plugin-before-tool-call" | "plugin-approval" | "tool-loop";
+export type HookBlockedReason =
+  | "client-voice-confirmation"
+  | "plugin-before-tool-call"
+  | "plugin-approval"
+  | "tool-loop";
 
 type HookBlockedOutcome = {
   blocked: true;
