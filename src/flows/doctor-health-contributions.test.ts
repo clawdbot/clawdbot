@@ -111,7 +111,9 @@ const mocks = vi.hoisted(() => ({
   collectHeartbeatCadenceMigrationFindings: vi.fn(async () => [] as unknown[]),
   maybeMigrateHeartbeatCadenceToCron: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
   collectHeartbeatScratchMigrationFindings: vi.fn(async () => [] as unknown[]),
+  collectToolsMdMigrationFindings: vi.fn(async () => [] as unknown[]),
   maybeMigrateHeartbeatFilesToScratch: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
+  maybeMigrateToolsMd: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
   collectHeartbeatTaskMigrationFindings: vi.fn(async () => [] as unknown[]),
   maybeMigrateHeartbeatTasksToCron: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
   collectWhatsappResponsivenessHealthFindings: vi.fn((): readonly HealthFinding[] => []),
@@ -420,6 +422,11 @@ vi.mock("../commands/doctor-heartbeat-scratch-migration.js", () => ({
   maybeMigrateHeartbeatFilesToScratch: mocks.maybeMigrateHeartbeatFilesToScratch,
 }));
 
+vi.mock("../commands/doctor-tools-md-migration.js", () => ({
+  collectToolsMdMigrationFindings: mocks.collectToolsMdMigrationFindings,
+  maybeMigrateToolsMd: mocks.maybeMigrateToolsMd,
+}));
+
 vi.mock("../commands/doctor-heartbeat-task-migration.js", () => ({
   collectHeartbeatTaskMigrationFindings: mocks.collectHeartbeatTaskMigrationFindings,
   maybeMigrateHeartbeatTasksToCron: mocks.maybeMigrateHeartbeatTasksToCron,
@@ -700,6 +707,10 @@ describe("doctor health contributions", () => {
     mocks.collectHeartbeatScratchMigrationFindings.mockResolvedValue([]);
     mocks.maybeMigrateHeartbeatFilesToScratch.mockReset();
     mocks.maybeMigrateHeartbeatFilesToScratch.mockResolvedValue({ changes: [], warnings: [] });
+    mocks.collectToolsMdMigrationFindings.mockReset();
+    mocks.collectToolsMdMigrationFindings.mockResolvedValue([]);
+    mocks.maybeMigrateToolsMd.mockReset();
+    mocks.maybeMigrateToolsMd.mockResolvedValue({ changes: [], warnings: [] });
     mocks.collectHeartbeatTaskMigrationFindings.mockReset();
     mocks.collectHeartbeatTaskMigrationFindings.mockResolvedValue([]);
     mocks.maybeMigrateHeartbeatTasksToCron.mockReset();

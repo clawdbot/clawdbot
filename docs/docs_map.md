@@ -8787,7 +8787,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Soul (required)
   - H2: Shared spaces (recommended)
   - H2: Memory system (recommended)
-  - H2: Tools and skills
+  - H2: Tools
+  - H3: Local notes
   - H2: Backup tip (recommended)
   - H2: What OpenClaw does
   - H2: Core skills (enable in Settings → Skills)
@@ -9063,6 +9064,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Existing solutions preflight
   - H2: Daily memory (recommended)
   - H2: Heartbeats (optional)
+  - H2: Tools
   - H2: Customize
   - H2: C-3PO Origin Memory
   - H3: Birth Day: 2026-01-09
@@ -9137,24 +9139,11 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Continuity
   - H2: Related
 
-## reference/templates/TOOLS.dev.md
-
-- Route: /reference/templates/TOOLS.dev
-- Headings:
-  - H1: TOOLS.md - User Tool Notes (editable)
-  - H2: Examples
-  - H3: imsg
-  - H3: sag
-  - H2: Related
-
 ## reference/templates/TOOLS.md
 
 - Route: /reference/templates/TOOLS
 - Headings:
-  - H1: TOOLS.md - Local Notes
-  - H2: Examples
-  - H2: Why Separate?
-  - H2: Related
+  - H1: TOOLS.md is retired
 
 ## reference/templates/USER.dev.md
 
