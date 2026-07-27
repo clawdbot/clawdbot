@@ -7,6 +7,10 @@ import type { ReplyToMode } from "../../config/types.js";
 import type { PluginHookReplyPayloadSendingContext } from "../../plugins/hook-types.js";
 import {
   claimDeliveryQueueEntryPlatformSend,
+  promoteDeliveryQueueEntryPlatformSend,
+  transitionOwnedDeliveryQueueEntry,
+} from "../delivery-queue-sqlite-claim.js";
+import {
   completeDeliveryQueueEntry,
   commitStagedDeliveryQueueEntry,
   commitStagedDeliveryQueueEntryOnce,
@@ -15,9 +19,7 @@ import {
   loadDeliveryQueueEntries,
   loadDeliveryQueueEntry,
   moveDeliveryQueueEntryToFailed,
-  promoteDeliveryQueueEntryPlatformSend,
   reserveDeliveryQueueEntryAttempt,
-  transitionOwnedDeliveryQueueEntry,
   updateDeliveryQueueEntry,
   upsertDeliveryQueueEntry,
   type DeliveryQueueRowMetadata,

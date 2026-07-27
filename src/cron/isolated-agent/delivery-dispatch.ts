@@ -1,10 +1,7 @@
 /** Dispatches isolated cron output to direct delivery, mirrors, and follow-up queues. */
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import { resolveStorePath } from "../../config/sessions/inbound.runtime.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { TtsAutoMode } from "../../config/types.tts.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   NormalizedOutboundPayload,
@@ -14,12 +11,10 @@ import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForMirror,
 } from "../../infra/outbound/payloads.js";
-import type { SourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { isCronSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import type { CronJob, CronRunTelemetry } from "../types.js";
 import {
   appendAdmittedDirectCronDeliveryTranscriptMirror,
   buildDirectCronTranscriptMirrorPayloads,
@@ -56,7 +51,11 @@ import {
   retryTransientDirectCronDelivery,
   waitForCompletedDirectCronDelivery,
 } from "./delivery-dispatch-policy.js";
-import type { DeliveryTargetResolution } from "./delivery-target.js";
+import type {
+  DispatchCronDeliveryParams,
+  DispatchCronDeliveryState,
+  SuccessfulCronDeliveryTarget,
+} from "./delivery-dispatch-types.js";
 import { pickSummaryFromOutput } from "./helpers.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import {
@@ -64,56 +63,6 @@ import {
   type CronRunSessionCleanupOutcome,
 } from "./session-cleanup.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
-
-type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
-
-type DispatchCronDeliveryParams = {
-  cfg: OpenClawConfig;
-  cfgWithAgentDefaults: OpenClawConfig;
-  deps: CliDeps;
-  job: CronJob;
-  agentId: string;
-  agentSessionKey: string;
-  runSessionKey: string;
-  sessionId: string;
-  lifecycleRevision: string;
-  sessionUpdatedAt: number;
-  beforeSessionDelete?: () => void;
-  runStartedAt: number;
-  runEndedAt: number;
-  timeoutMs: number;
-  resolvedDelivery: DeliveryTargetResolution;
-  deliveryRequested: boolean;
-  skipHeartbeatDelivery: boolean;
-  sourceDeliveryOutcome: SourceDeliveryOutcome;
-  deliveryBestEffort: boolean;
-  deliveryPayloadHasStructuredContent: boolean;
-  deliveryPayloads: ReplyPayload[];
-  synthesizedText?: string;
-  ttsAuto?: TtsAutoMode;
-  summary?: string;
-  outputText?: string;
-  telemetry?: CronRunTelemetry;
-  abortSignal?: AbortSignal;
-  isAborted: () => boolean;
-  abortReason: () => string;
-  withRunSession: (
-    result: Omit<RunCronAgentTurnResult, "sessionId" | "sessionKey">,
-  ) => RunCronAgentTurnResult;
-};
-
-/** Mutable delivery-dispatch accumulator returned to the isolated cron runner. */
-type DispatchCronDeliveryState = {
-  result?: RunCronAgentTurnResult;
-  delivered: boolean;
-  deliveryAttempted: boolean;
-  deliveryError?: string;
-  cronRunSessionCleanupAttempted: boolean;
-  summary?: string;
-  outputText?: string;
-  synthesizedText?: string;
-  deliveryPayloads: ReplyPayload[];
-};
 
 const deliveryOutboundRuntimeLoader = createLazyImportLoader(
   () => import("./delivery-outbound.runtime.js"),
@@ -220,7 +169,7 @@ export async function dispatchCronDelivery(
   };
 
   const deliverViaDirect = async (
-    delivery: SuccessfulDeliveryTarget,
+    delivery: SuccessfulCronDeliveryTarget,
     options?: { retryTransient?: boolean },
   ): Promise<RunCronAgentTurnResult | null> => {
     const deliveryIdempotencyKey = buildDirectCronDeliveryIdempotencyKey({
@@ -611,7 +560,7 @@ export async function dispatchCronDelivery(
   };
 
   const deliverViaDirectAndCleanup = async (
-    delivery: SuccessfulDeliveryTarget,
+    delivery: SuccessfulCronDeliveryTarget,
     options?: { retryTransient?: boolean },
   ): Promise<RunCronAgentTurnResult | null> => {
     try {
@@ -622,7 +571,7 @@ export async function dispatchCronDelivery(
   };
 
   const finalizeTextDelivery = async (
-    delivery: SuccessfulDeliveryTarget,
+    delivery: SuccessfulCronDeliveryTarget,
   ): Promise<RunCronAgentTurnResult | null> => {
     if (!synthesizedText) {
       return null;

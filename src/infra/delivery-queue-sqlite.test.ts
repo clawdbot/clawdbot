@@ -5,6 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   claimDeliveryQueueEntryPlatformSend,
+  promoteDeliveryQueueEntryPlatformSend,
+} from "./delivery-queue-sqlite-claim.js";
+import {
   completeDeliveryQueueEntry,
   countFailedDeliveryQueueEntries,
   deleteDeliveryQueueEntry,
@@ -12,7 +15,6 @@ import {
   loadDeliveryQueueEntries,
   loadDeliveryQueueEntry,
   moveDeliveryQueueEntryToFailed,
-  promoteDeliveryQueueEntryPlatformSend,
   updateDeliveryQueueEntry,
   upsertDeliveryQueueEntry,
 } from "./delivery-queue-sqlite.js";

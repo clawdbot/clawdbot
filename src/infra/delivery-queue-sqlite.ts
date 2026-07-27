@@ -8,12 +8,6 @@ import {
 } from "./kysely-sync.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
-export {
-  claimDeliveryQueueEntryPlatformSend,
-  promoteDeliveryQueueEntryPlatformSend,
-  transitionOwnedDeliveryQueueEntry,
-} from "./delivery-queue-sqlite-claim.js";
-
 // Generic durable delivery queue storage shared by session and outbound queues.
 // Queue-specific wrappers own payload shape; this layer owns SQLite state.
 type QueueStatus = "pending" | "failed" | "completed";
