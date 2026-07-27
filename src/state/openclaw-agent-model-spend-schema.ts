@@ -19,7 +19,7 @@ const modelSpendSchema = splitModelSpendSchema(OPENCLAW_AGENT_SCHEMA_SQL);
 export const AGENT_MODEL_SPEND_SCHEMA_SQL = modelSpendSchema.modelSpend;
 export const AGENT_SCHEMA_WITHOUT_MODEL_SPEND_SQL = modelSpendSchema.withoutModelSpend;
 
-/** Ensures the additive model-spend tables inside the caller's schema transaction. */
+/** Ensures the additive model-spend table inside the caller's schema transaction. */
 export function ensureOpenClawAgentModelSpendSchemaInTransaction(db: DatabaseSync): void {
   if (!db.isTransaction) {
     throw new Error("model-spend schema ensure requires an active transaction");

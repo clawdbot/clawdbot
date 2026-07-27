@@ -79,7 +79,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.entries.*.modelPolicy.allow":
     'Allowed model override refs for this agent. Accepts aliases, full "provider/model" refs, and trailing prefix wildcards such as "provider/*" or "provider/namespace/*"; empty permits any model.',
   "agents.entries.*.modelSpend":
-    "Optional per-agent text-model spend alerts delivered on private replies to routes in commands.ownerAllowFrom. Alerts are informational only: they do not block calls, change retry or fallback behavior, or rotate credentials.",
+    "Optional best-effort per-agent text-model spend alerts appended to private replies for routes in commands.ownerAllowFrom. Alerts are informational only: they do not block calls, change retry or fallback behavior, or rotate credentials.",
   "agents.entries.*.modelSpend.providers":
     "Provider IDs to track for this agent. All text models under one listed provider share that provider's daily spend pool; IDs are normalized to lowercase and duplicates are removed.",
   "agents.entries.*.modelSpend.dailyAlertEveryUsd":

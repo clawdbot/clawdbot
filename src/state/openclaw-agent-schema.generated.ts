@@ -542,52 +542,11 @@ CREATE TABLE IF NOT EXISTS model_spend_daily (
   timezone TEXT NOT NULL,
   provider TEXT NOT NULL,
   spend_microusd INTEGER NOT NULL DEFAULT 0 CHECK (spend_microusd >= 0),
+  last_alerted_threshold_microusd INTEGER NOT NULL DEFAULT 0
+    CHECK (last_alerted_threshold_microusd >= 0),
+  tracking_incomplete INTEGER NOT NULL DEFAULT 0 CHECK (tracking_incomplete IN (0, 1)),
+  tracking_incomplete_alerted INTEGER NOT NULL DEFAULT 0
+    CHECK (tracking_incomplete_alerted IN (0, 1)),
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (day_key, timezone, provider)
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS model_spend_calls (
-  accounting_call_id TEXT NOT NULL PRIMARY KEY,
-  day_key TEXT NOT NULL,
-  timezone TEXT NOT NULL,
-  provider TEXT NOT NULL,
-  cost_microusd INTEGER CHECK (cost_microusd IS NULL OR cost_microusd >= 0),
-  created_at INTEGER NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_agent_model_spend_calls_day
-  ON model_spend_calls(day_key, timezone, provider);
-
-CREATE INDEX IF NOT EXISTS idx_agent_model_spend_calls_created
-  ON model_spend_calls(created_at);
-
-CREATE TABLE IF NOT EXISTS model_spend_alerts (
-  alert_id TEXT NOT NULL PRIMARY KEY,
-  day_key TEXT NOT NULL,
-  timezone TEXT NOT NULL,
-  provider TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('threshold', 'tracking_incomplete')),
-  target_session_key TEXT,
-  spend_microusd INTEGER NOT NULL DEFAULT 0 CHECK (spend_microusd >= 0),
-  first_threshold_microusd INTEGER
-    CHECK (first_threshold_microusd IS NULL OR first_threshold_microusd > 0),
-  highest_threshold_microusd INTEGER
-    CHECK (highest_threshold_microusd IS NULL OR highest_threshold_microusd > 0),
-  status TEXT NOT NULL DEFAULT 'pending'
-    CHECK (status IN ('pending', 'claimed', 'queued', 'delivered', 'unknown')),
-  queue_id TEXT,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  delivered_at INTEGER,
-  CHECK (
-    (kind = 'threshold' AND first_threshold_microusd IS NOT NULL AND highest_threshold_microusd IS NOT NULL)
-    OR
-    (kind = 'tracking_incomplete' AND first_threshold_microusd IS NULL AND highest_threshold_microusd IS NULL)
-  )
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_agent_model_spend_alerts_pending
-  ON model_spend_alerts(status, target_session_key, created_at);
-
-CREATE INDEX IF NOT EXISTS idx_agent_model_spend_alerts_status_updated
-  ON model_spend_alerts(status, updated_at);\n`;
+) STRICT;\n`;

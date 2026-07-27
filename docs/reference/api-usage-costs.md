@@ -46,6 +46,9 @@ Map of OpenClaw features that can call paid provider APIs, where each reads its 
   `commands.ownerAllowFrom`; group and non-owner replies leave them pending.
   Compaction and worker spend is delivered with the agent's next private owner
   reply, without an extra model call.
+- Delivery is best-effort. OpenClaw advances the alert threshold before sending
+  the owner reply, so a failed or suppressed send is not retried and can lose
+  that notification. Spend accumulation still persists across restarts.
 
 See [Agent configuration](/gateway/config-agents#model-spend-alerts) for setup
 and the complete scope.

@@ -107,7 +107,7 @@ export type AgentConfig = {
   models?: Record<string, AgentModelEntryConfig>;
   /** Per-agent model override policy. Replaces the default policy when allow is present. */
   modelPolicy?: AgentModelPolicyConfig;
-  /** Optional provider-call spend alerts for this agent. Alerts do not block model calls. */
+  /** Optional best-effort provider-call spend alerts. Alerts do not block model calls. */
   modelSpend?: AgentModelSpendConfig;
   /** @deprecated Legacy per-agent compaction config is kept for raw doctor migration/repair. */
   compaction?: AgentDefaultsConfig["compaction"];

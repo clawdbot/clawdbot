@@ -5,17 +5,12 @@ const mocks = vi.hoisted(() => ({
   resolveOutboundDurableFinalDeliverySupport: vi.fn(),
   sendDurableMessageBatch: vi.fn(),
   preparePrivateOwnerModelSpendAlertBestEffort: vi.fn(),
-  markModelSpendAlertsQueued: vi.fn(),
-  releasePreparedModelSpendAlertsBestEffort: vi.fn(),
 }));
 
-vi.mock("../../agents/model-spend-alert-delivery.js", () => ({
-  preparePrivateOwnerModelSpendAlertBestEffort: mocks.preparePrivateOwnerModelSpendAlertBestEffort,
-}));
-
-vi.mock("../../agents/model-spend-alerts.js", () => ({
-  markModelSpendAlertsQueued: mocks.markModelSpendAlertsQueued,
-  releasePreparedModelSpendAlertsBestEffort: mocks.releasePreparedModelSpendAlertsBestEffort,
+vi.mock("../../agents/model-spend-alerts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/model-spend-alerts.js")>()),
+  preparePrivateOwnerModelSpendAlertBestEffort:
+    mocks.preparePrivateOwnerModelSpendAlertBestEffort,
 }));
 
 vi.mock("../../infra/outbound/deliver.js", async (importOriginal) => {
@@ -46,14 +41,6 @@ type SendDurableMessageBatchRequest = {
   requireUnknownSendReconciliation?: boolean;
   gatewayClientScopes?: readonly string[];
   payloads?: Array<{ text?: string }>;
-  deliveryIntentId?: string;
-  deliveryCompletion?: {
-    kind: string;
-    agentId: string;
-    alertIds: string[];
-    deliveryIntentId: string;
-  };
-  onDeliveryIntent?: (intent: { id: string }) => void;
 };
 
 type DeliverySupportRequest = {
@@ -95,8 +82,6 @@ describe("durable inbound reply delivery", () => {
     mocks.resolveOutboundDurableFinalDeliverySupport.mockReset();
     mocks.sendDurableMessageBatch.mockReset();
     mocks.preparePrivateOwnerModelSpendAlertBestEffort.mockReset();
-    mocks.markModelSpendAlertsQueued.mockReset();
-    mocks.releasePreparedModelSpendAlertsBestEffort.mockReset();
     mocks.resolveOutboundDurableFinalDeliverySupport.mockResolvedValue({ ok: true });
     mocks.sendDurableMessageBatch.mockResolvedValue({
       status: "sent",
@@ -155,10 +140,8 @@ describe("durable inbound reply delivery", () => {
     expect(latestSendDurableMessageBatchRequest().requireUnknownSendReconciliation).toBeUndefined();
   });
 
-  it("appends pending spend alerts to the final payload and serializes their completion", async () => {
+  it("appends a best-effort spend alert to the final payload", async () => {
     mocks.preparePrivateOwnerModelSpendAlertBestEffort.mockReturnValueOnce({
-      alertIds: ["alert-1"],
-      deliveryIntentId: "model-spend-claim-1",
       text: "Warning: deepseek reached $1.40.",
     });
     await deliverInboundReplyWithMessageSendContext({
@@ -176,73 +159,6 @@ describe("durable inbound reply delivery", () => {
 
     const request = latestSendDurableMessageBatchRequest();
     expect(request.payloads).toEqual([{ text: "model reply\n\nWarning: deepseek reached $1.40." }]);
-    expect(request.deliveryCompletion).toEqual({
-      kind: "model_spend_alert",
-      agentId: "main",
-      alertIds: ["alert-1"],
-      deliveryIntentId: "model-spend-claim-1",
-    });
-    expect(request.deliveryIntentId).toBe("model-spend-claim-1");
-    request.onDeliveryIntent?.({ id: "model-spend-claim-1" });
-    expect(mocks.markModelSpendAlertsQueued).toHaveBeenCalledWith(
-      request.deliveryCompletion,
-      "model-spend-claim-1",
-    );
-  });
-
-  it("releases a spend-alert claim when durable enqueue fails before intent ownership", async () => {
-    const completion = {
-      agentId: "main",
-      alertIds: ["alert-1"],
-      deliveryIntentId: "model-spend-claim-1",
-    };
-    mocks.preparePrivateOwnerModelSpendAlertBestEffort.mockReturnValueOnce({
-      ...completion,
-      text: "Warning: deepseek reached $1.40.",
-    });
-    mocks.sendDurableMessageBatch.mockRejectedValueOnce(new Error("queue unavailable"));
-
-    const result = await deliverInboundReplyWithMessageSendContext({
-      cfg: { commands: { ownerAllowFrom: ["telegram:chat-1"] } },
-      channel: "telegram",
-      agentId: "main",
-      info: { kind: "final" },
-      payload: { text: "model reply" },
-      ctxPayload: ctxPayload({
-        ChatType: "direct",
-        OriginatingTo: "chat-1",
-        SessionKey: "agent:main:telegram:chat-1",
-      }),
-    });
-
-    expect(result).toMatchObject({ status: "failed" });
-    expect(mocks.releasePreparedModelSpendAlertsBestEffort).toHaveBeenCalledWith({
-      kind: "model_spend_alert",
-      ...completion,
-    });
-  });
-
-  it("leaves spend alerts pending for group and non-owner inbound routes", async () => {
-    const cfg = { commands: { ownerAllowFrom: ["telegram:chat-1"] } };
-    await deliverInboundReplyWithMessageSendContext({
-      cfg,
-      channel: "telegram",
-      agentId: "main",
-      info: { kind: "final" },
-      payload: { text: "group reply" },
-      ctxPayload: ctxPayload({ ChatType: "group", OriginatingTo: "chat-1" }),
-    });
-    await deliverInboundReplyWithMessageSendContext({
-      cfg,
-      channel: "telegram",
-      agentId: "main",
-      info: { kind: "final" },
-      payload: { text: "non-owner reply" },
-      ctxPayload: ctxPayload({ ChatType: "direct", OriginatingTo: "chat-2" }),
-    });
-
-    expect(mocks.preparePrivateOwnerModelSpendAlertBestEffort).toHaveBeenCalledTimes(2);
-    expect(mocks.sendDurableMessageBatch).toHaveBeenCalledTimes(2);
   });
 
   it("uses required durability when a caller explicitly requires unknown-send reconciliation", async () => {
