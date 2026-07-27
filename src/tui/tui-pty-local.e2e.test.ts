@@ -818,7 +818,7 @@ describe("TUI PTY real backends", () => {
 
   it("does not replay a session rollover when an old busy notice is redrawn", async () => {
     const newSessionPrefix = "new session: agent:main:tui-";
-    const acceptedSession = createDeferred<void>();
+    const acceptedSession = createDeferred();
     const writes: string[] = [];
     let output = "";
     let acceptanceTimer: ReturnType<typeof setTimeout> | undefined;
