@@ -8,7 +8,7 @@ import {
   type LiveTransportQaCliRegistration,
   type LiveTransportQaCommandOptions,
 } from "../shared/live-transport-cli.js";
-import { readMatrixQaScenarioShard, resolveMatrixQaScenarioIds } from "./scenario-selection.js";
+import { resolveMatrixQaScenarioIds } from "./scenario-selection.js";
 
 const DISABLE_MATRIX_QA_FORCE_EXIT_ENV = "OPENCLAW_QA_MATRIX_DISABLE_FORCE_EXIT";
 
@@ -46,13 +46,11 @@ async function runQaMatrix(opts: LiveTransportQaCommandOptions) {
       envCredentialReason: "its homeserver is disposable and local.",
       laneLabel: "Matrix",
       options: opts,
-      selectScenarioIds(params) {
-        return resolveMatrixQaScenarioIds({
-          ...params,
-          channelDriver: "live",
-          shard: readMatrixQaScenarioShard(),
-        });
-      },
+      selectScenarioIds: (selection) =>
+        resolveMatrixQaScenarioIds({
+          scenarioIds: selection.scenarioIds,
+          shard: opts.shard,
+        }),
     });
   };
   if (process.env[DISABLE_MATRIX_QA_FORCE_EXIT_ENV] === "1") {
@@ -86,6 +84,7 @@ export const matrixQaCliRegistration: LiveTransportQaCliRegistration =
     description: "Run the Docker-backed Matrix live QA lane against a disposable homeserver",
     outputDirHelp: "Matrix QA artifact directory",
     scenarioHelp: "Run only the named Matrix QA scenario (repeatable)",
+    shardHelp: "Run one deterministic Matrix catalog shard as <index>/<total>",
     failFastHelp: "Stop after the first failed Matrix QA scenario",
     sutAccountHelp: "Temporary Matrix account id inside the QA gateway config",
     run: runQaMatrix,

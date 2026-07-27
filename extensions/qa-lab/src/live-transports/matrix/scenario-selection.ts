@@ -1,15 +1,10 @@
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import type { QaProviderMode } from "../../model-selection.js";
 import { readQaScenarioPack } from "../../scenario-catalog.js";
-import type { QaScorecardChannelDriver } from "../../scorecard-taxonomy.js";
-import { selectQaFlowSuiteScenarios } from "../../suite-planning.js";
 
-const MATRIX_QA_SHARD_INDEX_ENV = "OPENCLAW_QA_MATRIX_SHARD_INDEX";
-const MATRIX_QA_SHARD_COUNT_ENV = "OPENCLAW_QA_MATRIX_SHARD_COUNT";
+const MATRIX_QA_CHANNEL_ID = "matrix";
 
-type MatrixQaScenarioShard = {
-  count: number;
+type QaScenarioShard = {
   index: number;
+  total: number;
 };
 
 function compareStrings(left: string, right: string) {
@@ -25,66 +20,61 @@ function hashScenarioId(id: string) {
   return hash >>> 0;
 }
 
-export function readMatrixQaScenarioShard(
-  env: NodeJS.ProcessEnv = process.env,
-): MatrixQaScenarioShard | undefined {
-  const rawIndex = env[MATRIX_QA_SHARD_INDEX_ENV]?.trim();
-  const rawCount = env[MATRIX_QA_SHARD_COUNT_ENV]?.trim();
-  if (!rawIndex && !rawCount) {
-    return undefined;
-  }
-  if (!rawIndex || !rawCount) {
+function parseQaScenarioShard(value: string): QaScenarioShard {
+  const match = /^(\d+)\/(\d+)$/.exec(value.trim());
+  const index = Number.parseInt(match?.[1] ?? "", 10);
+  const total = Number.parseInt(match?.[2] ?? "", 10);
+  if (
+    !match ||
+    !Number.isSafeInteger(index) ||
+    !Number.isSafeInteger(total) ||
+    index < 1 ||
+    total < 1 ||
+    index > total
+  ) {
     throw new Error(
-      `${MATRIX_QA_SHARD_INDEX_ENV} and ${MATRIX_QA_SHARD_COUNT_ENV} must be set together.`,
+      `Invalid Matrix QA shard "${value}". Expected <index>/<total> with 1 <= index <= total.`,
     );
   }
-  const index = parseStrictPositiveInteger(rawIndex);
-  const count = parseStrictPositiveInteger(rawCount);
-  if (!index || !count) {
-    throw new Error(
-      `${MATRIX_QA_SHARD_INDEX_ENV} and ${MATRIX_QA_SHARD_COUNT_ENV} must be positive integers.`,
-    );
-  }
-  if (index > count) {
-    throw new Error(`${MATRIX_QA_SHARD_INDEX_ENV} must be at most ${MATRIX_QA_SHARD_COUNT_ENV}.`);
-  }
-  return { count, index };
+  return { index, total };
 }
 
-function shardMatrixQaScenarioIds(
-  scenarioIds: readonly string[],
-  shard: MatrixQaScenarioShard,
-): string[] {
+function shardMatrixQaScenarioIds(scenarioIds: readonly string[], shardValue: string): string[] {
+  const shard = parseQaScenarioShard(shardValue);
   // Hash ordering makes shard membership independent of catalog/YAML order while
   // round-robin assignment keeps every shard within one scenario of the others.
   const orderedIds = [...new Set(scenarioIds)].toSorted((left, right) => {
     const hashDelta = hashScenarioId(left) - hashScenarioId(right);
     return hashDelta || compareStrings(left, right);
   });
-  const selectedIds = orderedIds.filter((_, index) => index % shard.count === shard.index - 1);
+  const selectedIds = orderedIds.filter((_, index) => index % shard.total === shard.index - 1);
   if (selectedIds.length === 0) {
     throw new Error(
-      `Matrix QA shard ${shard.index}/${shard.count} resolved no scenarios from ${orderedIds.length} selected scenario(s).`,
+      `Matrix QA shard ${shardValue} resolved no scenarios from ${orderedIds.length} selected scenario(s).`,
     );
   }
   return selectedIds;
 }
 
+function listMatrixQaScenarioIds(): string[] {
+  return readQaScenarioPack()
+    .scenarios.filter(
+      (scenario) =>
+        scenario.execution.kind === "flow" &&
+        (scenario.execution.channel === MATRIX_QA_CHANNEL_ID ||
+          scenario.execution.channels?.includes(MATRIX_QA_CHANNEL_ID)),
+    )
+    .map((scenario) => scenario.id)
+    .toSorted(compareStrings);
+}
+
 export function resolveMatrixQaScenarioIds(params: {
-  channelDriver?: QaScorecardChannelDriver;
-  primaryModel: string;
-  providerMode: QaProviderMode;
   scenarioIds?: readonly string[];
-  shard?: MatrixQaScenarioShard;
+  shard?: string;
 }): string[] {
-  const scenarioIds = selectQaFlowSuiteScenarios({
-    scenarios: readQaScenarioPack().scenarios,
-    scenarioIds: params.scenarioIds ? [...params.scenarioIds] : undefined,
-    providerMode: params.providerMode,
-    primaryModel: params.primaryModel,
-    channelDriver: params.channelDriver ?? "live",
-    channel: "matrix",
-  }).map((scenario) => scenario.id);
+  const scenarioIds = params.scenarioIds?.length
+    ? [...new Set(params.scenarioIds)]
+    : listMatrixQaScenarioIds();
   if (scenarioIds.length === 0) {
     throw new Error("Matrix QA catalog selection resolved no scenarios.");
   }

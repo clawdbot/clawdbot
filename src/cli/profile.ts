@@ -16,7 +16,7 @@ type CliProfileParseResult =
   | { ok: false; error: string };
 
 export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
-  // Root profile flags are stripped before Commander sees argv.
+  // Root profile flags are stripped before Commander sees argv, except command-local cases.
   let profile: string | null = null;
   let sawDev = false;
 
@@ -37,6 +37,14 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
     if (arg === "--profile" || arg.startsWith("--profile=")) {
       const next = args[index + 1];
       const { value, consumedNext } = takeCliRootOptionValue(arg, next);
+      const [primary, secondary] = resolveCliArgvInvocation(out).commandPath;
+      if (primary === "qa" && secondary === "matrix") {
+        out.push(arg);
+        if (consumedNext && next !== undefined) {
+          out.push(next);
+        }
+        return { kind: "handled", consumedNext };
+      }
       if (sawDev) {
         return { kind: "error", error: "Cannot combine --dev with --profile" };
       }

@@ -1,67 +1,63 @@
 import { describe, expect, it } from "vitest";
-import { readMatrixQaScenarioShard, resolveMatrixQaScenarioIds } from "./scenario-selection.js";
+import { readQaScenarioPack } from "../../scenario-catalog.js";
+import { resolveMatrixQaScenarioIds } from "./scenario-selection.js";
 
-const matrixLane = {
-  primaryModel: "mock-openai/gpt-5.6-luna",
-  providerMode: "mock-openai" as const,
-};
+describe("QA Lab Matrix scenario selection", () => {
+  it("derives the default set from explicit Matrix channel eligibility", () => {
+    const catalog = readQaScenarioPack().scenarios;
+    const scenarioById = new Map(catalog.map((scenario) => [scenario.id, scenario] as const));
+    const scenarioIds = resolveMatrixQaScenarioIds({});
 
-describe("Matrix QA scenario selection", () => {
-  it("derives the implicit Matrix suite from catalog lane eligibility", () => {
-    const scenarioIds = resolveMatrixQaScenarioIds(matrixLane);
-
-    expect(scenarioIds).toContain("channel-chat-baseline");
-    expect(scenarioIds).toContain("matrix-room-block-streaming");
-    expect(scenarioIds).toContain("subagent-thread-spawn");
-    expect(scenarioIds).not.toContain("telegram-commands-command");
+    expect(scenarioIds.length).toBeGreaterThan(0);
     expect(new Set(scenarioIds).size).toBe(scenarioIds.length);
+    for (const scenarioId of scenarioIds) {
+      const scenario = scenarioById.get(scenarioId);
+      expect(scenario?.execution.kind, scenarioId).toBe("flow");
+      expect(
+        scenario?.execution.channel === "matrix" ||
+          (scenario?.execution.kind === "flow" && scenario.execution.channels?.includes("matrix")),
+        scenarioId,
+      ).toBe(true);
+    }
+
+    const unrelatedScenario = catalog.find(
+      (scenario) =>
+        scenario.execution.kind === "flow" &&
+        scenario.execution.channel !== "matrix" &&
+        !scenario.execution.channels?.includes("matrix"),
+    );
+    expect(unrelatedScenario).toBeDefined();
+    expect(scenarioIds).not.toContain(unrelatedScenario?.id);
   });
 
-  it("uses explicit scenarios as the only subset override", () => {
-    expect(
-      resolveMatrixQaScenarioIds({
-        ...matrixLane,
-        scenarioIds: ["matrix-room-block-streaming", "channel-chat-baseline"],
-      }),
-    ).toEqual(["matrix-room-block-streaming", "channel-chat-baseline"]);
-  });
+  it("preserves an explicit scenario subset without a named profile", () => {
+    const explicitScenarioIds = resolveMatrixQaScenarioIds({}).slice(0, 2).toReversed();
 
-  it("enforces Matrix channel eligibility for explicit scenarios", () => {
-    expect(() =>
-      resolveMatrixQaScenarioIds({
-        ...matrixLane,
-        scenarioIds: ["telegram-commands-command"],
-      }),
-    ).toThrow("channel=telegram");
-  });
-
-  it("keeps catalog membership identical across live implementations", () => {
-    expect(resolveMatrixQaScenarioIds({ ...matrixLane, channelDriver: "live" })).toEqual(
-      resolveMatrixQaScenarioIds({ ...matrixLane, channelDriver: "crabline" }),
+    expect(resolveMatrixQaScenarioIds({ scenarioIds: explicitScenarioIds })).toEqual(
+      explicitScenarioIds,
     );
   });
 
-  it("shards only after semantic selection", () => {
-    const all = resolveMatrixQaScenarioIds(matrixLane);
-    const shards = Array.from({ length: 5 }, (_, index) =>
-      resolveMatrixQaScenarioIds({ ...matrixLane, shard: { count: 5, index: index + 1 } }),
-    );
+  it("balances deterministic shards independently of input order", () => {
+    const scenarioIds = resolveMatrixQaScenarioIds({});
+    const shardValues = ["1/5", "2/5", "3/5", "4/5", "5/5"] as const;
+    const shards = shardValues.map((shard) => resolveMatrixQaScenarioIds({ scenarioIds, shard }));
     const sizes = shards.map((shard) => shard.length);
 
-    expect(new Set(shards.flat())).toEqual(new Set(all));
-    expect(shards.flat()).toHaveLength(all.length);
     expect(Math.max(...sizes) - Math.min(...sizes)).toBeLessThanOrEqual(1);
+    expect(shards.flat().toSorted()).toEqual(scenarioIds.toSorted());
+    expect(new Set(shards.flat()).size).toBe(scenarioIds.length);
+    expect(
+      resolveMatrixQaScenarioIds({ scenarioIds: scenarioIds.toReversed(), shard: shardValues[0] }),
+    ).toEqual(shards[0]);
   });
 
-  it("reads paired internal CI shard settings", () => {
-    expect(
-      readMatrixQaScenarioShard({
-        OPENCLAW_QA_MATRIX_SHARD_COUNT: "5",
-        OPENCLAW_QA_MATRIX_SHARD_INDEX: "3",
-      }),
-    ).toEqual({ count: 5, index: 3 });
-    expect(() => readMatrixQaScenarioShard({ OPENCLAW_QA_MATRIX_SHARD_COUNT: "5" })).toThrow(
-      "must be set together",
+  it("rejects invalid and empty shard selections honestly", () => {
+    expect(() => resolveMatrixQaScenarioIds({ scenarioIds: ["scenario"], shard: "0/5" })).toThrow(
+      "Expected <index>/<total>",
+    );
+    expect(() => resolveMatrixQaScenarioIds({ scenarioIds: ["scenario"], shard: "2/5" })).toThrow(
+      "resolved no scenarios",
     );
   });
 });

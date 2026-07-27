@@ -63,6 +63,7 @@ describe("QA Lab Matrix CLI registration", () => {
       "--model",
       "--alt-model",
       "--scenario",
+      "--shard",
       "--fast",
       "--fail-fast",
       "--sut-account",
@@ -72,7 +73,6 @@ describe("QA Lab Matrix CLI registration", () => {
     for (const optionName of ["--profile", "--credential-source", "--credential-role"]) {
       expect(optionNames).not.toContain(optionName);
     }
-    expect(optionNames).not.toContain("--shard");
   });
 
   it("delegates command options to the Matrix runtime", async () => {
@@ -86,6 +86,8 @@ describe("QA Lab Matrix CLI registration", () => {
       "matrix",
       "--scenario",
       "matrix-allowlist-hot-reload",
+      "--shard",
+      "1/1",
     ]);
 
     expect(runLiveTransportQaSuiteCommand).toHaveBeenCalledWith(
@@ -95,6 +97,7 @@ describe("QA Lab Matrix CLI registration", () => {
         options: expect.objectContaining({
           providerMode: "live-frontier",
           scenarioIds: ["matrix-allowlist-hot-reload"],
+          shard: "1/1",
         }),
       }),
     );

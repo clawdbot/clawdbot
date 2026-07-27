@@ -2621,28 +2621,8 @@ describe("package artifact reuse", () => {
     expect(qaWorkflow).not.toContain('"${{ inputs.expected_sha }}" !== ""');
     expect(qaWorkflow).toContain('if [[ -n "${EXPECTED_SHA}" ]]; then');
     const matrixJob = workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_matrix");
-    const matrixShardingContractStep = workflowStep(
-      matrixJob,
-      "Validate Matrix QA sharding contract",
-    );
-    const scheduledOpenAiSecret =
-      "${{ inputs.expected_sha == '' && github.event_name != 'workflow_dispatch' && secrets.OPENAI_API_KEY || '' }}";
-    expect(workflowStep(matrixJob, "Validate required QA credential env").env).toMatchObject({
-      MATRIX_PROVIDER_MODE:
-        "${{ inputs.expected_sha != '' && 'mock-openai' || github.event_name == 'workflow_dispatch' && 'mock-openai' || 'live-frontier' }}",
-      OPENAI_API_KEY: scheduledOpenAiSecret,
-    });
-    expect(workflowStep(matrixJob, "Run Matrix live lane").env).toMatchObject({
-      MATRIX_PROVIDER_MODE:
-        "${{ inputs.expected_sha != '' && 'mock-openai' || github.event_name == 'workflow_dispatch' && 'mock-openai' || 'live-frontier' }}",
-      MATRIX_PRIMARY_MODEL:
-        "${{ inputs.expected_sha != '' && 'mock-openai/gpt-5.6-luna' || github.event_name == 'workflow_dispatch' && 'mock-openai/gpt-5.6-luna' || env.OPENCLAW_CI_OPENAI_MODEL }}",
-      MATRIX_ALTERNATE_MODEL:
-        "${{ inputs.expected_sha != '' && 'mock-openai/gpt-5.6-luna-alt' || github.event_name == 'workflow_dispatch' && 'mock-openai/gpt-5.6-luna-alt' || env.OPENCLAW_CI_OPENAI_FALLBACK_MODEL }}",
-      OPENAI_API_KEY: scheduledOpenAiSecret,
-    });
     expect(workflowStep(matrixJob, "Run Matrix live lane").run).toContain(
-      '--provider-mode "${MATRIX_PROVIDER_MODE}"',
+      "--provider-mode mock-openai",
     );
     const matrixSpecificInputs = Object.keys(
       readWorkflow(QA_LIVE_TRANSPORTS_WORKFLOW).on?.workflow_call?.inputs ?? {},
@@ -2653,28 +2633,20 @@ describe("package artifact reuse", () => {
     );
     expect(matrixJob["continue-on-error"]).toBeUndefined();
     expect(matrixJob.strategy?.matrix?.shard).toEqual([1, 2, 3, 4, 5]);
-    expect(matrixShardingContractStep.run).toContain("OPENCLAW_QA_MATRIX_SHARD_INDEX");
-    expect(matrixShardingContractStep.run).toContain("OPENCLAW_QA_MATRIX_SHARD_COUNT");
-    expect(matrixShardingContractStep.run).toContain(
-      "Selected checkout does not support catalog-derived Matrix QA sharding",
+    expect(workflowStep(matrixJob, "Run Matrix live lane").run).toContain(
+      '--shard "${{ matrix.shard }}/5"',
     );
     expect(workflowStep(matrixJob, "Run Matrix live lane").run).toContain(
-      'OPENCLAW_QA_MATRIX_SHARD_INDEX="${{ matrix.shard }}"',
+      "Selected target predates profile-free Matrix catalog sharding",
     );
-    expect(workflowStep(matrixJob, "Run Matrix live lane").run).toContain(
-      'OPENCLAW_QA_MATRIX_SHARD_COUNT="5"',
-    );
-    expect(workflowStep(matrixJob, "Run Matrix live lane").run).not.toContain("--shard");
-    expect(qaWorkflow).not.toContain('matrix_runner="legacy"');
     expect(readWorkflow(QA_LIVE_TRANSPORTS_WORKFLOW).jobs?.run_live_matrix_sharded).toBeUndefined();
     expect(releaseTelegramWorkflow).toContain(
       'echo "Telegram live lane failed on attempt ${attempt}; retrying once..." >&2',
     );
     expect(qaWorkflow).toContain(
-      'echo "Matrix shard ${{ matrix.shard }}/5 failed on attempt ${attempt}; retrying..." >&2',
+      'echo "Matrix live lane failed on attempt ${attempt}; retrying..." >&2',
     );
     expect(qaWorkflow).not.toContain("OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS");
-    expect(qaWorkflow).not.toContain("matrix_profile");
     expect(qaWorkflow).not.toContain("--profile");
     expect(qaWorkflow).not.toContain("--fail-fast");
   });

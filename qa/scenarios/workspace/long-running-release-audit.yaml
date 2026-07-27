@@ -8,8 +8,6 @@ scenario:
       - agent-runtime.tool-fs-write
     secondary:
       - agent-runtime.tool-fs-read
-    representative:
-      - agent-runtime.tool-fs-read
   objective: Verify a model can complete a sustained repo audit that requires reading several scattered files, ignoring stale decoys, writing artifacts, and checking its own output.
   successCriteria:
     - Agent starts from the seeded project README instead of guessing.
