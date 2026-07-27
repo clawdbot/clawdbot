@@ -331,11 +331,17 @@ function runOpenClawNpmTrustedRefGuard(overrides: Record<string, string>) {
   }
   const binDir = tempDirs.make("openclaw-npm-trusted-ref-");
   const gitPath = `${binDir}/git`;
+  const timeoutPath = `${binDir}/timeout`;
   writeFileSync(
     gitPath,
     `#!/bin/sh\nif [ "$1" = "fetch" ]; then exit 0; fi\nif [ "$1" = "merge-base" ]; then [ "\${MOCK_WORKFLOW_ANCESTOR}" = "true" ]; exit $?; fi\nexit 2\n`,
   );
   chmodSync(gitPath, 0o755);
+  writeFileSync(
+    timeoutPath,
+    `#!/bin/sh\n[ "$1" = "--signal=TERM" ] && [ "$2" = "--kill-after=10s" ] && [ "$3" = "120s" ] || exit 2\nshift 3\nexec "$@"\n`,
+  );
+  chmodSync(timeoutPath, 0o755);
   return spawnSync("bash", ["-c", script], {
     encoding: "utf8",
     env: {
