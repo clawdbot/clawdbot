@@ -27,7 +27,11 @@ describe("chat pane pull request refresh", () => {
         await (params.sessionKey === "agent:main:current" ? previous : current),
     );
     const { pane, state } = createTestChatPane({
-      client: { request } as unknown as GatewayBrowserClient,
+      client: {
+        request,
+        requestSessionPullRequests: (params: { sessionKey: string }) =>
+          request("controlUi.sessionPullRequests", params),
+      } as unknown as GatewayBrowserClient,
       sessions: {
         capturePullRequestEpoch: vi.fn(() => Symbol("pr-refresh")),
         setPullRequestSummary: vi.fn(),
