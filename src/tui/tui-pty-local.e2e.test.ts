@@ -134,10 +134,10 @@ const SESSION_ROLLOVER_BUSY_MESSAGE = "abort the current run before /new";
 function isRetryableGatewayUnavailable(error: unknown): error is Error & {
   retryAfterMs?: number;
 } {
-  return Boolean(
+  return (
     error instanceof Error &&
     (error as { gatewayCode?: unknown }).gatewayCode === "UNAVAILABLE" &&
-    (error as { retryable?: unknown }).retryable === true,
+    (error as { retryable?: unknown }).retryable === true
   );
 }
 
