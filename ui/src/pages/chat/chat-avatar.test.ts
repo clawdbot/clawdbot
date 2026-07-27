@@ -194,6 +194,7 @@ describe("attributed sender avatars", () => {
       expect(image?.getAttribute("src")).toBe("blob:second-sender");
       return image!;
     });
+    expect(secondImage).toBe(firstImage);
     secondImage.dispatchEvent(new Event("load"));
     expect(container.querySelector(".chat-avatar-slot")?.classList.contains("is-fallback")).toBe(
       false,

@@ -327,12 +327,22 @@ describe("authenticated profile avatar cache", () => {
     );
   });
 
-  it("never fetches a sender-controlled URL outside the trusted avatar route", () => {
+  it("never forwards gateway credentials to a sender-controlled avatar origin", () => {
     setAvatarGatewayOrigin("https://gateway.example.test", "Bearer profile-token");
     const fetchAvatar = vi.spyOn(globalThis, "fetch");
 
-    expect(resolveAvatarImageUrl("https://evil.example/api/users/profile-ada/avatar")).toBeNull();
-    expect(resolveAvatarImageUrl("/api/secrets")).toBeNull();
+    for (const avatarUrl of [
+      "https://evil.example/api/users/profile-ada/avatar?v=7",
+      "https://gateway.example.test.evil.example/api/users/profile-ada/avatar?v=7",
+      "https://gateway.example.test@evil.example/api/users/profile-ada/avatar?v=7",
+      "//evil.example/api/users/profile-ada/avatar?v=7",
+      "/api/secrets",
+    ]) {
+      expect(resolveAvatarImageUrl(avatarUrl)).toBeNull();
+      expect(resolveAvatar({ id: "profile-ada", profileAvatarUrl: avatarUrl })).toMatchObject({
+        kind: "initials",
+      });
+    }
     expect(fetchAvatar).not.toHaveBeenCalled();
   });
 });

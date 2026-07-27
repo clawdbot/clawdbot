@@ -111,7 +111,7 @@ function toTrustedAvatarUrl(value: string, gatewayOrigin: string | null): string
   }
 }
 
-function loadIdentityAvatar(url: string): Promise<string | null> {
+function loadIdentityAvatar(url: string): string | Promise<string | null> {
   const cacheKey = url;
   const cached = identityAvatarCache.get(cacheKey);
   if (cached) {
@@ -119,7 +119,7 @@ function loadIdentityAvatar(url: string): Promise<string | null> {
     // must share both the authenticated request and its resulting blob.
     identityAvatarCache.delete(cacheKey);
     identityAvatarCache.set(cacheKey, cached);
-    return cached.promise;
+    return cached.loaded && cached.blobUrl ? cached.blobUrl : cached.promise;
   }
 
   const entry: CachedIdentityAvatar = {

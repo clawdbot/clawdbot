@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
-import { keyed } from "lit/directives/keyed.js";
+import { live } from "lit/directives/live.js";
 import { until } from "lit/directives/until.js";
 import type { PresenceEntry } from "../api/types.ts";
 import { CONTROL_UI_BUILD_INFO, type ControlUiBuildInfo } from "../build-info.ts";
@@ -199,18 +199,15 @@ class ViewerAvatar extends OpenClawLightDomContentsElement {
     });
     const imageUrl = avatar.kind === "initials" ? null : resolveAvatarImageUrl(avatar.url);
     const pending = imageUrl !== null && typeof imageUrl !== "string";
-    // A changed route or request must own fresh DOM so an older image's load
-    // callback cannot suppress the next avatar's pending initials.
-    return html`${keyed(
-      imageUrl ?? `${user.id}:${this.variant}`,
-      html`<span
-        class=${`viewer-avatar viewer-avatar--${this.variant}${pending ? " is-fallback" : ""}`}
-        data-viewer-id=${user.id}
-        aria-label=${label}
-      >
-        ${renderViewerAvatar(user, avatar, imageUrl)}
-      </span>`,
-    )}`;
+    // Image events toggle fallback imperatively; live() compares actual DOM so
+    // a changed avatar restores initials without replacing its existing image.
+    return html`<span
+      class=${live(`viewer-avatar viewer-avatar--${this.variant}${pending ? " is-fallback" : ""}`)}
+      data-viewer-id=${user.id}
+      aria-label=${label}
+    >
+      ${renderViewerAvatar(user, avatar, imageUrl)}
+    </span>`;
   }
 }
 

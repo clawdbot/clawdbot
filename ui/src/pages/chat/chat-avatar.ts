@@ -1,6 +1,6 @@
 // Control UI chat module implements chat avatar behavior.
 import { html, nothing } from "lit";
-import { keyed } from "lit/directives/keyed.js";
+import { live } from "lit/directives/live.js";
 import { until } from "lit/directives/until.js";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import { normalizeBasePath } from "../../app-route-paths.ts";
@@ -65,32 +65,31 @@ export function renderChatAvatar(
     // The derived route may 404 (no upload, no Gravatar); swap to initials
     // instead of a broken image. Lit reuses DOM parts, so a load must clear a
     // prior sender's error state.
-    return html`${keyed(
-      imageUrl,
-      html`<span class=${`chat-avatar-slot${typeof imageUrl === "string" ? "" : " is-fallback"}`}>
-        <img
-          class="chat-avatar user"
-          src=${typeof imageUrl === "string"
-            ? imageUrl
-            : until(
-                imageUrl.then((url) => url ?? nothing),
-                nothing,
-              )}
-          alt="${label}"
-          @error=${(event: Event) => {
-            const image = event.currentTarget as HTMLImageElement;
-            settleAvatarImageUrl(image.getAttribute("src"));
-            image.closest(".chat-avatar-slot")?.classList.add("is-fallback");
-          }}
-          @load=${(event: Event) => {
-            const image = event.currentTarget as HTMLImageElement;
-            settleAvatarImageUrl(image.getAttribute("src"));
-            image.closest(".chat-avatar-slot")?.classList.remove("is-fallback");
-          }}
-        />
-        ${initialsAvatar}
-      </span>`,
-    )}`;
+    return html`<span
+      class=${live(`chat-avatar-slot${typeof imageUrl === "string" ? "" : " is-fallback"}`)}
+    >
+      <img
+        class="chat-avatar user"
+        src=${typeof imageUrl === "string"
+          ? imageUrl
+          : until(
+              imageUrl.then((url) => url ?? nothing),
+              nothing,
+            )}
+        alt="${label}"
+        @error=${(event: Event) => {
+          const image = event.currentTarget as HTMLImageElement;
+          settleAvatarImageUrl(image.getAttribute("src"));
+          image.closest(".chat-avatar-slot")?.classList.add("is-fallback");
+        }}
+        @load=${(event: Event) => {
+          const image = event.currentTarget as HTMLImageElement;
+          settleAvatarImageUrl(image.getAttribute("src"));
+          image.closest(".chat-avatar-slot")?.classList.remove("is-fallback");
+        }}
+      />
+      ${initialsAvatar}
+    </span>`;
   }
   const assistantName = assistant?.name?.trim() || "Assistant";
   const assistantAvatar = assistant?.avatar?.trim() || "";

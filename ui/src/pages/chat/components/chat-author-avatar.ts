@@ -1,5 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
-import { keyed } from "lit/directives/keyed.js";
+import { live } from "lit/directives/live.js";
 import { until } from "lit/directives/until.js";
 import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
 import {
@@ -82,15 +82,12 @@ export function renderChatAuthorAvatar(
     avatar.kind === "initials"
       ? renderInitialsAvatar(avatar)
       : renderResolvedAvatar(fallback, imageUrl);
-  return html`${keyed(
-    imageUrl ?? `${sender.id ?? ""}:${label}`,
-    html`<span
-      class=${`chat-author-avatar${pending ? " is-fallback" : ""}`}
-      role="img"
-      aria-label=${label}
-      title=${label}
-    >
-      ${resolved}
-    </span>`,
-  )}`;
+  return html`<span
+    class=${live(`chat-author-avatar${pending ? " is-fallback" : ""}`)}
+    role="img"
+    aria-label=${label}
+    title=${label}
+  >
+    ${resolved}
+  </span>`;
 }
