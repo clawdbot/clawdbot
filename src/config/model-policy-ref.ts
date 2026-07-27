@@ -14,21 +14,6 @@ function hasControlCharacter(value: string): boolean {
   return false;
 }
 
-/**
- * Trim each segment of a wildcard prefix. The wildcard key is matched on segment
- * boundaries, so padding around a namespace is normalization; without this a
- * padded prefix would keep the padding in its canonical key and never match.
- */
-function splitWildcardPrefixSegments(trimmed: string): string[] {
-  return trimmed.split("/").map((segment) => segment.trim());
-}
-
-function isValidRefValue(value: string): boolean {
-  return (
-    value.length > 0 && !value.includes("*") && !/\s/u.test(value) && !hasControlCharacter(value)
-  );
-}
-
 function hasValidSegments(
   segments: readonly string[],
   bounds: { min: number; max?: number },
@@ -36,7 +21,13 @@ function hasValidSegments(
   return (
     segments.length >= bounds.min &&
     (bounds.max === undefined || segments.length <= bounds.max) &&
-    segments.every(isValidRefValue)
+    segments.every(
+      (segment) =>
+        segment.length > 0 &&
+        !segment.includes("*") &&
+        !/\s/u.test(segment) &&
+        !hasControlCharacter(segment),
+    )
   );
 }
 
@@ -51,7 +42,9 @@ export function parseModelPolicyWildcardRef(raw: string): ModelPolicyWildcardRef
   if (!trimmed.endsWith("/*")) {
     return null;
   }
-  const segments = splitWildcardPrefixSegments(trimmed);
+  // Wildcard keys match on segment boundaries, so normalize boundary padding
+  // before building the canonical key used by policy matching.
+  const segments = trimmed.split("/").map((segment) => segment.trim());
   if (
     segments.at(-1) !== "*" ||
     !hasValidSegments(segments.slice(0, -1), {
@@ -72,17 +65,12 @@ export function parseModelPolicyWildcardRef(raw: string): ModelPolicyWildcardRef
 
 /** True for a syntactically valid exact provider/model policy reference. */
 export function isValidExactModelPolicyRef(raw: string): boolean {
-  const parsed = parseModelCatalogRef(raw.trim());
-  if (!parsed) {
-    return false;
-  }
-  // Validate the values the runtime actually resolves: it trims the provider and the
-  // whole model remainder, not each nested segment. Trimming per segment here would
-  // accept refs that resolve to a model id with embedded whitespace.
-  return (
-    isValidRefValue(parsed.provider) &&
-    isValidRefValue(parsed.modelId) &&
-    !parsed.modelId.split("/").includes("")
+  const parsed = parseModelCatalogRef(raw);
+  return Boolean(
+    parsed &&
+    hasValidSegments([parsed.provider, ...parsed.modelId.split("/")], {
+      min: 2,
+    }),
   );
 }
 
