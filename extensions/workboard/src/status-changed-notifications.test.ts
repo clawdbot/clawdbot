@@ -196,7 +196,6 @@ describe("workboard status_changed notification", () => {
     expect(second.events[0]).toMatchObject({ fromStatus: "ready", toStatus: "running" });
   });
 
-
   it("keeps replay after ordinary card events are trimmed", async () => {
     const memory = createMemoryStore();
     const store = new WorkboardStore(memory);

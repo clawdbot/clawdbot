@@ -687,26 +687,28 @@ function readMetadata(db: DatabaseSync, row: Row): WorkboardMetadata | undefined
     }
     return entry;
   });
-  const statusTransitions = childRows(db, "workboard_card_status_transitions", cardId).map((child) => {
-    const transition: WorkboardStatusTransition = {
-      id: requiredString(child, "id"),
-      cardId,
-      fromStatus: requiredString(child, "from_status") as WorkboardStatusTransition["fromStatus"],
-      toStatus: requiredString(child, "to_status") as WorkboardStatusTransition["toStatus"],
-      createdAt: requiredNumber(child, "created_at"),
-      sequence: requiredNumber(child, "sequence"),
-      revision: requiredNumber(child, "revision"),
-    };
-    const sessionKey = stringValue(child, "session_key");
-    const runId = stringValue(child, "run_id");
-    if (sessionKey) {
-      transition.sessionKey = sessionKey;
-    }
-    if (runId) {
-      transition.runId = runId;
-    }
-    return transition;
-  });
+  const statusTransitions = childRows(db, "workboard_card_status_transitions", cardId).map(
+    (child) => {
+      const transition: WorkboardStatusTransition = {
+        id: requiredString(child, "id"),
+        cardId,
+        fromStatus: requiredString(child, "from_status") as WorkboardStatusTransition["fromStatus"],
+        toStatus: requiredString(child, "to_status") as WorkboardStatusTransition["toStatus"],
+        createdAt: requiredNumber(child, "created_at"),
+        sequence: requiredNumber(child, "sequence"),
+        revision: requiredNumber(child, "revision"),
+      };
+      const sessionKey = stringValue(child, "session_key");
+      const runId = stringValue(child, "run_id");
+      if (sessionKey) {
+        transition.sessionKey = sessionKey;
+      }
+      if (runId) {
+        transition.runId = runId;
+      }
+      return transition;
+    },
+  );
   const protocol = db
     .prepare("SELECT * FROM workboard_worker_protocol WHERE card_id = ?")
     .get(cardId) as Row | undefined;

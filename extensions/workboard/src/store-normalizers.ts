@@ -948,19 +948,31 @@ function normalizeStatusTransition(value: unknown): WorkboardStatusTransition | 
   const id = normalizeOptionalString(record.id);
   const cardId = normalizeOptionalString(record.cardId);
   const fromStatus =
-    typeof record.fromStatus === "string" && WORKBOARD_STATUSES.includes(record.fromStatus as WorkboardStatus)
+    typeof record.fromStatus === "string" &&
+    WORKBOARD_STATUSES.includes(record.fromStatus as WorkboardStatus)
       ? (record.fromStatus as WorkboardStatus)
       : undefined;
   const toStatus =
-    typeof record.toStatus === "string" && WORKBOARD_STATUSES.includes(record.toStatus as WorkboardStatus)
+    typeof record.toStatus === "string" &&
+    WORKBOARD_STATUSES.includes(record.toStatus as WorkboardStatus)
       ? (record.toStatus as WorkboardStatus)
       : undefined;
   const createdAt = normalizeTimestamp(record.createdAt, 0);
   const sequence = normalizeTimestamp(record.sequence, 0);
-  const revision = typeof record.revision === "number" && Number.isFinite(record.revision)
-    ? Math.max(1, Math.trunc(record.revision))
-    : undefined;
-  if (!id || !cardId || !fromStatus || !toStatus || fromStatus === toStatus || !createdAt || !sequence || !revision) {
+  const revision =
+    typeof record.revision === "number" && Number.isFinite(record.revision)
+      ? Math.max(1, Math.trunc(record.revision))
+      : undefined;
+  if (
+    !id ||
+    !cardId ||
+    !fromStatus ||
+    !toStatus ||
+    fromStatus === toStatus ||
+    !createdAt ||
+    !sequence ||
+    !revision
+  ) {
     return null;
   }
   const sessionKey = normalizeBoundedString(record.sessionKey, undefined, 240, "session key");

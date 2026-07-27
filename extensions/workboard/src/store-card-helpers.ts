@@ -780,19 +780,21 @@ export function synthesizeStatusChangedNotifications(card: WorkboardCard): Workb
     if (transition.cardId !== card.id) {
       return [];
     }
-    return [{
-      id: `status:${card.id}:${transition.id}`,
-      kind: "status_changed" as const,
-      createdAt: transition.createdAt,
-      sequence: transition.sequence,
-      message: `Status changed ${transition.fromStatus} → ${transition.toStatus}.`,
-      cardId: card.id,
-      fromStatus: transition.fromStatus,
-      toStatus: transition.toStatus,
-      revision: transition.revision,
-      ...(transition.sessionKey ? { sessionKey: transition.sessionKey } : {}),
-      ...(transition.runId ? { runId: transition.runId } : {}),
-    }];
+    return [
+      {
+        id: `status:${card.id}:${transition.id}`,
+        kind: "status_changed" as const,
+        createdAt: transition.createdAt,
+        sequence: transition.sequence,
+        message: `Status changed ${transition.fromStatus} → ${transition.toStatus}.`,
+        cardId: card.id,
+        fromStatus: transition.fromStatus,
+        toStatus: transition.toStatus,
+        revision: transition.revision,
+        ...(transition.sessionKey ? { sessionKey: transition.sessionKey } : {}),
+        ...(transition.runId ? { runId: transition.runId } : {}),
+      },
+    ];
   });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
