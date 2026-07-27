@@ -236,9 +236,10 @@ class GatewayExecApprovalRuntimeTest {
       withTimeout(2_000) { requestStarted.await() }
       waitUntil { !runtime.execApprovalsRefreshing.value }
 
+      val retainedApproval = runtime.execApprovals.value.single()
       assertNull(runtime.execApprovalsErrorText.value)
-      assertEquals("approval-1", runtime.execApprovals.value.single().id)
-      assertNull(runtime.execApprovals.value.single().errorText)
+      assertEquals("approval-1", retainedApproval.id)
+      assertNull(retainedApproval.errorText)
     }
 
   @Test
