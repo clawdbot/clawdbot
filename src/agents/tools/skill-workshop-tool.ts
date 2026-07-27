@@ -15,6 +15,7 @@ import {
   resolvePendingSkillProposal,
   reviseSkillProposal,
 } from "../../skills/workshop/service.js";
+import { SKILL_AUTHORING_STANDARDS_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
 import type {
   SkillProposalOrigin,
   SkillProposalReadResult,
@@ -171,10 +172,10 @@ function buildSkillWorkshopToolDescription(
   supportsCompletion: boolean,
 ): string {
   if (!proposalOnly) {
-    return "Create/update/revise/list/inspect/apply/reject/quarantine reusable-procedure skill proposals.";
+    return `Create/update/revise/list/inspect/apply/reject/quarantine reusable-procedure skill proposals.\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
   }
   const completion = supportsCompletion ? " complete = durably finish this review." : "";
-  return `Inspect reusable-procedure skill proposals and create or revise pending proposals.${completion} Live-skill updates and lifecycle actions are unavailable.`;
+  return `Inspect reusable-procedure skill proposals and create or revise pending proposals.${completion} Live-skill updates and lifecycle actions are unavailable.\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
 }
 
 /** Create the Skill Workshop tool for proposal discovery and lifecycle actions. */
