@@ -55,8 +55,6 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
   const { attempt } = input;
   installPromptSubmissionLockRelease({
     session: input.session,
-    waitForSessionEvents: (sessionToDrain) =>
-      input.sessionLockController.waitForSessionEvents(sessionToDrain),
     releaseForPrompt: () => input.sessionLockController.releaseForPrompt(),
     reacquireAfterPrompt: () => input.sessionLockController.reacquireAfterPrompt(),
     sessionKey: attempt.sessionKey,

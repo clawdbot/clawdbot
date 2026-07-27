@@ -55,7 +55,6 @@ export type EmbeddedAttemptSessionLockController = {
     validateAppend?: SessionFileWriteAppendValidator<T>,
   ): T;
   reacquireAfterPrompt(): Promise<void>;
-  waitForSessionEvents(session: unknown): Promise<void>;
   withSessionWriteLock<T>(
     run: () => Promise<T> | T,
     options?: OwnedSessionTranscriptWriteOptions<T>,
@@ -80,8 +79,20 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     ...(params.initialAcquireSignal ? { signal: params.initialAcquireSignal } : {}),
   });
   let initialLockReleasePromise: Promise<void> | undefined;
+  let initialLockReleased = false;
   const releaseInitialLock = (): Promise<void> => {
-    initialLockReleasePromise ??= Promise.resolve(noOpLock.release());
+    if (initialLockReleased) {
+      return Promise.resolve();
+    }
+    initialLockReleasePromise ??= Promise.resolve(noOpLock.release()).then(
+      () => {
+        initialLockReleased = true;
+      },
+      (error: unknown) => {
+        initialLockReleasePromise = undefined;
+        throw error;
+      },
+    );
     return initialLockReleasePromise;
   };
   let disposed = false;
@@ -98,6 +109,10 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   let reloadFailure: unknown;
   let disposePromise: Promise<void> | undefined;
   let cleanupReleasePromise: Promise<void> | undefined;
+  let cleanupLockGranted = false;
+  let cleanupOwnershipReleased: Promise<void> | undefined;
+  let resolveCleanupOwnershipReleased: (() => void) | undefined;
+  let rejectCleanupOwnershipReleased: ((error: unknown) => void) | undefined;
   type ActiveWriteOperation = {
     active: boolean;
     settlement?: Promise<void>;
@@ -245,7 +260,6 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         }
       });
     },
-    waitForSessionEvents: async () => {},
     withSessionWriteLock: async (run) => {
       if (disposed) {
         throw new Error("attempt disposed before transcript write");
@@ -306,18 +320,29 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       if (disposed) {
         throw new Error("attempt disposed before cleanup");
       }
+      cleanupLockGranted = true;
+      cleanupOwnershipReleased = new Promise<void>((resolve, reject) => {
+        resolveCleanupOwnershipReleased = resolve;
+        rejectCleanupOwnershipReleased = reject;
+      });
+      void cleanupOwnershipReleased.catch(() => {});
       return {
         release: () => {
           cleanupReleasePromise ??= (async () => {
-            await serializeLifecycle(() => {});
-            while (activeWriteOperations.size > 0) {
-              await Promise.all(
-                [...activeWriteOperations].flatMap((operation) =>
-                  operation.settlement ? [operation.settlement] : [],
-                ),
-              );
+            try {
+              while (activeWriteOperations.size > 0) {
+                await Promise.all(
+                  [...activeWriteOperations].flatMap((operation) =>
+                    operation.settlement ? [operation.settlement] : [],
+                  ),
+                );
+              }
+              await releaseInitialLock();
+              resolveCleanupOwnershipReleased?.();
+            } catch (error) {
+              rejectCleanupOwnershipReleased?.(error);
+              throw error;
             }
-            await releaseInitialLock();
           })();
           return cleanupReleasePromise;
         },
@@ -333,6 +358,16 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         disposed = true;
         promptAborted = true;
         promptReleased = false;
+        if (cleanupLockGranted) {
+          // Cleanup acquisition already drained the lifecycle queue. Its lock
+          // release resolves this handoff after any tracked write settlements.
+          try {
+            await cleanupOwnershipReleased;
+          } catch {
+            await releaseInitialLock();
+          }
+          return;
+        }
         let timeout: ReturnType<typeof setTimeout> | undefined;
         try {
           await Promise.race([
@@ -382,29 +417,9 @@ type SessionWithAgentPrompt = {
 };
 
 async function settlePromptSubmission(params: {
-  session: unknown;
-  waitForSessionEvents: (session: unknown) => Promise<void>;
   reacquireAfterPrompt: () => Promise<void>;
 }): Promise<void> {
-  let drainFailed = false;
-  let drainError: unknown;
-  try {
-    await params.waitForSessionEvents(params.session);
-  } catch (error) {
-    drainFailed = true;
-    drainError = error;
-  }
-  try {
-    await params.reacquireAfterPrompt();
-  } catch (error) {
-    if (drainFailed) {
-      attachPromptSettlementError(error, drainError);
-    }
-    throw error;
-  }
-  if (drainFailed) {
-    throw drainError;
-  }
+  await params.reacquireAfterPrompt();
 }
 
 function attachPromptSettlementError(promptError: unknown, settlementError: unknown): void {
@@ -419,7 +434,6 @@ function attachPromptSettlementError(promptError: unknown, settlementError: unkn
 
 export function installPromptSubmissionLockRelease(params: {
   session: unknown;
-  waitForSessionEvents: (session: unknown) => Promise<void>;
   releaseForPrompt: () => Promise<void>;
   reacquireAfterPrompt: () => Promise<void>;
   sessionFile?: string;
@@ -442,7 +456,6 @@ export function installPromptSubmissionLockRelease(params: {
   }
   const originalStreamFn = currentStreamFn.bind(agent);
   const wrappedStreamFn: PromptReleaseStreamFn = async (...args: unknown[]) => {
-    await params.waitForSessionEvents(params.session);
     await params.releaseForPrompt();
     let promptFailed = false;
     let promptError: unknown;

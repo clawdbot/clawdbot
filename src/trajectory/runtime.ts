@@ -281,6 +281,8 @@ function createSqliteTrajectoryRuntimeSink(params: {
           storePath: target.storePath,
         })
       : undefined;
+  // A prepared runtime target may precede its metadata row. Treat an absent
+  // row as uncommitted, while rejecting an existing conflicting mapping.
   if (
     completeTarget &&
     ((requestedSessionKey && target?.sessionKey !== requestedSessionKey) ||

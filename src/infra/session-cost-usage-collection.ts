@@ -397,6 +397,8 @@ export function resolveExistingUsageSessionFile(params: {
       sessionKey: target.sessionKey!,
       storePath: target.storePath!,
     });
+    // Complete targets remain authoritative after metadata cleanup; reject
+    // only an existing key row that proves the identity is stale.
     if (
       (sessionId !== undefined && target.sessionId !== sessionId) ||
       target.agentId !== params.agentId ||

@@ -10,6 +10,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
 import {
   persistSessionTranscriptTurn,
+  replaceTranscriptEvents,
   upsertSessionEntry,
 } from "../../../../src/config/sessions/session-accessor.js";
 import {
@@ -261,6 +262,28 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       "sessions/main/sqlite-live.jsonl.deleted.2026-06-25T12-01-00.000Z",
     );
     expect(archiveEntry.content).toBe("User: Archived JSONL transcript text");
+  });
+
+  it("validates an explicit session key when reading a legacy SQLite marker", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionId = "marker-session";
+    const sessionKey = "agent:main:dashboard:incognito-marker-session";
+    const marker = `sqlite:main:${sessionId}:${path.resolve(storePath)}`;
+    await replaceTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }, [
+      {
+        type: "message",
+        message: { role: "user", content: "marker transcript" },
+      },
+    ]);
+    await expect(buildSessionEntry(marker)).resolves.toMatchObject({ content: "" });
+    await expect(buildSessionEntry(marker, { sessionKey })).resolves.toMatchObject({
+      content: "User: marker transcript",
+    });
+    expect(statSessionEntrySync(marker, { sessionKey })).toMatchObject({
+      path: "sessions/main/marker-session.jsonl",
+      size: expect.any(Number),
+    });
   });
 
   it("exposes content revisions that change with SQLite appends and file replacement", async () => {

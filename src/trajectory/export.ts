@@ -223,6 +223,8 @@ async function readSessionEntries(params: {
       sessionKey: completeTarget.sessionKey,
       storePath: completeTarget.storePath,
     });
+    // Export remains available after the session index row is pruned. A row
+    // that still exists must agree with the artifact's complete target.
     if (
       completeTarget.sessionId !== params.sessionId ||
       (params.sessionKey !== undefined && completeTarget.sessionKey !== params.sessionKey) ||

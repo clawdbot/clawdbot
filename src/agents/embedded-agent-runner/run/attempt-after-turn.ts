@@ -140,7 +140,6 @@ export async function completeEmbeddedAttemptAfterTurn(
   }
 
   if (!state.beforeAgentFinalizeRevisionReason) {
-    await input.sessionLockController.waitForSessionEvents(activeSession);
     await input.withOwnedSessionWriteLock(async () => {
       const lifecycleState = input.readLifecycleState();
       if (

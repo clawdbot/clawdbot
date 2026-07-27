@@ -317,6 +317,45 @@ describe("createEmbeddedAttemptSessionLockController", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("keeps cleanup ownership until the granted cleanup lock is released", async () => {
+    const release = vi.fn(async () => undefined);
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release })),
+      lockOptions: { sessionFile: "agent:main:main" },
+    });
+    const cleanupLock = await controller.acquireForCleanup();
+
+    let disposeSettled = false;
+    const disposal = controller.dispose().then(() => {
+      disposeSettled = true;
+    });
+    await Promise.resolve();
+
+    expect(disposeSettled).toBe(false);
+    expect(release).not.toHaveBeenCalled();
+    await cleanupLock.release();
+    await disposal;
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("retries the underlying release when cleanup release fails", async () => {
+    const releaseError = new Error("release failed");
+    const release = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(releaseError)
+      .mockResolvedValueOnce(undefined);
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release })),
+      lockOptions: { sessionFile: "agent:main:main" },
+    });
+    const cleanupLock = await controller.acquireForCleanup();
+    const disposal = controller.dispose();
+
+    await expect(cleanupLock.release()).rejects.toBe(releaseError);
+    await expect(disposal).resolves.toBeUndefined();
+    expect(release).toHaveBeenCalledTimes(2);
+  });
+
   it("allows cleanup from an async descendant after its write callback settles", async () => {
     let resumeDescendant!: () => void;
     const descendantBlocked = new Promise<void>((resolve) => {
@@ -624,25 +663,6 @@ describe("createEmbeddedAttemptSessionLockController", () => {
 });
 
 describe("installPromptSubmissionLockRelease", () => {
-  it("reacquires after a post-stream event drain failure", async () => {
-    const drainError = new Error("event drain failed");
-    const session = { agent: { streamFn: vi.fn(async () => "ok") } };
-    const waitForSessionEvents = vi
-      .fn<(session: unknown) => Promise<void>>()
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(drainError);
-    const reacquireAfterPrompt = vi.fn(async () => undefined);
-    installPromptSubmissionLockRelease({
-      session,
-      waitForSessionEvents,
-      releaseForPrompt: vi.fn(async () => undefined),
-      reacquireAfterPrompt,
-    });
-
-    await expect(session.agent.streamFn()).rejects.toBe(drainError);
-    expect(reacquireAfterPrompt).toHaveBeenCalledOnce();
-  });
-
   it("preserves the provider error when prompt settlement also fails", async () => {
     const providerError = new Error("provider failed");
     const settlementError = new Error("reacquire failed");
@@ -655,7 +675,6 @@ describe("installPromptSubmissionLockRelease", () => {
     };
     installPromptSubmissionLockRelease({
       session,
-      waitForSessionEvents: vi.fn(async () => undefined),
       releaseForPrompt: vi.fn(async () => undefined),
       reacquireAfterPrompt: vi.fn(async () => {
         throw settlementError;
@@ -675,7 +694,6 @@ describe("installPromptSubmissionLockRelease", () => {
     });
     installPromptSubmissionLockRelease({
       session,
-      waitForSessionEvents: vi.fn(async () => undefined),
       releaseForPrompt: vi.fn(async () => undefined),
       reacquireAfterPrompt: vi.fn(() => undefinedRejection),
     });
@@ -695,7 +713,6 @@ describe("installPromptSubmissionLockRelease", () => {
     };
     installPromptSubmissionLockRelease({
       session,
-      waitForSessionEvents: vi.fn(async () => undefined),
       releaseForPrompt: vi.fn(async () => undefined),
       reacquireAfterPrompt: vi.fn(async () => {
         throw new Error("settlement failed");

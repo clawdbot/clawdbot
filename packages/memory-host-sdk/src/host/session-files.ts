@@ -678,7 +678,8 @@ function resolveBuildSessionSqliteIdentity(absPath: string, opts: BuildSessionEn
       storePath: opts.storePath,
     };
   }
-  return parseSqliteSessionFileMarker(absPath);
+  const marker = parseSqliteSessionFileMarker(absPath);
+  return marker && opts.sessionKey ? { ...marker, sessionKey: opts.sessionKey } : marker;
 }
 
 export function statSessionEntrySync(
