@@ -430,6 +430,7 @@ export async function persistInlineDirectives(params: {
           key: sessionKey,
           nextProvider: provider,
           nextModel: model,
+          nextRouteResolution: "resolved",
           nextModelOverrideSource: "user",
           nextAuthProfileId: appliedSessionEntry.authProfileOverride,
           nextAuthProfileIdSource: appliedSessionEntry.authProfileOverrideSource,

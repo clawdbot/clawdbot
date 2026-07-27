@@ -811,13 +811,9 @@ pub async fn quickchat_ready(
 }
 
 #[tauri::command]
-pub fn quickchat_show_dashboard(
-    webview: Webview,
-    app: AppHandle,
-    desktop: State<'_, DesktopState>,
-) -> Result<(), String> {
+pub fn quickchat_show_dashboard(webview: Webview, app: AppHandle) -> Result<(), String> {
     require_quickchat_webview(&webview)?;
-    tray::open_dashboard(&app, desktop.inner());
+    tray::open_dashboard(&app);
     Ok(())
 }
 

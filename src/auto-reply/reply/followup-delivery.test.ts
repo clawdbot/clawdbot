@@ -6,6 +6,7 @@ import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
 
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: () => undefined,
+  getLoadedChannelPlugin: () => undefined,
 }));
 
 const baseConfig = {} as OpenClawConfig;

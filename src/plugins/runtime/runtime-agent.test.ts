@@ -152,6 +152,7 @@ describe("plugin runtime session creation", () => {
         pluginOwnerId: "anthropic",
         providerOverride: "claude-cli",
         modelOverride: "claude-opus-4-8",
+        modelOverrideRouteResolution: "resolved",
         modelSelectionLocked: true,
         execHost: "node",
         execNode: "node-a",

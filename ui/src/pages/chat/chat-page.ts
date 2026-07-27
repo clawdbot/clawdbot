@@ -18,6 +18,7 @@ import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts"
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { persistSessionBoardFace } from "./chat-board-face-persistence.ts";
 import "../../styles/chat.css";
 import "./chat-pane.ts";
 import { locationWithoutDraft, type SessionChatRouteData } from "./route-loader.ts";
@@ -389,6 +390,7 @@ export class ChatPage extends OpenClawLightDomElement {
     if (layout && layout.activePaneId !== paneId) {
       this.persistLayout(setActivePane(layout, paneId));
     }
+    persistSessionBoardFace(this.context, sessionKey, face);
     this.updateRoute(sessionKey, false, face);
   };
 

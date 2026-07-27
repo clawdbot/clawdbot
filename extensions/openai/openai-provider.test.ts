@@ -537,7 +537,7 @@ describe("buildOpenAIProvider", () => {
       contextWindow: 1_050_000,
       maxTokens: 128_000,
       reasoning: true,
-      input: ["text"],
+      input: ["text", "image"],
       cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
     });
     expect(provider.models.find((model) => model.id === "gpt-5.4-mini")).toMatchObject({
@@ -581,6 +581,31 @@ describe("buildOpenAIProvider", () => {
     });
 
     expect(provider.models.map((model) => model.id)).toEqual(["gpt-5.5"]);
+  });
+
+  it.each([
+    ["returns an empty model list", () => Response.json({ data: [] })],
+    [
+      "returns only unsupported models",
+      () => Response.json({ data: [{ id: "not-in-manifest", object: "model" }] }),
+    ],
+    ["rejects the API key", () => new Response("unauthorized", { status: 401 })],
+    ["denies account access", () => new Response("forbidden", { status: 403 })],
+  ])("does not invent available OpenAI models when discovery %s", async (_label, response) => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
+      response: response(),
+      finalUrl: "https://api.openai.com/v1/models",
+      release,
+    }));
+
+    const provider = await buildOpenAILiveProviderConfig({
+      apiKey: "sk-openai-unavailable",
+      fetchGuard,
+    });
+
+    expect(provider.models).toEqual([]);
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("keeps only manifest fallback models when OpenAI discovery is unavailable", async () => {
@@ -1002,23 +1027,10 @@ describe("buildOpenAIProvider", () => {
     ).not.toContainEqual({ id: "ultra" });
   });
 
-  it.each([
-    ["fails", () => new Response("temporarily unavailable", { status: 503 })],
-    ["returns no models", () => Response.json({ models: [] })],
-    [
-      "returns hidden-only models",
-      () =>
-        Response.json({
-          models: [
-            { slug: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", visibility: "hide" },
-            { slug: "gpt-5.5", display_name: "GPT-5.5", show_in_picker: false },
-          ],
-        }),
-    ],
-  ])("keeps static OpenAI OAuth rows when Codex catalog discovery %s", async (_label, response) => {
+  it("keeps static OpenAI OAuth rows when Codex catalog discovery fails", async () => {
     const release = vi.fn(async () => undefined);
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
-      response: response(),
+      response: new Response("temporarily unavailable", { status: 503 }),
       finalUrl: "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
       release,
     }));
@@ -1045,6 +1057,40 @@ describe("buildOpenAIProvider", () => {
     expect(provider.models.map((model) => model.id)).not.toContain("gpt-5.6-terra");
     expect(provider.models.map((model) => model.id)).not.toContain("gpt-5.6-luna");
     expect(provider.models.map((model) => model.id)).toContain("gpt-5.5");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["returns no models", () => Response.json({ models: [] })],
+    [
+      "returns only hidden models",
+      () =>
+        Response.json({
+          models: [
+            { slug: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", visibility: "hide" },
+            { slug: "gpt-5.5", display_name: "GPT-5.5", show_in_picker: false },
+          ],
+        }),
+    ],
+    ["rejects the subscription token", () => new Response("unauthorized", { status: 401 })],
+    ["denies account access", () => new Response("forbidden", { status: 403 })],
+  ])("does not invent OAuth models when the account catalog %s", async (_label, response) => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
+      response: response(),
+      finalUrl: "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
+      release,
+    }));
+
+    const provider = await buildOpenAICodexLiveProviderConfig({
+      discoveryApiKey: "oauth-token-no-visible-models",
+      accountId: "acct-openai-workspace",
+      fetchGuard,
+    });
+
+    expect(provider.api).toBe("openai-chatgpt-responses");
+    expect(provider.auth).toBe("oauth");
+    expect(provider.models).toEqual([]);
     expect(release).toHaveBeenCalledOnce();
   });
 

@@ -16,7 +16,10 @@ import {
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
-import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
+import {
+  resolveSessionPreferredFaceForKey,
+  sessionNavigationTarget,
+} from "../../lib/sessions/route-navigation.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 
@@ -341,9 +344,10 @@ class WorktreesPage extends OpenClawLightDomElement {
 
   private renderOwner(record: WorktreeRecord) {
     if (record.ownerKind === "session" && record.ownerId) {
+      const face = resolveSessionPreferredFaceForKey(this.context, record.ownerId);
       const href = sessionNavigationTarget({
         context: this.context,
-        face: "chat",
+        face,
         sessionKey: record.ownerId,
       }).href;
       return html`<a href=${href} title=${record.ownerId}>${t("worktrees.ownerSession")}</a>`;

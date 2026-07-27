@@ -40211,7 +40211,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 256,
+      "line": 261,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Answered",
       "surface": "apple",
@@ -40219,7 +40219,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 259,
+      "line": 264,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Answered elsewhere",
       "surface": "apple",
@@ -40227,7 +40227,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 261,
+      "line": 266,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Skipped",
       "surface": "apple",
@@ -40235,7 +40235,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 263,
+      "line": 268,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Expired",
       "surface": "apple",
@@ -40243,7 +40243,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 265,
+      "line": 270,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Unavailable",
       "surface": "apple",
@@ -40251,7 +40251,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 267,
+      "line": 272,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Pending",
       "surface": "apple",
@@ -40259,7 +40259,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 361,
+      "line": 366,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Question summary",
       "surface": "apple",
@@ -40267,7 +40267,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 375,
+      "line": 380,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Other answer",
       "surface": "apple",
@@ -40275,7 +40275,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 433,
+      "line": 438,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Not selected",
       "surface": "apple",
@@ -40283,7 +40283,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 433,
+      "line": 438,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Selected",
       "surface": "apple",
@@ -40291,7 +40291,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 450,
+      "line": 455,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Skipping…",
       "surface": "apple",
@@ -40299,7 +40299,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 453,
+      "line": 458,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Skip",
       "surface": "apple",
@@ -40307,7 +40307,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 464,
+      "line": 469,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Submitting…",
       "surface": "apple",
@@ -40315,7 +40315,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 467,
+      "line": 472,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Submit",
       "surface": "apple",

@@ -128,6 +128,29 @@ describe("createCronToolSchema", () => {
         "tz",
       ].toSorted(),
     );
+    expect(propertyAt(schemaRecord, "job.schedule.kind")?.enum).toContain("stream");
+  });
+
+  it("documents wake, context, and session-target fields", () => {
+    expect(propertyAt(schemaRecord, "text")?.description).toBe(
+      'systemEvent text for action="wake"',
+    );
+    expect(propertyAt(schemaRecord, "mode")?.description).toBe(
+      'Wake mode for action="wake" (default next-heartbeat)',
+    );
+    for (const path of ["job.sessionTarget", "patch.sessionTarget"]) {
+      expect(propertyAt(schemaRecord, path)?.description).toBe(
+        "main | isolated | current (agentTurn default) | session:<id>",
+      );
+    }
+    for (const path of ["job.payload", "patch.payload"]) {
+      expect(propertyAt(schemaRecord, `${path}.lightContext`)?.description).toBe(
+        "Lightweight bootstrap context (skip full workspace context)",
+      );
+      expect(propertyAt(schemaRecord, `${path}.allowUnsafeExternalContent`)?.description).toBe(
+        "Allow untrusted external content in prompt",
+      );
+    }
   });
 
   it("marks staggerMs as cron-only in both job and patch schedule schemas", () => {

@@ -250,6 +250,7 @@ type TrustedInitialSessionEntry = {
   pluginOwnerId?: string;
   providerOverride?: string;
   modelOverride?: string;
+  modelOverrideRouteResolution?: "resolved";
   cliSessionBindings?: SessionEntry["cliSessionBindings"];
   initializationPending?: true;
   modelSelectionLocked?: true;
@@ -926,6 +927,7 @@ export async function createGatewaySession(params: {
                 providerOverride: catalogResolvedModel.provider,
                 modelOverride: catalogResolvedModel.model,
                 modelOverrideSource: "user" as const,
+                modelOverrideRouteResolution: "resolved" as const,
                 agentRuntimeOverride: catalogAgentRuntime,
                 modelSelectionLocked: true,
                 pluginOwnerId: catalogPluginOwnerId,
@@ -945,6 +947,9 @@ export async function createGatewaySession(params: {
             : {}),
           ...(authorizedPluginCreation && params.initialEntry?.modelOverride
             ? { modelOverride: params.initialEntry.modelOverride }
+            : {}),
+          ...(authorizedPluginCreation && params.initialEntry?.modelOverrideRouteResolution
+            ? { modelOverrideRouteResolution: params.initialEntry.modelOverrideRouteResolution }
             : {}),
           // Seeded CLI bindings ride only the plugin-authorized creation path;
           // harness creations must never smuggle pre-bound CLI session ids.

@@ -200,6 +200,27 @@ describe("board gateway methods", () => {
     expect(snapshot.widgets[0]).toMatchObject({ sandboxPort: 18790 });
   });
 
+  it("prepares HTML widget documents with the snapshot instead of rereading the store", async () => {
+    const { invoke, store } = createHarness();
+    await invoke("board.widget.put", {
+      sessionKey: "agent:main:main",
+      name: "first",
+      content: { kind: "html", html: "<p>first</p>" },
+    });
+    await invoke("board.widget.put", {
+      sessionKey: "agent:main:main",
+      name: "second",
+      content: { kind: "html", html: "<p>second</p>" },
+    });
+    const preparedRead = vi.spyOn(store, "getSnapshotWithHtmlDocuments");
+    const documentRead = vi.spyOn(store, "readWidgetHtml");
+
+    await invoke("board.get", { sessionKey: "agent:main:main" });
+
+    expect(preparedRead).toHaveBeenCalledOnce();
+    expect(documentRead).not.toHaveBeenCalled();
+  });
+
   it("applies updates and broadcasts board.changed", async () => {
     const { invoke, broadcast } = createHarness();
     const response = await invoke("board.update", {

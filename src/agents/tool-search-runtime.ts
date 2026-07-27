@@ -13,6 +13,12 @@ import {
   resolveCatalog,
   visibleCatalogEntries,
 } from "./tool-search-catalog.js";
+import {
+  buildLexicalIndex,
+  scoreLexical,
+  tokenizeDocument,
+  tokenizeQuery,
+} from "./tool-search-ranking.js";
 import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 import type {
   CatalogSource,
@@ -36,37 +42,46 @@ function describeEntry(entry: ToolSearchCatalogEntry) {
   };
 }
 
-function tokenize(input: string): string[] {
-  return normalizeStringEntries(input.toLowerCase().split(/[^a-z0-9_./:-]+/u));
+/**
+ * Text indexed for one catalog entry. Parameter names and their descriptions are
+ * included because they often carry the only words a task shares with a tool:
+ * "post a message to a channel" reaches a tool whose description says only
+ * "Send a message" through its `channel` parameter. Codex and the Claude API
+ * tool-search tools index argument metadata for the same reason.
+ */
+function toolSearchEntryText(entry: ToolSearchCatalogEntry): string {
+  // Only first-party schemas are walked. MCP and client parameters are untrusted
+  // and deliberately never traversed: compactToolSearchCatalogEntry reports them
+  // as "unknown" for the same reason, and a client may hand us a lazy object that
+  // throws on property access.
+  const parameters = entry.source === "openclaw" ? readParameterText(entry.parameters) : "";
+  return [entry.name, entry.id, entry.label ?? "", entry.description, parameters]
+    .filter(Boolean)
+    .join(" ");
 }
 
-function scoreEntry(entry: ToolSearchCatalogEntry, terms: string[]): number {
-  if (terms.length === 0) {
-    return 1;
+/** Collects property names and descriptions from a JSON-Schema-shaped value. */
+function readParameterText(parameters: unknown, depth = 0): string {
+  if (depth > 4 || !isRecord(parameters)) {
+    return "";
   }
-  const name = entry.name.toLowerCase();
-  const id = entry.id.toLowerCase();
-  const label = (entry.label ?? "").toLowerCase();
-  const description = entry.description.toLowerCase();
-  let score = 0;
-  for (const term of terms) {
-    if (name === term || id === term) {
-      score += 20;
-    }
-    if (name.includes(term)) {
-      score += 8;
-    }
-    if (id.includes(term)) {
-      score += 6;
-    }
-    if (label.includes(term)) {
-      score += 4;
-    }
-    if (description.includes(term)) {
-      score += 2;
+  const parts: string[] = [];
+  const description = parameters.description;
+  if (typeof description === "string") {
+    parts.push(description);
+  }
+  const properties = parameters.properties;
+  if (isRecord(properties)) {
+    for (const [name, child] of Object.entries(properties)) {
+      parts.push(name);
+      parts.push(readParameterText(child, depth + 1));
     }
   }
-  return score;
+  const items = parameters.items;
+  if (items !== undefined) {
+    parts.push(readParameterText(items, depth + 1));
+  }
+  return parts.filter(Boolean).join(" ");
 }
 
 function tokenizeLookupValue(input: string): Set<string> {
@@ -300,13 +315,35 @@ export class ToolSearchRuntime {
     const catalog = resolveCatalog(this.ctx);
     catalog.searchCount += 1;
     const limit = readToolSearchLimit(options?.limit, this.config);
-    const terms = tokenize(query);
-    return visibleCatalogEntries(catalog, options)
-      .map((entry) => ({ entry, score: scoreEntry(entry, terms) }))
-      .filter((hit) => hit.score > 0)
-      .toSorted((a, b) => b.score - a.score || a.entry.id.localeCompare(b.entry.id))
+    const entries = visibleCatalogEntries(catalog, options);
+    // A query that is exactly a tool name or id is a request for that tool, not
+    // a description of one. BM25 alone can rank a shorter entry that merely
+    // mentions the word above it, and the limit then drops the tool asked for.
+    const exact = query.trim().toLowerCase();
+    const index = buildLexicalIndex(
+      entries.map((entry) => ({
+        value: entry,
+        terms: tokenizeDocument(toolSearchEntryText(entry)),
+      })),
+    );
+    const isExact = (entry: ToolSearchCatalogEntry) =>
+      entry.name.toLowerCase() === exact || entry.id.toLowerCase() === exact;
+    const ranked = scoreLexical(index, tokenizeQuery(query))
+      .toSorted(
+        (a, b) =>
+          Number(isExact(b.value)) - Number(isExact(a.value)) ||
+          Number(b.matchedLiteral) - Number(a.matchedLiteral) ||
+          b.score - a.score ||
+          a.value.id.localeCompare(b.value.id),
+      )
+      .map((hit) => hit.value);
+    // A tool whose name is a stopword ("do") tokenizes to nothing and so never
+    // reaches the ranking at all. Naming it exactly is still an unambiguous
+    // request for it, which the previous scorer honored.
+    const exactEntries = entries.filter((entry) => isExact(entry) && !ranked.includes(entry));
+    return [...exactEntries, ...ranked]
       .slice(0, limit)
-      .map((hit) => compactToolSearchCatalogEntry(hit.entry));
+      .map((entry) => compactToolSearchCatalogEntry(entry));
   };
 
   all = (options?: CatalogVisibilityOptions) =>

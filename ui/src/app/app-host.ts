@@ -58,7 +58,10 @@ import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
-import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
+import {
+  resolveSessionPreferredFaceForKey,
+  sessionNavigationTarget,
+} from "../lib/sessions/route-navigation.ts";
 import {
   isUiGlobalSessionKey,
   normalizeAgentId,
@@ -109,6 +112,7 @@ import { controlUiPublicAssetPath } from "./public-assets.ts";
 import {
   applyServerUiPrefs,
   changedServerUiPrefs,
+  flushServerUiPrefs,
   isApplyingServerUiPrefs,
   pushServerUiPrefs,
   resetServerUiPrefsSync,
@@ -680,12 +684,11 @@ class OpenClawShell extends OpenClawLightDomElement {
   private reconcileServerUiPrefs(runtimeConfig: ApplicationContext["runtimeConfig"]) {
     const snapshot = runtimeConfig.state.configSnapshot;
     const context = this.context;
-    if (!snapshot?.config || !context) {
+    if (!snapshot?.config || !context || context.runtimeConfig !== runtimeConfig) {
       return;
     }
     applyServerUiPrefs(snapshot.config, {
       scope: context.gateway.connection.gatewayUrl,
-      snapshotHash: snapshot.hash ?? undefined,
       onApplied: (patch) => {
         if (patch.sidebarEntries !== undefined) {
           context.navigation.update({ sidebarEntries: patch.sidebarEntries });
@@ -730,8 +733,15 @@ class OpenClawShell extends OpenClawLightDomElement {
       }
       const prefs = changedServerUiPrefs(previous, next);
       const snapshot = this.context?.gateway.snapshot;
-      if (prefs && snapshot?.phase === "connected" && snapshot.client) {
-        pushServerUiPrefs(snapshot.client, prefs);
+      if (prefs && snapshot?.client) {
+        pushServerUiPrefs(snapshot.client, prefs, {
+          afterCommit: () => {
+            const runtimeConfig = this.context?.runtimeConfig;
+            if (runtimeConfig) {
+              void runtimeConfig.refresh();
+            }
+          },
+        });
       }
     });
   }
@@ -813,12 +823,10 @@ class OpenClawShell extends OpenClawLightDomElement {
             sessions: context.sessions.state.result?.sessions ?? [],
             onOpen: (sessionKey) => {
               context.gateway.setSessionKey(sessionKey);
+              const face = resolveSessionPreferredFaceForKey(context, sessionKey);
               // Ambiguous one-segment keys intentionally fall back to /chat;
               // the removed query deep-link format is not a compatibility path.
-              this.navigate(
-                "chat",
-                sessionNavigationTarget({ context, face: "chat", sessionKey }).options,
-              );
+              this.navigate(face, sessionNavigationTarget({ context, face, sessionKey }).options);
             },
           }),
         );
@@ -877,9 +885,10 @@ class OpenClawShell extends OpenClawLightDomElement {
       return;
     }
     context.gateway.setSessionKey(command.sessionKey);
+    const face = resolveSessionPreferredFaceForKey(context, command.sessionKey);
     this.navigate(
-      "chat",
-      sessionNavigationTarget({ context, face: "chat", sessionKey: command.sessionKey }).options,
+      face,
+      sessionNavigationTarget({ context, face, sessionKey: command.sessionKey }).options,
     );
   };
 
@@ -1534,6 +1543,14 @@ class OpenClawShell extends OpenClawLightDomElement {
     }
     this.runtimeConfigClient = snapshot.client;
     this.runtimeConfigSource = runtimeConfig;
+    flushServerUiPrefs(snapshot.client, {
+      afterCommit: () => {
+        const currentRuntimeConfig = this.context?.runtimeConfig;
+        if (currentRuntimeConfig) {
+          void currentRuntimeConfig.refresh();
+        }
+      },
+    });
     void runtimeConfig.ensureLoaded();
   }
 
@@ -1729,10 +1746,8 @@ class OpenClawShell extends OpenClawLightDomElement {
             .onNavigate=${(routeId: RouteId) => this.navigate(routeId)}
             .onSelectSession=${(sessionKey: string) => {
               context.gateway.setSessionKey(sessionKey);
-              this.navigate(
-                "chat",
-                sessionNavigationTarget({ context, face: "chat", sessionKey }).options,
-              );
+              const face = resolveSessionPreferredFaceForKey(context, sessionKey);
+              this.navigate(face, sessionNavigationTarget({ context, face, sessionKey }).options);
             }}
             .onSlashCommand=${this.handleCommandPaletteSlashCommand}
           ></openclaw-command-palette>`

@@ -5,8 +5,8 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import {
-  buildLiveModelProviderConfig,
   getCachedLiveProviderModelRows,
+  LiveModelCatalogHttpError,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
@@ -234,7 +234,7 @@ function buildOpenAIDiscoverablePlatformModels(baseUrl: string): ModelDefinition
     contextWindow,
     api: "openai-responses",
     baseUrl,
-    input: id === OPENAI_GPT_54_PRO_MODEL_ID ? ["text"] : ["text", "image"],
+    input: ["text", "image"],
     maxTokens: OPENAI_GPT_54_MAX_TOKENS,
   }));
 }
@@ -245,56 +245,61 @@ async function buildOpenAILiveProviderConfig(
   const baseUrl =
     normalizeOptionalString(params.baseUrl) ?? resolveOpenAIDefaultBaseUrl(params.env);
   const models = buildOpenAIManifestModelsForBaseUrl(baseUrl);
-  if (!shouldFetchOpenAILiveModels(baseUrl)) {
-    return {
-      baseUrl,
-      api: "openai-responses",
-      apiKey: params.apiKey,
-      models,
-    };
-  }
-  return await buildLiveModelProviderConfig({
-    providerId: PROVIDER_ID,
-    endpoint: OPENAI_MODELS_ENDPOINT,
-    providerConfig: {
-      baseUrl,
-      api: "openai-responses",
-    },
+  const fallback: ModelProviderConfig = {
+    baseUrl,
+    api: "openai-responses",
+    ...(params.apiKey ? { apiKey: params.apiKey } : {}),
     models,
-    projectRows: (rows, fallback) => {
-      const discoveredIds = new Set(
-        rows.flatMap((row) => {
-          if (!row || typeof row !== "object" || Array.isArray(row)) {
-            return [];
-          }
-          const candidate = row as { id?: unknown; object?: unknown };
-          if (candidate.object !== undefined && candidate.object !== "model") {
-            return [];
-          }
-          const modelId = typeof candidate.id === "string" ? candidate.id.trim() : "";
-          return modelId ? [modelId] : [];
-        }),
-      );
-      const selectedIds = new Set<string>();
-      // Discovery alone confirms account access; leave the manifest as the
-      // advisory fallback when OpenAI cannot return an authenticated catalog.
-      return [...fallback.models, ...buildOpenAIDiscoverablePlatformModels(baseUrl)].filter(
-        (model) => {
-          if (!discoveredIds.has(model.id) || selectedIds.has(model.id)) {
-            return false;
-          }
-          selectedIds.add(model.id);
-          return true;
-        },
-      );
-    },
-    apiKey: params.apiKey,
-    discoveryApiKey: params.discoveryApiKey,
-    fetchGuard: params.fetchGuard,
-    signal: params.signal,
-    ttlMs: OPENAI_MODELS_CACHE_TTL_MS,
-    auditContext: "openai-model-discovery",
-  });
+  };
+  if (!shouldFetchOpenAILiveModels(baseUrl)) {
+    return fallback;
+  }
+  try {
+    const rows = await getCachedLiveProviderModelRows({
+      providerId: PROVIDER_ID,
+      endpoint: OPENAI_MODELS_ENDPOINT,
+      apiKey: params.apiKey,
+      discoveryApiKey: params.discoveryApiKey,
+      fetchGuard: params.fetchGuard,
+      signal: params.signal,
+      ttlMs: OPENAI_MODELS_CACHE_TTL_MS,
+      auditContext: "openai-model-discovery",
+    });
+    const discoveredIds = new Set(
+      rows.flatMap((row) => {
+        if (!row || typeof row !== "object" || Array.isArray(row)) {
+          return [];
+        }
+        const candidate = row as { id?: unknown; object?: unknown };
+        if (candidate.object !== undefined && candidate.object !== "model") {
+          return [];
+        }
+        const modelId = typeof candidate.id === "string" ? candidate.id.trim() : "";
+        return modelId ? [modelId] : [];
+      }),
+    );
+    const selectedIds = new Set<string>();
+    // A successful account catalog is authoritative even when it has no
+    // visible supported models; static rows cannot grant model access.
+    return {
+      ...fallback,
+      models: [...models, ...buildOpenAIDiscoverablePlatformModels(baseUrl)].filter((model) => {
+        if (!discoveredIds.has(model.id) || selectedIds.has(model.id)) {
+          return false;
+        }
+        selectedIds.add(model.id);
+        return true;
+      }),
+    };
+  } catch (error) {
+    if (
+      error instanceof LiveModelCatalogHttpError &&
+      (error.status === 401 || error.status === 403)
+    ) {
+      return { ...fallback, models: [] };
+    }
+    return fallback;
+  }
 }
 
 function readCodexModelString(row: unknown, key: string): string | undefined {
@@ -578,18 +583,21 @@ async function buildOpenAICodexLiveProviderConfig(params: {
     const models = rows
       .map(buildOpenAICodexModelFromLiveRow)
       .filter((model): model is ModelDefinitionConfig => Boolean(model));
-    if (models.length > 0) {
-      // Successful Codex OAuth discovery is account-scoped and authoritative
-      // for the picker/list catalog. Do not merge static OpenAI fallback rows
-      // into a successful live catalog.
-      return {
-        baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
-        api: "openai-chatgpt-responses",
-        auth: "oauth",
-        models,
-      };
+    // A successful account-scoped response is authoritative even when all
+    // rows are hidden; static hints must not invent subscription access.
+    return {
+      baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
+      api: "openai-chatgpt-responses",
+      auth: "oauth",
+      models,
+    };
+  } catch (error) {
+    if (
+      error instanceof LiveModelCatalogHttpError &&
+      (error.status === 401 || error.status === 403)
+    ) {
+      return { ...buildOpenAICodexStaticProviderConfig(), models: [] };
     }
-  } catch {
     // Codex/ChatGPT discovery is advisory. Static OpenAI rows stay available
     // when OAuth refresh or the remote model list is unavailable.
   }
