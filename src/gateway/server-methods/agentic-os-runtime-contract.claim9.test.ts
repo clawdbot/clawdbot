@@ -7,10 +7,10 @@ import type { spawnSubagentDirect } from "../../agents/subagent-spawn.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const spawnSubagentDirectMock = vi.hoisted(() =>
-  vi.fn<typeof spawnSubagentDirect>(async () => ({
+  vi.fn<typeof spawnSubagentDirect>(async (_request, context) => ({
     status: "accepted",
-    childSessionKey: "agent:ai-engineer:subagent:real-child",
-    runId: "run-real-child",
+    childSessionKey: context.preallocatedChildSessionKey,
+    runId: context.preallocatedRunId,
     mode: "run",
   })),
 );
@@ -23,7 +23,7 @@ vi.mock("../../tasks/task-status-access.js", () => ({
   findTaskByRunIdForStatus: vi.fn(() => ({ status: "running", startedAt: 5 })),
 }));
 
-type RespondCall = [boolean, unknown?, { code: number; message: string }?];
+type RespondCall = [boolean, unknown?, { code?: string; message: string }?];
 
 let agenticOsRuntimeContractHandlers: GatewayRequestHandlers;
 let runtimeStateDir: string | undefined;
@@ -95,6 +95,7 @@ function payload(call: RespondCall): Record<string, unknown> {
 
 function expectInvalid(call: RespondCall, message: string) {
   expect(call[0]).toBe(false);
+  expect(call[2]?.code).toBe("INVALID_REQUEST");
   expect(call[2]?.message).toContain(message);
 }
 
@@ -135,12 +136,12 @@ describe("Agentic OS runtime contract claim 9 regressions", () => {
     const contract = await import("./agentic-os-runtime-contract.js");
     ({ agenticOsRuntimeContractHandlers } = contract);
     spawnSubagentDirectMock.mockClear();
-    spawnSubagentDirectMock.mockResolvedValue({
+    spawnSubagentDirectMock.mockImplementation(async (_request, context) => ({
       status: "accepted",
-      childSessionKey: "agent:ai-engineer:subagent:real-child",
-      runId: "run-real-child",
+      childSessionKey: context.preallocatedChildSessionKey,
+      runId: context.preallocatedRunId,
       mode: "run",
-    });
+    }));
   });
 
   afterEach(() => {
@@ -168,7 +169,10 @@ describe("Agentic OS runtime contract claim 9 regressions", () => {
     const accepted = payload(await invoke("sessions_spawn", spawnParamsFor(gatewayLeaseId)));
 
     expect(accepted.status).toBe("accepted");
-    expect(accepted.session_key).toBe("agent:ai-engineer:subagent:real-child");
+    expect(accepted.session_key).toBe(
+      spawnSubagentDirectMock.mock.calls[0]?.[1].preallocatedChildSessionKey,
+    );
+    expect(accepted.runId).toBe(spawnSubagentDirectMock.mock.calls[0]?.[1].preallocatedRunId);
     expect(spawnSubagentDirectMock.mock.calls[0]?.[1]).toMatchObject({
       agentSessionKey: "agent:main:main",
       requesterAgentIdOverride: "main",
@@ -238,12 +242,12 @@ describe("Agentic OS runtime contract claim 9 regressions", () => {
       task: "principal scoped spawn",
     });
     const first = payload(await invoke("sessions_spawn", firstParams, "device-a"));
-    spawnSubagentDirectMock.mockResolvedValueOnce({
+    spawnSubagentDirectMock.mockImplementationOnce(async (_request, context) => ({
       status: "accepted",
-      childSessionKey: "agent:ai-engineer:subagent:device-b-child",
-      runId: "run-device-b-child",
+      childSessionKey: context.preallocatedChildSessionKey,
+      runId: context.preallocatedRunId,
       mode: "run",
-    });
+    }));
     const secondParams = spawnParamsFor(secondLease, {
       ...sharedSpawnIds,
       run_id: "run-b",
@@ -270,7 +274,9 @@ describe("Agentic OS runtime contract claim 9 regressions", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     const gatewayLeaseId = await acquireLease();
     const accepted = payload(await invoke("sessions_spawn", spawnParamsFor(gatewayLeaseId)));
-    expect(accepted.session_key).toBe("agent:ai-engineer:subagent:real-child");
+    expect(accepted.session_key).toBe(
+      spawnSubagentDirectMock.mock.calls[0]?.[1].preallocatedChildSessionKey,
+    );
     expect(payload(await invoke("subagents.allowLease.status")).leases).toEqual([]);
 
     vi.mocked(Date.now).mockReturnValue(now + 5 * 60 * 1000 + 1);
@@ -298,12 +304,12 @@ describe("Agentic OS runtime contract claim 9 regressions", () => {
     const pendingGate = new Promise<void>((resolve) => {
       releasePending = resolve;
     });
-    spawnSubagentDirectMock.mockImplementation(async (request) => {
+    spawnSubagentDirectMock.mockImplementation(async (_request, context) => {
       await pendingGate;
       return {
         status: "accepted",
-        childSessionKey: `agent:ai-engineer:subagent:${request.taskName}`,
-        runId: `run-${request.taskName}`,
+        childSessionKey: context.preallocatedChildSessionKey,
+        runId: context.preallocatedRunId,
         mode: "run",
       };
     });
@@ -333,7 +339,11 @@ describe("Agentic OS runtime contract claim 9 regressions", () => {
     await vi.waitFor(() => expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(2));
 
     releasePending();
-    expect(payload(await first).session_key).toBe("agent:ai-engineer:subagent:device-a-pending");
-    expect(payload(await second).session_key).toBe("agent:ai-engineer:subagent:device-b-pending");
+    expect(payload(await first).session_key).toBe(
+      spawnSubagentDirectMock.mock.calls[0]?.[1].preallocatedChildSessionKey,
+    );
+    expect(payload(await second).session_key).toBe(
+      spawnSubagentDirectMock.mock.calls[1]?.[1].preallocatedChildSessionKey,
+    );
   });
 });

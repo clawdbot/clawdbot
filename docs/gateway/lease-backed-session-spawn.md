@@ -133,7 +133,10 @@ An accepted response has `status: "accepted"` and includes the canonical
 `session_key`, `childSessionKey`, `runId`, `gateway_lease_id`, request
 identities, `metadata`, and a nested `session` projection. Exact retries return
 the same accepted projection without launching another child. Conflicting
-reuse of `idempotency_key` or `client_request_id` is rejected.
+reuse of `idempotency_key` or `client_request_id` is rejected. The child
+runner must return the exact session key and run ID reserved by the Gateway;
+missing or divergent identities are treated as an operational contract
+failure and are never published as accepted.
 
 ## Read session state
 
@@ -185,9 +188,13 @@ replay state in its canonical SQLite state database:
   conflicting spawn fails closed;
 - before launch, the Gateway durably reserves a child session key and run ID;
 - after restart, an orphaned reservation is promoted into the normal 24-hour
-  session replay index. An exact spawn retry returns those same reserved
-  identities without invoking the child runner again. Until canonical runtime
-  evidence appears, `sessions_status` reports `runtime_status: "unavailable"`;
+  session replay index only when an accepted-session snapshot or canonical
+  child-run record proves that launch crossed the acceptance boundary. An
+  exact spawn retry then returns those same reserved identities without
+  invoking the child runner again;
+- a reservation without canonical acceptance evidence is cleared during
+  recovery, leaving the lease retryable instead of projecting a rejected or
+  indeterminate launch as accepted;
 - if the accepted session was persisted, an exact retry returns that session
   identity without invoking the child runner again.
 

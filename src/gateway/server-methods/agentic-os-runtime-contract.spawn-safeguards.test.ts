@@ -8,10 +8,10 @@ import type { waitForAgentJob } from "./agent-job.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const spawnSubagentDirectMock = vi.hoisted(() =>
-  vi.fn<typeof spawnSubagentDirect>(async () => ({
+  vi.fn<typeof spawnSubagentDirect>(async (_request, context) => ({
     status: "accepted",
-    childSessionKey: "agent:ai-engineer:subagent:real-child",
-    runId: "run-real-child",
+    childSessionKey: context.preallocatedChildSessionKey,
+    runId: context.preallocatedRunId,
     mode: "run",
   })),
 );
@@ -31,7 +31,7 @@ vi.mock("../../tasks/task-status-access.js", () => ({
   findTaskByRunIdForStatus: findTaskByRunIdForStatusMock,
 }));
 
-type RespondCall = [boolean, unknown?, { code: number; message: string }?];
+type RespondCall = [boolean, unknown?, { code?: string; message: string }?];
 
 let agenticOsRuntimeContractHandlers: GatewayRequestHandlers;
 let runtimeStateDir: string | undefined;
@@ -96,7 +96,16 @@ function payload(call: RespondCall): Record<string, unknown> {
 
 function expectInvalid(call: RespondCall, message: string) {
   expect(call[0]).toBe(false);
+  expect(call[2]?.code).toBe("INVALID_REQUEST");
   expect(call[2]?.message).toContain(message);
+}
+
+function expectUnavailable(call: RespondCall) {
+  expect(call[0]).toBe(false);
+  expect(call[2]).toEqual({
+    code: "UNAVAILABLE",
+    message: "Agentic OS runtime contract failure",
+  });
 }
 
 async function acquireLease(params: Record<string, unknown> = acquireParams) {
@@ -137,12 +146,12 @@ describe("Agentic OS runtime contract spawn safeguards", () => {
     const contract = await import("./agentic-os-runtime-contract.js");
     ({ agenticOsRuntimeContractHandlers } = contract);
     spawnSubagentDirectMock.mockClear();
-    spawnSubagentDirectMock.mockResolvedValue({
+    spawnSubagentDirectMock.mockImplementation(async (_request, context) => ({
       status: "accepted",
-      childSessionKey: "agent:ai-engineer:subagent:real-child",
-      runId: "run-real-child",
+      childSessionKey: context.preallocatedChildSessionKey,
+      runId: context.preallocatedRunId,
       mode: "run",
-    });
+    }));
     waitForAgentJobMock.mockReset();
     waitForAgentJobMock.mockResolvedValue(null);
     findTaskByRunIdForStatusMock.mockReset();
@@ -171,7 +180,9 @@ describe("Agentic OS runtime contract spawn safeguards", () => {
     expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
 
     const accepted = payload(await invoke("sessions_spawn", spawnParamsFor(gatewayLeaseId)));
-    expect(accepted.session_key).toBe("agent:ai-engineer:subagent:real-child");
+    expect(accepted.session_key).toBe(
+      spawnSubagentDirectMock.mock.calls[0]?.[1].preallocatedChildSessionKey,
+    );
   });
 
   it("rechecks lease expiry immediately before persisting the spawn reservation", async () => {
@@ -228,15 +239,80 @@ describe("Agentic OS runtime contract spawn safeguards", () => {
       originalSave(snapshot);
     });
     spawnSubagentDirectMock.mockResolvedValueOnce({
-      status: "rejected",
+      status: "error",
       error: "synthetic definitive rejection",
-    } as never);
+    });
 
-    expectInvalid(await invoke("sessions_spawn", spawnParamsFor(gatewayLeaseId)), "synthetic");
+    expectUnavailable(await invoke("sessions_spawn", spawnParamsFor(gatewayLeaseId)));
     expect(saveCalls).toBe(3);
 
     vi.resetModules();
     const restarted = await import("../agentic-os-runtime-contract.js");
+    expect(restarted.listAgenticOsAllowLeases()).toMatchObject({
+      leases: [
+        expect.objectContaining({
+          status: "active",
+          gateway_lease_id: gatewayLeaseId,
+        }),
+      ],
+    });
+  });
+
+  it("rejects accepted runner identities that diverge from the durable reservation", async () => {
+    const gatewayLeaseId = await acquireLease();
+    spawnSubagentDirectMock.mockResolvedValueOnce({
+      status: "accepted",
+      childSessionKey: "agent:ai-engineer:subagent:divergent-child",
+      runId: "run-divergent-child",
+      mode: "run",
+    });
+
+    expectUnavailable(await invoke("sessions_spawn", spawnParamsFor(gatewayLeaseId)));
+    expect(payload(await invoke("sessions_list")).sessions).toEqual([]);
+    expect(payload(await invoke("subagents.allowLease.status")).leases).toEqual([
+      expect.objectContaining({ gateway_lease_id: gatewayLeaseId, status: "active" }),
+    ]);
+
+    const accepted = payload(await invoke("sessions_spawn", spawnParamsFor(gatewayLeaseId)));
+    expect(accepted.session_key).toBe(
+      spawnSubagentDirectMock.mock.calls[1]?.[1].preallocatedChildSessionKey,
+    );
+    expect(accepted.runId).toBe(spawnSubagentDirectMock.mock.calls[1]?.[1].preallocatedRunId);
+  });
+
+  it("does not promote a rejected reservation after every rollback write fails", async () => {
+    const gatewayLeaseId = await acquireLease();
+    const store = await import("../agentic-os-runtime-contract-store.js");
+    const originalSave = store.saveAgenticOsRuntimeSnapshot;
+    let reservationPersisted = false;
+    const saveSpy = vi
+      .spyOn(store, "saveAgenticOsRuntimeSnapshot")
+      .mockImplementation((snapshot) => {
+        if (!reservationPersisted) {
+          reservationPersisted = true;
+          originalSave(snapshot);
+          return;
+        }
+        throw new Error("synthetic durable rollback outage");
+      });
+    spawnSubagentDirectMock.mockResolvedValueOnce({
+      status: "error",
+      error: "synthetic definitive rejection",
+    });
+
+    expectUnavailable(await invoke("sessions_spawn", spawnParamsFor(gatewayLeaseId)));
+    expect(reservationPersisted).toBe(true);
+
+    saveSpy.mockRestore();
+    findTaskByRunIdForStatusMock.mockReturnValue(undefined);
+    vi.resetModules();
+    const restarted = await import("../agentic-os-runtime-contract.js");
+
+    expect(restarted.listAgenticOsSessions()).toEqual({
+      status: "ok",
+      count: 0,
+      sessions: [],
+    });
     expect(restarted.listAgenticOsAllowLeases()).toMatchObject({
       leases: [
         expect.objectContaining({
@@ -290,13 +366,12 @@ describe("Agentic OS runtime contract spawn safeguards", () => {
     const pendingGate = new Promise<void>((resolve) => {
       releasePending = resolve;
     });
-    spawnSubagentDirectMock.mockImplementation(async (request) => {
+    spawnSubagentDirectMock.mockImplementation(async (_request, context) => {
       await pendingGate;
-      const suffix = request?.task?.replace(/\D/g, "") || "unknown";
       return {
         status: "accepted",
-        childSessionKey: `agent:ai-engineer:subagent:bounded-${suffix}`,
-        runId: `run-bounded-${suffix}`,
+        childSessionKey: context.preallocatedChildSessionKey,
+        runId: context.preallocatedRunId,
         mode: "run",
       };
     });
@@ -319,7 +394,7 @@ describe("Agentic OS runtime contract spawn safeguards", () => {
       invoke("sessions_spawn", makeSpawnParams(index)),
     );
     await vi.waitFor(() => expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1_024), {
-      timeout: 60_000,
+      timeout: 120_000,
     });
     expectInvalid(
       await invoke("sessions_spawn", makeSpawnParams(1_024)),

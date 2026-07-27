@@ -4,6 +4,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const findTaskByRunIdForStatusMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../tasks/task-status-access.js", () => ({
+  findTaskByRunIdForStatus: findTaskByRunIdForStatusMock,
+}));
+
 const acquireParams = {
   client_lease_id: "lease-a",
   idempotency_key: "lease-idem-a",
@@ -30,6 +36,7 @@ describe("Agentic OS allow lease release persistence", () => {
   beforeEach(() => {
     runtimeStateDir = mkdtempSync(path.join(tmpdir(), "openclaw-agentic-os-release-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", runtimeStateDir);
+    findTaskByRunIdForStatusMock.mockReset();
     vi.resetModules();
   });
 
@@ -164,6 +171,10 @@ describe("Agentic OS allow lease release persistence", () => {
       spawn_reservation: reservedSession,
     });
     store.saveAgenticOsRuntimeSnapshot(snapshot);
+    findTaskByRunIdForStatusMock.mockReturnValue({
+      status: "running",
+      runId: reservedSession.runId,
+    });
 
     vi.resetModules();
     const restarted = await import("./agentic-os-runtime-contract.js");

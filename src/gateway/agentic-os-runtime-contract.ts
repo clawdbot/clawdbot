@@ -45,7 +45,10 @@ import {
   runtimeSnapshotPath,
   saveAgenticOsRuntimeSnapshot,
 } from "./agentic-os-runtime-contract-store.js";
-import { sessionRecordHasActiveChildRun } from "./agentic-os-runtime-contract-task-state.js";
+import {
+  sessionRecordHasActiveChildRun,
+  sessionRecordHasChildRunEvidence,
+} from "./agentic-os-runtime-contract-task-state.js";
 
 const leasesByGatewayId = new Map<string, LeaseRecord>();
 const acquireByIdempotencyKey = new Map<string, LeaseRecord>();
@@ -98,20 +101,31 @@ function hydrateRuntimeSnapshot(snapshot: RuntimeSnapshot): boolean {
   );
   for (const lease of snapshot.leases) {
     if (lease.spawn_reservation_fingerprint && !lease.released_at_ms && !lease.consumed_at_ms) {
-      // A pending promise cannot survive process restart. Promote the durable
-      // outbox identity into the normal session replay indexes before consuming
-      // the lease. Exact retries then return the same child identity without
-      // risking a second launch across the ambiguous crash boundary.
-      const acceptedSession = reconcileSpawnReservation({
-        lease,
-        acceptedSession: acceptedSessionByLease.get(lease.gatewayLeaseId),
-        now: hydrationNow,
-      });
-      if (acceptedSession && !acceptedSessionByLease.has(lease.gatewayLeaseId)) {
-        reconciledSessions.push(acceptedSession);
-        acceptedSessionByLease.set(lease.gatewayLeaseId, acceptedSession);
+      // A pending promise cannot survive process restart. Promote a durable
+      // reservation only when an accepted snapshot or canonical child-run
+      // evidence proves that launch crossed the acceptance boundary. Otherwise
+      // clear the stale reservation so a definitively rejected launch cannot
+      // reappear as accepted after a failed rollback write.
+      const durableAcceptedSession = acceptedSessionByLease.get(lease.gatewayLeaseId);
+      const reservedSession = lease.spawn_reservation;
+      if (
+        !durableAcceptedSession &&
+        (!reservedSession || !sessionRecordHasChildRunEvidence(reservedSession))
+      ) {
+        clearSpawnReservation(lease);
+        changed = true;
+      } else {
+        const acceptedSession = reconcileSpawnReservation({
+          lease,
+          acceptedSession: durableAcceptedSession,
+          now: hydrationNow,
+        });
+        if (acceptedSession && !acceptedSessionByLease.has(lease.gatewayLeaseId)) {
+          reconciledSessions.push(acceptedSession);
+          acceptedSessionByLease.set(lease.gatewayLeaseId, acceptedSession);
+        }
+        changed = true;
       }
-      changed = true;
     }
     acquireByIdempotencyKey.set(
       principalScopedKey(lease.authenticatedPrincipalId, lease.acquireIdempotencyKey),
@@ -187,9 +201,6 @@ function persistAcceptedSpawn(): void {
 }
 
 function persistRejectedSpawnRollback(lease: LeaseRecord): void {
-  const reservation = lease.spawn_reservation;
-  const reservationFingerprint = lease.spawn_reservation_fingerprint;
-  const reservedAtMs = lease.spawn_reserved_at_ms;
   clearSpawnReservation(lease);
   let lastError: unknown;
   for (let attempt = 0; attempt < REJECTED_SPAWN_ROLLBACK_PERSIST_ATTEMPTS; attempt += 1) {
@@ -200,9 +211,6 @@ function persistRejectedSpawnRollback(lease: LeaseRecord): void {
       lastError = error;
     }
   }
-  lease.spawn_reservation = reservation;
-  lease.spawn_reservation_fingerprint = reservationFingerprint;
-  lease.spawn_reserved_at_ms = reservedAtMs;
   throw lastError;
 }
 
@@ -548,31 +556,29 @@ export async function spawnAgenticOsSession(
             preallocatedRunId: reservedSession.runId,
           },
         )) as Record<string, unknown>;
-        if (spawnResult.status !== "accepted") {
+        if (spawnResult.status === "forbidden") {
           throw new ContractInputError(
             typeof spawnResult.error === "string"
               ? spawnResult.error
-              : "child runner rejected spawn",
+              : "child runner forbids spawn",
           );
         }
-        const sessionKey = spawnResultSessionKey(spawnResult);
-        if (!sessionKey) {
-          return rejectConflict("sessions_spawn accepted without a child session identity");
+        if (spawnResult.status !== "accepted") {
+          throw new Error("child runner failed to accept spawn");
+        }
+        const returnedSessionKey = spawnResultSessionKey(spawnResult);
+        const returnedRunId = spawnResultRunId(spawnResult);
+        if (
+          returnedSessionKey !== reservedSession.sessionKey ||
+          returnedRunId !== reservedSession.runId
+        ) {
+          throw new Error("child runner violated the preallocated spawn identity");
         }
         const record: SessionRecord = {
-          sessionKey,
-          fingerprint,
-          clientRequestId,
-          idempotencyKey,
-          gatewayLeaseId,
-          metadata: metadataEnvelope(metadata),
-          taskName,
-          agentId,
-          authenticatedPrincipalId,
-          runId: spawnResultRunId(spawnResult),
+          ...reservedSession,
           created_at_ms: Date.now(),
         };
-        sessionsByKey.set(sessionKey, record);
+        sessionsByKey.set(record.sessionKey, record);
         spawnByIdempotencyKey.set(idempotencyScopedKey, record);
         spawnByClientRequestId.set(clientRequestScopedKey, record);
         lease.consumed_at_ms = Date.now();

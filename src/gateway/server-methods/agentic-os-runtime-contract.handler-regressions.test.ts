@@ -16,6 +16,7 @@ const canonicalSession = vi.hoisted(() => ({
   payload: { messages: [] as unknown[], sessionExists: false, totalMessages: 0 },
 }));
 const canonicalHistory = vi.hoisted(() => ({
+  error: undefined as string | undefined,
   payload: { messages: [] as unknown[] },
   requests: [] as Record<string, unknown>[],
 }));
@@ -59,6 +60,10 @@ vi.mock("./chat-history-handler.js", () => ({
       respond: (ok: boolean, payload?: unknown, error?: { message: string }) => void;
     }) => {
       canonicalHistory.requests.push(params);
+      if (canonicalHistory.error) {
+        respond(false, undefined, { message: canonicalHistory.error });
+        return;
+      }
       respond(true, canonicalHistory.payload, undefined);
     },
   },
@@ -121,6 +126,7 @@ describe("Agentic OS runtime handler regressions", () => {
     });
     canonicalSession.error = undefined;
     canonicalSession.payload = { messages: [], sessionExists: false, totalMessages: 0 };
+    canonicalHistory.error = undefined;
     canonicalHistory.payload = { messages: [] };
     canonicalHistory.requests = [];
     runtimeMocks.findTask.mockReset();
@@ -257,7 +263,21 @@ describe("Agentic OS runtime handler regressions", () => {
     const response = await invoke("sessions_status", null);
 
     expect(response[0]).toBe(false);
-    expect(response[2]?.message).toContain("synthetic canonical read failure");
+    expect(response[2]).toEqual({
+      code: "UNAVAILABLE",
+      message: "Agentic OS runtime contract failure",
+    });
+  });
+
+  it("reports canonical chat.history failures as unavailable without leaking backend text", async () => {
+    canonicalHistory.error = "private transcript store outage";
+    const response = await invoke("sessions_history", null);
+
+    expect(response[0]).toBe(false);
+    expect(response[2]).toEqual({
+      code: "UNAVAILABLE",
+      message: "Agentic OS runtime contract failure",
+    });
   });
 
   it("projects failed child lifecycle without exposing raw failure text", async () => {

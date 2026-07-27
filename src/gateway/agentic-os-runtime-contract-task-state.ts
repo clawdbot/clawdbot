@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import { findTaskByRunIdForStatus } from "../tasks/task-status-access.js";
 import type { SessionRecord } from "./agentic-os-runtime-contract-shared.js";
 
+export function sessionRecordHasChildRunEvidence(record: SessionRecord): boolean {
+  return Boolean(record.runId && findTaskByRunIdForStatus(record.runId));
+}
+
 export function sessionRecordHasActiveChildRun(record: SessionRecord): boolean {
   if (!record.runId) {
     return false;

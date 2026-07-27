@@ -143,9 +143,11 @@ async function callCanonicalHandler(
         resolve(payload as Record<string, unknown>);
         return;
       }
-      reject(new ContractInputError(error?.message ?? "canonical session read failed"));
+      reject(new Error(error?.message ?? "canonical session read failed"));
     };
-    Promise.resolve(handler({ ...opts, params, respond })).catch(reject);
+    Promise.resolve(handler({ ...opts, params, respond })).catch(() => {
+      reject(new Error("canonical session read failed"));
+    });
   });
 }
 
@@ -223,12 +225,8 @@ export const agenticOsRuntimeContractHandlers: GatewayRequestHandlers = {
           sessionKey,
           limit: 1,
         });
-      } catch (error) {
-        throw new ContractInputError(
-          error instanceof ContractInputError
-            ? error.message
-            : "canonical sessions.get read failed",
-        );
+      } catch {
+        throw new Error("canonical sessions.get read failed");
       }
       const sessionExists = canonical?.sessionExists === true;
       const totalMessages =
@@ -280,7 +278,7 @@ export const agenticOsRuntimeContractHandlers: GatewayRequestHandlers = {
           ...(limit === undefined ? {} : { limit }),
         });
       } catch {
-        throw new ContractInputError("canonical chat.history read failed");
+        throw new Error("canonical chat.history read failed");
       }
       const rawMessages = Array.isArray(canonical.messages) ? canonical.messages : [];
       const messages = includeTools === true ? rawMessages : stripToolMessages(rawMessages);

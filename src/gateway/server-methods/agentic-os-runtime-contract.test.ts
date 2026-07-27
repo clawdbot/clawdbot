@@ -11,10 +11,10 @@ import type { waitForAgentJob } from "./agent-job.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const spawnSubagentDirectMock = vi.hoisted(() =>
-  vi.fn<typeof spawnSubagentDirect>(async () => ({
+  vi.fn<typeof spawnSubagentDirect>(async (_request, context) => ({
     status: "accepted",
-    childSessionKey: "agent:ai-engineer:subagent:real-child",
-    runId: "run-real-child",
+    childSessionKey: context.preallocatedChildSessionKey,
+    runId: context.preallocatedRunId,
     mode: "run",
   })),
 );
@@ -34,7 +34,7 @@ vi.mock("../../tasks/task-status-access.js", () => ({
   findTaskByRunIdForStatus: findTaskByRunIdForStatusMock,
 }));
 
-type RespondCall = [boolean, unknown?, { code: number; message: string }?];
+type RespondCall = [boolean, unknown?, { code?: string; message: string }?];
 
 let agenticOsRuntimeContractHandlers: GatewayRequestHandlers;
 let runtimeStateDir: string | undefined;
@@ -124,7 +124,16 @@ function payload(call: RespondCall): Record<string, unknown> {
 
 function expectInvalid(call: RespondCall, message: string) {
   expect(call[0]).toBe(false);
+  expect(call[2]?.code).toBe("INVALID_REQUEST");
   expect(call[2]?.message).toContain(message);
+}
+
+function expectUnavailable(call: RespondCall) {
+  expect(call[0]).toBe(false);
+  expect(call[2]).toEqual({
+    code: "UNAVAILABLE",
+    message: "Agentic OS runtime contract failure",
+  });
 }
 
 async function acquireLease(params: Record<string, unknown> = acquireParams) {
@@ -165,12 +174,12 @@ describe("Agentic OS runtime contract v1", () => {
     const contract = await import("./agentic-os-runtime-contract.js");
     ({ agenticOsRuntimeContractHandlers } = contract);
     spawnSubagentDirectMock.mockClear();
-    spawnSubagentDirectMock.mockResolvedValue({
+    spawnSubagentDirectMock.mockImplementation(async (_request, context) => ({
       status: "accepted",
-      childSessionKey: "agent:ai-engineer:subagent:real-child",
-      runId: "run-real-child",
+      childSessionKey: context.preallocatedChildSessionKey,
+      runId: context.preallocatedRunId,
       mode: "run",
-    });
+    }));
     waitForAgentJobMock.mockReset();
     waitForAgentJobMock.mockResolvedValue(null);
     findTaskByRunIdForStatusMock.mockReset();
@@ -377,8 +386,11 @@ describe("Agentic OS runtime contract v1", () => {
     const spawnParams = spawnParamsFor(gatewayLeaseId);
     const accepted = payload(await invoke("sessions_spawn", spawnParams));
     expect(accepted.status).toBe("accepted");
-    expect(accepted.session_key).toBe("agent:ai-engineer:subagent:real-child");
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(accepted.session_key).toBe(
+      spawnSubagentDirectMock.mock.calls[0]?.[1].preallocatedChildSessionKey,
+    );
+    expect(accepted.runId).toBe(spawnSubagentDirectMock.mock.calls[0]?.[1].preallocatedRunId);
     expect(spawnSubagentDirectMock).toHaveBeenLastCalledWith(
       expect.any(Object),
       expect.objectContaining({
@@ -419,13 +431,13 @@ describe("Agentic OS runtime contract v1", () => {
     const gatewayLeaseId = await acquireLease();
     let acceptFirstSpawn: (() => void) | undefined;
     spawnSubagentDirectMock.mockImplementationOnce(
-      () =>
+      (_request, context) =>
         new Promise((resolve) => {
           acceptFirstSpawn = () =>
             resolve({
               status: "accepted",
-              childSessionKey: "agent:ai-engineer:subagent:concurrent-child",
-              runId: "run-concurrent-child",
+              childSessionKey: context.preallocatedChildSessionKey,
+              runId: context.preallocatedRunId,
               mode: "run",
             });
         }),
@@ -445,24 +457,26 @@ describe("Agentic OS runtime contract v1", () => {
 
     acceptFirstSpawn?.();
     const accepted = payload(await firstSpawn);
-    expect(accepted.session_key).toBe("agent:ai-engineer:subagent:concurrent-child");
+    expect(accepted.session_key).toBe(
+      spawnSubagentDirectMock.mock.calls[0]?.[1].preallocatedChildSessionKey,
+    );
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
   });
 
-  it("rolls back a reserved allow lease when the child spawn is rejected", async () => {
+  it("rolls back a reserved allow lease when the child spawn fails", async () => {
     const gatewayLeaseId = await acquireLease();
     spawnSubagentDirectMock.mockResolvedValueOnce({
-      status: "rejected",
+      status: "error",
       error: "synthetic spawn rejection",
-    } as never);
-    expectInvalid(await invoke("sessions_spawn", spawnParamsFor(gatewayLeaseId)), "synthetic");
-
-    spawnSubagentDirectMock.mockResolvedValueOnce({
-      status: "accepted",
-      childSessionKey: "agent:ai-engineer:subagent:retry-child",
-      runId: "run-retry-child",
-      mode: "run",
     });
+    expectUnavailable(await invoke("sessions_spawn", spawnParamsFor(gatewayLeaseId)));
+
+    spawnSubagentDirectMock.mockImplementationOnce(async (_request, context) => ({
+      status: "accepted",
+      childSessionKey: context.preallocatedChildSessionKey,
+      runId: context.preallocatedRunId,
+      mode: "run",
+    }));
     const accepted = payload(
       await invoke(
         "sessions_spawn",
@@ -473,7 +487,9 @@ describe("Agentic OS runtime contract v1", () => {
         }),
       ),
     );
-    expect(accepted.session_key).toBe("agent:ai-engineer:subagent:retry-child");
+    expect(accepted.session_key).toBe(
+      spawnSubagentDirectMock.mock.calls[1]?.[1].preallocatedChildSessionKey,
+    );
   });
 
   it("rolls back allow lease reservation when snapshot persistence fails", async () => {
@@ -483,10 +499,7 @@ describe("Agentic OS runtime contract v1", () => {
       throw new Error("synthetic snapshot failure");
     });
 
-    expectInvalid(
-      await invoke("sessions_spawn", spawnParamsFor(gatewayLeaseId)),
-      "Agentic OS runtime contract failure",
-    );
+    expectUnavailable(await invoke("sessions_spawn", spawnParamsFor(gatewayLeaseId)));
 
     const accepted = payload(
       await invoke(
@@ -498,7 +511,9 @@ describe("Agentic OS runtime contract v1", () => {
         }),
       ),
     );
-    expect(accepted.session_key).toBe("agent:ai-engineer:subagent:real-child");
+    expect(accepted.session_key).toBe(
+      spawnSubagentDirectMock.mock.calls[0]?.[1].preallocatedChildSessionKey,
+    );
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
   });
 
@@ -516,7 +531,9 @@ describe("Agentic OS runtime contract v1", () => {
       metadata: { ...sessionMetadata, task_digest: sha256Hex("persist across restart") },
     };
     const accepted = payload(await invoke("sessions_spawn", spawnParams));
-    expect(accepted.session_key).toBe("agent:ai-engineer:subagent:real-child");
+    expect(accepted.session_key).toBe(
+      spawnSubagentDirectMock.mock.calls[0]?.[1].preallocatedChildSessionKey,
+    );
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
 
     const database = openOpenClawStateDatabase();
@@ -748,10 +765,11 @@ describe("Agentic OS runtime contract v1", () => {
     const first = invoke("sessions_spawn", spawnParams);
     const second = invoke("sessions_spawn", spawnParams);
     await vi.waitFor(() => expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1));
+    const preallocated = spawnSubagentDirectMock.mock.calls[0]?.[1];
     resolveSpawn({
       status: "accepted",
-      childSessionKey: "agent:ai-engineer:subagent:real-child",
-      runId: "run-real-child",
+      childSessionKey: preallocated?.preallocatedChildSessionKey,
+      runId: preallocated?.preallocatedRunId,
     });
     expect(payload(await first).session_key).toBe(payload(await second).session_key);
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
@@ -787,10 +805,11 @@ describe("Agentic OS runtime contract v1", () => {
       }),
     );
     const second = invoke("sessions_spawn", spawnParams);
+    const preallocated = spawnSubagentDirectMock.mock.calls[0]?.[1];
     resolveSpawn({
       status: "accepted",
-      childSessionKey: "agent:ai-engineer:subagent:real-child",
-      runId: "run-real-child",
+      childSessionKey: preallocated?.preallocatedChildSessionKey,
+      runId: preallocated?.preallocatedRunId,
     });
     expect(payload(await first).session_key).toBe(payload(await second).session_key);
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
