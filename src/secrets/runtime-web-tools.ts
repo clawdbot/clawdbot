@@ -827,6 +827,16 @@ export async function resolveRuntimeWebTools(params: {
     providerSource: "none",
     diagnostics: [],
   };
+
+  // Providers whose plugins declare standalone tools (contracts.tools) need their
+  // credentials to stay active even when a different web search/fetch provider is
+  // selected, because the standalone tools share the same configured credential path.
+  const standalonePluginIds = new Set(
+    (params.context.manifestRegistry?.plugins ?? [])
+      .filter((p) => (p.contracts?.tools?.length ?? 0) > 0)
+      .map((p) => p.id),
+  );
+
   if (search || hasPluginWebSearchConfig) {
     const searchSurface = await resolveRuntimeWebProviderSurface({
       contract: "webSearchProviders",
@@ -864,6 +874,13 @@ export async function resolveRuntimeWebTools(params: {
       normalizeConfiguredProviderAgainstActiveProviders: true,
     });
 
+    const searchStandaloneToolProviderIds = new Set<string>();
+    for (const provider of searchSurface.providers) {
+      if (standalonePluginIds.has(provider.pluginId)) {
+        searchStandaloneToolProviderIds.add(provider.id);
+      }
+    }
+
     const searchSelection = await resolveRuntimeWebProviderSelection({
       scopePath: "tools.web.search",
       toolConfig: search,
@@ -878,6 +895,7 @@ export async function resolveRuntimeWebTools(params: {
       defaults,
       allowKeylessAutoSelect: false,
       deferKeylessFallback: true,
+      standaloneToolProviderIds: searchStandaloneToolProviderIds,
       allowUnavailableProviders: params.allowUnavailableSecretOwners,
       onUnavailableProviders: (error) => {
         attachWebProviderFailures(error.unavailableProviders, providerFailuresByRefKey);
@@ -1002,6 +1020,13 @@ export async function resolveRuntimeWebTools(params: {
         }),
     });
 
+    const fetchStandaloneToolProviderIds = new Set<string>();
+    for (const provider of fetchSurface.providers) {
+      if (standalonePluginIds.has(provider.pluginId)) {
+        fetchStandaloneToolProviderIds.add(provider.id);
+      }
+    }
+
     const fetchSelection = await resolveRuntimeWebProviderSelection({
       scopePath: "tools.web.fetch",
       toolConfig: fetch,
@@ -1016,6 +1041,7 @@ export async function resolveRuntimeWebTools(params: {
       defaults,
       allowKeylessAutoSelect: true,
       deferKeylessFallback: false,
+      standaloneToolProviderIds: fetchStandaloneToolProviderIds,
       allowUnavailableProviders: params.allowUnavailableSecretOwners,
       onUnavailableProviders: (error) => {
         attachWebProviderFailures(error.unavailableProviders, providerFailuresByRefKey);

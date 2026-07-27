@@ -67,6 +67,11 @@ type RuntimeWebProviderSelectionParams<
   allowKeylessAutoSelect: boolean;
   /** Defer keyless providers until credential-bearing auto-detect candidates are exhausted. */
   deferKeylessFallback: boolean;
+  /**
+   * Provider IDs whose credentials stay active even when not selected because
+   * they have enabled standalone tools that need the same credential.
+   */
+  standaloneToolProviderIds?: ReadonlySet<string>;
   /** Keep cold-start preparation alive when no configured provider ref can resolve. */
   allowUnavailableProviders?: boolean;
   onUnavailableProviders?: (error: RuntimeWebProviderUnavailableError) => void;
@@ -111,10 +116,15 @@ function pushInactiveProviderCredentialWarnings<
 >(params: {
   selection: RuntimeWebProviderSelectionParams<TProvider, TToolConfig, TSource, TMetadata>;
   skipProviderId?: string;
+  /** Provider IDs whose credentials stay active even when not the selected provider. */
+  skipStandaloneToolProviderIds?: ReadonlySet<string>;
   details: string;
 }): void {
   for (const provider of params.selection.providers) {
     if (provider.id === params.skipProviderId) {
+      continue;
+    }
+    if (params.skipStandaloneToolProviderIds?.has(provider.id)) {
       continue;
     }
     const value = params.selection.readConfiguredCredential({
@@ -710,11 +720,13 @@ export async function resolveRuntimeWebProviderSelection<
     pushInactiveProviderCredentialWarnings({
       selection: params,
       skipProviderId: params.metadata.selectedProvider,
+      skipStandaloneToolProviderIds: params.standaloneToolProviderIds,
       details: `${params.scopePath} auto-detected provider is "${params.metadata.selectedProvider}".`,
     });
   } else if (params.toolConfig && !params.enabled) {
     pushInactiveProviderCredentialWarnings({
       selection: params,
+      skipStandaloneToolProviderIds: params.standaloneToolProviderIds,
       details: `${params.scopePath} is disabled.`,
     });
   }
@@ -723,6 +735,7 @@ export async function resolveRuntimeWebProviderSelection<
     pushInactiveProviderCredentialWarnings({
       selection: params,
       skipProviderId: params.configuredProvider,
+      skipStandaloneToolProviderIds: params.standaloneToolProviderIds,
       details: `${params.scopePath}.provider is "${params.configuredProvider}".`,
     });
   }
