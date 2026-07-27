@@ -93,7 +93,6 @@ describe("filesystem tool output contracts", () => {
     const unknownOverwrite = await tool.execute("write-unknown-overwrite", {
       path: "large.txt",
       content: "replacement\n",
-      overwrite: true,
     });
     const boundedCreate = await tool.execute("write-bounded-create", {
       path: "large-created.txt",
