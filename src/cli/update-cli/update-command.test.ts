@@ -7,14 +7,10 @@ import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint
 import type { GatewayService } from "../../daemon/service.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import {
+  testing as updateCommandPluginsTesting,
   updatePluginsAfterCoreUpdate,
   type PostCorePluginUpdateResult,
 } from "./update-command-plugins.js";
-import {
-  buildInvalidConfigPostCoreUpdateResult,
-  collectMissingPluginInstallPayloads,
-  resolvePostSyncPluginUpdateSkipIds,
-} from "./update-command-plugins.test-support.js";
 import { resolvePostCoreUpdateChildStdio } from "./update-command-post-core.js";
 import { applyPostPluginConfigValidation } from "./update-command-post-plugin-validation.js";
 import {
@@ -22,14 +18,20 @@ import {
   resolvePostUpdateServiceStateReadEnv,
   resolveUpdatedGatewayRestartPort,
   shouldPrepareUpdatedInstallRestart,
+  testing as updateCommandServiceTesting,
 } from "./update-command-service.js";
-import {
+const {
   formatPostUpdateGatewayRecoveryInstructions,
   hasLoadedLaunchdKeepAliveSupervisor,
   recoverInstalledLaunchAgentAfterUpdate,
   recoverLaunchAgentAndRecheckGatewayHealth,
   shouldUseLegacyProcessRestartAfterUpdate,
-} from "./update-command-service.test-support.js";
+} = updateCommandServiceTesting;
+const {
+  buildInvalidConfigPostCoreUpdateResult,
+  collectMissingPluginInstallPayloads,
+  resolvePostSyncPluginUpdateSkipIds,
+} = updateCommandPluginsTesting;
 
 describe("resolveGatewayInstallEntrypoint", () => {
   it("prefers dist/index.js over dist/entry.js when both exist", async () => {

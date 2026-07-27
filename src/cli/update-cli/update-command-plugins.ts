@@ -338,14 +338,11 @@ function buildInvalidConfigPostCoreUpdateResult(): {
   };
 }
 
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.updateCommandPluginsTestApi")] =
-    {
-      buildInvalidConfigPostCoreUpdateResult,
-      collectMissingPluginInstallPayloads,
-      resolvePostSyncPluginUpdateSkipIds,
-    };
-}
+export const testing = {
+  buildInvalidConfigPostCoreUpdateResult,
+  collectMissingPluginInstallPayloads,
+  resolvePostSyncPluginUpdateSkipIds,
+};
 
 export async function updatePluginsAfterCoreUpdate(params: {
   root: string;

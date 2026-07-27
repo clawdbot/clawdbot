@@ -255,16 +255,13 @@ function formatPostUpdateGatewayRecoveryInstructions(
   return lines;
 }
 
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.updateCommandServiceTestApi")] =
-    {
-      formatPostUpdateGatewayRecoveryInstructions,
-      recoverInstalledLaunchAgentAfterUpdate,
-      recoverLaunchAgentAndRecheckGatewayHealth,
-      hasLoadedLaunchdKeepAliveSupervisor,
-      shouldUseLegacyProcessRestartAfterUpdate,
-    };
-}
+export const testing = {
+  formatPostUpdateGatewayRecoveryInstructions,
+  recoverInstalledLaunchAgentAfterUpdate,
+  recoverLaunchAgentAndRecheckGatewayHealth,
+  hasLoadedLaunchdKeepAliveSupervisor,
+  shouldUseLegacyProcessRestartAfterUpdate,
+};
 
 export type PreManagedServiceStop = {
   stopped: boolean;
