@@ -40,6 +40,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     flushPendingCommentaryProgress,
     getDispatchAbortSignal,
     getObservedReplyDelivery,
+    hasDeliveredRoutedBlockReply,
     isRoutedReplyDelivered,
     markIdle,
     markInboundDedupeReplayUnsafe,
@@ -303,6 +304,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     !getObservedReplyDelivery() &&
     !emptyFinalAllowedAsSilent &&
     !sawDedupedAgainstBlock &&
+    !hasDeliveredRoutedBlockReply() &&
     state.blockCount === 0 &&
     counts.tool === 0 &&
     counts.block === 0 &&

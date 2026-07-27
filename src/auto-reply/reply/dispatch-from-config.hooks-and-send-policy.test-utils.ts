@@ -575,8 +575,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("delivers routed fallback when routing drops an empty final without sending", async () => {
     setNoAbort();
-    mocks.routeReply.mockResolvedValueOnce({ ok: true });
-    mocks.routeReply.mockResolvedValueOnce({ ok: true, messageId: "fallback-1" });
+    mocks.routeReply.mockResolvedValue({ ok: true, messageId: "fallback-1" });
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "" }));
     const ctx = buildTestCtx({
@@ -617,8 +616,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("keeps eligibility when an empty routed final precedes a suppressed fallback", async () => {
     setNoAbort();
-    mocks.routeReply.mockResolvedValueOnce({ ok: true });
-    mocks.routeReply.mockResolvedValueOnce({ ok: true, suppressed: true });
+    mocks.routeReply.mockResolvedValue({ ok: true, suppressed: true });
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "" }));
     const ctx = buildTestCtx({
@@ -683,6 +681,50 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.queuedFinal).toBe(false);
     expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
     expect(result.noVisibleReplyFallbackEligible).toBe(true);
+  });
+
+  it("does not deliver no-visible fallback after a routed media-only block", async () => {
+    setNoAbort();
+    mocks.routeReply.mockResolvedValue({ ok: true, messageId: "media-block-1" });
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onBlockReply?.({ mediaUrl: "https://example.com/seatmap.png" });
+      return undefined;
+    });
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "slack",
+      Provider: "slack",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:999",
+      SessionKey: "agent:main:slack:group:oc_group",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        agents: {
+          defaults: {
+            silentReply: {
+              group: "disallow",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    // A routed media-only block increments neither blockCount (text-only counter)
+    // nor dispatcher counts; the delivered-routed-block fact must suppress the
+    // fallback so users never see failure text after valid media.
+    const fallbackCall = mocks.routeReply.mock.calls.find(
+      (call) =>
+        (call[0] as { payload?: { text?: string } }).payload?.text ===
+        NO_VISIBLE_REPLY_FALLBACK_TEXT,
+    );
+    expect(fallbackCall).toBeUndefined();
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
   });
 
   it("does not deliver no-visible fallback after streamed blocks invisible to dispatcher counts", async () => {
