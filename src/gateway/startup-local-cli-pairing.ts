@@ -15,7 +15,7 @@ import {
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 
-export type StartupLocalCliPairingResult = "created" | "reused" | "unavailable";
+type StartupLocalCliPairingResult = "created" | "reused" | "unavailable";
 
 function cacheOperatorToken(params: {
   deviceId: string;
