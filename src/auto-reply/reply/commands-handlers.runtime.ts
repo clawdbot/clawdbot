@@ -7,6 +7,7 @@ import { handleBtwCommand } from "./commands-btw.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
 import { handleContextCommand } from "./commands-context-command.js";
+import { handleDeleteSessionCommand } from "./commands-delete-session.js";
 import { handleDiagnosticsCommand } from "./commands-diagnostics.js";
 import { handleDockCommand } from "./commands-dock.js";
 import { handleGoalCommand } from "./commands-goal.js";
@@ -59,6 +60,7 @@ const commandHandlersById = {
   config: handleConfigCommand,
   context: handleContextCommand,
   debug: handleDebugCommand,
+  "delete-session": handleDeleteSessionCommand,
   diagnostics: handleDiagnosticsCommand,
   dock: handleDockCommand,
   "export-session": handleExportSessionCommand,

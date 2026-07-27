@@ -123,6 +123,8 @@ export const NEW_SESSION_LIST_LOADING_MESSAGE =
   "Thread list is still refreshing. Try New Chat again in a moment.";
 export const NEW_SESSION_CREATE_FAILED_MESSAGE =
   "New Chat could not create a new thread. Try again in a moment.";
+export const NEW_SESSION_RENAME_FAILED_MESSAGE =
+  "New Chat reset the thread but could not apply the name. Try renaming it again.";
 
 export function summarizeSessionPullRequests(
   pullRequests: readonly ControlUiSessionPullRequest[],

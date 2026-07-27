@@ -148,6 +148,11 @@ export const ChatAbortParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   runId: Type.Optional(NonEmptyString),
   preserveSideRuns: Type.Optional(Type.Boolean()),
+  // Session-wide abort (no runId) that must NOT terminate the run initiating it.
+  // A chat /close arrives as its own chat run; the nested session deletion aborts
+  // competing runs on the session, and without this exemption it would abort the
+  // initiating turn itself, dropping its success reply. Ignored when runId is set.
+  exemptRunId: Type.Optional(NonEmptyString),
 });
 
 /** Inserts an operator-visible synthetic message into an existing chat transcript. */
