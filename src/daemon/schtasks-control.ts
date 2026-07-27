@@ -28,6 +28,7 @@ import {
   assertSchtasksAvailable,
   hasScheduledTaskRunningEvidence,
   isRegisteredScheduledTask,
+  isScheduledTaskDefinitelyNotRunning,
   isStartupEntryInstalled,
   launchFallbackTaskScript,
   normalizeTaskResultCode,
@@ -181,10 +182,6 @@ export async function runScheduledTaskOrThrow(params: {
   return "direct-fallback";
 }
 
-function isTaskNotRunning(res: { stdout: string; stderr: string; code: number }): boolean {
-  return normalizeLowercaseStringOrEmpty(res.stderr || res.stdout).includes("not running");
-}
-
 function parseScheduledTaskXmlEnabled(output: string): boolean | null {
   const normalized = output.replace(/^\uFEFF/u, "").replaceAll(String.fromCharCode(0), "");
   const settings = /<Settings(?:\s[^>]*)?>([\s\S]*?)<\/Settings>/iu.exec(normalized)?.[1];
@@ -280,7 +277,7 @@ export async function stopScheduledTask({
   }
   const taskName = resolveTaskName(effectiveEnv);
   const res = await execSchtasks(["/End", "/TN", taskName]);
-  if (res.code !== 0 && !isTaskNotRunning(res)) {
+  if (res.code !== 0 && !isScheduledTaskDefinitelyNotRunning(taskName)) {
     throw new Error(`schtasks end failed: ${res.stderr || res.stdout}`.trim());
   }
   reportMutation("schtasks-stop");

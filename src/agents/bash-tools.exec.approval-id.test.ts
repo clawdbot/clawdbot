@@ -17,7 +17,7 @@ import { sendMessage } from "../infra/outbound/message.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
-import { createExecTool as createExecToolImpl } from "./bash-tools.exec.js";
+import { createExecTool as createExecToolImpl } from "./bash-tools.exec-run.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 const createExecTool = (

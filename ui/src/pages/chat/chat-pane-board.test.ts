@@ -15,7 +15,7 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { SessionObserverDigest } from "./chat-pane-deps.ts";
 import "./chat-pane.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
-import type { ChatPageHost } from "./chat-state.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   detachPanelToColumn,
   mergePanelIntoColumn,

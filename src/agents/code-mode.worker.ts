@@ -496,6 +496,16 @@ async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Pr
       // format it like the synchronous path so async rejections keep their cause
       // and location instead of collapsing to the bare message.
       const dumped = vm.dump(error);
+      // Node module globals are deliberately absent from the WASI guest. Keep
+      // aliases fail-closed at that runtime boundary rather than guessing source
+      // provenance or installing a host-backed loader.
+      if (
+        dumped instanceof Error &&
+        dumped.name === "ReferenceError" &&
+        /^(?:require|module|process) is not defined$/u.test(dumped.message)
+      ) {
+        throw new CodeModeWorkerFailure("invalid_input", "code mode module access is disabled.");
+      }
       const text =
         dumped instanceof Error
           ? formatQuickJsError(dumped.name, dumped.message, dumped.stack)

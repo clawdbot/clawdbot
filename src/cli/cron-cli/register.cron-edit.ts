@@ -15,6 +15,7 @@ import {
   callGatewayFromCli,
   type GatewayRpcOpts,
 } from "../gateway-rpc.js";
+import { parseDurationMs } from "../parse-duration.js";
 import { isUnknownCronGetMethodError, listCronJobsFromGateway } from "./list-jobs.js";
 import { resolveCronEditPayloadDeliveryPatch } from "./register.cron-edit-options.js";
 import {
@@ -23,11 +24,7 @@ import {
   resolveCronEditScheduleRequest,
   validateStreamScheduleMetadata,
 } from "./schedule-options.js";
-import {
-  getCronChannelOptions,
-  parsePositiveCronDurationMs,
-  warnIfCronSchedulerDisabled,
-} from "./shared.js";
+import { getCronChannelOptions, warnIfCronSchedulerDisabled } from "./shared.js";
 import { normalizeCronSessionTargetOption } from "./thread-id-shared.js";
 import { readCronTriggerScript } from "./trigger-options.js";
 
@@ -422,8 +419,10 @@ export function registerCronEditCommand(cron: Command) {
               failureAlert.to = to ? to : undefined;
             }
             if (hasFailureAlertCooldown) {
-              const cooldownMs = parsePositiveCronDurationMs(String(opts.failureAlertCooldown));
-              if (!cooldownMs && cooldownMs !== 0) {
+              let cooldownMs: number;
+              try {
+                cooldownMs = parseDurationMs(String(opts.failureAlertCooldown));
+              } catch {
                 throw new Error("Invalid --failure-alert-cooldown.");
               }
               failureAlert.cooldownMs = cooldownMs;

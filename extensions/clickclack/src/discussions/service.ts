@@ -30,7 +30,12 @@ import {
   type DiscussionBindingAccountResolution,
 } from "./eligibility.js";
 import { getClickClackDiscussionInstallationId } from "./installation.js";
-import { discussionCredentialFingerprint, resolveDiscussionLabel } from "./naming.js";
+import {
+  discussionCredentialFingerprint,
+  fallbackDiscussionLabel,
+  resolveDiscussionLabel,
+  truncateDiscussionDisplayTitle,
+} from "./naming.js";
 import {
   clearClickClackDiscussionChannelRevoked,
   isClickClackDiscussionChannelRevoked,
@@ -332,7 +337,10 @@ export class ClickClackDiscussionService {
     }
     const archived = entry ? entry.archivedAt !== undefined : true;
     const deleted = entry === undefined;
-    const label = entry ? resolveDiscussionLabel(entry.label, sessionKey) : binding.label;
+    const fallback = fallbackDiscussionLabel(sessionKey, binding.agentId);
+    const label = entry
+      ? resolveDiscussionLabel(entry, sessionKey, binding.agentId)
+      : binding.label;
     const section = entry?.category?.trim() || account.discussions.section;
     // Binding ownership follows global session routing; unscoped link decoration
     // follows the ClickClack account agent so reconciliation keeps the URL stable.
@@ -346,6 +354,7 @@ export class ClickClackDiscussionService {
       ) ?? "";
     const patch: {
       archived?: boolean;
+      display_title?: string;
       external_url?: string;
       name?: string;
       sidebar_section?: string;
@@ -354,6 +363,26 @@ export class ClickClackDiscussionService {
       patch.archived = archived;
     }
     const labelChanged = label !== binding.label;
+    const desiredDisplayTitle = label === fallback ? "" : truncateDiscussionDisplayTitle(label);
+    // Confirmation piggybacks on normal opens/renames, so a workspace backfills after any channel
+    // round-trips a title. Legacy servers never confirm, avoiding retry spam; a fully dormant
+    // workspace may wait until its next titled open. Scoped to this binding's server+account so a
+    // confirmation from a previous deployment cannot arm backfill against a legacy server.
+    const serverSupportsDisplayTitle = this.#store
+      .entries()
+      .some(
+        ({ binding: candidate }) =>
+          candidate.displayTitle !== undefined &&
+          candidate.serverBaseUrl === binding.serverBaseUrl &&
+          candidate.accountId === binding.accountId,
+      );
+    const shouldBackfillDisplayTitle =
+      desiredDisplayTitle !== "" &&
+      binding.displayTitle !== desiredDisplayTitle &&
+      serverSupportsDisplayTitle;
+    if (labelChanged || shouldBackfillDisplayTitle) {
+      patch.display_title = desiredDisplayTitle;
+    }
     if (section !== binding.section) {
       patch.sidebar_section = section;
     }
@@ -367,20 +396,22 @@ export class ClickClackDiscussionService {
       return;
     }
     const client = this.#clientFactory(account);
+    let updated: Awaited<ReturnType<ClickClackClient["updateChannel"]>>;
     if (labelChanged) {
-      await this.#withChannelMutationLock(async () => {
+      updated = await this.#withChannelMutationLock(async () => {
         for (let attempt = 0; attempt < CHANNEL_NAME_MUTATION_ATTEMPTS; attempt += 1) {
           patch.name = await resolveAvailableChannelName({
             client,
             workspaceId: binding.workspaceId,
             label,
             sessionKey,
+            agentId: binding.agentId,
             ownChannelId: binding.channelId,
           });
           try {
-            const updated = await client.updateChannel(binding.channelId, patch);
-            assertChannelPatch(updated, patch);
-            return;
+            const renamed = await client.updateChannel(binding.channelId, patch);
+            assertChannelPatch(renamed, patch);
+            return renamed;
           } catch (error) {
             if (
               !isClickClackChannelNameConflict(error) ||
@@ -390,16 +421,24 @@ export class ClickClackDiscussionService {
             }
           }
         }
+        throw new Error("ClickClack discussion channel name retries were exhausted");
       });
     } else {
-      const updated = await client.updateChannel(binding.channelId, patch);
+      updated = await client.updateChannel(binding.channelId, patch);
       assertChannelPatch(updated, patch);
     }
     if (deleted) {
       this.#revokeAndDeleteBinding(sessionKey, binding);
       return;
     }
-    this.#store.set(sessionKey, { ...binding, archived, externalUrl, label, section });
+    this.#store.set(sessionKey, {
+      ...binding,
+      archived,
+      externalUrl,
+      label,
+      section,
+      displayTitle: "display_title" in updated ? updated.display_title : undefined,
+    });
   }
 
   async #reconcilePendingOpen(

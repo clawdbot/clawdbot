@@ -1,5 +1,6 @@
 // Gateway RPC handlers for cron job CRUD, run logs, wake, and delivery previews.
 import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -318,7 +319,8 @@ function assertCronDoesNotTargetAgentHarness(input: {
 }
 
 function resolveCronJobId(params: CronJobIdParams): string | undefined {
-  return params.id ?? params.jobId;
+  // Exact store lookups; clipboard/UI padding must not fake "id not found".
+  return normalizeOptionalString(params.id ?? params.jobId);
 }
 
 function respondInvalidCronParams(respond: RespondFn, method: string, reason: string): void {
@@ -783,7 +785,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       expectedConfigRevision?: string;
     };
     const callerScope = readCronCallerScope(client);
-    const jobId = p.id ?? p.jobId;
+    const jobId = resolveCronJobId(p);
     if (!jobId) {
       respond(
         false,
@@ -1026,8 +1028,9 @@ export const cronHandlers: GatewayRequestHandlers = {
     const p = params as CronRunsRequestParams;
     const callerScope = readCronCallerScope(client);
     const explicitScope = p.scope;
+    const hasJobSelector = p.id !== undefined || p.jobId !== undefined;
     const jobId = resolveCronJobId(p);
-    const scope: "job" | "all" = explicitScope ?? (jobId ? "job" : "all");
+    const scope: "job" | "all" = explicitScope ?? (hasJobSelector ? "job" : "all");
     if (scope === "job" && !jobId) {
       respondMissingCronJobId(respond, "cron.runs");
       return;

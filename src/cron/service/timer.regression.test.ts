@@ -38,7 +38,8 @@ import type {
 import { cancelActiveCronTaskRun } from "./active-run-cancellation.js";
 import { resetActiveCronTaskRunsForTests } from "./active-run-cancellation.test-support.js";
 import { computeJobNextRunAtMs, recomputeNextRunsForMaintenance } from "./jobs.js";
-import { run as runManualCronJob, stop } from "./ops.js";
+import { stop } from "./ops-lifecycle.js";
+import { run as runManualCronJob } from "./ops-run.js";
 import { createCronServiceState as createBaseCronServiceState, type CronEvent } from "./state.js";
 import { applyJobResult, executeJobCoreWithTimeout, runMissedJobs } from "./timer.js";
 import { executeJobCore, onTimer } from "./timer.test-support.js";

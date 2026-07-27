@@ -377,6 +377,9 @@ const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
 // Keep OpenClaw control-path tools directly callable even when Codex tool_search
 // is unavailable or resolves a connector-only universe. Developer instructions
 // still steer normal Codex subagents to native spawn_agent.
+// sessions_yield is normally routed by its catalogMode "direct-only" before
+// this set is consulted; the name entry stays as the metadata-independent
+// contract that control-path tools remain directly callable.
 const ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES = new Set([
   "agents_list",
   "sessions_spawn",

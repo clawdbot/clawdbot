@@ -158,7 +158,12 @@ async function drainQueuedEntry(opts: {
       if (getErrnoCode(failErr) === "ENOENT") {
         return "already-gone";
       }
-      return "failed";
+      // A non-ENOENT persistence failure here means the retry metadata
+      // (retryCount/lastAttemptAt) never advanced, so swallowing it as "failed"
+      // re-drives the same entry forever without progressing toward the
+      // max-retries terminal move. Surface it like the sibling moveToFailed
+      // paths below, which also re-throw non-ENOENT.
+      throw failErr;
     }
   }
 }

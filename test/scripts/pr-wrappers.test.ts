@@ -155,11 +155,12 @@ describe("scripts/pr wrappers", () => {
     expect(script).toContain("scripts/pr review-init <PR>");
     expect(script).toContain("scripts/pr prepare-run <PR>");
     expect(script).toContain("scripts/pr ci-dispatch <PR>");
-    expect(script).toContain("scripts/pr merge-run <PR>");
+    expect(script).toContain("scripts/pr merge-run <PR> [--auto-merge]");
+    expect(script).toContain("OPENCLAW_PR_AUTO_MERGE=1 is equivalent");
     expect(script).toContain('review_init "$pr"');
     expect(script).toContain('prepare_run "$pr"');
     expect(script).toContain('ci_dispatch "$pr"');
-    expect(script).toContain('merge_run "$pr"');
+    expect(script).toContain('merge_run "$pr" "$auto_merge"');
     expect(script).toContain('require_main_target_pr "${1-}"');
     expect(script).toContain("only support PRs targeting main");
   });
@@ -261,6 +262,8 @@ describe("scripts/pr wrappers", () => {
     expect(script).toContain("--merge");
     expect(script).toContain("--rebase");
     expect(script).toContain('echo "Merged via $merge_label."');
+    expect(script).toContain("--auto");
+    expect(script).toContain('--match-head-commit "$PREP_HEAD_SHA"');
   });
 
   it("keeps prepare wrapper modes delegated to the main PR helper", () => {

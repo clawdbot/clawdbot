@@ -1943,7 +1943,9 @@ struct ChatViewModelTests {
         let discardedViewModel = try weakReference(to: viewModel)
 
         viewModel = nil
-        await Task.yield()
+        for _ in 0..<100 where discardedViewModel.value != nil {
+            await Task.yield()
+        }
 
         #expect(discardedViewModel.value == nil)
     }
