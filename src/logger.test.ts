@@ -12,7 +12,7 @@ import {
 } from "./logging.js";
 import { flushLogger } from "./logging/logger.js";
 import type { RuntimeEnv } from "./runtime.js";
-import { withTempDir, withTempDirSync } from "./test-helpers/temp-dir.js";
+import { withTempDir } from "./test-helpers/temp-dir.js";
 
 describe("logger helpers", () => {
   afterEach(() => {
