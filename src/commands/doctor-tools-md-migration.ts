@@ -410,6 +410,7 @@ async function recoverInterruptedAgentsClaim(params: {
   shouldMerge: boolean;
 }): Promise<void> {
   const { agentsPath } = params;
+  await recoverInterruptedAgentsPublish(agentsPath);
   const entries = await fs.readdir(path.dirname(agentsPath)).catch(() => [] as string[]);
   const prefix = `${path.basename(agentsPath)}.doctor-backup-`;
   const claims = entries.filter((entry) => entry.startsWith(prefix));
@@ -458,6 +459,34 @@ async function recoverInterruptedAgentsClaim(params: {
   }
   await publishNoClobber(claimPath, agentsPath);
   await fs.rm(claimPath);
+}
+
+async function recoverInterruptedAgentsPublish(agentsPath: string): Promise<void> {
+  const dir = path.dirname(agentsPath);
+  const prefix = `${path.basename(agentsPath)}.doctor-writing-`;
+  let agentsStat: syncFs.Stats;
+  try {
+    agentsStat = syncFs.lstatSync(agentsPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+  const linkedTemps = syncFs.readdirSync(dir).filter((entry) => {
+    if (!entry.startsWith(prefix)) {
+      return false;
+    }
+    const tempStat = syncFs.lstatSync(path.join(dir, entry));
+    return tempStat.isFile() && tempStat.dev === agentsStat.dev && tempStat.ino === agentsStat.ino;
+  });
+  if (!agentsStat.isFile() || agentsStat.nlink !== 2 || linkedTemps.length !== 1) {
+    return;
+  }
+  // The active TOOLS.md claim excludes concurrent doctor writers here; this
+  // same-inode link can only be the completed half of an interrupted publish.
+  syncFs.unlinkSync(path.join(dir, linkedTemps[0]!));
+  await syncDirectory(dir);
 }
 
 async function syncDirectory(dir: string): Promise<void> {

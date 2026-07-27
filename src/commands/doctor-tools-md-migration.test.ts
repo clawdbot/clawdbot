@@ -249,6 +249,34 @@ describe("TOOLS.md migration", () => {
     });
   });
 
+  it("recovers an AGENTS.md publish interrupted after the hard link", async () => {
+    const fixture = await createFixture();
+    const agents = "# Agent\n\n## Tools\n\nExisting notes.\n";
+    const tools = "### Cameras\n\n- kitchen → wide angle\n";
+    const merged = `${agents}\n### Local notes (migrated from TOOLS.md)\n\n${tools}`;
+    const interruptedAt = Date.now() - 60_000;
+    const toolsClaimPath = `${fixture.toolsPath}.doctor-importing-999999-${interruptedAt}-claim`;
+    const agentsClaimPath = `${fixture.agentsPath}.doctor-backup-999999-${interruptedAt}`;
+    const tempPath = `${fixture.agentsPath}.doctor-writing-999999-${interruptedAt}`;
+    await fs.writeFile(toolsClaimPath, tools);
+    await fs.writeFile(agentsClaimPath, agents);
+    await fs.writeFile(tempPath, merged);
+    await fs.link(tempPath, fixture.agentsPath);
+    await expect(fs.stat(fixture.agentsPath)).resolves.toMatchObject({ nlink: 2 });
+
+    const result = await maybeMigrateToolsMd({
+      cfg: fixture.cfg,
+      shouldRepair: true,
+      env: fixture.env,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toHaveLength(1);
+    await expect(fs.readFile(fixture.agentsPath, "utf8")).resolves.toBe(merged);
+    await expect(fs.stat(fixture.agentsPath)).resolves.toMatchObject({ nlink: 1 });
+    await expect(fs.readdir(fixture.workspace)).resolves.toEqual(["AGENTS.md"]);
+  });
+
   it("appends a Tools section when AGENTS.md has no Tools heading", async () => {
     const fixture = await createFixture();
     const agents = "# Agent\n\nKeep safe.";
