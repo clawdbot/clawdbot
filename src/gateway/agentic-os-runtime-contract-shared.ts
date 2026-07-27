@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { isValidAgentId, normalizeAgentId } from "../routing/session-key.js";
+
 export const CONTRACT_VERSION = "v1";
 export const AGENTIC_OS_ALLOW_LEASE_MAX_TTL_MS = 24 * 60 * 60 * 1000;
 export const AGENTIC_OS_RUNTIME_MAX_RECORDS = 1_024;
@@ -131,6 +134,10 @@ export function stableJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
+export function stableJsonDigest(value: unknown): string {
+  return `sha256:${createHash("sha256").update(stableJson(value)).digest("hex")}`;
+}
+
 export function assertNoForbiddenAliases(
   params: Record<string, unknown>,
   aliases: readonly string[] = FORBIDDEN_ALL_CAMEL_ALIASES,
@@ -147,6 +154,18 @@ export function readString(params: Record<string, unknown>, key: string): string
     throw new ContractInputError(`missing required string: ${key}`);
   }
   return value.trim();
+}
+
+export function readAgentIdentity(params: Record<string, unknown>, key: string): string {
+  const value = readString(params, key);
+  return canonicalAgentIdentity(value, key);
+}
+
+export function canonicalAgentIdentity(value: string, key = "agent_id"): string {
+  if (!isValidAgentId(value)) {
+    throw new ContractInputError(`invalid agent id: ${key}`);
+  }
+  return normalizeAgentId(value);
 }
 
 export function readPositiveInteger(params: Record<string, unknown>, key: string): number {
@@ -166,4 +185,27 @@ export function pickStrings<const T extends readonly string[]>(
     picked[field as T[number]] = readString(params, field);
   }
   return picked;
+}
+
+export function canonicalizeAgenticOsIdentityFields<const T extends readonly string[]>(
+  values: Record<T[number], string>,
+): Record<T[number], string> {
+  const canonical = { ...values };
+  if ("agent_id" in canonical) {
+    canonical.agent_id = canonicalAgentIdentity(canonical.agent_id as string, "agent_id");
+  }
+  if ("requester_agent_id" in canonical) {
+    canonical.requester_agent_id = canonicalAgentIdentity(
+      canonical.requester_agent_id as string,
+      "requester_agent_id",
+    );
+  }
+  return canonical;
+}
+
+export function pickCanonicalIdentityStrings<const T extends readonly string[]>(
+  params: Record<string, unknown>,
+  fields: T,
+): Record<T[number], string> {
+  return canonicalizeAgenticOsIdentityFields(pickStrings(params, fields));
 }

@@ -25,10 +25,11 @@ import {
   FORBIDDEN_RELEASE_ALIASES,
   FORBIDDEN_SESSION_STATUS_CAMEL_ALIASES,
   assertNoForbiddenAliases,
-  pickStrings,
+  canonicalAgentIdentity,
+  pickCanonicalIdentityStrings,
   readPositiveInteger,
   readString,
-  stableJson,
+  stableJsonDigest,
   type LeaseRecord,
   type ReleaseReplay,
   type SessionRecord,
@@ -74,6 +75,10 @@ let loadedSnapshotPath: string | undefined;
 
 function principalScopedKey(authenticatedPrincipalId: string, identity: string): string {
   return `${authenticatedPrincipalId}\0${identity}`;
+}
+
+function canonicalAuthenticatedRequesterAgentId(value: string | undefined): string | undefined {
+  return value ? canonicalAgentIdentity(value) : undefined;
 }
 
 function snapshotRuntimeState(): RuntimeSnapshot {
@@ -314,16 +319,17 @@ export function acquireAgenticOsAllowLease(
   ensureRuntimeStateLoaded();
   pruneExpiredLeases();
   assertNoForbiddenAliases(params, FORBIDDEN_LEASE_CAMEL_ALIASES);
-  const owner = pickStrings(params, ALLOW_LEASE_IDENTITY_FIELDS);
-  if (authenticatedRequesterAgentId && owner.requester_agent_id !== authenticatedRequesterAgentId) {
+  const owner = pickCanonicalIdentityStrings(params, ALLOW_LEASE_IDENTITY_FIELDS);
+  const requesterAgentId = canonicalAuthenticatedRequesterAgentId(authenticatedRequesterAgentId);
+  if (requesterAgentId && owner.requester_agent_id !== requesterAgentId) {
     return rejectConflict("requester_agent_id does not match authenticated requester");
   }
-  const spawnOwner = pickStrings(params, ALLOW_LEASE_OWNER_FIELDS);
+  const spawnOwner = pickCanonicalIdentityStrings(params, ALLOW_LEASE_OWNER_FIELDS);
   const ttlMs = readPositiveInteger(params, "ttl_ms");
   if (ttlMs > AGENTIC_OS_ALLOW_LEASE_MAX_TTL_MS) {
     return rejectConflict(`ttl_ms exceeds maximum ${AGENTIC_OS_ALLOW_LEASE_MAX_TTL_MS}`);
   }
-  const fingerprint = stableJson({ ...owner, ttl_ms: ttlMs });
+  const fingerprint = stableJsonDigest({ ...owner, ttl_ms: ttlMs });
   const idempotencyScopedKey = principalScopedKey(authenticatedPrincipalId, owner.idempotency_key);
   const clientLeaseScopedKey = principalScopedKey(authenticatedPrincipalId, owner.client_lease_id);
   const existingByIdempotency = acquireByIdempotencyKey.get(idempotencyScopedKey);
@@ -402,8 +408,9 @@ export function releaseAgenticOsAllowLease(
   ensureRuntimeStateLoaded();
   pruneExpiredLeases();
   assertNoForbiddenAliases(params, FORBIDDEN_RELEASE_ALIASES);
-  const owner = pickStrings(params, ALLOW_LEASE_OWNER_FIELDS);
-  if (authenticatedRequesterAgentId && owner.requester_agent_id !== authenticatedRequesterAgentId) {
+  const owner = pickCanonicalIdentityStrings(params, ALLOW_LEASE_OWNER_FIELDS);
+  const requesterAgentId = canonicalAuthenticatedRequesterAgentId(authenticatedRequesterAgentId);
+  if (requesterAgentId && owner.requester_agent_id !== requesterAgentId) {
     return rejectConflict("requester_agent_id does not match authenticated requester");
   }
   const releaseIdempotencyKey = readString(params, "release_idempotency_key");
@@ -413,7 +420,7 @@ export function releaseAgenticOsAllowLease(
     release_idempotency_key: releaseIdempotencyKey,
     gateway_lease_id: gatewayLeaseId,
   };
-  const fingerprint = stableJson(normalized);
+  const fingerprint = stableJsonDigest(normalized);
   const releaseScopedKey = principalScopedKey(authenticatedPrincipalId, releaseIdempotencyKey);
   const replay = releaseByReleaseIdempotencyKey.get(releaseScopedKey);
   if (replay) {
@@ -520,8 +527,9 @@ export async function spawnAgenticOsSession(
     return rejectConflict("gateway_lease_id is already reserved or consumed");
   }
   if (
-    authenticatedRequesterAgentId &&
-    lease.spawnOwner.requester_agent_id !== authenticatedRequesterAgentId
+    canonicalAuthenticatedRequesterAgentId(authenticatedRequesterAgentId) &&
+    lease.spawnOwner.requester_agent_id !==
+      canonicalAuthenticatedRequesterAgentId(authenticatedRequesterAgentId)
   ) {
     return rejectConflict("allow lease requester does not match authenticated requester");
   }

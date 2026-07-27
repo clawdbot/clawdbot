@@ -116,14 +116,17 @@ Call `sessions_spawn` with the acquired lease:
     "idempotency_key": "spawn-idem-01",
     "phase": "B",
     "agent_id": "ai-engineer",
-    "task_digest": "lowercase-sha256-hex"
+    "task_digest": "aa64985582ec710ff6cb61511413a970359aae3d4bba8c69b038f6456420d9c1"
   }
 }
 ```
 
 `metadata` must contain exactly the seven fields shown. `task_digest` is the
-lowercase hexadecimal SHA-256 digest of the UTF-8 bytes of the exact `task`
-string.
+lowercase hexadecimal SHA-256 digest of the UTF-8 bytes of the normalized
+launch task after the Gateway trims surrounding whitespace. For the example
+above, the launched task is `Run the bounded implementation phase`, so
+`task_digest` is
+`aa64985582ec710ff6cb61511413a970359aae3d4bba8c69b038f6456420d9c1`.
 
 Supported launch values are:
 
@@ -133,9 +136,14 @@ Supported launch values are:
 - `context`: `isolated` or `fork`
 - `lightContext`: boolean
 
-`taskName`, `cleanup`, `context`, and `lightContext` are optional. `taskName`
-is trimmed and validated before it becomes part of the replay identity.
-`agentId` defaults to `metadata.agent_id` and must equal it when supplied.
+`taskName`, `cleanup`, `context`, and `lightContext` are optional. When present,
+`taskName` must be a string; it is trimmed and validated before it becomes part
+of the replay identity. `agentId` defaults to `metadata.agent_id` and must equal
+it when supplied. The Gateway validates and canonicalizes `agentId`,
+`metadata.agent_id`, and lease `agent_id` with the same agent-id boundary used
+by the child-session runner before authorization, replay digesting, reservation,
+and response projection. Malformed strings such as provider error text are
+rejected instead of being sanitized into agent ids.
 
 An accepted response has `status: "accepted"` and includes the canonical
 `session_key`, `childSessionKey`, `runId`, `gateway_lease_id`, request
@@ -189,6 +197,11 @@ An exact release retry returns the same `status: "released"` response.
 The Gateway persists acquisition, reservation, accepted-session, and release
 replay state in its canonical SQLite state database:
 
+- persisted lease, release, and spawn replay fingerprints are bounded
+  cryptographic digests in `sha256:<64 lowercase hex>` form. The spawn replay
+  digest is SHA-256 over the stable canonical spawn identity, which includes
+  the normalized launch task for conflict detection, but the raw task text is
+  not persisted in fingerprint fields;
 - lease and release replay identities are retained for five minutes after
   becoming terminal;
 - accepted session projections are retained for 24 hours and remain retained

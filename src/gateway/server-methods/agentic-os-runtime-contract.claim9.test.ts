@@ -224,14 +224,18 @@ describe("Agentic OS runtime contract claim 9 regressions", () => {
   });
 
   it("normalizes metadata agent identity before spawn authorization and replay", async () => {
-    const gatewayLeaseId = await acquireLease();
+    const gatewayLeaseId = await acquireLease({
+      ...acquireParams,
+      agent_id: " AI-ENGINEER ",
+      requester_agent_id: " MAIN ",
+    });
     const accepted = payload(
       await invoke("sessions_spawn", {
         ...spawnParamsFor(gatewayLeaseId),
-        agentId: " ai-engineer ",
+        agentId: " AI-ENGINEER ",
         metadata: {
           ...sessionMetadata,
-          agent_id: " ai-engineer ",
+          agent_id: " AI-ENGINEER ",
         },
       }),
     );
@@ -257,6 +261,96 @@ describe("Agentic OS runtime contract claim 9 regressions", () => {
       }),
     );
     expect(exactRetry.session_key).toBe(accepted.session_key);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects present non-string taskName before reservation and spawn", async () => {
+    const gatewayLeaseId = await acquireLease();
+
+    expectInvalid(
+      await invoke("sessions_spawn", {
+        ...spawnParamsFor(gatewayLeaseId),
+        taskName: 123,
+      }),
+      "invalid string: taskName",
+    );
+
+    const store = await import("../agentic-os-runtime-contract-store.js");
+    const [lease] = store.loadAgenticOsRuntimeSnapshot()?.leases ?? [];
+    expect(lease).toMatchObject({ gatewayLeaseId });
+    expect(lease).not.toHaveProperty("spawn_reservation_fingerprint");
+    expect(lease).not.toHaveProperty("spawn_reservation");
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed agent identities before sanitization, reservation, and spawn", async () => {
+    expectInvalid(
+      await invoke("subagents.allowLease.acquire", {
+        ...acquireParams,
+        agent_id: "Agent not found: xyz",
+      }),
+      "invalid agent id: agent_id",
+    );
+
+    const gatewayLeaseId = await acquireLease();
+    expectInvalid(
+      await invoke("sessions_spawn", {
+        ...spawnParamsFor(gatewayLeaseId),
+        metadata: {
+          ...sessionMetadata,
+          agent_id: "Agent not found: xyz",
+        },
+      }),
+      "invalid agent id: agent_id",
+    );
+
+    const store = await import("../agentic-os-runtime-contract-store.js");
+    const [lease] = store.loadAgenticOsRuntimeSnapshot()?.leases ?? [];
+    expect(lease).toMatchObject({ gatewayLeaseId });
+    expect(lease).not.toHaveProperty("spawn_reservation_fingerprint");
+    expect(lease).not.toHaveProperty("spawn_reservation");
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("persists bounded replay digests without raw task-bearing fingerprints", async () => {
+    const rawTask = "Launch private task phrase: do-not-persist-in-fingerprint";
+    const gatewayLeaseId = await acquireLease();
+    const accepted = payload(
+      await invoke("sessions_spawn", spawnParamsFor(gatewayLeaseId, { task: rawTask })),
+    );
+
+    expect(accepted.status).toBe("accepted");
+    const store = await import("../agentic-os-runtime-contract-store.js");
+    const snapshot = store.loadAgenticOsRuntimeSnapshot() as
+      | {
+          leases?: Array<Record<string, unknown>>;
+          releaseReplays?: Array<Record<string, unknown>>;
+          sessions?: Array<Record<string, unknown>>;
+        }
+      | undefined;
+    const persistedFingerprints = [
+      ...(snapshot?.leases ?? []).flatMap((lease) => [
+        lease.fingerprint,
+        lease.spawn_reservation_fingerprint,
+        (lease.spawn_reservation as Record<string, unknown> | undefined)?.fingerprint,
+      ]),
+      ...(snapshot?.releaseReplays ?? []).map((replay) => replay.fingerprint),
+      ...(snapshot?.sessions ?? []).map((session) => session.fingerprint),
+    ].filter((value): value is string => typeof value === "string");
+
+    expect(persistedFingerprints.length).toBeGreaterThan(0);
+    expect(persistedFingerprints).toEqual(
+      persistedFingerprints.map(() => expect.stringMatching(/^sha256:[a-f0-9]{64}$/u)),
+    );
+    expect(JSON.stringify(persistedFingerprints)).not.toContain(rawTask);
+    expect(
+      payload(await invoke("sessions_spawn", spawnParamsFor(gatewayLeaseId, { task: rawTask })))
+        .session_key,
+    ).toBe(accepted.session_key);
+    expectInvalid(
+      await invoke("sessions_spawn", spawnParamsFor(gatewayLeaseId, { task: `${rawTask}!` })),
+      "conflicting sessions_spawn idempotency_key",
+    );
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
   });
 

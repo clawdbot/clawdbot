@@ -5,18 +5,23 @@ import {
   FORBIDDEN_SPAWN_CAMEL_ALIASES,
   SESSION_METADATA_FIELDS,
   assertNoForbiddenAliases,
+  canonicalizeAgenticOsIdentityFields,
   isRecord,
+  readAgentIdentity,
   readString,
   stableJson,
+  stableJsonDigest,
   type LeaseRecord,
 } from "./agentic-os-runtime-contract-shared.js";
 import { taskDigest } from "./agentic-os-runtime-contract-task-state.js";
+
+type SessionMetadataInput = Record<(typeof SESSION_METADATA_FIELDS)[number], string>;
 
 function rejectConflict(message: string): never {
   throw new ContractInputError(message);
 }
 
-function readSessionMetadata(params: Record<string, unknown>): Record<string, unknown> {
+function readSessionMetadata(params: Record<string, unknown>): SessionMetadataInput {
   const metadata = params.metadata;
   if (!isRecord(metadata)) {
     throw new ContractInputError("missing required object: metadata");
@@ -27,8 +32,11 @@ function readSessionMetadata(params: Record<string, unknown>): Record<string, un
     throw new ContractInputError("metadata must contain exactly the Agentic OS session v1 fields");
   }
   return Object.fromEntries(
-    SESSION_METADATA_FIELDS.map((field) => [field, readString(metadata, field)]),
-  );
+    SESSION_METADATA_FIELDS.map((field) => [
+      field,
+      field === "agent_id" ? readAgentIdentity(metadata, field) : readString(metadata, field),
+    ]),
+  ) as SessionMetadataInput;
 }
 
 export function parseAgenticOsSpawnInput(params: Record<string, unknown>) {
@@ -53,10 +61,13 @@ export function parseAgenticOsSpawnInput(params: Record<string, unknown>) {
   }
   const agentId =
     typeof params.agentId === "string" && params.agentId.trim()
-      ? params.agentId.trim()
-      : String(metadata.agent_id);
+      ? readAgentIdentity(params, "agentId")
+      : metadata.agent_id;
   if (agentId !== metadata.agent_id) {
     return rejectConflict("spawn agentId does not match session metadata agent_id");
+  }
+  if (Object.hasOwn(params, "taskName") && typeof params.taskName !== "string") {
+    return rejectConflict("invalid string: taskName");
   }
   const taskNameResult = normalizeSubagentTaskName(params.taskName);
   if (taskNameResult.error) {
@@ -81,7 +92,7 @@ export function parseAgenticOsSpawnInput(params: Record<string, unknown>) {
     return rejectConflict("invalid boolean: lightContext");
   }
   const lightContext = params.lightContext === true;
-  const fingerprint = stableJson({
+  const fingerprint = stableJsonDigest({
     client_request_id: clientRequestId,
     idempotency_key: idempotencyKey,
     gateway_lease_id: gatewayLeaseId,
@@ -114,10 +125,10 @@ export function parseAgenticOsSpawnInput(params: Record<string, unknown>) {
 
 export function requireLeaseAuthorizesSpawn(params: {
   lease: LeaseRecord;
-  metadata: Record<string, unknown>;
+  metadata: SessionMetadataInput;
   agentId: string;
 }): void {
-  const expected: Record<(typeof ALLOW_LEASE_OWNER_FIELDS)[number], unknown> = {
+  const expected: Record<(typeof ALLOW_LEASE_OWNER_FIELDS)[number], string> = {
     client_lease_id: params.lease.spawnOwner.client_lease_id,
     run_id: params.metadata.run_id,
     phase: params.metadata.phase,
@@ -125,8 +136,9 @@ export function requireLeaseAuthorizesSpawn(params: {
     agent_id: params.agentId,
     requester_agent_id: params.lease.spawnOwner.requester_agent_id,
   };
+  const canonicalExpected = canonicalizeAgenticOsIdentityFields(expected);
   for (const field of ALLOW_LEASE_OWNER_FIELDS) {
-    if (params.lease.spawnOwner[field] !== expected[field]) {
+    if (params.lease.spawnOwner[field] !== canonicalExpected[field]) {
       rejectConflict(`gateway_lease_id owner does not authorize spawn: ${field}`);
     }
   }
