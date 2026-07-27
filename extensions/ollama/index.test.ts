@@ -2192,9 +2192,9 @@ describe("ollama plugin", () => {
       expectedThink: "low",
     },
     {
-      name: "preserves native Ollama's highest supported max thinking effort",
+      name: "maps native Ollama max thinking to the highest supported wire effort",
       thinkingLevel: "max" as const,
-      expectedThink: "max",
+      expectedThink: "high",
     },
     {
       name: "does not set think param when thinkingLevel is undefined",

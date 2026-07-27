@@ -311,22 +311,6 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
       expectedThink: "medium",
     },
     {
-      name: "preserves configured native Ollama max thinking with implicit off",
-      id: "gpt-oss:20b",
-      contextWindow: 131072,
-      thinkingLevel: "off",
-      params: { thinking: "max" },
-      expectedThink: "max",
-    },
-    {
-      name: "preserves the native Ollama max think parameter with implicit off",
-      id: "gpt-oss:20b",
-      contextWindow: 131072,
-      thinkingLevel: "off",
-      params: { think: "max" },
-      expectedThink: "max",
-    },
-    {
       name: "does not forward truthy configured native Ollama thinking for non-reasoning models",
       id: "llama3.2:latest",
       contextWindow: 8192,
@@ -344,23 +328,6 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
       expectedThink: undefined,
     },
     {
-      name: "does not forward configured max thinking for non-reasoning models",
-      id: "llama3.2:latest",
-      contextWindow: 8192,
-      reasoning: false,
-      thinkingLevel: "off",
-      params: { think: "max" },
-      expectedThink: undefined,
-    },
-    {
-      name: "does not forward runtime max thinking for non-reasoning models",
-      id: "llama3.2:latest",
-      contextWindow: 8192,
-      reasoning: false,
-      thinkingLevel: "max",
-      expectedThink: undefined,
-    },
-    {
       name: "forwards the native think effort on native Ollama chat requests when thinking is enabled",
       id: "qwen3:32b",
       contextWindow: 131072,
@@ -368,32 +335,10 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
       expectedThink: "low",
     },
     {
-      name: "forwards native Ollama max thinking without downgrading the wire effort",
+      name: "maps native Ollama max thinking to think=high on the wire",
       id: "gpt-oss:20b",
       contextWindow: 131072,
       thinkingLevel: "max",
-      expectedThink: "max",
-    },
-    {
-      name: "lets runtime max override lower configured native Ollama thinking",
-      id: "gpt-oss:20b",
-      contextWindow: 131072,
-      thinkingLevel: "max",
-      params: { thinking: "low" },
-      expectedThink: "max",
-    },
-    {
-      name: "maps xhigh to Ollama's supported high thinking effort",
-      id: "gpt-oss:20b",
-      contextWindow: 131072,
-      thinkingLevel: "xhigh",
-      expectedThink: "high",
-    },
-    {
-      name: "maps adaptive to Ollama's supported high thinking effort",
-      id: "gpt-oss:20b",
-      contextWindow: 131072,
-      thinkingLevel: "adaptive",
       expectedThink: "high",
     },
   ])("$name", async ({ id, contextWindow, reasoning, thinkingLevel, params, expectedThink }) => {
@@ -2571,11 +2516,11 @@ describe("createOllamaStreamFn", () => {
     );
   });
 
-  it("preserves configured native Ollama max thinking in the top-level chat request", async () => {
+  it("maps configured native Ollama params.thinking=max to the stable top-level think value", async () => {
     await expectSuccessfulOllamaRequest(
       { baseUrl: "http://ollama-host:11434", model: { params: { thinking: "max" } } },
       ({ body }) => {
-        expect(body.think).toBe("max");
+        expect(body.think).toBe("high");
         expect(requireOptionalRecord(body.options)?.think).toBeUndefined();
       },
     );

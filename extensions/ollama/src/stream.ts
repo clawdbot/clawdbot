@@ -252,7 +252,7 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
     });
 }
 
-type OllamaThinkValue = boolean | "low" | "medium" | "high" | "max";
+type OllamaThinkValue = boolean | "low" | "medium" | "high";
 
 const OLLAMA_OPTION_PARAM_KEYS = new Set([
   "num_keep",
@@ -293,18 +293,13 @@ function resolveOllamaThinkValue(thinkingLevel: unknown): OllamaThinkValue | und
   if (thinkingLevel === "off") {
     return false;
   }
-  if (
-    thinkingLevel === "low" ||
-    thinkingLevel === "medium" ||
-    thinkingLevel === "high" ||
-    thinkingLevel === "max"
-  ) {
+  if (thinkingLevel === "low" || thinkingLevel === "medium" || thinkingLevel === "high") {
     return thinkingLevel;
   }
   if (thinkingLevel === "minimal") {
     return "low";
   }
-  if (thinkingLevel === "xhigh" || thinkingLevel === "adaptive") {
+  if (thinkingLevel === "xhigh" || thinkingLevel === "adaptive" || thinkingLevel === "max") {
     return "high";
   }
   return undefined;
@@ -320,13 +315,13 @@ function resolveOllamaThinkParamValue(
   if (raw === "off") {
     return false;
   }
-  if (raw === "low" || raw === "medium" || raw === "high" || raw === "max") {
+  if (raw === "low" || raw === "medium" || raw === "high") {
     return raw;
   }
   if (raw === "minimal") {
     return "low";
   }
-  if (raw === "xhigh" || raw === "adaptive") {
+  if (raw === "xhigh" || raw === "adaptive" || raw === "max") {
     return "high";
   }
   return undefined;
