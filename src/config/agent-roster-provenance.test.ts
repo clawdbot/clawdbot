@@ -18,7 +18,7 @@ function snapshot(params: {
     exists: true,
     raw: "{}",
     parsed: params.parsed,
-    includeProvenance: { agentRoster: params.agentRosterIncludeOwned === true },
+    agentRosterIncludeOwned: params.agentRosterIncludeOwned === true,
     sourceConfigBeforeMigrations: params.sourceConfigBeforeMigrations,
     sourceConfig: params.sourceConfigBeforeMigrations,
     resolved: params.sourceConfigBeforeMigrations,

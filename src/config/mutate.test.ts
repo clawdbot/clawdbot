@@ -564,6 +564,42 @@ describe("config mutate helpers", () => {
     );
   });
 
+  it("does not write through a nested single include owned by a root include array", async () => {
+    const snapshot = {
+      ...createSnapshot({
+        hash: "hash-nested-multiple-include",
+        parsed: { plugins: { $include: ["./delegating.json", "./override.json"] } },
+        sourceConfig: { plugins: { entries: {} } },
+      }),
+      includeProvenance: [
+        {
+          path: ["plugins"],
+          kind: "single" as const,
+          hasSiblingOverrides: false,
+          targetPath: "/tmp/nested.json",
+        },
+        {
+          path: [],
+          kind: "multiple" as const,
+          hasSiblingOverrides: false,
+        },
+      ],
+    } satisfies ConfigFileSnapshot;
+    const nextConfig = { plugins: { entries: { demo: { enabled: true } } } };
+
+    await replaceConfigFile({
+      snapshot,
+      nextConfig,
+      writeOptions: { expectedConfigPath: snapshot.path },
+    });
+
+    expect(ioMocks.writeConfigFile).toHaveBeenCalledWith(nextConfig, {
+      baseSnapshot: snapshot,
+      expectedConfigPath: snapshot.path,
+      afterWrite: { mode: "auto" },
+    });
+  });
+
   it("uses skipPluginValidation for replace pre-write snapshots", async () => {
     const snapshot = createSnapshot({
       hash: "hash-1",

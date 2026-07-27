@@ -141,7 +141,7 @@ export async function writeConfigFileFromContext(
       sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
       nextConfig: cfg,
       rootAuthoredConfig: snapshot.parsed,
-      agentRosterIncludeOwned: snapshot.includeProvenance?.agentRoster,
+      agentRosterIncludeOwned: snapshot.agentRosterIncludeOwned,
       unsetPaths,
       explicitSetPaths: options.explicitSetPaths,
       explicitSetValueSource: options.explicitSetValueSource,
