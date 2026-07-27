@@ -17,6 +17,7 @@ const REGISTERED_EVENT_TYPES = [
   "assistant.message_delta",
   "assistant.reasoning_delta",
   "assistant.reasoning",
+  "assistant.turn_start",
   "assistant.message",
   "assistant.usage",
   "tool.user_requested",
@@ -1113,11 +1114,13 @@ describe("attachEventBridge", () => {
     expect(bridge.buildAssistantMessage({ modelRef: MODEL_REF, now: () => 13 })).toBeUndefined();
   });
 
-  it("does not fold ephemeral deltas into a durable assistant message", () => {
+  it("keeps ephemeral deltas live without folding their text into the terminal message", async () => {
     const session = createFakeSession();
+    const onAssistantDelta = vi.fn();
     const bridge = attachEventBridge(session, {
       getSdkSessionId: () => "sdk-session-id",
       isAborted: () => false,
+      onAssistantDelta,
     });
 
     session.emit("assistant.message_delta", {
@@ -1135,8 +1138,13 @@ describe("attachEventBridge", () => {
       ephemeral: true,
     } as SessionEvent);
     bridge.recordSendResult(makeAssistantMessageEvent("visible"));
+    await bridge.awaitDeltaChain();
 
+    expect(onAssistantDelta).toHaveBeenCalledWith(
+      expect.objectContaining({ delta: "hidden text", text: "hidden text" }),
+    );
     expect(bridge.buildAssistantMessage({ modelRef: MODEL_REF, now: () => 13 })?.content).toEqual([
+      { type: "thinking", thinking: "hidden reasoning" },
       { type: "text", text: "visible" },
     ]);
   });

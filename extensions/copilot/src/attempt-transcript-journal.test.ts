@@ -324,7 +324,7 @@ describe("Copilot attempt transcript journal", () => {
   });
 
   it("marks orphaned durable reasoning replay-incomplete at terminal flush", async () => {
-    const { bridge, journal, session } = await createFixture();
+    const { bridge, journal, session, target } = await createFixture();
     await journal.persistInitialUser();
     session.emit(
       event("assistant.reasoning", "orphaned-reasoning", {
@@ -333,9 +333,21 @@ describe("Copilot attempt transcript journal", () => {
       }),
     );
     bridge.flushTranscriptProjection();
+    session.emit(
+      event("assistant.message", "next-assistant", {
+        content: "next turn",
+        messageId: "next-assistant",
+      }),
+    );
     await journal.barrier("orphaned reasoning");
 
     expect(journal.snapshot().replayInvalid).toBe(true);
+    const assistant = transcriptMessages(await readSessionTranscriptEvents(target)).find(
+      (row) => row.message.role === "assistant",
+    )?.message;
+    expect(assistant).toMatchObject({
+      content: [{ type: "text", text: "next turn" }],
+    });
   });
 
   it("marks a hook-suppressed standalone assistant replay-incomplete", async () => {
@@ -690,6 +702,41 @@ describe("Copilot attempt transcript journal", () => {
     expect(rows.at(-1)?.message).toMatchObject({
       role: "assistant",
       content: [{ type: "text", text: "checking now" }],
+    });
+  });
+
+  it("keeps ephemeral deltas out of the durable assistant row", async () => {
+    const { journal, session, target } = await createFixture();
+    await journal.persistInitialUser();
+    session.emit(event("user.message", "initial-user", { content: "inspect both files" }));
+    session.emit({
+      ...event("assistant.message_delta", "ephemeral-text", {
+        deltaContent: "stream-only text",
+        messageId: "stream-only",
+      }),
+      ephemeral: true,
+    } as SessionEvent);
+    session.emit({
+      ...event("assistant.reasoning_delta", "ephemeral-reasoning", {
+        deltaContent: "stream-only reasoning",
+        reasoningId: "stream-reasoning",
+      }),
+      ephemeral: true,
+    } as SessionEvent);
+    session.emit(
+      event("assistant.message", "durable-assistant", {
+        content: "visible",
+        messageId: "durable-assistant",
+      }),
+    );
+    await journal.barrier("ephemeral deltas");
+
+    const assistant = transcriptMessages(await readSessionTranscriptEvents(target)).find(
+      (row) => row.message.role === "assistant",
+    )?.message;
+    expect(assistant).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "visible" }],
     });
   });
 

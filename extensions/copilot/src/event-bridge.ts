@@ -113,6 +113,8 @@ type AssistantProjectionChunk = {
   assistantTexts: string[];
   event: Extract<SessionEvent, { type: "assistant.message" }>;
   reasoningText?: string;
+  transcriptAssistantTexts: string[];
+  transcriptReasoningText?: string;
 };
 type AssistantProjectionGroup = {
   apiCallId?: string;
@@ -128,6 +130,8 @@ export function attachEventBridge(
   const messagesById = new Map<string, MessageAccumulator>();
   const reasoningOrder: string[] = [];
   const reasoningById = new Map<string, string>();
+  const durableReasoningOrder: string[] = [];
+  const durableReasoningById = new Map<string, string>();
   let lastAssistantEvent: Extract<SessionEvent, { type: "assistant.message" }> | undefined;
   let lastAssistantReasoningText: string | undefined;
   let usage: AssistantUsageSnapshot | undefined;
@@ -216,7 +220,7 @@ export function attachEventBridge(
   });
 
   registerListener(session, unsubscribeFns, "assistant.message_delta", (event) => {
-    if (!isRootSessionEvent(event) || event.ephemeral === true) {
+    if (!isRootSessionEvent(event)) {
       return;
     }
     const messageId = readString(event.data.messageId) ?? "assistant-message";
@@ -253,7 +257,7 @@ export function attachEventBridge(
   });
 
   registerListener(session, unsubscribeFns, "assistant.reasoning_delta", (event) => {
-    if (!isRootSessionEvent(event) || event.ephemeral === true) {
+    if (!isRootSessionEvent(event)) {
       return;
     }
     const reasoningId = readString(event.data.reasoningId) ?? "assistant-reasoning";
@@ -276,7 +280,17 @@ export function attachEventBridge(
       reasoningOrder.push(event.data.reasoningId);
     }
     reasoningById.set(event.data.reasoningId, event.data.content);
+    if (!durableReasoningById.has(event.data.reasoningId)) {
+      durableReasoningOrder.push(event.data.reasoningId);
+    }
+    durableReasoningById.set(event.data.reasoningId, event.data.content);
     unconsumedDurableReasoning = true;
+  });
+
+  registerListener(session, unsubscribeFns, "assistant.turn_start", (event) => {
+    if (isRootSessionEvent(event)) {
+      markUnconsumedReasoningIncomplete();
+    }
   });
 
   registerListener(session, unsubscribeFns, "assistant.message", (event) => {
@@ -484,6 +498,7 @@ export function attachEventBridge(
   });
 
   registerListener(session, unsubscribeFns, "session.error", (event) => {
+    markUnconsumedReasoningIncomplete();
     if (!options.isAborted()) {
       streamError = createPromptError(
         event.data.errorCode ?? event.data.errorType,
@@ -493,6 +508,7 @@ export function attachEventBridge(
   });
 
   registerListener(session, unsubscribeFns, "abort", (event) => {
+    markUnconsumedReasoningIncomplete();
     if (!options.isAborted()) {
       streamError = createPromptError(
         "session_aborted",
@@ -567,6 +583,7 @@ export function attachEventBridge(
             () => args.now(),
             usageByApiCallId,
             usage,
+            false,
           ).message
         : buildAssistantMessage({
             event: lastAssistantEvent,
@@ -613,13 +630,20 @@ export function attachEventBridge(
     }
     lastAssistantReasoningText =
       event.data.reasoningText ?? (joinReasoning(reasoningOrder, reasoningById) || undefined);
+    const transcriptReasoningText =
+      event.data.reasoningText ??
+      (joinReasoning(durableReasoningOrder, durableReasoningById) || undefined);
     reasoningOrder.length = 0;
     reasoningById.clear();
+    durableReasoningOrder.length = 0;
+    durableReasoningById.clear();
     unconsumedDurableReasoning = false;
     const chunk: AssistantProjectionChunk = {
       event,
       assistantTexts: [messagesById.get(event.data.messageId)?.text ?? ""],
       ...(lastAssistantReasoningText ? { reasoningText: lastAssistantReasoningText } : {}),
+      transcriptAssistantTexts: [event.data.content ?? ""],
+      ...(transcriptReasoningText ? { transcriptReasoningText } : {}),
     };
     const apiCallId = readString(event.data.apiCallId);
     if (!apiCallId) {
@@ -656,8 +680,12 @@ export function attachEventBridge(
   function markUnconsumedReasoningIncomplete(): void {
     if (unconsumedDurableReasoning) {
       options.transcriptProjection?.journal.markReplayIncomplete();
-      unconsumedDurableReasoning = false;
     }
+    reasoningOrder.length = 0;
+    reasoningById.clear();
+    durableReasoningOrder.length = 0;
+    durableReasoningById.clear();
+    unconsumedDurableReasoning = false;
   }
 
   function flushPendingAssistantProjectionForToolCall(toolCallId: string): void {
@@ -684,6 +712,7 @@ export function attachEventBridge(
       // Optional assistant.usage must never delay canonical content. Later
       // unkeyed usage stays attempt metadata; this row uses per-call data only.
       undefined,
+      true,
     );
     const eventId = group.chunks[0]?.event.id;
     if (!eventId) {
@@ -797,6 +826,7 @@ function buildAssistantProjectionGroup(
   resolveTimestamp: (event: Extract<SessionEvent, { type: "assistant.message" }>) => number,
   usageByApiCallId: Map<string, AssistantUsageSnapshot>,
   latestUsage: AssistantUsageSnapshot | undefined,
+  forTranscript: boolean,
 ): {
   message: AssistantMessage | undefined;
   replayIncomplete: boolean;
@@ -807,11 +837,11 @@ function buildAssistantProjectionGroup(
       event: chunk.event,
       modelRef,
       now: () => resolveTimestamp(chunk.event),
-      reasoningText: chunk.reasoningText,
+      reasoningText: forTranscript ? chunk.transcriptReasoningText : chunk.reasoningText,
       // Usage is keyed to the complete API call, so every chunk resolves to the
       // same snapshot and the merged message keeps the terminal copy.
       usage: resolveAssistantUsage(chunk.event, latestUsage, usageByApiCallId),
-      assistantTexts: chunk.assistantTexts,
+      assistantTexts: forTranscript ? chunk.transcriptAssistantTexts : chunk.assistantTexts,
     });
     return message ? [message] : [];
   });
