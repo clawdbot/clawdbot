@@ -138,9 +138,14 @@ vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
     normalizeProviderModelIdWithRuntimeMock(params),
 }));
 
-vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
-  getCurrentPluginMetadataSnapshot: () => pluginMetadataMocks.snapshot,
-}));
+vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async () => {
+  const { clearCurrentPluginMetadataSnapshot } =
+    await import("../../plugins/current-plugin-metadata-state.js");
+  return {
+    clearCurrentPluginMetadataSnapshot,
+    getCurrentPluginMetadataSnapshot: () => pluginMetadataMocks.snapshot,
+  };
+});
 
 const telegramModelsTestPlugin: ChannelPlugin = {
   ...createChannelTestPluginBase({
