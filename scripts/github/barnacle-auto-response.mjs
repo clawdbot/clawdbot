@@ -353,8 +353,14 @@ function hasMostlyBlankTemplate(body) {
 }
 
 function stripPullRequestTemplateBoilerplate(text) {
-  return text
-    .replace(/<!--[\s\S]*?-->/g, "")
+  let sanitized = text;
+  let previous;
+  do {
+    previous = sanitized;
+    sanitized = sanitized.replace(/<!--[\s\S]*?-->/g, "");
+  } while (sanitized !== previous);
+
+  return sanitized
     .replace(/^#{2,3}\s+.*$/gm, "")
     .replace(/^-\s*\[[ xX]\]\s+.*$/gm, "")
     .replace(/^-\s*(?:Closes|Related)\s+#\s*$/gim, "")
