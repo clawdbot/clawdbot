@@ -385,6 +385,12 @@ describe("qa scenario catalog", () => {
     expect(readQaScenarioExecutionConfig(applyPatch.id)?.failurePrompt).toContain(
       "../runtime-tool-fixture-denied.txt",
     );
+    expect(readQaScenarioExecutionConfig(applyPatch.id)?.failurePrompt).toContain(
+      "runtime-tool-fixture-denied-original",
+    );
+    expect(readQaScenarioExecutionConfig(applyPatch.id)?.failurePrompt).not.toContain(
+      "missing-context",
+    );
     expect(readQaScenarioExecutionConfig(messageTool.id)).toMatchObject({
       toolName: "message",
       expectedAvailable: false,

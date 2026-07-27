@@ -4035,7 +4035,7 @@ describe("qa mock openai server", () => {
     expect(args.input).toContain("*** Begin Patch\n");
     expect(args.input).toContain(`*** ${operation}: ${patchPath}\n`);
     if (operation === "Update File") {
-      expect(args.input).toContain("\n@@\n-runtime-tool-fixture-context-that-must-never-exist\n");
+      expect(args.input).toContain("\n@@\n-runtime-tool-fixture-denied-original\n");
     }
     expect(args.input).toContain("\n*** End Patch\n");
   });

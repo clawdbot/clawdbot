@@ -9,7 +9,7 @@ scenario:
       - agent-runtime.tool-apply-patch
   objective: Verify OpenClaw and Codex execute valid workspace patches and reject workspace-escaping patches.
   successCriteria:
-    - OpenClaw executes a valid workspace patch and rejects a valid workspace-escaping patch.
+    - OpenClaw executes a valid workspace patch and rejects a matching-context workspace-escaping patch without modifying the outside sentinel.
     - Private mock QA verifies linked apply_patch calls and results without treating provider plans as execution evidence.
     - Live Codex verifies projected native file-change calls and results without requiring a duplicate dynamic apply_patch tool.
   docsRefs:
@@ -39,8 +39,9 @@ scenario:
       failurePrompt: >-
         tool search qa failure target=apply_patch. Call apply_patch exactly once
         with a complete patch that attempts to update
-        ../runtime-tool-fixture-denied.txt using context that does not exist,
-        then summarize the actual workspace-escape or missing-context rejection.
+        ../runtime-tool-fixture-denied.txt by replacing its existing
+        runtime-tool-fixture-denied-original line, then summarize the actual
+        workspace-escape rejection.
       promptSnippet: "target=apply_patch"
       failurePromptSnippet: "failure target=apply_patch"
 

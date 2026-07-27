@@ -57,6 +57,10 @@ type QaRuntimeToolFixtureTranscriptToolResult = {
 };
 
 const RUNTIME_PARITY_SESSION_KEY_DETAIL_PREFIX = "RUNTIME_PARITY_SESSION_KEY=";
+const RUNTIME_PATCH_DENIED_FILENAME = "runtime-tool-fixture-denied.txt";
+const RUNTIME_PATCH_DENIED_CONTENTS = "runtime-tool-fixture-denied-original\n";
+const RUNTIME_PATCH_WORKSPACE_DENIAL_RE =
+  /(?:path\s+escapes\s+(?:the\s+)?(?:sandbox|workspace)(?:\s+root)?|outside(?:\s+of)?\s+(?:the\s+)?(?:sandbox|workspace|allowed\s+(?:sandbox|workspace|root)|writable\s+roots?)(?:\s+root)?|workspace[- ]only|permission\s+denied|\b(?:EACCES|EPERM)\b)/iu;
 
 function runtimeParitySessionKeyDetails(...sessionKeys: string[]) {
   return sessionKeys.map(
@@ -162,6 +166,10 @@ function requestHasFailureLikeToolOutput(request: QaRuntimeToolFixtureRequest) {
       isError: request.toolOutputStructuredError,
     })
   );
+}
+
+function isWorkspaceBoundaryFailureToolOutput(text: unknown) {
+  return typeof text === "string" && RUNTIME_PATCH_WORKSPACE_DENIAL_RE.test(text);
 }
 
 function readNonEmptyString(value: unknown) {
@@ -737,14 +745,39 @@ export async function runRuntimeToolFixture(
         : {}),
     }),
   );
-  await runFixtureOperation(() =>
-    deps.runAgentPrompt(env, {
-      sessionKey: failureSessionKey,
-      message: failurePrompt,
-      timeoutMs: liveTurnTimeoutMs(env, 45_000),
-      ...(requireTranscriptEvidence ? { transcriptToolName: toolName } : {}),
-    }),
-  );
+  await runFixtureOperation(async () => {
+    const runFailurePrompt = () =>
+      deps.runAgentPrompt(env, {
+        sessionKey: failureSessionKey,
+        message: failurePrompt,
+        timeoutMs: liveTurnTimeoutMs(env, 45_000),
+        ...(requireTranscriptEvidence ? { transcriptToolName: toolName } : {}),
+      });
+    if (toolName !== "apply_patch") {
+      return runFailurePrompt();
+    }
+    const deniedPatchPath = path.resolve(
+      env.gateway.workspaceDir,
+      "..",
+      RUNTIME_PATCH_DENIED_FILENAME,
+    );
+    // Matching outside context makes failure evidence prove containment, not
+    // merely that apply_patch could not find a file or match a hunk.
+    await fs.writeFile(deniedPatchPath, RUNTIME_PATCH_DENIED_CONTENTS, {
+      encoding: "utf8",
+      flag: "wx",
+    });
+    try {
+      const result = await runFailurePrompt();
+      const sentinelContents = await fs.readFile(deniedPatchPath, "utf8").catch(() => undefined);
+      if (sentinelContents !== RUNTIME_PATCH_DENIED_CONTENTS) {
+        throw new Error("apply_patch modified or removed the outside-workspace sentinel");
+      }
+      return result;
+    } finally {
+      await fs.rm(deniedPatchPath, { force: true });
+    }
+  });
 
   if (!env.mock) {
     const happyRequest = await runFixtureOperation(() =>
@@ -806,6 +839,14 @@ export async function runRuntimeToolFixture(
       }
       throw fixtureError(
         new Error(`expected live failure-path tool failure output for ${toolName}`),
+      );
+    }
+    if (
+      toolName === "apply_patch" &&
+      !isWorkspaceBoundaryFailureToolOutput(failureRequest.failureOutputRequest.text)
+    ) {
+      throw fixtureError(
+        new Error("expected live apply_patch failure to explicitly reject the workspace boundary"),
       );
     }
     return withSessionDetails(
@@ -938,6 +979,14 @@ export async function runRuntimeToolFixture(
       skipFixture(formatKnownHarnessGapDetails(toolName, config));
     }
     throw fixtureError(new Error(`expected mock failure-path tool failure output for ${toolName}`));
+  }
+  if (
+    toolName === "apply_patch" &&
+    !isWorkspaceBoundaryFailureToolOutput(failureRequest.outputRequest.toolOutput)
+  ) {
+    throw fixtureError(
+      new Error("expected mock apply_patch failure to explicitly reject the workspace boundary"),
+    );
   }
 
   if (dynamicExposureIntentionallyExcluded) {

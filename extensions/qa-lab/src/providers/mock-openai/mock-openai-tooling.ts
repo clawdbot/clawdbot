@@ -177,7 +177,7 @@ export function buildQaToolSearchArgs(
         "*** Begin Patch",
         "*** Update File: ../runtime-tool-fixture-denied.txt",
         "@@",
-        "-runtime-tool-fixture-context-that-must-never-exist",
+        "-runtime-tool-fixture-denied-original",
         "+runtime patch outside the workspace",
         "*** End Patch",
         "",
