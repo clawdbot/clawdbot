@@ -23,12 +23,10 @@ import { runGit } from "../../agents/worktrees/git.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
-  isSqliteReadTarget,
   readSessionTranscriptVisibleMessageDelta,
   resolveTranscriptReadTarget,
   sqliteMessageEventWithSeq,
   toTranscriptReadScope,
-  visitSessionMessagesAsync,
   type SessionTranscriptReadScope,
 } from "../session-transcript-readers.js";
 import { loadSessionEntryReadOnly } from "../session-utils.js";
@@ -616,40 +614,20 @@ async function loadSessionFiles(params: {
   if (!entry?.sessionId || !storePath || !agentId) {
     return { files: [] };
   }
-  const entrySessionFile = normalizePathValue(entry.sessionFile);
-  const entryTargetsSqlite =
-    entrySessionFile !== undefined &&
-    isSqliteReadTarget({
-      agentId,
-      sessionFile: entrySessionFile,
-      sessionId: entry.sessionId,
-      sessionKey: canonicalKey,
-      storePath,
-    });
   const scope = {
     agentId,
     sessionEntry: entry,
     sessionId: entry.sessionId,
     sessionKey: canonicalKey,
     storePath,
-    ...(entrySessionFile && !entryTargetsSqlite ? { sessionFile: entrySessionFile } : {}),
   } satisfies SessionTranscriptReadScope;
   const target = resolveTranscriptReadTarget(scope);
-  let files: Map<string, TouchedFile>;
-  if (isSqliteReadTarget(target)) {
-    files = loadSqliteTouchedFiles(toTranscriptReadScope(target), `${agentId}\0${entry.sessionId}`);
-  } else {
-    files = new Map();
-    await visitSessionMessagesAsync(
-      scope,
-      (message) => collectTouchedFilesFromMessage(message, files),
-      {
-        mode: "full",
-        reason: "session files transcript scan",
-        cache: "reuse",
-      },
-    );
-  }
+  // Entry-scoped reads without an explicit sessionFile always resolve to a canonical SQLite marker.
+  // Legacy transcript files are doctor-owned migration debt, not a runtime read path.
+  const files = loadSqliteTouchedFiles(
+    toTranscriptReadScope(target),
+    `${agentId}\0${entry.sessionId}\0${target.storePath ?? ""}`,
+  );
   return {
     root: loaded.root,
     fileRoot: loaded.fileRoot,
