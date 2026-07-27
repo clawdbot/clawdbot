@@ -590,7 +590,7 @@ describe("admitFollowupTurn", () => {
         queued: createRun(),
         defaults: createDefaults({ sessionStore, sessionEntry: initialEntry }),
       }),
-    ).rejects.toThrow("Follow-up session generation was replaced during admission");
+    ).rejects.toThrow("Follow-up session generation changed");
     expect(operation.complete).toHaveBeenCalledOnce();
     expect(state.buildPreflightFailureText).not.toHaveBeenCalled();
   });
@@ -620,7 +620,7 @@ describe("admitFollowupTurn", () => {
         queued: createRun(),
         defaults: createDefaults({ sessionStore, sessionEntry: initialEntry }),
       }),
-    ).rejects.toThrow("Follow-up session generation was replaced during admission");
+    ).rejects.toThrow("Follow-up session generation changed");
     expect(operation.complete).toHaveBeenCalledOnce();
   });
 
@@ -762,7 +762,7 @@ describe("admitFollowupTurn", () => {
         defaults: createDefaults({ sessionEntry: initialEntry, storePath: "/tmp/sessions.json" }),
         onCompactionNoticePayload,
       }),
-    ).rejects.toThrow("Follow-up session generation changed during preflight");
+    ).rejects.toThrow("Follow-up session generation changed");
     expect(onCompactionNoticePayload).not.toHaveBeenCalled();
     expect(operation.complete).toHaveBeenCalledOnce();
   });
@@ -788,7 +788,7 @@ describe("admitFollowupTurn", () => {
         queued: createRun(),
         defaults: createDefaults({ sessionEntry: initialEntry, storePath: "/tmp/sessions.json" }),
       }),
-    ).rejects.toThrow("Follow-up session generation changed during preflight notice delivery");
+    ).rejects.toThrow("Follow-up session generation changed");
     expect(operation.abortForRestart).toHaveBeenCalledOnce();
     expect(operation.complete).toHaveBeenCalledOnce();
   });
@@ -808,6 +808,59 @@ describe("admitFollowupTurn", () => {
       turn: { preflightFailurePayload: { text: "preflight failed" } },
     });
     expect(operation.fail).toHaveBeenCalledWith("run_failed", expect.any(Error));
+  });
+
+  it("restores the item when a failing preflight observes a replacement generation", async () => {
+    const operation = createOperation();
+    const initialEntry: SessionEntry = {
+      sessionId: "queued-session",
+      lifecycleRevision: "admitted",
+      updatedAt: 1,
+    };
+    const replacementEntry: SessionEntry = {
+      sessionId: "replacement-session",
+      lifecycleRevision: "replacement",
+      updatedAt: 2,
+    };
+    const sessionStore = { main: initialEntry };
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
+    state.preflight.mockImplementation(async () => {
+      sessionStore.main = replacementEntry;
+      throw new Error("preflight failed");
+    });
+
+    await expect(
+      admitFollowupTurn({
+        queued: createRun(),
+        defaults: createDefaults({ sessionEntry: initialEntry, sessionStore }),
+      }),
+    ).rejects.toThrow("Follow-up session generation changed after reply admission");
+    expect(operation.complete).toHaveBeenCalledOnce();
+    expect(state.buildPreflightFailureText).not.toHaveBeenCalled();
+  });
+
+  it("restores the item when a failing preflight observes in-memory deletion", async () => {
+    const operation = createOperation();
+    const initialEntry: SessionEntry = {
+      sessionId: "queued-session",
+      lifecycleRevision: "admitted",
+      updatedAt: 1,
+    };
+    const sessionStore: Record<string, SessionEntry> = { main: initialEntry };
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
+    state.preflight.mockImplementation(async () => {
+      delete sessionStore.main;
+      throw new Error("preflight failed");
+    });
+
+    await expect(
+      admitFollowupTurn({
+        queued: createRun(),
+        defaults: createDefaults({ sessionEntry: initialEntry, sessionStore }),
+      }),
+    ).rejects.toThrow("Follow-up session generation changed");
+    expect(operation.complete).toHaveBeenCalledOnce();
+    expect(state.buildPreflightFailureText).not.toHaveBeenCalled();
   });
 
   it("uses admitted verbosity when formatting a preflight failure", async () => {

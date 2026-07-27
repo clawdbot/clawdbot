@@ -408,8 +408,8 @@ export async function admitFollowupTurn(params: {
                     storePath: params.defaults.storePath,
                     sessionKey: replySessionKey,
                   })
-                : replySessionKey
-                  ? (params.defaults.sessionStore?.[replySessionKey] ?? session.current())
+                : replySessionKey && params.defaults.sessionStore
+                  ? params.defaults.sessionStore[replySessionKey]
                   : session.current();
             try {
               assertPersistedGeneration(noticeEntry);
@@ -544,6 +544,16 @@ export async function admitFollowupTurn(params: {
         generationRotated || (activeEntry?.compactionCount ?? 0) > previousCompactionCount;
       preflightSucceeded = true;
     } catch (error) {
+      const failureEntry =
+        replySessionKey && params.defaults.storePath
+          ? loadSessionEntry({
+              storePath: params.defaults.storePath,
+              sessionKey: replySessionKey,
+            })
+          : replySessionKey && params.defaults.sessionStore
+            ? params.defaults.sessionStore[replySessionKey]
+            : session.current();
+      assertPersistedGeneration(failureEntry);
       if (compactionNoticeGenerationInvalidated) {
         throw new FollowupSessionGenerationInvalidatedError(
           "Follow-up session generation changed during preflight notice delivery",
