@@ -826,6 +826,41 @@ describe("Copilot attempt transcript journal", () => {
     expect(journal.snapshot().messagesSnapshot).toMatchObject([{ role: "user" }]);
   });
 
+  it("marks citation-bearing assistant messages replay-incomplete", async () => {
+    const { journal, session } = await createFixture();
+    await journal.persistInitialUser();
+    session.emit(event("user.message", "initial-user", { content: "inspect both files" }));
+    session.emit(
+      event("assistant.message", "assistant-citations", {
+        content: "cited response",
+        messageId: "assistant-citations",
+        citations: {
+          sources: [
+            {
+              id: "source-1",
+              provider: "openai",
+              title: "Example source",
+              url: "https://example.com/source",
+            },
+          ],
+          spans: [
+            {
+              endIndex: 5,
+              references: [{ sourceId: "source-1" }],
+              startIndex: 0,
+            },
+          ],
+        },
+      }),
+    );
+    await journal.barrier("citation-bearing assistant");
+
+    expect(journal.snapshot()).toMatchObject({
+      messagesSnapshot: [{ role: "user" }, { role: "assistant" }],
+      replayInvalid: true,
+    });
+  });
+
   it("marks session-bound encrypted reasoning replay-incomplete", async () => {
     for (const [field, value] of [
       ["encryptedContent", "encrypted-openai-state"],

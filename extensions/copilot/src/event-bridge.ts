@@ -909,6 +909,7 @@ function hasUnprojectedAssistantReplayState(
   // The SDK contract marks these as provider/session-bound state or custom
   // call shape. AgentMessage cannot represent them, so native replay must stay.
   return (
+    event.data.citations !== undefined ||
     event.data.serverTools !== undefined ||
     event.data.reasoningWireField !== undefined ||
     event.data.reasoningOpaque !== undefined ||
