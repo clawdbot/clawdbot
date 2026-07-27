@@ -4040,6 +4040,70 @@ describe("qa mock openai server", () => {
     expect(args.input).toContain("\n*** End Patch\n");
   });
 
+  it.each([
+    {
+      label: "successful native patch",
+      prompt:
+        "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+      output: "Successfully applied patch",
+      expectedOutput: "Successfully applied patch",
+      structuredError: false,
+    },
+    {
+      label: "denied native patch",
+      prompt:
+        "tool search qa failure target=apply_patch. Exercise the denied-input path once and then summarize.",
+      output: "Error: Path escapes sandbox root",
+      expectedOutput: "Error: Path escapes sandbox root",
+      structuredError: true,
+    },
+    {
+      label: "structured native patch output",
+      prompt:
+        "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+      output: [{ type: "input_text", text: "Successfully applied structured patch" }],
+      expectedOutput: "Successfully applied structured patch",
+      structuredError: false,
+    },
+  ])("links and completes $label custom-tool outputs", async (testCase) => {
+    const server = await startMockServer();
+    const planResponse = await postResponses(server, {
+      stream: false,
+      input: [makeUserInput(testCase.prompt)],
+    });
+    expect(planResponse.status).toBe(200);
+    const plannedCall = outputItem(await planResponse.json());
+    expect(plannedCall).toMatchObject({ type: "function_call", name: "apply_patch" });
+    const callId = outputToolCallId(plannedCall, "native-patch-call");
+
+    const continuationResponse = await postResponses(server, {
+      stream: false,
+      input: [
+        makeUserInput(testCase.prompt),
+        {
+          type: "custom_tool_call_output",
+          call_id: callId,
+          output: testCase.output,
+          ...(testCase.structuredError ? { is_error: true } : {}),
+        },
+      ],
+    });
+    expect(continuationResponse.status).toBe(200);
+    expect(outputItem(await continuationResponse.json()).type).toBe("message");
+
+    const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
+    expect(debugResponse.status).toBe(200);
+    const debug = requireRecord(await debugResponse.json(), "custom patch debug request");
+    expect(debug.toolOutput).toBe(testCase.expectedOutput);
+    expect(debug.toolOutputCallId).toBe(callId);
+    if (testCase.structuredError) {
+      expect(debug.toolOutputStructuredError).toBe(true);
+    } else {
+      expect(debug).not.toHaveProperty("toolOutputStructuredError");
+    }
+    expect(debug).not.toHaveProperty("plannedToolName");
+  });
+
   it("plans QA subagent handoff calls even when Codex dynamic tools are not in body.tools", async () => {
     const server = await startMockServer();
 

@@ -109,6 +109,12 @@ async function writeLiveRuntimeToolEvidence(env: QaSuiteRuntimeEnv, toolName = "
 async function writeCodexNativePatchEvidence(
   env: QaSuiteRuntimeEnv,
   failureOutput = "apply_patch failed: path escapes sandbox root",
+  options: {
+    happyPath?: string;
+    failurePath?: string;
+    happyKind?: string;
+    failureKind?: string;
+  } = {},
 ) {
   const toolName = "apply_patch";
   await writeQaSessionTranscript(env, `agent:qa:runtime-tool:${toolName}:happy`, [
@@ -120,7 +126,12 @@ async function writeCodexNativePatchEvidence(
           id: "native-patch-happy",
           name: toolName,
           arguments: {
-            changes: [{ path: "runtime-tool-fixture-patch.txt", kind: { type: "add" } }],
+            changes: [
+              {
+                path: options.happyPath ?? "runtime-tool-fixture-patch.txt",
+                kind: { type: options.happyKind ?? "add" },
+              },
+            ],
           },
         },
       ],
@@ -149,7 +160,12 @@ async function writeCodexNativePatchEvidence(
           id: "native-patch-failure",
           name: toolName,
           arguments: {
-            changes: [{ path: "../runtime-tool-fixture-denied.txt", kind: { type: "update" } }],
+            changes: [
+              {
+                path: options.failurePath ?? "../runtime-tool-fixture-denied.txt",
+                kind: { type: options.failureKind ?? "update" },
+              },
+            ],
           },
         },
       ],
@@ -762,6 +778,97 @@ describe("runtime tool fixture", () => {
     );
   });
 
+  it.each([
+    {
+      label: "happy-path file",
+      options: { happyPath: "runtime-tool-fixture-wrong.txt" },
+      expectedError: "expected linked live apply_patch to add runtime-tool-fixture-patch.txt",
+    },
+    {
+      label: "failure-path file",
+      options: { failurePath: "../runtime-tool-fixture-wrong.txt" },
+      expectedError:
+        "expected linked live apply_patch to update ../runtime-tool-fixture-denied.txt",
+    },
+    {
+      label: "failure-path operation",
+      options: { failureKind: "add" },
+      expectedError:
+        "expected linked live apply_patch to update ../runtime-tool-fixture-denied.txt",
+    },
+  ])("rejects linked native Codex patch evidence for the wrong $label", async (testCase) => {
+    const env = await makeEnv();
+    env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME = "codex";
+    await writeCodexNativePatchEvidence(
+      env,
+      "apply_patch failed: path escapes sandbox root",
+      testCase.options,
+    );
+
+    await expect(
+      runRuntimeToolFixture(
+        env,
+        {
+          toolName: "apply_patch",
+          toolCoverage: {
+            bucket: "codex-native-workspace",
+            expectedLayer: "codex-native-workspace",
+            required: true,
+          },
+        },
+        {
+          createSession: vi.fn(async (_env, _label, key) => key!),
+          readEffectiveTools: vi.fn(async () => new Set<string>()),
+          runAgentPrompt: vi.fn(async () => ({})),
+          fetchJson: vi.fn(),
+          ensureImageGenerationConfigured: vi.fn(),
+        },
+      ),
+    ).rejects.toThrow(testCase.expectedError);
+  });
+
+  it("validates the native patch call linked to its result instead of the first plan", async () => {
+    const env = await makeEnv();
+    env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME = "codex";
+    await writeQaSessionTranscript(env, "agent:qa:runtime-tool:apply_patch:happy", [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "native-patch-unlinked-decoy",
+            name: "apply_patch",
+            arguments: {
+              changes: [{ path: "runtime-tool-fixture-wrong.txt", kind: { type: "add" } }],
+            },
+          },
+        ],
+      },
+    ]);
+    await writeCodexNativePatchEvidence(env);
+
+    await expect(
+      runRuntimeToolFixture(
+        env,
+        {
+          toolName: "apply_patch",
+          toolCoverage: {
+            bucket: "codex-native-workspace",
+            expectedLayer: "codex-native-workspace",
+            required: true,
+          },
+        },
+        {
+          createSession: vi.fn(async (_env, _label, key) => key!),
+          readEffectiveTools: vi.fn(async () => new Set<string>()),
+          runAgentPrompt: vi.fn(async () => ({})),
+          fetchJson: vi.fn(),
+          ensureImageGenerationConfigured: vi.fn(),
+        },
+      ),
+    ).resolves.toContain("apply_patch live provider happy planned args");
+  });
+
   it("fails closed and cleans up when a patch changes the outside-workspace sentinel", async () => {
     const env = await makeEnv();
     const sentinelPath = path.resolve(
@@ -935,6 +1042,45 @@ describe("runtime tool fixture", () => {
     ).rejects.toThrow(
       "expected mock apply_patch failure to explicitly reject the workspace boundary",
     );
+  });
+
+  it.each([
+    {
+      label: "happy-path file",
+      happyInput:
+        "*** Begin Patch\n*** Add File: runtime-tool-fixture-wrong.txt\n+runtime patch\n*** End Patch\n",
+      failureInput:
+        "*** Begin Patch\n*** Update File: ../runtime-tool-fixture-denied.txt\n@@\n-runtime-tool-fixture-denied-original\n+runtime patch outside the workspace\n*** End Patch\n",
+      expectedError: "expected linked mock apply_patch to add runtime-tool-fixture-patch.txt",
+    },
+    {
+      label: "failure-path file",
+      happyInput:
+        "*** Begin Patch\n*** Add File: runtime-tool-fixture-patch.txt\n+runtime patch\n*** End Patch\n",
+      failureInput:
+        "*** Begin Patch\n*** Update File: ../runtime-tool-fixture-wrong.txt\n@@\n-runtime-tool-fixture-denied-original\n+runtime patch outside the workspace\n*** End Patch\n",
+      expectedError:
+        "expected linked mock apply_patch to update ../runtime-tool-fixture-denied.txt",
+    },
+    {
+      label: "failure-path context",
+      happyInput:
+        "*** Begin Patch\n*** Add File: runtime-tool-fixture-patch.txt\n+runtime patch\n*** End Patch\n",
+      failureInput:
+        "*** Begin Patch\n*** Update File: ../runtime-tool-fixture-denied.txt\n@@\n-context-that-does-not-exist\n+runtime patch outside the workspace\n*** End Patch\n",
+      expectedError:
+        "expected linked mock apply_patch to update ../runtime-tool-fixture-denied.txt",
+    },
+  ])("rejects linked mock patch evidence for the wrong $label", async (testCase) => {
+    await expect(
+      runMockRuntimeToolFixtureWithOutputs({
+        toolName: "apply_patch",
+        happyArgs: { input: testCase.happyInput },
+        failureArgs: { input: testCase.failureInput },
+        happyOutput: "Successfully applied patch",
+        failureOutput: "Error: Path escapes sandbox root",
+      }),
+    ).rejects.toThrow(testCase.expectedError);
   });
 
   it("rejects unlinked private-QA Codex patch results without waiting for a transcript", async () => {

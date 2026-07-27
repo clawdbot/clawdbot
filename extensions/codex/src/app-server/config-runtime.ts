@@ -191,14 +191,17 @@ export function resolveCodexAppServerRuntimeOptions(
     ? normalizedPolicyMode
     : (explicitPolicyMode ?? normalizedPolicyMode ?? defaultPolicy?.mode ?? "yolo");
   const serviceTier = normalizeCodexServiceTier(config.serviceTier);
-  // Private QA compares workspace containment against a sibling sentinel;
-  // native Codex must not inherit production yolo's unrestricted filesystem.
-  const resolvedSandbox = isForcedPrivateQaCodexRuntime(env)
-    ? "workspace-write"
-    : (forcedPolicy?.sandbox ??
-      configuredSandbox ??
-      defaultPolicy?.sandbox ??
-      (policyMode === "guardian" ? "workspace-write" : "danger-full-access"));
+  const configuredRuntimeSandbox =
+    forcedPolicy?.sandbox ??
+    configuredSandbox ??
+    defaultPolicy?.sandbox ??
+    (policyMode === "guardian" ? "workspace-write" : "danger-full-access");
+  // Private QA may bound production yolo, but must never widen a configured
+  // read-only sandbox or override the ordinary policy precedence.
+  const resolvedSandbox =
+    isForcedPrivateQaCodexRuntime(env) && configuredRuntimeSandbox === "danger-full-access"
+      ? "workspace-write"
+      : configuredRuntimeSandbox;
   if (transport === "websocket" && !url) {
     throw new Error(
       "plugins.entries.codex.config.appServer.url is required when appServer.transport is websocket",

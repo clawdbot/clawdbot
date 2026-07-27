@@ -580,6 +580,33 @@ describe("Codex app-server config", () => {
     });
   });
 
+  it("preserves an explicitly read-only sandbox for forced private-QA Codex runtime", () => {
+    const privateQaCodexEnv = {
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_QA_FORCE_RUNTIME: "codex",
+    };
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          mode: "yolo",
+          approvalPolicy: "never",
+          sandbox: "read-only",
+        },
+      },
+      env: privateQaCodexEnv,
+    });
+
+    expectRuntimePolicy(runtime, {
+      approvalPolicy: "never",
+      sandbox: "read-only",
+      approvalsReviewer: "user",
+    });
+    expect(codexSandboxPolicyForTurn(runtime.sandbox, "/qa/workspace", privateQaCodexEnv)).toEqual({
+      type: "readOnly",
+      networkAccess: false,
+    });
+  });
+
   it.each([
     { label: "ordinary production", env: {} },
     { label: "private build without a forced runtime", env: { OPENCLAW_BUILD_PRIVATE_QA: "1" } },

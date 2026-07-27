@@ -57,6 +57,7 @@ type QaRuntimeToolFixtureTranscriptToolResult = {
 };
 
 const RUNTIME_PARITY_SESSION_KEY_DETAIL_PREFIX = "RUNTIME_PARITY_SESSION_KEY=";
+const RUNTIME_PATCH_HAPPY_FILENAME = "runtime-tool-fixture-patch.txt";
 const RUNTIME_PATCH_DENIED_FILENAME = "runtime-tool-fixture-denied.txt";
 const RUNTIME_PATCH_DENIED_CONTENTS = "runtime-tool-fixture-denied-original\n";
 const RUNTIME_PATCH_WORKSPACE_DENIAL_RE =
@@ -170,6 +171,63 @@ function requestHasFailureLikeToolOutput(request: QaRuntimeToolFixtureRequest) {
 
 function isWorkspaceBoundaryFailureToolOutput(text: unknown) {
   return typeof text === "string" && RUNTIME_PATCH_WORKSPACE_DENIAL_RE.test(text);
+}
+
+function matchesRuntimePatchInput(input: unknown, operation: "add" | "update"): boolean {
+  if (typeof input !== "string") {
+    return false;
+  }
+  const lines = input.replace(/\r\n?/gu, "\n").split("\n");
+  while (lines.at(-1) === "") {
+    lines.pop();
+  }
+  if (lines[0] !== "*** Begin Patch" || lines.at(-1) !== "*** End Patch") {
+    return false;
+  }
+  const fileHeaders = lines.filter((line) => /^\*\*\* (?:Add|Update|Delete) File: /u.test(line));
+  const expectedHeader =
+    operation === "add"
+      ? `*** Add File: ${RUNTIME_PATCH_HAPPY_FILENAME}`
+      : `*** Update File: ../${RUNTIME_PATCH_DENIED_FILENAME}`;
+  if (fileHeaders.length !== 1 || fileHeaders[0] !== expectedHeader) {
+    return false;
+  }
+  return operation === "add"
+    ? lines.includes("+runtime patch")
+    : lines.includes("@@") &&
+        lines.includes(`-${RUNTIME_PATCH_DENIED_CONTENTS.trimEnd()}`) &&
+        lines.includes("+runtime patch outside the workspace");
+}
+
+function matchesRuntimePatchArguments(params: {
+  args: unknown;
+  workspaceDir: string;
+  operation: "add" | "update";
+}): boolean {
+  if (!isRecord(params.args)) {
+    return false;
+  }
+  if (typeof params.args.input === "string") {
+    return matchesRuntimePatchInput(params.args.input, params.operation);
+  }
+  const changes = params.args.changes;
+  if (!Array.isArray(changes) || changes.length !== 1 || !isRecord(changes[0])) {
+    return false;
+  }
+  const change = changes[0];
+  if (typeof change.path !== "string") {
+    return false;
+  }
+  const kind = change.kind;
+  const operation = isRecord(kind) ? kind.type : kind;
+  const expectedPath =
+    params.operation === "add"
+      ? path.resolve(params.workspaceDir, RUNTIME_PATCH_HAPPY_FILENAME)
+      : path.resolve(params.workspaceDir, "..", RUNTIME_PATCH_DENIED_FILENAME);
+  return (
+    operation === params.operation &&
+    path.resolve(params.workspaceDir, change.path) === expectedPath
+  );
 }
 
 function readNonEmptyString(value: unknown) {
@@ -427,19 +485,22 @@ function readTranscriptToolEvidence(transcriptBytes: string, toolName: string) {
       // Ignore malformed transcript rows and keep live fixture evidence deterministic.
     }
   }
-  const outputResult = calls
-    .map((call) =>
-      results.find((result) =>
+  const linkedEvidence = calls
+    .map((call) => ({
+      call,
+      result: results.find((result) =>
         transcriptToolResultLinksCall({
           call,
           result,
           targetCallCount: calls.length,
         }),
       ),
-    )
-    .find((result) => result && result.text.trim().length > 0);
+    }))
+    .find(({ result }) => result && result.text.trim().length > 0);
+  const outputResult = linkedEvidence?.result;
   return {
     plannedRequest: calls[0],
+    executedRequest: linkedEvidence?.call,
     outputRequest: outputResult,
     failureOutputRequest: outputResult?.failure ? outputResult : undefined,
   };
@@ -814,6 +875,19 @@ export async function runRuntimeToolFixture(
         new Error(`expected live happy-path successful tool output for ${toolName}`),
       );
     }
+    if (
+      toolName === "apply_patch" &&
+      metadata.required &&
+      !matchesRuntimePatchArguments({
+        args: happyRequest.executedRequest?.args,
+        workspaceDir: env.gateway.workspaceDir,
+        operation: "add",
+      })
+    ) {
+      throw fixtureError(
+        new Error(`expected linked live apply_patch to add ${RUNTIME_PATCH_HAPPY_FILENAME}`),
+      );
+    }
     const failureRequest = await runFixtureOperation(() =>
       readLiveToolEvidence({
         env,
@@ -839,6 +913,19 @@ export async function runRuntimeToolFixture(
       }
       throw fixtureError(
         new Error(`expected live failure-path tool failure output for ${toolName}`),
+      );
+    }
+    if (
+      toolName === "apply_patch" &&
+      metadata.required &&
+      !matchesRuntimePatchArguments({
+        args: failureRequest.executedRequest?.args,
+        workspaceDir: env.gateway.workspaceDir,
+        operation: "update",
+      })
+    ) {
+      throw fixtureError(
+        new Error(`expected linked live apply_patch to update ../${RUNTIME_PATCH_DENIED_FILENAME}`),
       );
     }
     if (
@@ -951,6 +1038,20 @@ export async function runRuntimeToolFixture(
       new Error(`expected mock happy-path successful tool output for ${toolName}`),
     );
   }
+  if (
+    toolName === "apply_patch" &&
+    metadata.required &&
+    happyRequest &&
+    !matchesRuntimePatchArguments({
+      args: happyRequest.plannedRequest.plannedToolArgs,
+      workspaceDir: env.gateway.workspaceDir,
+      operation: "add",
+    })
+  ) {
+    throw fixtureError(
+      new Error(`expected linked mock apply_patch to add ${RUNTIME_PATCH_HAPPY_FILENAME}`),
+    );
+  }
   if (!failureRequest) {
     if (dynamicExposureIntentionallyExcluded) {
       skipFixture(
@@ -979,6 +1080,19 @@ export async function runRuntimeToolFixture(
       skipFixture(formatKnownHarnessGapDetails(toolName, config));
     }
     throw fixtureError(new Error(`expected mock failure-path tool failure output for ${toolName}`));
+  }
+  if (
+    toolName === "apply_patch" &&
+    metadata.required &&
+    !matchesRuntimePatchArguments({
+      args: failureRequest.plannedRequest.plannedToolArgs,
+      workspaceDir: env.gateway.workspaceDir,
+      operation: "update",
+    })
+  ) {
+    throw fixtureError(
+      new Error(`expected linked mock apply_patch to update ../${RUNTIME_PATCH_DENIED_FILENAME}`),
+    );
   }
   if (
     toolName === "apply_patch" &&
