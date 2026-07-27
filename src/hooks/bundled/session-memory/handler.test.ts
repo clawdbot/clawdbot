@@ -175,11 +175,10 @@ async function runNewWithPreviousSessionEntry(params: {
         .map((line, index) => {
           const event = JSON.parse(line) as Record<string, unknown>;
           const id = typeof event.id === "string" ? event.id : `fixture-${index + 1}`;
-          const normalized = {
-            ...event,
-            id,
-            ...(Object.hasOwn(event, "parentId") ? {} : { parentId }),
-          };
+          const normalized = Object.assign(event, { id });
+          if (!Object.hasOwn(normalized, "parentId")) {
+            normalized.parentId = parentId;
+          }
           parentId = id;
           return normalized;
         });
