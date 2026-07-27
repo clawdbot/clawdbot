@@ -2925,7 +2925,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Profile-backed qa run
   - H2: Operator flow
   - H3: Observability smokes
-  - H3: Matrix smoke lanes
+  - H3: Matrix live lane
   - H3: Discord Mantis scenarios
   - H3: Mantis Slack desktop and visual-task runners
   - H3: Credential pool health check

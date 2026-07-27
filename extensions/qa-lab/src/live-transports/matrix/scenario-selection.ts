@@ -39,10 +39,7 @@ function parseQaScenarioShard(value: string): QaScenarioShard {
   return { index, total };
 }
 
-export function shardMatrixQaScenarioIds(
-  scenarioIds: readonly string[],
-  shardValue: string,
-): string[] {
+function shardMatrixQaScenarioIds(scenarioIds: readonly string[], shardValue: string): string[] {
   const shard = parseQaScenarioShard(shardValue);
   // Hash ordering makes shard membership independent of catalog/YAML order while
   // round-robin assignment keeps every shard within one scenario of the others.
@@ -59,7 +56,7 @@ export function shardMatrixQaScenarioIds(
   return selectedIds;
 }
 
-export function listMatrixQaScenarioIds(): string[] {
+function listMatrixQaScenarioIds(): string[] {
   return readQaScenarioPack()
     .scenarios.filter(
       (scenario) =>
