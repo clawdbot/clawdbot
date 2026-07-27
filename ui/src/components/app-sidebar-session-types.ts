@@ -5,9 +5,9 @@ import type { SessionCreatedActor } from "../../../packages/gateway-protocol/src
 import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-icon.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionRunStatus } from "../api/types.ts";
-import type { BoardFace } from "../lib/board/settings.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import type { BoardFace } from "../lib/board/settings.ts";
 import {
   normalizeCatalogProjectGrouping,
   type CatalogProjectGrouping,

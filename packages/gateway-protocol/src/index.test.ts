@@ -90,11 +90,13 @@ describe("lazy protocol validators", () => {
     expect(validateSessionsListParams({ archived: "archived" })).toBe(false);
   });
 
-  it("validates session face list and patch values", () => {
-    expect(validateSessionsListParams({ face: "dashboard" })).toBe(true);
-    expect(validateSessionsListParams({ face: "grid" })).toBe(false);
-    expect(validateSessionsPatchParams({ key: "agent:main:main", face: "chat" })).toBe(true);
-    expect(validateSessionsPatchParams({ key: "agent:main:main", face: "grid" })).toBe(false);
+  it("validates session board face list and patch values", () => {
+    expect(validateSessionsListParams({ boardFace: "dashboard" })).toBe(true);
+    expect(validateSessionsListParams({ boardFace: "grid" })).toBe(false);
+    expect(validateSessionsPatchParams({ key: "agent:main:main", boardFace: "chat" })).toBe(true);
+    expect(validateSessionsPatchParams({ key: "agent:main:main", boardFace: "grid" })).toBe(false);
+    // The schemas are closed objects; the pre-rename name must not slip back in.
+    expect(validateSessionsListParams({ face: "dashboard" })).toBe(false);
   });
 
   it("keeps validation errors readable on the exported validator", () => {

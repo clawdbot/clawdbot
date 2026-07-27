@@ -44,7 +44,9 @@ test("a write-scoped face patch is visible to another client", async () => {
       { boardFace: "dashboard" },
     );
     expect(listed.ok).toBe(true);
-    expect(listed.payload?.sessions).toMatchObject([{ key: "agent:main:main", boardFace: "dashboard" }]);
+    expect(listed.payload?.sessions).toMatchObject([
+      { key: "agent:main:main", boardFace: "dashboard" },
+    ]);
   } finally {
     secondClient.ws.close();
   }
