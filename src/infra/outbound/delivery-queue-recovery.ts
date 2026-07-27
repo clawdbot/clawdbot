@@ -140,7 +140,7 @@ function hasActiveStableDeliveryOwner(entry: QueuedDelivery, now: number): boole
       entry.completionRetention === "permanent" ||
       entry.requiresProducerClaim === true) &&
     (entry.recoveryState === "producer_claimed" ||
-      entry.recoveryState === "send_attempt_started") &&
+      (entry.recoveryState === "send_attempt_started" && entry.requiresProducerClaim === true)) &&
     typeof entry.availableAt === "number" &&
     entry.availableAt > now
   );
