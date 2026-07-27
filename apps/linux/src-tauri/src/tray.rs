@@ -235,6 +235,12 @@ pub fn build(
         ])
         .build()?;
 
+    // macOS draws menu bar icons from the alpha channel alone (see
+    // icon_as_template below), so it needs the knocked-out silhouette; the
+    // rounded-tile 32x32.png is opaque edge to edge and renders as a solid blob.
+    #[cfg(target_os = "macos")]
+    let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-template.png"))?;
+    #[cfg(not(target_os = "macos"))]
     let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
     let menu_state = state.clone();
     let menu_start_at_login = start_at_login.clone();

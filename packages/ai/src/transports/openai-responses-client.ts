@@ -45,7 +45,11 @@ import {
 } from "./openai-transport-params.js";
 import { log, type MutableAssistantOutput } from "./openai-transport-shared.js";
 import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
-import { assignTransportErrorDetails, mergeTransportMetadata } from "./transport-stream-shared.js";
+import {
+  assignTransportErrorDetails,
+  mergeTransportMetadata,
+  transportAbortError,
+} from "./transport-stream-shared.js";
 
 function resolveProviderTransportTurnState(
   model: Model,
@@ -194,7 +198,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           sessionId: options?.sessionId,
         });
         if (options?.signal?.aborted) {
-          throw new Error("Request was aborted");
+          throw transportAbortError(options.signal);
         }
         if (output.stopReason === "aborted" || output.stopReason === "error") {
           throw new Error("An unknown error occurred");
@@ -312,7 +316,7 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
           sessionId: options?.sessionId,
         });
         if (options?.signal?.aborted) {
-          throw new Error("Request was aborted");
+          throw transportAbortError(options.signal);
         }
         if (output.stopReason === "aborted" || output.stopReason === "error") {
           throw new Error("An unknown error occurred");

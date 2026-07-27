@@ -15,6 +15,7 @@ import {
   runSandboxHealth,
   runSessionLocksHealth,
   runSessionSnapshotsHealth,
+  runSessionTranscriptLabelsHealth,
   runSessionTranscriptsHealth,
   runStateIntegrityHealth,
 } from "./doctor-health-contribution-runners.state.js";
@@ -292,6 +293,11 @@ export function resolveInitialDoctorHealthContributions(params: {
         }, "legacy doctor session transcript contribution owns transcript rewrites"),
       },
       run: runSessionTranscriptsHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:session-transcript-labels",
+      label: "Session transcript labels",
+      run: runSessionTranscriptLabelsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:session-snapshots",

@@ -5,6 +5,8 @@ import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionPath,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -244,7 +246,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}chat?session=${encodeURIComponent(parentKey)}`);
+      await page.goto(controlUiSessionUrl(server.baseUrl, parentKey));
       const parent = page.locator(`[data-session-key="${parentKey}"]`);
       await parent.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => page.locator(".sidebar-recent-session--child").count()).toBe(0);
@@ -269,7 +271,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await captureUiProof(page, "child-sessions-expanded.png");
 
       await childRows.nth(1).getByRole("link").click();
-      await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(childTwoKey);
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(childTwoKey));
     } finally {
       await context.close();
     }
@@ -487,7 +489,9 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       // returning the same list, so the archived row stays visible here.)
       const researchLink = sidebarResearch.locator("a").first();
       await researchLink.click();
-      await expect.poll(() => page.url()).toContain("session=agent%3Amain%3Aresearch");
+      await expect
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath("agent:main:research"));
       await expect.poll(rowNames).toEqual(["Release planning", "Data migration", "Research notes"]);
       await expect
         .poll(() =>
@@ -542,7 +546,9 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       ).toBe(true);
       await captureUiProof(page, "command-palette-session-search.png");
       await paletteOption.click();
-      await expect.poll(() => page.url()).toContain("session=agent%3Amain%3Arelease");
+      await expect
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath("agent:main:release"));
     } finally {
       await context.close();
     }

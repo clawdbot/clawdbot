@@ -25,6 +25,7 @@ function createJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
 function createProps(overrides: Partial<CronProps> = {}): CronProps {
   return {
     basePath: "",
+    agentId: "main",
     loading: false,
     jobsLoadingMore: false,
     status: null,

@@ -742,7 +742,8 @@ describe("custodian page", () => {
     await page.updateComplete;
 
     expect(context.navigate).toHaveBeenCalledWith("chat", {
-      search: `?session=main&draft=${encodeURIComponent("Wake up, my friend!")}`,
+      pathname: "/chat/main",
+      search: `?draft=${encodeURIComponent("Wake up, my friend!")}`,
     });
   });
 

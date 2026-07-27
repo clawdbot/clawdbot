@@ -48,10 +48,21 @@ function loadManifestCatalogRowsForPluginIds(params: {
       )
       .map((entry) => entry.provider),
   );
-  if (eligibleProviders.size === 0) {
+  const runtimeRefreshProviders = new Set(
+    params.mode === "supplemental"
+      ? plan.entries.filter((entry) => entry.discovery === "runtime").map((entry) => entry.provider)
+      : [],
+  );
+  if (eligibleProviders.size === 0 && runtimeRefreshProviders.size === 0) {
     return [];
   }
-  return plan.rows.filter((row) => eligibleProviders.has(row.provider));
+  // Runtime-owned providers still discover authoritative models live; only
+  // validated remote-refresh rows may supplement that provider catalog.
+  return plan.rows.filter(
+    (row) =>
+      eligibleProviders.has(row.provider) ||
+      (runtimeRefreshProviders.has(row.provider) && row.source === "runtime-refresh"),
+  );
 }
 
 function resolveConventionModelCatalogPluginIds(params: {

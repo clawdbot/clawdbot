@@ -70,6 +70,10 @@ jobs:
         working-directory: apps/linux/src-tauri
         run: cargo +stable fmt --check
 
+      - name: Run Rust tests
+        working-directory: apps/linux/src-tauri
+        run: cargo +stable test --locked --all-targets
+
       - name: Build Linux companion bundles
         working-directory: apps/linux/src-tauri
         env:
@@ -89,3 +93,47 @@ jobs:
           path: |
             apps/linux/src-tauri/target/release/bundle/deb/*.deb
             apps/linux/src-tauri/target/release/bundle/appimage/*.AppImage
+
+  test-macos:
+    name: Test macOS companion
+    # This app also ships macOS desktop-test bundles, but the only job that
+    # compiles them (linux-app-release.yml build_macos) runs behind a manual
+    # dispatch input. Without a per-PR check, a macOS-gated Tauri API can break
+    # the macOS target for weeks unnoticed - `WebviewWindowBuilder::transparent`
+    # did exactly that.
+    #
+    # macos-15, not macos-14: tauri-plugin-notifications' Swift sources use
+    # typed throws (`throws(FFIResult)`), which needs Swift 6. The macos-14
+    # image still ships Swift 5.x and fails to parse them.
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Cache Cargo
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/linux/src-tauri/target
+          key: macos-app-${{ runner.os }}-${{ hashFiles('apps/linux/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            macos-app-${{ runner.os }}-
+
+      - name: Test macOS companion
+        working-directory: apps/linux/src-tauri
+        # `test` rather than `check`: it additionally links and runs the
+        # binaries, which is the only way macOS link-time breakage (a missing
+        # Swift runtime rpath, say) shows up at all. `--all-targets` keeps the
+        # compile coverage `check --all-targets` used to give.
+        run: cargo +stable test --locked --all-targets

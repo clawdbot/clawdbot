@@ -13,7 +13,7 @@ import "../../components/tooltip.ts";
 import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
-import { searchForSession } from "../../lib/sessions/index.ts";
+import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -28,7 +28,11 @@ import * as catalog from "./catalog-target.ts";
 import { CloudProfileDiscovery, selectProfiles } from "./cloud-profile-discovery.ts";
 import { PendingCloudRecoveryState, resolveScope } from "./cloud-recovery-state.ts";
 import { advanceCloudDraftSession } from "./cloud-submit.ts";
-import { renderDraftError, renderNewSessionDraftComposer } from "./composer.ts";
+import {
+  NewSessionComposerTextareaController,
+  renderDraftError,
+  renderNewSessionDraftComposer,
+} from "./composer.ts";
 import {
   buildDraftSessionCreateParams,
   canStartSessionAsDraft,
@@ -127,6 +131,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   private baseRefEditGeneration = 0;
   private browserRequestToken = 0;
   private readonly attachmentDraft = new NewSessionAttachmentDraft(() => this.requestUpdate());
+  private readonly composerTextarea = new NewSessionComposerTextareaController();
   private readonly modelControl = new NewSessionModelControl(() => this.requestUpdate());
   private gatewaySource: ApplicationContext["gateway"] | null = null;
   private gatewayClient: ApplicationContext["gateway"]["snapshot"]["client"] = null;
@@ -346,6 +351,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     globalThis.clearTimeout(this.catalogRetryTimer);
     this.catalogRetryTimer = undefined;
     this.attachmentDraft.reset({ release: true });
+    this.composerTextarea.disconnect();
     this.cloudProfileDiscovery.stop();
     super.disconnectedCallback();
   }
@@ -1008,7 +1014,15 @@ class NewSessionPage extends OpenClawLightDomElement {
         return;
       }
       context.gateway.setSessionKey(result.key);
-      context.navigate("chat", { search: searchForSession(result.key) });
+      context.navigate(
+        "chat",
+        sessionNavigationTarget({
+          context,
+          face: "chat",
+          sessionKey: result.key,
+          agentId: this.agentId,
+        }).options,
+      );
     } finally {
       if (requestId === this.submitRequestToken) {
         this.submitting = false;
@@ -1395,6 +1409,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           modelControl: this.modelControl,
           requiresModifier: loadSettings().chatSendShortcut === "modifier-enter",
           submitting: this.submitting,
+          textareaController: this.composerTextarea,
           messageLocked: Boolean(this.pendingCloud.sessionKey),
           onInput: (message) => {
             if (!this.submitting && !this.pendingCloud.sessionKey) {
@@ -1443,8 +1458,19 @@ class NewSessionPage extends OpenClawLightDomElement {
         if (this.submitting || this.pendingCloud.sessionKey) {
           return;
         }
-        this.context?.gateway.setSessionKey(sessionKey);
-        this.context?.navigate("chat", { search: searchForSession(sessionKey) });
+        const context = this.context;
+        if (!context) {
+          return;
+        }
+        context.gateway.setSessionKey(sessionKey);
+        context.navigate(
+          "chat",
+          sessionNavigationTarget({
+            context,
+            face: "chat",
+            sessionKey,
+          }).options,
+        );
       },
     });
   }

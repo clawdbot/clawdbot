@@ -1,4 +1,5 @@
 import { includeContributionOwnsAgentRoster } from "./agent-roster-provenance.js";
+import { resolveManagedUnsetPathsForWrite } from "./config-path-mutation.js";
 import { ConfigIncludeError } from "./includes.js";
 import type { ConfigIoContext } from "./io.context.js";
 import { maybeRecoverSuspiciousConfigRead } from "./io.observe-recovery.js";
@@ -27,7 +28,6 @@ import type {
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "./io.types.js";
 import { warnIfConfigFromFuture } from "./io.warnings.js";
-import { resolveManagedUnsetPathsForWrite } from "./io.write-prepare.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";

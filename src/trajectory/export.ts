@@ -993,6 +993,9 @@ function buildArtifactsCapture(params: {
     compactionCount: runtimeArtifacts?.compactionCount ?? runtimeCompletion?.compactionCount,
     assistantTexts: runtimeArtifacts?.assistantTexts ?? runtimeCompletion?.assistantTexts,
     finalPromptText: runtimeArtifacts?.finalPromptText ?? runtimeCompletion?.finalPromptText,
+    finalPromptTextOriginalLength:
+      runtimeArtifacts?.finalPromptTextOriginalLength ??
+      runtimeCompletion?.finalPromptTextOriginalLength,
     itemLifecycle: runtimeArtifacts?.itemLifecycle,
     toolMetas: runtimeArtifacts?.toolMetas,
     didSendViaMessagingTool: runtimeArtifacts?.didSendViaMessagingTool,
