@@ -717,6 +717,7 @@ export async function runRuntimeToolFixture(
     !env.mock && dynamicExposureIntentionallyExcluded && toolName === "apply_patch";
   const requireTranscriptEvidence =
     metadata.required &&
+    (!env.mock || toolName !== "apply_patch") &&
     (!dynamicExposureIntentionallyExcluded || requireNativePatchTranscriptEvidence) &&
     !isKnownHarnessGap(config.knownHarnessGap);
   const mockBaseUrl = env.mock?.baseUrl;

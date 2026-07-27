@@ -759,6 +759,10 @@ describe("runtime tool fixture", () => {
       mock: { baseUrl: "http://127.0.0.1:9999" },
     });
     env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME = "codex";
+    const promptEvidence: Array<{
+      requireSuccessfulTranscriptToolResult?: boolean;
+      transcriptToolName?: string;
+    }> = [];
     const happyCallId = "private-qa-patch-happy";
     const failureCallId = "private-qa-patch-failure";
     const fetchJson = vi
@@ -810,16 +814,90 @@ describe("runtime tool fixture", () => {
       {
         createSession: vi.fn(async (_env, _label, key) => key!),
         readEffectiveTools: vi.fn(async () => new Set(["apply_patch"])),
-        runAgentPrompt: vi.fn(async () => ({})),
+        runAgentPrompt: vi.fn(async (_env, params) => {
+          promptEvidence.push({
+            transcriptToolName: params.transcriptToolName,
+            requireSuccessfulTranscriptToolResult: params.requireSuccessfulTranscriptToolResult,
+          });
+          return {};
+        }),
         fetchJson,
         ensureImageGenerationConfigured: vi.fn(),
       },
     );
 
+    expect(promptEvidence).toEqual([
+      { transcriptToolName: undefined, requireSuccessfulTranscriptToolResult: undefined },
+      { transcriptToolName: undefined, requireSuccessfulTranscriptToolResult: undefined },
+    ]);
     expect(details).toContain("apply_patch mock provider happy planned args");
     expect(details).toContain("runtime-tool-fixture-patch.txt");
     expect(details).toContain("../runtime-tool-fixture-denied.txt");
     expect(details).not.toContain("codex-native-workspace apply_patch");
+  });
+
+  it("rejects unlinked private-QA Codex patch results without waiting for a transcript", async () => {
+    const env = await makeEnv({
+      mock: { baseUrl: "http://127.0.0.1:9999" },
+    });
+    env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME = "codex";
+    const promptEvidence: Array<{
+      requireSuccessfulTranscriptToolResult?: boolean;
+      transcriptToolName?: string;
+    }> = [];
+    const fetchJson = vi
+      .fn()
+      .mockResolvedValueOnce({ cursor: 0 })
+      .mockResolvedValueOnce([
+        {
+          allInputText: "target=apply_patch",
+          plannedToolCallId: "private-qa-patch-happy",
+          plannedToolName: "apply_patch",
+          plannedToolArgs: {
+            input:
+              "*** Begin Patch\n*** Add File: runtime-tool-fixture-patch.txt\n+runtime patch\n*** End Patch\n",
+          },
+        },
+        {
+          allInputText: "target=apply_patch",
+          toolOutputCallId: "unrelated-patch-call",
+          toolOutput: "Successfully applied patch",
+        },
+      ]);
+
+    await expect(
+      runRuntimeToolFixture(
+        env,
+        {
+          toolName: "apply_patch",
+          toolCoverage: {
+            bucket: "codex-native-workspace",
+            expectedLayer: "codex-native-workspace",
+            required: true,
+          },
+          promptSnippet: "target=apply_patch",
+          failurePromptSnippet: "failure target=apply_patch",
+        },
+        {
+          createSession: vi.fn(async (_env, _label, key) => key!),
+          readEffectiveTools: vi.fn(async () => new Set(["apply_patch"])),
+          runAgentPrompt: vi.fn(async (_env, params) => {
+            promptEvidence.push({
+              transcriptToolName: params.transcriptToolName,
+              requireSuccessfulTranscriptToolResult: params.requireSuccessfulTranscriptToolResult,
+            });
+            return {};
+          }),
+          fetchJson,
+          ensureImageGenerationConfigured: vi.fn(),
+        },
+      ),
+    ).rejects.toThrow("expected mock happy-path tool output for apply_patch");
+
+    expect(promptEvidence).toEqual([
+      { transcriptToolName: undefined, requireSuccessfulTranscriptToolResult: undefined },
+      { transcriptToolName: undefined, requireSuccessfulTranscriptToolResult: undefined },
+    ]);
   });
 
   it("skips Codex-native async planned-only fixtures without treating the plan as proof", async () => {
