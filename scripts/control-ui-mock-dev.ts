@@ -6,6 +6,7 @@ import qrcode from "qrcode";
 import { createServer, type Plugin, type ViteDevServer } from "vite";
 import type { UserProfile } from "../packages/gateway-protocol/src/index.js";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { applyConfigTierHints, applyResolvedConfigTierHints } from "../src/config/schema.tiers.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
 import {
   createControlUiMockBootstrapConfig,
@@ -641,6 +642,15 @@ function buildConfigMocks(options: { swarmEnabled?: boolean } = {}) {
     agents: { defaults: { thinkingDefault: "medium" } },
     models: { mode: "merge" },
     ...(options.swarmEnabled ? { tools: { swarm: true } } : {}),
+    channels: {
+      whatsapp: {
+        enabled: true,
+        allowFrom: ["+15551234567"],
+        dmPolicy: "pairing",
+        groupPolicy: "allowlist",
+        selfChatMode: "off",
+      },
+    },
     mcp: {
       servers: {
         context7: { url: "https://mcp.context7.com/mcp", transport: "streamable-http" },
@@ -727,6 +737,52 @@ function buildConfigMocks(options: { swarmEnabled?: boolean } = {}) {
           },
         },
       },
+      // Channel settings are the one schema surface the channels page renders,
+      // so the fixture keeps both tiers represented.
+      channels: {
+        type: "object",
+        title: "Channels",
+        properties: {
+          whatsapp: {
+            type: "object",
+            title: "WhatsApp",
+            properties: {
+              enabled: { type: "boolean", title: "Enabled" },
+              allowFrom: { type: "array", title: "Allow from", items: { type: "string" } },
+              dmPolicy: { type: "string", title: "DM policy", enum: ["pairing", "open", "off"] },
+              groupPolicy: {
+                type: "string",
+                title: "Group policy",
+                enum: ["allowlist", "open", "off"],
+              },
+              selfChatMode: { type: "string", title: "Self chat mode", enum: ["off", "notes"] },
+              configWrites: { type: "boolean", title: "Config writes" },
+              streaming: {
+                type: "object",
+                title: "Streaming",
+                properties: {
+                  progress: {
+                    type: "object",
+                    properties: {
+                      maxLines: { type: "integer", title: "Progress max lines" },
+                      toolProgress: { type: "boolean", title: "Progress tool lines" },
+                    },
+                  },
+                },
+              },
+              retry: {
+                type: "object",
+                title: "Retry",
+                properties: {
+                  attempts: { type: "integer", title: "Attempts" },
+                  minDelayMs: { type: "integer", title: "Min delay (ms)" },
+                  maxDelayMs: { type: "integer", title: "Max delay (ms)" },
+                },
+              },
+            },
+          },
+        },
+      },
     },
   };
   return {
@@ -742,7 +798,12 @@ function buildConfigMocks(options: { swarmEnabled?: boolean } = {}) {
     },
     schema: {
       schema,
-      uiHints: {},
+      // Resolve tiers the way the gateway does so the mock reproduces the
+      // real common/advanced split instead of a flat "everything advanced".
+      uiHints: applyResolvedConfigTierHints(
+        schema,
+        applyConfigTierHints({}, { includePluginOwnedChannels: true }),
+      ),
       version: "mock-config-schema",
       generatedAt: new Date(0).toISOString(),
     },
