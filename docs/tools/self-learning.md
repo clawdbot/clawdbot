@@ -132,8 +132,11 @@ Experience review is deliberately delayed and bounded:
 - If any agent or reply run is still active, review waits another 30 seconds.
 - Only one experience review runs at a time.
 - Delayed review is process-local Gateway work. The Gateway must remain running
-  through the idle window; one-shot local and CLI-backed runtimes do not retain
-  enough trajectory and tool-availability context to schedule it.
+  through the idle window. CLI-backed harnesses can schedule review only when
+  they report the resolved model, exact model-iteration count, and actual
+  `skill_workshop` availability. The Codex app-server harness reports those
+  facts for its `openai/*` sessions; runtimes with missing facts still fail
+  closed.
 
 The foreground answer is never delayed for learning. A failed or ineligible
 turn does not start experience review, although direct user corrections can
@@ -145,6 +148,12 @@ The background reviewer receives only the current turn, starting at its most
 recent user message. The rendered trajectory is capped at 60,000 characters;
 when necessary, OpenClaw keeps the first message and the newest evidence and
 marks the omitted middle.
+
+For Codex app-server sessions, OpenClaw counts unique upstream response
+completions as model iterations and uses the harness's frozen current-turn
+projection. The harness also attempts to mirror that projection into the agent's
+SQLite transcript before delayed review is scheduled; the reviewer does not
+need to reread the database.
 
 The reviewer reuses the resolved provider and model. It reuses the foreground
 auth profile when that identity is available and disables model fallbacks. The
