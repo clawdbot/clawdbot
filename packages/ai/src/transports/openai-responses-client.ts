@@ -222,7 +222,8 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           model,
           {
             ...config.pricingOptions?.(responsesOptions),
-            firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options) ?? config.firstEventTimeoutMs,
+            firstEventTimeoutMs:
+              getFirstStreamEventTimeoutMs(options) ?? config.firstEventTimeoutMs,
             abortFirstEventStream: firstEventAbort.abort,
             onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
             signal: options?.signal,
