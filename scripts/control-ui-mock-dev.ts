@@ -24,7 +24,7 @@ import { buildSkillWorkshopMocks } from "./control-ui-mock-skill-workshop.js";
 
 type CliOptions = {
   allowedHosts: string[];
-  fixture?: "board" | "swarm";
+  fixture?: "approval" | "board" | "swarm";
   host: string;
   port: number;
 };
@@ -140,11 +140,11 @@ function parseArgs(args: string[]): CliOptions {
   return options;
 }
 
-function parseFixture(value: string | undefined): "board" | "swarm" | undefined {
+function parseFixture(value: string | undefined): CliOptions["fixture"] {
   if (!value) {
     return undefined;
   }
-  if (value !== "board" && value !== "swarm") {
+  if (value !== "approval" && value !== "board" && value !== "swarm") {
     throw new Error(`Unknown Control UI mock fixture: ${value}`);
   }
   return value;
@@ -1415,10 +1415,12 @@ async function createChatPickerScenario(
           },
         ],
       },
+      // Pending exec approvals reopen as a blocking modal on every page load
+      // (connect-time exec.approval.list recovery), so the demo approval is
+      // opt-in via --fixture=approval instead of polluting the default mock.
       "exec.approval.list":
-        fixture === "swarm"
-          ? []
-          : [
+        fixture === "approval"
+          ? [
               {
                 id: "mock-production-export-approval",
                 request: {
@@ -1428,7 +1430,8 @@ async function createChatPickerScenario(
                 createdAtMs: baseTime - 75_000,
                 expiresAtMs: ATTENTION_FIXTURE_EXPIRES_AT,
               },
-            ],
+            ]
+          : [],
       "plugin.approval.list": [],
       "openclaw.approval.list": [],
       "sessions.patch": { ok: true },
