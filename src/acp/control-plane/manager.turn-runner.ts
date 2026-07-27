@@ -53,6 +53,64 @@ type ApplyRuntimeControls = (params: {
   meta: SessionAcpMeta;
 }) => Promise<void>;
 
+function resolveTurnCancellationReason(signal: AbortSignal): string {
+  return typeof signal.reason === "string" && signal.reason.trim()
+    ? signal.reason.trim()
+    : "cancel";
+}
+
+async function completeCancelledTurnBeforeStart(params: {
+  input: AcpRunTurnInput;
+  sessionKey: string;
+  runtime: AcpRuntime;
+  handle: AcpRuntimeHandle;
+  taskContext: ReturnType<typeof resolveBackgroundTaskContext>;
+  spawnedByWatcher?: string;
+  taskProgressSummary: string;
+  turnStartedAt: number;
+  recordTurnCompletion: (params: { startedAt: number }) => void;
+  setSessionState: SetManagerSessionState;
+}): Promise<void> {
+  const signal = expectDefined(params.input.signal, "cancelled ACP setup signal");
+  const stopReason = resolveTurnCancellationReason(signal);
+  await params.runtime.cancel({
+    handle: params.handle,
+    reason: stopReason,
+  });
+  await params.input.onEvent?.({
+    type: "done",
+    status: "cancelled",
+    stopReason,
+  });
+  params.recordTurnCompletion({ startedAt: params.turnStartedAt });
+  if (params.taskContext) {
+    const now = Date.now();
+    markBackgroundTaskTerminal(params.taskContext.runId, {
+      sessionKey: params.sessionKey,
+      status: "cancelled",
+      endedAt: now,
+      lastEventAt: now,
+      error: undefined,
+      progressSummary: params.taskProgressSummary || null,
+      terminalSummary: null,
+    });
+    if (params.spawnedByWatcher) {
+      recordSubagentTerminalState({
+        childSessionKey: params.sessionKey,
+        runId: params.taskContext.runId,
+        requesterSessionKey: params.spawnedByWatcher,
+        outcomeStatus: "cancelled",
+      });
+    }
+  }
+  await params.setSessionState({
+    cfg: params.input.cfg,
+    sessionKey: params.sessionKey,
+    state: "idle",
+    clearLastError: true,
+  });
+}
+
 /** Executes one ACP prompt turn against the selected backend and records terminal state. */
 export async function runManagerTurn(params: {
   input: AcpRunTurnInput;
@@ -64,6 +122,7 @@ export async function runManagerTurn(params: {
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
   applyRuntimeControls: ApplyRuntimeControls;
   setSessionState: SetManagerSessionState;
+  onTurnActive: () => void;
   recordTurnCompletion: (params: {
     startedAt: number;
     errorCode?: AcpRuntimeError["code"];
@@ -213,12 +272,42 @@ export async function runManagerTurn(params: {
           runtime = ensured.runtime;
           handle = ensured.handle;
           meta = ensured.meta;
+          if (input.signal?.aborted) {
+            await completeCancelledTurnBeforeStart({
+              input,
+              sessionKey,
+              runtime,
+              handle,
+              taskContext,
+              spawnedByWatcher,
+              taskProgressSummary,
+              turnStartedAt,
+              recordTurnCompletion: params.recordTurnCompletion,
+              setSessionState: params.setSessionState,
+            });
+            return;
+          }
           await params.applyRuntimeControls({
             sessionKey,
             runtime,
             handle,
             meta,
           });
+          if (input.signal?.aborted) {
+            await completeCancelledTurnBeforeStart({
+              input,
+              sessionKey,
+              runtime,
+              handle,
+              taskContext,
+              spawnedByWatcher,
+              taskProgressSummary,
+              turnStartedAt,
+              recordTurnCompletion: params.recordTurnCompletion,
+              setSessionState: params.setSessionState,
+            });
+            return;
+          }
 
           await params.setSessionState({
             cfg: input.cfg,
@@ -226,6 +315,21 @@ export async function runManagerTurn(params: {
             state: "running",
             clearLastError: true,
           });
+          if (input.signal?.aborted) {
+            await completeCancelledTurnBeforeStart({
+              input,
+              sessionKey,
+              runtime,
+              handle,
+              taskContext,
+              spawnedByWatcher,
+              taskProgressSummary,
+              turnStartedAt,
+              recordTurnCompletion: params.recordTurnCompletion,
+              setSessionState: params.setSessionState,
+            });
+            return;
+          }
 
           internalAbortController = new AbortController();
           onCallerAbort = () => {
@@ -244,6 +348,7 @@ export async function runManagerTurn(params: {
           };
           params.activeTurnBySession.set(actorKey, activeTurn);
           activeTurnStarted = true;
+          params.onTurnActive();
 
           const combinedSignal = input.signal
             ? AbortSignal.any([input.signal, internalAbortController.signal])
