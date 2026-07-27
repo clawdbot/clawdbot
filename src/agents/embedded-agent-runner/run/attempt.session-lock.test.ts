@@ -179,6 +179,7 @@ describe("createEmbeddedAttemptSessionLockController", () => {
 
     await expect(controller.reacquireAfterPrompt()).rejects.toBe(reloadError);
     await expect(controller.withSessionWriteLock(run)).rejects.toBe(reloadError);
+    expect(() => controller.withOwnedSessionFileWrite(run)).toThrow(reloadError);
     await controller.releaseForPrompt();
     await expect(controller.reacquireAfterPrompt()).rejects.toBe(reloadError);
     await expect(controller.acquireForCleanup()).resolves.toBeDefined();
@@ -307,6 +308,9 @@ describe("createEmbeddedAttemptSessionLockController", () => {
     });
     const cleanupLock = await controller.acquireForCleanup();
     await expect(controller.withSessionWriteLock(async () => undefined)).rejects.toThrow(
+      "attempt cleanup started before transcript write",
+    );
+    expect(() => controller.withOwnedSessionFileWrite(() => undefined)).toThrow(
       "attempt cleanup started before transcript write",
     );
     await cleanupLock.release();

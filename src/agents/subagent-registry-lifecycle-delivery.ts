@@ -4,6 +4,7 @@ import {
   loadSessionEntryReadOnly,
   type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import type { DetachedTaskFindResult } from "../tasks/detached-task-runtime-contract.js";
@@ -273,9 +274,16 @@ export function createSubagentRegistryLifecycleDelivery(
       const agentId =
         transcriptTarget?.agentId ?? resolveAgentIdFromSessionKey(entry.childSessionKey);
       const sessionKey = transcriptTarget?.sessionKey ?? entry.childSessionKey;
-      const storePath = agentId
+      const configuredStorePath = agentId
         ? (transcriptTarget?.storePath ??
           resolveStorePath(params.getRuntimeConfig().session?.store, { agentId }))
+        : undefined;
+      const storePath = configuredStorePath
+        ? resolveSessionStorePathForScope({
+            agentId,
+            sessionKey,
+            storePath: configuredStorePath,
+          })
         : undefined;
       const sessionId =
         transcriptTarget?.sessionId ??

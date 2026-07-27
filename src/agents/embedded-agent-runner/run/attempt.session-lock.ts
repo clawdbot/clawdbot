@@ -222,6 +222,12 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       if (disposed) {
         throw new Error("attempt disposed before transcript write");
       }
+      if (cleanupStarted) {
+        throw new Error("attempt cleanup started before transcript write");
+      }
+      if (reloadFailed) {
+        throw reloadFailure;
+      }
       return run();
     },
     reacquireAfterPrompt: async () => {
