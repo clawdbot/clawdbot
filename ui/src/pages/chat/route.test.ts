@@ -123,7 +123,7 @@ describe("loadChatRoute", () => {
     expect(list).not.toHaveBeenCalled();
   });
 
-  it("queries the full supplied prefix so longer disambiguation links can resolve", async () => {
+  it("queries the first uuid block so longer disambiguation links can resolve", async () => {
     const target = row({ key: "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001" });
     const { context, list } = contextFor(result([target]));
     await expect(
@@ -140,8 +140,11 @@ describe("loadChatRoute", () => {
       face: "chat",
       shortId: "123456780a",
     });
-    expect(list).toHaveBeenCalledWith(expect.objectContaining({ search: "123456780a" }));
-    expect(list).not.toHaveBeenCalledWith(expect.objectContaining({ search: "12345678" }));
+    // Stored keys hold a hyphenated uuid, so "123456780a" is not a substring of anything
+    // the gateway searches. Only the first block survives as a needle; the full prefix is
+    // still applied per row, so the longer link resolves instead of 404ing.
+    expect(list).toHaveBeenCalledWith(expect.objectContaining({ search: "12345678" }));
+    expect(list).not.toHaveBeenCalledWith(expect.objectContaining({ search: "123456780a" }));
   });
 
   it("stops prefix pagination at the fixed bound and reports an incomplete result", async () => {

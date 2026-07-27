@@ -27,6 +27,9 @@ import {
 
 const SESSION_REF_SEARCH_LIMIT = 20;
 const SESSION_REF_SEARCH_MAX_PAGES = 5;
+// A uuid's first block is the longest run that is contiguous in both the hyphenated
+// stored key and the hyphen-stripped short id used in URLs.
+const UUID_FIRST_BLOCK_LENGTH = 8;
 const SESSION_UUID_SUFFIX_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/iu;
 
 type SessionCandidate = {
@@ -114,19 +117,27 @@ function uniqueShortIdPrefix(
   return uuid;
 }
 
+// The gateway matches `search` as a plain substring of the stored key, id, and title
+// fields, so every needle here has to be a run that literally appears in one of them.
+// sessionReferenceMatches still applies the exact rule per row, so a loose needle only
+// widens the candidate set; too narrow a needle loses the session entirely.
 function sessionReferenceSearchText(search: SessionReferenceSearch): string {
-  if (search.kind !== "slug") {
+  if (search.kind === "exact") {
     return search.value;
   }
-  // The gateway matches `search` as a plain substring, and controlUiSessionSlug builds
-  // every token from a contiguous alphanumeric run of the lowercased display name. So a
-  // single token always matches server-side, while the joined slug would miss any name
-  // whose separators were punctuation ("Fix: auth bug" -> "fix-auth-bug"). Use the
-  // longest token as the most selective needle; sessionReferenceMatches still requires
-  // the full slug to be equal, so a loose needle only widens the candidate set.
-  return search.value
-    .split("-")
-    .reduce((longest, token) => (token.length > longest.length ? token : longest), "");
+  if (search.kind === "slug") {
+    // controlUiSessionSlug builds every token from a contiguous alphanumeric run of the
+    // lowercased display name, so one token always matches while the joined slug would
+    // miss any name whose separators were punctuation ("Fix: auth bug" -> "fix-auth-bug").
+    // The longest token is the most selective of those.
+    return search.value
+      .split("-")
+      .reduce((longest, token) => (token.length > longest.length ? token : longest), "");
+  }
+  // Short ids are compared hyphen-stripped, but the stored key holds a hyphenated uuid,
+  // so only its first block survives as a contiguous substring. Anything longer (from a
+  // disambiguation link or a canonicalized slug) would match nothing server-side.
+  return search.value.slice(0, UUID_FIRST_BLOCK_LENGTH);
 }
 
 function sessionReferenceMatches(
@@ -553,13 +564,16 @@ export async function loadChatRoute(
           };
         }
         if (slugResolution?.kind === "unique") {
+          // No shortId: a resolved slug canonicalizes to the same short reference every
+          // other surface links to, so `/chat/main/deploy-monitor` settles on
+          // `/chat/main/deploy-monitor-6db92d48` rather than a full uuid. A later
+          // first-block collision lands in the disambiguation view like any short link.
           const resolved = resolvedSessionRouteData({
             context,
             location: routeLocation,
             face,
             row: slugResolution.session,
             preferenceDerived,
-            shortId: sessionKeyUuid(slugResolution.session.key) ?? undefined,
           });
           return resolved ?? notFound({ routeId: face });
         }

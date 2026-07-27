@@ -214,8 +214,8 @@ describe("gateway-backed session route resolution", () => {
       kind: "session",
       sessionKey: storedRow.key,
       canonicalLocation: {
-        pathname:
-          "/chat/roboclaw/default-mode-with-rare-surprises-1234567890abcdef1234567890abcdef",
+        // Canonicalizes to the same short reference every other surface links to.
+        pathname: "/chat/roboclaw/default-mode-with-rare-surprises-12345678",
       },
     });
     expect(list.mock.calls.map(([options]) => options?.search)).toEqual([
@@ -298,8 +298,8 @@ describe("gateway-backed session route resolution", () => {
       kind: "session",
       sessionKey: storedRow.key,
       canonicalLocation: {
-        pathname:
-          "/chat/roboclaw/default-mode-with-rare-surprises-1234567890abcdef1234567890abcdef",
+        // Canonicalizes to the same short reference every other surface links to.
+        pathname: "/chat/roboclaw/default-mode-with-rare-surprises-12345678",
       },
     });
   });
