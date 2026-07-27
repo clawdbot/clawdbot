@@ -677,7 +677,8 @@ export async function runRuntimeToolFixture(
   });
   const dynamicExposureIntentionallyExcluded =
     env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME === "codex" &&
-    metadata.expectedLayer === "codex-native-workspace";
+    metadata.expectedLayer === "codex-native-workspace" &&
+    !tools.has(toolName);
   const expectedAvailable = readBoolean(config.expectedAvailable, true);
   if (!tools.has(toolName) && !dynamicExposureIntentionallyExcluded) {
     if (!expectedAvailable) {
@@ -710,9 +711,13 @@ export async function runRuntimeToolFixture(
     `failure target=${toolName}`,
   );
   const happyPathOutputRequired = readBoolean(config.happyPathOutputRequired, true);
+  // Private QA can expose an actual dynamic patch tool. Real Codex instead
+  // mirrors native file changes into linked apply_patch transcript evidence.
+  const requireNativePatchTranscriptEvidence =
+    !env.mock && dynamicExposureIntentionallyExcluded && toolName === "apply_patch";
   const requireTranscriptEvidence =
     metadata.required &&
-    !dynamicExposureIntentionallyExcluded &&
+    (!dynamicExposureIntentionallyExcluded || requireNativePatchTranscriptEvidence) &&
     !isKnownHarnessGap(config.knownHarnessGap);
   const mockBaseUrl = env.mock?.baseUrl;
   const requestCursorBefore = mockBaseUrl

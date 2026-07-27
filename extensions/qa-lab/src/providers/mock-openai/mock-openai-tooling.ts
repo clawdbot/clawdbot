@@ -171,6 +171,17 @@ export function buildQaToolSearchArgs(
   if (failureMode && targetTool === "web_search") {
     return { query: QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY };
   }
+  if (failureMode && targetTool === "apply_patch") {
+    return {
+      input: [
+        "*** Begin Patch",
+        "*** Add File: ../runtime-tool-fixture-denied.txt",
+        "+runtime patch outside the workspace",
+        "*** End Patch",
+        "",
+      ].join("\n"),
+    };
+  }
   if (failureMode) {
     return { __qaFailureMode: "denied-input" };
   }

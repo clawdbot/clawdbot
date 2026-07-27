@@ -4004,6 +4004,37 @@ describe("qa mock openai server", () => {
     expect(String(toolPlanOutput.arguments)).toContain("OPENCLAW_QA_WEB_SEARCH_DENIED_INPUT");
   });
 
+  it.each([
+    {
+      label: "workspace-local happy",
+      prompt:
+        "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+      patchPath: "runtime-tool-fixture-patch.txt",
+    },
+    {
+      label: "workspace-escaping failure",
+      prompt:
+        "tool search qa failure target=apply_patch. Exercise the denied-input path once and then summarize.",
+      patchPath: "../runtime-tool-fixture-denied.txt",
+    },
+  ])("plans a valid $label apply_patch envelope", async ({ prompt, patchPath }) => {
+    const server = await startMockServer();
+    const response = await postResponses(server, {
+      stream: false,
+      input: [makeUserInput(prompt)],
+    });
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(outputItem(payload)).toMatchObject({ type: "function_call", name: "apply_patch" });
+    const args = outputToolArgs(payload);
+    expect(args).not.toHaveProperty("__qaFailureMode");
+    expect(args.input).toBeTypeOf("string");
+    expect(args.input).toContain("*** Begin Patch\n");
+    expect(args.input).toContain(`*** Add File: ${patchPath}\n`);
+    expect(args.input).toContain("\n*** End Patch\n");
+  });
+
   it("plans QA subagent handoff calls even when Codex dynamic tools are not in body.tools", async () => {
     const server = await startMockServer();
 

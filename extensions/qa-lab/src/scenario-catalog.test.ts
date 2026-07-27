@@ -375,8 +375,16 @@ describe("qa scenario catalog", () => {
       toolCoverage: {
         bucket: "codex-native-workspace",
         expectedLayer: "codex-native-workspace",
+        required: true,
       },
     });
+    expect(readQaScenarioExecutionConfig(applyPatch.id)).not.toHaveProperty("knownHarnessGap");
+    expect(readQaScenarioExecutionConfig(applyPatch.id)?.happyPrompt).toContain(
+      "runtime-tool-fixture-patch.txt",
+    );
+    expect(readQaScenarioExecutionConfig(applyPatch.id)?.failurePrompt).toContain(
+      "../runtime-tool-fixture-denied.txt",
+    );
     expect(readQaScenarioExecutionConfig(messageTool.id)).toMatchObject({
       toolName: "message",
       expectedAvailable: false,
