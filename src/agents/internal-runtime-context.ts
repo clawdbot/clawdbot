@@ -57,11 +57,19 @@ function stripStandaloneDelimitedTokenLines(text: string, token: string): string
   return text.replace(new RegExp(delimitedTokenLinePattern(token), "g"), "");
 }
 
+function findDelimitedTokenLinePrefixStart(text: string, tokenIndex: number): number {
+  const lineStart = text.lastIndexOf("\n", tokenIndex - 1) + 1;
+  if (lineStart === 0) {
+    return 0;
+  }
+  return text[lineStart - 2] === "\r" ? lineStart - 2 : lineStart - 1;
+}
+
 function extractDelimitedBlocks(
   text: string,
   begin: string,
   end: string,
-  separator = "\n\n",
+  options: { preserveSurroundingWhitespace?: boolean; separator?: string } = {},
 ): { text: string; blocks: string[] } {
   let next = text;
   const blocks: string[] = [];
@@ -90,7 +98,12 @@ function extractDelimitedBlocks(
       cursor = nextEnd + end.length;
     }
 
-    const before = next.slice(0, start).trimEnd();
+    const blockStart = options.preserveSurroundingWhitespace
+      ? findDelimitedTokenLinePrefixStart(next, start)
+      : start;
+    const before = options.preserveSurroundingWhitespace
+      ? next.slice(0, blockStart)
+      : next.slice(0, start).trimEnd();
     if (finish === -1 || depth !== 0) {
       return { text: before, blocks };
     }
@@ -99,13 +112,23 @@ function extractDelimitedBlocks(
       blockEnd += 1;
     }
     blocks.push(next.slice(start, blockEnd).trim());
-    const after = next.slice(blockEnd).trimStart();
-    next = before && after ? `${before}${separator}${after}` : `${before}${after}`;
+    const after = options.preserveSurroundingWhitespace
+      ? next.slice(blockEnd)
+      : next.slice(blockEnd).trimStart();
+    next =
+      !options.preserveSurroundingWhitespace && before && after
+        ? `${before}${options.separator ?? "\n\n"}${after}`
+        : `${before}${after}`;
   }
 }
 
-function stripDelimitedBlock(text: string, begin: string, end: string, separator?: string): string {
-  return extractDelimitedBlocks(text, begin, end, separator).text;
+function stripDelimitedBlock(
+  text: string,
+  begin: string,
+  end: string,
+  options?: { preserveSurroundingWhitespace?: boolean; separator?: string },
+): string {
+  return extractDelimitedBlocks(text, begin, end, options).text;
 }
 
 function findLegacyInternalEventEnd(text: string, start: number): number | null {
@@ -228,7 +251,7 @@ function stripRuntimeContextPromptPreface(text: string): string {
 /** Remove protected and legacy runtime-context blocks from text. */
 export function stripInternalRuntimeContext(
   text: string,
-  options: { separator?: string } = {},
+  options: { preserveSurroundingWhitespace?: boolean; separator?: string } = {},
 ): string {
   if (!text) {
     return text;
@@ -238,7 +261,7 @@ export function stripInternalRuntimeContext(
       text,
       INTERNAL_RUNTIME_CONTEXT_BEGIN,
       INTERNAL_RUNTIME_CONTEXT_END,
-      options.separator,
+      options,
     ),
     INTERNAL_RUNTIME_CONTEXT_END,
   );

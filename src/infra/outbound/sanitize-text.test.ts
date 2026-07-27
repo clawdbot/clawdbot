@@ -185,6 +185,20 @@ describe("stripInternalRuntimeScaffolding", () => {
     ).toBe("before\nafter");
   });
 
+  it("preserves visible whitespace around removed runtime context", () => {
+    expect(
+      stripInternalRuntimeScaffolding(
+        [
+          "before  ",
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "internal",
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "    indented code",
+        ].join("\n"),
+      ),
+    ).toBe("before  \n    indented code");
+  });
+
   it("unwraps standalone untrusted child-result marker lines", () => {
     expect(
       stripInternalRuntimeScaffolding(

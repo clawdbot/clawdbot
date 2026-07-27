@@ -67,7 +67,7 @@ export function stripInternalRuntimeScaffolding(text: string): string {
       .replace(INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE, "")
       .replace(INTERNAL_RUNTIME_SCAFFOLDING_SELF_CLOSING_RE, "")
       .replace(INTERNAL_RUNTIME_SCAFFOLDING_TAG_RE, ""),
-    { separator: "\n" },
+    { preserveSurroundingWhitespace: true },
   );
   for (const marker of INTERNAL_RUNTIME_MARKER_LINES) {
     stripped = stripStandaloneMarkerLine(stripped, marker);
