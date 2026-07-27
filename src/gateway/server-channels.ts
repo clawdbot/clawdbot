@@ -1299,11 +1299,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         const hadCallerHandoff = knownAccountDeferredToCaller.has(rKey);
         const hadLiveState = Boolean(
           initialAbort ||
-            initialTask ||
-            store.starting.has(id) ||
-            runtimeSnapshot?.running ||
-            runtimeSnapshot?.restartPending ||
-            hadCallerHandoff,
+          initialTask ||
+          store.starting.has(id) ||
+          runtimeSnapshot?.running ||
+          runtimeSnapshot?.restartPending ||
+          hadCallerHandoff,
         );
         if (!hadLiveState && !plugin?.gateway?.stopAccount) {
           return { status: "fulfilled" };
