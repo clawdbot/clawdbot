@@ -26,6 +26,7 @@ import type { ChatPageHost } from "./chat-state.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
+import { prepareInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
 import { cacheChatSessionSnapshot, type ChatMessageCache } from "./session-message-cache.ts";
 import { openSlot } from "./sidebar-layout.ts";
 
@@ -470,6 +471,47 @@ describe("chat pane header state", () => {
 });
 
 describe("chat pane initialization", () => {
+  it("claims the connected client's first message before attaching the pane", () => {
+    const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
+    const targetSessionKey = "agent:main:created-session";
+    const client = {
+      addEventListener: vi.fn(() => vi.fn()),
+      request: vi.fn(),
+    } as unknown as GatewayBrowserClient;
+    const context = createInitializationContext();
+    context.gateway.snapshot.client = client;
+    prepareInitialUserMessageHandoff(
+      context.initialUserMessage,
+      targetSessionKey,
+      { attachments: [], createdAt: 1, text: "keep the first prompt visible" },
+      client,
+    );
+    pane.sessionKey = targetSessionKey;
+    pane.chatMessagesBySession = new Map();
+    pane.context = context;
+    const stopAfterAttach = new Error("stop after attach");
+    let attachedState: ChatPageHost | undefined;
+    vi.spyOn(pane.chatState, "attach").mockImplementation((state) => {
+      attachedState = state;
+      throw stopAfterAttach;
+    });
+
+    try {
+      expect(() => pane.connectedCallback()).toThrow(stopAfterAttach);
+      expect(attachedState?.client).toBe(client);
+      expect(attachedState?.chatMessages).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: [
+            expect.objectContaining({ type: "text", text: "keep the first prompt visible" }),
+          ],
+        }),
+      ]);
+    } finally {
+      pane.disconnectedCallback();
+    }
+  });
+
   it("sets the pane route before attaching outbox projection", () => {
     const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
     const targetSessionKey = "agent:main:pane-b";

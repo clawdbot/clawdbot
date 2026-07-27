@@ -162,6 +162,61 @@ describe("mock gateway stateful config", () => {
 });
 
 describe("mock gateway stateful sessions", () => {
+  it("makes a newly created session visible to the next sessions.list", async () => {
+    const sessionKey = "agent:main:created-session";
+    const script = createControlUiMockGatewayInitScript({
+      methodResponses: {
+        "sessions.create": { key: sessionKey, runStarted: true },
+      },
+    });
+    window.sessionStorage.clear();
+    // oxlint-disable-next-line typescript/no-implied-eval -- Executes the generated init script standalone, proving it captures no module closures.
+    new Function(script)();
+
+    const socket = new WebSocket("ws://mock-gateway");
+    const frames: ResponseFrame[] = [];
+    socket.addEventListener("message", (event) => {
+      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    });
+    await flushMockTimers();
+
+    socket.send(
+      JSON.stringify({
+        type: "req",
+        id: "create-1",
+        method: "sessions.create",
+        params: { agentId: "main" },
+      }),
+    );
+    await flushMockTimers();
+    expect(frames.find((frame) => frame.id === "create-1")?.payload).toEqual({
+      key: sessionKey,
+      runStarted: true,
+    });
+
+    socket.send(
+      JSON.stringify({
+        type: "req",
+        id: "list-1",
+        method: "sessions.list",
+        params: { agentId: "main", search: "created-session" },
+      }),
+    );
+    await flushMockTimers();
+    expect(frames.find((frame) => frame.id === "list-1")?.payload).toMatchObject({
+      count: 2,
+      sessions: [
+        expect.objectContaining({ key: "main" }),
+        expect.objectContaining({
+          key: sessionKey,
+          hasActiveRun: true,
+          status: "running",
+        }),
+      ],
+    });
+    socket.close();
+  });
+
   it("cycles subscription-scoped session events and stops after unsubscribe", async () => {
     const sessionKey = "agent:main:sidebar-narration-demo";
     const script = createControlUiMockGatewayInitScript({
