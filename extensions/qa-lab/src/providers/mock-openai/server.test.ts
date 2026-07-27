@@ -4009,15 +4009,17 @@ describe("qa mock openai server", () => {
       label: "workspace-local happy",
       prompt:
         "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+      operation: "Add File",
       patchPath: "runtime-tool-fixture-patch.txt",
     },
     {
       label: "workspace-escaping failure",
       prompt:
         "tool search qa failure target=apply_patch. Exercise the denied-input path once and then summarize.",
+      operation: "Update File",
       patchPath: "../runtime-tool-fixture-denied.txt",
     },
-  ])("plans a valid $label apply_patch envelope", async ({ prompt, patchPath }) => {
+  ])("plans a valid $label apply_patch envelope", async ({ prompt, operation, patchPath }) => {
     const server = await startMockServer();
     const response = await postResponses(server, {
       stream: false,
@@ -4031,7 +4033,10 @@ describe("qa mock openai server", () => {
     expect(args).not.toHaveProperty("__qaFailureMode");
     expect(args.input).toBeTypeOf("string");
     expect(args.input).toContain("*** Begin Patch\n");
-    expect(args.input).toContain(`*** Add File: ${patchPath}\n`);
+    expect(args.input).toContain(`*** ${operation}: ${patchPath}\n`);
+    if (operation === "Update File") {
+      expect(args.input).toContain("\n@@\n-runtime-tool-fixture-context-that-must-never-exist\n");
+    }
     expect(args.input).toContain("\n*** End Patch\n");
   });
 

@@ -38,9 +38,9 @@ scenario:
         runtime patch, then summarize the actual tool result.
       failurePrompt: >-
         tool search qa failure target=apply_patch. Call apply_patch exactly once
-        with a complete patch that attempts to add
-        ../runtime-tool-fixture-denied.txt, then summarize the actual
-        workspace-escape rejection.
+        with a complete patch that attempts to update
+        ../runtime-tool-fixture-denied.txt using context that does not exist,
+        then summarize the actual workspace-escape or missing-context rejection.
       promptSnippet: "target=apply_patch"
       failurePromptSnippet: "failure target=apply_patch"
 

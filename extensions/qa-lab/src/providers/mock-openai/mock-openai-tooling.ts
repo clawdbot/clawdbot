@@ -175,7 +175,9 @@ export function buildQaToolSearchArgs(
     return {
       input: [
         "*** Begin Patch",
-        "*** Add File: ../runtime-tool-fixture-denied.txt",
+        "*** Update File: ../runtime-tool-fixture-denied.txt",
+        "@@",
+        "-runtime-tool-fixture-context-that-must-never-exist",
         "+runtime patch outside the workspace",
         "*** End Patch",
         "",

@@ -144,7 +144,7 @@ async function writeCodexNativePatchEvidence(env: QaSuiteRuntimeEnv) {
           id: "native-patch-failure",
           name: toolName,
           arguments: {
-            changes: [{ path: "../runtime-tool-fixture-denied.txt", kind: { type: "add" } }],
+            changes: [{ path: "../runtime-tool-fixture-denied.txt", kind: { type: "update" } }],
           },
         },
       ],
@@ -789,7 +789,7 @@ describe("runtime tool fixture", () => {
           plannedToolName: "apply_patch",
           plannedToolArgs: {
             input:
-              "*** Begin Patch\n*** Add File: ../runtime-tool-fixture-denied.txt\n+runtime patch outside the workspace\n*** End Patch\n",
+              "*** Begin Patch\n*** Update File: ../runtime-tool-fixture-denied.txt\n@@\n-runtime-tool-fixture-context-that-must-never-exist\n+runtime patch outside the workspace\n*** End Patch\n",
           },
         },
         {
