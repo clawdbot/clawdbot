@@ -1,5 +1,6 @@
 import type { Message } from "grammy/types";
 import { describe, expect, it } from "vitest";
+import { isTelegramHistoryEntryAfterAmbientWatermark } from "./group-history-window.js";
 import {
   resolveTelegramMessageCachePersistentScopeKey,
   TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
@@ -746,5 +747,41 @@ describe("telegram message cache", () => {
     const recent = await recentBefore(cache, "9007199254740992");
 
     expect(recent).toEqual([]);
+  });
+
+  it("does not treat non-decimal message ids as newer than ambient watermarks", () => {
+    const timestampMs = Date.parse("2026-05-10T12:40:00.000Z");
+    const watermark = { messageId: "999", timestampMs };
+
+    expect(
+      isTelegramHistoryEntryAfterAmbientWatermark(
+        { messageId: "1000", timestamp: timestampMs },
+        watermark,
+      ),
+    ).toBe(true);
+    expect(
+      isTelegramHistoryEntryAfterAmbientWatermark(
+        { messageId: "999", timestamp: timestampMs },
+        watermark,
+      ),
+    ).toBe(false);
+    expect(
+      isTelegramHistoryEntryAfterAmbientWatermark(
+        { messageId: "1e3", timestamp: timestampMs },
+        watermark,
+      ),
+    ).toBe(false);
+    expect(
+      isTelegramHistoryEntryAfterAmbientWatermark(
+        { messageId: "0x10", timestamp: timestampMs },
+        { messageId: "15", timestampMs },
+      ),
+    ).toBe(false);
+    expect(
+      isTelegramHistoryEntryAfterAmbientWatermark(
+        { messageId: "9007199254740992", timestamp: timestampMs },
+        watermark,
+      ),
+    ).toBe(false);
   });
 });

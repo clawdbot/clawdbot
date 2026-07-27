@@ -51,11 +51,12 @@ function telegramHistoryEntryKey(entry: HistoryEntry): string | undefined {
 }
 
 function numericMessageId(value: string | undefined): number | undefined {
-  if (!value?.trim()) {
+  const trimmed = value?.trim();
+  if (!trimmed || !/^(?:0|[1-9]\d*)$/.test(trimmed)) {
     return undefined;
   }
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
 export function isTelegramHistoryEntryAfterAmbientWatermark(
