@@ -233,6 +233,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           () =>
             loadCombinedSessionStoreForGateway(cfg, {
               agentId: p.agentId,
+              projection: "list",
             }),
           {
             config: cfg,
@@ -284,6 +285,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         const sharingTargets = result.sessions.map((session) =>
           resolveSessionSharingTarget({
             cfg,
+            projection: "list",
             sessionKey: session.key,
             storeCache: sharingStoreCache,
             ...(session.key === "global" && p.agentId ? { agentId: p.agentId } : {}),

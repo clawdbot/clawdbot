@@ -113,6 +113,7 @@ type ChatThreadProps = {
   streamSegments: ChatStreamSegment[];
   stream: string | null;
   streamStartedAt: number | null;
+  runId?: string | null;
   runOutputTokens?: number | null;
   queue: ChatQueueItem[];
   showThinking: boolean;
@@ -1184,9 +1185,7 @@ function renderChatThreadContents(
   const chatItems = buildCachedChatItems({
     paneId: props.paneId,
     sessionKey: props.sessionKey,
-    runId:
-      props.sessions?.sessions.find((row) => areUiSessionKeysEquivalent(row.key, props.sessionKey))
-        ?.activeRunIds?.[0] ?? null,
+    runId: props.runId === undefined ? (activeSession?.activeRunIds?.[0] ?? null) : props.runId,
     locale,
     messages: props.messages,
     toolMessages: props.toolMessages,
