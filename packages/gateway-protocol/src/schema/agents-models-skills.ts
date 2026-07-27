@@ -169,6 +169,10 @@ export const AgentsFileEntrySchema = closedObject({
   name: NonEmptyString,
   path: NonEmptyString,
   missing: Type.Boolean(),
+  // True when absence is a normal workspace state (optional profile files, and
+  // MEMORY.md before anything is written). Editors should offer these for
+  // creation rather than flagging them as faults.
+  expectedAbsent: Type.Optional(Type.Boolean()),
   size: Type.Optional(Type.Integer({ minimum: 0 })),
   updatedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   content: Type.Optional(Type.String()),

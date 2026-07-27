@@ -271,7 +271,7 @@ export async function runDoctorRepairSequence(params: {
     staleOAuthShadowRepair.changes.length > 0 ||
     authProfileSqliteMigration.changes.length > 0;
 
-  const activeToolSchemaWarnings = collectActiveToolSchemaProjectionWarnings({
+  const activeToolSchemaWarnings = await collectActiveToolSchemaProjectionWarnings({
     cfg: state.candidate,
     env,
   });

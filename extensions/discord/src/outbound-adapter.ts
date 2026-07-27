@@ -37,20 +37,6 @@ import {
 import { resolveDiscordReplyReference } from "./reply-reference.js";
 
 export const DISCORD_TEXT_CHUNK_LIMIT = 2000;
-const DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE =
-  /<\s*(system-reminder|previous_response)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi;
-const DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_SELF_CLOSING_RE =
-  /<\s*(?:system-reminder|previous_response)\b[^>]*\/\s*>/gi;
-const DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_TAG_RE =
-  /<\s*\/?\s*(?:system-reminder|previous_response)\b[^>]*>/gi;
-
-function stripDiscordInternalRuntimeScaffolding(text: string): string {
-  return text
-    .replace(DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE, "")
-    .replace(DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_SELF_CLOSING_RE, "")
-    .replace(DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_TAG_RE, "");
-}
-
 const loadDiscordThreadBindings = createLazyRuntimeModule(
   () => import("./monitor/thread-bindings.js"),
 );
@@ -119,7 +105,6 @@ export const discordOutbound: ChannelOutboundAdapter = {
       maxLines: ctx?.formatting?.maxLinesPerMessage,
     }),
   textChunkLimit: DISCORD_TEXT_CHUNK_LIMIT,
-  sanitizeText: ({ text }) => stripDiscordInternalRuntimeScaffolding(text),
   pollMaxOptions: 10,
   normalizePayload: ({ payload }) => normalizeDiscordApprovalPayload(payload),
   presentationCapabilities: DISCORD_PRESENTATION_CAPABILITIES,

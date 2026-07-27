@@ -366,13 +366,15 @@ export async function applyInlineDirectiveOverrides(params: {
         }
         const label = `${modelSelection.provider}/${modelSelection.model}`;
         const labelWithAlias = modelSelection.alias ? `${modelSelection.alias} (${label})` : label;
+        // Model change first, then the thinking remap it triggered: the remap is a
+        // consequence of the model switch, so the cause is announced before the effect.
         const parts = [
-          persisted.thinkingRemap
-            ? `Thinking level set to ${persisted.thinkingRemap.to} (${persisted.thinkingRemap.from} not supported for ${persisted.thinkingRemap.provider}/${persisted.thinkingRemap.model}).`
-            : undefined,
           modelSelection.isDefault
             ? `Model reset to default (${labelWithAlias}).`
             : `Model set to ${labelWithAlias} for this session.`,
+          persisted.thinkingRemap
+            ? `Thinking level set to ${persisted.thinkingRemap.to} (${persisted.thinkingRemap.from} not supported for ${persisted.thinkingRemap.provider}/${persisted.thinkingRemap.model}).`
+            : undefined,
           persisted.runtimeChange?.kind === "clear"
             ? "Runtime reset to configured policy."
             : persisted.runtimeChange?.kind === "set"

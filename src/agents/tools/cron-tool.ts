@@ -24,6 +24,7 @@ import {
   type AnyAgentTool,
   jsonResult,
   readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
   readStringParam,
 } from "./common.js";
 import {
@@ -38,7 +39,11 @@ import {
   stripExistingContext,
 } from "./cron-tool-context.js";
 import { capCronJobToolsAllowOnCreate } from "./cron-tool-creator-cap.js";
-import { assertCronPacingInput, createCronToolSchema } from "./cron-tool-schema.js";
+import {
+  assertCronPacingInput,
+  createCronToolSchema,
+  CRON_TOOL_LIST_MAX_LIMIT,
+} from "./cron-tool-schema.js";
 import { assertNoCronShellExecution, updateCronJobFromAgentTool } from "./cron-tool-write.js";
 import type {
   CronCreatorToolAllowlistEntry,
@@ -284,7 +289,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
     displaySummary: CRON_TOOL_DISPLAY_SUMMARY,
     description: `Gateway scheduler: reminders, delayed self-wakeups, loops, recurring work, event watchers. Never exec sleep/poll as timer.
 
-ACTIONS: status | list [includeDisabled] | get jobId | add job | update jobId patch | remove jobId | run jobId (runMode "force"=now) | runs jobId = history | next_check in:"30m" (own paced run only) | wake text mode?:"now"|"next-heartbeat"(default) nudges a caller-owned lane (sessionKey/agentId to pick another).
+ACTIONS: status | list [includeDisabled,limit?,offset?] (use nextOffset for the next page) | get jobId | add job | update jobId patch | remove jobId | run jobId (runMode "force"=now) | runs jobId = history | next_check in:"30m" (own paced run only) | wake text mode?:"now"|"next-heartbeat"(default) nudges a caller-owned lane (sessionKey/agentId to pick another).
 
 ADD: {name?,schedule,payload,sessionTarget?,pacing?,trigger?,delivery?,enabled?}. Required: schedule+payload.
 
@@ -351,7 +356,16 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted cron-run s
             }
             const listAgentId = callerScope?.agentId ?? explicitAgentId;
             const includeDisabled = Boolean(params.includeDisabled);
-            let offset = 0;
+            const requestedLimit = selfRemoveOnlyJobId
+              ? undefined
+              : readPositiveIntegerParam(params, "limit", {
+                  max: CRON_TOOL_LIST_MAX_LIMIT,
+                  message: `limit must be a positive integer no greater than ${CRON_TOOL_LIST_MAX_LIMIT}`,
+                });
+            const requestedOffset = selfRemoveOnlyJobId
+              ? undefined
+              : readNonNegativeIntegerParam(params, "offset");
+            let offset = requestedOffset ?? 0;
             let result: unknown;
             let shouldContinue = true;
             let useCompactList = true;
@@ -361,7 +375,12 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted cron-run s
                   includeDisabled,
                   ...(useCompactList ? { compact: true } : {}),
                   ...(listAgentId ? { agentId: listAgentId } : {}),
-                  ...(selfRemoveOnlyJobId ? { limit: 200, offset } : {}),
+                  ...(selfRemoveOnlyJobId
+                    ? { limit: CRON_TOOL_LIST_MAX_LIMIT, offset }
+                    : {
+                        ...(requestedLimit !== undefined ? { limit: requestedLimit } : {}),
+                        ...(requestedOffset !== undefined ? { offset: requestedOffset } : {}),
+                      }),
                 });
               } catch (error) {
                 if (!useCompactList || !isOlderGatewayWithoutCompactCronList(error)) {

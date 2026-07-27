@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { createMockCronStateForJobs } from "./service.test-harness.js";
 import { recomputeNextRunsForMaintenance } from "./service/jobs.js";
+import { reserveQueuedCronRun } from "./service/run-admission.js";
 import type { CronJob } from "./types.js";
 
 function createCronSystemEventJob(now: number, overrides: Partial<CronJob> = {}): CronJob {
@@ -154,6 +155,82 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
     // But should NOT have changed nextRunAtMs (it's still future)
     expect(job.state.nextRunAtMs).toBe(futureTime);
   });
+
+  it("clears an orphaned queued marker from before a clock rollback", () => {
+    const now = Date.now();
+    const futureQueuedAt = now + 3 * 60 * 60_000;
+
+    const job = createCronSystemEventJob(now, {
+      state: {
+        nextRunAtMs: now + 60_000,
+        queuedAtMs: futureQueuedAt,
+      },
+    });
+
+    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
+    recomputeNextRunsForMaintenance(state);
+
+    expect(job.state.queuedAtMs).toBeUndefined();
+  });
+
+  it("clears an orphaned running marker from before a clock rollback", () => {
+    const now = Date.now();
+    const pastDue = now - 60_000;
+    const futureRunningAt = now + 3 * 60 * 60_000;
+
+    const job = createCronSystemEventJob(now, {
+      state: {
+        nextRunAtMs: pastDue,
+        runningAtMs: futureRunningAt,
+        lastRunAtMs: pastDue - 60_000,
+      },
+    });
+
+    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
+    recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
+
+    expect(job.state.runningAtMs).toBeUndefined();
+    expect(job.state.nextRunAtMs).toBe(pastDue);
+  });
+
+  it.each(["queuedAtMs", "runningAtMs"] as const)(
+    "preserves a future %s marker owned by a live reservation",
+    (markerField) => {
+      const now = Date.now();
+      const futureMarker = now + 3 * 60 * 60_000;
+      const job = createCronSystemEventJob(now, {
+        state: {
+          nextRunAtMs: now + 60_000,
+          [markerField]: futureMarker,
+        },
+      });
+      const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
+      reserveQueuedCronRun(state, job.id, futureMarker);
+
+      recomputeNextRunsForMaintenance(state);
+
+      expect(job.state[markerField]).toBe(futureMarker);
+    },
+  );
+
+  it.each(["queuedAtMs", "runningAtMs"] as const)(
+    "preserves a near-future %s marker within the stale-run window",
+    (markerField) => {
+      const now = Date.now();
+      const futureMarker = now + 1_000;
+      const job = createCronSystemEventJob(now, {
+        state: {
+          nextRunAtMs: now + 60_000,
+          [markerField]: futureMarker,
+        },
+      });
+      const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
+
+      recomputeNextRunsForMaintenance(state);
+
+      expect(job.state[markerField]).toBe(futureMarker);
+    },
+  );
 
   it("isolates schedule errors while filling missing nextRunAtMs", () => {
     const now = Date.now();

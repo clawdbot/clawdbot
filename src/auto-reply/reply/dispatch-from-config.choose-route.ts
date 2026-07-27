@@ -250,6 +250,9 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       deliveredBlockContentKeys.add(createBlockReplyContentKey(payload));
     }
   };
+  // Routed blocks bypass dispatcher queue counts entirely; this is the only
+  // settled-delivery fact for them (media-only blocks never touch blockCount).
+  const hasDeliveredRoutedBlockReply = (): boolean => deliveredBlockContentKeys.size > 0;
   const wasReplyDeliveredAsBlock = async (
     payload: ReplyPayload,
     abortSignal?: AbortSignal,
@@ -610,6 +613,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       sendTrackedBlockReply,
       recordRoutedBlockReplyDelivery,
       wasReplyDeliveredAsBlock,
+      hasDeliveredRoutedBlockReply,
       sendFinalPayload,
     },
     {

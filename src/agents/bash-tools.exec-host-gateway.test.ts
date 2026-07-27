@@ -849,6 +849,25 @@ describe("processGatewayAllowlist", () => {
     expect(JSON.stringify(captured.events)).not.toContain("allowed");
   });
 
+  it.runIf(process.platform !== "win32").each(["bash", "sh", "/bin/sh"])(
+    "keeps %s login-shell startup outside model auto-review",
+    async (shell) => {
+      const payload = "echo auto-review-startup-proof";
+      const command = `${shell} -lc "${payload}"`;
+      await configurePlanBackedCommand({ command });
+
+      const result = await runGatewayAllowlist({
+        command,
+        ask: "on-miss",
+        autoReview: true,
+      });
+
+      expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
+      expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+      expect(result.pendingResult?.details.status).toBe("approval-pending");
+    },
+  );
+
   it("does not execute after cancellation wins during auto-review", async () => {
     const command = "echo ok";
     await configurePlanBackedCommand({ command });

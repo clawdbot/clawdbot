@@ -290,7 +290,7 @@ export const streamOpenAICodexResponses: StreamFunction<
       const modelHeaders = resolveAiTransportHeaderSentinels(model.headers);
       const optionHeaders = resolveAiTransportHeaderSentinels(options?.headers);
 
-      const accountId = extractOpenAICodexAccountId(apiKey);
+      const accountId = resolveOpenAICodexRequestAccountId(apiKey, model.baseUrl);
       let body = buildRequestBody(model, context, options);
       const nextBody = await options?.onPayload?.(body, model);
       if (nextBody !== undefined) {
@@ -1643,6 +1643,36 @@ export function extractOpenAICodexAccountId(token: string): string {
   throw new Error("Failed to extract accountId from token");
 }
 
+function resolveOpenAICodexRequestAccountId(token: string, baseUrl: string): string | undefined {
+  const accountId = resolveOpenAICodexAccountId(token);
+  if (accountId) {
+    return accountId;
+  }
+  if (isLoopbackCodexProxyBaseUrl(baseUrl)) {
+    return undefined;
+  }
+  throw new Error("Failed to extract accountId from token");
+}
+
+function isLoopbackCodexProxyBaseUrl(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    const hostname = url.hostname.toLowerCase();
+    const path = url.pathname.replace(/\/+$/u, "");
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      (hostname === "127.0.0.1" || hostname === "[::1]") &&
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash &&
+      path.endsWith("/codex")
+    );
+  } catch {
+    return false;
+  }
+}
+
 function createCodexRequestId(): string {
   const crypto = globalThis.crypto;
   if (typeof crypto?.randomUUID === "function") {
@@ -1659,7 +1689,7 @@ function createCodexRequestId(): string {
 function buildBaseCodexHeaders(
   initHeaders: Record<string, string> | undefined,
   additionalHeaders: Record<string, string> | undefined,
-  accountId: string,
+  accountId: string | undefined,
   token: string,
 ): Headers {
   const headers = new Headers(initHeaders);
@@ -1667,7 +1697,11 @@ function buildBaseCodexHeaders(
     headers.set(key, value);
   }
   headers.set("Authorization", `Bearer ${token}`);
-  headers.set("chatgpt-account-id", accountId);
+  if (accountId) {
+    headers.set("chatgpt-account-id", accountId);
+  } else {
+    headers.delete("chatgpt-account-id");
+  }
   headers.set("originator", "openclaw");
   const userAgent = os
     ? `openclaw (${os.platform()} ${os.release()}; ${os.arch()})`
@@ -1679,7 +1713,7 @@ function buildBaseCodexHeaders(
 function buildSSEHeaders(
   initHeaders: Record<string, string> | undefined,
   additionalHeaders: Record<string, string> | undefined,
-  accountId: string,
+  accountId: string | undefined,
   token: string,
   sessionId?: string,
 ): Headers {
@@ -1699,7 +1733,7 @@ function buildSSEHeaders(
 function buildWebSocketHeaders(
   initHeaders: Record<string, string> | undefined,
   additionalHeaders: Record<string, string> | undefined,
-  accountId: string,
+  accountId: string | undefined,
   token: string,
   requestId: string,
 ): Headers {

@@ -61,6 +61,7 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
       data: { phase: "end", startedAt: 0, endedAt: 30_000 },
     });
     delete contextlessTerminal.sessionKey;
+    delete contextlessTerminal.agentId;
 
     harness.observer.handleEvent(contextlessTerminal);
     harness.observer.handleEvent(
@@ -84,6 +85,7 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
       data: { phase: "end", startedAt: 0, endedAt: 30_000 },
     });
     delete contextlessTerminal.sessionKey;
+    delete contextlessTerminal.agentId;
 
     harness.observer.handleEvent(contextlessTerminal);
     await flushObserver();
@@ -92,6 +94,29 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
       | SessionObserverDigest
       | undefined;
     expect(digest?.health).toBe("done");
+    expect(harness.persistDigest).toHaveBeenCalledOnce();
+    harness.observer.dispose();
+  });
+
+  it("finalizes an active run when the terminal omits only its agent owner", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const harness = createHarness();
+    harness.observer.handleEvent(event({ stream: "lifecycle", data: { phase: "start" } }));
+    vi.setSystemTime(30_000);
+    const terminal = event({
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 0, endedAt: 30_000 },
+    });
+    delete terminal.agentId;
+
+    harness.observer.handleEvent(terminal);
+    await flushObserver();
+
+    const digest = harness.broadcastToConnIds.mock.calls.at(-1)?.[1] as
+      | SessionObserverDigest
+      | undefined;
+    expect(digest).toMatchObject({ agentId: "main", health: "done" });
     expect(harness.persistDigest).toHaveBeenCalledOnce();
     harness.observer.dispose();
   });

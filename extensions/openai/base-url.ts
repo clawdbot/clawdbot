@@ -86,6 +86,39 @@ export function isOpenAIHttpsApiBaseUrl(baseUrl?: string): boolean {
   return new URL(baseUrl.trim()).protocol === "https:";
 }
 
+/**
+ * Normalizes a trusted local Codex proxy base URL.
+ *
+ * Codex bearer tokens must never be redirected to a remote custom host. Accept
+ * only exact IPv4 or IPv6 loopback literals, with no user info, query, or hash.
+ */
+export function normalizeOpenAICodexLoopbackBaseUrl(baseUrl: unknown): string | undefined {
+  if (typeof baseUrl !== "string" || !baseUrl.trim()) {
+    return undefined;
+  }
+  try {
+    const url = new URL(baseUrl.trim());
+    const hostname = url.hostname.toLowerCase();
+    if (
+      (url.protocol !== "http:" && url.protocol !== "https:") ||
+      (hostname !== "127.0.0.1" && hostname !== "[::1]") ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash
+    ) {
+      return undefined;
+    }
+    const path = url.pathname.replace(/\/+$/u, "");
+    if (!path.endsWith("/codex")) {
+      return undefined;
+    }
+    return `${url.origin}${path}`;
+  } catch {
+    return undefined;
+  }
+}
+
 export function canonicalizeCodexResponsesBaseUrl(baseUrl?: string): string | undefined {
   return isOpenAICodexBaseUrl(baseUrl) ? OPENAI_CODEX_RESPONSES_BASE_URL : baseUrl;
 }

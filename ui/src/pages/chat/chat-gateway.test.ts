@@ -106,10 +106,7 @@ function createOtherRunSilentFinalPayload(text: string): ChatEventPayload {
     runId: "run-announce",
     sessionKey: "main",
     state: "final",
-    message: {
-      role: "assistant",
-      content: [{ type: "text", text }],
-    },
+    message: createTextChatMessage("assistant", text),
   };
 }
 
@@ -236,10 +233,7 @@ describe("handleChatGatewayEvent", () => {
   });
 
   it("caches final messages for a switched-away session", () => {
-    const visibleMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "main visible" }],
-    };
+    const visibleMessage = createTextChatMessage("assistant", "main visible");
     const state = createState({
       sessionKey: "main",
       chatMessages: [visibleMessage],
@@ -249,10 +243,7 @@ describe("handleChatGatewayEvent", () => {
       runId: "run-1",
       sessionKey: "other",
       state: "final",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "other final" }],
-      },
+      message: createTextChatMessage("assistant", "other final"),
     };
 
     expect(handleChatGatewayEvent(state, payload)).toBe(null);
@@ -289,10 +280,7 @@ describe("handleChatGatewayEvent", () => {
       runId: "run-1",
       sessionKey: payloadSessionKey,
       state: "final",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "cached final" }],
-      },
+      message: createTextChatMessage("assistant", "cached final"),
     };
 
     if (withConfiguredDefaults) {
@@ -316,10 +304,7 @@ describe("handleChatGatewayEvent", () => {
   });
 
   it("caches inactive global finals under the payload agent only", () => {
-    const visibleMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "work visible" }],
-    };
+    const visibleMessage = createTextChatMessage("assistant", "work visible");
     const state = createState({
       sessionKey: "global",
       assistantAgentId: "work",
@@ -332,10 +317,7 @@ describe("handleChatGatewayEvent", () => {
       sessionKey: "global",
       agentId: "main",
       state: "final",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "main final" }],
-      },
+      message: createTextChatMessage("assistant", "main final"),
     };
 
     expect(handleChatGatewayEvent(state, payload)).toBe(null);
@@ -357,10 +339,7 @@ describe("handleChatGatewayEvent", () => {
       runId: "observed-run",
       sessionKey: "main",
       state: "final",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Observed reply" }],
-      },
+      message: createTextChatMessage("assistant", "Observed reply"),
     };
 
     expect(handleChatGatewayEvent(state, payload)).toBe("final");
@@ -426,10 +405,7 @@ describe("handleChatGatewayEvent", () => {
       sessionKey: "global",
       agentId: "work",
       state: "delta",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Work reply" }],
-      },
+      message: createTextChatMessage("assistant", "Work reply"),
     };
 
     expect(handleChatGatewayEvent(state, payload)).toBe("delta");
@@ -448,10 +424,7 @@ describe("handleChatGatewayEvent", () => {
       runId: "run-1",
       sessionKey: "agent:main:main",
       state: "delta",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Live reply" }],
-      },
+      message: createTextChatMessage("assistant", "Live reply"),
     };
 
     expect(handleChatGatewayEvent(state, payload)).toBe("delta");
@@ -529,10 +502,7 @@ describe("handleChatGatewayEvent", () => {
       runId: "run-feishu-1",
       sessionKey: "agent:main:feishu:direct:peer-1",
       state: "delta",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Observed reply" }],
-      },
+      message: createTextChatMessage("assistant", "Observed reply"),
     };
 
     expect(handleChatGatewayEvent(state, payload)).toBe("delta");
@@ -553,10 +523,7 @@ describe("handleChatGatewayEvent", () => {
       runId: "run-canonical-main",
       sessionKey: "agent:main:main",
       state: "delta",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Canonical reply" }],
-      },
+      message: createTextChatMessage("assistant", "Canonical reply"),
     };
 
     expect(handleChatGatewayEvent(state, payload)).toBe("delta");
@@ -576,10 +543,7 @@ describe("handleChatGatewayEvent", () => {
       runId: "run-1",
       sessionKey: "agent:main:main",
       state: "final",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Live reply" }],
-      },
+      message: createTextChatMessage("assistant", "Live reply"),
     };
 
     expect(handleChatGatewayEvent(state, payload)).toBe("final");
@@ -628,11 +592,7 @@ describe("handleChatGatewayEvent", () => {
       runId: "run-1",
       sessionKey: "main",
       state: "final",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Final answer." }],
-        timestamp: 5,
-      },
+      message: createTextChatMessage("assistant", "Final answer.", undefined, 5),
     };
 
     expect(handleChatGatewayEvent(state, payload)).toBe("final");
@@ -644,11 +604,7 @@ describe("handleChatGatewayEvent", () => {
   });
 
   it("does not replay persisted keyed commentary after retiring a same-run steer", () => {
-    const originalUser = {
-      role: "user",
-      content: [{ type: "text", text: "Ask" }],
-      timestamp: 1,
-    };
+    const originalUser = createTextChatMessage("user", "Ask", undefined, 1);
     const persistedCommentary = {
       role: "assistant",
       content: [{ type: "text", text: "Looking into it." }],
@@ -686,11 +642,7 @@ describe("handleChatGatewayEvent", () => {
         runId: "run-1",
         sessionKey: "main",
         state: "final",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "Final answer." }],
-          timestamp: 5,
-        },
+        message: createTextChatMessage("assistant", "Final answer.", undefined, 5),
       }),
     ).toBe("final");
 
@@ -718,12 +670,12 @@ describe("handleChatGatewayEvent", () => {
             source: "segment",
           },
         },
-        {
-          role: "user",
-          content: [{ type: "text", text: "Focus on deployment" }],
-          timestamp: 3,
-          __openclaw: { idempotencyKey: "steer-send-1:user" },
-        },
+        createTextChatMessage(
+          "user",
+          "Focus on deployment",
+          { idempotencyKey: "steer-send-1:user" },
+          3,
+        ),
       ],
       chatQueue: [
         {
@@ -745,11 +697,7 @@ describe("handleChatGatewayEvent", () => {
       runId: "run-1",
       sessionKey: "main",
       state: "final",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Final answer." }],
-        timestamp: 5,
-      },
+      message: createTextChatMessage("assistant", "Final answer.", undefined, 5),
     });
 
     expect(state.chatQueue).toEqual([]);
@@ -777,11 +725,7 @@ describe("handleChatGatewayEvent", () => {
       runId: "run-1",
       sessionKey: "main",
       state: "final",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Final answer." }],
-        timestamp: 5,
-      },
+      message: createTextChatMessage("assistant", "Final answer.", undefined, 5),
     };
 
     expect(handleChatGatewayEvent(state, payload)).toBe("final");
@@ -848,10 +792,7 @@ describe("handleChatGatewayEvent", () => {
         runId: "run-1",
         sessionKey: "main",
         state: "final",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "Live reply" }],
-        },
+        message: createTextChatMessage("assistant", "Live reply"),
       };
 
       expect(handleChatGatewayEvent(state, payload)).toBe("final");
@@ -920,15 +861,10 @@ describe("handleChatGatewayEvent", () => {
           state: "final",
           stopReason: "end_turn",
           yielded: true,
-          message: {
-            role: "assistant",
-            content: [
-              {
-                type: "text",
-                text: "The gateway will restart; I will resume verification afterward.",
-              },
-            ],
-          },
+          message: createTextChatMessage(
+            "assistant",
+            "The gateway will restart; I will resume verification afterward.",
+          ),
         }),
       ).toBe("final");
 
@@ -962,10 +898,7 @@ describe("handleChatGatewayEvent", () => {
           sessionKey: "main",
           state: "final",
           stopReason: "end_turn",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "Final response" }],
-          },
+          message: createTextChatMessage("assistant", "Final response"),
         }),
       ).toBe("final");
 
@@ -993,10 +926,7 @@ describe("handleChatGatewayEvent", () => {
           state: "final",
           stopReason: "completed",
           yielded: true,
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "Final response" }],
-          },
+          message: createTextChatMessage("assistant", "Final response"),
         }),
       ).toBe("final");
 
@@ -1016,10 +946,7 @@ describe("handleChatGatewayEvent", () => {
       runId: "run-2",
       sessionKey: "agent:main:main",
       state: "delta",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Wrong run" }],
-      },
+      message: createTextChatMessage("assistant", "Wrong run"),
     };
 
     expect(handleChatGatewayEvent(state, payload)).toBe(null);
@@ -1073,10 +1000,7 @@ describe("handleChatGatewayEvent", () => {
       runId: "run-announce",
       sessionKey: "main",
       state: "final",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Sub-agent findings" }],
-      },
+      message: createTextChatMessage("assistant", "Sub-agent findings"),
     };
     expect(handleChatGatewayEvent(state, payload)).toBe(null);
     expect(state.chatRunId).toBe("run-user");
@@ -1149,10 +1073,7 @@ describe("handleChatGatewayEvent", () => {
       runId: "run-1",
       sessionKey: "main",
       state: "delta",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Alpha" }],
-      },
+      message: createTextChatMessage("assistant", "Alpha"),
     };
     expect(handleChatGatewayEvent(state, payload)).toBe("delta");
     expect(state.chatStream).toBe("Alpha");
@@ -1189,10 +1110,7 @@ describe("handleChatGatewayEvent", () => {
     const payload: ChatEventPayload = {
       sessionKey: "main",
       state: "final",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Injected note" }],
-      },
+      message: createTextChatMessage("assistant", "Injected note"),
     };
 
     expect(handleChatGatewayEvent(state, payload)).toBe(null);
@@ -1220,11 +1138,7 @@ describe("handleChatGatewayEvent", () => {
   );
 
   it("persists streamed text when final event carries no message", () => {
-    const existingMessage = {
-      role: "user",
-      content: [{ type: "text", text: "Hi" }],
-      timestamp: 1,
-    };
+    const existingMessage = createTextChatMessage("user", "Hi", undefined, 1);
     const state = createState({
       sessionKey: "main",
       chatRunId: "run-1",
@@ -1290,11 +1204,7 @@ describe("handleChatGatewayEvent", () => {
       chatStream: "Streamed partial",
       chatStreamStartedAt: 100,
     });
-    const finalMsg = {
-      role: "assistant",
-      content: [{ type: "text", text: "Complete reply" }],
-      timestamp: 101,
-    };
+    const finalMsg = createTextChatMessage("assistant", "Complete reply", undefined, 101);
     const payload: ChatEventPayload = {
       runId: "run-1",
       sessionKey: "main",
@@ -1307,26 +1217,10 @@ describe("handleChatGatewayEvent", () => {
   });
 
   it("keeps repeated assistant final text from a later turn", () => {
-    const firstUser = {
-      role: "user",
-      content: [{ type: "text", text: "first" }],
-      timestamp: 1,
-    };
-    const firstAssistant = {
-      role: "assistant",
-      content: [{ type: "text", text: "OK" }],
-      timestamp: 2,
-    };
-    const secondUser = {
-      role: "user",
-      content: [{ type: "text", text: "second" }],
-      timestamp: 3,
-    };
-    const secondAssistant = {
-      role: "assistant",
-      content: [{ type: "text", text: "OK" }],
-      timestamp: 4,
-    };
+    const firstUser = createTextChatMessage("user", "first", undefined, 1);
+    const firstAssistant = createTextChatMessage("assistant", "OK", undefined, 2);
+    const secondUser = createTextChatMessage("user", "second", undefined, 3);
+    const secondAssistant = createTextChatMessage("assistant", "OK", undefined, 4);
     const state = createState({
       sessionKey: "main",
       chatRunId: "run-2",
@@ -1344,16 +1238,8 @@ describe("handleChatGatewayEvent", () => {
   });
 
   it("keeps repeated assistant final text within the same turn", () => {
-    const user = {
-      role: "user",
-      content: [{ type: "text", text: "repeat" }],
-      timestamp: 1,
-    };
-    const firstAssistant = {
-      role: "assistant",
-      content: [{ type: "text", text: "OK" }],
-      timestamp: 2,
-    };
+    const user = createTextChatMessage("user", "repeat", undefined, 1);
+    const firstAssistant = createTextChatMessage("assistant", "OK", undefined, 2);
     const secondAssistant = {
       role: "assistant",
       content: [
@@ -1389,11 +1275,7 @@ describe("handleChatGatewayEvent", () => {
       runId: "run-1",
       sessionKey: "main",
       state: "final",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Reply" }],
-        timestamp: 101,
-      },
+      message: createTextChatMessage("assistant", "Reply", undefined, 101),
     };
     const assignments = trackChatMessagesAssignments(state);
 
@@ -1417,11 +1299,7 @@ describe("handleChatGatewayEvent", () => {
       runId: "run-1",
       sessionKey: "main",
       state: "final",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "source reply final" }],
-        timestamp: 101,
-      },
+      message: createTextChatMessage("assistant", "source reply final", undefined, 101),
     };
 
     expect(handleChatGatewayEvent(state, payload)).toBe("final");
@@ -1736,11 +1614,7 @@ describe("handleChatGatewayEvent", () => {
     "⚠️ This operation may require additional review.",
   ])("preserves message-only terminal output beginning with %s", (text) => {
     const state = createState({ sessionKey: "main", chatRunId: "run-1" });
-    const message = {
-      role: "assistant",
-      content: [{ type: "text", text }],
-      timestamp: 10,
-    };
+    const message = createTextChatMessage("assistant", text, undefined, 10);
 
     const payload: ChatEventPayload = {
       runId: "run-1",
@@ -1766,11 +1640,7 @@ describe("handleChatGatewayEvent", () => {
       runId: "run-1",
       sessionKey: "main",
       state: "error",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Partial answer. Final detail." }],
-        timestamp: 10,
-      },
+      message: createTextChatMessage("assistant", "Partial answer. Final detail.", undefined, 10),
     };
 
     expect(handleChatGatewayEvent(state, payload)).toBe("error");
@@ -1784,11 +1654,12 @@ describe("handleChatGatewayEvent", () => {
       sessionKey: "main",
       chatRunId: "run-1",
     });
-    const message = {
-      role: "assistant",
-      content: [{ type: "text", text: "⚠️ Configure provider auth, then try again." }],
-      timestamp: 10,
-    };
+    const message = createTextChatMessage(
+      "assistant",
+      "⚠️ Configure provider auth, then try again.",
+      undefined,
+      10,
+    );
     const payload: ChatEventPayload = {
       runId: "run-1",
       sessionKey: "main",
@@ -1814,11 +1685,7 @@ describe("handleChatGatewayEvent", () => {
         runId: "run-1",
         sessionKey: "main",
         state: "final",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "Source reply delivered." }],
-          timestamp: 9,
-        },
+        message: createTextChatMessage("assistant", "Source reply delivered.", undefined, 9),
       }),
     ).toBe("final");
     expect(state.chatRunId).toBeNull();
@@ -1829,11 +1696,12 @@ describe("handleChatGatewayEvent", () => {
         sessionKey: "main",
         state: "error",
         errorMessage: "raw provider failure",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "Configure provider auth, then try again." }],
-          timestamp: 10,
-        },
+        message: createTextChatMessage(
+          "assistant",
+          "Configure provider auth, then try again.",
+          undefined,
+          10,
+        ),
       }),
     ).toBe("error");
     expect(state.chatMessages).toHaveLength(1);
@@ -1842,11 +1710,12 @@ describe("handleChatGatewayEvent", () => {
   });
 
   it("does not append an orphan error bubble when no run was active", () => {
-    const existingMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "Error: request failed before start" }],
-      timestamp: 1,
-    };
+    const existingMessage = createTextChatMessage(
+      "assistant",
+      "Error: request failed before start",
+      undefined,
+      1,
+    );
     const state = createState({
       sessionKey: "main",
       chatRunId: null,
@@ -1903,10 +1772,7 @@ describe("handleChatGatewayEvent", () => {
       runId: "run-1",
       sessionKey: "main",
       state: "final",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "NO_REPLY" }],
-      },
+      message: createTextChatMessage("assistant", "NO_REPLY"),
     };
 
     expect(handleChatGatewayEvent(state, payload)).toBe("final");
@@ -1928,10 +1794,7 @@ describe("handleChatGatewayEvent", () => {
         runId: "run-1",
         sessionKey: "main",
         state: "final",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text }],
-        },
+        message: createTextChatMessage("assistant", text),
       };
 
       expect(handleChatGatewayEvent(state, payload)).toBe("final");
@@ -1987,10 +1850,7 @@ describe("handleChatGatewayEvent", () => {
       runId: "run-announce",
       sessionKey: "main",
       state: "final",
-      message: {
-        role: "user",
-        content: [{ type: "text", text: "NO_REPLY" }],
-      },
+      message: createTextChatMessage("user", "NO_REPLY"),
     };
 
     // User messages with NO_REPLY text should NOT be filtered — only assistant messages.
@@ -2135,15 +1995,10 @@ describe("loadChatHistory filtering", () => {
 
   it("keeps a user message even if it matches the synthetic repair text", async () => {
     const messages = [
-      {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
-          },
-        ],
-      },
+      createTextChatMessage(
+        "user",
+        "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
+      ),
     ];
     const mockClient = {
       request: vi.fn().mockResolvedValue({ messages }),
@@ -2454,19 +2309,14 @@ describe("loadChatHistory retry handling", () => {
     const request = vi.fn().mockResolvedValue({
       messages: [
         { role: "assistant", content: [{ type: "text", text: "HEARTBEAT_OK" }] },
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: [
-                "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-                "subagent completion payload",
-                "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-              ].join("\n"),
-            },
-          ],
-        },
+        createTextChatMessage(
+          "user",
+          [
+            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+            "subagent completion payload",
+            "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+          ].join("\n"),
+        ),
         { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
       ],
       thinkingLevel: "low",
@@ -3105,11 +2955,7 @@ describe("loadChatHistory retry handling", () => {
     }
   });
   it("keeps live tool cards when only older history has a persisted tool result", async () => {
-    const olderUser = {
-      role: "user",
-      content: [{ type: "text", text: "older ask" }],
-      __openclaw: { seq: 1 },
-    };
+    const olderUser = createTextChatMessage("user", "older ask", { seq: 1 });
     const olderToolResult = {
       role: "toolResult",
       toolCallId: "call_old",
@@ -3117,11 +2963,7 @@ describe("loadChatHistory retry handling", () => {
       content: [{ type: "text", text: "old tool output" }],
       __openclaw: { seq: 2 },
     };
-    const latestUser = {
-      role: "user",
-      content: [{ type: "text", text: "latest ask" }],
-      __openclaw: { seq: 3 },
-    };
+    const latestUser = createTextChatMessage("user", "latest ask", { seq: 3 });
     const liveToolMessage = {
       role: "assistant",
       toolCallId: "call_current",
@@ -3165,11 +3007,7 @@ describe("loadChatHistory retry handling", () => {
   });
 
   it("clears live tool cards when history catches up with content-block tool ids", async () => {
-    const persistedUser = {
-      role: "user",
-      content: [{ type: "text", text: "latest ask" }],
-      __openclaw: { seq: 1 },
-    };
+    const persistedUser = createTextChatMessage("user", "latest ask", { seq: 1 });
     const persistedToolCall = {
       role: "assistant",
       content: [
@@ -3231,11 +3069,7 @@ describe("loadChatHistory retry handling", () => {
   });
 
   it("keeps segment-only streamed text when history catches up with tools", async () => {
-    const persistedUser = {
-      role: "user",
-      content: [{ type: "text", text: "latest ask" }],
-      __openclaw: { seq: 1 },
-    };
+    const persistedUser = createTextChatMessage("user", "latest ask", { seq: 1 });
     const persistedToolResult = {
       role: "toolResult",
       toolCallId: "call_1",
@@ -3285,11 +3119,7 @@ describe("loadChatHistory retry handling", () => {
   });
 
   it("materializes orphaned streamed assistant text when history reload is stale", async () => {
-    const persistedUser = {
-      role: "user",
-      content: [{ type: "text", text: "first" }],
-      __openclaw: { seq: 1 },
-    };
+    const persistedUser = createTextChatMessage("user", "first", { seq: 1 });
     const request = vi.fn().mockResolvedValue({
       messages: [persistedUser],
       thinkingLevel: "low",
@@ -3317,12 +3147,7 @@ describe("loadChatHistory retry handling", () => {
   });
 
   it("timestamps materialized streamed text after the persisted user prompt", async () => {
-    const persistedUser = {
-      role: "user",
-      content: [{ type: "text", text: "first" }],
-      timestamp: 200,
-      __openclaw: { seq: 1 },
-    };
+    const persistedUser = createTextChatMessage("user", "first", { seq: 1 }, 200);
     const request = vi.fn().mockResolvedValue({
       messages: [persistedUser],
       thinkingLevel: "low",
@@ -3351,11 +3176,7 @@ describe("loadChatHistory retry handling", () => {
   });
 
   it("materializes orphaned segment-only assistant text before clearing caught-up tools", async () => {
-    const persistedUser = {
-      role: "user",
-      content: [{ type: "text", text: "latest ask" }],
-      __openclaw: { seq: 1 },
-    };
+    const persistedUser = createTextChatMessage("user", "latest ask", { seq: 1 });
     const persistedToolResult = {
       role: "toolResult",
       toolCallId: "call_1",
@@ -3402,16 +3223,12 @@ describe("loadChatHistory retry handling", () => {
   });
 
   it("clears streamed assistant text when history already contains the replacement", async () => {
-    const persistedUser = {
-      role: "user",
-      content: [{ type: "text", text: "latest ask" }],
-      __openclaw: { seq: 1 },
-    };
-    const historyAssistant = {
-      role: "assistant",
-      content: [{ type: "text", text: "First visible stream text. More final text." }],
-      __openclaw: { seq: 2 },
-    };
+    const persistedUser = createTextChatMessage("user", "latest ask", { seq: 1 });
+    const historyAssistant = createTextChatMessage(
+      "assistant",
+      "First visible stream text. More final text.",
+      { seq: 2 },
+    );
     const request = vi.fn().mockResolvedValue({
       messages: [persistedUser, historyAssistant],
       thinkingLevel: "low",
@@ -3433,16 +3250,12 @@ describe("loadChatHistory retry handling", () => {
   });
 
   it("keeps live tool cards when history only replaces streamed text", async () => {
-    const persistedUser = {
-      role: "user",
-      content: [{ type: "text", text: "latest ask" }],
-      __openclaw: { seq: 1 },
-    };
-    const historyAssistant = {
-      role: "assistant",
-      content: [{ type: "text", text: "First visible stream text. More final text." }],
-      __openclaw: { seq: 2 },
-    };
+    const persistedUser = createTextChatMessage("user", "latest ask", { seq: 1 });
+    const historyAssistant = createTextChatMessage(
+      "assistant",
+      "First visible stream text. More final text.",
+      { seq: 2 },
+    );
     const liveToolMessage = {
       role: "assistant",
       toolCallId: "call_current",
@@ -3485,16 +3298,8 @@ describe("loadChatHistory retry handling", () => {
   });
 
   it("keeps local optimistic messages when history reload returns empty", async () => {
-    const optimisticUser = {
-      role: "user",
-      content: [{ type: "text", text: "first ask" }],
-      timestamp: 10,
-    };
-    const optimisticAssistant = {
-      role: "assistant",
-      content: [{ type: "text", text: "first answer" }],
-      timestamp: 11,
-    };
+    const optimisticUser = createTextChatMessage("user", "first ask", undefined, 10);
+    const optimisticAssistant = createTextChatMessage("assistant", "first answer", undefined, 11);
     const request = vi.fn().mockResolvedValue({
       messages: [],
       thinkingLevel: "low",
@@ -3512,21 +3317,9 @@ describe("loadChatHistory retry handling", () => {
   });
 
   it("does not duplicate optimistic tail messages after history catches up", async () => {
-    const optimisticUser = {
-      role: "user",
-      content: [{ type: "text", text: "latest ask" }],
-      timestamp: 10,
-    };
-    const historyUser = {
-      role: "user",
-      content: [{ type: "text", text: "latest ask" }],
-      __openclaw: { seq: 1 },
-    };
-    const historyAssistant = {
-      role: "assistant",
-      content: [{ type: "text", text: "latest answer" }],
-      __openclaw: { seq: 2 },
-    };
+    const optimisticUser = createTextChatMessage("user", "latest ask", undefined, 10);
+    const historyUser = createTextChatMessage("user", "latest ask", { seq: 1 });
+    const historyAssistant = createTextChatMessage("assistant", "latest answer", { seq: 2 });
     const request = vi.fn().mockResolvedValue({
       messages: [historyUser, historyAssistant],
     });
@@ -3605,11 +3398,12 @@ describe("loadChatHistory retry handling", () => {
     const load = loadChatHistory(state);
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
 
-    const optimisticMessage = {
-      role: "user",
-      content: [{ type: "text", text: "send before history settles" }],
-      timestamp: 123,
-    };
+    const optimisticMessage = createTextChatMessage(
+      "user",
+      "send before history settles",
+      undefined,
+      123,
+    );
     state.chatMessages = [optimisticMessage];
     state.chatRunId = "run-after-history-start";
     state.chatStream = "";
@@ -3637,16 +3431,18 @@ describe("loadChatHistory retry handling", () => {
     const load = loadChatHistory(state);
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
 
-    const userMessage = {
-      role: "user",
-      content: [{ type: "text", text: "send before history settles" }],
-      timestamp: 123,
-    };
-    const assistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "answer before history catches up" }],
-      timestamp: 456,
-    };
+    const userMessage = createTextChatMessage(
+      "user",
+      "send before history settles",
+      undefined,
+      123,
+    );
+    const assistantMessage = createTextChatMessage(
+      "assistant",
+      "answer before history catches up",
+      undefined,
+      456,
+    );
     state.chatMessages = [userMessage, assistantMessage];
 
     history.resolve({ messages: [userMessage], thinkingLevel: "low" });
@@ -3668,31 +3464,17 @@ describe("loadChatHistory retry handling", () => {
     const load = loadChatHistory(state);
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
 
-    const repeatedPrompt = {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-      timestamp: 200,
-    };
+    const repeatedPrompt = createTextChatMessage("user", "continue", undefined, 200);
     state.chatMessages = [repeatedPrompt];
 
     history.resolve({
-      messages: [
-        {
-          role: "user",
-          content: [{ type: "text", text: "continue" }],
-          timestamp: 100,
-        },
-      ],
+      messages: [createTextChatMessage("user", "continue", undefined, 100)],
       thinkingLevel: "low",
     });
     await load;
 
     expect(state.chatMessages).toEqual([
-      {
-        role: "user",
-        content: [{ type: "text", text: "continue" }],
-        timestamp: 100,
-      },
+      createTextChatMessage("user", "continue", undefined, 100),
       repeatedPrompt,
     ]);
     expect(state.chatThinkingLevel).toBe("low");
@@ -3741,10 +3523,7 @@ describe("loadChatHistory retry handling", () => {
       .mockImplementationOnce(() => staleRequest.promise)
       .mockImplementationOnce(() => freshRequest.promise);
     const client = { request } as unknown as NonNullable<ChatState["client"]>;
-    const visibleMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "visible before reconnect" }],
-    };
+    const visibleMessage = createTextChatMessage("assistant", "visible before reconnect");
     const state = createState({
       chatMessages: [visibleMessage],
       client,

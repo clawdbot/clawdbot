@@ -144,8 +144,17 @@ async function showDashboard(page: Page): Promise<void> {
       string,
       unknown
     >;
+    const boardSessionViews =
+      settings.boardSessionViews && typeof settings.boardSessionViews === "object"
+        ? (settings.boardSessionViews as Record<string, unknown>)
+        : {};
+    const savedView = boardSessionViews[key];
     settings.boardSessionViews = {
-      [key]: { activeTabId: "main" },
+      ...boardSessionViews,
+      [key]: {
+        activeTabId: "main",
+        ...(savedView && typeof savedView === "object" ? savedView : {}),
+      },
     };
     localStorage.setItem(settingsKey, JSON.stringify(settings));
   }, sessionKey);
@@ -264,6 +273,16 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
   it("pins Canvas HTML, follows board commands, and persists dock resizing", async () => {
     const context = await browser.newContext({ viewport: { height: 900, width: 1280 } });
     const page = await context.newPage();
+    const resizableBoardSnapshot = {
+      ...boardSnapshot,
+      tabs: boardSnapshot.tabs.map((tab) =>
+        tab.tabId === "research" ? { ...tab, chatDock: "bottom" } : tab,
+      ),
+    };
+    const resizablePinnedBoardSnapshot = {
+      ...pinnedBoardSnapshot,
+      tabs: resizableBoardSnapshot.tabs,
+    };
     const gateway = await installMockGateway(page, {
       sessionKey,
       featureCapabilities: [GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC],
@@ -297,8 +316,8 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
         },
       ],
       methodResponses: {
-        "board.get": boardSnapshot,
-        "board.widget.put": pinnedBoardSnapshot,
+        "board.get": resizableBoardSnapshot,
+        "board.widget.put": resizablePinnedBoardSnapshot,
       },
     });
     await showDashboard(page);
@@ -323,7 +342,7 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
     await expect
       .poll(() => preview.getByRole("button", { name: "Pinned" }).isDisabled())
       .toBe(true);
-    await gateway.setMethodResponse("board.get", pinnedBoardSnapshot);
+    await gateway.setMethodResponse("board.get", resizablePinnedBoardSnapshot);
 
     await gateway.emitGatewayEvent("board.command", {
       sessionKey,
@@ -336,9 +355,9 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
     const dock = page.locator(".board-session-surface__chat");
     await divider.focus();
     await page.keyboard.press("End");
-    await expect.poll(() => dock.getAttribute("style")).not.toBe("width: 420px");
+    await expect.poll(() => dock.getAttribute("style")).not.toBe("height: 320px");
     const persistedStyle = await dock.getAttribute("style");
-    expect(persistedStyle).toMatch(/^width: \d+(?:\.\d+)?px$/u);
+    expect(persistedStyle).toMatch(/^height: \d+(?:\.\d+)?px$/u);
 
     await page.reload();
     await page.locator(".board-session-surface__chat").waitFor();

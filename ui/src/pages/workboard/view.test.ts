@@ -2779,7 +2779,7 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-column")).toBeNull();
   });
 
-  it("keeps the panel in a neutral loading state while config enablement is unknown", () => {
+  it("shows the animated mascot while config enablement is unknown", () => {
     const container = document.createElement("div");
 
     render(
@@ -2795,7 +2795,11 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Loading panel");
+    const loadingState = container.querySelector('[role="status"]');
+    expect(loadingState?.getAttribute("aria-label")).toBe("Loading…");
+    expect(loadingState?.querySelector("openclaw-mascot")?.getAttribute("mood")).toBe("thinking");
+    expect(loadingState?.textContent?.trim()).toBe("");
+    expect(container.textContent).not.toContain("Loading panel");
     expect(container.textContent).not.toContain("Workboard is disabled");
     expect(container.querySelector(".workboard-column")).toBeNull();
   });

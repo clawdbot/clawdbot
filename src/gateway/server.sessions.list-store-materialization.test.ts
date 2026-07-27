@@ -6,6 +6,7 @@
 import { expect, test, vi } from "vitest";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -87,9 +88,11 @@ test("sessions.list projects out prompt snapshots without changing full entry re
   const stored = database.db
     .prepare("SELECT session_key, entry_json FROM session_nodes LIMIT 1")
     .get() as { session_key: string; entry_json: string };
-  database.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
-    JSON.stringify({
-      ...(JSON.parse(stored.entry_json) as Record<string, unknown>),
+  const storedEntry = JSON.parse(stored.entry_json) as SessionEntry;
+  await sessionAccessor.replaceSessionEntry(
+    { agentId: "main", sessionKey: stored.session_key, storePath },
+    {
+      ...storedEntry,
       skillsSnapshot: { prompt: "large skill prompt", skills: [{ name: "test" }] },
       systemPromptReport: {
         source: "run",
@@ -99,8 +102,7 @@ test("sessions.list projects out prompt snapshots without changing full entry re
         skills: { promptChars: 0, entries: [] },
         tools: { listChars: 0, schemaChars: 0, entries: [] },
       },
-    }),
-    stored.session_key,
+    },
   );
   database.db
     .prepare(

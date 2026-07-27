@@ -13,6 +13,7 @@ import {
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 
 export const REMINDER_CONTEXT_MESSAGES_MAX = 10;
+export const CRON_TOOL_LIST_MAX_LIMIT = 200;
 
 // Spell out job/patch properties for model-facing schema; runtime validation
 // still happens in normalizeCronJob* to avoid nested union schemas.
@@ -354,6 +355,13 @@ export function createCronToolSchema(): TSchema {
       action: stringEnum(CRON_ACTIONS),
       ...gatewayCallOptionSchemaProperties(),
       includeDisabled: Type.Optional(Type.Boolean()),
+      limit: optionalPositiveIntegerSchema({
+        maximum: CRON_TOOL_LIST_MAX_LIMIT,
+        description: 'Maximum jobs returned by action="list"',
+      }),
+      offset: optionalNonNegativeIntegerSchema({
+        description: 'Job offset for action="list"; use nextOffset to load the next page',
+      }),
       job: createCronJobObjectSchema(),
       jobId: Type.Optional(Type.String()),
       id: Type.Optional(Type.String()),

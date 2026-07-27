@@ -1093,7 +1093,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   };
 
   const refreshReplacement = (agentId?: string | null) => {
-    const options = { ...lastListOptions };
+    // Mutation refreshes replace the visible sidebar rows. A foreground probe
+    // that omitted derived titles must not turn readable names back into ids.
+    const options = {
+      ...lastListOptions,
+      includeDerivedTitles: lastListOptions.includeDerivedTitles ?? true,
+    };
     const normalizedAgentId = agentId?.trim();
     if (normalizedAgentId) {
       options.agentId = normalizedAgentId;

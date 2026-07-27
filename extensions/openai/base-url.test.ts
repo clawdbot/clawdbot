@@ -6,6 +6,7 @@ import {
   isOpenAIApiBaseUrl,
   isOpenAICodexBaseUrl,
   isOpenAIHttpsApiBaseUrl,
+  normalizeOpenAICodexLoopbackBaseUrl,
   OPENAI_API_BASE_URL,
   OPENAI_CODEX_RESPONSES_BASE_URL,
   resolveOpenAIDefaultBaseUrl,
@@ -84,6 +85,31 @@ describe("openai base URL helpers", () => {
     expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/v2")).toBe(false);
     expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/codex/v2")).toBe(false);
     expect(isOpenAICodexBaseUrl(undefined)).toBe(false);
+  });
+
+  it("accepts only exact loopback Codex proxy base URLs", () => {
+    expect(normalizeOpenAICodexLoopbackBaseUrl("http://127.0.0.1:7862/backend-api/codex/")).toBe(
+      "http://127.0.0.1:7862/backend-api/codex",
+    );
+    expect(normalizeOpenAICodexLoopbackBaseUrl("https://[::1]:8443/codex")).toBe(
+      "https://[::1]:8443/codex",
+    );
+    for (const invalid of [
+      "http://127.0.0.1",
+      "http://127.0.0.1/backend-api",
+      "http://127.0.0.1:7862/backend-api/CODEX",
+      "http://localhost:7862/codex",
+      "http://127.0.0.2:7862/codex",
+      "https://proxy.example.test/codex",
+      "ftp://127.0.0.1/codex",
+      "http://user@127.0.0.1/codex",
+      "http://127.0.0.1/codex?token=one",
+      "http://127.0.0.1/codex#fragment",
+      "not a URL",
+      "",
+    ]) {
+      expect(normalizeOpenAICodexLoopbackBaseUrl(invalid)).toBeUndefined();
+    }
   });
 
   it("canonicalizes legacy Codex Responses base URLs", () => {

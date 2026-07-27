@@ -2,12 +2,15 @@
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
+import { isCoreCodingSurfaceToolName } from "./core-tool-factory-descriptors.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import {
   addClientToolsToToolCatalog,
   applyToolCatalogCompaction,
+  classifyTool,
   reusableCatalogSnapshots,
+  resolveCatalog,
   sessionCatalogs,
 } from "./tool-search-catalog.js";
 import {
@@ -54,7 +57,6 @@ export {
 export { resolveToolSearchConfig } from "./tool-search-config.js";
 export {
   buildToolSchemaDirectoryPrompt,
-  estimateToolSchemaDirectoryToolNames,
   resolveToolSearchCatalogTool,
 } from "./tool-search-directory.js";
 export { ToolSearchRuntime } from "./tool-search-runtime.js";
@@ -107,6 +109,11 @@ export function applyToolSearchCatalog(params: {
     isVisibleControlTool: (tool) =>
       TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name) &&
       shouldExposeControlTool(tool.name, config.mode),
+    // Core file/shell primitives stay in the visible tool list (while remaining
+    // searchable); the source check keeps plugin/MCP tools that reuse a core
+    // name deferred like any other cataloged tool.
+    isVisibleCatalogTool: (tool) =>
+      isCoreCodingSurfaceToolName(tool.name) && classifyTool(tool).sourceName === "core",
   });
 }
 
@@ -132,7 +139,7 @@ export function addClientToolsToToolSearchCatalog(params: {
 /** Create Tool Search control tools for the current run/session context. */
 export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[] {
   const config = resolveToolSearchConfig(ctx.runtimeConfig ?? ctx.config);
-  const runtime = new ToolSearchRuntime(ctx, config);
+  const runtime = new ToolSearchRuntime(ctx, config, { validateInput: true });
   return [
     {
       name: TOOL_SEARCH_CODE_MODE_TOOL_NAME,
@@ -207,7 +214,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
         signal?: AbortSignal,
         onUpdate?: AgentToolUpdateCallback,
       ): Promise<AgentToolResult<unknown>> => {
-        const call = readToolSearchCallArgs(args);
+        const call = readToolSearchCallArgs(args, resolveCatalog(ctx));
         return jsonResult(
           await runtime.call(call.id, call.input, {
             parentToolCallId: toolCallId,

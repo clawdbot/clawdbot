@@ -43,6 +43,48 @@ describe("fetchBrowserScreenshotDataUrl", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("cancels an unsuccessful screenshot response body", async () => {
+    vi.useFakeTimers();
+    const response = new Response("not found", { status: 404 });
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => response),
+    );
+
+    await expect(
+      fetchBrowserScreenshotDataUrl({
+        basePath: "/openclaw",
+        authToken: null,
+        path: "/tmp/missing.png",
+      }),
+    ).rejects.toThrow("screenshot fetch failed (404)");
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("rejects an unsuccessful screenshot without waiting for stream cancellation", async () => {
+    vi.useFakeTimers();
+    const response = new Response("not found", { status: 404 });
+    const cancel = vi
+      .spyOn(response.body!, "cancel")
+      .mockImplementation(() => new Promise<void>(() => {}));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => response),
+    );
+
+    await expect(
+      fetchBrowserScreenshotDataUrl({
+        basePath: "/openclaw",
+        authToken: null,
+        path: "/tmp/missing.png",
+      }),
+    ).rejects.toThrow("screenshot fetch failed (404)");
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("aborts a stalled screenshot fetch after the request deadline", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
