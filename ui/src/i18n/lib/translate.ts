@@ -15,6 +15,7 @@ type LocaleLoadRecovery = {
   isUnrecoverableError: (error: unknown) => boolean;
   onUnrecoverableLocaleLoad?: (locale: Locale) => void;
 };
+type LocaleTranslationLoader = (locale: Locale) => Promise<TranslationMap | null>;
 
 export { SUPPORTED_LOCALES, isSupportedLocale };
 
@@ -30,7 +31,9 @@ class I18nManager {
   private localeRequestGeneration = 0;
   private localeLoadRecovery: LocaleLoadRecovery | undefined;
 
-  constructor() {
+  constructor(
+    private readonly loadLocaleTranslation: LocaleTranslationLoader = loadLazyLocaleTranslation,
+  ) {
     this.loadLocale();
   }
 
@@ -98,7 +101,7 @@ class I18nManager {
     if (needsTranslationLoad) {
       this.pendingLocale = locale;
       try {
-        const translation = await loadLazyLocaleTranslation(locale);
+        const translation = await this.loadLocaleTranslation(locale);
         if (!translation) {
           if (this.localeRequestGeneration === requestGeneration) {
             this.pendingLocale = locale;
@@ -193,6 +196,12 @@ class I18nManager {
 
     return value;
   }
+}
+
+export function createI18nManagerForTesting(
+  loadLocaleTranslation: LocaleTranslationLoader,
+): I18nManager {
+  return new I18nManager(loadLocaleTranslation);
 }
 
 export const i18n = new I18nManager();

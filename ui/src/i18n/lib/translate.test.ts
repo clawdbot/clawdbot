@@ -2,32 +2,25 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { en } from "../locales/en.ts";
+import { createI18nManagerForTesting } from "./translate.ts";
 import type { Locale, TranslationMap } from "./types.ts";
 
-vi.mock("./registry.ts", async () => {
-  const actual = await vi.importActual<typeof import("./registry.ts")>("./registry.ts");
-  return {
-    ...actual,
-    loadLazyLocaleTranslation: vi.fn(),
-  };
-});
-
-import { loadLazyLocaleTranslation } from "./registry.ts";
-import { i18n } from "./translate.ts";
-
 type I18nInternals = {
-  locale: Locale;
-  localeRequestGeneration: number;
   pendingLocale: Locale | null;
-  subscribers: Set<(locale: Locale) => void>;
-  translations: Partial<Record<Locale, TranslationMap>>;
 };
 
-const internals = i18n as unknown as I18nInternals;
-const loadTranslation = vi.mocked(loadLazyLocaleTranslation);
 const german = { common: { health: "Gesundheit" } } satisfies TranslationMap;
 const spanish = { common: { health: "Salud" } } satisfies TranslationMap;
+
+function createManager() {
+  const loadTranslation = vi.fn<(locale: Locale) => Promise<TranslationMap | null>>();
+  const manager = createI18nManagerForTesting(loadTranslation);
+  return {
+    internals: manager as unknown as I18nInternals,
+    loadTranslation,
+    manager,
+  };
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -43,13 +36,6 @@ describe("I18nManager pending locale retry", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
-    loadTranslation.mockReset();
-    internals.locale = "en";
-    internals.localeRequestGeneration = 0;
-    internals.pendingLocale = null;
-    internals.subscribers.clear();
-    internals.translations = { en };
-    i18n.setLocaleLoadRecovery(undefined);
   });
 
   afterEach(() => {
@@ -58,20 +44,21 @@ describe("I18nManager pending locale retry", () => {
   });
 
   it("applies and notifies when a failed locale load is retried after recovery", async () => {
+    const { internals, loadTranslation, manager } = createManager();
     vi.spyOn(console, "error").mockImplementation(() => {});
     loadTranslation.mockRejectedValueOnce(new Error("gateway unavailable"));
     loadTranslation.mockResolvedValueOnce(german);
     const subscriber = vi.fn();
-    const unsubscribe = i18n.subscribe(subscriber);
+    const unsubscribe = manager.subscribe(subscriber);
 
-    await i18n.setLocale("de");
+    await manager.setLocale("de");
 
-    expect(i18n.getLocale()).toBe("en");
+    expect(manager.getLocale()).toBe("en");
     expect(internals.pendingLocale).toBe("de");
     expect(subscriber).not.toHaveBeenCalled();
 
-    i18n.retryPendingLocale();
-    await vi.waitFor(() => expect(i18n.getLocale()).toBe("de"));
+    manager.retryPendingLocale();
+    await vi.waitFor(() => expect(manager.getLocale()).toBe("de"));
 
     expect(subscriber).toHaveBeenCalledExactlyOnceWith("de");
     expect(internals.pendingLocale).toBeNull();
@@ -79,59 +66,73 @@ describe("I18nManager pending locale retry", () => {
   });
 
   it("does nothing when no locale load is pending", () => {
+    const { loadTranslation, manager } = createManager();
     const subscriber = vi.fn();
-    const unsubscribe = i18n.subscribe(subscriber);
+    const unsubscribe = manager.subscribe(subscriber);
 
-    i18n.retryPendingLocale();
+    manager.retryPendingLocale();
 
     expect(loadTranslation).not.toHaveBeenCalled();
-    expect(i18n.getLocale()).toBe("en");
+    expect(manager.getLocale()).toBe("en");
     expect(subscriber).not.toHaveBeenCalled();
     unsubscribe();
   });
 
+  it("uses a pre-warmed locale without invoking the loader", async () => {
+    const { loadTranslation, manager } = createManager();
+    manager.registerTranslation("de", german);
+
+    await manager.setLocale("de");
+
+    expect(manager.getLocale()).toBe("de");
+    expect(loadTranslation).not.toHaveBeenCalled();
+  });
+
   it("clears an abandoned pending target after another locale succeeds", async () => {
+    const { internals, loadTranslation, manager } = createManager();
     vi.spyOn(console, "error").mockImplementation(() => {});
     loadTranslation.mockRejectedValueOnce(new Error("gateway unavailable"));
     loadTranslation.mockResolvedValueOnce(spanish);
 
-    await i18n.setLocale("de");
-    await i18n.setLocale("es");
-    i18n.retryPendingLocale();
+    await manager.setLocale("de");
+    await manager.setLocale("es");
+    manager.retryPendingLocale();
 
-    expect(i18n.getLocale()).toBe("es");
+    expect(manager.getLocale()).toBe("es");
     expect(internals.pendingLocale).toBeNull();
     expect(loadTranslation).toHaveBeenCalledTimes(2);
   });
 
   it("records a repeat failure so a later retry can still recover", async () => {
+    const { internals, loadTranslation, manager } = createManager();
     vi.spyOn(console, "error").mockImplementation(() => {});
     loadTranslation
       .mockRejectedValueOnce(new Error("gateway unavailable"))
       .mockRejectedValueOnce(new Error("gateway still unavailable"))
       .mockResolvedValueOnce(german);
 
-    await i18n.setLocale("de");
-    i18n.retryPendingLocale();
+    await manager.setLocale("de");
+    manager.retryPendingLocale();
     await vi.waitFor(() => {
       expect(loadTranslation).toHaveBeenCalledTimes(2);
       expect(internals.pendingLocale).toBe("de");
     });
 
-    i18n.retryPendingLocale();
-    await vi.waitFor(() => expect(i18n.getLocale()).toBe("de"));
+    manager.retryPendingLocale();
+    await vi.waitFor(() => expect(manager.getLocale()).toBe("de"));
 
     expect(loadTranslation).toHaveBeenCalledTimes(3);
     expect(internals.pendingLocale).toBeNull();
   });
 
   it("persists and reports a repeated module-import failure while keeping it pending", async () => {
+    const { internals, loadTranslation, manager } = createManager();
     vi.spyOn(console, "error").mockImplementation(() => {});
     const persistedLocalesAtHook: Array<string | null> = [];
     const onUnrecoverableLocaleLoad = vi.fn(() => {
       persistedLocalesAtHook.push(localStorage.getItem("openclaw.i18n.locale"));
     });
-    i18n.setLocaleLoadRecovery({
+    manager.setLocaleLoadRecovery({
       isUnrecoverableError: (error) =>
         error instanceof Error &&
         /failed to fetch dynamically imported module/i.test(error.message),
@@ -143,8 +144,8 @@ describe("I18nManager pending locale retry", () => {
         new Error("Failed to fetch dynamically imported module: /assets/fr-abc123.js"),
       );
 
-    await i18n.setLocale("fr");
-    i18n.retryPendingLocale();
+    await manager.setLocale("fr");
+    manager.retryPendingLocale();
     await vi.waitFor(() => expect(loadTranslation).toHaveBeenCalledTimes(2));
 
     expect(onUnrecoverableLocaleLoad).toHaveBeenCalledExactlyOnceWith("fr");
@@ -154,9 +155,10 @@ describe("I18nManager pending locale retry", () => {
   });
 
   it("does not report a repeated non-import failure", async () => {
+    const { internals, loadTranslation, manager } = createManager();
     vi.spyOn(console, "error").mockImplementation(() => {});
     const onUnrecoverableLocaleLoad = vi.fn();
-    i18n.setLocaleLoadRecovery({
+    manager.setLocaleLoadRecovery({
       isUnrecoverableError: (error) =>
         error instanceof Error &&
         /failed to fetch dynamically imported module/i.test(error.message),
@@ -166,8 +168,8 @@ describe("I18nManager pending locale retry", () => {
       .mockRejectedValueOnce(new Error("gateway unavailable"))
       .mockRejectedValueOnce(new Error("request failed"));
 
-    await i18n.setLocale("fr");
-    i18n.retryPendingLocale();
+    await manager.setLocale("fr");
+    manager.retryPendingLocale();
     await vi.waitFor(() => expect(loadTranslation).toHaveBeenCalledTimes(2));
 
     expect(onUnrecoverableLocaleLoad).not.toHaveBeenCalled();
@@ -175,6 +177,7 @@ describe("I18nManager pending locale retry", () => {
   });
 
   it("ignores an older failure after a newer locale succeeds", async () => {
+    const { internals, loadTranslation, manager } = createManager();
     vi.spyOn(console, "error").mockImplementation(() => {});
     const germanLoad = deferred<TranslationMap | null>();
     const spanishLoad = deferred<TranslationMap | null>();
@@ -182,20 +185,21 @@ describe("I18nManager pending locale retry", () => {
       .mockReturnValueOnce(germanLoad.promise)
       .mockReturnValueOnce(spanishLoad.promise);
 
-    const setGerman = i18n.setLocale("de");
-    const setSpanish = i18n.setLocale("es");
+    const setGerman = manager.setLocale("de");
+    const setSpanish = manager.setLocale("es");
     spanishLoad.resolve(spanish);
     await setSpanish;
     germanLoad.reject(new Error("late German failure"));
     await setGerman;
-    i18n.retryPendingLocale();
+    manager.retryPendingLocale();
 
-    expect(i18n.getLocale()).toBe("es");
+    expect(manager.getLocale()).toBe("es");
     expect(internals.pendingLocale).toBeNull();
     expect(loadTranslation).toHaveBeenCalledTimes(2);
   });
 
   it("preserves a newer failed target when an older load succeeds late", async () => {
+    const { internals, loadTranslation, manager } = createManager();
     vi.spyOn(console, "error").mockImplementation(() => {});
     const germanLoad = deferred<TranslationMap | null>();
     const spanishLoad = deferred<TranslationMap | null>();
@@ -204,18 +208,18 @@ describe("I18nManager pending locale retry", () => {
       .mockReturnValueOnce(spanishLoad.promise)
       .mockResolvedValueOnce(spanish);
 
-    const setGerman = i18n.setLocale("de");
-    const setSpanish = i18n.setLocale("es");
+    const setGerman = manager.setLocale("de");
+    const setSpanish = manager.setLocale("es");
     spanishLoad.reject(new Error("Spanish load failed"));
     await setSpanish;
     germanLoad.resolve(german);
     await setGerman;
 
-    expect(i18n.getLocale()).toBe("en");
+    expect(manager.getLocale()).toBe("en");
     expect(internals.pendingLocale).toBe("es");
 
-    i18n.retryPendingLocale();
-    await vi.waitFor(() => expect(i18n.getLocale()).toBe("es"));
+    manager.retryPendingLocale();
+    await vi.waitFor(() => expect(manager.getLocale()).toBe("es"));
 
     expect(loadTranslation).toHaveBeenCalledTimes(3);
     expect(internals.pendingLocale).toBeNull();
