@@ -287,15 +287,14 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
 
   private setApplicationSession(sessionKey: string) {
     const context = this.context;
-    if (!context) {
-      return;
+    if (context) {
+      selectApplicationSession({
+        selection: context.agentSelection,
+        gateway: context.gateway,
+        sessionKey,
+        agentId: parseAgentSessionKey(sessionKey)?.agentId ?? this.selectedAgentIdForSessions(),
+      });
     }
-    selectApplicationSession({
-      selection: context.agentSelection,
-      gateway: context.gateway,
-      sessionKey,
-      agentId: parseAgentSessionKey(sessionKey)?.agentId ?? this.selectedAgentIdForSessions(),
-    });
   }
 
   readonly selectSession = (sessionKey: string) => {
