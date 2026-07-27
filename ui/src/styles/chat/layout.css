@@ -158,7 +158,7 @@ openclaw-chat-page {
 .chat-workspace-conflict-notice__content p,
 .chat-workspace-conflict-event p {
   margin: 0;
-  color: var(--text-muted);
+  color: var(--muted);
 }
 
 .chat-workspace-conflict-notice__title,
@@ -924,21 +924,21 @@ openclaw-chat-page {
 }
 
 .agent-chat__goal--active {
-  color: var(--success);
-  background: color-mix(in srgb, var(--success) 9%, var(--card));
-  border-color: color-mix(in srgb, var(--success) 28%, var(--border));
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 9%, var(--card));
+  border-color: color-mix(in srgb, var(--ok) 28%, var(--border));
 }
 
 .agent-chat__goal--blocked,
 .agent-chat__goal--budget_limited,
 .agent-chat__goal--usage_limited {
-  color: var(--warning);
-  background: color-mix(in srgb, var(--warning) 10%, var(--card));
-  border-color: color-mix(in srgb, var(--warning) 30%, var(--border));
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 10%, var(--card));
+  border-color: color-mix(in srgb, var(--warn) 30%, var(--border));
 }
 
 .agent-chat__goal--complete {
-  color: color-mix(in srgb, var(--success) 72%, var(--text));
+  color: color-mix(in srgb, var(--ok) 72%, var(--text));
 }
 
 /* Image attachments preview */
@@ -1215,7 +1215,7 @@ openclaw-chat-page {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--fg);
+  color: var(--text);
 }
 
 .chat-reply-preview__dismiss {
@@ -1233,8 +1233,8 @@ openclaw-chat-page {
 }
 
 .chat-reply-preview__dismiss:hover {
-  color: var(--fg);
-  background: color-mix(in srgb, var(--fg) 10%, transparent);
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
 }
 
 .chat-reply-preview__dismiss svg {
@@ -1265,7 +1265,7 @@ openclaw-chat-page {
   padding: 8px 12px;
   border: none;
   background: none;
-  color: var(--fg);
+  color: var(--text);
   border-radius: 6px;
   text-align: left;
 }
@@ -1296,7 +1296,7 @@ openclaw-chat-page {
   padding: 6px 10px;
   border: none;
   background: none;
-  color: var(--fg);
+  color: var(--text);
   border-radius: 6px;
   font-size: 12px;
   white-space: nowrap;
@@ -4193,7 +4193,7 @@ openclaw-chat-page {
 
 .chat-controls__model-reset:hover:not(:disabled) {
   background: color-mix(in srgb, var(--border) 45%, transparent);
-  color: var(--fg);
+  color: var(--text);
 }
 
 .chat-controls__model-reset svg {
@@ -4714,7 +4714,7 @@ openclaw-chat-page {
   font-size: 24px;
   font-weight: 600;
   margin: 0;
-  color: var(--foreground);
+  color: var(--text);
 }
 
 .agent-chat__welcome-avatar {
@@ -4773,7 +4773,7 @@ openclaw-chat-page {
   border-radius: var(--radius-lg);
   background: var(--secondary);
   border: 1px solid var(--border);
-  color: var(--foreground);
+  color: var(--text);
   display: grid;
   place-items: center;
   font-size: 28px;
@@ -4808,7 +4808,7 @@ openclaw-chat-page {
   border-radius: var(--radius-md);
   border: 1px solid transparent;
   background: transparent;
-  color: var(--foreground);
+  color: var(--text);
   font-size: 13px;
   text-align: left;
   transition:
@@ -4877,7 +4877,7 @@ openclaw-chat-page {
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--panel);
-  color: var(--foreground);
+  color: var(--text);
   /* Localized labels wrap to multiple lines; balance keeps the split even and
      break-word stops long words from pushing past the chip border. */
   text-wrap: balance;

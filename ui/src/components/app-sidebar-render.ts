@@ -5,15 +5,20 @@ import {
   type NavigationRouteId,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
-import { pathForRoute } from "../app-route-paths.ts";
+import { isSessionRouteId } from "../app-route-paths.ts";
 import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
+import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
-import { searchForSession } from "../lib/sessions/index.ts";
-import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
+import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
+import {
+  areUiSessionKeysEquivalent,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../lib/sessions/session-key.ts";
 import { pluginTabKey } from "../pages/plugin/route.ts";
 import { renderSidebarPluginTab, shouldHandleNavigationClick } from "./app-sidebar-nav-menus.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
@@ -31,6 +36,33 @@ type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   getRouteSessionKey(): string;
   renderPinnedSidebarSession(session: SidebarRecentSession): unknown;
 };
+
+type SidebarNativeGateway = {
+  id: string;
+  name: string;
+  isPrimary: boolean;
+  health: "ok" | "error" | "unknown";
+};
+
+type SidebarNativeGatewaysSnapshot = {
+  gateways: SidebarNativeGateway[];
+  currentId: string;
+};
+
+// Display-only: read the injected global directly; the capability module must stay
+// chat-chunk-owned to protect the QA smoke startup budget.
+function readSidebarNativeGateway(): SidebarNativeGateway | null {
+  if (!isNativeWebChromeHost()) {
+    return null;
+  }
+  const snapshot = (
+    window as Window & { __OPENCLAW_NATIVE_GATEWAYS__?: SidebarNativeGatewaysSnapshot }
+  )["__OPENCLAW_NATIVE_GATEWAYS__"];
+  if (!snapshot || !Array.isArray(snapshot.gateways) || snapshot.gateways.length < 2) {
+    return null;
+  }
+  return snapshot.gateways.find((gateway) => gateway.id === snapshot.currentId) ?? null;
+}
 
 export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
   const { activeId: cardAgentId, agent: cardAgent, agents: cardAgents } = host.activeChipAgent();
@@ -90,7 +122,8 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
   );
   const outboxCount = host.outboxCountForSessionKey(mainKey);
   const active =
-    host.activeRouteId === "chat" && areUiSessionKeysEquivalent(host.getRouteSessionKey(), mainKey);
+    isSessionRouteId(host.activeRouteId) &&
+    areUiSessionKeysEquivalent(host.getRouteSessionKey(), mainKey);
   const running = mainRow?.hasActiveRun === true;
   const unread = mainRow?.unread === true && !active;
   // Home shares the sidebar's leading-slot contract: run state rings its icon
@@ -102,7 +135,14 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
   });
   return html`
     <a
-      href=${`${pathForRoute("chat", host.basePath)}${searchForSession(mainKey)}`}
+      href=${sessionNavigationTarget({
+        face: "chat",
+        sessionKey: mainKey,
+        fallbackAgentId: agentId,
+        basePath: host.basePath,
+        row: mainRow ?? undefined,
+        mainKey: parseAgentSessionKey(mainKey)?.rest,
+      }).href}
       class="nav-item nav-item--home ${active ? "nav-item--active" : ""}"
       aria-current=${active ? "page" : nothing}
       @click=${(event: MouseEvent) => {
@@ -179,6 +219,12 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
     ...(selfUser ?? { id: "account", name: selfLabel }),
     watchedSessions: [],
   };
+  const gateway = host.offline ? null : readSidebarNativeGateway();
+  // Health is visual-only here by budget decision; the header picker owns health accessibility.
+  const gatewayPrimaryTag = gateway?.isPrimary
+    ? t("chat.sessionHeader.gatewayPicker.primaryTag")
+    : null;
+  const identityMenuLabel = t("profilePage.identity.menuButtonLabel", { name: selfLabel });
   return html`
     <div class="sidebar-footer-bar">
       <openclaw-tooltip .content=${selfLabel}>
@@ -187,7 +233,9 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
           class="sidebar-identity-card"
           aria-haspopup="menu"
           aria-expanded=${String(host.sidebarMenus.identityMenuPosition !== null)}
-          aria-label=${t("profilePage.identity.menuButtonLabel", { name: selfLabel })}
+          aria-label=${gateway
+            ? `${identityMenuLabel}: ${gateway.name}${gatewayPrimaryTag ? `, ${gatewayPrimaryTag}` : ""}`
+            : identityMenuLabel}
           @click=${(event: MouseEvent) =>
             host.sidebarMenus.toggleIdentityMenu(event.currentTarget as HTMLElement)}
         >
@@ -198,7 +246,23 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
               ? html`<span class="sidebar-identity-card__subtitle" aria-hidden="true"
                   >${t("connection.reconnecting")}</span
                 >`
-              : nothing}
+              : gateway
+                ? html`<span
+                    class="sidebar-identity-card__subtitle sidebar-identity-card__subtitle--gateway"
+                    aria-hidden="true"
+                  >
+                    <span
+                      class="sidebar-identity-card__gateway-health"
+                      data-health=${gateway.health}
+                    ></span>
+                    <span class="sidebar-identity-card__gateway-name">${gateway.name}</span>
+                    ${gatewayPrimaryTag
+                      ? html`<span class="sidebar-identity-card__gateway-primary"
+                          >· ${gatewayPrimaryTag}</span
+                        >`
+                      : nothing}
+                  </span>`
+                : nothing}
           </span>
           <span class="sidebar-identity-card__chevron" aria-hidden="true"
             >${icons.chevronDown}</span

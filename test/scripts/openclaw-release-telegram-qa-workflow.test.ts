@@ -849,6 +849,19 @@ describe("release Telegram QA workflow", () => {
     expect(source).not.toMatch(/^\s+node_bin="\$\(realpath -e "\$\(command -v node\)"\)"$/mu);
     expect(source).toContain('temp_root="$(realpath -e "${OPENCLAW_QA_TEMP_ROOT:?}")"');
     expect(source).toContain("sudo install -d -o root -g root -m 0700 /tmp/openclaw");
+    expect(source).toContain('candidate_artifacts_dir="${CANDIDATE_ROOT}/.artifacts"');
+    expect(source).toContain(
+      'sudo install -d -o "$sut_uid" -g "$sut_gid" -m 0700 "$candidate_artifacts_dir"',
+    );
+    expect(source).toContain(
+      '[[ "$(stat -c \'%F:%a:%u:%g\' "$candidate_artifacts_dir")" == "directory:700:${sut_uid}:${sut_gid}" ]]',
+    );
+    expect(source).toContain("printf 'CANDIDATE_ARTIFACTS_DIR=%q\\n' \"$candidate_artifacts_dir\"");
+    expect(source).toContain("export CANDIDATE_ROOT CANDIDATE_ARTIFACTS_DIR RUNTIME_ROOT NODE_BIN");
+    expect(source).toContain(
+      '[[ -d "${CANDIDATE_ARTIFACTS_DIR:?}" && -w "$CANDIDATE_ARTIFACTS_DIR" ]]',
+    );
+    expect(source).toContain("CANDIDATE_ARTIFACTS_DIR \\");
     expect(source).toContain(
       '-m 0711 \\\n            "${runtime_root}/tmp/openclaw-${runner_uid}"',
     );

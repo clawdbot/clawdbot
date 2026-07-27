@@ -5028,25 +5028,19 @@ describe("gateway healthHandlers.status scope handling", () => {
 
 describe("gateway healthHandlers.health cache freshness", () => {
   let healthHandlers: typeof import("./health.js").healthHandlers;
-  let pricingState: typeof import("../model-pricing-cache-state.js");
   const contextEngineTestOwner = "plugin:health-test";
 
   beforeAll(async () => {
     ({ healthHandlers } = await import("./health.js"));
-    pricingState = await import("../model-pricing-cache-state.js");
   });
 
   beforeEach(() => {
-    pricingState.replaceGatewayModelPricingCache(new Map(), 0);
-    pricingState.clearGatewayModelPricingFailures();
     registerLegacyContextEngine();
     clearContextEnginesForOwner(contextEngineTestOwner);
     resetContextEngineRuntimeQuarantineForTests();
   });
 
   afterEach(() => {
-    pricingState.replaceGatewayModelPricingCache(new Map(), 0);
-    pricingState.clearGatewayModelPricingFailures();
     clearContextEnginesForOwner(contextEngineTestOwner);
     resetContextEngineRuntimeQuarantineForTests();
   });
@@ -5196,69 +5190,6 @@ describe("gateway healthHandlers.health cache freshness", () => {
     expect(mockCallArg(respond)).toBe(true);
     expectRecordFields(mockCallArg(respond, 0, 1), { eventLoop });
     expect(mockCallArg(respond, 0, 2)).toBeUndefined();
-  });
-
-  it("merges live model-pricing state into cached health responses", async () => {
-    const cached = {
-      ok: true,
-      ts: Date.now(),
-      durationMs: 1,
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-      heartbeatSeconds: 0,
-      defaultAgentId: "main",
-      agents: [],
-      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
-      modelPricing: { state: "ok", sources: [] },
-    };
-    pricingState.recordGatewayModelPricingSourceFailure(
-      "openrouter",
-      "OpenRouter pricing fetch failed: TypeError: fetch failed",
-      123,
-    );
-    const respond = vi.fn();
-    const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
-
-    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
-      healthHandlers,
-      {
-        req: {} as never,
-        params: {} as never,
-        respond: respond as never,
-        context: {
-          getHealthCache: () => cached,
-          refreshHealthSnapshot,
-          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
-          logHealth: { error: vi.fn() },
-        } as never,
-        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-        isWebchatConnect: () => false,
-      },
-    );
-
-    const payload = mockCallArg(respond, 0, 1) as
-      | {
-          modelPricing?: {
-            state?: string;
-            detail?: string;
-            sources?: Array<{ source?: string; state?: string; lastFailureAt?: number }>;
-          };
-        }
-      | undefined;
-    expect(payload?.modelPricing?.state).toBe("degraded");
-    expect(payload?.modelPricing?.detail).toBe(
-      "OpenRouter pricing fetch failed: TypeError: fetch failed",
-    );
-    expect(payload?.modelPricing?.sources).toHaveLength(1);
-    expect(payload?.modelPricing?.sources?.[0]?.source).toBe("openrouter");
-    expect(payload?.modelPricing?.sources?.[0]?.state).toBe("degraded");
-    expect(payload?.modelPricing?.sources?.[0]?.lastFailureAt).toBe(123);
-    expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
-    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
-      probe: false,
-      includeSensitive: false,
-    });
   });
 
   it("merges live context-engine quarantine state into cached health responses", async () => {

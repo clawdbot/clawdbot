@@ -29,6 +29,7 @@ import type {
 } from "./server-chat-state.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import { mapTaskSummary, type TaskEventPayload } from "./server-methods/task-summary.js";
+import { createSessionCompanion } from "./session-companion.js";
 import { createSessionObserver } from "./session-observer.js";
 
 function dispatchEventHandler<TEvent>(params: {
@@ -78,6 +79,10 @@ export function startGatewayEventSubscriptions(params: {
     subscribers: params.sessionMessageSubscribers,
     sessionEventSubscribers: params.sessionEventSubscribers,
     broadcastToConnIds: params.broadcastToConnIds,
+  });
+  const sessionCompanion = createSessionCompanion({
+    getConfig: getRuntimeConfig,
+    sessionObserver,
   });
   const unsubscribePrivateAuditEvents = auditEnabled
     ? onAgentAuditEvent(auditRecorder.record)
@@ -315,6 +320,7 @@ export function startGatewayEventSubscriptions(params: {
   });
   const agentUnsub = async () => {
     unsubscribeAgentEvents();
+    sessionCompanion.dispose();
     sessionObserver.dispose();
     unsubscribePrivateAuditEvents?.();
     unsubscribeToolAuditEvents?.();
@@ -393,6 +399,7 @@ export function startGatewayEventSubscriptions(params: {
   };
 
   return {
+    sessionCompanion,
     sessionObserver,
     agentUnsub,
     heartbeatUnsub,

@@ -2,7 +2,7 @@
 import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { planManifestModelCatalogRows } from "../../model-catalog/index.js";
+import { planEffectiveModelCatalogRows } from "../../model-catalog/index.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -34,8 +34,9 @@ function loadManifestCatalogRowsForPluginIds(params: {
         plugins: params.registry.plugins.filter((plugin) => pluginIdSet.has(plugin.id)),
       }
     : params.registry;
-  const plan = planManifestModelCatalogRows({
+  const plan = planEffectiveModelCatalogRows({
     registry,
+    config: params.cfg,
     ...(params.providerFilter ? { providerFilter: params.providerFilter } : {}),
   });
   const eligibleProviders = new Set(
@@ -47,10 +48,21 @@ function loadManifestCatalogRowsForPluginIds(params: {
       )
       .map((entry) => entry.provider),
   );
-  if (eligibleProviders.size === 0) {
+  const runtimeRefreshProviders = new Set(
+    params.mode === "supplemental"
+      ? plan.entries.filter((entry) => entry.discovery === "runtime").map((entry) => entry.provider)
+      : [],
+  );
+  if (eligibleProviders.size === 0 && runtimeRefreshProviders.size === 0) {
     return [];
   }
-  return plan.rows.filter((row) => eligibleProviders.has(row.provider));
+  // Runtime-owned providers still discover authoritative models live; only
+  // validated remote-refresh rows may supplement that provider catalog.
+  return plan.rows.filter(
+    (row) =>
+      eligibleProviders.has(row.provider) ||
+      (runtimeRefreshProviders.has(row.provider) && row.source === "runtime-refresh"),
+  );
 }
 
 function resolveConventionModelCatalogPluginIds(params: {

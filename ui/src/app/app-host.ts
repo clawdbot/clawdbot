@@ -1,6 +1,5 @@
 import { ContextProvider } from "@lit/context";
 import type { UiCommandParams } from "@openclaw/gateway-protocol";
-import type { RouteLocation, RouterState } from "@openclaw/uirouter";
 import { html, nothing } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import {
@@ -9,7 +8,6 @@ import {
   type GatewayBrowserClient,
 } from "../api/gateway.ts";
 import type { GatewayAgentRow } from "../api/types.ts";
-import "../components/app-sidebar.ts";
 import "../components/app-topbar.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/github-link-hovercard-registration.ts";
@@ -25,7 +23,7 @@ import {
   isSettingsNavigationRoute,
   titleForRoute,
 } from "../app-navigation.ts";
-import { workboardBoardIdFromPath } from "../app-route-paths.ts";
+import { isSessionRouteId, workboardBoardIdFromPath } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS, isRouteId, type RouteId } from "../app-routes.ts";
 import {
   EMPTY_SIDEBAR_WORKBOARD_SNAPSHOT,
@@ -54,12 +52,13 @@ import { renderSettingsSidebar } from "../components/settings-sidebar.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { i18n, isSupportedLocale, t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
+import type { BoardFace } from "../lib/board/settings.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
-import { searchForSession } from "../lib/sessions/index.ts";
+import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import {
   isUiGlobalSessionKey,
   normalizeAgentId,
@@ -67,7 +66,6 @@ import {
   resolveUiConfiguredMainKey,
   resolveUiKnownSelectedGlobalAgentId,
 } from "../lib/sessions/session-key.ts";
-import "../lib/toast.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
@@ -75,6 +73,7 @@ import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { renderDevicePairSetup } from "../pages/nodes/view-pairing.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
+import { selectShellRouteState, type ShellRouteState } from "./app-host-route-state.ts";
 import { findInlineApproval } from "./approval-presentation.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import {
@@ -107,7 +106,6 @@ import { navigationSurfaceIsHidden, renderFloatingUpdateCard } from "./navigatio
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { hasOperatorAdminAccess } from "./operator-access.ts";
 import { controlUiPublicAssetPath } from "./public-assets.ts";
-import { selectRenderedRouteMatch } from "./router-outlet.ts";
 import {
   applyServerUiPrefs,
   changedServerUiPrefs,
@@ -123,12 +121,6 @@ import {
   setSettingsChangeListener,
 } from "./settings.ts";
 
-type ShellRouteState = {
-  routeId?: RouteId;
-  location?: RouteLocation;
-  committedRouteId?: RouteId;
-  committedLocation?: RouteLocation;
-};
 type AppSidebarElement = HTMLElement & {
   dismissTransientMenus: () => boolean;
 };
@@ -181,17 +173,6 @@ function diffAgentRoster(
   return { invalidatedIds, changedIds };
 }
 
-function selectShellRouteState(routerState: RouterState<RouteId>): ShellRouteState {
-  const match = selectRenderedRouteMatch(routerState.matches[0], routerState.pendingMatches[0]);
-  const committedMatch = routerState.matches[0];
-  return {
-    ...(match ? { routeId: match.routeId, location: match.location } : {}),
-    ...(committedMatch
-      ? { committedRouteId: committedMatch.routeId, committedLocation: committedMatch.location }
-      : {}),
-  };
-}
-
 function equalShellRouteState(previous: ShellRouteState, next: ShellRouteState): boolean {
   return (
     previous.routeId === next.routeId &&
@@ -201,7 +182,8 @@ function equalShellRouteState(previous: ShellRouteState, next: ShellRouteState):
     previous.committedRouteId === next.committedRouteId &&
     previous.committedLocation?.pathname === next.committedLocation?.pathname &&
     previous.committedLocation?.search === next.committedLocation?.search &&
-    previous.committedLocation?.hash === next.committedLocation?.hash
+    previous.committedLocation?.hash === next.committedLocation?.hash &&
+    previous.committedSessionKey === next.committedSessionKey
   );
 }
 
@@ -306,6 +288,7 @@ class OpenClawApp extends OpenClawLightDomElement {
 
   override connectedCallback() {
     super.connectedCallback();
+    void import("../components/app-sidebar.ts");
     this.resetLoginSensitivePresentation();
     this.runtime = bootstrapApplication();
     if (this.terminalOnly) {
@@ -533,7 +516,8 @@ class OpenClawShell extends OpenClawLightDomElement {
   private navDrawerTrigger: HTMLElement | null = null;
   // Where "Back to app" / Escape leaves the settings takeover; falls back to
   // chat (the app default route) when settings was the entry point.
-  private lastWorkspaceLocation: { routeId: RouteId; search: string } | null = null;
+  private lastWorkspaceLocation: { routeId: RouteId; pathname: string; search: string } | null =
+    null;
   private agentsListClient: GatewayBrowserClient | null = null;
   private agentsListSource: ApplicationContext["agents"] | null = null;
   private sessionKeyClient: GatewayBrowserClient | null = null;
@@ -559,6 +543,11 @@ class OpenClawShell extends OpenClawLightDomElement {
     EventTarget,
     ReturnType<typeof globalThis.setTimeout>
   >();
+  // Lazy: the critical-notice module stays out of the startup chunk (perf
+  // budget); loaded on the first session.observer digest after boot.
+  private criticalNoticeRuntime: Promise<
+    typeof import("../pages/chat/critical-observer-notice.runtime.ts")
+  > | null = null;
   private readonly subscriptions = new SubscriptionsController(this);
 
   private get context(): ApplicationContext<RouteId> | undefined {
@@ -787,6 +776,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.navDrawerTrigger = null;
     this.lastWorkspaceLocation = null;
     this.activeSessionKey = "";
+    void this.criticalNoticeRuntime?.then((runtime) => runtime.resetCriticalObserverTracker());
     this.settingsSearchQuery = "";
     this.commandPaletteTarget = undefined;
     this.agentsListClient = null;
@@ -808,6 +798,33 @@ class OpenClawShell extends OpenClawLightDomElement {
 
   private readonly handleGatewayEvent = (event: GatewayEventFrame) => {
     this.sidebarWorkboardRuntime?.handleGatewayEvent(event.event);
+    if (event.event === "session.observer") {
+      const context = this.context;
+      if (context) {
+        // All digests flow through (not just critical ones): the runtime
+        // tracker must see recovery transitions for its re-announce dedupe.
+        this.criticalNoticeRuntime ??= import("../pages/chat/critical-observer-notice.runtime.ts");
+        const payload = event.payload;
+        void this.criticalNoticeRuntime.then((runtime) =>
+          runtime.handleCriticalObserverDigest({
+            payload,
+            selectedSessionKey: this.activeSessionKey,
+            sessionHost: this.storedOutboxScopeHost(context),
+            sessions: context.sessions.state.result?.sessions ?? [],
+            onOpen: (sessionKey) => {
+              context.gateway.setSessionKey(sessionKey);
+              // Ambiguous one-segment keys intentionally fall back to /chat;
+              // the removed query deep-link format is not a compatibility path.
+              this.navigate(
+                "chat",
+                sessionNavigationTarget({ context, face: "chat", sessionKey }).options,
+              );
+            },
+          }),
+        );
+      }
+      return;
+    }
     if (event.event === "config.changed") {
       // Another writer (agent-approved config_set, other device, CLI) changed
       // openclaw.json; refresh the snapshot so ui.prefs reconcile live. A
@@ -860,7 +877,10 @@ class OpenClawShell extends OpenClawLightDomElement {
       return;
     }
     context.gateway.setSessionKey(command.sessionKey);
-    this.navigate("chat", { search: searchForSession(command.sessionKey) });
+    this.navigate(
+      "chat",
+      sessionNavigationTarget({ context, face: "chat", sessionKey: command.sessionKey }).options,
+    );
   };
 
   private scheduleAgentRosterRefresh() {
@@ -894,12 +914,11 @@ class OpenClawShell extends OpenClawLightDomElement {
     if (rosterDiff.changedIds.length > 0) {
       void context.agentIdentity.ensure(rosterDiff.changedIds);
     }
-    const previousIds = new Set(previous?.agents.map((agent) => agent.id) ?? []);
     const nextIds = new Set(next.agents.map((agent) => agent.id));
     if (
       activeAgentId &&
       context.agentSelection.state.selectedId === activeAgentId &&
-      previousIds.has(activeAgentId) &&
+      next.agents.length > 0 &&
       !nextIds.has(activeAgentId)
     ) {
       context.agentSelection.set(next.defaultId);
@@ -930,9 +949,15 @@ class OpenClawShell extends OpenClawLightDomElement {
     }
   }
 
-  private chatNavigationOptions(options?: ApplicationNavigationOptions) {
+  private chatNavigationOptions(face: BoardFace, options?: ApplicationNavigationOptions) {
     const sessionKey = this.activeSessionKey.trim();
-    return options ?? (sessionKey ? { search: searchForSession(sessionKey) } : undefined);
+    const context = this.context;
+    return (
+      options ??
+      (sessionKey && context
+        ? sessionNavigationTarget({ context, face, sessionKey }).options
+        : undefined)
+    );
   }
 
   private navigate(routeId: string, options?: ApplicationNavigationOptions) {
@@ -941,11 +966,23 @@ class OpenClawShell extends OpenClawLightDomElement {
       return;
     }
     this.closeNavDrawer({ restoreFocus: true });
-    context.navigate(routeId, routeId === "chat" ? this.chatNavigationOptions(options) : options);
+    context.navigate(
+      routeId,
+      isSessionRouteId(routeId) ? this.chatNavigationOptions(routeId, options) : options,
+    );
   }
 
   private replaceChatWithCurrentSession() {
-    this.context?.replace("chat", this.chatNavigationOptions());
+    const context = this.context;
+    const sessionKey = this.activeSessionKey.trim();
+    if (
+      !context ||
+      (!parseAgentSessionKey(sessionKey) && context.gateway.snapshot.phase !== "connected")
+    ) {
+      return;
+    }
+    const face = this.routeState.routeId === "dashboard" ? "dashboard" : "chat";
+    context.replace(face, this.chatNavigationOptions(face));
   }
 
   private isSettingsTakeover(): boolean {
@@ -956,7 +993,10 @@ class OpenClawShell extends OpenClawLightDomElement {
   private exitSettings() {
     const previous = this.lastWorkspaceLocation;
     if (previous) {
-      this.navigate(previous.routeId, previous.search ? { search: previous.search } : undefined);
+      this.navigate(previous.routeId, {
+        pathname: previous.pathname,
+        ...(previous.search ? { search: previous.search } : {}),
+      });
       return;
     }
     this.navigate("chat");
@@ -1291,9 +1331,10 @@ class OpenClawShell extends OpenClawLightDomElement {
       return;
     }
     // Keep Chat's in-place draft path fast; other routes hand the draft through navigation.
-    const search = new URLSearchParams(this.chatNavigationOptions()?.search);
+    const navigation = this.chatNavigationOptions("chat");
+    const search = new URLSearchParams(navigation?.search ?? "");
     search.set("draft", command.endsWith(" ") ? command : `${command} `);
-    this.navigate("chat", { search: `?${search.toString()}` });
+    this.navigate("chat", { ...navigation, search: `?${search.toString()}` });
   };
 
   private readonly handleCommandPaletteTarget = (event: Event) => {
@@ -1333,7 +1374,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     }
     const outboxScopeHost = this.storedOutboxScopeHost(context);
     let primaryContext = titleForRoute(routeId);
-    if (routeId === "chat" && this.activeSessionKey) {
+    if (isSessionRouteId(routeId) && this.activeSessionKey) {
       primaryContext = this.chatTitleContext(context, outboxScopeHost) || primaryContext;
     } else if (routeId === "custodian") {
       primaryContext = t("nav.askOpenClaw");
@@ -1519,7 +1560,7 @@ class OpenClawShell extends OpenClawLightDomElement {
       return;
     }
     const routeId = this.routeState.routeId;
-    if (!agents || !routeId || routeId === "chat" || agents.state.agentsList) {
+    if (!agents || !routeId || isSessionRouteId(routeId) || agents.state.agentsList) {
       return;
     }
     if (this.agentsListClient === snapshot.client && this.agentsListSource === agents) {
@@ -1547,6 +1588,7 @@ class OpenClawShell extends OpenClawLightDomElement {
   private updateRouteState(routeState: ShellRouteState) {
     this.routeState = routeState;
     const committedRouteId = routeState.committedRouteId;
+    const committedPathname = routeState.committedLocation?.pathname ?? "";
     const committedSearch = routeState.committedLocation?.search ?? "";
     // Restoration and persistence both wait for a live context: consuming the
     // one-shot restore without a router to call, or persisting the bootstrap
@@ -1558,21 +1600,30 @@ class OpenClawShell extends OpenClawLightDomElement {
       // committed route must not be persisted over the remembered destination.
       const pendingDiffers =
         routeState.routeId !== committedRouteId ||
+        (routeState.location?.pathname ?? "") !== committedPathname ||
         (routeState.location?.search ?? "") !== committedSearch;
       if (!this.didConsiderNativeRouteRestore) {
         this.didConsiderNativeRouteRestore = true;
         const storedRoute = pendingDiffers
           ? null
-          : considerRouteRestore(committedRouteId, committedSearch);
+          : considerRouteRestore(committedRouteId, committedPathname, committedSearch);
         if (storedRoute) {
           // Replace instead of push so a fresh window does not start with a
           // Back entry pointing at the bootstrap chat route.
-          routeContext.replace(storedRoute.routeId, { search: storedRoute.search });
+          routeContext.replace(storedRoute.routeId, {
+            pathname: storedRoute.pathname,
+            search: storedRoute.search,
+          });
           return;
         }
       }
       if (!pendingDiffers) {
-        persistRoute(committedRouteId, committedSearch);
+        persistRoute(committedRouteId, committedPathname, committedSearch);
+        const committedSessionKey = routeState.committedSessionKey;
+        if (committedSessionKey) {
+          this.activeSessionKey = committedSessionKey;
+          routeContext.gateway.setSessionKey(committedSessionKey);
+        }
       }
     }
     const context = this.context;
@@ -1583,15 +1634,9 @@ class OpenClawShell extends OpenClawLightDomElement {
       this.settingsSearchQuery = "";
       this.lastWorkspaceLocation = {
         routeId: routeState.routeId,
+        pathname: routeState.location?.pathname ?? "",
         search: routeState.location?.search ?? "",
       };
-    }
-    if (routeState.routeId !== "chat") {
-      return;
-    }
-    const sessionKey = new URLSearchParams(routeState.location?.search).get("session")?.trim();
-    if (sessionKey) {
-      this.activeSessionKey = sessionKey;
     }
   }
 
@@ -1672,11 +1717,10 @@ class OpenClawShell extends OpenClawLightDomElement {
     // The new-session draft shares the chat layout: full-height pane that owns
     // its scrolling and pins the composer dock to the bottom.
     const chatLikeRoute =
-      activeRoute === "chat" || activeRoute === "custodian" || activeRoute === "new-session";
-    const inlineApproval =
-      activeRoute === "chat"
-        ? findInlineApproval(overlaySnapshot.approvalQueue, this.activeSessionKey)
-        : null;
+      isSessionRouteId(activeRoute) || activeRoute === "custodian" || activeRoute === "new-session";
+    const inlineApproval = isSessionRouteId(activeRoute)
+      ? findInlineApproval(overlaySnapshot.approvalQueue, this.activeSessionKey)
+      : null;
     // Optional tags stay mounted before definition. Lit replays their properties on upgrade,
     // and the upgraded panels catch the first toggle instead of dropping the event.
     return html`
@@ -1685,7 +1729,10 @@ class OpenClawShell extends OpenClawLightDomElement {
             .onNavigate=${(routeId: RouteId) => this.navigate(routeId)}
             .onSelectSession=${(sessionKey: string) => {
               context.gateway.setSessionKey(sessionKey);
-              this.navigate("chat", { search: searchForSession(sessionKey) });
+              this.navigate(
+                "chat",
+                sessionNavigationTarget({ context, face: "chat", sessionKey }).options,
+              );
             }}
             .onSlashCommand=${this.handleCommandPaletteSlashCommand}
           ></openclaw-command-palette>`

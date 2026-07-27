@@ -166,13 +166,13 @@ describe("mock gateway stateful sessions", () => {
     const sessionKey = "agent:main:sidebar-narration-demo";
     const script = createControlUiMockGatewayInitScript({
       methodResponses: {
-        "sessions.observer.ask": {
+        "sessions.companion.ask": {
           cases: [
             {
               match: { sessionKey },
               response: {
                 answer: "It is rerunning the focused test to verify the latest fix.",
-                digestRevision: 1,
+                ts: 1_000,
               },
             },
           ],
@@ -236,15 +236,15 @@ describe("mock gateway stateful sessions", () => {
     socket.send(
       JSON.stringify({
         type: "req",
-        id: "observer-ask-1",
-        method: "sessions.observer.ask",
+        id: "companion-ask-1",
+        method: "sessions.companion.ask",
         params: { sessionKey, question: "Why is it rerunning that test?" },
       }),
     );
     await flushMockTimers();
-    expect(frames.find((frame) => frame.id === "observer-ask-1")?.payload).toEqual({
+    expect(frames.find((frame) => frame.id === "companion-ask-1")?.payload).toEqual({
       answer: "It is rerunning the focused test to verify the latest fix.",
-      digestRevision: 1,
+      ts: 1_000,
     });
     expect(frames.find((frame) => frame.event === "agent")?.payload).toMatchObject({
       sessionKey,

@@ -63,6 +63,8 @@ export type CliSessionReseedReceipt = {
 
 export type CliSessionBinding = {
   sessionId: string;
+  /** Last successful assistant boundary accepted by the backend's resume contract. */
+  resumeCheckpointId?: string;
   /** Resume with the backend's fork argument once, then clear before process start. */
   forkNextResume?: true;
   /** Trust an explicitly attached CLI session even when auth, prompt, or MCP fingerprints drift. */
@@ -78,6 +80,12 @@ export type CliSessionBinding = {
   mcpResumeHash?: string;
   /** Identifies one synthetic history prompt and the trusted local handling of its user turn. */
   reseedReceipt?: CliSessionReseedReceipt;
+};
+
+type AcpSessionBinding = {
+  acpBackendId: string;
+  acpAgentId: string;
+  agentSessionId: string;
 };
 
 export type SessionCompactionCheckpointReason =
@@ -520,6 +528,8 @@ export type SessionEntry = SessionRestartRecoveryState &
     memoryFlushLastFailureError?: string;
     cliSessionIds?: Record<string, string>;
     cliSessionBindings?: Record<string, CliSessionBinding>;
+    /** Initialization fence for seeding canonical ACP metadata; cleared after creation. */
+    acpSessionBinding?: AcpSessionBinding;
     claudeCliSessionId?: string;
     label?: string;
     /** User-defined organization bucket for session lists; unrelated to chat groupId/groupChannel. */

@@ -16,6 +16,15 @@ import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus, PlanStatus } from "../tool-stream.ts";
 
+type ChatComposerDisabledBannerContent = {
+  text: string;
+  actionLabel: string;
+  onAction: () => void;
+};
+
+export type ChatComposerDisabledBanner = ChatComposerDisabledBannerContent &
+  ({ kind: "above-composer" } | { kind: "composer-replacement" });
+
 export type ChatComposerProps = {
   paneId: string;
   sessionKey: string;
@@ -25,7 +34,7 @@ export type ChatComposerProps = {
   queuedOutboxCount?: number;
   canSend: boolean;
   disabledReason: string | null;
-  disabledBanner?: { text: string; actionLabel: string; onAction: () => void };
+  disabledBanner?: ChatComposerDisabledBanner;
   runError?: { summary: string } | null;
   sending: boolean;
   canAbort?: boolean;

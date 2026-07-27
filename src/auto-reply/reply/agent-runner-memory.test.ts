@@ -55,6 +55,7 @@ function createReplyOperation(): TestReplyOperation {
     key: "test",
     sessionId: "session",
     abortSignal: new AbortController().signal,
+    staleExpiryReason: undefined,
     resetTriggered: false,
     terminalRecovery: false,
     acceptedSteeredInboundAudio: false,
@@ -83,6 +84,8 @@ function createReplyOperation(): TestReplyOperation {
     markAcceptedSteeredInboundAudio: vi.fn(),
     markWaitingForDeferredMaintenance: vi.fn(),
     markDeferredMaintenanceWaitEnded: vi.fn(),
+    markWaitingForGlobalLane: vi.fn(),
+    markGlobalLaneWaitEnded: vi.fn(),
   };
 }
 

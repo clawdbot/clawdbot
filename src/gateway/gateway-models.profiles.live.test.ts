@@ -45,7 +45,11 @@ import {
   shouldExcludeProviderFromDefaultHighSignalLiveSweep,
 } from "../agents/live-model-filter.js";
 import { createLiveTargetMatcher } from "../agents/live-target-matcher.js";
-import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../agents/live-test-helpers.js";
+import {
+  isLiveProfileKeyModeEnabled,
+  isLiveTestEnabled,
+  readLiveTestConfig,
+} from "../agents/live-test-helpers.js";
 import { shouldSkipLiveProviderDrift } from "../agents/live-test-provider-drift.js";
 import {
   isLiveBillingDrift,
@@ -56,7 +60,7 @@ import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
-import { clearRuntimeConfigSnapshot, getRuntimeConfig } from "../config/io.js";
+import { clearRuntimeConfigSnapshot } from "../config/io.js";
 import type { ModelsConfig, ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { ModelRegistry } from "../llm/model-registry.js";
@@ -4522,7 +4526,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     process.env.OPENCLAW_GATEWAY_TOKEN = token;
     const agentId = GATEWAY_LIVE_AGENT_ID;
 
-    const hostAgentDir = resolveDefaultAgentDir(getRuntimeConfig());
+    const hostAgentDir = resolveDefaultAgentDir(await readLiveTestConfig());
     const hostStore = ensureAuthProfileStore(hostAgentDir, {
       allowKeychainPrompt: false,
     });
@@ -5434,7 +5438,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         logProgress("[all-models] loading config");
         clearRuntimeConfigSnapshot();
         const cfg = await withGatewayLiveSetupTimeout(
-          Promise.resolve().then(() => getRuntimeConfig()),
+          readLiveTestConfig(),
           "[all-models] load config",
         );
         const workspaceDir = resolveAgentWorkspaceDir(cfg, DEFAULT_AGENT_ID);
@@ -5699,7 +5703,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     let tempDir: string | undefined;
     let tempStateDir: string | undefined;
     try {
-      const cfg = getRuntimeConfig();
+      const cfg = await readLiveTestConfig();
       await ensureOpenClawModelsJson(cfg);
 
       const agentDir = resolveDefaultAgentDir(cfg);

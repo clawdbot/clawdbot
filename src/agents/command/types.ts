@@ -73,6 +73,8 @@ export type AgentCommandOpts = {
   provider?: string;
   /** Per-run model override. */
   model?: string;
+  /** Explicit ordered fallback chain for this run. Undefined uses normal selection policy. */
+  modelFallbacksOverride?: string[];
   to?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -183,6 +185,10 @@ export type AgentCommandOpts = {
   mainRestartRecoveryAdmitted?: boolean;
   /** Called when the actual run model is selected, including fallback retries. */
   onActiveModelSelected?: (ctx: { provider: string; model: string }) => void | Promise<void>;
+  /** Called when every candidate in the run's model fallback chain failed. */
+  onModelFallbackExhausted?: () => void;
+  /** Called before delivery projection when the raw run contains an error payload. */
+  onResultErrorPayload?: (message?: string) => void;
   /** Called when compaction rotates the active run onto a successor session. */
   onSessionIdChanged?: (sessionId: string) => void;
   /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */

@@ -32,6 +32,18 @@ export function createAgentSelectionCapability(
   gateway: AgentSelectionGateway,
   roster: AgentSelectionRoster,
 ): AgentSelectionCapability {
+  const reconcileSelectedId = (value: string | null): string | null => {
+    const selectedId = value?.trim() ? normalizeAgentId(value) : null;
+    const agentsList = roster.state.agentsList;
+    if (!agentsList || agentsList.agents.length === 0) {
+      return selectedId;
+    }
+    const defaultId = normalizeAgentId(agentsList.defaultId);
+    return !selectedId ||
+      !agentsList.agents.some((agent) => normalizeAgentId(agent.id) === selectedId)
+      ? defaultId
+      : selectedId;
+  };
   const resolveScopeId = (value: string | null): string | null => {
     const scopeId = value?.trim() ? normalizeAgentId(value) : null;
     // System agents remain valid concrete chat targets, but never become shared page filters.
@@ -43,15 +55,20 @@ export function createAgentSelectionCapability(
   const initialId = gateway.snapshot.assistantAgentId
     ? normalizeAgentId(gateway.snapshot.assistantAgentId)
     : null;
+  const initialSelectedId = reconcileSelectedId(initialId);
   let state: AgentSelectionState = {
-    selectedId: initialId,
-    scopeId: resolveScopeId(initialId),
+    selectedId: initialSelectedId,
+    scopeId: resolveScopeId(initialSelectedId),
   };
   let client = gateway.snapshot.client;
   const listeners = new Set<(next: AgentSelectionState) => void>();
 
   const publish = (next: AgentSelectionState) => {
-    const reconciled = { ...next, scopeId: resolveScopeId(next.scopeId) };
+    const selectedId = reconcileSelectedId(next.selectedId);
+    // Selection and page scope move together when a configured agent vanishes.
+    // Otherwise route-derived agent ids keep sending agent-scoped RPCs to a dead target.
+    const scopeId = selectedId === next.selectedId ? next.scopeId : selectedId;
+    const reconciled = { selectedId, scopeId: resolveScopeId(scopeId) };
     if (state.selectedId === reconciled.selectedId && state.scopeId === reconciled.scopeId) {
       return;
     }

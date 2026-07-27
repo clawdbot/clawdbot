@@ -1,7 +1,8 @@
 ---
-summary: "CLI reference for `openclaw agent` (send one agent turn via the Gateway)"
+summary: "CLI reference for Gateway-backed `openclaw agent` turns and isolated `agent exec` runs"
 read_when:
   - You want to run one agent turn from scripts (optionally deliver reply)
+  - You want a strict, ephemeral one-shot agent run for CI
 title: "Agent"
 ---
 
@@ -12,6 +13,66 @@ Run one agent turn through the Gateway. The explicit `--local` flag is the only 
 Pass at least one session selector: `--to`, `--session-key`, `--session-id`, or `--agent`.
 
 Related: [Agent send tool](/tools/agent-send)
+
+## `agent exec`
+
+`openclaw agent exec` runs one embedded agent turn without connecting to a Gateway. It is the recommended headless entry point for CI and coding automation because it owns setup, cleanup, output projection, and process status.
+
+```bash
+openclaw agent exec "Run the focused tests and fix failures"
+openclaw agent exec --message-file task.md --cwd ./repo
+cat task.md | openclaw agent exec --message-file - --json
+```
+
+By default, the command creates and later removes a temporary state directory. Its implicit config skips workspace bootstrap files, disables the agent sandbox, selects the `coding` tool profile, restricts filesystem tools to `--cwd`, and enables full Gateway-host execution policy for the embedded local tool runtime. `--cwd` defaults to the process working directory and is passed as both the agent workspace and tool working directory.
+
+Use `--state-dir <dir>` to retain sessions and other run state. The directory must already exist and is never created or deleted by the command. The command still uses its isolated implicit policy config; it does not read the ordinary OpenClaw config from that directory.
+
+`--auth-env-only` is enabled by default. In this mode, the run can use provider keys already present in the process environment, but it does not load OpenClaw auth profiles or external Codex, Claude, or other CLI credential stores. Provider auth variables remain available to model authentication but are omitted from agent-launched host commands. Use `--no-auth-env-only` only when the run intentionally relies on those stored credentials.
+
+Select a primary and ordered fallback chain with repeatable flags:
+
+```bash
+openclaw agent exec "Implement the change" \
+  --model openai/gpt-5.6-sol \
+  --fallback anthropic/claude-sonnet-4-6 \
+  --fallback google/gemini-3.1-pro-preview
+```
+
+For this command only, explicit `--fallback` values remain active with explicit `--model`. Other agent entry points keep their existing rule that a user-selected model disables configured fallbacks.
+
+The timeout defaults to 600 seconds for `agent exec`; this does not change the existing embedded `agent --local` default. A successful run exits `0`, any model or result error exits `1`, and a timeout exits `2`. Failure includes `meta.error`, aborted runs, exhausted model fallbacks, an error stop reason, and any error payload.
+
+Plain output writes only the final assistant text to stdout. Diagnostics use stderr. `--json` reserves stdout for this stable envelope:
+
+```json
+{
+  "ok": true,
+  "status": "ok",
+  "final": "The focused tests pass.",
+  "payloads": [{ "text": "The focused tests pass." }],
+  "usage": { "input": 120, "output": 8, "total": 128 },
+  "model": "gpt-5.6-sol",
+  "provider": "openai",
+  "sessionId": "019..."
+}
+```
+
+`status` is `ok`, `error`, or `timeout`. `usage` is omitted when unavailable. Failed envelopes add `error: { message, kind }`; `model` and `provider` are `null` when failure happens before model selection.
+
+### `agent exec` options
+
+- `[message]`: positional prompt text
+- `--message-file <path>`: read a UTF-8 prompt from a file; `-` reads stdin
+- `--cwd <dir>`: set both the agent workspace and tool working directory
+- `--state-dir <dir>`: use an existing state directory without deleting it
+- `--model <provider/model>`: explicit primary model
+- `--thinking <level>`: one-run thinking level
+- `--fallback <provider/model>`: ordered fallback model; repeatable and requires `--model`
+- `--auth-env-only`: ignore stored and external CLI credentials (default)
+- `--no-auth-env-only`: allow stored and external CLI credentials
+- `--timeout <seconds>`: deadline in seconds (default `600`; `0` disables it)
+- `--json`: emit the stable JSON envelope
 
 ## Options
 

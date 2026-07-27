@@ -97,6 +97,7 @@ export const resolveSessionAuthProfileOverrideMock = createMock();
 export const resolveFastModeStateMock = createMock();
 export const getChannelPluginMock = createMock();
 export const retireSessionMcpRuntimeMock = createMock();
+export const cleanupBrowserSessionsForLifecycleEndMock = createMock();
 export const callGatewayMock = createMock();
 export const ensureRuntimePluginsLoadedMock = createMock();
 export const hasUsableWebSearchProviderMock = createMock();
@@ -353,6 +354,10 @@ vi.mock("../../agents/cli-runner.runtime.js", () => ({
 
 vi.mock("../../agents/agent-bundle-mcp-tools.js", () => ({
   retireSessionMcpRuntime: retireSessionMcpRuntimeMock,
+}));
+
+vi.mock("../../browser-lifecycle-cleanup.js", () => ({
+  cleanupBrowserSessionsForLifecycleEnd: cleanupBrowserSessionsForLifecycleEndMock,
 }));
 
 vi.mock("../../gateway/call.runtime.js", () => ({

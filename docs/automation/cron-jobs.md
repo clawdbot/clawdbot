@@ -330,7 +330,7 @@ Implicit announce delivery uses configured channel allowlists to validate and re
 
 Failure notifications follow a separate destination path:
 
-- `cron.failureDestination` sets a global default for failure notifications.
+- The destination fields on `cron.failureAlert` (`mode`, `channel`, `to`, `accountId`) set a global default for failure notifications. The retired `cron.failureDestination` block is merged into them by `openclaw doctor --fix`.
 - `job.delivery.failureDestination` overrides that per job.
 - If neither is set and the job already delivers via `announce`, failure notifications fall back to that primary announce target.
 - `delivery.failureDestination` is only supported on `sessionTarget="isolated"` jobs unless the primary delivery mode is `webhook`.

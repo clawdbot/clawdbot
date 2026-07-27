@@ -301,6 +301,7 @@ export type EmbeddedAgentParams = {
     toolCallId?: string;
     itemId?: string;
   }) => void;
+  onLaneWait?: (info: { waitMs: number; queuedAhead: number; waiting?: boolean }) => void;
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onAssistantMessageStart?: () => Promise<void> | void;
@@ -406,6 +407,7 @@ export function createMockReplyOperation(options?: { abortSignal?: AbortSignal }
       key: "main",
       sessionId: "session",
       abortSignal: options?.abortSignal ?? new AbortController().signal,
+      staleExpiryReason: undefined,
       resetTriggered: false,
       terminalRecovery: false,
       acceptedSteeredInboundAudio: false,
@@ -418,6 +420,8 @@ export function createMockReplyOperation(options?: { abortSignal?: AbortSignal }
       setPhase: vi.fn(),
       markWaitingForDeferredMaintenance: vi.fn(),
       markDeferredMaintenanceWaitEnded: vi.fn(),
+      markWaitingForGlobalLane: vi.fn(),
+      markGlobalLaneWaitEnded: vi.fn(),
       updateSessionId: updateSessionIdMock,
       updateSessionKey: vi.fn(),
       attachBackend: vi.fn(),

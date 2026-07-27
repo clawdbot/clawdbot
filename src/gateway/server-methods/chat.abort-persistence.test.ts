@@ -248,7 +248,11 @@ afterEach(async () => {
   transcriptFixtures.clear();
   const dirs = [...fixtureDirs];
   fixtureDirs.clear();
-  await Promise.all(dirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  // Abort persistence can still be flushing SQLite sidecar files when cleanup
+  // starts; retries absorb the ENOTEMPTY window instead of failing the test.
+  await Promise.all(
+    dirs.map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })),
+  );
 });
 
 describe("chat abort transcript persistence", () => {

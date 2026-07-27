@@ -12,6 +12,7 @@ import { extractToolCardsCached, isToolCardError } from "../../../lib/chat/tool-
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
+import type { TurnRecap } from "../chat-progress.ts";
 import { isPendingSendMessage, persistedMessageEntryId } from "../chat-thread.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
@@ -24,6 +25,11 @@ import {
   type MessageReplyTarget,
 } from "./chat-message-markdown.ts";
 import {
+  renderStreamGroupParts,
+  type StreamGroupOptions,
+  type StreamGroupPart,
+} from "./chat-message-stream.ts";
+import {
   extractGroupMeta,
   renderChatTimestamp,
   renderMessageMeta,
@@ -34,6 +40,12 @@ import {
   resolveToolRowText,
   shouldToggleSelectableDisclosure,
 } from "./chat-tool-cards.ts";
+import { renderTurnRecapRow } from "./chat-working-indicator.ts";
+
+type ActiveContinuation = {
+  parts: StreamGroupPart[];
+  options: StreamGroupOptions;
+};
 
 type RenderMessageGroupOptions = {
   onOpenSidebar?: (content: SidebarContent) => void;
@@ -72,6 +84,8 @@ type RenderMessageGroupOptions = {
   onReply?: (target: MessageReplyTarget) => void;
   onRewind?: () => void;
   rewindDisabled?: boolean;
+  activeContinuation?: ActiveContinuation;
+  turnRecap?: TurnRecap;
 };
 
 type GroupedMessageRenderOptions = Parameters<typeof renderGroupedMessage>[2];
@@ -389,6 +403,15 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               : nothing}
           `;
         })}
+        ${opts.activeContinuation
+          ? renderStreamGroupParts(
+              opts.activeContinuation.parts,
+              opts.activeContinuation.options,
+              "continuation",
+            )
+          : opts.turnRecap
+            ? renderTurnRecapRow(opts.turnRecap, { presentation: "continuation" })
+            : nothing}
       </div>
       <div
         class="chat-group-footer ${persistUserIdentity

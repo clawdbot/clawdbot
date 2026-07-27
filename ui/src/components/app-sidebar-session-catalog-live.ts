@@ -58,7 +58,7 @@ async function requestSessionCatalogList(params: {
       progressive: true,
     };
   } catch (error) {
-    if (!(error instanceof GatewayRequestError) || error.gatewayCode !== "INVALID_REQUEST") {
+    if (!isLegacyProgressIdRejection(error)) {
       throw error;
     }
     // Older Gateways advertise the list method but reject the additive field.
@@ -68,6 +68,21 @@ async function requestSessionCatalogList(params: {
       progressive: false,
     };
   }
+}
+
+function isLegacyProgressIdRejection(error: unknown): boolean {
+  if (!(error instanceof GatewayRequestError) || error.gatewayCode !== "INVALID_REQUEST") {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("progressid") &&
+    (message.includes("unexpected property") ||
+      message.includes("additional property") ||
+      message.includes("additional properties") ||
+      message.includes("unknown property") ||
+      message.includes("unrecognized property"))
+  );
 }
 
 function isSessionsCatalogHostEvent(value: unknown): value is SessionsCatalogHostEvent {
@@ -116,6 +131,7 @@ export class SessionCatalogLiveState {
   private readonly hostProgressSequences = new Map<string, number>();
   private readonly hostIdsByCatalog = new Map<string, ReadonlySet<string>>();
   private readonly requestChangedHostKeys = new Set<string>();
+  private readonly warnedRequestErrors = new Set<string>();
   private requestOwner: symbol | null = null;
 
   cancelTimer() {
@@ -227,6 +243,17 @@ export class SessionCatalogLiveState {
 
   ownsRequest(owner: symbol) {
     return this.requestOwner === owner;
+  }
+
+  warnRequestError(error: unknown) {
+    const code = error instanceof GatewayRequestError ? error.gatewayCode : "UNAVAILABLE";
+    const message = error instanceof Error ? error.message : String(error);
+    const signature = `${code}\u0000${message}`;
+    if (this.warnedRequestErrors.has(signature)) {
+      return;
+    }
+    this.warnedRequestErrors.add(signature);
+    console.warn("Session catalog refresh failed", error);
   }
 
   markFinal(params: {
@@ -430,6 +457,7 @@ export async function refreshSessionCatalogsLive(params: {
   pageDepths: ReadonlyMap<string, number>;
   connected: () => boolean;
   applyFinal: (catalogs: SessionCatalog[], revisedCatalogIds: ReadonlySet<string>) => void;
+  applyError: (error: unknown) => void;
   refresh: () => void;
 }) {
   const { live, client, generation, revision } = params;
@@ -469,8 +497,12 @@ export async function refreshSessionCatalogsLive(params: {
     ]);
     params.applyFinal(catalogs, revisedCatalogIds);
     live.markFinal({ catalogs, hadCatalogs, previousSnapshot, progressSequence });
-  } catch {
+  } catch (error) {
     // A transient poll failure must not collapse already visible or expanded pages.
+    if (revisionIsCurrent()) {
+      live.warnRequestError(error);
+      params.applyError(error);
+    }
   } finally {
     live.endRefetch(refetchOwner);
     const ownsRequest = live.ownsRequest(requestOwner);

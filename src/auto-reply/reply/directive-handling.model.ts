@@ -511,7 +511,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
     modelRefs.activeDiffers ? `Active: ${modelRefs.active.label} (runtime)` : null,
     `Default: ${defaultLabel}`,
     `Agent: ${params.activeAgentId}`,
-    `Auth file: ${formatPath(resolveAuthStorePathForDisplay(params.agentDir))}`,
+    `Auth store: ${formatPath(resolveAuthStorePathForDisplay(params.agentDir))}`,
   ].filter((line): line is string => Boolean(line));
   if (params.resetModelOverride) {
     lines.push(`(previous selection reset to default)`);

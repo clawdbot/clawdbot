@@ -338,7 +338,7 @@ Skills own workflows; root owns hard policy and routing.
 - SecretRef failures isolate to the smallest known owning surface. Proven-inactive surfaces skip; unknown ownership fails closed. Gateway refuses startup only when its own ingress protection cannot be established, config is structurally invalid, or the owning surface is unknown. Otherwise start, mark the exact capability/account/route configured-unavailable, emit a typed redacted diagnostic, and forbid implicit credential fallback. On reload, retain last-known-good only for an unchanged ref+provider; a changed unresolved ref makes that owner cold. Doctor and status must list every degraded owner.
 - Dependency patches/overrides/vendor changes need explicit approval. `pnpm-workspace.yaml` patched dependencies use exact versions only.
 - Release/package guards: no hard-coded retired-package denylists; use generic artifact/dependency checks or fix build source.
-- Lockfiles/shrinkwrap are security surface: review `pnpm-lock.yaml`, `npm-shrinkwrap.json`, `package-lock.json`; root/plugin npm packages ship shrinkwrap, not package-lock.
+- `pnpm-lock.yaml` is the product dependency security review surface; `.github/release/clawhub-cli/package-lock.json` separately pins trusted release tooling. Published packages bundle runtime dependencies where configured and never ship lockfiles; other npm-format locks exist only transiently during checks and publish staging.
 - Carbon pins owner-only: do not change `@buape/carbon` unless Shadow (`@thewilloftheshadow`, verified by `gh`) asks.
 - Releases/publish/version bumps need explicit approval. Use `$release-openclaw-maintainer`.
 - Active release scope lock: freeze the operator-selected cut SHA and release

@@ -29,7 +29,7 @@ import {
   updateDreamingEnabled,
   type DreamingState,
 } from "./dreaming.ts";
-import { renderDreamingRestartConfirmation } from "./restart-confirmation.ts";
+import { renderDreamingToggleConfirmation } from "./toggle-confirmation.ts";
 import { createDreamingViewState, renderDreaming, type DreamingViewState } from "./view.ts";
 
 type WikiPagePreview = {
@@ -104,8 +104,8 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) agentId = "";
 
   @state() private dreaming = createDreamingState();
-  @state() private restartConfirmOpen = false;
-  @state() private restartConfirmLoading = false;
+  @state() private toggleConfirmOpen = false;
+  @state() private toggleConfirmLoading = false;
   @state() private pendingEnabled: boolean | null = null;
 
   private readonly viewState: DreamingViewState = createDreamingViewState();
@@ -187,8 +187,8 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
 
   private resetTransientState() {
     this.resetWikiPreview();
-    this.restartConfirmOpen = false;
-    this.restartConfirmLoading = false;
+    this.toggleConfirmOpen = false;
+    this.toggleConfirmLoading = false;
     this.pendingEnabled = null;
   }
 
@@ -305,37 +305,37 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
   private setEnabled(enabled: boolean, dreamingOn: boolean) {
     if (
       this.dreaming.dreamingModeSaving ||
-      this.restartConfirmLoading ||
-      this.restartConfirmOpen ||
+      this.toggleConfirmLoading ||
+      this.toggleConfirmOpen ||
       dreamingOn === enabled
     ) {
       return;
     }
     this.pendingEnabled = enabled;
-    this.restartConfirmOpen = true;
+    this.toggleConfirmOpen = true;
     this.dreaming.dreamingStatusError = null;
   }
 
-  private cancelRestart() {
-    if (this.restartConfirmLoading) {
+  private cancelToggle() {
+    if (this.toggleConfirmLoading) {
       return;
     }
-    this.restartConfirmOpen = false;
+    this.toggleConfirmOpen = false;
     this.pendingEnabled = null;
     this.dreaming.dreamingStatusError = null;
   }
 
-  private async confirmRestart() {
+  private async confirmToggle() {
     const enabled = this.pendingEnabled;
-    if (enabled == null || this.restartConfirmLoading) {
+    if (enabled == null || this.toggleConfirmLoading) {
       return;
     }
-    this.restartConfirmLoading = true;
+    this.toggleConfirmLoading = true;
     this.dreaming.dreamingStatusError = null;
     const scope = this.captureTaskScope();
     const runtimeConfig = this.context.runtimeConfig;
     if (!scope) {
-      this.restartConfirmLoading = false;
+      this.toggleConfirmLoading = false;
       return;
     }
     try {
@@ -347,7 +347,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
         return;
       }
       if (!updated) {
-        this.dreaming.dreamingStatusError ??= t("dreaming.restartConfirmation.failed");
+        this.dreaming.dreamingStatusError ??= t("dreaming.toggleConfirmation.failed");
         return;
       }
       await runtimeConfig.refresh();
@@ -359,11 +359,11 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
       if (!this.isTaskScopeCurrent(scope)) {
         return;
       }
-      this.restartConfirmOpen = false;
+      this.toggleConfirmOpen = false;
       this.pendingEnabled = null;
     } finally {
       if (this.isTaskScopeCurrent(scope)) {
-        this.restartConfirmLoading = false;
+        this.toggleConfirmLoading = false;
       }
     }
   }
@@ -487,11 +487,12 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
         onRepairDreamingArtifacts: () => void this.runDreamingTask(repairDreamingArtifacts),
         onViewStateChange: () => this.requestUpdate(),
       })}
-      ${renderDreamingRestartConfirmation({
-        open: this.restartConfirmOpen,
-        loading: this.restartConfirmLoading,
-        onConfirm: () => void this.confirmRestart(),
-        onCancel: () => this.cancelRestart(),
+      ${renderDreamingToggleConfirmation({
+        open: this.toggleConfirmOpen,
+        enabling: this.pendingEnabled === true,
+        loading: this.toggleConfirmLoading,
+        onConfirm: () => void this.confirmToggle(),
+        onCancel: () => this.cancelToggle(),
         hasError: Boolean(dreaming.dreamingStatusError),
       })}
     `;

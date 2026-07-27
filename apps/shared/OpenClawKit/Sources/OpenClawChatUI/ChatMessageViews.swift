@@ -501,14 +501,7 @@ private struct ChatMessageBody: View {
     }
 
     private var inlineAttachments: [OpenClawChatMessageContent] {
-        self.message.content.filter { content in
-            switch content.type ?? "text" {
-            case "file", "attachment":
-                true
-            default:
-                false
-            }
-        }
+        self.message.content.filter(\.isInlineAttachment)
     }
 
     private var inlineWidgets: [OpenClawChatCanvasPreview] {

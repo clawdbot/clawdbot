@@ -403,25 +403,25 @@ Controls inline attachment support for `sessions_spawn`.
   </Accordion>
 </AccordionGroup>
 
-<a id="toolsexperimental"></a>
+<a id="toolsupdateplan"></a>
 
-### `tools.experimental`
+### `tools.updatePlan`
 
-Experimental built-in tool flags. Default off unless a strict-agentic GPT-5 auto-enable rule applies.
+Kill switch for the structured `update_plan` checklist tool used for non-trivial multi-step work tracking.
 
 ```json5
 {
   tools: {
-    experimental: {
-      planTool: true, // enable experimental update_plan
-    },
+    updatePlan: false, // hide update_plan from every run
   },
 }
 ```
 
-- `planTool`: enables the structured `update_plan` tool for non-trivial multi-step work tracking.
-- Default: `false` unless `agents.defaults.embeddedAgent.executionContract` (or a per-agent override) is set to `"strict-agentic"` for an `openai` provider run against a GPT-5-family model id (this covers OpenAI Codex CLI runs too, since Codex auth/model routing lives under the `openai` provider). Set `true` to force the tool on outside that scope, or `false` to keep it off even for strict-agentic GPT-5 runs.
-- When enabled, the system prompt also adds usage guidance so the model only uses it for substantial work and keeps at most one step `in_progress`.
+- Default: `true` for every provider and model. Set `false` to keep the tool off; there is no model-specific auto-enable rule.
+- The tool description adds usage guidance so the model only uses it for substantial work and keeps at most one step `in_progress`.
+- `tools.deny: ["update_plan"]` also removes the tool, so use whichever surface already carries your tool policy.
+
+Older configs used `tools.experimental.planTool`. Run `openclaw doctor --fix` to move the value to `tools.updatePlan`.
 
 ### `agents.defaults.subagents`
 

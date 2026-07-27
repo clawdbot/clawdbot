@@ -301,7 +301,6 @@ describe("registerPolicyDoctorChecks", () => {
       "policy/sandbox-container-runtime-socket-mount",
       "policy/sandbox-container-unconfined-profile",
       "policy/sandbox-browser-cdp-source-range-missing",
-      "policy/data-handling-redaction-disabled",
       "policy/data-handling-telemetry-content-capture",
       "policy/data-handling-session-retention-not-enforced",
       "policy/data-handling-session-transcript-memory-enabled",
@@ -1562,7 +1561,6 @@ describe("registerPolicyDoctorChecks", () => {
           remote: { allow: false },
         },
         dataHandling: {
-          sensitiveLogging: { requireRedaction: true },
           telemetry: { denyContentCapture: true },
         },
       }),

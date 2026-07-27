@@ -102,6 +102,7 @@ export default definePluginEntry({
         const normalizedId = normalizeKimiCodingModelId(model.id);
         return normalizedId === model.id ? undefined : { ...model, id: normalizedId };
       },
+      normalizeModelId: ({ modelId }) => normalizeKimiCodingModelId(modelId),
       resolveThinkingProfile,
       wrapSimpleCompletionStreamFn: (ctx) =>
         isKimiK3ModelId(ctx.modelId) ? wrapKimiProviderStream(ctx) : ctx.streamFn,

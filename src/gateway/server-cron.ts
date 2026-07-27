@@ -5,7 +5,6 @@ import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
 import { listAgentEntries, listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
@@ -721,26 +720,19 @@ export function buildGatewayCronService(params: {
     }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       const sessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? `cron:${job.id}`;
-      try {
-        return await runCronIsolatedAgentTurn({
-          cfg: runtimeConfig,
-          deps: params.deps,
-          job,
-          message,
-          abortSignal,
-          onExecutionStarted,
-          onExecutionPhase,
-          onLaneWait,
-          agentId,
-          sessionKey,
-          lane: "cron",
-        });
-      } finally {
-        await cleanupBrowserSessionsForLifecycleEnd({
-          sessionKeys: [sessionKey],
-          onWarn: (msg) => cronLogger.warn({ jobId: job.id }, msg),
-        });
-      }
+      return await runCronIsolatedAgentTurn({
+        cfg: runtimeConfig,
+        deps: params.deps,
+        job,
+        message,
+        abortSignal,
+        onExecutionStarted,
+        onExecutionPhase,
+        onLaneWait,
+        agentId,
+        sessionKey,
+        lane: "cron",
+      });
     },
     runCommandJob: async ({ job, abortSignal }) => {
       const result = await runCronCommandJob({

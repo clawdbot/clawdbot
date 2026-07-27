@@ -211,7 +211,8 @@ export async function runEmbeddedAgentAttempt(params: {
       const spawnedBy = normalizedSpawned.spawnedBy ?? sessionEntry?.spawnedBy;
       const effectiveFallbacksOverride = isModelSelectionLocked(sessionEntry)
         ? []
-        : resolveEffectiveModelFallbacks({
+        : (params.opts.modelFallbacksOverride ??
+          resolveEffectiveModelFallbacks({
             cfg,
             agentId: sessionAgentId,
             sessionKey,
@@ -221,7 +222,7 @@ export async function runEmbeddedAgentAttempt(params: {
             hasAutoFallbackProvenance: hasExplicitRunOverride
               ? false
               : hasStoredAutoFallbackProvenance,
-          });
+          }));
 
       const fallbackRuntimeState: { originRuntime?: "cli" | "embedded" } = {};
       attemptLifecycleState.currentTurnUserMessagePersisted = false;

@@ -4,6 +4,7 @@ import {
   type InternalSessionEntry as SessionEntry,
   resolveAllAgentSessionStoreTargetsSync,
 } from "../config/sessions.js";
+import type { SessionTranscriptTurnExpectedState } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isMainRestartRecoveryCandidate } from "./main-session-recovery-state.js";
@@ -26,6 +27,35 @@ export type ExpectedRestartRecoveryTarget = {
 export type ExhaustedRestartRecoveryTarget = ExpectedRestartRecoveryTarget & {
   storePath: string;
 };
+
+export function buildRestartRecoveryExpectedState(
+  entry: SessionEntry,
+  mainRestartRecovery?: { cycleId: string; revision: number },
+): SessionTranscriptTurnExpectedState {
+  return {
+    abortedLastRun: entry.abortedLastRun,
+    ...(mainRestartRecovery
+      ? {
+          mainRestartRecoveryCycleId: mainRestartRecovery.cycleId,
+          mainRestartRecoveryRevision: mainRestartRecovery.revision,
+        }
+      : {}),
+    restartRecoveryBeforeAgentReplyState: entry.restartRecoveryBeforeAgentReplyState,
+    restartRecoveryDeliveryReceiptState: entry.restartRecoveryDeliveryReceiptState,
+    restartRecoveryDeliveryToolCallId: entry.restartRecoveryDeliveryToolCallId,
+    restartRecoveryDeliveryRequestFingerprint: entry.restartRecoveryDeliveryRequestFingerprint,
+    restartRecoveryDeliveryRunId: entry.restartRecoveryDeliveryRunId,
+    restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
+    restartRecoveryRequesterAccountId: entry.restartRecoveryRequesterAccountId,
+    restartRecoveryRequesterSenderId: entry.restartRecoveryRequesterSenderId,
+    restartRecoverySameChannelThreadRequired: entry.restartRecoverySameChannelThreadRequired,
+    restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
+    restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
+    restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
+    status: entry.status,
+    updatedAt: entry.updatedAt,
+  };
+}
 
 export function shouldSkipMainRecovery(entry: SessionEntry, sessionKey: string): boolean {
   return !isMainRestartRecoveryCandidate(entry, sessionKey);

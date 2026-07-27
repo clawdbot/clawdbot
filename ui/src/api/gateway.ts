@@ -366,6 +366,10 @@ export class GatewayBrowserClient {
     return this.opts.instanceId;
   }
 
+  get gatewayUrl(): string {
+    return this.opts.url;
+  }
+
   start() {
     this.client.start();
   }

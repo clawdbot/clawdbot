@@ -12,8 +12,8 @@ import {
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   DEFAULT_CONTEXT_TOKENS,
-  normalizeModelCompat,
   normalizeProviderId,
+  resolveFamilyForwardCompatModel,
   type ModelDefinitionConfig,
   type ModelProviderConfig,
   type ProviderPlugin,
@@ -61,7 +61,6 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
   buildOpenAIResponsesProviderHooks,
   buildOpenAISyntheticCatalogEntry,
-  cloneFirstTemplateModel,
   findCatalogTemplate,
   matchesExactOrPrefix,
   OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
@@ -186,6 +185,60 @@ function buildOpenAIManifestModelsForBaseUrl(baseUrl: string): ModelDefinitionCo
   );
 }
 
+function buildOpenAIDiscoverablePlatformModels(baseUrl: string): ModelDefinitionConfig[] {
+  const models = [
+    {
+      id: OPENAI_CHAT_LATEST_MODEL_ID,
+      name: "Chat Latest",
+      reasoning: false,
+      cost: OPENAI_CHAT_LATEST_COST,
+      contextWindow: 400_000,
+    },
+    {
+      id: OPENAI_GPT_54_MODEL_ID,
+      name: "GPT-5.4",
+      reasoning: true,
+      cost: OPENAI_GPT_54_COST,
+      contextWindow: OPENAI_GPT_54_CONTEXT_TOKENS,
+    },
+    {
+      id: OPENAI_GPT_54_PRO_MODEL_ID,
+      name: "GPT-5.4 Pro",
+      reasoning: true,
+      cost: OPENAI_GPT_54_PRO_COST,
+      contextWindow: OPENAI_GPT_54_PRO_CONTEXT_TOKENS,
+    },
+    {
+      id: OPENAI_GPT_54_MINI_MODEL_ID,
+      name: "GPT-5.4 Mini",
+      reasoning: true,
+      cost: OPENAI_GPT_54_MINI_COST,
+      contextWindow: OPENAI_GPT_54_MINI_CONTEXT_TOKENS,
+    },
+    {
+      id: OPENAI_GPT_54_NANO_MODEL_ID,
+      name: "GPT-5.4 Nano",
+      reasoning: true,
+      cost: OPENAI_GPT_54_NANO_COST,
+      contextWindow: OPENAI_GPT_54_NANO_CONTEXT_TOKENS,
+    },
+  ] as const;
+
+  // First-party discovery must retain provider-owned costs and capabilities;
+  // generic projection would otherwise surface valid models as zero-cost.
+  return models.map(({ id, name, reasoning, cost, contextWindow }) => ({
+    id,
+    name,
+    reasoning,
+    cost,
+    contextWindow,
+    api: "openai-responses",
+    baseUrl,
+    input: id === OPENAI_GPT_54_PRO_MODEL_ID ? ["text"] : ["text", "image"],
+    maxTokens: OPENAI_GPT_54_MAX_TOKENS,
+  }));
+}
+
 async function buildOpenAILiveProviderConfig(
   params: BuildOpenAILiveProviderConfigParams,
 ): Promise<ModelProviderConfig> {
@@ -208,6 +261,33 @@ async function buildOpenAILiveProviderConfig(
       api: "openai-responses",
     },
     models,
+    projectRows: (rows, fallback) => {
+      const discoveredIds = new Set(
+        rows.flatMap((row) => {
+          if (!row || typeof row !== "object" || Array.isArray(row)) {
+            return [];
+          }
+          const candidate = row as { id?: unknown; object?: unknown };
+          if (candidate.object !== undefined && candidate.object !== "model") {
+            return [];
+          }
+          const modelId = typeof candidate.id === "string" ? candidate.id.trim() : "";
+          return modelId ? [modelId] : [];
+        }),
+      );
+      const selectedIds = new Set<string>();
+      // Discovery alone confirms account access; leave the manifest as the
+      // advisory fallback when OpenAI cannot return an authenticated catalog.
+      return [...fallback.models, ...buildOpenAIDiscoverablePlatformModels(baseUrl)].filter(
+        (model) => {
+          if (!discoveredIds.has(model.id) || selectedIds.has(model.id)) {
+            return false;
+          }
+          selectedIds.add(model.id);
+          return true;
+        },
+      );
+    },
     apiKey: params.apiKey,
     discoveryApiKey: params.discoveryApiKey,
     fetchGuard: params.fetchGuard,
@@ -718,144 +798,89 @@ function buildOpenAIUnknownModelHint(modelId: string): string | undefined {
   return "gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.";
 }
 
-function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelContext) {
-  const trimmedModelId = ctx.modelId.trim();
-  const lower = normalizeLowercaseStringOrEmpty(trimmedModelId);
-  let templateIds: readonly string[];
-  let patch: Partial<ProviderRuntimeModel>;
-  if (lower === OPENAI_CHAT_LATEST_MODEL_ID) {
-    templateIds = OPENAI_CHAT_LATEST_TEMPLATE_MODEL_IDS;
-    patch = {
-      api: "openai-responses",
-      provider: PROVIDER_ID,
-      baseUrl: resolveOpenAIDefaultBaseUrl(),
-      reasoning: false,
-      input: ["text", "image"],
-      cost: OPENAI_CHAT_LATEST_COST,
-      contextWindow: 400_000,
-      maxTokens: OPENAI_GPT_54_MAX_TOKENS,
-    };
-  } else if (
-    lower === OPENAI_GPT_56_MODEL_ID ||
-    lower === OPENAI_GPT_56_SOL_MODEL_ID ||
-    lower === OPENAI_GPT_56_TERRA_MODEL_ID ||
-    lower === OPENAI_GPT_56_LUNA_MODEL_ID
-  ) {
-    templateIds = OPENAI_GPT_56_TEMPLATE_MODEL_IDS;
-    const cost =
-      lower === OPENAI_GPT_56_MODEL_ID || lower === OPENAI_GPT_56_SOL_MODEL_ID
-        ? OPENAI_GPT_56_SOL_COST
-        : lower === OPENAI_GPT_56_TERRA_MODEL_ID
-          ? OPENAI_GPT_56_TERRA_COST
-          : OPENAI_GPT_56_LUNA_COST;
-    patch = {
-      api: "openai-responses",
-      provider: PROVIDER_ID,
-      baseUrl: resolveOpenAIDefaultBaseUrl(),
-      reasoning: true,
-      input: ["text", "image"],
-      cost,
-      contextWindow: OPENAI_GPT_56_DIRECT_CONTEXT_WINDOW,
-      contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
-      maxTokens: OPENAI_GPT_54_MAX_TOKENS,
-      thinkingLevelMap: OPENAI_GPT_56_THINKING_LEVEL_MAP,
-    };
-  } else if (lower === OPENAI_GPT_55_MODEL_ID) {
-    templateIds = [OPENAI_GPT_55_MODEL_ID, OPENAI_GPT_54_MODEL_ID];
-    patch = {
-      api: "openai-responses",
-      provider: PROVIDER_ID,
-      baseUrl: resolveOpenAIDefaultBaseUrl(),
-      reasoning: true,
-      input: ["text", "image"],
+const OPENAI_GPT_FORWARD_COMPAT_CASES = [
+  {
+    match: [OPENAI_CHAT_LATEST_MODEL_ID],
+    templateIds: OPENAI_CHAT_LATEST_TEMPLATE_MODEL_IDS,
+    patch: { reasoning: false, cost: OPENAI_CHAT_LATEST_COST, contextWindow: 400_000 },
+  },
+  {
+    match: [
+      OPENAI_GPT_56_MODEL_ID,
+      OPENAI_GPT_56_SOL_MODEL_ID,
+      OPENAI_GPT_56_TERRA_MODEL_ID,
+      OPENAI_GPT_56_LUNA_MODEL_ID,
+    ],
+    templateIds: OPENAI_GPT_56_TEMPLATE_MODEL_IDS,
+    patch: ({ normalizedModelId: id }) =>
+      ({
+        cost:
+          id === OPENAI_GPT_56_MODEL_ID || id === OPENAI_GPT_56_SOL_MODEL_ID
+            ? OPENAI_GPT_56_SOL_COST
+            : id === OPENAI_GPT_56_TERRA_MODEL_ID
+              ? OPENAI_GPT_56_TERRA_COST
+              : OPENAI_GPT_56_LUNA_COST,
+        contextWindow: OPENAI_GPT_56_DIRECT_CONTEXT_WINDOW,
+        contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
+        thinkingLevelMap: OPENAI_GPT_56_THINKING_LEVEL_MAP,
+      }) satisfies Partial<ProviderRuntimeModel>,
+  },
+  {
+    match: [OPENAI_GPT_55_MODEL_ID],
+    templateIds: [OPENAI_GPT_55_MODEL_ID, OPENAI_GPT_54_MODEL_ID],
+    patch: {
       mediaInput: OPENAI_GPT_55_MEDIA_INPUT,
       cost: OPENAI_GPT_55_COST,
       contextWindow: OPENAI_GPT_55_CONTEXT_WINDOW,
       contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
-      maxTokens: OPENAI_GPT_54_MAX_TOKENS,
-    };
-  } else if (lower === OPENAI_GPT_55_PRO_MODEL_ID) {
-    templateIds = OPENAI_GPT_55_PRO_TEMPLATE_MODEL_IDS;
-    patch = {
-      api: "openai-responses",
-      provider: PROVIDER_ID,
-      baseUrl: resolveOpenAIDefaultBaseUrl(),
-      reasoning: true,
-      input: ["text", "image"],
+    },
+  },
+  {
+    match: [OPENAI_GPT_55_PRO_MODEL_ID],
+    templateIds: OPENAI_GPT_55_PRO_TEMPLATE_MODEL_IDS,
+    patch: {
       cost: OPENAI_GPT_55_PRO_COST,
       contextWindow: OPENAI_GPT_55_PRO_CONTEXT_WINDOW,
       contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
-      maxTokens: OPENAI_GPT_54_MAX_TOKENS,
-    };
-  } else if (lower === OPENAI_GPT_54_MODEL_ID) {
-    templateIds = OPENAI_GPT_54_TEMPLATE_MODEL_IDS;
-    patch = {
-      api: "openai-responses",
-      provider: PROVIDER_ID,
-      baseUrl: resolveOpenAIDefaultBaseUrl(),
-      reasoning: true,
-      input: ["text", "image"],
-      cost: OPENAI_GPT_54_COST,
-      contextWindow: OPENAI_GPT_54_CONTEXT_TOKENS,
-      maxTokens: OPENAI_GPT_54_MAX_TOKENS,
-    };
-  } else if (lower === OPENAI_GPT_54_PRO_MODEL_ID) {
-    templateIds = OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS;
-    patch = {
-      api: "openai-responses",
-      provider: PROVIDER_ID,
-      baseUrl: resolveOpenAIDefaultBaseUrl(),
-      reasoning: true,
-      input: ["text", "image"],
-      cost: OPENAI_GPT_54_PRO_COST,
-      contextWindow: OPENAI_GPT_54_PRO_CONTEXT_TOKENS,
-      maxTokens: OPENAI_GPT_54_MAX_TOKENS,
-    };
-  } else if (lower === OPENAI_GPT_54_MINI_MODEL_ID) {
-    templateIds = OPENAI_GPT_54_MINI_TEMPLATE_MODEL_IDS;
-    patch = {
-      api: "openai-responses",
-      provider: PROVIDER_ID,
-      baseUrl: resolveOpenAIDefaultBaseUrl(),
-      reasoning: true,
-      input: ["text", "image"],
-      cost: OPENAI_GPT_54_MINI_COST,
-      contextWindow: OPENAI_GPT_54_MINI_CONTEXT_TOKENS,
-      maxTokens: OPENAI_GPT_54_MAX_TOKENS,
-    };
-  } else if (lower === OPENAI_GPT_54_NANO_MODEL_ID) {
-    templateIds = OPENAI_GPT_54_NANO_TEMPLATE_MODEL_IDS;
-    patch = {
-      api: "openai-responses",
-      provider: PROVIDER_ID,
-      baseUrl: resolveOpenAIDefaultBaseUrl(),
-      reasoning: true,
-      input: ["text", "image"],
-      cost: OPENAI_GPT_54_NANO_COST,
-      contextWindow: OPENAI_GPT_54_NANO_CONTEXT_TOKENS,
-      maxTokens: OPENAI_GPT_54_MAX_TOKENS,
-    };
-  } else {
-    return undefined;
-  }
+    },
+  },
+  {
+    match: [OPENAI_GPT_54_MODEL_ID],
+    templateIds: OPENAI_GPT_54_TEMPLATE_MODEL_IDS,
+    patch: { cost: OPENAI_GPT_54_COST, contextWindow: OPENAI_GPT_54_CONTEXT_TOKENS },
+  },
+  {
+    match: [OPENAI_GPT_54_PRO_MODEL_ID],
+    templateIds: OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS,
+    patch: { cost: OPENAI_GPT_54_PRO_COST, contextWindow: OPENAI_GPT_54_PRO_CONTEXT_TOKENS },
+  },
+  {
+    match: [OPENAI_GPT_54_MINI_MODEL_ID],
+    templateIds: OPENAI_GPT_54_MINI_TEMPLATE_MODEL_IDS,
+    patch: { cost: OPENAI_GPT_54_MINI_COST, contextWindow: OPENAI_GPT_54_MINI_CONTEXT_TOKENS },
+  },
+  {
+    match: [OPENAI_GPT_54_NANO_MODEL_ID],
+    templateIds: OPENAI_GPT_54_NANO_TEMPLATE_MODEL_IDS,
+    patch: { cost: OPENAI_GPT_54_NANO_COST, contextWindow: OPENAI_GPT_54_NANO_CONTEXT_TOKENS },
+  },
+] satisfies Parameters<typeof resolveFamilyForwardCompatModel>[0]["cases"];
 
-  return (
-    cloneFirstTemplateModel({
-      providerId: PROVIDER_ID,
-      modelId: trimmedModelId,
-      templateIds,
-      ctx,
-      patch,
-    }) ??
-    normalizeModelCompat({
-      id: trimmedModelId,
-      name: trimmedModelId,
-      ...patch,
-      cost: patch.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: patch.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
-      maxTokens: patch.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
-    } as ProviderRuntimeModel)
-  );
+function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelContext) {
+  return resolveFamilyForwardCompatModel({
+    providerId: PROVIDER_ID,
+    ctx,
+    cases: OPENAI_GPT_FORWARD_COMPAT_CASES,
+    patch: {
+      api: "openai-responses",
+      provider: PROVIDER_ID,
+      baseUrl: resolveOpenAIDefaultBaseUrl(),
+      reasoning: true,
+      input: ["text", "image"],
+      maxTokens: OPENAI_GPT_54_MAX_TOKENS,
+    },
+    synthesize: true,
+  });
 }
 
 export function buildOpenAIProvider(): ProviderPlugin {

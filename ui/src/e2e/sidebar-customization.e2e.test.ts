@@ -5,6 +5,8 @@ import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionPath,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -275,9 +277,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       const pinnedItems = sidebar.locator(
         '.sidebar-zone-entry[data-sidebar-entry^="route:"] > .nav-item',
       );
-      await expect
-        .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Usage", "Automations", "Plugins"]);
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Automations", "Plugins"]);
       await expect.poll(() => sidebar.locator(".sidebar-brand").count()).toBe(1);
       // Desktop renders no topbar row: the sidebar owns navigation.
       await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
@@ -321,17 +321,17 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await expect.poll(() => roundedWidth(shellNav)).toBe(400);
       // Settings takes over the whole app: the regular sidebar yields to the
       // settings sidebar until "Back to app" (or Escape) exits. Settings opens
-      // through the footer agent chip's utility menu.
-      const agentChip = sidebar.getByRole("button", { name: /Agent menu/ });
-      const openSettingsFromChip = async () => {
-        await agentChip.click();
+      // through the footer identity card's account utility menu.
+      const identityCard = sidebar.locator(".sidebar-identity-card");
+      const openSettingsFromIdentity = async () => {
+        await identityCard.click();
         await sidebar
-          .locator("wa-dropdown.sidebar-agent-menu")
+          .locator("wa-dropdown.sidebar-identity-menu")
           .getByRole("menuitem", { exact: true, name: "Settings" })
           .click();
       };
-      await expect.poll(() => agentChip.isVisible()).toBe(true);
-      await openSettingsFromChip();
+      await expect.poll(() => identityCard.isVisible()).toBe(true);
+      await openSettingsFromIdentity();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/general");
       const settingsSidebar = page.locator(".settings-sidebar");
       await expect.poll(() => settingsSidebar.isVisible()).toBe(true);
@@ -450,7 +450,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await page.keyboard.press("Escape");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/chat");
       await expect.poll(() => sidebar.isVisible()).toBe(true);
-      await openSettingsFromChip();
+      await openSettingsFromIdentity();
       await expect.poll(() => settingsSidebar.isVisible()).toBe(true);
       await expect.poll(() => settingsSearch.inputValue()).toBe("");
       await captureSettingsSidebarProof(settingsSidebar, "01g-settings-search-reset.png");
@@ -510,11 +510,11 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await tasksItem.click();
       await expect
         .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Usage", "Automations", "Plugins", "Tasks"]);
+        .toEqual(["Automations", "Plugins", "Tasks"]);
       await page.reload();
       await expect
         .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Usage", "Automations", "Plugins", "Tasks"]);
+        .toEqual(["Automations", "Plugins", "Tasks"]);
       // The More menu is transient: closed after reload, unpinned routes inside.
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("false");
       await moreButton.click();
@@ -525,9 +525,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
 
       await moreMenu.getByRole("menuitem", { name: "Edit pinned items" }).click();
       await menu.getByRole("menuitem", { name: "Reset pinned items" }).click();
-      await expect
-        .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Usage", "Automations", "Plugins"]);
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Automations", "Plugins"]);
 
       // The shell chrome search button is the command palette entry point.
       const searchButton = page.locator(".shell-chrome-controls__search");
@@ -678,7 +676,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
     await installMockGateway(page);
 
     try {
-      await page.goto(`${server.baseUrl}chat?session=${encodeURIComponent("agent:main:work")}`);
+      await page.goto(controlUiSessionUrl(server.baseUrl, "agent:main:work"));
       await page.locator("openclaw-app-sidebar .sidebar-brand__new-thread").click();
 
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
@@ -914,7 +912,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
     try {
       await page.goto(`${server.baseUrl}chat`);
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.getByRole("button", { name: /Agent menu/ }).click();
+      await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       const menu = sidebar.locator("wa-dropdown.sidebar-agent-menu");
       const mainSwitch = menu.getByRole("menuitemradio", { name: "Main" });
       const researchSwitch = menu.getByRole("menuitemradio", { name: "Research" });
@@ -935,8 +933,9 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
         .toBe(true);
       await captureUiProof(page, "agent-menu-without-new-session-rows.png");
       await page.keyboard.press("Enter");
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/chat");
-      expect(new URL(page.url()).searchParams.get("session")).toBe("agent:research:main");
+      await expect
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath("agent:research:main"));
     } finally {
       await context.close();
     }

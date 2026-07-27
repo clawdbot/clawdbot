@@ -1741,6 +1741,13 @@ CREATE TABLE IF NOT EXISTS session_groups (
   created_at INTEGER NOT NULL
 ) STRICT;
 
+-- Gateway-owned sidebar section layout. IDs are ungrouped, groups, work, or
+-- category:<name>; pinned sessions are ordered separately and never stored.
+CREATE TABLE IF NOT EXISTS sidebar_sections (
+  section_id TEXT NOT NULL PRIMARY KEY,
+  position INTEGER NOT NULL
+) STRICT;
+
 -- Gateway-owned durable cloud worker lifecycle. Provider-specific execution
 -- stays in plugins; this table records only core reconciliation facts.
 CREATE TABLE IF NOT EXISTS worker_environments (
@@ -2107,4 +2114,15 @@ CREATE TABLE IF NOT EXISTS outbound_media_provenance (
   sha256 TEXT NOT NULL,
   size_bytes INTEGER NOT NULL,
   created_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS model_catalog_remote (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  bundle_json TEXT NOT NULL,
+  generated_at INTEGER NOT NULL,
+  min_version TEXT,
+  source_url TEXT NOT NULL,
+  etag TEXT,
+  last_modified TEXT,
+  checked_at INTEGER NOT NULL
 ) STRICT;

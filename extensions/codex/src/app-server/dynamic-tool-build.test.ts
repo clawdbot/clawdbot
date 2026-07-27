@@ -459,6 +459,7 @@ describe("Codex app-server dynamic tool build", () => {
       sourceSessionKey: "agent:main:subagent:codex-child",
       sourceTool: "subagent_announce",
     };
+    params.config = {};
     params.trustedInternalHandoff = true;
     params.scheduledToolPolicy = {
       version: 1,

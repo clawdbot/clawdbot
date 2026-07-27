@@ -27,6 +27,7 @@ import { createBackgroundTasksProps } from "./components/chat-background-tasks.t
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
 import { cacheChatSessionSnapshot, type ChatMessageCache } from "./session-message-cache.ts";
+import { openSlot } from "./sidebar-layout.ts";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -595,7 +596,7 @@ describe("chat pane keyboard shortcuts", () => {
     pane.active = true;
     state.connected = false;
     state.sidebarContent = canvasContent;
-    state.sidebarOpen = true;
+    state.sidebarLayout = openSlot({ columns: [] }, "detail");
 
     expect(createSessionWorkspaceProps(state).collapsed).toBe(true);
 
@@ -603,14 +604,14 @@ describe("chat pane keyboard shortcuts", () => {
 
     expect(expandEvent.defaultPrevented).toBe(true);
     expect(createSessionWorkspaceProps(state).collapsed).toBe(false);
-    expect(state.sidebarOpen).toBe(true);
+    expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("detail");
     expect(state.sidebarContent).toBe(canvasContent);
 
     const collapseEvent = dispatchSidebarShortcut(pane);
 
     expect(collapseEvent.defaultPrevented).toBe(true);
     expect(createSessionWorkspaceProps(state).collapsed).toBe(true);
-    expect(state.sidebarOpen).toBe(true);
+    expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("detail");
     expect(state.sidebarContent).toBe(canvasContent);
 
     const mainSidebarEvent = dispatchSidebarShortcut(pane, false);

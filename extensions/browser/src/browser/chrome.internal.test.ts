@@ -333,6 +333,13 @@ async function withMockChromeCdpServer(params: {
 describe("chrome.ts internal", () => {
   beforeEach(() => {
     vi.useRealTimers();
+    vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+    vi.spyOn(fs, "statSync").mockImplementation((candidate) => {
+      if (!fs.existsSync(candidate)) {
+        throw new Error("ENOENT");
+      }
+      return { isFile: () => true } as fs.Stats;
+    });
   });
 
   afterEach(() => {

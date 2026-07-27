@@ -156,6 +156,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "memoryFlushLastFailureError",
   "cliSessionIds",
   "cliSessionBindings",
+  "acpSessionBinding",
   "claudeCliSessionId",
   "label",
   "category",

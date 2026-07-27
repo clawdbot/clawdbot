@@ -175,6 +175,7 @@ export {
 export {
   cloneFirstTemplateModel,
   matchesExactOrPrefix,
+  resolveFamilyForwardCompatModel,
 } from "../plugins/provider-model-helpers.js";
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 

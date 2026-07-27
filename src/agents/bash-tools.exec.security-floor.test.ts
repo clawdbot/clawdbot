@@ -7,7 +7,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { saveExecApprovals, type ExecApprovalsFile } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool as createExecToolImpl } from "./bash-tools.exec.js";
@@ -35,10 +37,8 @@ function installAllowlistedGogFixture(root: string): string {
   return binDir;
 }
 
-function writeExecApprovalsFixture(root: string, file: Record<string, unknown>): void {
-  const stateDir = process.env.OPENCLAW_STATE_DIR ?? path.join(root, "state");
-  fs.mkdirSync(stateDir, { recursive: true });
-  fs.writeFileSync(path.join(stateDir, "exec-approvals.json"), `${JSON.stringify(file)}\n`);
+function writeExecApprovalsFixture(_root: string, file: Record<string, unknown>): void {
+  saveExecApprovals(file as ExecApprovalsFile);
 }
 
 function writeDenyExecApprovalsFixture(root: string): void {
@@ -91,6 +91,7 @@ describe("exec security floor", () => {
   afterEach(() => {
     const dir = tempRoot;
     tempRoot = undefined;
+    closeOpenClawStateDatabaseForTest();
     envSnapshot.restore();
     if (dir) {
       fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });

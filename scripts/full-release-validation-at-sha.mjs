@@ -319,6 +319,10 @@ export function releaseEvidenceVerificationArgs(parentRunId) {
   return ["--validate-run", String(parentRunId), "--trusted-workflow-ref", "main", "--json"];
 }
 
+export function shouldDeleteTemporaryWorkflowRef(params) {
+  return !params.keepBranch && (params.dryRun || params.parentConclusion === "success");
+}
+
 export function releaseEvidenceVerifierPath(worktreeRoot) {
   const candidates = [
     join(worktreeRoot, "scripts", "release-ci-summary.mjs"),
@@ -388,6 +392,7 @@ function main() {
   });
 
   let parentRunId;
+  let parentConclusion = "";
   try {
     const dispatchArgs = ["workflow", "run", WORKFLOW, "--ref", branch];
     for (const [key, value] of Object.entries(dispatchInputs)) {
@@ -416,16 +421,32 @@ function main() {
     }
 
     console.log(`Parent run: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`);
-    waitForWorkflowRun(parentRunId, workflowSha);
+    const completedRun = waitForWorkflowRun(parentRunId, workflowSha);
+    parentConclusion = String(completedRun.conclusion ?? "");
+    if (parentConclusion !== "success") {
+      throw new Error(
+        `Full Release Validation concluded ${parentConclusion.toLowerCase() || "without a conclusion"}: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
+      );
+    }
     verifyReleaseEvidence(parentRunId, workflowSha);
   } finally {
-    if (!args.keepBranch) {
+    if (
+      shouldDeleteTemporaryWorkflowRef({
+        keepBranch: args.keepBranch,
+        dryRun: args.dryRun,
+        parentConclusion,
+      })
+    ) {
       run("git", ["push", "origin", `:${remoteBranchRef}`], {
         dryRun: args.dryRun,
         stdio: "inherit",
       });
     } else {
-      console.log(`Kept ${remoteBranchRef}`);
+      console.warn(
+        args.keepBranch
+          ? `Kept ${remoteBranchRef}`
+          : `Kept ${remoteBranchRef}: parent concluded ${parentConclusion || "without a conclusion"}. Keep it through any GitHub reruns; delete it after a successful parent attempt.`,
+      );
     }
   }
 }

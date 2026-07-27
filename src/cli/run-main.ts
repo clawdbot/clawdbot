@@ -677,6 +677,10 @@ function shouldLoadCliDotEnv(env: NodeJS.ProcessEnv = process.env): boolean {
   return existsSync(path.join(resolveStateDir(env), ".env"));
 }
 
+function isAgentExecInvocation(commandPath: string[]): boolean {
+  return commandPath[0] === "agent" && commandPath[1] === "exec";
+}
+
 function isCommanderParseExit(error: unknown): error is { exitCode: number } {
   if (!error || typeof error !== "object") {
     return false;
@@ -999,7 +1003,11 @@ export async function runCli(argv: string[] = process.argv) {
   // Enforce the minimum supported runtime before gateway selection can read or recover config.
   assertSupportedRuntime();
 
-  if (!isHelpOrVersionInvocation && (isGatewayRunInvocation || shouldLoadCliDotEnv())) {
+  if (
+    !isHelpOrVersionInvocation &&
+    !isAgentExecInvocation(normalizedInvocation.commandPath) &&
+    (isGatewayRunInvocation || shouldLoadCliDotEnv())
+  ) {
     await startupTrace.measure("dotenv", async () => {
       if (isRemoteAgentDispatchInvocation(normalizedArgv, normalizedInvocation.primary)) {
         const { loadGatewayDispatchCliDotEnv } = await import("./gateway-dispatch-dotenv.js");

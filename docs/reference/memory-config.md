@@ -448,10 +448,10 @@ Concurrency, polling, and timeout behavior are provider-owned.
 
 Index session transcripts and surface them via `memory_search`:
 
-| Key                           | Type       | Default      | Description                              |
-| ----------------------------- | ---------- | ------------ | ---------------------------------------- |
-| `rememberAcrossConversations` | `boolean`  | `false`      | Permit private cross-conversation recall |
-| `sources`                     | `string[]` | `["memory"]` | Add `"sessions"` to include transcripts  |
+| Key                           | Type       | Default                                                    | Description                              |
+| ----------------------------- | ---------- | ---------------------------------------------------------- | ---------------------------------------- |
+| `rememberAcrossConversations` | `boolean`  | On for personal installs; off with configured DM isolation | Permit private cross-conversation recall |
+| `sources`                     | `string[]` | `["memory"]`                                               | Add `"sessions"` to include transcripts  |
 
 <Warning>
 Session indexing is opt-in and runs asynchronously. Results can be slightly stale. Session logs live on disk, so treat filesystem access as the trust boundary.

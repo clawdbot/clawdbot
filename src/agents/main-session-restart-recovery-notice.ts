@@ -10,7 +10,11 @@ import type { MainSessionRecoveryObservation } from "./main-session-recovery-sta
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import { buildUnresumableSessionNoticeIdempotencyKey } from "./main-session-restart-claim.js";
 import { resolveRestartRecoveryDeliveryContext } from "./main-session-restart-dispatch.js";
-import { log, UNRESUMABLE_SESSION_NOTICE } from "./main-session-restart-recovery-shared.js";
+import {
+  buildRestartRecoveryExpectedState,
+  log,
+  UNRESUMABLE_SESSION_NOTICE,
+} from "./main-session-restart-recovery-shared.js";
 
 async function markSessionFailed(params: {
   observation: MainSessionRecoveryObservation;
@@ -84,25 +88,7 @@ async function writeUnresumableSessionNotice(params: {
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     expectedSessionId: params.entry.sessionId,
-    expectedSessionState: {
-      abortedLastRun: params.entry.abortedLastRun,
-      restartRecoveryBeforeAgentReplyState: params.entry.restartRecoveryBeforeAgentReplyState,
-      restartRecoveryDeliveryReceiptState: params.entry.restartRecoveryDeliveryReceiptState,
-      restartRecoveryDeliveryToolCallId: params.entry.restartRecoveryDeliveryToolCallId,
-      restartRecoveryDeliveryRequestFingerprint:
-        params.entry.restartRecoveryDeliveryRequestFingerprint,
-      restartRecoveryDeliveryRunId: params.entry.restartRecoveryDeliveryRunId,
-      restartRecoveryDeliverySourceRunId: params.entry.restartRecoveryDeliverySourceRunId,
-      restartRecoveryRequesterAccountId: params.entry.restartRecoveryRequesterAccountId,
-      restartRecoveryRequesterSenderId: params.entry.restartRecoveryRequesterSenderId,
-      restartRecoverySameChannelThreadRequired:
-        params.entry.restartRecoverySameChannelThreadRequired,
-      restartRecoverySourceIngress: params.entry.restartRecoverySourceIngress,
-      restartRecoverySourceReplyDeliveryMode: params.entry.restartRecoverySourceReplyDeliveryMode,
-      restartRecoveryTerminalRunIds: params.entry.restartRecoveryTerminalRunIds,
-      status: params.entry.status,
-      updatedAt: params.entry.updatedAt,
-    },
+    expectedSessionState: buildRestartRecoveryExpectedState(params.entry),
     storePath: params.storePath,
     text: UNRESUMABLE_SESSION_NOTICE,
     idempotencyKey: buildUnresumableSessionNoticeIdempotencyKey(params.entry),

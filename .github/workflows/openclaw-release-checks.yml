@@ -1281,6 +1281,18 @@ jobs:
 
           pnpm openclaw qa suite "${runtime_pair_args[@]}"
 
+          if [[ "$RUNTIME_PAIR_LANE" == "core" ]]; then
+            # Restart recovery owns an OpenClaw Gateway lifecycle; it is release-critical
+            # but cannot be compared against the Codex app-server runtime.
+            pnpm openclaw qa suite \
+              --provider-mode mock-openai \
+              --concurrency "${QA_PARITY_CONCURRENCY}" \
+              --model "${OPENCLAW_CI_OPENAI_MODEL}" \
+              --alt-model "openai/gpt-5.6-luna-alt" \
+              --scenario gateway-restart-inflight-run \
+              --output-dir ".artifacts/qa-e2e/openclaw-core-restart"
+          fi
+
       - name: Generate runtime-pair lane report
         id: generate_runtime_parity_report
         if: always()

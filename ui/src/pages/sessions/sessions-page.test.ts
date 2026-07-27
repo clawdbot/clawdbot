@@ -83,6 +83,7 @@ function createGateway(client: GatewayBrowserClient): MutableGateway {
     client,
     phase: "connected",
     offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
@@ -382,7 +383,7 @@ describe("sessions page lifecycle", () => {
     await toast.updateComplete;
     toast.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
     await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(mutableGateway.setSessionKey).toHaveBeenLastCalledWith(key));
+    expect(mutableGateway.setSessionKey).not.toHaveBeenCalled();
 
     expect(patch).toHaveBeenNthCalledWith(1, key, { archived: true }, { agentId: undefined });
     expect(patch).toHaveBeenNthCalledWith(

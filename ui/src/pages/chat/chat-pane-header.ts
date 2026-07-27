@@ -7,7 +7,12 @@ import {
   isCloudWorkerPlacementState,
   isGatewayMethodAdvertised,
   parseAgentSessionKey,
+  SIDEBAR_NARROW_BREAKPOINT_PX,
+  activatePanel,
+  closeSlot,
+  fitSidebarLayout,
   nothing,
+  openSlot,
   t,
   type ChatPaneHeaderAction,
   type GatewayBrowserClient,
@@ -15,7 +20,7 @@ import {
   type SessionDiscussionInfo,
   type SessionDiscussionState,
   type SessionsFilesRevealResult,
-  type SidebarContent,
+  type SessionDiscussionPanelConfig,
   type SystemInfoResult,
   type WorktreesBranchesResult,
   type WorktreesListResult,
@@ -286,7 +291,7 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
   // key's cached state on every session switch (and reconnect clears all), so
   // each activation resolves a fresh probe and reaches this. Within one
   // activation the cache dedupes — closing the sidebar sticks, and an
-  // already-open sidebar is never stolen.
+  // already-open discussion column is never duplicated.
   protected maybeAutoShowSessionDiscussion(
     sessionKey: string,
     discussionState: SessionDiscussionState,
@@ -296,20 +301,19 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
       discussionState !== "open" ||
       !state ||
       state.sessionKey.trim() !== sessionKey ||
-      state.sidebarOpen
+      state.sidebarLayout.columns.some((column) =>
+        column.panels.some((panel) => panel.slot === "discussion"),
+      )
     ) {
       return;
     }
-    const content = this.buildSessionDiscussionContent(state, sessionKey);
-    if (content) {
-      state.handleOpenSidebar(content);
-    }
+    this.openSessionDiscussionSlot();
   }
 
-  protected buildSessionDiscussionContent(
+  protected buildSessionDiscussionPanel(
     state: NonNullable<typeof this.state>,
     sessionKey: string,
-  ): SidebarContent | null {
+  ): SessionDiscussionPanelConfig | null {
     if (!state.connected || !state.client) {
       return null;
     }
@@ -317,8 +321,12 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
       hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
       isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.discussion.open") === true;
     const contentGeneration = this.connectionGeneration;
-    const content: SidebarContent = {
-      kind: "session-discussion",
+    const cached = this.sessionDiscussionPanels.get(sessionKey);
+    if (cached?.generation === contentGeneration && cached.canOpen === canOpen) {
+      cached.config.openUrl = this.sessionDiscussionOpenUrls.get(sessionKey) ?? null;
+      return cached.config;
+    }
+    const config: SessionDiscussionPanelConfig = {
       sessionKey,
       canOpen,
       openUrl: this.sessionDiscussionOpenUrls.get(sessionKey) ?? null,
@@ -352,26 +360,45 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
         if (discussionState === "none") {
           this.sessionDiscussionOpenUrls.delete(key);
         }
-        const current = state.sidebarContent;
-        if (
-          discussionState === "none" &&
-          current?.kind === "session-discussion" &&
-          current.sessionKey === key
-        ) {
-          state.handleCloseSidebar();
+        if (discussionState === "none" && isCurrentSession) {
+          state.updateSidebarLayout(closeSlot(state.sidebarLayout, "discussion"));
           return;
-        }
-        if (
-          isCurrentSession &&
-          current?.kind === "session-discussion" &&
-          current.sessionKey === key
-        ) {
-          state.sidebarContent = { ...current, openUrl };
         }
         state.requestUpdate();
       },
     };
-    return content;
+    this.sessionDiscussionPanels.set(sessionKey, {
+      generation: contentGeneration,
+      canOpen,
+      config,
+    });
+    return config;
+  }
+
+  protected openSessionDiscussionSlot(): boolean {
+    const state = this.state;
+    if (!state) {
+      return false;
+    }
+    let opened = openSlot(state.sidebarLayout, "discussion", "right");
+    const discussionPanel = opened.columns
+      .flatMap((column) => column.panels)
+      .find((panel) => panel.slot === "discussion");
+    if (discussionPanel) {
+      opened = activatePanel(opened, discussionPanel.id);
+    }
+    const newColumn = opened.columns.find(
+      (column) => !state.sidebarLayout.columns.some((current) => current.id === column.id),
+    );
+    const fitted =
+      this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
+        ? (fitSidebarLayout(opened, this.paneWidth, newColumn?.id) ?? opened)
+        : opened;
+    state.updateSidebarLayout(fitted);
+    if (discussionPanel) {
+      state.updateSidebarActivePanel(discussionPanel.id);
+    }
+    return true;
   }
 
   protected renderSessionDiscussionAction() {
@@ -388,14 +415,12 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
     ) {
       return nothing;
     }
-    const content = this.buildSessionDiscussionContent(state, sessionKey);
-    if (!content) {
+    if (!this.buildSessionDiscussionPanel(state, sessionKey)) {
       return nothing;
     }
-    const active =
-      state.sidebarOpen &&
-      state.sidebarContent?.kind === "session-discussion" &&
-      state.sidebarContent.sessionKey === sessionKey;
+    const active = state.sidebarLayout.columns.some((column) =>
+      column.panels.some((panel) => panel.slot === "discussion"),
+    );
     const label = t(active ? "chat.sessionDiscussion.hide" : "chat.sessionDiscussion.show");
     return html`
       <openclaw-tooltip .content=${label}>
@@ -404,7 +429,10 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
           type="button"
           aria-label=${label}
           aria-pressed=${String(active)}
-          @click=${() => (active ? state.handleCloseSidebar() : state.handleOpenSidebar(content))}
+          @click=${() =>
+            active
+              ? state.updateSidebarLayout(closeSlot(state.sidebarLayout, "discussion"))
+              : this.openSessionDiscussionSlot()}
         >
           ${icons.messageSquare}
         </button>

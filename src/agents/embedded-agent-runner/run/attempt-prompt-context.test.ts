@@ -56,7 +56,7 @@ function createAttempt(overrides?: Partial<EmbeddedRunAttemptParams>) {
     config: {},
     contextTokenBudget: 32_000,
     currentInboundContext: {
-      text: "Conversation info (untrusted metadata): channel=telegram",
+      text: "Conversation info: channel=telegram",
     },
     currentInboundEventKind: "user_request",
     sessionId: "session-1",
@@ -136,9 +136,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
       timestamp: 123,
       text: "Visible request",
     });
-    expect(result.runtimeContextMessageForCurrentTurn?.content).toContain(
-      "Conversation info (untrusted metadata)",
-    );
+    expect(result.runtimeContextMessageForCurrentTurn?.content).toContain("Conversation info:");
     expect(result.hookMessagesForCurrentPrompt.some((message) => message.role === "custom")).toBe(
       true,
     );
@@ -149,7 +147,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     expect(fixture.report.currentTurn).toEqual({
       kind: "user_request",
       promptChars: "Visible request".length,
-      runtimeContextChars: "Conversation info (untrusted metadata): channel=telegram".length,
+      runtimeContextChars: "Conversation info: channel=telegram".length,
       modelOnlyPromptChars: 0,
     });
     expect(fixture.replaceSessionMessages).not.toHaveBeenCalled();
