@@ -592,8 +592,10 @@ function renderPeakErrorList(
 }
 
 function focusSummaryHint(event: MouseEvent) {
-  if (event.currentTarget instanceof HTMLElement) {
-    event.currentTarget.focus();
+  const target = event.currentTarget;
+  if (target instanceof HTMLElement) {
+    target.blur();
+    target.focus();
   }
 }
 
@@ -638,8 +640,8 @@ function renderSummaryStat(params: {
           >
             ?
           </button>
-          <!-- Some browsers do not focus buttons on pointer activation; the
-               click handler normalizes that path without adding a second toggle. -->
+          <!-- Shared tooltips dismiss pointer activation for action buttons. Usage hints
+               deliberately refocus here so click remains an open interaction. -->
           <span slot="content">${params.hint}</span>
         </openclaw-tooltip>
       </div>
