@@ -36,19 +36,19 @@ import { isRetryableError, type MattermostClient, type MattermostPost } from "./
 import type { HistoryEntry } from "./runtime-api.js";
 
 /** Mattermost rejects `perPage` above this; the API contract documents 200. */
-export const MATTERMOST_THREAD_PER_PAGE_MAX = 200;
+const MATTERMOST_THREAD_PER_PAGE_MAX = 200;
 /**
  * Upper bound on how long a cold turn may wait for the server. Deliberately far
  * below the client's 30s default: this request sits on the inbound path, so a
  * slow server must cost the reply seconds, not half a minute.
  */
-export const THREAD_BACKFILL_TIMEOUT_MS = 5_000;
+const THREAD_BACKFILL_TIMEOUT_MS = 5_000;
 /** Total fetches allowed per marker before recovery gives up. */
-export const THREAD_BACKFILL_MAX_ATTEMPTS = 3;
+const THREAD_BACKFILL_MAX_ATTEMPTS = 3;
 /** Minimum spacing between attempts for the same marker. */
-export const THREAD_BACKFILL_COOLDOWN_MS = 60_000;
+const THREAD_BACKFILL_COOLDOWN_MS = 60_000;
 /** Insertion-ordered eviction bound for both recovery maps. */
-export const THREAD_BACKFILL_MARKER_CAP = 1_000;
+const THREAD_BACKFILL_MARKER_CAP = 1_000;
 
 type RetryRecord = {
   marker: string;
@@ -56,7 +56,7 @@ type RetryRecord = {
   nextAttemptAt: number;
 };
 
-export type MattermostThreadBackfillDeps = {
+type MattermostThreadBackfillDeps = {
   client: MattermostClient;
   channelHistories: Map<string, HistoryEntry[]>;
   historyLimit: number;
@@ -70,7 +70,7 @@ export type MattermostThreadBackfillDeps = {
   markerCap?: number;
 };
 
-export type EnsureThreadHistoryParams = {
+type EnsureThreadHistoryParams = {
   historyKey: string;
   threadRootId: string;
   /** The post being handled; it is already in the turn and must not be replayed. */
@@ -79,7 +79,7 @@ export type EnsureThreadHistoryParams = {
   agentId: string;
 };
 
-export type MattermostThreadBackfill = {
+type MattermostThreadBackfill = {
   ensureThreadHistory: (params: EnsureThreadHistoryParams) => Promise<void>;
 };
 
@@ -89,13 +89,13 @@ export type MattermostThreadBackfill = {
  * One extra post is requested because the post being handled is filtered out of
  * the response, so a full window still yields `historyLimit` entries.
  */
-export function resolveThreadFetchLimit(historyLimit: number): number {
-  const requested = Math.max(Number(historyLimit) + 1, 1);
+function resolveThreadFetchLimit(historyLimit: number): number {
+  const requested = Math.max(historyLimit + 1, 1);
   return Math.min(requested, MATTERMOST_THREAD_PER_PAGE_MAX);
 }
 
 /** A session id means the store settled; until then recovery is tracked as pending. */
-export function resolveRecoveryMarker(params: {
+function resolveRecoveryMarker(params: {
   historyKey: string;
   sessionId: string | undefined;
 }): string {
@@ -106,7 +106,7 @@ export function resolveRecoveryMarker(params: {
  * A recorded failure blocks the next attempt only while it belongs to the
  * current marker, the budget is unspent, and the cooldown has not elapsed.
  */
-export function mayAttemptRecovery(params: {
+function mayAttemptRecovery(params: {
   record: RetryRecord | undefined;
   marker: string;
   now: number;
