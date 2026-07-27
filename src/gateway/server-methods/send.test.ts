@@ -124,7 +124,8 @@ function messageActionContextFromSessionKeyForTests(sessionKey: string): {
   };
 }
 
-vi.mock("../../agents/agent-scope.js", () => ({
+vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
   resolveSessionAgentId: ({
     sessionKey,
   }: {
@@ -3081,6 +3082,33 @@ describe("gateway send mirroring", () => {
     const actionCall = lastDispatchChannelMessageActionCall();
     expect(actionCall?.mediaLocalRoots).toContain(TEST_AGENT_WORKSPACE);
     expect(actionCall?.gatewayClientScopes).toEqual(["operator.write"]);
+  });
+
+  it("passes workspace-bearing media access so relative media paths resolve (#114299)", async () => {
+    registerMessageActionPlugin({
+      action: "sendAttachment",
+      registrySuffix: "message-action-media-workspace",
+    });
+
+    // Workspace-relative source, as emitted by cron/heartbeat/subagent runs.
+    const { respond } = await runMessageActionRequest(
+      {
+        channel: "telegram",
+        action: "sendAttachment",
+        params: { chatId: "123", mediaUrl: "work/report/report.md" },
+        agentId: "work",
+        idempotencyKey: "idem-message-action-media-workspace",
+      },
+      { connect: { scopes: ["operator.write"] } },
+    );
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    const actionCall = lastDispatchChannelMessageActionCall();
+    // workspaceDir is what lets loadWebMedia resolve relative paths against
+    // the agent workspace instead of the gateway cwd; bare roots cannot.
+    expect(actionCall?.mediaAccess?.workspaceDir).toBe(TEST_AGENT_WORKSPACE);
+    expect(actionCall?.mediaAccess?.localRoots).toContain(TEST_AGENT_WORKSPACE);
+    expect(actionCall?.mediaLocalRoots).toContain(TEST_AGENT_WORKSPACE);
   });
 
   it("materializes buffer-only message.action sends on the gateway before plugin dispatch", async () => {
