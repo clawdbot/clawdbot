@@ -49,8 +49,19 @@ const isSupportedNodeVersion = (version) => {
 
 const ensureSupportedRuntimeVersion = () => {
   if (process.versions.bun) {
+    // Bun >=1.4 (Rust rewrite) ships node:sqlite; feature-probe instead of
+    // rejecting Bun outright so capable Bun builds can run OpenClaw.
+    let hasNodeSqlite = false;
+    try {
+      hasNodeSqlite = Boolean(process.getBuiltinModule?.("node:sqlite"));
+    } catch {
+      hasNodeSqlite = false;
+    }
+    if (hasNodeSqlite) {
+      return;
+    }
     process.stderr.write(
-      "openclaw: the Bun runtime is unsupported because OpenClaw requires node:sqlite.\n" +
+      "openclaw: this Bun runtime is unsupported because it does not provide node:sqlite.\n" +
         `Use Node.js ${SUPPORTED_NODE_RANGE}; Bun remains supported for installs and package scripts.\n`,
     );
     process.exit(1);
