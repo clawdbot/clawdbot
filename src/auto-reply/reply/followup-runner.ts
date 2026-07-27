@@ -134,10 +134,12 @@ export function createFollowupRunner(
         disposition = { kind: "deferred", reason: error.message };
       } else if (executionStarted) {
         // There is no durable post-execution resume record yet. Requeueing the prompt
-        // here can duplicate persisted turns and external tool side effects.
+        // here can duplicate persisted turns and external tool side effects. Preserve
+        // the terminal failure through complete() rather than reporting success.
         defaultRuntime.error?.(
           `followup queue: execution failed after start; refusing replay: ${formatErrorMessage(error)}`,
         );
+        operation?.fail("run_failed", error);
         disposition = { kind: "consumed" };
       } else {
         disposition = { kind: "retry", error };

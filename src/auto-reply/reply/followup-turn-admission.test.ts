@@ -644,6 +644,32 @@ describe("admitFollowupTurn", () => {
     expect(sessionStore.main).toBe(rotatedEntry);
   });
 
+  it("forwards owned preflight deletion to the backing session store", async () => {
+    const operation = createOperation();
+    const initialEntry: SessionEntry = {
+      sessionId: "queued-session",
+      lifecycleRevision: "initial",
+      updatedAt: 1,
+    };
+    const sessionStore: Record<string, SessionEntry> = { main: initialEntry };
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
+    state.preflight.mockImplementation(
+      async ({ sessionStore: ownedStore }: { sessionStore: Record<string, SessionEntry> }) => {
+        delete ownedStore.main;
+        return initialEntry;
+      },
+    );
+
+    await expect(
+      admitFollowupTurn({
+        queued: createRun(),
+        defaults: createDefaults({ sessionEntry: initialEntry, sessionStore }),
+      }),
+    ).rejects.toThrow("Follow-up session generation changed");
+    expect(sessionStore.main).toBeUndefined();
+    expect(operation.complete).toHaveBeenCalledOnce();
+  });
+
   it("restores the item when preflight adoption races a replacement generation", async () => {
     const operation = createOperation();
     const initialEntry: SessionEntry = {

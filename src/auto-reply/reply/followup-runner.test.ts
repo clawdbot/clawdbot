@@ -87,6 +87,7 @@ function createTypingController() {
 function createTurn(order: string[] = []) {
   const operation = {
     complete: vi.fn(() => order.push("operation-complete")),
+    fail: vi.fn(() => order.push("operation-failed")),
   };
   return {
     runId: "run-1",
@@ -210,6 +211,7 @@ describe("createFollowupRunner", () => {
     expect(state.execute).toHaveBeenCalledOnce();
     expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
     expect(state.clearRunContext).toHaveBeenCalledWith("run-1");
+    expect(turn.operation.fail).toHaveBeenCalledWith("run_failed", expect.any(Error));
   });
 
   it("holds the reply operation through progress drain, accounting, and delivery", async () => {

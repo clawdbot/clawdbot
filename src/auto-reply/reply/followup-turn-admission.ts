@@ -53,6 +53,7 @@ type FollowupSessionOwner =
   | {
       kind: "detached";
       current(): SessionEntry | undefined;
+      clear(): void;
       publish(entry: SessionEntry | undefined): void;
       adopt(entry: SessionEntry): void;
     }
@@ -61,6 +62,7 @@ type FollowupSessionOwner =
       key: string;
       storePath?: string;
       current(): SessionEntry | undefined;
+      clear(): void;
       publish(entry: SessionEntry | undefined): void;
       adopt(entry: SessionEntry): void;
     };
@@ -131,6 +133,12 @@ function createFollowupSessionOwner(params: {
       }
     }
   };
+  const clear = () => {
+    currentEntry = undefined;
+    if (params.key && params.store && matchesGeneration(params.store[params.key])) {
+      delete params.store[params.key];
+    }
+  };
   const adopt = (entry: SessionEntry) => {
     const storedEntry = params.key ? params.store?.[params.key] : undefined;
     const storedMatchesOwnedGeneration = Boolean(matchesGeneration(storedEntry));
@@ -177,8 +185,16 @@ function createFollowupSessionOwner(params: {
     params.store[params.key] = currentEntry;
   }
   return params.key
-    ? { kind: "session", key: params.key, storePath: params.storePath, current, publish, adopt }
-    : { kind: "detached", current, publish, adopt };
+    ? {
+        kind: "session",
+        key: params.key,
+        storePath: params.storePath,
+        current,
+        clear,
+        publish,
+        adopt,
+      }
+    : { kind: "detached", current, clear, publish, adopt };
 }
 
 function resolveFollowupCurrentMessageId(queued: FollowupRun): string | undefined {
@@ -214,15 +230,29 @@ function createFollowupSessionStoreView(params: {
     enumerable: true,
     get: () => params.owner.current(),
     set: (entry: SessionEntry | undefined) => {
+      if (!entry) {
+        params.owner.clear();
+        return;
+      }
       const current = params.owner.current();
-      if (entry && !isSameSessionGeneration(entry, current)) {
+      if (!isSameSessionGeneration(entry, current)) {
         params.owner.adopt(entry);
         return;
       }
       params.owner.publish(entry);
     },
   });
-  return view;
+  return new Proxy(view, {
+    deleteProperty: (target, key) => {
+      if (key === params.key) {
+        // CAS failures invalidate only the owned generation; a concurrent replacement
+        // remains in the backing store while this view forgets its stale snapshot.
+        params.owner.clear();
+        return true;
+      }
+      return Reflect.deleteProperty(target, key);
+    },
+  });
 }
 
 /** Resolves one queued item into an immutable admitted turn. */

@@ -148,10 +148,24 @@ export function resolveFollowupDeliveryDecision(params: {
       ? result.meta.finalAssistantVisibleText
       : "",
   );
-  const hasExplicitlyDeliverablePayload = accounting.payloadArray.some(
-    (payload) =>
-      getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true &&
-      hasOutboundReplyContent(payload),
+  let payloads = resolveFollowupDeliveryPayloads({
+    cfg: turn.config,
+    payloads: accounting.payloadArray,
+    messageProvider: turn.queued.run.messageProvider,
+    originatingAccountId: turn.queued.originatingAccountId ?? turn.queued.run.agentAccountId,
+    originatingChannel: turn.queued.originatingChannel,
+    originatingChatType: turn.queued.originatingChatType,
+    originatingReplyToMode: turn.queued.originatingReplyToMode,
+    originatingTo: turn.queued.originatingTo,
+    originatingThreadId: turn.queued.originatingThreadId,
+    reasoningPayloadsEnabled: opts?.reasoningPayloadsEnabled === true,
+    commentaryPayloadsEnabled: opts?.commentaryPayloadsEnabled === true,
+    sentMediaUrls: result.messagingToolSentMediaUrls,
+    sentTargets: result.messagingToolSentTargets,
+    sentTexts: result.messagingToolSentTexts,
+  });
+  const hasExplicitlyDeliverablePayload = payloads.some(
+    (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
   );
   const recovery =
     hasExplicitlyDeliverablePayload || accounting.terminalFailurePayload
@@ -222,22 +236,6 @@ export function resolveFollowupDeliveryDecision(params: {
         },
         cfg: turn.config,
       });
-  let payloads = resolveFollowupDeliveryPayloads({
-    cfg: turn.config,
-    payloads: accounting.payloadArray,
-    messageProvider: turn.queued.run.messageProvider,
-    originatingAccountId: turn.queued.originatingAccountId ?? turn.queued.run.agentAccountId,
-    originatingChannel: turn.queued.originatingChannel,
-    originatingChatType: turn.queued.originatingChatType,
-    originatingReplyToMode: turn.queued.originatingReplyToMode,
-    originatingTo: turn.queued.originatingTo,
-    originatingThreadId: turn.queued.originatingThreadId,
-    reasoningPayloadsEnabled: opts?.reasoningPayloadsEnabled === true,
-    commentaryPayloadsEnabled: opts?.commentaryPayloadsEnabled === true,
-    sentMediaUrls: result.messagingToolSentMediaUrls,
-    sentTargets: result.messagingToolSentTargets,
-    sentTexts: result.messagingToolSentTexts,
-  });
   const hasTerminalPayload = payloads.some(
     (payload) =>
       payload.isReasoning !== true &&

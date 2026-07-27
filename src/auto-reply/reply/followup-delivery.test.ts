@@ -601,6 +601,32 @@ describe("resolveFollowupDeliveryDecision", () => {
     });
   });
 
+  it("normalizes explicitly allowed payloads before skipping stranded recovery", () => {
+    const substantiveFinal =
+      "This is a substantive private answer that missed the message tool. It must still trigger recovery when the marked payload is not deliverable.";
+    const rawPayloads: ReplyPayload[] = [
+      { text: "   " },
+      { text: "HEARTBEAT_OK" },
+      { text: "hidden reasoning", isReasoning: true },
+    ];
+
+    for (const rawPayload of rawPayloads) {
+      const turn = createTurn();
+      turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
+      const explicitPayload = setReplyPayloadMetadata(rawPayload, {
+        deliverDespiteSourceReplySuppression: true,
+      });
+
+      expect(
+        resolveFollowupDeliveryDecision({
+          turn,
+          execution: createSettledExecution(substantiveFinal),
+          accounting: createAccounting([explicitPayload]),
+        }),
+      ).toMatchObject({ kind: "retry-source-delivery" });
+    }
+  });
+
   it("routes settled delivery with the actual runtime provider", () => {
     const decision = resolveFollowupDeliveryDecision({
       turn: createTurn(),
