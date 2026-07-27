@@ -388,6 +388,53 @@ describe("Bedrock thinking effort mapping", () => {
   );
 
   it.each([
+    "us.anthropic.claude-opus-5",
+    "eu.anthropic.claude-opus-5",
+    "global.anthropic.claude-opus-5",
+    "anthropic.claude-opus-5-v1:0",
+    "us.anthropic.claude-opus-5-20260615-v1:0",
+  ])("sends adaptive thinking for Opus 5 profile %s at medium", (id) => {
+    const model = bedrockModel({
+      id,
+      name: "Claude Opus 5",
+      reasoning: true,
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    });
+    const options = testing.resolveSimpleBedrockOptions(model, { reasoning: "medium" });
+
+    expect(testing.buildAdditionalModelRequestFields(model, options)).toEqual({
+      thinking: { type: "adaptive", display: "summarized" },
+      output_config: { effort: "medium" },
+    });
+  });
+
+  it.each([
+    { reasoning: "high" as const, expected: "high" },
+    { reasoning: "xhigh" as const, expected: "xhigh" },
+    { reasoning: "max" as const, expected: "max" },
+  ])("honors the requested Opus 5 effort for reasoning=$reasoning", ({ reasoning, expected }) => {
+    const model = bedrockModel({
+      id: "us.anthropic.claude-opus-5",
+      name: "Claude Opus 5",
+      reasoning: true,
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    });
+    const fields = testing.buildAdditionalModelRequestFields(model, { reasoning });
+
+    // Adaptive-only models must never receive the removed
+    // thinking.type="enabled" + budget_tokens shape.
+    expect(fields).toEqual({
+      thinking: { type: "adaptive", display: "summarized" },
+      output_config: { effort: expected },
+    });
+    expect(JSON.stringify(fields)).not.toContain("budget_tokens");
+  });
+
+  it.each([
     { reasoning: undefined, expected: "high" },
     { reasoning: "off" as const, expected: "low" },
   ])("keeps Sonnet 5 adaptive for reasoning=$reasoning", ({ reasoning, expected }) => {
