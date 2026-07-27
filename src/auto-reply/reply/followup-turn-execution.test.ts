@@ -114,6 +114,8 @@ describe("executeFollowupTurn", () => {
     expect(call.sessionCtx).toMatchObject({
       Provider: "slack",
       Surface: "discord",
+      SessionKey: "main",
+      RuntimePolicySessionKey: "main",
       OriginatingTo: "channel:C1",
       MessageThreadId: "thread-1",
       MessageSid: "message-1",
@@ -494,7 +496,7 @@ describe("executeFollowupTurn", () => {
       onCompactionNoticePayload: vi.fn(async () => {}),
     });
 
-    await expect(detachedProgress).rejects.toBe(failure);
+    await expect(detachedProgress).resolves.toBeUndefined();
     await expect(result.progress.drain()).rejects.toBe(failure);
   });
 

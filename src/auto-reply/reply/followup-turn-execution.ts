@@ -25,6 +25,7 @@ function buildFollowupTemplateContext(turn: AdmittedFollowupTurn): TemplateConte
   const queued = turn.queued;
   const run = queued.run;
   const surface = queued.originatingChannel ?? run.messageProvider;
+  const sessionKey = turn.session.kind === "session" ? turn.session.key : run.sessionKey;
   const currentMessageId =
     run.inputProvenance?.kind === "internal_system" &&
     run.inputProvenance.sourceTool === "restart-sentinel"
@@ -38,6 +39,8 @@ function buildFollowupTemplateContext(turn: AdmittedFollowupTurn): TemplateConte
     To: queued.originatingTo,
     AccountId: queued.originatingAccountId ?? run.agentAccountId,
     ChatType: queued.originatingChatType ?? run.chatType,
+    SessionKey: sessionKey,
+    RuntimePolicySessionKey: run.runtimePolicySessionKey ?? sessionKey,
     MessageSid: currentMessageId,
     MessageSidFull: currentMessageId,
     MessageThreadId: queued.originatingThreadId,
@@ -112,7 +115,7 @@ export async function executeFollowupTurn(params: {
     const trackedTask = observedTask.finally(() => pendingProgressTasks.delete(trackedTask));
     void trackedTask.catch(() => undefined);
     pendingProgressTasks.add(trackedTask);
-    return trackedTask;
+    return progressChain;
   };
   const wrap = <T>(callback: ((value: T) => unknown) | undefined, allowed = progressAllowed) =>
     callback
