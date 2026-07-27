@@ -312,6 +312,38 @@ describe("admitFollowupTurn", () => {
     expect(state.preflight).not.toHaveBeenCalled();
   });
 
+  it("restores the item when an in-memory generation changes while admission awaits", async () => {
+    const operation = createOperation();
+    const initialEntry: SessionEntry = {
+      sessionId: "queued-session",
+      lifecycleRevision: "admitted",
+      updatedAt: 1,
+    };
+    const replacementEntry: SessionEntry = {
+      sessionId: "replacement-session",
+      lifecycleRevision: "replacement",
+      updatedAt: 2,
+    };
+    const sessionStore = { main: initialEntry };
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
+    const onQueuedFollowupAdmitted = vi.fn(async () => {
+      sessionStore.main = replacementEntry;
+    });
+
+    await expect(
+      admitFollowupTurn({
+        queued: createRun(),
+        defaults: createDefaults({
+          sessionEntry: initialEntry,
+          sessionStore,
+          opts: { onQueuedFollowupAdmitted },
+        }),
+      }),
+    ).rejects.toThrow("Follow-up session generation changed after reply admission");
+    expect(operation.complete).toHaveBeenCalledOnce();
+    expect(state.preflight).not.toHaveBeenCalled();
+  });
+
   it("restores the item when the admitted persisted generation disappears", async () => {
     const operation = createOperation();
     const initialEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };

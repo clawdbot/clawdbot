@@ -285,8 +285,10 @@ export async function admitFollowupTurn(params: {
           : undefined;
     const assertPersistedGeneration = (entry: SessionEntry | undefined) => {
       const matchesExpectedGeneration = isSameSessionGeneration(entry, expectedPersistedEntry);
+      const shouldValidateGeneration =
+        Boolean(params.defaults.storePath) || entry !== initialStoredEntry;
       if (
-        params.defaults.storePath &&
+        shouldValidateGeneration &&
         ((expectedPersistedEntry && !matchesExpectedGeneration) ||
           (!expectedPersistedEntry && entry && entry.sessionId !== operation.sessionId))
       ) {
@@ -406,7 +408,9 @@ export async function admitFollowupTurn(params: {
                     storePath: params.defaults.storePath,
                     sessionKey: replySessionKey,
                   })
-                : session.current();
+                : replySessionKey
+                  ? (params.defaults.sessionStore?.[replySessionKey] ?? session.current())
+                  : session.current();
             try {
               assertPersistedGeneration(noticeEntry);
             } catch (error) {
