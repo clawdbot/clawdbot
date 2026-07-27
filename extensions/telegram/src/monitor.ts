@@ -2,7 +2,7 @@
 import type { RunOptions } from "@grammyjs/runner";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveAgentMaxConcurrent } from "openclaw/plugin-sdk/model-session-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -97,19 +97,14 @@ const loadTelegramMonitorWebhookRuntime = createLazyRuntimeModule(
   () => import("./monitor-webhook.runtime.js"),
 );
 
-export function buildTelegramIsolatedIngressOptions(params: {
-  enabled: boolean;
-  apiRoot?: string;
-  proxy?: string;
-  network?: unknown;
-  spooledUpdateHandlerTimeoutMs?: number;
-}): {
-  enabled: boolean;
-  apiRoot?: string;
-  proxy?: string;
-  network?: unknown;
-  spooledUpdateHandlerTimeoutMs?: number;
-} {
+type TelegramIsolatedIngressForwardedOptions = Pick<
+  TelegramAccountConfig,
+  "apiRoot" | "proxy" | "network" | "spooledUpdateHandlerTimeoutMs"
+>;
+
+export function buildTelegramIsolatedIngressOptions(
+  params: TelegramIsolatedIngressForwardedOptions & { enabled: boolean },
+): TelegramIsolatedIngressForwardedOptions & { enabled: boolean } {
   return {
     enabled: params.enabled,
     apiRoot: params.apiRoot,
