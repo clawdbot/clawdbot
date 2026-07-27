@@ -188,10 +188,28 @@ describe("LabsPage", () => {
     expect(labToggle(direct.page, auditIndex, "audit").checked).toBe(true);
     direct.provider.remove();
 
-    // `all` is a broader mode an operator chose deliberately elsewhere. Reading
-    // it as off would invite this row to quietly narrow their setting.
+    // `all` is broader than the mode this row offers, but it is still on. Showing
+    // it as off would make the switch look available and quietly narrow a choice
+    // the operator made deliberately somewhere else.
     const all = await mountPage({ logging: { audit: { messages: "all" } } });
-    expect(labToggle(all.page, auditIndex, "audit").checked).toBe(false);
+    expect(labToggle(all.page, auditIndex, "audit").checked).toBe(true);
+  });
+
+  it("turns a broader audit mode off rather than narrowing it", async () => {
+    const auditIndex = LAB_FEATURES.findIndex((feature) => feature.id === "auditMessages");
+    const { page, runtimeConfig } = await mountPage({
+      logging: { audit: { messages: "all" } },
+    });
+    const toggle = labToggle(page, auditIndex, "audit");
+
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+
+    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    expect(runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: { logging: { audit: { messages: "off" } } },
+      note: "labs: update auditMessages",
+    });
   });
 
   it("marks only the startup-scoped entry as needing a restart", async () => {

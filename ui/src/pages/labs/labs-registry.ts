@@ -18,6 +18,13 @@ export type LabFeature = {
   onValue: LabFeatureValue;
   offValue: LabFeatureValue;
   /**
+   * Every value that reads as on, which is not always just `onValue`. A mode can
+   * have settings broader than the one Labs offers, and those must render as
+   * enabled — otherwise the row shows off, and clicking it narrows a choice the
+   * operator made deliberately somewhere else.
+   */
+  activeValues: readonly LabFeatureValue[];
+  /**
    * Extra keys written beside the gate when enabling, relative to the gate's
    * parent. Labs pins the variant we actually recommend rather than inheriting
    * whatever a bare enable defaults to.
@@ -35,6 +42,7 @@ export const LAB_FEATURES = [
     configPath: ["tools", "codeMode", "enabled"],
     onValue: true,
     offValue: false,
+    activeValues: [true],
     enableAlso: null,
     restartHint: null,
   },
@@ -46,6 +54,7 @@ export const LAB_FEATURES = [
     configPath: ["tools", "swarm", "enabled"],
     onValue: true,
     offValue: false,
+    activeValues: [true],
     enableAlso: null,
     restartHint: null,
   },
@@ -57,6 +66,7 @@ export const LAB_FEATURES = [
     configPath: ["tools", "toolSearch", "enabled"],
     onValue: true,
     offValue: false,
+    activeValues: [true],
     // resolveToolSearchConfig defaults an unset mode to "code" even in object
     // form, which is the surface with the weakest recall. Pin the bounded
     // directory instead, so enabling from Labs is the variant we recommend.
@@ -71,6 +81,7 @@ export const LAB_FEATURES = [
     configPath: ["agents", "defaults", "experimental", "localModelLean"],
     onValue: true,
     offValue: false,
+    activeValues: [true],
     enableAlso: null,
     restartHint: null,
   },
@@ -85,6 +96,7 @@ export const LAB_FEATURES = [
     configPath: ["logging", "audit", "messages"],
     onValue: "direct",
     offValue: "off",
+    activeValues: ["direct", "all"],
     enableAlso: null,
     // startGatewayEventSubscriptions resolves the mode once and bakes it into
     // the recorder, so this outlives the reload plan's `logging: none` rule.
@@ -121,7 +133,7 @@ export function isLabFeatureEnabled(
   if (!parent || typeof parent !== "object" || Array.isArray(parent) || !key) {
     return false;
   }
-  return (parent as Record<string, unknown>)[key] === feature.onValue;
+  return feature.activeValues.includes((parent as Record<string, unknown>)[key] as LabFeatureValue);
 }
 
 export function labFeatureMergePatch(
