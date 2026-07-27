@@ -14,6 +14,7 @@ import {
   renderQaAgenticParityMarkdownReport,
   renderQaRuntimeParityMarkdownReport,
   type QaParitySuiteSummary,
+  type QaRuntimeParityReport,
   type QaRuntimeParitySuiteSummary,
 } from "./agentic-parity-report.js";
 import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
@@ -1115,7 +1116,7 @@ export async function runQaParityReportCommand(opts: {
     const summary = JSON.parse(
       await fs.readFile(summaryPath, "utf8"),
     ) as QaRuntimeParitySuiteSummary;
-    const reportPayload = buildQaRuntimeParityReport({ summary });
+    const reportPayload: QaRuntimeParityReport = buildQaRuntimeParityReport({ summary });
     const report = renderQaRuntimeParityMarkdownReport(reportPayload);
     const reportPath = path.join(outputDir, "qa-runtime-parity-report.md");
     const runtimeSummaryPath = path.join(outputDir, "qa-runtime-parity-summary.json");
