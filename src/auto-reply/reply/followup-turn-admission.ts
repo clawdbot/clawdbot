@@ -424,6 +424,33 @@ export async function admitFollowupTurn(params: {
       turn.currentInboundContext = currentInboundContext;
       turn.queued = { ...turn.queued, currentInboundContext };
     };
+    const synchronizeTurnGeneration = (
+      entry: SessionEntry | undefined,
+      previousEntry: SessionEntry | undefined,
+    ) => {
+      const generationRotated = Boolean(entry && !isSameSessionGeneration(entry, previousEntry));
+      if (entry && generationRotated) {
+        operation.updateSessionId(entry.sessionId);
+        turn.queued = {
+          ...turn.queued,
+          run: {
+            ...turn.queued.run,
+            sessionId: entry.sessionId,
+            sessionFile:
+              resolveAdmittedRunSessionFile({
+                agentId: turn.queued.run.agentId,
+                sessionId: entry.sessionId,
+                sessionFile: entry.sessionFile,
+                storePath: params.defaults.storePath,
+              }) ?? resolveSessionTranscriptPath(entry.sessionId, turn.queued.run.agentId),
+            cliSessionBindingFacts: undefined,
+            autoFallbackPrimaryProbe: undefined,
+            modelSelectionLocked: entry.modelSelectionLocked === true,
+          },
+        };
+      }
+      return generationRotated;
+    };
     const previousCompactionCount = activeEntry?.compactionCount ?? 0;
     let pendingTerminalCompactionNotice: Exclude<CompactionNoticePhase, "start"> | undefined;
     let compactionNoticeGenerationInvalidated = false;
@@ -481,8 +508,8 @@ export async function admitFollowupTurn(params: {
             );
           }
         : undefined;
+    const preflightEntry = session.current();
     try {
-      const previousEntry = session.current();
       activeEntry = await runPreflightCompactionIfNeeded({
         cfg: config,
         followupRun: turn.queued,
@@ -508,9 +535,9 @@ export async function admitFollowupTurn(params: {
           sessionKey: replySessionKey,
         });
         if (
-          (!persistedEntry && previousEntry) ||
+          (!persistedEntry && preflightEntry) ||
           (persistedEntry &&
-            !isSameSessionGeneration(persistedEntry, previousEntry) &&
+            !isSameSessionGeneration(persistedEntry, preflightEntry) &&
             !isSameSessionGeneration(persistedEntry, activeEntry))
         ) {
           throw new FollowupSessionGenerationInvalidatedError(
@@ -526,35 +553,11 @@ export async function admitFollowupTurn(params: {
           activeEntry = persistedEntry;
         }
       }
-      const generationRotated = Boolean(
-        activeEntry &&
-        (activeEntry.sessionId !== previousEntry?.sessionId ||
-          activeEntry.lifecycleRevision !== previousEntry?.lifecycleRevision),
-      );
       if (activeEntry) {
         session.adopt(activeEntry);
         activeEntry = session.current() ?? activeEntry;
       }
-      if (activeEntry && generationRotated) {
-        operation.updateSessionId(activeEntry.sessionId);
-        turn.queued = {
-          ...turn.queued,
-          run: {
-            ...turn.queued.run,
-            sessionId: activeEntry.sessionId,
-            sessionFile:
-              resolveAdmittedRunSessionFile({
-                agentId: turn.queued.run.agentId,
-                sessionId: activeEntry.sessionId,
-                sessionFile: activeEntry.sessionFile,
-                storePath: params.defaults.storePath,
-              }) ?? resolveSessionTranscriptPath(activeEntry.sessionId, turn.queued.run.agentId),
-            cliSessionBindingFacts: undefined,
-            autoFallbackPrimaryProbe: undefined,
-            modelSelectionLocked: activeEntry.modelSelectionLocked === true,
-          },
-        };
-      }
+      const generationRotated = synchronizeTurnGeneration(activeEntry, preflightEntry);
       refreshTurnSessionState(activeEntry);
       turn.preflightCompactionApplied =
         generationRotated || (activeEntry?.compactionCount ?? 0) > previousCompactionCount;
@@ -568,11 +571,14 @@ export async function admitFollowupTurn(params: {
           : replySessionKey && params.defaults.sessionStore
             ? params.defaults.sessionStore[replySessionKey]
             : session.current();
-      assertPersistedGeneration(failureEntry);
+      if (!isSameSessionGeneration(failureEntry, session.current())) {
+        assertPersistedGeneration(failureEntry);
+      }
       if (failureEntry) {
         session.adopt(failureEntry);
         activeEntry = session.current() ?? failureEntry;
       }
+      synchronizeTurnGeneration(activeEntry, preflightEntry);
       refreshTurnSessionState(activeEntry);
       if (compactionNoticeGenerationInvalidated) {
         throw new FollowupSessionGenerationInvalidatedError(

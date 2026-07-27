@@ -61,6 +61,7 @@ function buildFollowupTemplateContext(turn: AdmittedFollowupTurn): TemplateConte
 export async function executeFollowupTurn(params: {
   turn: AdmittedFollowupTurn;
   defaults: FollowupRunnerParams;
+  onExecutionStarted?: () => void;
   onToolResult: (payload: ReplyPayload, execution: { runId: string }) => Promise<void>;
   onCompactionNoticePayload: (payload: ReplyPayload, execution: { runId: string }) => Promise<void>;
 }): Promise<FollowupExecutionResult> {
@@ -261,6 +262,7 @@ export async function executeFollowupTurn(params: {
     };
   } else {
     try {
+      params.onExecutionStarted?.();
       execution = await executeAgentTurn({
         commandBody: turn.queued.prompt,
         transcriptCommandBody: turn.queued.transcriptPrompt,

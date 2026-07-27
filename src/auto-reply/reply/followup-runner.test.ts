@@ -194,6 +194,24 @@ describe("createFollowupRunner", () => {
     expect(typing.markDispatchIdle).toHaveBeenCalledOnce();
   });
 
+  it("consumes a turn that fails after canonical execution starts", async () => {
+    const typing = createTypingController();
+    const turn = createTurn();
+    state.admit.mockResolvedValue({ kind: "admitted", turn });
+    state.execute.mockImplementation(async ({ onExecutionStarted }) => {
+      onExecutionStarted?.();
+      throw new Error("execution failed after start");
+    });
+
+    await createFollowupRunner({ typing, typingMode: "instant", defaultModel: "claude" })(
+      turn.queued,
+    );
+
+    expect(state.execute).toHaveBeenCalledOnce();
+    expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
+    expect(state.clearRunContext).toHaveBeenCalledWith("run-1");
+  });
+
   it("holds the reply operation through progress drain, accounting, and delivery", async () => {
     const order: string[] = [];
     const typing = createTypingController();

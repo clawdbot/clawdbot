@@ -31,6 +31,7 @@ export function createFollowupRunner(
     let disposition: FollowupDrainDisposition = { kind: "retry", error: undefined };
     let operation: ReplyOperation | undefined;
     let admittedRunId: string | undefined;
+    let executionStarted = false;
     const initiallyAborted =
       queued.abortSignal?.aborted === true || queued.queueAbortSignal?.aborted === true;
     const endDeliveryCorrelations = initiallyAborted
@@ -75,6 +76,9 @@ export function createFollowupRunner(
       const execution = await executeFollowupTurn({
         turn,
         defaults,
+        onExecutionStarted: () => {
+          executionStarted = true;
+        },
         onToolResult: async (payload, identity) => {
           await deliverFollowupDecision({
             decision: { kind: "deliver", payloads: [payload] },
@@ -126,10 +130,16 @@ export function createFollowupRunner(
       });
       disposition = { kind: "consumed" };
     } catch (error) {
-      disposition =
-        error instanceof FollowupRunDeferredError
-          ? { kind: "deferred", reason: error.message }
-          : { kind: "retry", error };
+      if (error instanceof FollowupRunDeferredError) {
+        disposition = { kind: "deferred", reason: error.message };
+      } else if (executionStarted) {
+        defaultRuntime.error?.(
+          `followup queue: execution failed after start; refusing replay: ${formatErrorMessage(error)}`,
+        );
+        disposition = { kind: "consumed" };
+      } else {
+        disposition = { kind: "retry", error };
+      }
     } finally {
       for (const end of endDeliveryCorrelations.toReversed()) {
         try {

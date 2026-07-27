@@ -882,6 +882,42 @@ describe("admitFollowupTurn", () => {
     );
   });
 
+  it("keeps an owned preflight rotation when preflight later fails", async () => {
+    const operation = createOperation();
+    const initialEntry: SessionEntry = {
+      sessionId: "queued-session",
+      lifecycleRevision: "initial",
+      updatedAt: 1,
+    };
+    const rotatedEntry: SessionEntry = {
+      sessionId: "compacted-session",
+      lifecycleRevision: "compacted",
+      updatedAt: 2,
+    };
+    const sessionStore = { main: initialEntry };
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
+    state.preflight.mockImplementation(
+      async ({ sessionStore: ownedStore }: { sessionStore: Record<string, SessionEntry> }) => {
+        ownedStore.main = rotatedEntry;
+        throw new Error("preflight failed after rotation");
+      },
+    );
+
+    const result = await admitFollowupTurn({
+      queued: createRun(),
+      defaults: createDefaults({ sessionEntry: initialEntry, sessionStore }),
+    });
+
+    expect(result).toMatchObject({
+      kind: "admitted",
+      turn: {
+        queued: { run: { sessionId: "compacted-session" } },
+        preflightFailurePayload: {},
+      },
+    });
+    expect(operation.updateSessionId).toHaveBeenCalledWith("compacted-session");
+  });
+
   it("restores the item when generation changes before a compaction notice", async () => {
     const operation = createOperation();
     const initialEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
