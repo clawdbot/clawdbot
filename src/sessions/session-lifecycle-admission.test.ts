@@ -15,6 +15,7 @@ import {
   getActiveSessionWorkAdmissionCount,
   hasOnlySessionLifecycleMutationKindActive,
   interruptSessionWorkAdmissions,
+  isSessionLifecycleMutationActive,
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "./session-lifecycle-admission.js";
@@ -139,6 +140,185 @@ it("counts one multi-identity lifecycle mutation once across module instances", 
     await mutation;
   }
   expect(second.getActiveSessionLifecycleMutationCount()).toBe(0);
+});
+
+it("counts a cross-store lifecycle mutation once and fences every target", async () => {
+  const mutationStarted = createDeferred();
+  const releaseMutation = createDeferred();
+  const mutation = runExclusiveSessionLifecycleMutation({
+    targets: [
+      {
+        scope: "store-cross-count-b",
+        identities: ["agent:work:main", "session-cross-count-b"],
+      },
+      {
+        scope: "store-cross-count-a",
+        identities: ["agent:main:main", "session-cross-count-a"],
+      },
+      {
+        scope: "store-cross-count-a",
+        identities: ["session-cross-count-a", undefined],
+      },
+    ],
+    run: async () => {
+      mutationStarted.resolve();
+      await releaseMutation.promise;
+    },
+  });
+  await mutationStarted.promise;
+
+  try {
+    expect(getActiveSessionLifecycleMutationCount()).toBe(1);
+    expect(isSessionLifecycleMutationActive("store-cross-count-a", ["agent:main:main"])).toBe(true);
+    expect(isSessionLifecycleMutationActive("store-cross-count-b", ["session-cross-count-b"])).toBe(
+      true,
+    );
+    expect(isSessionLifecycleMutationActive("store-cross-count-b", ["agent:main:main"])).toBe(
+      false,
+    );
+  } finally {
+    releaseMutation.resolve();
+    await mutation;
+  }
+
+  expect(getActiveSessionLifecycleMutationCount()).toBe(0);
+  expect(isSessionLifecycleMutationActive("store-cross-count-a", ["session-cross-count-a"])).toBe(
+    false,
+  );
+  expect(isSessionLifecycleMutationActive("store-cross-count-b", ["session-cross-count-b"])).toBe(
+    false,
+  );
+});
+
+it("serializes opposite-direction cross-store lifecycle mutations", async () => {
+  const main = {
+    scope: "store-cross-order-a",
+    identities: ["agent:main:main", "session-cross-order-a"],
+  };
+  const work = {
+    scope: "store-cross-order-b",
+    identities: ["agent:work:main", "session-cross-order-b"],
+  };
+  let activeMutations = 0;
+  let maximumActiveMutations = 0;
+  let completedMutations = 0;
+
+  await Promise.all(
+    Array.from({ length: 48 }, async (_, index) =>
+      runExclusiveSessionLifecycleMutation({
+        targets: index % 2 === 0 ? [main, work] : [work, main],
+        run: async () => {
+          activeMutations += 1;
+          maximumActiveMutations = Math.max(maximumActiveMutations, activeMutations);
+          try {
+            await Promise.resolve();
+            completedMutations += 1;
+          } finally {
+            activeMutations -= 1;
+          }
+        },
+      }),
+    ),
+  );
+
+  expect(completedMutations).toBe(48);
+  expect(maximumActiveMutations).toBe(1);
+  expect(activeMutations).toBe(0);
+  expect(getActiveSessionLifecycleMutationCount()).toBe(0);
+});
+
+it("interrupts admitted work in both stores before a cross-store mutation", async () => {
+  const mainTarget = {
+    scope: "store-cross-interrupt-a",
+    identities: ["agent:main:main", "session-cross-interrupt-a"],
+  };
+  const workTarget = {
+    scope: "store-cross-interrupt-b",
+    identities: ["agent:work:main", "session-cross-interrupt-b"],
+  };
+  let mainInterrupted = false;
+  let workInterrupted = false;
+  const mainAdmission = await beginSessionWorkAdmission({
+    ...mainTarget,
+    assertAllowed: () => {},
+    onInterrupt: () => {
+      mainInterrupted = true;
+      mainAdmission.release();
+    },
+  });
+  const workAdmission = await beginSessionWorkAdmission({
+    ...workTarget,
+    assertAllowed: () => {},
+    onInterrupt: () => {
+      workInterrupted = true;
+      workAdmission.release();
+    },
+  });
+
+  try {
+    await runExclusiveSessionLifecycleMutation({
+      targets: [workTarget, mainTarget],
+      prepare: async () => {
+        const interrupted = await Promise.all([
+          interruptSessionWorkAdmissions({ ...mainTarget, timeoutMs: 1_000 }),
+          interruptSessionWorkAdmissions({ ...workTarget, timeoutMs: 1_000 }),
+        ]);
+        expect(interrupted).toEqual([true, true]);
+      },
+      run: async () => {
+        expect(mainInterrupted).toBe(true);
+        expect(workInterrupted).toBe(true);
+        expect(isSessionWorkAdmissionActive(mainTarget.scope, mainTarget.identities)).toBe(false);
+        expect(isSessionWorkAdmissionActive(workTarget.scope, workTarget.identities)).toBe(false);
+      },
+    });
+  } finally {
+    mainAdmission.release();
+    workAdmission.release();
+  }
+});
+
+it("cancels an opposite-direction cross-store mutation before activation", async () => {
+  const main = {
+    scope: "store-cross-cancel-a",
+    identities: ["agent:main:main", "session-cross-cancel-a"],
+  };
+  const work = {
+    scope: "store-cross-cancel-b",
+    identities: ["agent:work:main", "session-cross-cancel-b"],
+  };
+  const mutationStarted = createDeferred();
+  const releaseMutation = createDeferred();
+  const first = runExclusiveSessionLifecycleMutation({
+    targets: [main, work],
+    run: async () => {
+      mutationStarted.resolve();
+      await releaseMutation.promise;
+    },
+  });
+  await mutationStarted.promise;
+
+  const controller = new AbortController();
+  const abortError = new Error("cancel queued cross-store lifecycle mutation");
+  let cancelledMutationRan = false;
+  const cancelled = runExclusiveSessionLifecycleMutation({
+    targets: [work, main],
+    signal: controller.signal,
+    run: async () => {
+      cancelledMutationRan = true;
+    },
+  });
+  controller.abort(abortError);
+
+  try {
+    await expect(cancelled).rejects.toBe(abortError);
+  } finally {
+    releaseMutation.resolve();
+    await first;
+  }
+
+  expect(cancelledMutationRan).toBe(false);
+  expect(getActiveSessionLifecycleMutationCount()).toBe(0);
 });
 
 it("rejects an admission that resumes after suspension closes the async gap", async () => {

@@ -40,6 +40,18 @@ type SessionLifecycleAdmissionState = {
 
 type SessionLifecycleMutationKind = "compaction";
 
+type SessionLifecycleMutationTarget = {
+  scope: string;
+  identities: Iterable<string | undefined>;
+};
+
+type SessionLifecycleMutationParams<T> = {
+  kind?: SessionLifecycleMutationKind;
+  prepare?: () => Promise<void>;
+  run: () => Promise<T>;
+  signal?: AbortSignal;
+} & (SessionLifecycleMutationTarget | { targets: Iterable<SessionLifecycleMutationTarget> });
+
 // Runtime chunks can load separate module instances while still coordinating
 // the same sessions. One shared state keeps every lock and admission visible.
 const SESSION_LIFECYCLE_ADMISSION_STATE = resolveGlobalSingleton(
@@ -72,35 +84,19 @@ async function runWithSessionIdentityLocks<T>(
   identities: readonly string[],
   index: number,
   run: () => Promise<T>,
+  kind: "lifecycle" | "mutation" = "lifecycle",
 ): Promise<T> {
   const identity = identities[index];
   if (!identity) {
     return await run();
   }
   return await runQueuedStoreWrite({
-    queues: SESSION_LIFECYCLE_QUEUES,
+    queues: kind === "mutation" ? SESSION_LIFECYCLE_MUTATION_QUEUES : SESSION_LIFECYCLE_QUEUES,
     storePath: identity,
-    label: "runExclusiveSessionLifecycle",
+    label:
+      kind === "mutation" ? "runExclusiveSessionLifecycleMutation" : "runExclusiveSessionLifecycle",
     reentrant: true,
-    fn: async () => await runWithSessionIdentityLocks(identities, index + 1, run),
-  });
-}
-
-async function runWithSessionMutationIdentityLocks<T>(
-  identities: readonly string[],
-  index: number,
-  run: () => Promise<T>,
-): Promise<T> {
-  const identity = identities[index];
-  if (!identity) {
-    return await run();
-  }
-  return await runQueuedStoreWrite({
-    queues: SESSION_LIFECYCLE_MUTATION_QUEUES,
-    storePath: identity,
-    label: "runExclusiveSessionLifecycleMutation",
-    reentrant: true,
-    fn: async () => await runWithSessionMutationIdentityLocks(identities, index + 1, run),
+    fn: async () => await runWithSessionIdentityLocks(identities, index + 1, run, kind),
   });
 }
 
@@ -195,22 +191,29 @@ async function runExclusiveSessionLifecycle<T>(params: {
   }
 }
 
-export async function runExclusiveSessionLifecycleMutation<T>(params: {
-  scope: string;
-  identities: Iterable<string | undefined>;
-  kind?: SessionLifecycleMutationKind;
-  prepare?: () => Promise<void>;
-  run: () => Promise<T>;
-  signal?: AbortSignal;
-}): Promise<T> {
-  const identities = normalizeSessionIdentities(params.scope, params.identities);
+export async function runExclusiveSessionLifecycleMutation<T>(
+  params: SessionLifecycleMutationParams<T>,
+): Promise<T> {
+  // Normalize every store and session into one globally ordered identity set.
+  // Cross-agent mutations then acquire one fence and count as one active run,
+  // instead of nesting store locks in caller-selected order.
+  const identities =
+    "targets" in params
+      ? Array.from(
+          new Set(
+            Array.from(params.targets, (target) =>
+              normalizeSessionIdentities(target.scope, target.identities),
+            ).flat(),
+          ),
+        ).toSorted()
+      : normalizeSessionIdentities(params.scope, params.identities);
   const signal = params.signal;
   signal?.throwIfAborted();
   const callerAdmissions = new Set(CURRENT_SESSION_WORK_ADMISSIONS.getStore());
   const mutationRun = {};
   let mutationActivated = false;
   let removeAbortListener = () => {};
-  const mutation = runWithSessionMutationIdentityLocks(
+  const mutation = runWithSessionIdentityLocks(
     identities,
     0,
     async () =>
@@ -268,6 +271,7 @@ export async function runExclusiveSessionLifecycleMutation<T>(params: {
           });
         }
       }),
+    "mutation",
   );
   if (!signal) {
     return await mutation;

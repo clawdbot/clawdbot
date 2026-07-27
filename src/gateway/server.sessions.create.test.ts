@@ -3119,6 +3119,138 @@ test("sessions.create resolves an agent-qualified fork from the parent store", a
   }
 });
 
+test("sessions.create completes simultaneous opposite-direction cross-agent forks", async () => {
+  const { dir } = await createSessionStoreDir();
+  const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
+  const mainStorePath = storeTemplate.replace("{agentId}", "main");
+  const workStorePath = storeTemplate.replace("{agentId}", "work");
+  testState.sessionStorePath = storeTemplate;
+  testState.sessionConfig = { scope: "per-sender" };
+  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+
+  try {
+    const mainDir = path.dirname(mainStorePath);
+    const workDir = path.dirname(workStorePath);
+    await Promise.all([
+      fs.mkdir(mainDir, { recursive: true }),
+      fs.mkdir(workDir, { recursive: true }),
+    ]);
+    const [mainParent, workParent] = await Promise.all([
+      createCheckpointFixture(mainDir),
+      createCheckpointFixture(workDir),
+    ]);
+    await Promise.all([
+      writeSessionStore({
+        storePath: mainStorePath,
+        agentId: "main",
+        entries: {
+          main: sessionStoreEntry(mainParent.sessionId, {
+            sessionFile: mainParent.sessionFile,
+          }),
+        },
+      }),
+      writeSessionStore({
+        storePath: workStorePath,
+        agentId: "work",
+        entries: {
+          main: sessionStoreEntry(workParent.sessionId, {
+            sessionFile: workParent.sessionFile,
+          }),
+        },
+      }),
+    ]);
+    await Promise.all([
+      seedSessionTranscript({
+        agentId: "main",
+        sessionId: mainParent.sessionId,
+        sessionKey: "agent:main:main",
+        storePath: mainStorePath,
+        messages: [{ role: "user", content: "main parent context" }],
+      }),
+      seedSessionTranscript({
+        agentId: "work",
+        sessionId: workParent.sessionId,
+        sessionKey: "agent:work:main",
+        storePath: workStorePath,
+        messages: [{ role: "user", content: "work parent context" }],
+      }),
+    ]);
+
+    const requests = Array.from({ length: 12 }, (_, index) =>
+      index % 2 === 0
+        ? {
+            agentId: "main",
+            parentSessionKey: "agent:work:main",
+            parentSessionId: workParent.sessionId,
+            storePath: mainStorePath,
+          }
+        : {
+            agentId: "work",
+            parentSessionKey: "agent:main:main",
+            parentSessionId: mainParent.sessionId,
+            storePath: workStorePath,
+          },
+    );
+    const created = await Promise.all(
+      requests.map((request) =>
+        directSessionReq<{
+          key: string;
+          sessionId: string;
+          entry: {
+            parentSessionKey?: string;
+            forkSource?: { sessionKey: string; sessionId: string };
+            forkedFromParent?: boolean;
+          };
+        }>("sessions.create", {
+          agentId: request.agentId,
+          parentSessionKey: request.parentSessionKey,
+          fork: true,
+        }),
+      ),
+    );
+
+    expect(
+      created.every((result) => result.ok),
+      JSON.stringify(created.filter((result) => !result.ok)),
+    ).toBe(true);
+    expect(new Set(created.map((result) => result.payload?.key)).size).toBe(requests.length);
+    expect(new Set(created.map((result) => result.payload?.sessionId)).size).toBe(requests.length);
+    for (const [index, result] of created.entries()) {
+      const request = requests[index];
+      if (!request) {
+        throw new Error(`missing cross-agent fork request ${index}`);
+      }
+      expect(result.payload?.entry).toMatchObject({
+        forkSource: {
+          sessionKey: request.parentSessionKey,
+          sessionId: request.parentSessionId,
+        },
+        forkedFromParent: true,
+        parentSessionKey: request.parentSessionKey,
+      });
+      const key = requireNonEmptyString(result.payload?.key, "cross-agent fork session key");
+      expect(
+        loadSessionEntry({
+          agentId: request.agentId,
+          sessionKey: key,
+          storePath: request.storePath,
+        }),
+      ).toMatchObject({
+        forkSource: {
+          sessionKey: request.parentSessionKey,
+          sessionId: request.parentSessionId,
+        },
+        parentSessionKey: request.parentSessionKey,
+        sessionId: result.payload?.sessionId,
+      });
+    }
+  } finally {
+    testState.sessionStorePath = undefined;
+    testState.sessionConfig = undefined;
+    testState.agentsConfig = undefined;
+  }
+});
+
 test("sessions.create can start the first agent turn from an initial task", async () => {
   await createSessionStoreDir();
   // Register "ops" so the deleted-agent guard added in #65986 does not
