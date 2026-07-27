@@ -74,10 +74,10 @@ function renderCodeModeCatalogIndex(lines: readonly string[], total: number): st
       ? `${omitted} additional OpenClaw/plugin tools omitted from this prompt index. Use ALL_TOOLS or tools.search inside exec to find them.`
       : "Use these exact ids with tools.callValue; use ALL_TOOLS or tools.search inside exec when lookup is ambiguous.";
   return [
-    "OpenClaw/plugin tool quick index (exact ids plus compact input and declared output hints; descriptions are intentionally deferred):",
-    "Each line is `id input -> output`; `-> ?` means the output shape is unknown.",
-    "OUTPUT DECLARED RULE: use the named fields in the first exec; keep dependent reads, checks, and follow-up calls in that exec instead of returning a raw value only to inspect an already-declared shape.",
-    "OUTPUT UNKNOWN RULE: when the needed tool is `-> ?`, including a final dependent call after declared-output calls, return that tool's raw value unchanged. Do not wrap it in the requested answer shape or read guessed fields; filter or map only in a later exec after observing its shape.",
+    "OpenClaw/plugin tool quick index (exact ids; descriptions are intentionally deferred):",
+    "Each line is `id input -> output`; `-> ?` means unknown.",
+    "OUTPUT DECLARED RULE: use declared fields for dependent calls in the first exec.",
+    "OUTPUT UNKNOWN RULE: return the raw tool value unchanged; inspect or map it only in a later exec.",
     ...lines,
     "",
     footer,
