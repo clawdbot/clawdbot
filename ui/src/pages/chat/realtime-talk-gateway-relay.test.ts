@@ -184,7 +184,12 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
   });
 
   it("preserves audio processing while selecting the exact microphone", async () => {
-    const transport = createTransport({ inputDeviceId: "usb-mic" });
+    const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
+      callbacks: {},
+      client: createClient(),
+      sessionKey: "main",
+      inputDeviceId: "usb-mic",
+    });
 
     await transport.start();
 
@@ -200,7 +205,11 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
   });
 
   it("keeps the microphone processor inaudible locally", async () => {
-    const transport = createTransport();
+    const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
+      callbacks: {},
+      client: createClient(),
+      sessionKey: "main",
+    });
 
     await transport.start();
 
@@ -225,7 +234,11 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     getUserMedia.mockReturnValue(pendingMedia);
     const stopTrack = vi.fn();
     const onInputLevel = vi.fn();
-    const transport = createTransport({ callbacks: { onInputLevel } });
+    const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
+      callbacks: { onInputLevel },
+      client: createClient(),
+      sessionKey: "main",
+    });
 
     const start = transport.start();
     transport.stop();
@@ -239,7 +252,11 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
 
   it("forwards common Talk events from Gateway relay frames", async () => {
     const onTalkEvent = vi.fn();
-    const transport = createTransport({ callbacks: { onTalkEvent } });
+    const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
+      callbacks: { onTalkEvent },
+      client: createClient(),
+      sessionKey: "main",
+    });
     const talkEvent = {
       id: "relay-1:1",
       type: "session.ready",
@@ -1091,3 +1108,4 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
