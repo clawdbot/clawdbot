@@ -763,7 +763,7 @@ function installControlUiMockGateway(input: {
         return row;
       }
       const patch = sessionPatches.get(row.key);
-      const next = patch ? { ...row, ...patch } : { ...row };
+      const next = Object.assign({}, row, patch);
       // Replay group renames/deletes over static fixtures: the real gateway
       // rewrites member categories server-side before the next sessions.list.
       let category = typeof next.category === "string" ? next.category : undefined;
