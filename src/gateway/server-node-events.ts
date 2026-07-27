@@ -44,6 +44,7 @@ import {
   registerApnsRegistration,
   requestHeartbeat,
   resolveChatAttachmentMaxBytes,
+  resolveChatAttachmentMaxImageBytes,
   resolveGatewayModelSupportsImages,
   resolveOutboundTarget,
   resolveSessionAgentId,
@@ -707,6 +708,7 @@ export const handleNodeEvent = async (
         try {
           const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
             maxBytes: resolveChatAttachmentMaxBytes(cfg),
+            maxImageBytes: resolveChatAttachmentMaxImageBytes(cfg),
             log: ctx.logGateway,
             supportsInlineImages,
             // server-node-events dispatches via agentCommandFromIngress which

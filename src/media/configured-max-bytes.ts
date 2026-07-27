@@ -8,6 +8,14 @@ type GeneratedMediaKind = Extract<MediaKind, "audio" | "image" | "video">;
 
 /** Resolves the global generated-media byte cap from the user-facing MB config value. */
 export function resolveConfiguredMediaMaxBytes(cfg?: OpenClawConfig): number | undefined {
+  const configuredImageBytes = cfg?.tools?.media?.image?.maxBytes;
+  if (
+    typeof configuredImageBytes === "number" &&
+    Number.isFinite(configuredImageBytes) &&
+    configuredImageBytes > 0
+  ) {
+    return Math.floor(configuredImageBytes);
+  }
   const configured = cfg?.agents?.defaults?.mediaMaxMb;
   if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
     return Math.floor(configured * MB);
