@@ -1,4 +1,5 @@
 // Tests /loop recognition, work-order rewriting, authorization, and interval guards.
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { handleLoopCommand } from "./commands-loop.js";
@@ -48,6 +49,9 @@ function rewrittenBody(params: HandleCommandsParams): string {
   return (params.ctx as { BodyForAgent?: string }).BodyForAgent ?? "";
 }
 
+// Mirrors the handler's conversation tag for the fixture sessionKey.
+const LOOP_PREFIX = `loop[${createHash("sha256").update("agent:main:webchat:test").digest("hex").slice(0, 6)}]`;
+
 describe("loop command", () => {
   it("ignores non-loop text", async () => {
     expect(await handleLoopCommand(buildLoopParams("check ci"), true)).toBeNull();
@@ -68,6 +72,8 @@ describe("loop command", () => {
     expect(await handleLoopCommand(params, true)).toEqual({ shouldContinue: true });
     expect(rewrittenBody(params)).toContain('schedule:{kind:"every",everyMs:300000}');
     expect(rewrittenBody(params)).toContain('sessionTarget:"current"');
+    expect(rewrittenBody(params)).toContain(`"${LOOP_PREFIX} check ci"`);
+    expect(rewrittenBody(params)).toContain("do not use the message tool");
   });
 
   it("preserves parseDurationMs unitless millisecond intervals", async () => {
@@ -91,20 +97,18 @@ describe("loop command", () => {
 
     expect(await handleLoopCommand(params, true)).toEqual({ shouldContinue: true });
     expect(rewrittenBody(params)).toContain('action:"list"');
-    expect(rewrittenBody(params)).toContain('names starting with "loop:"');
-    expect(rewrittenBody(params)).toContain("bound to this conversation");
-    expect(rewrittenBody(params)).toContain('action:"get"');
-    expect(rewrittenBody(params)).toContain('sessionKey exactly "agent:main:webchat:test"');
+    expect(rewrittenBody(params)).toContain(`name starts with "${LOOP_PREFIX}"`);
   });
 
   it("rewrites /loop stop as a scoped cron removal work order", async () => {
     const params = buildLoopParams("/loop stop");
 
     expect(await handleLoopCommand(params, true)).toEqual({ shouldContinue: true });
-    expect(rewrittenBody(params)).toContain('starting "loop:"');
+    expect(rewrittenBody(params)).toContain(`name starts with "${LOOP_PREFIX}"`);
     expect(rewrittenBody(params)).toContain('action:"remove"');
-    expect(rewrittenBody(params)).toContain('action:"get"');
-    expect(rewrittenBody(params)).toContain('sessionKey exactly "agent:main:webchat:test"');
+    expect(rewrittenBody(params)).toContain(
+      `Never remove a job whose name does not start with "${LOOP_PREFIX}"`,
+    );
   });
 
   it("rejects unauthorized senders", async () => {

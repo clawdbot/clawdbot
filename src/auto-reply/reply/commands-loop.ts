@@ -1,4 +1,5 @@
 // Handles /loop by rewriting chat sugar into a cron-tool work order.
+import { createHash } from "node:crypto";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { rejectNonOwnerCommand, rejectUnauthorizedCommand } from "./command-gates.js";
@@ -51,10 +52,23 @@ function applyLoopWorkOrder(params: HandleCommandsParams, instruction: string): 
   params.command.commandBodyNormalized = instruction;
 }
 
-function loopNameForPrompt(prompt: string): { jobName: string; shortName: string } {
-  const shortName = truncateUtf16Safe(prompt.trim(), LOOP_NAME_MAX_LENGTH).trimEnd();
-  return { jobName: `loop: ${shortName}`, shortName };
+function loopShortName(prompt: string): string {
+  return truncateUtf16Safe(prompt.trim(), LOOP_NAME_MAX_LENGTH).trimEnd();
 }
+
+// Conversation tag baked into the job name at create time. Status/stop match by
+// this same tag, so loop discovery never depends on how the cron side resolves
+// session keys (which can differ from the command pipeline's sessionKey).
+function loopConversationTag(sessionKey: string): string {
+  return createHash("sha256").update(sessionKey).digest("hex").slice(0, 6);
+}
+
+function loopNamePrefix(sessionKey: string): string {
+  return `loop[${loopConversationTag(sessionKey)}]`;
+}
+
+const LOOP_FINAL_REPLY_ONLY =
+  "Reply with your normal final message only; do not use the message tool.";
 
 function buildLoopPayloadMessage(params: {
   prompt: string;
@@ -67,31 +81,37 @@ function buildLoopPayloadMessage(params: {
   ];
   if (params.selfPaced) {
     lines.push(
-      'After finishing, call the cron tool action:"next_check" with in:"<duration>" — pick the next check interval yourself based on how active the task is; back off toward 1h when quiet.',
+      'Before replying, ALWAYS call the cron tool action:"next_check" with in:"<duration>" — pick the next check interval from how active the task is; back off toward 1h when quiet.',
     );
   }
   return lines.join("\n");
 }
 
-function buildFixedLoopWorkOrder(prompt: string, everyMs: number): string {
-  const { jobName, shortName } = loopNameForPrompt(prompt);
+function buildFixedLoopWorkOrder(prompt: string, everyMs: number, sessionKey: string): string {
+  const shortName = loopShortName(prompt);
+  const jobName = `${loopNamePrefix(sessionKey)} ${shortName}`;
   const message = buildLoopPayloadMessage({ prompt, shortName, selfPaced: false });
-  return `Create a recurring loop with the cron tool, then confirm in one short line (name + cadence + '/loop stop' hint). action:"add", job:{name:${JSON.stringify(jobName)},schedule:{kind:"every",everyMs:${everyMs}},sessionTarget:"current",payload:{kind:"agentTurn",message:${JSON.stringify(message)}}}.`;
+  return `Create a recurring loop with the cron tool, then confirm in one short line (name + cadence + '/loop stop' hint). ${LOOP_FINAL_REPLY_ONLY} action:"add", job:{name:${JSON.stringify(jobName)},schedule:{kind:"every",everyMs:${everyMs}},sessionTarget:"current",payload:{kind:"agentTurn",message:${JSON.stringify(message)}}}.`;
 }
 
-function buildSelfPacedLoopWorkOrder(prompt: string): string {
-  const { jobName, shortName } = loopNameForPrompt(prompt);
+function buildSelfPacedLoopWorkOrder(prompt: string, sessionKey: string): string {
+  const shortName = loopShortName(prompt);
+  const jobName = `${loopNamePrefix(sessionKey)} ${shortName}`;
   const message = buildLoopPayloadMessage({ prompt, shortName, selfPaced: true });
-  return `Create a recurring loop with the cron tool, then confirm in one short line (name + cadence + '/loop stop' hint). action:"add", job:{name:${JSON.stringify(jobName)},schedule:{kind:"every",everyMs:${LOOP_DEFAULT_INTERVAL_MS}},pacing:{min:"1m",max:"1h"},sessionTarget:"current",payload:{kind:"agentTurn",message:${JSON.stringify(message)}}}.`;
+  return `Create a recurring loop with the cron tool, then confirm in one short line (name + cadence + '/loop stop' hint). ${LOOP_FINAL_REPLY_ONLY} action:"add", job:{name:${JSON.stringify(jobName)},schedule:{kind:"every",everyMs:${LOOP_DEFAULT_INTERVAL_MS}},pacing:{min:"1m",max:"1h"},sessionTarget:"current",payload:{kind:"agentTurn",message:${JSON.stringify(message)}}}.`;
 }
 
 function buildLoopStatusWorkOrder(sessionKey: string): string {
-  return `Use the cron tool (action:"list") and report the loop jobs bound to this conversation (names starting with "loop:"): name, schedule/pacing, last run, next run. If none, say so. The list is agent-wide, so call action:"get" for each "loop:" candidate and include it only when its full definition has sessionTarget:"current" and sessionKey exactly ${JSON.stringify(sessionKey)}.`;
+  const prefix = loopNamePrefix(sessionKey);
+  return `Use the cron tool (action:"list") and report this conversation's loop jobs — exactly those whose name starts with ${JSON.stringify(prefix)}: name, schedule/pacing, last run, next run. If none, say so. ${LOOP_FINAL_REPLY_ONLY}`;
 }
 
 function buildLoopStopWorkOrder(name: string, sessionKey: string): string {
-  const matchInstruction = name ? ` Match ${JSON.stringify(name)} against the job name.` : "";
-  return `List cron jobs, find jobs named starting "loop:" bound to this conversation.${matchInstruction} Remove them with action:"remove" and confirm the removed names. If none matched, say so and list active loop names. The list is agent-wide: immediately before each removal, call action:"get" and remove only a job whose full definition has sessionTarget:"current" and sessionKey exactly ${JSON.stringify(sessionKey)}.`;
+  const prefix = loopNamePrefix(sessionKey);
+  const matchInstruction = name
+    ? ` Among those, match ${JSON.stringify(name)} against the job name.`
+    : "";
+  return `List cron jobs and find this conversation's loops — exactly those whose name starts with ${JSON.stringify(prefix)}.${matchInstruction} Remove the matching jobs with action:"remove" and confirm the removed names. If none matched, say so and list this conversation's active loop names. Never remove a job whose name does not start with ${JSON.stringify(prefix)}. ${LOOP_FINAL_REPLY_ONLY}`;
 }
 
 /** Command handler for conversation-bound recurring loops. */
@@ -146,10 +166,10 @@ export const handleLoopCommand: CommandHandler = async (params, allowTextCommand
     if (!prompt) {
       return directReply(LOOP_USAGE);
     }
-    applyLoopWorkOrder(params, buildFixedLoopWorkOrder(prompt, everyMs));
+    applyLoopWorkOrder(params, buildFixedLoopWorkOrder(prompt, everyMs, params.sessionKey));
     return { shouldContinue: true };
   }
 
-  applyLoopWorkOrder(params, buildSelfPacedLoopWorkOrder(spec));
+  applyLoopWorkOrder(params, buildSelfPacedLoopWorkOrder(spec, params.sessionKey));
   return { shouldContinue: true };
 };
