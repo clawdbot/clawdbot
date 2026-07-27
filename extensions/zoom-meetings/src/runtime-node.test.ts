@@ -84,9 +84,10 @@ describe("Zoom meetings node realtime recovery", () => {
                       }
                     : {
                         inCall: false,
-                        manualActionMessage: "Waiting for admission",
-                        manualActionReason: "zoom-admission-required",
-                        manualActionRequired: true,
+                        manualAction: {
+                          reason: "zoom-admission-required",
+                          message: "Waiting for admission",
+                        },
                         url: URL,
                       },
                 ),
@@ -149,7 +150,7 @@ describe("Zoom meetings node realtime recovery", () => {
     expect(realtimeMocks.startAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         config: expect.objectContaining({
-          realtime: expect.objectContaining({ agentId: "consult" }),
+          realtime: expect.objectContaining({ agentId: "support" }),
         }),
         requesterSessionKey: "agent:support:session:caller",
       }),

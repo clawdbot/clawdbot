@@ -65,7 +65,13 @@ function decodeLegacyAmbientWatchMarkerKey(markerKey: string): string | undefine
   if (!encoded || encoded.length % 2 !== 0 || !/^[0-9a-f]+$/.test(encoded)) {
     return undefined;
   }
-  return Buffer.from(encoded, "hex").toString("utf8");
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+      Buffer.from(encoded, "hex"),
+    );
+  } catch {
+    return undefined;
+  }
 }
 
 export function migrateSessionWatchCursorProvenance(

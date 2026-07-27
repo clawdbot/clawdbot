@@ -218,6 +218,36 @@ describe("bedrock discovery", () => {
     },
   );
 
+  it("applies the Opus 5 contract to inference-profile-only discovery", async () => {
+    sendMock.mockResolvedValueOnce({ modelSummaries: [] }).mockResolvedValueOnce({
+      inferenceProfileSummaries: [
+        {
+          inferenceProfileId: "global.anthropic.claude-opus-5",
+          inferenceProfileName: "Global Claude Opus 5",
+          status: "ACTIVE",
+          type: "SYSTEM_DEFINED",
+          models: [
+            {
+              modelArn: "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-opus-5",
+            },
+          ],
+        },
+      ],
+    });
+
+    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+
+    expectModelFields(models[0], {
+      id: "global.anthropic.claude-opus-5",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      params: { canonicalModelId: "claude-opus-5" },
+    });
+  });
+
   it("applies the Sonnet 5 contract to inference-profile-only discovery", async () => {
     sendMock.mockResolvedValueOnce({ modelSummaries: [] }).mockResolvedValueOnce({
       inferenceProfileSummaries: [

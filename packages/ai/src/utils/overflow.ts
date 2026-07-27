@@ -92,7 +92,10 @@ function resolveContextInputTokens(message: AssistantMessage): number | undefine
   if (message.usage.contextUsage?.state === "unavailable") {
     return undefined;
   }
-  return message.usage.input + message.usage.cacheRead;
+  // Cache writes are prompt tokens too: providers that report them separately keep
+  // them out of `input`, so omitting the bucket under-counts the context by exactly
+  // that amount. Mirrors the Anthropic lane's `input + cacheRead + cacheWrite`.
+  return message.usage.input + message.usage.cacheRead + message.usage.cacheWrite;
 }
 
 /**
@@ -168,7 +171,7 @@ export function isContextOverflow(message: AssistantMessage, contextWindow?: num
 
   // Case 3: Length-stop overflow (Xiaomi MiMo style) - server truncates oversized input
   // to fit the context window, leaving no room for output. Returns stopReason "length"
-  // with output=0 and input+cacheRead filling the context window.
+  // with output=0 and the prompt buckets filling the context window.
   if (contextWindow && message.stopReason === "length" && message.usage.output === 0) {
     const inputTokens = resolveContextInputTokens(message);
     if (inputTokens !== undefined && inputTokens >= contextWindow * 0.99) {

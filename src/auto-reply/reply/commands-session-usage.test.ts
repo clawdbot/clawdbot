@@ -176,6 +176,9 @@ describe("handleUsageCommand", () => {
     const args = expectSessionCostArgs();
     expect(args.agentId).toBe("target");
     expect(args.sessionId).toBe("session-1");
+    expect(loadCostUsageSummaryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "target" }),
+    );
   });
 
   it("prefers the target session entry from sessionStore for /usage cost", async () => {

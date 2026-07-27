@@ -93,18 +93,29 @@ export function interruptCodexTurnBestEffort(
     timeoutMs?: number;
   },
 ): void {
+  void interruptCodexTurnAndWaitBestEffort(client, params);
+}
+
+/** Sends a bounded turn interrupt and waits for Codex to confirm terminal abort handling. */
+export async function interruptCodexTurnAndWaitBestEffort(
+  client: CodexAppServerClient,
+  params: {
+    threadId: string;
+    turnId: string;
+    timeoutMs?: number;
+  },
+): Promise<void> {
   const requestOptions =
     params.timeoutMs && Number.isFinite(params.timeoutMs) && params.timeoutMs > 0
       ? { timeoutMs: params.timeoutMs }
       : undefined;
   const requestParams = { threadId: params.threadId, turnId: params.turnId };
   try {
-    const interrupt = requestOptions
+    // Non-empty interrupts resolve after Codex emits TurnAborted; the empty
+    // startup form resolves after Op::Interrupt is submitted because no turn exists yet.
+    await (requestOptions
       ? client.request("turn/interrupt", requestParams, requestOptions)
-      : client.request("turn/interrupt", requestParams);
-    void Promise.resolve(interrupt).catch((error: unknown) => {
-      embeddedAgentLog.debug("codex app-server turn interrupt failed during abort", { error });
-    });
+      : client.request("turn/interrupt", requestParams));
   } catch (error) {
     embeddedAgentLog.debug("codex app-server turn interrupt failed during abort", { error });
   }

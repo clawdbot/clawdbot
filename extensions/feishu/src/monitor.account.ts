@@ -459,7 +459,12 @@ function registerEventHandlers(
 }
 
 type BotOpenIdSource =
-  | { kind: "prefetched"; botOpenId?: string; botName?: string }
+  | {
+      kind: "prefetched";
+      botOpenId?: string;
+      botName?: string;
+      source?: "provider" | "cache";
+    }
   | { kind: "fetch" };
 
 type MonitorSingleAccountParams = {
@@ -486,13 +491,23 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
   const botOpenIdSource = params.botOpenIdSource ?? { kind: "fetch" };
   const botIdentity =
     botOpenIdSource.kind === "prefetched"
-      ? { botOpenId: botOpenIdSource.botOpenId, botName: botOpenIdSource.botName }
+      ? {
+          botOpenId: botOpenIdSource.botOpenId,
+          botName: botOpenIdSource.botName,
+          source: botOpenIdSource.source,
+        }
       : await fetchBotIdentityForMonitor(account, { runtime, abortSignal });
   const { botOpenId } = applyBotIdentityState(accountId, botIdentity);
   log(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? "unknown"}`);
 
-  if (!botOpenId && !abortSignal?.aborted) {
-    startBotIdentityRecovery({ account, accountId, runtime, abortSignal });
+  if ((!botOpenId || botIdentity.source === "cache") && !abortSignal?.aborted) {
+    startBotIdentityRecovery({
+      account,
+      accountId,
+      runtime,
+      abortSignal,
+      currentSource: botIdentity.source,
+    });
   }
 
   const connectionMode = account.config.connectionMode ?? "websocket";

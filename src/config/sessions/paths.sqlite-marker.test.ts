@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { resolveSessionFilePath } from "./paths.js";
 import { loadSessionEntry, upsertSessionEntry } from "./session-accessor.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
+import { sqliteSessionFileMarkerMatchesTarget } from "./sqlite-marker.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 
 describe("SQLite sessionFile markers", () => {
@@ -15,6 +16,30 @@ describe("SQLite sessionFile markers", () => {
     const resolved = resolveSessionFilePath("sess-1", { sessionFile: marker }, { sessionsDir });
 
     expect(resolved).toBe(marker);
+  });
+
+  it("matches SQLite markers against the full transcript target", () => {
+    const marker =
+      "sqlite:main:sess-1:/tmp/openclaw/agents/main/agent/../agent/openclaw-agent.sqlite";
+    const target = {
+      agentId: "main",
+      sessionId: "sess-1",
+      storePath: "/tmp/openclaw/agents/main/agent/openclaw-agent.sqlite",
+    };
+
+    expect(sqliteSessionFileMarkerMatchesTarget(marker, target)).toBe(true);
+    expect(sqliteSessionFileMarkerMatchesTarget(marker, { ...target, agentId: "other" })).toBe(
+      false,
+    );
+    expect(sqliteSessionFileMarkerMatchesTarget(marker, { ...target, sessionId: "sess-2" })).toBe(
+      false,
+    );
+    expect(
+      sqliteSessionFileMarkerMatchesTarget(marker, {
+        ...target,
+        storePath: "/tmp/openclaw/agents/other/agent/openclaw-agent.sqlite",
+      }),
+    ).toBe(false);
   });
 
   it("does not downgrade matching SQLite markers when resolving runtime session files", async () => {

@@ -29,8 +29,9 @@ function createContext(
 ): ApplicationContext<RouteId> {
   const snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected,
-    reconnecting: false,
+    phase: connected ? "connected" : "stopped",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: "main",
     sessionKey: "agent:main:main",
@@ -93,8 +94,9 @@ function createConnectedContext(
 ) {
   let snapshot: ApplicationGatewaySnapshot = {
     client: { request } as GatewayBrowserClient,
-    connected: true,
-    reconnecting: false,
+    phase: "connected",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: "main",
     sessionKey: "agent:main:main",
@@ -156,7 +158,7 @@ function createConnectedContext(
   return {
     context,
     emitConnected(connected: boolean) {
-      snapshot = { ...snapshot, connected };
+      snapshot = { ...snapshot, phase: connected ? "connected" : "reconnecting" };
       for (const listener of listeners) {
         listener(snapshot);
       }
@@ -307,6 +309,58 @@ it("keeps identity UI and profile RPCs absent for unidentified connections", asy
   expect(page.querySelector("#settings-profile-identity")).toBeNull();
 });
 
+it("retries the identity bootstrap when users.self returns no profile", async () => {
+  const profile: UserProfile = {
+    id: "profile-1",
+    displayName: "Ada",
+    avatarMime: null,
+    mergedInto: null,
+    createdAt: 1,
+    updatedAt: 2,
+    emails: ["ada@example.test"],
+    hasAvatar: false,
+  };
+  let identityRequests = 0;
+  const request = vi.fn(async (method: string) => {
+    if (method === "usage.cost") {
+      return createCostSummary();
+    }
+    if (method === "sessions.usage") {
+      return createSessionsResult();
+    }
+    if (method === "users.self") {
+      identityRequests += 1;
+      return identityRequests === 1 ? {} : { profile };
+    }
+    throw new Error(`unexpected method: ${method}`);
+  });
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: "profile-1",
+    email: "ada@example.test",
+    name: "Ada",
+  });
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+  provider.append(page);
+  document.body.append(provider);
+
+  await waitForFast(() => expect(page.querySelector(".profile-identity-empty")).not.toBeNull());
+  const emptyState = page.querySelector<HTMLElement>(".profile-identity-empty");
+  const setIdentityButton = emptyState?.querySelector<HTMLButtonElement>("button");
+  expect(emptyState?.textContent).toContain(t("profilePage.identity.notSet"));
+  expect(setIdentityButton?.textContent?.trim()).toBe(t("profilePage.identity.setIdentity"));
+  expect(page.textContent).not.toContain("Cannot read properties of undefined");
+
+  setIdentityButton?.click();
+
+  await waitForFast(() =>
+    expect(request.mock.calls.filter(([method]) => method === "users.self")).toHaveLength(2),
+  );
+  await waitForFast(() =>
+    expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe("Ada"),
+  );
+});
+
 it("bootstraps and refreshes the connected user's profile through users.self", async () => {
   let profile: UserProfile = {
     id: "profile-1",
@@ -318,6 +372,7 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
     emails: ["ada@example.test", "ada@work.test"],
     hasAvatar: false,
   };
+  let omitNextProfile = false;
   const request = vi.fn(async (method: string, params?: unknown) => {
     if (method === "usage.cost") {
       return createCostSummary();
@@ -326,6 +381,10 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
       return createSessionsResult();
     }
     if (method === "users.self") {
+      if (omitNextProfile) {
+        omitNextProfile = false;
+        return {};
+      }
       return { profile };
     }
     if (method === "users.setDisplayName") {
@@ -426,6 +485,7 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
     "Unsaved draft",
   );
 
+  omitNextProfile = true;
   request.mockClear();
   page.querySelector<HTMLButtonElement>(".profile-refresh")?.click();
   await waitForFast(() =>
@@ -439,6 +499,7 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
   expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe(
     "Unsaved draft",
   );
+  expect(page.querySelector(".profile-identity-empty")).toBeNull();
 
   const pageWithState = page as ProfilePageElement & {
     identityBusy: "display-name" | "avatar" | null;

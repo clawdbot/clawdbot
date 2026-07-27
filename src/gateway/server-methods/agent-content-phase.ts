@@ -14,6 +14,7 @@ import {
   loadVoiceWakeRoutingConfig,
   resolveVoiceWakeRouteByTrigger,
 } from "../../infra/voicewake-routing.js";
+import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import {
   classifySessionKeyShape,
@@ -57,6 +58,7 @@ type AgentContentPhaseResult = {
   message: string;
   images: Array<{ type: "image"; data: string; mimeType: string }>;
   imageOrder: PromptImageOrderEntry[];
+  media: MediaFact[];
   replyTo: string;
   recipientChannel?: string;
   recipientAccountId?: string;
@@ -110,6 +112,7 @@ export async function prepareAgentContentPhase(params: {
     : annotateInterSessionPromptText(transcriptInputText, params.inputProvenance);
   let images: AgentContentPhaseResult["images"] = [];
   let imageOrder: PromptImageOrderEntry[] = [];
+  let media: MediaFact[] = [];
   let agentId = params.agentId;
   let requestedSessionKey = params.requestedSessionKey;
 
@@ -150,6 +153,7 @@ export async function prepareAgentContentPhase(params: {
       message = parsed.message.trim();
       images = parsed.images;
       imageOrder = parsed.imageOrder;
+      media = parsed.media;
     } catch (err) {
       logAttachmentFailure(params.context.logGateway, "agent attachment parse failed", err);
       params.respond(
@@ -255,6 +259,7 @@ export async function prepareAgentContentPhase(params: {
     message,
     images,
     imageOrder,
+    media,
     replyTo,
     recipientChannel,
     recipientAccountId,

@@ -44,3 +44,73 @@ export type {
   StableChannelIngressIdentityParams,
 } from "../channels/message-access/index.js";
 export type { ResolvedChannelImplicitMentions } from "../config/implicit-mentions.js";
+
+import type { ChannelIngressMonitorLifecycle } from "../channels/message/ingress-monitor.js";
+
+type ChannelIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
+
+/** Fan one logical inbound turn's ownership lifecycle across its durable claims. */
+export function fanInChannelIngressLifecycles(
+  inputs: readonly (ChannelIngressLifecycle | undefined)[],
+): {
+  lifecycle: ChannelIngressLifecycle | undefined;
+  settle: () => Promise<void>;
+  abandon: (error?: unknown) => Promise<void>;
+} {
+  const lifecycles = inputs.filter((lifecycle) => lifecycle !== undefined);
+  const first = lifecycles[0];
+  if (!first) {
+    return { lifecycle: undefined, settle: async () => {}, abandon: async () => {} };
+  }
+
+  let handedOff = false;
+  const adoptAll = async () => {
+    for (const lifecycle of lifecycles) {
+      await lifecycle.onAdopted();
+    }
+  };
+  const abandonAll = async () => {
+    await Promise.all(lifecycles.map(async (lifecycle) => await lifecycle.onAbandoned()));
+  };
+
+  return {
+    lifecycle: {
+      abortSignal:
+        lifecycles.length === 1
+          ? first.abortSignal
+          : AbortSignal.any(lifecycles.map((lifecycle) => lifecycle.abortSignal)),
+      onAdopted: async () => {
+        handedOff = true;
+        await adoptAll();
+      },
+      onDeferred: () => {
+        handedOff = true;
+        for (const lifecycle of lifecycles) {
+          lifecycle.onDeferred();
+        }
+      },
+      onAdoptionFinalizing: () => {
+        for (const lifecycle of lifecycles) {
+          lifecycle.onAdoptionFinalizing();
+        }
+      },
+      onAbandoned: async () => {
+        handedOff = true;
+        await abandonAll();
+      },
+    },
+    // A gated or deliberately skipped turn still consumed every source claim.
+    settle: async () => {
+      if (!handedOff) {
+        await adoptAll();
+        handedOff = true;
+      }
+    },
+    abandon: async (_error?: unknown) => {
+      if (!handedOff) {
+        handedOff = true;
+        await abandonAll();
+      }
+    },
+  };
+}

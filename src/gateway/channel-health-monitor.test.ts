@@ -17,6 +17,8 @@ function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelM
     stopChannel: vi.fn(async () => {}),
     setAutostartSuppression: vi.fn(),
     getAutostartSuppression: vi.fn(() => null),
+    setAmbientAutostartSuppressedChannelIds: vi.fn(),
+    isAmbientAutostartSuppressed: vi.fn(() => false),
     markChannelLoggedOut: vi.fn(),
     isHealthMonitorEnabled: vi.fn(() => true),
     isManuallyStopped: vi.fn(() => false),
@@ -236,6 +238,21 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
+  it("does not start a replacement when channel teardown fails", async () => {
+    const manager = createSlackSnapshotManager(disconnectedAccount(Date.now() - 300_000), {
+      stopChannel: vi.fn(async () => {
+        throw new Error("stop failed");
+      }),
+    });
+
+    const monitor = await startAndRunCheck(manager, { cooldownCycles: 0 });
+
+    expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default", { manual: false });
+    expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
+    expect(manager.startChannel).not.toHaveBeenCalled();
+    monitor.stop();
+  });
+
   it("accepts timing.monitorStartupGraceMs", async () => {
     const manager = createMockChannelManager();
     const monitor = startDefaultMonitor(manager, { timing: { monitorStartupGraceMs: 60_000 } });
@@ -286,6 +303,21 @@ describe("channel-health-monitor", () => {
     expect(manager.resetRestartAttempts).toHaveBeenCalledWith("discord", "default");
     expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
     monitor.stop();
+  });
+
+  it("does not restart an ambient-suppressed dev channel", async () => {
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: managedStoppedAccount("ambient credentials suppressed"),
+        },
+      },
+      {
+        isAmbientAutostartSuppressed: vi.fn((channelId) => channelId === "discord"),
+      },
+    );
+
+    await expectNoRestart(manager);
   });
 
   it("skips disabled channels", async () => {

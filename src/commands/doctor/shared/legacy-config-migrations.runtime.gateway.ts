@@ -14,6 +14,13 @@ import {
 } from "../../../config/legacy.shared.js";
 import { DEFAULT_GATEWAY_PORT } from "../../../config/paths.js";
 
+const GATEWAY_PORT_OOB_RULE: LegacyConfigRule = {
+  path: ["gateway", "port"],
+  message:
+    'gateway.port is outside the valid TCP range (1–65535) and will be removed to avoid startup failure. Run "openclaw doctor --fix".',
+  match: (value) => typeof value === "number" && (value < 1 || value > 65_535),
+};
+
 const GATEWAY_BIND_RULE: LegacyConfigRule = {
   path: ["gateway", "bind"],
   message:
@@ -25,6 +32,13 @@ const GATEWAY_BIND_RULE: LegacyConfigRule = {
 const GATEWAY_WEBCHAT_RULE: LegacyConfigRule = {
   path: ["gateway", "webchat"],
   message: 'gateway.webchat is retired. Run "openclaw doctor --fix".',
+};
+
+const CONTROL_UI_DEVICE_AUTH_MIGRATION_RULE: LegacyConfigRule = {
+  path: ["gateway", "controlUi", "dangerouslyDisableDeviceAuth"],
+  message:
+    'gateway.controlUi.dangerouslyDisableDeviceAuth is retired. OpenClaw will preserve authenticated, pairing-only access for remediation, remove the legacy key, and prompt you to reopen the Control UI over HTTPS or localhost before clicking Secure this browser. Run "openclaw doctor --fix".',
+  match: (value) => typeof value === "boolean",
 };
 
 function isLegacyGatewayBindHostAlias(value: unknown): boolean {
@@ -71,6 +85,25 @@ function escapeControlForLog(value: string): string {
 /** Legacy config migration specs for gateway runtime config. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
+    id: "gateway.control-ui-device-auth-bypass->pairing-migration",
+    describe: "Convert the retired Control UI device-auth bypass into explicit pairing",
+    legacyRules: [CONTROL_UI_DEVICE_AUTH_MIGRATION_RULE],
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      const controlUi = getRecord(gateway?.controlUi);
+      if (!controlUi || !Object.hasOwn(controlUi, "dangerouslyDisableDeviceAuth")) {
+        return;
+      }
+      const migrationRequired = controlUi.dangerouslyDisableDeviceAuth === true;
+      delete controlUi.dangerouslyDisableDeviceAuth;
+      changes.push(
+        migrationRequired
+          ? "Preserved the retired Control UI device-auth bypass for remediation. Reopen the Control UI over HTTPS or localhost, then click Secure this browser."
+          : "Removed disabled gateway.controlUi.dangerouslyDisableDeviceAuth legacy config.",
+      );
+    },
+  }),
+  defineLegacyConfigMigration({
     id: "gateway.webchat-remove",
     describe: "Remove retired WebChat gateway config",
     legacyRules: [GATEWAY_WEBCHAT_RULE],
@@ -86,6 +119,31 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
         delete raw.gateway;
       }
       changes.push("Removed retired gateway.webchat config.");
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "gateway.port-oob-repair",
+    describe: "Remove out-of-range gateway.port to avoid post-schema-tightening startup failures",
+    legacyRules: [GATEWAY_PORT_OOB_RULE],
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      if (!gateway || !Object.hasOwn(gateway, "port")) {
+        return;
+      }
+      const port = gateway.port;
+      if (typeof port !== "number" || (port >= 1 && port <= 65_535)) {
+        return;
+      }
+      delete gateway.port;
+      if (Object.keys(gateway).length > 0) {
+        raw.gateway = gateway;
+      } else {
+        delete raw.gateway;
+      }
+      changes.push(
+        `Removed out-of-range gateway.port (${String(port)}). ` +
+          `Valid TCP ports are 1–65535; the gateway will use the default port ${DEFAULT_GATEWAY_PORT}.`,
+      );
     },
   }),
   defineLegacyConfigMigration({

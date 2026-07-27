@@ -1,6 +1,8 @@
 // Console capture tests cover intercepting and restoring console output.
+import fs from "node:fs";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setVerbose } from "../global-state.js";
+import { logWarn } from "../logger.js";
 import {
   enableConsoleCapture,
   resetLogger,
@@ -137,6 +139,17 @@ describe("enableConsoleCapture", () => {
     expect(stdoutWrite).toHaveBeenCalledWith('{\n  "ok": true\n}\n');
   });
 
+  it("routes subsystem-prefixed warnings through one file-log sink", () => {
+    const logPath = tempLogPath();
+    setLoggerOverride({ level: "info", file: logPath });
+    enableConsoleCapture();
+
+    logWarn("mcp-loopback: conflicting schema definitions");
+
+    const content = fs.readFileSync(logPath, "utf-8");
+    expect(countMatchingLines(content, "conflicting schema definitions")).toBe(1);
+  });
+
   it("redacts credentials before forwarding console output", () => {
     setLoggerOverride({ level: "info", file: tempLogPath() });
     const log = vi.fn();
@@ -243,6 +256,10 @@ describe("enableConsoleCapture", () => {
 
 function tempLogPath() {
   return logPathTracker.nextPath();
+}
+
+function countMatchingLines(value: string, needle: string): number {
+  return value.split(/\r?\n/u).filter((line) => line.includes(needle)).length;
 }
 
 function eioError() {

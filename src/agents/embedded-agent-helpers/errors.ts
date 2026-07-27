@@ -1,4 +1,5 @@
 import { isConfiguredContextSizeOverflowError } from "@openclaw/ai/internal/runtime";
+import { inspectTlsCertificateError } from "@openclaw/ai/internal/shared";
 /**
  * Classifies provider/runtime failures and formats assistant-facing error text.
  */
@@ -30,6 +31,7 @@ import {
   isBillingErrorMessage,
   isOverloadedErrorMessage,
   isPeriodicUsageLimitErrorMessage,
+  isProviderCompletedErrorFinishReasonMessage,
   isRateLimitErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
@@ -389,6 +391,7 @@ export type ProviderRuntimeFailureKind =
   | "rate_limit"
   | "dns"
   | "timeout"
+  | "tls_certificate"
   | "model_not_found"
   | "schema"
   | "sandbox_blocked"
@@ -1057,6 +1060,13 @@ function classifyFailoverClassificationFromMessage(
   if (isOverloadedErrorMessage(raw)) {
     return toReasonClassification("overloaded");
   }
+  // Provider-completed `finish_reason: error` / stop-reason `error` is not a
+  // hang. Classify as server_error (failover still runs) so operators do not
+  // chase timeout knobs and user copy is not rewritten to "LLM request timed out."
+  // (#109218; keep #59524 fallback by remaining a failover reason).
+  if (isProviderCompletedErrorFinishReasonMessage(raw)) {
+    return toReasonClassification("server_error");
+  }
   if (
     isStructuredServerErrorMessage(raw) &&
     !isBillingErrorMessage(raw) &&
@@ -1161,6 +1171,12 @@ function mergeMessageAndDetailClassification(
   if (detailClassification.kind === "context_overflow") {
     return detailClassification;
   }
+  if (
+    classificationReason(detailClassification) === "billing" &&
+    classificationReason(messageClassification) === "rate_limit"
+  ) {
+    return detailClassification;
+  }
   return classificationReason(messageClassification) === "format"
     ? detailClassification
     : messageClassification;
@@ -1168,6 +1184,10 @@ function mergeMessageAndDetailClassification(
 
 export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassification | null {
   const inferredStatus = inferSignalStatus(signal);
+  const tlsCertificateError = inspectTlsCertificateError(signal);
+  if (tlsCertificateError && inferredStatus === undefined) {
+    return toReasonClassification("tls_certificate");
+  }
   const explicitStatus =
     typeof signal.status === "number" && Number.isFinite(signal.status) ? signal.status : undefined;
   if (
@@ -1282,6 +1302,12 @@ export function classifyProviderRuntimeFailureKind(
     status,
     message: message || undefined,
   });
+  if (
+    failoverClassification?.kind === "reason" &&
+    failoverClassification.reason === "tls_certificate"
+  ) {
+    return "tls_certificate";
+  }
   if (failoverClassification?.kind === "reason" && failoverClassification.reason === "rate_limit") {
     return "rate_limit";
   }
@@ -1474,6 +1500,13 @@ export function formatAssistantErrorText(
     return "LLM request failed: proxy or tunnel configuration blocked the provider request.";
   }
 
+  if (providerRuntimeFailureKind === "tls_certificate") {
+    return (
+      "LLM request failed: TLS certificate validation rejected the provider endpoint. " +
+      "Check the endpoint hostname, proxy, and local certificate trust."
+    );
+  }
+
   if (providerRuntimeFailureKind === "model_not_found") {
     return MODEL_NOT_FOUND_USER_TEXT;
   }
@@ -1543,6 +1576,12 @@ export function formatAssistantErrorText(
   const transportCopy = formatTransportErrorCopy(raw);
   if (transportCopy) {
     return transportCopy;
+  }
+
+  // Provider finished the stream with finish_reason/stop-reason `error` — not a hang.
+  // Keep the raw reason in the message so operators still see the provider signal (#109218).
+  if (isProviderCompletedErrorFinishReasonMessage(raw)) {
+    return formatRawAssistantErrorForUi(raw);
   }
 
   if (isTimeoutErrorMessage(raw)) {

@@ -140,9 +140,9 @@ class SkillsPage extends OpenClawLightDomElement {
 
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot, resetForSourceBind = false) {
     const clientChanged = resetForSourceBind || snapshot.client !== this.client;
-    const connectionChanged = snapshot.connected !== this.connected;
+    const connectionChanged = (snapshot.phase === "connected") !== this.connected;
     this.client = snapshot.client;
-    this.connected = snapshot.connected;
+    this.connected = snapshot.phase === "connected";
     if (clientChanged || connectionChanged) {
       this.resetLoadedSkillState();
     }
@@ -213,7 +213,7 @@ class SkillsPage extends OpenClawLightDomElement {
     const gateway = this.context.gateway;
     const snapshot = gateway.snapshot;
     this.client = snapshot.client;
-    this.connected = snapshot.connected;
+    this.connected = snapshot.phase === "connected";
     if (
       data.gateway !== gateway ||
       data.gatewaySnapshot !== snapshot ||

@@ -10,6 +10,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
 
 const RELAY_SECRET_FILE = "browser-extension-relay.secret";
@@ -26,11 +27,10 @@ function normalizeToken(raw: string): string | null {
 
 /** Read the host-local relay token, or null when it has not been created yet. */
 export function readExtensionRelayToken(env: NodeJS.ProcessEnv = process.env): string | null {
-  try {
-    return normalizeToken(fs.readFileSync(resolveExtensionRelaySecretPath(env), "utf8"));
-  } catch {
-    return null;
-  }
+  return normalizeToken(
+    tryReadSecretFileSync(resolveExtensionRelaySecretPath(env), "browser extension relay secret") ??
+      "",
+  );
 }
 
 /**

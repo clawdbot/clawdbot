@@ -127,6 +127,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     harnessId: runtime.agentHarness.id,
     harnessRuntime: runtime.agentHarness.id,
     preparedAuthPlan: runtime.activePreparedAuthPlan,
+    metadataSnapshot: runtime.pluginMetadataSnapshot,
+    providerRuntimeHandle: runtime.providerRuntimeHandle,
     config: params.config,
     workspaceDir,
     agentDir,

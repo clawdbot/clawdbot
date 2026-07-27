@@ -2028,7 +2028,8 @@ describe("cron service timer regressions", () => {
       .spyOn(cronStoreModule, "loadCronJobsStoreWithConfigJobs")
       .mockImplementation(async (storePath) => {
         loadCount += 1;
-        if (loadCount === 3) {
+        // The first catch-up outcome now reloads and persists before job two.
+        if (loadCount === 4) {
           throw new Error("startup activation reload failed");
         }
         return await realLoad(storePath);
@@ -2278,7 +2279,7 @@ describe("cron service timer regressions", () => {
 
       const timerPromise = onTimer(state);
       await secondStarted.promise;
-      expect(isCronJobActive(first.id)).toBe(true);
+      expect(isCronJobActive(first.id)).toBe(false);
       expect(isCronJobActive(second.id)).toBe(true);
       await vi.advanceTimersByTimeAsync(60_100);
       now += 60_100;
@@ -3677,6 +3678,70 @@ describe("cron service timer regressions", () => {
     } finally {
       nextRunSpy.mockRestore();
     }
+  });
+
+  it("does not retry permanent script failures with timeout-looking text", () => {
+    const startedAt = Date.parse("2026-07-21T12:00:00.000Z");
+    const endedAt = startedAt + 500;
+    const job = createIsolatedRegressionJob({
+      id: "permanent-script-failure",
+      name: "permanent-script-failure",
+      scheduledAt: startedAt,
+      schedule: { kind: "at", at: new Date(startedAt).toISOString() },
+      payload: { kind: "script", script: "throw new Error('request timed out')" },
+      state: { runningAtMs: startedAt },
+    });
+    const state = createRunningCronServiceState({
+      storePath: "/tmp/cron-permanent-script-failure.json",
+      log: noopLogger,
+      nowMs: () => endedAt,
+      jobs: [job],
+    });
+
+    applyJobResult(state, job, {
+      status: "error",
+      error: "cron script failed after a tool side effect: request timed out",
+      errorClassification: { kind: "permanent" },
+      executionStarted: true,
+      startedAt,
+      endedAt,
+    });
+
+    expect(job.state.lastErrorReason).toBeUndefined();
+    expect(job.state.nextRunAtMs).toBeUndefined();
+    expect(job.enabled).toBe(false);
+  });
+
+  it("retries explicitly classified script timeouts", () => {
+    const startedAt = Date.parse("2026-07-21T12:00:00.000Z");
+    const endedAt = startedAt + 500;
+    const job = createIsolatedRegressionJob({
+      id: "transient-script-timeout",
+      name: "transient-script-timeout",
+      scheduledAt: startedAt,
+      schedule: { kind: "at", at: new Date(startedAt).toISOString() },
+      payload: { kind: "script", script: "while (true) {}" },
+      state: { runningAtMs: startedAt },
+    });
+    const state = createRunningCronServiceState({
+      storePath: "/tmp/cron-transient-script-timeout.json",
+      log: noopLogger,
+      nowMs: () => endedAt,
+      jobs: [job],
+    });
+
+    applyJobResult(state, job, {
+      status: "error",
+      error: "cron script payload failed (timeout): wall-clock timeout exceeded",
+      errorClassification: { kind: "reason", reason: "timeout" },
+      executionStarted: true,
+      startedAt,
+      endedAt,
+    });
+
+    expect(job.state.lastErrorReason).toBe("timeout");
+    expect(job.state.nextRunAtMs).toBe(endedAt + 30_000);
+    expect(job.enabled).toBe(true);
   });
 
   it("force run preserves 'every' anchor while recording manual lastRunAtMs", () => {

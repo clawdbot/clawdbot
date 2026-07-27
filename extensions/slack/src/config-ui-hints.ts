@@ -11,7 +11,7 @@ export const slackChannelConfigUiHints = {
     label: "Slack Enterprise Grid Org Install",
     help: 'Enable only for an Enterprise Grid org-wide bot installation. OpenClaw verifies the token with Slack auth.test at startup; DMs must be disabled or use dmPolicy="open" with allowFrom=["*"].',
   },
-  identity: {
+  postAs: {
     label: "Slack Identity",
     help: 'Select "bot" (default) for the classic Slack app/bot identity or "user" to post as the authorizing human through a user token while the app carries event transport.',
   },
@@ -50,22 +50,6 @@ export const slackChannelConfigUiHints = {
   "botLoopProtection.cooldownSeconds": {
     label: "Slack Bot Loop Cooldown Seconds",
     help: "How long to suppress the bot pair after it exceeds the budget. Default: 60.",
-  },
-  socketMode: {
-    label: "Slack Socket Mode Transport",
-    help: "Slack Socket Mode transport tuning passed to the Slack SDK. Use only when investigating ping/pong timeout or stale websocket behavior.",
-  },
-  "socketMode.clientPingTimeout": {
-    label: "Slack Socket Mode Pong Timeout",
-    help: "Milliseconds the Slack SDK waits for a pong after its client ping before treating the websocket as stale (OpenClaw default: 15000). Increase on hosts with event-loop starvation or slow network scheduling.",
-  },
-  "socketMode.serverPingTimeout": {
-    label: "Slack Socket Mode Server Ping Timeout",
-    help: "Milliseconds the Slack SDK waits for Slack server pings before treating the websocket as stale.",
-  },
-  "socketMode.pingPongLoggingEnabled": {
-    label: "Slack Socket Mode Ping/Pong Logging",
-    help: "Enable Slack SDK ping/pong transport logs while debugging Socket Mode websocket health.",
   },
   relay: {
     label: "Slack Relay Mode",

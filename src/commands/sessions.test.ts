@@ -1,5 +1,6 @@
 // Sessions command tests cover listing, details, filtering, and transcript display behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
   cleanupStore,
   makeRuntime,
@@ -317,12 +318,14 @@ describe("sessionsCommand", () => {
         "agent:main:main": {
           sessionId: "telegram-main",
           updatedAt: Date.now() - 60_000,
-          origin: {
-            provider: "telegram",
-            chatType: "direct",
-            to: "telegram:42",
-            accountId: "default",
-          },
+          delivery: normalizeSessionDeliveryState({
+            origin: {
+              provider: "telegram",
+              chatType: "direct",
+              to: "telegram:42",
+              accountId: "default",
+            },
+          }),
         },
       },
       "sessions-runtime-policy-alias",

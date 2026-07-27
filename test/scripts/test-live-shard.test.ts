@@ -48,7 +48,10 @@ describe("scripts/test-live-shard", () => {
 
     expect(allFiles.length).toBeGreaterThan(0);
     expect([...new Set(selectedFiles)].toSorted((a, b) => a.localeCompare(b))).toEqual(allFiles);
-    expect(duplicateFiles).toEqual(["extensions/music-generation-providers.live.test.ts"]);
+    expect(duplicateFiles).toEqual([
+      "src/agents/zai.live.test.ts",
+      "extensions/music-generation-providers.live.test.ts",
+    ]);
     expect(musicProviderFanout).toEqual([
       "native-live-extensions-media-music-google",
       "native-live-extensions-media-music-minimax",
@@ -88,7 +91,7 @@ describe("scripts/test-live-shard", () => {
     expect(selectLiveShardFiles("native-live-src-agents", allFiles)).toContain(
       "src/skills/workshop/experience-review.live.test.ts",
     );
-    expect(selectLiveShardFiles("native-live-src-agents", allFiles)).not.toContain(
+    expect(selectLiveShardFiles("native-live-src-agents", allFiles)).toContain(
       "src/agents/zai.live.test.ts",
     );
     expect(selectLiveShardFiles("native-live-src-agents-zai-coding", allFiles)).toEqual([
@@ -113,6 +116,7 @@ describe("scripts/test-live-shard", () => {
     expect(selectLiveShardFiles("native-live-test", allFiles)).toEqual([
       "test/image-generation.infer-cli.live.test.ts",
       "test/image-generation.runtime.live.test.ts",
+      "test/openai-onboarding.live.test.ts",
     ]);
     expect(selectLiveShardFiles("native-live-extensions-media", allFiles)).toEqual([
       "extensions/minimax/minimax.live.test.ts",

@@ -1,4 +1,4 @@
-// Process coverage for help rendering without loading live Gateway transports.
+// Process coverage for CLI help exits and route-first fallback validation.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -52,7 +52,7 @@ registerHooks({
   return { root, stateDir, configPath, tlsImportGuardPath, keepAlivePath };
 }
 
-async function runHelpProcess(params: {
+async function runCliProcess(params: {
   args: string[];
   forbidTlsImport?: boolean;
   keepAlive?: boolean;
@@ -90,12 +90,26 @@ async function runHelpProcess(params: {
   );
 }
 
+type CliProcessFailure = Error & {
+  code?: number | string;
+  stderr?: string;
+};
+
+async function runCliProcessExpectFailure(args: string[]): Promise<CliProcessFailure> {
+  try {
+    await runCliProcess({ args });
+  } catch (error) {
+    return error as CliProcessFailure;
+  }
+  throw new Error(`expected CLI process failure for ${args.join(" ")}`);
+}
+
 describe("CLI help process exit", () => {
   it.each([
     { args: ["--help"], usage: "Usage: openclaw [options] [command]" },
     { args: ["path", "--help"], usage: "Usage: openclaw path [options] [command]" },
   ])("exits promptly after $args", async ({ args, usage }) => {
-    const result = await runHelpProcess({ args, forbidTlsImport: true });
+    const result = await runCliProcess({ args, forbidTlsImport: true });
 
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain(usage);
@@ -103,9 +117,24 @@ describe("CLI help process exit", () => {
 
   it.each(LAZY_GROUP_HELP_CASES)("exits promptly after $group --help", async (testCase) => {
     const { group, usageCommand } = testCase;
-    const result = await runHelpProcess({ args: [group, "--help"], keepAlive: true });
+    const result = await runCliProcess({ args: [group, "--help"], keepAlive: true });
 
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain(`Usage: openclaw ${usageCommand} [options] [command]`);
+  });
+});
+
+describe("route-first CLI process rejection", () => {
+  it.each([
+    { name: "health", args: ["health", "--wat"], option: "--wat" },
+    { name: "status", args: ["status", "--wat"], option: "--wat" },
+    { name: "sessions", args: ["sessions", "--wat"], option: "--wat" },
+    { name: "agents list", args: ["agents", "list", "--wat"], option: "--wat" },
+    { name: "bare agents", args: ["agents", "--wat"], option: "--wat" },
+  ])("rejects unknown $name options with a nonzero exit", async ({ args, option }) => {
+    const failure = await runCliProcessExpectFailure(args);
+
+    expect(failure.code).toBe(1);
+    expect(failure.stderr).toContain(`does not recognize option "${option}"`);
   });
 });

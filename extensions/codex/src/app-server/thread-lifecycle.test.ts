@@ -36,6 +36,26 @@ type CodexThreadLifecycleTimingLogger = NonNullable<
   NonNullable<Parameters<typeof startOrResumeThreadImpl>[0]["timing"]>["log"]
 >;
 
+describe("Codex incognito thread persistence", () => {
+  it("marks only incognito-shaped harness sessions ephemeral", () => {
+    const appServer = createAppServerOptions() as never;
+    const persistent = createAttemptParams({ provider: "openai" });
+    persistent.sessionKey = "agent:main:dashboard:persistent-thread";
+    const incognito = createAttemptParams({ provider: "openai" });
+    incognito.sessionKey = "agent:main:internal-session-effects:incognito-private-thread";
+
+    const build = (params: EmbeddedRunAttemptParams) =>
+      buildThreadStartParams(params, {
+        appServer,
+        cwd: "/repo",
+        dynamicTools: [],
+      });
+
+    expect(build(persistent)).not.toHaveProperty("ephemeral");
+    expect(build(incognito)).toMatchObject({ ephemeral: true });
+  });
+});
+
 describe("Codex ring-zero thread config", () => {
   it("applies the restriction to both thread start and resume", () => {
     const params = createAttemptParams({ provider: "openai" });
@@ -1274,10 +1294,7 @@ describe("Codex app-server turn params", () => {
     params.thinkLevel = "medium";
     params.trigger = "heartbeat";
 
-    const heartbeatCollaborationMode = buildTurnCollaborationMode(params, {
-      heartbeatCollaborationInstructions:
-        "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md. Read it before proceeding.",
-    });
+    const heartbeatCollaborationMode = buildTurnCollaborationMode(params, {});
     expect(heartbeatCollaborationMode.mode).toBe("default");
     expect(heartbeatCollaborationMode.settings.model).toBe("gpt-5.4-codex");
     expect(heartbeatCollaborationMode.settings.reasoning_effort).toBe("medium");
@@ -1290,15 +1307,10 @@ describe("Codex app-server turn params", () => {
     expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
       "If `heartbeat_respond` is not already available and `tool_search` is available",
     );
-    expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
-      "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md.",
-    );
 
     params.bootstrapContextRunKind = "commitment-only";
     const commitmentCollaborationMode = buildTurnCollaborationMode(params, {
       turnScopedDeveloperInstructions: "Turn-only workspace instructions.",
-      heartbeatCollaborationInstructions:
-        "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md. Read it before proceeding.",
     });
     expect(commitmentCollaborationMode.settings.developer_instructions).toContain(
       "# Collaboration Mode: Default",
@@ -1309,16 +1321,11 @@ describe("Codex app-server turn params", () => {
     expect(commitmentCollaborationMode.settings.developer_instructions).not.toContain(
       "This is an OpenClaw heartbeat turn",
     );
-    expect(commitmentCollaborationMode.settings.developer_instructions).not.toContain(
-      "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md.",
-    );
 
     params.trigger = "user";
     expect(
       buildTurnCollaborationMode(params, {
         turnScopedDeveloperInstructions: "Turn-only workspace instructions.",
-        heartbeatCollaborationInstructions:
-          "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md. Read it before proceeding.",
       }).settings.developer_instructions,
     ).toContain("Turn-only workspace instructions.");
     expect(

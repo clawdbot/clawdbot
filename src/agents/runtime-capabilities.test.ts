@@ -8,11 +8,9 @@ describe("collectRuntimeChannelCapabilities", () => {
       channel: "discord",
       accountId: "default",
       cfg: {
-        channels: {
-          discord: {
-            threadBindings: {
-              spawnSessions: true,
-            },
+        session: {
+          threadBindings: {
+            spawnSessions: true,
           },
         },
       },
@@ -26,11 +24,9 @@ describe("collectRuntimeChannelCapabilities", () => {
       channel: "discord",
       accountId: "default",
       cfg: {
-        channels: {
-          discord: {
-            threadBindings: {
-              spawnSessions: false,
-            },
+        session: {
+          threadBindings: {
+            spawnSessions: false,
           },
         },
       },

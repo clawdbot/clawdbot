@@ -19,6 +19,20 @@ import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../avatar.ts"
 import { buildQualifiedChatModelValue } from "../chat/model-ref.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 
+type AgentRosterEntry = {
+  id: string;
+  kind?: "agent" | "system";
+};
+
+/** Ordinary agent targets; system rows remain available to diagnostic surfaces. */
+export function listSelectableAgents<T extends AgentRosterEntry>(agents: readonly T[]): T[] {
+  return agents.filter((agent) => agent.kind !== "system");
+}
+
+export function selectableAgentsList(agentsList: AgentsListResult): AgentsListResult {
+  return { ...agentsList, agents: listSelectableAgents(agentsList.agents) };
+}
+
 export type AgentToolEntry = {
   id: string;
   label: string;
@@ -318,7 +332,7 @@ export function resolveAgentTextAvatar(
 }
 
 export function agentBadgeText(agentId: string, defaultId: string | null) {
-  return defaultId && agentId === defaultId ? "default" : null;
+  return defaultId && agentId === defaultId ? t("agents.default") : null;
 }
 
 export function formatBytes(bytes?: number) {
@@ -479,7 +493,13 @@ export function resolveEffectiveModelFallbacks(
   entryModel?: unknown,
   defaultModel?: unknown,
 ): string[] | null {
-  return resolveModelFallbacks(entryModel) ?? resolveModelFallbacks(defaultModel);
+  const entryFallbacks = resolveModelFallbacks(entryModel);
+  if (entryFallbacks !== null) {
+    return entryFallbacks;
+  }
+  // An agent-owned primary is strict; only an inherited primary can use
+  // the global fallback chain, matching the Gateway's model routing.
+  return resolveModelPrimary(entryModel) ? [] : resolveModelFallbacks(defaultModel);
 }
 
 export function parseFallbackList(value: string): string[] {

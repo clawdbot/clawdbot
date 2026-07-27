@@ -61,10 +61,10 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     });
   });
 
-  it("persists pnpm cwd exec approvals against the inner executable", async () => {
+  it("keeps pnpm cwd exec approvals one-shot", async () => {
     const dir = makeTempDir();
     makeExecutable(dir, "pnpm");
-    const tsxPath = makeExecutable(dir, "tsx");
+    makeExecutable(dir, "tsx");
     const env = makePathEnv(dir);
     const command = "pnpm -C ./package exec -- tsx ./run.ts";
     const plan = await planShellAuthorization({ command, cwd: dir, env });
@@ -79,9 +79,8 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     });
 
     expect(decision).toEqual({
-      kind: "patterns",
-      commandText: command,
-      patterns: [expect.objectContaining({ pattern: tsxPath })],
+      kind: "one-shot",
+      reasons: expect.arrayContaining(["no-reusable-pattern"]),
     });
   });
 
@@ -114,12 +113,12 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     },
   );
 
-  it.each(["--workspace=a", "--workspace a", "--workspaces"])(
-    "persists npm workspace exec approvals against the inner executable: %s",
+  it.each(["--package=tsx", "--package tsx", "--workspace=a", "--workspace a", "--workspaces"])(
+    "keeps npm workspace exec approvals one-shot: %s",
     async (workspaceOption) => {
       const dir = makeTempDir();
       makeExecutable(dir, "npm");
-      const tsxPath = makeExecutable(dir, "tsx");
+      makeExecutable(dir, "tsx");
       const env = makePathEnv(dir);
       const command = `npm ${workspaceOption} exec -- tsx ./run.ts`;
       const plan = await planShellAuthorization({ command, cwd: dir, env });
@@ -134,17 +133,16 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
       });
 
       expect(decision).toEqual({
-        kind: "patterns",
-        commandText: command,
-        patterns: [expect.objectContaining({ pattern: tsxPath })],
+        kind: "one-shot",
+        reasons: expect.arrayContaining(["no-reusable-pattern"]),
       });
     },
   );
 
-  it("persists npm cwd exec approvals against the inner executable", async () => {
+  it("keeps npm cwd exec approvals one-shot", async () => {
     const dir = makeTempDir();
     makeExecutable(dir, "npm");
-    const tsxPath = makeExecutable(dir, "tsx");
+    makeExecutable(dir, "tsx");
     const env = makePathEnv(dir);
     const command = "npm -C ./package exec -- tsx ./run.ts";
     const plan = await planShellAuthorization({ command, cwd: dir, env });
@@ -159,11 +157,115 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     });
 
     expect(decision).toEqual({
-      kind: "patterns",
-      commandText: command,
-      patterns: [expect.objectContaining({ pattern: tsxPath })],
+      kind: "one-shot",
+      reasons: expect.arrayContaining(["no-reusable-pattern"]),
     });
   });
+
+  it.each([
+    "exec --workspace=a --",
+    "exec --prefix ./package --",
+    "exec -C ./package --",
+    "exec tsx ./run.ts --workspace=a",
+    "exec tsx ./run.ts -C ./package",
+    "x --workspaces --",
+  ])("keeps npm post-subcommand context approvals one-shot: %s", async (npmExec) => {
+    const dir = makeTempDir();
+    makeExecutable(dir, "npm");
+    makeExecutable(dir, "tsx");
+    const env = makePathEnv(dir);
+    const command = `npm ${npmExec} tsx ./run.ts`;
+    const plan = await planShellAuthorization({ command, cwd: dir, env });
+
+    const decision = resolveAllowAlwaysPersistenceDecision({
+      segments: plannedSegments(plan),
+      commandText: command,
+      cwd: dir,
+      env,
+      platform: process.platform,
+      authorizationPlan: plan,
+    });
+
+    expect(decision).toEqual({
+      kind: "one-shot",
+      reasons: expect.arrayContaining(["no-reusable-pattern"]),
+    });
+  });
+
+  it("keeps pnpm dlx allow-build approvals one-shot", async () => {
+    const dir = makeTempDir();
+    makeExecutable(dir, "pnpm");
+    makeExecutable(dir, "tsx");
+    const env = makePathEnv(dir);
+    const command = "pnpm dlx --allow-build=tsx tsx ./run.ts";
+    const plan = await planShellAuthorization({ command, cwd: dir, env });
+
+    const decision = resolveAllowAlwaysPersistenceDecision({
+      segments: plannedSegments(plan),
+      commandText: command,
+      cwd: dir,
+      env,
+      platform: process.platform,
+      authorizationPlan: plan,
+    });
+
+    expect(decision).toEqual({
+      kind: "one-shot",
+      reasons: expect.arrayContaining(["no-reusable-pattern"]),
+    });
+  });
+
+  it.each(["-C ./package", "--workspace-root", "-w"])(
+    "keeps post-dlx pnpm context approvals one-shot: %s",
+    async (contextOption) => {
+      const dir = makeTempDir();
+      makeExecutable(dir, "pnpm");
+      makeExecutable(dir, "tsx");
+      const env = makePathEnv(dir);
+      const command = `pnpm dlx ${contextOption} tsx ./run.ts`;
+      const plan = await planShellAuthorization({ command, cwd: dir, env });
+
+      const decision = resolveAllowAlwaysPersistenceDecision({
+        segments: plannedSegments(plan),
+        commandText: command,
+        cwd: dir,
+        env,
+        platform: process.platform,
+        authorizationPlan: plan,
+      });
+
+      expect(decision).toEqual({
+        kind: "one-shot",
+        reasons: expect.arrayContaining(["no-reusable-pattern"]),
+      });
+    },
+  );
+
+  it.each(["--allow-build=tsx", "--package=tsx", "--config ./npmrc"])(
+    "keeps leading pnpm dlx context approvals one-shot: %s",
+    async (contextOption) => {
+      const dir = makeTempDir();
+      makeExecutable(dir, "pnpm");
+      makeExecutable(dir, "tsx");
+      const env = makePathEnv(dir);
+      const command = `pnpm ${contextOption} dlx tsx ./run.ts`;
+      const plan = await planShellAuthorization({ command, cwd: dir, env });
+
+      const decision = resolveAllowAlwaysPersistenceDecision({
+        segments: plannedSegments(plan),
+        commandText: command,
+        cwd: dir,
+        env,
+        platform: process.platform,
+        authorizationPlan: plan,
+      });
+
+      expect(decision).toEqual({
+        kind: "one-shot",
+        reasons: expect.arrayContaining(["no-reusable-pattern"]),
+      });
+    },
+  );
 
   it("persists npm x approvals against the inner executable", async () => {
     const dir = makeTempDir();

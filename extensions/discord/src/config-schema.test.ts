@@ -39,6 +39,42 @@ describe("discord config schema", () => {
     expect(issues[0]?.path.join(".")).toBe("allowFrom");
   });
 
+  it('rejects dmPolicy="allowlist" without allowFrom', () => {
+    const issues = expectInvalidDiscordConfig({ dmPolicy: "allowlist" });
+    expect(issues.some((issue) => issue.path.includes("allowFrom"))).toBe(true);
+  });
+
+  it("accepts account allowlist policy inherited from the channel", () => {
+    expectValidDiscordConfig({
+      allowFrom: ["123456789"],
+      accounts: { work: { dmPolicy: "allowlist" } },
+    });
+  });
+
+  it("accepts progress commentary in streaming config", () => {
+    expectValidDiscordConfig({
+      streaming: {
+        mode: "progress",
+        progress: { commentary: true },
+      },
+    });
+  });
+
+  it("rejects retired subagent progress config", () => {
+    expectInvalidDiscordConfig({ subagentProgress: true });
+    expectInvalidDiscordConfig({ subagentProgress: { enabled: true } });
+  });
+
+  it("validates mention aliases at channel and account scope", () => {
+    expectValidDiscordConfig({
+      mentionAliases: { opslead: "123456789012345678" },
+      accounts: {
+        work: { mentionAliases: { vladislava: "234567890123456789" } },
+      },
+    });
+    expectInvalidDiscordConfig({ mentionAliases: { opslead: "not-a-user-id" } });
+  });
+
   it("rejects legacy nested DM access keys", () => {
     const issues = expectInvalidDiscordConfig({
       dm: { policy: "open", allowFrom: [] },
@@ -361,7 +397,6 @@ describe("discord config schema", () => {
           enabled: true,
           intervalMs: 30000,
           minUpdateIntervalMs: 15000,
-          exhaustedText: "token exhausted",
         },
       },
     },

@@ -685,6 +685,10 @@ public actor GatewayNodeSession {
         return "\(host):\(port)"
     }
 
+    public func resolveGatewayHTTPURL(_ raw: String) -> URL? {
+        GatewayPluginSurfaceURL.resolveHTTPURL(raw: raw, against: self.activeURL)
+    }
+
     public func currentRoute(ifGatewayID expectedGatewayID: String? = nil) async -> GatewayNodeSessionRoute? {
         guard let channel = self.channel else { return nil }
         if let expectedGatewayID {
@@ -756,12 +760,40 @@ public actor GatewayNodeSession {
         ]
         do {
             try Task.checkCancellation()
-            try await channel.send(method: "node.event", params: params)
+            if let expectedRoute {
+                try await channel.send(
+                    method: "node.event",
+                    params: params,
+                    ifCurrentConnectionGeneration: expectedRoute.socketGeneration)
+            } else {
+                try await channel.send(method: "node.event", params: params)
+            }
             return true
         } catch {
             self.logger.error("node event failed: \(error.localizedDescription, privacy: .public)")
             return false
         }
+    }
+
+    /// Sends a node event on one captured socket and waits for the Gateway's
+    /// handled result. A nil result is a legacy acknowledgement without the
+    /// modern event contract, not proof that the event was applied.
+    public func requestEventResult(
+        event: String,
+        payloadJSON: String?,
+        timeoutMs: Double = 8000,
+        ifCurrentRoute expectedRoute: GatewayNodeSessionRoute) async throws -> NodeEventResult?
+    {
+        let params: [String: AnyCodable] = [
+            "event": AnyCodable(event),
+            "payloadJSON": AnyCodable(payloadJSON ?? NSNull()),
+        ]
+        let data = try await self.request(
+            method: "node.event",
+            params: params,
+            timeoutMs: timeoutMs,
+            ifCurrentRoute: expectedRoute)
+        return try? self.decoder.decode(NodeEventResult.self, from: data)
     }
 
     public func request(
@@ -800,11 +832,15 @@ public actor GatewayNodeSession {
         }
 
         if let expectedRoute {
-            return try await channel.request(
+            let data = try await channel.request(
                 method: method,
                 params: params,
                 timeoutMs: timeoutMs,
                 ifCurrentConnectionGeneration: expectedRoute.socketGeneration)
+            guard self.isCurrentRoute(expectedRoute), self.channel === channel else {
+                throw CancellationError()
+            }
+            return data
         }
         return try await channel.request(
             method: method,

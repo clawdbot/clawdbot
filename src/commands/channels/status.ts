@@ -15,6 +15,7 @@ import { isGatewaySecretRefUnavailableError } from "../../gateway/credentials.js
 import { collectChannelStatusIssues } from "../../infra/channels-status-issues.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
+import { formatPhoneNumberForCli } from "../../infra/phone-number-presentation.js";
 import { listConfiguredAnnounceChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import {
@@ -143,7 +144,10 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
         bits.push(`dm:${account.dmPolicy}`);
       }
       if (Array.isArray(account.allowFrom) && account.allowFrom.length > 0) {
-        bits.push(`allow:${account.allowFrom.slice(0, 2).join(",")}`);
+        const allowFrom = account.allowFrom
+          .slice(0, 2)
+          .map((entry) => formatPhoneNumberForCli(String(entry)));
+        bits.push(`allow:${allowFrom.join(",")}`);
       }
       appendTokenSourceBits(bits, account);
       const application = account.application as

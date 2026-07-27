@@ -49,12 +49,14 @@ enum GatewayWebSocketTestSupport {
         id: String,
         tickIntervalMs: Int = 30000,
         deviceToken: String? = nil,
-        canvasPluginSurfaceURL: String? = nil) -> Data
+        canvasPluginSurfaceURL: String? = nil,
+        methods: [String] = []) -> Data
     {
         let deviceTokenField = deviceToken.map { #", "deviceToken": "\#($0)""# } ?? ""
         let pluginSurfaceField = canvasPluginSurfaceURL.map {
             #", "pluginSurfaceUrls": { "canvas": "\#($0)" }"#
         } ?? ""
+        let methodsJSON = methods.map { #""\#($0)""# }.joined(separator: ",")
         let json = """
         {
           "type": "res",
@@ -64,7 +66,7 @@ enum GatewayWebSocketTestSupport {
             "type": "hello-ok",
             "protocol": 2,
             "server": { "version": "test", "connId": "test" },
-            "features": { "methods": [], "events": [] }\(pluginSurfaceField),
+            "features": { "methods": [\(methodsJSON)], "events": [] }\(pluginSurfaceField),
             "snapshot": {
               "presence": [ { "ts": 1 } ],
               "health": {},

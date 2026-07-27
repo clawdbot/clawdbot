@@ -7,7 +7,7 @@ import {
   applyAnthropicEphemeralCacheControlMarkers,
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
-import { rewriteCopilotResponsePayloadConnectionBoundIds } from "./connection-bound-ids.js";
+import { sanitizeCopilotReplayResponsePayload } from "./connection-bound-ids.js";
 import { stripCopilotAssistantThinkingMessages } from "./replay-policy.js";
 
 type StreamOptions = Parameters<StreamFn>[2];
@@ -62,11 +62,11 @@ function buildCopilotDynamicHeaders(params: {
 function patchOnPayloadResult(result: unknown): unknown {
   if (result && typeof result === "object" && "then" in result) {
     return Promise.resolve(result).then((next) => {
-      rewriteCopilotResponsePayloadConnectionBoundIds(next);
+      sanitizeCopilotReplayResponsePayload(next);
       return next;
     });
   }
-  rewriteCopilotResponsePayloadConnectionBoundIds(result);
+  sanitizeCopilotReplayResponsePayload(result);
   return result;
 }
 
@@ -132,7 +132,7 @@ function wrapCopilotOpenAIResponsesStream(
       ...options,
       headers: buildCopilotRequestHeaders(context, options?.headers),
       onPayload: (payload, payloadModel) => {
-        rewriteCopilotResponsePayloadConnectionBoundIds(payload);
+        sanitizeCopilotReplayResponsePayload(payload);
         return patchOnPayloadResult(originalOnPayload?.(payload, payloadModel));
       },
     };

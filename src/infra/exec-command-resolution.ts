@@ -1,4 +1,5 @@
 // Resolves command executables and wrapper policy paths for exec approvals.
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -285,7 +286,36 @@ export function resolvePolicyAllowlistCandidatePath(
   return resolvePolicyTargetCandidatePath(resolution, cwd);
 }
 
+const HASHED_ARG_PATTERN_PREFIX = "sha256:argv:";
+
+export function isGeneratedHashedArgPattern(value: string | null | undefined): boolean {
+  return typeof value === "string" && value.startsWith(HASHED_ARG_PATTERN_PREFIX);
+}
+
+function renderGeneratedArgPatternSubject(argv: string[]): string {
+  const argsSlice = argv.slice(1);
+  return argsSlice.length === 0 ? "\x00\x00" : argsSlice.join("\x00") + "\x00";
+}
+
+function renderGeneratedHashedArgPatternSubject(argv: string[]): string {
+  const argsSlice = argv.slice(1);
+  return `${argsSlice.length}\x00${argsSlice
+    .map((arg) => `${Buffer.byteLength(arg, "utf8")}\x00${arg}\x00`)
+    .join("")}`;
+}
+
+export function buildHashedArgPatternFromArgv(argv: string[]): string {
+  const digest = crypto
+    .createHash("sha256")
+    .update(renderGeneratedHashedArgPatternSubject(argv), "utf8")
+    .digest("hex");
+  return `${HASHED_ARG_PATTERN_PREFIX}${digest}`;
+}
+
 function matchArgPattern(argPattern: string, argv: string[], platform?: string | null): boolean {
+  if (argPattern.startsWith(HASHED_ARG_PATTERN_PREFIX)) {
+    return argPattern === buildHashedArgPatternFromArgv(argv);
+  }
   // Patterns built by buildArgPatternFromArgv use \x00 as the argument separator and
   // always include a trailing \x00 sentinel so that every auto-generated pattern
   // (including zero-arg "^\x00\x00$" and single-arg "^hello world\x00$") contains at
@@ -300,13 +330,8 @@ function matchArgPattern(argPattern: string, argv: string[], platform?: string |
   // Zero args use a double sentinel "\x00\x00" to distinguish [] from [""] — both
   // join to "" but must match different patterns ("^\x00\x00$" vs "^\x00$").
   const sep = argPattern.includes("\x00") ? "\x00" : " ";
-  const argsSlice = argv.slice(1);
   const argsString =
-    sep === "\x00"
-      ? argsSlice.length === 0
-        ? "\x00\x00" // zero args: double sentinel matches "^\x00\x00$" pattern
-        : argsSlice.join(sep) + sep // trailing sentinel to match pattern format
-      : argsSlice.join(sep);
+    sep === "\x00" ? renderGeneratedArgPatternSubject(argv) : argv.slice(1).join(sep);
   try {
     const regex = new RegExp(argPattern);
     if (regex.test(argsString)) {
@@ -366,7 +391,9 @@ export function matchAllowlist(
   // A bare "*" wildcard allows any parsed executable command.
   // Check it before the resolvedPath guard so unresolved PATH lookups still
   // match (for example platform-specific executables without known extensions).
-  const bareWild = entries.find((e) => e.pattern?.trim() === "*" && !e.argPattern);
+  const bareWild = entries.find(
+    (e) => e.pattern?.trim() === "*" && !e.argPattern && e.source !== "allow-always",
+  );
   if (bareWild && resolution) {
     return bareWild;
   }
@@ -390,6 +417,11 @@ export function matchAllowlist(
       continue;
     }
     if (!entry.argPattern) {
+      // Old generated allow-always entries were path-only and could authorize
+      // changed argv after upgrade. Manual path-only entries have no source.
+      if (entry.source === "allow-always") {
+        continue;
+      }
       if (!pathOnlyMatch) {
         pathOnlyMatch = entry;
       }

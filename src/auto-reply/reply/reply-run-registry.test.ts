@@ -7,6 +7,8 @@ import {
   RUN_STALE_TAKEOVER_MS,
 } from "../../logging/diagnostic-run-activity.js";
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
+import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
+import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
 import {
@@ -14,6 +16,7 @@ import {
   createReplyOperation,
   expireStaleReplyOperation,
   forceClearReplyRunBySessionId,
+  isReplyRunEvidenceStale,
   isReplyRunActiveForSessionId,
   isReplyRunAbortableForCompaction,
   isReplyRunAbortableForSignal,
@@ -23,6 +26,7 @@ import {
   REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
   ReplyRunAlreadyActiveError,
   replyRunRegistry,
+  markReplyOperationGlobalLaneWaitProgress,
   runAfterReplyOperationClear,
   resolveActiveReplyRunSessionId,
   resolveReplyRunPhaseForSessionId,
@@ -33,9 +37,21 @@ import { admitReplyTurn } from "./reply-turn-admission.js";
 
 const REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS = 60_000;
 
+function createTestReplyOperation(
+  overrides: Partial<Parameters<typeof createReplyOperation>[0]> = {},
+) {
+  return createReplyOperation({
+    sessionKey: "agent:main:main",
+    sessionId: "session-1",
+    resetTriggered: false,
+    ...overrides,
+  });
+}
+
 describe("reply run registry", () => {
   afterEach(() => {
     testing.resetReplyRunRegistry();
+    resetCommandQueueStateForTest();
     resetDiagnosticRunActivityForTest();
     vi.restoreAllMocks();
   });
@@ -43,10 +59,8 @@ describe("reply run registry", () => {
   it("keeps ownership stable by sessionKey while sessionId rotates", async () => {
     vi.useFakeTimers();
     try {
-      const operation = createReplyOperation({
-        sessionKey: "agent:main:main",
+      const operation = createTestReplyOperation({
         sessionId: "session-old",
-        resetTriggered: false,
       });
 
       const oldWaitPromise = waitForReplyRunEndBySessionId("session-old", 1_000);
@@ -75,10 +89,8 @@ describe("reply run registry", () => {
   });
 
   it("treats queued reply operations as non-abortable for compaction", () => {
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:main",
+    const operation = createTestReplyOperation({
       sessionId: "session-compact",
-      resetTriggered: false,
     });
 
     expect(isReplyRunActiveForSessionId("session-compact")).toBe(true);
@@ -95,10 +107,8 @@ describe("reply run registry", () => {
   });
 
   it("records reply-operation progress without claiming embedded-run activity", () => {
-    const operation = createReplyOperation({
+    const operation = createTestReplyOperation({
       sessionKey: "agent:main:telegram:direct:chat-1",
-      sessionId: "session-1",
-      resetTriggered: false,
     });
 
     expect(
@@ -137,10 +147,9 @@ describe("reply run registry", () => {
   });
 
   it("tracks deferred-maintenance wait as a reply-operation phase", () => {
-    const operation = createReplyOperation({
+    const operation = createTestReplyOperation({
       sessionKey: "agent:main:telegram:direct:chat-1",
       sessionId: "session-wait",
-      resetTriggered: false,
     });
 
     operation.markWaitingForDeferredMaintenance();
@@ -173,11 +182,53 @@ describe("reply run registry", () => {
     });
   });
 
+  it("keeps a reply alive while the saturated global lane waits past the stale threshold", async () => {
+    vi.useFakeTimers();
+    const operation = createTestReplyOperation({
+      sessionKey: "agent:main:telegram:direct:lane-wait",
+      sessionId: "session-global-lane-wait",
+    });
+    try {
+      const lane = "test:reply-global-wait";
+      setCommandLaneConcurrency(lane, 0);
+      operation.setPhase("running");
+      operation.markWaitingForGlobalLane();
+      let ran = false;
+
+      const queued = enqueueCommandInLane(
+        lane,
+        async () => {
+          operation.markGlobalLaneWaitEnded();
+          ran = true;
+        },
+        { onWait: () => markReplyOperationGlobalLaneWaitProgress(operation) },
+      );
+
+      await vi.advanceTimersByTimeAsync(RUN_STALE_TAKEOVER_MS + 1);
+      expect(operation.phase).toBe("waiting_for_global_lane");
+      expect(isReplyRunEvidenceStale(operation)).toBe(false);
+      expect(ran).toBe(false);
+
+      setCommandLaneConcurrency(lane, 1);
+      await queued;
+
+      expect(ran).toBe(true);
+      expect(operation.phase).toBe("running");
+      expect(
+        getDiagnosticSessionActivitySnapshot({
+          sessionId: operation.sessionId,
+          sessionKey: operation.key,
+        }).lastProgressReason,
+      ).toBe("global_lane:wait_ended");
+    } finally {
+      operation.complete();
+      vi.useRealTimers();
+    }
+  });
+
   it("clears deferred-maintenance operations immediately on user abort", () => {
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:main",
+    const operation = createTestReplyOperation({
       sessionId: "session-waiting-abort",
-      resetTriggered: false,
     });
 
     operation.markWaitingForDeferredMaintenance();
@@ -189,10 +240,8 @@ describe("reply run registry", () => {
   });
 
   it("does not reset deferred-maintenance operations as backend-owned work", () => {
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:main",
+    const operation = createTestReplyOperation({
       sessionId: "session-waiting-reset",
-      resetTriggered: false,
     });
 
     operation.markWaitingForDeferredMaintenance();
@@ -203,10 +252,8 @@ describe("reply run registry", () => {
   });
 
   it("clears queued operations immediately on user abort", () => {
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:main",
+    const operation = createTestReplyOperation({
       sessionId: "session-queued",
-      resetTriggered: false,
     });
 
     expect(replyRunRegistry.isActive("agent:main:main")).toBe(true);
@@ -218,10 +265,8 @@ describe("reply run registry", () => {
   });
 
   it("runs completeThen callbacks after active state clears", () => {
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:main",
+    const operation = createTestReplyOperation({
       sessionId: "session-complete",
-      resetTriggered: false,
     });
     const afterClear = vi.fn(() => {
       expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
@@ -235,10 +280,8 @@ describe("reply run registry", () => {
   });
 
   it("clears active state before a deferred after-clear barrier settles", async () => {
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:main",
+    const operation = createTestReplyOperation({
       sessionId: "session-deferred",
-      resetTriggered: false,
     });
     let releaseBarrier: () => void = () => {};
     const barrier = new Promise<void>((resolve) => {
@@ -261,10 +304,8 @@ describe("reply run registry", () => {
   });
 
   it("keeps later after-clear work behind earlier delivery barriers", async () => {
-    const first = createReplyOperation({
-      sessionKey: "agent:main:main",
+    const first = createTestReplyOperation({
       sessionId: "first-session",
-      resetTriggered: false,
     });
     let releaseFirst: () => void = () => {};
     const firstBarrier = new Promise<void>((resolve) => {
@@ -274,10 +315,8 @@ describe("reply run registry", () => {
     runAfterReplyOperationClear(first, firstAfterClear);
     first.completeWithAfterClearBarrier(firstBarrier);
 
-    const second = createReplyOperation({
-      sessionKey: "agent:main:main",
+    const second = createTestReplyOperation({
       sessionId: "second-session",
-      resetTriggered: false,
     });
     let releaseSecond: () => void = () => {};
     const secondBarrier = new Promise<void>((resolve) => {
@@ -302,10 +341,8 @@ describe("reply run registry", () => {
   it("keeps follow-up admission blocked until slow delivery settles", async () => {
     vi.useFakeTimers();
     try {
-      const operation = createReplyOperation({
-        sessionKey: "agent:main:main",
+      const operation = createTestReplyOperation({
         sessionId: "hung-session",
-        resetTriggered: false,
       });
       let releaseBarrier: () => void = () => {};
       const barrier = new Promise<void>((resolve) => {
@@ -318,7 +355,7 @@ describe("reply run registry", () => {
       await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
       expect(afterClear).not.toHaveBeenCalled();
       expect(() =>
-        createReplyOperation({
+        createTestReplyOperation({
           sessionKey: "agent:main:main",
           sessionId: "blocked-session",
           resetTriggered: false,
@@ -331,10 +368,8 @@ describe("reply run registry", () => {
       await vi.waitFor(() => {
         expect(afterClear).toHaveBeenCalledWith("hung-session");
       });
-      const next = createReplyOperation({
-        sessionKey: "agent:main:main",
+      const next = createTestReplyOperation({
         sessionId: "next-session",
-        resetTriggered: false,
         respectFollowupAdmissionBarrier: true,
       });
       next.complete();
@@ -347,10 +382,8 @@ describe("reply run registry", () => {
   it("extends a hung delivery barrier only while bounded owner work remains active", async () => {
     vi.useFakeTimers();
     try {
-      const operation = createReplyOperation({
-        sessionKey: "agent:main:main",
+      const operation = createTestReplyOperation({
         sessionId: "active-owner-session",
-        resetTriggered: false,
       });
       let ownerActive = true;
       const afterClear = vi.fn();
@@ -377,10 +410,9 @@ describe("reply run registry", () => {
   it("keeps follow-up admission blocked during an unsettled inter-block delay", async () => {
     vi.useFakeTimers();
     try {
-      const operation = createReplyOperation({
+      const operation = createTestReplyOperation({
         sessionKey: "agent:main:mattermost:direct:user-1",
         sessionId: "mattermost-delivery-session",
-        resetTriggered: false,
       });
       let settledDeliveryCount = 1;
       const queuedDeliveryCount = 2;
@@ -394,7 +426,7 @@ describe("reply run registry", () => {
       await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
       expect(afterClear).not.toHaveBeenCalled();
       expect(() =>
-        createReplyOperation({
+        createTestReplyOperation({
           sessionKey: "agent:main:mattermost:direct:user-1",
           sessionId: "queued-followup",
           resetTriggered: false,
@@ -408,10 +440,9 @@ describe("reply run registry", () => {
         expect(afterClear).toHaveBeenCalledWith("mattermost-delivery-session");
       });
 
-      const followup = createReplyOperation({
+      const followup = createTestReplyOperation({
         sessionKey: "agent:main:mattermost:direct:user-1",
         sessionId: "admitted-followup",
-        resetTriggered: false,
         respectFollowupAdmissionBarrier: true,
       });
       followup.complete();
@@ -424,10 +455,8 @@ describe("reply run registry", () => {
   it("eventually releases a permanently hung delivery barrier at the default timeout", async () => {
     vi.useFakeTimers();
     try {
-      const operation = createReplyOperation({
-        sessionKey: "agent:main:main",
+      const operation = createTestReplyOperation({
         sessionId: "hung-session",
-        resetTriggered: false,
       });
       const afterClear = vi.fn();
       runAfterReplyOperationClear(operation, afterClear);
@@ -440,10 +469,8 @@ describe("reply run registry", () => {
       await vi.waitFor(() => {
         expect(afterClear).toHaveBeenCalledWith("hung-session");
       });
-      const next = createReplyOperation({
-        sessionKey: "agent:main:main",
+      const next = createTestReplyOperation({
         sessionId: "next-session",
-        resetTriggered: false,
         respectFollowupAdmissionBarrier: true,
       });
       next.complete();
@@ -454,10 +481,8 @@ describe("reply run registry", () => {
   });
 
   it("retains failed operations until final delivery completes", () => {
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:main",
+    const operation = createTestReplyOperation({
       sessionId: "session-failed",
-      resetTriggered: false,
     });
     const afterClear = vi.fn();
     operation.retainFailureUntilComplete();
@@ -478,10 +503,9 @@ describe("reply run registry", () => {
   it("keeps retained terminal failures immutable across late aborts", () => {
     const upstreamAbort = new AbortController();
     const cancel = vi.fn();
-    const operation = createReplyOperation({
+    const operation = createTestReplyOperation({
       sessionKey: "agent:main:failed-final",
       sessionId: "session-failed-final",
-      resetTriggered: false,
       upstreamAbortSignal: upstreamAbort.signal,
     });
     operation.attachBackend({
@@ -507,10 +531,9 @@ describe("reply run registry", () => {
   it("records upstream cancellation as an aborted operation", () => {
     const upstreamAbort = new AbortController();
     const cancel = vi.fn();
-    const operation = createReplyOperation({
+    const operation = createTestReplyOperation({
       sessionKey: "agent:main:upstream-cancelled",
       sessionId: "session-upstream-cancelled",
-      resetTriggered: false,
       upstreamAbortSignal: upstreamAbort.signal,
     });
     operation.attachBackend({
@@ -532,10 +555,9 @@ describe("reply run registry", () => {
   it("records upstream restart cancellation separately", () => {
     const upstreamAbort = new AbortController();
     const cancel = vi.fn();
-    const operation = createReplyOperation({
+    const operation = createTestReplyOperation({
       sessionKey: "agent:main:upstream-restart",
       sessionId: "session-upstream-restart",
-      resetTriggered: false,
       upstreamAbortSignal: upstreamAbort.signal,
     });
     operation.attachBackend({
@@ -558,10 +580,9 @@ describe("reply run registry", () => {
     const upstreamAbort = new AbortController();
     upstreamAbort.abort(new Error("caller already cancelled"));
 
-    const operation = createReplyOperation({
+    const operation = createTestReplyOperation({
       sessionKey: "agent:main:already-cancelled",
       sessionId: "session-already-cancelled",
-      resetTriggered: false,
       upstreamAbortSignal: upstreamAbort.signal,
     });
 
@@ -574,10 +595,9 @@ describe("reply run registry", () => {
   it("does not cancel the backend twice when upstream abort follows a user abort", () => {
     const upstreamAbort = new AbortController();
     const cancel = vi.fn();
-    const operation = createReplyOperation({
+    const operation = createTestReplyOperation({
       sessionKey: "agent:main:duplicate-cancel",
       sessionId: "session-duplicate-cancel",
-      resetTriggered: false,
       upstreamAbortSignal: upstreamAbort.signal,
     });
     operation.attachBackend({
@@ -600,10 +620,9 @@ describe("reply run registry", () => {
     vi.useFakeTimers();
     try {
       const cancel = vi.fn();
-      const operation = createReplyOperation({
+      const operation = createTestReplyOperation({
         sessionKey: "agent:main:hung-abort",
         sessionId: "session-hung-abort",
-        resetTriggered: false,
       });
       operation.attachBackend({
         kind: "embedded",
@@ -645,10 +664,9 @@ describe("reply run registry", () => {
   it("keeps late owner complete harmless after forced terminal release", async () => {
     vi.useFakeTimers();
     try {
-      const operation = createReplyOperation({
+      const operation = createTestReplyOperation({
         sessionKey: "agent:main:late-complete",
         sessionId: "session-late-complete",
-        resetTriggered: false,
       });
       operation.setPhase("running");
       const afterClear = vi.fn();
@@ -669,10 +687,9 @@ describe("reply run registry", () => {
   it("force-releases retained failures when the owner never completes", async () => {
     vi.useFakeTimers();
     try {
-      const operation = createReplyOperation({
+      const operation = createTestReplyOperation({
         sessionKey: "agent:main:retained-hung-failure",
         sessionId: "session-retained-hung-failure",
-        resetTriggered: false,
       });
       operation.retainFailureUntilComplete();
       const afterClear = vi.fn();
@@ -691,10 +708,9 @@ describe("reply run registry", () => {
   });
 
   it("keeps run_stalled attribution when backend cancel re-enters abortByUser", () => {
-    const operation = createReplyOperation({
+    const operation = createTestReplyOperation({
       sessionKey: "agent:main:reentrant-expire",
       sessionId: "reentrant-session",
-      resetTriggered: false,
     });
     operation.attachBackend({
       kind: "embedded",
@@ -716,10 +732,9 @@ describe("reply run registry", () => {
     vi.useFakeTimers();
     try {
       const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
-      const operation = createReplyOperation({
+      const operation = createTestReplyOperation({
         sessionKey: "agent:main:owner-clears",
         sessionId: "session-owner-clears",
-        resetTriggered: false,
       });
       operation.setPhase("running");
 
@@ -738,10 +753,8 @@ describe("reply run registry", () => {
   });
 
   it("force-clears retained failed operations", () => {
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:main",
+    const operation = createTestReplyOperation({
       sessionId: "session-retained",
-      resetTriggered: false,
     });
     operation.retainFailureUntilComplete();
 
@@ -754,10 +767,8 @@ describe("reply run registry", () => {
     vi.useFakeTimers();
     try {
       const cancel = vi.fn();
-      const operation = createReplyOperation({
-        sessionKey: "agent:main:main",
+      const operation = createTestReplyOperation({
         sessionId: "session-running",
-        resetTriggered: false,
       });
       operation.attachBackend({
         kind: "embedded",
@@ -786,10 +797,9 @@ describe("reply run registry", () => {
   it("rejects aborts while the attached backend is finalizing", () => {
     let abortable = false;
     const cancel = vi.fn();
-    const operation = createReplyOperation({
+    const operation = createTestReplyOperation({
       sessionKey: "agent:main:finalizing",
       sessionId: "session-finalizing",
-      resetTriggered: false,
     });
     operation.attachBackend({
       kind: "embedded",
@@ -812,10 +822,9 @@ describe("reply run registry", () => {
 
   it("keeps finalizing reply bookkeeping through forced in-process restart", () => {
     const cancel = vi.fn();
-    const operation = createReplyOperation({
+    const operation = createTestReplyOperation({
       sessionKey: "agent:main:restart-finalizing",
       sessionId: "session-restart-finalizing",
-      resetTriggered: false,
     });
     operation.attachBackend({
       kind: "embedded",
@@ -837,10 +846,9 @@ describe("reply run registry", () => {
   it("keeps abort frozen after the backend detaches for reply delivery", () => {
     const cancel = vi.fn();
     const upstreamAbort = new AbortController();
-    const operation = createReplyOperation({
+    const operation = createTestReplyOperation({
       sessionKey: "agent:main:delivery-finalizing",
       sessionId: "session-delivery-finalizing",
-      resetTriggered: false,
       upstreamAbortSignal: upstreamAbort.signal,
     });
     const backend = {
@@ -873,10 +881,9 @@ describe("reply run registry", () => {
     vi.useFakeTimers();
     try {
       const afterClear = vi.fn();
-      const operation = createReplyOperation({
+      const operation = createTestReplyOperation({
         sessionKey: "agent:main:hung-finalization",
         sessionId: "session-hung-finalization",
-        resetTriggered: false,
       });
       operation.setPhase("running");
       runAfterReplyOperationClear(operation, afterClear);
@@ -904,10 +911,9 @@ describe("reply run registry", () => {
   it("renews finalization from owner progress", async () => {
     vi.useFakeTimers();
     try {
-      const operation = createReplyOperation({
+      const operation = createTestReplyOperation({
         sessionKey: "agent:main:progressing-finalization",
         sessionId: "session-progressing-finalization",
-        resetTriggered: false,
       });
       operation.setPhase("running");
       operation.freezeAbort();
@@ -932,10 +938,9 @@ describe("reply run registry", () => {
   it("preserves bounded work that starts before finalization", async () => {
     vi.useFakeTimers();
     try {
-      const operation = createReplyOperation({
+      const operation = createTestReplyOperation({
         sessionKey: "agent:main:pre-finalization-work",
         sessionId: "session-pre-finalization-work",
-        resetTriggered: false,
       });
       operation.setPhase("running");
       beginReplyOperationFinalizationWork(operation, REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS * 2);
@@ -958,10 +963,9 @@ describe("reply run registry", () => {
   it("does not shorten bounded work when ordinary activity renews", async () => {
     vi.useFakeTimers();
     try {
-      const operation = createReplyOperation({
+      const operation = createTestReplyOperation({
         sessionKey: "agent:main:overlapping-finalization-work",
         sessionId: "session-overlapping-finalization-work",
-        resetTriggered: false,
       });
       operation.setPhase("running");
       operation.freezeAbort();
@@ -985,10 +989,9 @@ describe("reply run registry", () => {
   it("honors a bounded extended finalization lease", async () => {
     vi.useFakeTimers();
     try {
-      const operation = createReplyOperation({
+      const operation = createTestReplyOperation({
         sessionKey: "agent:main:extended-finalization",
         sessionId: "session-extended-finalization",
-        resetTriggered: false,
       });
       operation.setPhase("running");
       operation.freezeAbort();
@@ -1009,19 +1012,17 @@ describe("reply run registry", () => {
   it("keeps late finalization cleanup from clearing a successor", async () => {
     vi.useFakeTimers();
     try {
-      const operation = createReplyOperation({
+      const operation = createTestReplyOperation({
         sessionKey: "agent:main:late-finalization",
         sessionId: "session-late-finalization",
-        resetTriggered: false,
       });
       operation.setPhase("running");
       operation.freezeAbort();
       await vi.advanceTimersByTimeAsync(REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS);
 
-      const successor = createReplyOperation({
+      const successor = createTestReplyOperation({
         sessionKey: "agent:main:late-finalization",
         sessionId: "session-successor",
-        resetTriggered: false,
       });
       operation.complete();
 
@@ -1037,10 +1038,8 @@ describe("reply run registry", () => {
     vi.useFakeTimers();
     try {
       const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-      const operation = createReplyOperation({
-        sessionKey: "agent:main:main",
+      const operation = createTestReplyOperation({
         sessionId: "session-running",
-        resetTriggered: false,
       });
 
       const waitPromise = waitForReplyRunEndBySessionId(
@@ -1060,10 +1059,9 @@ describe("reply run registry", () => {
   it("waits for reply-run completion without a timer when requested", async () => {
     vi.useFakeTimers();
     try {
-      const operation = createReplyOperation({
+      const operation = createTestReplyOperation({
         sessionKey: "agent:main:unbounded",
         sessionId: "session-unbounded",
-        resetTriggered: false,
       });
       const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
@@ -1080,10 +1078,8 @@ describe("reply run registry", () => {
 
   it("queues messages only through the active running backend", () => {
     const queueMessage = vi.fn(async () => {});
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:main",
+    const operation = createTestReplyOperation({
       sessionId: "session-running",
-      resetTriggered: false,
     });
 
     operation.attachBackend({
@@ -1103,10 +1099,8 @@ describe("reply run registry", () => {
 
   it("queues messages only when the task-suggestion tool surface matches", () => {
     const queueMessage = vi.fn(async () => {});
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:main",
+    const operation = createTestReplyOperation({
       sessionId: "session-task-suggestions",
-      resetTriggered: false,
     });
     operation.attachBackend({
       kind: "embedded",
@@ -1137,10 +1131,8 @@ describe("reply run registry", () => {
 
   it("queues images only through backends that preserve them", () => {
     const queueMessage = vi.fn(async () => {});
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:main",
+    const operation = createTestReplyOperation({
       sessionId: "session-images",
-      resetTriggered: false,
     });
     operation.attachBackend({
       kind: "embedded",
@@ -1168,10 +1160,8 @@ describe("reply run registry", () => {
 
   it("queues messages through active non-streaming backends with live stopped state", () => {
     const queueMessage = vi.fn(async () => {});
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:main",
+    const operation = createTestReplyOperation({
       sessionId: "session-running",
-      resetTriggered: false,
     });
 
     operation.attachBackend({
@@ -1191,10 +1181,8 @@ describe("reply run registry", () => {
     vi.useFakeTimers();
     try {
       const queueMessage = vi.fn(async () => {});
-      const operation = createReplyOperation({
-        sessionKey: "agent:main:main",
+      const operation = createTestReplyOperation({
         sessionId: "session-running",
-        resetTriggered: false,
       });
       operation.attachBackend({
         kind: "embedded",
@@ -1220,10 +1208,8 @@ describe("reply run registry", () => {
 
   it("does not queue messages through stopped backends", () => {
     const queueMessage = vi.fn(async () => {});
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:main",
+    const operation = createTestReplyOperation({
       sessionId: "session-running",
-      resetTriggered: false,
     });
 
     operation.attachBackend({
@@ -1241,10 +1227,8 @@ describe("reply run registry", () => {
 
   it("fails closed when backend stopped state checks throw", () => {
     const queueMessage = vi.fn(async () => {});
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:main",
+    const operation = createTestReplyOperation({
       sessionId: "session-running",
-      resetTriggered: false,
     });
 
     operation.attachBackend({
@@ -1263,17 +1247,14 @@ describe("reply run registry", () => {
   });
 
   it("aborts compacting runs through the registry compatibility helper", () => {
-    const compactingOperation = createReplyOperation({
-      sessionKey: "agent:main:main",
+    const compactingOperation = createTestReplyOperation({
       sessionId: "session-compacting",
-      resetTriggered: false,
     });
     compactingOperation.setPhase("preflight_compacting");
 
-    const runningOperation = createReplyOperation({
+    const runningOperation = createTestReplyOperation({
       sessionKey: "agent:main:other",
       sessionId: "session-running",
-      resetTriggered: false,
     });
     runningOperation.setPhase("running");
 
@@ -1285,10 +1266,9 @@ describe("reply run registry", () => {
   it("moves a queued reservation to the target slot and frees the source", async () => {
     const sourceSessionKey = "agent:main:telegram:slash:rekey-user";
     const targetSessionKey = "agent:main:telegram:group:rekey-target";
-    const operation = createReplyOperation({
+    const operation = createTestReplyOperation({
       sessionKey: sourceSessionKey,
       sessionId: "rekey-session",
-      resetTriggered: false,
     });
     const sourceIdle = replyRunRegistry.waitForIdle(sourceSessionKey, 1_000);
 
@@ -1309,15 +1289,13 @@ describe("reply run registry", () => {
   it("refuses to rekey onto an owned target slot and keeps the source slot", () => {
     const targetSessionKey = "agent:main:telegram:group:rekey-owned";
     const sourceSessionKey = "agent:main:telegram:slash:rekey-blocked";
-    const blocker = createReplyOperation({
+    const blocker = createTestReplyOperation({
       sessionKey: targetSessionKey,
       sessionId: "owned-session",
-      resetTriggered: false,
     });
-    const operation = createReplyOperation({
+    const operation = createTestReplyOperation({
       sessionKey: sourceSessionKey,
       sessionId: "blocked-session",
-      resetTriggered: false,
     });
 
     expect(() => operation.updateSessionKey(targetSessionKey)).toThrow(ReplyRunAlreadyActiveError);
@@ -1330,10 +1308,9 @@ describe("reply run registry", () => {
   });
 
   it("refuses to rekey after the run leaves the queued phase", () => {
-    const operation = createReplyOperation({
+    const operation = createTestReplyOperation({
       sessionKey: "agent:main:telegram:slash:rekey-late",
       sessionId: "late-session",
-      resetTriggered: false,
     });
     operation.setPhase("running");
 

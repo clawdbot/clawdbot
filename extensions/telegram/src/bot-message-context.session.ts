@@ -624,6 +624,13 @@ export async function buildTelegramInboundContextPayload(params: {
       inboundHistory,
       sourceModality: msg.voice ? "voice" : undefined,
     },
+    sessionTranscript: {
+      chatWindow: true,
+      historyLimit: isGroup ? historyLimit : 10,
+      beforeTimestampMs: options?.receivedAtMs ?? (msg.date ? msg.date * 1000 : undefined),
+      minTimestampMs: options?.promptContextMinTimestampMs,
+      senderLabels: { assistant: "OpenClaw", user: "User" },
+    },
     access: {
       commands: {
         authorized: commandAuthorized,
@@ -668,7 +675,7 @@ export async function buildTelegramInboundContextPayload(params: {
           }
         : undefined,
       groupSystemPrompt: isGroup || (!isGroup && groupConfig) ? groupSystemPrompt : undefined,
-      untrustedContext: visiblePromptContext.length > 0 ? visiblePromptContext : undefined,
+      channelStructuredContext: visiblePromptContext.length > 0 ? visiblePromptContext : undefined,
     },
     contextVisibility: contextVisibilityMode,
     extra: {
@@ -758,10 +765,9 @@ export async function buildTelegramInboundContextPayload(params: {
       ? {
           sessionKey: updateLastRouteSessionKey,
           channel: "telegram" as const,
-          to:
-            isGroup && updateLastRouteThreadId != null
-              ? `telegram:${chatId}:topic:${updateLastRouteThreadId}`
-              : `telegram:${chatId}`,
+          // Persist the same canonical target used by the live context. General topic
+          // stays chat-scoped while threadId keeps its conversation distinct.
+          to: telegramTo,
           accountId: route.accountId,
           threadId: updateLastRouteThreadId,
           mainDmOwnerPin:

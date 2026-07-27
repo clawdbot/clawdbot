@@ -15,6 +15,33 @@ function renderAssistantTranscriptRoleMarker(
   return `${ROLE_MARKER_OPEN}${escapeHtml(text)}${ROLE_MARKER_CLOSE}`;
 }
 
+const linkedImageIndicesByTokens = new WeakMap<readonly { type: string }[], ReadonlySet<number>>();
+
+function linkedImageIndices(tokens: readonly { type: string }[]): ReadonlySet<number> {
+  const cached = linkedImageIndicesByTokens.get(tokens);
+  if (cached) {
+    return cached;
+  }
+  const linked = new Set<number>();
+  let linkDepth = 0;
+  for (let index = 0; index < tokens.length; index += 1) {
+    const tokenType = tokens[index]?.type;
+    if (tokenType === "link_open") {
+      linkDepth += 1;
+    } else if (tokenType === "link_close") {
+      linkDepth = Math.max(0, linkDepth - 1);
+    } else if (tokenType === "image" && linkDepth > 0) {
+      linked.add(index);
+    }
+  }
+  linkedImageIndicesByTokens.set(tokens, linked);
+  return linked;
+}
+
+function isImageWithinLink(tokens: readonly { type: string }[], index: number): boolean {
+  return linkedImageIndices(tokens).has(index);
+}
+
 function renderAssistantTranscriptRoleImageLabel(
   text: string,
   spans: ReadonlyArray<{ start: number; end: number }>,
@@ -56,9 +83,11 @@ export function installAssistantTranscriptRoleImageRenderer(
     isInlineDataImage: (src: string) => boolean;
     normalizeLabel: (value: string) => string;
     assistantLabel: () => string;
+    openImageLabel: (alt: string, hasAlt: boolean) => string;
+    interactiveImages: (env: unknown) => boolean;
   },
 ): void {
-  md.renderer.rules.image = (tokens, index) => {
+  md.renderer.rules.image = (tokens, index, _rendererOptions, env) => {
     const token = tokens[index];
     if (!token) {
       return "";
@@ -74,9 +103,14 @@ export function installAssistantTranscriptRoleImageRenderer(
         : options.escapeHtml(alt);
     }
     const image = `<img class="markdown-inline-image" src="${options.escapeHtml(src)}" alt="${options.escapeHtml(alt)}">`;
+    const linkedImage = isImageWithinLink(tokens, index);
+    const interactiveImage =
+      linkedImage || !options.interactiveImages(env)
+        ? image
+        : `<button class="markdown-inline-image-button" type="button" aria-label="${options.escapeHtml(options.openImageLabel(alt, token.content.trim().length > 0))}">${image}</button>`;
     return roleMeta
-      ? `${renderAssistantTranscriptRoleMarker(`${options.assistantLabel()}:`, options.escapeHtml)} ${image}`
-      : image;
+      ? `${renderAssistantTranscriptRoleMarker(`${options.assistantLabel()}:`, options.escapeHtml)} ${interactiveImage}`
+      : interactiveImage;
   };
 }
 

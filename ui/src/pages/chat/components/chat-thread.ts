@@ -17,12 +17,12 @@ import { classifySessionKind } from "../../../../../src/sessions/classify-sessio
 import type { SessionsListResult } from "../../../api/types.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
+import { COPY_LABEL } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
+import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
+import { handleMarkdownCodeBlockCopy } from "../../../components/markdown-code-blocks.ts";
+import { markdownFileLinkFromEvent } from "../../../components/markdown-file-links.ts";
 import "../../../components/tooltip.ts";
-import {
-  handleMarkdownCodeBlockCopy,
-  markdownFileLinkFromEvent,
-} from "../../../components/markdown.ts";
 import { McpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import { i18n, t } from "../../../i18n/index.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
@@ -31,12 +31,14 @@ import type {
   ChatStreamSegment,
   MessageGroup,
 } from "../../../lib/chat/chat-types.ts";
-import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import {
-  buildMoreDetailsSideCommand,
-  combineSideChatComposerDraft,
-} from "../../../lib/chat/side-question.ts";
+  buildCompanionQuestionPrefill,
+  buildMoreDetailsCompanionQuestion,
+} from "../../../lib/chat/companion-question.ts";
+import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
+import { copyToClipboard } from "../../../lib/clipboard.ts";
+import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalScopeConfigured,
@@ -44,12 +46,16 @@ import {
   resolveUiGlobalAliasAgentId,
   type UiSessionDefaultsHost,
 } from "../../../lib/sessions/session-key.ts";
+import { resolveTurnRecap, type TurnRecap } from "../chat-progress.ts";
+import type { ChatRunStartupStatus } from "../chat-run-startup.ts";
 import {
+  assistantGroupCanOwnActiveRunStatus,
   buildCachedChatItems,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
   deletedChatItemsSignature,
   getExpandedToolCards,
+  getExpandedUserMessages,
   persistedMessageEntryId,
   resetChatThreadState,
   stableBooleanMapSignature,
@@ -63,29 +69,27 @@ import type { PlanStatus } from "../tool-stream.ts";
 import { getToolTitlesVersion } from "../tool-titles.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.ts";
-import { renderChatDivider } from "./chat-divider.ts";
+import { renderChatDivider, renderChatNotice } from "./chat-divider.ts";
 import {
+  dismissConfirmedActionPopovers,
   getAssistantAttachmentAvailabilityRenderVersion,
+  openChatHideConfirmation,
   openChatRewindConfirmation,
   renderMessageGroup,
   renderStreamGroup,
   renderWorkGroupSummary,
+  type MessageReplyTarget,
+  type StreamGroupOptions,
+  type StreamGroupPart,
 } from "./chat-message.ts";
 import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import { handleChatSelectionPointerUp, removeChatSelectionPopup } from "./chat-selection-popup.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
+import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
 const pinnedMessagesMap = new Map<string, PinnedMessages>();
 const deletedMessagesMap = new Map<string, DeletedMessages>();
-
-type ReplyTarget = {
-  messageId: string;
-  text: string;
-  senderLabel?: string | null;
-  /** Persisted transcript id; when present chat.send carries it as replyToId. */
-  sourceMessageId?: string | null;
-};
 
 type ChatThreadState = {
   searchOpen: boolean;
@@ -109,6 +113,8 @@ type ChatThreadProps = {
   streamSegments: ChatStreamSegment[];
   stream: string | null;
   streamStartedAt: number | null;
+  runId?: string | null;
+  runOutputTokens?: number | null;
   queue: ChatQueueItem[];
   showThinking: boolean;
   showToolCalls: boolean;
@@ -117,6 +123,8 @@ type ChatThreadProps = {
   runActive?: boolean;
   /** True while the agent is visibly working (isChatRunWorking); shows the working spark. */
   runWorking?: boolean;
+  /** Coarse startup stage shown until assistant or tool activity becomes visible. */
+  startupStatus?: ChatRunStartupStatus | null;
   /** Re-labels the working spark while the active run is parked on an approval. */
   waitingApproval?: boolean;
   planStatus?: PlanStatus | null;
@@ -129,10 +137,9 @@ type ChatThreadProps = {
   assistantName: string;
   assistantAvatar: string | null;
   assistantAvatarUrl?: string | null;
+  userId?: string | null;
   userName?: string | null;
   userAvatar?: string | null;
-  /** Gateway resolves authenticated user identities (multi-user attribution). */
-  attributedIdentity?: boolean;
   basePath?: string;
   fullMessageAgentId?: string;
   localMediaPreviewRoots?: string[];
@@ -146,19 +153,19 @@ type ChatThreadProps = {
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   onOpenSessionCheckpoints?: () => void | Promise<void>;
   onAssistantAttachmentLoaded?: () => void;
+  onRequestOpenImage?: () => number;
+  onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
   onRequestUpdate?: () => void;
   onChatScroll?: (event: Event) => void;
   onHistoryIntent?: (event: Event) => void;
   onDraftChange: (next: string) => void;
-  /** Current composer draft; the selection popup preserves it when prefilling. */
-  getDraft?: () => string;
   onSend: () => void;
-  onSetReply?: (target: ReplyTarget) => void;
+  onSetReply?: (target: MessageReplyTarget) => void;
   onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
   onForkMessage?: (entryId: string) => Promise<void> | void;
   onFocusComposer?: () => void;
-  /** Sends a detached /btw side question built from the selection popup. */
-  onSideQuestion?: (command: string) => void;
+  onCompanionQuestion?: (question: string) => void;
+  onCompanionPrefill?: (question: string) => void;
   onOpenSession?: (sessionKey: string) => void;
   /** Tasks-rail snapshot backing the post-turn running-tasks status row. */
   backgroundTasks?: BackgroundTasksProps;
@@ -225,13 +232,30 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
     this.threadInnerElement = element instanceof HTMLDivElement ? element : null;
   };
   private readonly measureRowRefs = new Map<string, (element?: Element) => void>();
+  private pruneDetachedRowsQueued = false;
   private measureRowRefFor(key: string): (element?: Element) => void {
     let callback = this.measureRowRefs.get(key);
     if (!callback) {
-      callback = (element?: Element) =>
-        this.virtualizerController
-          .getVirtualizer()
-          .measureElement(element instanceof HTMLElement ? element : null);
+      callback = (element?: Element) => {
+        if (element instanceof HTMLElement) {
+          this.virtualizerController.getVirtualizer().measureElement(element);
+          return;
+        }
+        // Re-stamps (e.g. the chat<->dashboard face switch) re-invoke each
+        // stable row ref as an (undefined, element) pair while the new subtree
+        // is still detached. measureElement(null) prunes every disconnected
+        // row, so calling it synchronously unobserves just-registered sibling
+        // rows and freezes their heights at the old pane width (overlapping
+        // bubbles). Defer until the commit lands so only removed rows prune.
+        if (this.pruneDetachedRowsQueued) {
+          return;
+        }
+        this.pruneDetachedRowsQueued = true;
+        queueMicrotask(() => {
+          this.pruneDetachedRowsQueued = false;
+          this.virtualizerController.getVirtualizer().measureElement(null);
+        });
+      };
       this.measureRowRefs.set(key, callback);
     }
     return callback;
@@ -552,8 +576,11 @@ function getPinnedMessageSummary(message: unknown): string {
   return extractTextCached(message) ?? "";
 }
 
-export function resetChatThreadPresentationState(paneId?: string) {
+export function resetChatThreadPresentationState(paneId?: string, owner?: ParentNode) {
   removeReplyContextMenu(paneId);
+  if (owner) {
+    dismissConfirmedActionPopovers(owner);
+  }
   // The selection popup is body-portaled; pane teardown/route changes must
   // drop it so it cannot outlive the render that owns its callbacks.
   removeChatSelectionPopup();
@@ -602,10 +629,6 @@ export function renderChatSearchBar(
       </openclaw-tooltip>
     </div>
   `;
-}
-
-export function isChatThreadSearchOpen(paneId: string): boolean {
-  return getChatThreadState(paneId).searchOpen;
 }
 
 export function toggleChatThreadSearch(paneId: string, requestUpdate: () => void): void {
@@ -700,10 +723,17 @@ function removeReplyContextMenu(paneId?: string) {
   if (paneId && paneId !== activeReplyContextMenuPaneId) {
     return;
   }
-  activeReplyContextMenu?.remove();
+  if (activeReplyContextMenu) {
+    dismissConfirmedActionPopovers(activeReplyContextMenu);
+    activeReplyContextMenu.remove();
+  }
   activeReplyContextMenu = null;
   activeReplyContextMenuPaneId = null;
-  document.querySelector(".chat-reply-context-menu")?.remove();
+  const fallbackMenu = document.querySelector<HTMLElement>(".chat-reply-context-menu");
+  if (fallbackMenu) {
+    dismissConfirmedActionPopovers(fallbackMenu);
+    fallbackMenu.remove();
+  }
   if (contextMenuDocumentClickHandler) {
     document.removeEventListener("click", contextMenuDocumentClickHandler);
     contextMenuDocumentClickHandler = null;
@@ -720,36 +750,15 @@ function removeReplyContextMenu(paneId?: string) {
 
 function stableReplyMessageId(senderLabel: string | undefined, text: string): string {
   const source = `${senderLabel ?? ""}\n${text}`;
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < source.length; index += 1) {
-    hash ^= source.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return `reply:${(hash >>> 0).toString(16)}`;
+  return `reply:${fnv1aUtf16(source).toString(16)}`;
 }
 
 function createReplyContextMenuButton(onClick: () => void): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
   button.setAttribute("role", "menuitem");
-  button.setAttribute("aria-label", "Reply to message");
-
-  const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  icon.setAttribute("viewBox", "0 0 24 24");
-  icon.setAttribute("width", "16");
-  icon.setAttribute("height", "16");
-  icon.setAttribute("fill", "currentColor");
-  icon.setAttribute("stroke", "none");
-  icon.setAttribute("aria-hidden", "true");
-  icon.setAttribute("focusable", "false");
-  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  path.setAttribute("d", "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z");
-  icon.appendChild(path);
-
-  const label = document.createElement("span");
-  label.textContent = "Reply";
-
-  button.append(icon, label);
+  button.setAttribute("aria-label", t("chat.messages.replyToMessage"));
+  button.textContent = t("chat.messages.reply");
   button.addEventListener("click", onClick);
   return button;
 }
@@ -774,25 +783,38 @@ function createMessageActionContextButton(params: {
 }
 
 function handleChatThreadSelectionPointerUp(event: PointerEvent, props: ChatThreadProps) {
-  if (typeof props.onSideQuestion !== "function") {
+  if (
+    typeof props.onCompanionQuestion !== "function" ||
+    typeof props.onCompanionPrefill !== "function"
+  ) {
     return;
   }
   handleChatSelectionPointerUp(event, {
     onMoreDetails: (selection) => {
-      const command = buildMoreDetailsSideCommand(selection);
-      if (command) {
-        props.onSideQuestion?.(command);
+      const question = buildMoreDetailsCompanionQuestion(selection);
+      if (question) {
+        props.onCompanionQuestion?.(question);
       }
     },
     onAskSideChat: (selection) => {
-      const draft = combineSideChatComposerDraft(selection, props.getDraft?.());
-      if (draft) {
-        props.onDraftChange(draft);
-        props.onRequestUpdate?.();
-        props.onFocusComposer?.();
+      const question = buildCompanionQuestionPrefill(selection);
+      if (question) {
+        props.onCompanionPrefill?.(question);
       }
     },
   });
+}
+
+function selectionIntersectsElement(selection: Selection | null, element: Element): boolean {
+  if (!selection || selection.isCollapsed) {
+    return false;
+  }
+  for (let index = 0; index < selection.rangeCount; index += 1) {
+    if (selection.getRangeAt(index).intersectsNode(element)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
@@ -817,13 +839,29 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   const senderLabel = senderEl?.textContent?.trim() ?? undefined;
   const text = truncateUtf16Safe((bubble as HTMLElement).dataset.messageText?.trim() ?? "", 500);
   const entryId = (bubble as HTMLElement).dataset.entryId?.trim() ?? "";
+  const messageId = (bubble as HTMLElement).dataset.messageId?.trim() ?? "";
+  const groupKey = (group as HTMLElement).dataset.chatRowKey?.trim() ?? "";
   const isUserMessage = group.classList.contains("user") && Boolean(entryId);
+  // Grouped rows can contain several bubbles. Match the clicked bubble to its
+  // own action owner so canvas/copy never targets a sibling message.
+  const actionOwner = [...group.querySelectorAll<HTMLElement>("[data-message-actions-for]")].find(
+    (element) => element.dataset.messageActionsFor === messageId,
+  );
+  const expandButton = actionOwner?.querySelector<HTMLButtonElement>(".chat-expand-btn");
+  const copyButton = actionOwner?.querySelector<HTMLButtonElement>(".chat-copy-btn");
   const canReply = Boolean(text && props.onSetReply);
   const canRewind = isUserMessage && typeof props.onRewindMessage === "function";
+  const canHide = Boolean(groupKey);
+  const canOpenInCanvas = Boolean(expandButton);
+  const canCopy = Boolean(copyButton);
   const canFork = isUserMessage && typeof props.onForkMessage === "function";
-  if (!canReply && !canRewind && !canFork) {
+  if (!canReply && !canRewind && !canHide && !canOpenInCanvas && !canCopy && !canFork) {
     return;
   }
+
+  const selection = window.getSelection();
+  const selectedText = selectionIntersectsElement(selection, bubble) ? selection?.toString() : "";
+
   event.preventDefault();
   event.stopPropagation();
   removeReplyContextMenu();
@@ -834,12 +872,24 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   menu.style.left = `${event.clientX}px`;
   menu.style.top = `${event.clientY}px`;
   const focusCandidates: HTMLButtonElement[] = [];
+  if (selectedText) {
+    const action = createMessageActionContextButton({
+      label: t("chat.messages.copySelection"),
+      disabled: false,
+      tooltip: t("chat.messages.copySelection"),
+      onClick: () => {
+        void copyToClipboard(selectedText);
+        removeReplyContextMenu();
+      },
+    });
+    menu.append(action.element);
+    focusCandidates.push(action.button);
+  }
   if (canReply) {
-    const messageId =
-      (bubble as HTMLElement).dataset.messageId?.trim() || stableReplyMessageId(senderLabel, text);
+    const replyMessageId = messageId || stableReplyMessageId(senderLabel, text);
     const replyButton = createReplyContextMenuButton(() => {
       props.onSetReply?.({
-        messageId,
+        messageId: replyMessageId,
         text,
         senderLabel,
         ...(entryId ? { sourceMessageId: entryId } : {}),
@@ -868,6 +918,49 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
       },
     });
     action.element.classList.add("chat-delete-wrap", "chat-rewind-wrap");
+    menu.append(action.element);
+    focusCandidates.push(action.button);
+  }
+  if (canHide) {
+    const action = createMessageActionContextButton({
+      label: t("chat.messages.hideMessage"),
+      disabled: false,
+      tooltip: t("chat.messages.hideTooltip"),
+      onClick: () => {
+        openChatHideConfirmation(action.button, () => {
+          removeReplyContextMenu();
+          getDeletedMessages(props.sessionKey).delete(groupKey);
+          props.onRequestUpdate?.();
+        });
+      },
+    });
+    action.element.classList.add("chat-delete-wrap");
+    menu.append(action.element);
+    focusCandidates.push(action.button);
+  }
+  if (canOpenInCanvas) {
+    const action = createMessageActionContextButton({
+      label: t("chat.messages.openInCanvas"),
+      disabled: false,
+      tooltip: t("chat.messages.openInCanvas"),
+      onClick: () => {
+        removeReplyContextMenu();
+        expandButton?.click();
+      },
+    });
+    menu.append(action.element);
+    focusCandidates.push(action.button);
+  }
+  if (canCopy) {
+    const action = createMessageActionContextButton({
+      label: COPY_LABEL,
+      disabled: false,
+      tooltip: COPY_LABEL,
+      onClick: () => {
+        removeReplyContextMenu();
+        copyButton?.click();
+      },
+    });
     menu.append(action.element);
     focusCandidates.push(action.button);
   }
@@ -1036,10 +1129,19 @@ function trackTranscriptRenderDependencies(
   return dependencies;
 }
 
-function guardChatRenderItems(state: ChatThreadState, render: (item: ChatRenderItem) => unknown) {
+function guardChatRenderItems(
+  state: ChatThreadState,
+  // Live run status is not derivable from a row's own item identity: ownership
+  // is decided by sibling rows, and the usage counter ticks on run patches that
+  // touch nothing else. Rows showing status must re-render on both, or the
+  // memoized copy stacks a second claw row or freezes the token count.
+  liveStatus: (item: ChatRenderItem) => string,
+  render: (item: ChatRenderItem) => unknown,
+) {
   return (item: ChatRenderItem) =>
-    guard([...chatRenderItemGuardDependencies(item), state.transcriptRenderContext], () =>
-      render(item),
+    guard(
+      [...chatRenderItemGuardDependencies(item), state.transcriptRenderContext, liveStatus(item)],
+      () => render(item),
     );
 }
 
@@ -1083,9 +1185,7 @@ function renderChatThreadContents(
   const chatItems = buildCachedChatItems({
     paneId: props.paneId,
     sessionKey: props.sessionKey,
-    runId:
-      props.sessions?.sessions.find((row) => areUiSessionKeysEquivalent(row.key, props.sessionKey))
-        ?.activeRunIds?.[0] ?? null,
+    runId: props.runId === undefined ? (activeSession?.activeRunIds?.[0] ?? null) : props.runId,
     locale,
     messages: props.messages,
     toolMessages: props.toolMessages,
@@ -1106,6 +1206,7 @@ function renderChatThreadContents(
   });
   syncToolCardExpansionState(props.sessionKey, chatItems, Boolean(props.autoExpandToolCalls));
   const expandedToolCards = getExpandedToolCards(props.sessionKey);
+  const expandedUserMessages = getExpandedUserMessages(props.sessionKey);
   const questionPrompts = new Map(
     (props.questionPrompts ?? []).map((prompt) => [prompt.id, prompt]),
   );
@@ -1135,10 +1236,15 @@ function renderChatThreadContents(
   // sessions, so the author marker is signal, not decoration.
   const isDirectThread =
     (sessionKind === "direct" || sessionKind === "cron" || sessionKind === "spawn-child") &&
-    !props.attributedIdentity;
+    !props.userId;
   const showLoadingSkeleton = props.loading && chatItems.length === 0;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
+  const activeContinuationByGroupKey = new Map<
+    string,
+    { parts: StreamGroupPart[]; options: StreamGroupOptions }
+  >();
+  const turnRecapByGroupKey = new Map<string, TurnRecap>();
   const renderGroupItem = (item: MessageGroup) => {
     if (deleted.has(item.key)) {
       return nothing;
@@ -1163,14 +1269,23 @@ function renderChatThreadContents(
         expandedToolCards.set(messageId, !(expanded ?? expandedToolCards.get(messageId) ?? false));
         requestUpdate();
       },
+      isUserMessageExpanded: (messageId: string) => expandedUserMessages.get(messageId) ?? false,
+      onToggleUserMessageExpanded: (messageId: string) => {
+        expandedUserMessages.set(messageId, !expandedUserMessages.get(messageId));
+        requestUpdate();
+      },
       isToolExpanded: (toolCardId: string) => expandedToolCards.get(toolCardId) ?? false,
       onToggleToolExpanded: toggleToolCardExpanded,
       onRequestUpdate: requestUpdate,
       onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
+      onRequestOpenImage: props.onRequestOpenImage,
+      onOpenImage: props.onOpenImage,
       assistantName: props.assistantName,
       assistantAvatar: assistantIdentity.avatar,
+      userId: props.userId ?? null,
       userName: props.userName ?? null,
       userAvatar: props.userAvatar ?? null,
+      showAvatarGutter: !isDirectThread,
       basePath: props.basePath,
       localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
       assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
@@ -1178,6 +1293,7 @@ function renderChatThreadContents(
       embedSandboxMode: props.embedSandboxMode ?? "scripts",
       allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
       contextWindow: threadContextWindow,
+      onReply: props.onSetReply,
       onDelete: () => {
         deleted.delete(item.key);
         requestUpdate();
@@ -1193,18 +1309,46 @@ function renderChatThreadContents(
             }
           : undefined,
       rewindDisabled: Boolean(props.runActive || props.runWorking),
+      activeContinuation: activeContinuationByGroupKey.get(item.key),
+      turnRecap: turnRecapByGroupKey.get(item.key),
     });
   };
-  const renderItem = guardChatRenderItems(state, (item) => {
+  // Only the working indicator shows live usage, so rows without one keep
+  // memoizing across usage patches.
+  const workingUsageKey = `usage:${props.runOutputTokens ?? ""}`;
+  const liveStatusSignature = (item: ChatRenderItem): string => {
+    if (item.kind === "stream-run") {
+      return item.parts.some((part) => part.kind === "reading-indicator") ? workingUsageKey : "";
+    }
+    if (item.kind !== "group") {
+      return "";
+    }
+    const continuation = activeContinuationByGroupKey.get(item.key);
+    const recap = turnRecapByGroupKey.get(item.key);
+    // Part keys stand in for the rest of the continuation: its remaining
+    // options mirror props that already invalidate every row through the
+    // shared render context.
+    const continuationKey = continuation
+      ? `${continuation.parts.map((part) => part.key).join(" ")}${workingUsageKey}`
+      : "";
+    const recapKey = recap ? `${recap.runtimeMs}:${recap.outputTokens ?? ""}` : "";
+    return `${continuationKey}|${recapKey}`;
+  };
+  const renderItem = guardChatRenderItems(state, liveStatusSignature, (item) => {
     if (item.kind === "divider") {
       return renderChatDivider(item, props.onOpenSessionCheckpoints);
+    }
+    if (item.kind === "notice") {
+      return renderChatNotice(item);
     }
     if (item.kind === "stream-run") {
       return renderStreamGroup(item.parts, {
         questionPrompts,
         planStatus: props.planStatus,
         planActive: Boolean(props.runActive),
+        startupPhase: props.startupStatus?.phase,
         waitingApproval: props.waitingApproval,
+        runOutputTokens: props.runOutputTokens,
         onOpenSidebar: props.onOpenSidebar,
         assistant: assistantIdentity,
         basePath: props.basePath,
@@ -1239,7 +1383,54 @@ function renderChatThreadContents(
     runWorking: Boolean(props.runWorking),
     searchActive: state.searchOpen && Boolean(state.searchQuery.trim()),
   });
-  const transcriptRows: ChatTranscriptRow[] = collapsedItems.map((item) => ({
+  // Watch/settle on actual indicator visibility (not runWorking): queued
+  // sends show the claw before the run starts, and the recap must never
+  // stack under a visible working row.
+  const workingIndicatorVisible = chatItems.some((item) => item.kind === "reading-indicator");
+  const turnRecap = resolveTurnRecap(props.sessionKey, workingIndicatorVisible, activeSession);
+  const transcriptItems = collapsedItems.filter((item, index) => {
+    if (item.kind !== "stream-run") {
+      return true;
+    }
+    const previous = collapsedItems[index - 1];
+    const isActiveStatusRun =
+      item.parts.some((part) => part.kind === "reading-indicator") &&
+      item.parts.every((part) => part.kind === "reading-indicator" || part.kind === "plan");
+    if (
+      previous?.kind !== "group" ||
+      !isActiveStatusRun ||
+      deleted.has(previous.key) ||
+      !assistantGroupCanOwnActiveRunStatus(previous)
+    ) {
+      return true;
+    }
+    // A reply and its still-running state are one turn-level presentation.
+    // Keeping the status in the reply avoids a second claw/assistant row.
+    activeContinuationByGroupKey.set(previous.key, {
+      parts: item.parts,
+      options: {
+        planStatus: props.planStatus,
+        planActive: Boolean(props.runActive),
+        startupPhase: props.startupStatus?.phase,
+        waitingApproval: props.waitingApproval,
+        runOutputTokens: props.runOutputTokens,
+      },
+    });
+    return false;
+  });
+  let turnRecapOwnerKey: string | null = null;
+  if (turnRecap !== null) {
+    const lastItem = transcriptItems.at(-1);
+    if (
+      lastItem?.kind === "group" &&
+      !deleted.has(lastItem.key) &&
+      assistantGroupCanOwnActiveRunStatus(lastItem)
+    ) {
+      turnRecapByGroupKey.set(lastItem.key, turnRecap);
+      turnRecapOwnerKey = lastItem.key;
+    }
+  }
+  const transcriptRows: ChatTranscriptRow[] = transcriptItems.map((item) => ({
     kind: "item",
     key: item.key,
     item,
@@ -1250,6 +1441,13 @@ function renderChatThreadContents(
       kind: "content",
       key: "realtime-talk",
       content: realtimeConversation,
+    });
+  }
+  if (turnRecap !== null && turnRecapOwnerKey === null && !isEmpty && !showLoadingSkeleton) {
+    transcriptRows.push({
+      kind: "content",
+      key: "turn-recap",
+      content: renderTurnRecapRow(turnRecap),
     });
   }
   const backgroundTasks =
@@ -1268,6 +1466,7 @@ function renderChatThreadContents(
     locale,
     deletedChatItemsSignature(deleted, chatItems),
     stableBooleanMapSignature(expandedToolCards),
+    stableBooleanMapSignature(expandedUserMessages),
     getAssistantAttachmentAvailabilityRenderVersion(),
     // The host minute poll requests an update; this key crosses row guard() memoization.
     Math.floor(Date.now() / 60_000),
@@ -1282,12 +1481,14 @@ function renderChatThreadContents(
     props.showToolCalls,
     Boolean(props.runActive),
     Boolean(props.runWorking),
+    props.startupStatus?.phase,
     Boolean(props.waitingApproval),
     props.planStatus,
     props.questionPrompts,
     Boolean(props.autoExpandToolCalls),
     props.assistantName,
     assistantIdentity.avatar,
+    props.userId,
     props.userName,
     props.userAvatar,
     props.basePath,
@@ -1297,6 +1498,8 @@ function renderChatThreadContents(
     props.embedSandboxMode ?? "scripts",
     props.allowExternalEmbedUrls ?? false,
     threadContextWindow,
+    props.onSetReply,
+    turnRecap === null ? "" : `${turnRecap.runtimeMs}:${turnRecap.outputTokens ?? ""}`,
   ]);
   const transcriptContents =
     showLoadingSkeleton || isEmpty

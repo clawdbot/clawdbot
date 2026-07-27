@@ -9,7 +9,10 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
-import { applySessionPatchProjection } from "../../config/sessions/session-accessor.js";
+import {
+  applySessionPatchProjection,
+  type SessionPatchProjectionSnapshot,
+} from "../../config/sessions/session-accessor.js";
 import { disableCronJobsBoundToSession } from "../../cron/job-session-bindings.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
@@ -34,8 +37,11 @@ import {
   type SessionsPatchResult,
 } from "../session-utils.js";
 import { projectSessionsPatchEntry } from "../sessions-patch.js";
+import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { hasVisibleActiveSessionRun } from "./session-active-runs.js";
+import { appendSessionAudit } from "./session-audit.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import {
   isAgentMainSessionKey,
   loadSessionsRuntimeModule,
@@ -48,7 +54,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const sessionMutationHandlers: GatewayRequestHandlers = {
-  "sessions.patch": async ({ params, respond, context, client }) => {
+  "sessions.patch": async ({ params, respond, context, client, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateSessionsPatchParams, "sessions.patch", respond)) {
       return;
     }
@@ -58,6 +64,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = context.getRuntimeConfig();
+    const archiveActor = gatewayClientSessionCreator(client);
     const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, p.agentId);
     if (!requestedAgent.ok) {
       respond(false, undefined, requestedAgent.error);
@@ -105,6 +112,17 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       const catalog = await context.loadGatewayModelCatalog();
       patchModelCatalog = catalog;
       return catalog;
+    };
+    let wasArchivedBeforePatch = false;
+    const resolvePatchTarget = ({ entries }: SessionPatchProjectionSnapshot) => {
+      const store = Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry]));
+      const { target: migratedTarget, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+        cfg,
+        key,
+        store,
+        agentId: requestedAgentId,
+      });
+      return { primaryKey, candidateKeys: migratedTarget.storeKeys };
     };
     const applyPatch = async () => {
       const currentLifecycleEntry = loadSessionEntry(key, { agentId: requestedAgentId }).entry;
@@ -160,20 +178,11 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       }
       return await applySessionPatchProjection({
         agentId: target.agentId,
+        assertCurrent: sessionMutationAuthorization?.assertCurrent,
         storePath,
-        resolveTarget: ({ entries }) => {
-          const store = Object.fromEntries(
-            entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
-          );
-          const { target: migratedTarget, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-            cfg,
-            key,
-            store,
-            agentId: requestedAgentId,
-          });
-          return { primaryKey, candidateKeys: migratedTarget.storeKeys };
-        },
+        resolveTarget: resolvePatchTarget,
         project: async ({ primaryKey, existingEntry, entries }) => {
+          wasArchivedBeforePatch = existingEntry?.archivedAt !== undefined;
           const projected = await projectSessionsPatchEntry({
             cfg,
             entries,
@@ -181,6 +190,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
             storeKey: primaryKey,
             agentId: requestedAgentId,
             patch: p,
+            archivedBy: archiveActor,
             loadGatewayModelCatalog: loadPatchModelCatalog,
           });
           if (!projected.ok) {
@@ -208,7 +218,40 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     const applied = await runExclusiveSessionLifecycleMutation({
       scope: storePath,
       identities: lifecycleIdentities,
-      run: applyPatch,
+      run: async () => {
+        const result = await applyPatch();
+        if (!result?.ok) {
+          return result;
+        }
+        const archiveStateChanged =
+          typeof p.archived === "boolean" &&
+          wasArchivedBeforePatch !== (result.entry.archivedAt !== undefined);
+        if (!archiveStateChanged || !archiveActor) {
+          return result;
+        }
+        const action = result.entry.archivedAt === undefined ? "unarchived" : "archived";
+        try {
+          await appendSessionAudit({
+            cfg,
+            target: { agentId: target.agentId, entry: result.entry, storePath },
+            text: `${action} by ${archiveActor.label ?? archiveActor.id}`,
+            now: Date.now(),
+          });
+        } catch (error) {
+          // The "<name> archived/unarchived this" system note is best-effort. The archive
+          // state (archivedAt/archivedBy) is the durable outcome and is already committed; if
+          // the note append fails (rare) keep the archive and log rather than reversing it.
+          // Reversing raced concurrent membership/pin changes and is not worth the complexity
+          // for this non-security lifecycle toggle — visibility changes, a real access
+          // boundary, still roll back on audit failure.
+          sessionLog.warn(
+            `sessions.patch: ${action} audit note failed for ${canonicalKey}; archive kept: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+        return result;
+      },
     });
     if (!applied) {
       return;
@@ -310,7 +353,13 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       reason: "patch",
     });
   },
-  "sessions.pluginPatch": async ({ params, respond, context, client }) => {
+  "sessions.pluginPatch": async ({
+    params,
+    respond,
+    context,
+    client,
+    sessionMutationAuthorization,
+  }) => {
     if (
       !assertValidParams(params, validateSessionsPluginPatchParams, "sessions.pluginPatch", respond)
     ) {
@@ -371,6 +420,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       namespace,
       value: params.value,
       unset: params.unset === true,
+      assertCurrent: sessionMutationAuthorization?.assertCurrent,
     });
     if (!patched.ok) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, patched.error));
@@ -382,7 +432,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       reason: "plugin-patch",
     });
   },
-  "sessions.reset": async ({ params, respond, context }) => {
+  "sessions.reset": async ({ params, respond, context, client, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateSessionsResetParams, "sessions.reset", respond)) {
       return;
     }
@@ -399,9 +449,19 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       ...(p.agentId ? { agentId: p.agentId } : {}),
       reason,
       commandSource: "gateway:sessions.reset",
+      creation: resolveOperatorSessionCreation(client),
+      assertAuthorizedInstance: sessionMutationAuthorization?.assertCurrent,
     });
     if (!result.ok) {
       respond(false, undefined, result.error);
+      return;
+    }
+    if ("incognitoDeleted" in result) {
+      respond(true, { ok: true, key: result.key, deleted: true }, undefined);
+      emitSessionsChanged(context, {
+        sessionKey: result.key,
+        reason,
+      });
       return;
     }
     respond(

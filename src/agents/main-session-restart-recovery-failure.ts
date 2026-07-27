@@ -14,6 +14,7 @@ import {
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import { buildUnresumableSessionNoticeIdempotencyKey } from "./main-session-restart-claim.js";
 import { resolveRestartRecoveryDeliveryContext } from "./main-session-restart-dispatch.js";
+import { buildRestartRecoveryExpectedState } from "./main-session-restart-recovery-shared.js";
 
 const log = createSubsystemLogger("main-session-restart-recovery");
 const TOMBSTONED_SESSION_NOTICE =
@@ -176,27 +177,7 @@ async function writeUnresumableSessionNotice(params: {
     agentId: resolveAgentIdFromSessionKey(params.sessionKey),
     sessionKey: params.sessionKey,
     expectedSessionId: params.entry.sessionId,
-    expectedSessionState: {
-      abortedLastRun: params.entry.abortedLastRun,
-      mainRestartRecoveryCycleId: params.observation.cycleId,
-      mainRestartRecoveryRevision: params.observation.revision,
-      restartRecoveryBeforeAgentReplyState: params.entry.restartRecoveryBeforeAgentReplyState,
-      restartRecoveryDeliveryReceiptState: params.entry.restartRecoveryDeliveryReceiptState,
-      restartRecoveryDeliveryToolCallId: params.entry.restartRecoveryDeliveryToolCallId,
-      restartRecoveryDeliveryRequestFingerprint:
-        params.entry.restartRecoveryDeliveryRequestFingerprint,
-      restartRecoveryDeliveryRunId: params.entry.restartRecoveryDeliveryRunId,
-      restartRecoveryDeliverySourceRunId: params.entry.restartRecoveryDeliverySourceRunId,
-      restartRecoveryRequesterAccountId: params.entry.restartRecoveryRequesterAccountId,
-      restartRecoveryRequesterSenderId: params.entry.restartRecoveryRequesterSenderId,
-      restartRecoverySameChannelThreadRequired:
-        params.entry.restartRecoverySameChannelThreadRequired,
-      restartRecoverySourceIngress: params.entry.restartRecoverySourceIngress,
-      restartRecoverySourceReplyDeliveryMode: params.entry.restartRecoverySourceReplyDeliveryMode,
-      restartRecoveryTerminalRunIds: params.entry.restartRecoveryTerminalRunIds,
-      status: params.entry.status,
-      updatedAt: params.entry.updatedAt,
-    },
+    expectedSessionState: buildRestartRecoveryExpectedState(params.entry, params.observation),
     sessionLifecyclePatch: {
       abortedLastRun: false,
       endedAt: now,

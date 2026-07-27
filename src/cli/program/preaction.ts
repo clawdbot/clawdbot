@@ -35,6 +35,7 @@ function setProcessTitleForCommand(actionCommand: Command) {
 
 function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: string[]): boolean {
   return (
+    commandPath[0] === "update" ||
     resolvePluginInstallInvalidConfigPolicy(
       resolvePluginInstallPreactionRequest({
         actionCommand,

@@ -84,7 +84,7 @@ class McpServersCard extends OpenClawLightDomElement {
 
   private mutationBlockedReason(): string | null {
     const gateway = this.context?.gateway;
-    if (!gateway?.snapshot.connected) {
+    if (gateway?.snapshot.phase !== "connected") {
       return t("mcpServers.connectRequired");
     }
     if (!hasOperatorAdminAccess(gateway.snapshot.hello?.auth ?? null)) {

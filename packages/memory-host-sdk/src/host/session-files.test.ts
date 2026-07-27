@@ -7,6 +7,7 @@ import {
   clearRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
 import {
   persistSessionTranscriptTurn,
   upsertSessionEntry,
@@ -620,7 +621,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     );
     fsSync.writeFileSync(
       configPath,
-      JSON.stringify({ agents: { list: [{ id: "ops", default: true }] } }),
+      JSON.stringify({ agents: { entries: { ops: { default: true } } } }),
     );
     Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", configPath);
     clearRuntimeConfigSnapshot();
@@ -911,12 +912,12 @@ describe("buildSessionEntry", () => {
         message: {
           role: "user",
           content: [
-            { type: "text", text: "Conversation info (untrusted metadata):" },
+            { type: "text", text: markInboundContextLabel("Conversation info:") },
             { type: "text", text: "```json" },
             { type: "text", text: '{"message_id":"msg-100","chat_id":"-100123"}' },
             { type: "text", text: "```" },
             { type: "text", text: "" },
-            { type: "text", text: "Sender (untrusted metadata):" },
+            { type: "text", text: markInboundContextLabel("Sender:") },
             { type: "text", text: "```json" },
             { type: "text", text: '{"label":"Chris","id":"42"}' },
             { type: "text", text: "```" },

@@ -28,7 +28,13 @@ import type {
   PluginDiagnostic,
   PluginFormat,
 } from "./manifest-types.js";
-import type { PluginManifestContracts } from "./manifest.js";
+import type {
+  PluginManifestContracts,
+  PluginManifestDashboard,
+  PluginManifestDashboardActionVerb,
+  PluginManifestDashboardDataBinding,
+  PluginManifestMcpServer,
+} from "./manifest.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -172,9 +178,22 @@ type PluginSessionCatalogRegistration = {
   rootDir?: string;
 };
 
+export type PluginDashboardDataBindingRegistration = PluginManifestDashboardDataBinding & {
+  pluginId: string;
+  capabilityId: string;
+  handler: GatewayRequestHandlers[string];
+};
+
+export type PluginDashboardActionVerbRegistration = PluginManifestDashboardActionVerb & {
+  pluginId: string;
+  capabilityId: string;
+  handler: GatewayRequestHandlers[string];
+};
+
 type PluginCliBackendRegistration = {
   pluginId: string;
   pluginName?: string;
+  builtWithOpenClawVersion?: string;
   backend: CliBackendPlugin;
   source: string;
   rootDir?: string;
@@ -396,6 +415,7 @@ export type PluginRecord = {
   id: string;
   name: string;
   version?: string;
+  builtWithOpenClawVersion?: string;
   packageName?: string;
   description?: string;
   format?: PluginFormat;
@@ -449,6 +469,8 @@ export type PluginRecord = {
   configUiHints?: Record<string, PluginConfigUiHint>;
   configJsonSchema?: JsonSchemaObject;
   contracts?: PluginManifestContracts;
+  dashboard?: PluginManifestDashboard;
+  mcpServers?: Record<string, PluginManifestMcpServer>;
   memorySlotSelected?: boolean;
   dependencyStatus?: PluginDependencyStatus;
 };
@@ -484,6 +506,8 @@ export type PluginRegistry = {
   agentHarnesses: PluginAgentHarnessRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
   gatewayMethodDescriptors: GatewayMethodDescriptor[];
+  dashboardDataBindings: Map<string, PluginDashboardDataBindingRegistration>;
+  dashboardActionVerbs: Map<string, PluginDashboardActionVerbRegistration>;
   coreGatewayMethodNames: string[];
   httpRoutes: PluginHttpRouteRegistration[];
   hostedMediaResolvers: PluginHostedMediaResolverRegistration[];

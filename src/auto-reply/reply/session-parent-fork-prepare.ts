@@ -60,6 +60,10 @@ export async function prepareReplySessionParentFork(params: {
     ...buildMainSessionRecoveryClearPatch(params.sessionEntry),
     sessionId: fork.sessionId,
     sessionFile: fork.sessionFile,
+    forkSource: {
+      sessionKey: params.parentSessionKey,
+      sessionId: parentEntry.sessionId,
+    },
     forkedFromParent: true,
     totalTokens: undefined,
     totalTokensFresh: false,

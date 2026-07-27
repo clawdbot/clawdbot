@@ -2,6 +2,7 @@
  * Azure Speech provider descriptor. It reads config/env defaults, parses speech
  * directives, lists voices, and calls the Azure TTS runtime helper.
  */
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -27,8 +28,6 @@ import {
   listAzureSpeechVoices,
   normalizeAzureSpeechBaseUrl,
 } from "./tts.js";
-
-const DEFAULT_GENERATED_AUDIO_MAX_BYTES = 16 * 1024 * 1024;
 
 type AzureSpeechProviderConfig = {
   apiKey?: string;
@@ -92,7 +91,7 @@ function normalizeAzureSpeechProviderConfig(
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.providers.azure-speech.apiKey",
+      path: "tts.providers.azure-speech.apiKey",
     }),
     region,
     endpoint,
@@ -186,16 +185,6 @@ function resolveApiKey(...candidates: Array<string | undefined>): string | undef
 
 function resolveTimeoutMs(config: AzureSpeechProviderConfig, timeoutMs: number): number {
   return config.timeoutMs ?? timeoutMs;
-}
-
-function resolveGeneratedAudioMaxBytes(req: {
-  cfg: { agents?: { defaults?: { mediaMaxMb?: number } } };
-}): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return DEFAULT_GENERATED_AUDIO_MAX_BYTES;
 }
 
 /** Build the Azure Speech provider descriptor for the speech-core runtime. */
@@ -295,7 +284,7 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
         lang: overrides.lang ?? config.lang,
         outputFormat,
         timeoutMs: resolveTimeoutMs(config, req.timeoutMs),
-        maxBytes: resolveGeneratedAudioMaxBytes(req),
+        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
       });
       return {
         audioBuffer,
@@ -322,7 +311,7 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
         lang: overrides.lang ?? config.lang,
         outputFormat: DEFAULT_AZURE_SPEECH_TELEPHONY_FORMAT,
         timeoutMs: resolveTimeoutMs(config, req.timeoutMs),
-        maxBytes: resolveGeneratedAudioMaxBytes(req),
+        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
       });
       return {
         audioBuffer,

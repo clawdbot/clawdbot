@@ -27,6 +27,7 @@ import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-m
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { loadSessionEntry } from "../session-utils.js";
 import {
   respondDeletedAgentSession,
@@ -206,7 +207,7 @@ export function prepareAgentSession(params: {
     resetType: resolveSessionResetType({ sessionKey: canonicalKey }),
     resetOverride: resolveChannelResetConfig({
       sessionCfg: cfg.session,
-      channel: entry?.lastChannel ?? entry?.channel ?? params.recipientChannel,
+      channel: sessionDeliveryChannel(entry) ?? params.recipientChannel,
     }),
   });
   const lifecycleTimestamps = entry

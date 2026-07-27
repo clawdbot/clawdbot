@@ -3,6 +3,7 @@ import { detectPolicyInlineEval } from "./command-analysis/policy.js";
 import { makeExecutable, makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
 import {
   evaluateShellAllowlistWithAuthorization,
+  requiresExecApproval,
   resolveAllowAlwaysPersistenceDecision,
   resolveExecApprovalAllowedDecisions,
 } from "./exec-approvals.js";
@@ -238,5 +239,57 @@ describe("authorization-backed exec allowlist", () => {
       "allow-once",
       "deny",
     ]);
+  });
+
+  it("does not satisfy allowlist policy for escaped word-boundary newlines", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: "tr x\n\\id",
+      allowlist: [],
+      safeBins: new Set(["tr"]),
+      platform: process.platform,
+    });
+
+    expect(result.analysisOk).toBe(false);
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(result.authorizationPlan).toEqual(
+      expect.objectContaining({
+        ok: false,
+        reason: "line-continuation",
+      }),
+    );
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: result.analysisOk,
+        allowlistSatisfied: result.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not satisfy pattern allowlists for escaped word-boundary newlines", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: "git\n\\id -u",
+      allowlist: [{ pattern: "git" }],
+      safeBins: new Set(),
+      platform: process.platform,
+    });
+
+    expect(result.analysisOk).toBe(false);
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(result.authorizationPlan).toEqual(
+      expect.objectContaining({
+        ok: false,
+        reason: "line-continuation",
+      }),
+    );
   });
 });

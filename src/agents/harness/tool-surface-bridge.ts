@@ -15,6 +15,7 @@ import {
   resolveLocalModelLeanPreserveToolNames,
   shouldCatalogToolForLocalModelLean,
 } from "../local-model-lean.js";
+import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../tool-schema-projection.js";
 import { resolveAgentToolSearchRuntimeConfig } from "../tool-search-runtime-config.js";
 import {
@@ -74,6 +75,7 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
   runtimeToolAllowlist?: readonly string[];
   sessionId?: string;
   sessionKey?: string;
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
   sourceReplyDeliveryMode?: string;
   toolsAllow?: readonly string[];
 }): AgentHarnessToolSurfaceRuntime {
@@ -124,6 +126,7 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
     modelProvider: params.modelProvider,
     modelId: params.modelId,
     runtimeToolAllowlist,
+    scheduledToolPolicy: params.scheduledToolPolicy,
   });
   const preserveToolNames = resolveLocalModelLeanPreserveToolNames({
     toolNames: capabilityProfile.policy.explicitToolOverrideAllowlist,

@@ -12,7 +12,6 @@ import { createDedupeCache } from "../../infra/dedupe.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { TextContent } from "../../llm/types.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { resolveAgentContextLimits } from "../agent-scope.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
   acquireSessionWriteLock,
@@ -21,6 +20,11 @@ import {
 } from "../session-write-lock.js";
 import { SessionManager } from "../sessions/index.js";
 import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
+import {
+  calculateMaxToolResultCharsWithCap,
+  resolveAutoLiveToolResultMaxChars,
+  resolveLiveToolResultMaxChars,
+} from "../tool-result-limits.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { log } from "./logger.js";
 import type { ToolResultPromptProjectionState } from "./session-prompt-state.js";
@@ -40,25 +44,10 @@ import {
   type RuntimeTranscriptScope,
 } from "./transcript-runtime-state.js";
 
-/**
- * Maximum share of the context window a single tool result should occupy.
- * This is intentionally conservative – a single tool result should not
- * consume more than 30% of the context window even without other messages.
- */
-const MAX_TOOL_RESULT_CONTEXT_SHARE = 0.3;
-
-/**
- * Low-context default cap for a single live tool result text block.
- *
- * The session runtime already truncates tool results aggressively when serializing old history
- * for compaction summaries. For the live request path we still keep a bounded
- * request-local ceiling so oversized tool output cannot dominate the next turn.
- */
-export const DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS = 16_000;
-const LARGE_CONTEXT_MAX_LIVE_TOOL_RESULT_CHARS = 32_000;
-const XL_CONTEXT_MAX_LIVE_TOOL_RESULT_CHARS = 64_000;
-const LARGE_CONTEXT_TOOL_RESULT_TOKENS = 100_000;
-const XL_CONTEXT_TOOL_RESULT_TOKENS = 200_000;
+export {
+  DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
+  resolveLiveToolResultMaxChars,
+} from "../tool-result-limits.js";
 const PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER = 4;
 const AGGREGATE_TOOL_RESULT_CONTEXT_SHARE = 0.5;
 
@@ -288,45 +277,9 @@ function calculateMaxToolResultChars(contextWindowTokens: number): number {
   );
 }
 
-export function resolveAutoLiveToolResultMaxChars(contextWindowTokens: number): number {
-  if (!Number.isFinite(contextWindowTokens)) {
-    return DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
-  }
-  const tokens = Math.floor(contextWindowTokens);
-  if (tokens >= XL_CONTEXT_TOOL_RESULT_TOKENS) {
-    return XL_CONTEXT_MAX_LIVE_TOOL_RESULT_CHARS;
-  }
-  if (tokens >= LARGE_CONTEXT_TOOL_RESULT_TOKENS) {
-    return LARGE_CONTEXT_MAX_LIVE_TOOL_RESULT_CHARS;
-  }
-  return DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
-}
-
-export function calculateMaxToolResultCharsWithCap(
-  contextWindowTokens: number,
-  hardCapChars: number,
-): number {
-  const maxTokens = Math.floor(contextWindowTokens * MAX_TOOL_RESULT_CONTEXT_SHARE);
-  // Rough conversion: ~4 chars per token on average
-  const maxChars = maxTokens * 4;
-  return Math.min(maxChars, Math.max(1, hardCapChars));
-}
-
-export function resolveLiveToolResultMaxChars(params: {
-  contextWindowTokens: number;
-  cfg?: OpenClawConfig;
-  agentId?: string | null;
-}): number {
-  const configuredCap = resolveAgentContextLimits(params.cfg, params.agentId)?.toolResultMaxChars;
-  const cap = configuredCap ?? resolveAutoLiveToolResultMaxChars(params.contextWindowTokens);
-  return calculateMaxToolResultCharsWithCap(params.contextWindowTokens, cap);
-}
-
 export function resolveLiveToolResultAggregateMaxChars(params: {
   contextWindowTokens: number;
   perResultMaxChars?: number;
-  cfg?: OpenClawConfig;
-  agentId?: string | null;
 }): number {
   const perResultMaxChars = Math.max(
     1,
@@ -334,8 +287,6 @@ export function resolveLiveToolResultAggregateMaxChars(params: {
       params.perResultMaxChars ??
         resolveLiveToolResultMaxChars({
           contextWindowTokens: params.contextWindowTokens,
-          cfg: params.cfg,
-          agentId: params.agentId,
         }),
     ),
   );

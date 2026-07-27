@@ -28,6 +28,26 @@
     "target": "BlueBubbles"
   },
   {
+    "source": "Buzz",
+    "target": "Buzz"
+  },
+  {
+    "source": "Channel overview",
+    "target": "频道概览"
+  },
+  {
+    "source": "Channel access controls",
+    "target": "频道访问控制"
+  },
+  {
+    "source": "Secrets management",
+    "target": "密钥管理"
+  },
+  {
+    "source": "Channel troubleshooting",
+    "target": "频道故障排除"
+  },
+  {
     "source": "Configuration reference - iMessage",
     "target": "Configuration reference - iMessage"
   },
@@ -42,6 +62,18 @@
   {
     "source": "ClawHub",
     "target": "ClawHub"
+  },
+  {
+    "source": "Claws",
+    "target": "Claws"
+  },
+  {
+    "source": "Cron jobs",
+    "target": "定时任务"
+  },
+  {
+    "source": "MCP configuration",
+    "target": "MCP 配置"
   },
   {
     "source": "ClawRouter (managed multi-provider routing)",
@@ -1602,5 +1634,37 @@
   {
     "source": "Baseten (Inkling + Model APIs)",
     "target": "Baseten（Inkling + Model APIs）"
+  },
+  {
+    "source": "Multi-user mode",
+    "target": "多用户模式"
+  },
+  {
+    "source": "The main session",
+    "target": "主会话"
+  },
+  {
+    "source": "Session management",
+    "target": "会话管理"
+  },
+  {
+    "source": "Presence",
+    "target": "在线状态"
+  },
+  {
+    "source": "Gateway security",
+    "target": "Gateway 安全"
+  },
+  {
+    "source": "Retired HEARTBEAT.md workspace file",
+    "target": "已弃用的 HEARTBEAT.md 工作区文件"
+  },
+  {
+    "source": "Cron CLI",
+    "target": "Cron CLI"
+  },
+  {
+    "source": "TOOLS.md retired",
+    "target": "TOOLS.md 已弃用"
   }
 ]

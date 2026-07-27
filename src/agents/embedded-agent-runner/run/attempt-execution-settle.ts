@@ -1,5 +1,11 @@
 /** Runs prompt dispatch, stream settlement, cleanup, and result projection. */
 import type { AssistantMessage } from "../../../llm/types.js";
+import {
+  mergeAgentRunAttemptTerminal,
+  projectAgentRunAttemptTerminal,
+  setAgentRunAttemptTerminalFailure,
+  type AgentRunAttemptFailureSource,
+} from "../../agent-run-terminal-outcome.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { settleRequesterAfterSessionSpawns } from "../../subagent-registry.js";
 import type { NormalizedUsage } from "../../usage.js";
@@ -30,14 +36,15 @@ type StreamCleanupInput = {
 
 function cleanupEmbeddedAttemptStreamExecution(input: StreamCleanupInput): void {
   const { attempt, state } = input;
+  const terminal = projectAgentRunAttemptTerminal(state.terminal);
   input.clearAttemptTimeoutTimers();
   if (
     !input.isProbeSession &&
-    (state.aborted || state.timedOut) &&
-    !state.timedOutDuringCompaction
+    (terminal.aborted || terminal.timedOut) &&
+    !terminal.timedOutDuringCompaction
   ) {
     log.debug(
-      `run cleanup: runId=${attempt.runId} sessionId=${attempt.sessionId} aborted=${state.aborted} timedOut=${state.timedOut}`,
+      `run cleanup: runId=${attempt.runId} sessionId=${attempt.sessionId} aborted=${terminal.aborted} timedOut=${terminal.timedOut}`,
     );
   }
   try {
@@ -143,7 +150,13 @@ export async function runEmbeddedAttemptSettledPhase(
   let sessionIdUsed = activeSession.sessionId;
   let sessionFileUsed: string | undefined = attempt.sessionFile;
   let preflightRecovery: EmbeddedRunAttemptResult["preflightRecovery"];
-  let promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"] = null;
+  const readTerminal = () => projectAgentRunAttemptTerminal(state.terminal);
+  const setFailure = (error: unknown, source: AgentRunAttemptFailureSource | null) => {
+    state.terminal = setAgentRunAttemptTerminalFailure(
+      state.terminal,
+      error !== null && error !== undefined ? { error, source: source ?? "prompt" } : null,
+    );
+  };
 
   try {
     const { promptStartedAt } = await runEmbeddedAttemptPromptPhase({
@@ -214,7 +227,6 @@ export async function runEmbeddedAttemptSettledPhase(
         contextEngineAssemblySucceeded,
         contextEnginePromptAuthority,
         includeBoundaryTimestamp,
-        sessionAgentId: input.setup.sessionAgentId,
         ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
         ...(unwindowedContextEngineMessagesForPrecheck
           ? { unwindowedContextEngineMessagesForPrecheck }
@@ -227,17 +239,19 @@ export async function runEmbeddedAttemptSettledPhase(
         trajectoryRecorder,
       },
       lifecycle: {
-        readState: () => ({
-          contextBudgetStatus,
-          preflightRecovery,
-          promptError: state.promptError,
-          promptErrorSource,
-        }),
+        readState: () => {
+          const terminal = readTerminal();
+          return {
+            contextBudgetStatus,
+            preflightRecovery,
+            promptError: terminal.promptError,
+            promptErrorSource: terminal.promptErrorSource,
+          };
+        },
         writeState: (nextState) => {
           contextBudgetStatus = nextState.contextBudgetStatus;
           preflightRecovery = nextState.preflightRecovery;
-          state.promptError = nextState.promptError;
-          promptErrorSource = nextState.promptErrorSource;
+          setFailure(nextState.promptError, nextState.promptErrorSource);
         },
         getPrePromptMessageCount: () => sessionRuntimeState.prePromptMessageCount,
         setPrePromptMessageCount: (count) => {
@@ -258,8 +272,10 @@ export async function runEmbeddedAttemptSettledPhase(
         },
         markYieldAborted: () => {
           yieldAborted = true;
-          state.cleanupYieldAborted = true;
-          state.aborted = false;
+          state.terminal = mergeAgentRunAttemptTerminal(state.terminal, {
+            kind: "aborted",
+            source: "yield_cleanup",
+          });
         },
         readYieldState: input.lifecycle.readYieldState,
         stopAcceptingSteerMessages,
@@ -281,13 +297,17 @@ export async function runEmbeddedAttemptSettledPhase(
       getBeforeAgentFinalizeRevisionReason,
       getContextEngineAfterTurnCheckpoint: contextGuards.getAfterTurnCheckpoint,
       onSettleErrorState: (settleState) => {
-        state.promptError = settleState.promptError;
-        promptErrorSource = settleState.promptErrorSource;
+        setFailure(settleState.promptError, settleState.promptErrorSource);
       },
       onSettled: (settledStream) => {
-        state.promptError = settledStream.promptError;
-        promptErrorSource = settledStream.promptErrorSource;
-        state.timedOutDuringCompaction = settledStream.timedOutDuringCompaction;
+        setFailure(settledStream.promptError, settledStream.promptErrorSource);
+        if (settledStream.timedOutDuringCompaction) {
+          state.terminal = mergeAgentRunAttemptTerminal(state.terminal, {
+            kind: "timeout",
+            phase: "compaction",
+            source: "observation",
+          });
+        }
         messagesSnapshot = settledStream.messagesSnapshot;
         sessionIdUsed = settledStream.sessionIdUsed;
         lastAssistant = settledStream.lastAssistant;
@@ -297,22 +317,32 @@ export async function runEmbeddedAttemptSettledPhase(
         cacheBreak = settledStream.cacheBreak;
         sessionRuntimeState.promptCache = settledStream.promptCache;
       },
-      getState: () => ({
-        promptError: state.promptError,
-        promptErrorSource,
-        yieldAborted,
-        sessionIdUsed,
-        sessionFileUsed,
-      }),
+      getState: () => {
+        const terminal = readTerminal();
+        return {
+          promptError: terminal.promptError,
+          promptErrorSource: terminal.promptErrorSource,
+          yieldAborted,
+          sessionIdUsed,
+          sessionFileUsed,
+        };
+      },
       settle: {
         subscription,
-        readLifecycleState: () => ({
-          aborted: state.aborted,
-          timedOut: state.timedOut,
-          timedOutDuringCompaction: state.timedOutDuringCompaction,
-        }),
+        readLifecycleState: () => {
+          const terminal = readTerminal();
+          return {
+            aborted: terminal.aborted,
+            timedOut: terminal.timedOut,
+            timedOutDuringCompaction: terminal.timedOutDuringCompaction,
+          };
+        },
         markTimedOutDuringCompaction: () => {
-          state.timedOutDuringCompaction = true;
+          state.terminal = mergeAgentRunAttemptTerminal(state.terminal, {
+            kind: "timeout",
+            phase: "compaction",
+            source: "observation",
+          });
         },
         runAbortSignal: input.runAbortController.signal,
         isProbeSession,
@@ -328,12 +358,15 @@ export async function runEmbeddedAttemptSettledPhase(
       },
       afterTurn: {
         activeContextEngine: input.activeContextEngine,
-        readLifecycleState: () => ({
-          aborted: state.aborted,
-          timedOut: state.timedOut,
-          idleTimedOut: state.idleTimedOut,
-          timedOutDuringCompaction: state.timedOutDuringCompaction,
-        }),
+        readLifecycleState: () => {
+          const terminal = readTerminal();
+          return {
+            aborted: terminal.aborted,
+            timedOut: terminal.timedOut,
+            idleTimedOut: terminal.idleTimedOut,
+            timedOutDuringCompaction: terminal.timedOutDuringCompaction,
+          };
+        },
         runtime: {
           effectiveWorkspace: input.setup.effectiveWorkspace,
           agentDir: input.agentDir,
@@ -371,15 +404,7 @@ export async function runEmbeddedAttemptSettledPhase(
     attempt,
     subscription,
     state: {
-      aborted: state.aborted,
-      externalAbort: state.externalAbort,
-      timedOut: state.timedOut,
-      idleTimedOut: state.idleTimedOut,
-      timedOutDuringCompaction: state.timedOutDuringCompaction,
-      timedOutDuringToolExecution: state.timedOutDuringToolExecution,
-      timedOutByRunBudget: state.timedOutByRunBudget,
-      promptError: state.promptError,
-      promptErrorSource,
+      terminal: state.terminal,
       preflightRecovery,
       sessionIdUsed,
       sessionFileUsed,

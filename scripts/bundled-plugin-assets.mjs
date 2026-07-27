@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mjs";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const VALID_PHASES = new Set(["build", "copy"]);
@@ -139,12 +140,42 @@ export async function runBundledPluginAssetHooks(options = {}) {
 }
 
 /**
- * Parses `--phase` and repeated `--plugin` flags for asset hook scripts.
+ * Lists declared generated source-tree outputs that differ from the committed
+ * bytes. Committed buildOutputs must match a fresh hook run; PR node-test
+ * selection skips extension suites for packages-only diffs, so this check is
+ * the guard that keeps upstream changes from landing stale committed bundles.
+ */
+export function listStaleGeneratedPluginAssets(options = {}) {
+  const repoRoot = options.rootDir ?? rootDir;
+  const sources = listGeneratedExtensionAssetSources({ rootDir: repoRoot });
+  if (sources.length === 0) {
+    return [];
+  }
+  const result = spawnSync("git", ["status", "--porcelain", "--", ...sources], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.status !== 0) {
+    throw new Error(
+      `git status failed for generated plugin assets: ${result.stderr?.trim() || result.status}`,
+    );
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.slice(3).trim())
+    .filter(Boolean)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+/**
+ * Parses `--phase`, repeated `--plugin`, and `--check` flags for asset hook scripts.
  */
 export function parseBundledPluginAssetArgs(argv) {
   const args = [...argv];
   const plugins = [];
   let phase = null;
+  let check = false;
 
   while (args.length > 0) {
     const arg = args.shift();
@@ -167,19 +198,44 @@ export function parseBundledPluginAssetArgs(argv) {
       plugins.push(arg.slice("--plugin=".length));
       continue;
     }
+    if (arg === "--check") {
+      check = true;
+      continue;
+    }
     throw new Error(`Unknown bundled plugin asset argument: ${String(arg)}`);
   }
 
   if (!VALID_PHASES.has(phase)) {
     throw new Error(`Expected --phase ${[...VALID_PHASES].join("|")}`);
   }
+  // The stale-asset scan covers every declared buildOutput, so a filtered run
+  // would fail on drift it never rebuilt; keep check runs whole-repo.
+  if (check && phase !== "build") {
+    throw new Error("--check requires --phase build");
+  }
+  if (check && plugins.length > 0) {
+    throw new Error("--check cannot be combined with --plugin filters");
+  }
 
-  return { phase, plugins };
+  return { check, phase, plugins };
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {
-    await runBundledPluginAssetHooks(parseBundledPluginAssetArgs(process.argv.slice(2)));
+    const args = parseBundledPluginAssetArgs(process.argv.slice(2));
+    await runBundledPluginAssetHooks(args);
+    if (args.check) {
+      const stale = listStaleGeneratedPluginAssets();
+      if (stale.length > 0) {
+        console.error("Generated bundled plugin assets differ from the committed bytes:");
+        for (const source of stale) {
+          console.error(`  - ${source}`);
+        }
+        console.error("Rebuild with `pnpm plugins:assets:build` and commit the regenerated files.");
+        process.exit(1);
+      }
+      console.log("Generated bundled plugin assets match the committed bytes.");
+    }
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);

@@ -1,6 +1,8 @@
 // Channels page view contracts.
 import type {
   ChannelAccountSnapshot,
+  ChannelsPairingListResult,
+  ChannelsPairingRequest,
   ChannelsStatusSnapshot,
   ConfigUiHints,
   DiscordStatus,
@@ -18,12 +20,30 @@ import type { ChannelWizardState } from "./wizard-controller.ts";
 
 export type ChannelKey = string;
 
+export type ChannelPairingPrompt = {
+  kind: "approve" | "dismiss";
+  request: ChannelsPairingRequest;
+  notify: boolean;
+  bootstrapCommandOwner: boolean;
+};
+
 export type ChannelsProps = {
   connected: boolean;
   loading: boolean;
   snapshot: ChannelsStatusSnapshot | null;
   lastError: string | null;
   lastSuccessAt: number | null;
+  pairingLoading: boolean;
+  pairingSnapshot: ChannelsPairingListResult | null;
+  pairingError: string | null;
+  pairingLastSuccessAt: number | null;
+  pairingBusyRequestId: string | null;
+  pairingChannelFilter: string | null;
+  pairingAccountFilter: string | null;
+  pairingPrompt: ChannelPairingPrompt | null;
+  pairingNotice: string | null;
+  canManagePairing: boolean;
+  canAdmin: boolean;
   whatsappMessage: string | null;
   whatsappQrDataUrl: string | null;
   whatsappConnected: boolean | null;
@@ -47,6 +67,16 @@ export type ChannelsProps = {
   onWizardToggleMultiselect: (value: unknown) => void;
   onWizardClose: () => void;
   onRefresh: (probe: boolean) => void;
+  onPairingRefresh: () => void;
+  onPairingFilterChange: (channel: string | null, accountId: string | null) => void;
+  onPairingReviewAccount: (channel: string, accountId: string) => void;
+  onPairingApprove: (request: ChannelsPairingRequest) => void;
+  onPairingDismiss: (request: ChannelsPairingRequest) => void;
+  onPairingPromptChange: (
+    patch: Partial<Pick<ChannelPairingPrompt, "notify" | "bootstrapCommandOwner">>,
+  ) => void;
+  onPairingPromptCancel: () => void;
+  onPairingPromptConfirm: () => void;
   onWhatsAppStart: (force: boolean) => void;
   onWhatsAppWait: () => void;
   onWhatsAppLogout: () => void;

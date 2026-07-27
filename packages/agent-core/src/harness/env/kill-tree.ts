@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 
 const DEFAULT_GRACE_MS = 3000;
 const MAX_GRACE_MS = 60_000;
+const TASKKILL_COMPLETION_TIMEOUT_MS = 3000;
 
 export type KillProcessTreeOptions = {
   graceMs?: number;
@@ -64,20 +65,22 @@ export function killProcessTree(pid: number, opts?: KillProcessTreeOptions): voi
 export function signalProcessTree(
   pid: number,
   signal: "SIGTERM" | "SIGKILL",
-  opts?: { detached?: boolean },
+  opts?: { detached?: boolean; onComplete?: () => void },
 ): void {
   if (!Number.isFinite(pid) || pid <= 0) {
+    opts?.onComplete?.();
     return;
   }
 
   if (process.platform === "win32") {
-    signalProcessTreeWindows(pid, signal);
+    void signalProcessTreeWindowsAndWait(pid, signal).then(opts?.onComplete);
     return;
   }
 
   const useGroupKill =
     opts?.detached === true || (opts?.detached !== false && isProcessGroupLeader(pid));
   signalProcessTreeUnix(pid, signal, useGroupKill);
+  opts?.onComplete?.();
 }
 
 function normalizeGraceMs(value?: number): number {
@@ -166,17 +169,32 @@ function signalProcessTreeUnix(
   }
 }
 
-function runTaskkill(args: string[]): void {
-  try {
-    const child = spawn("taskkill", args, {
-      stdio: "ignore",
-      detached: true,
-      windowsHide: true,
-    });
-    child.once("error", () => {});
-  } catch {
-    // Ignore taskkill spawn failures.
-  }
+function runTaskkill(args: string[]): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(completionTimer);
+      resolve();
+    };
+    const completionTimer = setTimeout(finish, TASKKILL_COMPLETION_TIMEOUT_MS);
+    completionTimer.unref?.();
+    try {
+      const child = spawn("taskkill", args, {
+        stdio: "ignore",
+        detached: true,
+        windowsHide: true,
+      });
+      child.once("error", finish);
+      child.once("close", finish);
+    } catch {
+      // Ignore taskkill spawn failures.
+      finish();
+    }
+  });
 }
 
 function killProcessTreeWindows(pid: number, graceMs: number): void {
@@ -191,7 +209,14 @@ function killProcessTreeWindows(pid: number, graceMs: number): void {
 }
 
 function signalProcessTreeWindows(pid: number, signal: "SIGTERM" | "SIGKILL"): void {
+  void signalProcessTreeWindowsAndWait(pid, signal);
+}
+
+function signalProcessTreeWindowsAndWait(
+  pid: number,
+  signal: "SIGTERM" | "SIGKILL",
+): Promise<void> {
   const args =
     signal === "SIGKILL" ? ["/F", "/T", "/PID", String(pid)] : ["/T", "/PID", String(pid)];
-  runTaskkill(args);
+  return runTaskkill(args);
 }

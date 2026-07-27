@@ -98,15 +98,15 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
       }
 
       const snapshot = channelManager.getRuntimeSnapshot();
-      const autostartSuppression = channelManager.getAutostartSuppression();
-      if (!autostartSuppression) {
-        suppressedAccounts.clear();
-      }
+      const globalAutostartSuppression = channelManager.getAutostartSuppression();
 
       for (const [channelId, accounts] of Object.entries(snapshot.channelAccounts)) {
         if (!accounts) {
           continue;
         }
+        const autostartSuppressed =
+          globalAutostartSuppression !== null ||
+          channelManager.isAmbientAutostartSuppressed(channelId);
         for (const [accountId, status] of Object.entries(accounts)) {
           // A replacement monitor owns future accounts. The retired monitor may
           // only finish the restart it had already begun.
@@ -123,7 +123,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             continue;
           }
           const key = rKey(channelId, accountId);
-          if (autostartSuppression) {
+          if (autostartSuppressed) {
             if (status.running !== true && !suppressedAccounts.has(key)) {
               log.info?.(
                 `[${channelId}:${accountId}] health-monitor: channel autostart suppressed; treating as expected stopped`,

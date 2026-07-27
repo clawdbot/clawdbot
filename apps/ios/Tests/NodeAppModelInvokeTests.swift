@@ -88,6 +88,18 @@ private actor ApprovalResolutionCapture {
     }
 }
 
+private actor WatchApprovalReadbackProbe {
+    private var approvalIDs: [String] = []
+
+    func record(_ approvalID: String) {
+        self.approvalIDs.append(approvalID)
+    }
+
+    func snapshot() -> [String] {
+        self.approvalIDs
+    }
+}
+
 private actor MockHealthSummaryService: HealthSummaryServicing {
     private(set) var periods: [OpenClawHealthSummaryPeriod] = []
 
@@ -2522,6 +2534,58 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         await appModel.purgeChatTranscriptCache(gatewayID: stableID)
     }
 
+    @Test @MainActor func `offline stores keep byte-distinct gateway owners isolated`() async throws {
+        let appModel = NodeAppModel()
+        let suffix = UUID().uuidString
+        let composedGatewayID = "offline-gateway-\u{00E9}-\(suffix)"
+        let decomposedGatewayID = "offline-gateway-e\u{0301}-\(suffix)"
+        #expect(composedGatewayID.precomposedStringWithCanonicalMapping ==
+            decomposedGatewayID.precomposedStringWithCanonicalMapping)
+        #expect(GatewayStableIdentifier.key(composedGatewayID) !=
+            GatewayStableIdentifier.key(decomposedGatewayID))
+        defer {
+            appModel.cancelChatOfflineDataRemoval(gatewayID: composedGatewayID)
+        }
+
+        appModel._test_setConnectedGatewayID(composedGatewayID)
+        let composedStore = try #require(appModel.makeChatOfflineStore())
+        let composedOwnerID = appModel.chatViewModelOwnerID
+        #expect(await appModel.stageChatOfflineDataRemoval(gatewayID: composedGatewayID))
+
+        appModel._test_setConnectedGatewayID(decomposedGatewayID)
+        let decomposedStore = try #require(appModel.makeChatOfflineStore())
+
+        #expect(ObjectIdentifier(composedStore) != ObjectIdentifier(decomposedStore))
+        #expect(Array(composedStore.gatewayID.utf8) == Array(composedGatewayID.utf8))
+        #expect(Array(decomposedStore.gatewayID.utf8) == Array(decomposedGatewayID.utf8))
+        #expect(appModel.chatViewModelOwnerID != composedOwnerID)
+
+        appModel.cancelChatOfflineDataRemoval(gatewayID: composedGatewayID)
+        _ = await appModel.purgeChatTranscriptCache(gatewayID: composedGatewayID)
+        _ = await appModel.purgeChatTranscriptCache(gatewayID: decomposedGatewayID)
+    }
+
+    @Test @MainActor func `failed full offline reset never reuses retired facade`() async throws {
+        let appModel = NodeAppModel()
+        let gatewayID = "offline-reset-failure-\(UUID().uuidString)"
+        appModel._test_setConnectedGatewayID(gatewayID)
+        let originalStore = try #require(appModel.makeChatOfflineStore())
+        appModel._test_setRemoveAllChatDatabaseFilesHandler {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        defer {
+            appModel._test_setRemoveAllChatDatabaseFilesHandler(nil)
+        }
+
+        let didPurge = await appModel.purgeChatTranscriptCache()
+        #expect(!didPurge)
+        let replacementStore = try #require(appModel.makeChatOfflineStore())
+
+        #expect(ObjectIdentifier(originalStore) != ObjectIdentifier(replacementStore))
+        appModel._test_setRemoveAllChatDatabaseFilesHandler(nil)
+        _ = await appModel.purgeChatTranscriptCache(gatewayID: gatewayID)
+    }
+
     @Test @MainActor func `gateway main key refresh preserves focused Talk session`() {
         let talkMode = TalkModeManager(allowSimulatorCapture: true)
         let appModel = NodeAppModel(talkMode: talkMode)
@@ -4422,6 +4486,65 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(snapshot.approvals.map(\.id) == approvalIDs.sorted())
     }
 
+    @Test @MainActor func `watch readback classifies cached persisted and held approvals once in owner order`()
+        async throws
+    {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        NodeAppModel._test_setPersistedWatchExecApprovalBridgeStateJSON(#"""
+        {
+          "approvals": [],
+          "pendingApprovalReadbacks": [{
+            "approvalId": "approval-persisted-owner",
+            "gatewayStableID": "test-gateway"
+          }]
+        }
+        """#)
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: watchService)
+        appModel._test_setConnectedGatewayID("test-gateway")
+        try appModel._test_presentExecApprovalPrompt(#require(
+            NodeAppModel._test_makeExecApprovalPrompt(
+                id: "approval-cached-owner",
+                commandText: "echo cached",
+                expiresAtMs: 4_000_000_000_000)))
+
+        let expectedApprovalIDs = [
+            "approval-cached-owner",
+            "approval-persisted-owner",
+            "approval-held-owner",
+        ]
+        let probe = WatchApprovalReadbackProbe()
+        appModel._test_setUnifiedExecApprovalGetResponses(
+            expectedApprovalIDs.map {
+                (approvalID: $0, json: makePendingExecApprovalJSON($0))
+            },
+            beforeResponse: { approvalID in
+                await probe.record(approvalID)
+            })
+
+        await appModel._test_refreshWatchExecApprovalSnapshotOnDemand(
+            WatchExecApprovalSnapshotRequestEvent(
+                requestId: "snapshot-canonical-owner-order",
+                gatewayStableID: "test-gateway",
+                heldApprovals: [WatchExecApprovalSnapshotRequestItem(
+                    approvalId: "approval-held-owner",
+                    activeResolutionAttemptId: nil)],
+                sentAtMs: 226,
+                transport: "sendMessage"))
+
+        #expect(await probe.snapshot() == expectedApprovalIDs)
+        let snapshot = try #require(watchService.sentExecApprovalSnapshots.first {
+            $0.requestId == "snapshot-canonical-owner-order"
+        })
+        #expect(snapshot.requestId == "snapshot-canonical-owner-order")
+        #expect(snapshot.requestGatewayStableID == "test-gateway")
+        #expect(snapshot.approvals.map(\.id) == expectedApprovalIDs.sorted())
+        #expect(appModel._test_pendingPersistedExecApprovalReadbacks().isEmpty)
+    }
+
     @Test @MainActor func `canonical watch refresh does not acknowledge byte distinct owner`() async throws {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
@@ -5529,6 +5652,43 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let items = NodeAppModel._test_makeWatchChatItems(from: rawMessages)
 
         #expect(items.map(\.text) == ["Still worth reading"])
+    }
+
+    @Test func `canonical watch chat owner keeps the last five readable projected rows`() throws {
+        let rawMessages = try (0..<7).map { index in
+            try makeWatchChatRawMessage(
+                role: "assistant",
+                text: "Readable message \(index)",
+                timestamp: Double(index + 1))
+        }
+
+        let items = WatchChatPresentation.makeItems(from: rawMessages)
+
+        #expect(items.map(\.text) == (2..<7).map { "Readable message \($0)" })
+    }
+
+    @Test func `canonical watch chat owner anchors terminal tool mirrors to the submitted turn`() throws {
+        let rawMessages = try [
+            makeWatchChatRawMessage(
+                role: "user",
+                text: "Send the update",
+                timestamp: 3000,
+                idempotencyKey: "watch-run:user"),
+            makeProjectedWatchChatRawMessage(
+                role: "assistant",
+                text: "Update sent",
+                timestamp: 4000,
+                serverId: "tool-result-1",
+                isMessageToolMirror: true),
+        ]
+
+        let reply = WatchChatPresentation.replyText(
+            from: rawMessages,
+            runID: "watch-run",
+            submittedText: "Send the update",
+            submittedAtMs: 2500)
+
+        #expect(reply == "Update sent")
     }
 
     @Test func `watch chat preview reads responses output text`() throws {

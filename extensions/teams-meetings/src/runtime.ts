@@ -2,19 +2,24 @@ import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  createMeetingSession,
+  MeetingPlatformAdapter,
   MeetingSessionRuntime,
   type MeetingSessionRuntimeHandles,
   type MeetingSessionRuntimeJoinContext,
 } from "openclaw/plugin-sdk/meeting-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import type {
+  TranscriptStartRequest,
+  TranscriptStopRequest,
+} from "openclaw/plugin-sdk/transcripts";
 import type { TeamsMeetingsConfig, TeamsMeetingsMode, TeamsMeetingsTransport } from "./config.js";
 import {
   testTeamsMeetingListening,
   testTeamsMeetingSpeech,
   type TeamsMeetingsProbeContext,
 } from "./runtime-probes.js";
-import { createTeamsMeetingsSession } from "./runtime-session.js";
 import { getTeamsMeetingsSetupStatus } from "./runtime-setup.js";
 import {
   launchTeamsMeetingInChrome,
@@ -23,11 +28,7 @@ import {
   readTeamsMeetingTranscript,
   recoverCurrentTeamsMeetingTab,
 } from "./transports/chrome.js";
-import {
-  TEAMS_MEETINGS_PLATFORM_ADAPTER,
-  isTeamsMeetingsRealtimeRouteReady,
-  isTeamsMeetingsTalkBackMode,
-} from "./transports/teams-meetings-platform-adapter.js";
+import { TEAMS_MEETINGS_PLATFORM_ADAPTER } from "./transports/teams-meetings-platform-adapter.js";
 import type {
   TeamsMeetingsBrowserTab,
   TeamsMeetingsChromeHealth,
@@ -36,7 +37,7 @@ import type {
   TeamsMeetingsSession,
 } from "./transports/types.js";
 
-type ManualActionReason = NonNullable<TeamsMeetingsChromeHealth["manualActionReason"]>;
+type ManualActionReason = NonNullable<TeamsMeetingsChromeHealth["manualAction"]>["reason"];
 type SpeechBlockedReason = NonNullable<TeamsMeetingsChromeHealth["speechBlockedReason"]>;
 type SessionRuntime = MeetingSessionRuntime<
   TeamsMeetingsSession,
@@ -122,8 +123,6 @@ export class TeamsMeetingsRuntime {
         speech: {
           audioBridgeUnavailable: "Realtime speech requires an active Chrome audio bridge.",
           browserUnverified: "Microsoft Teams browser state has not been verified yet.",
-          manualActionFallback:
-            "Resolve the Microsoft Teams browser prompt before asking OpenClaw to speak.",
           microphoneMuted: "Turn on the OpenClaw Teams microphone before asking OpenClaw to speak.",
           microphoneMutedReason: "teams-microphone-muted",
           notInCall: "Microsoft Teams has not reported that the browser guest is in the call.",
@@ -139,7 +138,12 @@ export class TeamsMeetingsRuntime {
         agentId: normalizeAgentId(request.agentId ?? this.#defaultAgentId),
       }),
       createSession: ({ request, resolved, createdAt }) => {
-        const session = createTeamsMeetingsSession({ config: params.config, resolved, createdAt });
+        const session: TeamsMeetingsSession = createMeetingSession({
+          platform: TEAMS_MEETINGS_PLATFORM_ADAPTER,
+          config: params.config,
+          resolved,
+          createdAt,
+        });
         if (request.requesterSessionKey) {
           this.#requesterSessionKeys.set(session.id, request.requesterSessionKey);
         }
@@ -148,7 +152,7 @@ export class TeamsMeetingsRuntime {
       resolveSpeechInstructions: (request) =>
         request.message ?? params.config.realtime.introMessage,
       isBrowserTransport: () => true,
-      isTalkBackMode: isTeamsMeetingsTalkBackMode,
+      isTalkBackMode: (mode) => MeetingPlatformAdapter.isTalkBackMode(mode),
       isTranscribeMode: (mode) => mode === "transcribe",
       sameMeetingUrl: (left, right) =>
         TEAMS_MEETINGS_PLATFORM_ADAPTER.urls.isSameMeeting(left, right),
@@ -186,11 +190,24 @@ export class TeamsMeetingsRuntime {
       captureTranscript: async (session, options) =>
         await this.#captureTranscript(session, options),
       speakViaTransport: async () => undefined,
+      durableTranscripts: {
+        config: params.fullConfig.transcripts,
+        providerId: "teams",
+        providerName: "Microsoft Teams",
+      },
     });
   }
 
   list(): TeamsMeetingsSession[] {
     return this.#sessions.list();
+  }
+
+  async startTranscriptSource(request: TranscriptStartRequest) {
+    return await this.#sessions.startTranscriptSource(request);
+  }
+
+  async stopTranscriptSource(request: TranscriptStopRequest) {
+    return await this.#sessions.stopTranscriptSource(request);
   }
 
   ownsSession(agentId: string, sessionId: string): boolean {
@@ -356,11 +373,11 @@ export class TeamsMeetingsRuntime {
     session: TeamsMeetingsSession,
   ): Promise<MeetingSessionRuntimeHandles<TeamsMeetingsChromeHealth> | undefined> {
     if (
-      !isTeamsMeetingsTalkBackMode(session.mode) ||
+      !MeetingPlatformAdapter.isTalkBackMode(session.mode) ||
       session.state !== "active" ||
       !session.chrome ||
       session.chrome.audioBridge ||
-      !isTeamsMeetingsRealtimeRouteReady(session.mode, session.chrome.health)
+      !MeetingPlatformAdapter.isRealtimeRouteReady(session.mode, session.chrome.health)
     ) {
       return undefined;
     }
@@ -419,6 +436,7 @@ export class TeamsMeetingsRuntime {
       const result = await recoverCurrentTeamsMeetingTab({
         runtime: this.params.runtime,
         config: this.params.config,
+        fullConfig: this.params.fullConfig,
         meetingSessionId: session.id,
         mode: session.mode,
         nodeId: session.chrome?.nodeId,

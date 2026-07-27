@@ -23,6 +23,21 @@ describe("sessions tool", () => {
     expect(GATEWAY_OWNER_ONLY_CORE_TOOLS).toContain("sessions");
   });
 
+  it("cannot patch an incognito session through the cross-session tool", async () => {
+    const sessionKey = "agent:main:dashboard:incognito-private";
+    const callGateway = vi.fn();
+    const tool = createSessionsTool({
+      agentSessionKey: sessionKey,
+      config: {},
+      callGateway,
+    });
+
+    await expect(
+      tool.execute("incognito-patch", { action: "patch", label: "private" }),
+    ).rejects.toThrow("Session not visible from session tools");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
   it("advertises the full model-visible sidebar presence contract", () => {
     const tool = createSessionsTool({ agentSessionKey: "agent:main:main", callGateway: vi.fn() });
     expect(tool.parameters).toMatchObject({

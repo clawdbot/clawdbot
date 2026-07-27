@@ -50,7 +50,11 @@ const deliveryMocks = vi.hoisted(() => ({
       opts?: unknown,
     ) => Promise<import("discord-api-types/v10").APIMessage>
   >(async () => ({ id: "m1" }) as import("discord-api-types/v10").APIMessage),
-  deliverDiscordReply: vi.fn<(params: unknown) => Promise<void>>(async () => {}),
+  deliverDiscordReply: vi.fn<(params: unknown) => Promise<{ visibleReplySent: true }>>(
+    async () => ({
+      visibleReplySent: true,
+    }),
+  ),
   createDiscordDraftStream: vi.fn<(params: unknown) => ReturnType<typeof createMockDraftStream>>(
     () => createMockDraftStream(),
   ),
@@ -382,7 +386,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   return {
     ...actual,
     dispatchChannelInboundTurn: async (
-      plan: Parameters<typeof actual.dispatchChannelInboundTurn>[0],
+      plan: import("openclaw/plugin-sdk/channel-inbound").ChannelInboundTurnPlan<"provider_message_sending">,
     ) => {
       const { cfg, route, delivery, sessionInitRetry, ...prepared } = plan;
       const runDispatch = async () => {
@@ -393,7 +397,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
               cfg,
               dispatcherOptions: {
                 ...plan.dispatcherOptions,
-                deliver: delivery.deliver,
+                deliver: (delivery.deliverWithProviderMessageSending ?? delivery.deliver)!,
                 onError: delivery.onError,
               },
               toolsAllow: plan.toolsAllow,
@@ -611,7 +615,7 @@ export function getLastDispatchCtx():
       CommandBody?: string;
       From?: string;
       GroupRequireMention?: boolean;
-      MediaTranscribedIndexes?: number[];
+      media?: Array<{ transcribed?: boolean }>;
       MessageSid?: string;
       MessageSidFull?: string;
       MessageThreadId?: string | number;
@@ -636,7 +640,7 @@ export function getLastDispatchCtx():
           CommandBody?: string;
           From?: string;
           GroupRequireMention?: boolean;
-          MediaTranscribedIndexes?: number[];
+          media?: Array<{ transcribed?: boolean }>;
           MessageSid?: string;
           MessageSidFull?: string;
           MessageThreadId?: string | number;

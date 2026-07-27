@@ -8,6 +8,10 @@ The fastest useful reports show a current, reproducible boundary bypass with dem
 
 Security work is shared across a number of OpenClaw maintainers, including engineers and security researchers from organizations such as NVIDIA and Tencent. See the [maintainer list](CONTRIBUTING.md#maintainers).
 
+## Shared Agents
+
+Anyone who can operate an agent can make it do anything that agent can do. Session ownership, visibility, and presence are usability features, not security boundaries. Turn attribution is best-effort because steering can merge input into an active turn. Use separate agents or separate gateway/host trust boundaries when operators need real isolation.
+
 ## Report a Security Issue
 
 Report vulnerabilities directly to the repository where the issue lives:
@@ -301,7 +305,9 @@ OpenClaw's web interface (Gateway Control UI + HTTP endpoints) is intended for *
 - Recommended: keep the Gateway **loopback-only** (`127.0.0.1` / `::1`).
   - Config: `gateway.bind="loopback"` (default).
   - CLI: `openclaw gateway run --bind loopback`.
-- `gateway.controlUi.dangerouslyDisableDeviceAuth` is intended for localhost-only break-glass use.
+- The retired `gateway.controlUi.dangerouslyDisableDeviceAuth` break-glass key is not a
+  current security option. Upgrade migration accepts it only from older config
+  versions and requires explicit self-pairing before normal enforcement resumes.
   - OpenClaw keeps deployment flexibility by design and does not hard-forbid non-local setups.
   - Non-local and other risky configurations are surfaced by `openclaw security audit` as dangerous findings.
   - This operator-selected tradeoff is by design and not, by itself, a security vulnerability.

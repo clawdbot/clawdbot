@@ -56,6 +56,23 @@ extension OpenClawChatViewModel {
         applyDeferredExternalStateIfReady()
     }
 
+    func restoreEditorAttachments(_ editorAttachments: [OpenClawChatEditorAttachment]?) {
+        self.attachments = (editorAttachments ?? []).enumerated().compactMap { index, attachment in
+            guard let data = Data(base64Encoded: attachment.data),
+                  data.count <= Self.maxAttachmentBytes,
+                  let contentType = UTType(mimeType: attachment.mimeType),
+                  contentType.conforms(to: .image)
+            else { return nil }
+            let fileExtension = contentType.preferredFilenameExtension ?? "img"
+            return OpenClawPendingAttachment(
+                url: nil,
+                data: data,
+                fileName: "image-\(index + 1).\(fileExtension)",
+                mimeType: attachment.mimeType,
+                preview: Self.previewImage(data: data))
+        }
+    }
+
     /// True while replacing this model could move an attachment across chats.
     public var isAttachmentOwnerPinned: Bool {
         self.blocksAttachmentOwnerChange

@@ -2,12 +2,10 @@
  * Records optional Codex runtime trajectory events with bounded, redacted
  * context and completion payloads.
  */
-import type {
-  EmbeddedRunAttemptParams,
-  EmbeddedRunAttemptResult,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import { flattenCodexDynamicToolFunctions, type CodexDynamicToolSpec } from "./protocol.js";
 
@@ -214,13 +212,14 @@ export function recordCodexTrajectoryCompletion(
   if (!recorder) {
     return;
   }
+  const terminal = attemptTerminal.project(params.result.terminal);
   recorder.recordEvent("model.completed", {
     threadId: params.threadId,
     turnId: params.turnId,
     timedOut: params.timedOut,
     yieldDetected: params.yieldDetected ?? false,
-    aborted: params.result.aborted,
-    promptError: normalizeCodexTrajectoryError(params.result.promptError),
+    aborted: terminal.aborted,
+    promptError: normalizeCodexTrajectoryError(terminal.promptError),
     usage: params.result.attemptUsage,
     assistantTexts: params.result.assistantTexts,
     messagesSnapshot: params.result.messagesSnapshot,

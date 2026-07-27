@@ -25,7 +25,15 @@ extension OpenClawChatViewModel {
     }
 
     var hasBlockingRunActivity: Bool {
-        pendingRunCount > 0 || hasActiveSessionRunWithoutChatSnapshot
+        pendingRunCount > 0 || hasActiveSessionRunWithoutChatSnapshot || isSwitchingSessionBranch
+    }
+
+    var workingIndicatorIdentity: String {
+        ChatWorkingIdentity.resolve(
+            sessionKey: sessionKey,
+            pendingRunIDs: pendingRuns,
+            localUserMessageIDsByRunID: pendingLocalUserEchoMessageIDsByRunID,
+            fallbackGeneration: runOwnershipGeneration)
     }
 
     public func send() {
@@ -449,8 +457,7 @@ extension OpenClawChatViewModel {
             }
         }
 
-        let mustPreserveOutboxOrder = !hasRestoredOutboxMessages ||
-            outboxStatesByMessageID.values.contains(where: { !$0.isFailed })
+        let mustPreserveOutboxOrder = self.hasPendingOutboxCommandsForCurrentSession
         let attachmentDecision = await attachmentPersistenceDecision(
             draft,
             mustPreserveOutboxOrder: mustPreserveOutboxOrder)
