@@ -1,8 +1,11 @@
 import {
   aggregateRuntimeParityCacheUsage,
   summarizeRuntimeParityCacheUsage,
-  type QaRuntimeParityCacheUsage,
 } from "./agentic-parity-cache-usage.js";
+import type {
+  QaRuntimeParityReport,
+  QaRuntimeParityScenarioReport,
+} from "./agentic-parity-runtime-report-contract.js";
 // Qa Lab plugin module implements agentic parity report behavior.
 import {
   QA_AGENTIC_PARITY_SCENARIO_TITLES,
@@ -11,14 +14,8 @@ import {
 import {
   compareRuntimeWallClockMs,
   summarizeRuntimeParityTiming,
-  type QaRuntimeTiming,
 } from "./runtime-parity-timing.js";
-import type {
-  RuntimeId,
-  RuntimeParityDrift,
-  RuntimeParityResult,
-  RuntimeParityUsagePolicy,
-} from "./runtime-parity.js";
+import type { RuntimeId, RuntimeParityDrift, RuntimeParityResult } from "./runtime-parity.js";
 import {
   isRuntimeParityResultPass,
   resolveRuntimeParityUsagePolicy,
@@ -26,6 +23,7 @@ import {
 } from "./runtime-parity.js";
 
 export { renderQaRuntimeParityMarkdownReport } from "./agentic-parity-runtime-markdown.js";
+export type { QaRuntimeParityReport } from "./agentic-parity-runtime-report-contract.js";
 
 type QaParityReportStep = {
   name: string;
@@ -73,46 +71,6 @@ type QaRuntimeParitySuiteScenario = QaParityReportScenario & {
 
 export type QaRuntimeParitySuiteSummary = Omit<QaParitySuiteSummary, "scenarios"> & {
   scenarios: QaRuntimeParitySuiteScenario[];
-};
-
-type QaRuntimeParityScenarioReport = {
-  name: string;
-  status: "pass" | "fail";
-  runtimeParityUsage: RuntimeParityUsagePolicy;
-  drift: RuntimeParityDrift | "missing";
-  driftDetails?: string;
-  openclawStatus: "pass" | "fail" | "missing";
-  codexStatus: "pass" | "fail" | "missing";
-  openclawTokens: number;
-  codexTokens: number;
-  openclawUsage: QaRuntimeParityCacheUsage | null;
-  codexUsage: QaRuntimeParityCacheUsage | null;
-  openclawToolCalls: number;
-  codexToolCalls: number;
-  openclawWallClockMs: number | null;
-  codexWallClockMs: number | null;
-  fasterRuntime: RuntimeId | "tie" | null;
-  speedupPercent: number | null;
-};
-
-export type QaRuntimeParityReport = {
-  runtimePair: [RuntimeId, RuntimeId];
-  comparedAt: string;
-  providerMode?: string;
-  primaryModel?: string;
-  totalScenarios: number;
-  passedScenarios: number;
-  failedScenarios: number;
-  driftCounts: Record<RuntimeParityDrift, number>;
-  scenarios: QaRuntimeParityScenarioReport[];
-  timing: QaRuntimeTiming;
-  usage: {
-    openclaw: QaRuntimeParityCacheUsage | null;
-    codex: QaRuntimeParityCacheUsage | null;
-  };
-  pass: boolean;
-  failures: string[];
-  notes: string[];
 };
 
 type QaAgenticParityMetrics = {

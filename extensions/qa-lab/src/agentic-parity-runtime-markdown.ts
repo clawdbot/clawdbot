@@ -2,7 +2,7 @@ import {
   formatRuntimeCacheCount,
   formatRuntimeCacheHitPercent,
 } from "./agentic-parity-cache-usage.js";
-import type { QaRuntimeParityReport } from "./agentic-parity-report.js";
+import type { QaRuntimeParityReport } from "./agentic-parity-runtime-report-contract.js";
 import { formatRuntimeSpeedComparison, formatRuntimeWallClockMs } from "./runtime-parity-timing.js";
 
 export function renderQaRuntimeParityMarkdownReport(report: QaRuntimeParityReport): string {
