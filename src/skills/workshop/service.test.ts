@@ -157,6 +157,30 @@ describe("skill workshop proposals", () => {
     expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("applied");
   });
 
+  it("persists the reason when applying a proposal", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Reviewed Skill",
+      description: "Proposal approved after review",
+      content: "# Reviewed Skill\n\nUse the reviewed workflow.\n",
+    });
+
+    const applied = await applySkillProposal({
+      workspaceDir,
+      proposalId: proposal.record.id,
+      reason: "  approved after operator review  ",
+    });
+
+    expect(applied.record.statusReason).toBe("approved after operator review");
+    await expect(inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
+      record: {
+        status: "applied",
+        statusReason: "approved after operator review",
+      },
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
     "applies updates through opted-in trusted workspace skills symlink targets",
     async () => {
