@@ -4,7 +4,6 @@ import type {
   AgentHarnessAttemptResult,
   AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { AttemptTranscriptJournal } from "./attempt-transcript-journal.js";
 import {
   buildAssistantMessage,
   hasOwnKeys,
@@ -15,6 +14,7 @@ import {
   sanitizeToolDetailText,
   type AssistantMessage,
   type AssistantUsageSnapshot,
+  type AttemptTranscriptJournalProjection,
 } from "./event-bridge-transcript.js";
 import { normalizeCopilotUsage } from "./usage-bridge.js";
 
@@ -69,7 +69,7 @@ interface EventBridgeOptions {
   getSdkSessionId: () => string | undefined;
   isAborted: () => boolean;
   transcriptProjection?: {
-    journal: AttemptTranscriptJournal;
+    journal: AttemptTranscriptJournalProjection;
     modelRef: { api?: string; id: string; provider: string };
     now: () => number;
   };

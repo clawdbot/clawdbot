@@ -10,7 +10,6 @@ import {
   readVisibleSessionTranscriptMessageEntries,
   type SessionTranscriptTargetParams,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { readString } from "./attempt-config.js";
 import type { AttemptParamsLike } from "./attempt-types.js";
 
 type TranscriptMessage = Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }>;
@@ -433,4 +432,8 @@ function userText(content: unknown): string {
     }
   }
   return JSON.stringify(content) ?? "";
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }

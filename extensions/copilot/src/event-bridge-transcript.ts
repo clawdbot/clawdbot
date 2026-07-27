@@ -6,6 +6,25 @@ import { buildCopilotAssistantUsage, type CopilotUsageSnapshot } from "./usage-b
 export type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 export type AssistantUsageSnapshot = CopilotUsageSnapshot;
 
+export interface AttemptTranscriptJournalProjection {
+  recordAssistant(input: {
+    eventId: string;
+    message: AssistantMessage;
+    toolCallIds: string[];
+  }): void;
+  recordSdkUser(input: {
+    autopilotContinuation: boolean;
+    eventId: string;
+    message: Extract<AgentMessage, { role: "user" }>;
+    replayIncomplete?: boolean;
+  }): void;
+  recordToolResult(input: {
+    eventId: string;
+    message: Extract<AgentMessage, { role: "toolResult" }>;
+    replayIncomplete?: boolean;
+  }): void;
+}
+
 export function buildAssistantMessage(params: {
   assistantTexts: string[];
   event?: Extract<SessionEvent, { type: "assistant.message" }>;
