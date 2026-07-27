@@ -1326,6 +1326,63 @@ def ai_routing_telemetry_panel_html():
     """
 
 
+def classify_m4_ssh_metrics_error(error=None, key_path=None):
+    """Return a concise operator-facing classification for an SSH probe failure."""
+    if key_path and not Path(key_path).is_file():
+        return {
+            "status": "Credentials not configured",
+            "summary": "The dashboard metrics key is missing on this host.",
+            "technical": "SSH metrics key is not installed.",
+        }
+
+    output = getattr(error, "output", "") or ""
+    message = f"{output}\n{error or ''}".lower()
+    if "permission denied" in message:
+        return {
+            "status": "Credentials rejected",
+            "summary": "The M4 rejected the configured SSH account or key.",
+            "technical": "SSH authentication failed.",
+        }
+    if "host key verification failed" in message or "remote host identification has changed" in message:
+        return {
+            "status": "Host identity not trusted",
+            "summary": "The saved M4 host identity must be reviewed.",
+            "technical": "SSH host-key verification failed.",
+        }
+    if "connection refused" in message:
+        return {
+            "status": "SSH service unavailable",
+            "summary": "The M4 answered on the network but did not accept SSH.",
+            "technical": "SSH connection was refused.",
+        }
+    if any(
+        text in message
+        for text in ("no route to host", "host is down", "network is unreachable")
+    ):
+        return {
+            "status": "Host unreachable",
+            "summary": "The dashboard cannot currently reach the M4 over the network.",
+            "technical": "M4 network route is unavailable.",
+        }
+    if isinstance(error, subprocess.TimeoutExpired) or "timed out" in message:
+        return {
+            "status": "Connection timed out",
+            "summary": "The M4 SSH metrics probe did not respond in time.",
+            "technical": "SSH metrics probe timed out.",
+        }
+    if isinstance(error, FileNotFoundError):
+        return {
+            "status": "SSH client unavailable",
+            "summary": "The dashboard host does not have an SSH client available.",
+            "technical": "Local SSH executable was not found.",
+        }
+    return {
+        "status": "Metrics probe failed",
+        "summary": "Optional M4 metrics could not be collected.",
+        "technical": "SSH metrics probe failed; review the dashboard service log.",
+    }
+
+
 def m4_ai_health_panel_html(ollama=None):
     ollama = ollama or get_m4_ollama_status()
     ollama_status = "Online" if ollama["connected"] else "Offline"
@@ -1343,6 +1400,8 @@ def m4_ai_health_panel_html(ollama=None):
         "ollama_cpu": "unknown",
         "uptime": "unknown",
         "error": "",
+        "ssh_status": "Available",
+        "ssh_summary": "Remote CPU, memory, process, and uptime metrics are available.",
     }
 
     remote_script = r"""
@@ -1403,6 +1462,8 @@ PY_REMOTE
 """
 
     try:
+        if not Path(M4_SSH_KEY).is_file():
+            raise FileNotFoundError(M4_SSH_KEY)
         out = subprocess.check_output(
             [
                 "ssh",
@@ -1421,9 +1482,12 @@ PY_REMOTE
         m4.update(remote)
         m4["reachable"] = True
     except Exception as e:
-        m4["error"] = str(e)[:160]
+        classification = classify_m4_ssh_metrics_error(e, M4_SSH_KEY)
+        m4["ssh_status"] = classification["status"]
+        m4["ssh_summary"] = classification["summary"]
+        m4["error"] = classification["technical"]
 
-    ssh_status = "Available" if m4["reachable"] else "Unavailable"
+    ssh_status = m4["ssh_status"]
     ssh_color = "#22c55e" if m4["reachable"] else "#fbbf24"
 
     html = f"""
@@ -1434,7 +1498,8 @@ PY_REMOTE
 
 <div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:15px;">
 <b>Remote metrics (optional)</b><br><br>
-<span style="color:{ssh_color};font-weight:bold;">{ssh_status}</span><br>
+<span style="color:{ssh_color};font-weight:bold;">{html_module.escape(ssh_status)}</span><br>
+{html_module.escape(m4['ssh_summary'])}<br>
 M4 SSH host: {html_module.escape(M4_SSH_HOST)}
 </div>
 
@@ -1468,7 +1533,7 @@ M4 Uptime:
 {m4['uptime']}
 
 Errors:
-{m4['error'] if m4['error'] else 'None'}
+{html_module.escape(m4['error']) if m4['error'] else 'None'}
 </div>
 </div>
 """
