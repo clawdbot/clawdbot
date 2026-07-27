@@ -351,7 +351,11 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
     expect(result).toMatchObject({ ok: true, compacted: true });
     const lockOptions = mockCallArg(acquireSessionWriteLockMock);
-    expect(lockOptions).toMatchObject({ sessionFile: TEST_SESSION_KEY });
+    expect(lockOptions).toMatchObject({
+      sessionFile: expect.any(String),
+      targetKind: "session-key",
+    });
+    expect(lockOptions.sessionFile).not.toBe(TEST_SESSION_KEY);
     expect(lockOptions).not.toHaveProperty("allowReentrant");
   });
 
@@ -364,8 +368,8 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
     const result = await withOwnedSessionTranscriptWrites(
       {
-        sessionFile: TEST_SESSION_FILE,
         sessionKey: TEST_SESSION_KEY,
+        sessionTarget: wrappedCompactionArgs().sessionTarget,
         withSessionWriteLock,
       },
       async () => await compactEmbeddedAgentSessionDirect(wrappedCompactionArgs()),

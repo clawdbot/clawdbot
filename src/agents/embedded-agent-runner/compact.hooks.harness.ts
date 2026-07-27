@@ -785,16 +785,22 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveSandboxContext: resolveSandboxContextMock,
   }));
 
-  vi.doMock("../session-write-lock.js", () => ({
-    acquireSessionWriteLock: acquireSessionWriteLockMock,
-    resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 0),
-    resolveSessionWriteLockAcquireTimeoutMs: vi.fn(() => 60_000),
-    resolveSessionWriteLockOptions: vi.fn(() => ({
-      timeoutMs: 60_000,
-      staleMs: 1_800_000,
-      maxHoldMs: 300_000,
-    })),
-  }));
+  vi.doMock("../session-write-lock.js", async () => {
+    const { resolveSessionWriteLockTargetKey } = await vi.importActual<
+      typeof import("../session-write-lock.js")
+    >("../session-write-lock.js");
+    return {
+      acquireSessionWriteLock: acquireSessionWriteLockMock,
+      resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 0),
+      resolveSessionWriteLockAcquireTimeoutMs: vi.fn(() => 60_000),
+      resolveSessionWriteLockOptions: vi.fn(() => ({
+        timeoutMs: 60_000,
+        staleMs: 1_800_000,
+        maxHoldMs: 300_000,
+      })),
+      resolveSessionWriteLockTargetKey,
+    };
+  });
 
   vi.doMock("../../context-engine/init.js", () => ({
     ensureContextEnginesInitialized: vi.fn(),
