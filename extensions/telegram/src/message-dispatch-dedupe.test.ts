@@ -22,8 +22,7 @@ type TelegramMessageDispatchReplayGuard = Parameters<
 
 const tempDirs: string[] = [];
 const DEFAULT_BOT_USER_ID = 99;
-const CURRENT_NAMESPACE = "v2";
-const LEGACY_NAMESPACE = "global";
+const CURRENT_NAMESPACE = "global";
 const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE_PREFIX = "telegram.message-dispatch-dedupe";
 const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_PLUGIN_ID = "telegram-message-dispatch-dedupe";
@@ -45,8 +44,15 @@ function message(params?: { chatId?: number; messageId?: number }): Message {
 }
 
 function storedReplayKey(accountId: string, botUserId: number, msg: Message): string {
-  const key = JSON.stringify(["message", String(msg.chat.id), msg.message_id]);
-  return JSON.stringify(["account", accountId, "bot", String(botUserId), key]);
+  return JSON.stringify([
+    "account",
+    accountId,
+    "bot",
+    String(botUserId),
+    "message",
+    String(msg.chat.id),
+    msg.message_id,
+  ]);
 }
 
 function legacyStoredReplayKey(accountId: string, msg: Message): string {
@@ -64,7 +70,7 @@ function createLegacyReplayGuard() {
       stateMaxEntries: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_MAX_ENTRIES,
     },
     buildReplayKey: (event) => legacyStoredReplayKey(event.accountId, event.msg),
-    namespace: () => LEGACY_NAMESPACE,
+    namespace: () => CURRENT_NAMESPACE,
   });
 }
 
@@ -194,7 +200,7 @@ describe("Telegram message dispatch replay guard", () => {
     }
   });
 
-  it("does not let a legacy V1 row suppress a bot-scoped V2 message", async () => {
+  it("does not let a legacy unscoped row suppress a bot-scoped message", async () => {
     const legacy = createLegacyReplayGuard();
     const legacyClaim = await legacy.claim({ accountId: "default", msg: message() });
     if (legacyClaim.kind !== "claimed") {
@@ -213,19 +219,6 @@ describe("Telegram message dispatch replay guard", () => {
     if (currentClaim.kind === "claimed") {
       currentClaim.handle.release();
     }
-  });
-
-  it("fails open when bot identity is unavailable", async () => {
-    const guard = createTelegramMessageDispatchReplayGuard();
-    await expect(
-      claimTelegramMessageDispatchReplay({
-        guard,
-        accountId: "default",
-        msg: message(),
-      }),
-    ).resolves.toEqual({ kind: "invalid" });
-    await expect(guard.warmup(CURRENT_NAMESPACE)).resolves.toBe(0);
-    await expect(guard.warmup(LEGACY_NAMESPACE)).resolves.toBe(0);
   });
 
   it("preserves concurrent commits", async () => {

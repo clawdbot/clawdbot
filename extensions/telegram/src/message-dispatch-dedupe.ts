@@ -14,9 +14,7 @@ import {
 } from "openclaw/plugin-sdk/persistent-dedupe";
 
 const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-// Safety invariant: no row with unknown bot identity may suppress a message.
-// Runtime claims therefore use only v2; older unscoped rows are intentionally ignored.
-const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE = "v2";
+const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE = "global";
 const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE_PREFIX = "telegram.message-dispatch-dedupe";
 const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_PLUGIN_ID = "telegram-message-dispatch-dedupe";
 const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_MEMORY_MAX_ENTRIES = 50_000;
@@ -55,35 +53,29 @@ export function isTelegramMessageDispatchReplayForgetError(
   return error instanceof TelegramMessageDispatchReplayForgetError;
 }
 
-function buildTelegramMessageDispatchReplayKey(msg: Message): string | null {
-  const chatId = msg.chat?.id;
-  const messageId = msg.message_id;
+function buildTelegramMessageDispatchStoredReplayKey(params: {
+  accountId: string;
+  botUserId: number;
+  msg: Message;
+}): string | null {
+  const chatId = params.msg.chat?.id;
+  const messageId = params.msg.message_id;
   if (chatId == null || typeof messageId !== "number" || messageId <= 0) {
     return null;
   }
-  return JSON.stringify(["message", String(chatId), messageId]);
-}
-
-function buildTelegramMessageDispatchStoredReplayKey(params: {
-  accountId: string;
-  botUserId?: number;
-  msg: Message;
-}): string | null {
-  if (
-    typeof params.botUserId !== "number" ||
-    !Number.isSafeInteger(params.botUserId) ||
-    params.botUserId <= 0
-  ) {
-    return null;
-  }
-  const key = buildTelegramMessageDispatchReplayKey(params.msg);
-  return key
-    ? JSON.stringify(["account", params.accountId, "bot", String(params.botUserId), key])
-    : null;
+  return JSON.stringify([
+    "account",
+    params.accountId,
+    "bot",
+    String(params.botUserId),
+    "message",
+    String(chatId),
+    messageId,
+  ]);
 }
 
 type TelegramMessageDispatchReplayEvent =
-  | { accountId: string; botUserId?: number; msg: Message }
+  | { accountId: string; botUserId: number; msg: Message }
   | { keys?: readonly string[] };
 
 export function createTelegramMessageDispatchReplayGuard(
@@ -114,7 +106,7 @@ type TelegramMessageDispatchReplayGuard = Pick<
 export async function claimTelegramMessageDispatchReplay(params: {
   guard: TelegramMessageDispatchReplayGuard;
   accountId: string;
-  botUserId?: number;
+  botUserId: number;
   msg: Message;
 }): Promise<TelegramMessageDispatchClaim> {
   return await runClaimableDedupeClaimLoop(
