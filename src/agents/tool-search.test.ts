@@ -2561,11 +2561,11 @@ describe("Tool Search", () => {
     expect(bound.catalogRegistered).toBe(true);
     expect(testing.sessionCatalogs.has(`run:${runId}`)).toBe(true);
     // Premise of the skip: cataloged entries really are hook-wrapped.
-    const boundEntry = catalogRef.current?.entries.find(
-      (entry) => entry.name === "fake_hookctx_bound_alpha",
+    const boundEntry = expectDefined(
+      catalogRef.current?.entries.find((entry) => entry.name === "fake_hookctx_bound_alpha"),
+      "hook-bound catalog entry",
     );
-    expect(boundEntry).toBeDefined();
-    expect(isToolWrappedWithBeforeToolCallHook(expectDefined(boundEntry).tool)).toBe(true);
+    expect(isToolWrappedWithBeforeToolCallHook(boundEntry.tool as AnyAgentTool)).toBe(true);
     expect(testing.reusableCatalogSnapshots.has(`session:${sessionId}`)).toBe(false);
     clearToolSearchCatalog({ sessionId, runId, catalogRef });
     expect(testing.sessionCatalogs.has(`run:${runId}`)).toBe(false);
