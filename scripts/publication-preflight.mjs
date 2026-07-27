@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Fail-closed publication gates for branch, diff, identity, privacy, and PR overlap.
+// Opt-in local publication review gates for branch, diff, identity, privacy, and PR overlap.
+// Remote branch protection and CI remain the authoritative publication controls.
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -766,6 +767,7 @@ function help() {
     "",
     "prepare records an explicit staged-file allowlist and open-PR inventory in a per-worktree Git manifest.",
     "approve is a separate human action; hook requires approval bound to the exact HEAD being pushed.",
+    "This helper is a local review gate only; it cannot enforce remote publication security.",
   ].join("\n");
 }
 

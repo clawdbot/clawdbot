@@ -28,10 +28,18 @@ function runGit(spawn, gitBin, args, cwd, stdio) {
  */
 export function configurePrepareGitHooks(params = {}) {
   const cwd = params.cwd ?? DEFAULT_PACKAGE_ROOT;
+  const install = params.install === true;
   const exists = params.existsSync ?? existsSync;
   const gitBin = params.gitBin ?? "git";
   const spawn = params.spawnSync ?? spawnSync;
   const warn = params.warn ?? console.warn;
+
+  // A local hook is a convenience review gate, not a publication security
+  // boundary. Keep package installation from changing push behavior unless a
+  // contributor explicitly opts in for this checkout.
+  if (!install) {
+    return { configured: false, reason: "opt-in-required" };
+  }
 
   if (!exists(join(cwd, "git-hooks"))) {
     return { configured: false, reason: "missing-hooks-dir" };
@@ -69,5 +77,7 @@ export function configurePrepareGitHooks(params = {}) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  configurePrepareGitHooks();
+  configurePrepareGitHooks({
+    install: process.argv.includes("--install") || process.env.OPENCLAW_INSTALL_GIT_HOOKS === "1",
+  });
 }

@@ -1,12 +1,5 @@
 import { execFileSync } from "node:child_process";
-import {
-  chmodSync,
-  mkdtempSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -173,12 +166,14 @@ describe("publication preflight pure gates", () => {
 
 describe("publication preflight real hook behavior", () => {
   it("invokes the configured hook for an allowed push and rejects an unallowlisted commit", () => {
-    const bareRemote = mkdtempSync(path.join(os.tmpdir(), "openclaw-publication-preflight-remote-"));
+    const bareRemote = mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-publication-preflight-remote-"),
+    );
     tempDirs.push(bareRemote);
     run(bareRemote, "git", ["init", "-q", "--bare"]);
 
     const { dir, manifest, branch } = makeRepository({ remoteUrl: `file://${bareRemote}` });
-    run(dir, "node", [path.join(dir, "scripts", "prepare-git-hooks.mjs")]);
+    run(dir, "node", [path.join(dir, "scripts", "prepare-git-hooks.mjs"), "--install"]);
     expect(run(dir, "git", ["config", "--get", "core.hooksPath"])).toBe("git-hooks");
 
     run(dir, "node", [

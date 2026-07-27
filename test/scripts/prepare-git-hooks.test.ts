@@ -26,6 +26,7 @@ describe("configurePrepareGitHooks", () => {
     expect(
       configurePrepareGitHooks({
         cwd: "C:\\repo",
+        install: true,
         existsSync: () => true,
         spawnSync,
       }),
@@ -50,6 +51,7 @@ describe("configurePrepareGitHooks", () => {
     expect(
       configurePrepareGitHooks({
         cwd: "C:\\repo",
+        install: true,
         existsSync: () => true,
         spawnSync: createSpawn([{ error: enoent }]),
         warn,
@@ -64,6 +66,7 @@ describe("configurePrepareGitHooks", () => {
     expect(
       configurePrepareGitHooks({
         cwd: "/repo",
+        install: true,
         existsSync: () => true,
         spawnSync: createSpawn([
           { status: 0, stdout: "true\n" },
@@ -81,10 +84,24 @@ describe("configurePrepareGitHooks", () => {
     expect(
       configurePrepareGitHooks({
         cwd: "/package",
+        install: true,
         existsSync: () => false,
         spawnSync,
       }),
     ).toEqual({ configured: false, reason: "missing-hooks-dir" });
+    expect(spawnSync).not.toHaveBeenCalled();
+  });
+
+  it("does not change checkout push behavior unless explicitly opted in", () => {
+    const spawnSync = createSpawn([]);
+
+    expect(
+      configurePrepareGitHooks({
+        cwd: "/repo",
+        existsSync: () => true,
+        spawnSync,
+      }),
+    ).toEqual({ configured: false, reason: "opt-in-required" });
     expect(spawnSync).not.toHaveBeenCalled();
   });
 });

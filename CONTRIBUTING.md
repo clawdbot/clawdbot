@@ -47,13 +47,13 @@ For coordinated change sets that genuinely need more than 20 PRs, join the **#cl
 
 ## Publication security preflight
 
-The repository installs a fail-closed `pre-push` hook. In a source checkout, the
-existing package `prepare` lifecycle runs `scripts/prepare-git-hooks.mjs`, which
-sets Git's local `core.hooksPath` to `git-hooks`. If hooks are missing or the
-checkout predates that lifecycle step, run this recovery command from the repo root:
+The repository includes an **opt-in local** `pre-push` review hook. It is not a
+publication security boundary: local hooks can be bypassed, so remote branch
+protection and CI remain authoritative. To enable the convenience gate for one
+source checkout, run this command from the repo root:
 
 ```bash
-node scripts/prepare-git-hooks.mjs
+node scripts/prepare-git-hooks.mjs --install
 ```
 
 Verify the installation with `git config --get core.hooksPath`; it must print
@@ -76,13 +76,13 @@ node scripts/publication-preflight.mjs approve
 git push origin HEAD
 ```
 
-The hook rechecks the remote, branch ancestry, merge-free history, staged and
+The local hook rechecks the remote, branch ancestry, merge-free history, staged and
 committed diff, identity, secret/privacy scan, changed-path allowlist, open-PR
-overlap strategy, whitespace, and exact approved `HEAD`. It blocks publication when
-the manifest is missing, stale, incomplete, or not explicitly approved. It never
-publishes or edits unrelated working-tree files.
+overlap strategy, whitespace, and exact approved `HEAD`. It blocks the local push
+when the manifest is missing, stale, incomplete, or not explicitly approved. It
+never publishes or edits unrelated working-tree files.
 
-If the hook blocks a push, do not bypass it with `--no-verify`. Read the first
+If the local hook blocks a push, read the first
 finding, correct or explicitly review the affected change, rerun `check`, and then
 run `approve` again because approval is bound to the exact `HEAD`. False positives
 should be reduced by using placeholders and the approved GitHub no-reply identity;

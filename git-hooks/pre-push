@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# This is an opt-in local review gate. Remote branch protection and CI remain
+# the authoritative publication controls; local hooks can be bypassed.
+
 set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || true)"
