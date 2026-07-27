@@ -81,10 +81,15 @@ describe("imessage actions runtime", () => {
   it("suppresses the imsg poll caption when the caller already rendered context", async () => {
     runIMessageCliJsonCommandMock.mockResolvedValue({
       guid: "poll-guid",
-      poll: { options: [] },
+      poll: {
+        options: [
+          { id: " option-allow ", text: "Allow" },
+          { id: "option-deny", text: " Deny " },
+        ],
+      },
     });
 
-    await imessageActionsRuntime.sendPoll({
+    const result = await imessageActionsRuntime.sendPoll({
       chatGuid: "iMessage;+;chat0000",
       question: "Approval details",
       choices: ["Allow", "Deny"],
@@ -114,6 +119,13 @@ describe("imessage actions runtime", () => {
         "--no-comment",
       ],
     });
+    expect(result).toEqual({
+      messageId: "poll-guid",
+      pollOptions: [
+        { id: "option-allow", text: "Allow" },
+        { id: "option-deny", text: "Deny" },
+      ],
+    });
   });
 
   it("drops cached chats.list entries when the current clock is not a valid date timestamp", async () => {
@@ -125,12 +137,14 @@ describe("imessage actions runtime", () => {
       imessageActionsRuntime.resolveChatGuidForTarget({
         target: { kind: "chat_id", chatId: 1 },
         options: { cliPath: "imsg-invalid-clock" },
+        conversationReadOrigin: "delegated",
       }),
     ).resolves.toBe("iMessage;+;first");
     await expect(
       imessageActionsRuntime.resolveChatGuidForTarget({
         target: { kind: "chat_id", chatId: 2 },
         options: { cliPath: "imsg-invalid-clock" },
+        conversationReadOrigin: "delegated",
       }),
     ).resolves.toBe("iMessage;+;second");
 
@@ -156,12 +170,14 @@ describe("imessage actions runtime", () => {
       imessageActionsRuntime.resolveChatGuidForTarget({
         target: { kind: "chat_id", chatId: 1 },
         options: { cliPath: "imsg-overflow-clock" },
+        conversationReadOrigin: "direct-operator",
       }),
     ).resolves.toBe("iMessage;+;first");
     await expect(
       imessageActionsRuntime.resolveChatGuidForTarget({
         target: { kind: "chat_id", chatId: 2 },
         options: { cliPath: "imsg-overflow-clock" },
+        conversationReadOrigin: "direct-operator",
       }),
     ).resolves.toBe("iMessage;+;second");
 

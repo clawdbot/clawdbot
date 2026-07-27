@@ -292,6 +292,25 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     expect(resolverMocks.resolveIMessageApproval).not.toHaveBeenCalled();
   });
 
+  it("rejects imsg's local-identity sender fallback on received rows", async () => {
+    expect(bind()).toBe(true);
+
+    await expect(
+      maybeResolveIMessageApprovalPollVote({
+        cfg,
+        accountId: "default",
+        message: buildVote({
+          sender: APPROVER,
+          participant: APPROVER,
+          isFromMe: false,
+          destinationCallerId: APPROVER,
+        }),
+      }),
+    ).resolves.toBe(false);
+
+    expect(resolverMocks.resolveIMessageApproval).not.toHaveBeenCalled();
+  });
+
   it("uses the option id when imsg reports the prompt GUID instead of the poll GUID", async () => {
     registerIMessageApprovalPollTarget({
       accountId: "default",

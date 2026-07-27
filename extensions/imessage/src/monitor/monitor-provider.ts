@@ -775,11 +775,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         message,
       })
     ) {
-      // A vote is a real message row, so the debouncer still owns its ingress
-      // claim (see dispatch's `deferred` result). Resolving it here means no
-      // session will ever adopt it; abandon explicitly or the claim stalls
-      // until the 300s handler-timeout fires.
-      await ingressLifecycle?.onAbandoned();
+      // Returning normally lets dispatchUnit settle the durable claim. Only a
+      // resolver error abandons it for replay; a handled vote must not retry.
       return;
     }
 

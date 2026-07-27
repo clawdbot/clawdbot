@@ -1,6 +1,7 @@
 // Imessage plugin module implements actions behavior.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   asDateTimestampMs,
   parseStrictInteger,
@@ -31,6 +32,10 @@ type IMessageBridgeActionOptions = CliRunOptions & {
 type IMessageBridgeSendResult = {
   messageId: string;
 };
+
+type IMessageConversationReadOrigin = NonNullable<
+  ChannelMessageActionContext["conversationReadOrigin"]
+>;
 
 /** Option identity assigned by Messages when the poll balloon was created. */
 export type IMessagePollSentOption = {
@@ -250,7 +255,11 @@ export const imessageActionsRuntime = {
   async resolveChatGuidForTarget(params: {
     target: Extract<IMessageTarget, { kind: "chat_id" | "chat_identifier" }>;
     options: CliRunOptions;
+    conversationReadOrigin: IMessageConversationReadOrigin;
   }): Promise<string | null> {
+    // Requiring the host-normalized origin at this list-backed read seam keeps
+    // direct operator lookups distinct from delegated actions, which have
+    // already passed the core exact-current-conversation gate.
     // Each `chats.list` call spawns a fresh imsg rpc subprocess and pulls
     // every chat the account knows about. Bursts of agent actions (react
     // then reply, reply then add-participant, etc.) all paid that cost

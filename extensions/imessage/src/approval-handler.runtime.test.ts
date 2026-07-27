@@ -681,7 +681,10 @@ describe("imessageApprovalNativeRuntime", () => {
       });
 
       expect(actionsMock.resolveChatGuidForTarget).toHaveBeenCalledWith(
-        expect.objectContaining({ target: { kind: "chat_id", chatId: 42 } }),
+        expect.objectContaining({
+          target: { kind: "chat_id", chatId: 42 },
+          conversationReadOrigin: "direct-operator",
+        }),
       );
       expect(actionsMock.sendPoll).toHaveBeenCalled();
       expect(entry).toMatchObject({ poll: expect.anything(), reactionFallbackVisible: true });

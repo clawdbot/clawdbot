@@ -208,10 +208,7 @@ function resolveIMessageApprovalCliOptions(params: {
  *
  * Conversation-read authority: `chatGuid` is resolved from the approval's own
  * routing target (origin session or a configured approver), so this read is
- * host-originated, not delegated. The bridge runtime seam does not yet accept
- * an attested `conversationReadOrigin` the way `sendMessageIMessage` does; the
- * safety here rests on the target never being caller-supplied. Route this
- * through the attested seam once it exists rather than widening the target.
+ * host-originated and carries the server-owned direct-operator attestation.
  *
  */
 async function deliverIMessageApprovalPoll(params: {
@@ -331,7 +328,11 @@ async function resolveIMessageApprovalChatGuid(params: {
   }
   const runtime = await loadIMessageActionsRuntime();
   if (target.kind === "chat_id" || target.kind === "chat_identifier") {
-    return await runtime.resolveChatGuidForTarget({ target, options: params.cliOptions });
+    return await runtime.resolveChatGuidForTarget({
+      target,
+      options: params.cliOptions,
+      conversationReadOrigin: "direct-operator",
+    });
   }
   if (target.kind !== "handle") {
     return null;
@@ -340,6 +341,7 @@ async function resolveIMessageApprovalChatGuid(params: {
   return await runtime.resolveChatGuidForTarget({
     target: { kind: "chat_identifier", chatIdentifier: `${service};-;${target.to}` },
     options: params.cliOptions,
+    conversationReadOrigin: "direct-operator",
   });
 }
 
