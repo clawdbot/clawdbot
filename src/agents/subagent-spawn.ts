@@ -4,6 +4,7 @@
  * Validates spawn requests, prepares child sessions, stages attachments, binds delivery context, and registers runs.
  */
 import { promises as fs } from "node:fs";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isAcpRuntimeSpawnAvailable } from "../acp/runtime/availability.js";
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
@@ -57,7 +58,6 @@ import {
   bindThreadForSubagentSpawn,
   hasRoutableDeliveryOrigin,
 } from "./subagent-spawn-thread-binding.js";
-import { sanitizeMountPathHint } from "./subagent-spawn-validation.js";
 import {
   buildSubagentSystemPrompt,
   emitSessionLifecycleEvent,
@@ -68,6 +68,30 @@ import { activateSwarmRun, removeQueuedSwarmRun } from "./swarm-scheduler.js";
 export { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES } from "./subagent-spawn.types.js";
 
 const SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS = 60_000;
+
+function sanitizeMountPathHint(value?: string): string | undefined {
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed) {
+    return undefined;
+  }
+  if (hasPromptUnsafeControlCharacter(trimmed)) {
+    return undefined;
+  }
+  if (!/^[A-Za-z0-9._\-/:]+$/.test(trimmed)) {
+    return undefined;
+  }
+  return trimmed;
+}
+
+function hasPromptUnsafeControlCharacter(value: string): boolean {
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (code <= 0x1f || code === 0x7f || code === 0x85 || code === 0x2028 || code === 0x2029) {
+      return true;
+    }
+  }
+  return false;
+}
 
 export async function spawnSubagentDirect(
   params: SpawnSubagentParams,

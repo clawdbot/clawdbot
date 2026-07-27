@@ -6,10 +6,7 @@ import {
 import { DEEPSEEK_BASE_URL, DEEPSEEK_MODEL_CATALOG } from "./models.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-export const DEEPSEEK_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(
-  manifest,
-  "deepseek",
-)!;
+const DEEPSEEK_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(manifest, "deepseek")!;
 
 const deepSeekPresetAppliers = createModelCatalogPresetAppliers({
   primaryModelRef: DEEPSEEK_DEFAULT_MODEL_REF,
