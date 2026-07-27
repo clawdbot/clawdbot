@@ -3,7 +3,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
-import { WizardStartResultSchema } from "./wizard.js";
+import { WizardStartResultSchema, WizardStepSchema } from "./wizard.js";
 
 /**
  * OpenClaw chat lets clients (macOS app onboarding, future UIs) hold the
@@ -90,6 +90,11 @@ export const SystemAgentChatResultSchema = closedObject({
   needsApproval: Type.Optional(Type.Boolean()),
   proposalId: Type.Optional(NonEmptyString),
   question: Type.Optional(SystemAgentChatQuestionSchema),
+  /**
+   * The awaited wizard step in full. `question` above is a lossy card projection
+   * of the same step, so control-capable clients render this instead.
+   */
+  step: Type.Optional(WizardStepSchema),
 });
 
 export const SystemAgentChatHistoryParamsSchema = closedObject({

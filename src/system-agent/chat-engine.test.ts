@@ -3263,6 +3263,167 @@ describe("OpenClaw agent loop backends", () => {
   });
 });
 
+describe("OpenClaw chat wizard step payload", () => {
+  // `action` is missing on purpose: no production path or prompter method emits
+  // a step of that type, so it is unreachable through this seam. The protocol
+  // round-trip test in packages/gateway-protocol covers it instead.
+  const cases: Array<{
+    name: string;
+    run: (prompter: WizardPrompter) => Promise<void>;
+    /** Undefined means no step awaits an answer when the reply is built. */
+    step: Record<string, unknown> | undefined;
+  }> = [
+    {
+      name: "text",
+      // openUrl binds to the next created step, so this proves the fields the
+      // card projection drops (placeholder/initialValue/sensitive/externalUrl).
+      // It is optional on the prompter contract; a prompter without it would
+      // fail the step assertion below on the missing externalUrl.
+      run: async (prompter) => {
+        await prompter.openUrl?.("https://example.com/auth");
+        await prompter.text({
+          message: "Bot token",
+          initialValue: "seed-token",
+          placeholder: "123:abc",
+          sensitive: true,
+        });
+      },
+      step: {
+        id: expect.any(String),
+        type: "text",
+        message: "Bot token",
+        initialValue: "seed-token",
+        placeholder: "123:abc",
+        sensitive: true,
+        executor: "client",
+        externalUrl: "https://example.com/auth",
+      },
+    },
+    {
+      name: "select",
+      run: async (prompter) => {
+        // Option values avoid "telegram" so tryAutoSelectChannel cannot answer
+        // this step for us and null the bridge's awaited step.
+        await prompter.select({
+          message: "DM mode",
+          options: [
+            { value: "alpha", label: "Alpha", hint: "First" },
+            { value: "beta", label: "Beta" },
+          ],
+          initialValue: "beta",
+        });
+      },
+      step: {
+        id: expect.any(String),
+        type: "select",
+        message: "DM mode",
+        options: [
+          { value: "alpha", label: "Alpha", hint: "First" },
+          { value: "beta", label: "Beta" },
+        ],
+        initialValue: "beta",
+        executor: "client",
+      },
+    },
+    {
+      name: "confirm",
+      run: async (prompter) => {
+        await prompter.confirm({ message: "Enable delegated auth?", initialValue: false });
+      },
+      step: {
+        id: expect.any(String),
+        type: "confirm",
+        message: "Enable delegated auth?",
+        initialValue: false,
+        executor: "client",
+      },
+    },
+    {
+      name: "multiselect",
+      run: async (prompter) => {
+        await prompter.multiselect({
+          message: "Features",
+          options: [
+            { value: "alerts", label: "Alerts" },
+            { value: "logs", label: "Logs" },
+          ],
+        });
+      },
+      step: {
+        id: expect.any(String),
+        type: "multiselect",
+        message: "Features",
+        options: [
+          { value: "alerts", label: "Alerts" },
+          { value: "logs", label: "Logs" },
+        ],
+        executor: "client",
+      },
+    },
+    {
+      // Informational steps are auto-answered by the pump before the reply is
+      // built, so they render as prose with no control. Absent `step` here is
+      // the contract, not a gap.
+      name: "note",
+      run: async (prompter) => {
+        await prompter.note("Open the provider console first.");
+      },
+      step: undefined,
+    },
+    {
+      name: "progress",
+      run: async (prompter) => {
+        prompter.progress("Linking your account");
+      },
+      step: undefined,
+    },
+  ];
+
+  it.each(cases)("carries the awaited $name step on the chat reply", async ({ run, step }) => {
+    useTempStateDir();
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await run(prompter);
+      },
+    });
+
+    const reply = await engine.handle("connect telegram");
+
+    if (step) {
+      expect(reply.step).toEqual(step);
+    } else {
+      expect(reply.step).toBeUndefined();
+    }
+  });
+
+  it("omits the wizard step outside an awaiting hosted wizard", async () => {
+    useTempStateDir();
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => ({ text: "*click* Everything looks healthy." }),
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({ message: "Bot token" });
+      },
+    });
+
+    const ordinary = await engine.handle("how is my setup looking?");
+    expect(ordinary.step).toBeUndefined();
+
+    const awaiting = await engine.handle("connect telegram");
+    expect(awaiting.step?.type).toBe("text");
+
+    const done = await engine.handle("123:abc");
+    expect(done.text).toContain("telegram is configured");
+    expect(done.step).toBeUndefined();
+  });
+});
+
 function fakeOverviewLoader(
   overrides: { defaultModel?: string; claudeFound?: boolean; codexFound?: boolean } = {},
 ) {

@@ -11,6 +11,7 @@ version and the additive schema surface. Dates are authoring dates (2026).
 - Rename structured-question item `id` to `questionId` and flatten keyed answer arrays.
 - Slim worker and session-catalog payloads to the active wire contract.
 - Remove dead protocol surfaces and add since-vintage metadata to retained schemas and methods.
+- Add optional `step` on `SystemAgentChatResult` carrying the full awaited wizard step.
 
 ## Protocol v4 (current)
 

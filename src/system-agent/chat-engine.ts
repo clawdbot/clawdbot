@@ -132,6 +132,8 @@ type SystemAgentChatReply = {
   handoff?: SystemAgentOperation;
   /** Structured choice mirroring the awaited wizard step for card-capable clients. */
   question?: SystemAgentChatQuestion;
+  /** The awaited wizard step in full; `question` is its lossy card projection. */
+  step?: WizardStep;
 };
 
 type WizardPrompterLike = import("../wizard/prompts.js").WizardPrompter;
@@ -762,12 +764,14 @@ export class SystemAgentChatEngine {
     }
     // While a hosted wizard awaits a step, every turn routes to it, so the
     // awaited step is always the question this reply asks.
-    const question = wizardStepChatQuestion(this.wizardBridge?.step ?? null);
+    const step = this.wizardBridge?.step ?? null;
+    const question = wizardStepChatQuestion(step);
     return {
       ...reply,
-      ...(this.wizardBridge?.step?.sensitive === true ? { sensitive: true } : {}),
+      ...(step?.sensitive === true ? { sensitive: true } : {}),
       ...(this.wizardBridge ? { wizardInputPending: true } : {}),
       ...(question ? { question } : {}),
+      ...(step ? { step } : {}),
     };
   }
 

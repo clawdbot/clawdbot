@@ -746,6 +746,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             ...(reply.sensitive === true ? { sensitive: true } : {}),
             ...(reply.wizardInputPending === true ? { wizardInputPending: true } : {}),
             ...(reply.question ? { question: reply.question } : {}),
+            ...(reply.step ? { step: reply.step } : {}),
             ...(proposalId ? { needsApproval: true, proposalId } : {}),
           },
           undefined,
