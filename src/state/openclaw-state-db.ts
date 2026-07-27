@@ -25,6 +25,7 @@ import { assertSqliteSchemaTablesPresent } from "../infra/sqlite-schema-contract
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import {
+  isSqliteCorruptionError,
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
 } from "../infra/sqlite-transaction.js";
@@ -609,12 +610,27 @@ export function runOpenClawStateWriteTransaction<T>(
   > = {},
 ): T {
   const database = openOpenClawStateDatabase(options);
-  const result = runSqliteImmediateTransactionSync(database.db, () => operation(database), {
-    busyTimeoutMs: transactionOptions.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-    databaseLabel: database.path,
-    ...transactionOptions,
-    operationLabel: transactionOptions.operationLabel ?? "state.write",
-  });
+  let result: T;
+  try {
+    result = runSqliteImmediateTransactionSync(database.db, () => operation(database), {
+      busyTimeoutMs: transactionOptions.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+      databaseLabel: database.path,
+      ...transactionOptions,
+      operationLabel: transactionOptions.operationLabel ?? "state.write",
+    });
+  } catch (error) {
+    if (isSqliteCorruptionError(error)) {
+      // A cached handle stays poisoned for the process once its file reports
+      // corruption. Evicting makes the next open reverify: a repaired file
+      // recovers without a restart, real damage latches terminally instead.
+      try {
+        closeOpenClawStateDatabaseByPath(database.path);
+      } catch {
+        // Eviction is best-effort; the corruption error must reach the caller.
+      }
+    }
+    throw error;
+  }
   try {
     ensureOpenClawStatePermissions(database.path, options.env ?? process.env);
   } catch {
