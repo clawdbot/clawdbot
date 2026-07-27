@@ -4,7 +4,10 @@ import type {
   ChannelAccountState as ChannelAccountDisplayState,
 } from "../plugins/types.core.js";
 
-export type ChannelAccountState =
+// Internal to this module: callers consume the projections, never the variant
+// shape. Keeping it unexported also avoids colliding with the display-state
+// `ChannelAccountState` in plugins/types.core.ts.
+type ChannelAccountState =
   | {
       kind: "disabled";
       configured: boolean;
@@ -75,7 +78,7 @@ export function resolveChannelAccountLinked(
   return state ? (state === "unknown" ? undefined : state === "linked") : fallback;
 }
 
-export function projectChannelAccountState(state: ChannelAccountState): {
+function projectChannelAccountState(state: ChannelAccountState): {
   configured: boolean;
   linked?: boolean;
   running: boolean;

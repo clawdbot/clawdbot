@@ -1,11 +1,20 @@
 import { describe, expect, it } from "vitest";
+import type { ChannelAccountSnapshot } from "../plugins/types.core.js";
 import {
   applyChannelAccountState,
   projectChannelAccountDisplayState,
-  projectChannelAccountState,
   resolveChannelAccountLinked,
   resolveChannelAccountState,
 } from "./account-state.js";
+
+// The projection is module-internal; exercise it through the public merge helper
+// so the test does not force a wider export surface than production needs.
+function projectChannelAccountState(state: Parameters<typeof applyChannelAccountState>[1]) {
+  const snapshot: ChannelAccountSnapshot = { accountId: "default" };
+  applyChannelAccountState(snapshot, state);
+  const { accountId: _accountId, ...projected } = snapshot;
+  return projected;
+}
 
 const baseInput = {
   enabled: true,
