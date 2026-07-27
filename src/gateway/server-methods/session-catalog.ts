@@ -205,7 +205,7 @@ async function listProviderHosts(
     }
     return pending.promise;
   }
-  const onHosts = new Set<(host: SessionCatalogHost) => void>();
+  const onHosts = new Set<(host: SessionCatalog["hosts"][number]) => void>();
   if (options.onHost) {
     onHosts.add(options.onHost);
   }
