@@ -273,7 +273,7 @@ describe("executeFollowupTurn", () => {
   });
 
   it("tracks a visible failed item before suppressing duplicate default warnings", async () => {
-    const onItemEvent = vi.fn(async () => true);
+    const onItemEvent = vi.fn(async () => undefined);
     let warningSuppressed: boolean | undefined;
     state.execute.mockImplementation(async (params: AgentTurnParams) => {
       await params.opts?.onItemEvent?.({ phase: "end", status: "failed" });
@@ -299,7 +299,7 @@ describe("executeFollowupTurn", () => {
   });
 
   it("tracks a full-verbosity failed command before suppressing duplicate warnings", async () => {
-    const onCommandOutput = vi.fn(async () => true);
+    const onCommandOutput = vi.fn(async () => undefined);
     let warningSuppressed: boolean | undefined;
     const turn = createTurn({
       session: {

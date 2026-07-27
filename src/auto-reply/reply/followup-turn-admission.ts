@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionTranscriptPath } from "../../config/sessions/paths.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -365,7 +366,9 @@ export async function admitFollowupTurn(params: {
       sessionKey: run.runtimePolicySessionKey ?? replySessionKey,
       channel:
         queued.originatingChannel ?? run.messageProvider ?? sessionDeliveryChannel(activeEntry),
-      chatType: queued.originatingChatType ?? run.chatType ?? activeEntry?.chatType,
+      chatType: normalizeChatType(
+        queued.originatingChatType ?? run.chatType ?? activeEntry?.chatType,
+      ),
     });
     let currentInboundContext =
       params.defaults.opts?.isHeartbeat === true
@@ -422,10 +425,11 @@ export async function admitFollowupTurn(params: {
                 turn.queued.originatingChannel ??
                 turn.queued.run.messageProvider ??
                 sessionDeliveryChannel(noticeEntry),
-              chatType:
+              chatType: normalizeChatType(
                 turn.queued.originatingChatType ??
-                turn.queued.run.chatType ??
-                noticeEntry?.chatType,
+                  turn.queued.run.chatType ??
+                  noticeEntry?.chatType,
+              ),
             });
             if (noticeSendPolicy === "deny") {
               return;
@@ -521,8 +525,9 @@ export async function admitFollowupTurn(params: {
           turn.queued.originatingChannel ??
           turn.queued.run.messageProvider ??
           sessionDeliveryChannel(activeEntry),
-        chatType:
+        chatType: normalizeChatType(
           turn.queued.originatingChatType ?? turn.queued.run.chatType ?? activeEntry?.chatType,
+        ),
       });
       currentInboundContext =
         params.defaults.opts?.isHeartbeat === true

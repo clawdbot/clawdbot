@@ -8,6 +8,7 @@ import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
+import { normalizeVerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveConfiguredFallbackModel } from "./agent-runner-core.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
@@ -330,7 +331,8 @@ export async function accountFollowupTurn(params: {
     pendingToolTasks: execution.pendingToolTasks,
     preflightCompactionApplied: turn.preflightCompactionApplied,
     resolvedVerboseLevel:
-      turn.session.current()?.verboseLevel ?? turn.queued.run.verboseLevel ?? "off",
+      normalizeVerboseLevel(turn.session.current()?.verboseLevel ?? turn.queued.run.verboseLevel) ??
+      "off",
     execution: settled,
     runId: execution.execution.runId,
     runStartedAt: execution.runStartedAt,
