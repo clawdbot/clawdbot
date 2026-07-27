@@ -39,6 +39,7 @@ import {
   type PendingCommentaryTags,
 } from "../utils/assistant-text-phase.js";
 import { createAssistantMessageEventStream } from "../utils/event-stream.js";
+import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
 import {
   buildGuardedModelFetch,
@@ -625,6 +626,10 @@ async function processOpenAICompletionsStream(
   });
   for await (const rawChunk of guardedStream) {
     throwIfModelStreamAborted(options?.signal);
+    // Notify the idle-timeout watchdog that the provider is still active.
+    // This must run before reasoning-output filtering so that hidden
+    // thinking deltas (emitReasoning=false) still refresh the watchdog.
+    notifyLlmRequestActivity(options?.signal);
     chunkPushedEvent = false;
     if (!rawChunk || typeof rawChunk !== "object") {
       await cooperativeScheduler.afterEvent();
