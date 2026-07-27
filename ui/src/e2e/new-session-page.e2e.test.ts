@@ -268,7 +268,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     const sessionKey = "agent:main:visible-initial-prompt";
     const message = "keep this prompt visible while the agent works";
     const activeOutputTimestamp = Date.now() + 60_000;
-    const gateway = await installMockGateway(page, {
+    await installMockGateway(page, {
       methodResponses: {
         "sessions.create": { key: sessionKey, runStarted: true },
         "chat.history": {
