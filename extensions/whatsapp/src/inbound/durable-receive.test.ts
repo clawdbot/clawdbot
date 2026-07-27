@@ -1,4 +1,5 @@
 // WhatsApp durable ingress drain adapter: completion, retry, and lane serialization.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,11 +10,16 @@ import {
   deserializeWhatsAppDurableInboundMessage,
   serializeWhatsAppDurableInboundMessage,
 } from "./durable-payload.js";
-import {
-  createWhatsAppDurableInboundMessageId,
-  createWhatsAppIngressMonitor,
-  type WhatsAppDurableInboundPayload,
-} from "./durable-receive.js";
+import { createWhatsAppIngressMonitor } from "./durable-receive.js";
+
+type WhatsAppDurableInboundPayload = {
+  message: ReturnType<typeof serializeWhatsAppDurableInboundMessage>;
+  upsertType?: string;
+  skipStaleAppend?: boolean;
+  skipRecentOutboundEcho?: boolean;
+  receivedAt: number;
+  receiveOrder?: number;
+};
 
 const REMOTE_JID = "1@s.whatsapp.net";
 
@@ -34,7 +40,7 @@ function message(id: string, remoteJid = REMOTE_JID): WAMessage {
 }
 
 function eventId(id: string, remoteJid = REMOTE_JID): string {
-  return createWhatsAppDurableInboundMessageId({ remoteJid, id });
+  return createHash("sha256").update(`${remoteJid}\n${id}`).digest("hex");
 }
 
 function payload(id: string, remoteJid = REMOTE_JID): WhatsAppDurableInboundPayload {

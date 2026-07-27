@@ -28,7 +28,7 @@ export type WhatsAppReadReceiptTarget = {
   participant?: string;
 };
 
-export type WhatsAppDurableInboundPayload = {
+type WhatsAppDurableInboundPayload = {
   message: SerializedWhatsAppDurableInboundMessage;
   upsertType?: string;
   skipStaleAppend?: boolean;
@@ -54,7 +54,7 @@ function hashNamespacePart(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 24);
 }
 
-export function createWhatsAppDurableInboundMessageId(params: {
+function createWhatsAppDurableInboundMessageId(params: {
   remoteJid: string;
   id: string;
 }): string {
