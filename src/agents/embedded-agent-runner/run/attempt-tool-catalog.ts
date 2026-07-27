@@ -51,6 +51,8 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
   const { attempt, preparedToolBase } = input;
   const {
     codeModeControlsEnabledForRun,
+    codeModeSkills,
+    localModelLeanEnabled,
     localModelLeanPreserveToolNames,
     runtimeCapabilityProfile,
     toolSearchConfig,
@@ -89,6 +91,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
         abortSignal: input.abortSignal,
         forceRestartSafeTools: attempt.forceRestartSafeTools,
         executeTool: input.executeCodeModeTool,
+        codeModeSkills,
       })
     : [];
   // When the message tool is the only reply path it must stay directly visible
@@ -105,6 +108,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
         catalogRef: preparedToolBase.toolSearchCatalogRef,
         toolHookContext: catalogToolHookContext,
         directToolNames: requiredDirectToolNames,
+        codeModeSkills,
       })
     : toolSearchConfig.mode === "directory"
       ? applyToolSchemaDirectoryCatalog({

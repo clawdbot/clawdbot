@@ -11,6 +11,8 @@ type CodeModeBridgeMethod =
   | "namespace"
   | "agentSpawn"
   | "agentWait"
+  | "skillsList"
+  | "skillsRead"
   | "swarmNote";
 
 export type CodeModeConfig = {

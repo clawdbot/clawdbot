@@ -151,7 +151,7 @@ export async function runEmbeddedAttempt(
       sessionAgentId,
     });
     restoreSkillEnv = preparedSkills.restoreSkillEnv;
-    const { skillUsagePaths, skillsPrompt, skillsSnapshotForRun } = preparedSkills;
+    const { codeModeSkills, skillUsagePaths, skillsPrompt, skillsSnapshotForRun } = preparedSkills;
     prepStages.mark("skills");
 
     const isRawModelRun = params.modelRun === true || params.promptMode === "none";
@@ -196,6 +196,7 @@ export async function runEmbeddedAttempt(
       sessionAgentId,
       skillUsagePaths,
       skillsSnapshot: skillsSnapshotForRun,
+      codeModeSkills,
       toolSearchCatalogExecutor: (toolParams) => {
         if (!toolSearchCatalogExecutor) {
           throw new Error("Tool Search catalog executor is unavailable for this run.");
@@ -298,6 +299,7 @@ export async function runEmbeddedAttempt(
       sandboxSessionKey,
       sessionAgentId,
       skillsPrompt,
+      codeModeActive: codeModeControlsEnabledForRun,
       toolSearchCatalogRef,
       toolSearchDirectoryEnabled: toolSearchControlsEnabledForRun && toolSearch.catalogRegistered,
       toolSearchRuntimeConfig,
