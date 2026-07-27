@@ -53,6 +53,8 @@ export type NextcloudTalkMentionEntry = {
 export type ParsedNextcloudTalkBody = {
   /** Human-readable text with `{mentionN}` placeholders stripped or substituted. */
   text: string;
+  /** User-authored text for command parsing, without rich-object metadata. */
+  commandText: string;
   /** True when the original message was structured JSON (as opposed to plain text). */
   structured: boolean;
   mentionEntries: NextcloudTalkMentionEntry[];
@@ -64,7 +66,7 @@ export function parseStructuredNextcloudTalkBody(
 ): ParsedNextcloudTalkBody {
   const trimmed = raw.trim();
   if (!trimmed.startsWith("{")) {
-    return { text: raw, structured: false, mentionEntries: [] };
+    return { text: raw, commandText: raw, structured: false, mentionEntries: [] };
   }
 
   try {
@@ -96,43 +98,53 @@ export function parseStructuredNextcloudTalkBody(
             : undefined,
       name: typeof value?.name === "string" ? value.name : undefined,
     }));
-    // Strip the bot's own mention placeholder so command parsing and agent
-    // dispatch see clean text. Non-bot user mentions and non-user rich objects
-    // (calls, files, links) are substituted with their display name so the
-    // agent sees the content the user saw.
+    const botMentionKeys = new Set(
+      mentionEntries
+        .filter((entry) => {
+          const isUser = (entry.type ?? "").toLowerCase() === "user";
+          return (
+            isUser &&
+            botIds !== undefined &&
+            [entry.id, entry.mentionId]
+              .filter((value): value is string =>
+                Boolean(typeof value === "string" && value.trim()),
+              )
+              .some((value) => botIds.has(value.trim().toLowerCase()))
+          );
+        })
+        .map((entry) => entry.key),
+    );
+    // Strip the bot's own mention placeholder so agent dispatch sees clean
+    // text. Preserve other rich objects with the text shown in the chat UI.
     const text = mentionEntries
       .reduce((acc, entry) => {
-        const isUser = (entry.type ?? "").toLowerCase() === "user";
-        const isBotMention =
-          isUser &&
-          botIds !== undefined &&
-          [entry.id, entry.mentionId]
-            .filter((v): v is string => typeof v === "string" && v.trim().length > 0)
-            .map((v) => v.trim().toLowerCase())
-            .some((v) => botIds.has(v));
-        const replacement = isBotMention ? "" : (entry.name ?? "");
+        const replacement = botMentionKeys.has(entry.key) ? "" : (entry.name ?? "");
         return acc.replace(new RegExp(`\\{${entry.key}\\}`, "g"), replacement);
       }, rawMessage)
       .trim();
-    return { text, structured: true, mentionEntries };
+    // Rich-object names are server-provided metadata. Use a neutral marker for
+    // non-bot objects so neither their names nor their removal can form a command.
+    const commandText = mentionEntries
+      .reduce(
+        (acc, entry) =>
+          acc.replace(
+            new RegExp(`\\{${entry.key}\\}`, "g"),
+            botMentionKeys.has(entry.key) ? "" : "_",
+          ),
+        rawMessage,
+      )
+      .trim();
+    return { text, commandText, structured: true, mentionEntries };
   } catch {
-    return { text: raw, structured: false, mentionEntries: [] };
+    return { text: raw, commandText: raw, structured: false, mentionEntries: [] };
   }
 }
 
 function buildNextcloudTalkBotIds(account: ResolvedNextcloudTalkAccount): Set<string> {
   const ids = new Set<string>();
-  const accountId = account.accountId.trim().toLowerCase();
-  if (accountId) {
-    ids.add(accountId);
-  }
   const configuredApiUser = account.config.apiUser?.trim().toLowerCase();
   if (configuredApiUser) {
     ids.add(configuredApiUser);
-    const apiLocalPart = configuredApiUser.split("@")[0]?.trim();
-    if (apiLocalPart) {
-      ids.add(apiLocalPart.toLowerCase());
-    }
   }
   return ids;
 }
@@ -256,6 +268,7 @@ export async function handleNextcloudTalkInbound(params: {
   const parsedBody = parseStructuredNextcloudTalkBody(rawBody, botIds);
   // For structured bodies use the stripped/substituted text; fall back to rawBody for plain text.
   const effectiveBody = parsedBody.structured ? parsedBody.text : rawBody;
+  const commandBody = parsedBody.structured ? parsedBody.commandText : rawBody;
   if (!effectiveBody) {
     return;
   }
@@ -283,7 +296,7 @@ export async function handleNextcloudTalkInbound(params: {
     surface: CHANNEL_ID,
   });
   const hasControlCommand = core.channel.text.hasControlCommand(
-    effectiveBody,
+    commandBody,
     config as OpenClawConfig,
   );
   const shouldRequireMention = isGroup
@@ -486,7 +499,7 @@ export async function handleNextcloudTalkInbound(params: {
       body,
       bodyForAgent: effectiveBody,
       rawBody: effectiveBody,
-      commandBody: effectiveBody,
+      commandBody,
     },
     access: {
       commands: { authorized: commandAuthorized },

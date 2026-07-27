@@ -13,6 +13,7 @@ describe("parseStructuredNextcloudTalkBody", () => {
   it("returns plain text unchanged with empty mentionEntries and structured=false", () => {
     const result = parseStructuredNextcloudTalkBody("hello world");
     expect(result.text).toBe("hello world");
+    expect(result.commandText).toBe("hello world");
     expect(result.structured).toBe(false);
     expect(result.mentionEntries).toEqual([]);
   });
@@ -34,6 +35,7 @@ describe("parseStructuredNextcloudTalkBody", () => {
     });
     const result = parseStructuredNextcloudTalkBody(raw, new Set(["agent"]));
     expect(result.text).toBe("Hey , how are you?");
+    expect(result.commandText).toBe("Hey , how are you?");
     expect(result.structured).toBe(true);
     expect(result.mentionEntries).toHaveLength(1);
     expect(result.mentionEntries[0]).toMatchObject({
@@ -77,7 +79,32 @@ describe("parseStructuredNextcloudTalkBody", () => {
     });
     const result = parseStructuredNextcloudTalkBody(raw, new Set(["agent"]));
     expect(result.text).toBe("/reset");
+    expect(result.commandText).toBe("/reset");
     expect(result.structured).toBe(true);
+  });
+
+  it("does not promote rich-object display names into command text", () => {
+    const raw = JSON.stringify({
+      message: "{object0}",
+      parameters: {
+        object0: { type: "file", name: "/reset" },
+      },
+    });
+    const result = parseStructuredNextcloudTalkBody(raw);
+    expect(result.text).toBe("/reset");
+    expect(result.commandText).toBe("_");
+  });
+
+  it("preserves non-bot placeholder position before command-like text", () => {
+    const raw = JSON.stringify({
+      message: "{mention0} /reset",
+      parameters: {
+        mention0: { type: "user", id: "alice", name: "Alice" },
+      },
+    });
+    const result = parseStructuredNextcloudTalkBody(raw, new Set(["agent"]));
+    expect(result.text).toBe("Alice /reset");
+    expect(result.commandText).toBe("_ /reset");
   });
 
   it("falls back to raw body text when JSON has no message field", () => {
@@ -199,18 +226,26 @@ function makeAccount(
 }
 
 describe("resolveExplicitNextcloudTalkMention", () => {
-  it("returns true when a user-type entry matches the account id", () => {
+  it("does not treat the local account id as a Nextcloud user id", () => {
     const result = resolveExplicitNextcloudTalkMention({
       mentionEntries: [{ key: "m0", type: "user", id: "default" }],
       account: makeAccount({ accountId: "default" }),
     });
-    expect(result).toBe(true);
+    expect(result).toBe(false);
   });
 
-  it("is case-insensitive on both sides", () => {
+  it("matches the configured API user case-insensitively", () => {
     const result = resolveExplicitNextcloudTalkMention({
       mentionEntries: [{ key: "m0", type: "user", id: "AGENT" }],
-      account: makeAccount({ accountId: "agent" }),
+      account: makeAccount({
+        config: {
+          dmPolicy: "pairing",
+          allowFrom: [],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+          apiUser: "agent",
+        },
+      }),
     });
     expect(result).toBe(true);
   });
@@ -255,7 +290,7 @@ describe("resolveExplicitNextcloudTalkMention", () => {
     expect(result).toBe(true);
   });
 
-  it("matches via local part of apiUser email", () => {
+  it("does not infer a user id from the API user's email local part", () => {
     const result = resolveExplicitNextcloudTalkMention({
       mentionEntries: [{ key: "m0", type: "user", id: "bot" }],
       account: makeAccount({
@@ -268,7 +303,7 @@ describe("resolveExplicitNextcloudTalkMention", () => {
         },
       }),
     });
-    expect(result).toBe(true);
+    expect(result).toBe(false);
   });
 
   it("does not match via account display name (UI label is not a stable identifier)", () => {

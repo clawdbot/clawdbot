@@ -280,6 +280,45 @@ describe("nextcloud-talk inbound behavior", () => {
     );
   });
 
+  it("does not interpret rich-object display names as control commands", async () => {
+    const hasControlCommand = vi.fn((body: string) => body.startsWith("/"));
+    const coreRuntime = installRuntime({ hasControlCommand });
+    createChannelPairingControllerMock.mockReturnValue({
+      readStoreForDmPolicy: vi.fn(async () => []),
+      issueChallenge: vi.fn(),
+    });
+
+    const config = { channels: { "nextcloud-talk": {} } } as CoreConfig;
+    await handleNextcloudTalkInbound({
+      message: createMessage({
+        text: JSON.stringify({
+          message: "{object0}",
+          parameters: {
+            object0: { type: "file", name: "/reset" },
+          },
+        }),
+      }),
+      account: createAccount({
+        config: {
+          dmPolicy: "allowlist",
+          allowFrom: ["user-1"],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+        },
+      }),
+      config,
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(hasControlCommand).toHaveBeenCalledWith("_", config);
+    const assembledRequest = requireFirstMockArg(
+      coreRuntime.channel.inbound.dispatchReply as ReturnType<typeof vi.fn>,
+      "Nextcloud Talk assembled request",
+    ) as { ctxPayload: { BodyForAgent?: unknown; CommandBody?: unknown } };
+    expect(assembledRequest.ctxPayload.BodyForAgent).toBe("/reset");
+    expect(assembledRequest.ctxPayload.CommandBody).toBe("_");
+  });
+
   it("passes the shared reply pipeline for dispatched replies", async () => {
     const coreRuntime = createPluginRuntimeMock();
     setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
