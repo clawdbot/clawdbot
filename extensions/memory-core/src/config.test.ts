@@ -20,6 +20,9 @@ describe("memory-core manifest config schema", () => {
           enabled: true,
           timezone: "Europe/London",
           verboseLogging: true,
+          nephesh: {
+            enabled: true,
+          },
           storage: {
             mode: "inline",
             separateReports: false,

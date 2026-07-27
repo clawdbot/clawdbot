@@ -22,6 +22,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 const DEFAULT_MEMORY_DREAMING_ENABLED = false;
 const DEFAULT_MEMORY_DREAMING_TIMEZONE = undefined;
 const DEFAULT_MEMORY_DREAMING_VERBOSE_LOGGING = false;
+const DEFAULT_MEMORY_DREAMING_NEPHESH_ENABLED = false;
 const DEFAULT_MEMORY_DREAMING_STORAGE_MODE = "separate";
 const DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS = false;
 export const DEFAULT_MEMORY_DREAMING_FREQUENCY = "0 3 * * *";
@@ -65,6 +66,10 @@ type MemoryDreamingSpeed = "fast" | "balanced" | "slow";
 type MemoryDreamingThinking = "low" | "medium" | "high";
 type MemoryDreamingBudget = "cheap" | "medium" | "expensive";
 type MemoryDreamingStorageMode = "inline" | "separate" | "both";
+
+export type MemoryDreamingNepheshConfig = {
+  enabled: boolean;
+};
 
 type MemoryLightDreamingSource = "daily" | "sessions" | "recall";
 type MemoryDeepDreamingSource = "daily" | "memory" | "sessions" | "logs" | "recall";
@@ -136,6 +141,7 @@ type MemoryDreamingConfig = {
   frequency: string;
   timezone?: string;
   verboseLogging: boolean;
+  nephesh: MemoryDreamingNepheshConfig;
   storage: MemoryDreamingStorageConfig;
   execution: {
     defaults: MemoryDreamingExecutionConfig;
@@ -341,6 +347,7 @@ export function resolveMemoryDreamingConfig(params: {
     normalizeTrimmedString(params.cfg?.agents?.defaults?.userTimezone) ??
     DEFAULT_MEMORY_DREAMING_TIMEZONE;
   const storage = asNullableRecord(dreaming?.storage);
+  const nephesh = asNullableRecord(dreaming?.nephesh);
   const execution = asNullableRecord(dreaming?.execution);
   const phases = asNullableRecord(dreaming?.phases);
   const topLevelModel = normalizeTrimmedString(dreaming?.model);
@@ -367,6 +374,9 @@ export function resolveMemoryDreamingConfig(params: {
       dreaming?.verboseLogging,
       DEFAULT_MEMORY_DREAMING_VERBOSE_LOGGING,
     ),
+    nephesh: {
+      enabled: normalizeBoolean(nephesh?.enabled, DEFAULT_MEMORY_DREAMING_NEPHESH_ENABLED),
+    },
     storage: {
       mode: normalizeStorageMode(storage?.mode),
       separateReports: normalizeBoolean(
@@ -498,6 +508,7 @@ export function resolveMemoryDeepDreamingConfig(params: {
 }): MemoryDeepDreamingConfig & {
   timezone?: string;
   verboseLogging: boolean;
+  nephesh: MemoryDreamingNepheshConfig;
   storage: MemoryDreamingStorageConfig;
 } {
   const resolved = resolveMemoryDreamingConfig(params);
@@ -506,6 +517,7 @@ export function resolveMemoryDeepDreamingConfig(params: {
     enabled: resolved.enabled && resolved.phases.deep.enabled,
     ...(resolved.timezone ? { timezone: resolved.timezone } : {}),
     verboseLogging: resolved.verboseLogging,
+    nephesh: resolved.nephesh,
     storage: resolved.storage,
   };
 }
@@ -516,6 +528,7 @@ export function resolveMemoryLightDreamingConfig(params: {
 }): MemoryLightDreamingConfig & {
   timezone?: string;
   verboseLogging: boolean;
+  nephesh: MemoryDreamingNepheshConfig;
   storage: MemoryDreamingStorageConfig;
 } {
   const resolved = resolveMemoryDreamingConfig(params);
@@ -524,6 +537,7 @@ export function resolveMemoryLightDreamingConfig(params: {
     enabled: resolved.enabled && resolved.phases.light.enabled,
     ...(resolved.timezone ? { timezone: resolved.timezone } : {}),
     verboseLogging: resolved.verboseLogging,
+    nephesh: resolved.nephesh,
     storage: resolved.storage,
   };
 }
@@ -534,6 +548,7 @@ export function resolveMemoryRemDreamingConfig(params: {
 }): MemoryRemDreamingConfig & {
   timezone?: string;
   verboseLogging: boolean;
+  nephesh: MemoryDreamingNepheshConfig;
   storage: MemoryDreamingStorageConfig;
 } {
   const resolved = resolveMemoryDreamingConfig(params);
@@ -542,6 +557,7 @@ export function resolveMemoryRemDreamingConfig(params: {
     enabled: resolved.enabled && resolved.phases.rem.enabled,
     ...(resolved.timezone ? { timezone: resolved.timezone } : {}),
     verboseLogging: resolved.verboseLogging,
+    nephesh: resolved.nephesh,
     storage: resolved.storage,
   };
 }
