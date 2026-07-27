@@ -248,14 +248,159 @@ describe("acquireSessionWriteLock", () => {
     });
   });
 
-  it("skips file locking for explicit session-key targets", async () => {
+  it("serializes explicit session-key targets through SQLite without lock files", async () => {
+    const sessionKey = `agent:main:write-lock-${Date.now()}`;
     const lock = await acquireSessionWriteLock({
-      sessionFile: "agent:main:main",
+      sessionFile: sessionKey,
+      targetKind: "session-key",
+    });
+    await expect(
+      acquireSessionWriteLock({
+        sessionFile: sessionKey,
+        targetKind: "session-key",
+        timeoutMs: 5,
+      }),
+    ).rejects.toThrow(/session file locked/);
+
+    await lock.release();
+    const nextLock = await acquireSessionWriteLock({
+      sessionFile: sessionKey,
+      targetKind: "session-key",
+      timeoutMs: 500,
+    });
+    await nextLock.release();
+    await expectPathMissing(path.resolve(`${sessionKey}.lock`));
+  });
+
+  it("reference-counts reentrant session-key leases", async () => {
+    const sessionKey = `agent:main:write-lock-reentrant-${Date.now()}`;
+    const first = await acquireSessionWriteLock({
+      sessionFile: sessionKey,
+      targetKind: "session-key",
+      allowReentrant: true,
+    });
+    const second = await acquireSessionWriteLock({
+      sessionFile: sessionKey,
+      targetKind: "session-key",
+      allowReentrant: true,
+    });
+
+    await first.release();
+    expect(() => second.assertOwned?.()).not.toThrow();
+    await expect(
+      acquireSessionWriteLock({
+        sessionFile: sessionKey,
+        targetKind: "session-key",
+        timeoutMs: 5,
+      }),
+    ).rejects.toThrow(/session file locked/);
+    await second.release();
+  });
+
+  it("uses the abort signal only while acquiring a session-key lease", async () => {
+    const abort = new AbortController();
+    const lock = await acquireSessionWriteLock({
+      sessionFile: `agent:main:write-lock-abort-${Date.now()}`,
+      targetKind: "session-key",
+      signal: abort.signal,
+    });
+
+    abort.abort(new Error("late abort"));
+    await expect(lock.release()).resolves.toBeUndefined();
+  });
+
+  it("does not let a releasing owner erase its successor", async () => {
+    const sessionKey = `agent:main:write-lock-successor-${Date.now()}`;
+    const first = await acquireSessionWriteLock({
+      sessionFile: sessionKey,
       targetKind: "session-key",
     });
 
-    await lock.release();
-    await expectPathMissing(path.resolve("agent:main:main.lock"));
+    const releasing = first.release();
+    const second = await acquireSessionWriteLock({
+      sessionFile: sessionKey,
+      targetKind: "session-key",
+      timeoutMs: 500,
+    });
+    await releasing;
+
+    expect(() => second.assertOwned?.()).not.toThrow();
+    await second.release();
+  });
+
+  it("coalesces concurrent releases for one session-key handle", async () => {
+    const sessionKey = `agent:main:write-lock-release-${Date.now()}`;
+    const lock = await acquireSessionWriteLock({
+      sessionFile: sessionKey,
+      targetKind: "session-key",
+    });
+
+    await Promise.all([lock.release(), lock.release()]);
+    const next = await acquireSessionWriteLock({
+      sessionFile: sessionKey,
+      targetKind: "session-key",
+      timeoutMs: 500,
+    });
+    await next.release();
+  });
+
+  it("does not time-takeover a live session-key owner", async () => {
+    pinCurrentProcessStartTimeForTest();
+    const sessionKey = `agent:main:write-lock-expiry-${Date.now()}`;
+    const first = await acquireSessionWriteLock({
+      sessionFile: sessionKey,
+      targetKind: "session-key",
+      maxHoldMs: 5,
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    await expect(
+      acquireSessionWriteLock({
+        sessionFile: sessionKey,
+        targetKind: "session-key",
+        maxHoldMs: 1_000,
+        timeoutMs: 5,
+      }),
+    ).rejects.toThrow(/session file locked/);
+    expect(() => first.assertOwned?.()).not.toThrow();
+    await first.release();
+    const second = await acquireSessionWriteLock({
+      sessionFile: sessionKey,
+      targetKind: "session-key",
+      maxHoldMs: 1_000,
+      timeoutMs: 500,
+    });
+    expect(() => second.assertOwned?.()).not.toThrow();
+    await second.release();
+  });
+
+  it("does not time-takeover a live owner when process start time is unavailable", async () => {
+    testing.setProcessStartTimeResolverForTest(() => null);
+    const sessionKey = `agent:main:write-lock-unverifiable-${Date.now()}`;
+    const first = await acquireSessionWriteLock({
+      sessionFile: sessionKey,
+      targetKind: "session-key",
+      maxHoldMs: 5,
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+
+    await expect(
+      acquireSessionWriteLock({
+        sessionFile: sessionKey,
+        targetKind: "session-key",
+        maxHoldMs: 1_000,
+        timeoutMs: 5,
+      }),
+    ).rejects.toThrow(/session file locked/);
+    expect(() => first.assertOwned?.()).not.toThrow();
+    await first.release();
+    const second = await acquireSessionWriteLock({
+      sessionFile: sessionKey,
+      targetKind: "session-key",
+      maxHoldMs: 1_000,
+      timeoutMs: 500,
+    });
+    expect(() => second.assertOwned?.()).not.toThrow();
+    await second.release();
   });
 
   it("does not reenter locks by default in the same process", async () => {

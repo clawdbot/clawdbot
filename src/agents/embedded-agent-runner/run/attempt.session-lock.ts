@@ -6,6 +6,7 @@ import type {
   SessionTranscriptWriteLockTarget,
 } from "../../../config/sessions/transcript-write-context.js";
 import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
+import { isSessionWriteLockAcquireError } from "../../session-write-lock-error.js";
 import type { acquireSessionWriteLock } from "../../session-write-lock.js";
 import type {
   PromptReleasedSessionEntry,
@@ -99,6 +100,16 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   let promptAborted = false;
   let promptSubmissionBlocked = false;
   let takeoverDetected = false;
+  const assertInitialLockOwned = (): void => {
+    try {
+      noOpLock.assertOwned?.();
+    } catch (error) {
+      if (isSessionWriteLockAcquireError(error)) {
+        takeoverDetected = true;
+      }
+      throw error;
+    }
+  };
   let promptReleased = false;
   let promptReleaseNeedsReload = false;
   let cleanupStarted = false;
@@ -184,6 +195,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       throw reloadFailure;
     }
     try {
+      assertInitialLockOwned();
       await params.reloadPromptReleasedSessionFile?.();
     } catch (error) {
       reloadFailed = true;
@@ -243,6 +255,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       if (reloadFailed) {
         throw reloadFailure;
       }
+      assertInitialLockOwned();
       return run();
     },
     reacquireAfterPrompt: async () => {
@@ -278,6 +291,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         if (reloadFailed) {
           throw reloadFailure;
         }
+        assertInitialLockOwned();
         writeOperation.started = true;
         return await activeWriteOperation.run(writeOperation, async () => await run());
       });
@@ -323,6 +337,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       if (disposed) {
         throw new Error("attempt disposed before cleanup");
       }
+      assertInitialLockOwned();
       cleanupLockGranted = true;
       cleanupOwnershipReleased = new Promise<void>((resolve, reject) => {
         resolveCleanupOwnershipReleased = resolve;
@@ -405,7 +420,10 @@ export async function createEmbeddedAttemptSessionLockController(params: {
           }
           await releaseInitialLock();
         }
-      })();
+      })().catch((error: unknown) => {
+        disposePromise = undefined;
+        throw error;
+      });
       await disposePromise;
     },
   };

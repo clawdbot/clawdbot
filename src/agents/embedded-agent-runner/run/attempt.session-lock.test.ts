@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { SessionWriteLockStaleError } from "../../session-write-lock-error.js";
 import {
   createEmbeddedAttemptSessionLockController,
   EmbeddedAttemptSessionTakeoverError,
@@ -49,6 +50,26 @@ describe("createEmbeddedAttemptSessionLockController", () => {
     await Promise.all([first, second]);
 
     expect(events).toEqual(["first:start", "first:end", "second"]);
+  });
+
+  it("fences transcript writes after the SQLite session lease is lost", async () => {
+    const leaseError = new SessionWriteLockStaleError({
+      lockPath: "sqlite:session-write:agent:main:main",
+      owner: "replacement",
+      staleReasons: ["lease-lost"],
+    });
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({
+        assertOwned: () => {
+          throw leaseError;
+        },
+        release: async () => undefined,
+      })),
+      lockOptions: { sessionFile: "agent:main:main" },
+    });
+
+    await expect(controller.withSessionWriteLock(() => undefined)).rejects.toBe(leaseError);
+    expect(controller.hasSessionTakeover()).toBe(true);
   });
 
   it("allows nested writes to reuse the active lifecycle owner", async () => {
@@ -560,6 +581,22 @@ describe("createEmbeddedAttemptSessionLockController", () => {
     );
     expect(write).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("retries direct disposal when the underlying release fails", async () => {
+    const releaseError = new Error("release failed");
+    const release = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(releaseError)
+      .mockResolvedValueOnce(undefined);
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release })),
+      lockOptions: { sessionFile: "agent:main:main" },
+    });
+
+    await expect(controller.dispose()).rejects.toBe(releaseError);
+    await expect(controller.dispose()).resolves.toBeUndefined();
+    expect(release).toHaveBeenCalledTimes(2);
   });
 
   it("keeps session ownership until an active write callback settles", async () => {
