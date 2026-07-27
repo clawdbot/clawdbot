@@ -275,6 +275,12 @@ export function attachEventBridge(
     }
   });
 
+  registerListener(session, unsubscribeFns, "tool.user_requested", (event) => {
+    if (isRootSessionEvent(event) && event.ephemeral !== true) {
+      options.transcriptProjection?.journal.markReplayIncomplete();
+    }
+  });
+
   registerListener(session, unsubscribeFns, "tool.execution_start", (event) => {
     flushPendingAssistantProjectionForToolCall(event.data.toolCallId);
     if (isRootSessionEvent(event)) {
@@ -302,6 +308,14 @@ export function attachEventBridge(
       };
     }
     const projection = options.transcriptProjection;
+    if (
+      projection &&
+      isRootSessionEvent(event) &&
+      event.ephemeral !== true &&
+      event.data.isUserRequested === true
+    ) {
+      projection.journal.markReplayIncomplete();
+    }
     if (
       projection &&
       isRootSessionEvent(event) &&

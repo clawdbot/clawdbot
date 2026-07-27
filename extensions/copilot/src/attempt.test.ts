@@ -775,6 +775,31 @@ describe("runCopilotAttempt", () => {
     expect(pool.release.mock.calls).toHaveLength(1);
   });
 
+  it("does not delete a resumed session when deferred compaction cannot complete", async () => {
+    vi.useFakeTimers();
+    const sdk = makeFakeSdk({
+      onResumeSession: (session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("session.compaction_start", {});
+          return makeAssistantMessageEvent("done");
+        });
+      },
+    });
+    const pool = makeFakePool(sdk);
+
+    const result = await runCopilotAttempt(
+      makeParams({ initialReplayState: { sdkSessionId: "legacy-session" } }),
+      { pool },
+    );
+
+    expect(result.terminal).toEqual({ kind: "ok" });
+    await vi.advanceTimersByTimeAsync(180_000);
+
+    expect(sdk.sessions[0]?.disconnect).toHaveBeenCalledTimes(1);
+    expect(sdk.client.deleteSession).not.toHaveBeenCalled();
+    expect(pool.release).toHaveBeenCalledTimes(1);
+  });
+
   it("cancels retained compaction when the caller aborts after a turn result", async () => {
     const controller = new AbortController();
     const onDeferredCompaction = vi.fn();

@@ -591,6 +591,29 @@ describe("Copilot attempt transcript journal", () => {
     expect(journal.snapshot().replayInvalid).toBe(true);
   });
 
+  it("marks user-requested tools replay-incomplete", async () => {
+    const { journal, session } = await createFixture();
+    await journal.persistInitialUser();
+    session.emit(
+      event("tool.user_requested", "user-tool-request", {
+        arguments: { path: "a" },
+        toolCallId: "user-call",
+        toolName: "read",
+      }),
+    );
+    session.emit(
+      event("tool.execution_complete", "user-tool-result", {
+        isUserRequested: true,
+        result: { content: "done" },
+        success: true,
+        toolCallId: "user-call",
+      }),
+    );
+    await journal.barrier("user-requested tool");
+
+    expect(journal.snapshot().replayInvalid).toBe(true);
+  });
+
   it("hides autopilot users while preserving unknown SDK source provenance", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([

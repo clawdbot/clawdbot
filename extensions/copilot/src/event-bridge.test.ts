@@ -16,6 +16,7 @@ const REGISTERED_EVENT_TYPES = [
   "assistant.reasoning_delta",
   "assistant.message",
   "assistant.usage",
+  "tool.user_requested",
   "tool.execution_start",
   "tool.execution_complete",
   "session.plan_changed",
