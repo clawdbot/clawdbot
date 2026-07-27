@@ -4351,6 +4351,12 @@ describe("scripts/test-projects full-suite sharding", () => {
     ]);
   });
 
+  it("covers Codex attempt client prewarming in full-suite routing", () => {
+    expect(
+      fullSuiteMatches.get("extensions/codex/src/app-server/run-attempt-client-prewarm.test.ts"),
+    ).toEqual(["test/vitest/vitest.extension-codex-app-server-attempt-light.config.ts"]);
+  });
+
   it("uses the global host worker budget for roomy local hosts", () => {
     expect(
       resolveParallelFullSuiteConcurrency(
