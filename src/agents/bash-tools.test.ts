@@ -1131,3 +1131,64 @@ describe("exec backgrounded onUpdate suppression", () => {
     isWin ? 10_000 : 5_000,
   );
 });
+
+describe("exec abort edge cases", () => {
+  useCapturedEnv([...SHELL_ENV_KEYS], applyDefaultShellEnv);
+
+  it(
+    "rejects with AbortError when signal is already aborted before execute",
+    async () => {
+      const abortController = new AbortController();
+      abortController.abort();
+      await expect(
+        execTool.execute(
+          nextCallId(),
+          { command: shellEcho("never-runs") },
+          abortController.signal,
+          vi.fn(),
+        ),
+      ).rejects.toThrow("Tool execution was aborted");
+    },
+    isWin ? 5_000 : 3_000,
+  );
+
+  it(
+    "does not kill backgrounded process when abort fires after backgrounding",
+    async () => {
+      const abortController = new AbortController();
+      const tool = createTestExecTool({ allowBackground: true, backgroundMs: 0 });
+      const onUpdateSpy = vi.fn();
+      const command = joinCommands([shellEcho("bg-start"), shortDelayCmd, shellEcho("bg-done")]);
+
+      const result = await tool.execute(
+        nextCallId(),
+        { command, background: true },
+        abortController.signal,
+        onUpdateSpy,
+      );
+
+      const sessionId = requireSessionId(result.details as { sessionId?: string });
+      expect(readProcessStatus(result.details)).toBe(PROCESS_STATUS_RUNNING);
+
+      // Abort fires — onAbortSignal must NOT kill the already-backgrounded session
+      abortController.abort();
+
+      // Process should still finish normally
+      await expect
+        .poll(() => {
+          const finished = getFinishedSession(sessionId);
+          return Boolean(finished);
+        }, BACKGROUND_POLL_OPTIONS)
+        .toBe(true);
+
+      const poll = await executeProcessTool(processTool, {
+        action: "log",
+        sessionId,
+      });
+      const output = readNormalizedTextContent(poll.content);
+      expect(output).toContain("bg-start");
+      expect(output).toContain("bg-done");
+    },
+    isWin ? 15_000 : 5_000,
+  );
+});

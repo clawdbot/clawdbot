@@ -672,6 +672,10 @@ export function createExecTool(
           })
           .catch((err: unknown) => {
             cleanupToolRunListeners();
+            if (toolAborted) {
+              reject(new DOMException("Tool execution was aborted", "AbortError"));
+              return;
+            }
             if (yielded || run.session.backgrounded) {
               return;
             }
