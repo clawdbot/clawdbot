@@ -1778,24 +1778,39 @@ describe("ci workflow guards", () => {
     }
   });
 
-  it("downloads the opengrep installer completely before execution", () => {
+  it("verifies the pinned OpenGrep release binary before installing it", () => {
     for (const workflowPath of [OPENGREP_PR_DIFF_WORKFLOW, OPENGREP_FULL_WORKFLOW]) {
       const workflow = parse(readFileSync(workflowPath, "utf8"));
-      const run = expectDefined(
-        workflow.jobs.scan.steps.find((step: WorkflowStep) => step.name === "Install opengrep")
-          ?.run,
+      const installStep = expectDefined(
+        workflow.jobs.scan.steps.find((step: WorkflowStep) => step.name === "Install opengrep"),
         `Install opengrep step in ${workflowPath}`,
       );
+      const run = expectDefined(installStep.run, `Install opengrep script in ${workflowPath}`);
 
+      expect(installStep.env, workflowPath).toMatchObject({
+        OPENGREP_VERSION: "v1.25.0",
+        OPENGREP_LINUX_X64_SHA256:
+          "9ac4aebb47ba3f7b0d8fc641ac8749cb6c2f253f616131a67d9631e00d4bea33",
+      });
+      expect(run, workflowPath).toContain('binary="$(mktemp "${RUNNER_TEMP}/opengrep.XXXXXX")"');
+      expect(run, workflowPath).toContain("trap 'rm -f \"$binary\"' EXIT");
       expect(run, workflowPath).toContain(
-        'installer="$(mktemp "${RUNNER_TEMP}/opengrep-install.XXXXXX")"',
+        "curl -fsSL --retry 4 --retry-all-errors --retry-delay 2",
       );
-      expect(run, workflowPath).toContain("curl -fsSL --connect-timeout 10 --max-time 120 \\");
-      expect(run, workflowPath).toContain('-o "$installer"');
-      expect(run, workflowPath).toContain('bash "$installer" -v "$OPENGREP_VERSION"');
-      expect(run, workflowPath).toContain("trap 'rm -f \"$installer\"' EXIT");
-      expect(run.indexOf('-o "$installer"'), workflowPath).toBeLessThan(
-        run.indexOf('bash "$installer"'),
+      expect(run, workflowPath).toContain("--connect-timeout 10 --max-time 300");
+      expect(run, workflowPath).toContain('-o "$binary"');
+      expect(run, workflowPath).toContain(
+        "https://github.com/opengrep/opengrep/releases/download/${OPENGREP_VERSION}/opengrep_manylinux_x86",
+      );
+      expect(run, workflowPath).toContain(
+        'printf \'%s  %s\\n\' "$OPENGREP_LINUX_X64_SHA256" "$binary" | sha256sum --check',
+      );
+      expect(run, workflowPath).toContain('install -m 0755 "$binary" "$install_dir/opengrep"');
+      expect(run.indexOf('-o "$binary"'), workflowPath).toBeLessThan(
+        run.indexOf("sha256sum --check"),
+      );
+      expect(run.indexOf("sha256sum --check"), workflowPath).toBeLessThan(
+        run.indexOf('install -m 0755 "$binary"'),
       );
       expect(run, workflowPath).not.toMatch(/\|\s*bash/u);
     }
