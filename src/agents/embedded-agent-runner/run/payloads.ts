@@ -646,7 +646,7 @@ export function buildEmbeddedRunPayloads(params: {
     }
   }
   const reasoningText =
-    suppressAssistantArtifacts || runAborted
+    suppressAssistantArtifacts || runAborted || lastAssistantNeedsErrorSurface
       ? ""
       : assistantForPayload && params.reasoningLevel === "on" && params.thinkingLevel !== "off"
         ? extractAssistantThinking(assistantForPayload)
