@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
-import { CLAIM_RECLAIM_MS } from "./store-constants.js";
 import { WorkboardStore } from "./store.js";
+
+const CLAIM_RECLAIM_MS = 5 * 60 * 1000;
 
 function createMemoryStore(): WorkboardKeyedStore {
   const entries = new Map<string, PersistedWorkboardCard>();
