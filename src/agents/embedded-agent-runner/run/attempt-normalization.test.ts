@@ -125,7 +125,7 @@ describe("applyEmbeddedAttemptSessionIdentity", () => {
         sessionKey: "agent:main:other",
         entry: { sessionId: "session-after", updatedAt: 2 },
       },
-    ]);
+    ] as never);
     const state = promptState();
 
     expect(() =>

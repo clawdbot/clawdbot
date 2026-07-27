@@ -755,9 +755,9 @@ describe("SessionManager.open", () => {
     expect(() => sessionManager.appendModelChange("openai", "gpt-5.5")).toThrow(
       "entry was not persisted",
     );
-    expect(() => sessionManager.appendMessage({ role: "user", content: "late message" })).toThrow(
-      "message was not persisted",
-    );
+    expect(() =>
+      sessionManager.appendMessage({ role: "user", content: "late message", timestamp: 1 }),
+    ).toThrow("message was not persisted");
     expect(sessionManager.getEntries()).toEqual(entriesBeforeRejectedAppends);
     expect(sessionManager.getLeafId()).toBe(leafBeforeRejectedAppends);
     expect(sessionManager.getAppendParentId()).toBe(appendParentBeforeRejectedAppends);

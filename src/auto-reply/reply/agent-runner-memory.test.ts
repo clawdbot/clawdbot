@@ -2702,7 +2702,10 @@ describe("runMemoryFlushIfNeeded", () => {
       sessionKey,
       storePath: durableStorePath,
     });
-    expect(requireCompactEmbeddedAgentSessionCall().sessionTarget).toMatchObject({
+    expect(
+      (requireCompactEmbeddedAgentSessionCall() as { sessionTarget?: Record<string, unknown> })
+        .sessionTarget,
+    ).toMatchObject({
       agentId: "main",
       sessionId: sessionEntry.sessionId,
       sessionKey,

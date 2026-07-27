@@ -232,6 +232,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       sessionKey: "agent:main:main",
       target: {
         agentId: "main",
+        sessionId: "partial-target-session",
         sessionKey: "agent:main:main",
         storePath: "/tmp/explicit-sessions.json",
       },
