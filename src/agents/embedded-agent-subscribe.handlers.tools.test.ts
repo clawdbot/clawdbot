@@ -2148,6 +2148,84 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     expect(ctx.state.messagingToolSentTargets).toEqual([]);
   });
 
+  it("registers source-reply evidence for an explicit-route send to the current source (openclaw-p3j)", async () => {
+    // Regression: app-server/embedded-runner sends never carry the gateway's
+    // trusted current-source route tag, so an explicit channel/to send that
+    // actually reaches the current conversation used to be rejected as
+    // source-reply evidence, wrongly tripping stranded-reply recovery even
+    // though the reply was delivered.
+    const { ctx } = createTestContext();
+    ctx.params.sourceReplyDeliveryMode = "message_tool_only";
+    ctx.params.messageChannel = "telegram";
+    ctx.params.currentChannelId = "chat-current";
+    const toolCallId = "tool-message-explicit-route-current-source";
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "message",
+        toolCallId,
+        args: {
+          action: "send",
+          provider: "telegram",
+          to: "chat-current",
+          message: "explicit-route reply to the current chat",
+        },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "message",
+        toolCallId,
+        isError: false,
+        result: { ok: true },
+      } as never,
+    );
+
+    expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(true);
+  });
+
+  it("does not register source-reply evidence for an explicit-route send to a different conversation", async () => {
+    // Fail-safe: an explicit route that resolves elsewhere is a real outbound
+    // side effect, not a source reply, so stranded-reply recovery must still
+    // fire for it.
+    const { ctx } = createTestContext();
+    ctx.params.sourceReplyDeliveryMode = "message_tool_only";
+    ctx.params.messageChannel = "telegram";
+    ctx.params.currentChannelId = "chat-current";
+    const toolCallId = "tool-message-explicit-route-other-conversation";
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "message",
+        toolCallId,
+        args: {
+          action: "send",
+          provider: "telegram",
+          to: "chat-somewhere-else",
+          message: "explicit-route reply to a different chat",
+        },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "message",
+        toolCallId,
+        isError: false,
+        result: { ok: true },
+      } as never,
+    );
+
+    expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(false);
+  });
+
   it("does not treat text or media arguments on non-messaging tools as delivery", async () => {
     const { ctx } = createTestContext();
 

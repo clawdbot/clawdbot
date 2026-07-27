@@ -62,6 +62,7 @@ import {
   isMessagingToolTargetEvidenceAction,
 } from "./embedded-agent-messaging.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
+import { embeddedSendResolvesToCurrentSource } from "./embedded-agent-send-resolution.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type {
   ToolCallSummary,
@@ -424,7 +425,7 @@ function emitAgentEventCallbackBestEffort(
   });
 }
 
-function applyCurrentMessageProvider(
+export function applyCurrentMessageProvider(
   toolName: string,
   args: Record<string, unknown>,
   currentProvider: string | undefined,
@@ -1560,6 +1561,13 @@ export async function handleToolExecutionEnd(
         args: startArgs,
         result,
         isError: isToolError,
+        // Loopback/app-server sends never carry the gateway's trusted
+        // current-source route tag (the turn capability that mints it isn't
+        // threaded into this dispatch path). The handler verifies the route
+        // itself so an explicit-route reply to the current source still
+        // counts as delivered and doesn't trip stranded-reply recovery
+        // (openclaw-p3j — the embedded-path sibling of openclaw-kg9).
+        allowExplicitSourceRoute: embeddedSendResolvesToCurrentSource(ctx, toolName, startArgs),
       })
     ) {
       ctx.state.messageToolOnlySourceReplyDelivered = true;
