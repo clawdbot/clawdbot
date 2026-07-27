@@ -273,7 +273,7 @@ Details: [Release channels](https://docs.openclaw.ai/install/development-channel
 ## Agent workspace + skills
 
 - Workspace root: `~/.openclaw/workspace` (configurable via `agents.defaults.workspace`).
-- Injected prompt files: `AGENTS.md`, `SOUL.md`, `TOOLS.md`.
+- Injected prompt files: `AGENTS.md`, `SOUL.md`, and other workspace context files.
 - Skills: `~/.openclaw/workspace/skills/<skill>/SKILL.md`.
 
 ## Configuration
