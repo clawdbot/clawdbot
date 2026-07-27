@@ -6,6 +6,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import {
   resolveSessionPreferredFaceForKey,
+  SESSION_FACE_PREFERENCE_PARAM,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import { loadChatRoute } from "./route-loader.ts";
@@ -39,7 +40,11 @@ function result(
 }
 
 function contextFor(
-  listResult: (options: { search?: string; offset?: number }) => SessionsListResult | null,
+  listResult: (options: {
+    search?: string;
+    offset?: number;
+    agentId?: string;
+  }) => SessionsListResult | null,
   cachedSessions: GatewaySessionRow[] = [],
 ) {
   const client = {};
@@ -66,6 +71,51 @@ function targetLocation(target: ReturnType<typeof sessionNavigationTarget>) {
 }
 
 describe("gateway-backed session route resolution", () => {
+  it("resolves a non-default agent's canonical global face from its scoped row", async () => {
+    const globalRow = row({ key: "global", kind: "global", boardFace: "dashboard" });
+    const { context, list } = contextFor(({ agentId, search }) =>
+      agentId === "research" && search === "global" ? result([globalRow]) : result([]),
+    );
+    context.agents.state.agentsList = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "global",
+      agents: [],
+    };
+    context.gateway.snapshot.hello = {
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "main",
+          mainKey: "main",
+          mainSessionKey: "global",
+        },
+      },
+    } as ApplicationContext["gateway"]["snapshot"]["hello"];
+
+    await expect(
+      loadChatRoute(
+        context,
+        {
+          pathname: "/chat/research",
+          search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
+          hash: "",
+        },
+        "chat",
+        new AbortController().signal,
+      ),
+    ).resolves.toEqual({
+      kind: "session",
+      sessionKey: "global",
+      agentId: "research",
+      draft: undefined,
+      face: "dashboard",
+      canonicalLocation: { pathname: "/dashboard/research", search: "", hash: "" },
+    });
+    expect(list).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "research", search: "global" }),
+    );
+  });
+
   it("applies an uncached stored face to a preference-derived open", async () => {
     const dashboardRow = row({ boardFace: "dashboard" });
     const { context } = contextFor(() => result([dashboardRow]));

@@ -578,6 +578,29 @@ describe("handleAssistantFailover", () => {
       expect(err.status).toBe(429);
     });
 
+    it("throws format-classified provider rejections to the outer model fallback", async () => {
+      const rawError =
+        '{"type":"error","error":{"type":"invalid_request_error","message":"thinking blocks cannot be modified"}}';
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "surface_error", reason: "format" },
+          fallbackConfigured: true,
+          failoverReason: "format",
+          billingFailure: false,
+          lastAssistant: {
+            errorMessage: rawError,
+            model: "claude-haiku-4-5-20251001",
+            provider: "Anthropic",
+          } as Params["lastAssistant"],
+        }),
+      );
+
+      const err = expectThrownFailoverError(outcome);
+      expect(err.reason).toBe("format");
+      expect(err.status).toBe(400);
+      expect(err.rawError).toBe(rawError);
+    });
+
     it("preserves the raw provider error on surfaced failures", async () => {
       const rawError = '  400 {"error":{"message":"credit balance is too low"}}  ';
       const outcome = await handleAssistantFailover(

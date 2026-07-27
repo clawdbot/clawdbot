@@ -5,6 +5,7 @@ import { Command, Option } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { routeLogsToStderr } from "../logging/console.js";
+import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
 import {
   buildFishOptionCompletionLine,
   buildFishSubcommandCompletionLine,
@@ -166,7 +167,8 @@ async function writeCompletionCache(params: {
 }
 
 function writeCompletionRegistrationWarning(message: string): void {
-  process.stderr.write(`[completion] ${message}\n`);
+  const diagnostic = `[completion] ${message}`;
+  process.stderr.write(`${formatConsoleDiagnosticLine({ level: "warn", message: diagnostic })}\n`);
 }
 
 async function registerSubcommandsForCompletion(program: Command): Promise<void> {

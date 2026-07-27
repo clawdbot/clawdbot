@@ -208,7 +208,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["sessions"],
     exact: true,
-    policy: { ensureCliPath: false, networkProxy: "bypass" },
+    policy: { ensureCliPath: false, ownsProtocolStdout: true, networkProxy: "bypass" },
     route: { id: "sessions" },
   },
   {

@@ -21,6 +21,30 @@ const chatHistoryManagedImageCleanupState = new Map<string, Promise<void>>();
 
 export type AssistantDisplayContentBlock = Record<string, unknown>;
 
+/** Recombine non-streamed text without destroying Markdown's meaningful indentation. */
+export function combineNonStreamingReplyParts(parts: readonly string[]): string {
+  let combined = "";
+  for (const part of parts) {
+    if (!part.trim()) {
+      continue;
+    }
+    if (!combined) {
+      combined = part;
+      continue;
+    }
+    // Outbound media normalization trims a chunk's trailing newline, so an
+    // indented following chunk still needs its original single-line boundary.
+    const separator =
+      /[\r\n]$/.test(combined) || /^[\r\n]/.test(part)
+        ? ""
+        : /^[\t ]+\S/.test(part)
+          ? "\n"
+          : "\n\n";
+    combined += separator + part;
+  }
+  return combined.trim();
+}
+
 export function isMediaBearingPayload(payload: ReplyPayload): boolean {
   if (payload.isReasoning === true) {
     return false;
@@ -60,14 +84,18 @@ async function buildPairingQrAssistantContentBlock(
   };
 }
 
-export function sanitizeAssistantDisplayText(value?: string | null): string | undefined {
+export function sanitizeAssistantDisplayText(
+  value?: string | null,
+  options?: { preserveBoundaries?: boolean },
+): string | undefined {
   if (!value) {
     return undefined;
   }
   const withoutEnvelope = stripEnvelopeFromMessage(value);
   const normalized = typeof withoutEnvelope === "string" ? withoutEnvelope : value;
-  const stripped = stripInlineDirectiveTagsForDisplay(normalized).text.trim();
-  return stripped || undefined;
+  const stripped = stripInlineDirectiveTagsForDisplay(normalized).text;
+  const visible = stripped.trim();
+  return visible ? (options?.preserveBoundaries ? stripped : visible) : undefined;
 }
 
 export function extractAssistantDisplayTextFromContent(
@@ -81,10 +109,11 @@ export function extractAssistantDisplayTextFromContent(
       if (block?.type !== "text" || typeof block.text !== "string") {
         return "";
       }
-      return block.text.trim();
+      return block.text;
     })
     .filter(Boolean);
-  return parts.length > 0 ? parts.join("\n\n") : undefined;
+  const text = combineNonStreamingReplyParts(parts);
+  return text || undefined;
 }
 
 export async function buildAssistantDisplayContentFromReplyPayloads(params: {
@@ -109,12 +138,22 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
     return rawTextPayloadCount > 0 ? [{ type: "text", text: "" }] : undefined;
   }
 
+  const preserveTextBoundaries =
+    normalized.filter((payload) => typeof payload.text === "string" && payload.text.trim()).length >
+    1;
   const content: AssistantDisplayContentBlock[] = [];
   let strippedTextPayloadCount = 0;
   for (const payload of normalized) {
-    const text = sanitizeAssistantDisplayText(payload.text);
+    const text = sanitizeAssistantDisplayText(payload.text, {
+      preserveBoundaries: preserveTextBoundaries,
+    });
     if (text) {
-      content.push({ type: "text", text });
+      const previousBlock = content.at(-1);
+      if (previousBlock?.type === "text" && typeof previousBlock.text === "string") {
+        previousBlock.text = combineNonStreamingReplyParts([previousBlock.text, text]);
+      } else {
+        content.push({ type: "text", text });
+      }
     } else if (typeof payload.text === "string" && payload.text.trim().length > 0) {
       strippedTextPayloadCount += 1;
     }
@@ -242,11 +281,11 @@ export function extractAssistantDisplayText(
   if (!content || content.length === 0) {
     return undefined;
   }
-  const text = content
-    .map((block) => (block?.type === "text" && typeof block.text === "string" ? block.text : ""))
-    .filter(Boolean)
-    .join("\n\n")
-    .trim();
+  const text = combineNonStreamingReplyParts(
+    content.map((block) =>
+      block?.type === "text" && typeof block.text === "string" ? block.text : "",
+    ),
+  );
   return text || undefined;
 }
 

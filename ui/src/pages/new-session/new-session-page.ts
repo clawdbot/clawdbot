@@ -5,6 +5,7 @@ import type {
   FsListDirResult,
   WorktreesBranchesResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
@@ -1190,7 +1191,12 @@ class NewSessionPage extends OpenClawLightDomElement {
       if (requestId !== this.submitRequestToken) {
         return;
       }
-      context.gateway.setSessionKey(result.key);
+      selectApplicationSession({
+        selection: context.agentSelection,
+        gateway: context.gateway,
+        sessionKey: result.key,
+        agentId: submissionAgentId,
+      });
       context.navigate(
         "chat",
         sessionNavigationTarget({
@@ -1658,7 +1664,12 @@ class NewSessionPage extends OpenClawLightDomElement {
         if (!context) {
           return;
         }
-        context.gateway.setSessionKey(sessionKey);
+        selectApplicationSession({
+          selection: context.agentSelection,
+          gateway: context.gateway,
+          sessionKey,
+          agentId: this.agentId,
+        });
         context.navigate(
           "chat",
           sessionNavigationTarget({

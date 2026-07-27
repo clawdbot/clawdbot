@@ -73,12 +73,13 @@ export function renderSidebarAgentMenuForController(controller: SidebarMenusCont
   const { host } = controller;
   const position = controller.agentMenuPosition;
   const trigger = controller.agentMenuTrigger;
-  const { activeId, agent, agents } = host.activeChipAgent();
+  const { activeId, agent, agents, identity, identities } = host.activeChipAgent();
   return renderSidebarAgentMenu({
     position,
     activeId,
-    activeName: agent ? normalizeAgentLabel(agent) : activeId,
+    activeName: identity?.name?.trim() || (agent ? normalizeAgentLabel(agent) : activeId),
     agents,
+    identities,
     filter: controller.agentMenuFilter,
     pinnedAgentIds: host.pinnedAgentIds,
     connected: host.connected,

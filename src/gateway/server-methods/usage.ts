@@ -6,7 +6,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateSessionsUsageParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
@@ -69,6 +68,7 @@ import {
 } from "../session-store-key.js";
 import { loadCombinedSessionStoreForGateway, loadSessionEntryReadOnly } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
 const COST_USAGE_CACHE_MAX = 256;
@@ -1121,15 +1121,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     respond(true, summary, undefined);
   },
   "sessions.usage": async ({ respond, params, context }) => {
-    if (!validateSessionsUsageParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid sessions.usage params: ${formatValidationErrors(validateSessionsUsageParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateSessionsUsageParams, "sessions.usage", respond)) {
       return;
     }
 

@@ -4874,6 +4874,7 @@ public struct SessionObserverPlanProgress: Codable, Sendable {
 
 public struct SessionObserverDigest: Codable, Sendable {
     public let sessionkey: String
+    public let agentid: String?
     public let runid: String?
     public let revision: Int
     public let updatedat: Int
@@ -4884,6 +4885,7 @@ public struct SessionObserverDigest: Codable, Sendable {
 
     public init(
         sessionkey: String,
+        agentid: String? = nil,
         runid: String? = nil,
         revision: Int,
         updatedat: Int,
@@ -4893,6 +4895,7 @@ public struct SessionObserverDigest: Codable, Sendable {
         planprogress: SessionObserverPlanProgress? = nil)
     {
         self.sessionkey = sessionkey
+        self.agentid = agentid
         self.runid = runid
         self.revision = revision
         self.updatedat = updatedat
@@ -4904,6 +4907,7 @@ public struct SessionObserverDigest: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case agentid = "agentId"
         case runid = "runId"
         case revision
         case updatedat = "updatedAt"

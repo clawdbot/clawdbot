@@ -131,6 +131,30 @@ const LOCAL_TEST_TIMEOUT_MS = 150_000;
 const SUBMISSION_SETTLE_MS = 150;
 const SESSION_ROLLOVER_BUSY_MESSAGE = "abort the current run before /new";
 
+function isRetryableGatewayUnavailable(error: unknown): error is Error & {
+  retryAfterMs?: number;
+} {
+  return (
+    error instanceof Error &&
+    (error as { gatewayCode?: unknown }).gatewayCode === "UNAVAILABLE" &&
+    (error as { retryable?: unknown }).retryable === true
+  );
+}
+
+async function requestWithUnavailableRetry<T>(request: () => Promise<T>): Promise<T> {
+  const deadline = Date.now() + LOCAL_STARTUP_TIMEOUT_MS;
+  while (true) {
+    try {
+      return await request();
+    } catch (error) {
+      if (!isRetryableGatewayUnavailable(error) || Date.now() >= deadline) {
+        throw error;
+      }
+      await sleep(Math.max(25, Math.min(error.retryAfterMs ?? 25, 1_000)));
+    }
+  }
+}
+
 function createIdempotentCleanup(cleanup: () => Promise<void>) {
   let cleanupPromise: Promise<void> | undefined;
   return () => (cleanupPromise ??= cleanup());
@@ -1189,20 +1213,24 @@ describe("TUI PTY real backends", () => {
         await fixture.run.waitForOutput("FIRST_RUN_ACTIVE", LOCAL_OUTPUT_TIMEOUT_MS);
         const firstReplyOffset = fixture.run.output().lastIndexOf("FIRST_RUN_ACTIVE");
         await waitForOutputAfter(fixture.run, "| idle", firstReplyOffset);
-        externalClient = await connectGatewayClient({
+        const connectedExternalClient = await connectGatewayClient({
           url: fixture.gateway.url,
           token: fixture.gateway.gatewayToken,
           scopes: ["operator.read", "operator.write"],
           clientDisplayName: "tui-external-session-writer",
         });
+        externalClient = connectedExternalClient;
 
         const marker = "EXTERNAL_GATEWAY_SESSION_MESSAGE";
-        await externalClient.request("sessions.send", {
-          key: fixture.sessionKey,
-          message: marker,
-          idempotencyKey: `${fixture.sessionKey}:external-message`,
-          timeoutMs: 30_000,
-        });
+        await requestWithUnavailableRetry(
+          async () =>
+            await connectedExternalClient.request("sessions.send", {
+              key: fixture.sessionKey,
+              message: marker,
+              idempotencyKey: `${fixture.sessionKey}:external-message`,
+              timeoutMs: 30_000,
+            }),
+        );
 
         await fixture.run.waitForOutput(marker, LOCAL_OUTPUT_TIMEOUT_MS);
         await fixture.run.waitForOutput("FOLLOWUP_RUN_COMPLETE", LOCAL_OUTPUT_TIMEOUT_MS);

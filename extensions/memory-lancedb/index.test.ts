@@ -1084,7 +1084,9 @@ describe("memory plugin e2e", () => {
           on: vi.fn(),
           resolvePath: (filePath: string) => filePath,
         };
-        const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+        const stdoutWrite = vi
+          .spyOn(process.stdout, "write")
+          .mockImplementation(() => true as unknown as ReturnType<typeof process.stdout.write>);
         try {
           registerTestPlugin(dynamicMemoryPlugin, mockApi);
           const registrar = firstMockArg(registerCli as unknown as MockCallSource, "cli registrar");
@@ -1094,8 +1096,9 @@ describe("memory plugin e2e", () => {
           await program.parseAsync(["node", "openclaw", "ltm", "list", "--limit", "+03"]);
 
           expect(limit).toHaveBeenCalledWith(3);
+          expect(stdoutWrite).toHaveBeenCalledWith("[]\n");
         } finally {
-          log.mockRestore();
+          stdoutWrite.mockRestore();
         }
       },
     });
