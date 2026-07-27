@@ -580,6 +580,8 @@ export async function buildPreparedModelCatalogSnapshot(
         },
       });
       if (supplemental.length > 0) {
+        // Explicitly configured rows are user-authorized even when live
+        // discovery omits them; normalize both sets to preserve their routes.
         const accountVisibleModelKeys = new Set(
           [...models, ...configuredModels].map((entry) =>
             catalogEntryDedupeKey(
