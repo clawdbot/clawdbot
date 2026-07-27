@@ -538,6 +538,7 @@ function projectReplayPayload(message: TranscriptMessage): unknown {
         toolName: message.toolName,
       };
   }
+  return undefined;
 }
 
 function readIdempotencyKey(message: AgentMessage): string | undefined {

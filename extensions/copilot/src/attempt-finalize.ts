@@ -113,8 +113,8 @@ export async function completeCopilotAttempt(params: {
       promptError === undefined &&
       !nativeSessionHistoryUnvalidated &&
       transcriptJournal?.hasFailed() !== true &&
-      transcript?.replayInvalid !== true &&
-      (!sentTurnStarted || settledToolFinalization || transcript.initialSdkUserValidated === true),
+      !transcript?.replayInvalid &&
+      (!sentTurnStarted || settledToolFinalization || transcript.initialSdkUserValidated),
     messagesSnapshot,
     assistantTranscriptOwned: transcript?.assistantTranscriptOwned,
     assistantTranscriptIdempotencyKey: transcript?.assistantTranscriptIdempotencyKey,
