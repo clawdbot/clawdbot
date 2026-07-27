@@ -146,6 +146,12 @@ export async function handleToolExecutionEnd(
   const eventResult = isExecToolName(toolName)
     ? capLiveExecResult(sanitizedResult)
     : sanitizedResult;
+  ctx.params.trajectoryRecorder?.recordEvent("tool.result", {
+    toolCallId,
+    name: toolName,
+    success: !observerIsError,
+    result: eventResult,
+  });
   const toolStartKey = buildToolStartKey(runId, toolCallId);
   const startData = toolStartData.get(toolStartKey);
   toolStartData.delete(toolStartKey);

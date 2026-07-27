@@ -57,6 +57,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
   onAgentToolResult?: (event: { toolName: string; result: unknown; isError: boolean }) => void;
   observeToolTerminal?: EmbeddedRunAttemptParams["observeToolTerminal"];
+  /** Attempt-scoped trajectory recorder for runtime tool audit events. */
+  trajectoryRecorder?: EmbeddedRunAttemptParams["trajectoryRecorder"];
   onReasoningStream?: (payload: ReasoningStreamPayload) => void | Promise<void>;
   /** Expands window reasoning beyond "stream" mode for callers with their own display gate. */
   streamReasoningInNonStreamModes?: boolean;
