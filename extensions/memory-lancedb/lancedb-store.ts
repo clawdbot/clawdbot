@@ -109,20 +109,17 @@ export class MemoryDB {
         if ((await db.tableNames()).includes(MEMORY_TABLE_NAME)) {
           throw openError;
         }
-        const schema = lancedb.makeArrowTable(
-          [
-            {
-              id: "",
-              text: "",
-              vector: Array.from({ length: this.vectorDim }).fill(0),
-              importance: 0,
-              category: "other",
-              createdAt: 0,
-              agentId: "",
-            },
-          ],
-          { vectorColumns: { vector: { type: "float32" } } },
-        ).schema;
+        const schema = lancedb.makeArrowTable([
+          {
+            id: "",
+            text: "",
+            vector: Array.from({ length: this.vectorDim }).fill(0),
+            importance: 0,
+            category: "other",
+            createdAt: 0,
+            agentId: "",
+          },
+        ]).schema;
         table = await db.createEmptyTable(MEMORY_TABLE_NAME, schema, {
           mode: "create",
           existOk: true,
