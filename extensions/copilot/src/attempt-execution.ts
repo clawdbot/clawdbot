@@ -483,6 +483,7 @@ export async function runCopilotExecution(context: {
           await bridge?.awaitDeltaChain();
         } catch {}
         await bridge?.awaitAgentEventChain();
+        bridge?.flushTranscriptProjection();
         try {
           await transcriptJournal?.barrier("timeout");
         } catch (transcriptError) {
@@ -490,6 +491,7 @@ export async function runCopilotExecution(context: {
         }
       } else {
         try {
+          bridge?.flushTranscriptProjection();
           await transcriptJournal?.barrier("attempt error");
           promptError = toError(error);
         } catch (transcriptError) {
@@ -500,6 +502,7 @@ export async function runCopilotExecution(context: {
   } finally {
     settled = true;
     try {
+      bridge?.flushTranscriptProjection();
       await transcriptJournal?.barrier("bridge detach");
     } catch (transcriptError) {
       promptError = toError(transcriptError);

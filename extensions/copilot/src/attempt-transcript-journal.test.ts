@@ -150,6 +150,73 @@ afterEach(async () => {
 });
 
 describe("Copilot attempt transcript journal", () => {
+  it("drains work appended after a barrier starts waiting", async () => {
+    const { journal, session } = await createFixture();
+    await journal.persistInitialUser();
+    session.emit(event("user.message", "initial-user", { content: "inspect both files" }));
+    session.emit(
+      event("assistant.message", "assistant-before-barrier", {
+        content: "first",
+        messageId: "assistant-before-barrier",
+      }),
+    );
+
+    const waiting = journal.barrier("concurrent event");
+    session.emit(
+      event("assistant.message", "assistant-after-barrier", {
+        content: "second",
+        messageId: "assistant-after-barrier",
+      }),
+    );
+    await waiting;
+
+    expect(journal.snapshot().messagesSnapshot.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "assistant",
+    ]);
+  });
+
+  it("replaces the originally staged user when async resolution changes it", async () => {
+    const { journal, recorder } = await createFixture();
+    recorder.resolveMessage.mockResolvedValue({
+      role: "user",
+      content: "resolved user",
+      timestamp: 2,
+    });
+
+    await journal.persistInitialUser();
+
+    expect(journal.snapshot().messagesSnapshot).toMatchObject([
+      { role: "user", content: "resolved user" },
+    ]);
+  });
+
+  it("removes the originally staged user when its resolved replacement is blocked", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_message_write",
+          handler: (input: unknown) =>
+            (input as { message: AgentMessage }).message.role === "user"
+              ? { block: true }
+              : undefined,
+        },
+      ]),
+    );
+    const { journal, recorder } = await createFixture();
+    recorder.resolveMessage.mockResolvedValue({
+      role: "user",
+      content: "blocked resolved user",
+      timestamp: 2,
+    });
+
+    await journal.persistInitialUser();
+
+    expect(journal.snapshot().messagesSnapshot).toEqual([]);
+    expect(recorder.markBlocked).toHaveBeenCalledOnce();
+  });
+
   it("commits a hidden tool turn to SQLite in assistant request order", async () => {
     const { bridge, journal, recorder, session, target, tempDir } = await createFixture("memory");
     await journal.persistInitialUser();
@@ -273,6 +340,86 @@ describe("Copilot attempt transcript journal", () => {
     );
     const files = await fs.readdir(tempDir, { recursive: true });
     expect(files.some((file) => file.endsWith(".jsonl"))).toBe(false);
+  });
+
+  it("groups assistant chunks from one API call before matching tool results", async () => {
+    const { bridge, journal, session, target } = await createFixture();
+    await journal.persistInitialUser();
+    session.emit(event("user.message", "initial-user", { content: "inspect both files" }));
+    session.emit(
+      event("assistant.message", "assistant-chunk-a", {
+        apiCallId: "api-call-1",
+        content: "checking ",
+        messageId: "assistant-chunk-a",
+        reasoningText: "partial reasoning",
+        toolRequests: [{ arguments: { path: "a" }, name: "read", toolCallId: "call-a" }],
+      }),
+    );
+    session.emit(
+      event("assistant.message", "assistant-chunk-b", {
+        apiCallId: "api-call-1",
+        content: "now",
+        messageId: "assistant-chunk-b",
+        reasoningText: "complete reasoning",
+      }),
+    );
+    session.emit(
+      event("tool.execution_complete", "result-a", {
+        result: { content: "done" },
+        success: true,
+        toolCallId: "call-a",
+      }),
+    );
+    await journal.barrier("grouped API call");
+
+    const rows = transcriptMessages(await readSessionTranscriptEvents(target));
+    expect(rows.map((row) => row.message.role)).toEqual(["user", "assistant", "toolResult"]);
+    expect(rows[1]?.message).toMatchObject({
+      content: [
+        { type: "thinking", thinking: "complete reasoning" },
+        { type: "text", text: "checking now" },
+        { type: "toolCall", id: "call-a", name: "read", arguments: { path: "a" } },
+      ],
+      idempotencyKey: "copilot-sdk:sdk-session:assistant-chunk-a",
+      stopReason: "toolUse",
+    });
+    expect(
+      bridge.buildAssistantMessage({
+        modelRef: { api: "openai-responses", id: "gpt-5", provider: "github-copilot" },
+        now: () => 3,
+      })?.content,
+    ).toEqual([
+      { type: "thinking", thinking: "complete reasoning" },
+      { type: "text", text: "checking now" },
+      { type: "toolCall", id: "call-a", name: "read", arguments: { path: "a" } },
+    ]);
+    expect(journal.snapshot().replayInvalid).toBe(false);
+  });
+
+  it("marks unprojected assistant provider round-trip state replay-incomplete", async () => {
+    const { journal, session } = await createFixture();
+    await journal.persistInitialUser();
+    session.emit(event("user.message", "initial-user", { content: "inspect both files" }));
+    session.emit(
+      event("assistant.message", "assistant-provider-state", {
+        apiCallId: "api-call-provider-state",
+        content: "",
+        messageId: "assistant-provider-state",
+        reasoningWireField: "reasoning_content",
+        serverTools: { provider: "openai", items: [{ type: "web_search" }] },
+      }),
+    );
+    session.emit(
+      event("assistant.usage", "assistant-provider-usage", {
+        apiCallId: "api-call-provider-state",
+        model: "gpt-5",
+        outputTokens: 1,
+      }),
+    );
+    await journal.barrier("provider round-trip state");
+
+    expect(journal.snapshot().replayInvalid).toBe(true);
+    expect(journal.snapshot().messagesSnapshot).toMatchObject([{ role: "user" }]);
   });
 
   it("hides autopilot users while preserving unknown SDK source provenance", async () => {

@@ -98,6 +98,7 @@ interface EventBridgeController {
   settleCompactionWait(): void;
   awaitDeltaChain(): Promise<void>;
   awaitAgentEventChain(): Promise<void>;
+  flushTranscriptProjection(): void;
   hasObservedCompaction(): boolean;
   hasObservedSessionIdle(): boolean;
   isCompacting(): boolean;
@@ -108,6 +109,15 @@ interface EventBridgeController {
 }
 
 type MessageAccumulator = { messageId: string; text: string };
+type AssistantProjectionChunk = {
+  assistantTexts: string[];
+  event: Extract<SessionEvent, { type: "assistant.message" }>;
+  reasoningText?: string;
+};
+type AssistantProjectionGroup = {
+  apiCallId?: string;
+  chunks: AssistantProjectionChunk[];
+};
 type PromptErrorWithCode = Error & { code?: string; cause?: unknown };
 
 export function attachEventBridge(
@@ -123,6 +133,8 @@ export function attachEventBridge(
   let usage: AssistantUsageSnapshot | undefined;
   const usageByApiCallId = new Map<string, AssistantUsageSnapshot>();
   const handledAssistantEventIds = new Set<string>();
+  let pendingAssistantProjection: AssistantProjectionGroup | undefined;
+  let lastAssistantProjection: AssistantProjectionGroup | undefined;
   let streamError: Error | undefined;
   const toolMetas: AgentHarnessAttemptResult["toolMetas"] = [];
   const toolMetaIndexByCallId = new Map<string, number>();
@@ -146,6 +158,7 @@ export function attachEventBridge(
   const unsubscribeFns: Array<() => void> = [];
 
   registerListener(session, unsubscribeFns, "user.message", (event) => {
+    flushPendingAssistantProjection();
     const projection = options.transcriptProjection;
     if (!projection || !isRootSessionEvent(event) || event.ephemeral === true) {
       return;
@@ -244,9 +257,13 @@ export function attachEventBridge(
     if (apiCallId && usage) {
       usageByApiCallId.set(apiCallId, usage);
     }
+    if (apiCallId) {
+      flushPendingAssistantProjection(apiCallId);
+    }
   });
 
   registerListener(session, unsubscribeFns, "tool.execution_start", (event) => {
+    flushPendingAssistantProjectionForToolCall(event.data.toolCallId);
     if (isRootSessionEvent(event)) {
       startedCount += 1;
     }
@@ -255,6 +272,7 @@ export function attachEventBridge(
   });
 
   registerListener(session, unsubscribeFns, "tool.execution_complete", (event) => {
+    flushPendingAssistantProjectionForToolCall(event.data.toolCallId);
     if (isRootSessionEvent(event)) {
       completedCount += 1;
     }
@@ -413,6 +431,7 @@ export function attachEventBridge(
     if (!isRootCompactionEvent(event)) {
       return;
     }
+    flushPendingAssistantProjection();
     observedSessionIdle = true;
     resolveSessionIdle?.();
     resolveSessionIdle = undefined;
@@ -446,6 +465,7 @@ export function attachEventBridge(
         return false;
       }
       handleAssistantMessage(result);
+      flushPendingAssistantProjection();
       return true;
     },
     awaitCompactionChain() {
@@ -468,6 +488,9 @@ export function attachEventBridge(
     awaitAgentEventChain() {
       return agentEventChain;
     },
+    flushTranscriptProjection() {
+      flushPendingAssistantProjection();
+    },
     hasObservedCompaction() {
       return observedCompaction;
     },
@@ -489,14 +512,23 @@ export function attachEventBridge(
       };
     },
     buildAssistantMessage(args) {
-      return buildAssistantMessage({
-        event: lastAssistantEvent,
-        modelRef: args.modelRef,
-        now: args.now,
-        reasoningText: lastAssistantReasoningText,
-        usage: resolveAssistantUsage(lastAssistantEvent, usage, usageByApiCallId),
-        assistantTexts: finalizeAssistantTexts(messageOrder, messagesById, lastAssistantEvent),
-      });
+      const group = pendingAssistantProjection ?? lastAssistantProjection;
+      return group
+        ? buildAssistantProjectionGroup(
+            group,
+            args.modelRef,
+            () => args.now(),
+            usageByApiCallId,
+            usage,
+          ).message
+        : buildAssistantMessage({
+            event: lastAssistantEvent,
+            modelRef: args.modelRef,
+            now: args.now,
+            reasoningText: lastAssistantReasoningText,
+            usage: resolveAssistantUsage(lastAssistantEvent, usage, usageByApiCallId),
+            assistantTexts: finalizeAssistantTexts(messageOrder, messagesById, lastAssistantEvent),
+          });
     },
     finalizeAssistantTexts() {
       return finalizeAssistantTexts(messageOrder, messagesById, lastAssistantEvent);
@@ -536,27 +568,76 @@ export function attachEventBridge(
       event.data.reasoningText ?? (joinReasoning(reasoningOrder, reasoningById) || undefined);
     reasoningOrder.length = 0;
     reasoningById.clear();
+    const chunk: AssistantProjectionChunk = {
+      event,
+      assistantTexts: [messagesById.get(event.data.messageId)?.text ?? ""],
+      ...(lastAssistantReasoningText ? { reasoningText: lastAssistantReasoningText } : {}),
+    };
+    const apiCallId = readString(event.data.apiCallId);
+    if (!apiCallId) {
+      flushPendingAssistantProjection();
+      const group = { chunks: [chunk] } satisfies AssistantProjectionGroup;
+      lastAssistantProjection = group;
+      recordAssistantProjection(group);
+      return;
+    }
+    if (pendingAssistantProjection?.apiCallId !== apiCallId) {
+      flushPendingAssistantProjection();
+      pendingAssistantProjection = { apiCallId, chunks: [] };
+    }
+    pendingAssistantProjection.chunks.push(chunk);
+  }
+
+  function flushPendingAssistantProjection(apiCallId?: string): void {
+    const group = pendingAssistantProjection;
+    if (!group || (apiCallId !== undefined && group.apiCallId !== apiCallId)) {
+      return;
+    }
+    pendingAssistantProjection = undefined;
+    lastAssistantProjection = group;
+    recordAssistantProjection(group);
+  }
+
+  function flushPendingAssistantProjectionForToolCall(toolCallId: string): void {
+    const group = pendingAssistantProjection;
+    if (
+      group?.chunks.some((chunk) =>
+        chunk.event.data.toolRequests?.some((request) => request.toolCallId === toolCallId),
+      )
+    ) {
+      flushPendingAssistantProjection();
+    }
+  }
+
+  function recordAssistantProjection(group: AssistantProjectionGroup): void {
     const projection = options.transcriptProjection;
     if (!projection) {
       return;
     }
-    const message = buildAssistantMessage({
-      event,
-      modelRef: projection.modelRef,
-      now: () => resolveEventTimestamp(event.timestamp, projection.now),
-      reasoningText: lastAssistantReasoningText,
-      // Maintainer decision: optional assistant.usage must never delay canonical content.
-      // Later usage stays attempt metadata; this row uses outputTokens/zero defaults.
-      usage: resolveAssistantUsage(event, undefined, usageByApiCallId),
-      assistantTexts: [messagesById.get(event.data.messageId)?.text ?? ""],
-    });
+    const { message, replayIncomplete, toolCallIds } = buildAssistantProjectionGroup(
+      group,
+      projection.modelRef,
+      (event) => resolveEventTimestamp(event.timestamp, projection.now),
+      usageByApiCallId,
+      // Optional assistant.usage must never delay canonical content. Later
+      // unkeyed usage stays attempt metadata; this row uses per-call data only.
+      undefined,
+    );
+    const eventId = group.chunks[0]?.event.id;
+    if (!eventId) {
+      return;
+    }
     if (!message) {
+      if (replayIncomplete) {
+        projection.journal.markReplayIncomplete();
+      }
       return;
     }
     projection.journal.recordAssistant({
-      eventId: event.id,
+      eventId,
       message,
-      toolCallIds: (event.data.toolRequests ?? []).map((request) => request.toolCallId),
+      replayIncomplete,
+      toolCallIds,
     });
   }
 
@@ -646,6 +727,94 @@ function finalizeAssistantTexts(
     return [event.data.content];
   }
   return [];
+}
+
+function buildAssistantProjectionGroup(
+  group: AssistantProjectionGroup,
+  modelRef: { api?: string; id: string; provider: string },
+  resolveTimestamp: (event: Extract<SessionEvent, { type: "assistant.message" }>) => number,
+  usageByApiCallId: Map<string, AssistantUsageSnapshot>,
+  latestUsage: AssistantUsageSnapshot | undefined,
+): {
+  message: AssistantMessage | undefined;
+  replayIncomplete: boolean;
+  toolCallIds: string[];
+} {
+  const messages = group.chunks.flatMap((chunk) => {
+    const message = buildAssistantMessage({
+      event: chunk.event,
+      modelRef,
+      now: () => resolveTimestamp(chunk.event),
+      reasoningText: chunk.reasoningText,
+      // Usage is keyed to the complete API call, so every chunk resolves to the
+      // same snapshot and the merged message keeps the terminal copy.
+      usage: resolveAssistantUsage(chunk.event, latestUsage, usageByApiCallId),
+      assistantTexts: chunk.assistantTexts,
+    });
+    return message ? [message] : [];
+  });
+  const replayIncomplete = group.chunks.some(({ event }) =>
+    hasUnprojectedAssistantReplayState(event),
+  );
+  const last = messages.at(-1);
+  if (!last) {
+    return { message: undefined, replayIncomplete, toolCallIds: [] };
+  }
+  const narrative: AssistantMessage["content"] = [];
+  let terminalThinking:
+    | Extract<AssistantMessage["content"][number], { type: "thinking" }>
+    | undefined;
+  const toolCallOrder: string[] = [];
+  const toolCallsById = new Map<
+    string,
+    Extract<AssistantMessage["content"][number], { type: "toolCall" }>
+  >();
+  for (const message of messages) {
+    for (const part of message.content) {
+      if (part.type === "toolCall") {
+        if (!toolCallsById.has(part.id)) {
+          toolCallOrder.push(part.id);
+        }
+        toolCallsById.set(part.id, part);
+        continue;
+      }
+      if (part.type === "thinking") {
+        // Reasoning is an accumulated snapshot, not a per-message delta. Keep
+        // only the terminal snapshot when one API call emits phased chunks.
+        terminalThinking = part;
+        continue;
+      }
+      const previous = narrative.at(-1);
+      if (part.type === "text" && previous?.type === "text") {
+        narrative[narrative.length - 1] = { ...previous, text: previous.text + part.text };
+      } else {
+        narrative.push(part);
+      }
+    }
+  }
+  const toolCalls = toolCallOrder.flatMap((id) => {
+    const toolCall = toolCallsById.get(id);
+    return toolCall ? [toolCall] : [];
+  });
+  const content = [...(terminalThinking ? [terminalThinking] : []), ...narrative, ...toolCalls];
+  const toolCallIds = [...toolCallOrder];
+  return {
+    message: {
+      ...last,
+      content,
+      stopReason: toolCallIds.length > 0 ? "toolUse" : "stop",
+    },
+    replayIncomplete,
+    toolCallIds,
+  };
+}
+
+function hasUnprojectedAssistantReplayState(
+  event: Extract<SessionEvent, { type: "assistant.message" }>,
+): boolean {
+  // The SDK contract names both fields as provider round-trip state. The
+  // canonical AgentMessage cannot represent them, so native replay must stay.
+  return event.data.serverTools !== undefined || event.data.reasoningWireField !== undefined;
 }
 
 function isAssistantMessageEvent(

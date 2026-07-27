@@ -194,7 +194,15 @@ export function createAttemptTranscriptJournal(params: {
   };
 
   const barrier = async (boundary: string) => {
-    await queue;
+    // SDK events can append work while an earlier write is pending. Drain until
+    // the observed tail stays stable so finalization cannot outrun persistence.
+    while (true) {
+      const tail = queue;
+      await tail;
+      if (tail === queue) {
+        break;
+      }
+    }
     if (!firstFailure && pendingTools) {
       captureFailure(
         new Error(
@@ -214,6 +222,9 @@ export function createAttemptTranscriptJournal(params: {
   };
 
   return {
+    markReplayIncomplete() {
+      replayInvalid = true;
+    },
     async persistInitialUser() {
       const recorder = params.attempt.userTurnTranscriptRecorder;
       if (!recorder) {
@@ -235,7 +246,7 @@ export function createAttemptTranscriptJournal(params: {
             idempotencyKey: `${params.attempt.runId}:user`,
           } as TranscriptMessage,
         });
-        replaceTailUser(resolved);
+        replaceTailUser(currentUser);
         if (!outcome) {
           recorder.markBlocked();
           return;
@@ -278,11 +289,13 @@ export function createAttemptTranscriptJournal(params: {
     recordAssistant(input: {
       eventId: string;
       message: Extract<AgentMessage, { role: "assistant" }>;
+      replayIncomplete?: boolean;
       toolCallIds: string[];
     }) {
       if (!claim(input.eventId)) {
         return;
       }
+      replayInvalid ||= input.replayIncomplete === true;
       const key = `copilot-sdk:${params.sdkSessionId}:${input.eventId}`;
       latestAssistantKey = key;
       assistantTranscriptOwned = false;

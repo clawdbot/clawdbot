@@ -7,9 +7,11 @@ export type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 export type AssistantUsageSnapshot = CopilotUsageSnapshot;
 
 export interface AttemptTranscriptJournalProjection {
+  markReplayIncomplete(): void;
   recordAssistant(input: {
     eventId: string;
     message: AssistantMessage;
+    replayIncomplete?: boolean;
     toolCallIds: string[];
   }): void;
   recordSdkUser(input: {
