@@ -210,7 +210,10 @@ export function completionProfileCandidates(
   if (shell === "bash") {
     const env = options.env ?? process.env;
     const home = env.HOME || (options.homeDir ?? os.homedir)();
-    return [primary, path.join(home, ".bash_profile")];
+    // Scrub BOTH standard bash profiles regardless of which exists now: install writes to
+    // whichever bash profile is present (resolveCompletionProfilePath picks the existing
+    // one), so uninstall must clean both, plus any custom primary. Dedupe, .bashrc first.
+    return [...new Set([path.join(home, ".bashrc"), path.join(home, ".bash_profile"), primary])];
   }
   return [primary];
 }
