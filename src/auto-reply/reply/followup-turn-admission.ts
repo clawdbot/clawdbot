@@ -386,11 +386,18 @@ export async function admitFollowupTurn(params: {
       preflightCompactionApplied: false,
     };
     const previousCompactionCount = activeEntry?.compactionCount ?? 0;
+    let pendingTerminalCompactionNotice: Exclude<CompactionNoticePhase, "start"> | undefined;
+    let compactionNoticeGenerationInvalidated = false;
+    let preflightSucceeded = false;
     const notifyPreflightCompaction =
       sendPolicy === "allow" &&
       queued.currentInboundEventKind !== "room_event" &&
       shouldNotifyUserAboutCompaction(config)
         ? async (phase: CompactionNoticePhase) => {
+            if (phase !== "start") {
+              pendingTerminalCompactionNotice = phase;
+              return;
+            }
             const noticeEntry =
               replySessionKey && params.defaults.storePath
                 ? loadSessionEntry({
@@ -398,7 +405,16 @@ export async function admitFollowupTurn(params: {
                     sessionKey: replySessionKey,
                   })
                 : session.current();
-            assertPersistedGeneration(noticeEntry);
+            try {
+              assertPersistedGeneration(noticeEntry);
+            } catch (error) {
+              if (error instanceof FollowupSessionGenerationInvalidatedError) {
+                compactionNoticeGenerationInvalidated = true;
+                operation.abortForRestart();
+                throw error;
+              }
+              throw error;
+            }
             const noticeSendPolicy = resolveSendPolicy({
               cfg: config,
               entry: noticeEntry,
@@ -439,6 +455,11 @@ export async function admitFollowupTurn(params: {
         replyOperation: operation,
         onCompactionNotice: notifyPreflightCompaction,
       });
+      if (compactionNoticeGenerationInvalidated) {
+        throw new FollowupSessionGenerationInvalidatedError(
+          "Follow-up session generation changed during preflight notice delivery",
+        );
+      }
       const previousEntry = session.current();
       if (replySessionKey && params.defaults.storePath) {
         const persistedEntry = loadSessionEntry({
@@ -513,7 +534,13 @@ export async function admitFollowupTurn(params: {
       turn.queued = { ...turn.queued, currentInboundContext };
       turn.preflightCompactionApplied =
         generationRotated || (activeEntry?.compactionCount ?? 0) > previousCompactionCount;
+      preflightSucceeded = true;
     } catch (error) {
+      if (compactionNoticeGenerationInvalidated) {
+        throw new FollowupSessionGenerationInvalidatedError(
+          "Follow-up session generation changed during preflight notice delivery",
+        );
+      }
       if (error instanceof FollowupSessionGenerationInvalidatedError) {
         throw error;
       }
@@ -527,6 +554,20 @@ export async function admitFollowupTurn(params: {
         return { kind: "admitted", turn };
       }
       turn.preflightFailurePayload = markReplyPayloadForSourceSuppressionDelivery({ text });
+    }
+    if (
+      preflightSucceeded &&
+      pendingTerminalCompactionNotice &&
+      turn.sendPolicy === "allow" &&
+      turn.queued.currentInboundEventKind !== "room_event"
+    ) {
+      await params.onCompactionNoticePayload?.(
+        createCompactionNoticePayload({
+          phase: pendingTerminalCompactionNotice,
+          currentMessageId: resolveFollowupCurrentMessageId(turn.queued),
+        }),
+        turn,
+      );
     }
     return { kind: "admitted", turn };
   } catch (error) {

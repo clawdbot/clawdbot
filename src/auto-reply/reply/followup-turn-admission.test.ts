@@ -89,6 +89,7 @@ function createRun(overrides: Partial<FollowupRun> = {}): FollowupRun {
 function createOperation(sessionId = "queued-session") {
   return {
     sessionId,
+    abortForRestart: vi.fn(() => true),
     retainFailureUntilComplete: vi.fn(),
     fail: vi.fn(),
     complete: vi.fn(),
@@ -643,6 +644,67 @@ describe("admitFollowupTurn", () => {
     );
   });
 
+  it("delivers a terminal compaction notice after adopting its rotated generation", async () => {
+    const operation = createOperation();
+    const initialEntry: SessionEntry = {
+      sessionId: "queued-session",
+      lifecycleRevision: "initial",
+      updatedAt: 1,
+    };
+    const rotatedEntry: SessionEntry = {
+      sessionId: "compacted-session",
+      lifecycleRevision: "compacted",
+      updatedAt: 2,
+    };
+    const sessionStore = { main: initialEntry };
+    const onCompactionNoticePayload = vi.fn(async () => {});
+    state.shouldNotifyCompaction = true;
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
+    state.preflight.mockImplementation(async ({ onCompactionNotice }) => {
+      sessionStore.main = rotatedEntry;
+      await onCompactionNotice?.("end");
+      return rotatedEntry;
+    });
+
+    const result = await admitFollowupTurn({
+      queued: createRun(),
+      defaults: createDefaults({ sessionEntry: initialEntry, sessionStore }),
+      onCompactionNoticePayload,
+    });
+
+    expect(result).toMatchObject({ kind: "admitted" });
+    expect(onCompactionNoticePayload).toHaveBeenCalledWith(
+      { text: "end" },
+      expect.objectContaining({
+        sendPolicy: "allow",
+        queued: expect.objectContaining({
+          run: expect.objectContaining({ sessionId: "compacted-session" }),
+        }),
+      }),
+    );
+  });
+
+  it("releases the admitted operation when deferred terminal notice delivery fails", async () => {
+    const operation = createOperation();
+    const initialEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
+    const failure = new Error("notice delivery failed");
+    state.shouldNotifyCompaction = true;
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
+    state.preflight.mockImplementation(async ({ onCompactionNotice }) => {
+      await onCompactionNotice?.("end");
+      return initialEntry;
+    });
+
+    await expect(
+      admitFollowupTurn({
+        queued: createRun(),
+        defaults: createDefaults({ sessionEntry: initialEntry }),
+        onCompactionNoticePayload: vi.fn(async () => Promise.reject(failure)),
+      }),
+    ).rejects.toBe(failure);
+    expect(operation.complete).toHaveBeenCalledOnce();
+  });
+
   it("restores the item when generation changes before a compaction notice", async () => {
     const operation = createOperation();
     const initialEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
@@ -662,8 +724,34 @@ describe("admitFollowupTurn", () => {
         defaults: createDefaults({ sessionEntry: initialEntry, storePath: "/tmp/sessions.json" }),
         onCompactionNoticePayload,
       }),
-    ).rejects.toThrow("Follow-up session generation changed after reply admission");
+    ).rejects.toThrow("Follow-up session generation changed during preflight");
     expect(onCompactionNoticePayload).not.toHaveBeenCalled();
+    expect(operation.complete).toHaveBeenCalledOnce();
+  });
+
+  it("cancels preflight immediately when the start notice sees invalidation", async () => {
+    const operation = createOperation();
+    const initialEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
+    const replacementEntry: SessionEntry = { sessionId: "replacement-session", updatedAt: 2 };
+    state.shouldNotifyCompaction = true;
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
+    state.loadEntry.mockReturnValueOnce(initialEntry).mockReturnValue(replacementEntry);
+    state.preflight.mockImplementation(async ({ onCompactionNotice }) => {
+      try {
+        await onCompactionNotice?.("start");
+      } catch {
+        // The memory owner logs notice failures; the abort signal stops its compactor.
+      }
+      throw new Error("compaction aborted");
+    });
+
+    await expect(
+      admitFollowupTurn({
+        queued: createRun(),
+        defaults: createDefaults({ sessionEntry: initialEntry, storePath: "/tmp/sessions.json" }),
+      }),
+    ).rejects.toThrow("Follow-up session generation changed during preflight notice delivery");
+    expect(operation.abortForRestart).toHaveBeenCalledOnce();
     expect(operation.complete).toHaveBeenCalledOnce();
   });
 
