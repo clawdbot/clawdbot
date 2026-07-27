@@ -27,10 +27,7 @@ describe("DeepInfra generic embedding adapter", () => {
     vi.clearAllMocks();
     mocks.createDeepInfraEmbeddingProvider.mockResolvedValue({
       provider: memoryProvider,
-      runtime: {
-        id: "deepinfra",
-        cacheKeyData: { provider: "deepinfra", model: "BAAI/bge-m3" },
-      },
+      client: { model: "BAAI/bge-m3-resolved" },
     });
   });
 
@@ -82,7 +79,7 @@ describe("DeepInfra generic embedding adapter", () => {
     });
     expect(result.runtime).toEqual({
       id: "deepinfra",
-      cacheKeyData: { provider: "deepinfra", model: "BAAI/bge-m3" },
+      cacheKeyData: { provider: "deepinfra", model: "BAAI/bge-m3-resolved" },
     });
     expect(result.provider).toMatchObject({
       id: "deepinfra",

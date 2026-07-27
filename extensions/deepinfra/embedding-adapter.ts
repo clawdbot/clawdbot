@@ -63,13 +63,19 @@ export function buildDeepInfraEmbeddingAdapter(options?: {
     transport: "remote",
     authProviderId: "deepinfra",
     create: async (createOptions) => {
-      const result = await createDeepInfraEmbeddingProvider({
+      const { provider, client } = await createDeepInfraEmbeddingProvider({
         ...buildMemoryCreateOptions(createOptions),
         defaultModel,
       });
       return {
-        provider: result.provider ? adaptMemoryEmbeddingProvider(result.provider) : null,
-        runtime: result.runtime,
+        provider: provider ? adaptMemoryEmbeddingProvider(provider) : null,
+        runtime: {
+          id: "deepinfra",
+          cacheKeyData: {
+            provider: "deepinfra",
+            model: client.model,
+          },
+        },
       };
     },
   };
