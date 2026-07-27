@@ -253,7 +253,8 @@ describe("plugin metadata snapshot", () => {
     const proxy = new Proxy(target, {
       getOwnPropertyDescriptor(proxyTarget, key) {
         const descriptor = Reflect.getOwnPropertyDescriptor(proxyTarget, key);
-        if (key === "current" && descriptor?.configurable && forgedDescriptors < 2) {
+        // Preserve the real accessor during Object.freeze so later proxy reads remain valid.
+        if (key === "current" && descriptor?.configurable && forgedDescriptors < 1) {
           forgedDescriptors += 1;
           return {
             configurable: true,
@@ -283,7 +284,7 @@ describe("plugin metadata snapshot", () => {
     loadPluginManifestRegistryForInstalledIndex.mockReturnValue(registry);
 
     const first = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
-    expect(forgedDescriptors).toBe(2);
+    expect(forgedDescriptors).toBe(1);
     expect(Object.isFrozen(proxy)).toBe(true);
     expect(Object.isFrozen(currentValue.nested)).toBe(true);
 
