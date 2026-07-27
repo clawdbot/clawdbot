@@ -4,7 +4,6 @@ import {
   WIDGET_PROMPT_EVENT,
   admitInitialTurnHandoff,
   admitInitialUserMessageHandoff,
-  areUiSessionKeysEquivalent,
   chatAttachmentFromDataUrl,
   createPageState,
   disposeQuestionPromptState,
@@ -21,6 +20,7 @@ import {
   resetChatViewState,
   resolveChatPaneObserverRunId,
   resolveSessionKey,
+  selectedChatSessionRow,
   toggleSessionWorkspace,
   type BrowserAnnotationDraft,
   type SessionObserverDigest,
@@ -410,9 +410,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneReset {
         }
       });
     }
-    const selectedSessionRow = this.state?.sessionsResult?.sessions.find((row) =>
-      areUiSessionKeysEquivalent(row.key, this.state?.sessionKey ?? ""),
-    );
+    const selectedSessionRow = this.state ? selectedChatSessionRow(this.state) : undefined;
     // Active runs count even without a digest: a hidden observer generates
     // none, and the rail module owns the restore control for turning it back on.
     const observerRunId = resolveChatPaneObserverRunId({

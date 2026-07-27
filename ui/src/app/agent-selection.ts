@@ -1,10 +1,8 @@
-import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
-import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import { normalizeAgentId, parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 
 type AgentSelectionGateway = {
   readonly snapshot: {
-    client: GatewayBrowserClient | null;
     assistantAgentId: string | null;
   };
   subscribe: (listener: (snapshot: AgentSelectionGateway["snapshot"]) => void) => () => void;
@@ -27,6 +25,22 @@ export type AgentSelectionCapability = {
   setScope: (agentId: string | null) => void;
   subscribe: (listener: (state: AgentSelectionState) => void) => () => void;
 };
+
+/** Change application ownership before the Gateway session so every navigation
+ * caller observes one ordered state transition. Canonical global keys need the
+ * explicit agent carried by their data-plane event or owning UI surface. */
+export function selectApplicationSession(params: {
+  selection: Pick<AgentSelectionCapability, "set">;
+  gateway: { setSessionKey: (sessionKey: string) => void };
+  sessionKey: string;
+  agentId?: string | null;
+}): void {
+  const agentId = params.agentId?.trim() || parseAgentSessionKey(params.sessionKey)?.agentId;
+  if (agentId) {
+    params.selection.set(normalizeAgentId(agentId));
+  }
+  params.gateway.setSessionKey(params.sessionKey);
+}
 
 export function createAgentSelectionCapability(
   gateway: AgentSelectionGateway,
@@ -60,7 +74,6 @@ export function createAgentSelectionCapability(
     selectedId: initialSelectedId,
     scopeId: resolveScopeId(initialSelectedId),
   };
-  let client = gateway.snapshot.client;
   let assistantAgentId = initialId;
   const listeners = new Set<(next: AgentSelectionState) => void>();
 
@@ -83,12 +96,10 @@ export function createAgentSelectionCapability(
     const nextAssistantAgentId = next.assistantAgentId
       ? normalizeAgentId(next.assistantAgentId)
       : null;
-    const clientChanged = next.client !== client;
     const assistantChanged = nextAssistantAgentId !== assistantAgentId;
     const followedPreviousDefault = state.selectedId === assistantAgentId;
-    client = next.client;
     assistantAgentId = nextAssistantAgentId;
-    if (clientChanged || (assistantChanged && (!state.selectedId || followedPreviousDefault))) {
+    if (assistantChanged && (!state.selectedId || followedPreviousDefault)) {
       publish({ selectedId: nextAssistantAgentId, scopeId: nextAssistantAgentId });
     }
   });

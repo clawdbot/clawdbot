@@ -25,6 +25,7 @@ import {
   resetChatStateForRouteSession,
   retryChatComposerMemoryFallback,
   resolveChatAvatarUrl,
+  selectedChatSessionRow,
   type ChatPageHost,
 } from "./chat-state.ts";
 import {
@@ -138,6 +139,131 @@ describe("ChatStateController render lifecycle", () => {
     handlePageGatewayEvent(state, observerEvent("r1"));
     expect(state.observerDigest?.headline).toBe("Live status r1");
     expect(requestUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("accepts global observer digests only from the selected agent", () => {
+    const requestUpdate = vi.fn();
+    const state = {
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main", scope: "global" },
+      chatRunId: "run-work",
+      observerDigest: null,
+      requestUpdate,
+    } as unknown as ChatPageHost;
+    const observerEvent = (agentId: string) =>
+      ({
+        type: "event" as const,
+        event: "session.observer",
+        payload: {
+          sessionKey: "global",
+          agentId,
+          runId: "run-work",
+          revision: 1,
+          updatedAt: 1_000,
+          headline: `${agentId} status`,
+          health: "on-track",
+        },
+      }) satisfies Parameters<typeof handlePageGatewayEvent>[1];
+
+    handlePageGatewayEvent(state, observerEvent("main"));
+    expect(state.observerDigest).toBeNull();
+    expect(requestUpdate).not.toHaveBeenCalled();
+
+    handlePageGatewayEvent(state, observerEvent("work"));
+    expect(state.observerDigest?.headline).toBe("work status");
+    expect(requestUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("reconciles a selected global alias with its scoped canonical row after reconnect", () => {
+    const requestUpdate = vi.fn();
+    const state = {
+      sessionKey: "agent:work:main",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main", mainKey: "main", scope: "global" },
+      hello: {
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "main",
+            mainKey: "main",
+            mainSessionKey: "global",
+          },
+        },
+      },
+      chatRunId: null,
+      observerDigest: {
+        sessionKey: "global",
+        agentId: "work",
+        runId: "run-work",
+        revision: 1,
+        updatedAt: 1_000,
+        headline: "Stale status",
+        health: "on-track",
+      },
+      sessionsResultAgentId: "work",
+      sessionsResult: {
+        sessions: [
+          {
+            key: "global",
+            hasActiveRun: true,
+            activeRunIds: ["run-work"],
+            observerDigest: {
+              agentId: "work",
+              runId: "run-work",
+              revision: 2,
+              updatedAt: 2_000,
+              headline: "Projected status",
+              health: "grinding",
+            },
+          },
+        ],
+      },
+      requestUpdate,
+    } as unknown as ChatPageHost;
+
+    expect(selectedChatSessionRow(state)?.key).toBe("global");
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.observer",
+      payload: {
+        sessionKey: "global",
+        agentId: "work",
+        runId: "run-work",
+        revision: 3,
+        updatedAt: 3_000,
+        headline: "Reconnected live status",
+        health: "on-track",
+      },
+    });
+
+    expect(state.observerDigest?.headline).toBe("Reconnected live status");
+    expect(requestUpdate).toHaveBeenCalledOnce();
+
+    state.sessionsResultAgentId = "main";
+    expect(selectedChatSessionRow(state)).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: "prefers an exact direct row over a preceding stray global row",
+      rows: [{ key: "global" }, { key: "agent:work:main", displayName: "Exact work session" }],
+      expectedKey: "agent:work:main",
+    },
+    {
+      name: "ignores a lone global row outside configured-global scope",
+      rows: [{ key: "global" }],
+      expectedKey: undefined,
+    },
+  ])("$name", ({ rows, expectedKey }) => {
+    const state = {
+      sessionKey: "agent:work:main",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
+      sessionsResultAgentId: "work",
+      sessionsResult: { sessions: rows },
+    } as unknown as ChatPageHost;
+
+    expect(selectedChatSessionRow(state)?.key).toBe(expectedKey);
   });
 
   it("tracks waiting approval only for the selected session until resolution", () => {
