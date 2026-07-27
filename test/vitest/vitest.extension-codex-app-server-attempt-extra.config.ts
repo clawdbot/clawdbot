@@ -6,7 +6,6 @@ function createExtensionCodexAppServerAttemptExtraVitestConfig(
 ) {
   return createScopedVitestConfig(
     [
-      "extensions/codex/src/app-server/run-attempt-client-prewarm.test.ts",
       "extensions/codex/src/app-server/run-attempt-lifecycle-controller.test.ts",
       "extensions/codex/src/app-server/run-attempt-thread-cleanup.test.ts",
       "extensions/codex/src/app-server/run-attempt.context-engine.test.ts",
