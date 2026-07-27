@@ -9,7 +9,10 @@ import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { buildLegacyBundledRootPath } from "./bundled-load-path-aliases.js";
 import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
 import { normalizePluginsConfig } from "./config-state.js";
-import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import {
+  clearCurrentPluginMetadataSnapshot,
+  getCurrentPluginMetadataSnapshot,
+} from "./current-plugin-metadata-snapshot.js";
 import { discoverConfiguredPluginLoadPaths, type PluginDiscoveryResult } from "./discovery.js";
 import { fileSignatureMatches, hashJson } from "./installed-plugin-index-hash.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
@@ -84,6 +87,8 @@ let pluginRegistrySnapshotMemo: PluginRegistrySnapshotMemo | undefined;
 
 function clearLoadPluginRegistrySnapshotMemo(): void {
   pluginRegistrySnapshotMemo = undefined;
+  // A retired registry must not leave its published metadata graph behind.
+  clearCurrentPluginMetadataSnapshot();
 }
 
 registerPluginMetadataProcessMemoLifecycleClear(clearLoadPluginRegistrySnapshotMemo);
