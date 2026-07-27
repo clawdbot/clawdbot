@@ -12,29 +12,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage as errorMessage } from "../infra/errors.js";
 import { shortenHomePath } from "../utils.js";
+import { describeToolsMdMergedBootstrapLimit } from "./doctor-tools-md-migration-budget.js";
+import { shouldMergeToolsMd } from "./doctor-tools-md-migration-content.js";
+import { rewriteLegacyAgentsToolsGuidance as rewriteLegacyToolsGuidance } from "./doctor-tools-md-migration-guidance.js";
 
 const TOOLS_MD_MIGRATION_CHECK_ID = "core/doctor/tools-md-migration";
 const MIGRATED_SUBSECTION_HEADING = "### Local notes (migrated from TOOLS.md)";
-const LEGACY_AGENTS_TOOLS_GUIDANCE =
-  "Skills provide your tools. When you need one, check its `SKILL.md`. Keep local notes (camera names, SSH details, voice preferences) in `TOOLS.md`.";
-const CURRENT_AGENTS_TOOLS_GUIDANCE =
-  "Skills define how tools work. Keep environment-specific local notes in this section.";
 const TOOLS_CLAIM_INFIX = ".doctor-importing-";
 const ACTIVE_CLAIM_MAX_AGE_MS = 10 * 60 * 1000;
 const HARD_LINK_UNSUPPORTED_CODES = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "EXDEV"]);
-
-const LEGACY_TOOLS_MD_TEMPLATE =
-  "# TOOLS.md - Local Notes\n\nSkills define _how_ tools work. This file is for _your_ specifics — the stuff that's unique to your setup: camera names and locations, SSH hosts and aliases, preferred TTS voices, speaker/room names, device nicknames, anything environment-specific.\n\n## Examples\n\n```markdown\n### Cameras\n\n" +
-  "- living-room → Main area, 180° wide angle\n- front-door → Entrance, motion-triggered\n\n### SSH\n\n- home-server → 192.168.1.100, user: admin\n\n### TTS\n\n" +
-  '- Preferred voice: "Nova" (warm, slightly British)\n- Default speaker: Kitchen HomePod\n```\n\n## Why Separate?\n\n' +
-  "Skills are shared. Your setup is yours. Keeping them apart means you can update skills without losing your notes, and share skills without leaking your infrastructure.\n\n---\n\nAdd whatever helps you do your job. This is your cheat sheet.\n\n## Related\n\n- [Agent workspace](/concepts/agent-workspace)\n";
-
-const LEGACY_TOOLS_DEV_MD_TEMPLATE =
-  "# TOOLS.md - User Tool Notes (editable)\n\nThis file is for _your_ notes about external tools and conventions. It does not define which tools exist; OpenClaw provides built-in tools internally, and skills add the rest.\n\n## Examples\n\n### imsg\n\n" +
-  "- Send an iMessage/SMS: describe who/what, confirm before sending.\n- Prefer short messages; avoid sending secrets.\n\n### sag\n\n" +
-  "- Text-to-speech: specify voice, target speaker/room, and whether to stream.\n\nAdd whatever else you want the assistant to know about your local toolchain.\n\n## Related\n\n- [TOOLS.md template](/reference/templates/TOOLS)\n";
-const LEGACY_TOOLS_DEV_FALLBACK =
-  "# TOOLS.md - User Tool Notes (editable)\n\nAdd your local tool notes here.\n";
 
 type ToolsMdMigrationResult = {
   changes: string[];
@@ -246,14 +232,7 @@ function appendWithSpacing(before: string, addition: string, after = ""): string
 }
 
 function mergeToolsMdIntoAgentsMd(agentsContent: string, toolsContent: string): string {
-  const hadLegacyGuidance = agentsContent.includes(LEGACY_AGENTS_TOOLS_GUIDANCE);
-  let mergedAgentsContent = agentsContent.replace(
-    LEGACY_AGENTS_TOOLS_GUIDANCE,
-    CURRENT_AGENTS_TOOLS_GUIDANCE,
-  );
-  if (hadLegacyGuidance) {
-    mergedAgentsContent = ensureLocalNotesHeading(mergedAgentsContent);
-  }
+  const mergedAgentsContent = rewriteLegacyAgentsToolsGuidance(agentsContent);
   if (mergedAgentsContent.includes(MIGRATED_SUBSECTION_HEADING)) {
     if (mergedAgentsContent.includes(toolsContent)) {
       return mergedAgentsContent;
@@ -277,6 +256,11 @@ function mergeToolsMdIntoAgentsMd(agentsContent: string, toolsContent: string): 
     block,
     mergedAgentsContent.slice(insertAt),
   );
+}
+
+function rewriteLegacyAgentsToolsGuidance(content: string): string {
+  const rewritten = rewriteLegacyToolsGuidance(content);
+  return rewritten === content ? content : ensureLocalNotesHeading(rewritten);
 }
 
 function findToolsSection(content: string): { headingEnd: number; insertAt: number } | undefined {
@@ -444,9 +428,7 @@ async function recoverInterruptedAgentsClaim(params: {
     const claimedContent = claimSnapshot.content;
     const expected = params.shouldMerge
       ? mergeToolsMdIntoAgentsMd(claimedContent, params.toolsContent)
-      : ensureLocalNotesHeading(
-          claimedContent.replace(LEGACY_AGENTS_TOOLS_GUIDANCE, CURRENT_AGENTS_TOOLS_GUIDANCE),
-        );
+      : rewriteLegacyAgentsToolsGuidance(claimedContent);
     if (agentsSnapshot.content === expected || agentsSnapshot.content === claimedContent) {
       await fs.rm(claimPath);
       return;
@@ -615,6 +597,32 @@ export async function collectToolsMdMigrationFindings(
             requirement: "legacy-tools-md",
           }),
         );
+        if (shouldMergeToolsMd(source.content)) {
+          const agentsPath = path.join(target.workspaceDir, DEFAULT_AGENTS_FILENAME);
+          const agentsContent = (
+            await readMigrationFileSnapshot({
+              filePath: agentsPath,
+              label: "AGENTS.md",
+              allowMissing: true,
+            })
+          ).content;
+          const mergedChars = mergeToolsMdIntoAgentsMd(agentsContent, source.content).length;
+          const budgetMessage = describeToolsMdMergedBootstrapLimit({
+            cfg,
+            agentId: target.agentId,
+            mergedChars,
+          });
+          if (budgetMessage) {
+            findings.push(
+              migrationFinding({
+                agentId: target.agentId,
+                path: agentsPath,
+                message: budgetMessage,
+                requirement: "tools-md-merged-bootstrap-limit",
+              }),
+            );
+          }
+        }
       }
     } catch (error) {
       findings.push(
@@ -655,11 +663,7 @@ export async function maybeMigrateToolsMd(params: {
         continue;
       }
 
-      const shouldMerge =
-        source.content.trim().length > 0 &&
-        source.content !== LEGACY_TOOLS_MD_TEMPLATE &&
-        source.content !== LEGACY_TOOLS_DEV_MD_TEMPLATE &&
-        source.content !== LEGACY_TOOLS_DEV_FALLBACK;
+      const shouldMerge = shouldMergeToolsMd(source.content);
       await archiveSource({ agentId: target.agentId, source, env });
       const claimPath = `${source.path}${TOOLS_CLAIM_INFIX}${process.pid}-${Date.now()}-${source.sha256.slice(0, 12)}`;
       await fs.rename(source.path, claimPath);
@@ -682,11 +686,7 @@ export async function maybeMigrateToolsMd(params: {
         ).content;
         const merged = shouldMerge
           ? mergeToolsMdIntoAgentsMd(agentsContent, source.content)
-          : agentsContent.includes(LEGACY_AGENTS_TOOLS_GUIDANCE)
-            ? ensureLocalNotesHeading(
-                agentsContent.replace(LEGACY_AGENTS_TOOLS_GUIDANCE, CURRENT_AGENTS_TOOLS_GUIDANCE),
-              )
-            : agentsContent;
+          : rewriteLegacyAgentsToolsGuidance(agentsContent);
         if (merged !== agentsContent) {
           await writeAgentsAtomically({ agentsPath, expected: agentsContent, content: merged });
         }

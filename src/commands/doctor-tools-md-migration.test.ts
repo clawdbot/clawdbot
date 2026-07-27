@@ -50,6 +50,68 @@ const LEGACY_TOOLS_MD_TEMPLATE_FIXTURE =
     "",
     "- [Agent workspace](/concepts/agent-workspace)",
   ].join("\n") + "\n";
+const LEGACY_AGENTS_GUIDANCE_REWRITES = [
+  [
+    "generic workspace template",
+    "Skills provide your tools. When you need one, check its `SKILL.md`. Keep local notes (camera names, SSH details, voice preferences) in `TOOLS.md`.",
+    "Skills define how tools work. Keep environment-specific local notes in this section.",
+  ],
+  [
+    "default template lowercase parenthetical",
+    "- Keep environment-specific notes in `TOOLS.md` (notes for skills).",
+    "- Keep environment-specific notes in this file's `## Tools` section.",
+  ],
+  [
+    "default template title-case parenthetical",
+    "- Keep environment-specific notes in `TOOLS.md` (Notes for Skills).",
+    "- Keep environment-specific notes in this file's `## Tools` section.",
+  ],
+  [
+    "current lesson reminder",
+    "- You learn a lesson -> update `AGENTS.md`, `TOOLS.md`, or the relevant skill.",
+    "- You learn a lesson -> update `AGENTS.md` or the relevant skill.",
+  ],
+  [
+    "original lesson reminder",
+    "- When you learn a lesson → update AGENTS.md, TOOLS.md, or the relevant skill",
+    "- When you learn a lesson → update AGENTS.md or the relevant skill",
+  ],
+  [
+    "Chinese generic template with English Skills",
+    "Skills 提供你的工具。当你需要某个工具时，查看它的 `SKILL.md`。在 `TOOLS.md` 中保存本地笔记（摄像头名称、SSH 详情、语音偏好等）。",
+    "Skills 定义工具的使用方式。请将环境特定的本地笔记保存在本节中。",
+  ],
+  [
+    "Chinese generic template",
+    "技能提供你的工具。当你需要某个工具时，查看它的 `SKILL.md`。在 `TOOLS.md` 中保存本地笔记（摄像头名称、SSH 详情、语音偏好等）。",
+    "技能定义工具的使用方式。请将环境特定的本地笔记保存在本节中。",
+  ],
+  [
+    "Chinese default template",
+    "- 在 `TOOLS.md` 中保存环境特定的笔记（Skills 注意事项）。",
+    "- 将环境特定的笔记保存在本文件的 `## Tools` 部分。",
+  ],
+  [
+    "Chinese default template with Skills",
+    "- 将环境相关的备注保存在 `TOOLS.md`（Skills 备注）中。",
+    "- 将环境相关的备注保存在本文件的 `## Tools` 部分。",
+  ],
+  [
+    "Chinese default template with translated skills",
+    "- 将环境相关的备注保存在 `TOOLS.md`（技能备注）中。",
+    "- 将环境相关的备注保存在本文件的 `## Tools` 部分。",
+  ],
+  [
+    "Chinese lesson reminder with Skills",
+    "- 当你学到教训 → 更新 AGENTS.md、TOOLS.md 或相关 Skills 文件",
+    "- 当你学到教训 → 更新 AGENTS.md 或相关 Skills 文件",
+  ],
+  [
+    "Chinese lesson reminder with translated skills",
+    "- 当你学到教训 → 更新 AGENTS.md、TOOLS.md 或相关技能文件",
+    "- 当你学到教训 → 更新 AGENTS.md 或相关技能文件",
+  ],
+] as const;
 
 afterEach(() => {
   noteMock.mockReset();
@@ -152,6 +214,60 @@ describe("TOOLS.md migration", () => {
     expect(rerunAgents).toBe(expected);
     expect(rerunAgents.match(/migrated from TOOLS\.md/gu)).toHaveLength(1);
   });
+
+  it("warns when the merged AGENTS.md will exceed the agent bootstrap file limit", async () => {
+    const fixture = await createFixture();
+    const agents = `# Agent\n\n## Tools\n\n${"a".repeat(15_000)}\n`;
+    const tools = `${"b".repeat(15_000)}\n`;
+    const merged = `${agents}\n### Local notes (migrated from TOOLS.md)\n\n${tools}`;
+    fixture.cfg.agents!.list![0]!.bootstrapMaxChars = 20_000;
+    await fs.writeFile(fixture.agentsPath, agents);
+    await fs.writeFile(fixture.toolsPath, tools);
+
+    const findings = await collectToolsMdMigrationFindings(fixture.cfg);
+
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/tools-md-migration",
+        requirement: "tools-md-merged-bootstrap-limit",
+        message: `Agent "main" TOOLS.md migration will produce a ${merged.length}-character AGENTS.md, exceeding its configured bootstrapMaxChars limit of 20000. Raise \`agents.entries.*.bootstrapMaxChars\` for this agent, or \`agents.defaults.bootstrapMaxChars\` as fallback, to preserve all migrated instructions.`,
+      }),
+    );
+  });
+
+  it("does not emit a bootstrap limit finding for a normal-sized merge", async () => {
+    const fixture = await createFixture();
+    await fs.writeFile(fixture.agentsPath, "# Agent\n\n## Tools\n\nExisting notes.\n");
+    await fs.writeFile(fixture.toolsPath, "Local camera: kitchen\n");
+
+    const findings = await collectToolsMdMigrationFindings(fixture.cfg);
+
+    expect(findings).not.toContainEqual(
+      expect.objectContaining({ requirement: "tools-md-merged-bootstrap-limit" }),
+    );
+  });
+
+  it.each(LEGACY_AGENTS_GUIDANCE_REWRITES)(
+    "rewrites the %s without leaving a TOOLS.md directive",
+    async (_label, legacy, current) => {
+      const fixture = await createFixture();
+      await fs.writeFile(fixture.agentsPath, `# Agent\n\n## Tools\n\n${legacy}\n`);
+      await fs.writeFile(fixture.toolsPath, LEGACY_TOOLS_MD_TEMPLATE_FIXTURE);
+
+      const result = await maybeMigrateToolsMd({
+        cfg: fixture.cfg,
+        shouldRepair: true,
+        env: fixture.env,
+      });
+
+      expect(result.warnings).toEqual([]);
+      const migratedAgents = await fs.readFile(fixture.agentsPath, "utf8");
+      expect(migratedAgents).toContain(current);
+      expect(migratedAgents).not.toContain(legacy);
+      expect(migratedAgents).not.toContain("TOOLS.md");
+      await expectMissing(fixture.toolsPath);
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "refuses symlinked AGENTS.md files and interrupted claims",
