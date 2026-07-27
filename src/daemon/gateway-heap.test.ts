@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatGatewayHeapLimitReport,
   inspectGatewayHeapLimit,
+  isExplicitGatewayHeapLimit,
   resolveGatewayHeapNodeOptions,
 } from "./gateway-heap.js";
 
@@ -112,5 +113,44 @@ describe("Gateway service NODE_OPTIONS", () => {
     expect(formatGatewayHeapLimitReport(report)).toBe(
       "6144 MiB (service setting; adaptive default 4096 MiB from 50% of 8192 MiB constrained memory, target range 2048-8192 MiB, native headroom cap 6144 MiB)",
     );
+  });
+
+  it("distinguishes managed adaptive defaults from operator heap overrides", () => {
+    const memory = {
+      constrainedMemoryBytes: 16_384 * MIB,
+      physicalMemoryBytes: 32_768 * MIB,
+    };
+    expect(
+      isExplicitGatewayHeapLimit({
+        nodeOptions: "--max-old-space-size=8192",
+        execArgv: [],
+        serviceMarker: "openclaw",
+        memory,
+      }),
+    ).toBe(false);
+    expect(
+      isExplicitGatewayHeapLimit({
+        nodeOptions: "--max-old-space-size=6144",
+        execArgv: [],
+        serviceMarker: "openclaw",
+        memory,
+      }),
+    ).toBe(true);
+    expect(
+      isExplicitGatewayHeapLimit({
+        nodeOptions: "--max-old-space-size=8192",
+        execArgv: [],
+        serviceMarker: "",
+        memory,
+      }),
+    ).toBe(true);
+    expect(
+      isExplicitGatewayHeapLimit({
+        nodeOptions: "--max-old-space-size=8192",
+        execArgv: ["--max-old-space-size", "7168"],
+        serviceMarker: "openclaw",
+        memory,
+      }),
+    ).toBe(true);
   });
 });

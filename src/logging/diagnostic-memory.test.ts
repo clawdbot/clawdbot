@@ -23,6 +23,7 @@ import { resetLogger, setLoggerOverride } from "./logger.js";
 
 const mocks = vi.hoisted(() => ({
   heapSizeLimitBytes: undefined as number | undefined,
+  explicitGatewayHeapLimit: false,
 }));
 
 vi.mock("node:v8", async (importOriginal) => {
@@ -35,6 +36,14 @@ vi.mock("node:v8", async (importOriginal) => {
         ? {}
         : { heap_size_limit: mocks.heapSizeLimitBytes }),
     }),
+  };
+});
+
+vi.mock("../daemon/gateway-heap.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../daemon/gateway-heap.js")>();
+  return {
+    ...actual,
+    isExplicitGatewayHeapLimit: () => mocks.explicitGatewayHeapLimit,
   };
 });
 
@@ -63,6 +72,7 @@ describe("diagnostic memory", () => {
     resetDiagnosticStabilityRecorderForTest();
     resetLogger();
     mocks.heapSizeLimitBytes = undefined;
+    mocks.explicitGatewayHeapLimit = false;
   });
 
   afterEach(() => {
@@ -179,6 +189,28 @@ describe("diagnostic memory", () => {
     );
   });
 
+  it("preserves fixed defaults for a resource-derived enlarged heap", () => {
+    mocks.heapSizeLimitBytes = 8 * 1024 * 1024 * 1024;
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onDiagnosticEvent((event) => events.push(event));
+
+    emitDiagnosticMemorySample({
+      now: 1000,
+      memoryUsage: memoryUsage({
+        heapTotal: 3 * 1024 * 1024 * 1024,
+        heapUsed: 3 * 1024 * 1024 * 1024,
+      }),
+    });
+    stop();
+
+    expect(events.at(-1)).toMatchObject({
+      type: "diagnostic.memory.pressure",
+      level: "critical",
+      reason: "heap_threshold",
+      thresholdBytes: 2 * 1024 * 1024 * 1024,
+    });
+  });
+
   it.each([
     {
       name: "default-sized",
@@ -205,6 +237,7 @@ describe("diagnostic memory", () => {
     "resolves heap pressure thresholds for $name V8 heaps",
     ({ heapSizeLimitBytes, heapUsedBytes, level, thresholdBytes }) => {
       mocks.heapSizeLimitBytes = heapSizeLimitBytes;
+      mocks.explicitGatewayHeapLimit = true;
       const events: DiagnosticEventPayload[] = [];
       const stop = onDiagnosticEvent((event) => events.push(event));
 

@@ -1,5 +1,6 @@
 /** Adaptive Node heap policy for the managed Gateway service. */
 import os from "node:os";
+import { GATEWAY_SERVICE_MARKER } from "./constants.js";
 
 const MEBIBYTE_BYTES = 1024 * 1024;
 const GATEWAY_HEAP_FLOOR_MIB = 2048;
@@ -146,6 +147,31 @@ export function inspectGatewayHeapLimit(
     ...resolveGatewayHeapLimit(memory),
     appliedMiB: parseMaxOldSpaceSizeMiB(nodeOptions),
   };
+}
+
+export function isExplicitGatewayHeapLimit(params?: {
+  nodeOptions?: string;
+  execArgv?: readonly string[];
+  serviceMarker?: string;
+  memory?: GatewayHeapMemoryInputs;
+}): boolean {
+  const execArgv = params?.execArgv ?? process.execArgv;
+  if (parseMaxOldSpaceSizeMiB(execArgv.join(" ")) !== null) {
+    return true;
+  }
+  const report = inspectGatewayHeapLimit(
+    params?.nodeOptions ?? process.env.NODE_OPTIONS,
+    params?.memory,
+  );
+  if (report.appliedMiB === null) {
+    return false;
+  }
+  // Managed services always materialize their resource-derived default as
+  // NODE_OPTIONS. Only a different applied value represents an operator override.
+  return (
+    (params?.serviceMarker ?? process.env.OPENCLAW_SERVICE_MARKER)?.trim() !==
+      GATEWAY_SERVICE_MARKER || report.appliedMiB !== report.maxOldSpaceSizeMiB
+  );
 }
 
 export function formatGatewayHeapLimitReport(report: GatewayHeapLimitReport): string {

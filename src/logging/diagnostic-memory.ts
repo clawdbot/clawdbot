@@ -1,5 +1,6 @@
 // Diagnostic memory helpers capture process memory facts for support diagnostics.
 import { getHeapStatistics } from "node:v8";
+import { isExplicitGatewayHeapLimit } from "../daemon/gateway-heap.js";
 import {
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
   type DiagnosticMemoryPressureEvent,
@@ -63,16 +64,15 @@ function resolveThresholds(
   thresholds?: DiagnosticMemoryThresholds,
 ): Required<DiagnosticMemoryThresholds> {
   const heapSizeLimitBytes = getHeapStatistics().heap_size_limit;
-  // The established 1/2 GiB defaults remain floors. Only enlarged V8 heaps scale
-  // upward, avoiding restart policy changes for existing constrained/default heaps.
-  const heapUsedWarningBytes = Math.max(
-    DEFAULT_HEAP_WARNING_BYTES,
-    Math.floor(heapSizeLimitBytes * 0.25),
-  );
-  const heapUsedCriticalBytes = Math.max(
-    DEFAULT_HEAP_CRITICAL_BYTES,
-    Math.floor(heapSizeLimitBytes * 0.5),
-  );
+  // Managed services materialize resource-derived defaults as NODE_OPTIONS.
+  // Scale only for a distinct operator override or direct Node CLI heap flag.
+  const useAdaptiveHeapThresholds = isExplicitGatewayHeapLimit();
+  const heapUsedWarningBytes = useAdaptiveHeapThresholds
+    ? Math.max(DEFAULT_HEAP_WARNING_BYTES, Math.floor(heapSizeLimitBytes * 0.25))
+    : DEFAULT_HEAP_WARNING_BYTES;
+  const heapUsedCriticalBytes = useAdaptiveHeapThresholds
+    ? Math.max(DEFAULT_HEAP_CRITICAL_BYTES, Math.floor(heapSizeLimitBytes * 0.5))
+    : DEFAULT_HEAP_CRITICAL_BYTES;
   return {
     rssWarningBytes: thresholds?.rssWarningBytes ?? DEFAULT_RSS_WARNING_BYTES,
     rssCriticalBytes: thresholds?.rssCriticalBytes ?? DEFAULT_RSS_CRITICAL_BYTES,
