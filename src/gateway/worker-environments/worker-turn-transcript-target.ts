@@ -6,12 +6,13 @@ export function resolveWorkerTurnTranscriptTarget(
 ): { agentId: string; sessionId: string; sessionKey: string; storePath: string } {
   if (
     !turn.sessionTarget?.agentId ||
+    !turn.sessionTarget.sessionId ||
     !turn.sessionTarget.sessionKey ||
     !turn.sessionTarget.storePath
   ) {
     throw new Error("Cloud worker turn is missing its transcript identity");
   }
-  if (turn.sessionTarget.sessionId && turn.sessionTarget.sessionId !== turn.sessionId) {
+  if (turn.sessionTarget.sessionId !== turn.sessionId) {
     throw new Error("Cloud worker transcript identity does not match the active turn");
   }
   const targetKeyAgentId = parseAgentSessionKey(turn.sessionTarget.sessionKey)?.agentId;

@@ -239,6 +239,64 @@ describe("createEmbeddedAttemptSessionLockController", () => {
     await expect(completion).rejects.toBe(nestedError);
   });
 
+  it("preserves the callback error when a handled nested write also failed", async () => {
+    const primaryError = new Error("outer write failed");
+    const nestedError = new Error("nested write failed");
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release: async () => undefined })),
+      lockOptions: { sessionFile: "agent:main:main" },
+    });
+
+    await expect(
+      controller.withSessionWriteLock(async () => {
+        await controller
+          .withSessionWriteLock(() => {
+            throw nestedError;
+          })
+          .catch(() => undefined);
+        throw primaryError;
+      }),
+    ).rejects.toBe(primaryError);
+    expect(primaryError.cause).toBe(nestedError);
+  });
+
+  it("preserves a frozen callback error when nested drain also failed", async () => {
+    const primaryError = new Error("outer write failed");
+    Object.freeze(primaryError);
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release: async () => undefined })),
+      lockOptions: { sessionFile: "agent:main:main" },
+    });
+
+    await expect(
+      controller.withSessionWriteLock(async () => {
+        await controller
+          .withSessionWriteLock(() => {
+            throw new Error("nested write failed");
+          })
+          .catch(() => undefined);
+        throw primaryError;
+      }),
+    ).rejects.toBe(primaryError);
+  });
+
+  it("does not attach a propagated nested error as its own cause", async () => {
+    const nestedError = new Error("nested write failed");
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release: async () => undefined })),
+      lockOptions: { sessionFile: "agent:main:main" },
+    });
+
+    await expect(
+      controller.withSessionWriteLock(async () => {
+        await controller.withSessionWriteLock(() => {
+          throw nestedError;
+        });
+      }),
+    ).rejects.toBe(nestedError);
+    expect(nestedError.cause).toBeUndefined();
+  });
+
   it("terminally fences writes after a generic prompt reload failure", async () => {
     const reloadError = new Error("reload failed");
     const run = vi.fn();

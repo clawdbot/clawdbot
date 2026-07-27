@@ -54,6 +54,19 @@ function hasLoneSurrogate(value: string): boolean {
 }
 
 describe("worker turn launcher", () => {
+  it("rejects a transcript target without a session incarnation", () => {
+    expect(() =>
+      resolveWorkerTurnTranscriptTarget({
+        sessionId: "current-session",
+        sessionTarget: {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          storePath: "/tmp/sessions.json",
+        },
+      }),
+    ).toThrow("missing its transcript identity");
+  });
+
   it("rejects a transcript target from another session incarnation", () => {
     expect(() =>
       resolveWorkerTurnTranscriptTarget({

@@ -156,6 +156,49 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       throw firstError;
     }
   };
+  const runLifecycleOwner = async <T>(
+    owner: LifecycleOwner,
+    run: () => Promise<T> | T,
+  ): Promise<T> => {
+    let value: T | undefined;
+    let primaryError: unknown;
+    let primaryFailed = false;
+    try {
+      value = await lifecycleOwner.run(owner, async () => await run());
+    } catch (error) {
+      primaryFailed = true;
+      primaryError = error;
+    }
+    let drainError: unknown;
+    let drainFailed = false;
+    try {
+      await drainLifecycleOwner(owner);
+    } catch (error) {
+      drainFailed = true;
+      drainError = error;
+    } finally {
+      owner.active = false;
+    }
+    if (primaryFailed) {
+      if (
+        drainFailed &&
+        drainError !== primaryError &&
+        primaryError instanceof Error &&
+        primaryError.cause === undefined
+      ) {
+        try {
+          primaryError.cause = drainError;
+        } catch {
+          // Frozen callback errors remain primary; drain failure is secondary.
+        }
+      }
+      throw primaryError;
+    }
+    if (drainFailed) {
+      throw drainError;
+    }
+    return value as T;
+  };
   const serializeLifecycle = async <T>(run: () => Promise<T> | T): Promise<T> => {
     const inheritedOwner = lifecycleOwner.getStore();
     if (inheritedOwner?.active) {
@@ -164,15 +207,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       inheritedOwner.nestedPending += 1;
       const operation = waitForPrevious.then(async () => {
         const childOwner = createLifecycleOwner();
-        try {
-          return await lifecycleOwner.run(childOwner, async () => await run());
-        } finally {
-          try {
-            await drainLifecycleOwner(childOwner);
-          } finally {
-            childOwner.active = false;
-          }
-        }
+        return await runLifecycleOwner(childOwner, run);
       });
       void operation.catch(() => {});
       const queueTail = operation.then(
@@ -196,14 +231,9 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     await previous;
     const owner = createLifecycleOwner();
     try {
-      return await lifecycleOwner.run(owner, async () => await run());
+      return await runLifecycleOwner(owner, run);
     } finally {
-      try {
-        await drainLifecycleOwner(owner);
-      } finally {
-        owner.active = false;
-        release();
-      }
+      release();
     }
   };
   const reloadPromptReleasedState = async (): Promise<void> => {
@@ -247,6 +277,8 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         if (cleanupStarted) {
           throw new Error("attempt cleanup started before prompt submission");
         }
+        // The SQLite lease spans the provider prompt. Its stale deadline never
+        // permits takeover from a live process owner.
         promptAborted = false;
         promptReleased = true;
         promptReleaseNeedsReload = true;
@@ -490,6 +522,8 @@ export function installPromptSubmissionLockRelease(params: {
   }
   const originalStreamFn = currentStreamFn.bind(agent);
   const wrappedStreamFn: PromptReleaseStreamFn = async (...args: unknown[]) => {
+    // The internal agent runtime routes transcript mutations through the
+    // lifecycle lock; it has no separate SDK event queue to drain.
     await params.releaseForPrompt();
     let promptFailed = false;
     let promptError: unknown;
