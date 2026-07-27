@@ -516,7 +516,10 @@ export function applyToolCatalogCompaction(
     };
   }
 
-  const reusableKey = reusableCatalogKey(params);
+  // Hook-bound catalogs hold tools rebuilt per attempt (createOpenClawCodingTools),
+  // so the per-object identity in the fingerprint can never match across runs; a
+  // remembered snapshot is unrestorable and only retains the finished run's graph.
+  const reusableKey = params.toolHookContext ? undefined : reusableCatalogKey(params);
   const reusableSnapshot = reusableKey ? reusableCatalogSnapshots.get(reusableKey) : undefined;
   if (reusableSnapshot?.fingerprint === incomingFingerprint) {
     restoreToolSearchCatalog({

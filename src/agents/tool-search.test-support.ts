@@ -10,6 +10,7 @@ type ToolSearchCatalogSession = {
 
 type ToolSearchTestApi = {
   sessionCatalogs: Map<string, ToolSearchCatalogSession>;
+  reusableCatalogSnapshots: Map<string, { entries: ToolSearchCatalogEntry[]; fingerprint: string }>;
   maxToolSchemaDirectoryPromptChars: number;
   setToolSearchCodeModeSupportedForTest(value: boolean | undefined): void;
   setToolSearchMinCodeTimeoutMsForTest(value: number | undefined): void;
@@ -33,6 +34,9 @@ function getTestApi(): ToolSearchTestApi {
 export const testing: ToolSearchTestApi = {
   get sessionCatalogs() {
     return getTestApi().sessionCatalogs;
+  },
+  get reusableCatalogSnapshots() {
+    return getTestApi().reusableCatalogSnapshots;
   },
   get maxToolSchemaDirectoryPromptChars() {
     return getTestApi().maxToolSchemaDirectoryPromptChars;

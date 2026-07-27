@@ -2506,6 +2506,136 @@ describe("Tool Search", () => {
     );
   });
 
+  it("still remembers reusable catalog snapshots for run-scoped catalogs without a hook context", () => {
+    // Control for the hook-bound tests below: with a runId but no hook context
+    // the snapshot path is unchanged, so their assertions cannot pass vacuously
+    // and a future refactor cannot silently re-key the gate onto runId.
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const config = { tools: { toolSearch: true } } as never;
+    const sessionId = "session-hookctx-control";
+    const catalogRef = createToolSearchCatalogRef();
+    applyToolSearchCatalog({
+      tools: [codeTool, pluginTool("fake_hookctx_control_alpha", "Control tool")],
+      config,
+      sessionId,
+      runId: "run-hookctx-control",
+      catalogRef,
+    });
+    expect(testing.reusableCatalogSnapshots.has(`session:${sessionId}`)).toBe(true);
+
+    // A run-scoped clear keeps the snapshot (cross-run reuse), a session-scoped
+    // clear releases it.
+    clearToolSearchCatalog({ sessionId, runId: "run-hookctx-control", catalogRef });
+    expect(testing.reusableCatalogSnapshots.has(`session:${sessionId}`)).toBe(true);
+    clearToolSearchCatalog({ sessionId });
+    expect(testing.reusableCatalogSnapshots.has(`session:${sessionId}`)).toBe(false);
+  });
+
+  it("does not remember reusable catalog snapshots for hook-bound catalogs", () => {
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const config = { tools: { toolSearch: true } } as never;
+    const snapshotsBefore = testing.reusableCatalogSnapshots.size;
+
+    // Embedded runs always pass a per-run hook context whose wrappers close
+    // over the run's abort signal and onToolOutcome observer, so a snapshot
+    // would retain the finished run graph without ever being restorable.
+    const sessionId = "session-hookctx-bound";
+    const runId = "run-hookctx-bound";
+    const catalogRef = createToolSearchCatalogRef();
+    const tools = [codeTool, pluginTool("fake_hookctx_bound_alpha", "Hook-bound tool")];
+    const hookContext = {
+      agentId: "agent-main",
+      sessionId,
+      sessionKey: "agent:main:main",
+      runId,
+      onToolOutcome: vi.fn(),
+    };
+    const bound = applyToolSearchCatalog({
+      tools,
+      config,
+      sessionId,
+      runId,
+      catalogRef,
+      toolHookContext: hookContext,
+    });
+    expect(bound.catalogRegistered).toBe(true);
+    expect(testing.sessionCatalogs.has(`run:${runId}`)).toBe(true);
+    // Premise of the skip: cataloged entries really are hook-wrapped.
+    const boundEntry = catalogRef.current?.entries.find(
+      (entry) => entry.name === "fake_hookctx_bound_alpha",
+    );
+    expect(boundEntry).toBeDefined();
+    expect(isToolWrappedWithBeforeToolCallHook(expectDefined(boundEntry).tool)).toBe(true);
+    expect(testing.reusableCatalogSnapshots.has(`session:${sessionId}`)).toBe(false);
+    clearToolSearchCatalog({ sessionId, runId, catalogRef });
+    expect(testing.sessionCatalogs.has(`run:${runId}`)).toBe(false);
+
+    // Re-registering the same tool objects under a new run gains no reuse —
+    // there was none to lose: the fingerprint pins per-object tool identity.
+    const secondRef = createToolSearchCatalogRef();
+    const second = applyToolSearchCatalog({
+      tools,
+      config,
+      sessionId,
+      runId: "run-hookctx-bound-2",
+      catalogRef: secondRef,
+      toolHookContext: { ...hookContext, runId: "run-hookctx-bound-2" },
+    });
+    expect(second.catalogRegistered).toBe(true);
+    expect(second.catalogReused).toBe(false);
+    clearToolSearchCatalog({ sessionId, runId: "run-hookctx-bound-2", catalogRef: secondRef });
+
+    // The gate keys on the hook context alone: a session-keyed registration
+    // (no runId) with a hook context must not snapshot either.
+    const runlessSessionId = "session-hookctx-runless";
+    applyToolSearchCatalog({
+      tools: [codeTool, pluginTool("fake_hookctx_runless_alpha", "Runless tool")],
+      config,
+      sessionId: runlessSessionId,
+      toolHookContext: { agentId: "agent-main", sessionId: runlessSessionId },
+    });
+    expect(testing.reusableCatalogSnapshots.has(`session:${runlessSessionId}`)).toBe(false);
+    clearToolSearchCatalog({ sessionId: runlessSessionId });
+
+    expect(testing.reusableCatalogSnapshots.size).toBe(snapshotsBefore);
+  });
+
+  it("does not accumulate reusable catalog snapshots across one-shot hook-bound runs", () => {
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const config = { tools: { toolSearch: true } } as never;
+    // Sibling tests leave entries in this shared module-global map, so assert
+    // bounded growth against a baseline instead of clearing state this test
+    // does not own.
+    const snapshotsBefore = testing.reusableCatalogSnapshots.size;
+
+    // Runs under one-shot session ids (fresh isolated sessions, session
+    // rollovers) rebuild hook-wrapped tool objects every time, so each run
+    // would claim a snapshot slot that no later run can ever match.
+    for (let tick = 0; tick < 8; tick += 1) {
+      const sessionId = `session-oneshot-${tick}`;
+      const runId = `run-oneshot-${tick}`;
+      const catalogRef = createToolSearchCatalogRef();
+      applyToolSearchCatalog({
+        tools: [codeTool, pluginTool("fake_oneshot_probe", "One-shot probe tool")],
+        config,
+        sessionId,
+        runId,
+        catalogRef,
+        toolHookContext: {
+          agentId: "agent-main",
+          sessionId,
+          sessionKey: "agent:main:main",
+          runId,
+          onToolOutcome: vi.fn(),
+        },
+      });
+      clearToolSearchCatalog({ sessionId, runId, catalogRef });
+    }
+
+    expect(testing.reusableCatalogSnapshots.has("session:session-oneshot-0")).toBe(false);
+    expect(testing.reusableCatalogSnapshots.size).toBe(snapshotsBefore);
+  });
+
   it("does not reuse when a same-named tool uses a different executable", () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const original = pluginTool("fake_exec_swap", "Stable description");
