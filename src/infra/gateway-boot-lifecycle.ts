@@ -22,6 +22,9 @@ const GATEWAY_BOOT_LOOP_WINDOW_MS = 5 * 60_000;
 const GATEWAY_BOOT_LIFECYCLE_RETENTION_MS = 24 * 60 * 60_000;
 export const GATEWAY_CRASH_LOOP_BREAKER_REASON = "gateway.crash_loop_breaker";
 export const GATEWAY_CRASH_LOOP_RECOVERED_REASON = "gateway.crash_loop_recovered";
+/** The breaker never self-clears within its window, so both operator-facing surfaces must name the
+ * manual override command instead of the internal RPC name. */
+export const GATEWAY_CRASH_LOOP_MANUAL_CHANNEL_START_HINT = `Start a channel manually with: openclaw gateway call channels.start --params '{"channel":"<id>"}'`;
 
 const gatewayLifecycleLog = createSubsystemLogger("gateway/lifecycle");
 
