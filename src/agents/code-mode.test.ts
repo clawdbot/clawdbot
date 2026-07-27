@@ -416,6 +416,31 @@ describe("Code Mode", () => {
     );
   });
 
+  it("keeps code-mode exec guidance compact without advertising unavailable namespaces", () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    const compacted = applyCodeModeCatalog({
+      tools: [...tools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const execTool = expectDefined(compacted.tools[0], "exec tool test invariant");
+    const parameters = execTool.parameters as {
+      properties?: Record<string, Record<string, unknown>>;
+    };
+    const codeDescription = parameters.properties?.code?.description;
+
+    expect(execTool.description.length).toBeLessThan(2_400);
+    expect(execTool.description).toContain("parallelize independent work only");
+    expect(codeDescription).toEqual(expect.any(String));
+    expect(String(codeDescription).length).toBeLessThan(320);
+    expect(codeDescription).not.toContain("MCP namespace globals");
+    expect(codeDescription).not.toContain("`API` virtual declaration files");
+  });
+
   it("primes the exec schema with exact native tool ids and compact contracts", () => {
     const { config, catalogRef, tools } = createCodeModeHarness();
     const alpha = pluginTool("alpha_tool", "Another deferred description.");

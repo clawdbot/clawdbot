@@ -75,6 +75,21 @@ type QaRuntimeParityScenarioReport = {
   codexTokens: number;
   openclawToolCalls: number;
   codexToolCalls: number;
+  openclawWallClockMs: number | null;
+  codexWallClockMs: number | null;
+  fasterRuntime: RuntimeId | "tie" | null;
+  speedupPercent: number | null;
+};
+
+type QaRuntimeWallClockMetrics = {
+  totalWallClockMs: number | null;
+  p50WallClockMs: number | null;
+  p90WallClockMs: number | null;
+};
+
+type QaRuntimeSpeedComparison = {
+  fasterRuntime: RuntimeId | "tie" | null;
+  speedupPercent: number | null;
 };
 
 type QaRuntimeParityReport = {
@@ -87,6 +102,10 @@ type QaRuntimeParityReport = {
   failedScenarios: number;
   driftCounts: Record<RuntimeParityDrift, number>;
   scenarios: QaRuntimeParityScenarioReport[];
+  timing: QaRuntimeSpeedComparison & {
+    openclaw: QaRuntimeWallClockMetrics;
+    codex: QaRuntimeWallClockMetrics;
+  };
   pass: boolean;
   failures: string[];
   notes: string[];
@@ -298,6 +317,56 @@ function normalizeRuntimePair(
     return pair;
   }
   return ["openclaw", "codex"];
+}
+
+function compareRuntimeWallClockMs(
+  openclawWallClockMs: number | null,
+  codexWallClockMs: number | null,
+): QaRuntimeSpeedComparison {
+  if (openclawWallClockMs === null || codexWallClockMs === null) {
+    return { fasterRuntime: null, speedupPercent: null };
+  }
+  if (openclawWallClockMs === codexWallClockMs) {
+    return { fasterRuntime: "tie", speedupPercent: 0 };
+  }
+  const fasterRuntime = openclawWallClockMs < codexWallClockMs ? "openclaw" : "codex";
+  const fasterWallClockMs = Math.min(openclawWallClockMs, codexWallClockMs);
+  const slowerWallClockMs = Math.max(openclawWallClockMs, codexWallClockMs);
+  return {
+    fasterRuntime,
+    speedupPercent:
+      fasterWallClockMs === 0
+        ? null
+        : ((slowerWallClockMs - fasterWallClockMs) / fasterWallClockMs) * 100,
+  };
+}
+
+function summarizeRuntimeWallClock(values: number[]): QaRuntimeWallClockMetrics {
+  if (values.length === 0) {
+    return { totalWallClockMs: null, p50WallClockMs: null, p90WallClockMs: null };
+  }
+  const sorted = values.toSorted((left, right) => left - right);
+  const percentile = (value: number) =>
+    sorted[Math.min(sorted.length - 1, Math.ceil((value / 100) * sorted.length) - 1)] ?? null;
+  return {
+    totalWallClockMs: sorted.reduce((total, value) => total + value, 0),
+    p50WallClockMs: percentile(50),
+    p90WallClockMs: percentile(90),
+  };
+}
+
+function formatRuntimeWallClockMs(value: number | null): string {
+  return value === null ? "N/A" : `${value} ms`;
+}
+
+function formatRuntimeSpeedComparison(comparison: QaRuntimeSpeedComparison): string {
+  if (comparison.fasterRuntime === null || comparison.speedupPercent === null) {
+    return "N/A";
+  }
+  if (comparison.fasterRuntime === "tie") {
+    return "tie";
+  }
+  return `${comparison.fasterRuntime} ${comparison.speedupPercent.toFixed(1)}% faster`;
 }
 
 function requiredCoverageStatus(
@@ -668,6 +737,10 @@ export function buildQaRuntimeParityReport(params: {
         codexTokens: 0,
         openclawToolCalls: 0,
         codexToolCalls: 0,
+        openclawWallClockMs: null,
+        codexWallClockMs: null,
+        fasterRuntime: null,
+        speedupPercent: null,
       } satisfies QaRuntimeParityScenarioReport;
     }
     driftCounts[parity.drift] += 1;
@@ -689,6 +762,9 @@ export function buildQaRuntimeParityReport(params: {
       codexTokens: codexCell.usage.totalTokens,
       openclawToolCalls: openclawCell.toolCalls.length,
       codexToolCalls: codexCell.toolCalls.length,
+      openclawWallClockMs: openclawCell.wallClockMs,
+      codexWallClockMs: codexCell.wallClockMs,
+      ...compareRuntimeWallClockMs(openclawCell.wallClockMs, codexCell.wallClockMs),
     } satisfies QaRuntimeParityScenarioReport;
     if (parityStatus === "fail") {
       failures.push(
@@ -712,6 +788,19 @@ export function buildQaRuntimeParityReport(params: {
   if (scenarios.length === 0 || totalScenarios <= 0) {
     failures.push("Runtime parity report has no executed scenarios.");
   }
+  const openclawTiming = summarizeRuntimeWallClock(
+    scenarios.flatMap((scenario) =>
+      scenario.openclawWallClockMs === null ? [] : [scenario.openclawWallClockMs],
+    ),
+  );
+  const codexTiming = summarizeRuntimeWallClock(
+    scenarios.flatMap((scenario) =>
+      scenario.codexWallClockMs === null ? [] : [scenario.codexWallClockMs],
+    ),
+  );
+  const hasTimingCaptures = scenarios.some(
+    (scenario) => scenario.openclawWallClockMs !== null && scenario.codexWallClockMs !== null,
+  );
 
   return {
     runtimePair,
@@ -723,11 +812,20 @@ export function buildQaRuntimeParityReport(params: {
     failedScenarios,
     driftCounts,
     scenarios,
+    timing: {
+      openclaw: openclawTiming,
+      codex: codexTiming,
+      ...compareRuntimeWallClockMs(
+        hasTimingCaptures ? openclawTiming.totalWallClockMs : null,
+        hasTimingCaptures ? codexTiming.totalWallClockMs : null,
+      ),
+    },
     pass: failures.length === 0 && failedScenarios === 0,
     failures,
     notes: [
       "Runtime parity fails runtime, transport, and failure-mode drift; structural and tool-shape drift is recorded as advisory when both runtimes complete.",
       "Token totals here are assistant-message usage captured from the normalized transcript, not provider transport payloads.",
+      "Wall-clock timings cover each complete QA runtime cell, including gateway, model, and tool execution; they are not provider-reported turn durations.",
     ],
   };
 }
@@ -755,6 +853,15 @@ export function renderQaRuntimeParityMarkdownReport(report: QaRuntimeParityRepor
     `| Structural drift | ${report.driftCounts.structural} |`,
     `| Failure-mode drift | ${report.driftCounts["failure-mode"]} |`,
     "",
+    "## Runtime Timing",
+    "",
+    "| Runtime | Total wall time | p50 per scenario | p90 per scenario |",
+    "| --- | ---: | ---: | ---: |",
+    `| openclaw | ${formatRuntimeWallClockMs(report.timing.openclaw.totalWallClockMs)} | ${formatRuntimeWallClockMs(report.timing.openclaw.p50WallClockMs)} | ${formatRuntimeWallClockMs(report.timing.openclaw.p90WallClockMs)} |`,
+    `| codex | ${formatRuntimeWallClockMs(report.timing.codex.totalWallClockMs)} | ${formatRuntimeWallClockMs(report.timing.codex.p50WallClockMs)} | ${formatRuntimeWallClockMs(report.timing.codex.p90WallClockMs)} |`,
+    "",
+    `- Faster runtime: ${formatRuntimeSpeedComparison(report.timing)}`,
+    "",
   ];
 
   if (report.failures.length > 0) {
@@ -778,6 +885,9 @@ export function renderQaRuntimeParityMarkdownReport(report: QaRuntimeParityRepor
     );
     lines.push(
       `- codex: ${scenario.codexStatus} (${scenario.codexToolCalls} tool calls, ${codexTokens} tokens)`,
+    );
+    lines.push(
+      `- wall time: openclaw ${formatRuntimeWallClockMs(scenario.openclawWallClockMs)}; codex ${formatRuntimeWallClockMs(scenario.codexWallClockMs)}; ${formatRuntimeSpeedComparison(scenario)}`,
     );
     if (scenario.runtimeParityUsage.expectation === "not-applicable") {
       lines.push(`- assistant-message usage: N/A (${scenario.runtimeParityUsage.reason})`);
