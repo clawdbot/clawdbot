@@ -28,6 +28,7 @@ import {
   classifyOpenAIBaseUrl,
   isOpenAICodexBaseUrl,
   isOpenAIHttpsApiBaseUrl,
+  normalizeOpenAICodexLoopbackBaseUrl,
   resolveOpenAIDefaultBaseUrl,
 } from "./base-url.js";
 import {
@@ -85,6 +86,7 @@ const OPENAI_MODELS_ENDPOINT = "https://api.openai.com/v1/models";
 // the provider contract test fails when that managed-runtime pin changes.
 const OPENAI_CODEX_CLIENT_VERSION = "0.145.0";
 const OPENAI_CODEX_MODELS_ENDPOINT = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=${OPENAI_CODEX_CLIENT_VERSION}`;
+const OPENAI_CODEX_PROXY_BASE_URL_PARAM = "codexProxyBaseUrl";
 const OPENAI_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CODEX_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_GPT_56_DIRECT_CONTEXT_WINDOW = 1_050_000;
@@ -463,7 +465,10 @@ function resolveCodexModelFallback(modelId: string): ModelDefinitionConfig | und
   return fallbackModel ? normalizeOpenAICodexCatalogModel(fallbackModel) : undefined;
 }
 
-function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig | undefined {
+function buildOpenAICodexModelFromLiveRow(
+  row: unknown,
+  baseUrl = OPENAI_CODEX_RESPONSES_BASE_URL,
+): ModelDefinitionConfig | undefined {
   if (!shouldIncludeCodexModelRow(row)) {
     return undefined;
   }
@@ -518,7 +523,7 @@ function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig |
     id: modelId,
     name: readCodexModelString(row, "display_name") ?? fallback?.name ?? modelId,
     api: "openai-chatgpt-responses",
-    baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
+    baseUrl,
     reasoning: (reasoningLevels?.length ?? 0) > 0 || fallback?.reasoning || false,
     input: resolveCodexModelInput(row, fallback),
     cost: fallback?.cost ?? OPENAI_UNKNOWN_MODEL_COST,
@@ -533,11 +538,15 @@ function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig |
   };
 }
 
-function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {
+function buildOpenAICodexStaticProviderConfig(params?: {
+  baseUrl?: string;
+  auth?: "oauth" | "token";
+}): ModelProviderConfig {
+  const baseUrl = params?.baseUrl ?? OPENAI_CODEX_RESPONSES_BASE_URL;
   return {
-    baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
+    baseUrl,
     api: "openai-chatgpt-responses",
-    auth: "oauth",
+    auth: params?.auth ?? "oauth",
     models: OPENAI_MANIFEST_PROVIDER.models.flatMap((model) => {
       const modelId = normalizeLowercaseStringOrEmpty(model.id);
       // Static OAuth rows are offline hints, not entitlement claims. Keep only
@@ -546,7 +555,7 @@ function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {
         return [];
       }
       const normalized = normalizeOpenAICodexCatalogModel(model);
-      return normalized ? [normalized] : [];
+      return normalized ? [{ ...normalized, api: "openai-chatgpt-responses", baseUrl }] : [];
     }),
   };
 }
@@ -554,13 +563,19 @@ function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {
 async function buildOpenAICodexLiveProviderConfig(params: {
   discoveryApiKey: string;
   accountId?: string;
+  baseUrl?: string;
+  auth?: "oauth" | "token";
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
 }): Promise<ModelProviderConfig> {
+  const baseUrl = params.baseUrl ?? OPENAI_CODEX_RESPONSES_BASE_URL;
+  const modelsEndpoint = params.baseUrl
+    ? `${baseUrl}/models?client_version=${OPENAI_CODEX_CLIENT_VERSION}`
+    : OPENAI_CODEX_MODELS_ENDPOINT;
   try {
     const rows = await getCachedLiveProviderModelRows({
       providerId: PROVIDER_ID,
-      endpoint: OPENAI_CODEX_MODELS_ENDPOINT,
+      endpoint: modelsEndpoint,
       discoveryApiKey: params.discoveryApiKey,
       fetchGuard: params.fetchGuard,
       signal: params.signal,
@@ -575,20 +590,20 @@ async function buildOpenAICodexLiveProviderConfig(params: {
       cacheKeyParts: [
         PROVIDER_ID,
         "codex-model-rows",
-        OPENAI_CODEX_MODELS_ENDPOINT,
+        modelsEndpoint,
         params.discoveryApiKey,
         params.accountId ?? "",
       ],
     });
     const models = rows
-      .map(buildOpenAICodexModelFromLiveRow)
+      .map((row) => buildOpenAICodexModelFromLiveRow(row, baseUrl))
       .filter((model): model is ModelDefinitionConfig => Boolean(model));
     // A successful account-scoped response is authoritative even when all
     // rows are hidden; static hints must not invent subscription access.
     return {
-      baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
+      baseUrl,
       api: "openai-chatgpt-responses",
-      auth: "oauth",
+      auth: params.auth ?? "oauth",
       models,
     };
   } catch (error) {
@@ -596,15 +611,39 @@ async function buildOpenAICodexLiveProviderConfig(params: {
       error instanceof LiveModelCatalogHttpError &&
       (error.status === 401 || error.status === 403)
     ) {
-      return { ...buildOpenAICodexStaticProviderConfig(), models: [] };
+      return {
+        ...buildOpenAICodexStaticProviderConfig({ baseUrl, auth: params.auth }),
+        models: [],
+      };
     }
     // Codex/ChatGPT discovery is advisory. Static OpenAI rows stay available
     // when OAuth refresh or the remote model list is unavailable.
   }
-  return buildOpenAICodexStaticProviderConfig();
+  return buildOpenAICodexStaticProviderConfig({ baseUrl, auth: params.auth });
 }
 
-function isCodexCatalogAuthMode(mode: string): boolean {
+class OpenAICodexProxyConfigError extends Error {}
+
+function resolveOpenAICodexProxyBaseUrl(config: unknown): string | undefined {
+  const providers = (config as { models?: { providers?: Record<string, unknown> } } | undefined)
+    ?.models?.providers;
+  const provider = Object.entries(providers ?? {}).find(
+    ([providerId]) => normalizeProviderId(providerId) === PROVIDER_ID,
+  )?.[1] as { params?: Record<string, unknown> } | undefined;
+  const configured = provider?.params?.[OPENAI_CODEX_PROXY_BASE_URL_PARAM];
+  if (configured === undefined) {
+    return undefined;
+  }
+  const normalized = normalizeOpenAICodexLoopbackBaseUrl(configured);
+  if (!normalized) {
+    throw new OpenAICodexProxyConfigError(
+      `models.providers.openai.params.${OPENAI_CODEX_PROXY_BASE_URL_PARAM} must be an HTTP(S) URL using 127.0.0.1 or [::1]`,
+    );
+  }
+  return normalized;
+}
+
+function isCodexCatalogAuthMode(mode: string): mode is "oauth" | "token" {
   return mode === "oauth" || mode === "token";
 }
 
@@ -957,10 +996,15 @@ export function buildOpenAIProvider(): ProviderPlugin {
             const provider = await buildOpenAICodexLiveProviderConfig({
               discoveryApiKey: runtimeAuth.apiKey,
               accountId: metadata.accountId,
+              baseUrl: resolveOpenAICodexProxyBaseUrl(ctx.config),
+              auth: runtimeAuth.mode,
             });
             return { providers: { [PROVIDER_ID]: provider } };
           }
-        } catch {
+        } catch (error) {
+          if (error instanceof OpenAICodexProxyConfigError) {
+            throw error;
+          }
           // OAuth discovery is advisory; fall through so configured API-key
           // auth can still publish the standard OpenAI catalog.
         }

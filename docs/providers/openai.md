@@ -473,6 +473,35 @@ for the full example.
     or session state, `openclaw doctor --fix` rewrites them to `openai/*` with
     the Codex runtime unless OpenClaw is explicitly configured.
 
+    ### Trusted loopback credential proxies
+
+    A trusted local credential broker can keep ChatGPT OAuth material outside
+    the OpenClaw process while preserving the native `openai/*` catalog and
+    Responses transport. Configure the broker's Codex base URL under provider
+    parameters:
+
+    ```json5
+    {
+      models: {
+        providers: {
+          openai: {
+            params: {
+              codexProxyBaseUrl: "http://127.0.0.1:7862/backend-api/codex",
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    Token or OAuth profile model discovery uses
+    `<codexProxyBaseUrl>/models`, and Codex Responses models use
+    `<codexProxyBaseUrl>/responses`. OpenAI API-key profiles keep using the
+    Platform API route. The proxy URL must use the exact `127.0.0.1` or `[::1]`
+    loopback literal; OpenClaw rejects remote hosts before sending the profile
+    token. The local proxy remains responsible for upstream authentication,
+    account headers, refresh, and revocation.
+
     ### Context window defaults and long-context opt-in
 
     OpenClaw treats native model capacity and the active runtime budget as
