@@ -436,18 +436,24 @@ export function createSessionMcpRuntime(params: {
     const existing = currentCatalog?.diagnostics?.find(
       (diagnostic) => diagnostic.serverName === serverName,
     );
-    if (!currentCatalog || (!server && !existing)) {
+    if (!currentCatalog) {
       invalidateCatalog();
       return;
     }
-    const diagnostic: McpToolCatalogDiagnostic = existing
-      ? { ...existing, message }
-      : {
-          serverName,
-          safeServerName: server!.safeServerName,
-          launchSummary: server!.launchSummary,
-          message,
-        };
+    let diagnostic: McpToolCatalogDiagnostic;
+    if (existing) {
+      diagnostic = { ...existing, message };
+    } else if (server) {
+      diagnostic = {
+        serverName,
+        safeServerName: server.safeServerName ?? serverName,
+        launchSummary: server.launchSummary,
+        message,
+      };
+    } else {
+      invalidateCatalog();
+      return;
+    }
     catalogInvalidationGeneration += 1;
     catalog = {
       ...currentCatalog,

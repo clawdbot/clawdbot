@@ -1862,7 +1862,7 @@ process.on("SIGINT", shutdown);`,
   });
 
   it("does not recycle a responsive server that returns JSON-RPC code -32001", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-remote-timeout-code-"));
+    const tempDir = tempDirTracker.make("bundle-mcp-remote-timeout-code-");
     const serverPath = path.join(tempDir, "remote-timeout-code.mjs");
     const logPath = path.join(tempDir, "server.log");
     const pidPath = path.join(tempDir, "server.pid");
@@ -1907,7 +1907,7 @@ process.on("SIGINT", shutdown);`,
   });
 
   it("recycles an MCP server after repeated request timeouts", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-timeout-recycle-"));
+    const tempDir = tempDirTracker.make("bundle-mcp-timeout-recycle-");
     const serverPath = path.join(tempDir, "timeout-recycle.mjs");
     const logPath = path.join(tempDir, "server.log");
     const pidPath = path.join(tempDir, "server.pid");
@@ -1970,7 +1970,7 @@ process.on("SIGINT", shutdown);`,
   });
 
   it("gives each paginated resource request its own timeout", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-resource-pages-"));
+    const tempDir = tempDirTracker.make("bundle-mcp-resource-pages-");
     const serverPath = path.join(tempDir, "resource-pages.mjs");
     const logPath = path.join(tempDir, "server.log");
     await writeListToolsMcpServer({
