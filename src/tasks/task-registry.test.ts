@@ -153,6 +153,14 @@ vi.mock("../utils/message-channel.js", () => ({
     channel === "slack",
 }));
 
+// Thread-addressed direct delivery requires the transport to declare capabilities.threads;
+// guildchat stays undeclared so tests can pin the deliverable-but-not-thread-capable fallback.
+vi.mock("../channels/thread-addressing.js", () => ({
+  channelSupportsThreadDelivery: (channel?: string | null) =>
+    channel === "discord" || channel === "slack",
+  resolveChannelThreadAddressing: () => "address" as const,
+}));
+
 function configureTaskRegistryMaintenanceRuntimeForTest(params: {
   currentTasks: Map<string, ReturnType<typeof createTaskFixture>>;
   snapshotTasks: ReturnType<typeof createTaskFixture>[];
@@ -1864,6 +1872,57 @@ describe("task-registry", () => {
         "Next: parent will review/verify before calling it done.",
       );
       expect(peekSystemEvents(origin.ownerKey)).toStrictEqual([]);
+    });
+  });
+
+  it("keeps delegated ACP completion queued when the transport does not declare thread delivery", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const runId = "run-guildchat-thread-terminal";
+      // guildchat is deliverable but declares no thread capability, so a thread-shaped
+      // origin must keep routing through the parent session instead of direct delivery.
+      const requesterOrigin = {
+        channel: "guildchat",
+        to: "channel:room-9",
+        threadId: "thread-77",
+      };
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: requesterOrigin.channel,
+        to: requesterOrigin.to,
+        via: "direct",
+      });
+
+      createAcpTaskRecord({
+        ownerKey: "agent:main:guildchat:channel:room-9",
+        requesterOrigin,
+        runId,
+        task: "Investigate thread-bound ACP delivery",
+        terminalSummary: "ACP final answer",
+        startedAt: 100,
+      });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          endedAt: 250,
+        },
+      });
+
+      await waitForAssertion(() => {
+        const task = findTaskByRunId(runId);
+        if (!task) {
+          throw new Error(`Expected task for run ${runId}`);
+        }
+        expect(task.status).toBe("succeeded");
+        expect(task.deliveryStatus).toBe("session_queued");
+      });
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+      expect(peekSystemEvents("agent:main:guildchat:channel:room-9")).toEqual([
+        expect.stringContaining("Background task ready for review: ACP background task"),
+      ]);
     });
   });
 

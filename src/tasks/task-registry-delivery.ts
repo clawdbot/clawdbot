@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { shouldRouteCompletionThroughRequesterSession } from "../auto-reply/reply/completion-delivery-policy.js";
+import { channelSupportsThreadDelivery } from "../channels/thread-addressing.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import {
@@ -125,8 +126,13 @@ function canDeliverParentReviewTaskToThreadOrigin(task: TaskRecord): boolean {
   const origin = owner.requesterOrigin;
   const threadId = String(origin?.threadId ?? "").trim();
   // Parent-review terminal messages may deliver directly only when the requester origin
-  // already names a concrete thread; root-level origins keep routing through the parent session.
-  return Boolean(threadId && canDeliverToRequesterOrigin(origin));
+  // already names a concrete thread on a transport that declares thread-addressed
+  // delivery; root-level origins keep routing through the parent session.
+  return Boolean(
+    threadId &&
+    channelSupportsThreadDelivery(origin?.channel) &&
+    canDeliverToRequesterOrigin(origin),
+  );
 }
 
 function resolveMissingOwnerDeliveryStatus(task: TaskRecord): TaskDeliveryStatus {
