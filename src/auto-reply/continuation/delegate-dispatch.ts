@@ -18,11 +18,6 @@ import {
   removeUnacceptedDelegateArtifactPolicy,
 } from "../../agents/delegate-artifacts.js";
 import { deriveContinuationDelegateChildSessionKeyFromParent } from "../../agents/subagent-continuation-ids.js";
-import {
-  getSubagentRunByChildSessionKey,
-  hasLiveContinuationDelegateChildRun,
-  isSubagentRunLive,
-} from "../../agents/subagent-registry-read.js";
 import { spawnSubagentDirect } from "../../agents/subagent-spawn.js";
 import type { SpawnSubagentContext } from "../../agents/subagent-spawn.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -37,6 +32,7 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { sanitizeInboundSystemTags } from "../../security/system-tags.js";
 import { resolveContinuationRuntimeConfig } from "./config.js";
+import { partitionKnownAcceptedDelegateChildren } from "./delegate-dispatch-accepted-children.js";
 import type {
   DelegateDispatchParams,
   DelegateDispatchResult,
@@ -113,15 +109,6 @@ async function persistChainStateBeforeTerminalCommit(
  * Called by agent-runner.ts after the response finalizes.
  * Each delegate goes through chain/cost enforcement and is spawned via spawnSubagentDirect.
  */
-
-function hasActiveSubagentRegistryRun(childSessionKey: string): boolean {
-  return isSubagentRunLive(getSubagentRunByChildSessionKey(childSessionKey));
-}
-
-function hasAcceptedContinuationChildRun(childSessionKey: string, flowId: string): boolean {
-  return hasLiveContinuationDelegateChildRun({ childSessionKey, flowId });
-}
-
 function markDelegateFailed(
   delegate: { flowId?: string; expectedRevision?: number; task: string },
   summary: string,
@@ -254,9 +241,14 @@ export async function dispatchToolDelegates(
     return committed;
   };
   const artifactRuntimeSnapshot = resolveContinuationRuntimeConfig(getRuntimeConfig());
+  const { acceptedDelegates, pendingDelegates, acceptedChildSessionKeysByFlowId } =
+    partitionKnownAcceptedDelegateChildren({
+      delegates: toolDelegates,
+      parentSessionKey: (delegate) => delegate.spawnRequesterSessionKey ?? sessionKey,
+    });
   const { dispatchableDelegates, unavailablePolicyDelegates } = partitionManagedDelegatesForRuntime(
     {
-      delegates: toolDelegates,
+      delegates: pendingDelegates,
       sessionKey,
       runtime: artifactRuntimeSnapshot,
       defer: deferManagedDelegate,
@@ -264,14 +256,17 @@ export async function dispatchToolDelegates(
   );
   const delegateSlotsAvailable = Math.max(
     0,
-    maxDelegatesPerTurn - (params.reservedDelegateSlots ?? 0),
+    maxDelegatesPerTurn - (params.reservedDelegateSlots ?? 0) - acceptedDelegates.length,
   );
-  const delegatesWithinLimit = dispatchableDelegates.slice(0, delegateSlotsAvailable);
+  const delegatesWithinLimit = acceptedDelegates.concat(
+    dispatchableDelegates.slice(0, delegateSlotsAvailable),
+  );
   const delegatesOverLimit = dispatchableDelegates.slice(delegateSlotsAvailable);
   let dispatched = 0;
   let rejected = delegatesOverLimit.length + unavailablePolicyDelegates.length;
   let currentChainCount = chainState.currentChainCount;
-  const foldBearingDelegates = dispatchableDelegates.concat(
+  const foldBearingDelegates = acceptedDelegates.concat(
+    dispatchableDelegates,
     unavailablePolicyDelegates.map(({ delegate }) => delegate),
   );
   const appliedChainTokensFold = params.applyDelegateChainTokensFold
@@ -360,24 +355,24 @@ export async function dispatchToolDelegates(
   for (const delegate of delegatesWithinLimit) {
     const spawnSessionKey = delegate.spawnRequesterSessionKey ?? sessionKey;
     const childSessionKey = delegate.flowId
-      ? deriveContinuationDelegateChildSessionKeyFromParent(spawnSessionKey, delegate.flowId)
+      ? (acceptedChildSessionKeysByFlowId.get(delegate.flowId) ??
+        deriveContinuationDelegateChildSessionKeyFromParent(spawnSessionKey, delegate.flowId))
       : undefined;
     const acceptedChildAlreadyKnown = Boolean(
-      childSessionKey &&
-      (hasActiveSubagentRegistryRun(childSessionKey) ||
-        (delegate.flowId && hasAcceptedContinuationChildRun(childSessionKey, delegate.flowId))),
+      delegate.flowId && acceptedChildSessionKeysByFlowId.has(delegate.flowId),
     );
     const managedArtifacts = hasManagedArtifacts(delegate);
     const currentArtifactRuntime = managedArtifacts
       ? resolveContinuationRuntimeConfig(getRuntimeConfig())
       : undefined;
-    if (managedArtifacts && !currentArtifactRuntime?.enabled) {
+    if (!acceptedChildAlreadyKnown && managedArtifacts && !currentArtifactRuntime?.enabled) {
       deferManagedDelegate(delegate);
       continue;
     }
     const effectiveCrossSessionTargeting =
       currentArtifactRuntime?.crossSessionTargeting ?? crossSessionTargeting;
     if (
+      !acceptedChildAlreadyKnown &&
       effectiveCrossSessionTargeting === "disabled" &&
       hasCrossSessionDelegateTargeting(delegate, sessionKey)
     ) {
@@ -444,14 +439,13 @@ export async function dispatchToolDelegates(
           accumulatedChainTokens: currentAccumulatedTokens,
           ...(currentChainId ? { chainId: currentChainId } : {}),
         };
-    const budgetCheck =
-      delegate.persistedChainState && acceptedChildAlreadyKnown
-        ? undefined
-        : checkContinuationBudget({
-            chainState: budgetChainState,
-            config,
-            sessionKey,
-          });
+    const budgetCheck = acceptedChildAlreadyKnown
+      ? undefined
+      : checkContinuationBudget({
+          chainState: budgetChainState,
+          config,
+          sessionKey,
+        });
 
     if (budgetCheck) {
       const summary = `Tool delegate rejected: ${budgetCheck}.`;

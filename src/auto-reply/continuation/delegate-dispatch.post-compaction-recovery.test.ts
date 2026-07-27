@@ -740,6 +740,69 @@ describe("recoverAndReleaseStagedPostCompactionDelegates", () => {
     expect(listRecoverableStagedPostCompactionDelegates()).toHaveLength(0);
   });
 
+  it("reconciles an accepted managed child before disabled runtime and policy gates", async () => {
+    setRuntimeConfigSnapshot({
+      agents: { defaults: { continuation: { enabled: false } } },
+    });
+    const sessionKey = "agent:main:subagent:pc-recover-accepted-managed-disabled";
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: { sessionId: "session-child", continuationChainCount: 0 },
+    });
+    stagePostCompactionTaskFlowDelegate(sessionKey, {
+      task: "finalize accepted managed child while disabled",
+      stagedAt: Date.now(),
+      returnOptions: { artifacts: "required" },
+    });
+    const claimed = claimStagedPostCompactionTaskFlowDelegates(sessionKey);
+    const flowId = expectDefined(claimed[0]?.flowId, "accepted managed flow id");
+    const digest = crypto.createHash("sha256").update(flowId).digest("hex").slice(0, 32);
+    acceptedChildSessionKeys.add(`agent:main:subagent:continuation-${digest}`);
+    assertDelegateArtifactPolicyPreparedMock.mockImplementation(() => {
+      throw new UnavailableDelegateArtifactPolicyError();
+    });
+
+    const result = await recoverAndReleaseStagedPostCompactionDelegates({
+      runningUpdatedAtOrBefore: Date.now(),
+    });
+
+    expect(result).toMatchObject({ sessions: 1, dispatched: 1, failed: 0 });
+    expect(assertDelegateArtifactPolicyPreparedMock).not.toHaveBeenCalled();
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get(flowId)).toMatchObject({ status: "succeeded" });
+    expect(findPersistedRecoveryEntry(sessionKey)).toMatchObject({
+      continuationChainCount: 1,
+    });
+  });
+
+  it("terminalizes an expired managed policy before disabled-runtime deferral", async () => {
+    setRuntimeConfigSnapshot({
+      agents: { defaults: { continuation: { enabled: false } } },
+    });
+    const sessionKey = "agent:main:subagent:pc-recover-expired-disabled";
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: { sessionId: "session-child", continuationChainCount: 0 },
+    });
+    stagePostCompactionTaskFlowDelegate(sessionKey, {
+      task: "reject expired managed policy while disabled",
+      stagedAt: Date.now(),
+      returnOptions: { artifacts: "optional" },
+    });
+    const claimed = claimStagedPostCompactionTaskFlowDelegates(sessionKey);
+    const flowId = expectDefined(claimed[0]?.flowId, "expired managed flow id");
+    assertDelegateArtifactPolicyPreparedMock.mockImplementation(() => {
+      throw new UnavailableDelegateArtifactPolicyError();
+    });
+
+    const result = await recoverAndReleaseStagedPostCompactionDelegates({
+      runningUpdatedAtOrBefore: Date.now(),
+    });
+
+    expect(result).toMatchObject({ sessions: 1, dispatched: 0, failed: 1 });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get(flowId)).toMatchObject({ status: "failed" });
+    expect(removeUnacceptedDelegateArtifactPolicyMock).toHaveBeenCalledWith(flowId);
+  });
+
   it("leaves a transient spawn-failed row running and recoverable — no terminalize, no silent drop", async () => {
     const sessionKey = "agent:main:subagent:pc-recover-fail";
     loadSessionStoreForRecoveryMock.mockReturnValue({

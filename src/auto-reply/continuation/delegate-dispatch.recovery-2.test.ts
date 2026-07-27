@@ -473,6 +473,43 @@ describe("recoverPendingContinuationDelegates", () => {
     });
   });
 
+  it("reconciles an accepted managed child before rechecking its completed policy", async () => {
+    const sessionKey = "agent:main:parent";
+    const delegate = enqueuePendingDelegate(sessionKey, {
+      task: "recover accepted managed child",
+      returnOptions: { artifacts: "required" },
+    });
+    expect(delegate?.flowId).toBe("flow-1");
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+    });
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+
+    const runningFlow = expectDefined(mockFlows.get("flow-1"), "managed accepted flow");
+    runningFlow.status = "running";
+    runningFlow.endedAt = undefined;
+    runningFlow.revision = 1;
+    const digest = crypto.createHash("sha256").update("flow-1").digest("hex").slice(0, 32);
+    acceptedChildSessionKeys.add(`agent:main:subagent:continuation-${digest}`);
+    assertDelegateArtifactPolicyPreparedMock.mockReset().mockImplementation(() => {
+      throw new UnavailableDelegateArtifactPolicyError();
+    });
+
+    await recoverPendingContinuationDelegates({
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      maxChainLength: 10,
+    });
+
+    expect(assertDelegateArtifactPolicyPreparedMock).not.toHaveBeenCalled();
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "succeeded" });
+    expect(removeUnacceptedDelegateArtifactPolicyMock).not.toHaveBeenCalled();
+  });
+
   it("does not reapply a shared fold after a later expired-policy persist fails", async () => {
     const sessionKey = "agent:main:subagent:expired-policy-shared-fold-persist-fail";
     for (const task of ["first expired", "second expired", "third expired"]) {

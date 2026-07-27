@@ -6,12 +6,6 @@ import {
   MissingDelegateArtifactPolicyError,
   UnavailableDelegateArtifactPolicyError,
 } from "../../agents/delegate-artifacts.js";
-import { deriveContinuationDelegateChildSessionKeyFromParent } from "../../agents/subagent-continuation-ids.js";
-import {
-  getSubagentRunByChildSessionKey,
-  hasLiveContinuationDelegateChildRun,
-  isSubagentRunLive,
-} from "../../agents/subagent-registry-read.js";
 import { spawnSubagentDirect } from "../../agents/subagent-spawn.js";
 import {
   emitContinuationDisabledSpan,
@@ -23,6 +17,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { sanitizeInboundSystemTags } from "../../security/system-tags.js";
 import type { InlineAttachment, InlineAttachmentMount } from "../../shared/inline-attachments.js";
 import { resolveContinuationRuntimeConfig } from "./config.js";
+import { partitionKnownAcceptedDelegateChildren } from "./delegate-dispatch-accepted-children.js";
 import { requeueReleasedPostCompactionTaskFlowDelegate } from "./delegate-store.js";
 import { rejectPostCompactionTaskFlowDelegate } from "./post-compaction-taskflow-rejection.js";
 import { checkContinuationBudget, type ChainState } from "./scheduler.js";
@@ -32,14 +27,6 @@ const postCompactionLog = createSubsystemLogger("continuation/compaction");
 
 function formatDelegateTaskForSystemEvent(task: string): string {
   return sanitizeInboundSystemTags(task);
-}
-
-function hasActiveSubagentRegistryRun(childSessionKey: string): boolean {
-  return isSubagentRunLive(getSubagentRunByChildSessionKey(childSessionKey));
-}
-
-function hasAcceptedContinuationChildRun(childSessionKey: string, flowId: string): boolean {
-  return hasLiveContinuationDelegateChildRun({ childSessionKey, flowId });
 }
 
 export interface PostCompactionSpawnContext {
@@ -85,6 +72,8 @@ export async function dispatchStagedPostCompactionDelegates(
   spawnCtx: PostCompactionSpawnContext,
   options?: {
     chainState?: ChainState;
+    /** Startup recovery leaves valid pending rows running while disabled. */
+    holdPendingWhileDisabled?: boolean;
   },
 ): Promise<{
   dispatched: number;
@@ -104,26 +93,6 @@ export async function dispatchStagedPostCompactionDelegates(
   const accumulatedChainTokens = options?.chainState?.accumulatedChainTokens ?? 0;
   let currentChainCount = options?.chainState?.currentChainCount ?? 0;
   let currentChainId = options?.chainState?.chainId;
-  const dispatchableDelegates = delegates.filter((delegate) => {
-    const managedArtifacts =
-      delegate.returnOptions?.artifacts === "optional" ||
-      delegate.returnOptions?.artifacts === "required";
-    if (managedArtifacts && !config.enabled) {
-      requeueReleasedPostCompactionTaskFlowDelegate(delegate);
-      return false;
-    }
-    if (
-      managedArtifacts &&
-      config.crossSessionTargeting === "disabled" &&
-      hasCrossSessionDelegateTargeting(delegate, sessionKey)
-    ) {
-      requeueReleasedPostCompactionTaskFlowDelegate(delegate);
-      return false;
-    }
-    return true;
-  });
-  const delegatesWithinLimit = dispatchableDelegates.slice(0, config.maxDelegatesPerTurn);
-  const delegatesOverLimit = dispatchableDelegates.slice(config.maxDelegatesPerTurn);
 
   postCompactionLog.info(
     `[continuation:compaction-delegate] Consuming ${delegates.length} compaction delegate(s) for session ${sessionKey}`,
@@ -151,6 +120,71 @@ export async function dispatchStagedPostCompactionDelegates(
     }
   };
 
+  const rejectUnavailablePolicy = (
+    delegate: (typeof delegates)[number],
+    error: MissingDelegateArtifactPolicyError | UnavailableDelegateArtifactPolicyError,
+  ): void => {
+    const unavailable = error instanceof UnavailableDelegateArtifactPolicyError;
+    const reason = unavailable ? "inactive or expired" : "missing";
+    const summary = `Post-compaction delegate rejected: accepted artifact policy is ${reason}.`;
+    postCompactionLog.warn(
+      `[continuation:post-compaction-policy-${unavailable ? "unavailable" : "missing"}] session=${sessionKey} task=${delegate.task.slice(0, 80)}`,
+    );
+    enqueueSystemEvent(
+      `[continuation] ${summary} Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
+      { sessionKey, trusted: true },
+    );
+    markTerminalRejected(delegate, summary);
+  };
+
+  const { acceptedDelegates, pendingDelegates, acceptedChildSessionKeysByFlowId } =
+    partitionKnownAcceptedDelegateChildren({
+      delegates,
+      parentSessionKey: () => sessionKey,
+    });
+
+  const dispatchableDelegates: typeof delegates = [];
+  for (const delegate of pendingDelegates) {
+    const managedArtifacts =
+      delegate.returnOptions?.artifacts === "optional" ||
+      delegate.returnOptions?.artifacts === "required";
+    if (managedArtifacts && delegate.flowId) {
+      try {
+        assertDelegateArtifactPolicyPrepared(delegate.flowId);
+      } catch (error) {
+        if (
+          error instanceof MissingDelegateArtifactPolicyError ||
+          error instanceof UnavailableDelegateArtifactPolicyError
+        ) {
+          rejectUnavailablePolicy(delegate, error);
+          continue;
+        }
+        throw error;
+      }
+    }
+    if (!config.enabled && options?.holdPendingWhileDisabled) {
+      continue;
+    }
+    if (managedArtifacts && !config.enabled) {
+      requeueReleasedPostCompactionTaskFlowDelegate(delegate);
+      continue;
+    }
+    if (
+      managedArtifacts &&
+      config.crossSessionTargeting === "disabled" &&
+      hasCrossSessionDelegateTargeting(delegate, sessionKey)
+    ) {
+      requeueReleasedPostCompactionTaskFlowDelegate(delegate);
+      continue;
+    }
+    dispatchableDelegates.push(delegate);
+  }
+  const delegateSlotsAvailable = Math.max(0, config.maxDelegatesPerTurn - acceptedDelegates.length);
+  const delegatesWithinLimit = acceptedDelegates.concat(
+    dispatchableDelegates.slice(0, delegateSlotsAvailable),
+  );
+  const delegatesOverLimit = dispatchableDelegates.slice(delegateSlotsAvailable);
+
   for (const dropped of delegatesOverLimit) {
     const summary = `Post-compaction delegate rejected: maxDelegatesPerTurn exceeded (${config.maxDelegatesPerTurn}).`;
     postCompactionLog.warn(
@@ -177,8 +211,16 @@ export async function dispatchStagedPostCompactionDelegates(
     const managedArtifacts =
       delegate.returnOptions?.artifacts === "optional" ||
       delegate.returnOptions?.artifacts === "required";
-    if (managedArtifacts && !config.enabled) {
-      requeueReleasedPostCompactionTaskFlowDelegate(delegate);
+    const acceptedChildAlreadyKnown = Boolean(
+      delegate.flowId && acceptedChildSessionKeysByFlowId.has(delegate.flowId),
+    );
+    const nextHop = currentChainCount + 1;
+    const dispatchChainId = currentChainId ?? generateChainId();
+    if (acceptedChildAlreadyKnown) {
+      currentChainCount = nextHop;
+      currentChainId = dispatchChainId;
+      dispatched++;
+      dispatchedFlowIds.push(delegate.flowId!);
       continue;
     }
     if (
@@ -251,22 +293,6 @@ export async function dispatchStagedPostCompactionDelegates(
 
     try {
       const spawnTraceparent = resolveContinuationTraceparent(delegate.traceparent);
-      const nextHop = currentChainCount + 1;
-      const dispatchChainId = currentChainId ?? generateChainId();
-      const childSessionKey = delegate.flowId
-        ? deriveContinuationDelegateChildSessionKeyFromParent(sessionKey, delegate.flowId)
-        : undefined;
-      if (
-        childSessionKey &&
-        (hasActiveSubagentRegistryRun(childSessionKey) ||
-          (delegate.flowId && hasAcceptedContinuationChildRun(childSessionKey, delegate.flowId)))
-      ) {
-        currentChainCount = nextHop;
-        currentChainId = dispatchChainId;
-        dispatched++;
-        dispatchedFlowIds.push(delegate.flowId!);
-        continue;
-      }
       if (
         delegate.flowId &&
         (delegate.returnOptions?.artifacts === "optional" ||
@@ -334,17 +360,7 @@ export async function dispatchStagedPostCompactionDelegates(
         err instanceof MissingDelegateArtifactPolicyError ||
         err instanceof UnavailableDelegateArtifactPolicyError
       ) {
-        const unavailable = err instanceof UnavailableDelegateArtifactPolicyError;
-        const reason = unavailable ? "inactive or expired" : "missing";
-        const summary = `Post-compaction delegate rejected: accepted artifact policy is ${reason}.`;
-        postCompactionLog.warn(
-          `[continuation:post-compaction-policy-${unavailable ? "unavailable" : "missing"}] session=${sessionKey} task=${delegate.task.slice(0, 80)}`,
-        );
-        enqueueSystemEvent(
-          `[continuation] ${summary} Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
-          { sessionKey, trusted: true },
-        );
-        markTerminalRejected(delegate, summary);
+        rejectUnavailablePolicy(delegate, err);
         continue;
       }
       postCompactionLog.warn(

@@ -252,13 +252,9 @@ export async function requeueAwaitingNextCompactionDelegates(options: {
 export async function recoverAndReleaseStagedPostCompactionDelegates(options: {
   runningUpdatedAtOrBefore: number;
 }): Promise<{ sessions: number; dispatched: number; failed: number }> {
-  const runtimeConfig = resolveContinuationRuntimeConfig();
   const recoverable = listRecoverableStagedPostCompactionDelegates({
     runningUpdatedAtOrBefore: options.runningUpdatedAtOrBefore,
   });
-  if (!runtimeConfig.enabled) {
-    return { sessions: 0, dispatched: 0, failed: 0 };
-  }
   if (recoverable.length === 0) {
     return { sessions: 0, dispatched: 0, failed: 0 };
   }
@@ -330,6 +326,7 @@ export async function recoverAndReleaseStagedPostCompactionDelegates(options: {
     };
     const result = await dispatchStagedPostCompactionDelegates(delegates, sessionKey, spawnCtx, {
       chainState,
+      holdPendingWhileDisabled: true,
     });
     dispatched += result.dispatched;
     failed += result.failed;
