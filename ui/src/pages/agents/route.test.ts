@@ -13,11 +13,12 @@ describe("agents route", () => {
       scope: "per-sender",
       agents: [
         { id: "main", name: "Main" },
+        { id: "ordinary-looking-id", kind: "system", name: "System" },
         { id: "research", name: "Research" },
       ],
     };
     const ensureList = vi.fn(async () => agentsList);
-    const gateway = { snapshot: { client: null, connected: false } };
+    const gateway = { snapshot: { client: null, phase: "stopped" } };
     const context = {
       gateway,
       agents: {
@@ -43,7 +44,7 @@ describe("agents route", () => {
     } satisfies RouteLoaderOptions)) as AgentsRouteData;
 
     expect(ensureList).toHaveBeenCalledOnce();
-    expect(result.agentsList).toBe(agentsList);
+    expect(result.agentsList?.agents.map((agent) => agent.id)).toEqual(["main", "research"]);
     expect(result.selectedAgentId).toBe("research");
   });
 });

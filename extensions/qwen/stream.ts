@@ -12,7 +12,6 @@ import {
   isQwenTokenPlanDeepSeekV4ModelId,
   isQwenTokenPlanGlmModelId,
   isQwenTokenPlanKimiModelId,
-  isQwenTokenPlanModelId,
   isQwenTokenPlanThinkingOnlyModelId,
   QWEN_TOKEN_PLAN_LEGACY_PROVIDER_ID,
   QWEN_TOKEN_PLAN_PROVIDER_ID,
@@ -404,9 +403,11 @@ export function wrapQwenProviderStream(ctx: ProviderWrapStreamFnContext): Stream
     ? undefined
     : resolveQwenTokenPlanThinkingContract(ctx.provider, ctx.modelId);
   const tokenPlanProvider = isQwenTokenPlanProviderId(ctx.provider);
-  const tokenPlanModel =
-    tokenPlanProvider && isQwenTokenPlanModelId(ctx.modelId) && !explicitLegacyThinkingFormat;
-  const forceThinking = tokenPlanModel && isQwenTokenPlanThinkingOnlyModelId(ctx.modelId);
+  // The picker catalog is intentionally curated; direct Token Plan refs still
+  // need provider constraints unless an explicit transport format owns them.
+  const useTokenPlanConstraints =
+    tokenPlanProvider && !explicitLegacyThinkingFormat && thinkingFormat === undefined;
+  const forceThinking = useTokenPlanConstraints && isQwenTokenPlanThinkingOnlyModelId(ctx.modelId);
   let streamFn = createQwenThinkingWrapper(
     ctx.streamFn,
     ctx.thinkingLevel,
@@ -414,7 +415,7 @@ export function wrapQwenProviderStream(ctx: ProviderWrapStreamFnContext): Stream
     forceThinking,
     tokenPlanContract,
   );
-  if (tokenPlanModel) {
+  if (useTokenPlanConstraints) {
     // Config and request extra_body hooks run outside plugin wrappers. Reapply
     // model wire constraints after those hooks so invalid fields cannot escape.
     streamFn = createQwenTokenPlanConstraintWrapper(

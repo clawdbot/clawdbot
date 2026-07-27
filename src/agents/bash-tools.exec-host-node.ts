@@ -255,6 +255,7 @@ export async function executeNodeHostCommand(
       workdir: prepared.cwd,
       host: "node",
       nodeId: target.nodeId,
+      toolCallId: params.toolCallId,
       security: hostSecurity,
       ask: hostAsk,
       ...unavailableDecisionRequestParams,

@@ -153,6 +153,52 @@ describe("policy commands", () => {
     });
   });
 
+  it("checks authored routing probes without exposing route identifiers", async () => {
+    const peerId = "+15555550123-private";
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        plugins: { entries: { policy: { enabled: true, config: { enabled: true } } } },
+        agents: { entries: { main: { default: true }, family: {} } },
+        channels: { imessage: { enabled: false } },
+        bindings: [],
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        routing: {
+          requireBindings: true,
+          requireConfiguredChannels: true,
+          probes: [
+            {
+              id: "family-dm",
+              route: { channel: "imessage", peer: { kind: "direct", id: peerId } },
+              expect: { agentId: "family", matchedBy: ["binding.peer"] },
+            },
+          ],
+        },
+      }),
+      "utf-8",
+    );
+
+    const { exitCode, parsed, output } = await runPolicyCheckJson();
+
+    expect(exitCode).toBe(1);
+    expect(parsed.findings.map((finding: { checkId: string }) => finding.checkId)).toEqual([
+      "policy/routing-bindings-required",
+      "policy/routing-agent-mismatch",
+      "policy/routing-match-kind-mismatch",
+    ]);
+    expect(parsed.evidence.routing.probes).toEqual([
+      expect.objectContaining({ id: "family-dm", agentId: "main", matchedBy: "default" }),
+    ]);
+    expect(output.join("\n")).not.toContain(peerId);
+  });
+
   it("reports malformed policy rules in policy check output", async () => {
     await fs.writeFile(
       join(workspaceDir, "policy.jsonc"),
@@ -530,6 +576,102 @@ describe("policy commands", () => {
       ok: true,
       findings: [],
     });
+  });
+
+  it("treats retained routing probes and narrower match kinds as conformant", async () => {
+    const baselineProbe = {
+      id: "family-dm",
+      route: { channel: "imessage", peer: { kind: "direct", id: "private-peer" } },
+      expect: { agentId: "family", matchedBy: ["binding.peer", "binding.account"] },
+    };
+    await fs.writeFile(
+      join(workspaceDir, "baseline.policy.jsonc"),
+      JSON.stringify({ routing: { requireBindings: true, probes: [baselineProbe] } }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        routing: {
+          requireBindings: true,
+          probes: [
+            {
+              ...baselineProbe,
+              expect: { ...baselineProbe.expect, matchedBy: ["binding.peer"] },
+            },
+            {
+              id: "group-fallback",
+              route: { channel: "imessage", peer: { kind: "group", id: "private-group" } },
+              expect: { agentId: "groups", matchedBy: ["binding.channel"] },
+            },
+          ],
+        },
+      }),
+      "utf-8",
+    );
+
+    const { exitCode, parsed } = await runPolicyCompareJson({
+      baseline: "baseline.policy.jsonc",
+    });
+
+    expect(exitCode).toBe(0);
+    expect(parsed).toMatchObject({ ok: true, findings: [] });
+  });
+
+  it("rejects removed or redirected routing probes as weaker", async () => {
+    const baselineProbe = {
+      id: "family-dm",
+      route: { channel: "imessage", peer: { kind: "direct", id: "private-peer" } },
+      expect: { agentId: "family", matchedBy: ["binding.peer"] },
+    };
+    await fs.writeFile(
+      join(workspaceDir, "baseline.policy.jsonc"),
+      JSON.stringify({ routing: { probes: [baselineProbe] } }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        routing: {
+          probes: [
+            {
+              ...baselineProbe,
+              expect: { ...baselineProbe.expect, agentId: "main" },
+            },
+          ],
+        },
+      }),
+      "utf-8",
+    );
+
+    const { exitCode, parsed } = await runPolicyCompareJson({
+      baseline: "baseline.policy.jsonc",
+    });
+
+    expect(exitCode).toBe(1);
+    expect(parsed.findings).toEqual([
+      expect.objectContaining({ checkId: "policy/policy-conformance-weaker" }),
+    ]);
+  });
+
+  it("treats an empty baseline routing probe list as a no-op", async () => {
+    await fs.writeFile(
+      join(workspaceDir, "baseline.policy.jsonc"),
+      JSON.stringify({ routing: { probes: [] } }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ routing: {} }),
+      "utf-8",
+    );
+
+    const { exitCode, parsed } = await runPolicyCompareJson({
+      baseline: "baseline.policy.jsonc",
+    });
+
+    expect(exitCode).toBe(0);
+    expect(parsed).toMatchObject({ ok: true, findings: [] });
   });
 
   it("rejects unsupported exec approval allowlist requirement keys in policy compare", async () => {

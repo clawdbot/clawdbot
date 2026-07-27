@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Control UI cloud workspace conflicts:** surface staged-ref guidance, bounded conflicted paths, structured transcript events, and sidebar attention for cloud worker results that kept local versions.
 - **Control UI update recovery:** the "A new version is available" Reload button now waits out the gateway restart that stranded the chunk and reloads as soon as it answers, instead of silently doing nothing and leaving a manual hard reload as the only way out.
 - **Control UI sender identity polish:** attributed user messages show the author's real avatar in an always-visible gutter on identity-resolving gateways, sender labels drop the opaque profile-UUID suffix (new and historical transcripts), and profile-id senders resolve avatars through the canonical gateway route.
 - **Control UI who's-online roster:** click the sidebar footer facepile to open a scrollable roster of everyone online, showing each person's avatar, name, and email with your own entry pinned first.
@@ -50,6 +51,23 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Codex native controls:** stop misclassifying valid thinking/fast runtime controls as provider overrides so Codex routes keep their native controls, while provider-native objects and invalid values stay fail-closed. Thanks @VACInc. (#107588)
+- **State snapshot verification:** run SQLite snapshot verification in a separate process so worker-thread file closes no longer drop the Gateway's POSIX WAL locks, eliminating spurious WAL misses and I/O errors. Thanks @VACInc. (#114016)
+- **Reply latency with model policies:** reuse one immutable plugin-metadata snapshot per model-selection run instead of repeating plugin discovery, cutting reply delay when a model policy is configured. Thanks @VACInc. (#114117)
+- **Claude cache after stalls:** recover stalled Claude CLI sessions by forking from the last pre-turn checkpoint so native cache continuity survives without duplicating the pending prompt, with a cold reseed fallback for CLIs without checkpoint support. Thanks @VACInc. (#113866)
+
+- **Control UI initial prompts:** keep accepted first messages visible across Gateway transport reconnects by binding the process-local handoff to the logical browser client instead of the per-handshake hello snapshot.
+- **Gateway exec deny fallback:** fail closed immediately when shell-expanded arguments prevent an allowlisted command from producing an enforceable execution plan and effective policy is `ask=off` with `askFallback=deny`, instead of registering an approval that can only time out. Fixes #113191. Thanks @shakkernerd.
+- **Cron local-provider preflight:** report the guarded-fetch deadline as a bounded preflight timeout, preserve concrete nested non-timeout errors, and carry the failure reason into fallback warnings. Thanks @shakkernerd.
+- **Buzz lifecycle recovery:** isolate relay and room-role failures to the Buzz account reconnect loop, prevent subscription cleanup from terminating the Gateway, and clear stale channel errors after successful reconnects. Thanks @shakkernerd.
+- **Buzz standalone sends:** let `openclaw message send` and other non-Gateway processes open a bounded authenticated relay connection, publish the message, and close cleanly while running Gateways continue to reuse their active connection. Thanks @shakkernerd.
+- **Buzz presence:** publish nonblocking online presence when the Gateway connects, refresh it without overlapping heartbeat writes, and let Buzz's final-connection cleanup provide accurate offline state across reconnects and multiple Gateway instances. Thanks @shakkernerd.
+- **Buzz bot profiles:** persist optional Buzz account names, publish them as bot display names without delaying Gateway startup, preserve existing profile metadata, and include configured owner attestations so Buzz can show verified provenance. Thanks @shakkernerd.
+- **Buzz agent identity:** register connected bots in Buzz's agent directory without overwriting existing profile policy, so later room invitations retain the Bot role instead of downgrading the identity to a normal member. Thanks @shakkernerd.
+- **Buzz guided setup:** reuse or generate the bot identity automatically, wait for Bot-role approval before falling back to identity-preserving Retry/Back controls, select single-room defaults, preserve advanced access settings, accept normal room messages by default without relying on composer mentions, verify setup without posting test messages, finish targeted channel setup directly, derive new bot profiles from the routed agent identity, and authorize fresh setups from Buzz's live room roster without per-message relay queries. Thanks @shakkernerd.
+- **Buzz resumable setup:** persist paused bot identities, resume disabled setup in place, retry authenticated room discovery without rotating keys, require verified **Bot**-role room membership instead of accepting unverified room UUIDs, and give accurate CLI authorization guidance for generated identities that Buzz desktop cannot discover. Thanks @shakkernerd.
+- **Buzz inbound authorization:** apply shared room sender and command authorization before agent dispatch, allow authorized control commands to bypass mention gating, and preserve Buzz thread/reply identifiers through delivery. Thanks @shakkernerd.
+- **ClickClack split-origin setup codes:** consume versioned exact claim endpoints without appending a second claim path, validate the returned canonical API base, preserve private API transport overrides, and keep legacy setup URLs working. Fixes #111919. Thanks @shakkernerd.
 - **Standalone plugin files:** let manifestless files explicitly listed in `plugins.load.paths` pass config validation and load independently when several files share a directory.
 - **Control UI terminal error messages:** preserve message-only assistant output beginning with `Error:` or a warning marker instead of treating text prefixes as synthetic failures. Thanks @shakkernerd.
 - **Channel outbound echo suppression:** drop recently emitted platform message and source identities at shared inbound admission and migrate Discord thread unbinds off channel-local expiry state, preventing delayed webhook copies from re-entering agents.

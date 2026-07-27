@@ -3,6 +3,7 @@
  */
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
+import { captureAgentRunLifecycleGeneration } from "../../../infra/agent-events.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -185,7 +186,11 @@ export async function completeEmbeddedAttemptAfterTurn(
           if (rotation.rotated) {
             sessionIdUsed = rotation.sessionId ?? sessionIdUsed;
             sessionFileUsed = rotation.sessionFile ?? sessionFileUsed;
-            updateActiveEmbeddedRunSessionFile(attempt.sessionId, sessionFileUsed);
+            updateActiveEmbeddedRunSessionFile(
+              attempt.sessionId,
+              sessionFileUsed,
+              attempt.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(attempt.runId),
+            );
             log.info(
               `[compaction] rotated active transcript after automatic compaction ` +
                 `(sessionKey=${attempt.sessionKey ?? attempt.sessionId})`,
@@ -211,7 +216,10 @@ export async function completeEmbeddedAttemptAfterTurn(
   });
   runtime.anthropicPayloadLogger?.recordUsage(state.messagesSnapshot, state.promptError);
 
-  if (!state.beforeAgentFinalizeRevisionReason) {
+  if (
+    attempt.operation !== "settled-tool-finalization" &&
+    !state.beforeAgentFinalizeRevisionReason
+  ) {
     const lifecycleForAgentEnd = input.readLifecycleState();
     runAgentEndSideEffects({
       event: {

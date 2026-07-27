@@ -220,26 +220,14 @@ export function maybeRetireLegacyMainDeliveryRoute(params: {
   if (!activeDirectRouteKey || activeDirectRouteKey !== legacyRouteKey) {
     return undefined;
   }
-  if (
-    legacyMain.route === undefined &&
-    legacyMain.deliveryContext === undefined &&
-    legacyMain.lastChannel === undefined &&
-    legacyMain.lastTo === undefined &&
-    legacyMain.lastAccountId === undefined &&
-    legacyMain.lastThreadId === undefined
-  ) {
+  if (legacyMain.delivery?.kind !== "external") {
     return undefined;
   }
   return {
     key: canonicalMainSessionKey,
     entry: {
       ...legacyMain,
-      route: undefined,
-      deliveryContext: undefined,
-      lastChannel: undefined,
-      lastTo: undefined,
-      lastAccountId: undefined,
-      lastThreadId: undefined,
+      delivery: { kind: "none" },
     },
   };
 }

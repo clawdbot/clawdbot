@@ -15,7 +15,7 @@ import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
 } from "../../config/sessions/sqlite-marker.js";
-import { clearSessionStoreCacheForTest } from "../../config/sessions/store.js";
+import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
@@ -78,15 +78,12 @@ vi.mock("../cli-runner/claude-live-session.js", () => ({
 }));
 
 vi.mock("../model-selection.js", () => ({
-  isCliProvider: (provider: string, cfg?: OpenClawConfig) => {
+  isCliProvider: (provider: string, _cfg?: OpenClawConfig) => {
     const normalized = provider.trim().toLowerCase();
     return (
       normalized === "claude-cli" ||
       normalized === "codex-cli" ||
-      normalized === "google-gemini-cli" ||
-      Object.keys(cfg?.agents?.defaults?.cliBackends ?? {}).some(
-        (candidate) => candidate.trim().toLowerCase() === normalized,
-      )
+      normalized === "google-gemini-cli"
     );
   },
   normalizeProviderId: (provider: string) => provider.trim().toLowerCase(),
@@ -583,18 +580,24 @@ describe("CLI attempt execution", () => {
     expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(cliSessionId);
   });
 
-  it("clears reused Claude CLI session IDs before a fresh retry after timeout failover", async () => {
+  it("atomically forks and rebinds a reused Claude CLI session after timeout failover", async () => {
     const sessionKey = "agent:main:direct:cli-timeout";
     const cliSessionId = "timeout-poisoned-session";
+    const forkedCliSessionId = "timeout-recovery-fork";
     await writeClaudeCliAssistantTranscript(cliSessionId);
     const sessionEntry = makeClaudeCliSessionEntry("session-cli-timeout", cliSessionId);
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await writeSessionStoreSeed(sessionStore);
     runCliAgentMock.mockImplementationOnce(async (args: unknown) => {
-      const retry = requireRecord(args, "run CLI agent argument").onBeforeFreshCliSessionRetry;
-      expect(retry).toBeTypeOf("function");
+      const runArgs = requireRecord(args, "run CLI agent argument");
+      const prepareFork = runArgs.onBeforeForkedCliSessionRetry;
+      const claimFork = runArgs.claimCliSessionFork;
+      const persistFork = runArgs.persistCliSessionForkSuccessor;
+      expect(prepareFork).toBeTypeOf("function");
+      expect(claimFork).toBeTypeOf("function");
+      expect(persistFork).toBeTypeOf("function");
       await (
-        retry as (params: {
+        prepareFork as (params: {
           provider: string;
           reason: "timeout";
           sessionId: string;
@@ -604,9 +607,17 @@ describe("CLI attempt execution", () => {
         reason: "timeout",
         sessionId: cliSessionId,
       });
-      expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
-      expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
-      expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]?.forkNextResume).toBe(
+        true,
+      );
+      await (claimFork as () => Promise<boolean>)();
+      expect(
+        sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]?.forkNextResume,
+      ).toBeUndefined();
+      await (persistFork as (sessionId: string) => Promise<void>)(forkedCliSessionId);
+      expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
+        forkedCliSessionId,
+      );
       return makeCliResult("hello after timeout");
     });
 
@@ -620,9 +631,203 @@ describe("CLI attempt execution", () => {
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     expect(firstRunCliAgentArg().cliSessionId).toBe(cliSessionId);
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
+      forkedCliSessionId,
+    );
+    expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe(forkedCliSessionId);
+    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe(forkedCliSessionId);
+
+    const persisted = readSessionStore();
+    expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
+      forkedCliSessionId,
+    );
+  });
+
+  it("clears a persisted fork successor before transcript fallback", async () => {
+    const sessionKey = "agent:main:direct:cli-fork-timeout";
+    const cliSessionId = "timeout-parent-session";
+    const forkedCliSessionId = "timeout-stalled-fork";
+    await writeClaudeCliAssistantTranscript(cliSessionId);
+    const sessionEntry = makeClaudeCliSessionEntry("session-cli-fork-timeout", cliSessionId);
+    sessionEntry.cliSessionBindings!["claude-cli"]!.forkNextResume = true;
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    runCliAgentMock.mockImplementationOnce(async (args: unknown) => {
+      const runArgs = requireRecord(args, "run CLI agent argument");
+      const claimFork = runArgs.claimCliSessionFork;
+      const persistFork = runArgs.persistCliSessionForkSuccessor;
+      const clearFork = runArgs.onBeforeFreshCliSessionRetry;
+      expect(runArgs.forkCliSessionOnResume).toBe(true);
+      expect(runArgs.onBeforeForkedCliSessionRetry).toBeUndefined();
+      expect(clearFork).toBeTypeOf("function");
+      await (claimFork as () => Promise<boolean>)();
+      await (persistFork as (sessionId: string) => Promise<void>)(forkedCliSessionId);
+      await (
+        clearFork as (params: {
+          provider: string;
+          reason: "timeout";
+          sessionId: string;
+        }) => Promise<boolean>
+      )({
+        provider: "claude-cli",
+        reason: "timeout",
+        sessionId: forkedCliSessionId,
+      });
+      return makeCliResult("hello after fork timeout");
+    });
+
+    await runClaudeCliAttempt({
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      body: "retry after fork timeout",
+      runId: "run-cli-fork-timeout",
+    });
+
     expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
-    expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
-    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
+    const persisted = readSessionStore();
+    expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+  });
+
+  it("clears a persisted fork successor when recovery fails after rebinding", async () => {
+    const sessionKey = "agent:main:direct:cli-fork-finalization-failure";
+    const cliSessionId = "finalization-parent-session";
+    const forkedCliSessionId = "partial-fork-successor";
+    await writeClaudeCliAssistantTranscript(cliSessionId);
+    const sessionEntry = makeClaudeCliSessionEntry(
+      "session-cli-fork-finalization-failure",
+      cliSessionId,
+    );
+    sessionEntry.cliSessionBindings!["claude-cli"]!.forkNextResume = true;
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    const finalizationError = Object.assign(new Error("fork finalization failed"), {
+      name: "AbortError",
+    });
+    runCliAgentMock.mockImplementationOnce(async (args: unknown) => {
+      const runArgs = requireRecord(args, "run CLI agent argument");
+      await (runArgs.claimCliSessionFork as () => Promise<boolean>)();
+      await (runArgs.persistCliSessionForkSuccessor as (sessionId: string) => Promise<void>)(
+        forkedCliSessionId,
+      );
+      throw finalizationError;
+    });
+
+    await expect(
+      runClaudeCliAttempt({
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        body: "resume and fail after fork",
+        runId: "run-cli-fork-finalization-failure",
+      }),
+    ).rejects.toBe(finalizationError);
+
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(readSessionStore()[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+  });
+
+  it("preserves a restored fork marker when recovery dies before producing a successor", async () => {
+    const sessionKey = "agent:main:direct:cli-fork-before-successor-failure";
+    const cliSessionId = "recovery-source-session";
+    await writeClaudeCliAssistantTranscript(cliSessionId);
+    const sessionEntry = makeClaudeCliSessionEntry(
+      "session-cli-fork-before-successor-failure",
+      cliSessionId,
+    );
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    const recoveryError = Object.assign(new Error("fork process died before init"), {
+      name: "AbortError",
+    });
+    runCliAgentMock.mockImplementationOnce(async (args: unknown) => {
+      const runArgs = requireRecord(args, "run CLI agent argument");
+      await (
+        runArgs.onBeforeForkedCliSessionRetry as (params: {
+          provider: string;
+          reason: "timeout";
+          sessionId: string;
+        }) => Promise<boolean>
+      )({ provider: "claude-cli", reason: "timeout", sessionId: cliSessionId });
+      await (runArgs.claimCliSessionFork as () => Promise<boolean>)();
+      await (runArgs.restoreCliSessionFork as () => Promise<void>)();
+      throw recoveryError;
+    });
+
+    await expect(
+      runClaudeCliAttempt({
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        body: "resume and fail before fork init",
+        runId: "run-cli-fork-before-successor-failure",
+      }),
+    ).rejects.toBe(recoveryError);
+
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toMatchObject({
+      sessionId: cliSessionId,
+      forkNextResume: true,
+    });
+    expect(readSessionStore()[sessionKey]?.cliSessionBindings?.["claude-cli"]).toMatchObject({
+      sessionId: cliSessionId,
+      forkNextResume: true,
+    });
+  });
+
+  it("does not clear a concurrent rebind after failed fork recovery", async () => {
+    const sessionKey = "agent:main:direct:cli-fork-concurrent-rebind";
+    const cliSessionId = "concurrent-parent-session";
+    const forkedCliSessionId = "failed-fork-successor";
+    const concurrentCliSessionId = "newer-concurrent-session";
+    await writeClaudeCliAssistantTranscript(cliSessionId);
+    const sessionEntry = makeClaudeCliSessionEntry(
+      "session-cli-fork-concurrent-rebind",
+      cliSessionId,
+    );
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    const recoveryError = Object.assign(new Error("fork recovery aborted"), {
+      name: "AbortError",
+    });
+    runCliAgentMock.mockImplementationOnce(async (args: unknown) => {
+      const runArgs = requireRecord(args, "run CLI agent argument");
+      await (
+        runArgs.onBeforeForkedCliSessionRetry as (params: {
+          provider: string;
+          reason: "timeout";
+          sessionId: string;
+        }) => Promise<boolean>
+      )({ provider: "claude-cli", reason: "timeout", sessionId: cliSessionId });
+      await (runArgs.claimCliSessionFork as () => Promise<boolean>)();
+      await (runArgs.persistCliSessionForkSuccessor as (sessionId: string) => Promise<void>)(
+        forkedCliSessionId,
+      );
+
+      const concurrentEntry = makeClaudeCliSessionEntry(
+        sessionEntry.sessionId,
+        concurrentCliSessionId,
+      );
+      await replaceSessionEntry({ sessionKey, storePath }, concurrentEntry);
+      sessionStore[sessionKey] = concurrentEntry;
+      throw recoveryError;
+    });
+
+    await expect(
+      runClaudeCliAttempt({
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        body: "resume while another turn rebinds",
+        runId: "run-cli-fork-concurrent-rebind",
+      }),
+    ).rejects.toBe(recoveryError);
+
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
+      concurrentCliSessionId,
+    );
+    expect(readSessionStore()[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
+      concurrentCliSessionId,
+    );
   });
 
   it("does not install a stale-session clearing hook for storeless CLI attempts", async () => {
@@ -1615,10 +1820,14 @@ describe("CLI attempt execution", () => {
       expect.objectContaining({
         role: "user",
         content: "",
-        MediaPath: "/media/inbound/image-1.png",
-        MediaPaths: ["/media/inbound/image-1.png"],
-        MediaType: "image/png",
-        MediaTypes: ["image/png"],
+        __openclaw: {
+          media: [
+            expect.objectContaining({
+              path: "/media/inbound/image-1.png",
+              contentType: "image/png",
+            }),
+          ],
+        },
       }),
     );
   });
@@ -2196,6 +2405,74 @@ describe("CLI attempt execution", () => {
       provider: "claude-cli",
       toolsAllow: ["read", "web_search"],
     });
+  });
+
+  it("disables CLI tools for a subagent completion announce handoff", async () => {
+    const sessionKey = "agent:main:direct:claude-announce";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-cli-announce",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("tool-free announce"));
+
+    await runAgentAttempt({
+      providerOverride: "claude-cli",
+      originalProvider: "claude-cli",
+      modelOverride: "opus",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "A background task finished. Process the completion update now.",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-cli-announce",
+      opts: {
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:openclaw:subagent:child",
+          sourceChannel: "internal",
+          sourceTool: "subagent_announce",
+        },
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "subagent",
+            childSessionKey: "agent:openclaw:subagent:child",
+            announceType: "subagent task",
+            taskLabel: "review",
+            status: "ok",
+            statusLabel: "completed",
+            result: "child output",
+            replyInstruction: "Relay this completion.",
+          },
+        ],
+      } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: "telegram",
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "claude-cli",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    expectMockArgFields(runCliAgentMock, {
+      provider: "claude-cli",
+      disableTools: true,
+      allowEmptyAssistantReplyAsSilent: true,
+    });
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
   it("stamps CLI prompts with current timestamp context", async () => {
@@ -3007,7 +3284,6 @@ describe("embedded attempt harness pinning", () => {
       cfg: {
         agents: {
           defaults: {
-            cliBackends: { codex: { command: "codex" } },
             models: {
               "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
             },
@@ -3103,13 +3379,7 @@ describe("embedded attempt harness pinning", () => {
       providerOverride: "openai",
       originalProvider: "openai",
       modelOverride: "gpt-5.4",
-      cfg: {
-        agents: {
-          defaults: {
-            cliBackends: { "claude-cli": { command: "claude" } },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: {} as OpenClawConfig,
       sessionEntry,
       sessionId: sessionEntry.sessionId,
       sessionKey: "agent:main:main",

@@ -2,13 +2,17 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
+import { redactSensitiveText } from "../../logging/redact.js";
 
 const PREFLIGHT_CACHE_TTL_MS = 5 * 60_000;
 const PREFLIGHT_TIMEOUT_MS = 2_500;
+const MAX_PREFLIGHT_ERROR_CAUSE_DEPTH = 8;
+const MAX_PREFLIGHT_ERROR_CHARS = 1_000;
 
 type PreflightApi = "ollama" | "openai-completions";
 
@@ -130,6 +134,75 @@ function buildLocalProviderSsrFPolicy(baseUrl: string): SsrFPolicy | undefined {
   }
 }
 
+function readErrorProperty(error: unknown, key: "cause" | "code" | "message" | "name"): unknown {
+  if ((typeof error !== "object" && typeof error !== "function") || error === null) {
+    return undefined;
+  }
+  try {
+    return (error as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function collectPreflightErrorCauseChain(error: unknown): unknown[] {
+  const chain: unknown[] = [];
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  while (
+    current !== undefined &&
+    current !== null &&
+    chain.length < MAX_PREFLIGHT_ERROR_CAUSE_DEPTH &&
+    !seen.has(current)
+  ) {
+    seen.add(current);
+    chain.push(current);
+    current = readErrorProperty(current, "cause");
+  }
+  return chain;
+}
+
+function stringifyPreflightErrorValue(error: unknown): string {
+  try {
+    return String(error);
+  } catch {
+    return "Unknown error";
+  }
+}
+
+function formatPreflightErrorDetail(error: unknown): string {
+  const rawName = readErrorProperty(error, "name");
+  const rawMessage = readErrorProperty(error, "message");
+  const rawCode = readErrorProperty(error, "code");
+  const name = typeof rawName === "string" ? rawName.trim() : "";
+  const message = typeof rawMessage === "string" ? rawMessage.trim() : "";
+  const code =
+    typeof rawCode === "string" || typeof rawCode === "number" ? String(rawCode) : undefined;
+  const detail =
+    name && message
+      ? `${name}: ${message}`
+      : message || name || (code ? `code=${code}` : stringifyPreflightErrorValue(error));
+  return code && detail !== `code=${code}` ? `${detail} (code=${code})` : detail;
+}
+
+function formatPreflightError(error: unknown): string {
+  const causeChain = collectPreflightErrorCauseChain(error);
+  const details = causeChain
+    .map(formatPreflightErrorDetail)
+    .filter((detail, index, all) => detail && all.indexOf(detail) === index);
+  const causeDetails = details.join(" | ") || stringifyPreflightErrorValue(error);
+  // fetchWithSsrFGuard propagates only its owned deadline as TimeoutError.
+  const classified = causeChain.some(
+    (candidate) => readErrorProperty(candidate, "name") === "TimeoutError",
+  )
+    ? `Local provider preflight exceeded its configured ${PREFLIGHT_TIMEOUT_MS}ms deadline | ${causeDetails}`
+    : causeDetails;
+  const redacted = redactSensitiveText(classified);
+  return redacted.length <= MAX_PREFLIGHT_ERROR_CHARS
+    ? redacted
+    : `${truncateUtf16Safe(redacted, MAX_PREFLIGHT_ERROR_CHARS - 1)}…`;
+}
+
 function formatUnavailableReason(params: {
   provider: string;
   model: string;
@@ -137,9 +210,9 @@ function formatUnavailableReason(params: {
   error: unknown;
 }): string {
   return [
-    `Agent cron job uses ${params.provider}/${params.model} but the local provider endpoint is not reachable at ${params.baseUrl}.`,
-    `Skipping this cron run; OpenClaw will retry the provider preflight on a later scheduled run.`,
-    `Last error: ${String(params.error)}`,
+    `Agent cron job uses ${params.provider}/${params.model} but the local provider preflight failed at ${params.baseUrl}.`,
+    `The candidate is unavailable for this cron run; OpenClaw will retry its provider preflight on a later scheduled run.`,
+    `Last error: ${formatPreflightError(params.error)}`,
   ].join(" ");
 }
 

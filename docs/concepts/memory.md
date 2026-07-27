@@ -40,10 +40,13 @@ observations, session summaries, and raw context that may still be useful
 later. These are indexed for `memory_search` and `memory_get`, but are not
 injected into the bootstrap prompt on every turn.
 
-Over time, the agent distills useful material from daily notes into
-`MEMORY.md` and removes stale long-term entries. Generated workspace
-instructions and the heartbeat flow do this periodically; you do not need to
-manually edit `MEMORY.md` for every detail.
+Over time, useful material from daily notes can be distilled into `MEMORY.md`
+and stale long-term entries removed — but this does not happen on its own in a
+default install. The generated workspace instructions encourage the agent to
+record durable facts as it works. You can make consolidation routine with a
+[scheduled job](/automation/cron-jobs) that reviews recent daily notes, or by
+enabling the optional [dreaming](/concepts/memory#dreaming) pass. The default
+heartbeat prompt performs no memory maintenance on its own.
 
 If `MEMORY.md` grows past the bootstrap file budget, OpenClaw keeps the file on
 disk intact but truncates the copy injected into context. Treat that as a
@@ -123,21 +126,20 @@ This is not a required schema for every memory; simple facts can stay concise.
 Use action-sensitive boundaries when losing timing, authority, expiry, or
 safe-to-act context could cause the agent to do the wrong thing later.
 
-Use [commitments](/concepts/commitments) for inferred, short-lived follow-ups.
 Use [scheduled tasks](/automation/cron-jobs) for exact reminders, timed checks,
-and recurring work. Memory can still summarize the durable context around
-either path.
+and recurring work. Memory can still summarize the durable context around that
+work.
 
-## Inferred commitments
+## Retired inferred commitments
 
 Some future follow-ups are not durable facts. If you mention an interview
 tomorrow, the useful memory may be "check in after the interview," not "store
 this forever in `MEMORY.md`."
 
-[Commitments](/concepts/commitments) are opt-in, short-lived follow-up
-memories for that case. OpenClaw infers them in a hidden background pass,
-scopes them to the same agent and channel, and delivers due check-ins through
-heartbeat. Explicit reminders still use [scheduled tasks](/automation/cron-jobs).
+The inferred commitments experiment is retired. OpenClaw no longer extracts or
+delivers those follow-ups. Use [scheduled tasks](/automation/cron-jobs) for
+future actions; the legacy `openclaw commitments` command remains available to
+inspect or dismiss existing stored rows.
 
 ## Memory tools
 
@@ -158,7 +160,7 @@ for any supported provider.
 
 <Info>
 OpenClaw uses OpenAI embeddings by default. Set
-`agents.defaults.memorySearch.provider` explicitly to use Gemini, Voyage,
+`memory.search.provider` explicitly to use Gemini, Voyage,
 Mistral, Bedrock, DeepInfra, local GGUF, Ollama, LM Studio, GitHub Copilot, or
 a generic OpenAI-compatible endpoint.
 </Info>

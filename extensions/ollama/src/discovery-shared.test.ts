@@ -2,7 +2,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it } from "vitest";
-import { isLocalOllamaBaseUrl, resolveOllamaDiscoveryResult } from "./discovery-shared.js";
+import {
+  isLocalOllamaBaseUrl,
+  resolveOllamaDiscoveryResult,
+  shouldUseSyntheticOllamaAuth,
+} from "./discovery-shared.js";
 
 describe("isLocalOllamaBaseUrl", () => {
   it.each([
@@ -77,6 +81,169 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
     api: "ollama",
     models: [discoveredModel],
   });
+
+  it.each([
+    {
+      name: "an unresolved environment SecretRef with configured models",
+      baseUrl: "http://127.0.0.1:11434",
+      apiKey: { source: "env", provider: "default", id: "MISSING_OLLAMA_TOKEN" } as const,
+      hasExplicitModels: true,
+    },
+    {
+      name: "an unresolved environment marker with configured models",
+      baseUrl: "http://127.0.0.1:11434",
+      apiKey: { source: "env", provider: "default", id: "MISSING_OLLAMA_TOKEN" } as const,
+      resolvedAuth: { apiKey: "MISSING_OLLAMA_TOKEN" },
+      hasExplicitModels: true,
+    },
+    {
+      name: "an unresolved file SecretRef with configured models",
+      baseUrl: "http://127.0.0.1:11434",
+      apiKey: { source: "file", provider: "default", id: "/missing-ollama-token" } as const,
+      hasExplicitModels: true,
+    },
+    {
+      name: "an unresolved managed file marker with configured models",
+      baseUrl: "http://127.0.0.1:11434",
+      apiKey: { source: "file", provider: "default", id: "/missing-ollama-token" } as const,
+      resolvedAuth: { apiKey: "secretref-managed" },
+      hasExplicitModels: true,
+    },
+    {
+      name: "an unresolved exec SecretRef with configured models",
+      baseUrl: "http://127.0.0.1:11434",
+      apiKey: { source: "exec", provider: "default", id: "missing-ollama-token" } as const,
+      hasExplicitModels: true,
+    },
+    {
+      name: "an unresolved environment template with configured models",
+      baseUrl: "http://127.0.0.1:11434",
+      apiKey: "${MISSING_OLLAMA_TOKEN}",
+      hasExplicitModels: true,
+    },
+    {
+      name: "an unresolved environment SecretRef at a custom local endpoint",
+      baseUrl: "http://192.168.10.8:11434",
+      apiKey: { source: "env", provider: "default", id: "MISSING_OLLAMA_TOKEN" } as const,
+      hasExplicitModels: false,
+    },
+    {
+      name: "an unresolved environment marker at a custom local endpoint",
+      baseUrl: "http://192.168.10.8:11434",
+      apiKey: { source: "env", provider: "default", id: "MISSING_OLLAMA_TOKEN" } as const,
+      resolvedAuth: { apiKey: "MISSING_OLLAMA_TOKEN" },
+      hasExplicitModels: false,
+    },
+    {
+      name: "an unresolved file SecretRef at a custom local endpoint",
+      baseUrl: "http://192.168.10.8:11434",
+      apiKey: { source: "file", provider: "default", id: "/missing-ollama-token" } as const,
+      hasExplicitModels: false,
+    },
+    {
+      name: "an unresolved exec SecretRef at a custom local endpoint",
+      baseUrl: "http://192.168.10.8:11434",
+      apiKey: { source: "exec", provider: "default", id: "missing-ollama-token" } as const,
+      hasExplicitModels: false,
+    },
+    {
+      name: "an unresolved managed exec marker at a custom local endpoint",
+      baseUrl: "http://192.168.10.8:11434",
+      apiKey: { source: "exec", provider: "default", id: "missing-ollama-token" } as const,
+      resolvedAuth: { apiKey: "secretref-managed" },
+      hasExplicitModels: false,
+    },
+    {
+      name: "an unresolved environment template at a custom local endpoint",
+      baseUrl: "http://192.168.10.8:11434",
+      apiKey: "${MISSING_OLLAMA_TOKEN}",
+      hasExplicitModels: false,
+    },
+  ])("does not replace $name with synthetic local auth", async (testCase) => {
+    let providerCalled = false;
+    const resolvedAuth = "resolvedAuth" in testCase ? testCase.resolvedAuth : {};
+
+    const result = await resolveOllamaDiscoveryResult({
+      ctx: {
+        config: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: testCase.baseUrl,
+                api: "ollama",
+                apiKey: testCase.apiKey,
+                ...(testCase.hasExplicitModels ? { models: [cloudModel] } : {}),
+              },
+            },
+          },
+        },
+        env: {},
+        resolveProviderApiKey: () => resolvedAuth ?? {},
+      },
+      pluginConfig: {},
+      buildProvider: async () => {
+        providerCalled = true;
+        return await buildMockProvider();
+      },
+    });
+
+    expect(result).toBeNull();
+    expect(providerCalled).toBe(false);
+  });
+
+  it.each([
+    {
+      name: "a resolved environment marker",
+      apiKey: { source: "env", provider: "default", id: "RESOLVED_OLLAMA_TOKEN" } as const,
+      resolvedAuth: {
+        apiKey: "RESOLVED_OLLAMA_TOKEN",
+        discoveryApiKey: "resolved-ollama-fixture",
+      },
+    },
+    {
+      name: "a resolved managed file marker",
+      apiKey: { source: "file", provider: "default", id: "/resolved-ollama-token" } as const,
+      resolvedAuth: {
+        apiKey: "secretref-managed",
+        discoveryApiKey: "resolved-ollama-fixture",
+      },
+    },
+    {
+      name: "a resolved managed exec marker",
+      apiKey: { source: "exec", provider: "default", id: "resolved-ollama-token" } as const,
+      resolvedAuth: {
+        apiKey: "secretref-managed",
+        discoveryApiKey: "resolved-ollama-fixture",
+      },
+    },
+  ])(
+    "preserves an explicit local Ollama SecretRef with $name",
+    async ({ apiKey, resolvedAuth }) => {
+      const result = await resolveOllamaDiscoveryResult({
+        ctx: {
+          config: {
+            models: {
+              providers: {
+                ollama: {
+                  baseUrl: "http://127.0.0.1:11434",
+                  api: "ollama",
+                  apiKey,
+                  models: [cloudModel],
+                },
+              },
+            },
+          },
+          env: { RESOLVED_OLLAMA_TOKEN: "resolved-ollama-fixture" },
+          resolveProviderApiKey: () => resolvedAuth,
+        },
+        pluginConfig: {},
+        buildProvider: buildMockProvider,
+      });
+
+      expect(result?.provider.apiKey).toBe("resolved-ollama-fixture");
+      expect(result?.provider.models).toEqual([cloudModel]);
+    },
+  );
 
   it.each([
     "https://ollama.com",
@@ -252,5 +419,32 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
     });
     // Local base URL should still reach the discovery path
     expect(result).not.toBeNull();
+  });
+});
+
+describe("shouldUseSyntheticOllamaAuth", () => {
+  it.each([
+    { source: "env", provider: "default", id: "MISSING_OLLAMA_TOKEN" } as const,
+    { source: "file", provider: "default", id: "/missing-ollama-token" } as const,
+    { source: "exec", provider: "default", id: "missing-ollama-token" } as const,
+  ])("does not replace an explicitly configured $source SecretRef", (apiKey) => {
+    expect(
+      shouldUseSyntheticOllamaAuth({
+        baseUrl: "http://127.0.0.1:11434",
+        api: "ollama",
+        apiKey,
+        models: [
+          {
+            id: "local-fixture",
+            name: "Local fixture",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 8192,
+            maxTokens: 4096,
+          },
+        ],
+      }),
+    ).toBe(false);
   });
 });

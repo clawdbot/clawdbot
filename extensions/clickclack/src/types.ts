@@ -105,6 +105,8 @@ export type ClickClackBotCommand = {
 
 /** One-time bot token and installer context returned by setup-code claim. */
 export type ClickClackSetupCodeClaim = {
+  contract_version?: 1;
+  api_base_url?: string;
   token: string;
   bot: {
     id: string;

@@ -104,7 +104,9 @@ function buildPreparedCliRunContext(params: {
 
   return {
     params: {
+      agentId: "main",
       sessionId: "session-1",
+      sessionKey: "agent:main:main",
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
       prompt: "hi",
@@ -235,6 +237,34 @@ describe("executePreparedCliRun supervisor output capture", () => {
 
     expect(spawnInput.captureOutput).toBe(false);
     expect(result.rawText).toBe(fullText);
+  });
+
+  it("passes prepared secret input to a one-shot child", async () => {
+    const context = buildPreparedCliRunContext({ output: "text", provider: "claude-cli" });
+    const secretInput = {
+      fd: 3,
+      fingerprint: "credential-a",
+      createData: () => Buffer.from("secret"),
+    };
+    context.preparedBackend.secretInput = secretInput;
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.("done");
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    await executePreparedCliRun(context);
+
+    expect(requireSupervisorSpawnInput()).toEqual(expect.objectContaining({ secretInput }));
   });
 
   it("rejects oversized successful stdout instead of parsing a truncated tail", async () => {
@@ -2294,6 +2324,12 @@ describe("executePreparedCliRun supervisor output capture", () => {
     const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
     context.mcpDeliveryCapture = true;
     context.preparedBackend.backend.liveSession = "claude-stdio";
+    const secretInput = {
+      fd: 3,
+      fingerprint: "credential-a",
+      createData: () => Buffer.from("secret"),
+    };
+    context.preparedBackend.secretInput = secretInput;
     const activateCapture = vi.fn<(captureKey: string) => void>();
     const deactivateCapture = vi.fn<(captureKey: string) => void>();
     context.preparedBackend.mcpClientGrantCapture = {
@@ -2305,6 +2341,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
     await expect(executePreparedCliRun(context)).rejects.toThrow("spawn failed");
 
     expect(activateCapture).toHaveBeenCalledOnce();
+    expect(requireSupervisorSpawnInput()).toEqual(expect.objectContaining({ secretInput }));
     expect(deactivateCapture).toHaveBeenCalledExactlyOnceWith(activateCapture.mock.calls[0]?.[0]);
     expect(activateCapture.mock.invocationCallOrder[0]).toBeLessThan(
       supervisorSpawnMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,

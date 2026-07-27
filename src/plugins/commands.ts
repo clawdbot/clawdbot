@@ -128,6 +128,7 @@ function resolveBindingConversationFromCommand(params: {
   senderId?: string;
   from?: string;
   to?: string;
+  originatingTo?: string;
   accountId?: string;
   messageThreadId?: string | number;
   threadParentId?: string;
@@ -151,7 +152,7 @@ function resolveBindingConversationFromCommand(params: {
     threadId: params.messageThreadId,
     threadParentId: params.threadParentId,
     senderId: params.senderId,
-    originatingTo: params.from,
+    originatingTo: params.originatingTo ?? params.from,
     commandTo: params.to,
     fallbackTo: params.to ?? params.from,
   });
@@ -230,6 +231,7 @@ export async function executePluginCommand(params: {
   config: OpenClawConfig;
   from?: PluginCommandContext["from"];
   to?: PluginCommandContext["to"];
+  originatingTo?: string;
   accountId?: PluginCommandContext["accountId"];
   messageThreadId?: PluginCommandContext["messageThreadId"];
   threadParentId?: PluginCommandContext["threadParentId"];
@@ -288,6 +290,7 @@ export async function executePluginCommand(params: {
     senderId,
     from: params.from,
     to: params.to,
+    originatingTo: params.originatingTo,
     accountId: params.accountId,
     messageThreadId: params.messageThreadId,
     threadParentId: params.threadParentId,

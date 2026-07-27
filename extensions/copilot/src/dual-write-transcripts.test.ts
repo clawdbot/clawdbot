@@ -119,6 +119,83 @@ async function readMirrorMessages(target: {
 }
 
 describe("mirrorCopilotTranscript", () => {
+  it("hides current memory-maintenance messages without hiding replayed turns", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_message_write",
+          handler: (event) => {
+            const { display: _display, ...message } = (
+              event as { message: Record<string, unknown> }
+            ).message;
+            return { message: castAgentMessage(message) };
+          },
+        },
+      ]),
+    );
+    const target = await createSqliteMirrorTarget("openclaw-copilot-mirror-memory-");
+    const messages = [
+      attachCopilotMirrorIdentity(
+        makeAgentAssistantMessage({
+          content: [{ type: "text", text: "ordinary prior reply" }],
+          timestamp: Date.now(),
+        }),
+        "run-prior:assistant:final",
+      ),
+      attachCopilotMirrorIdentity(
+        makeAgentUserMessage({
+          content: [{ type: "text", text: "Pre-compaction memory flush" }],
+          timestamp: Date.now() + 1,
+        }),
+        "run-memory:prompt",
+      ),
+      attachCopilotMirrorIdentity(
+        makeAgentAssistantMessage({
+          content: [{ type: "toolCall", id: "call-1", name: "write", arguments: {} }],
+          timestamp: Date.now() + 2,
+        }),
+        "run-memory:tool-call:call-1",
+      ),
+      attachCopilotMirrorIdentity(
+        castAgentMessage({
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "write",
+          content: [{ type: "toolResult", toolCallId: "call-1", content: "saved" }],
+          timestamp: Date.now() + 3,
+        }),
+        "run-memory:tool-result:call-1",
+      ),
+      attachCopilotMirrorIdentity(
+        makeAgentAssistantMessage({
+          content: [{ type: "text", text: "NO_REPLY" }],
+          timestamp: Date.now() + 4,
+        }),
+        "run-memory:assistant:final",
+      ),
+    ];
+    for (const message of messages.slice(1)) {
+      Object.assign(message, { display: false });
+    }
+
+    await mirrorCopilotTranscript({
+      ...target,
+      messages,
+      idempotencyScope: "copilot:memory",
+    });
+
+    const persistedMessages = (await readMirrorEvents(target))
+      .map((event) =>
+        event && typeof event === "object" ? (event as { message?: unknown }).message : undefined,
+      )
+      .filter((message): message is Record<string, unknown> =>
+        Boolean(message && typeof message === "object"),
+      );
+    expect(persistedMessages).toHaveLength(messages.length);
+    expect(persistedMessages[0]).not.toHaveProperty("display", false);
+    expect(persistedMessages.slice(1).every((message) => message.display === false)).toBe(true);
+  });
+
   it("mirrors user, assistant, and tool result messages by SQLite identity", async () => {
     const target = await createSqliteMirrorTarget("openclaw-copilot-mirror-basic-");
     const userMessage = makeAgentUserMessage({

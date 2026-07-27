@@ -46,6 +46,9 @@
     }
   },
   "modelCatalog": {
+    "discovery": {
+      "google": "runtime"
+    },
     "suppressions": [
       {
         "provider": "google",

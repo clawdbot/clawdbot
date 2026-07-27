@@ -34,9 +34,6 @@ type Workflow = {
   env?: Record<string, string>;
   jobs?: Record<string, WorkflowJob>;
   on?: {
-    pull_request_target?: {
-      types?: string[];
-    };
     workflow_dispatch?: {
       inputs?: Record<
         string,
@@ -172,6 +169,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(cleanupStep.run).toContain("sudo -u codex env");
     expect(cleanupStep.run).not.toContain("*/telegram-user-crabbox/*/session.json");
     expect(cleanupStep.run).not.toContain("*/telegram-user-crabbox/*/.session/lease.json");
+    expect(cleanupStep.run).toContain('sudo -u codex "$MANTIS_NODE_BIN"');
+    expect(cleanupStep.run).not.toContain("sudo -u codex node");
   });
 
   it("cleans partially started proof daemons when local SUT startup fails", () => {
@@ -184,31 +183,17 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(proofScript).toContain("throw error;");
   });
 
-  it("uses the OpenClaw Mantis mention as the comment trigger", () => {
-    const workflow = readFileSync(WORKFLOW, "utf8");
-    const liveWorkflow = readFileSync(LIVE_WORKFLOW, "utf8");
-    expect(workflow).toContain("@openclaw-mantis");
-    expect(workflow).toContain("/openclaw-mantis");
-    expect(workflow).toContain("mantis: telegram-visible-proof");
-    expect(workflow).toContain('setOutput("should_run", "false")');
-    expect(workflow).toContain('normalized.includes("telegram desktop")');
-    expect(liveWorkflow).toContain('normalized.includes("telegram desktop")');
-    expect(liveWorkflow).toContain("!requestedDesktopProof");
-    expect(workflow).not.toContain("@Mantis");
-    expect(workflow).not.toContain("@mantis");
-    expect(workflow).not.toContain('"/mantis"');
-  });
-
-  it("runs when ClawSweeper applies the Telegram proof label", () => {
+  it("requires explicit maintainer dispatch before executing a PR worktree", () => {
     const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
     const workflowText = readFileSync(WORKFLOW, "utf8");
 
-    expect(workflow.on?.pull_request_target?.types).toContain("labeled");
-    expect(workflowText).toContain("github.event.label.name == 'mantis: telegram-visible-proof'");
-    expect(workflowText).toContain('eventName === "pull_request_target"');
-    expect(workflowText).toContain("context.payload.pull_request?.number");
-    expect(workflowText).toContain("Accepted Mantis label trigger");
-    expect(workflowText).toContain("allow-bot-users: clawsweeper[bot]");
+    expect(workflow.on?.workflow_dispatch).toBeDefined();
+    expect(workflowText).not.toContain("issue_comment:");
+    expect(workflowText).not.toContain("pull_request_target:");
+    expect(workflowText).not.toContain("clear_issue_comment_reaction:");
+    expect(workflowText).toContain("allow-bot-users: github-actions[bot]");
+    expect(workflowText).not.toContain("allow-bot-users: clawsweeper[bot]");
+    expect(workflowText).toContain('setOutput("request_source", "workflow_dispatch")');
   });
 
   it("can publish an existing proof artifact without recapturing", () => {
@@ -298,9 +283,13 @@ describe("Mantis Telegram Desktop proof workflow", () => {
   it("installs local proof tools before the Codex agent runs", () => {
     const install = workflowStep("Install local proof tools");
     expect(install.run).toContain("test -f scripts/e2e/telegram-user-driver.py");
+    expect(install.run).toContain('node_bin="$(command -v node)"');
+    expect(install.run).toContain('corepack_bin="$(command -v corepack)"');
+    expect(install.run).toContain("/usr/local/lib/mantis-toolchain/node");
+    expect(install.run).toContain("/usr/local/lib/mantis-toolchain/pnpm");
     expect(install.run).toContain("/usr/local/bin/openclaw-telegram-user-crabbox-proof");
     expect(install.run).toContain(
-      'exec node --import tsx "${GITHUB_WORKSPACE}/scripts/e2e/telegram-user-crabbox-proof.ts" "$@"',
+      'exec /usr/local/lib/mantis-toolchain/node --import tsx "${GITHUB_WORKSPACE}/scripts/e2e/telegram-user-crabbox-proof.ts" "\\$@"',
     );
     expect(install.run).toContain("BtbN/FFmpeg-Builds");
     expect(install.run).toContain("ffmpeg-master-latest-linux64-gpl.tar.xz");
@@ -316,6 +305,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
       "/usr/local/bin/openclaw-telegram-user-crabbox-proof",
     );
     expect(agent.env?.OPENCLAW_TELEGRAM_USER_CRABBOX_BIN).toBe("/usr/local/bin/crabbox");
+    expect(agent.env?.MANTIS_NODE_BIN).toBe("/usr/local/lib/mantis-toolchain/node");
+    expect(agent.env?.MANTIS_PNPM_BIN).toBe("/usr/local/lib/mantis-toolchain/pnpm");
     expect(agent.env?.CRABBOX_COORDINATOR).toContain(
       "secrets.CRABBOX_COORDINATOR || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR",
     );
@@ -328,9 +319,13 @@ describe("Mantis Telegram Desktop proof workflow", () => {
       "OPENCLAW_TELEGRAM_USER_CRABBOX_BIN OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER OPENCLAW_TELEGRAM_USER_DRIVER_SCRIPT OPENCLAW_TELEGRAM_USER_PROOF_CMD",
     );
     expect(prepare.run).toContain("MANTIS_CANDIDATE_TRUST");
+    expect(prepare.run).toContain("MANTIS_NODE_BIN MANTIS_PNPM_BIN");
 
     const prompt = readFileSync(PROMPT, "utf8");
     expect(prompt).toContain("$OPENCLAW_TELEGRAM_USER_PROOF_CMD");
+    expect(prompt).toContain("`--link-preview false`");
+    expect(prompt).toContain("Do not edit the generated\n   config or restart the Gateway");
+    expect(prompt).toContain("`--mock-response-chunk-delay-ms 1200`");
     expect(prompt).toContain("do not run\n   `pnpm qa:telegram-user:crabbox` directly");
     expect(prompt).toContain("Let `start` return or fail on its\n   own");
     expect(prompt).toContain("`--mcp-app-fixture` option");
@@ -340,6 +335,27 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain(
       "Use a long\n   command timeout for `start`, `send`, `view`, and `finish`",
     );
+  });
+
+  it("prepares exact proof worktrees before agent secrets are available", () => {
+    const step = workflowStep("Prepare proof worktrees with pinned toolchain");
+    const run = step.run ?? "";
+
+    expect(run).toContain('git cat-file -e "${BASELINE_SHA}^{commit}"');
+    expect(run).toContain('git fetch --no-tags origin "pull/${MANTIS_PR_NUMBER}/head"');
+    expect(run).toContain('git worktree add --detach "$baseline_root" "$BASELINE_SHA"');
+    expect(run).toContain('git worktree add --detach "$candidate_root" "$CANDIDATE_SHA"');
+    expect(run.match(/env -i/gu)).toHaveLength(3);
+    expect(run).toContain('"$toolchain_dir/pnpm" install --frozen-lockfile');
+    expect(run).toContain('"$toolchain_dir/pnpm" build');
+    expect(run).toContain("sudo -u mantis-builder env -i");
+    expect(run).toContain('sudo chown -R mantis-builder:mantis-builder "$candidate_root"');
+    expect(run).toContain('test "$(cat "$candidate_root/.git")" = "$candidate_git_link"');
+    expect(run).toContain('git -C "$candidate_root" diff --exit-code');
+    expect(run).not.toContain("GH_TOKEN");
+    expect(run).not.toContain("OPENAI_API_KEY");
+    expect(run).not.toContain("CRABBOX_");
+    expect(run).not.toContain("OPENCLAW_QA_");
   });
 
   it("pins AWS Crabbox proof runs to the working region", () => {

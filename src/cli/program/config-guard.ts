@@ -12,6 +12,7 @@ import {
   resolveStateDir,
 } from "../../config/paths.js";
 import type { ConfigFileSnapshot } from "../../config/types.js";
+import { resolveExecApprovalsPath } from "../../infra/exec-approvals-config.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { ExitError, type RuntimeEnv } from "../../runtime.js";
 import { shouldMigrateStateFromPath } from "../argv.js";
@@ -126,10 +127,13 @@ function hasLegacyStateMigrationInputs(): boolean {
     path.join(stateDir, "plugin-state", "state.sqlite"),
     path.join(stateDir, "tasks", "runs.sqlite"),
   ];
+  const legacyExecApprovalsPath = resolveExecApprovalsPath(process.env);
   return (
     [
       path.join(stateDir, "agent"),
       path.join(stateDir, "agents"),
+      legacyExecApprovalsPath,
+      `${legacyExecApprovalsPath}.doctor-importing`,
       path.join(stateDir, "plugins", "installs.json"),
       path.join(stateDir, "restart-sentinel.json"),
       path.join(stateDir, "restart-sentinel.json.doctor-importing"),

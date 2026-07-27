@@ -29,7 +29,6 @@ struct RootTabsSourceGuardTests {
         #expect(source.contains("shouldShowSidebarRevealInDestinationHeader"))
         #expect(source.contains("layoutMode: self.isSidebarDrawerLayout ? .drawer : .split"))
         #expect(componentSource.contains("OpenClawSidebarHeaderLeadingSlot"))
-        #expect(componentSource.contains(".frame(width: 44, height: 44, alignment: .center)"))
         #expect(componentSource.contains(".frame(width: 44, height: 44)"))
         #expect(source.contains(".safeAreaPadding(.top, 8)"))
         #expect(source.contains("Self.sidebarShowButtonAccessibilityIdentifier"))
@@ -56,7 +55,7 @@ struct RootTabsSourceGuardTests {
         #expect(!source.contains("shouldShowOverviewHeaderSidebarReveal"))
     }
 
-    @Test func `i pad split stays integrated while compact drawer uses push reveal`() throws {
+    @Test func `i pad split stays integrated while compact drawer uses one local shell`() throws {
         let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
         let splitContent = try Self.extract(
             source,
@@ -76,25 +75,21 @@ struct RootTabsSourceGuardTests {
         #expect(splitContent.contains(".overlay(alignment: .trailing)"))
         #expect(splitContent.contains("self.sidebarVerticalSeparator"))
         #expect(splitContent.contains("self.sidebarDetailNavigationShell"))
+        #expect(splitContent.contains(".animation(self.sidebarAnimation, value: self.isSidebarVisible)"))
         #expect(!splitContent.contains("NavigationSplitView"))
         #expect(!splitContent.contains("self.collapsedSidebarRail"))
         #expect(!source.contains("Self.sidebarCollapsedRailWidth"))
-        #expect(drawerContent.contains("ZStack(alignment: .leading)"))
-        #expect(drawerContent.contains("self.sidebarDrawerLayer"))
-        #expect(drawerContent.contains("self.sidebarDrawerContentSurface"))
-        #expect(drawerContent.contains("self.sidebarDrawerContentCard"))
-        #expect(drawerContent.contains("self.sidebarContentDismissGesture(sidebarWidth: sidebarWidth)"))
-        #expect(drawerContent.contains(".allowsHitTesting(!self.isSidebarVisible)"))
-        #expect(drawerContent.contains(".clipShape(RoundedRectangle("))
-        #expect(drawerContent.contains("cornerRadius: OpenClawProMetric.drawerRadius * progress"))
-        #expect(drawerContent.contains(".offset(x: Self.sidebarContentOffset("))
-        #expect(drawerContent.contains(".shadow("))
-        #expect(drawerContent.contains(".fill(Color(uiColor: .systemGroupedBackground))"))
-        #expect(drawerContent.contains(".ignoresSafeArea(.container, edges: .vertical)"))
-        #expect(!drawerContent.contains("Color.black.opacity(0.35)"))
-        #expect(!drawerContent.contains("UnevenRoundedRectangle"))
-        #expect(!drawerContent.contains("sidebarDrawerShape"))
+
+        #expect(drawerContent.contains("RootSidebarDrawer("))
+        #expect(drawerContent.contains("isPresented: self.isSidebarVisible"))
+        #expect(drawerContent.contains("self.isSidebarDetailRootVisible && self.sidebarNavigationPath.isEmpty"))
+        #expect(drawerContent.contains("onShow: self.showSidebar"))
+        #expect(drawerContent.contains("onHide: self.hideSidebar"))
+        #expect(drawerContent.contains("self.sidebarColumn(drawerSafeAreaInsets: safeAreaInsets)"))
+        #expect(drawerContent.contains("self.sidebarDetailNavigationShell"))
         #expect(!drawerContent.contains("NavigationSplitView"))
+        #expect(!source.contains("sidebarDrawerContentSurface"))
+        #expect(!source.contains("sidebarDrawerContentCard"))
     }
 
     @Test func `unified root shell removes phone tab chrome`() throws {
@@ -487,10 +482,12 @@ struct RootTabsSourceGuardTests {
         #expect(chatSource.contains("self.headerAgentIdentity"))
         #expect(!chatSource.contains("headerAgentModelPicker"))
         #expect(chatSource.contains(".sharedBackgroundVisibility(.hidden)"))
-        #expect(chatSource.contains("OpenClawSidebarRevealButton(action: headerSidebarAction)"))
+        #expect(chatSource.contains("OpenClawSidebarToolbarItem("))
+        #expect(componentsSource.contains("struct OpenClawSidebarToolbarItem: ToolbarContent"))
+        #expect(componentsSource.contains(".sharedBackgroundVisibility(.hidden)"))
         #expect(!chatSource.contains("OpenClawAdaptiveHeaderRow("))
         #expect(agentOverviewSource.contains("OpenClawAdaptiveHeaderRow("))
-        #expect(settingsSource.contains("ToolbarItem(placement: .topBarLeading)"))
+        #expect(settingsSource.contains("OpenClawSidebarToolbarItem("))
         #expect(!settingsSource.contains("ToolbarItem(placement: .topBarTrailing)"))
     }
 
@@ -972,7 +969,9 @@ extension RootTabsSourceGuardTests {
         #expect(locationCard.contains(".accessibilityElement(children: .ignore)"))
         #expect(locationCard.contains(".accessibilityLabel(\"Access Level\")"))
         #expect(!locationCard.contains(".minimumScaleFactor("))
-        #expect(locationCard.contains("showLocationAccessDialog"))
+        #expect(locationCard.contains("Menu {"))
+        #expect(locationCard.contains("self.selectLocationAccessLevel(.whileUsing)"))
+        #expect(locationCard.contains("self.selectLocationAccessLevel(.always)"))
         #expect(locationCard.contains("chevron.up.chevron.down"))
         #expect(locationCard.contains("Chooses While Using the App or Always"))
         #expect(!locationCard.contains("Picker(\"Location\""))
@@ -1068,7 +1067,7 @@ extension RootTabsSourceGuardTests {
         let storeSource = try String(contentsOf: Self.watchInboxStoreSourceURL(), encoding: .utf8)
         let consumePayload = try Self.extract(
             receiverSource,
-            from: "private func consumeIncomingPayload(_ payload: [String: Any], transport: String)",
+            from: "private func consumeIncomingPayload(",
             to: "}\n}")
         let appSnapshotConsume = try #require(
             consumePayload.range(of: "self.store.consume(appSnapshot: appSnapshot)"))

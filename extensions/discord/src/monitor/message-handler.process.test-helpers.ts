@@ -55,7 +55,6 @@ function expectAckReactionRuntimeOptions(
   params?: {
     accountId?: string;
     ackReaction?: string;
-    removeAckAfterReply?: boolean;
   },
 ) {
   const optionRecord = requireRecord(options, "reaction runtime options");
@@ -66,9 +65,6 @@ function expectAckReactionRuntimeOptions(
   const messages: Record<string, unknown> = {};
   if (params?.ackReaction) {
     messages.ackReaction = params.ackReaction;
-  }
-  if (params?.removeAckAfterReply !== undefined) {
-    messages.removeAckAfterReply = params.removeAckAfterReply;
   }
   if (Object.keys(messages).length > 0) {
     const cfg = requireRecord(optionRecord.cfg, "reaction config");
@@ -94,7 +90,6 @@ function expectReactionCallAt(
   params?: {
     accountId?: string;
     ackReaction?: string;
-    removeAckAfterReply?: boolean;
     channelId?: string;
     messageId?: string;
   },
@@ -125,24 +120,9 @@ export function expectReactAckCallAt(
     messageId?: string;
     accountId?: string;
     ackReaction?: string;
-    removeAckAfterReply?: boolean;
   },
 ) {
   expectReactionCallAt(sendMocks.reactMessageDiscord, index, emoji, params);
-}
-
-export function expectRemoveAckCallAt(
-  index: number,
-  emoji: string,
-  params?: {
-    channelId?: string;
-    messageId?: string;
-    accountId?: string;
-    ackReaction?: string;
-    removeAckAfterReply?: boolean;
-  },
-) {
-  expectReactionCallAt(sendMocks.removeReactionDiscord, index, emoji, params);
 }
 
 export function createMockDraftStreamForTest() {

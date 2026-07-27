@@ -5,6 +5,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { isRootHelpInvocation } from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
+import { runCliWithExitFinalization } from "./cli/one-shot-exit.js";
 import {
   tryOutputPrecomputedCommandHelp,
   type PrecomputedCommandHelpDeps,
@@ -200,27 +201,30 @@ export async function tryHandlePrecomputedCommandHelpFastPath(
 }
 
 async function runMainOrRootHelp(argv: string[]): Promise<void> {
-  if (await tryHandleRootHelpFastPath(argv)) {
-    return;
-  }
-  if (await tryHandlePrecomputedCommandHelpFastPath(argv)) {
-    return;
-  }
-  try {
-    const { runCli } = await gatewayEntryStartupTrace.measure(
-      "run-main-import",
-      () => import("./cli/run-main.js"),
-    );
-    await runCli(argv);
-  } catch (error) {
-    const { formatCliFailureLines } = await import("./cli/failure-output.js");
-    for (const line of formatCliFailureLines({
-      title: "Could not start the CLI.",
-      error,
-      argv,
-    })) {
-      console.error(line);
-    }
-    process.exit(1);
-  }
+  await runCliWithExitFinalization({
+    run: async () => {
+      if (await tryHandleRootHelpFastPath(argv)) {
+        return;
+      }
+      if (await tryHandlePrecomputedCommandHelpFastPath(argv)) {
+        return;
+      }
+      const { runCli } = await gatewayEntryStartupTrace.measure(
+        "run-main-import",
+        () => import("./cli/run-main.js"),
+      );
+      await runCli(argv);
+    },
+    onError: async (error) => {
+      const { formatCliFailureLines } = await import("./cli/failure-output.js");
+      for (const line of formatCliFailureLines({
+        title: "Could not start the CLI.",
+        error,
+        argv,
+      })) {
+        console.error(line);
+      }
+      process.exitCode = 1;
+    },
+  });
 }

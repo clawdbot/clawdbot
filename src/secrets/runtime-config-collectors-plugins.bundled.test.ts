@@ -12,6 +12,10 @@ function envRef(id: string) {
   return { source: "env" as const, provider: "default", id };
 }
 
+const explicitMainRoster: NonNullable<OpenClawConfig["agents"]> = {
+  list: [{ id: "main", default: true }],
+};
+
 describe("collectPluginConfigAssignments bundled plugin manifests", () => {
   it("assigns each webhooks route SecretRef to its exact runtime owner", () => {
     expect(
@@ -21,6 +25,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       })?.manifest.configContracts?.secretInputs?.paths,
     ).toEqual([{ path: "routes.*.secret", expected: "string", ownerKind: "route" }]);
     const config = {
+      agents: explicitMainRoster,
       plugins: {
         entries: {
           webhooks: {
@@ -68,6 +73,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       { path: "appServer.headers.*", expected: "string" },
     ]);
     const config = {
+      agents: explicitMainRoster,
       plugins: {
         entries: {
           codex: {
@@ -150,6 +156,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       { path: "tts.providers.*.apiKey", expected: "string" },
     ]);
     const config = {
+      agents: explicitMainRoster,
       plugins: {
         entries: {
           "voice-call": {
@@ -235,6 +242,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       new URL("../../extensions/google-meet", import.meta.url),
     );
     const config = {
+      agents: explicitMainRoster,
       plugins: {
         load: { paths: [googleMeetPluginDir] },
         entries: {

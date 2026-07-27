@@ -41,6 +41,19 @@ describe("cron next_check action", () => {
     expect(consumeCronNextCheckProposal(RUN_ID, JOB_ID)).toBeUndefined();
   });
 
+  it("accepts an explicit matching job id", async () => {
+    registerRun(true);
+
+    const result = await createScopedTool().execute("call-next-check-explicit", {
+      action: "next_check",
+      jobId: JOB_ID,
+      in: "45m",
+    });
+
+    expect(result.details).toEqual({ ok: true, delayMs: 45 * 60_000 });
+    expect(consumeCronNextCheckProposal(RUN_ID, JOB_ID)).toBe(45 * 60_000);
+  });
+
   it("rejects a proposal when the current job has no pacing", async () => {
     registerRun(false);
 

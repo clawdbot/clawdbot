@@ -13,8 +13,6 @@ export type {
   InteractiveReplyBlock,
   InteractiveReplyButton,
   InteractiveReplyOption,
-  InteractiveReplySelectBlock,
-  InteractiveReplyTextBlock,
   LegacyInteractiveReply,
   LegacyInteractiveReplyBlock,
   LegacyInteractiveReplyButton,

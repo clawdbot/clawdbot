@@ -43,6 +43,9 @@ describe("runtime postbuild static assets", () => {
       "dist/extensions/diffs-language-pack/assets/viewer-runtime.js",
       "dist/extensions/diffs/assets/viewer-runtime.js",
       "dist/extensions/discord/assets/embedded-app-sdk.mjs",
+      "dist/extensions/onepassword/onepassword-op-path.js",
+      "dist/extensions/onepassword/onepassword-secret-id.js",
+      "dist/extensions/onepassword/onepassword-secret-ref-resolver.js",
       "dist/extensions/vault/vault-secret-id.js",
       "dist/extensions/vault/vault-secret-ref-resolver.js",
     ]);
@@ -66,6 +69,9 @@ describe("runtime postbuild static assets", () => {
       "dist/extensions/diffs-language-pack/assets/viewer-runtime.js",
       "dist/extensions/diffs/assets/viewer-runtime.js",
       "dist/extensions/discord/assets/embedded-app-sdk.mjs",
+      "dist/extensions/onepassword/onepassword-op-path.js",
+      "dist/extensions/onepassword/onepassword-secret-id.js",
+      "dist/extensions/onepassword/onepassword-secret-ref-resolver.js",
       "dist/extensions/vault/vault-secret-id.js",
       "dist/extensions/vault/vault-secret-ref-resolver.js",
     ]);

@@ -1,3 +1,4 @@
+import { WORKER_LAUNCH_V2_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   isUnavailableEnvironment,
   type WorkerActiveDispatchPlacement,
@@ -12,6 +13,15 @@ import {
 } from "./placement-dispatch-pending-results.js";
 import type { WorkerEnvironmentService } from "./service.js";
 
+function supportsWorkerLaunchV2(environment: ReturnType<WorkerEnvironmentService["get"]>): boolean {
+  // A persisted bundle hash can still match a pre-v2 worker when current bundle preparation fails.
+  // Require the admitted receipt so restart recovery never revives an incompatible launch contract.
+  return (
+    environment?.bootstrapReceipt?.protocolFeatures.includes(WORKER_LAUNCH_V2_PROTOCOL_FEATURE) ===
+    true
+  );
+}
+
 function sameActiveEnvironment(
   placement: WorkerActiveDispatchPlacement | WorkerDrainingDispatchPlacement,
   environment: ReturnType<WorkerEnvironmentService["get"]>,
@@ -25,6 +35,7 @@ function sameActiveEnvironment(
     environment.ownerEpoch === placement.activeOwnerEpoch &&
     placement.workerBundleHash &&
     environment.bootstrapReceipt?.bundleHash === placement.workerBundleHash &&
+    supportsWorkerLaunchV2(environment) &&
     environment.attachedSessionIds.length === 1 &&
     environment.attachedSessionIds[0] === placement.sessionId,
   );
@@ -40,6 +51,24 @@ function isFailedPlacement(
   placement: WorkerDispatchPlacement,
 ): placement is WorkerFailedDispatchPlacement {
   return placement.state === "failed";
+}
+
+function blockingWorkspaceJournalSessions(
+  placements: PlacementRecoveryDeps["placements"],
+): Set<string> {
+  const sessions = new Set<string>();
+  for (const owner of placements.listWorkspaceReconciliationOwners()) {
+    const placement = placements.get(owner.sessionId);
+    if (
+      (placement?.state === "active" || placement?.state === "draining") &&
+      placement.environmentId === owner.environmentId &&
+      placement.activeOwnerEpoch === owner.ownerEpoch &&
+      placement.generation === owner.placementGeneration
+    ) {
+      sessions.add(owner.sessionId);
+    }
+  }
+  return sessions;
 }
 
 export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
@@ -102,6 +131,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
       environment &&
       expectedBundle &&
       environment.bootstrapReceipt?.bundleHash === expectedBundle &&
+      supportsWorkerLaunchV2(environment) &&
       hasSyncedWorkspace;
     if (!canResume) {
       const error = new Error("Interrupted worker dispatch cannot safely resume");
@@ -163,9 +193,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
   const reconcile = async (): Promise<void> => {
     await environments.reconcileOnce();
     const pendingResultOwners = await recoverPendingWorkspaceResults(deps, true);
-    const journalOwners = new Set(
-      placements.listWorkspaceReconciliationOwners().map((owner) => owner.sessionId),
-    );
+    const journalOwners = blockingWorkspaceJournalSessions(placements);
     for (const placement of placements.listForReconcile()) {
       if (journalOwners.has(placement.sessionId) || pendingResultOwners.has(placement.sessionId)) {
         continue;
@@ -204,9 +232,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
   const reconcileActive = async (environmentId?: string): Promise<void> => {
     await environments.reconcileOnce();
     const pendingResultOwners = await recoverPendingWorkspaceResults(deps, false);
-    const journalOwners = new Set(
-      placements.listWorkspaceReconciliationOwners().map((owner) => owner.sessionId),
-    );
+    const journalOwners = blockingWorkspaceJournalSessions(placements);
     for (const placement of placements.listForReconcile()) {
       if (journalOwners.has(placement.sessionId) || pendingResultOwners.has(placement.sessionId)) {
         continue;

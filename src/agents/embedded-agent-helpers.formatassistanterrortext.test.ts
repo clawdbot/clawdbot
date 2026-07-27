@@ -364,6 +364,13 @@ describe("formatAssistantErrorText", () => {
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
   });
 
+  it("does not rewrite Provider finish_reason: error into a timeout (#109218)", () => {
+    const msg = makeAssistantError("Provider finish_reason: error");
+    // Keep provider signal; do not rewrite to the timeout string (formatAssistantErrorText
+    // may return undefined for some paths — assert the concrete copy we preserve).
+    expect(formatAssistantErrorText(msg)).toBe("Provider finish_reason: error");
+  });
+
   it("returns a connection-refused message for ECONNREFUSED failures", () => {
     const msg = makeAssistantError("connect ECONNREFUSED 127.0.0.1:443 during upstream call");
     expect(formatAssistantErrorText(msg)).toBe(
@@ -541,6 +548,16 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError("407 Proxy Authentication Required");
     expect(formatAssistantErrorText(msg)).toBe(
       "LLM request failed: proxy or tunnel configuration blocked the provider request.",
+    );
+  });
+
+  it("returns a certificate-specific message for TLS validation failures", () => {
+    const msg = makeAssistantError(
+      "Hostname/IP does not match certificate's altnames: Host: api.example.com",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM request failed: TLS certificate validation rejected the provider endpoint. " +
+        "Check the endpoint hostname, proxy, and local certificate trust.",
     );
   });
 

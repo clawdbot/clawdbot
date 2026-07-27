@@ -35,6 +35,7 @@ import {
   collectRuntimeDependencySpecs,
   packageNameFromSpecifier,
 } from "./lib/plugin-package-dependencies.mjs";
+import { classifyReleaseTrain } from "./lib/release-version.mjs";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mjs";
 import { parseReleaseVersion, resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
@@ -295,6 +296,10 @@ function resolveNpmProvenanceVerificationPolicy(
   const workflow = statement.predicate?.buildDefinition?.externalParameters?.workflow;
   const workflowRef = workflow?.ref;
   const expectedReleaseRef = `refs/heads/release/${parsedVersion.baseVersion}`;
+  // A month's final patch >=33 releases stay on its canonical .33 maintenance branch.
+  const isExpectedExtendedStableRef =
+    classifyReleaseTrain(parsedVersion) === "extended-stable" &&
+    workflowRef === `refs/heads/extended-stable/${parsedVersion.year}.${parsedVersion.month}.33`;
   const protectedReleasePublishMatch =
     /^refs\/tags\/release-publish\/([a-f0-9]{12})-[1-9][0-9]*$/u.exec(workflowRef ?? "");
   let protectedReleasePublishTrusted = false;
@@ -325,6 +330,7 @@ function resolveNpmProvenanceVerificationPolicy(
   const isTrustedRef =
     workflowRef === "refs/heads/main" ||
     workflowRef === expectedReleaseRef ||
+    isExpectedExtendedStableRef ||
     protectedReleasePublishTrusted ||
     (parsedVersion.channel === "alpha" &&
       /^refs\/heads\/tideclaw\/alpha\/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$/u.test(
@@ -954,13 +960,22 @@ function readBundledExtensionPackageJsons(packageRoot: string): {
   errors: string[];
 } {
   const extensionsDir = join(packageRoot, "dist", "extensions");
-  if (!existsSync(extensionsDir)) {
-    return { manifests: [], errors: [] };
-  }
-
   const manifests: InstalledBundledExtensionManifestRecord[] = [];
   const errors: string[] = [];
   const expectedPackageIds = collectExpectedBundledExtensionPackageIds();
+
+  // Scan the package contract first: absent bundled directories are invisible
+  // when verification only walks the installed extension root.
+  for (const expectedPackageId of expectedPackageIds) {
+    const packageJsonPath = join(extensionsDir, expectedPackageId, "package.json");
+    if (!existsSync(packageJsonPath)) {
+      errors.push(`installed bundled extension manifest missing: ${packageJsonPath}.`);
+    }
+  }
+
+  if (!existsSync(extensionsDir)) {
+    return { manifests, errors };
+  }
 
   for (const entry of readdirSync(extensionsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) {
@@ -970,9 +985,6 @@ function readBundledExtensionPackageJsons(packageRoot: string): {
     const extensionDirPath = join(extensionsDir, entry.name);
     const packageJsonPath = join(extensionsDir, entry.name, "package.json");
     if (!existsSync(packageJsonPath)) {
-      if (expectedPackageIds.has(entry.name)) {
-        errors.push(`installed bundled extension manifest missing: ${packageJsonPath}.`);
-      }
       continue;
     }
 

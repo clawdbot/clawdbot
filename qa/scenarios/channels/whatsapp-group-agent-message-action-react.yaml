@@ -3,7 +3,8 @@ scenario:
   id: whatsapp-group-agent-message-action-react
   surface: channels
   coverage:
-    primary: [channels.group-messages]
+    primary:
+      - channels.message-actions
   execution:
     profiles: { "whatsapp:mock-default": 12 }
     kind: flow

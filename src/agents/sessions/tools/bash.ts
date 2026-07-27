@@ -81,7 +81,7 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
           reject: false,
           stdio: [invocation.stdin, "pipe", "pipe"],
         });
-        const releaseOutput = releaseChildProcessOutputAfterExit(child);
+        const releaseOutput = releaseChildProcessOutputAfterExit(child.nodeChildProcess);
         let timedOut = false;
         let timeoutHandle: NodeJS.Timeout | undefined;
         const timeoutMs = resolveBashTimeoutMs(timeout);
@@ -93,9 +93,10 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
             }
           }, timeoutMs);
         }
-        // Stream stdout and stderr.
-        child.stdout?.on("data", onData);
-        child.stderr?.on("data", onData);
+        // Stream stdout and stderr. Tag each pipe so downstream decode state
+        // stays per-stream; a pending sequence on one must not eat the other.
+        child.stdout?.on("data", (data: Buffer) => onData(data, "stdout"));
+        child.stderr?.on("data", (data: Buffer) => onData(data, "stderr"));
         // Handle abort signal by killing the entire process tree.
         const onAbort = () => {
           if (child.pid) {
@@ -374,11 +375,11 @@ export function createBashToolDefinition(
         onUpdate({ content: [], details: undefined });
       }
 
-      const handleData = (data: Buffer) => {
+      const handleData = (data: Buffer, stream?: "stdout" | "stderr") => {
         if (!acceptingOutput) {
           return;
         }
-        output.append(data);
+        output.append(data, stream);
         scheduleOutputUpdate();
       };
 

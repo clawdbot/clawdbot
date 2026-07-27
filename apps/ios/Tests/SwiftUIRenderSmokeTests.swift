@@ -102,6 +102,27 @@ struct SwiftUIRenderSmokeTests {
         }
     }
 
+    @Test @MainActor func `settings OpenClaw destination builds access gate across appearance and type size`() {
+        var windows: [UIWindow] = []
+        defer { windows.forEach { $0.isHidden = true } }
+
+        for scheme in [ColorScheme.light, ColorScheme.dark] {
+            for typeSize in [DynamicTypeSize.large, .accessibility2] {
+                let appModel = NodeAppModel()
+                let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+                let root = SettingsProTab(directRoute: .systemAgent)
+                    .environment(AppAppearanceModel())
+                    .environment(appModel)
+                    .environment(appModel.voiceWake)
+                    .environment(gatewayController)
+                    .environment(\.dynamicTypeSize, typeSize)
+                    .preferredColorScheme(scheme)
+
+                windows.append(Self.host(root, size: CGSize(width: 393, height: 852)))
+            }
+        }
+    }
+
     @Test @MainActor func `settings pro tab appearance row builds for all preferences`() throws {
         for preference in AppAppearancePreference.allCases {
             let suiteName = "OpenClawTests.appearance.\(preference.rawValue).\(UUID().uuidString)"
@@ -223,6 +244,41 @@ struct SwiftUIRenderSmokeTests {
         }
     }
 
+    @Test @MainActor func `long user prompt disclosure builds across dynamic type sizes`() {
+        let text = Array(repeating: "A long user-authored prompt line.", count: 13).joined(separator: "\n")
+        let message = OpenClawChatMessage(
+            role: "user",
+            content: [OpenClawChatMessageContent(
+                type: "text",
+                text: text,
+                mimeType: nil,
+                fileName: nil,
+                content: nil)],
+            timestamp: nil)
+
+        for typeSize in [DynamicTypeSize.large, .accessibility2] {
+            let root = ChatMessageBubble(
+                message: message,
+                style: .standard,
+                markdownVariant: .standard,
+                userAccent: nil,
+                displayOptions: [],
+                assistantName: "OpenClaw",
+                assistantAvatarText: "OC",
+                assistantAvatarTint: nil,
+                showsAssistantAvatar: true,
+                isClean: false,
+                contextWindowTokens: nil,
+                userMessageExpanded: false,
+                onToggleUserMessageExpanded: {},
+                inlineWidgetResolverReady: true,
+                inlineWidgetResourceResolver: { _, _ in nil })
+                .environment(\.dynamicTypeSize, typeSize)
+
+            _ = Self.host(root, size: CGSize(width: 320, height: 420))
+        }
+    }
+
     @Test @MainActor func `streaming assistant bubble builds mixed prose and code`() {
         let text = """
         Earlier prose stays visible.
@@ -281,6 +337,8 @@ struct SwiftUIRenderSmokeTests {
                 showsAssistantAvatar: true,
                 isClean: false,
                 contextWindowTokens: 1_000_000,
+                userMessageExpanded: false,
+                onToggleUserMessageExpanded: {},
                 inlineWidgetResolverReady: true,
                 inlineWidgetResourceResolver: { _, _ in nil })
                 .environment(\.dynamicTypeSize, typeSize)
@@ -493,8 +551,8 @@ struct SwiftUIRenderSmokeTests {
                 model: RootSidebarModel(),
                 selectedDestination: .overview,
                 isDrawerLayout: true,
+                isDismissButtonEnabled: true,
                 selectDestination: { _ in },
-                selectSettingsRoute: { _ in },
                 hideSidebar: {})
                 .environment(appModel)
 
@@ -508,8 +566,8 @@ struct SwiftUIRenderSmokeTests {
             model: RootSidebarModel(),
             selectedDestination: .chat,
             isDrawerLayout: true,
+            isDismissButtonEnabled: true,
             selectDestination: { _ in },
-            selectSettingsRoute: { _ in },
             hideSidebar: {})
             .environment(appModel)
             .environment(\.horizontalSizeClass, .regular)

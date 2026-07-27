@@ -16,6 +16,8 @@ import type {
   CustomMessageEntry,
   LabelEntry,
   ModelChangeEntry,
+  ResetEntry,
+  ResetReason,
   SessionContext,
   SessionEntry,
   SessionInfoEntry,
@@ -105,6 +107,19 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     this.appendEntry(entry, {
       invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
     });
+    return entry.id;
+  }
+
+  appendResetBoundary(reason: ResetReason, firstKeptEntryId?: string): string {
+    const entry: ResetEntry = {
+      type: "reset",
+      id: generateSessionEntryId(this.byId),
+      parentId: this.appendParentId,
+      timestamp: new Date().toISOString(),
+      reason,
+      ...(firstKeptEntryId ? { firstKeptEntryId } : {}),
+    };
+    this.appendEntry(entry);
     return entry.id;
   }
 
@@ -234,6 +249,11 @@ export class SessionManagerEntries extends SessionManagerPersistence {
 
   buildSessionContext(): SessionContext {
     return buildCoreSessionContext(this.getBranch() as CoreSessionTreeEntry[]) as SessionContext;
+  }
+
+  getBoundaryCount(): number {
+    return this.getBranch().filter((entry) => entry.type === "compaction" || entry.type === "reset")
+      .length;
   }
 
   getHeader(): SessionHeader | null {

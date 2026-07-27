@@ -298,9 +298,11 @@ function parseWizardAnswer(step: WizardStep, text: string): { value: unknown } |
   }
   const options = step.options ?? [];
   const matchOption = (token: string) => {
-    const index = Number(token);
-    if (Number.isInteger(index) && index >= 1 && index <= options.length) {
-      return options[index - 1];
+    if (/^\d+$/.test(token)) {
+      const index = Number(token);
+      if (Number.isSafeInteger(index) && index >= 1 && index <= options.length) {
+        return options[index - 1];
+      }
     }
     const lower = token.toLowerCase();
     return options.find(

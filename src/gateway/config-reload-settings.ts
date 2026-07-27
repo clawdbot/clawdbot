@@ -16,9 +16,6 @@ const DEFAULT_RELOAD_SETTINGS: GatewayReloadSettings = {
 /** Resolves gateway reload mode/debounce from config with bounded defaults. */
 export function resolveGatewayReloadSettings(cfg: OpenClawConfig): GatewayReloadSettings {
   const rawMode = cfg.gateway?.reload?.mode;
-  const mode =
-    rawMode === "off" || rawMode === "restart" || rawMode === "hot" || rawMode === "hybrid"
-      ? rawMode
-      : DEFAULT_RELOAD_SETTINGS.mode;
+  const mode = rawMode === "off" || rawMode === "hybrid" ? rawMode : DEFAULT_RELOAD_SETTINGS.mode;
   return { mode, debounceMs: DEFAULT_RELOAD_SETTINGS.debounceMs };
 }

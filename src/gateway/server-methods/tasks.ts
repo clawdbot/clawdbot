@@ -11,6 +11,8 @@ import {
   validateTasksGetParams,
   validateTasksListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { canonicalizeMainSessionAlias } from "../../config/sessions.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { getTaskById, listTaskRecordsUnsorted } from "../../tasks/runtime-internal.js";
 import { cancelDetachedTaskRunById } from "../../tasks/task-executor.js";
@@ -86,7 +88,7 @@ function parseCursor(cursor: string | undefined): number | null {
 // Control UI task methods expose the stable gateway protocol shape; helpers
 // above keep runtime registry details out of the wire result.
 export const tasksHandlers: GatewayRequestHandlers = {
-  "tasks.list": ({ params, respond }) => {
+  "tasks.list": ({ params, respond, context }) => {
     if (!validateTasksListParams(params)) {
       respond(
         false,
@@ -109,6 +111,19 @@ export const tasksHandlers: GatewayRequestHandlers = {
     }
     const statusFilter = normalizeTaskStatusFilter(params.status);
     const limit = Math.min(params.limit ?? DEFAULT_TASKS_LIST_LIMIT, MAX_TASKS_LIST_LIMIT);
+    const requestedSessionKey = normalizeOptionalString(params.sessionKey);
+    let sessionKey: string | undefined;
+    if (requestedSessionKey) {
+      const cfg = context.getRuntimeConfig();
+      sessionKey = canonicalizeMainSessionAlias({
+        cfg,
+        agentId:
+          parseAgentSessionKey(requestedSessionKey)?.agentId ??
+          normalizeOptionalString(params.agentId) ??
+          resolveDefaultAgentId(cfg),
+        sessionKey: requestedSessionKey,
+      });
+    }
     // The ledger view pages by last activity so an old long-running task that
     // just finished still surfaces on the first page instead of hiding behind
     // newer-created records. Start from a cloned insertion-order snapshot so
@@ -118,9 +133,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
         if (statusFilter && !statusFilter.has(task.status)) {
           return false;
         }
-        return (
-          taskMatchesAgent(task, params.agentId) && taskMatchesSession(task, params.sessionKey)
-        );
+        return taskMatchesAgent(task, params.agentId) && taskMatchesSession(task, sessionKey);
       })
       .toSorted((left, right) => {
         const updatedDiff = taskUpdatedAt(right) - taskUpdatedAt(left);

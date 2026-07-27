@@ -20,7 +20,11 @@ import {
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
-import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
+import {
+  isPluginMetadataSnapshotCompatible,
+  resolvePluginMetadataSnapshot,
+} from "../../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
   buildAgentMainSessionKey,
   parseAgentSessionKey,
@@ -38,12 +42,15 @@ import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-
 import {
   deliveryContextFromSession,
   normalizeDeliveryContext,
+  sessionDeliveryChannel,
+  sessionDeliveryOrigin,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { resolveDefaultAgentId } from "../agent-scope-config.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agent-scope.js";
 import {
   buildModelAliasIndex,
@@ -327,10 +334,10 @@ function buildSessionStatusRouteDetails(params: {
 }): SessionStatusRouteDetails {
   const origin = compactOriginDetails({
     provider:
-      readStringValue(params.entry.origin?.provider) ??
+      readStringValue(sessionDeliveryOrigin(params.entry)?.provider) ??
       inferOriginProviderFromSessionKey(params.sessionKey),
-    accountId: readStringValue(params.entry.origin?.accountId),
-    threadId: params.entry.origin?.threadId,
+    accountId: readStringValue(sessionDeliveryOrigin(params.entry)?.accountId),
+    threadId: sessionDeliveryOrigin(params.entry)?.threadId,
   });
   const deliveryContext = normalizeStatusDeliveryContext(deliveryContextFromSession(params.entry));
   const active = params.isLiveRunSession
@@ -407,6 +414,7 @@ function withActiveStatusModelIdentity(
   delete next.providerOverride;
   delete next.modelOverride;
   delete next.modelOverrideSource;
+  delete next.modelOverrideRouteResolution;
   return next;
 }
 
@@ -441,6 +449,7 @@ async function resolveModelOverride(params: {
   agentId: string;
   agentDir: string;
   workspaceDir: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<
   | { kind: "reset" }
   | {
@@ -475,13 +484,24 @@ async function resolveModelOverride(params: {
       ? { workspaceDir: params.sessionEntry.spawnedWorkspaceDir }
       : {}),
   });
-  const manifestMetadataSnapshot = loadManifestMetadataSnapshot({
-    config: params.cfg,
-    workspaceDir: params.sessionEntry?.spawnedWorkspaceDir,
-    env: process.env,
-  });
+  const workspaceDir = params.sessionEntry?.spawnedWorkspaceDir ?? params.workspaceDir;
+  const manifestMetadataSnapshot =
+    params.metadataSnapshot &&
+    params.metadataSnapshot.pluginIds === undefined &&
+    isPluginMetadataSnapshotCompatible({
+      snapshot: params.metadataSnapshot,
+      config: params.cfg,
+      env: process.env,
+      workspaceDir,
+    })
+      ? params.metadataSnapshot
+      : resolvePluginMetadataSnapshot({
+          config: params.cfg,
+          ...(workspaceDir ? { workspaceDir } : {}),
+          env: process.env,
+        });
   const modelManifestContext = {
-    manifestPlugins: manifestMetadataSnapshot.plugins,
+    manifestPlugins: manifestMetadataSnapshot?.plugins,
   };
   const policy = createModelVisibilityPolicy({
     cfg: params.cfg,
@@ -532,6 +552,7 @@ export function createSessionStatusTool(opts?: {
   sandboxed?: boolean;
   activeModelProvider?: string;
   activeModelId?: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
   /** Active live-run route, kept separate from the persisted/origin delivery route. */
   activeDeliveryContext?: DeliveryContext;
 }): AnyAgentTool {
@@ -552,8 +573,10 @@ export function createSessionStatusTool(opts?: {
         sandboxed: opts?.sandboxed,
       });
       const a2aPolicy = createAgentToAgentPolicy(cfg);
+      const configuredDefaultAgentId = resolveDefaultAgentId(cfg);
       const requesterAgentId = resolveAgentIdFromSessionKey(
         opts?.agentSessionKey ?? effectiveRequesterKey,
+        configuredDefaultAgentId,
       );
       const visibilityRequesterKey = (opts?.agentSessionKey ?? effectiveRequesterKey).trim();
       const usesLegacyMainAlias = alias === mainKey;
@@ -564,7 +587,8 @@ export function createSessionStatusTool(opts?: {
       const resolveVisibilityMainSessionKey = (sessionAgentId: string) => {
         const requesterParsed = parseAgentSessionKey(visibilityRequesterKey);
         if (
-          resolveAgentIdFromSessionKey(visibilityRequesterKey) === sessionAgentId &&
+          resolveAgentIdFromSessionKey(visibilityRequesterKey, configuredDefaultAgentId) ===
+            sessionAgentId &&
           (requesterParsed?.rest === mainKey || isLegacyMainVisibilityKey(visibilityRequesterKey))
         ) {
           return visibilityRequesterKey;
@@ -594,6 +618,7 @@ export function createSessionStatusTool(opts?: {
       };
       const visibilityGuard = await createSessionVisibilityGuard({
         action: "status",
+        defaultAgentId: resolveDefaultAgentId(cfg),
         requesterSessionKey: visibilityRequesterKey,
         visibility: resolveEffectiveSessionToolsVisibility({
           cfg,
@@ -664,7 +689,10 @@ export function createSessionStatusTool(opts?: {
       };
 
       if (requestedKeyInput.startsWith("agent:") && !isSemanticCurrentRequest) {
-        const requestedAgentId = resolveAgentIdFromSessionKey(requestedKeyInput);
+        const requestedAgentId = resolveAgentIdFromSessionKey(
+          requestedKeyInput,
+          configuredDefaultAgentId,
+        );
         ensureAgentAccess(requestedAgentId);
         const access = visibilityGuard.check(
           normalizeVisibilityTargetSessionKey(requestedKeyInput, requestedAgentId),
@@ -676,7 +704,7 @@ export function createSessionStatusTool(opts?: {
 
       const isExplicitAgentKey = requestedKeyInput.startsWith("agent:");
       let agentId = isExplicitAgentKey
-        ? resolveAgentIdFromSessionKey(requestedKeyInput)
+        ? resolveAgentIdFromSessionKey(requestedKeyInput, configuredDefaultAgentId)
         : requesterAgentId;
       let storePath = resolveStorePath(cfg.session?.store, { agentId });
       let storeScopedRequesterKey = resolveStoreScopedRequesterKey({
@@ -719,11 +747,13 @@ export function createSessionStatusTool(opts?: {
             throw new Error("Session status visibility is restricted to the current session tree.");
           }
           // If resolution points at another agent, enforce A2A policy before switching stores.
-          ensureAgentAccess(resolveAgentIdFromSessionKey(visibleSession.key));
+          ensureAgentAccess(
+            resolveAgentIdFromSessionKey(visibleSession.key, configuredDefaultAgentId),
+          );
           resolvedViaSessionId = true;
           requestedKeyRaw = visibleSession.key;
           requestedKeyInput = requestedKeyRaw.trim();
-          agentId = resolveAgentIdFromSessionKey(visibleSession.key);
+          agentId = resolveAgentIdFromSessionKey(visibleSession.key, configuredDefaultAgentId);
           storePath = resolveStorePath(cfg.session?.store, { agentId });
           storeScopedRequesterKey = resolveStoreScopedRequesterKey({
             requesterKey: effectiveRequesterKey,
@@ -845,6 +875,7 @@ export function createSessionStatusTool(opts?: {
               agentId,
               agentDir: selectedAgentDir,
               workspaceDir: selectedWorkspaceDir,
+              metadataSnapshot: opts?.metadataSnapshot,
             });
             const modelSelection =
               selection.kind === "reset"
@@ -991,11 +1022,7 @@ export function createSessionStatusTool(opts?: {
             parentSessionKey: statusSessionEntry.parentSessionKey,
             sessionScope: cfg.session?.scope,
             storePath,
-            statusChannel:
-              statusSessionEntry.channel ??
-              statusSessionEntry.lastChannel ??
-              statusSessionEntry.origin?.provider ??
-              "unknown",
+            statusChannel: sessionDeliveryChannel(statusSessionEntry) ?? "unknown",
             workspaceDir: statusSessionEntry.spawnedWorkspaceDir,
             provider: providerForCard,
             model: defaultModelForCard,

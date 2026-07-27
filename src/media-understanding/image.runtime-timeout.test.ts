@@ -620,6 +620,50 @@ describe("describeImageWithModel", () => {
     },
   );
 
+  it("does not start the reasoning-only retry after caller cancellation", async () => {
+    const controller = new AbortController();
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4-mini",
+        input: ["text", "image"],
+        baseUrl: "https://api.openai.com/v1",
+      })),
+    });
+    completeMock.mockImplementationOnce(async () => {
+      controller.abort(new Error("caller cancelled image description"));
+      return {
+        role: "assistant",
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-5.4-mini",
+        stopReason: "stop",
+        timestamp: Date.now(),
+        content: [{ type: "thinking", thinking: "internal", thinkingSignature: "reasoning" }],
+      };
+    });
+
+    await expect(
+      describeImageWithModel({
+        cfg: {},
+        agentDir: "/tmp/openclaw-agent",
+        provider: "openai",
+        model: "gpt-5.4-mini",
+        buffer: Buffer.from("png-bytes"),
+        fileName: "image.png",
+        mime: "image/png",
+        prompt: "Describe the image.",
+        timeoutMs: 1000,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("caller cancelled image description");
+
+    expect(completeMock).toHaveBeenCalledOnce();
+    const options = requireFirstMockCall(completeMock, "cancelled image completion")[2];
+    expect(options?.signal?.aborted).toBe(true);
+  });
+
   it("rejects when a generic image completion ignores the abort signal", async () => {
     vi.useFakeTimers();
     discoverModelsMock.mockReturnValue({
@@ -657,6 +701,39 @@ describe("describeImageWithModel", () => {
     }
     expect(options.signal.aborted).toBe(true);
     expect(options.timeoutMs).toBe(25);
+  });
+
+  it("releases the prepared runtime when a provider ignores caller cancellation", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4-mini",
+        input: ["text", "image"],
+        baseUrl: "https://api.openai.com/v1",
+      })),
+    });
+    completeMock.mockImplementation(() => new Promise(() => {}));
+    const controller = new AbortController();
+    const result = describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 60_000,
+      signal: controller.signal,
+    });
+
+    await vi.waitFor(() => expect(completeMock).toHaveBeenCalledOnce());
+    const assertion = expect(result).rejects.toThrow("caller cancelled provider request");
+    controller.abort(new Error("caller cancelled provider request"));
+    await assertion;
+
+    expect(releasePreparedModelRuntimeMock).toHaveBeenCalledOnce();
   });
 
   it("keeps the full configured timeout for provider requests after slow setup", async () => {
@@ -788,6 +865,53 @@ describe("describeImageWithModel", () => {
       modelRegistry: {},
     });
     await vi.runAllTimersAsync();
+    await vi.waitFor(() => expect(releasePreparedModelRuntimeMock).toHaveBeenCalledOnce());
+    expect(completeMock).not.toHaveBeenCalled();
+  });
+
+  it("releases a prepared generation when cancellation wins during setup", async () => {
+    let finishResolution!: (value: {
+      authStorage: typeof preparedAuthStorage;
+      model: { provider: string; id: string; api: string; input: string[] };
+      modelRegistry: object;
+    }) => void;
+    resolveModelAsyncMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishResolution = resolve;
+        }),
+    );
+    const controller = new AbortController();
+    const result = describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+      signal: controller.signal,
+    });
+
+    await vi.waitFor(() => expect(resolveModelAsyncMock).toHaveBeenCalledOnce());
+    const assertion = expect(result).rejects.toThrow("caller cancelled during setup");
+    controller.abort(new Error("caller cancelled during setup"));
+    await assertion;
+    expect(releasePreparedModelRuntimeMock).not.toHaveBeenCalled();
+
+    finishResolution({
+      authStorage: preparedAuthStorage,
+      model: {
+        provider: "openai",
+        id: "gpt-5.4-mini",
+        api: "openai-responses",
+        input: ["text", "image"],
+      },
+      modelRegistry: {},
+    });
+
     await vi.waitFor(() => expect(releasePreparedModelRuntimeMock).toHaveBeenCalledOnce());
     expect(completeMock).not.toHaveBeenCalled();
   });

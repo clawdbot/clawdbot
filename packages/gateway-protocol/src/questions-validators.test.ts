@@ -1,5 +1,7 @@
+import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
+  QuestionRecordSchema,
   validateQuestionRequestParams,
   validateQuestionResolveParams,
   validateQuestionWaitAnswerParams,
@@ -21,6 +23,7 @@ describe("question protocol validators", () => {
     expect(
       validateQuestionRequestParams({
         id: "client-question-id",
+        runId: "agent-run-id",
         questions: [question],
         timeoutMs: 100,
       }),
@@ -28,6 +31,16 @@ describe("question protocol validators", () => {
     expect(validateQuestionWaitAnswerParams({ id: "question-uuid", timeoutMs: 50 })).toBe(true);
     expect(validateQuestionResolveParams({ id: "question-uuid", answers })).toBe(true);
     expect(validateQuestionResolveParams({ id: "question-uuid", cancel: true })).toBe(true);
+    expect(
+      Value.Check(QuestionRecordSchema, {
+        id: "client-question-id",
+        runId: "agent-run-id",
+        questions: [question],
+        createdAtMs: 1,
+        expiresAtMs: 2,
+        status: "pending",
+      }),
+    ).toBe(true);
   });
 
   it("enforces the shared question header cap", () => {

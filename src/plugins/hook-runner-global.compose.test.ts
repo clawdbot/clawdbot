@@ -41,6 +41,28 @@ function addToolOwner(registry: PluginRegistry, pluginId: string, toolName: stri
   });
 }
 
+function addChannelOwner(registry: PluginRegistry, pluginId: string) {
+  registry.channels.push({
+    pluginId,
+    source: "test",
+    plugin: {
+      id: pluginId,
+      meta: {
+        id: pluginId,
+        label: pluginId,
+        selectionLabel: pluginId,
+        docsPath: `/channels/${pluginId}`,
+        blurb: "test",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => undefined,
+      },
+    },
+  });
+}
+
 afterEach(() => {
   resetGlobalHookRunner();
   resetPluginRuntimeStateForTest();
@@ -182,7 +204,7 @@ describe("global hook runner composition (#91918, #107933)", () => {
     // Give the active registry a channel so the channel-presentation selector
     // would prefer it and evict the zero-channel pinned registry — the raw
     // live-registry collector must keep the pinned one regardless.
-    (channelActive.channels as unknown[]).push({});
+    addChannelOwner(channelActive, "chan");
 
     setActivePluginRegistry(channelActive);
     pinActivePluginChannelRegistry(hookOnlyPinned);

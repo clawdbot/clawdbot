@@ -84,4 +84,33 @@ describe("readConfiguredLogTail", () => {
 
     expect(result.lines).toEqual(["old line", "recent one", "recent two"]);
   });
+
+  it("falls back only within the active profile's rolling log family", async () => {
+    const tempDir = tempDirs.make("openclaw-log-tail-");
+    const missing = path.join(tempDir, "openclaw-dev-2026-01-22.log");
+    const devLog = path.join(tempDir, "openclaw-dev-2026-01-21.log");
+    const defaultLog = path.join(tempDir, "openclaw-2026-01-21.log");
+    await fs.writeFile(devLog, "dev profile\n");
+    await fs.writeFile(defaultLog, "default profile\n");
+    await fs.utimes(devLog, new Date(0), new Date(0));
+    await fs.utimes(defaultLog, new Date(), new Date());
+    const { resolveLogFile } = await import("./log-tail.js");
+    const result = await resolveLogFile(missing, { rolling: true });
+
+    expect(result).toBe(devLog);
+  });
+
+  it("does not reinterpret an explicit profile-shaped logging.file as rolling", async () => {
+    const { readConfiguredLogTail } = await import("./log-tail.js");
+    const tempDir = tempDirs.make("openclaw-log-tail-");
+    const configured = path.join(tempDir, "openclaw-dev-2026-01-22.log");
+    const sibling = path.join(tempDir, "openclaw-dev-2026-01-21.log");
+    await fs.writeFile(sibling, "sibling profile log\n");
+    setLoggerOverride({ file: configured });
+
+    const result = await readConfiguredLogTail();
+
+    expect(result.file).toBe(configured);
+    expect(result.lines).toEqual([]);
+  });
 });

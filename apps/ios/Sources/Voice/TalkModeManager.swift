@@ -2781,7 +2781,7 @@ final class TalkModeManager: NSObject {
             agentID: nil,
             expectedSessionRoutingContract: nil,
             message: message,
-            thinking: "low",
+            thinking: Self.chatThinkingOverride,
             idempotencyKey: idempotencyKey,
             attachments: [],
             runTimeoutMs: 30000)
@@ -5167,6 +5167,10 @@ extension TalkModeManager {
     }
 }
 #endif
+
+extension TalkModeManager {
+    static let chatThinkingOverride: String? = nil
+}
 
 private struct IncrementalSpeechContext: Equatable {
     let apiKey: String?

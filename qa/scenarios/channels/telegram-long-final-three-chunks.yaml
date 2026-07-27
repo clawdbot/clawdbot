@@ -2,10 +2,11 @@ title: Telegram long final keeps three final chunks
 
 scenario:
   id: telegram-long-final-three-chunks
-  surface: channel-framework
-  category: channel-framework.conversation-routing-and-delivery
+  surface: channels
+  category: channels.conversation-routing-and-delivery
   coverage:
-    primary: [runtime.delivery]
+    primary:
+      - telegram.conversation-routing-and-delivery
   regressionRefs:
     - openclaw/openclaw#39905
   objective: Verify a three-chunk Telegram final removes previews and keeps only final chunks.

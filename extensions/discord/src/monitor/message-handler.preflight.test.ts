@@ -559,12 +559,14 @@ describe("preflightDiscordMessage", () => {
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
     const dmAudioCall = firstMockArg(transcribeFirstAudioMock, "transcribeFirstAudio") as
-      | { ctx?: { MediaUrls?: unknown; MediaTypes?: unknown } }
+      | { ctx?: { media?: unknown } }
       | undefined;
-    expect(dmAudioCall?.ctx?.MediaUrls).toEqual([
-      "https://cdn.discordapp.com/attachments/voice.ogg",
+    expect(dmAudioCall?.ctx?.media).toEqual([
+      {
+        url: "https://cdn.discordapp.com/attachments/voice.ogg",
+        contentType: "audio/ogg",
+      },
     ]);
-    expect(dmAudioCall?.ctx?.MediaTypes).toEqual(["audio/ogg"]);
     const preflight = expectPreflightResult(result);
     expect(preflight.isDirectMessage).toBe(true);
     expect(preflight.preflightAudioTranscript).toBe("hello openclaw from dm audio");
@@ -1247,6 +1249,149 @@ describe("preflightDiscordMessage", () => {
     expect(expectPreflightResult(result).message.id).toBe("m-bot-mentions-hydrated");
   });
 
+  it.each(["<@123456789012345678>", "<@!123456789012345678>"])(
+    "accepts raw bot mention %s when REST hydration fails",
+    async (rawMention) => {
+      const channelId = "channel-bot-mentions-raw";
+      const guildId = "guild-bot-mentions-raw";
+      const botId = "123456789012345678";
+      const message = createDiscordMessage({
+        id: "m-bot-mentions-raw",
+        channelId,
+        content: `hi ${rawMention}`,
+        author: {
+          id: "relay-bot-1",
+          bot: true,
+          username: "Relay",
+        },
+        mentionedUsers: [],
+      });
+      const client = createGuildTextClient(channelId);
+      client.rest = {
+        get: vi.fn(async () => {
+          throw new Error("Discord REST unavailable");
+        }),
+      } as unknown as DiscordClient["rest"];
+
+      const result = await preflightDiscordMessage({
+        ...createPreflightArgs({
+          cfg: DEFAULT_PREFLIGHT_CFG,
+          discordConfig: {
+            allowBots: "mentions",
+          } as DiscordConfig,
+          data: createGuildEvent({
+            channelId,
+            guildId,
+            author: message.author,
+            message,
+          }),
+          client,
+        }),
+        botUserId: botId,
+      });
+
+      expect(expectPreflightResult(result).message.id).toBe("m-bot-mentions-raw");
+    },
+  );
+
+  it("does not trust raw mention syntax when REST hydration succeeds without a mention", async () => {
+    const channelId = "channel-bot-mentions-authoritative";
+    const guildId = "guild-bot-mentions-authoritative";
+    const botId = "123456789012345678";
+    const message = createDiscordMessage({
+      id: "m-bot-mentions-authoritative",
+      channelId,
+      content: `hi <@${botId}>`,
+      author: {
+        id: "relay-bot-1",
+        bot: true,
+        username: "Relay",
+      },
+      mentionedUsers: [],
+    });
+    const client = createGuildTextClient(channelId);
+    client.rest = {
+      get: vi.fn(async () => ({
+        id: message.id,
+        content: message.content,
+        mentions: [],
+        mention_roles: [],
+        mention_everyone: false,
+      })),
+    } as unknown as DiscordClient["rest"];
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: {
+          allowBots: "mentions",
+        } as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId,
+          author: message.author,
+          message,
+        }),
+        client,
+      }),
+      botUserId: botId,
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it.each([
+    { name: "inline code", content: (botId: string) => `example: \`<@${botId}>\`` },
+    {
+      name: "fenced code",
+      content: (botId: string) => `example:\n\`\`\`text\n<@${botId}>\n\`\`\``,
+    },
+    { name: "escaped syntax", content: (botId: string) => `example: \\<@${botId}>` },
+    { name: "another user", content: () => "hi <@987654321098765432>" },
+    { name: "role mention", content: (botId: string) => `hi <@&${botId}>` },
+    { name: "longer user id", content: (botId: string) => `hi <@${botId}9>` },
+  ])("does not trust $name when REST hydration fails", async ({ content }) => {
+    const channelId = "channel-bot-mentions-untrusted";
+    const guildId = "guild-bot-mentions-untrusted";
+    const botId = "123456789012345678";
+    const message = createDiscordMessage({
+      id: "m-bot-mentions-untrusted",
+      channelId,
+      content: content(botId),
+      author: {
+        id: "relay-bot-1",
+        bot: true,
+        username: "Relay",
+      },
+      mentionedUsers: [],
+    });
+    const client = createGuildTextClient(channelId);
+    client.rest = {
+      get: vi.fn(async () => {
+        throw new Error("Discord REST unavailable");
+      }),
+    } as unknown as DiscordClient["rest"];
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: {
+          allowBots: "mentions",
+        } as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId,
+          author: message.author,
+          message,
+        }),
+        client,
+      }),
+      botUserId: botId,
+    });
+
+    expect(result).toBeNull();
+  });
+
   it("still drops bot control commands without a real mention when allowBots=mentions", async () => {
     const channelId = "channel-bot-command-no-mention";
     const guildId = "guild-bot-command-no-mention";
@@ -1745,6 +1890,10 @@ describe("preflightDiscordMessage", () => {
       sender: "Alice",
       body: "<media:image>",
       messageId: "m-history-image",
+      senderProvenance: {
+        id: "user-1",
+        memberRoleIds: [],
+      },
       media: [
         {
           contentType: "image/png",
@@ -2120,12 +2269,14 @@ describe("preflightDiscordMessage", () => {
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
     const guildAudioCall = firstMockArg(transcribeFirstAudioMock, "transcribeFirstAudio") as
-      | { ctx?: { MediaUrls?: unknown; MediaTypes?: unknown } }
+      | { ctx?: { media?: unknown } }
       | undefined;
-    expect(guildAudioCall?.ctx?.MediaUrls).toEqual([
-      "https://cdn.discordapp.com/attachments/voice.ogg",
+    expect(guildAudioCall?.ctx?.media).toEqual([
+      {
+        url: "https://cdn.discordapp.com/attachments/voice.ogg",
+        contentType: "audio/ogg",
+      },
     ]);
-    expect(guildAudioCall?.ctx?.MediaTypes).toEqual(["audio/ogg"]);
     const preflight = expectPreflightResult(result);
     expect(preflight.wasMentioned).toBe(true);
     expect(preflight.preflightAudioTranscript).toBe("hey openclaw");

@@ -77,6 +77,7 @@ export abstract class AgentSessionBase {
   protected compactionAbortController: AbortController | undefined = undefined;
   protected autoCompactionAbortController: AbortController | undefined = undefined;
   protected overflowRecoveryAttempted = false;
+  protected contextOverflowRecoveryOwner: "session" | "caller";
 
   // Branch summarization state
   protected branchSummaryAbortController: AbortController | undefined = undefined;
@@ -146,6 +147,7 @@ export abstract class AgentSessionBase {
       reason: "startup",
     };
     this.withExternalSessionWriteLock = config.withSessionWriteLock;
+    this.contextOverflowRecoveryOwner = config.contextOverflowRecoveryOwner ?? "session";
   }
 
   /** Model registry for API key resolution and model discovery */

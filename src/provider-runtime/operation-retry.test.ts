@@ -113,6 +113,26 @@ describe("executeProviderOperationWithRetry", () => {
     expect(operation).toHaveBeenCalledTimes(1);
   });
 
+  it("does not start another attempt after caller cancellation", async () => {
+    const controller = new AbortController();
+    const operation = vi.fn(async () => {
+      controller.abort(new Error("caller cancelled provider read"));
+      throw Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+    });
+
+    await expect(
+      executeProviderOperationWithRetry({
+        provider: "test",
+        stage: "read",
+        operation,
+        signal: controller.signal,
+        retry: { attempts: 2, baseDelayMs: 0, maxDelayMs: 0 },
+      }),
+    ).rejects.toThrow("caller cancelled provider read");
+
+    expect(operation).toHaveBeenCalledOnce();
+  });
+
   it("does not retry create operations by default", async () => {
     const operation = vi.fn(async () => {
       throw Object.assign(new Error("write EPIPE"), { code: "EPIPE" });

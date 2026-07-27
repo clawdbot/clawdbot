@@ -6,6 +6,7 @@ import { OpenClawSchema } from "../config/zod-schema.js";
 import {
   formatConfigPath,
   noteImplicitFallbackClobberWarnings,
+  noteSandboxOriginProxyWarning,
   resolveConfigPathTarget,
   stripUnknownConfigKeys,
 } from "./doctor-config-analysis.js";
@@ -60,18 +61,18 @@ describe("doctor config analysis helpers", () => {
         },
       },
       agents: {
-        list: [
-          { id: "main", description: "Main coordinator" },
-          { id: "stock-news", description: "Tracks market news" },
-        ],
+        entries: {
+          main: { description: "Main coordinator" },
+          "stock-news": { description: "Tracks market news" },
+        },
       },
       unexpected: true,
     } as never);
 
     expect(result.removed).toContain("unexpected");
     expect(result.removed).toContain("defaultModel");
-    expect(result.removed).not.toContain("agents.list[0].description");
-    expect(result.removed).not.toContain("agents.list[1].description");
+    expect(result.removed).not.toContain("agents.entries.main.description");
+    expect(result.removed).not.toContain("agents.entries.stock-news.description");
     expect(OpenClawSchema.safeParse({ defaultModel: "minimax/MiniMax-M2.7" }).success).toBe(false);
     expect(result.config).toMatchObject({
       mcp: {
@@ -83,10 +84,10 @@ describe("doctor config analysis helpers", () => {
         },
       },
       agents: {
-        list: [
-          { id: "main", description: "Main coordinator" },
-          { id: "stock-news", description: "Tracks market news" },
-        ],
+        entries: {
+          main: { description: "Main coordinator" },
+          "stock-news": { description: "Tracks market news" },
+        },
       },
     });
   });
@@ -346,5 +347,35 @@ describe("collectImplicitFallbackClobberWarnings", () => {
         '  Fix: add "fallbacks": [...] to inherit or override, or "fallbacks": [] to explicitly disable.',
       ].join("\n"),
     ]);
+  });
+});
+
+describe("noteSandboxOriginProxyWarning", () => {
+  function warningsFor(cfg: OpenClawConfig): string[] {
+    noteMock.mockClear();
+    noteSandboxOriginProxyWarning(cfg);
+    return noteMock.mock.calls.map((call) => String(call[0]));
+  }
+
+  it("warns for trusted-proxy gateways without a sandbox origin", () => {
+    const warnings = warningsFor({
+      gateway: { auth: { mode: "trusted-proxy" } },
+    } as OpenClawConfig);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("mcp.apps.sandboxOrigin is not set");
+    expect(warnings[0]).toContain("sandbox listener");
+  });
+
+  it("stays silent when a sandbox origin is configured", () => {
+    const warnings = warningsFor({
+      gateway: { auth: { mode: "trusted-proxy" } },
+      mcp: { apps: { sandboxOrigin: "https://widgets.example.com" } },
+    } as OpenClawConfig);
+    expect(warnings).toHaveLength(0);
+  });
+
+  it("stays silent for non-proxy auth modes", () => {
+    expect(warningsFor({ gateway: { auth: { mode: "token" } } } as OpenClawConfig)).toHaveLength(0);
+    expect(warningsFor({} as OpenClawConfig)).toHaveLength(0);
   });
 });

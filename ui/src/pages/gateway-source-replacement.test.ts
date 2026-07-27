@@ -39,8 +39,9 @@ function gatewayWithClient(
 ): ApplicationContext["gateway"] {
   const snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected,
-    reconnecting: false,
+    phase: connected ? "connected" : "stopped",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
@@ -112,7 +113,7 @@ function contextWithMutableGateway(client: GatewayBrowserClient) {
   return {
     context,
     emitConnected(connected: boolean) {
-      currentSnapshot = { ...currentSnapshot, connected };
+      currentSnapshot = { ...currentSnapshot, phase: connected ? "connected" : "stopped" };
       for (const listener of listeners) {
         listener(currentSnapshot);
       }
@@ -153,7 +154,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       result: { count: 1, sessions: [{ key: "old" }] },
       error: null,
       expandedSessionKey: null,
-      showArchived: false,
+      statusFilter: "active",
     } as unknown as SessionsRouteData;
     const page = createPage("openclaw-sessions-page", context) as TestPage & {
       routeData: SessionsRouteData;
@@ -276,7 +277,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     await page.updateComplete;
     page.refreshRuntime.applyGatewaySnapshot({
       ...context.gateway.snapshot,
-      connected: false,
+      phase: "stopped",
     });
     page.refreshRuntime.applyGatewaySnapshot(context.gateway.snapshot);
     await Promise.resolve();
@@ -321,7 +322,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     page.usageLoading = true;
     page.refreshRuntime.applyGatewaySnapshot({
       ...context.gateway.snapshot,
-      connected: false,
+      phase: "stopped",
     });
     page.refreshRuntime.applyGatewaySnapshot(context.gateway.snapshot);
 
@@ -539,7 +540,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     };
     document.body.append(page);
     await page.updateComplete;
-    (context.gateway.snapshot as ApplicationGatewaySnapshot).connected = true;
+    (context.gateway.snapshot as ApplicationGatewaySnapshot).phase = "connected";
     page.connected = true;
 
     const load = page.loadAgents();
@@ -619,7 +620,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     };
     document.body.append(page);
     await page.updateComplete;
-    (context.gateway.snapshot as ApplicationGatewaySnapshot).connected = true;
+    (context.gateway.snapshot as ApplicationGatewaySnapshot).phase = "connected";
     page.connected = true;
 
     const load = page.loadDiagnostics();

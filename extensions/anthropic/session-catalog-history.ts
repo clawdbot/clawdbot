@@ -7,10 +7,14 @@ import type { ClaudeTranscriptItem } from "./session-catalog-transcript.js";
 function importedClaudeMessage(
   item: ClaudeTranscriptItem,
   fallbackTimestamp: number,
-): AgentMessage {
+): AgentMessage | undefined {
   const parsedTimestamp = item.timestamp ? Date.parse(item.timestamp) : Number.NaN;
   const timestamp = Number.isFinite(parsedTimestamp) ? parsedTimestamp : fallbackTimestamp;
-  const text = item.text?.trim() || "[Unsupported Claude transcript item]";
+  const importedText = item.text?.trim();
+  if (!importedText && item.type === "reasoning") {
+    return undefined;
+  }
+  const text = importedText || "[Unsupported Claude transcript item]";
   if (item.type === "userMessage") {
     // Imported native rows are not OpenClaw-authored; mirrorOrigin excludes them
     // from self-echo provenance so a repeated native prompt stays observable.
@@ -61,9 +65,13 @@ export async function importClaudeHistory(params: {
   const items = params.items.toReversed();
   await withSessionTranscriptWriteLock(params, async (transcript) => {
     for (const [index, item] of items.entries()) {
+      const imported = importedClaudeMessage(item, Date.now() + index);
+      if (!imported) {
+        continue;
+      }
       // The idempotency key rides on the message so recovery re-imports dedupe.
       const message = {
-        ...(importedClaudeMessage(item, Date.now() + index) as unknown as Record<string, unknown>),
+        ...(imported as unknown as Record<string, unknown>),
         idempotencyKey: `claude-catalog:${params.threadId}:${item.uuid ?? index}`,
       } as unknown as AgentMessage;
       await transcript.appendMessage({

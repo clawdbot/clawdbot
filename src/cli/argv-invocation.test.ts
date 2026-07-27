@@ -24,4 +24,39 @@ describe("argv-invocation", () => {
       isRootHelpInvocation: false,
     });
   });
+
+  it("consumes agent parent option values before the exec subcommand", () => {
+    expect(
+      resolveCliArgvInvocation([
+        "node",
+        "openclaw",
+        "agent",
+        "--model",
+        "openai/gpt-5.6-sol",
+        "exec",
+        "fix it",
+      ]).commandPath,
+    ).toEqual(["agent", "exec"]);
+  });
+
+  it("does not treat an exec-valued parent option as the subcommand", () => {
+    expect(
+      resolveCliArgvInvocation(["node", "openclaw", "agent", "--message", "exec"]).commandPath,
+    ).toEqual(["agent"]);
+  });
+
+  it("consumes root options between the agent parent and exec", () => {
+    expect(
+      resolveCliArgvInvocation([
+        "node",
+        "openclaw",
+        "agent",
+        "--no-color",
+        "--model",
+        "openai/gpt-5.6-sol",
+        "exec",
+        "fix it",
+      ]).commandPath,
+    ).toEqual(["agent", "exec"]);
+  });
 });

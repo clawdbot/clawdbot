@@ -4,6 +4,28 @@ import Testing
 @testable import OpenClawChatUI
 
 struct ChatGatewayRequestTests {
+    @Test func `session observation requests encode global subscription and actual visibility`() {
+        let subscribe = OpenClawChatGatewayRequests.subscribeSessions()
+        let visible = OpenClawChatGatewayRequests.setSessionObserverVisibility(true)
+        let hidden = OpenClawChatGatewayRequests.setSessionObserverVisibility(false)
+        let longerSubscription = OpenClawChatGatewayRequests.subscribeSessions(timeoutMs: 12000)
+        let longerVisibility = OpenClawChatGatewayRequests.setSessionObserverVisibility(
+            true,
+            timeoutMs: 12000)
+
+        #expect(subscribe.method == "sessions.subscribe")
+        #expect(subscribe.params.isEmpty)
+        #expect(subscribe.timeoutMs == 10000)
+        #expect(visible.method == "sessions.observer.visibility")
+        #expect(visible.params["visible"]?.value as? Bool == true)
+        #expect(visible.timeoutMs == 10000)
+        #expect(hidden.method == "sessions.observer.visibility")
+        #expect(hidden.params["visible"]?.value as? Bool == false)
+        #expect(hidden.timeoutMs == 10000)
+        #expect(longerSubscription.timeoutMs == 12000)
+        #expect(longerVisibility.timeoutMs == 12000)
+    }
+
     @Test func `session targets share normalization while preserving platform routing policy`() {
         #expect(OpenClawChatSessionTarget.resolve(
             " Matrix:Channel:Room ",
@@ -46,6 +68,22 @@ struct ChatGatewayRequestTests {
         #expect(request.params["limit"]?.value as? Int == 12)
         #expect(request.params["search"]?.value as? String == "incident")
         #expect(request.params["archived"]?.value as? Bool == true)
+    }
+
+    @Test func `child session request encodes focused pagination filters`() {
+        let request = OpenClawChatGatewayRequests.sessionsList(
+            limit: 10000,
+            search: nil,
+            archived: false,
+            includeGlobal: false,
+            spawnedBy: " agent:main:parent ",
+            offset: 10000,
+            configuredAgentsOnly: true)
+
+        #expect(request.params["includeGlobal"]?.value as? Bool == false)
+        #expect(request.params["spawnedBy"]?.value as? String == "agent:main:parent")
+        #expect(request.params["offset"]?.value as? Int == 10000)
+        #expect(request.params["configuredAgentsOnly"]?.value as? Bool == true)
     }
 
     @Test func `session patch request preserves explicit null clearing`() {
@@ -160,6 +198,29 @@ struct ChatGatewayRequestTests {
         #expect(fork.params["key"] == nil)
     }
 
+    @Test func `branch list and switch requests preserve routing identity`() {
+        let list = OpenClawChatGatewayRequests.listSessionBranches(
+            sessionKey: "agent:reviewer:telegram:group:1",
+            agentID: " reviewer ")
+        let switchBranch = OpenClawChatGatewayRequests.switchSessionBranch(
+            sessionKey: "global",
+            agentID: nil,
+            leafEntryId: " leaf-42 ")
+
+        #expect(list.method == "sessions.branches.list")
+        #expect(list.timeoutMs == 15000)
+        #expect(list.params["sessionKey"]?.value as? String == "agent:reviewer:telegram:group:1")
+        #expect(list.params["agentId"]?.value as? String == "reviewer")
+        #expect(list.params["key"] == nil)
+
+        #expect(switchBranch.method == "sessions.branches.switch")
+        #expect(switchBranch.timeoutMs == 15000)
+        #expect(switchBranch.params["sessionKey"]?.value as? String == "global")
+        #expect(switchBranch.params["agentId"] == nil)
+        #expect(switchBranch.params["leafEntryId"]?.value as? String == "leaf-42")
+        #expect(switchBranch.params["key"] == nil)
+    }
+
     @Test func `session group requests encode exact gateway contracts`() {
         let list = OpenClawChatGatewayRequests.sessionGroupsList()
         let put = OpenClawChatGatewayRequests.sessionGroupsPut(names: ["Work", "Personal"])
@@ -203,6 +264,19 @@ struct ChatGatewayRequestTests {
         #expect(fork.method == "sessions.create")
         #expect(fork.params["parentSessionKey"]?.value as? String == "agent:main:child")
         #expect(fork.params["fork"]?.value as? Bool == true)
+    }
+
+    @Test func `chat metadata request selects session agent before fallback`() {
+        let scoped = OpenClawChatGatewayRequests.chatMetadata(
+            sessionKey: "agent:reviewer:main",
+            fallbackAgentID: "fallback")
+        #expect(scoped.method == "chat.metadata")
+        #expect(scoped.params["agentId"]?.value as? String == "reviewer")
+
+        let global = OpenClawChatGatewayRequests.chatMetadata(
+            sessionKey: "global",
+            fallbackAgentID: "reviewer")
+        #expect(global.params["agentId"]?.value as? String == "reviewer")
     }
 
     @Test func `commands request selects session agent before fallback`() {
@@ -350,6 +424,25 @@ struct ChatGatewayPayloadCodecTests {
             agentId: "main",
             reason: "command-metadata"))
 
+        let swarmNote = EventFrame(
+            type: "event",
+            event: "sessions.changed",
+            payload: AnyCodable([
+                "sessionKey": AnyCodable("agent:main:main"),
+                "reason": AnyCodable("swarm-note"),
+                "swarmGroupId": AnyCodable("swarm:agent:main:main:run-1"),
+                "kind": AnyCodable("phase"),
+                "text": AnyCodable("Research"),
+            ]))
+        guard case let .sessionsChanged(note) = OpenClawChatGatewayPayloadCodec.event(from: swarmNote)
+        else {
+            Issue.record("expected swarm sessionsChanged")
+            return
+        }
+        #expect(note.swarmGroupId == "swarm:agent:main:main:run-1")
+        #expect(note.kind == "phase")
+        #expect(note.text == "Research")
+
         let chat = EventFrame(
             type: "event",
             event: "chat",
@@ -365,8 +458,126 @@ struct ChatGatewayPayloadCodecTests {
         #expect(payload.runId == "run-1")
         #expect(payload.sessionKey == "main")
         #expect(payload.state == "final")
+
+        let observer = EventFrame(
+            type: "event",
+            event: "session.observer",
+            payload: AnyCodable([
+                "sessionKey": AnyCodable("main"),
+                "runId": AnyCodable("run-1"),
+                "revision": AnyCodable(2),
+                "updatedAt": AnyCodable(300),
+                "headline": AnyCodable("Wrapping up"),
+                "health": AnyCodable("wrapping-up"),
+            ]))
+        guard case let .sessionObserver(digest) = OpenClawChatGatewayPayloadCodec.event(from: observer)
+        else {
+            Issue.record("expected sessionObserver")
+            return
+        }
+        #expect(digest.sessionkey == "main")
+        #expect(digest.runid == "run-1")
+        #expect(digest.revision == 2)
+
         #expect(OpenClawChatGatewayPayloadCodec.event(from: EventFrame(
             type: "event",
             event: "unknown")) == nil)
+    }
+
+    @Test func `session change decoding distinguishes absent fields from explicit clears`() {
+        func decode(_ fields: [String: AnyCodable]) throws -> OpenClawChatSessionsChangedEvent {
+            let frame = EventFrame(
+                type: "event",
+                event: "sessions.changed",
+                payload: AnyCodable(fields))
+            guard case let .sessionsChanged(change) = OpenClawChatGatewayPayloadCodec.event(from: frame)
+            else {
+                throw CancellationError()
+            }
+            return change
+        }
+
+        let partial = try? decode([
+            "sessionKey": AnyCodable("main"),
+            "reason": AnyCodable("message"),
+            "updatedAt": AnyCodable(200),
+        ])
+        #expect(partial?.agentStatusPresent == false)
+        #expect(partial?.observerDigestPresent == false)
+        #expect(partial?.statusPresent == false)
+        #expect(partial?.lastRunErrorPresent == false)
+
+        let cleared = try? decode([
+            "sessionKey": AnyCodable("main"),
+            "reason": AnyCodable("patch"),
+            "agentStatus": AnyCodable(NSNull()),
+            "observerDigest": AnyCodable(NSNull()),
+            "status": AnyCodable(NSNull()),
+            "lastRunError": AnyCodable(NSNull()),
+        ])
+        #expect(cleared?.agentStatusPresent == true)
+        #expect(cleared?.observerDigestPresent == true)
+        #expect(cleared?.statusPresent == true)
+        #expect(cleared?.lastRunErrorPresent == true)
+    }
+
+    @Test func `session change decodes nested fallback with outer null precedence and no reason`() throws {
+        let data = Data("""
+        {
+          "sessionKey": null,
+          "status": null,
+          "session": {
+            "key": "agent:main:child",
+            "agentId": "main",
+            "parentSessionKey": "agent:main:parent",
+            "status": "running",
+            "lastRunError": null,
+            "hasActiveRun": true,
+            "swarmGroupId": "swarm:agent:main:parent:turn-1"
+          }
+        }
+        """.utf8)
+
+        let event = try JSONDecoder().decode(OpenClawChatSessionsChangedEvent.self, from: data)
+        #expect(event.reason.isEmpty)
+        #expect(event.sessionKey == nil)
+        #expect(event.agentId == "main")
+        #expect(event.parentSessionKey == "agent:main:parent")
+        #expect(event.status == nil)
+        #expect(event.statusPresent)
+        #expect(event.lastRunError == nil)
+        #expect(event.lastRunErrorPresent)
+        #expect(event.hasActiveRun == true)
+        #expect(event.swarmGroupId == "swarm:agent:main:parent:turn-1")
+    }
+
+    @Test func `session change remains codable without exposing presence flags`() throws {
+        let event = OpenClawChatSessionsChangedEvent(
+            sessionKey: "agent:main:work",
+            agentId: "main",
+            reason: "run-progress",
+            updatedAt: 200,
+            lastReadAt: 100,
+            agentStatus: .init(note: "Reviewing", expiresAt: 500, attention: "hand"),
+            observerDigest: .init(
+                runId: "run-1",
+                revision: 2,
+                updatedAt: 200,
+                headline: "On track",
+                health: "on-track"),
+            status: "running",
+            lastRunError: "Previous warning",
+            hasActiveRun: true,
+            activeRunIds: ["run-1"],
+            startedAt: 50,
+            endedAt: nil)
+
+        let data = try JSONEncoder().encode(event)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["agentStatusPresent"] == nil)
+        #expect(object["observerDigestPresent"] == nil)
+        #expect(object["statusPresent"] == nil)
+        #expect(object["lastRunErrorPresent"] == nil)
+        #expect(try JSONDecoder().decode(OpenClawChatSessionsChangedEvent.self, from: data) == event)
     }
 }

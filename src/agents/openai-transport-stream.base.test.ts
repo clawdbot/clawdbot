@@ -1,3 +1,10 @@
+import {
+  buildTransportAwareSimpleStreamFn,
+  createBoundaryAwareStreamFnForModel,
+  createOpenClawTransportStreamFnForModel,
+  prepareTransportAwareSimpleModel,
+  resolveTransportAwareSimpleApi,
+} from "@openclaw/ai/transports";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
@@ -17,13 +24,6 @@ import {
 } from "./openai-transport-stream.test-harness.js";
 import { testing } from "./openai-transport-stream.test-support.js";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
-import {
-  buildTransportAwareSimpleStreamFn,
-  createBoundaryAwareStreamFnForModel,
-  createOpenClawTransportStreamFnForModel,
-  prepareTransportAwareSimpleModel,
-  resolveTransportAwareSimpleApi,
-} from "./provider-transport-stream.js";
 
 describe("openai transport stream", () => {
   it("keeps bounded redacted diagnostics UTF-16 well-formed", () => {
@@ -265,11 +265,17 @@ describe("openai transport stream", () => {
             summary: [{ type: "summary_text", text: "Need a tool." }],
           },
         },
+        { type: "response.completed", response: { id: "resp_123", status: "completed" } },
       ]),
       output,
       { push: vi.fn() },
       model,
-      { authProfileId: "openai:oauth", sessionId: "session-123" },
+      {
+        reasoningReplayMetadata: testing.buildOpenAIResponsesReasoningReplayMetadata(model, {
+          authProfileId: "openai:oauth",
+          sessionId: "session-123",
+        }),
+      },
     );
 
     const expectedReplayMetadata = testing.buildOpenAIResponsesReasoningReplayMetadata(model, {
@@ -873,7 +879,6 @@ describe("openai transport stream", () => {
         id: "call_123|fc_123",
         name: "session_status",
         arguments: { sessionKey: "current" },
-        partialJson: '{"sessionKey":"current"}',
       },
     ]);
   });
@@ -1176,7 +1181,7 @@ describe("openai transport stream", () => {
     });
     const transportAliasModel = {
       ...codexModel,
-      api: "openclaw-openai-responses-transport" as Api,
+      api: "openclaw-openai-chatgpt-responses-transport" as Api,
     } satisfies Model;
     const nonNativeChatGPTModel = makeResponsesModel({
       ...codexModel,
@@ -1352,9 +1357,11 @@ describe("openai transport stream", () => {
 
     const prepared = prepareTransportAwareSimpleModel(model);
 
-    expect(resolveTransportAwareSimpleApi(model.api)).toBe("openclaw-openai-responses-transport");
+    expect(resolveTransportAwareSimpleApi(model.api)).toBe(
+      "openclaw-openai-chatgpt-responses-transport",
+    );
     expectRecordFields(prepared, {
-      api: "openclaw-openai-responses-transport",
+      api: "openclaw-openai-chatgpt-responses-transport",
       provider: "openai",
       id: "codex-mini-latest",
     });

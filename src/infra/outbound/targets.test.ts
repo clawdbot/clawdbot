@@ -3,12 +3,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import { normalizeLegacySessionEntryDelivery } from "../state-migrations.legacy-session-store.js";
 import {
-  resolveHeartbeatDeliveryTarget,
-  resolveHeartbeatDeliveryTargetWithSessionRoute,
+  resolveHeartbeatDeliveryTarget as resolveCanonicalHeartbeatDeliveryTarget,
+  resolveHeartbeatDeliveryTargetWithSessionRoute as resolveCanonicalHeartbeatDeliveryTargetWithSessionRoute,
   resolveOutboundTarget,
-  resolveSessionDeliveryTarget,
+  resolveSessionDeliveryTarget as resolveCanonicalSessionDeliveryTarget,
 } from "./targets.js";
 import type { SessionDeliveryTarget } from "./targets.js";
 import {
@@ -26,6 +29,51 @@ const mocks = vi.hoisted(() => ({
   normalizeDeliverableOutboundChannel: vi.fn(),
   resolveOutboundChannelPlugin: vi.fn(),
 }));
+
+type LegacyDeliveryFixture = SessionEntry & {
+  route?: ChannelRouteRef;
+  deliveryContext?: DeliveryContext;
+  origin?: { provider?: string; accountId?: string; threadId?: string | number };
+  channel?: string;
+  lastChannel?: string;
+  lastTo?: string;
+  lastAccountId?: string;
+  lastThreadId?: string | number;
+};
+
+function resolveSessionDeliveryTarget(
+  params: Omit<Parameters<typeof resolveCanonicalSessionDeliveryTarget>[0], "entry"> & {
+    entry?: LegacyDeliveryFixture;
+  },
+) {
+  return resolveCanonicalSessionDeliveryTarget({
+    ...params,
+    entry: params.entry ? normalizeLegacySessionEntryDelivery(params.entry) : undefined,
+  });
+}
+
+function resolveHeartbeatDeliveryTarget(
+  params: Omit<Parameters<typeof resolveCanonicalHeartbeatDeliveryTarget>[0], "entry"> & {
+    entry?: LegacyDeliveryFixture;
+  },
+) {
+  return resolveCanonicalHeartbeatDeliveryTarget({
+    ...params,
+    entry: params.entry ? normalizeLegacySessionEntryDelivery(params.entry) : undefined,
+  });
+}
+
+async function resolveHeartbeatDeliveryTargetWithSessionRoute(
+  params: Omit<
+    Parameters<typeof resolveCanonicalHeartbeatDeliveryTargetWithSessionRoute>[0],
+    "entry"
+  > & { entry?: LegacyDeliveryFixture },
+) {
+  return await resolveCanonicalHeartbeatDeliveryTargetWithSessionRoute({
+    ...params,
+    entry: params.entry ? normalizeLegacySessionEntryDelivery(params.entry) : undefined,
+  });
+}
 
 vi.mock("./channel-resolution.js", () => ({
   normalizeDeliverableOutboundChannel: mocks.normalizeDeliverableOutboundChannel,
@@ -542,10 +590,10 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.reason).toBe("target-none");
   });
 
-  const resolveHeartbeatTarget = (entry: SessionEntry, directPolicy?: "allow" | "block") =>
+  const resolveHeartbeatTarget = (entry: LegacyDeliveryFixture, directPolicy?: "allow" | "block") =>
     resolveHeartbeatDeliveryTarget({
       cfg: {},
-      entry,
+      entry: normalizeLegacySessionEntryDelivery(entry),
       heartbeat: {
         target: "last",
         ...(directPolicy ? { directPolicy } : {}),
@@ -554,7 +602,7 @@ describe("resolveSessionDeliveryTarget", () => {
 
   const expectHeartbeatTarget = (params: {
     name: string;
-    entry: SessionEntry;
+    entry: LegacyDeliveryFixture;
     directPolicy?: "allow" | "block";
     expectedChannel: string;
     expectedTo?: string;
@@ -678,7 +726,7 @@ describe("resolveSessionDeliveryTarget", () => {
     },
   ] satisfies Array<{
     name: string;
-    entry: NonNullable<Parameters<typeof resolveHeartbeatDeliveryTarget>[0]["entry"]>;
+    entry: LegacyDeliveryFixture;
     directPolicy?: "allow" | "block";
     expectedChannel: string;
     expectedTo?: string;

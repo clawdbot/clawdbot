@@ -19,7 +19,11 @@ import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import { readSessionMessageCountAsync } from "../session-transcript-readers.js";
-import { loadSessionEntry, resolveDeletedAgentIdFromSessionKey } from "../session-utils.js";
+import {
+  loadSessionEntry,
+  loadSessionEntryReadOnly,
+  resolveDeletedAgentIdFromSessionKey,
+} from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import { chatHandlers } from "./chat.js";
 import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
@@ -98,7 +102,7 @@ async function createAgentMainSessionForSend(params: {
   }
 
   const createdKey = normalizeOptionalString(createResult.payload?.key) ?? params.canonicalKey;
-  const loaded = loadSessionEntry(createdKey);
+  const loaded = loadSessionEntryReadOnly(createdKey);
   if (!loaded.entry?.sessionId) {
     return {
       ok: false,

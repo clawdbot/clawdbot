@@ -1,7 +1,9 @@
+// @vitest-environment node
 // Control UI tests cover config behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot } from "../../api/types.ts";
+import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { createRuntimeConfigCapability, findAgentConfigEntryIndex } from "./index.ts";
 
 const CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS = 800;
@@ -17,7 +19,11 @@ function deferred<T>() {
 }
 
 function createGatewayHarness(client: GatewayBrowserClient) {
-  let snapshot = { client, connected: true, sessionKey: "main" };
+  let snapshot: {
+    client: GatewayBrowserClient;
+    phase: ApplicationGatewayPhase;
+    sessionKey: string;
+  } = { client, phase: "connected", sessionKey: "main" };
   const listeners = new Set<(next: typeof snapshot) => void>();
   return {
     gateway: {
@@ -30,7 +36,11 @@ function createGatewayHarness(client: GatewayBrowserClient) {
       },
     },
     publish: (connected: boolean) => {
-      snapshot = { client, connected, sessionKey: "main" };
+      snapshot = {
+        client,
+        phase: connected ? "connected" : "reconnecting",
+        sessionKey: "main",
+      };
       for (const listener of listeners) {
         listener(snapshot);
       }
@@ -1649,6 +1659,69 @@ describe("config form auto-save", () => {
     expect(submissions[1]?.baseHash).toBe("hash-2");
     expect(applySubmissions).toHaveLength(1);
     expect(applySubmissions[0]?.baseHash).toBe("hash-3");
+    runtimeConfig.dispose();
+  });
+
+  it("lets a reconnected explicit op bypass a dead prior-connection FIFO", async () => {
+    const deadSet = deferred<unknown>();
+    const methods: string[] = [];
+    const request = vi.fn((method: string) => {
+      methods.push(method);
+      if (method === "config.get") {
+        return Promise.resolve({ config: { count: 1 }, hash: "hash-1", valid: true, issues: [] });
+      }
+      if (method === "config.set") {
+        return deadSet.promise;
+      }
+      return Promise.resolve({});
+    });
+    const { runtimeConfig, publish } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    void runtimeConfig.save();
+    void runtimeConfig.apply();
+    await vi.waitFor(() => expect(methods).toContain("config.set"));
+    publish(false);
+    publish(true);
+
+    await expect(
+      runtimeConfig.patch({ raw: { ui: { prefs: { themeMode: "dark" } } }, note: "test" }),
+    ).resolves.toBe(true);
+    expect(methods).toContain("config.patch");
+    expect(methods).not.toContain("config.apply");
+    runtimeConfig.dispose();
+  });
+
+  it("does not dispatch an explicit op enqueued before reconnect", async () => {
+    const firstPatch = deferred<unknown>();
+    let patchCalls = 0;
+    let setCalls = 0;
+    const request = vi.fn((method: string) => {
+      if (method === "config.get") {
+        return Promise.resolve({ config: { count: 1 }, hash: "hash-1", valid: true, issues: [] });
+      }
+      if (method === "config.patch") {
+        patchCalls += 1;
+        return firstPatch.promise;
+      }
+      if (method === "config.set") {
+        setCalls += 1;
+      }
+      return Promise.resolve({});
+    });
+    const { runtimeConfig, publish } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    const stalePatch = runtimeConfig.patch({ raw: { ui: { prefs: {} } }, note: "test" });
+    const staleSet = runtimeConfig.save();
+    await vi.waitFor(() => expect(patchCalls).toBe(1));
+    publish(false);
+    publish(true);
+    firstPatch.resolve({});
+
+    await expect(stalePatch).resolves.toBe(false);
+    await expect(staleSet).resolves.toBe(false);
+    expect(setCalls).toBe(0);
     runtimeConfig.dispose();
   });
 

@@ -18,6 +18,10 @@ import {
 import { log } from "../logger.js";
 import { resolveCacheRetention } from "../prompt-cache-retention.js";
 import {
+  type ProviderPromptState,
+  wrapStreamFnWithProviderPromptState,
+} from "../provider-prompt-state.js";
+import {
   describeEmbeddedAgentStreamStrategy,
   resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentBaseStreamFn,
@@ -43,6 +47,10 @@ export async function prepareEmbeddedAttemptTransport(input: {
   sandboxSessionKey: string;
   sandbox?: SandboxContext | null;
   codeModeControlsEnabled: boolean;
+  providerPromptState: {
+    state: ProviderPromptState;
+    effectiveContextTokenBudget: number;
+  };
 }) {
   const attempt = input.attempt;
   const session = input.session;
@@ -116,6 +124,12 @@ export async function prepareEmbeddedAttemptTransport(input: {
     transportAuthAvailable: Boolean(transportApiKey?.trim()),
     authProfileId: resolveAttemptStreamAuthProfileId(attempt),
     authStorage: attempt.authStorage,
+  });
+  // Install inside provider/config wrappers so their full onPayload chain runs
+  // before admission hashes the request body that the built-in transport sends.
+  session.agent.streamFn = wrapStreamFnWithProviderPromptState({
+    streamFn: session.agent.streamFn,
+    ...input.providerPromptState,
   });
   const providerTextTransforms = resolveProviderTextTransforms({
     provider: attempt.provider,

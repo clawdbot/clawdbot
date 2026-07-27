@@ -1,4 +1,5 @@
 // Unified operator approval lookup and first-answer resolution handlers.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -57,10 +58,6 @@ type CreateApprovalHandlersParams = {
   pluginIosPushDelivery?: PluginApprovalIosPushDelivery;
   databaseOptions?: OpenClawStateDatabaseOptions;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function buildApprovalSnapshot(
   record: OperatorApprovalRecord,

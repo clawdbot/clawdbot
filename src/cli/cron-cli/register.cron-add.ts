@@ -12,6 +12,7 @@ import { defaultRuntime } from "../../runtime.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parseStrictPositiveIntOrUndefined } from "../program/helpers.js";
+import { listCronJobsFromGateway } from "./list-jobs.js";
 import { resolveCronCreateScheduleFromArgs } from "./schedule-options.js";
 import {
   getCronChannelOptions,
@@ -56,14 +57,14 @@ export function registerCronListCommand(cron: Command) {
       .option("--json", "Output JSON", false)
       .action(async (opts) => {
         try {
-          const listParams: Record<string, unknown> = {
+          const listParams: { includeDisabled: boolean; agentId?: string } = {
             includeDisabled: Boolean(opts.all),
           };
           const agentId = normalizeOptionalString(opts.agent);
           if (agentId) {
             listParams.agentId = sanitizeAgentId(agentId);
           }
-          const res = await callGatewayFromCli("cron.list", opts, listParams);
+          const res = await listCronJobsFromGateway(opts, listParams);
           if (opts.json) {
             printCronJson(enrichCronJsonWithStatus(res));
             return;
@@ -110,6 +111,12 @@ export function registerCronAddCommand(cron: Command) {
         "Fire once when this watched command exits (event trigger; survives turn teardown)",
       )
       .option("--on-exit-cwd <path>", "Working directory for the --on-exit watched command")
+      .option("--stream-command <json>", "Stream source argv as a JSON array of strings")
+      .option("--stream-cwd <path>", "Working directory for the stream source")
+      .option("--stream-mode <mode>", "Stream line selection mode (line|match)")
+      .option("--stream-match <regex>", "Regex source required for stream match mode")
+      .option("--stream-batch-ms <n>", "Quiet-window batch delay in milliseconds")
+      .option("--stream-max-batch-bytes <n>", "Maximum UTF-8 bytes per stream batch")
       .option(
         "--tz <iana>",
         "Timezone for cron expressions (IANA; cron default: Gateway host local timezone)",
@@ -166,7 +173,8 @@ export function registerCronAddCommand(cron: Command) {
               typeof opts.at === "string" ||
               typeof opts.cron === "string" ||
               typeof opts.every === "string" ||
-              typeof opts.onExit === "string";
+              typeof opts.onExit === "string" ||
+              typeof opts.streamCommand === "string";
             const positionalSchedule = hasScheduleFlag ? undefined : nameArg;
             const schedule = resolveCronCreateScheduleFromArgs({
               at: opts.at,
@@ -174,6 +182,12 @@ export function registerCronAddCommand(cron: Command) {
               every: opts.every,
               onExit: opts.onExit,
               onExitCwd: opts.onExitCwd,
+              streamCommand: opts.streamCommand,
+              streamCwd: opts.streamCwd,
+              streamMode: opts.streamMode,
+              streamMatch: opts.streamMatch,
+              streamBatchMs: opts.streamBatchMs,
+              streamMaxBatchBytes: opts.streamMaxBatchBytes,
               exact: opts.exact,
               positionalSchedule,
               stagger: opts.stagger,
@@ -454,9 +468,7 @@ export function registerCronAddCommand(cron: Command) {
               : undefined;
 
             if (
-              (resolvedPayload.kind === "agentTurn" ||
-                resolvedPayload.kind === "command" ||
-                resolvedPayload.kind === "script") &&
+              (resolvedPayload.kind === "agentTurn" || resolvedPayload.kind === "script") &&
               !agentId
             ) {
               defaultRuntime.error(

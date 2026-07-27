@@ -7,7 +7,7 @@ const hoisted = vi.hoisted(() => ({
   applyAgentCompactionSettingsFromConfig: vi.fn(),
   applySystemPromptToSession: vi.fn(),
   buildEmbeddedExtensionFactories: vi.fn(),
-  createAgentSession: vi.fn(),
+  createAgentSessionForEmbeddedRunner: vi.fn(),
   createEmbeddedAgentResourceLoader: vi.fn(),
   createPreparedEmbeddedAgentSettingsManager: vi.fn(),
   getGlobalHookRunner: vi.fn(),
@@ -36,8 +36,8 @@ vi.mock("../../agent-settings.js", () => ({
 vi.mock("../../agent-tool-definition-adapter.js", () => ({
   toToolDefinitions: hoisted.toToolDefinitions,
 }));
-vi.mock("../../sessions/index.js", () => ({
-  createAgentSession: hoisted.createAgentSession,
+vi.mock("../../sessions/sdk.js", () => ({
+  createAgentSessionForEmbeddedRunner: hoisted.createAgentSessionForEmbeddedRunner,
 }));
 vi.mock("../../sessions/tools/tool-definition-wrapper.js", () => ({
   wrapToolDefinition: hoisted.wrapToolDefinition,
@@ -129,7 +129,7 @@ function createInput(options?: { activationError?: Error }) {
     sessionToolAllowlist,
     ...clientToolRuntime,
   });
-  hoisted.createAgentSession.mockImplementation(async () => {
+  hoisted.createAgentSessionForEmbeddedRunner.mockImplementation(async () => {
     events.push("create-session");
     return { session: activeSession };
   });
@@ -202,8 +202,14 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     ]);
     expect(hoisted.applyAgentAutoCompactionGuard).toHaveBeenCalledTimes(2);
     expect(hoisted.applyAgentCompactionSettingsFromConfig).toHaveBeenCalledOnce();
-    expect(hoisted.createAgentSession).toHaveBeenCalledWith(
-      expect.objectContaining({ resourceLoader: fixture.resourceLoader }),
+    expect(hoisted.createAgentSessionForEmbeddedRunner).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resourceLoader: fixture.resourceLoader,
+      }),
+      { contextOverflowRecoveryOwner: "caller" },
+    );
+    expect(hoisted.createAgentSessionForEmbeddedRunner.mock.calls[0]?.[0]).not.toHaveProperty(
+      "contextOverflowRecoveryOwner",
     );
     expect(fixture.setActiveToolsByName).toHaveBeenCalledWith(fixture.sessionToolAllowlist);
     expect(result).toEqual(
@@ -218,6 +224,20 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     expect(result.hasDeliveredSourceReply()).toBe(false);
     fixture.onDeliveredSourceReply();
     expect(result.hasDeliveredSourceReply()).toBe(true);
+  });
+
+  it("leaves overflow recovery with the session when no model budget was resolved", async () => {
+    const fixture = createInput();
+    fixture.input.attempt = {
+      ...fixture.input.attempt,
+      contextTokenBudget: undefined,
+    };
+
+    await prepareEmbeddedAttemptAgentSession(fixture.input);
+
+    expect(hoisted.createAgentSessionForEmbeddedRunner).toHaveBeenCalledWith(expect.any(Object), {
+      contextOverflowRecoveryOwner: "session",
+    });
   });
 
   it("publishes session ownership before activation can fail", async () => {

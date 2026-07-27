@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 function readScript(path: string): string {
@@ -28,17 +28,22 @@ const canonicalMismatchMessage = (repo: string) =>
 
 function makeMismatchedWrapperRepo() {
   const root = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), "openclaw-pr-dev-wrapper-")));
+  const bin = join(root, "bin");
   const home = join(root, "home");
   const canonicalPath = join(root, "canonical");
   const linkedPath = join(root, "linked");
   const originPath = join(root, "origin.git");
+  mkdirSync(bin, { recursive: true });
   mkdirSync(home, { recursive: true });
+  writeFileSync(join(bin, "rg"), "#!/usr/bin/env sh\nexit 0\n");
+  chmodSync(join(bin, "rg"), 0o755);
 
   const fixtureEnv = {
     ...process.env,
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
     HOME: home,
+    PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
     XDG_CONFIG_HOME: join(home, ".config"),
   };
   const git = (cwd: string, args: string[]) => {
@@ -184,7 +189,7 @@ describe("scripts/pr wrappers", () => {
           env: fixture.env,
         },
       );
-      expect(cliResult.status, cliResult.stderr).toBe(0);
+      expect(cliResult.status, `${cliResult.stderr}\n${cliResult.stdout}`).toBe(0);
       expect(cliResult.stdout).toContain("local wrapper executed");
       expect(cliResult.stderr).toContain(
         `WARNING: running local scripts/pr revision ${fixture.localRevision} via dev-wrapper opt-in.`,
@@ -197,7 +202,7 @@ describe("scripts/pr wrappers", () => {
         encoding: "utf8",
         env: { ...fixture.env, OPENCLAW_PR_DEV_WRAPPER: "1" },
       });
-      expect(envResult.status, envResult.stderr).toBe(0);
+      expect(envResult.status, `${envResult.stderr}\n${envResult.stdout}`).toBe(0);
       expect(envResult.stdout).toContain("local wrapper executed");
       expect(envResult.stderr).toContain("subcommand 'ci-dispatch' is classified advisory.");
     } finally {

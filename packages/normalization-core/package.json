@@ -39,6 +39,11 @@
       "import": "./dist/number-coercion.mjs",
       "default": "./dist/number-coercion.mjs"
     },
+    "./phone-presentation": {
+      "types": "./dist/phone-presentation.d.mts",
+      "import": "./dist/phone-presentation.mjs",
+      "default": "./dist/phone-presentation.mjs"
+    },
     "./record-coerce": {
       "types": "./dist/record-coerce.d.mts",
       "import": "./dist/record-coerce.mjs",
@@ -66,6 +71,9 @@
     }
   },
   "scripts": {
-    "build": "tsdown src/index.ts src/agent-id.ts src/boolean-coercion.ts src/error-coercion.ts src/expect.ts src/number-coercion.ts src/record-coerce.ts src/result.ts src/string-coerce.ts src/string-normalization.ts src/utf16-slice.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "tsdown src/index.ts src/agent-id.ts src/boolean-coercion.ts src/error-coercion.ts src/expect.ts src/number-coercion.ts src/phone-presentation.ts src/record-coerce.ts src/result.ts src/string-coerce.ts src/string-normalization.ts src/utf16-slice.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+  },
+  "dependencies": {
+    "libphonenumber-js": "1.13.9"
   }
 }

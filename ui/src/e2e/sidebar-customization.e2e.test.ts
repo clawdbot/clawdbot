@@ -5,6 +5,8 @@ import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionPath,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -121,6 +123,109 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
     await server?.close();
   });
 
+  it.each([
+    { mode: "standalone", webChrome: false },
+    { mode: "native web chrome", webChrome: true },
+  ])("aligns the settings search with navigation rows in $mode", async ({ mode, webChrome }) => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 620, width: 1440 },
+    });
+    const page = await context.newPage();
+    if (webChrome) {
+      await page.addInitScript(() => {
+        const nativeWindow = window as Window & {
+          __OPENCLAW_NATIVE_WEB_CHROME__?: boolean;
+          __OPENCLAW_NATIVE_HISTORY__?: { canGoBack: boolean; canGoForward: boolean };
+        };
+        nativeWindow["__OPENCLAW_NATIVE_WEB_CHROME__"] = true;
+        nativeWindow["__OPENCLAW_NATIVE_HISTORY__"] = {
+          canGoBack: false,
+          canGoForward: false,
+        };
+        const stamp = () =>
+          document.documentElement.classList.add(
+            "openclaw-native-macos",
+            "openclaw-native-web-chrome",
+          );
+        if (document.documentElement) {
+          stamp();
+        } else {
+          document.addEventListener("DOMContentLoaded", stamp);
+        }
+      });
+    }
+    await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}settings/general`);
+      const settingsSidebar = page.locator(".settings-sidebar");
+      const settingsSearchShell = settingsSidebar.locator(".settings-sidebar__search");
+      const settingsSearchInput = settingsSidebar.locator(".settings-sidebar__search-input");
+      const settingsNav = settingsSidebar.locator(".settings-sidebar__nav");
+      const firstSettingsLink = settingsSidebar.locator(".settings-sidebar__item").first();
+      await settingsSidebar.waitFor();
+      await expect
+        .poll(() =>
+          page
+            .locator("html")
+            .evaluate((element) => element.classList.contains("openclaw-native-web-chrome")),
+        )
+        .toBe(webChrome);
+      await captureSettingsSidebarProof(
+        settingsSidebar,
+        `settings-search-alignment-${mode.replaceAll(" ", "-")}.png`,
+      );
+      await expect
+        .poll(async () => {
+          const [searchBox, firstLinkBox] = await Promise.all([
+            settingsSearchShell.boundingBox(),
+            firstSettingsLink.boundingBox(),
+          ]);
+          if (!searchBox || !firstLinkBox) {
+            return null;
+          }
+          return Math.round(searchBox.x - firstLinkBox.x);
+        })
+        .toBe(0);
+      await expect
+        .poll(async () => {
+          const [searchBox, navBox] = await Promise.all([
+            settingsSearchInput.boundingBox(),
+            settingsNav.boundingBox(),
+          ]);
+          if (!searchBox || !navBox) {
+            return null;
+          }
+          return Math.round(navBox.y - (searchBox.y + searchBox.height));
+        })
+        .toBe(8);
+      await settingsNav.evaluate((element) => {
+        element.scrollTop = Math.min(48, element.scrollHeight - element.clientHeight);
+        element.dispatchEvent(new Event("scroll"));
+      });
+      await expect
+        .poll(() =>
+          settingsSearchShell.evaluate((element) =>
+            element.classList.contains("settings-sidebar__search--scrolled"),
+          ),
+        )
+        .toBe(true);
+      await expect
+        .poll(() =>
+          settingsSearchShell.evaluate((element) => getComputedStyle(element, "::after").opacity),
+        )
+        .toBe("1");
+      await captureSettingsSidebarProof(
+        settingsSidebar,
+        `settings-search-scrolled-${mode.replaceAll(" ", "-")}.png`,
+      );
+    } finally {
+      await context.close();
+    }
+  });
+
   it("pins routes, restores defaults, and persists navigation state across reloads", async () => {
     if (captureUiProofEnabled) {
       await mkdir(uiProofArtifactDir, { recursive: true });
@@ -172,9 +277,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       const pinnedItems = sidebar.locator(
         '.sidebar-zone-entry[data-sidebar-entry^="route:"] > .nav-item',
       );
-      await expect
-        .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["OpenClaw", "Usage", "Automations", "Plugins"]);
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Automations", "Plugins"]);
       await expect.poll(() => sidebar.locator(".sidebar-brand").count()).toBe(1);
       // Desktop renders no topbar row: the sidebar owns navigation.
       await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
@@ -218,17 +321,17 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await expect.poll(() => roundedWidth(shellNav)).toBe(400);
       // Settings takes over the whole app: the regular sidebar yields to the
       // settings sidebar until "Back to app" (or Escape) exits. Settings opens
-      // through the footer agent chip's utility menu.
-      const agentChip = sidebar.getByRole("button", { name: /Agent menu/ });
-      const openSettingsFromChip = async () => {
-        await agentChip.click();
+      // through the footer identity card's account utility menu.
+      const identityCard = sidebar.locator(".sidebar-identity-card");
+      const openSettingsFromIdentity = async () => {
+        await identityCard.click();
         await sidebar
-          .locator("wa-dropdown.sidebar-agent-menu")
+          .locator("wa-dropdown.sidebar-identity-menu")
           .getByRole("menuitem", { exact: true, name: "Settings" })
           .click();
       };
-      await expect.poll(() => agentChip.isVisible()).toBe(true);
-      await openSettingsFromChip();
+      await expect.poll(() => identityCard.isVisible()).toBe(true);
+      await openSettingsFromIdentity();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/general");
       const settingsSidebar = page.locator(".settings-sidebar");
       await expect.poll(() => settingsSidebar.isVisible()).toBe(true);
@@ -312,7 +415,9 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await expect.poll(() => browserResult.isVisible()).toBe(true);
       await browserResult.click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/infrastructure");
-      await expect.poll(() => new URL(page.url()).search).toBe("?section=browser");
+      // Browser is an advanced-tier section (#112538): search navigation
+      // carries the advanced=1 reveal intent.
+      await expect.poll(() => new URL(page.url()).search).toBe("?section=browser&advanced=1");
       await expect.poll(() => new URL(page.url()).hash).toBe("#config-section-browser");
       await expect.poll(() => page.locator("#config-section-browser").isVisible()).toBe(true);
       await captureSettingsSidebarProof(settingsSidebar, "01c-settings-search-deep-link.png");
@@ -345,7 +450,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await page.keyboard.press("Escape");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/chat");
       await expect.poll(() => sidebar.isVisible()).toBe(true);
-      await openSettingsFromChip();
+      await openSettingsFromIdentity();
       await expect.poll(() => settingsSidebar.isVisible()).toBe(true);
       await expect.poll(() => settingsSearch.inputValue()).toBe("");
       await captureSettingsSidebarProof(settingsSidebar, "01g-settings-search-reset.png");
@@ -355,7 +460,10 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .not.toContain("shell--onboarding");
-      await expect.poll(() => sidebar.isVisible()).toBe(true);
+      // Ask OpenClaw is a settings-takeover page (#111686): the settings
+      // sidebar owns navigation there, not the app sidebar.
+      await expect.poll(() => settingsSidebar.isVisible()).toBe(true);
+      await expect.poll(() => sidebar.isVisible()).toBe(false);
       await expect
         .poll(() => page.getByRole("button", { name: "Exit setup" }).isVisible())
         .toBe(false);
@@ -367,8 +475,13 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("false");
       await moreButton.click();
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("true");
+      // Enabled plugin tabs render directly in the sidebar body (#111995),
+      // not inside the More menu.
       await expect
         .poll(() => trimmedTextContents(moreMenu.getByRole("menuitem")))
+        .not.toContain("Logbook");
+      await expect
+        .poll(() => trimmedTextContents(sidebar.locator(".nav-item__text")))
         .toContain("Logbook");
       await expect.poll(() => trimmedTextContents(pinnedItems)).not.toContain("Logbook");
       // Workboard ships disabled, so it stays hidden from navigation entirely.
@@ -387,54 +500,47 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
         .not.toContain("Workboard");
       const tasksItem = menu.getByRole("menuitemcheckbox", { name: "Tasks" });
       await expect.poll(() => tasksItem.getAttribute("aria-checked")).toBe("false");
-      const custodianItem = menu.getByRole("menuitemcheckbox", { name: "OpenClaw" });
-      await expect.poll(() => custodianItem.getAttribute("aria-checked")).toBe("true");
+      // Ask OpenClaw moved to Settings (#111686): custodian is not a sidebar
+      // nav route anymore, so the pin editor does not offer it.
       await expect
-        .poll(() => custodianItem.evaluate((element) => element === document.activeElement))
-        .toBe(true);
+        .poll(() => menu.getByRole("menuitemcheckbox", { name: "OpenClaw" }).count())
+        .toBe(0);
       await captureUiProof(page, "02-customize-menu.png");
 
-      await custodianItem.click();
-      await expect
-        .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Usage", "Automations", "Plugins"]);
       await tasksItem.click();
       await expect
         .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Usage", "Automations", "Plugins", "Tasks"]);
+        .toEqual(["Automations", "Plugins", "Tasks"]);
       await page.reload();
       await expect
         .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Usage", "Automations", "Plugins", "Tasks"]);
+        .toEqual(["Automations", "Plugins", "Tasks"]);
       // The More menu is transient: closed after reload, unpinned routes inside.
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("false");
       await moreButton.click();
       await expect
         .poll(() => trimmedTextContents(moreMenu.getByRole("menuitem")))
-        .toContain("OpenClaw");
+        .not.toContain("Tasks");
       await captureUiProof(page, "03-persisted-customization.png");
 
       await moreMenu.getByRole("menuitem", { name: "Edit pinned items" }).click();
       await menu.getByRole("menuitem", { name: "Reset pinned items" }).click();
-      await expect
-        .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["OpenClaw", "Usage", "Automations", "Plugins"]);
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Automations", "Plugins"]);
 
-      // The sidebar search field is the command palette entry point.
-      const searchButton = sidebar.locator(".sidebar-search");
+      // The shell chrome search button is the command palette entry point.
+      const searchButton = page.locator(".shell-chrome-controls__search");
       await searchButton.click();
       const paletteInput = page.locator("#cmd-palette-input");
       await expect.poll(() => paletteInput.isVisible()).toBe(true);
       await page.keyboard.press("Escape");
       await expect.poll(() => paletteInput.isVisible()).toBe(false);
 
-      // The sidebar toggle lives in the sidebar brand row on desktop.
-      // Collapsing hides the sidebar entirely; a floating expand control and
-      // Cmd+B bring it back (there is no icon rail).
+      // The shell chrome toggle stays visible while the desktop sidebar
+      // collapses and expands (there is no icon rail).
       const collapseButton = page.getByRole("button", { name: "Collapse sidebar" });
       await expect
         .poll(() =>
-          collapseButton.evaluate((element) => Boolean(element.closest(".sidebar-brand"))),
+          collapseButton.evaluate((element) => Boolean(element.closest(".shell-chrome-controls"))),
         )
         .toBe(true);
       await collapseButton.click();
@@ -450,12 +556,14 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
         .toBe("0px");
       await expect.poll(() => sidebarResizer.count()).toBe(0);
       await expect.poll(() => sidebar.isVisible()).toBe(false);
-      const navExpand = page.locator(".shell-nav-expand");
+      const navExpand = page.locator(".shell-chrome-controls__nav-toggle");
       await expect.poll(() => navExpand.isVisible()).toBe(true);
       await page.reload();
-      await expect.poll(() => page.locator(".shell-nav-expand").isVisible()).toBe(true);
+      await expect
+        .poll(() => page.locator(".shell-chrome-controls__nav-toggle").isVisible())
+        .toBe(true);
       await captureUiProof(page, "04-persisted-collapsed.png");
-      await page.locator(".shell-nav-expand").click();
+      await page.locator(".shell-chrome-controls__nav-toggle").click();
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .not.toContain("shell--nav-collapsed");
@@ -493,7 +601,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       // Widening with the drawer open must not leave its stale state blocking
       // the desktop collapse control.
       await page.setViewportSize({ height: 900, width: 1440 });
-      await sidebar.getByRole("button", { name: "Collapse sidebar" }).click();
+      await page.locator(".shell-chrome-controls__nav-toggle").click();
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .toContain("shell--nav-collapsed");
@@ -568,7 +676,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
     await installMockGateway(page);
 
     try {
-      await page.goto(`${server.baseUrl}chat?session=${encodeURIComponent("agent:main:work")}`);
+      await page.goto(controlUiSessionUrl(server.baseUrl, "agent:main:work"));
       await page.locator("openclaw-app-sidebar .sidebar-brand__new-thread").click();
 
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
@@ -804,7 +912,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
     try {
       await page.goto(`${server.baseUrl}chat`);
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.getByRole("button", { name: /Agent menu/ }).click();
+      await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       const menu = sidebar.locator("wa-dropdown.sidebar-agent-menu");
       const mainSwitch = menu.getByRole("menuitemradio", { name: "Main" });
       const researchSwitch = menu.getByRole("menuitemradio", { name: "Research" });
@@ -825,8 +933,9 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
         .toBe(true);
       await captureUiProof(page, "agent-menu-without-new-session-rows.png");
       await page.keyboard.press("Enter");
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/chat");
-      expect(new URL(page.url()).searchParams.get("session")).toBe("agent:research:main");
+      await expect
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath("agent:research:main"));
     } finally {
       await context.close();
     }

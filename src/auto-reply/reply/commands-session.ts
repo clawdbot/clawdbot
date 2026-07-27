@@ -313,9 +313,11 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
   const requested = rawArgs ? normalizeUsageDisplay(rawArgs) : undefined;
   if (normalizeLowercaseStringOrEmpty(rawArgs).startsWith("cost")) {
     const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-    const sessionAgentId = params.sessionKey
-      ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
-      : params.agentId;
+    const sessionAgentId = resolveSessionAgentId({
+      sessionKey: params.sessionKey,
+      config: params.cfg,
+      agentId: params.agentId,
+    });
     const sessionSummary = await loadSessionCostSummary({
       sessionId: targetSessionEntry?.sessionId,
       sessionEntry: targetSessionEntry,
@@ -323,7 +325,10 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
       config: params.cfg,
       agentId: sessionAgentId,
     });
-    const summary = await loadCostUsageSummary({ config: params.cfg });
+    const summary = await loadCostUsageSummary({
+      config: params.cfg,
+      agentId: sessionAgentId,
+    });
 
     const sessionCost = formatUsd(sessionSummary?.totalCost);
     const sessionTokens = sessionSummary?.totalTokens
