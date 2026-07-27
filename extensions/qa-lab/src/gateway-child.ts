@@ -68,6 +68,7 @@ import {
   stageQaLiveAnthropicSetupToken,
 } from "./providers/live-frontier/auth.js";
 import { stageQaMockAuthProfiles } from "./providers/shared/mock-auth.js";
+import { listMockCodexModelInfos } from "./providers/shared/mock-model-config.js";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
 import { buildQaGatewayConfig, type QaThinkingLevel } from "./qa-gateway-config.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
@@ -432,10 +433,33 @@ export function buildQaRuntimeEnv(params: {
   return scrubQaGatewayChildSecretEnv(normalizedEnv);
 }
 
+async function stageQaCodexMockModelCatalog(params: {
+  tempRoot: string;
+  forcedRuntime?: RuntimeId;
+  providerMode: QaProviderMode;
+  primaryModel?: string;
+  alternateModel?: string;
+}): Promise<string | undefined> {
+  if (params.forcedRuntime !== "codex" || params.providerMode !== "mock-openai") {
+    return undefined;
+  }
+  const modelCatalogPath = path.join(params.tempRoot, "codex-model-catalog.json");
+  const selectedModelRefs = [params.primaryModel, params.alternateModel].filter(
+    (model): model is string => typeof model === "string" && model.length > 0,
+  );
+  await fs.writeFile(
+    modelCatalogPath,
+    `${JSON.stringify({ models: listMockCodexModelInfos(selectedModelRefs) }, null, 2)}\n`,
+    { encoding: "utf8", mode: 0o600 },
+  );
+  return modelCatalogPath;
+}
+
 function buildQaForcedRuntimeEnvPatch(params: {
   forcedRuntime?: RuntimeId;
   providerMode: QaProviderMode;
   providerBaseUrl?: string;
+  codexModelCatalogPath?: string;
 }): NodeJS.ProcessEnv | undefined {
   if (!params.forcedRuntime) {
     return undefined;
@@ -451,7 +475,11 @@ function buildQaForcedRuntimeEnvPatch(params: {
   if (!providerBaseUrl) {
     throw new Error("forced Codex mock QA requires the managed mock provider URL");
   }
-  patch.OPENCLAW_CODEX_APP_SERVER_ARGS = `app-server -c openai_base_url=${providerBaseUrl} --listen stdio://`;
+  if (!params.codexModelCatalogPath) {
+    throw new Error("forced Codex mock QA requires the staged native model catalog");
+  }
+  const modelCatalogOverride = JSON.stringify(`model_catalog_json=${params.codexModelCatalogPath}`);
+  patch.OPENCLAW_CODEX_APP_SERVER_ARGS = `app-server -c openai_base_url=${providerBaseUrl} -c ${modelCatalogOverride} --listen stdio://`;
   patch.OPENAI_API_KEY = QA_MOCK_OPENAI_API_KEY;
   patch.CODEX_API_KEY = QA_MOCK_OPENAI_API_KEY;
   return patch;
@@ -593,6 +621,7 @@ async function waitForQaGatewayRestartBoundary(params: {
 
 export const testing = {
   assertQaArtifactDirWithinRepo,
+  buildQaForcedRuntimeEnvPatch,
   buildQaRuntimeEnv,
   cleanupQaGatewayTempRoots,
   fetchLocalGatewayHealth,
@@ -609,6 +638,7 @@ export const testing = {
   stageQaLiveApiKeyProfiles,
   stageQaLiveAnthropicSetupToken,
   stageQaMockAuthProfiles,
+  stageQaCodexMockModelCatalog,
   resolveQaLiveCliAuthEnv,
   waitForQaGatewayRestartBoundary,
   resolveQaOwnerPluginIdsForProviderIds,
@@ -1047,6 +1077,13 @@ export async function startQaGatewayChild(params: {
     fs.mkdir(xdgCacheHome, { recursive: true }),
   ]);
   const providerMode = resolveQaGatewayChildProviderMode(params.providerMode);
+  const codexModelCatalogPath = await stageQaCodexMockModelCatalog({
+    tempRoot,
+    forcedRuntime: params.forcedRuntime,
+    providerMode,
+    primaryModel: params.primaryModel,
+    alternateModel: params.alternateModel,
+  });
   const resolvedProvider = getQaProvider(providerMode);
   const liveProviderIds = resolvedProvider.usesModelProviderPlugins
     ? [params.primaryModel, params.alternateModel]
@@ -1309,6 +1346,7 @@ export async function startQaGatewayChild(params: {
               forcedRuntime: params.forcedRuntime,
               providerMode,
               providerBaseUrl: params.providerBaseUrl,
+              codexModelCatalogPath,
             }),
           },
           forwardHostHomeForClaudeCli: liveProviderIds.includes("claude-cli"),

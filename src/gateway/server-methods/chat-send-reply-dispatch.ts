@@ -1,7 +1,7 @@
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
-import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import type { ReplyDispatcherOptions } from "../../auto-reply/reply/reply-dispatcher.js";
 import {
   appendLocalMediaParentRoots,
   getAgentScopedMediaLocalRoots,
@@ -20,6 +20,7 @@ import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
   buildAssistantDisplayContentFromReplyPayloads,
+  combineNonStreamingReplyParts,
   extractAssistantDisplayTextFromContent,
   hasAssistantDisplayMediaContent,
   isMediaBearingPayload,
@@ -65,10 +66,8 @@ export function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
       } else if (payload.replyToCurrent || parsedText?.replyToCurrent) {
         lines.push("[[reply_to_current]]");
       }
-      const text = payload.text
-        ? stripInlineDirectiveTagsForDelivery(payload.text).text.trim()
-        : "";
-      if (text && !isSuppressedControlReplyText(text)) {
+      const text = payload.text ? stripInlineDirectiveTagsForDelivery(payload.text).text : "";
+      if (text.trim() && !isSuppressedControlReplyText(text)) {
         lines.push(text);
       }
       for (const mediaUrl of parts.mediaUrls) {
@@ -86,13 +85,13 @@ export function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
       ) {
         lines.push("[[audio_as_voice]]");
       }
-      return lines.join("\n").trim();
+      return lines.join("\n");
     })
     .filter(Boolean);
-  return chunks.join("\n\n").trim();
+  return combineNonStreamingReplyParts(chunks);
 }
 
-/** Build the live reply dispatcher and capture payloads for post-dispatch projection. */
+/** Build delivery options and capture state for the core-owned webchat dispatcher. */
 export function createChatSendReplyDispatch(params: {
   accountId: string | undefined;
   isAgentRunStarted: () => boolean;
@@ -240,7 +239,7 @@ export function createChatSendReplyDispatch(params: {
       `webchat transcript append failed for media reply: ${appended.error ?? "unknown error"}`,
     );
   };
-  const dispatcher = createReplyDispatcher({
+  const dispatcherOptions: ReplyDispatcherOptions = {
     ...replyPipeline,
     onError: (err) => {
       logGateway.warn(`webchat dispatch failed: ${formatForLog(err)}`);
@@ -270,10 +269,10 @@ export function createChatSendReplyDispatch(params: {
           break;
       }
     },
-  });
+  };
   return {
     deliveredReplies,
-    dispatcher,
+    dispatcherOptions,
     hasAppendedWebchatAgentMedia: () => appendedWebchatAgentMedia,
     onModelSelected,
   };

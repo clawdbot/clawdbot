@@ -93,6 +93,9 @@ importers:
       '@silvia-odwyer/photon-node':
         specifier: 0.3.4
         version: 0.3.4
+      acorn:
+        specifier: 8.17.0
+        version: 8.17.0
       chalk:
         specifier: 5.6.2
         version: 5.6.2
@@ -289,9 +292,6 @@ importers:
       '@vitest/coverage-v8':
         specifier: 4.1.10
         version: 4.1.10(@vitest/browser@4.1.10)(vitest@4.1.10)
-      acorn:
-        specifier: 8.17.0
-        version: 8.17.0
       esbuild:
         specifier: 0.28.1
         version: 0.28.1
@@ -476,6 +476,12 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/baseten:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/beam:
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1589,6 +1595,9 @@ importers:
       semver:
         specifier: 7.8.5
         version: 7.8.5
+      ws:
+        specifier: 8.21.1
+        version: 8.21.1
       yaml:
         specifier: 2.9.0
         version: 2.9.0
@@ -2197,6 +2206,15 @@ importers:
       markdown-it-cjk-friendly:
         specifier: 2.0.2
         version: 2.0.2(@types/markdown-it@14.1.2)(markdown-it@14.3.0)
+      mdast-util-from-markdown:
+        specifier: 2.0.3
+        version: 2.0.3(supports-color@10.2.2)
+      mdast-util-gfm-table:
+        specifier: 2.0.0
+        version: 2.0.0(supports-color@10.2.2)
+      micromark-extension-gfm-table:
+        specifier: 2.1.1
+        version: 2.1.1
       yaml:
         specifier: 2.9.0
         version: 2.9.0

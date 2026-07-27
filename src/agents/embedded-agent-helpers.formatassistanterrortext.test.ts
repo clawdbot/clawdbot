@@ -146,7 +146,7 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError(
       '{"type":"error","error":{"message":"SECRET\\nCANARY","type":"invalid_request_error"}}',
     );
-    expect(formatAssistantErrorText(msg)).toBe("LLM error invalid_request_error: SECRET\nCANARY");
+    expect(formatAssistantErrorText(msg)).toBe("LLM request rejected: SECRET\nCANARY");
     expect(formatUserFacingAssistantErrorText(msg)).toBe(
       "LLM request failed: provider rejected the request schema or tool payload.",
     );

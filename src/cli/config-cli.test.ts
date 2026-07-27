@@ -111,6 +111,7 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
 
 const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 const mockLog = defaultRuntime.log;
+const mockWriteStdout = defaultRuntime.writeStdout;
 const mockError = defaultRuntime.error;
 const mockExit = defaultRuntime.exit;
 
@@ -1191,7 +1192,7 @@ describe("config cli", () => {
 
       await runConfigCommand(["config", "get", "gateway.auth.token"]);
 
-      expect(mockLog).toHaveBeenCalledWith("__OPENCLAW_REDACTED__");
+      expect(mockWriteStdout).toHaveBeenCalledWith("__OPENCLAW_REDACTED__\n");
     });
 
     it("prints materialized subagent archive default", async () => {
@@ -1211,7 +1212,7 @@ describe("config cli", () => {
 
       await runConfigCommand(["config", "get", "agents.defaults.subagents.archiveAfterMinutes"]);
 
-      expect(mockLog).toHaveBeenCalledWith("60");
+      expect(mockWriteStdout).toHaveBeenCalledWith("60\n");
     });
 
     it("outputs JSON error to stdout when path is not found and --json is set", async () => {
@@ -3575,7 +3576,7 @@ describe("config cli", () => {
 
       await runConfigCommand(["config", "get", aliasPath]);
 
-      expect(mockLog).toHaveBeenCalledWith("gpt");
+      expect(mockWriteStdout).toHaveBeenCalledWith("gpt\n");
       mockLog.mockClear();
       setSnapshot(resolved, runtimeMerged);
 

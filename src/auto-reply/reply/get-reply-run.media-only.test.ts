@@ -12,9 +12,26 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { runReplyAgent } from "./agent-runner.runtime.js";
+import { applySessionHints } from "./body.js";
+import {
+  loadAgentRunnerRuntime,
+  loadEmbeddedAgentRuntime,
+  loadSessionUpdatesRuntime,
+} from "./get-reply-run-helpers.js";
+import { runPreparedReply } from "./get-reply-run.js";
+import { buildDirectChatContext, buildGroupChatContext, buildGroupIntro } from "./groups.js";
 import { finalizeInboundContextForSdk } from "./inbound-context.js";
-import { createReplyOperation } from "./reply-run-registry.js";
+import {
+  buildInboundUserContextPrefix,
+  resolveInboundUserContextPromptJoiner,
+} from "./inbound-meta.js";
+import { createReplyOperation, getActiveReplyRunCount } from "./reply-run-registry.js";
+import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
+import { routeReply } from "./route-reply.runtime.js";
+import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
+import { resolveTypingMode } from "./typing-mode.js";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
   resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
@@ -156,20 +173,6 @@ vi.mock("./session-reset-prompt.js", () => ({
 vi.mock("./typing-mode.js", () => ({
   resolveTypingMode: vi.fn().mockReturnValue("off"),
 }));
-
-let runPreparedReply: typeof import("./get-reply-run.js").runPreparedReply;
-let runReplyAgent: typeof import("./agent-runner.runtime.js").runReplyAgent;
-let routeReply: typeof import("./route-reply.runtime.js").routeReply;
-let drainFormattedSystemEvents: typeof import("./session-system-events.js").drainFormattedSystemEvents;
-let applySessionHints: typeof import("./body.js").applySessionHints;
-let resolveTypingMode: typeof import("./typing-mode.js").resolveTypingMode;
-let buildDirectChatContext: typeof import("./groups.js").buildDirectChatContext;
-let buildGroupIntro: typeof import("./groups.js").buildGroupIntro;
-let buildGroupChatContext: typeof import("./groups.js").buildGroupChatContext;
-let buildInboundUserContextPrefix: typeof import("./inbound-meta.js").buildInboundUserContextPrefix;
-let resolveInboundUserContextPromptJoiner: typeof import("./inbound-meta.js").resolveInboundUserContextPromptJoiner;
-let getActiveReplyRunCount: typeof import("./reply-run-registry.js").getActiveReplyRunCount;
-let replyRunTesting: typeof import("./reply-run-registry.test-support.js").testing;
 
 function createGatewayDrainingError(): Error {
   const error = new Error("Gateway is draining for restart; new tasks are not accepted");
@@ -344,21 +347,13 @@ describe("runPreparedReply media-only handling", () => {
   const cleanupPaths: string[] = [];
 
   beforeAll(async () => {
-    ({ runPreparedReply } = await import("./get-reply-run.js"));
-    ({ runReplyAgent } = await import("./agent-runner.runtime.js"));
-    ({ routeReply } = await import("./route-reply.runtime.js"));
-    ({ drainFormattedSystemEvents } = await import("./session-system-events.js"));
-    ({ applySessionHints } = await import("./body.js"));
-    ({ resolveTypingMode } = await import("./typing-mode.js"));
-    ({ buildDirectChatContext, buildGroupIntro, buildGroupChatContext } =
-      await import("./groups.js"));
-    ({ buildInboundUserContextPrefix, resolveInboundUserContextPromptJoiner } =
-      await import("./inbound-meta.js"));
-    ({ getActiveReplyRunCount } = await import("./reply-run-registry.js"));
-    ({ testing: replyRunTesting } = await import("./reply-run-registry.test-support.js"));
-
-    // Load deferred reply dependencies before per-case timing starts.
-    await runPreparedReply(baseParams());
+    // Preload the runtime seams directly so test setup does not need a synthetic
+    // reply turn with registry and session side effects.
+    await Promise.all([
+      loadEmbeddedAgentRuntime(),
+      loadAgentRunnerRuntime(),
+      loadSessionUpdatesRuntime(),
+    ]);
   });
 
   beforeEach(async () => {

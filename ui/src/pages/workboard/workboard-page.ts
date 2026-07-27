@@ -377,13 +377,19 @@ class WorkboardPage extends OpenClawLightDomElement {
         pluginEnablementError:
           !config.configSnapshot && !config.configLoading ? config.lastError : null,
         agentsList: context.agents.state.agentsList,
+        defaultAgentId: gateway.assistantAgentId,
         sessions: context.sessions.state.result?.sessions ?? [],
         scopeAgentId: context.agentSelection.state.scopeId,
         showAgentFilter: context.agentSelection.state.scopeId === null,
         onOpenSession: (sessionKey) => {
           const face = resolveSessionPreferredFaceForKey(context, sessionKey);
           context.navigate(face, {
-            ...sessionNavigationTarget({ context, face, sessionKey }).options,
+            ...sessionNavigationTarget({
+              context,
+              face,
+              sessionKey,
+              preferenceDerivedFace: true,
+            }).options,
             hash: "",
           });
         },

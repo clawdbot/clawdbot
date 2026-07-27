@@ -1010,6 +1010,12 @@ describe("memory cli", () => {
 
   it("repairs invalid recall metadata and stale locks with status --fix", async () => {
     await withTempWorkspace(async (workspaceDir) => {
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "2026-04-03.md"),
+        "QMD router cache note\n",
+        "utf-8",
+      );
       await shortTermTesting.writeRawRecallStore(workspaceDir, {
         version: 1,
         updatedAt: "2026-04-04T00:00:00.000Z",

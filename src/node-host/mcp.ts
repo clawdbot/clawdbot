@@ -101,7 +101,7 @@ type ListedNodeMcpTool = {
 };
 
 function defaultWarn(message: string): void {
-  process.stderr.write(`${message}\n`);
+  console.warn(message);
 }
 
 function formatMcpError(error: unknown): string {

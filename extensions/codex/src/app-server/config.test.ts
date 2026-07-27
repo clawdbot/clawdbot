@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   codexAppServerStartOptionsKey,
+  codexSandboxPolicyForTurn,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexAppServerStartOptionsForAgent,
@@ -546,6 +547,91 @@ describe("Codex app-server config", () => {
       command: "codex",
       commandSource: "managed",
       homeScope: "agent",
+    });
+  });
+
+  it("confines only explicitly forced private-QA Codex runtime to workspace writes", () => {
+    const privateQaCodexEnv = {
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_QA_FORCE_RUNTIME: "codex",
+    };
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          mode: "yolo",
+          approvalPolicy: "never",
+          sandbox: "danger-full-access",
+        },
+      },
+      env: privateQaCodexEnv,
+    });
+
+    expectRuntimePolicy(runtime, {
+      approvalPolicy: "never",
+      sandbox: "workspace-write",
+      approvalsReviewer: "user",
+    });
+    expect(codexSandboxPolicyForTurn(runtime.sandbox, "/qa/workspace", privateQaCodexEnv)).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/qa/workspace"],
+      networkAccess: false,
+      excludeTmpdirEnvVar: true,
+      excludeSlashTmp: true,
+    });
+  });
+
+  it("preserves an explicitly read-only sandbox for forced private-QA Codex runtime", () => {
+    const privateQaCodexEnv = {
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_QA_FORCE_RUNTIME: "codex",
+    };
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          mode: "yolo",
+          approvalPolicy: "never",
+          sandbox: "read-only",
+        },
+      },
+      env: privateQaCodexEnv,
+    });
+
+    expectRuntimePolicy(runtime, {
+      approvalPolicy: "never",
+      sandbox: "read-only",
+      approvalsReviewer: "user",
+    });
+    expect(codexSandboxPolicyForTurn(runtime.sandbox, "/qa/workspace", privateQaCodexEnv)).toEqual({
+      type: "readOnly",
+      networkAccess: false,
+    });
+  });
+
+  it.each([
+    { label: "ordinary production", env: {} },
+    { label: "private build without a forced runtime", env: { OPENCLAW_BUILD_PRIVATE_QA: "1" } },
+    {
+      label: "forced runtime without a private build",
+      env: { OPENCLAW_QA_FORCE_RUNTIME: "codex" },
+    },
+    {
+      label: "forced private-QA OpenClaw runtime",
+      env: { OPENCLAW_BUILD_PRIVATE_QA: "1", OPENCLAW_QA_FORCE_RUNTIME: "openclaw" },
+    },
+  ])("preserves production yolo filesystem policy for $label", ({ env }) => {
+    const runtime = resolveRuntimeForTest({ pluginConfig: {}, env });
+
+    expectRuntimePolicy(runtime, {
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+      approvalsReviewer: "user",
+    });
+    expect(codexSandboxPolicyForTurn("workspace-write", "/qa/workspace", env)).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/qa/workspace"],
+      networkAccess: false,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
     });
   });
 

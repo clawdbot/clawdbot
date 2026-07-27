@@ -8,6 +8,7 @@ import type {
   SessionsListResult,
 } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
+import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
@@ -701,18 +702,22 @@ class SessionsPage extends OpenClawLightDomElement {
           areUiSessionKeysEquivalent(key, scope.gateway.snapshot.sessionKey),
         );
         if (deletedCurrent) {
-          scope.gateway.setSessionKey(
-            buildAgentMainSessionKey({
-              agentId:
-                parseAgentSessionKey(deletedCurrent)?.agentId ??
-                scope.context.agentSelection.state.selectedId ??
-                "main",
+          const agentId =
+            parseAgentSessionKey(deletedCurrent)?.agentId ??
+            scope.context.agentSelection.state.selectedId ??
+            "main";
+          selectApplicationSession({
+            selection: scope.context.agentSelection,
+            gateway: scope.gateway,
+            agentId,
+            sessionKey: buildAgentMainSessionKey({
+              agentId,
               mainKey: resolveUiConfiguredMainKey({
                 agentsList: scope.context.agents.state.agentsList,
                 hello: scope.gateway.snapshot.hello,
               }),
             }),
-          );
+          });
         }
       }
       if (result.errors.length > 0) {
@@ -1404,6 +1409,7 @@ class SessionsPage extends OpenClawLightDomElement {
                 face,
                 sessionKey,
                 agentId: this.sessionPathAgentId(sessionKey, context),
+                preferenceDerivedFace: true,
               }).options,
               hash: "",
             });

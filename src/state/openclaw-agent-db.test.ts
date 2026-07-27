@@ -903,6 +903,24 @@ describe("openclaw agent database", () => {
     expect(fs.existsSync(stateDatabasePath)).toBe(false);
   });
 
+  it("invalidates the registered database memo after a registry write", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = path.join(
+      stateDir,
+      "agents",
+      "worker-1",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+
+    expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([]);
+    registerOpenClawAgentDatabase({ agentId: "worker-1", path: databasePath, env });
+    expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([
+      expect.objectContaining({ agentId: "worker-1", path: databasePath }),
+    ]);
+  });
+
   it.skipIf(process.platform === "win32")(
     "fails closed when the missing registry has a dangling parent symlink",
     () => {

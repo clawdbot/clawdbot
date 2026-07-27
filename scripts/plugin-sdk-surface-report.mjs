@@ -151,7 +151,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: session-discussion binds one external discussion provider to sessions.
       // +1: focused media-local-roots replacement for the legacy agent-media facade.
       // +1: account-aware channel DM policy setup descriptors.
-      142,
+      // +1: dependency-light CLI argv parsing for machine-output metadata.
+      143,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -182,7 +183,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: shared plugin SecretRef setup plan helper.
       // +1: shared multi-claim ingress lifecycle fan-in.
       // +3: channel prompt-context entry/compat types and channel metadata builder.
-      4727,
+      // +4: focused CLI root-option constants and parsers.
+      // +6: model-picker action/capability and authoritative session-apply contracts.
+      4737,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -208,7 +211,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: native approval messaging target resolver.
       // +1: shared multi-claim ingress lifecycle fan-in.
       // +1: channel metadata builder.
-      2863,
+      // +3: focused CLI root-option parsers.
+      // +1: authoritative model-picker session-apply operation.
+      2867,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

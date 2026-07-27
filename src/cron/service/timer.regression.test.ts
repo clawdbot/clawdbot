@@ -38,7 +38,8 @@ import type {
 import { cancelActiveCronTaskRun } from "./active-run-cancellation.js";
 import { resetActiveCronTaskRunsForTests } from "./active-run-cancellation.test-support.js";
 import { computeJobNextRunAtMs, recomputeNextRunsForMaintenance } from "./jobs.js";
-import { run as runManualCronJob, stop } from "./ops.js";
+import { stop } from "./ops-lifecycle.js";
+import { run as runManualCronJob } from "./ops-run.js";
 import { createCronServiceState as createBaseCronServiceState, type CronEvent } from "./state.js";
 import { applyJobResult, executeJobCoreWithTimeout, runMissedJobs } from "./timer.js";
 import { executeJobCore, onTimer } from "./timer.test-support.js";
@@ -2028,7 +2029,8 @@ describe("cron service timer regressions", () => {
       .spyOn(cronStoreModule, "loadCronJobsStoreWithConfigJobs")
       .mockImplementation(async (storePath) => {
         loadCount += 1;
-        if (loadCount === 3) {
+        // The first catch-up outcome now reloads and persists before job two.
+        if (loadCount === 4) {
           throw new Error("startup activation reload failed");
         }
         return await realLoad(storePath);
@@ -2278,7 +2280,7 @@ describe("cron service timer regressions", () => {
 
       const timerPromise = onTimer(state);
       await secondStarted.promise;
-      expect(isCronJobActive(first.id)).toBe(true);
+      expect(isCronJobActive(first.id)).toBe(false);
       expect(isCronJobActive(second.id)).toBe(true);
       await vi.advanceTimersByTimeAsync(60_100);
       now += 60_100;
@@ -3038,7 +3040,7 @@ describe("cron service timer regressions", () => {
     }
   });
 
-  it("does not notify setup timeout for cron-nested lane contention", async () => {
+  it("does not spend setup timeout while waiting for cron-nested admission", async () => {
     vi.useFakeTimers();
     try {
       const store = timerRegressionFixtures.makeStorePath();
@@ -3074,25 +3076,32 @@ describe("cron service timer regressions", () => {
         cleanupTimedOutAgentRun: vi.fn(async () => {}),
         onIsolatedAgentSetupTimeout,
         runIsolatedAgentJob: vi.fn(async ({ onLaneWait }) => {
-          onLaneWait?.();
+          onLaneWait?.({ waiting: true });
           return await enqueueCommandInLane(CommandLane.CronNested, async () => {
+            onLaneWait?.({ waiting: false });
             return { status: "ok" as const, summary: "lane released" };
           });
         }),
       });
 
       const timerPromise = onTimer(state);
+      let timerSettled = false;
+      void timerPromise.then(() => {
+        timerSettled = true;
+      });
       await vi.advanceTimersByTimeAsync(60_100);
       now += 60_100;
-      await timerPromise;
 
+      expect(timerSettled).toBe(false);
       expect(onIsolatedAgentSetupTimeout).not.toHaveBeenCalled();
-      const job = requireJob(state, cronJob.id);
-      expect(job.state.lastStatus).toBe("error");
-      expect(job.state.lastError).toContain("setup timed out before runner start");
 
       releaseLane.resolve();
       await laneBlocker;
+      await timerPromise;
+
+      const job = requireJob(state, cronJob.id);
+      expect(job.state.lastStatus).toBe("ok");
+      expect(job.state.lastError).toBeUndefined();
     } finally {
       vi.useRealTimers();
     }

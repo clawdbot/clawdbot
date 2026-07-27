@@ -274,9 +274,74 @@ describe("agent run terminal outcome", () => {
 
     expect(mergeAgentRunTerminalOutcome(timeout, earlierCompletion)).toBe(earlierCompletion);
   });
+
+  it("keeps the first proven sticky outcome regardless of callback ordering", () => {
+    const timeout = buildAgentRunTerminalOutcome({
+      status: "timeout",
+      timeoutPhase: "provider",
+      endedAt: 200,
+    });
+    const earlierCancellation = buildAgentRunTerminalOutcome({
+      status: "error",
+      stopReason: "rpc",
+      endedAt: 190,
+    });
+    const laterCancellation = buildAgentRunTerminalOutcome({
+      status: "error",
+      stopReason: "restart",
+      endedAt: 210,
+    });
+
+    for (const [current, incoming] of [
+      [timeout, earlierCancellation],
+      [earlierCancellation, timeout],
+    ] as const) {
+      expect(mergeAgentRunTerminalOutcome(current, incoming)).toBe(earlierCancellation);
+    }
+    for (const [current, incoming] of [
+      [timeout, laterCancellation],
+      [laterCancellation, timeout],
+    ] as const) {
+      expect(mergeAgentRunTerminalOutcome(current, incoming)).toBe(timeout);
+    }
+  });
+
+  it("keeps explicit provider timeout attribution ahead of simultaneous cancellation", () => {
+    const timeout = buildAgentRunTerminalOutcome({
+      status: "timeout",
+      timeoutPhase: "provider",
+      endedAt: 200,
+    });
+    const cancellation = buildAgentRunTerminalOutcome({
+      status: "error",
+      stopReason: "rpc",
+      endedAt: 200,
+    });
+
+    expect(mergeAgentRunTerminalOutcome(timeout, cancellation)).toBe(timeout);
+    expect(mergeAgentRunTerminalOutcome(cancellation, timeout)).toBe(timeout);
+  });
 });
 
 describe("agent run attempt terminal", () => {
+  it("merges observation-only timeout phases without creating a run timeout", () => {
+    const toolExecution = {
+      kind: "timeout",
+      phase: "tool_execution",
+      source: "observation",
+    } as const;
+    const compaction = { kind: "timeout", phase: "compaction", source: "observation" } as const;
+
+    for (const [current, incoming] of [
+      [toolExecution, compaction],
+      [compaction, toolExecution],
+    ] as const) {
+      const terminal = mergeAgentRunAttemptTerminal(current, incoming);
+      expect(terminal).toEqual(compaction);
+      expect(projectAgentRunAttemptTerminal(terminal).timedOut).toBe(false);
+    }
+  });
+
   it("keeps timeout phase and source precedence in the canonical owner", () => {
     const failure = new Error("provider failed while aborting");
     const failed = mergeAgentRunAttemptTerminal(

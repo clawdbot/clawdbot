@@ -601,6 +601,81 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     },
   );
 
+  it("terminates realtime voice on non-canonical base64 audio", async () => {
+    vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
+    const onAudio = vi.fn();
+    const onClose = vi.fn();
+    const onError = vi.fn();
+    let retry: Promise<void> | undefined;
+    const handleError = (error: Error) => {
+      onError(error);
+      retry = bridge.connect();
+    };
+    const bridge = buildXaiRealtimeVoiceProvider().createBridge({
+      providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
+      onAudio,
+      onClose,
+      onError: handleError,
+      onClearAudio: vi.fn(),
+    });
+
+    const { connecting, socket } = await openRealtimeBridge(bridge);
+    await connecting;
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "response.output_audio.delta", delta: "ZE==" })),
+    );
+
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "xAI realtime voice stream returned malformed base64 audio data",
+      }),
+    );
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onAudio).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledWith("error");
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(socket.closed).toBe(true);
+    if (!retry) {
+      throw new Error("expected synchronous retry from onError");
+    }
+    await expect(retry).rejects.toThrow(
+      "xAI realtime voice stream returned malformed base64 audio data",
+    );
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  it("rejects startup when malformed audio arrives before session.updated", async () => {
+    vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
+    const onClose = vi.fn();
+    const onError = vi.fn();
+    const bridge = buildXaiRealtimeVoiceProvider().createBridge({
+      providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClose,
+      onError,
+      onClearAudio: vi.fn(),
+    });
+
+    const connection = bridge.connect();
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
+    const socket = requireSocket();
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "response.output_audio.delta", delta: "ZE==" })),
+    );
+
+    await expect(connection).rejects.toThrow(
+      "xAI realtime voice stream returned malformed base64 audio data",
+    );
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledWith("error");
+    expect(socket.closed).toBe(true);
+  });
+
   it("deduplicates repeated function-call arguments done events", async () => {
     vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
     const provider = buildXaiRealtimeVoiceProvider();

@@ -357,7 +357,7 @@ export function buildGatewaySessionRow(params: {
       storePath,
     });
     if (params.includeDerivedTitles) {
-      derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
+      derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage, displayName);
     }
     if (params.includeLastMessage && fields.lastMessagePreview) {
       lastMessagePreview = fields.lastMessagePreview;
@@ -438,6 +438,7 @@ export function buildGatewaySessionRow(params: {
     agentStatus,
     observerDigest: observerDigest
       ? {
+          ...(observerDigest.agentId ? { agentId: observerDigest.agentId } : {}),
           runId: observerDigest.runId,
           headline: observerDigest.headline,
           health: observerDigest.health,

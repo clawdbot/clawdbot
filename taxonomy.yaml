@@ -16,7 +16,6 @@ profiles:
       - agent-runtime.model-and-runtime-selection
       - agent-runtime.tool-calls-and-response-handling
       - session-memory.cross-client-history-and-session-parity
-      - session-memory.memory
       - gateway.gateway-rpc-apis-and-events
       - gateway.websocket-connection
       - channels.channel-actions-commands-and-approvals
@@ -1516,7 +1515,7 @@ surfaces:
           - docs/concepts/agent-runtimes.md
         search_anchors:
           - agent RPC shape and event stream
-          - runAgentTurnWithFallback
+          - executeAgentTurn
           - agent.wait timeout and terminal outcomes
         category_note: agent-turn-orchestration-and-runtime-lifecycle.md
         human_lts_override: true

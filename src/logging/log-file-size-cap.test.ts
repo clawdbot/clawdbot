@@ -79,6 +79,33 @@ describe("log file size cap", () => {
     expect(rotationWarnings).toHaveLength(0);
   });
 
+  it("structures rotation failure diagnostics for JSON console output", () => {
+    fs.writeFileSync(logPath, "seed");
+    vi.spyOn(fs, "renameSync").mockImplementation(() => {
+      throw new Error("rotation denied");
+    });
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true as unknown as ReturnType<typeof process.stderr.write>);
+    setLoggerOverride({
+      level: "info",
+      file: logPath,
+      maxFileBytes: 1,
+      consoleLevel: "info",
+      consoleStyle: "json",
+    });
+
+    getLogger().error("rotation diagnostic");
+
+    const warning = stderrSpy.mock.calls
+      .map(([firstArg]) => String(firstArg))
+      .find((line) => line.includes("log file rotation failed"));
+    expect(JSON.parse(warning ?? "")).toMatchObject({
+      level: "warn",
+      message: expect.stringContaining("log file rotation failed"),
+    });
+  });
+
   it("keeps cached default rolling loggers on the current-day file", () => {
     const logDir = path.dirname(logPath);
     const firstDay = path.join(logDir, "openclaw-2026-01-01.log");

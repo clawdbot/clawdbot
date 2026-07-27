@@ -598,6 +598,21 @@ function buildMessagingSection(params: {
   ];
 }
 
+function buildCollapsibleDetailsSection(params: {
+  isMinimal: boolean;
+  collapsibleDetailsSupported: boolean;
+}) {
+  if (params.isMinimal || !params.collapsibleDetailsSupported) {
+    return [];
+  }
+  return [
+    "## Collapsible Details",
+    "This surface renders `<details>` disclosures. When a reply has optional depth — long derivations, logs, background, worked examples — you may place it inside `<details><summary>Label</summary>` … `</details>` written on their own lines.",
+    "Keep the primary answer, and anything the user must act on, outside the block. Never hide the actual answer behind a disclosure.",
+    "",
+  ];
+}
+
 function buildMessageChannelOptions(runtimeChannel?: string): string | undefined {
   const deliverableChannels: readonly string[] = listDeliverableMessageChannels();
   if (deliverableChannels.length <= 1) {
@@ -969,6 +984,7 @@ export function buildAgentSystemPrompt(params: {
   const runtimeCapabilities = runtimeInfo?.capabilities ?? [];
   const runtimeCapabilitiesLower = new Set(normalizeStringEntriesLower(runtimeCapabilities));
   const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
+  const collapsibleDetailsSupported = runtimeCapabilitiesLower.has("markdowndetails");
   const threadBoundAcpSpawnEnabled = runtimeCapabilitiesLower.has("threadbound-acp-spawn");
   const promptMode = params.promptMode ?? "full";
   const isMinimal = promptMode === "minimal" || promptMode === "none";
@@ -1108,7 +1124,7 @@ export function buildAgentSystemPrompt(params: {
       ...(toolSchemaDirectoryPrompt
         ? ["", "### Deferred Tool Schemas", toolSchemaDirectoryPrompt]
         : []),
-      "TOOLS.md guides usage; never grants availability.",
+      "The AGENTS.md Tools section guides usage; it never grants availability.",
       ...(renderOpenClawToolWorkflowHints
         ? [
             `Long wait: no rapid poll. Use ${execToolName} yieldMs or ${processToolName}(poll, timeout=<ms>).`,
@@ -1360,6 +1376,9 @@ export function buildAgentSystemPrompt(params: {
       requireExplicitMessageTarget: params.requireExplicitMessageTarget,
       silentReplyPromptMode,
     }),
+    // Capability-gated reply guidance stays below the cache boundary so channel changes
+    // cannot alter the byte-identical stable prefix shared across sessions.
+    ...buildCollapsibleDetailsSection({ isMinimal, collapsibleDetailsSupported }),
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
   );
 

@@ -18,6 +18,8 @@ export type SessionCatalogListProviderParams = {
   cursors?: Record<string, string>;
   /** Request-owned session entries. Providers must not retain this past `list`. */
   sessionEntries?: SessionCatalogEntrySnapshot;
+  /** Lazily lists Gateway nodes once per catalog request. Providers must not retain this past `list`. */
+  listNodes?: () => ReturnType<PluginRuntime["nodes"]["list"]>;
   /** Publishes completed hosts without waiting for slower machines in the same list. */
   onHost?: (host: SessionCatalogHost) => void;
 };

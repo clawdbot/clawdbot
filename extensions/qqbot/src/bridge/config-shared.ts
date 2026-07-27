@@ -1,11 +1,8 @@
+import { createScopedChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 // Qqbot helper module supports config shared behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  applyAccountNameToChannelSection,
-  deleteAccountFromConfigSection,
-  setAccountEnabledInConfigSection,
-} from "openclaw/plugin-sdk/core";
+import { applyAccountNameToChannelSection } from "openclaw/plugin-sdk/core";
 import type { ChannelSetupInput } from "openclaw/plugin-sdk/setup";
 import {
   describeAccount as engineDescribeAccount,
@@ -61,46 +58,19 @@ function describeQQBotAccount(account: ResolvedQQBotAccount | undefined) {
   return engineDescribeAccount(account as never);
 }
 
-function formatQQBotAllowFrom(params: {
-  allowFrom: Array<string | number> | undefined | null;
-}): string[] {
-  return engineFormatAllowFrom(params.allowFrom);
-}
-
 export const qqbotConfigAdapter = {
-  listAccountIds: (cfg: OpenClawConfig) => listQQBotAccountIds(cfg),
-  resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) =>
-    resolveQQBotAccount(cfg, accountId, { allowUnresolvedSecretRef: true }),
-  defaultAccountId: (cfg: OpenClawConfig) => resolveDefaultQQBotAccountId(cfg),
-  setAccountEnabled: ({
-    cfg,
-    accountId,
-    enabled,
-  }: {
-    cfg: OpenClawConfig;
-    accountId: string;
-    enabled: boolean;
-  }) =>
-    setAccountEnabledInConfigSection({
-      cfg,
-      sectionKey: "qqbot",
-      accountId,
-      enabled,
-      allowTopLevel: true,
-    }),
-  deleteAccount: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) =>
-    deleteAccountFromConfigSection({
-      cfg,
-      sectionKey: "qqbot",
-      accountId,
-      clearBaseFields: ["appId", "clientSecret", "clientSecretFile", "name"],
-    }),
+  ...createScopedChannelConfigAdapter<ResolvedQQBotAccount>({
+    sectionKey: "qqbot",
+    listAccountIds: listQQBotAccountIds,
+    resolveAccount: (cfg, accountId) =>
+      resolveQQBotAccount(cfg, accountId, { allowUnresolvedSecretRef: true }),
+    defaultAccountId: resolveDefaultQQBotAccountId,
+    clearBaseFields: ["appId", "clientSecret", "clientSecretFile", "name"],
+    resolveAllowFrom: (account) => account.config.allowFrom,
+    formatAllowFrom: engineFormatAllowFrom,
+  }),
   isConfigured: isQQBotConfigured,
   describeAccount: describeQQBotAccount,
-  resolveAllowFrom: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string | null }) =>
-    resolveQQBotAccount(cfg, accountId, { allowUnresolvedSecretRef: true }).config?.allowFrom,
-  formatAllowFrom: ({ allowFrom }: { allowFrom: Array<string | number> | undefined | null }) =>
-    formatQQBotAllowFrom({ allowFrom }),
 };
 
 export const qqbotSetupAdapterShared = {

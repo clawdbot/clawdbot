@@ -1,10 +1,13 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { icon, type IconName } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import type { BoardFace } from "../../lib/board/settings.ts";
 import { formatMs, formatRelativeTimestamp } from "../../lib/format.ts";
-import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
+import {
+  resolveSessionPreferredFace,
+  sessionNavigationTarget,
+} from "../../lib/sessions/route-navigation.ts";
 import {
   partitionTasks,
   taskDetail,
@@ -27,7 +30,7 @@ type TasksProps = {
   error: string | null;
   tasks: TaskSummary[];
   cancellingTaskIds: ReadonlySet<string>;
-  sessionFace: (sessionKey: string) => BoardFace;
+  sessionRow: (sessionKey: string) => GatewaySessionRow | undefined;
   onCancel: (taskId: string) => void;
   onNavigateToChat: (sessionKey: string) => void;
 };
@@ -37,13 +40,15 @@ function renderSessionLink(task: TaskSummary, props: TasksProps) {
   if (!sessionKey) {
     return nothing;
   }
-  const face = props.sessionFace(sessionKey);
+  const row = props.sessionRow(sessionKey);
   const href = sessionNavigationTarget({
-    face,
+    face: resolveSessionPreferredFace(row),
     sessionKey,
     fallbackAgentId: props.agentId,
     basePath: props.basePath,
     mainKey: props.mainKey,
+    row,
+    preferenceDerivedFace: true,
   }).href;
   return html`<a
     class="session-link"

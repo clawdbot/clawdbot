@@ -547,8 +547,6 @@ src/auto-reply/reply/dispatch-from-config.progress.test-utils.ts
 src/auto-reply/reply/dispatch-from-config.routing.test-utils.ts
 src/auto-reply/reply/dispatch-from-config.send-policy-routing.test-utils.ts
 src/auto-reply/reply/dispatch-from-config.shared.test-harness.ts
-src/auto-reply/reply/followup-runner.test.ts
-src/auto-reply/reply/followup-runner.ts
 src/auto-reply/reply/get-reply-inline-actions.skip-when-config-empty.test.ts
 src/auto-reply/reply/get-reply-run.media-only.test.ts
 src/auto-reply/reply/get-reply.ts
@@ -652,7 +650,6 @@ src/commands/models/auth.test.ts
 src/commands/models/auth.ts
 src/commands/models/list.list-command.forward-compat.test.ts
 src/commands/models/list.probe.ts
-src/commands/models/list.rows.ts
 src/commands/models/list.status-command.ts
 src/commands/models/list.status.test.ts
 src/commands/onboard-channels.e2e.test.ts
@@ -983,7 +980,6 @@ src/tui/embedded-backend.ts
 src/tui/tui-command-handlers.test.ts
 src/tui/tui-command-handlers.ts
 src/tui/tui-event-handlers.test.ts
-src/tui/tui-event-handlers.ts
 src/tui/tui-pty-local.e2e.test.ts
 src/tui/tui-session-actions.test.ts
 src/tui/tui.ts

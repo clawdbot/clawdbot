@@ -1778,24 +1778,39 @@ describe("ci workflow guards", () => {
     }
   });
 
-  it("downloads the opengrep installer completely before execution", () => {
+  it("verifies the pinned OpenGrep release binary before installing it", () => {
     for (const workflowPath of [OPENGREP_PR_DIFF_WORKFLOW, OPENGREP_FULL_WORKFLOW]) {
       const workflow = parse(readFileSync(workflowPath, "utf8"));
-      const run = expectDefined(
-        workflow.jobs.scan.steps.find((step: WorkflowStep) => step.name === "Install opengrep")
-          ?.run,
+      const installStep = expectDefined(
+        workflow.jobs.scan.steps.find((step: WorkflowStep) => step.name === "Install opengrep"),
         `Install opengrep step in ${workflowPath}`,
       );
+      const run = expectDefined(installStep.run, `Install opengrep script in ${workflowPath}`);
 
+      expect(installStep.env, workflowPath).toMatchObject({
+        OPENGREP_VERSION: "v1.25.0",
+        OPENGREP_LINUX_X64_SHA256:
+          "9ac4aebb47ba3f7b0d8fc641ac8749cb6c2f253f616131a67d9631e00d4bea33",
+      });
+      expect(run, workflowPath).toContain('binary="$(mktemp "${RUNNER_TEMP}/opengrep.XXXXXX")"');
+      expect(run, workflowPath).toContain("trap 'rm -f \"$binary\"' EXIT");
       expect(run, workflowPath).toContain(
-        'installer="$(mktemp "${RUNNER_TEMP}/opengrep-install.XXXXXX")"',
+        "curl -fsSL --retry 4 --retry-all-errors --retry-delay 2",
       );
-      expect(run, workflowPath).toContain("curl -fsSL --connect-timeout 10 --max-time 120 \\");
-      expect(run, workflowPath).toContain('-o "$installer"');
-      expect(run, workflowPath).toContain('bash "$installer" -v "$OPENGREP_VERSION"');
-      expect(run, workflowPath).toContain("trap 'rm -f \"$installer\"' EXIT");
-      expect(run.indexOf('-o "$installer"'), workflowPath).toBeLessThan(
-        run.indexOf('bash "$installer"'),
+      expect(run, workflowPath).toContain("--connect-timeout 10 --max-time 300");
+      expect(run, workflowPath).toContain('-o "$binary"');
+      expect(run, workflowPath).toContain(
+        "https://github.com/opengrep/opengrep/releases/download/${OPENGREP_VERSION}/opengrep_manylinux_x86",
+      );
+      expect(run, workflowPath).toContain(
+        'printf \'%s  %s\\n\' "$OPENGREP_LINUX_X64_SHA256" "$binary" | sha256sum --check',
+      );
+      expect(run, workflowPath).toContain('install -m 0755 "$binary" "$install_dir/opengrep"');
+      expect(run.indexOf('-o "$binary"'), workflowPath).toBeLessThan(
+        run.indexOf("sha256sum --check"),
+      );
+      expect(run.indexOf("sha256sum --check"), workflowPath).toBeLessThan(
+        run.indexOf('install -m 0755 "$binary"'),
       );
       expect(run, workflowPath).not.toMatch(/\|\s*bash/u);
     }
@@ -2055,6 +2070,7 @@ describe("ci workflow guards", () => {
       "checks-fast-plugin-contracts-shard",
       "checks-node-core-test-nondist-shard",
       "checks-ui",
+      "checks-ui-e2e",
       "control-ui-i18n",
       "native-i18n",
       "qa-smoke-ci-profile",
@@ -4278,6 +4294,44 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(uiTest.run).toContain("pnpm --dir ui test");
   });
 
+  it("gates current Control UI changes on the mocked new-session Chromium E2E", () => {
+    const workflow = readCiWorkflow();
+    const ui = workflow.jobs["checks-ui"];
+    const uiE2e = workflow.jobs["checks-ui-e2e"];
+
+    expect(uiE2e.permissions).toEqual({ contents: "read" });
+    expect(uiE2e.needs).toEqual(["preflight"]);
+    expect(uiE2e.if).toBe(
+      "needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'",
+    );
+    expect(uiE2e["runs-on"]).toBe(ui["runs-on"]);
+    expect(uiE2e["timeout-minutes"]).toBe(30);
+
+    const uiSetup = expectDefined(
+      ui.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
+      "Control UI Node setup",
+    );
+    const uiE2eSetup = expectDefined(
+      uiE2e.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
+      "Control UI E2E Node setup",
+    );
+    expect(uiE2eSetup.uses).toBe("./.github/actions/setup-node-env");
+    expect(uiE2eSetup.with).toEqual(uiSetup.with);
+
+    const chromiumInstall = expectDefined(
+      uiE2e.steps.find((step: WorkflowStep) => step.name === "Install Playwright Chromium"),
+      "Control UI E2E Chromium installation",
+    );
+    expect(chromiumInstall.run).toBe("node scripts/ensure-playwright-chromium.mjs");
+
+    const scenario = expectDefined(
+      uiE2e.steps.find((step: WorkflowStep) => step.name === "Test Control UI new-session E2E"),
+      "Control UI new-session E2E regression",
+    );
+    expect(scenario.run).toBe("pnpm test:ui:e2e ui/src/e2e/new-session-page.e2e.test.ts");
+    expect(JSON.stringify(uiE2e)).not.toContain("OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM");
+  });
+
   it("does not rebuild Control UI after build:ci-artifacts", () => {
     const workflow = readCiWorkflow();
     const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
@@ -4525,6 +4579,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "build-artifacts",
       "native-i18n",
       "checks-ui",
+      "checks-ui-e2e",
       "control-ui-i18n",
       "checks-fast-core",
       "qa-smoke-ci-profile",
@@ -4598,6 +4653,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(failedSelected.status).not.toBe(0);
       expect(failedSelected.stdout).toContain("checks-ui finished with failure");
       expect(failedSelected.stdout).toContain("macos-swift finished with cancelled");
+
+      const failedUiE2e = runCiGateFixture(
+        "preflight=success\nsecurity-fast=success",
+        "checks-ui=success\nchecks-ui-e2e=failure",
+      );
+      expect(failedUiE2e.status).not.toBe(0);
+      expect(failedUiE2e.stdout).toContain("checks-ui-e2e finished with failure");
     },
   );
 
@@ -5195,7 +5257,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const compatibilityScenarioBlock = smokeRunStep.run.match(
       /const compatibilityScenarioIds = new Set\(\[([\s\S]*?)\]\);/u,
     )?.[1];
-    expect(compatibilityScenarioBlock?.match(/^\s+"[^"]+",$/gmu)).toHaveLength(12);
+    expect(compatibilityScenarioBlock?.match(/^\s+"[^"]+",$/gmu)).toHaveLength(11);
+    expect(compatibilityScenarioBlock).not.toContain('"dreaming-shadow-trial-report"');
     expect(compatibilityScenarioBlock).toContain('"control-ui-chat-flow-playwright"');
     expect(compatibilityScenarioBlock).toContain('"gateway-smoke"');
     expect(compatibilityScenarioBlock).toContain('"matrix-restart-resume"');

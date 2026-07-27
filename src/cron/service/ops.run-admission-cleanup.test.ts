@@ -7,7 +7,8 @@ import {
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
-import { run, stop } from "./ops.js";
+import { stop } from "./ops-lifecycle.js";
+import { run } from "./ops-run.js";
 import { createCronServiceState } from "./state.js";
 import { runMissedJobs } from "./timer.js";
 import { onTimer } from "./timer.test-support.js";

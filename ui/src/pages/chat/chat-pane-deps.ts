@@ -63,6 +63,7 @@ export {
 export { loadSettings, patchSettings } from "../../app/settings.ts";
 export {
   readPresenceEntries,
+  resolveActorIdentityUsers,
   resolveCurrentSelfUser,
   type PresencePayload,
 } from "../../app/user-profile.ts";
@@ -134,10 +135,12 @@ export {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
   canonicalUiSessionKeyForPersistence,
+  normalizeAgentId,
   normalizeSessionKeyForUiComparison,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
   resolveUiConfiguredMainKey,
+  resolveUiGlobalAliasAgentId,
   uiSessionEventMatches,
 } from "../../lib/sessions/session-key.ts";
 export { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
@@ -191,23 +194,26 @@ export {
   switchChatModel,
   switchChatThinkingLevel,
 } from "./chat-session.ts";
+export { ChatStateController } from "./chat-state-controller.ts";
+export { handlePageGatewayEvent } from "./chat-state-events.ts";
+export type { ChatPageHost } from "./chat-state-host.ts";
+export { createPageState } from "./chat-state-page.ts";
 export {
-  canCreateChatSession,
-  ChatStateController,
-  createPageState,
-  handlePageGatewayEvent,
   refreshChatCommands,
   refreshChatMetadata,
   refreshChatModelAuthStatus,
   refreshPageChat,
+} from "./chat-state-refresh.ts";
+export {
+  canCreateChatSession,
   refreshRouteSessionOptions,
   resetChatStateForRouteSession,
   retryChatComposerMemoryFallback,
   resolveChatAgentId,
   resolveChatAvatarUrl,
+  selectedChatSessionRow,
   saveRouteSessionSettings,
-  type ChatPageHost,
-} from "./chat-state.ts";
+} from "./chat-state-route.ts";
 export { resetChatViewState } from "./chat-view-state.ts";
 export { renderChat, type ChatProps } from "./chat-view.ts";
 export {
@@ -277,7 +283,7 @@ export {
   storedChatOutboxScopeKey,
 } from "./composer-persistence.ts";
 export { exportChatMarkdown } from "./export.ts";
-export { admitInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
+export { admitInitialTurnHandoff, admitInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
 export {
   hasAbortableSessionRun,
   reconcileStaleChatRunAfterSessionStatePublication,

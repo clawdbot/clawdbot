@@ -9,6 +9,17 @@ import type {
 
 const WORKBOARD_STALE_SESSION_MS = 30 * 60 * 1000;
 
+export function isActiveWorkboardCard(card: WorkboardCard): boolean {
+  return !card.metadata?.archivedAt;
+}
+
+export function selectedWorkboardBoardParams(
+  state: Pick<WorkboardUiState, "boards" | "boardFilter">,
+): { boardId?: string } {
+  const boardId = state.boards.find((board) => board.id === state.boardFilter)?.id;
+  return boardId ? { boardId } : {};
+}
+
 export function replaceCard(state: WorkboardUiState, card: WorkboardCard) {
   const next = state.cards.filter((existing) => existing.id !== card.id);
   next.push(card);

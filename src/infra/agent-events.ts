@@ -452,24 +452,42 @@ export function listAgentRunsForSession(params: {
   );
 }
 
+export type ProjectedAgentRunIndex = {
+  sessionKeys: ReadonlySet<string>;
+  sessionIds: ReadonlySet<string>;
+};
+
+export function buildProjectedAgentRunIndex(): ProjectedAgentRunIndex {
+  const state = getAgentEventState();
+  const sessionKeys = new Set<string>();
+  const sessionIds = new Set<string>();
+  for (const context of state.runContextById.values()) {
+    if (
+      context.projectSessionActive !== true ||
+      context.lifecycleGeneration !== state.lifecycleGeneration
+    ) {
+      continue;
+    }
+    if (context.sessionKey !== undefined) {
+      sessionKeys.add(context.sessionKey);
+    }
+    if (context.sessionId !== undefined) {
+      sessionIds.add(context.sessionId);
+    }
+  }
+  return { sessionKeys, sessionIds };
+}
+
 export function hasProjectedAgentRunForSession(params: {
   sessionKeys: readonly string[];
   sessionId?: string;
+  index?: ProjectedAgentRunIndex;
 }): boolean {
-  const lifecycleGeneration = getAgentEventState().lifecycleGeneration;
-  for (const context of getAgentEventState().runContextById.values()) {
-    const matches =
-      (context.sessionKey !== undefined && params.sessionKeys.includes(context.sessionKey)) ||
-      (params.sessionId !== undefined && context.sessionId === params.sessionId);
-    if (
-      matches &&
-      context.projectSessionActive === true &&
-      context.lifecycleGeneration === lifecycleGeneration
-    ) {
-      return true;
-    }
-  }
-  return false;
+  const index = params.index ?? buildProjectedAgentRunIndex();
+  return (
+    params.sessionKeys.some((sessionKey) => index.sessionKeys.has(sessionKey)) ||
+    (params.sessionId !== undefined && index.sessionIds.has(params.sessionId))
+  );
 }
 
 /** Clears context and sequence state for a run that has ended or been discarded. */

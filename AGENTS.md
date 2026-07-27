@@ -115,7 +115,7 @@ Skills own workflows; root owns hard policy and routing.
 
 ## Commands
 
-- Runtime: Node 22.22.3+, 24.15+, or 25.9+; Node 24 recommended. Keep Node + Bun paths working.
+- Runtime: Node 22.22.3+, 24.15+, or 25.9+; Node 26 recommended (CI and release workflows still pin Node 24). Keep Node + Bun paths working.
 - Package manager/runtime: repo defaults only. No swaps without approval.
 - Install: `pnpm install` (keep Bun lock/patches aligned if touched). Agent dependency installation for tests/builds defaults to the selected remote box; do not reconcile a local Codex worktree just to run validation.
 - CLI: `pnpm openclaw ...` or `pnpm dev`; build: `pnpm build`.
@@ -199,6 +199,7 @@ Skills own workflows; root owns hard policy and routing.
 - zsh: quote command globs; unmatched patterns abort before the tool runs.
 - Nested remote shell: avoid local `$()` expansion; use remote-safe validation.
 - zsh: don't use `path` as a variable; it rewrites `$PATH`.
+- File lists into tools: `--name-only -z | xargs -0`; zsh scalars don't word-split, and a zero-file run exits 0 looking clean.
 - `scripts/pr` artifacts: preserve template enum values; validate before prepare.
 - `scripts/pr` subcommands require a PR number; no subcommand `--help` placeholder.
 - `scripts/pr` review: checkout main baseline, then PR, before artifact validation.

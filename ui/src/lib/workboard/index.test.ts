@@ -1304,6 +1304,26 @@ describe("workboard controller", () => {
     expect(client.request).toHaveBeenCalledWith("workboard.cards.dispatch", {});
   });
 
+  it("limits dispatch to the selected named board", async () => {
+    state.boardFilter = "ops";
+    state.boards = [{ id: "ops", total: 1, active: 1, archived: 0, byStatus: { ready: 1 } }];
+    const client = createClient({
+      "workboard.cards.dispatch": {
+        promoted: [],
+        reclaimed: [],
+        blocked: [],
+        orchestrated: [],
+        count: 0,
+      },
+      "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "done"] },
+      "tasks.list": { tasks: [] },
+    });
+
+    await dispatchWorkboard({ host, client: client as never });
+
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.dispatch", { boardId: "ops" });
+  });
+
   it("clears stale refresh errors after a successful dispatch reload", async () => {
     state.lastRefreshError = "poll unavailable";
     const client = createClient({
@@ -2572,6 +2592,36 @@ describe("workboard controller", () => {
     expect(state.draftSessionKey).toBe("");
   });
 
+  it("creates cards on the selected named board", async () => {
+    state.boardFilter = "ops";
+    state.boards = [{ id: "ops", total: 0, active: 0, archived: 0, byStatus: {} }];
+    state.draftTitle = "Investigate operations alert";
+    const created = {
+      ...sampleCard,
+      id: "card-ops",
+      title: "Investigate operations alert",
+      metadata: { automation: { boardId: "ops" } },
+    } satisfies WorkboardCard;
+    const client = createClient({ "workboard.cards.create": { card: created } });
+
+    await saveWorkboardCardDraft({ host, client: client as never });
+
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.create", {
+      title: "Investigate operations alert",
+      notes: "",
+      status: "todo",
+      priority: "normal",
+      labels: [],
+      agentId: "",
+      sessionKey: "",
+      boardId: "ops",
+    });
+    expect(state.cards[0]).toMatchObject({
+      id: "card-ops",
+      metadata: { automation: { boardId: "ops" } },
+    });
+  });
+
   it("creates template-backed cards through the save action", async () => {
     state.draftTitle = "Fix: flaky worker";
     state.draftTemplateId = "bugfix";
@@ -2662,6 +2712,58 @@ describe("workboard controller", () => {
     await syncLifecycle(client, [{ ...sampleSession, status: "running", hasActiveRun: true }]);
 
     expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it("does not poll tasks or reconcile archived session cards", async () => {
+    state.loaded = true;
+    const archived = createWorkboardCard({
+      status: "running",
+      sessionKey: sampleSession.key,
+      taskId: "archived-task",
+      metadata: { archivedAt: 10 },
+    });
+    state.cards = [archived];
+    const client = createClient({});
+
+    await syncLifecycle(client, [
+      { ...sampleSession, status: "done", hasActiveRun: false, updatedAt: 20 },
+    ]);
+
+    expect(client.request).not.toHaveBeenCalled();
+    expect(state.cards).toEqual([archived]);
+    expect(state.tasksByCardId.size).toBe(0);
+  });
+
+  it("reconciles active session cards without rewriting an archived sibling", async () => {
+    state.loaded = true;
+    const archived = createWorkboardCard({
+      id: "archived-session-card",
+      status: "running",
+      sessionKey: sampleSession.key,
+      taskId: "archived-task",
+      metadata: { archivedAt: 10 },
+    });
+    const active = createWorkboardCard({
+      id: "active-session-card",
+      status: "todo",
+      sessionKey: sampleSession.key,
+    });
+    state.cards = [archived, active];
+    const updated = { ...active, status: "review" as const };
+    const client = createClient((method) =>
+      method === "workboard.cards.update" ? { card: updated } : {},
+    );
+
+    await syncLifecycle(client, [
+      { ...sampleSession, status: "done", hasActiveRun: false, updatedAt: 20 },
+    ]);
+
+    expect(client.request).toHaveBeenCalledOnce();
+    expect(client.request).toHaveBeenCalledWith(
+      "workboard.cards.update",
+      expect.objectContaining({ id: active.id }),
+    );
+    expect(state.cards.find((card) => card.id === archived.id)).toEqual(archived);
   });
 
   it.each(["editing", "dragging"] as const)(
@@ -2845,6 +2947,37 @@ describe("workboard controller", () => {
     expect(getWorkboardState(host).cards[0]).toMatchObject({ sessionKey: sampleSession.key });
   });
 
+  it("captures a session on the selected named board", async () => {
+    state.loaded = true;
+    state.boardFilter = "ops";
+    state.boards = [{ id: "ops", total: 0, active: 0, archived: 0, byStatus: {} }];
+    const created = createWorkboardCard({
+      id: "captured-ops-card",
+      sessionKey: sampleSession.key,
+      metadata: { automation: { boardId: "ops" } },
+    });
+    const client = createClient((method) => {
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      if (method === "workboard.cards.create") {
+        return { card: created };
+      }
+      return {};
+    });
+
+    await expect(captureSession(client, sampleSession)).resolves.toMatchObject({
+      id: "captured-ops-card",
+      metadata: { automation: { boardId: "ops" } },
+    });
+
+    expect(client.request).toHaveBeenCalledWith(
+      "workboard.cards.create",
+      expect.objectContaining({ boardId: "ops", sessionKey: sampleSession.key }),
+    );
+    expect(state.cards).toContainEqual(created);
+  });
+
   it("does not duplicate existing captured sessions", async () => {
     const existing = createWorkboardCard({
       execution: createWorkboardExecution({ sessionKey: sampleSession.key }),
@@ -2856,6 +2989,49 @@ describe("workboard controller", () => {
 
     expect(card).toBe(existing);
     expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it("reuses an active captured session before an older archived match", async () => {
+    const archived = {
+      ...sampleCard,
+      id: "archived-session-card",
+      sessionKey: sampleSession.key,
+      metadata: { archivedAt: 10 },
+    } satisfies WorkboardCard;
+    const active = {
+      ...sampleCard,
+      id: "active-session-card",
+      sessionKey: sampleSession.key,
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [archived, active];
+    const client = createClient({});
+
+    await expect(captureSession(client, sampleSession)).resolves.toBe(active);
+    expect(client.request).not.toHaveBeenCalled();
+    expect(state.cards).toEqual([archived, active]);
+  });
+
+  it("returns the active captured session while a duplicate capture is in flight", async () => {
+    const archived = {
+      ...sampleCard,
+      id: "archived-inflight-session-card",
+      sessionKey: sampleSession.key,
+      metadata: { archivedAt: 10 },
+    } satisfies WorkboardCard;
+    const active = {
+      ...sampleCard,
+      id: "active-inflight-session-card",
+      sessionKey: sampleSession.key,
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [archived, active];
+    state.capturingSessionKeys.add(sampleSession.key);
+    const client = createClient({});
+
+    await expect(captureSession(client, sampleSession)).resolves.toBe(active);
+    expect(client.request).not.toHaveBeenCalled();
+    expect(state.cards).toEqual([archived, active]);
   });
 
   it("restores archived captured sessions instead of leaving them hidden", async () => {

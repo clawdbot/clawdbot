@@ -165,6 +165,7 @@ class IncludeProcessor {
     private basePath: string,
     private resolver: IncludeResolver,
     private readonly boundary: IncludeBoundary,
+    private readonly rootProjectionKeys?: ReadonlySet<string>,
   ) {
     this.visited.add(path.normalize(basePath));
   }
@@ -195,6 +196,13 @@ class IncludeProcessor {
   ): Record<string, unknown> {
     const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(obj)) {
+      if (
+        logicalPath.length === 0 &&
+        this.rootProjectionKeys &&
+        !this.rootProjectionKeys.has(key)
+      ) {
+        continue;
+      }
       result[key] = this.process(value, [...logicalPath, key]);
     }
     return result;
@@ -202,7 +210,11 @@ class IncludeProcessor {
 
   private processInclude(obj: Record<string, unknown>, logicalPath: readonly string[]): unknown {
     const includeValue = obj[INCLUDE_KEY];
-    const otherKeys = Object.keys(obj).filter((k) => k !== INCLUDE_KEY);
+    const otherKeys = Object.keys(obj).filter(
+      (key) =>
+        key !== INCLUDE_KEY &&
+        (logicalPath.length > 0 || !this.rootProjectionKeys || this.rootProjectionKeys.has(key)),
+    );
     const resolved = this.resolveInclude(includeValue, logicalPath);
     const included = resolved.value;
     this.resolver.onIncludeResolved?.({
@@ -415,7 +427,12 @@ class IncludeProcessor {
     parsed: unknown,
     logicalPath: readonly string[],
   ): unknown {
-    const nested = new IncludeProcessor(resolvedPath, this.resolver, this.boundary);
+    const nested = new IncludeProcessor(
+      resolvedPath,
+      this.resolver,
+      this.boundary,
+      this.rootProjectionKeys,
+    );
     nested.visited = new Set([...this.visited, resolvedPath]);
     nested.depth = this.depth + 1;
     return nested.process(parsed, logicalPath);
@@ -520,8 +537,9 @@ function resolveConfigIncludesWithinBoundary(
   configPath: string,
   resolver: IncludeResolver,
   boundary: IncludeBoundary,
+  rootProjectionKeys?: ReadonlySet<string>,
 ): unknown {
-  return new IncludeProcessor(configPath, resolver, boundary).process(obj);
+  return new IncludeProcessor(configPath, resolver, boundary, rootProjectionKeys).process(obj);
 }
 
 /**
@@ -548,4 +566,20 @@ export function resolveConfigIncludes(
 ): unknown {
   const boundary = createConfigIncludeBoundary(configPath, options.allowedRoots ?? []);
   return resolveConfigIncludesWithinBoundary(obj, configPath, resolver, boundary);
+}
+
+/**
+ * Resolves one top-level config field through the canonical include graph while
+ * leaving unrelated top-level branches untouched. Early bootstrap readers use
+ * this when a malformed sibling must not hide an independently valid setting.
+ */
+export function resolveConfigIncludesForTopLevelKey(
+  obj: unknown,
+  configPath: string,
+  key: string,
+  resolver: IncludeResolver = defaultResolver,
+  options: ResolveConfigIncludesOptions = {},
+): unknown {
+  const boundary = createConfigIncludeBoundary(configPath, options.allowedRoots ?? []);
+  return resolveConfigIncludesWithinBoundary(obj, configPath, resolver, boundary, new Set([key]));
 }

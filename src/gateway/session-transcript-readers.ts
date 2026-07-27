@@ -1,10 +1,12 @@
 import {
+  isSessionTranscriptProjectionUnavailableError,
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptMessageEventById,
   readSessionTranscriptMessageEventCount,
   readSessionTranscriptMessageEventPage,
   readSessionTranscriptMessageEvents,
   resolveSessionTranscriptReadTarget,
+  waitForSessionTranscriptProjection,
   type SessionTranscriptMessageEvent,
   type SessionTranscriptReadScope,
   type TranscriptEvent,
@@ -38,6 +40,7 @@ import type { SessionPreviewItem } from "./session-utils.types.js";
 
 export type { ReadSessionMessagesAsyncOptions };
 export { attachOpenClawTranscriptMeta, capArrayByJsonBytes } from "./session-utils.fs.js";
+export { readSessionTranscriptVisibleMessageDelta } from "../config/sessions/session-accessor.js";
 
 export type { SessionTranscriptReadScope };
 
@@ -45,6 +48,11 @@ type SessionTitleFields = {
   firstUserMessage: string | null;
   lastMessagePreview: string | null;
 };
+
+// Session-list title probes must not scale with transcript size. Read at most
+// this many active-path messages from either end, widening only once.
+const SQLITE_TITLE_PROBE_INITIAL_MESSAGES = 20;
+const SQLITE_TITLE_PROBE_MAX_MESSAGES = 100;
 
 export type ReadRecentSessionMessagesResult = {
   activeLeafEntryId?: string | null;
@@ -278,21 +286,87 @@ function extractMessageText(message: unknown): string | null {
   return null;
 }
 
-function readSqliteTitleFields(
-  target: ResolvedTranscriptReadTarget,
-  opts?: { includeInterSession?: boolean },
-): SessionTitleFields {
-  const messages = readSqliteMessagesSync(target);
-  const firstUser = messages.find((message) => {
+function readSqliteTitleProbeRange(
+  scope: SessionTranscriptReadScope,
+  totalMessages: number,
+  start: number,
+  endExclusive: number,
+): SessionTranscriptMessageEvent[] {
+  const end = Math.min(totalMessages, endExclusive);
+  const boundedStart = Math.min(Math.max(0, start), end);
+  if (boundedStart === end) {
+    return [];
+  }
+  return readSessionTranscriptMessageEventPage(scope, {
+    maxMessages: end - boundedStart,
+    offset: totalMessages - end,
+  }).events;
+}
+
+function findFirstTitleUserMessage(
+  entries: readonly SessionTranscriptMessageEvent[],
+  includeInterSession: boolean,
+): unknown {
+  return entries.map(sqliteMessageEventWithSeq).find((message) => {
     if (extractMessageRole(message) !== "user") {
       return false;
     }
     return (
-      opts?.includeInterSession === true ||
+      includeInterSession ||
       !hasInterSessionUserProvenance(message as { role?: unknown; provenance?: unknown })
     );
   });
-  const lastText = messages.toReversed().map(extractMessageText).find(Boolean) ?? null;
+}
+
+function findLastMessageText(entries: readonly SessionTranscriptMessageEvent[]): string | null {
+  return (
+    entries.toReversed().map(sqliteMessageEventWithSeq).map(extractMessageText).find(Boolean) ??
+    null
+  );
+}
+
+function readSqliteTitleFields(
+  target: ResolvedTranscriptReadTarget,
+  opts?: { includeInterSession?: boolean },
+): SessionTitleFields {
+  const scope = toTranscriptReadScope(target);
+  const tail = readSessionTranscriptMessageEventPage(scope, {
+    maxMessages: SQLITE_TITLE_PROBE_INITIAL_MESSAGES,
+    offset: 0,
+  });
+  let lastText = findLastMessageText(tail.events);
+  if (!lastText && tail.totalMessages > SQLITE_TITLE_PROBE_INITIAL_MESSAGES) {
+    lastText = findLastMessageText(
+      readSqliteTitleProbeRange(
+        scope,
+        tail.totalMessages,
+        tail.totalMessages - SQLITE_TITLE_PROBE_MAX_MESSAGES,
+        tail.totalMessages - SQLITE_TITLE_PROBE_INITIAL_MESSAGES,
+      ),
+    );
+  }
+
+  const head =
+    tail.totalMessages <= SQLITE_TITLE_PROBE_INITIAL_MESSAGES
+      ? tail.events
+      : readSqliteTitleProbeRange(
+          scope,
+          tail.totalMessages,
+          0,
+          SQLITE_TITLE_PROBE_INITIAL_MESSAGES,
+        );
+  let firstUser = findFirstTitleUserMessage(head, opts?.includeInterSession === true);
+  if (!firstUser && tail.totalMessages > SQLITE_TITLE_PROBE_INITIAL_MESSAGES) {
+    firstUser = findFirstTitleUserMessage(
+      readSqliteTitleProbeRange(
+        scope,
+        tail.totalMessages,
+        SQLITE_TITLE_PROBE_INITIAL_MESSAGES,
+        SQLITE_TITLE_PROBE_MAX_MESSAGES,
+      ),
+      opts?.includeInterSession === true,
+    );
+  }
   return {
     firstUserMessage: firstUser ? extractMessageText(firstUser) : null,
     lastMessagePreview: lastText,
@@ -458,7 +532,18 @@ export async function readSessionMessageCountAsync(
 ): Promise<number> {
   const target = resolveTranscriptReadTarget(scope);
   if (isSqliteReadTarget(target)) {
-    return readSessionTranscriptMessageEventCount(toTranscriptReadScope(target));
+    const transcriptScope = toTranscriptReadScope(target);
+    try {
+      return readSessionTranscriptMessageEventCount(transcriptScope);
+    } catch (error) {
+      if (!isSessionTranscriptProjectionUnavailableError(error)) {
+        throw error;
+      }
+      // The failed read already scheduled the rebuild; wait before assigning
+      // a sequence so a concurrent send cannot fail or reuse a stale count.
+      await waitForSessionTranscriptProjection(transcriptScope);
+      return readSessionTranscriptMessageEventCount(transcriptScope);
+    }
   }
   return await readSessionMessageCountAsyncFile(
     target.sessionId,

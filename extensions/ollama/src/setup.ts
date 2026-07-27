@@ -843,15 +843,20 @@ export async function configureOllamaNonInteractive(params: {
     return params.nextConfig;
   }
 
-  await storeOllamaCredential(params.agentDir);
-
   const enrichedModels = await enrichOllamaModelsWithContext(
     baseUrl,
     models.slice(0, OLLAMA_CONTEXT_ENRICH_LIMIT),
   );
   const discoveredModelsByName = new Map(enrichedModels.map((model) => [model.name, model]));
   const modelNames = models.map((model) => model.name);
-  const orderedModelNames = mergeUniqueModelNames(OLLAMA_SUGGESTED_MODELS_LOCAL, modelNames);
+  // Configured local models are advertised as available, so suggested models
+  // belong in the inventory only when Ollama actually reports them as installed.
+  const orderedModelNames = mergeUniqueModelNames(
+    OLLAMA_SUGGESTED_MODELS_LOCAL.filter(
+      (modelName) => findAvailableOllamaModelName(modelName, modelNames) !== undefined,
+    ),
+    modelNames,
+  );
 
   const requestedDefaultModelId =
     explicitModel ??
@@ -905,6 +910,9 @@ export async function configureOllamaNonInteractive(params: {
       `Ollama model ${requestedDefaultModelId} was not available; using ${defaultModelId} instead.`,
     );
   }
+
+  // Failed setup must not leave a durable local profile behind.
+  await storeOllamaCredential(params.agentDir);
 
   const config = applyOllamaProviderConfig(
     params.nextConfig,

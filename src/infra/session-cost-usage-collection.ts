@@ -37,7 +37,7 @@ import {
   parseUsageCostTranscriptEntry,
   type UsageCostResolver,
 } from "./session-cost-usage-pricing.js";
-import type { ParsedTranscriptEntry, ParsedUsageEntry } from "./session-cost-usage.types.js";
+import type { ParsedUsageEntry } from "./session-cost-usage.types.js";
 
 export const USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY = 32;
 
@@ -337,28 +337,6 @@ export async function* readTranscriptRecordsBestEffort(
   }
 }
 
-async function scanTranscriptFile(params: {
-  filePath: string;
-  config?: OpenClawConfig;
-  resolveCost?: UsageCostResolver;
-  startOffset?: number;
-  endOffset?: number;
-  onEntry: (entry: ParsedTranscriptEntry) => void;
-}): Promise<void> {
-  const resolveCost = params.resolveCost ?? createUsageCostResolver({ config: params.config });
-  for await (const parsed of readTranscriptRecords(
-    params.filePath,
-    params.startOffset,
-    params.endOffset,
-  )) {
-    const entry = parseUsageCostTranscriptEntry(parsed, resolveCost);
-    if (!entry) {
-      continue;
-    }
-    params.onEntry(entry);
-  }
-}
-
 export async function scanUsageFile(params: {
   filePath: string;
   config?: OpenClawConfig;
@@ -367,26 +345,25 @@ export async function scanUsageFile(params: {
   endOffset?: number;
   onEntry: (entry: ParsedUsageEntry) => void;
 }): Promise<void> {
-  await scanTranscriptFile({
-    filePath: params.filePath,
-    config: params.config,
-    resolveCost: params.resolveCost,
-    startOffset: params.startOffset,
-    endOffset: params.endOffset,
-    onEntry: (entry) => {
-      if (!entry.usage) {
-        return;
-      }
-      params.onEntry({
-        usage: entry.usage,
-        costTotal: entry.costTotal,
-        costBreakdown: entry.costBreakdown,
-        provider: entry.provider,
-        model: entry.model,
-        timestamp: entry.timestamp,
-      });
-    },
-  });
+  const resolveCost = params.resolveCost ?? createUsageCostResolver({ config: params.config });
+  for await (const parsed of readTranscriptRecords(
+    params.filePath,
+    params.startOffset,
+    params.endOffset,
+  )) {
+    const entry = parseUsageCostTranscriptEntry(parsed, resolveCost);
+    if (!entry?.usage) {
+      continue;
+    }
+    params.onEntry({
+      usage: entry.usage,
+      costTotal: entry.costTotal,
+      costBreakdown: entry.costBreakdown,
+      provider: entry.provider,
+      model: entry.model,
+      timestamp: entry.timestamp,
+    });
+  }
 }
 
 export function resolveExistingUsageSessionFile(params: {

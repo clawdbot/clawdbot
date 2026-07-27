@@ -93,10 +93,27 @@ function createTestTrajectoryEvent(sessionId: string): TrajectoryEvent {
   };
 }
 
+function createManualCompactRecords(sessionId: string) {
+  return [
+    { type: "session", version: 3, id: sessionId, timestamp: "2026-06-19T12:00:00.000Z" },
+    ...[1, 2, 3, 4].map((index) => ({
+      type: "message",
+      id: `entry-${index}`,
+      parentId: index === 1 ? null : `entry-${index - 1}`,
+      timestamp: `2026-06-19T12:00:0${index}.000Z`,
+      message: { role: "user", content: `message ${index}`, timestamp: index },
+    })),
+  ];
+}
+
 describe("session accessor seam", () => {
   let tempDir: string;
   let storePath: string;
   let transcriptPath: string;
+
+  function loadMainInitializationSnapshot(sessionKey: string) {
+    return loadReplySessionInitializationSnapshot({ agentId: "main", sessionKey, storePath });
+  }
 
   beforeEach(() => {
     cleanupArchivedSessionTranscriptsMock.mockReset();
@@ -925,7 +942,7 @@ describe("session accessor seam", () => {
     expect(fs.existsSync(storePath)).toBe(false);
   });
 
-  it("resolves canonical candidate and transcript rows without parsing unrelated sessions", async () => {
+  it("parses the store once across canonical candidate and transcript reads", async () => {
     const sessionKey = "agent:main:focused-session";
     await upsertSessionEntry(
       { agentId: "main", sessionKey, storePath },
@@ -952,6 +969,7 @@ describe("session accessor seam", () => {
         legacyKeys: [],
         normalizedKey: sessionKey,
       });
+      expect(parse.mock.calls.filter(([value]) => value === unrelatedEntryJson)).toHaveLength(1);
       expect(
         resolveSessionEntryCandidateTarget({
           agentId: "main",
@@ -967,7 +985,7 @@ describe("session accessor seam", () => {
           storePath,
         }),
       ).toMatchObject({ agentId: "main", sessionId: "focused-session", sessionKey });
-      expect(parse).not.toHaveBeenCalledWith(unrelatedEntryJson);
+      expect(parse.mock.calls.filter(([value]) => value === unrelatedEntryJson)).toHaveLength(1);
     } finally {
       parse.mockRestore();
     }
@@ -1324,11 +1342,7 @@ describe("session accessor seam", () => {
       },
     );
 
-    const snapshot = loadReplySessionInitializationSnapshot({
-      agentId: "main",
-      sessionKey,
-      storePath,
-    });
+    const snapshot = loadMainInitializationSnapshot(sessionKey);
     const committed = await commitReplySessionInitialization({
       activeSessionKey: sessionKey,
       agentId: "main",
@@ -1367,11 +1381,7 @@ describe("session accessor seam", () => {
       },
     );
 
-    const snapshot = loadReplySessionInitializationSnapshot({
-      agentId: "main",
-      sessionKey,
-      storePath,
-    });
+    const snapshot = loadMainInitializationSnapshot(sessionKey);
     const committed = await commitReplySessionInitialization({
       activeSessionKey: sessionKey,
       agentId: "main",
@@ -1403,11 +1413,7 @@ describe("session accessor seam", () => {
         updatedAt: 10,
       },
     );
-    const snapshot = loadReplySessionInitializationSnapshot({
-      agentId: "main",
-      sessionKey,
-      storePath,
-    });
+    const snapshot = loadMainInitializationSnapshot(sessionKey);
     await upsertSessionEntry(
       { sessionKey, storePath },
       {
@@ -1437,34 +1443,44 @@ describe("session accessor seam", () => {
     });
   });
 
-  it("commits reply session initialization despite active-turn metadata changes", async () => {
+  it.each([
+    {
+      name: "commits reply session initialization despite active-turn metadata changes",
+      initial: {},
+      concurrent: { compactionCount: 1, totalTokensFresh: false, updatedAt: 11 },
+      prepared: {},
+      expected: { compactionCount: 1, totalTokensFresh: false },
+    },
+    {
+      name: "commits reply session initialization despite non-identity metadata changes",
+      initial: { lastHeartbeatSentAt: 100, lastHeartbeatText: "heartbeat-1" },
+      concurrent: { lastHeartbeatSentAt: 200, lastHeartbeatText: "heartbeat-2" },
+      prepared: { lastHeartbeatSentAt: 100, lastHeartbeatText: "heartbeat-1" },
+      expected: { lastHeartbeatSentAt: 200, lastHeartbeatText: "heartbeat-2" },
+    },
+    {
+      name: "preserves concurrent optional additions when prepared fields are undefined",
+      initial: {},
+      concurrent: { modelOverride: "channel-model", modelOverrideSource: "user" },
+      prepared: { modelOverride: undefined, modelOverrideSource: undefined },
+      expected: { modelOverride: "channel-model", modelOverrideSource: "user" },
+    },
+  ] as const)("$name", async ({ initial, concurrent, prepared, expected }) => {
     const sessionKey = "agent:main:main";
-    await upsertSessionEntry(
-      { sessionKey, storePath },
-      {
-        sessionId: "existing-session",
-        updatedAt: 10,
-      },
-    );
+    const scope = { sessionKey, storePath };
+    await upsertSessionEntry(scope, {
+      sessionId: "existing-session",
+      updatedAt: 10,
+      ...initial,
+    });
     const snapshot = loadReplySessionInitializationSnapshot({
       agentId: "main",
-      sessionKey,
-      storePath,
+      ...scope,
     });
-    const current = loadSessionEntry({ sessionKey, storePath });
-    if (!current) {
-      throw new Error("expected existing session entry");
-    }
-    await replaceSessionEntry(
-      { sessionKey, storePath },
-      {
-        ...current,
-        compactionCount: 1,
-        totalTokensFresh: false,
-        updatedAt: current.updatedAt + 1,
-      },
-    );
+    const current = expectDefined(loadSessionEntry(scope), "existing session entry");
+    await replaceSessionEntry(scope, { ...current, ...concurrent });
 
+    // Initialization guards session identity; it must retain concurrent metadata.
     const committed = await commitReplySessionInitialization({
       activeSessionKey: sessionKey,
       agentId: "main",
@@ -1472,158 +1488,19 @@ describe("session accessor seam", () => {
       sessionEntry: {
         sessionId: "existing-session",
         updatedAt: 30,
+        ...prepared,
       },
       sessionKey,
       snapshotEntry: snapshot.currentEntry,
       storePath,
     });
-
     expect(committed.ok).toBe(true);
     if (!committed.ok) {
       throw new Error("expected reply session initialization to commit");
     }
-    expect(committed.sessionEntry).toMatchObject({
-      compactionCount: 1,
-      sessionId: "existing-session",
-      totalTokensFresh: false,
-      updatedAt: 30,
-    });
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-      compactionCount: 1,
-      sessionId: "existing-session",
-      totalTokensFresh: false,
-      updatedAt: 30,
-    });
-  });
-
-  it("commits reply session initialization despite non-identity metadata changes", async () => {
-    const sessionKey = "agent:main:main";
-    await upsertSessionEntry(
-      { sessionKey, storePath },
-      {
-        sessionId: "existing-session",
-        updatedAt: 10,
-        lastHeartbeatSentAt: 100,
-        lastHeartbeatText: "heartbeat-1",
-      },
-    );
-
-    const snapshot = loadReplySessionInitializationSnapshot({
-      agentId: "main",
-      sessionKey,
-      storePath,
-    });
-
-    // Background activity (heartbeat runner, delivery retry, etc.) can touch
-    // metadata fields without rotating the session. The initialization guard
-    // should only care about session identity, so this must not conflict.
-    const current = loadSessionEntry({ sessionKey, storePath });
-    if (!current) {
-      throw new Error("expected existing session entry");
-    }
-    await replaceSessionEntry(
-      { sessionKey, storePath },
-      {
-        ...current,
-        lastHeartbeatSentAt: 200,
-        lastHeartbeatText: "heartbeat-2",
-      },
-    );
-
-    const committed = await commitReplySessionInitialization({
-      activeSessionKey: sessionKey,
-      agentId: "main",
-      expectedRevision: snapshot.revision,
-      // The real caller builds the prepared entry from the snapshot, so it
-      // inherits the pre-drift heartbeat values. The commit must still notice
-      // the concurrent metadata change and preserve the newer values.
-      sessionEntry: {
-        sessionId: "existing-session",
-        updatedAt: 30,
-        lastHeartbeatSentAt: 100,
-        lastHeartbeatText: "heartbeat-1",
-      },
-      sessionKey,
-      snapshotEntry: snapshot.currentEntry,
-      storePath,
-    });
-
-    expect(committed.ok).toBe(true);
-    if (!committed.ok) {
-      throw new Error("expected reply session initialization to commit");
-    }
-    expect(committed.sessionEntry.sessionId).toBe("existing-session");
-    // The accepted commit must not roll back the metadata drift that happened
-    // while the initialization was in flight.
-    expect(committed.sessionEntry.lastHeartbeatSentAt).toBe(200);
-    expect(committed.sessionEntry.lastHeartbeatText).toBe("heartbeat-2");
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-      sessionId: "existing-session",
-      lastHeartbeatSentAt: 200,
-      lastHeartbeatText: "heartbeat-2",
-    });
-  });
-
-  it("preserves concurrent optional additions when prepared fields are undefined", async () => {
-    const sessionKey = "agent:main:main";
-    await upsertSessionEntry(
-      { sessionKey, storePath },
-      {
-        sessionId: "existing-session",
-        updatedAt: 10,
-      },
-    );
-
-    const snapshot = loadReplySessionInitializationSnapshot({
-      agentId: "main",
-      sessionKey,
-      storePath,
-    });
-
-    const current = loadSessionEntry({ sessionKey, storePath });
-    if (!current) {
-      throw new Error("expected existing session entry");
-    }
-    await replaceSessionEntry(
-      { sessionKey, storePath },
-      {
-        ...current,
-        modelOverride: "channel-model",
-        modelOverrideSource: "user",
-      },
-    );
-
-    const committed = await commitReplySessionInitialization({
-      activeSessionKey: sessionKey,
-      agentId: "main",
-      expectedRevision: snapshot.revision,
-      sessionEntry: {
-        sessionId: "existing-session",
-        updatedAt: 30,
-        modelOverride: undefined,
-        modelOverrideSource: undefined,
-      },
-      sessionKey,
-      snapshotEntry: snapshot.currentEntry,
-      storePath,
-    });
-
-    expect(committed.ok).toBe(true);
-    if (!committed.ok) {
-      throw new Error("expected reply session initialization to commit");
-    }
-    expect(committed.sessionEntry).toMatchObject({
-      modelOverride: "channel-model",
-      modelOverrideSource: "user",
-      sessionId: "existing-session",
-      updatedAt: 30,
-    });
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-      modelOverride: "channel-model",
-      modelOverrideSource: "user",
-      sessionId: "existing-session",
-      updatedAt: 30,
-    });
+    const expectedEntry = { sessionId: "existing-session", updatedAt: 30, ...expected };
+    expect(committed.sessionEntry).toMatchObject(expectedEntry);
+    expect(loadSessionEntry(scope)).toMatchObject(expectedEntry);
   });
 
   it("does not restore pending final delivery metadata cleared after the snapshot", async () => {
@@ -1644,11 +1521,7 @@ describe("session accessor seam", () => {
       },
     );
 
-    const snapshot = loadReplySessionInitializationSnapshot({
-      agentId: "main",
-      sessionKey,
-      storePath,
-    });
+    const snapshot = loadMainInitializationSnapshot(sessionKey);
     if (!snapshot.currentEntry) {
       throw new Error("expected reply session initialization snapshot");
     }
@@ -1715,11 +1588,7 @@ describe("session accessor seam", () => {
       },
     );
 
-    const snapshot = loadReplySessionInitializationSnapshot({
-      agentId: "main",
-      sessionKey,
-      storePath,
-    });
+    const snapshot = loadMainInitializationSnapshot(sessionKey);
 
     const current = loadSessionEntry({ sessionKey, storePath });
     if (!current) {
@@ -1785,11 +1654,7 @@ describe("session accessor seam", () => {
       ],
     });
 
-    const snapshot = loadReplySessionInitializationSnapshot({
-      agentId: "main",
-      sessionKey,
-      storePath,
-    });
+    const snapshot = loadMainInitializationSnapshot(sessionKey);
     const committed = await commitReplySessionInitialization({
       activeSessionKey: sessionKey,
       agentId: "main",
@@ -1853,11 +1718,7 @@ describe("session accessor seam", () => {
         updatedAt: 10,
       },
     );
-    const snapshot = loadReplySessionInitializationSnapshot({
-      agentId: "main",
-      sessionKey,
-      storePath,
-    });
+    const snapshot = loadMainInitializationSnapshot(sessionKey);
 
     const committed = await commitReplySessionInitialization({
       activeSessionKey: sessionKey,
@@ -2682,16 +2543,7 @@ describe("session accessor seam", () => {
       sessionId,
       sessionKey: "agent:main:main",
     };
-    const records = [
-      { type: "session", version: 3, id: sessionId, timestamp: "2026-06-19T12:00:00.000Z" },
-      ...[1, 2, 3, 4].map((index) => ({
-        type: "message",
-        id: `entry-${index}`,
-        parentId: index === 1 ? null : `entry-${index - 1}`,
-        timestamp: `2026-06-19T12:00:0${index}.000Z`,
-        message: { role: "user", content: `message ${index}`, timestamp: index },
-      })),
-    ];
+    const records = createManualCompactRecords(sessionId);
     await upsertSessionEntry(scope, { sessionId, updatedAt: 1 });
     await replaceSqliteTranscriptEvents(
       scope,
@@ -2729,16 +2581,7 @@ describe("session accessor seam", () => {
       sessionKey,
       storePath,
     };
-    const records = [
-      { type: "session", version: 3, id: sessionId, timestamp: "2026-06-19T12:00:00.000Z" },
-      ...[1, 2, 3, 4].map((index) => ({
-        type: "message",
-        id: `entry-${index}`,
-        parentId: index === 1 ? null : `entry-${index - 1}`,
-        timestamp: `2026-06-19T12:00:0${index}.000Z`,
-        message: { role: "user", content: `message ${index}`, timestamp: index },
-      })),
-    ];
+    const records = createManualCompactRecords(sessionId);
     await upsertSessionEntry(scope, {
       inputTokens: 10,
       outputTokens: 20,
@@ -2782,159 +2625,99 @@ describe("session accessor seam", () => {
     ).toBe(`${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
   });
 
-  it("rejects a manual compact when session metadata changes after its snapshot", async () => {
-    const sessionId = "88888888-8888-4888-8888-888888888888";
-    const scope = {
-      agentId: "main",
-      sessionId,
-      sessionKey: "agent:main:main",
-      storePath,
-    };
-    const records = [
-      { type: "session", version: 3, id: sessionId, timestamp: "2026-06-19T12:00:00.000Z" },
-      ...[1, 2, 3, 4].map((index) => ({
-        type: "message",
-        id: `entry-${index}`,
-        parentId: index === 1 ? null : `entry-${index - 1}`,
-        timestamp: `2026-06-19T12:00:0${index}.000Z`,
-        message: { role: "user", content: `message ${index}`, timestamp: index },
-      })),
-    ];
-    await upsertSessionEntry(scope, {
-      sessionId,
-      totalTokens: 30,
-      totalTokensFresh: true,
-      updatedAt: 100,
-    });
+  it.each([
+    {
+      name: "rejects a manual compact when session metadata changes after its snapshot",
+      sessionId: "88888888-8888-4888-8888-888888888888",
+      conflict: "metadata",
+      reuseArchive: false,
+    },
+    {
+      name: "preserves the backup and rows written after the manual compact snapshot",
+      sessionId: "55555555-5555-4555-8555-555555555555",
+      conflict: "transcript",
+      reuseArchive: false,
+    },
+    {
+      name: "preserves a reused manual compact backup when the rewrite conflicts",
+      sessionId: "66666666-6666-4666-8666-666666666666",
+      conflict: "transcript",
+      reuseArchive: true,
+    },
+  ] as const)("$name", async ({ sessionId, conflict, reuseArchive }) => {
+    const scope = { agentId: "main", sessionId, sessionKey: "agent:main:main", storePath };
+    const records = createManualCompactRecords(sessionId);
+    const archiveContent = `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
+    await upsertSessionEntry(
+      scope,
+      conflict === "metadata"
+        ? { sessionId, totalTokens: 30, totalTokensFresh: true, updatedAt: 100 }
+        : { sessionId, updatedAt: 1 },
+    );
     await replaceSqliteTranscriptEvents(
       scope,
       records as Parameters<typeof replaceSqliteTranscriptEvents>[1],
     );
+    const existingArchive = path.join(tempDir, `${sessionId}.jsonl.bak.preexisting`);
+    if (reuseArchive) {
+      fs.writeFileSync(existingArchive, archiveContent);
+    }
 
+    const expectedError =
+      conflict === "metadata"
+        ? "SQLite session state changed while preparing session.transcript.manual-compact"
+        : `SQLite transcript changed while preparing rewrite for ${sessionId}`;
     await expect(
       trimSqliteTranscriptForManualCompact(
         scope,
         (lines) => {
-          replaceSqliteSessionEntrySync(scope, {
-            label: "concurrent metadata",
-            sessionId,
-            totalTokens: 40,
-            totalTokensFresh: true,
-            updatedAt: 200,
-          });
+          if (conflict === "metadata") {
+            replaceSqliteSessionEntrySync(scope, {
+              label: "concurrent metadata",
+              sessionId,
+              totalTokens: 40,
+              totalTokensFresh: true,
+              updatedAt: 200,
+            });
+          } else {
+            appendSqliteTranscriptEventSync(scope, {
+              type: "custom",
+              id: "late-append",
+              timestamp: "2026-06-19T12:00:09.000Z",
+            });
+          }
           return lines.slice(0, 1);
         },
-        { nowMs: 500 },
+        conflict === "metadata" ? { nowMs: 500 } : undefined,
       ),
-    ).rejects.toThrow(
-      "SQLite session state changed while preparing session.transcript.manual-compact",
-    );
-
-    expect(await loadTranscriptEvents(scope)).toEqual(records);
-    expect(loadSessionEntry(scope)).toMatchObject({
-      label: "concurrent metadata",
-      totalTokens: 40,
-      totalTokensFresh: true,
-      updatedAt: 200,
-    });
-    const archiveNames = fs.readdirSync(tempDir).filter((name) => name.includes(".bak."));
-    expect(archiveNames).toHaveLength(1);
-    expect(
-      readSessionArchiveContentSync(
-        path.join(tempDir, expectDefined(archiveNames[0], "manual compact archive name")),
-      ),
-    ).toBe(`${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
-  });
-
-  it("preserves the backup and rows written after the manual compact snapshot", async () => {
-    const sessionId = "55555555-5555-4555-8555-555555555555";
-    const scope = {
-      agentId: "main",
-      sessionId,
-      sessionKey: "agent:main:main",
-      storePath,
-    };
-    const records = [
-      { type: "session", version: 3, id: sessionId, timestamp: "2026-06-19T12:00:00.000Z" },
-      ...[1, 2, 3, 4].map((index) => ({
-        type: "message",
-        id: `entry-${index}`,
-        parentId: index === 1 ? null : `entry-${index - 1}`,
-        timestamp: `2026-06-19T12:00:0${index}.000Z`,
-        message: { role: "user", content: `message ${index}`, timestamp: index },
-      })),
-    ];
-    const lateEvent = {
-      type: "custom",
-      id: "late-append",
-      timestamp: "2026-06-19T12:00:09.000Z",
-    };
-    await upsertSessionEntry(scope, { sessionId, updatedAt: 1 });
-    await replaceSqliteTranscriptEvents(
-      scope,
-      records as Parameters<typeof replaceSqliteTranscriptEvents>[1],
-    );
-
-    await expect(
-      trimSqliteTranscriptForManualCompact(scope, (lines) => {
-        appendSqliteTranscriptEventSync(scope, lateEvent);
-        return lines.slice(0, 1);
-      }),
-    ).rejects.toThrow(`SQLite transcript changed while preparing rewrite for ${sessionId}`);
+    ).rejects.toThrow(expectedError);
 
     const remaining = (await loadTranscriptEvents(scope)) as Array<Record<string, unknown>>;
-    expect(remaining).toHaveLength(6);
-    expect(remaining.slice(0, 5)).toEqual(records);
-    expect(remaining[5]).toMatchObject({ id: "late-append" });
-    const archiveNames = fs.readdirSync(tempDir).filter((name) => name.includes(".bak."));
-    expect(archiveNames).toHaveLength(1);
-    expect(
-      readSessionArchiveContentSync(
-        path.join(tempDir, expectDefined(archiveNames[0], "manual compact archive name")),
-      ),
-    ).toBe(`${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
-  });
-
-  it("preserves a reused manual compact backup when the rewrite conflicts", async () => {
-    const sessionId = "66666666-6666-4666-8666-666666666666";
-    const scope = {
-      agentId: "main",
-      sessionId,
-      sessionKey: "agent:main:main",
-      storePath,
-    };
-    const records = [
-      { type: "session", version: 3, id: sessionId, timestamp: "2026-06-19T12:00:00.000Z" },
-      ...[1, 2, 3, 4].map((index) => ({
-        type: "message",
-        id: `entry-${index}`,
-        parentId: index === 1 ? null : `entry-${index - 1}`,
-        timestamp: `2026-06-19T12:00:0${index}.000Z`,
-        message: { role: "user", content: `message ${index}`, timestamp: index },
-      })),
-    ];
-    const existingArchive = path.join(tempDir, `${sessionId}.jsonl.bak.preexisting`);
-    const archiveContent = `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
-    await upsertSessionEntry(scope, { sessionId, updatedAt: 1 });
-    await replaceSqliteTranscriptEvents(
-      scope,
-      records as Parameters<typeof replaceSqliteTranscriptEvents>[1],
-    );
-    fs.writeFileSync(existingArchive, archiveContent);
-
-    await expect(
-      trimSqliteTranscriptForManualCompact(scope, (lines) => {
-        appendSqliteTranscriptEventSync(scope, {
-          type: "custom",
-          id: "late-append",
-          timestamp: "2026-06-19T12:00:09.000Z",
-        });
-        return lines.slice(0, 1);
-      }),
-    ).rejects.toThrow(`SQLite transcript changed while preparing rewrite for ${sessionId}`);
-
-    expect(fs.existsSync(existingArchive)).toBe(true);
-    expect(readSessionArchiveContentSync(existingArchive)).toBe(archiveContent);
+    if (conflict === "metadata") {
+      expect(remaining).toEqual(records);
+      expect(loadSessionEntry(scope)).toMatchObject({
+        label: "concurrent metadata",
+        totalTokens: 40,
+        totalTokensFresh: true,
+        updatedAt: 200,
+      });
+    } else {
+      expect(remaining).toHaveLength(6);
+      expect(remaining.slice(0, 5)).toEqual(records);
+      expect(remaining[5]).toMatchObject({ id: "late-append" });
+    }
+    if (reuseArchive) {
+      expect(fs.existsSync(existingArchive)).toBe(true);
+      expect(readSessionArchiveContentSync(existingArchive)).toBe(archiveContent);
+    } else {
+      const archiveNames = fs.readdirSync(tempDir).filter((name) => name.includes(".bak."));
+      expect(archiveNames).toHaveLength(1);
+      expect(
+        readSessionArchiveContentSync(
+          path.join(tempDir, expectDefined(archiveNames[0], "manual compact archive name")),
+        ),
+      ).toBe(archiveContent);
+    }
   });
 
   it("repairs a retained compaction boundary when its first kept entry was trimmed", async () => {

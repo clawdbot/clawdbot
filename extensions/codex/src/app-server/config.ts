@@ -5,7 +5,6 @@ export {
 } from "./config-contracts.js";
 export type {
   CodexAppServerApprovalPolicy,
-  CodexAppServerConnectionClass,
   CodexAppServerHomeScope,
   CodexAppServerRuntimeOptions,
   CodexAppServerSandboxMode,
