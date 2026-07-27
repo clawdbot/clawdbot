@@ -204,6 +204,35 @@ describe("session cost usage", () => {
       expect(
         resolveExistingUsageSessionFile({
           agentId: "main",
+          sessionId,
+          sessionTarget: {
+            ...sessionTarget,
+            sessionKey: "agent:other:empty-sqlite-cost",
+          },
+        }),
+      ).toBeUndefined();
+      const mismatchedTarget = {
+        ...sessionTarget,
+        sessionKey: "agent:main:mapped-other-cost",
+      };
+      await upsertSessionEntry(
+        {
+          agentId: "main",
+          sessionKey: mismatchedTarget.sessionKey,
+          storePath,
+        },
+        { sessionId: "mapped-other-session", updatedAt: 1 },
+      );
+      expect(
+        resolveExistingUsageSessionFile({
+          agentId: "main",
+          sessionId,
+          sessionTarget: mismatchedTarget,
+        }),
+      ).toBeUndefined();
+      expect(
+        resolveExistingUsageSessionFile({
+          agentId: "main",
           sessionId: "other-session",
           sessionTarget,
         }),

@@ -391,9 +391,17 @@ export function resolveExistingUsageSessionFile(params: {
     target?.agentId && target.sessionId && target.sessionKey && target.storePath,
   );
   if (target && completeTarget) {
+    const targetKeyAgentId = parseAgentSessionKey(target.sessionKey)?.agentId;
+    const targetKeyEntry = loadSessionEntry({
+      agentId: target.agentId!,
+      sessionKey: target.sessionKey!,
+      storePath: target.storePath!,
+    });
     if (
       (sessionId !== undefined && target.sessionId !== sessionId) ||
-      target.agentId !== params.agentId
+      target.agentId !== params.agentId ||
+      (targetKeyAgentId && targetKeyAgentId !== target.agentId) ||
+      (targetKeyEntry && targetKeyEntry.sessionId !== target.sessionId)
     ) {
       return undefined;
     }
