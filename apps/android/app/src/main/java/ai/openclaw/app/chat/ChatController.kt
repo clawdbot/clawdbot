@@ -55,6 +55,7 @@ import java.util.concurrent.atomic.AtomicLong
 internal const val SESSION_LIST_FETCH_LIMIT = 200
 private val QUESTION_REFRESH_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000L)
 private val SWARM_REFRESH_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000L)
+private const val SESSION_EDITOR_MAX_BASE64_CHARS = ((OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES + 2) / 3) * 4
 
 internal fun chatOutboxQueueFailureText(): NativeText = ChatController.queueFailureText()
 
@@ -1128,7 +1129,10 @@ class ChatController internal constructor(
           false
         }
       if (!historyApplied || !branchApplied) recoverOutboxAfterSessionMutationRefreshFailure(snapshot, mutationLease)
-      SessionRewindResult(editorText)
+      SessionRewindResult(
+        editorText = editorText,
+        editorAttachments = parseSessionEditorAttachments(root?.get("editorAttachments")),
+      )
     } catch (err: CancellationException) {
       withContext(NonCancellable) {
         recoverOutboxAfterSessionMutationRefreshFailure(snapshot, mutationLease)
@@ -1152,7 +1156,7 @@ class ChatController internal constructor(
   suspend fun forkSessionAtEntry(
     sessionKey: String,
     entryId: String,
-  ): Pair<String, String?>? {
+  ): SessionForkResult? {
     val entry = entryId.trim().takeIf { it.isNotEmpty() } ?: return null
     val snapshot = currentSessionActionSnapshot(sessionKey) ?: return null
     if (!canPerformMessageSessionAction(snapshot)) return null
@@ -1185,7 +1189,11 @@ class ChatController internal constructor(
         fetchSessionsForCurrentWindow()
         return null
       }
-      createdKey to root?.get("editorText").asStringOrNull()
+      SessionForkResult(
+        sessionKey = createdKey,
+        editorText = root?.get("editorText").asStringOrNull(),
+        editorAttachments = parseSessionEditorAttachments(root?.get("editorAttachments")),
+      )
     } catch (err: CancellationException) {
       withContext(NonCancellable) {
         cancelOutboxSessionMutation(snapshot, mutationLease)
@@ -6657,6 +6665,30 @@ private fun messageContentIdentityKey(message: ChatMessage): String? {
 private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
 
 private fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
+
+private fun parseSessionEditorAttachments(value: JsonElement?): List<SessionEditorAttachment> =
+  value.asArrayOrNull()?.mapNotNull { element ->
+    val attachment = element.asObjectOrNull() ?: return@mapNotNull null
+    val mimeType =
+      attachment["mimeType"]
+        .asStringOrNull()
+        ?.trim()
+        ?.takeIf { it.startsWith("image/", ignoreCase = true) }
+        ?: return@mapNotNull null
+    val data =
+      attachment["data"]
+        .asStringOrNull()
+        ?.takeIf { it.isNotEmpty() && it.length.toLong() <= SESSION_EDITOR_MAX_BASE64_CHARS }
+        ?: return@mapNotNull null
+    val decoded =
+      try {
+        Base64.getDecoder().decode(data)
+      } catch (_: IllegalArgumentException) {
+        return@mapNotNull null
+      }
+    if (decoded.isEmpty() || decoded.size.toLong() > OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES) return@mapNotNull null
+    SessionEditorAttachment(mimeType = mimeType, data = data)
+  } ?: emptyList()
 
 private fun JsonElement?.asStringOrNull(): String? =
   when (this) {

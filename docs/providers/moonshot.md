@@ -184,7 +184,7 @@ onboarding.
     **Best for:** code-focused tasks via the Kimi Coding endpoint.
 
     <Note>
-    Kimi Coding uses a different API key and provider prefix (`kimi/...`) than Moonshot (`moonshot/...`). Current refs are `kimi/k3` for a 256K context, `kimi/k3[1m]` for the 1M tier, `kimi/kimi-for-coding`, and `kimi/kimi-for-coding-highspeed`. Legacy refs `kimi/kimi-code` and `kimi/k2p5` remain accepted and normalize to `kimi/kimi-for-coding`.
+    Kimi Coding uses a different API key and provider prefix (`kimi/...`) than Moonshot (`moonshot/...`). Current refs are `kimi/k3` for up to 1M context (tier-gated), `kimi/k3-256k` for 256K context with lower quota use, `kimi/kimi-for-coding`, and `kimi/kimi-for-coding-highspeed`. Legacy refs `kimi/kimi-code` and `kimi/k2p5` normalize to `kimi/kimi-for-coding`; legacy `kimi/k3[1m]` normalizes to `kimi/k3`.
     </Note>
 
     The coding service accepts both OpenAI-compatible
@@ -193,6 +193,15 @@ onboarding.
     Create membership keys in the
     [Kimi Code Console](https://www.kimi.com/code/console); current membership
     pricing lives on [Kimi's pricing page](https://www.kimi.com/membership/pricing).
+
+    | Model ref | Name | Reasoning | Input | Context | Max output |
+    | --- | --- | --- | --- | --- | --- |
+    | `kimi/k3` | Kimi K3 | adaptive; low / high / max effort | text, image | 1,048,576 | 131,072 |
+    | `kimi/k3-256k` | Kimi K3 (256k) | adaptive; low / high / max effort | text, image | 262,144 | 131,072 |
+
+    The K3 catalog estimates $3/MTok input, $15/MTok output, $0.30/MTok
+    cache reads, and $0/MTok cache writes. The catalog reports K3's maximum
+    context; your Kimi membership may enforce a lower live limit.
 
     <Steps>
       <Step title="Install the plugin">
@@ -224,11 +233,10 @@ onboarding.
       </Step>
     </Steps>
 
-    Kimi Code K3 defaults to deep thinking at `max`. `/think off` sends
-    `thinking.type: "disabled"`; `/think max` sends K3's adaptive-thinking
-    request with max effort. Stale lower thinking levels resolve to the
-    supported `max` level. The 1M model requires an Allegretto or higher Kimi
-    membership; use `kimi/k3` on Moderato.
+    Kimi Code K3 always uses adaptive thinking when reasoning is enabled and
+    defaults to high effort. `/think minimal|low` maps to low effort,
+    `/think medium|high|adaptive` maps to high effort, and `/think xhigh|max`
+    maps to max effort. `/think off` sends `thinking.type: "disabled"`.
 
     See the official [Kimi Code model table](https://www.kimi.com/code/docs/en/kimi-code/models.html) for current plan availability.
 
@@ -311,10 +319,12 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
     `/think max`, sends `reasoning_effort: "max"`, and ignores stale lower or
     `off` settings.
 
-    Kimi Code K3 exposes `/think off|max`. Its Anthropic-compatible endpoint
-    receives `thinking.type: "disabled"` for off, or adaptive thinking with
-    `output_config.effort: "max"` for max. This applies to both `kimi/k3` and
-    `kimi/k3[1m]`.
+    Kimi Code K3 exposes `/think off|minimal|low|medium|high|adaptive|xhigh|max`.
+    Its Anthropic-compatible endpoint receives `thinking.type: "disabled"` for
+    off. Every enabled level uses adaptive thinking; minimal/low maps to low
+    effort, medium/high/adaptive maps to high effort, and xhigh/max maps to max
+    effort. This applies to both `kimi/k3` and `kimi/k3-256k`. Legacy
+    `kimi/k3[1m]` normalizes to `kimi/k3`.
     Moonshot API K3 supports `auto`, `none`, `required`, and pinned tool choices,
     so OpenClaw preserves the requested `tool_choice`. For multi-turn tool use,
     OpenClaw preserves the assistant reasoning content required by Moonshot's

@@ -2,7 +2,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
+import {
+  detectPackageManager as detectPackageManagerImpl,
+  isBunOwnedPackageRoot,
+  isPnpmOwnedPackageRoot,
+  resolvePnpmNodeModulesRoot,
+} from "./detect-package-manager.js";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
 import { channelToNpmTag, type UpdateChannel } from "./update-channels.js";
@@ -179,6 +184,33 @@ async function detectPackageManager(root: string): Promise<PackageManager> {
   return (await detectPackageManagerImpl(root)) ?? "unknown";
 }
 
+// Packed manifests advertise the workspace pnpm packageManager, so installed roots need
+// topology proof (pnpm virtual store, Bun global root, or otherwise npm); mistakes break self-update.
+async function isLocklessOpenClawNpmInstall(params: {
+  root: string;
+  manager: PackageManager;
+}): Promise<boolean> {
+  if (params.manager !== "pnpm" || (await exists(path.join(params.root, "pnpm-lock.yaml")))) {
+    return false;
+  }
+  try {
+    const manifest = JSON.parse(await fs.readFile(path.join(params.root, "package.json"), "utf8"));
+    if (manifest?.name !== "openclaw") {
+      return false;
+    }
+    if (
+      !resolvePnpmNodeModulesRoot(params.root) ||
+      (await isPnpmOwnedPackageRoot(params.root)) ||
+      (await isBunOwnedPackageRoot(params.root))
+    ) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function detectGitRoot(root: string): Promise<string | null> {
   const res = await runCommandWithTimeout(["git", "-C", root, "rev-parse", "--show-toplevel"], {
     timeoutMs: 4000,
@@ -329,11 +361,8 @@ async function resolveDepsMarker(params: { root: string; manager: PackageManager
     };
   }
   if (params.manager === "npm") {
-    const shrinkwrapPath = path.join(root, "npm-shrinkwrap.json");
     return {
-      lockfilePath: (await exists(shrinkwrapPath))
-        ? shrinkwrapPath
-        : path.join(root, "package-lock.json"),
+      lockfilePath: path.join(root, "package-lock.json"),
       markerPath: path.join(root, "node_modules"),
     };
   }
@@ -566,8 +595,19 @@ export async function checkUpdateStatus(params: {
   }
 
   const rootRealpath = await fs.realpath(root).catch(() => root);
-  const [pm, gitRoot] = await Promise.all([detectPackageManager(root), detectGitRoot(root)]);
+  const [detectedPackageManager, gitRoot] = await Promise.all([
+    detectPackageManager(root),
+    detectGitRoot(root),
+  ]);
   const isGit = gitRoot && path.resolve(gitRoot) === path.resolve(rootRealpath);
+  const packageManager =
+    !isGit &&
+    (await isLocklessOpenClawNpmInstall({
+      root,
+      manager: detectedPackageManager,
+    }))
+      ? "npm"
+      : detectedPackageManager;
 
   const registry = params.includeRegistry
     ? params.registryChannel === "extended-stable" && isGit
@@ -589,13 +629,13 @@ export async function checkUpdateStatus(params: {
           fetch: Boolean(params.fetchGit),
         })
       : Promise.resolve(undefined),
-    checkDepsStatus({ root, manager: pm }),
+    checkDepsStatus({ root, manager: packageManager }),
   ]);
 
   return {
     root,
     installKind,
-    packageManager: pm,
+    packageManager,
     git,
     deps,
     registry,

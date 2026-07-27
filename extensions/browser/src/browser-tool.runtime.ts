@@ -28,6 +28,7 @@ export {
   readStringParam,
   normalizeWhitespace,
   prepareSimpleCompletionModelForAgent,
+  validateJsonSchemaValue,
   resolveNodeIdFromList,
   saveMediaBuffer,
   sanitizeHtml,

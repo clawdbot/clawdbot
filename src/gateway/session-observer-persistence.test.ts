@@ -38,6 +38,7 @@ describe("session observer digest persistence", () => {
       now: () => now,
       persistDigest,
       stillCurrent: () => () => true,
+      onMissingEntry: vi.fn(),
       onError: vi.fn(),
     });
     const session = state();

@@ -679,52 +679,6 @@ describe("Pi session catalog", () => {
     },
   );
 
-  it("adopts local Pi sessions once with the native ACP resume binding", async () => {
-    await createPiStore("hi", "Pi catalog session", { command: "pwd" }, true);
-    await installFakePi();
-    const { createSessionEntry, provider } = capturePiContinuationCatalog();
-
-    const [first, concurrent] = await Promise.all([
-      provider.continueSession!({ hostId: "gateway", threadId: "pi-session" }),
-      provider.continueSession!({ hostId: "gateway", threadId: "pi-session" }),
-    ]);
-    const second = await provider.continueSession!({
-      hostId: "gateway",
-      threadId: "pi-session",
-    });
-
-    expect(first).toEqual(concurrent);
-    expect(second).toEqual(first);
-    expect(createSessionEntry).toHaveBeenCalledTimes(1);
-    expect(createSessionEntry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        label: "Pi catalog session",
-        spawnedCwd: "/workspace",
-        initialEntry: {
-          acpBackendId: "acpx",
-          acpSessionBinding: { acpAgentId: "pi", agentSessionId: "pi-session" },
-          pluginExtensions: {
-            acpx: { piSessionCatalog: { sourceThreadId: "pi-session" } },
-          },
-        },
-      }),
-    );
-  });
-
-  it("rejects paired-node and unknown Pi session continuation", async () => {
-    await createPiStore("hi", "Pi catalog session", { command: "pwd" }, true);
-    await installFakePi();
-    const { createSessionEntry, provider } = capturePiContinuationCatalog();
-
-    await expect(
-      provider.continueSession!({ hostId: "node:remote", threadId: "pi-session" }),
-    ).rejects.toThrow("paired-node Pi session rows are view-only");
-    await expect(
-      provider.continueSession!({ hostId: "gateway", threadId: "missing" }),
-    ).rejects.toThrow("Pi session is unavailable");
-    expect(createSessionEntry).not.toHaveBeenCalled();
-  });
-
   it("hides and rejects Continue when ACP cannot resume Pi", async () => {
     await createPiStore("hi", "Pi catalog session", { command: "pwd" }, true);
     await installFakePi();

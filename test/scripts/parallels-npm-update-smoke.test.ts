@@ -137,6 +137,15 @@ describe("parallels npm update smoke", () => {
     ).toThrow("--registry-package-tarball requires --target-tarball");
   });
 
+  it("passes an explicit macOS snapshot hint through fresh lanes", () => {
+    expect(
+      parseArgs(["--platform", "macos", "--macos-snapshot-hint", "macOS 26.5 Node 24"]),
+    ).toMatchObject({
+      macosSnapshotHint: "macOS 26.5 Node 24",
+      platforms: new Set(["macos"]),
+    });
+  });
+
   it("stops the host artifact server when the wrapper fails mid-run", async () => {
     let stopCalls = 0;
     const server: HostServer = {

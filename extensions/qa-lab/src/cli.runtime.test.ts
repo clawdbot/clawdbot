@@ -1739,7 +1739,6 @@ describe("qa cli runtime", () => {
         "channel-chat-baseline",
         "runtime-tool-bash",
         "approval-turn-tool-followthrough",
-        "gateway-restart-inflight-run",
         "runtime-first-hour-20-turn",
         "runtime-tool-apply-patch",
         "source-docs-discovery-report",
@@ -1792,10 +1791,6 @@ describe("qa cli runtime", () => {
     expectWriteContains(
       stderrWrite,
       "excluded incompatible non-flow scenario(s): codex-plugin-cold-install (script)",
-    );
-    expectWriteContains(
-      stderrWrite,
-      "excluded lane-incompatible scenario(s): gateway-restart-inflight-run",
     );
   });
 

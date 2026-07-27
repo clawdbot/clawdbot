@@ -68,7 +68,7 @@ import {
   buildTextToolResult,
   REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
   resolveMediaToolInboundRoots,
-  resolveMediaToolLocalRoots,
+  resolveMediaToolReferenceAccess,
   resolveRemoteMediaSsrfPolicy,
   resolvePromptAndModelOverride,
 } from "./media-tool-shared.js";
@@ -80,7 +80,6 @@ import {
 } from "./model-config.helpers.js";
 import {
   createSandboxBridgeReadFile,
-  resolveSandboxedBridgeMediaPath,
   runWithImageModelFallback,
   type AnyAgentTool,
   type SandboxedBridgeMediaPathConfig,
@@ -1086,30 +1085,22 @@ export function createImageTool(options?: {
           }
           return normalizedRef;
         })();
-        const resolvedPathInfo: { resolved: string; rewrittenFrom?: string } = isDataUrl
-          ? { resolved: "" }
-          : sandboxConfig
-            ? await resolveSandboxedBridgeMediaPath({
-                sandbox: sandboxConfig,
-                mediaPath: resolvedImage,
-                inboundFallbackDir: "media/inbound",
-              })
-            : {
-                resolved: resolvedImage.startsWith("file://")
-                  ? resolvedImage.slice("file://".length)
-                  : resolvedImage,
-              };
-        const resolvedPath = isDataUrl ? null : resolvedPathInfo.resolved;
-        const mediaLocalRoots = resolveMediaToolLocalRoots(
-          options?.workspaceDir,
-          {
+        const {
+          resolvedPath,
+          localRoots: mediaLocalRoots,
+          rewrittenFrom,
+        } = await resolveMediaToolReferenceAccess({
+          input: resolvedImage,
+          isDataUrl,
+          workspaceDir: options?.workspaceDir,
+          sandbox: sandboxConfig,
+          rootOptions: {
             workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
             cfg: options?.config,
             channelId: options?.agentChannel ?? options?.currentChannelId,
             accountId: options?.agentAccountId,
           },
-          resolvedPath ? [resolvedPath] : undefined,
-        );
+        });
         const mediaInboundRoots = resolveMediaToolInboundRoots({
           workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
           cfg: options?.config,
@@ -1161,9 +1152,7 @@ export function createImageTool(options?: {
           buffer: media.buffer,
           mimeType,
           resolvedImage,
-          ...(resolvedPathInfo.rewrittenFrom
-            ? { rewrittenFrom: resolvedPathInfo.rewrittenFrom }
-            : {}),
+          ...(rewrittenFrom ? { rewrittenFrom } : {}),
         });
       }
 

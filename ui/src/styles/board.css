@@ -743,49 +743,94 @@ openclaw-workboard-mini-widget {
 
 @media (hover: hover) and (pointer: fine) {
   /* Focus keeps keyboard actions reachable; menu-open and dragging keep chrome
-     pinned when interaction leaves the card bounds. */
+     pinned when interaction leaves the card bounds. Inline-size containment
+     lets the pill drop to its minimal form on narrow cards; grid tracks set
+     the card's width, so containment changes no layout. */
   .board-widget {
+    container-type: inline-size;
     grid-template-rows: minmax(0, 1fr);
   }
 
+  /* Chrome is a compact top-left pill, not a full-width strip: widgets put
+     their own actions top-right, so that corner must stay visible and
+     clickable even while host chrome is revealed. The 30px pill height is
+     overlay-only; coarse pointers keep the base 38px in-flow grid row that
+     BOARD_WIDGET_TOUCH_BAR_PX mirrors. */
   .board-widget__bar {
     backdrop-filter: blur(6px);
     background: color-mix(in srgb, var(--board-surface) 92%, transparent);
-    border-radius: 11px 11px 0 0;
-    height: 38px;
-    left: 0;
+    border: 1px solid var(--board-line);
+    border-radius: 999px;
+    box-shadow: 0 4px 14px rgb(0 0 0 / 18%);
+    height: 30px;
+    left: 7px;
+    /* Reserve a widget-owned top-right action region: the interactive pill may
+       never stretch across the card, or it re-intercepts the exact corner this
+       chrome exists to keep clickable. The 88px floor keeps the drag handle and
+       menu usable on very narrow widgets; below 184px the container query strips
+       the pill to that irreducible pair so the reservation stays maximal. */
+    max-width: max(88px, calc(100% - 96px));
     opacity: 0;
+    padding: 0 5px;
     position: absolute;
-    right: 0;
-    top: 0;
+    top: 7px;
     transition:
-      opacity 120ms ease,
-      visibility 0s linear 120ms;
+      opacity 100ms ease,
+      visibility 0s linear 100ms;
     visibility: hidden;
     z-index: 5;
-    /* The overlay strip must not steal clicks from widget content underneath:
-       only real controls stay interactive, everything else passes through. */
-    pointer-events: none;
   }
 
-  /* Capabilities chip stays interactive for its granted-permissions tooltip;
-     the kind badge and title are display-only and pass clicks through. */
+  .board-widget__bar > .board-widget__title {
+    max-width: 200px;
+  }
+
+  /* Every flexible child must shrink inside the capped pill; content that
+     overflowed the box would carry pointer events into the reserved corner. */
   .board-widget__bar > .board-widget__drag-handle,
-  .board-widget__bar > .board-widget__capabilities,
   .board-widget__bar > .board-widget__menu {
-    pointer-events: auto;
+    flex-shrink: 0;
+  }
+
+  .board-widget__bar > .board-widget__kind,
+  .board-widget__bar > .board-widget__capabilities {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  /* Below 184px the 96px reservation and the 88px pill cannot coexist, so the
+     pill sheds its display-only pieces and keeps just move + menu — the two
+     controls without which a widget cannot be managed. The card's aria-label
+     and the drag handle tooltip still carry the title. */
+  @container (max-width: 184px) {
+    .board-widget__bar > .board-widget__title,
+    .board-widget__bar > .board-widget__kind,
+    .board-widget__bar > .board-widget__capabilities {
+      display: none;
+    }
   }
 
   .board-widget__resize-handle {
     opacity: 0;
     transition:
-      opacity 120ms ease,
-      visibility 0s linear 120ms;
+      opacity 100ms ease,
+      visibility 0s linear 100ms;
     visibility: hidden;
   }
 
+  /* Hover-intent: the pointer must rest on the card briefly before chrome
+     appears, so quick clicks into widget content never race the overlay.
+     Delay-only overrides keep the base fade, and reduced-motion's
+     transition: none stays authoritative because no transition-property is
+     redeclared here. */
   .board-widget:hover .board-widget__bar,
-  .board-widget:hover .board-widget__resize-handle,
+  .board-widget:hover .board-widget__resize-handle {
+    opacity: 1;
+    transition-delay: 350ms;
+    visibility: visible;
+  }
+
+  /* Keyboard focus, an open menu, and active drags need chrome immediately. */
   .board-widget:focus-within .board-widget__bar,
   .board-widget:focus-within .board-widget__resize-handle,
   .board-widget--dragging .board-widget__bar,
@@ -793,9 +838,6 @@ openclaw-workboard-mini-widget {
   .board-widget:has(.board-widget__menu[open]) .board-widget__bar,
   .board-widget:has(.board-widget__menu[open]) .board-widget__resize-handle {
     opacity: 1;
-    /* Delay-only override: reveal flips visibility immediately while the base
-       shorthand keeps the fade, and reduced-motion's transition: none stays
-       authoritative because no transition-property is redeclared here. */
     transition-delay: 0s;
     visibility: visible;
   }

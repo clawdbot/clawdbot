@@ -92,6 +92,7 @@ function migrateOpenClawAgentSchema(db: DatabaseSync): void {
   if (userVersion >= OPENCLAW_AGENT_SCHEMA_VERSION) {
     return;
   }
+  // Remove after 2026-10-01: drop the v1-v6 ladder once the minimum supported agent schema is 7.
   if (userVersion < 7) {
     db.exec("DROP INDEX IF EXISTS idx_agent_sessions_status;");
     migrateSessionEntryStatusProjection(db, (entryJson) => {
@@ -225,6 +226,7 @@ function migrateOpenClawAgentSchema(db: DatabaseSync): void {
 
 /** Backfill one generation token without copying or rewriting transcript rows. */
 function migrateSessionTranscriptGenerations(db: DatabaseSync, previousVersion: number): void {
+  // Remove after 2026-10-01: drop the generation backfill once the minimum supported agent schema is 13.
   if (previousVersion >= 13) {
     return;
   }
@@ -548,6 +550,7 @@ function ensureAgentSchema(
       migrateOpenClawAgentSchema(db);
       migrateConversationDeliveryTargetColumn(db);
       backfillOpenClawAgentSchema(db, previousVersion);
+      // Remove after 2026-10-01: drop the pre-v11 conversation backfill once schema 11 is the support floor.
       if (previousVersion < 11) {
         backfillSessionConversations(db);
       }

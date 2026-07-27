@@ -29,7 +29,6 @@
   "cli-backend",
   "cli-runtime",
   "codex-mcp-projection",
-  "codex-native-task-runtime",
   "command-status-runtime",
   "command-surface",
   "concurrency-runtime",

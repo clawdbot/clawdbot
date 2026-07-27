@@ -13,8 +13,8 @@ type TestMemoryPanel = HTMLElement & {
   agentId: string;
   dreaming: DreamingState;
   viewState: DreamingViewState;
-  restartConfirmOpen: boolean;
-  restartConfirmLoading: boolean;
+  toggleConfirmOpen: boolean;
+  toggleConfirmLoading: boolean;
   pendingEnabled: boolean | null;
   applyAgentId: () => void;
   applyGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot) => void;
@@ -120,8 +120,8 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     page.viewState.wikiPreviewLoading = true;
     page.viewState.wikiPreviewTitle = "Old page";
     page.viewState.wikiPreviewContent = "old wiki";
-    page.restartConfirmOpen = true;
-    page.restartConfirmLoading = true;
+    page.toggleConfirmOpen = true;
+    page.toggleConfirmLoading = true;
     page.pendingEnabled = true;
 
     await replaceContext(page, contextWithGateway(client, false));
@@ -132,19 +132,19 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     expect(page.viewState.wikiPreviewLoading).toBe(false);
     expect(page.viewState.wikiPreviewTitle).toBe("");
     expect(page.viewState.wikiPreviewContent).toBe("");
-    expect(page.restartConfirmOpen).toBe(false);
-    expect(page.restartConfirmLoading).toBe(false);
+    expect(page.toggleConfirmOpen).toBe(false);
+    expect(page.toggleConfirmLoading).toBe(false);
     expect(page.pendingEnabled).toBeNull();
 
     page.viewState.wikiPreviewOpen = true;
-    page.restartConfirmOpen = true;
-    page.restartConfirmLoading = true;
+    page.toggleConfirmOpen = true;
+    page.toggleConfirmLoading = true;
     page.pendingEnabled = false;
     page.remove();
 
     expect(page.viewState.wikiPreviewOpen).toBe(false);
-    expect(page.restartConfirmOpen).toBe(false);
-    expect(page.restartConfirmLoading).toBe(false);
+    expect(page.toggleConfirmOpen).toBe(false);
+    expect(page.toggleConfirmLoading).toBe(false);
     expect(page.pendingEnabled).toBeNull();
   });
 

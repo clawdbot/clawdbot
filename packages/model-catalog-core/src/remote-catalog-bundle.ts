@@ -5,28 +5,40 @@ import type { ModelCatalogProvider } from "./model-catalog-types.js";
 export const REMOTE_CATALOG_MAX_FUTURE_SKEW_MS = 24 * 60 * 60_000;
 
 const stringMapSchema = z.record(z.string(), z.string());
+const pricingTierSchema = z
+  .object({
+    input: z.number().finite().nonnegative(),
+    output: z.number().finite().nonnegative(),
+    cacheRead: z.number().finite().nonnegative(),
+    cacheWrite: z.number().finite().nonnegative(),
+    range: z.union([
+      z.tuple([z.number().finite().nonnegative()]),
+      z.tuple([z.number().finite().nonnegative(), z.number().finite().nonnegative()]),
+    ]),
+  })
+  .strict();
+
 const costSchema = z
   .object({
     input: z.number().finite().nonnegative().optional(),
     output: z.number().finite().nonnegative().optional(),
     cacheRead: z.number().finite().nonnegative().optional(),
     cacheWrite: z.number().finite().nonnegative().optional(),
-    tieredPricing: z
-      .array(
-        z.object({
-          input: z.number().finite().nonnegative(),
-          output: z.number().finite().nonnegative(),
-          cacheRead: z.number().finite().nonnegative(),
-          cacheWrite: z.number().finite().nonnegative(),
-          range: z.union([
-            z.tuple([z.number().finite().nonnegative()]),
-            z.tuple([z.number().finite().nonnegative(), z.number().finite().nonnegative()]),
-          ]),
-        }),
-      )
-      .optional(),
+    tieredPricing: z.array(pricingTierSchema).optional(),
   })
   .strict();
+
+const hostedPricingSchema = z
+  .object({
+    input: z.number().finite().nonnegative(),
+    output: z.number().finite().nonnegative(),
+    cacheRead: z.number().finite().nonnegative().optional(),
+    cacheWrite: z.number().finite().nonnegative().optional(),
+    tieredPricing: z.array(pricingTierSchema).optional(),
+  })
+  .strict();
+
+export type RemoteModelCatalogPricing = z.infer<typeof hostedPricingSchema>;
 
 const modelSchema = z.object({
   id: z.string().trim().min(1),
@@ -89,6 +101,7 @@ export const remoteModelCatalogBundleSchema = z
     minVersion: z.string().trim().min(1).optional(),
     sourceCommit: z.string().trim().min(1),
     providers: z.record(z.string().trim().min(1), remoteModelCatalogProviderSchema),
+    pricing: z.record(z.string().trim().min(1), hostedPricingSchema).optional(),
   })
   .strict();
 

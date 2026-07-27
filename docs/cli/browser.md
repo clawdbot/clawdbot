@@ -142,12 +142,18 @@ Answer a question from the current page without printing the page content:
 ```bash
 openclaw browser extract "What is the main conclusion?"
 openclaw browser extract "Which deadline is listed?" --target-id docs --timeout-ms 90000
+openclaw browser extract "List the releases" --selector "main" --ignore-selector "nav" --schema '{"type":"array","items":{"type":"object"}}'
 ```
 
 `extract` uses the selected agent model, returns only the wrapped answer, and
 reports `NOT_FOUND` when the answer is absent. Its overall timeout defaults to
 60 seconds and is clamped to 5–120 seconds. It requires a Playwright-backed
 profile; use `snapshot` when you need refs or when extraction is unavailable.
+Use `--selector <css>` to limit large pages to matching subtrees and repeat
+`--ignore-selector <css>` to remove navigation, footers, ads, or banners before
+conversion. `--schema <json>` requests validated structured output in
+`details.json`; invalid structured output is retried once, then fails with
+guidance to retry without the schema.
 
 Snapshot:
 

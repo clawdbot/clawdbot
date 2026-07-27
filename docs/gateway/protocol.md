@@ -504,7 +504,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `terminal.data` and `terminal.exit` events stream only to the connection that owns the session.
     - Sessions whose connection drops are detached, not killed: they stay reattachable for `gateway.terminal.detachedSessionTimeoutSeconds` (default 300; `0` restores kill-on-disconnect) while recent output accumulates in a bounded server-side buffer.
     - `terminal.list` returns attachable sessions; `terminal.attach` rebinds a live-or-detached session to the calling connection and returns the replay buffer (tmux-style take-over — a previous live owner receives `terminal.exit` with reason `detached`); `terminal.text` reads the buffer as plain text without attaching.
-    - Every terminal method requires `operator.admin`; `gateway.terminal.enabled` must be explicitly true. Fully sandboxed agents are refused, and an agent policy change closes existing and in-flight PTYs, detached ones included.
+    - Every terminal method requires `operator.admin`; `gateway.terminal.enabled` is on by default and refuses every method when set to `false`. Fully sandboxed agents are refused, and an agent policy change closes existing and in-flight PTYs, detached ones included.
 
   </Accordion>
 
@@ -783,8 +783,9 @@ and may drop records on failure or saturation, so this surface is not a
 lossless compliance archive.
 
 Recording is on by default and controlled by
-[`audit.enabled`](/gateway/configuration-reference#audit). Message recording is
-separately controlled by `audit.messages` and defaults to `"off"`. When
+[`logging.audit.enabled`](/gateway/configuration-reference#audit). Message
+recording is separately controlled by `logging.audit.messages` and defaults to
+`"off"`. When
 recording is disabled, `audit.activity.list` keeps serving records written
 earlier until they expire.
 

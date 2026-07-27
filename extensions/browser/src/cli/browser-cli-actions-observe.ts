@@ -2,8 +2,13 @@
  * Browser CLI observation commands for console, PDF, and response bodies.
  */
 import type { Command } from "commander";
+import type { JsonSchemaObject } from "openclaw/plugin-sdk/json-schema-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { completeBrowserExtract, resolveBrowserExtractTimeoutMs } from "../browser-extract.js";
+import {
+  completeBrowserExtract,
+  resolveBrowserExtractTimeoutMs,
+  validateBrowserExtractSchema,
+} from "../browser-extract.js";
 import { runCommandWithRuntime } from "../core-api.js";
 import {
   completeWithPreparedSimpleCompletionModel,
@@ -12,6 +17,7 @@ import {
   normalizeWhitespace,
   prepareSimpleCompletionModelForAgent,
   sanitizeHtml,
+  validateJsonSchemaValue,
 } from "../sdk-setup-tools.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
@@ -29,7 +35,28 @@ const browserCliExtractDeps = {
   normalizeWhitespace,
   prepareSimpleCompletionModelForAgent,
   sanitizeHtml,
+  validateJsonSchemaValue,
 };
+
+function collectOption(value: string, previous: string[] = []): string[] {
+  return [...previous, value];
+}
+
+function parseSchemaOption(value: string | undefined): JsonSchemaObject | undefined {
+  if (!value) {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("--schema must be valid JSON.");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("--schema must be a JSON Schema object.");
+  }
+  return parsed as JsonSchemaObject;
+}
 
 function runBrowserObserve(action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
@@ -48,6 +75,9 @@ export function registerBrowserActionObserveCommands(
     .description("Answer a question from the current page")
     .argument("<question>", "Question to answer from page content")
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
+    .option("--selector <css>", "Extract only matching page content")
+    .option("--ignore-selector <css>", "CSS selector to omit (repeatable)", collectOption, [])
+    .option("--schema <json>", "JSON Schema for structured output")
     .option("--timeout-ms <ms>", "Overall timeout (default: 60000)", (v: string) =>
       parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
     )
@@ -61,25 +91,47 @@ export function registerBrowserActionObserveCommands(
         }
         const timeoutMs = resolveBrowserExtractTimeoutMs({ timeoutMs: opts.timeoutMs });
         const deadlineAt = Date.now() + timeoutMs;
+        const selector = normalizeOptionalString(opts.selector);
+        const ignoreSelectors = (opts.ignoreSelector as string[])
+          .map((value) => normalizeOptionalString(value))
+          .filter((value): value is string => Boolean(value));
+        const schema = parseSchemaOption(normalizeOptionalString(opts.schema));
+        if (schema) {
+          const schemaError = validateBrowserExtractSchema(schema, browserCliExtractDeps);
+          if (schemaError) {
+            throw new Error(`Invalid extract schema: ${schemaError}`);
+          }
+        }
         const captured = await callBrowserRequest<{
-          ok: true;
+          ok: boolean;
           targetId: string;
           url: string;
-          html: string;
+          html?: string;
+          message?: string;
         }>(
           parent,
           {
             method: "POST",
             path: "/extract",
             query: profile ? { profile } : undefined,
-            body: { targetId: normalizeOptionalString(opts.targetId), timeoutMs },
+            body: {
+              targetId: normalizeOptionalString(opts.targetId),
+              timeoutMs,
+              ...(selector ? { selector } : {}),
+              ...(ignoreSelectors.length > 0 ? { ignoreSelectors } : {}),
+            },
           },
           { timeoutMs },
         );
+        if (!captured.ok || typeof captured.html !== "string") {
+          throw new Error(captured.message || "Browser extract page capture failed");
+        }
         const result = await completeBrowserExtract({
           html: captured.html,
           url: captured.url,
           query,
+          schema,
+          schemaPrevalidated: Boolean(schema),
           agentId: "main",
           deadlineAt,
           deps: browserCliExtractDeps,

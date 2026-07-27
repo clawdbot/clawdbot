@@ -281,6 +281,10 @@ describe("Parallels smoke model selection", () => {
     expect(controller).toContain('prlctl stop "$VM_NAME" --acpi');
     expect(controller).toContain("HypervisorPresent");
     expect(controller).toContain("git --version && node --version && npm --version");
+    expect(controller).toContain(
+      "if (Test-Path -LiteralPath '${GUEST_PROFILE_PS}/Downloads/OpenClawPrereqs')",
+    );
+    expect(controller).toContain("winget.exe download --source winget");
     expect(controller).toContain("OPENCLAW_PARALLELS_WINDOWS_LIBRARY_ONLY");
     expect(controller).not.toContain("openclaw-windows-node");
   });
@@ -367,6 +371,7 @@ fetch_host_metadata "https://example.test/metadata"`,
     expect(parseMacosSmokeArgs(["--host-port", "65535"]).hostPort).toBe(65535);
     expect(parseLinuxSmokeArgs(["--host-port", "65535"]).hostPort).toBe(65535);
     expect(parseWindowsSmokeArgs(["--host-port", "65535"]).hostPort).toBe(65535);
+    expect(parseWindowsSmokeArgs([]).snapshotHint).toBe("pre-openclaw-native-e2e-");
     for (const parseArgs of [parseMacosSmokeArgs, parseLinuxSmokeArgs, parseWindowsSmokeArgs]) {
       expect(parseArgs(["--npm-registry", "http://192.0.2.2:48123"]).npmRegistry).toBe(
         "http://192.0.2.2:48123",
@@ -760,6 +765,10 @@ if [[ "$1" == "snapshot-list" ]]; then
 {
   "{older}": {"name": "fresh", "state": "running"},
   "{wanted}": {"name": "fresh-poweroff-2026-04-01", "state": "poweroff"},
+  "{old-e2e}": {"name": "pre-openclaw-native-e2e-2026-03-12", "state": "poweroff", "date": "2026-03-12 22:32:24"},
+  "{new-e2e}": {"name": "pre-openclaw-native-e2e-2026-07-26", "state": "poweroff", "date": "2026-07-26 11:52:02"},
+  "{undated-first}": {"name": "undated-family-1", "state": "poweroff"},
+  "{dated-later}": {"name": "undated-family-2", "state": "poweroff", "date": "2026-07-26 11:52:02"},
   "{other}": {"name": "unrelated", "state": "poweroff"}
 }
 JSON
@@ -776,6 +785,10 @@ if (isPrlctl) {
     console.log(JSON.stringify({
       "{older}": { name: "fresh", state: "running" },
       "{wanted}": { name: "fresh-poweroff-2026-04-01", state: "poweroff" },
+      "{old-e2e}": { name: "pre-openclaw-native-e2e-2026-03-12", state: "poweroff", date: "2026-03-12 22:32:24" },
+      "{new-e2e}": { name: "pre-openclaw-native-e2e-2026-07-26", state: "poweroff", date: "2026-07-26 11:52:02" },
+      "{undated-first}": { name: "undated-family-1", state: "poweroff" },
+      "{dated-later}": { name: "undated-family-2", state: "poweroff", date: "2026-07-26 11:52:02" },
       "{other}": { name: "unrelated", state: "poweroff" },
     }));
     process.exit(0);
@@ -788,11 +801,20 @@ if (isPrlctl) {
     try {
       const output = withEnv(fakePrlctlEnv(tempDir), () => {
         const snapshot = resolveSnapshot("vm", "fresh");
-        return `${shellQuote("it's ok")}\n${[snapshot.id, snapshot.state, snapshot.name].join("\t")}`;
+        const latestE2e = resolveSnapshot("vm", "pre-openclaw-native-e2e-");
+        const missingDate = resolveSnapshot("vm", "undated-family-");
+        return [
+          shellQuote("it's ok"),
+          [snapshot.id, snapshot.state, snapshot.name].join("\t"),
+          [latestE2e.id, latestE2e.state, latestE2e.name].join("\t"),
+          [missingDate.id, missingDate.state, missingDate.name].join("\t"),
+        ].join("\n");
       });
 
       expect(output.split("\n")[0]).toBe("'it'\"'\"'s ok'");
       expect(output).toContain("{wanted}\tpoweroff\tfresh-poweroff-2026-04-01");
+      expect(output).toContain("{new-e2e}\tpoweroff\tpre-openclaw-native-e2e-2026-07-26");
+      expect(output).toContain("{undated-first}\tpoweroff\tundated-family-1");
     } finally {
       rmSync(tempDir, { force: true, recursive: true });
     }

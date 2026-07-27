@@ -1444,6 +1444,9 @@ describe("package acceptance workflow", () => {
 describe("package artifact reuse", () => {
   it("binds package acceptance input artifacts to the complete producer tuple", () => {
     const resolvePackage = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package");
+    expect(workflowStep(resolvePackage, "Setup Node environment").with).toMatchObject({
+      "install-deps": "true",
+    });
     expect(
       workflowStep(resolvePackage, "Checkout package workflow ref").with?.["persist-credentials"],
     ).toBe(false);
@@ -1484,6 +1487,11 @@ describe("package artifact reuse", () => {
     ]);
 
     const packageIntegrity = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "package_integrity");
+    expect(
+      workflowStep(packageIntegrity, "Setup package validation dependencies").with,
+    ).toMatchObject({
+      "install-deps": "true",
+    });
     expect(
       workflowStep(packageIntegrity, "Download package-under-test artifact").with,
     ).toMatchObject({
@@ -2763,6 +2771,8 @@ describe("package artifact reuse", () => {
     expect(runtimePairRun).toContain("--runtime-parity-tier standard,live-only");
     expect(runtimePairRun).toContain("--runtime-parity-tier soak");
     expect(runtimePairRun).toContain("Frozen candidate cannot select runtime-pair lane");
+    expect(runtimePairRun).toContain("--scenario gateway-restart-inflight-run");
+    expect(runtimePairRun).toContain('--output-dir ".artifacts/qa-e2e/openclaw-core-restart"');
     expect(workflowStep(laneJob, "Upload runtime-pair lane artifacts").with?.name).toContain(
       "${{ matrix.lane }}",
     );

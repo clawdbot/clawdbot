@@ -7,6 +7,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { SESSION_DRAG_MIME } from "../lib/sessions/drag.ts";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionPath,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -421,8 +423,8 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await unrelatedTarget.dispatchEvent("drop", unrelatedDrag);
       await expect.poll(() => panes.count()).toBe(2);
       await expect
-        .poll(() => new URL(page.url()).searchParams.get("session"))
-        .toBe("agent:main:session-a");
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath("agent:main:session-a"));
 
       // Start with no retained pane preview and target the visible header.
       const targetBox = await targetHeader.boundingBox();
@@ -450,8 +452,8 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         )
         .toContain("Session B");
       await expect
-        .poll(() => new URL(page.url()).searchParams.get("session"))
-        .toBe("agent:main:session-b");
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath("agent:main:session-b"));
     } finally {
       await closeBrowserContext(context);
     }
@@ -624,7 +626,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}chat?session=main`);
+      await page.goto(controlUiSessionUrl(server.baseUrl, "main"));
       await page.getByText(historyText).waitFor({ timeout: 10_000 });
       await gateway.waitForRequest("chat.startup");
 

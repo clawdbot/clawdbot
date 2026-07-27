@@ -283,11 +283,6 @@ describe("buildGatewayReloadPlan", () => {
       reason: "gateway.auth.token",
     },
     {
-      path: "models.pricing.enabled",
-      restart: true,
-      reason: "models.pricing.enabled",
-    },
-    {
       path: "agents.defaults.model",
       restart: false,
       hot: "agents.defaults.model",

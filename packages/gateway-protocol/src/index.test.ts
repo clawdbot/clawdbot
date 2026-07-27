@@ -39,6 +39,8 @@ import {
   validateWakeParams,
   type ValidationError,
 } from "./index.js";
+import * as schemaExportRegistry from "./schema-export-registry.js";
+import * as validatorRegistry from "./validator-registry.js";
 
 /**
  * Broad protocol validator smoke tests.
@@ -60,6 +62,16 @@ const makeError = (overrides: Partial<ValidationError>): ValidationError => ({
 
 /** Runtime shape shared by all exported lazy protocol validator functions. */
 type ProtocolValidator = (value: unknown) => boolean;
+
+describe("protocol export registries", () => {
+  it("re-exports every runtime registry symbol by identity", () => {
+    for (const registry of [schemaExportRegistry, validatorRegistry]) {
+      for (const [name, value] of Object.entries(registry)) {
+        expect(protocol[name as keyof typeof protocol], name).toBe(value);
+      }
+    }
+  });
+});
 
 describe("lazy protocol validators", () => {
   it("validates through exported lazy validators", () => {

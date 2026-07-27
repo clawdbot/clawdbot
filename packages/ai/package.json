@@ -24,7 +24,6 @@
   },
   "files": [
     "dist",
-    "npm-shrinkwrap.json",
     "LICENSE",
     "README.md"
   ],
