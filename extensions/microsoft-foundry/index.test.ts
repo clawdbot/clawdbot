@@ -1472,21 +1472,23 @@ describe("microsoft-foundry plugin", () => {
     ["gpt-5-nano", 400_000],
     ["gpt-5-codex", 400_000],
   ] as const)(
-    "uses documented Foundry GPT token limits for deployment aliases backed by %s",
+    "emits documented Foundry GPT token limits for discovered deployment aliases backed by %s",
     (modelNameHint, contextWindow) => {
+      const deploymentName = `prod-${modelNameHint}`;
       const result = buildFoundryAuthResult({
         profileId: "microsoft-foundry:entra",
         apiKey: "__entra_id_dynamic__",
         endpoint: "https://example.services.ai.azure.com",
-        modelId: `prod-${modelNameHint}`,
+        modelId: deploymentName,
         modelNameHint,
         api: "openai-responses",
         authMethod: "entra-id",
+        deployments: [{ name: deploymentName, modelName: modelNameHint, api: "openai-responses" }],
       });
 
       expect(result.configPatch?.models?.providers?.["microsoft-foundry"]?.models[0]).toMatchObject(
         {
-          id: `prod-${modelNameHint}`,
+          id: deploymentName,
           name: modelNameHint,
           contextWindow,
           maxTokens: 128_000,
