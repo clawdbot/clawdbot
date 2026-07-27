@@ -16,7 +16,7 @@ export function buildStrandedReplyDeliveryFailurePayload(): ReplyPayload {
   });
 }
 
-export type StrandedReplyRecovery =
+type StrandedReplyRecovery =
   | { kind: "none" }
   | { kind: "retry"; run: FollowupRun }
   | { kind: "diagnostic"; payload: ReplyPayload; warn: boolean };
