@@ -224,10 +224,15 @@ function sortReadyCards(a: WorkboardCard, b: WorkboardCard): number {
   );
 }
 
+function resolveDispatchOwner(card: WorkboardCard, ownerOverride?: string): string {
+  return ownerOverride || card.metadata?.claim?.ownerId || card.agentId || DEFAULT_DISPATCH_OWNER;
+}
+
 function selectStartableCards(
   cards: WorkboardCard[],
   limit: number,
   candidates: WorkboardCard[] = cards,
+  ownerOverride?: string,
 ): WorkboardCard[] {
   if (limit <= 0) {
     return [];
@@ -236,29 +241,33 @@ function selectStartableCards(
   for (const card of cards) {
     const consumesOwnerSlot =
       card.status === "running" ||
-      Boolean(card.metadata?.claim) ||
+      (card.status !== "done" && Boolean(card.metadata?.claim)) ||
       card.execution?.status === "running";
     if (!consumesOwnerSlot || cardIsArchived(card)) {
       continue;
     }
-    const owner = card.agentId ?? DEFAULT_DISPATCH_OWNER;
+    const owner = resolveDispatchOwner(card);
     runningByOwner.set(owner, (runningByOwner.get(owner) ?? 0) + 1);
   }
   const selected: WorkboardCard[] = [];
+  const fallback: WorkboardCard[] = [];
+  const selectedOwners = new Set<string>();
   for (const card of candidates
     .filter((entry) => entry.status === "ready" && !entry.metadata?.claim && !cardIsArchived(entry))
     .toSorted(sortReadyCards)) {
-    const owner = card.agentId ?? DEFAULT_DISPATCH_OWNER;
+    const owner = resolveDispatchOwner(card, ownerOverride);
     if ((runningByOwner.get(owner) ?? 0) > 0) {
       continue;
     }
-    selected.push(card);
-    runningByOwner.set(owner, 1);
-    if (selected.length >= limit) {
-      break;
+    if (selectedOwners.has(owner)) {
+      fallback.push(card);
+      continue;
     }
+    selectedOwners.add(owner);
+    selected.push(card);
   }
-  return selected;
+  // Try each owner before a failed owner's extra cards consume the outage budget.
+  return [...selected, ...fallback];
 }
 
 export async function dispatchAndStartWorkboardCards(params: {
@@ -278,9 +287,22 @@ export async function dispatchAndStartWorkboardCards(params: {
   const startFailures: WorkboardStartFailure[] = [];
   const cards = await params.store.list();
   const candidates = await params.store.list({ boardId });
+  const ownerOverride = params.options?.ownerId?.trim() || undefined;
+  const startedOwners = new Set<string>();
+  // Allow one fallback per worker slot without draining the queue during an outage.
+  const maxAttempts = maxStarts * 2;
+  let acceptedStarts = 0;
+  let attemptedStarts = 0;
 
-  for (const card of selectStartableCards(cards, maxStarts, candidates)) {
-    const ownerId = params.options?.ownerId?.trim() || card.agentId || DEFAULT_DISPATCH_OWNER;
+  for (const card of selectStartableCards(cards, maxStarts, candidates, ownerOverride)) {
+    const ownerId = resolveDispatchOwner(card, ownerOverride);
+    if (acceptedStarts >= maxStarts || attemptedStarts >= maxAttempts) {
+      break;
+    }
+    if (startedOwners.has(ownerId)) {
+      continue;
+    }
+    attemptedStarts += 1;
     const sessionKey = buildSessionKey(card);
     let claimValue = "";
     let materializedWorkspace: WorkboardWorkspace | undefined;
@@ -426,6 +448,8 @@ export async function dispatchAndStartWorkboardCards(params: {
         ...(runCwd ? { cwd: runCwd } : {}),
       });
       runStarted = true;
+      acceptedStarts += 1;
+      startedOwners.add(ownerId);
       const updated = await params.store.update(card.id, {
         sessionKey,
         runId: run.runId,

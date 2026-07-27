@@ -561,7 +561,7 @@ export async function dispatchCronDelivery(
 
   const deliverViaDirectAndCleanup = async (
     delivery: SuccessfulCronDeliveryTarget,
-    options?: { retryTransient?: boolean },
+    options: { retryTransient?: boolean } = { retryTransient: true },
   ): Promise<RunCronAgentTurnResult | null> => {
     try {
       return await deliverViaDirect(delivery, options);

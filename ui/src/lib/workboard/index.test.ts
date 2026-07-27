@@ -1304,6 +1304,26 @@ describe("workboard controller", () => {
     expect(client.request).toHaveBeenCalledWith("workboard.cards.dispatch", {});
   });
 
+  it("limits dispatch to the selected named board", async () => {
+    state.boardFilter = "ops";
+    state.boards = [{ id: "ops", total: 1, active: 1, archived: 0, byStatus: { ready: 1 } }];
+    const client = createClient({
+      "workboard.cards.dispatch": {
+        promoted: [],
+        reclaimed: [],
+        blocked: [],
+        orchestrated: [],
+        count: 0,
+      },
+      "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "done"] },
+      "tasks.list": { tasks: [] },
+    });
+
+    await dispatchWorkboard({ host, client: client as never });
+
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.dispatch", { boardId: "ops" });
+  });
+
   it("clears stale refresh errors after a successful dispatch reload", async () => {
     state.lastRefreshError = "poll unavailable";
     const client = createClient({
@@ -2570,6 +2590,36 @@ describe("workboard controller", () => {
     expect(state.cards[0]).toMatchObject({ id: "card-2", title: "Write tests" });
     expect(state.draftOpen).toBe(false);
     expect(state.draftSessionKey).toBe("");
+  });
+
+  it("creates cards on the selected named board", async () => {
+    state.boardFilter = "ops";
+    state.boards = [{ id: "ops", total: 0, active: 0, archived: 0, byStatus: {} }];
+    state.draftTitle = "Investigate operations alert";
+    const created = {
+      ...sampleCard,
+      id: "card-ops",
+      title: "Investigate operations alert",
+      metadata: { automation: { boardId: "ops" } },
+    } satisfies WorkboardCard;
+    const client = createClient({ "workboard.cards.create": { card: created } });
+
+    await saveWorkboardCardDraft({ host, client: client as never });
+
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.create", {
+      title: "Investigate operations alert",
+      notes: "",
+      status: "todo",
+      priority: "normal",
+      labels: [],
+      agentId: "",
+      sessionKey: "",
+      boardId: "ops",
+    });
+    expect(state.cards[0]).toMatchObject({
+      id: "card-ops",
+      metadata: { automation: { boardId: "ops" } },
+    });
   });
 
   it("creates template-backed cards through the save action", async () => {

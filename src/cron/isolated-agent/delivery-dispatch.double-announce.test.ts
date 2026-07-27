@@ -2088,6 +2088,34 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(2);
   });
 
+  it.each(["structured", "threaded"] as const)(
+    "retries proven-not-sent %s cron delivery without duplicating a message",
+    async (deliveryKind) => {
+      vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+      vi.mocked(deliverOutboundPayloads)
+        .mockRejectedValueOnce(
+          new PlatformMessageNotDispatchedError("upload stopped before final dispatch", {
+            cause: new Error("gateway upload failed"),
+          }),
+        )
+        .mockResolvedValueOnce([{ ok: true } as never]);
+
+      const params = makeBaseParams({ synthesizedText: "Retry without duplicating." });
+      if (deliveryKind === "structured") {
+        params.deliveryPayloadHasStructuredContent = true;
+      } else {
+        params.resolvedDelivery = makeResolvedDelivery({ threadId: "42" });
+      }
+
+      const state = await dispatchCronDelivery(params);
+
+      expect(state.result).toBeUndefined();
+      expect(state.deliveryAttempted).toBe(true);
+      expect(state.delivered).toBe(true);
+      expect(deliverOutboundPayloads).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("does not retry ambiguous direct announce send errors", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.mocked(deliverOutboundPayloads).mockRejectedValueOnce(
