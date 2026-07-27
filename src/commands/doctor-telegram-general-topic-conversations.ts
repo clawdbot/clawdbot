@@ -41,7 +41,7 @@ type ConversationRow = {
   updated_at: number;
 };
 
-export type TelegramGeneralTopicConversationRepair = {
+type TelegramGeneralTopicConversationRepair = {
   agentId: string;
   canonicalConversationId: string;
   legacyConversationId: string;
