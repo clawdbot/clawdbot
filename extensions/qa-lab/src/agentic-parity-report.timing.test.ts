@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { makeRuntimeParitySummary } from "./agentic-parity-report-test-helpers.js";
 import { buildQaRuntimeParityReport } from "./agentic-parity-report.js";
+import { summarizeRuntimeParityTiming } from "./runtime-parity-timing.js";
 
 describe("qa runtime parity timing reporting", () => {
   it("reports when OpenClaw is faster without changing the parity verdict", () => {
@@ -36,5 +37,29 @@ describe("qa runtime parity timing reporting", () => {
       fasterRuntime: "openclaw",
       speedupPercent: null,
     });
+  });
+
+  it("compares only paired captures while retaining independently measured totals", () => {
+    const timing = summarizeRuntimeParityTiming([
+      { openclawWallClockMs: 20, codexWallClockMs: 30 },
+      { openclawWallClockMs: 1_000, codexWallClockMs: null },
+    ]);
+
+    expect(timing.openclaw.totalWallClockMs).toBe(1_020);
+    expect(timing.codex.totalWallClockMs).toBe(30);
+    expect(timing.fasterRuntime).toBe("openclaw");
+    expect(timing.speedupPercent).toBeCloseTo(50);
+  });
+
+  it("does not compare independently measured totals without a complete pair", () => {
+    const timing = summarizeRuntimeParityTiming([
+      { openclawWallClockMs: 20, codexWallClockMs: null },
+      { openclawWallClockMs: null, codexWallClockMs: 30 },
+    ]);
+
+    expect(timing.openclaw.totalWallClockMs).toBe(20);
+    expect(timing.codex.totalWallClockMs).toBe(30);
+    expect(timing.fasterRuntime).toBeNull();
+    expect(timing.speedupPercent).toBeNull();
   });
 });

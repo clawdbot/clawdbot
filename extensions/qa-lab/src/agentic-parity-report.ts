@@ -23,7 +23,6 @@ import {
 } from "./runtime-parity.js";
 
 export { renderQaRuntimeParityMarkdownReport } from "./agentic-parity-runtime-markdown.js";
-export type { QaRuntimeParityReport } from "./agentic-parity-runtime-report-contract.js";
 
 type QaParityReportStep = {
   name: string;
