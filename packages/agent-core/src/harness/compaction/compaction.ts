@@ -1,5 +1,9 @@
 // Agent Core module implements compaction behavior.
 import {
+  CHARS_PER_TOKEN_ESTIMATE,
+  estimateStringChars,
+} from "@openclaw/normalization-core/cjk-chars";
+import {
   resolveClaudeFable5ModelIdentity,
   type AssistantMessage,
   type Context,
@@ -260,21 +264,6 @@ export function shouldCompact(
 }
 
 const IMAGE_BLOCK_CHARS = 4800;
-const CHARS_PER_TOKEN_ESTIMATE = 4;
-const NON_LATIN_RE =
-  /[\u2E80-\u9FFF\uA000-\uA4FF\uAC00-\uD7AF\uF900-\uFAFF\uFF01-\uFF9F\uFFE0-\uFFE6\u{20000}-\u{2FA1F}\u{30000}-\u{3347F}]/gu;
-const CJK_SURROGATE_RE =
-  /(?:[\uD840-\uD87E][\uDC00-\uDFFF]|[\uD880-\uD88C][\uDC00-\uDFFF]|\uD88D[\uDC00-\uDC7F])/g;
-
-function estimateTextChars(text: string): number {
-  if (text.length === 0) {
-    return 0;
-  }
-  const nonLatinCount = (text.match(NON_LATIN_RE) ?? []).length;
-  const codePointLength =
-    nonLatinCount === 0 ? text.length : text.length - (text.match(CJK_SURROGATE_RE) ?? []).length;
-  return codePointLength + nonLatinCount * (CHARS_PER_TOKEN_ESTIMATE - 1);
-}
 
 function countContentBlockChars(
   content: Array<{ type: string; content?: unknown; text?: string }>,
@@ -284,7 +273,7 @@ function countContentBlockChars(
     if (block.type === "image") {
       chars += IMAGE_BLOCK_CHARS;
     } else {
-      chars += estimateTextChars(getCompactionContentBlockText(block));
+      chars += estimateStringChars(getCompactionContentBlockText(block));
     }
   }
   return chars;
@@ -301,7 +290,7 @@ export function estimateTokens(message: AgentMessage): number {
         harnessMessage as { content: string | Array<{ type: string; text?: string }> }
       ).content;
       if (typeof content === "string") {
-        chars = estimateTextChars(content);
+        chars = estimateStringChars(content);
       } else if (Array.isArray(content)) {
         chars = countContentBlockChars(content);
       }
@@ -311,12 +300,13 @@ export function estimateTokens(message: AgentMessage): number {
       const assistant = harnessMessage;
       for (const block of assistant.content) {
         if (block.type === "text") {
-          chars += estimateTextChars(block.text);
+          chars += estimateStringChars(block.text);
         } else if (block.type === "thinking") {
-          chars += estimateTextChars(block.thinking);
+          chars += estimateStringChars(block.thinking);
         } else if (block.type === "toolCall") {
           chars +=
-            estimateTextChars(block.name) + estimateTextChars(safeJsonStringify(block.arguments));
+            estimateStringChars(block.name) +
+            estimateStringChars(safeJsonStringify(block.arguments));
         }
       }
       return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
@@ -324,19 +314,20 @@ export function estimateTokens(message: AgentMessage): number {
     case "custom":
     case "toolResult": {
       if (typeof harnessMessage.content === "string") {
-        chars = estimateTextChars(harnessMessage.content);
+        chars = estimateStringChars(harnessMessage.content);
       } else {
         chars = countContentBlockChars(harnessMessage.content);
       }
       return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
     case "bashExecution": {
-      chars = estimateTextChars(harnessMessage.command) + estimateTextChars(harnessMessage.output);
+      chars =
+        estimateStringChars(harnessMessage.command) + estimateStringChars(harnessMessage.output);
       return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
     case "branchSummary":
     case "compactionSummary": {
-      chars = estimateTextChars(harnessMessage.summary);
+      chars = estimateStringChars(harnessMessage.summary);
       return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
   }
