@@ -7,14 +7,11 @@ import { handleNextcloudTalkInbound } from "./inbound.js";
 import { createNextcloudTalkWebhookServer } from "./monitor.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import type { CoreConfig, NextcloudTalkInboundMessage } from "./types.js";
+import { resolveNextcloudTalkWebhookListenerConfig } from "./webhook-url.js";
 import {
   createNextcloudTalkWebhookSpool,
   type NextcloudTalkIngressLifecycle,
 } from "./webhook-spool.js";
-
-const DEFAULT_WEBHOOK_PORT = 8788;
-const DEFAULT_WEBHOOK_HOST = "0.0.0.0";
-const DEFAULT_WEBHOOK_PATH = "/nextcloud-talk-webhook";
 
 function normalizeOrigin(value: string): string | null {
   try {
@@ -56,9 +53,7 @@ export async function monitorNextcloudTalkProvider(
     throw new Error(`Nextcloud Talk bot secret not configured for account "${account.accountId}"`);
   }
 
-  const port = account.config.webhookPort ?? DEFAULT_WEBHOOK_PORT;
-  const host = account.config.webhookHost ?? DEFAULT_WEBHOOK_HOST;
-  const path = account.config.webhookPath ?? DEFAULT_WEBHOOK_PATH;
+  const { port, host, path, publicUrl } = resolveNextcloudTalkWebhookListenerConfig(account.config);
 
   const logger = core.logging.getChildLogger({
     channel: "nextcloud-talk",
@@ -139,9 +134,6 @@ export async function monitorNextcloudTalkProvider(
     return { stop };
   }
 
-  const publicUrl =
-    account.config.webhookPublicUrl ??
-    `http://${host === "0.0.0.0" ? "localhost" : host}:${port}${path}`;
   logger.info(`[nextcloud-talk:${account.accountId}] webhook listening on ${publicUrl}`);
 
   return { stop };

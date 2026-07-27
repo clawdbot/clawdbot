@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import {
   buildChannelInboundEventContext,
   resolveChannelInboundRouteEnvelope,
@@ -42,6 +41,7 @@ import { resolveNextcloudTalkRoomKind } from "./room-info.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { sendMessageNextcloudTalk } from "./send.js";
 import type { CoreConfig, NextcloudTalkInboundMessage, NextcloudTalkRoomConfig } from "./types.js";
+import { resolveNextcloudTalkBotActorId } from "./webhook-url.js";
 
 export type NextcloudTalkMentionEntry = {
   key: string;
@@ -141,15 +141,7 @@ export function parseStructuredNextcloudTalkBody(
 }
 
 function buildNextcloudTalkBotIds(account: ResolvedNextcloudTalkAccount): Set<string> {
-  const ids = new Set<string>();
-  const webhookUrl = account.config.webhookPublicUrl?.trim();
-  if (webhookUrl) {
-    // Nextcloud defines webhook bot actor ids as `bot-<sha1(installed URL)>`.
-    // This mirrors that identifier contract; SHA-1 is not used for security.
-    const urlHash = createHash("sha1").update(webhookUrl).digest("hex");
-    ids.add(`bot-${urlHash}`);
-  }
-  return ids;
+  return new Set([resolveNextcloudTalkBotActorId(account.config)]);
 }
 
 export function resolveExplicitNextcloudTalkMention(params: {

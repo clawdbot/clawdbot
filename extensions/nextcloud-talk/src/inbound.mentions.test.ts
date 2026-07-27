@@ -281,6 +281,20 @@ describe("resolveExplicitNextcloudTalkMention", () => {
     expect(result).toBe(true);
   });
 
+  it("derives the bot actor id from the default listener URL", () => {
+    const result = resolveExplicitNextcloudTalkMention({
+      mentionEntries: [
+        {
+          key: "m0",
+          type: "user",
+          id: "bot-69739f2d0a2371dd78066cea3704b66c08548aac",
+        },
+      ],
+      account: makeAccount(),
+    });
+    expect(result).toBe(true);
+  });
+
   it("returns false when type is not 'user'", () => {
     const result = resolveExplicitNextcloudTalkMention({
       mentionEntries: [{ key: "m0", type: "guest", id: "agent" }],
