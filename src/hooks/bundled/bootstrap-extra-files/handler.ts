@@ -1,4 +1,5 @@
 // Bootstrap extra files hook injects configured extra files into startup context.
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   filterBootstrapFilesForSession,
   loadExtraBootstrapFilesWithDiagnostics,
@@ -6,10 +7,22 @@ import {
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { resolveHookConfig } from "../../config.js";
 import { isAgentBootstrapEvent, type HookHandler } from "../../hooks.js";
-import { resolveExtraBootstrapPatterns } from "./patterns.js";
 
 const HOOK_KEY = "bootstrap-extra-files";
 const log = createSubsystemLogger("bootstrap-extra-files");
+
+/** Resolve legacy and current config keys for extra bootstrap file patterns. */
+function resolveExtraBootstrapPatterns(hookConfig: Record<string, unknown>): string[] {
+  const fromPaths = normalizeTrimmedStringList(hookConfig.paths);
+  if (fromPaths.length > 0) {
+    return fromPaths;
+  }
+  const fromPatterns = normalizeTrimmedStringList(hookConfig.patterns);
+  if (fromPatterns.length > 0) {
+    return fromPatterns;
+  }
+  return normalizeTrimmedStringList(hookConfig.files);
+}
 
 /** Agent-bootstrap hook that appends configured extra files to the session bootstrap set. */
 const bootstrapExtraFilesHook: HookHandler = async (event) => {

@@ -51,6 +51,3 @@ workspace root.
 All paths are resolved from the workspace and must stay inside it (including realpath checks).
 Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`,
 `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`, `MEMORY.md`).
-Legacy patterns that name nested `TOOLS.md` files are migration inputs for
-`openclaw doctor`, which adds the corresponding `AGENTS.md` pattern after a
-successful migration. `TOOLS.md` is not loaded into runtime context.
