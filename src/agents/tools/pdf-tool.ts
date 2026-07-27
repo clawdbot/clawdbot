@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { bindModelLlmRuntime } from "../../llm/model-runtime-binding.js";
 import { complete } from "../../llm/stream.js";
 import type { Context } from "../../llm/types.js";
+import { logWarn } from "../../logger.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -31,7 +32,6 @@ import { getModelProviderRequestTransport } from "../provider-request-config.js"
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { optionalFiniteNumberSchema } from "../schema/typebox.js";
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
-import { logWarn } from "../../logger.js";
 import { readFiniteNumberParam, ToolInputError } from "./common.js";
 import { coerceImageModelConfig, type ImageModelConfig } from "./image-tool.helpers.js";
 import {
