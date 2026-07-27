@@ -187,6 +187,58 @@ describe("createEmbeddedAttemptSessionLockController", () => {
     expect(events).toEqual(["first:start", "first:end", "second"]);
   });
 
+  it("propagates failures from detached nested writes", async () => {
+    const nestedError = new Error("nested write failed");
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release: async () => undefined })),
+      lockOptions: { sessionFile: "agent:main:main" },
+    });
+
+    await expect(
+      controller.withSessionWriteLock(() => {
+        void controller.withSessionWriteLock(() => {
+          throw nestedError;
+        });
+      }),
+    ).rejects.toBe(nestedError);
+  });
+
+  it("waits for every detached nested write before propagating failure", async () => {
+    const nestedError = new Error("nested write failed");
+    let releaseSlowWrite!: () => void;
+    const slowWriteBlocked = new Promise<void>((resolve) => {
+      releaseSlowWrite = resolve;
+    });
+    const slowWriteStarted = vi.fn();
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release: async () => undefined })),
+      lockOptions: { sessionFile: "agent:main:main" },
+    });
+    const completion = controller.withSessionWriteLock(() => {
+      void controller.withSessionWriteLock(() => {
+        throw nestedError;
+      });
+      void controller.withSessionWriteLock(async () => {
+        slowWriteStarted();
+        await slowWriteBlocked;
+      });
+    });
+    let settled = false;
+    void completion.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await vi.waitFor(() => expect(slowWriteStarted).toHaveBeenCalledOnce());
+
+    expect(settled).toBe(false);
+    releaseSlowWrite();
+    await expect(completion).rejects.toBe(nestedError);
+  });
+
   it("terminally fences writes after a generic prompt reload failure", async () => {
     const reloadError = new Error("reload failed");
     const run = vi.fn();
@@ -200,7 +252,6 @@ describe("createEmbeddedAttemptSessionLockController", () => {
 
     await expect(controller.reacquireAfterPrompt()).rejects.toBe(reloadError);
     await expect(controller.withSessionWriteLock(run)).rejects.toBe(reloadError);
-    expect(() => controller.withOwnedSessionFileWrite(run)).toThrow(reloadError);
     await controller.releaseForPrompt();
     await expect(controller.reacquireAfterPrompt()).rejects.toBe(reloadError);
     await expect(controller.acquireForCleanup()).resolves.toBeDefined();
@@ -331,9 +382,6 @@ describe("createEmbeddedAttemptSessionLockController", () => {
     await expect(controller.withSessionWriteLock(async () => undefined)).rejects.toThrow(
       "attempt cleanup started before transcript write",
     );
-    expect(() => controller.withOwnedSessionFileWrite(() => undefined)).toThrow(
-      "attempt cleanup started before transcript write",
-    );
     await cleanupLock.release();
     expect(release).toHaveBeenCalledOnce();
   });
@@ -449,6 +497,30 @@ describe("createEmbeddedAttemptSessionLockController", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("lets a started write finish nested writes after disposal begins", async () => {
+    let resumeOuter!: () => void;
+    const outerBlocked = new Promise<void>((resolve) => {
+      resumeOuter = resolve;
+    });
+    const nestedWrite = vi.fn();
+    const release = vi.fn(async () => undefined);
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release })),
+      lockOptions: { sessionFile: "agent:main:main" },
+    });
+    const outer = controller.withSessionWriteLock(async () => {
+      await outerBlocked;
+      await controller.withSessionWriteLock(nestedWrite);
+    });
+    await Promise.resolve();
+    const disposal = controller.dispose();
+
+    resumeOuter();
+    await Promise.all([outer, disposal]);
+    expect(nestedWrite).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("keeps disposal tied to a released prompt until the bounded timeout", async () => {
@@ -572,9 +644,6 @@ describe("createEmbeddedAttemptSessionLockController", () => {
     await controller.dispose();
     await expect(controller.releaseForPrompt()).rejects.toThrow(
       "attempt disposed before prompt submission",
-    );
-    expect(() => controller.withOwnedSessionFileWrite(write)).toThrow(
-      "attempt disposed before transcript write",
     );
     await expect(controller.withSessionWriteLock(write)).rejects.toThrow(
       "attempt disposed before transcript write",

@@ -1,7 +1,10 @@
 /** Acquires and publishes the session-write ownership used by one attempt. */
 import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
-import { acquireSessionWriteLock } from "../../session-write-lock.js";
+import {
+  acquireSessionWriteLock,
+  resolveSessionWriteLockTargetKey,
+} from "../../session-write-lock.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { resolveEmbeddedAttemptSessionWriteLockOptions } from "./attempt.run-decisions.js";
 import {
@@ -63,7 +66,8 @@ export async function prepareEmbeddedAttemptSessionLock(input: {
     acquireSessionWriteLock,
     initialAcquireSignal: attempt.abortSignal,
     lockOptions: {
-      sessionFile: attempt.sessionFile,
+      sessionFile: resolveSessionWriteLockTargetKey(attempt.sessionTarget),
+      targetKind: "session-key",
       ...sessionWriteLockOptions,
     },
     mergePromptReleasedSessionEntries: (entries) =>

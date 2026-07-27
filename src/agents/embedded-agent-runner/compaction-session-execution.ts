@@ -1,5 +1,4 @@
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
-import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import { acquireOwnedSessionTranscriptWriteLock } from "../../config/sessions/transcript-write-context.js";
 /**
  * Executes compaction while owning the transcript lock, session lifecycle,
@@ -21,11 +20,13 @@ import {
   isSilentOverflowProneModel,
 } from "../agent-settings.js";
 import { pickFallbackThinkingLevel } from "../embedded-agent-helpers.js";
+import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import {
   acquireSessionWriteLock,
   resolveSessionLockMaxHoldFromTimeout,
+  resolveSessionWriteLockTargetKey,
   resolveSessionWriteLockOptions,
 } from "../session-write-lock.js";
 import { createAgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
@@ -107,14 +108,22 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
 
   try {
     const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
+    const sessionTarget = await resolveAgentRunSessionTarget({
+      agentId: sessionAgentId,
+      config: params.config,
+      sessionFile: params.sessionFile,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionTarget: params.sessionTarget,
+    });
     const sessionLock =
       (await acquireOwnedSessionTranscriptWriteLock({
         sessionFile: params.sessionFile,
         sessionKey: params.sessionKey,
-        sessionTarget: params.sessionTarget,
+        sessionTarget,
       })) ??
       (await acquireSessionWriteLock({
-        sessionFile: params.sessionFile,
+        sessionFile: resolveSessionWriteLockTargetKey(sessionTarget),
         targetKind: "session-key",
         ...resolveSessionWriteLockOptions(params.config, {
           maxHoldMsFallback: resolveSessionLockMaxHoldFromTimeout({
@@ -124,7 +133,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       }));
     try {
       const transcriptPolicy = runtimePlan.transcript.resolvePolicy(runtimePlanModelContext);
-      const sessionTarget = params.sessionTarget as SessionTranscriptRuntimeTarget;
       const sessionManager = guardSessionManager(SessionManager.open(sessionTarget), {
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,

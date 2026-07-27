@@ -9,6 +9,7 @@ import type fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import { createFileLockManager } from "../infra/file-lock-manager.js";
@@ -126,6 +127,10 @@ function stateLeaseDurationMs(value: number, minimum: number): number {
 
 function sessionKeyLeasePath(sessionKey: string): string {
   return `sqlite:${SESSION_KEY_WRITE_LEASE_SCOPE}:${sessionKey}`;
+}
+
+export function resolveSessionWriteLockTargetKey(target: SessionTranscriptRuntimeTarget): string {
+  return JSON.stringify([target.agentId, path.resolve(target.storePath), target.sessionKey]);
 }
 
 function runSessionKeyLeaseWrite<T>(

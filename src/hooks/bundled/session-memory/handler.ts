@@ -158,7 +158,7 @@ function captureRecentSessionMemoryEvents(
     offset < totalMessages &&
     offset < SESSION_MEMORY_CAPTURE_MAX_SCANNED_MESSAGES &&
     capturedBytes < SESSION_MEMORY_CAPTURE_MAX_BYTES &&
-    countSessionMemoryMessages(captured) < messageCount
+    countSessionMemoryMessages(selectVisibleTranscriptEvents(captured)) < messageCount
   ) {
     const page = readSessionTranscriptBoundedMessageTailPage(scope, {
       maxBytes: SESSION_MEMORY_CAPTURE_MAX_BYTES - capturedBytes,

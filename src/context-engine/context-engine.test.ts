@@ -726,6 +726,32 @@ describe("Engine contract tests", () => {
     ).rejects.toThrow("successor target conflicts with the caller session identity");
   });
 
+  it("rejects a legacy successor marker for another caller agent", async () => {
+    compactEmbeddedAgentSessionDirectMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      reason: undefined,
+      result: {
+        summary: "summary",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 100,
+        tokensAfter: 40,
+        details: undefined,
+        sessionId: "worker-successor",
+        sessionFile: "sqlite:worker:worker-successor:/tmp/worker-sessions.json",
+      },
+    });
+
+    await expect(
+      delegateCompactionToRuntime({
+        agentId: "main",
+        sessionId: "main-session",
+        sessionKey: "global",
+        tokenBudget: 4096,
+      }),
+    ).rejects.toThrow("successor target conflicts with the caller session identity");
+  });
+
   it("delegateCompactionToRuntime forwards the caller abortSignal to the runtime (#89868)", async () => {
     installCompactRuntimeSpy();
     const controller = new AbortController();

@@ -418,6 +418,64 @@ describe("session-memory hook", () => {
     expect(memoryContent).not.toContain("Inactive branch content");
   });
 
+  it("pages past a full inactive branch to capture visible memory", async () => {
+    const tempDir = await createCaseWorkspace("workspace");
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionId = "sqlite-deep-inactive-branch";
+    const sessionKey = "agent:main:main";
+    const events: Array<Record<string, unknown>> = [
+      {
+        type: "message",
+        id: "visible-user",
+        parentId: null,
+        message: { role: "user", content: "Visible context before inactive branch" },
+      },
+      {
+        type: "message",
+        id: "visible-assistant",
+        parentId: "visible-user",
+        message: { role: "assistant", content: "Visible answer before inactive branch" },
+      },
+    ];
+    let inactiveParentId = "visible-user";
+    for (let index = 0; index < 300; index += 1) {
+      const id = `inactive-${index}`;
+      events.push({
+        type: "message",
+        id,
+        parentId: inactiveParentId,
+        message: { role: "assistant", content: `Inactive branch ${index}` },
+      });
+      inactiveParentId = id;
+    }
+    events.push({
+      type: "leaf",
+      id: "visible-leaf",
+      parentId: inactiveParentId,
+      targetId: "visible-assistant",
+    });
+    await replaceTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }, events);
+
+    const { memoryContent } = await runNewWithPreviousSessionEntry({
+      tempDir,
+      sessionKey,
+      cfg: {
+        agents: { defaults: { workspace: tempDir } },
+        hooks: {
+          internal: {
+            entries: { "session-memory": { enabled: true, messages: 2 } },
+          },
+        },
+        session: { store: storePath },
+      },
+      previousSessionEntry: { sessionId },
+    });
+
+    expect(memoryContent).toContain("user: Visible context before inactive branch");
+    expect(memoryContent).toContain("assistant: Visible answer before inactive branch");
+    expect(memoryContent).not.toContain("Inactive branch");
+  });
+
   it("fills the configured memory window past ineligible tail messages", async () => {
     const tempDir = await createCaseWorkspace("workspace");
     const storePath = path.join(tempDir, "sessions.json");

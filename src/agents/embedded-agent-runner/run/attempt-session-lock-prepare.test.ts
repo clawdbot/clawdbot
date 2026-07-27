@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   acquireSessionFileOwner: vi.fn(),
   acquireSessionWriteLock: vi.fn(),
   createSessionLockController: vi.fn(),
+  resolveSessionWriteLockTargetKey: vi.fn(() => "canonical-lock-key"),
   resolveCompactionTimeoutMs: vi.fn(() => 30_000),
   resolveSessionWriteLockOptions: vi.fn(() => ({
     timeoutMs: 100,
@@ -14,6 +15,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../session-write-lock.js", () => ({
   acquireSessionWriteLock: mocks.acquireSessionWriteLock,
+  resolveSessionWriteLockTargetKey: mocks.resolveSessionWriteLockTargetKey,
 }));
 vi.mock("../compaction-safety-timeout.js", () => ({
   resolveCompactionTimeoutMs: mocks.resolveCompactionTimeoutMs,
@@ -84,6 +86,12 @@ function createFixture(options?: { rejectPostArmFence?: Error }) {
       config: {},
       sessionFile: "/tmp/session.jsonl",
       sessionKey: "agent:main:session-1",
+      sessionTarget: {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        storePath: "/tmp/sessions.json",
+      },
     },
     externalAbortController,
     getSessionManager: () => sessionManager,
@@ -141,12 +149,16 @@ describe("prepareEmbeddedAttemptSessionLock", () => {
         acquireSessionWriteLock: mocks.acquireSessionWriteLock,
         initialAcquireSignal: fixture.input.attempt.abortSignal,
         lockOptions: {
-          sessionFile: "/tmp/session.jsonl",
+          sessionFile: "canonical-lock-key",
+          targetKind: "session-key",
           timeoutMs: 100,
           staleMs: 200,
           maxHoldMs: 300,
         },
       }),
+    );
+    expect(mocks.resolveSessionWriteLockTargetKey).toHaveBeenCalledWith(
+      fixture.input.attempt.sessionTarget,
     );
     expect(controllerInput?.mergePromptReleasedSessionEntries([])).toBe("merged");
     expect(fixture.sessionManager.mergePromptReleasedSessionEntries).toHaveBeenCalledWith([], {

@@ -16,7 +16,6 @@ import type {
 type SessionLock = Awaited<ReturnType<typeof acquireSessionWriteLock>>;
 type AcquireSessionWriteLock = typeof acquireSessionWriteLock;
 type LockOptions = Parameters<AcquireSessionWriteLock>[0];
-type SessionFileWriteAppendValidator<T> = (result: T) => boolean;
 const PROMPT_DISPOSE_SETTLE_TIMEOUT_MS = 5_000;
 
 export type EmbeddedAttemptSessionFileOwner = {
@@ -51,10 +50,6 @@ export type EmbeddedAttemptSessionLockController = {
   releaseForPrompt(): Promise<void>;
   releaseHeldLockForAbort(options?: { terminal?: boolean }): Promise<void>;
   refreshAfterOwnedSessionWrite(): void;
-  withOwnedSessionFileWrite<T>(
-    run: () => T,
-    validateAppend?: SessionFileWriteAppendValidator<T>,
-  ): T;
   reacquireAfterPrompt(): Promise<void>;
   withSessionWriteLock<T>(
     run: () => Promise<T> | T,
@@ -144,6 +139,23 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     pendingOperations: new Set(),
   });
   const lifecycleOwner = new AsyncLocalStorage<LifecycleOwner>();
+  const drainLifecycleOwner = async (owner: LifecycleOwner): Promise<void> => {
+    let failed = false;
+    let firstError: unknown;
+    while (owner.pendingOperations.size > 0) {
+      const pending = [...owner.pendingOperations];
+      owner.pendingOperations.clear();
+      const settled = await Promise.allSettled(pending);
+      const rejection = settled.find((result) => result.status === "rejected");
+      if (!failed && rejection?.status === "rejected") {
+        failed = true;
+        firstError = rejection.reason;
+      }
+    }
+    if (failed) {
+      throw firstError;
+    }
+  };
   const serializeLifecycle = async <T>(run: () => Promise<T> | T): Promise<T> => {
     const inheritedOwner = lifecycleOwner.getStore();
     if (inheritedOwner?.active) {
@@ -155,21 +167,24 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         try {
           return await lifecycleOwner.run(childOwner, async () => await run());
         } finally {
-          while (childOwner.pendingOperations.size > 0) {
-            await Promise.all(childOwner.pendingOperations);
+          try {
+            await drainLifecycleOwner(childOwner);
+          } finally {
+            childOwner.active = false;
           }
-          childOwner.active = false;
         }
       });
-      const settlement = operation.then(
+      void operation.catch(() => {});
+      const queueTail = operation.then(
         () => undefined,
         () => undefined,
       );
-      inheritedOwner.nestedTail = settlement;
-      inheritedOwner.pendingOperations.add(settlement);
-      void settlement.finally(() => {
+      const propagated = operation.then(() => undefined);
+      void propagated.catch(() => {});
+      inheritedOwner.nestedTail = queueTail;
+      inheritedOwner.pendingOperations.add(propagated);
+      void queueTail.finally(() => {
         inheritedOwner.nestedPending -= 1;
-        inheritedOwner.pendingOperations.delete(settlement);
       });
       return await operation;
     }
@@ -183,11 +198,12 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     try {
       return await lifecycleOwner.run(owner, async () => await run());
     } finally {
-      while (owner.pendingOperations.size > 0) {
-        await Promise.all(owner.pendingOperations);
+      try {
+        await drainLifecycleOwner(owner);
+      } finally {
+        owner.active = false;
+        release();
       }
-      owner.active = false;
-      release();
     }
   };
   const reloadPromptReleasedState = async (): Promise<void> => {
@@ -245,19 +261,6 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       promptReleased = false;
     },
     refreshAfterOwnedSessionWrite: () => {},
-    withOwnedSessionFileWrite: (run) => {
-      if (disposed) {
-        throw new Error("attempt disposed before transcript write");
-      }
-      if (cleanupStarted) {
-        throw new Error("attempt cleanup started before transcript write");
-      }
-      if (reloadFailed) {
-        throw reloadFailure;
-      }
-      assertInitialLockOwned();
-      return run();
-    },
     reacquireAfterPrompt: async () => {
       if (disposed) {
         return;
@@ -273,16 +276,25 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         }
       });
     },
-    withSessionWriteLock: async (run) => {
-      if (disposed) {
-        throw new Error("attempt disposed before transcript write");
+    withSessionWriteLock: (run) => {
+      const rejectWrite = (error: unknown): Promise<never> => {
+        const rejected = Promise.reject(error);
+        void rejected.catch(() => {});
+        return rejected;
+      };
+      const parentWriteOperation = activeWriteOperation.getStore();
+      const activeDescendant = Boolean(
+        parentWriteOperation?.active && activeWriteOperations.has(parentWriteOperation),
+      );
+      if (disposed && !activeDescendant) {
+        return rejectWrite(new Error("attempt disposed before transcript write"));
       }
       if (cleanupStarted) {
-        throw new Error("attempt cleanup started before transcript write");
+        return rejectWrite(new Error("attempt cleanup started before transcript write"));
       }
       const writeOperation: ActiveWriteOperation = { active: true, started: false };
       const operation = serializeLifecycle(async () => {
-        if (disposed) {
+        if (disposed && !activeDescendant) {
           throw new Error("attempt disposed before transcript write");
         }
         if (cleanupStarted) {
@@ -299,13 +311,14 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         () => undefined,
         () => undefined,
       );
+      void operation.catch(() => {});
       writeOperation.settlement = settlement;
       activeWriteOperations.add(writeOperation);
       void settlement.then(() => {
         writeOperation.active = false;
         activeWriteOperations.delete(writeOperation);
       });
-      return await operation;
+      return operation;
     },
     acquireForCleanup: async () => {
       const currentWriteOperation = activeWriteOperation.getStore();

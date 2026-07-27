@@ -1349,7 +1349,10 @@ export async function noteStateIntegrity(
       })
       .slice(0, 5);
     const recentTranscriptCandidates = recent.filter(([key]) => !isSlashRoutingSessionKey(key));
-    const missing = recentTranscriptCandidates.filter(([, entry]) => {
+    const missing = recentTranscriptCandidates.filter(([key, entry]) => {
+      if (sqliteSessionKeys.has(key)) {
+        return false;
+      }
       const sessionId = entry.sessionId;
       if (!sessionId) {
         return false;

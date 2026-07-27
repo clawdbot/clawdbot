@@ -47,6 +47,7 @@ function buildCompactionResultSessionTarget(params: {
   const callerAgentId = suppliedAgentId ?? parseAgentSessionKey(suppliedSessionKey)?.agentId;
   if (
     (callerAgentId && targetAgentId && targetAgentId !== callerAgentId) ||
+    (callerAgentId && marker && marker.agentId !== callerAgentId) ||
     (suppliedSessionKey && targetSessionKey && targetSessionKey !== suppliedSessionKey)
   ) {
     throw new Error("Context-engine successor target conflicts with the caller session identity");

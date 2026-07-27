@@ -17,6 +17,7 @@ let resetSessionWriteLockStateForTest: typeof import("./session-write-lock.test-
 let resolveSessionLockMaxHoldFromTimeout: typeof import("./session-write-lock.js").resolveSessionLockMaxHoldFromTimeout;
 let resolveSessionWriteLockAcquireTimeoutMs: typeof import("./session-write-lock.js").resolveSessionWriteLockAcquireTimeoutMs;
 let resolveSessionWriteLockOptions: typeof import("./session-write-lock.js").resolveSessionWriteLockOptions;
+let resolveSessionWriteLockTargetKey: typeof import("./session-write-lock.js").resolveSessionWriteLockTargetKey;
 
 async function expectLockRemovedOnlyAfterFinalRelease(params: {
   lockPath: string;
@@ -168,6 +169,7 @@ describe("acquireSessionWriteLock", () => {
       resolveSessionLockMaxHoldFromTimeout,
       resolveSessionWriteLockAcquireTimeoutMs,
       resolveSessionWriteLockOptions,
+      resolveSessionWriteLockTargetKey,
     } = await import("./session-write-lock.js"));
     ({ testing, resetSessionWriteLockStateForTest } =
       await import("./session-write-lock.test-support.js"));
@@ -270,6 +272,30 @@ describe("acquireSessionWriteLock", () => {
     });
     await nextLock.release();
     await expectPathMissing(path.resolve(`${sessionKey}.lock`));
+  });
+
+  it("namespaces unqualified session-key leases by transcript target", async () => {
+    const first = await acquireSessionWriteLock({
+      sessionFile: resolveSessionWriteLockTargetKey({
+        agentId: "main",
+        sessionId: "main-session",
+        sessionKey: "global",
+        storePath: "/tmp/main/sessions.json",
+      }),
+      targetKind: "session-key",
+    });
+    const second = await acquireSessionWriteLock({
+      sessionFile: resolveSessionWriteLockTargetKey({
+        agentId: "worker",
+        sessionId: "worker-session",
+        sessionKey: "global",
+        storePath: "/tmp/worker/sessions.json",
+      }),
+      targetKind: "session-key",
+      timeoutMs: 5,
+    });
+
+    await Promise.all([first.release(), second.release()]);
   });
 
   it("reference-counts reentrant session-key leases", async () => {
