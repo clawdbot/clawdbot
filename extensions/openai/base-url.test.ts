@@ -94,8 +94,9 @@ describe("openai base URL helpers", () => {
     expect(normalizeOpenAICodexLoopbackBaseUrl("https://[::1]:8443/codex")).toBe(
       "https://[::1]:8443/codex",
     );
-    expect(normalizeOpenAICodexLoopbackBaseUrl("http://127.0.0.1")).toBe("http://127.0.0.1");
     for (const invalid of [
+      "http://127.0.0.1",
+      "http://127.0.0.1/backend-api",
       "http://localhost:7862/codex",
       "http://127.0.0.2:7862/codex",
       "https://proxy.example.test/codex",

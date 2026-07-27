@@ -110,6 +110,9 @@ export function normalizeOpenAICodexLoopbackBaseUrl(baseUrl: unknown): string | 
       return undefined;
     }
     const path = url.pathname.replace(/\/+$/u, "");
+    if (!path.toLowerCase().endsWith("/codex")) {
+      return undefined;
+    }
     return `${url.origin}${path}`;
   } catch {
     return undefined;

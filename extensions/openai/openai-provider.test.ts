@@ -1746,6 +1746,63 @@ describe("buildOpenAIProvider", () => {
     });
   });
 
+  it("preserves loopback proxy routing through dynamic Codex resolution", () => {
+    const provider = buildOpenAIProvider();
+    const proxyBaseUrl = "http://127.0.0.1:7862/backend-api/codex";
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            params: { codexProxyBaseUrl: proxyBaseUrl },
+          },
+        },
+      },
+    };
+
+    const dynamic = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.6-sol",
+      modelRegistry: { find: () => null },
+      authProfileMode: "token",
+      providerConfig: {
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        models: [],
+      },
+      config,
+    } as never);
+    expectFields(dynamic, {
+      provider: "openai",
+      id: "gpt-5.6-sol",
+      api: "openai-chatgpt-responses",
+      baseUrl: proxyBaseUrl,
+    });
+
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "openai",
+      modelId: "gpt-5.6-sol",
+      model: {
+        provider: "openai",
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      },
+      config,
+    } as never);
+    expect(normalized?.baseUrl).toBe(proxyBaseUrl);
+
+    expect(
+      provider.normalizeTransport?.({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        config,
+      } as never),
+    ).toEqual({ api: "openai-chatgpt-responses", baseUrl: proxyBaseUrl });
+  });
+
   it("keeps HTTP Platform routes out of Codex transport gates", () => {
     const provider = buildOpenAIProvider();
     const baseUrl = "http://api.openai.com/v1";

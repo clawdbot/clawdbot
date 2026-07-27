@@ -643,6 +643,29 @@ function resolveOpenAICodexProxyBaseUrl(config: unknown): string | undefined {
   return normalized;
 }
 
+function withOpenAICodexProxyRoute(
+  ctx: ProviderResolveDynamicModelContext,
+): ProviderResolveDynamicModelContext {
+  const baseUrl = resolveOpenAICodexProxyBaseUrl(ctx.config);
+  if (!baseUrl || ctx.providerConfig?.baseUrl === baseUrl) {
+    return ctx;
+  }
+  return {
+    ...ctx,
+    providerConfig: ctx.providerConfig
+      ? { ...ctx.providerConfig, baseUrl }
+      : { baseUrl, models: [] },
+  };
+}
+
+function applyOpenAICodexProxyRoute<T extends ProviderRuntimeModel>(model: T, config: unknown): T {
+  const baseUrl = resolveOpenAICodexProxyBaseUrl(config);
+  if (!baseUrl || model.baseUrl === baseUrl) {
+    return model;
+  }
+  return { ...model, api: "openai-chatgpt-responses", baseUrl };
+}
+
 function isCodexCatalogAuthMode(mode: string): mode is "oauth" | "token" {
   return mode === "oauth" || mode === "token";
 }
@@ -1040,7 +1063,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
     },
     resolveDynamicModel: (ctx) =>
       shouldResolveDynamicModelThroughCodex(ctx)
-        ? codexHooks.resolveDynamicModel?.(ctx)
+        ? codexHooks.resolveDynamicModel?.(withOpenAICodexProxyRoute(ctx))
         : resolveOpenAIGptForwardCompatModel(ctx),
     preferRuntimeResolvedModel: (ctx) => codexHooks.preferRuntimeResolvedModel?.(ctx) ?? false,
     normalizeResolvedModel: (ctx) => {
@@ -1058,7 +1081,9 @@ export function buildOpenAIProvider(): ProviderPlugin {
           baseUrl: ctx.model.baseUrl,
         })
       ) {
-        return codexHooks.normalizeResolvedModel?.(ctx);
+        const normalized = codexHooks.normalizeResolvedModel?.(ctx) ?? ctx.model;
+        const routed = applyOpenAICodexProxyRoute(normalized, ctx.config);
+        return routed === ctx.model ? undefined : routed;
       }
       return normalizeOpenAITransport(ctx.model, ctx);
     },
@@ -1071,7 +1096,12 @@ export function buildOpenAIProvider(): ProviderPlugin {
           : authoredCompletionsRoute;
       }
       if (shouldUseCodexResponsesHooks(ctx)) {
-        return codexHooks.normalizeTransport?.(ctx);
+        const normalized = codexHooks.normalizeTransport?.(ctx);
+        const baseUrl = resolveOpenAICodexProxyBaseUrl(ctx.config);
+        if (baseUrl) {
+          return { api: normalized?.api ?? "openai-chatgpt-responses", baseUrl };
+        }
+        return normalized;
       }
       return shouldUseOpenAIResponsesTransport(ctx)
         ? { api: "openai-responses", baseUrl: ctx.baseUrl }

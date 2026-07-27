@@ -475,10 +475,9 @@ for the full example.
 
     ### Trusted loopback credential proxies
 
-    A trusted local credential broker can keep ChatGPT OAuth material outside
-    the OpenClaw process while preserving the native `openai/*` catalog and
-    Responses transport. Configure the broker's Codex base URL under provider
-    parameters:
+    A trusted local credential broker can preserve the native `openai/*`
+    catalog and Responses transport while handling upstream authentication on
+    loopback. Configure the broker's Codex base URL under provider parameters:
 
     ```json5
     {
@@ -498,9 +497,14 @@ for the full example.
     `<codexProxyBaseUrl>/models`, and Codex Responses models use
     `<codexProxyBaseUrl>/responses`. OpenAI API-key profiles keep using the
     Platform API route. The proxy URL must use the exact `127.0.0.1` or `[::1]`
-    loopback literal; OpenClaw rejects remote hosts before sending the profile
-    token. The local proxy remains responsible for upstream authentication,
-    account headers, refresh, and revocation.
+    loopback literal and end in `/codex`; OpenClaw rejects other URLs before
+    sending the profile token.
+
+    OpenClaw sends the selected token or OAuth credential to the local proxy.
+    To keep upstream OAuth material outside OpenClaw, configure the profile with
+    an opaque proxy capability instead of the upstream OAuth token. The local
+    proxy then owns upstream authentication, account headers, refresh, and
+    revocation.
 
     ### Context window defaults and long-context opt-in
 
