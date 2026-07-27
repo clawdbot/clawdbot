@@ -354,13 +354,48 @@ export function createNpmLockGuardCommand(paths) {
   };
 }
 
+// Enough of the wrapper tail to hold its run summary; the rest is streamed, not kept.
+const DELEGATION_OUTPUT_TAIL_LIMIT = 64 * 1024;
+
+/**
+ * Whether a failed delegation means the remote never ran our command.
+ *
+ * The wrapper only emits a run summary once the command reached the box, so a
+ * failure carrying `command-exit` is a real check failure. Anything else — a
+ * lease, broker, DNS, or network error — never produced a verdict, which is the
+ * case AGENTS.md says falls back to local execution.
+ *
+ * This has to stay a positive test for `command-exit` rather than a blocklist of
+ * infrastructure errors: guessing wrong toward "infrastructure" only re-runs the
+ * checks locally, while guessing wrong toward "real failure" would block on an
+ * outage. Never widen it to fall back on any non-zero exit — some lanes (prompt
+ * snapshots) are Linux-only truth and would pass locally on macOS.
+ */
+export function delegationFailedBeforeRunning(output) {
+  return !/"errorKind"\s*:\s*"command-exit"/u.test(output);
+}
+
 async function runChangedCheckViaCrabbox(argv = [], env = process.env) {
   console.error("[check:changed] delegating to Blacksmith Testbox via the Node wrapper.");
-  return await runManagedCommand({
+  let tail = "";
+  const exitCode = await runManagedCommand({
     bin: "node",
     args: buildChangedCheckCrabboxArgs(argv),
     env,
+    stdio: ["inherit", "pipe", "pipe"],
+    onReady: (child) => {
+      for (const stream of [child.stdout, child.stderr]) {
+        stream?.on("data", (chunk) => {
+          process.stderr.write(chunk);
+          tail = (tail + chunk).slice(-DELEGATION_OUTPUT_TAIL_LIMIT);
+        });
+      }
+    },
   });
+  return {
+    exitCode,
+    backendUnavailable: exitCode !== 0 && delegationFailedBeforeRunning(tail),
+  };
 }
 
 export function createChangedCheckPlan(result, options = {}) {
@@ -1006,7 +1041,13 @@ if (isDirectRun()) {
       if (!shouldDelegateChangedCheckToCrabbox(argv, process.env)) {
         throw error;
       }
-      process.exitCode = await runChangedCheckViaCrabbox(argv, process.env);
+      // No local fallback here: this path exists because the checkout cannot
+      // resolve the diff refs itself, so there is nothing local to run.
+      const delegated = await runChangedCheckViaCrabbox(argv, process.env);
+      if (delegated.backendUnavailable) {
+        throw error;
+      }
+      process.exitCode = delegated.exitCode;
     }
     if (paths) {
       const result = detectChangedLanesForPaths({
@@ -1028,7 +1069,20 @@ if (isDirectRun()) {
             : undefined,
         })
       ) {
-        process.exitCode = await runChangedCheckViaCrabbox(argv, process.env);
+        const delegated = await runChangedCheckViaCrabbox(argv, process.env);
+        if (delegated.backendUnavailable) {
+          // Say this loudly: the proof below is local, so whoever reads the run
+          // knows which machine produced it and that Linux-only lanes are unproven.
+          console.error(
+            "[check:changed] Blacksmith never ran the checks (no run summary). Falling back to local execution; note this in the proof summary.",
+          );
+        }
+        process.exitCode = delegated.backendUnavailable
+          ? await runChangedCheck(result, {
+              ...args,
+              explicitPaths: args.paths.length > 0,
+            })
+          : delegated.exitCode;
       } else {
         process.exitCode = await runChangedCheck(result, {
           ...args,
