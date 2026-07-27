@@ -76,13 +76,12 @@ export async function completeCopilotAttempt(params: {
   const transcript = transcriptJournal?.snapshot();
   // Pre-journal failures keep the prepared input snapshot. Reconstructing a
   // user/assistant mirror here would restore the deleted dual-write owner.
+  const recorder = input.userTurnTranscriptRecorder;
   const messagesSnapshot =
     transcript?.messagesSnapshot ??
-    includePreparedUser(
-      messages,
-      input.userTurnTranscriptRecorder?.message,
-      input.trigger === "memory",
-    );
+    (recorder?.isBlocked()
+      ? removePreparedUser(messages, recorder.message)
+      : includePreparedUser(messages, recorder?.message, input.trigger === "memory"));
   const result = createResult(input, {
     aborted,
     assistantTexts,
@@ -172,6 +171,15 @@ function includePreparedUser(
     return [...messages.slice(0, -1), projected];
   }
   return [...messages, projected];
+}
+
+function removePreparedUser(
+  messages: AgentMessage[],
+  prepared: Extract<AgentMessage, { role: "user" }> | undefined,
+): AgentMessage[] {
+  return prepared && isSamePreparedUser(messages.at(-1), prepared)
+    ? messages.slice(0, -1)
+    : messages;
 }
 
 function isSamePreparedUser(

@@ -138,6 +138,7 @@ export function attachEventBridge(
   let streamError: Error | undefined;
   const toolMetas: AgentHarnessAttemptResult["toolMetas"] = [];
   const toolMetaIndexByCallId = new Map<string, number>();
+  const userRequestedToolCallIds = new Set<string>();
   let startedCount = 0;
   let completedCount = 0;
   let activeCompactionCount = 0;
@@ -155,6 +156,7 @@ export function attachEventBridge(
   });
   let firstDeltaError: unknown;
   let detached = false;
+  let unconsumedDurableReasoning = false;
   const unsubscribeFns: Array<() => void> = [];
 
   registerListener(session, unsubscribeFns, "user.message", (event) => {
@@ -202,6 +204,12 @@ export function attachEventBridge(
   });
 
   registerListener(session, unsubscribeFns, "skill.invoked", (event) => {
+    if (isRootSessionEvent(event) && event.ephemeral !== true) {
+      options.transcriptProjection?.journal.markReplayIncomplete();
+    }
+  });
+
+  registerListener(session, unsubscribeFns, "system.notification", (event) => {
     if (isRootSessionEvent(event) && event.ephemeral !== true) {
       options.transcriptProjection?.journal.markReplayIncomplete();
     }
@@ -260,6 +268,17 @@ export function attachEventBridge(
     reasoningById.set(reasoningId, `${reasoningById.get(reasoningId) ?? ""}${delta}`);
   });
 
+  registerListener(session, unsubscribeFns, "assistant.reasoning", (event) => {
+    if (!isRootSessionEvent(event) || event.ephemeral === true) {
+      return;
+    }
+    if (!reasoningById.has(event.data.reasoningId)) {
+      reasoningOrder.push(event.data.reasoningId);
+    }
+    reasoningById.set(event.data.reasoningId, event.data.content);
+    unconsumedDurableReasoning = true;
+  });
+
   registerListener(session, unsubscribeFns, "assistant.message", (event) => {
     if (!isRootSessionEvent(event) || event.ephemeral === true) {
       return;
@@ -283,6 +302,7 @@ export function attachEventBridge(
 
   registerListener(session, unsubscribeFns, "tool.user_requested", (event) => {
     if (isRootSessionEvent(event) && event.ephemeral !== true) {
+      userRequestedToolCallIds.add(event.data.toolCallId);
       options.transcriptProjection?.journal.markReplayIncomplete();
     }
   });
@@ -314,20 +334,12 @@ export function attachEventBridge(
       };
     }
     const projection = options.transcriptProjection;
-    if (
-      projection &&
-      isRootSessionEvent(event) &&
-      event.ephemeral !== true &&
-      event.data.isUserRequested === true
-    ) {
+    const wasTrackedUserRequest = userRequestedToolCallIds.delete(event.data.toolCallId);
+    const isUserRequested = event.data.isUserRequested === true || wasTrackedUserRequest;
+    if (projection && isRootSessionEvent(event) && event.ephemeral !== true && isUserRequested) {
       projection.journal.markReplayIncomplete();
     }
-    if (
-      projection &&
-      isRootSessionEvent(event) &&
-      event.ephemeral !== true &&
-      event.data.isUserRequested !== true
-    ) {
+    if (projection && isRootSessionEvent(event) && event.ephemeral !== true && !isUserRequested) {
       const resultText = event.data.success
         ? (event.data.result?.content ?? "")
         : (event.data.error?.message ?? "Tool execution failed");
@@ -464,6 +476,7 @@ export function attachEventBridge(
     if (!isRootCompactionEvent(event)) {
       return;
     }
+    markUnconsumedReasoningIncomplete();
     flushPendingAssistantProjection();
     observedSessionIdle = true;
     resolveSessionIdle?.();
@@ -522,6 +535,7 @@ export function attachEventBridge(
       return agentEventChain;
     },
     flushTranscriptProjection() {
+      markUnconsumedReasoningIncomplete();
       flushPendingAssistantProjection();
     },
     hasObservedCompaction() {
@@ -601,6 +615,7 @@ export function attachEventBridge(
       event.data.reasoningText ?? (joinReasoning(reasoningOrder, reasoningById) || undefined);
     reasoningOrder.length = 0;
     reasoningById.clear();
+    unconsumedDurableReasoning = false;
     const chunk: AssistantProjectionChunk = {
       event,
       assistantTexts: [messagesById.get(event.data.messageId)?.text ?? ""],
@@ -636,6 +651,13 @@ export function attachEventBridge(
     pendingAssistantProjection = undefined;
     lastAssistantProjection = group;
     recordAssistantProjection(group);
+  }
+
+  function markUnconsumedReasoningIncomplete(): void {
+    if (unconsumedDurableReasoning) {
+      options.transcriptProjection?.journal.markReplayIncomplete();
+      unconsumedDurableReasoning = false;
+    }
   }
 
   function flushPendingAssistantProjectionForToolCall(toolCallId: string): void {

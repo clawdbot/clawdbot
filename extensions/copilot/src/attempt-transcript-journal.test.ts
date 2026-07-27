@@ -281,6 +281,32 @@ describe("Copilot attempt transcript journal", () => {
     expect(journal.snapshot().replayInvalid).toBe(true);
   });
 
+  it("marks durable system notifications replay-incomplete", async () => {
+    const { journal, session } = await createFixture();
+    await journal.persistInitialUser();
+    session.emit(
+      event("system.notification", "system-notification", { content: "background task done" }),
+    );
+    await journal.barrier("system notification");
+
+    expect(journal.snapshot().replayInvalid).toBe(true);
+  });
+
+  it("marks orphaned durable reasoning replay-incomplete at terminal flush", async () => {
+    const { bridge, journal, session } = await createFixture();
+    await journal.persistInitialUser();
+    session.emit(
+      event("assistant.reasoning", "orphaned-reasoning", {
+        content: "durable thinking without a message",
+        reasoningId: "reasoning-1",
+      }),
+    );
+    bridge.flushTranscriptProjection();
+    await journal.barrier("orphaned reasoning");
+
+    expect(journal.snapshot().replayInvalid).toBe(true);
+  });
+
   it("marks a hook-suppressed standalone assistant replay-incomplete", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([
@@ -663,7 +689,6 @@ describe("Copilot attempt transcript journal", () => {
     );
     session.emit(
       event("tool.execution_complete", "user-tool-result", {
-        isUserRequested: true,
         result: { content: "done" },
         success: true,
         toolCallId: "user-call",

@@ -2997,6 +2997,21 @@ describe("runCopilotAttempt", () => {
       ]);
     });
 
+    it("does not restore an already-blocked user when pre-journal setup fails", async () => {
+      const sdk = makeFakeSdk();
+      const recorder = makeUserTurnRecorder({ role: "user", content: "blocked", timestamp: 1 });
+      recorder.markBlocked();
+      const params = makeParams({
+        messages: [{ role: "user", content: "blocked", timestamp: 1 }],
+        userTurnTranscriptRecorder: recorder,
+      }) as AgentHarnessAttemptParams & { sessionTarget?: unknown };
+      delete params.sessionTarget;
+
+      const result = await runCopilotAttempt(params, { pool: makeFakePool(sdk) });
+
+      expect(result.messagesSnapshot).toEqual([]);
+    });
+
     it("replaces the common unkeyed active user in the pre-journal fallback", async () => {
       const sdk = makeFakeSdk();
       const params = makeParams() as AgentHarnessAttemptParams & { sessionTarget?: unknown };
