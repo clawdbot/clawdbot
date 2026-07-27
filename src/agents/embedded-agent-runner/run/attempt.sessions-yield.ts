@@ -179,7 +179,6 @@ export function stripSessionsYieldArtifacts(activeSession: {
   agent: { state: { messages: AgentMessage[] } };
   sessionManager: Pick<SessionManager, "removeTrailingEntries">;
 }) {
-  const originalLength = activeSession.messages.length;
   const strippedMessages = activeSession.messages.slice();
 
   // The tool-calling assistant turn and synthetic abort artifacts form one
