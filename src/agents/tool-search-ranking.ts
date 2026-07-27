@@ -163,8 +163,10 @@ function stripOneSuffix(token: string): string {
     if (suffix === "s" && token.endsWith("ss")) {
       continue;
     }
+    // "repositories" -> "repository", not "repositori", or it never meets the
+    // singular form the catalog is more likely to use.
     if (suffix === "ies") {
-      return `${token.slice(0, -3)}i`;
+      return `${token.slice(0, -3)}y`;
     }
     const stripped = token.slice(0, -suffix.length);
     return UNDOUBLING_SUFFIXES.has(suffix) ? undoubleFinalConsonant(stripped) : stripped;
@@ -224,6 +226,9 @@ export function tokenizeDocument(input: string): string[] {
  * that fires on the wrong word is worse than one that does not fire.
  */
 function normalizeTrigger(word: string): string {
+  if (word.length > 4 && word.endsWith("ies")) {
+    return `${word.slice(0, -3)}y`;
+  }
   return word.length > 4 && word.endsWith("s") && !word.endsWith("ss") ? word.slice(0, -1) : word;
 }
 
@@ -299,22 +304,31 @@ export function buildLexicalIndex<T>(documents: ReadonlyArray<RankedDocument<T>>
  *
  * An empty query scores nothing on purpose: returning the whole catalog in
  * arbitrary order would look like a ranked answer without being one.
+ *
+ * `matchedLiteral` reports whether a hit shares any word the caller actually
+ * typed. Callers rank on it first: discounting expansions is not sufficient on
+ * its own, because BM25 sums per term and a common literal term carries little
+ * IDF, so a short document collecting two rare expansions can still outscore it.
  */
 export function scoreLexical<T>(
   index: LexicalIndex<T>,
   queryTerms: readonly WeightedTerm[],
-): Array<{ value: T; score: number }> {
+): Array<{ value: T; score: number; matchedLiteral: boolean }> {
   if (queryTerms.length === 0 || index.documents.length === 0) {
     return [];
   }
   const total = index.documents.length;
-  const results: Array<{ value: T; score: number }> = [];
+  const results: Array<{ value: T; score: number; matchedLiteral: boolean }> = [];
   for (const document of index.documents) {
     let score = 0;
+    let matchedLiteral = false;
     for (const { term, weight } of queryTerms) {
       const frequency = document.termCounts.get(term);
       if (!frequency) {
         continue;
+      }
+      if (weight >= 1) {
+        matchedLiteral = true;
       }
       const matching = index.documentFrequency.get(term) ?? 0;
       const idf = Math.log(1 + (total - matching + 0.5) / (matching + 0.5));
@@ -324,7 +338,7 @@ export function scoreLexical<T>(
         (frequency + BM25_K1 * (1 - BM25_B + BM25_B * normalized));
     }
     if (score > 0) {
-      results.push({ value: document.value, score });
+      results.push({ value: document.value, score, matchedLiteral });
     }
   }
   return results;

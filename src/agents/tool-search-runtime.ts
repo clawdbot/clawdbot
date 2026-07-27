@@ -323,7 +323,12 @@ export class ToolSearchRuntime {
       })),
     );
     return scoreLexical(index, tokenizeQuery(query))
-      .toSorted((a, b) => b.score - a.score || a.value.id.localeCompare(b.value.id))
+      .toSorted(
+        (a, b) =>
+          Number(b.matchedLiteral) - Number(a.matchedLiteral) ||
+          b.score - a.score ||
+          a.value.id.localeCompare(b.value.id),
+      )
       .slice(0, limit)
       .map((hit) => compactToolSearchCatalogEntry(hit.value));
   };

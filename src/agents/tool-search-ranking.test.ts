@@ -70,6 +70,22 @@ describe("tokenizeQuery", () => {
     expect(tokenizeDocument(`${word}ing`)).toEqual(tokenizeDocument(word));
   });
 
+  it.each([
+    ["repositories", "repository"],
+    ["queries", "query"],
+    ["memories", "memory"],
+  ])("normalizes -ies back to its singular: %s", (plural, singular) => {
+    expect(tokenizeDocument(plural)).toEqual(tokenizeDocument(singular));
+  });
+
+  it("fires expansions for -ies plurals of a trigger word", () => {
+    // "directories" must reach the directory/folder group, not stall at
+    // "directorie" and expand nothing.
+    expect(tokenizeQuery("list directories").map((term) => term.term)).toContain(
+      tokenizeDocument("file")[0],
+    );
+  });
+
   it("drops stopwords so they cannot carry a match", () => {
     expect(tokenizeQuery("the and with")).toEqual([]);
   });
@@ -129,17 +145,22 @@ describe("scoreLexical", () => {
     expect(scoreLexical(index, tokenizeQuery("価格")).map((hit) => hit.value)).toEqual(["jp"]);
   });
 
-  it("ranks a literal match above one reached only through expansion", () => {
+  it("marks literal overlap so callers can rank it ahead of expansion-only hits", () => {
+    // A common literal term carries little IDF, so a short document collecting
+    // two rare expansions can outscore it. The tier, not the weight, is what
+    // keeps a tool matching the typed word from being dropped by the limit.
     const index = buildLexicalIndex([
-      { value: "weather", terms: tokenizeDocument("weather_now Report the weather") },
+      { value: "weather-a", terms: tokenizeDocument("weather_now Report the weather") },
+      { value: "weather-b", terms: tokenizeDocument("weather_hourly Hourly weather") },
+      { value: "weather-c", terms: tokenizeDocument("weather_alerts Weather alerts") },
       { value: "web", terms: tokenizeDocument("web_search Search the web") },
     ]);
 
-    const ranked = scoreLexical(index, tokenizeQuery("weather")).toSorted(
-      (a, b) => b.score - a.score,
-    );
+    const hits = scoreLexical(index, tokenizeQuery("weather"));
+    const web = hits.find((hit) => hit.value === "web");
 
-    expect(ranked[0]?.value).toBe("weather");
+    expect(hits.filter((hit) => hit.matchedLiteral).map((hit) => hit.value)).toContain("weather-a");
+    expect(web?.matchedLiteral).toBe(false);
   });
 
   it("ranks a rare term above one shared across the catalog", () => {
