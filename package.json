@@ -1934,6 +1934,7 @@
     "openai": "6.48.0",
     "p-limit": "7.3.0",
     "p-map": "7.0.5",
+    "partial-json": "0.1.7",
     "playwright-core": "1.61.1",
     "pretty-ms": "9.3.0",
     "proper-lockfile": "4.1.2",

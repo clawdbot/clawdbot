@@ -219,6 +219,11 @@
       "class": "core-runtime",
       "risk": ["concurrency"]
     },
+    "partial-json": {
+      "owner": "core:llm-json-parsing",
+      "class": "core-runtime",
+      "risk": ["streaming-json-parser"]
+    },
     "playwright-core": {
       "owner": "core:browser",
       "class": "core-runtime",
