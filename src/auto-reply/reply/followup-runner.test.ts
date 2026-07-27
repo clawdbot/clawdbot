@@ -106,7 +106,7 @@ function createTurn(
     },
     sendPolicy: "allow",
     preflightCompactionApplied: false,
-  } as unknown as AdmittedFollowupTurn;
+  } as unknown as AdmittedFollowupTurn & { operation: typeof operation };
 }
 
 function createRejectedExecution(order: string[] = []): FollowupExecutionResult {
