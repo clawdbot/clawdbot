@@ -466,6 +466,7 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
   const mock = await startQaMockOpenAiServer({ finalOnlyMarkerPauseMs: 60_000 });
   let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
   let client: GatewayClient | undefined;
+  let diagnosticsClient: GatewayClient | undefined;
   try {
     gateway = await startQaGatewayChild({
       repoRoot: options.repoRoot,
@@ -543,7 +544,13 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
     });
     assertControlResult(cancel, { mode: "cancel", active: true, aborted: true });
     await consultRequest;
-    const queuedDiagnostics = await client.request<DiagnosticStabilitySnapshot>(
+    diagnosticsClient = await connectGatewayClient({
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
+      token: gateway.token,
+      url: gateway.wsUrl,
+    });
+    const queuedDiagnostics = await diagnosticsClient.request<DiagnosticStabilitySnapshot>(
       "diagnostics.stability",
       { type: "message.queued", limit: 20 },
     );
@@ -555,7 +562,7 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
         `active-run steering changed diagnostic backlog: ${JSON.stringify(queuedDiagnostics.events)}`,
       );
     }
-    const stateDiagnostics = await client.request<DiagnosticStabilitySnapshot>(
+    const stateDiagnostics = await diagnosticsClient.request<DiagnosticStabilitySnapshot>(
       "diagnostics.stability",
       { type: "session.state", limit: 20 },
     );
@@ -567,6 +574,7 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
     }
     return `real Gateway pid=${gateway.pid ?? "unknown"}; persistent WebChat connection completed status, steer, follow-up, cancel RPCs; steeringQueueDepths=${steeringQueueDepths.join(",")}; finalState=${finalState.outcome}; finalQueueDepth=${finalState.queueDepth}`;
   } finally {
+    diagnosticsClient?.stop();
     client?.stop();
     await gateway?.stop().catch(() => undefined);
     await mock.stop();
