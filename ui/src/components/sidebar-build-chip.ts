@@ -4,7 +4,7 @@ import { pathForRoute } from "../app-route-paths.ts";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
-import { formatBuildChipText } from "./sidebar-build-chip-format.ts";
+import { formatBuildChipText, renderSidebarServerDetails } from "./sidebar-build-chip-format.ts";
 import "./tooltip.ts";
 
 function shouldHandleNavigationClick(event: MouseEvent): boolean {
@@ -29,25 +29,8 @@ class SidebarBuildChip extends OpenClawLightDomContentsElement {
     if (!text) {
       return nothing;
     }
-    const summary = [
-      CONTROL_UI_BUILD_INFO.version ? `v${CONTROL_UI_BUILD_INFO.version}` : null,
-      CONTROL_UI_BUILD_INFO.branch,
-      CONTROL_UI_BUILD_INFO.dirty === true ? "dirty" : null,
-    ]
-      .filter((line): line is string => line !== null)
-      .join(" · ");
-    const tooltip = [
-      summary,
-      CONTROL_UI_BUILD_INFO.commit,
-      CONTROL_UI_BUILD_INFO.builtAt
-        ? `${t("aboutPage.built")}: ${CONTROL_UI_BUILD_INFO.builtAt}`
-        : null,
-      this.gatewayVersion ? `${t("aboutPage.gatewayVersion")}: ${this.gatewayVersion}` : null,
-    ]
-      .filter((line): line is string => Boolean(line))
-      .join("\n");
     return html`
-      <openclaw-tooltip .content=${tooltip}>
+      <openclaw-tooltip class="sidebar-hover-tooltip">
         <a
           class="sidebar-footer-build"
           href=${pathForRoute("about", this.basePath)}
@@ -61,6 +44,9 @@ class SidebarBuildChip extends OpenClawLightDomContentsElement {
           }}
           >${text}</a
         >
+        <div slot="content" class="sidebar-hover-card sidebar-build-hover-card">
+          ${renderSidebarServerDetails(CONTROL_UI_BUILD_INFO, this.gatewayVersion)}
+        </div>
       </openclaw-tooltip>
     `;
   }

@@ -215,6 +215,11 @@ export default definePluginEntry({
           }
           api.logger.warn?.(`thread-ownership: unexpected status ${resp.status}, allowing send`);
         } finally {
+          // 200 / unexpected statuses leave the body unread; 409 may already have
+          // consumed it via readProviderJsonResponse. release() does not cancel streams.
+          if (!resp.bodyUsed) {
+            await resp.body?.cancel().catch(() => undefined);
+          }
           await release();
         }
       } catch (err) {

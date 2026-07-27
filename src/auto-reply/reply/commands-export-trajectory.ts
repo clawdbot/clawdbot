@@ -166,7 +166,7 @@ async function requestTrajectoryExportApproval(
   request: TrajectoryExportExecRequest,
   options: { privateApprovalTarget?: PrivateCommandRouteTarget } = {},
 ): Promise<string> {
-  const timeoutSec = params.cfg.tools?.exec?.timeoutSec;
+  const timeoutSec = params.cfg.tools?.exec?.timeoutSeconds;
   const agentId =
     params.agentId ??
     resolveSessionAgentId({

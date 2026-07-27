@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import {
   acquireSessionWriteLock,
@@ -12,6 +11,7 @@ import {
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { redactSecrets } from "../../logging/redact.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import { serializeJsonlEntry, serializeJsonlLine, writeJsonlLines } from "./transcript-jsonl.js";

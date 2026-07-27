@@ -40,6 +40,53 @@ function status(overrides: Partial<ShellCompletionStatus> = {}): ShellCompletion
 }
 
 describe("shell completion health mapping", () => {
+  it("recognizes cached Bash completion from the documented login profile", async () => {
+    const homeDir = tempDirs.make("openclaw-bash-profile-home-");
+    const stateDir = tempDirs.make("openclaw-bash-profile-state-");
+    setTestEnvValue("HOME", homeDir);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    setTestEnvValue("SHELL", "/bin/bash");
+
+    const cachePath = path.join(stateDir, "completions", "openclaw.bash");
+    await fs.mkdir(path.dirname(cachePath), { recursive: true });
+    await fs.writeFile(cachePath, "complete -W 'status' openclaw\n", "utf-8");
+    await fs.writeFile(
+      path.join(homeDir, ".bash_profile"),
+      `# OpenClaw Completion\n[ -f "${cachePath}" ] && source "${cachePath}"\n`,
+      "utf-8",
+    );
+
+    await expect(checkShellCompletionStatus("openclaw", { shell: "bash" })).resolves.toEqual({
+      shell: "bash",
+      profileInstalled: true,
+      cacheExists: true,
+      cachePath,
+      usesSlowPattern: false,
+    });
+  });
+
+  it("reports slow dynamic Bash completion from the documented login profile", async () => {
+    const homeDir = tempDirs.make("openclaw-bash-slow-profile-home-");
+    const stateDir = tempDirs.make("openclaw-bash-slow-profile-state-");
+    setTestEnvValue("HOME", homeDir);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    setTestEnvValue("SHELL", "/bin/bash");
+
+    await fs.writeFile(
+      path.join(homeDir, ".bash_profile"),
+      "source <(openclaw completion --shell bash)\n",
+      "utf-8",
+    );
+
+    await expect(checkShellCompletionStatus("openclaw", { shell: "bash" })).resolves.toEqual({
+      shell: "bash",
+      profileInstalled: true,
+      cacheExists: false,
+      cachePath: path.join(stateDir, "completions", "openclaw.bash"),
+      usesSlowPattern: true,
+    });
+  });
+
   it("checks an explicit shell instead of the detected environment shell", async () => {
     const homeDir = tempDirs.make("openclaw-completion-home-");
     const stateDir = tempDirs.make("openclaw-completion-state-");
@@ -172,6 +219,20 @@ describe("doctorShellCompletion", () => {
   beforeEach(() => {
     installCompletionMock.mockReset();
     spawnSyncMock.mockClear();
+  });
+
+  it("shows the Bash login profile after installing completion without .bashrc", async () => {
+    await setupDoctorCompletionTest(false);
+    installCompletionMock.mockResolvedValue(undefined);
+    const noteSpy = vi.spyOn(noteModule, "note");
+
+    await doctorShellCompletion({} as never, mockPrompter());
+
+    expect(installCompletionMock).toHaveBeenCalledWith("bash", true, "openclaw");
+    expect(noteSpy).toHaveBeenCalledWith(
+      expect.stringContaining("source ~/.bash_profile"),
+      "Shell completion",
+    );
   });
 
   it.each([

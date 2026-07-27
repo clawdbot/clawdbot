@@ -444,7 +444,7 @@ const voices = await api.runtime.tts.listVoices({
 Notes:
 
 - `textToSpeech` returns the normal core TTS output payload for file/voice-note surfaces.
-- Uses core `messages.tts` configuration and provider selection.
+- Uses core `tts` configuration and provider selection.
 - Returns PCM audio buffer + sample rate. Plugins must resample/encode for providers.
 - `listVoices` is optional per provider. Use it for vendor-owned voice pickers or setup flows.
 - Core passes a resolved request deadline to provider `listVoices` hooks; provider-specific timeout settings may override it.

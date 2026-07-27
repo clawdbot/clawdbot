@@ -49,6 +49,43 @@ describe("Zoom meeting runtime probes", () => {
     expect(Date.now()).toBe(200);
   });
 
+  it("requires fresh non-silent loopback capture as well as output bytes", async () => {
+    for (const [outputLoopbackSignalBytes, expected] of [
+      [0, false],
+      [4, true],
+    ] as const) {
+      const session = {
+        agentId: "main",
+        chrome: {
+          health: {
+            inCall: true,
+            lastOutputBytes: 4,
+            outputGeneration: 1,
+            outputLoopbackSignalBytes,
+            verifiedOutputGeneration: expected ? 1 : undefined,
+          },
+        },
+        id: `zoom-speech-${outputLoopbackSignalBytes}`,
+        mode: "agent",
+        transport: "chrome",
+      } as ZoomMeetingsSession;
+      const context = {
+        config: resolveZoomMeetingsConfig({}),
+        hasHealthHandle: () => false,
+        isReusable: () => false,
+        join: vi.fn(async () => ({ session, spoken: true })),
+        list: () => [],
+        refreshCaptionHealth: async () => {},
+        refreshHealth: () => {},
+        resolveAgentId: () => "main",
+      } satisfies ZoomMeetingsProbeContext;
+
+      const result = await testZoomMeetingSpeech(context, { mode: "agent", url: URL });
+
+      expect(result.speechOutputVerified).toBe(expected);
+    }
+  });
+
   it("bounds a blocked caption refresh by the per-request listening timeout", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);

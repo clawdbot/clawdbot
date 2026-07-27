@@ -45,6 +45,7 @@ export type ModelCatalogCompatConfig = {
   supportsTemperature?: boolean;
   supportsUsageInStreaming?: boolean;
   supportsStrictMode?: boolean;
+  supportsJsonSchemaResponseFormat?: boolean;
   maxTokensField?: "max_completion_tokens" | "max_tokens";
   requiresToolResultName?: boolean;
   requiresAssistantAfterToolResult?: boolean;
@@ -64,9 +65,7 @@ export type ModelCatalogCompatConfig = {
   strictMessageKeys?: boolean;
   toolSchemaProfile?: string;
   unsupportedToolSchemaKeywords?: string[];
-  nativeWebSearchTool?: boolean;
   toolCallArgumentsEncoding?: string;
-  requiresMistralToolIds?: boolean;
   requiresOpenAiAnthropicToolPayload?: boolean;
   thinkingFormat?: ModelCatalogThinkingFormat;
   supportedReasoningEfforts?: string[];
@@ -246,6 +245,8 @@ export type ModelCatalogProvider = {
   baseUrl?: string;
   api?: ModelCatalogApi;
   headers?: Record<string, string>;
+  /** Provider-recommended primary model id. */
+  defaultModel?: string;
   /** Provider-recommended small model id for short internal utility tasks. */
   defaultUtilityModel?: string;
   models: ModelCatalogModel[];

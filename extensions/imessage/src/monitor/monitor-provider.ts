@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentConfig, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
@@ -12,7 +12,9 @@ import {
   runChannelInboundEvent,
   shouldDebounceTextInbound,
   type ChannelInboundTurnPlan,
+  type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   bindIngressLifecycleToReplyOptions,
   createChannelMessageReplyPipeline,
@@ -44,6 +46,7 @@ import {
   resolveSendPolicy,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
@@ -70,13 +73,7 @@ import { normalizeIMessageHandle } from "../targets.js";
 import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
 import { runIMessageCatchup } from "./catchup-bridge.js";
 import { advanceIMessageCatchupCursor, resolveCatchupConfig } from "./catchup.js";
-import {
-  combineIMessagePayloads,
-  hasIMessageBalloonMetadata,
-  hasIMessageUrlBalloonBundleID,
-  isStandaloneIMessageUrlPreviewPayload,
-  shouldCombineIMessagePayloadBucket,
-} from "./coalesce.js";
+import { combineIMessagePayloads } from "./coalesce.js";
 import { repairIMessageConversationAnchor } from "./conversation-repair.js";
 import { createIMessageEchoCachingSend, deliverReplies } from "./deliver.js";
 import { resolveIMessageDmHistoryContext, resolveIMessageDmHistoryLimit } from "./dm-history.js";
@@ -100,11 +97,7 @@ import {
   resolveIMessageReactionContext,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
-import {
-  buildIMessageFlushIngressLifecycle,
-  createIMessageDurableIngress,
-  type IMessageIngressLifecycle,
-} from "./ingress.js";
+import { createIMessageDurableIngress, type IMessageIngressLifecycle } from "./ingress.js";
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
 import { stageIMessageAttachments } from "./media-staging.js";
 import { createPollCommentFolder } from "./poll-comment.js";
@@ -126,29 +119,10 @@ const APPROVAL_REACTION_POLL_INTERVAL_MS = 2_000;
 const APPROVAL_REACTION_DISCOVERY_INTERVAL_MS = 60_000;
 const IMESSAGE_TYPING_KEEPALIVE_INTERVAL_MS = 8_000;
 const IMESSAGE_TYPING_KEEPALIVE_MAX_DURATION_MS = 10 * 60_000;
-const IMESSAGE_SPLIT_SEND_COMPAT_DEBOUNCE_MS = 7_000;
 type IMessageTypingController = Parameters<NonNullable<GetReplyOptions["onTypingController"]>>[0];
 
-function resolveConfiguredIMessageTypingMode(cfg: OpenClawConfig) {
-  return cfg.session?.typingMode ?? cfg.agents?.defaults?.typingMode;
-}
-
-function resolveIMessageSplitSendCompatDebounceMs(
-  cfg: OpenClawConfig,
-  coalesceSameSenderDms: boolean,
-): number | undefined {
-  if (!coalesceSameSenderDms) {
-    return undefined;
-  }
-  const inbound = cfg.messages?.inbound;
-  const channelOverride = inbound?.byChannel?.imessage;
-  if (typeof channelOverride === "number" && Number.isFinite(channelOverride)) {
-    return undefined;
-  }
-  if (typeof inbound?.debounceMs === "number" && Number.isFinite(inbound.debounceMs)) {
-    return undefined;
-  }
-  return IMESSAGE_SPLIT_SEND_COMPAT_DEBOUNCE_MS;
+function resolveConfiguredIMessageTypingMode(cfg: OpenClawConfig, agentId: string) {
+  return resolveAgentConfig(cfg, agentId)?.typingMode ?? cfg.agents?.defaults?.typingMode;
 }
 
 function isIMessagePluginPayloadAttachment(attachment: {
@@ -174,14 +148,19 @@ function resolveIMessageInboundMediaInput(params: {
 }) {
   // Apple rich-link previews are opaque plugin payloads; the useful URL stays
   // in message text. Treating them as media creates phantom attachments and
-  // keeps split-send URL previews out of the text debounce path.
+  // incorrectly bypasses text-only inbound debounce.
   const mediaCandidates = params.attachments.filter(
     (entry) => !isIMessagePluginPayloadAttachment(entry),
   );
-  const rawMediaAttachments = mediaCandidates.flatMap((attachment) => {
+  const mediaFacts = mediaCandidates.map((attachment): ChannelInboundMediaInput => {
+    const contentType = attachment.mime_type?.trim() || undefined;
+    return { contentType, kind: kindFromMime(contentType) ?? "unknown" };
+  });
+  const rawMediaAttachments = mediaCandidates.map((attachment, index) => {
+    const fact = mediaFacts[index] ?? { kind: "unknown" as const };
     const attachmentPath = attachment.original_path?.trim();
     if (!attachmentPath || attachment.missing) {
-      return [];
+      return fact;
     }
     if (
       !isInboundPathAllowed({ filePath: attachmentPath, roots: params.effectiveAttachmentRoots })
@@ -189,21 +168,13 @@ function resolveIMessageInboundMediaInput(params: {
       params.logVerbose?.(
         `imessage: dropping inbound attachment outside allowed roots: ${attachmentPath}`,
       );
-      return [];
+      return fact;
     }
-    return [{ path: attachmentPath, contentType: attachment.mime_type ?? undefined }];
+    return { ...fact, path: attachmentPath };
   });
-  const kind = kindFromMime(
-    rawMediaAttachments[0]?.contentType ?? mediaCandidates[0]?.mime_type ?? undefined,
-  );
-  const mediaPlaceholder = kind
-    ? `<media:${kind}>`
-    : mediaCandidates.length
-      ? "<media:attachment>"
-      : "";
   return {
-    bodyText: params.messageText || mediaPlaceholder,
-    mediaPlaceholder,
+    bodyText: params.messageText,
+    mediaFacts,
     mediaCandidates,
     rawMediaAttachments,
   };
@@ -211,20 +182,10 @@ function resolveIMessageInboundMediaInput(params: {
 
 function formatIMessageInboundMediaBody(params: {
   messageText: string;
-  optimisticPlaceholder: string;
-  mediaAttachments: Array<{ contentType?: string }>;
   unavailableCount: number;
 }): string {
-  const materializedKind = kindFromMime(params.mediaAttachments[0]?.contentType);
-  const materializedPlaceholder = materializedKind
-    ? `<media:${materializedKind}>`
-    : params.mediaAttachments.length > 0
-      ? "<media:attachment>"
-      : "";
   return formatInboundMediaUnavailableText({
-    body: params.messageText || materializedPlaceholder || params.optimisticPlaceholder,
-    mediaPlaceholder:
-      params.mediaAttachments.length === 0 ? params.optimisticPlaceholder : undefined,
+    body: params.messageText,
     notice: `[imessage ${params.unavailableCount > 1 ? `${params.unavailableCount} attachments` : "attachment"} unavailable]`,
   });
 }
@@ -307,8 +268,7 @@ async function resolveIMessageStartupRowidWatermark(dbPath: string): Promise<num
       }
     | undefined;
   try {
-    const { DatabaseSync } = await import("node:sqlite");
-    database = new DatabaseSync(resolvedDbPath, { readOnly: true });
+    database = openNodeSqliteDatabase(resolvedDbPath, { readOnly: true });
     const row = database.prepare("SELECT MAX(ROWID) AS maxRowid FROM message").get() as
       | { maxRowid?: unknown }
       | undefined;
@@ -563,12 +523,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         : recoveryCursorRowid
       : recoveryBoundaryRowid;
 
-  const coalesceSameSenderDms = imessageCfg.coalesceSameSenderDms === true;
-  const debounceMsOverride = resolveIMessageSplitSendCompatDebounceMs(cfg, coalesceSameSenderDms);
-  // Session capability latch: flips true once any inbound row from this imsg
-  // build carries balloon metadata. The coalesce flush gate needs a build-level
-  // signal because imsg omits `balloon_bundle_id` for plain rows.
-  let imsgEmitsBalloonMetadata = false;
   let latestAdvancedRecoveryCursorRowid = recoveryCursorRowid ?? -1;
   const durableRecoveryCursorRowids = new Set<number>();
   const failedRecoveryCursorRowids = new Set<number>();
@@ -620,7 +574,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   }>({
     cfg,
     channel: "imessage",
-    debounceMsOverride,
     buildKey: (entry) => {
       const msg = entry.message;
       const sender = msg.sender?.trim();
@@ -632,10 +585,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           ? `chat:${msg.chat_id}`
           : (msg.chat_guid ?? msg.chat_identifier ?? "unknown");
 
-      if (coalesceSameSenderDms && msg.is_group !== true) {
-        return `imessage:${accountInfo.accountId}:dm:${conversationId}:${sender}`;
-      }
-
       return `imessage:${accountInfo.accountId}:${conversationId}:${sender}`;
     },
     shouldDebounce: (entry) => {
@@ -646,12 +595,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       // From-me messages are cached, not processed — never debounce.
       if (msg.is_from_me === true) {
         return false;
-      }
-
-      // Opt-in DM coalescing holds rows long enough for Apple's command+URL
-      // split-send to arrive. Group chats keep instant per-message dispatch.
-      if (coalesceSameSenderDms) {
-        return msg.is_group !== true;
       }
 
       // General same-sender inbound debounce: text-only, no control commands,
@@ -674,7 +617,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         unitEntries: { message: IMessagePayload; ingressLifecycle?: IMessageIngressLifecycle }[],
         message: IMessagePayload,
       ) => {
-        const { lifecycle, settle, abandon } = buildIMessageFlushIngressLifecycle(
+        const { lifecycle, settle, abandon } = fanInChannelIngressLifecycles(
           unitEntries.flatMap((entry) => (entry.ingressLifecycle ? [entry.ingressLifecycle] : [])),
         );
         try {
@@ -699,48 +642,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       }
 
       const messages = entries.map((e) => e.message);
-      if (!shouldCombineIMessagePayloadBucket(messages, imsgEmitsBalloonMetadata)) {
-        for (const entry of entries) {
-          await dispatchUnit([entry], entry.message);
-        }
-        return;
-      }
-      // The bucket-level gate only says this window contains URL-balloon work.
-      // Standalone URL preview rows merge with the immediately preceding row;
-      // already-complete URL messages flush any pending ordinary row first.
-      if (messages.some(hasIMessageUrlBalloonBundleID)) {
-        let pending: {
-          message: IMessagePayload;
-          ingressLifecycle?: IMessageIngressLifecycle;
-        } | null = null;
-        for (const entry of entries) {
-          if (isStandaloneIMessageUrlPreviewPayload(entry.message) && pending) {
-            const unitEntries = [pending, entry];
-            await dispatchUnit(
-              unitEntries,
-              combineIMessagePayloads(unitEntries.map((e) => e.message)),
-            );
-            pending = null;
-            continue;
-          }
-          if (hasIMessageUrlBalloonBundleID(entry.message)) {
-            if (pending) {
-              await dispatchUnit([pending], pending.message);
-              pending = null;
-            }
-            await dispatchUnit([entry], entry.message);
-            continue;
-          }
-          if (pending) {
-            await dispatchUnit([pending], pending.message);
-          }
-          pending = entry;
-        }
-        if (pending) {
-          await dispatchUnit([pending], pending.message);
-        }
-        return;
-      }
       const combined = combineIMessagePayloads(messages);
       if (shouldLogVerbose()) {
         const text = combined.text ?? "";
@@ -900,7 +801,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const {
       messageText,
       bodyText,
-      mediaPlaceholder,
+      mediaFacts,
       mediaCandidates,
       rawMediaAttachments,
       effectiveAttachmentRoots,
@@ -941,6 +842,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       opts,
       messageText,
       bodyText,
+      mediaFacts,
       allowFrom,
       groupAllowFrom,
       allowLegacyConversationAllowFromForGroup,
@@ -1084,7 +986,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         warnIfImsgUpgradeNeeded.fireOnce(privateApiStatus.rpcMethods, runtime);
       }
     }
-    const configuredTypingMode = resolveConfiguredIMessageTypingMode(cfg);
+    const configuredTypingMode = resolveConfiguredIMessageTypingMode(cfg, decision.route.agentId);
     const sendPolicy = resolveSendPolicy({
       cfg,
       entry: getSessionEntry({ storePath, sessionKey: decision.route.sessionKey }),
@@ -1156,7 +1058,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const staged = remoteHost
       ? {
           attachments: rawMediaAttachments,
-          unavailableCount: mediaCandidates.length - rawMediaAttachments.length,
+          unavailableCount: rawMediaAttachments.filter((attachment) => !attachment.path).length,
         }
       : await stageIMessageAttachments(mediaCandidates, {
           maxBytes: mediaMaxBytes,
@@ -1164,12 +1066,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           deps: { logVerbose },
         });
     const mediaAttachments = staged.attachments;
-    const firstAttachment = mediaAttachments[0];
-    const mediaPath = firstAttachment?.path ?? undefined;
-    const mediaType = firstAttachment?.contentType ?? undefined;
-    // Build arrays for all attachments (for multi-image support)
-    const mediaPaths = mediaAttachments.map((a) => a.path).filter(Boolean);
-    const mediaTypes = mediaAttachments.map((a) => a.contentType ?? undefined);
     const unavailableCount = staged.unavailableCount;
     const contextDecision =
       unavailableCount > 0
@@ -1177,8 +1073,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             ...decision,
             agentBodyText: formatIMessageInboundMediaBody({
               messageText,
-              optimisticPlaceholder: mediaPlaceholder,
-              mediaAttachments,
               unavailableCount,
             }),
           }
@@ -1215,10 +1109,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       groupHistories,
       dmHistory,
       media: {
-        path: mediaPath,
-        type: mediaType,
-        paths: mediaPaths,
-        types: mediaTypes,
+        facts: mediaAttachments,
       },
     });
 
@@ -1452,9 +1343,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     accountId: accountInfo.accountId,
     runtime,
     dispatch: async (message, ingressLifecycle, receivedAt, provenance) => {
-      if (!imsgEmitsBalloonMetadata && hasIMessageBalloonMetadata(message)) {
-        imsgEmitsBalloonMetadata = true;
-      }
       // Age fence with two windows, split on the recovery boundary:
       //  - rows at/below recoveryBoundaryRowid are the downtime-recovery replay
       //    imsg emits from since_rowid — deliver them up to the wider recovery

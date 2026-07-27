@@ -100,6 +100,7 @@ describe("ClickClack account resolution", () => {
     ).toEqual({
       allowFrom: ["*"],
       accountId: "service",
+      apiEndpoint: "https://app.clickclack.chat",
       baseUrl: "https://app.clickclack.chat",
       config: {
         allowFrom: ["*"],
@@ -202,6 +203,7 @@ describe("ClickClack account resolution", () => {
       allowFrom: ["*"],
       accountId: "peter",
       agentId: "peter-bot",
+      apiEndpoint: "https://app.clickclack.chat",
       baseUrl: "https://app.clickclack.chat",
       config: {
         agentId: "peter-bot",
@@ -256,6 +258,44 @@ describe("ClickClack account resolution", () => {
 
     expect(resolveClickClackAccount({ cfg }).agentActivity).toBe(false);
     expect(resolveClickClackAccount({ cfg, accountId: "bridge" }).agentActivity).toBe(true);
+  });
+
+  it("resolves a private API base per account and defaults it to the public base", () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          baseUrl: "https://clack.openclaw.ai/",
+          apiBaseUrl: "http://127.0.0.1:8484/",
+          workspace: "default",
+          token: "test-token-placeholder",
+          accounts: {
+            public: { apiBaseUrl: "https://api.clickclack.example/" },
+            inherited: {},
+          },
+        },
+      },
+    } satisfies CoreConfig;
+
+    expect(resolveClickClackAccount({ cfg }).apiEndpoint).toBe("http://127.0.0.1:8484");
+    expect(resolveClickClackAccount({ cfg, accountId: "public" }).apiEndpoint).toBe(
+      "https://api.clickclack.example",
+    );
+    expect(resolveClickClackAccount({ cfg, accountId: "inherited" }).apiEndpoint).toBe(
+      "http://127.0.0.1:8484",
+    );
+
+    const fallbackCfg = {
+      channels: {
+        clickclack: {
+          baseUrl: "https://clack.openclaw.ai/",
+          workspace: "default",
+          token: "test-token-placeholder",
+        },
+      },
+    } satisfies CoreConfig;
+    expect(resolveClickClackAccount({ cfg: fallbackCfg }).apiEndpoint).toBe(
+      "https://clack.openclaw.ai",
+    );
   });
 
   it("normalizes per-account discussion settings and defaults", () => {

@@ -41,6 +41,7 @@ import {
   type UpdateRestartSentinelMeta,
 } from "../../infra/update-restart-sentinel-payload.js";
 import { resolveUpdateInstallSurface, runGatewayUpdate } from "../../infra/update-runner.js";
+import { getUpdateAvailable } from "../../infra/update-startup.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
 import {
   getLatestUpdateRestartSentinel,
@@ -141,6 +142,7 @@ export const updateHandlers: GatewayRequestHandlers = {
     }
     respond(true, {
       sentinel,
+      updateAvailable: getUpdateAvailable(),
     });
   },
   "update.run": async ({ params, respond, client, context }) => {

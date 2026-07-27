@@ -1,4 +1,5 @@
 use crate::gateway_ws::{AgentsListResult, ChatSendResult, GatewayClient};
+use crate::quickchat_widgets::QuickChatWidgetState;
 use crate::{tray, DesktopState};
 use serde::Serialize;
 use std::fs;
@@ -6,8 +7,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{
-    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, State, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder,
+    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, State, Webview, WebviewUrl,
+    WebviewWindow, WebviewWindowBuilder, Window,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 use uuid::Uuid;
@@ -67,6 +68,7 @@ pub struct QuickChatState {
     shortcuts_supported: bool,
     hide_requested: Arc<AtomicBool>,
     retry_identity: Arc<Mutex<Option<QuickChatRetryIdentity>>>,
+    widget_state: QuickChatWidgetState,
 }
 
 impl QuickChatState {
@@ -83,7 +85,12 @@ impl QuickChatState {
             shortcuts_supported,
             hide_requested: Arc::new(AtomicBool::new(true)),
             retry_identity: Arc::new(Mutex::new(None)),
+            widget_state: QuickChatWidgetState::default(),
         }
+    }
+
+    pub(crate) fn widget_state(&self) -> &QuickChatWidgetState {
+        &self.widget_state
     }
 
     fn send_idempotency_key(
@@ -284,6 +291,7 @@ fn build_agents(catalog: &AgentsListResult) -> Result<Vec<QuickChatAgent>, Strin
     let agents = catalog
         .agents
         .iter()
+        .filter(|summary| summary.kind.as_deref() != Some("system"))
         .map(|summary| {
             let id = summary.id.clone();
             let identity = summary.identity.as_ref();
@@ -470,7 +478,7 @@ fn ensure_quickchat_window(app: &AppHandle) -> Result<WebviewWindow, String> {
     Ok(window)
 }
 
-fn position_quickchat(app: &AppHandle, window: &WebviewWindow) -> Result<(), String> {
+fn position_quickchat(app: &AppHandle, window: &Window) -> Result<(), String> {
     let monitor = app
         .cursor_position()
         .ok()
@@ -517,7 +525,7 @@ fn show_quickchat(app: &AppHandle) -> Result<(), String> {
     window
         .set_size(LogicalSize::new(QUICKCHAT_WIDTH, QUICKCHAT_HEIGHT))
         .map_err(|error| format!("Could not reset Quick Chat size: {error}"))?;
-    position_quickchat(app, &window)?;
+    position_quickchat(app, &window.as_ref().window())?;
     app.state::<QuickChatState>()
         .hide_requested
         .store(false, Ordering::SeqCst);
@@ -541,31 +549,33 @@ fn show_quickchat(app: &AppHandle) -> Result<(), String> {
         .map_err(|error| format!("Could not activate Quick Chat: {error}"))
 }
 
-fn require_quickchat_window(window: &WebviewWindow) -> Result<(), String> {
-    if window.label() == QUICKCHAT_LABEL {
+// Commands take the calling WebView, not WebviewWindow: once widgets are attached the
+// host becomes multi-WebView and Tauri intentionally rejects WebviewWindow command args.
+fn require_quickchat_webview(webview: &Webview) -> Result<(), String> {
+    if webview.label() == QUICKCHAT_LABEL && webview.window().label() == QUICKCHAT_LABEL {
         Ok(())
     } else {
-        Err("Quick Chat command is available only to the Quick Chat window.".to_string())
+        Err("Quick Chat command is available only to the Quick Chat webview.".to_string())
     }
 }
 
 #[tauri::command]
 pub async fn quickchat_agents(
-    window: WebviewWindow,
+    webview: Webview,
     gateway: State<'_, GatewayClient>,
     state: State<'_, QuickChatState>,
 ) -> Result<Vec<QuickChatAgent>, String> {
-    require_quickchat_window(&window)?;
+    require_quickchat_webview(&webview)?;
     state.agents(gateway.inner()).await
 }
 
 #[tauri::command]
 pub async fn quickchat_identity(
-    window: WebviewWindow,
+    webview: Webview,
     gateway: State<'_, GatewayClient>,
     state: State<'_, QuickChatState>,
 ) -> Result<QuickChatAgent, String> {
-    require_quickchat_window(&window)?;
+    require_quickchat_webview(&webview)?;
     state
         .selected_agent(gateway.inner(), MissingSelection::FallBackToDefault)
         .await
@@ -574,23 +584,23 @@ pub async fn quickchat_identity(
 
 #[tauri::command]
 pub async fn quickchat_select_agent(
-    window: WebviewWindow,
+    webview: Webview,
     gateway: State<'_, GatewayClient>,
     state: State<'_, QuickChatState>,
     agent_id: String,
 ) -> Result<QuickChatAgent, String> {
-    require_quickchat_window(&window)?;
+    require_quickchat_webview(&webview)?;
     state.select_agent(gateway.inner(), &agent_id).await
 }
 
 #[tauri::command]
 pub async fn quickchat_send(
-    window: WebviewWindow,
+    webview: Webview,
     gateway: State<'_, GatewayClient>,
     state: State<'_, QuickChatState>,
     message: String,
 ) -> Result<ChatSendResult, String> {
-    require_quickchat_window(&window)?;
+    require_quickchat_webview(&webview)?;
     let message = message.trim().to_string();
     if message.is_empty() {
         return Err("Message cannot be empty.".to_string());
@@ -618,22 +628,22 @@ pub async fn quickchat_send(
 
 #[tauri::command]
 pub fn quickchat_shortcut(
-    window: WebviewWindow,
+    webview: Webview,
     state: State<'_, QuickChatState>,
 ) -> Result<QuickChatShortcutStatus, String> {
-    require_quickchat_window(&window)?;
+    require_quickchat_webview(&webview)?;
     state.shortcut_status()
 }
 
 #[tauri::command]
 pub fn quickchat_set_shortcut(
-    window: WebviewWindow,
+    webview: Webview,
     app: AppHandle,
     desktop: State<'_, DesktopState>,
     state: State<'_, QuickChatState>,
     accelerator: Option<String>,
 ) -> Result<QuickChatShortcutStatus, String> {
-    require_quickchat_window(&window)?;
+    require_quickchat_webview(&webview)?;
     if !state.shortcuts_supported {
         return state.shortcut_status();
     }
@@ -692,8 +702,9 @@ pub fn quickchat_set_shortcut(
 }
 
 #[tauri::command]
-pub fn quickchat_set_expanded(window: WebviewWindow, expanded: bool) -> Result<(), String> {
-    require_quickchat_window(&window)?;
+pub fn quickchat_set_expanded(webview: Webview, expanded: bool) -> Result<(), String> {
+    require_quickchat_webview(&webview)?;
+    let window = webview.window();
     let height = if expanded {
         QUICKCHAT_EXPANDED_HEIGHT
     } else {
@@ -706,38 +717,77 @@ pub fn quickchat_set_expanded(window: WebviewWindow, expanded: bool) -> Result<(
 }
 
 #[tauri::command]
-pub fn quickchat_hide(window: WebviewWindow) -> Result<(), String> {
-    require_quickchat_window(&window)?;
-    window
-        .app_handle()
-        .state::<QuickChatState>()
-        .hide_requested
-        .store(true, Ordering::SeqCst);
-    window
-        .hide()
-        .map_err(|error| format!("Could not hide Quick Chat: {error}"))?;
-    let _ = window.set_size(LogicalSize::new(QUICKCHAT_WIDTH, QUICKCHAT_HEIGHT));
-    Ok(())
+pub async fn quickchat_activate(
+    webview: Webview,
+    state: State<'_, QuickChatState>,
+    session_id: String,
+    renderer_epoch: u64,
+    generation: u64,
+) -> Result<bool, String> {
+    require_quickchat_webview(&webview)?;
+    state
+        .widget_state()
+        .activate(
+            &webview.window(),
+            &session_id,
+            renderer_epoch,
+            generation,
+            &state.hide_requested,
+        )
+        .await
 }
 
 #[tauri::command]
-pub fn quickchat_ready(
-    window: WebviewWindow,
+pub async fn quickchat_hide(
+    webview: Webview,
+    session_id: String,
+    renderer_epoch: u64,
+    generation: u64,
+) -> Result<bool, String> {
+    require_quickchat_webview(&webview)?;
+    let window = webview.window();
+    let app = window.app_handle();
+    let state = app.state::<QuickChatState>();
+    state
+        .widget_state()
+        .hide(
+            app,
+            &window,
+            &session_id,
+            renderer_epoch,
+            generation,
+            &state.hide_requested,
+        )
+        .await
+}
+
+#[tauri::command]
+pub async fn quickchat_ready(
+    webview: Webview,
     gateway: State<'_, GatewayClient>,
     state: State<'_, QuickChatState>,
+    session_id: String,
+    renderer_epoch: u64,
 ) -> Result<bool, String> {
-    require_quickchat_window(&window)?;
-    gateway.emit_current_state(&window)?;
+    require_quickchat_webview(&webview)?;
+    if !state
+        .widget_state()
+        .start_session(webview.app_handle(), &session_id, renderer_epoch)
+        .await?
+    {
+        return Ok(false);
+    }
+    gateway.emit_current_state(&webview)?;
     Ok(!state.hide_requested.load(Ordering::SeqCst))
 }
 
 #[tauri::command]
 pub fn quickchat_show_dashboard(
-    window: WebviewWindow,
+    webview: Webview,
     app: AppHandle,
     desktop: State<'_, DesktopState>,
 ) -> Result<(), String> {
-    require_quickchat_window(&window)?;
+    require_quickchat_webview(&webview)?;
     tray::open_dashboard(&app, desktop.inner());
     Ok(())
 }
@@ -826,6 +876,7 @@ mod tests {
             agents: vec![
                 crate::gateway_ws::GatewayAgentSummary {
                     id: "main".to_string(),
+                    kind: Some("agent".to_string()),
                     name: Some("Configured".to_string()),
                     identity: Some(crate::gateway_ws::GatewayAgentIdentity {
                         name: Some("Molty".to_string()),
@@ -835,7 +886,14 @@ mod tests {
                 },
                 crate::gateway_ws::GatewayAgentSummary {
                     id: "other".to_string(),
+                    kind: None,
                     name: None,
+                    identity: None,
+                },
+                crate::gateway_ws::GatewayAgentSummary {
+                    id: "ordinary-looking-id".to_string(),
+                    kind: Some("system".to_string()),
+                    name: Some("System".to_string()),
                     identity: None,
                 },
             ],
@@ -849,6 +907,7 @@ mod tests {
             Some("data:image/png;base64,AA==")
         );
         assert_eq!(agents[1].name, "other");
+        assert_eq!(agents.len(), 2);
     }
 
     #[test]

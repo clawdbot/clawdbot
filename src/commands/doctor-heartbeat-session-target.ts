@@ -1,13 +1,15 @@
+import fs from "node:fs";
 /** Doctor warnings for heartbeat.session values that resolve to missing delivery sessions. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries, listAgentIds, resolveAgentConfig } from "../agents/agent-scope.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore } from "../config/sessions/store-load.js";
+import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHeartbeatIntervalMs } from "../infra/heartbeat-summary.js";
 import { resolveHeartbeatDeliveryTarget } from "../infra/outbound/targets.js";
+import { loadLegacySessionStore } from "../infra/state-migrations.legacy-session-store.js";
 import {
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
@@ -121,8 +123,13 @@ export function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig): strin
     }
     const storeAgentId = resolvedAgentId;
     const storePath = resolveStorePath(cfg.session?.store, { agentId: storeAgentId });
-    const store = loadSessionStore(storePath, { skipCache: true, clone: false });
-    const entry = store[canonicalSession];
+    const entry =
+      loadSessionEntryReadOnly({
+        agentId: storeAgentId,
+        sessionKey: canonicalSession,
+        storePath,
+      }) ??
+      (fs.existsSync(storePath) ? loadLegacySessionStore(storePath)[canonicalSession] : undefined);
     if (entry) {
       continue;
     }

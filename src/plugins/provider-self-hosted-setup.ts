@@ -10,6 +10,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { ApiKeyCredential, AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/upsert-with-lock.js";
 import { parseConfiguredModelVisibilityEntries } from "../agents/model-selection-shared.js";
+import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
@@ -18,7 +19,6 @@ import {
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 // Builds setup metadata for self-hosted provider plugins.
-import { readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -93,23 +93,10 @@ function readPositiveInteger(value: unknown): number | undefined {
   return Math.trunc(value);
 }
 
-/**
- * Reads and parses a self-hosted discovery JSON body under a hard byte cap.
- * Mirrors the byte-bounded reader pattern shared across provider/media reads so
- * an untrusted endpoint cannot stream an unbounded body into memory.
- */
-async function readSelfHostedDiscoveryJson(response: Response, label: string): Promise<unknown> {
-  const bytes = await readResponseWithLimit(response, SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES, {
-    onOverflow: ({ size, maxBytes }) =>
-      new Error(
-        `${label} discovery response body too large: ${size} bytes (limit: ${maxBytes} bytes)`,
-      ),
+async function readSelfHostedDiscoveryJson<T>(response: Response, label: string): Promise<T> {
+  return await readProviderJsonResponse<T>(response, `${label} discovery`, {
+    maxBytes: SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES,
   });
-  try {
-    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
-  } catch (cause) {
-    throw new Error(`${label} discovery response is not valid JSON`, { cause });
-  }
 }
 
 async function cancelUnreadResponseBody(response: Response): Promise<void> {
@@ -159,10 +146,10 @@ async function discoverLlamaCppRuntimeContextTokens(params: {
         await cancelUnreadResponseBody(response);
         return undefined;
       }
-      const data = (await readSelfHostedDiscoveryJson(
+      const data = await readSelfHostedDiscoveryJson<LlamaCppPropsResponse>(
         response,
         "llama.cpp /props",
-      )) as LlamaCppPropsResponse;
+      );
       return (
         readPositiveInteger(data.default_generation_settings?.n_ctx) ??
         readPositiveInteger(data.n_ctx)
@@ -207,10 +194,10 @@ export async function discoverOpenAICompatibleLocalModels(params: {
         log.warn(`Failed to discover ${params.label} models: ${response.status}`);
         return [];
       }
-      const data = (await readSelfHostedDiscoveryJson(
+      const data = await readSelfHostedDiscoveryJson<OpenAICompatModelsResponse>(
         response,
         params.label,
-      )) as OpenAICompatModelsResponse;
+      );
       const models = data.data ?? [];
       if (models.length === 0) {
         log.warn(`No ${params.label} models found on local instance`);

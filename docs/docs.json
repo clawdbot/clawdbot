@@ -53,6 +53,10 @@
   },
   "redirects": [
     {
+      "source": "/gateway/security/shrinkwrap",
+      "destination": "/gateway/security/dependency-locking"
+    },
+    {
       "source": "/cli/crestodian",
       "destination": "/cli/openclaw"
     },
@@ -1233,6 +1237,7 @@
                 "group": "Sessions and memory",
                 "pages": [
                   "concepts/main-session",
+                  "concepts/multi-user",
                   "concepts/session",
                   "concepts/session-search",
                   "concepts/channel-docking",
@@ -1673,7 +1678,7 @@
                       "gateway/security/index",
                       "gateway/security/exposure-runbook",
                       "gateway/security/secure-file-operations",
-                      "gateway/security/shrinkwrap",
+                      "gateway/security/dependency-locking",
                       "gateway/security/audit-checks",
                       "gateway/security/rate-limiting",
                       "gateway/operator-scopes",
@@ -1686,6 +1691,8 @@
                     "group": "Protocols and APIs",
                     "pages": [
                       "gateway/protocol",
+                      "gateway/clients",
+                      "gateway/embedding",
                       "gateway/bridge-protocol",
                       "gateway/openai-http-api",
                       "gateway/openresponses-http-api",
@@ -1755,7 +1762,9 @@
                 "pages": [
                   "web/index",
                   "web/control-ui",
+                  "web/urls",
                   "web/dashboard",
+                  "web/dashboards",
                   "web/dashboard-architecture",
                   "web/webchat",
                   "web/tui",
@@ -1798,6 +1807,7 @@
                     "pages": [
                       "cli/agent",
                       "cli/agents",
+                      "cli/claws",
                       "cli/audit",
                       "cli/hooks",
                       "cli/infer",

@@ -4,7 +4,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.streaming
+      - matrix.message-presentation-metadata
   execution:
     profiles: { "matrix:all": 13, "matrix:transport": 12 }
     kind: flow

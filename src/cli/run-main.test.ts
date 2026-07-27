@@ -51,6 +51,15 @@ const browserCommandAliasRegistry: PluginManifestCommandAliasRegistry = {
   ],
 };
 
+const workboardCommandAliasRegistry: PluginManifestCommandAliasRegistry = {
+  plugins: [
+    {
+      id: "workboard",
+      commandAliases: [{ name: "workboard" }],
+    },
+  ],
+};
+
 describe("isGatewayRunFastPathArgv", () => {
   it("matches only plain gateway foreground starts without root options or help", () => {
     expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway"])).toBe(true);
@@ -402,6 +411,19 @@ describe("resolveMissingPluginCommandMessage", () => {
     expect(message).toContain('"voice-call" plugin');
     expect(message).toContain("disabled by default");
     expect(message).toContain("openclaw plugins enable voice-call");
+  });
+
+  it("prefers CLI ownership for plugins that also register a slash command", () => {
+    const message = resolveMissingPluginCommandMessage(
+      "workboard",
+      {},
+      { registry: workboardCommandAliasRegistry },
+    );
+
+    expect(message).toContain('"workboard" plugin');
+    expect(message).toContain("disabled by default");
+    expect(message).toContain("openclaw plugins enable workboard");
+    expect(message).not.toContain("runtime slash command");
   });
 
   it("returns null for CLI command aliases when disabled-by-default parent plugins are enabled", () => {

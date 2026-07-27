@@ -2451,12 +2451,13 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let appModel = NodeAppModel(talkMode: talkMode)
         let barrier = TalkPreparationBarrier()
         let stableID = "talk-routing-restore-\(UUID().uuidString)"
-        let databaseURL = try #require(NodeAppModel.chatTranscriptCacheDatabaseURL(gatewayID: stableID))
+        let databaseDirectoryURL = try #require(NodeAppModel.chatDatabaseDirectoryURL())
+        let databases = try OpenClawClientDatabases(directoryURL: databaseDirectoryURL)
         let identity = try #require(OpenClawChatSessionRoutingIdentity(
             scope: "per-sender",
             mainSessionKey: "restored-main",
             defaultAgentID: "main"))
-        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: databaseURL, gatewayID: stableID)
+        let store = databases.store(gatewayID: stableID)
         await store.storeSessionRoutingIdentity(identity)
         await store.retire()
         appModel._test_setChatSessionRoutingRestoreHandler {
@@ -2465,7 +2466,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         defer {
             barrier.release()
             appModel._test_setChatSessionRoutingRestoreHandler(nil)
-            OpenClawChatSQLiteTranscriptCache.removeDatabaseFiles(at: databaseURL)
+            try? databases.removeGatewayData(gatewayID: stableID)
             appModel.voiceWake.stop()
         }
 
@@ -2489,12 +2490,13 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let appModel = NodeAppModel()
         let barrier = TalkPreparationBarrier()
         let stableID = "cancelled-routing-restore-\(UUID().uuidString)"
-        let databaseURL = try #require(NodeAppModel.chatTranscriptCacheDatabaseURL(gatewayID: stableID))
+        let databaseDirectoryURL = try #require(NodeAppModel.chatDatabaseDirectoryURL())
+        let databases = try OpenClawClientDatabases(directoryURL: databaseDirectoryURL)
         let identity = try #require(OpenClawChatSessionRoutingIdentity(
             scope: "per-sender",
             mainSessionKey: "stale-main",
             defaultAgentID: "main"))
-        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: databaseURL, gatewayID: stableID)
+        let store = databases.store(gatewayID: stableID)
         await store.storeSessionRoutingIdentity(identity)
         await store.retire()
         appModel._test_setConnectedGatewayID(stableID)
@@ -2504,7 +2506,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         defer {
             barrier.release()
             appModel._test_setChatSessionRoutingRestoreHandler(nil)
-            OpenClawChatSQLiteTranscriptCache.removeDatabaseFiles(at: databaseURL)
+            try? databases.removeGatewayData(gatewayID: stableID)
             appModel.voiceWake.stop()
         }
 
@@ -2518,6 +2520,58 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
 
         #expect(appModel.chatSessionRoutingContract == nil)
         await appModel.purgeChatTranscriptCache(gatewayID: stableID)
+    }
+
+    @Test @MainActor func `offline stores keep byte-distinct gateway owners isolated`() async throws {
+        let appModel = NodeAppModel()
+        let suffix = UUID().uuidString
+        let composedGatewayID = "offline-gateway-\u{00E9}-\(suffix)"
+        let decomposedGatewayID = "offline-gateway-e\u{0301}-\(suffix)"
+        #expect(composedGatewayID.precomposedStringWithCanonicalMapping ==
+            decomposedGatewayID.precomposedStringWithCanonicalMapping)
+        #expect(GatewayStableIdentifier.key(composedGatewayID) !=
+            GatewayStableIdentifier.key(decomposedGatewayID))
+        defer {
+            appModel.cancelChatOfflineDataRemoval(gatewayID: composedGatewayID)
+        }
+
+        appModel._test_setConnectedGatewayID(composedGatewayID)
+        let composedStore = try #require(appModel.makeChatOfflineStore())
+        let composedOwnerID = appModel.chatViewModelOwnerID
+        #expect(await appModel.stageChatOfflineDataRemoval(gatewayID: composedGatewayID))
+
+        appModel._test_setConnectedGatewayID(decomposedGatewayID)
+        let decomposedStore = try #require(appModel.makeChatOfflineStore())
+
+        #expect(ObjectIdentifier(composedStore) != ObjectIdentifier(decomposedStore))
+        #expect(Array(composedStore.gatewayID.utf8) == Array(composedGatewayID.utf8))
+        #expect(Array(decomposedStore.gatewayID.utf8) == Array(decomposedGatewayID.utf8))
+        #expect(appModel.chatViewModelOwnerID != composedOwnerID)
+
+        appModel.cancelChatOfflineDataRemoval(gatewayID: composedGatewayID)
+        _ = await appModel.purgeChatTranscriptCache(gatewayID: composedGatewayID)
+        _ = await appModel.purgeChatTranscriptCache(gatewayID: decomposedGatewayID)
+    }
+
+    @Test @MainActor func `failed full offline reset never reuses retired facade`() async throws {
+        let appModel = NodeAppModel()
+        let gatewayID = "offline-reset-failure-\(UUID().uuidString)"
+        appModel._test_setConnectedGatewayID(gatewayID)
+        let originalStore = try #require(appModel.makeChatOfflineStore())
+        appModel._test_setRemoveAllChatDatabaseFilesHandler {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        defer {
+            appModel._test_setRemoveAllChatDatabaseFilesHandler(nil)
+        }
+
+        let didPurge = await appModel.purgeChatTranscriptCache()
+        #expect(!didPurge)
+        let replacementStore = try #require(appModel.makeChatOfflineStore())
+
+        #expect(ObjectIdentifier(originalStore) != ObjectIdentifier(replacementStore))
+        appModel._test_setRemoveAllChatDatabaseFilesHandler(nil)
+        _ = await appModel.purgeChatTranscriptCache(gatewayID: gatewayID)
     }
 
     @Test @MainActor func `gateway main key refresh preserves focused Talk session`() {

@@ -988,11 +988,17 @@ extension OnboardingWizardView {
         let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
         self.gatewayCredentialFieldStableID = setupAuth.targetStableID
         if setupAuth.hasBootstrapToken {
-            await GatewayOnboardingReset.prepareForBootstrapPairing(
+            guard await GatewayOnboardingReset.prepareForBootstrapPairing(
                 appModel: self.appModel,
                 instanceId: GatewaySettingsStore.currentInstanceID(),
                 gatewayStableID: setupAuth.targetStableID,
                 disconnectGateway: disconnectExistingGatewayForBootstrap)
+            else {
+                let message = "Could not safely replace the gateway's offline data. Try again."
+                self.connectMessage = message
+                self.statusLine = message
+                return
+            }
         }
         self.gatewayToken = setupAuth.token
         self.gatewayPassword = setupAuth.password

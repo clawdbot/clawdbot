@@ -4,21 +4,21 @@ import type { ReactiveController } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ModelCatalogEntry } from "../../api/types.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import * as chatModels from "../chat/models.ts";
+import * as realtimeTalk from "../chat/realtime-talk.ts";
 import { ConfigPage, configSelectionFromSearch, supportsSystemInfo } from "./config-page.ts";
 import { configSectionKeysForPage } from "./config-sections.ts";
 import type { ConfigViewState } from "./view.ts";
 
-const { switchActiveRealtimeTalkCameras } = vi.hoisted(() => ({
-  switchActiveRealtimeTalkCameras: vi.fn<() => Promise<void>>(),
-}));
-
-vi.mock("../chat/realtime-talk.ts", () => ({ switchActiveRealtimeTalkCameras }));
+const switchActiveRealtimeTalkCameras =
+  vi.fn<typeof realtimeTalk.switchActiveRealtimeTalkCameras>();
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -31,6 +31,9 @@ function deferred<T>() {
 let localStorageMock: Storage;
 
 beforeEach(() => {
+  vi.spyOn(realtimeTalk, "switchActiveRealtimeTalkCameras").mockImplementation(
+    switchActiveRealtimeTalkCameras,
+  );
   localStorageMock = createStorageMock();
   vi.stubGlobal("localStorage", localStorageMock);
   switchActiveRealtimeTalkCameras.mockReset();
@@ -113,6 +116,52 @@ describe("ConfigPage advanced selection guard", () => {
   });
 });
 
+describe("ConfigPage media discovery", () => {
+  it("coalesces refreshes while discovery is in flight", async () => {
+    for (const method of ["refreshMicrophones", "refreshCameras"] as const) {
+      const discovery = deferred<MediaDeviceInfo[]>();
+      const enumerateDevices = vi.fn(() => discovery.promise);
+      vi.stubGlobal("navigator", { mediaDevices: { enumerateDevices } });
+      const page = new ConfigPage();
+      const state = page as unknown as Record<
+        typeof method,
+        (requestPermission: boolean) => Promise<void>
+      >;
+
+      const first = state[method](true);
+      await state[method](true);
+      expect(enumerateDevices).toHaveBeenCalledOnce();
+
+      discovery.resolve([]);
+      await first;
+    }
+  });
+
+  it("upgrades passive discovery when the user requests permission", async () => {
+    for (const method of ["refreshMicrophones", "refreshCameras"] as const) {
+      const passiveDiscovery = deferred<MediaDeviceInfo[]>();
+      const enumerateDevices = vi
+        .fn()
+        .mockImplementationOnce(() => passiveDiscovery.promise)
+        .mockResolvedValueOnce([]);
+      vi.stubGlobal("navigator", { mediaDevices: { enumerateDevices } });
+      const page = new ConfigPage();
+      const state = page as unknown as Record<
+        typeof method,
+        (requestPermission: boolean) => Promise<void>
+      >;
+
+      const passive = state[method](false);
+      await state[method](true);
+      expect(enumerateDevices).toHaveBeenCalledOnce();
+
+      passiveDiscovery.resolve([]);
+      await passive;
+      expect(enumerateDevices).toHaveBeenCalledTimes(2);
+    }
+  });
+});
+
 describe("ConfigPage camera selection", () => {
   it("clears recovered errors and ignores failures from superseded selections", async () => {
     let rejectFirst: (error: Error) => void = () => undefined;
@@ -153,7 +202,7 @@ describe("ConfigPage system info", () => {
     const client = {} as GatewayBrowserClient;
     const snapshot = {
       client,
-      connected: false,
+      phase: "stopped",
       hello: null,
     } as ApplicationGatewaySnapshot;
     const page = new ConfigPage();
@@ -183,7 +232,7 @@ describe("ConfigPage system info", () => {
     } as unknown as GatewayBrowserClient;
     const snapshot = {
       client,
-      connected: true,
+      phase: "connected",
       hello: { features: { methods: ["system.info"] } },
     } as ApplicationGatewaySnapshot;
     const firstGateway = { snapshot } as ApplicationGateway;
@@ -224,6 +273,75 @@ describe("ConfigPage system info", () => {
     await secondLoad;
     expect(state.systemInfo).toBe(current);
     page.remove();
+  });
+});
+
+describe("ConfigPage session observer models", () => {
+  it("lets a replacement Gateway load while the stale client is still pending", async () => {
+    const first = deferred<ModelCatalogEntry[]>();
+    const second = deferred<ModelCatalogEntry[]>();
+    vi.spyOn(chatModels, "loadModels")
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const firstClient = {} as GatewayBrowserClient;
+    const secondClient = {} as GatewayBrowserClient;
+    const gateway = {
+      snapshot: { client: firstClient, phase: "connected" },
+    } as unknown as ApplicationGateway;
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      context: ApplicationContext;
+      systemInfoGatewaySource: ApplicationGateway;
+      sessionObserverModels: ModelCatalogEntry[];
+      sessionObserverModelsClient: GatewayBrowserClient | null;
+      ensureSessionObserverModels: (client: GatewayBrowserClient) => Promise<void>;
+    };
+    Object.defineProperty(page, "isConnected", { configurable: true, value: true });
+    state.context = { gateway } as ApplicationContext;
+    state.systemInfoGatewaySource = gateway;
+
+    const firstLoad = state.ensureSessionObserverModels(firstClient);
+    (gateway as { snapshot: ApplicationGatewaySnapshot }).snapshot = {
+      client: secondClient,
+      phase: "connected",
+    } as ApplicationGatewaySnapshot;
+    const secondLoad = state.ensureSessionObserverModels(secondClient);
+    const currentModels = [{ id: "small", name: "Small", provider: "openai" }];
+    second.resolve(currentModels);
+    await secondLoad;
+    expect(state.sessionObserverModels).toEqual(currentModels);
+    expect(state.sessionObserverModelsClient).toBe(secondClient);
+
+    first.resolve([{ id: "stale", name: "Stale", provider: "old" }]);
+    await firstLoad;
+    expect(state.sessionObserverModels).toEqual(currentModels);
+    expect(chatModels.loadModels).toHaveBeenCalledTimes(2);
+  });
+
+  it("marks a failed client unavailable without polling it again", async () => {
+    vi.spyOn(chatModels, "loadModels").mockRejectedValue(new Error("catalog unavailable"));
+    const client = {} as GatewayBrowserClient;
+    const gateway = {
+      snapshot: { client, phase: "connected" },
+    } as unknown as ApplicationGateway;
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      context: ApplicationContext;
+      systemInfoGatewaySource: ApplicationGateway;
+      sessionObserverModels: ModelCatalogEntry[];
+      sessionObserverModelsUnavailable: boolean;
+      ensureSessionObserverModels: (client: GatewayBrowserClient) => Promise<void>;
+    };
+    Object.defineProperty(page, "isConnected", { configurable: true, value: true });
+    state.context = { gateway } as ApplicationContext;
+    state.systemInfoGatewaySource = gateway;
+
+    await state.ensureSessionObserverModels(client);
+    await state.ensureSessionObserverModels(client);
+
+    expect(state.sessionObserverModels).toEqual([]);
+    expect(state.sessionObserverModelsUnavailable).toBe(true);
+    expect(chatModels.loadModels).toHaveBeenCalledOnce();
   });
 });
 

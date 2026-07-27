@@ -403,13 +403,12 @@ describe("runMessageAction core send routing", () => {
     });
   });
 
-  it("prepends messages.responsePrefix to message-tool sends", async () => {
+  it("prepends the channel responsePrefix to message-tool sends", async () => {
     const sendText = registerSlackTextPlugin();
 
     await runMessageAction({
       cfg: {
-        channels: { slack: { enabled: true } },
-        messages: { responsePrefix: "[Nexus]" },
+        channels: { slack: { enabled: true, responsePrefix: "[Nexus]" } },
       } as OpenClawConfig,
       action: "send",
       params: {
@@ -429,8 +428,7 @@ describe("runMessageAction core send routing", () => {
 
     await runMessageAction({
       cfg: {
-        channels: { slack: { enabled: true } },
-        messages: { responsePrefix: "[Nexus]" },
+        channels: { slack: { enabled: true, responsePrefix: "[Nexus]" } },
       } as OpenClawConfig,
       action: "send",
       params: {
@@ -481,8 +479,7 @@ describe("runMessageAction core send routing", () => {
 
     await runMessageAction({
       cfg: {
-        channels: { slack: { enabled: true } },
-        messages: { responsePrefix: "[Nexus]" },
+        channels: { slack: { enabled: true, responsePrefix: "[Nexus]" } },
       } as OpenClawConfig,
       action: "send",
       params: {
@@ -502,8 +499,7 @@ describe("runMessageAction core send routing", () => {
 
     await runMessageAction({
       cfg: {
-        channels: { slack: { enabled: true } },
-        messages: { responsePrefix: "[{identity.name}]" },
+        channels: { slack: { enabled: true, responsePrefix: "[{identity.name}]" } },
         agents: { list: [{ id: "main", identity: { name: "Nexus" } }] },
       } as OpenClawConfig,
       action: "send",
@@ -525,8 +521,7 @@ describe("runMessageAction core send routing", () => {
 
     await runMessageAction({
       cfg: {
-        channels: { slack: { enabled: true } },
-        messages: { responsePrefix: "[{provider}/{model}]" },
+        channels: { slack: { enabled: true, responsePrefix: "[{provider}/{model}]" } },
       } as OpenClawConfig,
       action: "send",
       params: {
@@ -821,10 +816,8 @@ describe("runMessageAction core send routing", () => {
             enabled: true,
           },
         },
-        messages: {
-          tts: {
-            auto: "tagged",
-          },
+        tts: {
+          auto: "tagged",
         },
       } as OpenClawConfig,
       action: "send",
@@ -881,10 +874,8 @@ describe("runMessageAction core send routing", () => {
             enabled: true,
           },
         },
-        messages: {
-          tts: {
-            auto: "inbound",
-          },
+        tts: {
+          auto: "inbound",
         },
       } as OpenClawConfig,
       action: "send",

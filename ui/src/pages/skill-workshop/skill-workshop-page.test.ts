@@ -66,8 +66,9 @@ function createContext(
   const client = { request } as unknown as GatewayBrowserClient;
   const snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected: true,
-    reconnecting: false,
+    phase: "connected",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: "research",
     sessionKey: "global",
@@ -284,7 +285,7 @@ describe("SkillWorkshopPage lifecycle", () => {
     );
     const loadingState = page.state;
 
-    gatewayListener?.({ ...context.gateway.snapshot, connected: false });
+    gatewayListener?.({ ...context.gateway.snapshot, phase: "stopped" });
     expect(page.state).not.toBe(loadingState);
     expect(page.state?.skillWorkshopLoaded).toBe(false);
 

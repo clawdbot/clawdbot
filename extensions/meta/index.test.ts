@@ -30,6 +30,7 @@ describe("meta provider", () => {
       id: "api-key",
       kind: "api_key",
       label: "Meta API key",
+      starterModel: "meta/muse-spark-1.1",
     });
   });
 
@@ -44,7 +45,13 @@ describe("meta provider", () => {
     expect(model.contextWindow).toBe(1048576);
     expect(model.maxTokens).toBe(131072);
     expect(model.reasoning).toBe(true);
-    expect(model.input).toContain("image");
+    expect(model.input).toEqual(["text", "image"]);
+    expect(model.cost).toEqual({
+      input: 1.25,
+      output: 4.25,
+      cacheRead: 0.15,
+      cacheWrite: 0,
+    });
   });
 
   it("advertises a high default thinking profile for muse-spark-1.1", () => {

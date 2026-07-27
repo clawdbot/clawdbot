@@ -1804,8 +1804,8 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(lease?.rootPid).toBe(777);
     expect(lease?.state).toBe("open");
     expect(lease?.wrapperPath).toBe("/tmp/openclaw/acpx/codex-acp-wrapper.mjs");
-    expect(launchCommands[0]).toContain("OPENCLAW_ACPX_LEASE_ID=");
-    expect(launchCommands[0]).toContain("OPENCLAW_GATEWAY_INSTANCE_ID=gateway-test");
+    expect(launchCommands[0]).toContain(OPENCLAW_ACPX_LEASE_ID_ARG);
+    expect(launchCommands[0]).toContain(OPENCLAW_GATEWAY_INSTANCE_ID_ARG);
     expect(savedRecords[0]?.agentCommand).toBe(CODEX_ACP_WRAPPER_COMMAND);
     expect(savedRecords[0]?.openclawGatewayInstanceId).toBe("gateway-test");
     expect(savedRecords[0]?.openclawLeaseId).toBe(lease?.leaseId);

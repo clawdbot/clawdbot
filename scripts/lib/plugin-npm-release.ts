@@ -6,11 +6,8 @@ import { join, resolve } from "node:path";
 import { expectDefined } from "../../packages/normalization-core/src/expect.js";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { validateExternalCodePluginPackageJson } from "../../packages/plugin-package-contract/src/index.ts";
-import {
-  collectReleaseVersionFloorErrors,
-  parseReleaseVersion,
-  resolveNpmPublishPlan,
-} from "./npm-publish-plan.mjs";
+import { resolveNpmPublishPlan } from "./npm-publish-plan.mjs";
+import { collectReleaseVersionFloorErrors, parseReleaseVersion } from "./release-version.mjs";
 
 type PluginPackageJson = {
   name?: string;

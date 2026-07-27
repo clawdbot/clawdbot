@@ -28,7 +28,10 @@ Routing order:
 
 In guided mode, `--workspace <dir>` is the workspace proposed to OpenClaw;
 it is persisted only after you approve that proposal. Baseline, classic, and
-noninteractive setup persist the supplied workspace through their normal flow.
+noninteractive setup persist the supplied workspace through their normal flow
+on a fresh install. When an existing agent roster would be remapped, the
+classic wizard requires explicit confirmation; noninteractive setup keeps the
+current fleet workspace and prints a warning.
 
 Guided inference detection runs on the Gateway host on macOS or Linux. The CLI
 and macOS app call the same Gateway-owned detector, which checks configured
@@ -47,7 +50,8 @@ auth (`--auth-choice`, `--token`, provider key flags), Gateway
 Tailscale (`--tailscale`), reset (`--reset`, `--reset-scope`), flow
 (`--flow quickstart|advanced|manual|import`), and skip flags
 (`--skip-channels`, `--skip-skills`, `--skip-bootstrap`, `--skip-search`,
-`--skip-health`, `--skip-ui`, `--skip-hooks`). See [Onboard](/cli/onboard) and
+`--skip-health`, `--skip-ui`, `--skip-hooks`). Pass `--tui` to use the same
+terminal hatch as `openclaw onboard --tui`. See [Onboard](/cli/onboard) and
 [CLI automation](/start/wizard-cli-automation) for the full flag reference and
 non-interactive examples. `openclaw onboard --modern` remains a compatibility
 entry for the same inference-gated OpenClaw assistant.
@@ -58,25 +62,26 @@ entry for the same inference-gated OpenClaw assistant.
 
 ## Options
 
-| Flag                       | Description                                                                                           |
-| -------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `-m, --message <text>`     | Run one OpenClaw request.                                                                             |
-| `--yes`                    | Approve persistent config writes for one `--message` request.                                         |
-| `--workspace <dir>`        | Workspace proposal in guided mode; persisted directly by baseline, classic, and noninteractive setup. |
-| `--baseline`               | Create baseline config/workspace/session folders without onboarding.                                  |
-| `--wizard`                 | Force interactive onboarding.                                                                         |
-| `--non-interactive`        | Run onboarding without prompts.                                                                       |
-| `--accept-risk`            | Acknowledge full-system agent access risk; required with `--non-interactive`.                         |
-| `--mode <mode>`            | Onboarding mode: `local` or `remote`.                                                                 |
-| `--flow <flow>`            | Onboard flow: `quickstart`, `advanced`, `manual`, or `import`.                                        |
-| `--reset`                  | Reset config + credentials + sessions before onboarding (workspace only with `--reset-scope full`).   |
-| `--reset-scope <scope>`    | Reset scope: `config`, `config+creds+sessions`, or `full`.                                            |
-| `--import-from <provider>` | Migration provider to run during onboarding.                                                          |
-| `--import-source <path>`   | Source agent home for `--import-from`.                                                                |
-| `--import-secrets`         | Import supported secrets during onboarding migration.                                                 |
-| `--remote-url <url>`       | Remote Gateway WebSocket URL.                                                                         |
-| `--remote-token <token>`   | Remote Gateway token (optional).                                                                      |
-| `--json`                   | Configured system: OpenClaw overview. Onboarding route: onboarding summary.                           |
+| Flag                       | Description                                                                                          |
+| -------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `-m, --message <text>`     | Run one OpenClaw request.                                                                            |
+| `--yes`                    | Approve persistent config writes for one `--message` request.                                        |
+| `--workspace <dir>`        | Workspace proposal; existing fleets require classic confirmation and are preserved noninteractively. |
+| `--baseline`               | Create baseline config/workspace/session folders without onboarding.                                 |
+| `--wizard`                 | Force interactive onboarding.                                                                        |
+| `--tui`                    | Use the terminal hatch instead of the browser handoff.                                               |
+| `--non-interactive`        | Run onboarding without prompts.                                                                      |
+| `--accept-risk`            | Acknowledge full-system agent access risk; required with `--non-interactive`.                        |
+| `--mode <mode>`            | Onboarding mode: `local` or `remote`.                                                                |
+| `--flow <flow>`            | Onboard flow: `quickstart`, `advanced`, `manual`, or `import`.                                       |
+| `--reset`                  | Reset config + credentials + sessions before onboarding (workspace only with `--reset-scope full`).  |
+| `--reset-scope <scope>`    | Reset scope: `config`, `config+creds+sessions`, or `full`.                                           |
+| `--import-from <provider>` | Migration provider to run during onboarding.                                                         |
+| `--import-source <path>`   | Source agent home for `--import-from`.                                                               |
+| `--import-secrets`         | Import supported secrets during onboarding migration.                                                |
+| `--remote-url <url>`       | Remote Gateway WebSocket URL.                                                                        |
+| `--remote-token <token>`   | Remote Gateway token (optional).                                                                     |
+| `--json`                   | Configured system: OpenClaw overview. Onboarding route: onboarding summary.                          |
 
 `--classic` and `--non-interactive` are mutually exclusive: classic opens the
 prompted wizard, while noninteractive setup uses the automation path.
@@ -90,7 +95,10 @@ storage mode.
 
 `openclaw setup --baseline` preserves the older baseline-only behavior: it
 creates the config, workspace, and session directories, then exits without
-running onboarding.
+running onboarding. It accepts `--workspace` and harmless output controls, but
+rejects explicit onboarding, Gateway, auth, reset, or daemon options instead of
+silently ignoring them. If an existing config is invalid, baseline setup preserves
+it and asks you to run `openclaw doctor` before retrying.
 
 ## Examples
 

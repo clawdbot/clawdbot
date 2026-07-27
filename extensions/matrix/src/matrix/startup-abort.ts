@@ -1,4 +1,6 @@
 // Matrix plugin module implements startup abort behavior.
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+
 export function createMatrixStartupAbortError(): Error {
   const error = new Error("Matrix startup aborted");
   error.name = "AbortError";
@@ -38,22 +40,8 @@ export async function awaitMatrixStartupWithAbort<T>(
       },
       (error: unknown) => {
         abortSignal.removeEventListener("abort", onAbort);
-        reject(toLintErrorObject(error, "Non-Error rejection"));
+        reject(toErrorObject(error, "Non-Error rejection"));
       },
     );
   });
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

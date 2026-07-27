@@ -11,7 +11,7 @@ import type { DraftCloudProfile } from "./discovery.ts";
 import { readDraftCloudProfiles } from "./discovery.ts";
 
 type CloudStartOutcome =
-  | { status: "started"; messageId: string }
+  | { status: "started"; messageId: string; messageSeq?: number }
   | { status: "cancelled" }
   | { status: "cleanup-rejected"; error: string; messageId?: string }
   | { status: "dispatch-rejected"; error: string }
@@ -383,7 +383,7 @@ export async function startCloudInitialTurn(
       : { status: "send-not-started", error: "cloud recovery storage is unavailable" };
   }
   try {
-    await client.request("sessions.send", {
+    const sent = await client.request<{ messageSeq?: unknown }>("sessions.send", {
       key: params.key,
       agentId: params.agentId,
       message: params.message,
@@ -401,7 +401,14 @@ export async function startCloudInitialTurn(
         ? { status: "cleanup-rejected", error: cleanupError, messageId }
         : { status: "cancelled" };
     }
-    return { status: "started", messageId };
+    const messageSeq = sent?.messageSeq;
+    return {
+      status: "started",
+      messageId,
+      ...(typeof messageSeq === "number" && Number.isSafeInteger(messageSeq) && messageSeq > 0
+        ? { messageSeq }
+        : {}),
+    };
   } catch (error) {
     if (!isCurrent()) {
       const cleanupError = await cancelActivePlacement(client, {
@@ -432,6 +439,8 @@ export async function startCloudInitialTurn(
 type SessionMenuItemOptions = {
   value: string;
   label: string;
+  icon?: unknown;
+  sub?: string;
   checked: boolean;
   disabled?: boolean;
   title?: string;
@@ -454,7 +463,11 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
       <span class="session-menu__check" aria-hidden="true"
         >${params.checked ? icons.check : nothing}</span
       >
+      ${params.icon
+        ? html`<span class="session-menu__icon" aria-hidden="true">${params.icon}</span>`
+        : nothing}
       <span class="session-menu__text">${params.label}</span>
+      ${params.sub ? html`<span class="session-menu__sub">${params.sub}</span>` : nothing}
     </button>
   `;
 }
@@ -463,6 +476,7 @@ export function renderCloudProfileMenuItems(params: {
   profiles: DraftCloudProfile[];
   selectedId: string;
   submitting: boolean;
+  icon?: unknown;
   disabled?: boolean;
   disabledReason?: string;
   onSelect: (profileId: string) => void;
@@ -472,6 +486,7 @@ export function renderCloudProfileMenuItems(params: {
       {
         value: `cloud:${profile.id}`,
         label: t("newSession.cloudWorker", { profile: profile.id }),
+        icon: params.icon,
         checked: params.selectedId === profile.id,
         disabled: params.disabled,
         title:

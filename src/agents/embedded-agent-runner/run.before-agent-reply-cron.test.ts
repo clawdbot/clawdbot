@@ -122,7 +122,7 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
       (hookName: string) => hookName === "before_agent_reply",
     );
     mockedGlobalHookRunner.runBeforeAgentReply.mockResolvedValue(undefined);
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult());
     const onExecutionPhase = vi.fn();
 
     await runEmbeddedAgent({
@@ -225,7 +225,7 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
       mockedGlobalHookRunner.hasHooks.mockImplementation(
         (hookName: string) => hookName === "before_agent_reply",
       );
-      mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult());
 
       await runEmbeddedAgent({
         ...overflowBaseRunParams,
@@ -240,7 +240,7 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
   it("forwards one-shot auxiliary-run flags into the embedded attempt", async () => {
     // Auxiliary-run flags are request-scoped; they must pass through to the
     // first attempt without becoming persistent session settings.
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult());
 
     await runEmbeddedAgent({
       ...overflowBaseRunParams,
@@ -257,7 +257,7 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
   });
 
   it("forwards one-shot bundle MCP cleanup into the embedded attempt", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult());
 
     await runEmbeddedAgent({
       ...overflowBaseRunParams,
@@ -268,7 +268,7 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
   });
 
   it("forwards prompt cache identity into the embedded attempt", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult());
 
     await runEmbeddedAgent({
       ...overflowBaseRunParams,
@@ -279,7 +279,7 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
   });
 
   it("forwards suppressed live stream output into the embedded attempt", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult());
 
     await runEmbeddedAgent({
       ...overflowBaseRunParams,

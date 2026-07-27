@@ -165,6 +165,7 @@ export function resolveClickClackAccount(params: {
   const workspace = merged.workspace?.trim() ?? "";
   const discussionsWorkspace = merged.discussions?.workspace?.trim() || workspace;
   const controlUrlBase = merged.discussions?.controlUrlBase?.trim();
+  const apiEndpoint = merged.apiBaseUrl?.trim().replace(/\/$/, "") || baseUrl;
   return {
     accountId,
     enabled,
@@ -202,6 +203,7 @@ export function resolveClickClackAccount(params: {
       ...merged,
       allowFrom: merged.allowFrom ?? ["*"],
     },
+    apiEndpoint,
   };
 }
 

@@ -43,6 +43,14 @@ export type MeetingBrowserHealth<
   speechReady?: boolean;
   speechBlockedReason?: TSpeechBlockedReason;
   speechBlockedMessage?: string;
+  /** Non-silent sink audio observed again on the meeting microphone capture path. */
+  outputLoopbackSignalBytes?: number;
+  lastOutputLoopbackAt?: string;
+  lastOutputLoopbackCorrelation?: number;
+  lastOutputLoopbackRms?: number;
+  lastOutputLoopbackPeak?: number;
+  outputGeneration?: number;
+  verifiedOutputGeneration?: number;
 };
 
 export type MeetingRealtimeSessionBlock = {

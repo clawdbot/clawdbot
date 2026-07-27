@@ -9,7 +9,6 @@ export * from "./sessions/main-session.js";
 export type { MainRestartRecoveryState } from "./sessions/main-session-recovery.types.js";
 export * from "./sessions/main-session.runtime.js";
 export * from "./sessions/lifecycle.js";
-export * from "./sessions/legacy-store-readonly.js";
 export * from "./sessions/paths.js";
 export * from "./sessions/reset.js";
 export {
@@ -20,12 +19,14 @@ export {
   resolveSessionEntryCandidateTarget,
 } from "./sessions/session-accessor.js";
 export * from "./sessions/session-key.js";
-export * from "./sessions/store.js";
+export { resolveSessionStoreEntry } from "./sessions/store-entry.js";
 export * from "./sessions/types.js";
 export * from "./sessions/transcript.js";
 export * from "./sessions/session-file.js";
 export * from "./sessions/session-file-rotation.js";
 export * from "./sessions/session-registry-maintenance.js";
+export * from "./sessions/session-sharing-store.js";
+export * from "./sessions/session-suggestion-store.js";
 export * from "./sessions/delivery-info.js";
 export * from "./sessions/disk-budget.js";
 export * from "./sessions/targets.js";

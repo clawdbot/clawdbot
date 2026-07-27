@@ -169,9 +169,39 @@ describe("package scripts", () => {
     );
   });
 
-  it("runs SQLite transcript archive durability coverage in Windows CI", () => {
+  it("runs Docker package process-tree coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
-      "src/config/sessions/store.session-lifecycle-mutation.test.ts",
+      "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts",
+    );
+  });
+
+  it("runs legacy session importer atomicity coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/infra/state-migrations.legacy-session-store.test.ts",
+    );
+  });
+
+  it("runs SQLite snapshot path coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/infra/sqlite-snapshot.test.ts",
+    );
+  });
+
+  it("runs shared test-state cleanup coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/test-utils/openclaw-test-state.test.ts",
+    );
+  });
+
+  it("runs snapshot repository verification coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/snapshot/local-repository.windows.test.ts",
+    );
+  });
+
+  it("runs backup verification coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/commands/backup-verify.test.ts",
     );
   });
 

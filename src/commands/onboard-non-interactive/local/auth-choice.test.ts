@@ -53,6 +53,12 @@ function createRuntime() {
   };
 }
 
+const target = {
+  agentId: "main",
+  agentDir: "/tmp/main-agent",
+  workspaceDir: "/tmp/workspace",
+};
+
 describe("applyNonInteractiveAuthChoice", () => {
   it("rejects an unknown auth choice and lists the valid choices", async () => {
     const runtime = createRuntime();
@@ -64,6 +70,7 @@ describe("applyNonInteractiveAuthChoice", () => {
       opts: {} as never,
       runtime: runtime as never,
       baseConfig: nextConfig,
+      target,
     });
 
     expect(result).toBeNull();
@@ -85,9 +92,13 @@ describe("applyNonInteractiveAuthChoice", () => {
       opts: {} as never,
       runtime: runtime as never,
       baseConfig: nextConfig,
+      target,
     });
 
     expect(result).toBe(resolvedConfig);
+    expect(applyNonInteractivePluginProviderChoice).toHaveBeenCalledWith(
+      expect.objectContaining({ target }),
+    );
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
   });
@@ -104,6 +115,7 @@ describe("applyNonInteractiveAuthChoice", () => {
       opts: {} as never,
       runtime: runtime as never,
       baseConfig: nextConfig,
+      target,
     });
 
     expect(result).toBe(resolvedConfig);
@@ -123,6 +135,7 @@ describe("applyNonInteractiveAuthChoice", () => {
       opts: {} as never,
       runtime: runtime as never,
       baseConfig: nextConfig,
+      target,
     });
 
     expect(result).toBeNull();
@@ -146,6 +159,7 @@ describe("applyNonInteractiveAuthChoice", () => {
       opts: {} as never,
       runtime: runtime as never,
       baseConfig: nextConfig,
+      target,
     });
 
     expect(result).toBeNull();
@@ -169,6 +183,7 @@ describe("applyNonInteractiveAuthChoice", () => {
       opts: {} as never,
       runtime: runtime as never,
       baseConfig: nextConfig,
+      target,
     });
 
     expect(result).toBeNull();
@@ -198,6 +213,7 @@ describe("applyNonInteractiveAuthChoice", () => {
       } as never,
       runtime: runtime as never,
       baseConfig: nextConfig,
+      target,
     });
 
     expect(result?.models?.providers?.["custom-models-custom-local"]?.apiKey).toEqual({
@@ -214,6 +230,7 @@ describe("applyNonInteractiveAuthChoice", () => {
     expect(apiKeyParams?.flagName).toBe("--custom-api-key");
     expect(apiKeyParams?.envVar).toBe("CUSTOM_API_KEY");
     expect(apiKeyParams?.envVarName).toBe("CUSTOM_API_KEY");
+    expect(apiKeyParams?.agentDir).toBe(target.agentDir);
     expect(apiKeyParams?.secretInputMode).toBe("ref");
   });
 
@@ -232,6 +249,7 @@ describe("applyNonInteractiveAuthChoice", () => {
       } as never,
       runtime: runtime as never,
       baseConfig: nextConfig,
+      target,
     });
 
     expect(result?.models?.providers?.["custom-models-custom-local"]?.api).toBe("openai-responses");
@@ -252,6 +270,7 @@ describe("applyNonInteractiveAuthChoice", () => {
       } as never,
       runtime: runtime as never,
       baseConfig: nextConfig,
+      target,
     });
 
     expect(result?.models?.providers?.["custom-models-custom-local"]?.models?.[0]?.input).toEqual([
@@ -274,6 +293,7 @@ describe("applyNonInteractiveAuthChoice", () => {
       } as never,
       runtime: runtime as never,
       baseConfig: nextConfig,
+      target,
     });
 
     expect(result?.models?.providers?.["custom-models-custom-local"]?.models?.[0]?.input).toEqual([
@@ -297,6 +317,7 @@ describe("applyNonInteractiveAuthChoice", () => {
       } as never,
       runtime: runtime as never,
       baseConfig: nextConfig,
+      target,
     });
 
     expect(result?.models?.providers?.["custom-models-custom-local"]?.models?.[0]?.input).toEqual([

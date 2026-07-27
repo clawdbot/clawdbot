@@ -1,18 +1,17 @@
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
-  acknowledgeOnboardingRecommendations,
-  clearOnboardingRecommendations,
-  clearPendingOnboardingRecommendations,
-  readOnboardingRecommendations,
-  updatePendingOnboardingRecommendations,
+  createOnboardingRecommendationsStore,
+  type OnboardingRecommendationsStore,
   type OnboardingRecommendationsRecord,
 } from "../state/onboarding-recommendations.js";
 
 type OnboardRecommendationsDeps = {
   read?: () => OnboardingRecommendationsRecord | null;
   acknowledge?: () => OnboardingRecommendationsRecord | null;
-  updatePending?: typeof updatePendingOnboardingRecommendations;
-  clearPending?: typeof clearPendingOnboardingRecommendations;
+  updatePending?: OnboardingRecommendationsStore["updatePending"];
+  clearPending?: OnboardingRecommendationsStore["clearPending"];
   clear?: () => boolean;
 };
 
@@ -27,6 +26,17 @@ type BootstrapRecommendation = {
   source: "official-plugin" | "clawhub-skill";
   tier: "recommended" | "optional";
 };
+
+function createDefaultOnboardingRecommendationsStore(): OnboardingRecommendationsStore {
+  const cfg = getRuntimeConfig();
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+  return createOnboardingRecommendationsStore({ workspaceDir });
+}
+
+function createDefaultStoreAccessor(): () => OnboardingRecommendationsStore {
+  let store: OnboardingRecommendationsStore | undefined;
+  return () => (store ??= createDefaultOnboardingRecommendationsStore());
+}
 
 function isLegacyBareClawHubId(match: OnboardingRecommendationsRecord["matches"][number]): boolean {
   return (
@@ -66,10 +76,11 @@ export function onboardRecommendationsCommand(
   runtime: RuntimeEnv,
   deps: OnboardRecommendationsDeps = {},
 ): void {
-  const stored = (deps.read ?? readOnboardingRecommendations)();
+  const defaultStore = createDefaultStoreAccessor();
+  const stored = (deps.read ?? defaultStore().read)();
   const hasLegacyClawHubId = stored?.matches.some(isLegacyBareClawHubId);
   if (hasLegacyClawHubId && stored && stored.acceptedAt == null) {
-    const cleared = (deps.clearPending ?? clearPendingOnboardingRecommendations)({
+    const cleared = (deps.clearPending ?? defaultStore().clearPending)({
       expected: stored,
     });
     if (!cleared) {
@@ -105,9 +116,10 @@ export function acknowledgeOnboardRecommendationsCommand(
   runtime: RuntimeEnv,
   deps: OnboardRecommendationsDeps = {},
 ): void {
+  const defaultStore = createDefaultStoreAccessor();
   const retryIds = [...new Set(opts.retry ?? [])];
   if (retryIds.length > 0) {
-    const record = (deps.read ?? readOnboardingRecommendations)();
+    const record = (deps.read ?? defaultStore().read)();
     if (!record || record.acceptedAt != null) {
       runtime.error("No pending onboarding recommendations to retry.");
       runtime.exit(1);
@@ -124,7 +136,7 @@ export function acknowledgeOnboardRecommendationsCommand(
     const retryIdSet = new Set(retryIds);
     const retryMatches =
       record?.matches.filter((match) => retryIdSet.has(match.candidate.id)) ?? [];
-    const updated = (deps.updatePending ?? updatePendingOnboardingRecommendations)({
+    const updated = (deps.updatePending ?? defaultStore().updatePending)({
       matches: retryMatches,
       expected: record,
     });
@@ -136,7 +148,7 @@ export function acknowledgeOnboardRecommendationsCommand(
     runtime.log(`Onboarding recommendations updated; ${retryIds.length} left pending for retry.`);
     return;
   }
-  const record = (deps.acknowledge ?? acknowledgeOnboardingRecommendations)();
+  const record = (deps.acknowledge ?? defaultStore().acknowledge)();
   runtime.log(record ? "Onboarding recommendations acknowledged." : "No stored recommendations.");
 }
 
@@ -144,7 +156,8 @@ export function refreshOnboardRecommendationsCommand(
   runtime: RuntimeEnv,
   deps: OnboardRecommendationsDeps = {},
 ): void {
-  const cleared = (deps.clear ?? clearOnboardingRecommendations)();
+  const defaultStore = createDefaultStoreAccessor();
+  const cleared = (deps.clear ?? defaultStore().clear)();
   runtime.log(
     cleared
       ? "Onboarding recommendations cleared. The next onboarding run will rescan."

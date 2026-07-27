@@ -23,6 +23,15 @@ describe("telegram actions contract", () => {
     ],
   });
 
+  it("exposes message resource aliases through the registered adapter", () => {
+    for (const action of ["react", "edit", "delete"] as const) {
+      expect(telegramPlugin.actions?.messageActionTargetAliases?.[action]).toEqual({
+        aliases: ["messageId"],
+        deliveryTargetAliases: [],
+      });
+    }
+  });
+
   it.each([
     {
       richMessages: undefined as boolean | undefined,

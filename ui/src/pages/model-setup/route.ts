@@ -15,7 +15,7 @@ async function loadModelSetupRouteData(
 ): Promise<ModelSetupRouteData> {
   const firstRun = new URLSearchParams(location.search).get("firstRun") === "1";
   const snapshot = context.gateway.snapshot;
-  const client = snapshot.connected ? snapshot.client : null;
+  const client = snapshot.phase === "connected" ? snapshot.client : null;
   if (
     !client ||
     !hasOperatorAdminAccess(snapshot.hello?.auth ?? null) ||

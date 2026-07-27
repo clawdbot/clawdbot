@@ -35,6 +35,7 @@ describe("extractCanvasFromText", () => {
             toolName: "show",
             uiResourceUri: "ui://demo/app",
             toolCallId: "call-1",
+            originSessionKey: "agent:main:main",
             resultMetaState: "unavailable",
           },
         },
@@ -47,6 +48,7 @@ describe("extractCanvasFromText", () => {
         toolName: "show",
         uiResourceUri: "ui://demo/app",
         toolCallId: "call-1",
+        originSessionKey: "agent:main:main",
         resultMetaState: "unavailable",
       },
     });

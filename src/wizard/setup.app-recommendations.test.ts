@@ -5,8 +5,12 @@ import type { RuntimeEnv } from "../runtime.js";
 import type {
   OnboardingRecommendationMatch,
   OnboardingRecommendationsRecord,
+  OnboardingRecommendationsStore,
 } from "../state/onboarding-recommendations.js";
-import type { SetupAppRecommendationsResult } from "../system-agent/setup-app-recommendations.js";
+import type {
+  SetupAppRecommendationsResult,
+  SetupAppScanPhase,
+} from "../system-agent/setup-app-recommendations.js";
 import type { WizardPrompter } from "./prompts.js";
 import { setupAppRecommendations as setupAppRecommendationsWithOutcome } from "./setup.app-recommendations.js";
 
@@ -42,11 +46,7 @@ function storeDeps(initial: OnboardingRecommendationsRecord | null = null) {
   let current = initial;
   let now = 0;
   const writeOffer = vi.fn(
-    (
-      params: Parameters<
-        typeof import("../state/onboarding-recommendations.js").writeOnboardingRecommendationsOffer
-      >[0],
-    ) => {
+    (params: Parameters<OnboardingRecommendationsStore["writeOffer"]>[0]) => {
       now += 1;
       current = {
         inventoryHash: "hash",
@@ -59,11 +59,7 @@ function storeDeps(initial: OnboardingRecommendationsRecord | null = null) {
     },
   );
   const acknowledgeStored = vi.fn(
-    (
-      params: Parameters<
-        typeof import("../state/onboarding-recommendations.js").acknowledgeOnboardingRecommendations
-      >[0] = {},
-    ) => {
+    (params: Parameters<OnboardingRecommendationsStore["acknowledge"]>[0] = {}) => {
       if (
         !current ||
         (params.expected &&
@@ -78,11 +74,7 @@ function storeDeps(initial: OnboardingRecommendationsRecord | null = null) {
     },
   );
   const updatePendingStored = vi.fn(
-    (
-      params: Parameters<
-        typeof import("../state/onboarding-recommendations.js").updatePendingOnboardingRecommendations
-      >[0],
-    ) => {
+    (params: Parameters<OnboardingRecommendationsStore["updatePending"]>[0]) => {
       if (
         !current ||
         params.expected.inventoryHash !== current.inventoryHash ||
@@ -208,12 +200,14 @@ describe("setupAppRecommendations", () => {
       return true;
     });
     const recommend = vi.fn(async () => recommendationResult());
+    const log = vi.fn();
+    const prompter = createPrompter();
 
     refreshOnboardRecommendationsCommand(runtime, { clear });
     await setupAppRecommendations({
       config: {},
-      prompter: createPrompter(),
-      runtime,
+      prompter,
+      runtime: { ...runtime, log },
       workspaceDir: "/tmp/workspace",
       modelRouteVerified: true,
       platform: "darwin",
@@ -227,10 +221,45 @@ describe("setupAppRecommendations", () => {
 
     expect(clear).toHaveBeenCalledOnce();
     expect(recommend).toHaveBeenCalledOnce();
+    expect(prompter.plain).toHaveBeenCalledWith(
+      "App names are matched with your configured model and ClawHub search (disable via wizard.appRecommendations).",
+    );
+    expect(vi.mocked(prompter.plain!).mock.invocationCallOrder[0]).toBeLessThan(
+      recommend.mock.invocationCallOrder[0]!,
+    );
+    expect(log).not.toHaveBeenCalledWith(
+      "App names are matched with your configured model and ClawHub search (disable via wizard.appRecommendations).",
+    );
+  });
+
+  it("logs the scan disclosure when the prompter has no plain-output surface", async () => {
+    const recommend = vi.fn(async () => recommendationResult());
+    const log = vi.fn();
+    const prompter = createPrompter();
+    delete prompter.plain;
+
+    await setupAppRecommendations({
+      config: {},
+      prompter,
+      runtime: { ...runtime, log },
+      workspaceDir: "/tmp/workspace",
+      modelRouteVerified: true,
+      platform: "darwin",
+      deps: {
+        recommend,
+        ...storeDeps(),
+      },
+    });
+
+    expect(log).toHaveBeenCalledWith(
+      "App names are matched with your configured model and ClawHub search (disable via wizard.appRecommendations).",
+    );
+    expect(log.mock.invocationCallOrder[0]).toBeLessThan(recommend.mock.invocationCallOrder[0]!);
   });
 
   it("reuses a pending stored offer without rescanning and acknowledges the answer", async () => {
     const recommend = vi.fn(async () => recommendationResult());
+    const log = vi.fn();
     const prompter = createPrompter(["recommendation:0"]);
     const pending: OnboardingRecommendationsRecord = {
       inventoryHash: "hash",
@@ -249,7 +278,7 @@ describe("setupAppRecommendations", () => {
     await setupAppRecommendations({
       config: {},
       prompter,
-      runtime,
+      runtime: { ...runtime, log },
       workspaceDir: "/tmp/workspace",
       modelRouteVerified: true,
       platform: "darwin",
@@ -267,6 +296,10 @@ describe("setupAppRecommendations", () => {
     });
 
     expect(recommend).not.toHaveBeenCalled();
+    expect(log).not.toHaveBeenCalledWith(
+      "App names are matched with your configured model and ClawHub search (disable via wizard.appRecommendations).",
+    );
+    expect(prompter.plain).not.toHaveBeenCalled();
     expect(prompter.progress).not.toHaveBeenCalled();
     expect(prompter.multiselect).toHaveBeenCalledOnce();
     expect(store.acknowledgeStored).toHaveBeenCalledOnce();
@@ -350,6 +383,68 @@ describe("setupAppRecommendations", () => {
     expect(writeOffer).not.toHaveBeenCalled();
   });
 
+  it("updates progress as recommendation scan phases advance", async () => {
+    const prompter = createPrompter();
+    const progress = { update: vi.fn(), stop: vi.fn() };
+    vi.mocked(prompter.progress).mockReturnValue(progress);
+
+    await setupAppRecommendations({
+      config: {},
+      prompter,
+      runtime,
+      workspaceDir: "/tmp/workspace",
+      modelRouteVerified: true,
+      platform: "darwin",
+      deps: {
+        recommend: vi.fn(async (onPhase?: (phase: SetupAppScanPhase) => void) => {
+          onPhase?.({
+            kind: "candidates",
+            appCount: 4,
+            sampleLabels: ["alpha", "Bravo", "Echo"],
+          });
+          onPhase?.({ kind: "matching", appCount: 4 });
+          return recommendationResult();
+        }),
+        ...storeDeps(),
+      },
+    });
+
+    expect(progress.update).toHaveBeenNthCalledWith(
+      1,
+      "Found 4 apps — searching plugins and skills for alpha, Bravo, Echo…",
+    );
+    expect(progress.update).toHaveBeenNthCalledWith(
+      2,
+      "Asking your model to pick the best matches…",
+    );
+  });
+
+  it("uses singular progress copy for one installed app", async () => {
+    const prompter = createPrompter();
+    const progress = { update: vi.fn(), stop: vi.fn() };
+    vi.mocked(prompter.progress).mockReturnValue(progress);
+
+    await setupAppRecommendations({
+      config: {},
+      prompter,
+      runtime,
+      workspaceDir: "/tmp/workspace",
+      modelRouteVerified: true,
+      platform: "darwin",
+      deps: {
+        recommend: vi.fn(async (onPhase?: (phase: SetupAppScanPhase) => void) => {
+          onPhase?.({ kind: "candidates", appCount: 1, sampleLabels: ["Chat"] });
+          return recommendationResult();
+        }),
+        ...storeDeps(),
+      },
+    });
+
+    expect(progress.update).toHaveBeenCalledWith(
+      "Found 1 app — searching plugins and skills for Chat…",
+    );
+  });
+
   it("never preselects third-party ClawHub skills even when model-recommended", async () => {
     const result = recommendationResult();
     result.matches[1] = {
@@ -365,7 +460,10 @@ describe("setupAppRecommendations", () => {
       workspaceDir: "/tmp/workspace",
       modelRouteVerified: true,
       platform: "darwin",
-      deps: { recommend: vi.fn(async () => result), ...store },
+      deps: {
+        recommend: vi.fn(async () => result),
+        ...store,
+      },
     });
     expect(prompter.multiselect).toHaveBeenCalledWith(
       expect.objectContaining({ initialValues: ["recommendation:0"] }),
@@ -452,11 +550,7 @@ describe("setupAppRecommendations", () => {
     const storeState: { current: OnboardingRecommendationsRecord | null } = { current: null };
     let now = 0;
     const writeOffer = vi.fn(
-      (
-        params: Parameters<
-          typeof import("../state/onboarding-recommendations.js").writeOnboardingRecommendationsOffer
-        >[0],
-      ) => {
+      (params: Parameters<OnboardingRecommendationsStore["writeOffer"]>[0]) => {
         now += 1;
         storeState.current = {
           inventoryHash: "hash",
@@ -469,11 +563,7 @@ describe("setupAppRecommendations", () => {
       },
     );
     const acknowledgeStored = vi.fn(
-      (
-        params: Parameters<
-          typeof import("../state/onboarding-recommendations.js").acknowledgeOnboardingRecommendations
-        >[0] = {},
-      ) => {
+      (params: Parameters<OnboardingRecommendationsStore["acknowledge"]>[0] = {}) => {
         if (
           !storeState.current ||
           (params.expected &&

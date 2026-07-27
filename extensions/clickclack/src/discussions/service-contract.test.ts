@@ -8,6 +8,7 @@ import {
 import type { ClickClackDiscussionBinding } from "./binding-store.js";
 import { discussionCredentialFingerprint } from "./naming.js";
 import { markClickClackDiscussionChannelRevoked } from "./revoked-channel-store.js";
+import { assertManagedChannelListContract } from "./service-open.js";
 import {
   TEST_DESTINATION_IDENTITY,
   createHarness,
@@ -36,6 +37,62 @@ describe("ClickClack discussion service contracts", () => {
     expect(harness.generationStore.lookup("agent:main:unsupported")).toBeUndefined();
   });
 
+  it("accepts ordinary channels whose nullable managed fields are omitted", async () => {
+    const harness = createHarness({ label: "Supported server" });
+    vi.mocked(harness.channels).mockResolvedValue([
+      {
+        id: "chn_general",
+        route_id: "general-route",
+        workspace_id: "wsp_team",
+        name: "general",
+        kind: "public",
+        external_managed: false,
+        created_at: "2026-07-19T00:00:00.000Z",
+      },
+    ]);
+
+    await expect(harness.service.open("agent:main:supported")).resolves.toMatchObject({
+      state: "open",
+    });
+  });
+
+  it("rejects a non-boolean managed-contract capability signal", async () => {
+    const harness = createHarness({ label: "Unsupported server" });
+    vi.mocked(harness.channels).mockResolvedValue([
+      {
+        id: "chn_general",
+        route_id: "general-route",
+        workspace_id: "wsp_team",
+        name: "general",
+        kind: "public",
+        external_managed: "false" as unknown as boolean,
+        created_at: "2026-07-19T00:00:00.000Z",
+      },
+    ]);
+
+    await expect(harness.service.open("agent:main:unsupported-type")).rejects.toThrow(
+      "ClickClack server does not advertise the managed discussion contract",
+    );
+  });
+
+  it("accepts a managed list entry whose external URL is omitted", () => {
+    expect(() =>
+      assertManagedChannelListContract([
+        {
+          id: "chn_managed",
+          route_id: "managed-route",
+          workspace_id: "wsp_team",
+          name: "managed",
+          kind: "public",
+          external_managed: true,
+          external_ref: "openclaw:discussion:example",
+          sidebar_section: "Sessions",
+          created_at: "2026-07-19T00:00:00.000Z",
+        },
+      ]),
+    ).not.toThrow();
+  });
+
   it("does not retain a generation when channel preflight cannot run", async () => {
     const harness = createHarness({ label: "Unavailable preflight" });
     const sessionKey = "agent:main:unavailable-preflight";
@@ -57,8 +114,9 @@ describe("ClickClack discussion service contracts", () => {
     expect(harness.createChannel).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects a created channel that omits the managed external URL field", async () => {
+  it("accepts a managed channel whose absent external URL is omitted", async () => {
     const harness = createHarness({ label: "Missing URL field" });
+    harness.config.channels!.clickclack!.discussions!.controlUrlBase = undefined;
     vi.mocked(harness.channels).mockResolvedValue([]);
     vi.mocked(harness.createChannel).mockImplementationOnce(async (_workspaceId, input) => ({
       id: "chn_incompatible",
@@ -70,11 +128,10 @@ describe("ClickClack discussion service contracts", () => {
       created_at: "2026-07-19T00:00:00.000Z",
     }));
 
-    await expect(harness.service.open("agent:main:missing-url-field")).rejects.toThrow(
-      "ClickClack server does not support the managed discussion channel contract",
-    );
-    expect(harness.updateChannel).toHaveBeenCalledWith("chn_incompatible", { archived: true });
-    expect(harness.revokedStore.entries()).toHaveLength(1);
+    await expect(harness.service.open("agent:main:missing-url-field")).resolves.toMatchObject({
+      state: "open",
+    });
+    expect(harness.revokedStore.entries()).toHaveLength(0);
     expect(harness.generationStore.lookup("agent:main:missing-url-field")).toBeUndefined();
   });
 
@@ -538,7 +595,7 @@ describe("ClickClack discussion service contracts", () => {
       "https://new-control.example";
     await harness.service.reconcile(sessionKey);
     expect(harness.updateChannel).toHaveBeenLastCalledWith("chn_discussion", {
-      external_url: `https://new-control.example/chat?session=${encodeURIComponent(sessionKey)}`,
+      external_url: "https://new-control.example/chat/main/control-link",
     });
   });
 
@@ -555,7 +612,7 @@ describe("ClickClack discussion service contracts", () => {
       kind: "public",
       external_managed: true,
       external_ref: testExternalRef(sessionKey),
-      external_url: `https://control.example/control/chat?session=${encodeURIComponent(sessionKey)}`,
+      external_url: "https://control.example/control/chat/main/support-12345678",
       sidebar_section: "Projects",
       archived: false,
       created_at: "2026-07-19T00:00:00.000Z",

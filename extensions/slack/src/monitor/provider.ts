@@ -33,7 +33,7 @@ import {
   resolveSlackAccountDmPolicy,
 } from "../accounts.js";
 import { isSlackAnyNativeApprovalClientEnabled } from "../approval-native-gates.js";
-import { resolveSlackWebClientOptions } from "../client-options.js";
+import { resolveSlackProxyDispatcher, resolveSlackWebClientOptions } from "../client-options.js";
 import { createSlackStartupAuthClient } from "../client.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
@@ -327,7 +327,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   });
 
   const resolveToken = account.userToken || botToken;
-  const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+  const useAccessGroups = true;
   const reactionMode = slackCfg.reactionNotifications ?? "own";
   const reactionAllowlist = slackCfg.reactionAllowlist ?? [];
   const replyToMode = slackCfg.replyToMode ?? "off";
@@ -341,8 +341,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const typingReaction = slackCfg.typingReaction?.trim() ?? "";
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
-  const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
-  const clientOptions = resolveSlackWebClientOptions();
+  const slackDispatcher = resolveSlackProxyDispatcher();
+  const clientOptions = resolveSlackWebClientOptions({}, slackDispatcher);
   const durableIngress = createSlackDurableIngress({
     accountId: account.accountId,
     ...(runtime.log ? { onLog: runtime.log } : {}),
@@ -356,7 +356,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     signingSecret: slackMode === "http" ? (signingSecret ?? undefined) : undefined,
     slackWebhookPath,
     clientOptions: clientOptions as Record<string, unknown>,
-    ...(slackCfg.socketMode ? { socketMode: slackCfg.socketMode } : {}),
+    dispatcher: slackDispatcher,
     wrapReceiver: durableIngress.wrapReceiver,
   });
 
@@ -507,7 +507,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     ackReactionScope,
     typingReaction,
     mediaMaxBytes,
-    removeAckAfterReply,
   });
 
   // Slack's socket-mode client keeps ping/pong health private and closes on
@@ -856,6 +855,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     unregisterHttpHandler?.();
     await durableIngress.stop();
     await gracefulStop();
+    await slackDispatcher?.close();
   }
 }
 

@@ -93,6 +93,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   };
 }): Promise<EmbeddedAttemptPromptAssembly> {
   const { attempt } = input;
+  const isSettledTurnFinalization = attempt.operation === "settled-tool-finalization";
   let systemPromptText = input.systemPromptText;
   const setSystemPrompt = (next: string) => {
     systemPromptText = next;
@@ -119,16 +120,17 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   };
   const promptBuildMessages =
     pruneProcessedHistoryImages(input.activeSession.messages) ?? input.activeSession.messages;
-  const hookResult = input.isRawModelRun
-    ? undefined
-    : await resolvePromptBuildHookResult({
-        config: attempt.config ?? getRuntimeConfig(),
-        prompt: attempt.prompt,
-        messages: promptBuildMessages,
-        hookCtx,
-        hookRunner: input.hookRunner,
-        bootstrapContextRunKind: attempt.bootstrapContextRunKind,
-      });
+  const hookResult =
+    input.isRawModelRun || isSettledTurnFinalization
+      ? undefined
+      : await resolvePromptBuildHookResult({
+          config: attempt.config ?? getRuntimeConfig(),
+          prompt: attempt.prompt,
+          messages: promptBuildMessages,
+          hookCtx,
+          hookRunner: input.hookRunner,
+          bootstrapContextRunKind: attempt.bootstrapContextRunKind,
+        });
   const promptBeforePromptBuildHooks = effectivePrompt;
   const promptBuildPrependContext = hookResult?.prependContext;
   const promptBuildAppendContext = hookResult?.appendContext;
@@ -160,10 +162,12 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
         `(${hookResult?.prependSystemContext?.trim().length ?? 0}+${hookResult?.appendSystemContext?.trim().length ?? 0} chars)`,
     );
   }
-  const mediaTaskSystemPromptAddition = resolveAttemptMediaTaskSystemPromptAddition({
-    sessionKey: attempt.sessionKey,
-    trigger: attempt.trigger,
-  });
+  const mediaTaskSystemPromptAddition = isSettledTurnFinalization
+    ? undefined
+    : resolveAttemptMediaTaskSystemPromptAddition({
+        sessionKey: attempt.sessionKey,
+        trigger: attempt.trigger,
+      });
   if (mediaTaskSystemPromptAddition) {
     setSystemPrompt(
       prependSystemPromptAddition({
@@ -175,13 +179,15 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
 
   // Keep model identity after the stable cache boundary so media-only dynamic
   // context cannot change the cached prefix between adjacent turns.
-  const modelAwareSystemPrompt = appendModelIdentitySystemPrompt({
-    systemPrompt:
-      buildModelIdentityPromptLine(input.runtimeModel) && systemPromptText.trim().length > 0
-        ? ensureSystemPromptCacheBoundary(systemPromptText)
-        : systemPromptText,
-    model: input.runtimeModel,
-  });
+  const modelAwareSystemPrompt = isSettledTurnFinalization
+    ? systemPromptText
+    : appendModelIdentitySystemPrompt({
+        systemPrompt:
+          buildModelIdentityPromptLine(input.runtimeModel) && systemPromptText.trim().length > 0
+            ? ensureSystemPromptCacheBoundary(systemPromptText)
+            : systemPromptText,
+        model: input.runtimeModel,
+      });
   if (modelAwareSystemPrompt !== systemPromptText) {
     setSystemPrompt(modelAwareSystemPrompt);
   }
@@ -275,6 +281,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   if (
     attempt.sessionKey &&
     !input.isRawModelRun &&
+    !isSettledTurnFinalization &&
     attempt.bootstrapContextRunKind !== "commitment-only"
   ) {
     const leaseId = `${attempt.runId}:agent-steering`;
@@ -309,7 +316,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
 
   const promptForModelBeforeRuntimeContextSplit = effectivePrompt;
   const promptForRuntimeContextBeforeAnnotation = promptForRuntimeContextSplit;
-  if (!input.isRawModelRun) {
+  if (!input.isRawModelRun && !isSettledTurnFinalization) {
     promptForRuntimeContextSplit = annotateInterSessionPromptText(
       promptForRuntimeContextSplit,
       attempt.inputProvenance,
@@ -318,7 +325,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   const transcriptLeafId =
     (input.sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null;
   const heartbeatSummary =
-    attempt.config && input.sessionAgentId
+    !isSettledTurnFinalization && attempt.config && input.sessionAgentId
       ? resolveHeartbeatSummaryForAgent(attempt.config, input.sessionAgentId)
       : undefined;
 

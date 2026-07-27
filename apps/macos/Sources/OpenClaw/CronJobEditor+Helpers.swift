@@ -56,6 +56,8 @@ extension CronJobEditor {
             self.agentMessage = message
             self.thinking = thinking ?? ""
             self.timeoutSeconds = timeoutSeconds.map(String.init) ?? ""
+        case .command, .script:
+            break
         }
 
         if let delivery = job.delivery {
@@ -80,6 +82,15 @@ extension CronJobEditor {
     }
 
     func buildPayload() throws -> [String: AnyCodable] {
+        if let job, !job.payload.isEditableInMacApp {
+            throw NSError(
+                domain: "Cron",
+                code: 0,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "Command and script cron payloads are read-only in the macOS app; manage them with the CLI.",
+                ])
+        }
         // Gate on-exit saves: the editor has no on-exit schedule form (it falls back to
         // the cron form), so saving would rewrite the on-exit schedule as cron and
         // corrupt the job. Block it until a read-only/native on-exit editor exists.

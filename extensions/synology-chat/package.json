@@ -34,7 +34,13 @@
       "docsPath": "/channels/synology-chat",
       "docsLabel": "synology-chat",
       "blurb": "Connect your Synology NAS Chat to OpenClaw with full agent capabilities.",
-      "order": 90
+      "order": 90,
+      "setup": { "fields": [
+        { "key": "token", "kind": "string", "sensitive": true, "cli": { "flags": "--token <token>", "description": "Synology Chat token" } },
+        { "key": "url", "kind": "string", "cli": { "flags": "--url <url>", "description": "Synology Chat webhook URL" } },
+        { "key": "webhookPath", "kind": "string", "cli": { "flags": "--webhook-path <path>", "description": "Synology Chat webhook path" } },
+        { "key": "useEnv", "kind": "boolean", "cli": { "flags": "--use-env", "description": "Use Synology Chat environment credentials" } }
+      ] }
     },
     "install": {
       "npmSpec": "@openclaw/synology-chat",

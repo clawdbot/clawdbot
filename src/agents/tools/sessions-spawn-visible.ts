@@ -24,7 +24,11 @@ import { resolveSubagentSpawnOwnership } from "../subagent-spawn-ownership.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "../subagent-spawn-plan.js";
 import { resolveSubagentTargetPolicy } from "../subagent-target-policy.js";
 import { normalizeToolModelOverride, readStringParam, ToolInputError } from "./common.js";
-import { callInProcessGatewayTool, type InProcessGatewayCaller } from "./in-process-gateway.js";
+import {
+  callInProcessGatewayTool,
+  callInProcessGatewayToolWithCreation,
+  type InProcessGatewayCaller,
+} from "./in-process-gateway.js";
 import { reserveVisibleChildSlot } from "./sessions-spawn-visible-admission.js";
 
 export const VISIBLE_SESSIONS_SPAWN_SCHEMA = {
@@ -274,7 +278,14 @@ export async function maybeSpawnVisibleSession(params: {
   }
   try {
     const gatewayCall = params.options?.callGateway ?? callInProcessGatewayTool;
-    const response = await gatewayCall<{
+    const createGatewayCall: InProcessGatewayCaller =
+      params.options?.callGateway ??
+      ((method, requestParams) =>
+        callInProcessGatewayToolWithCreation(method, requestParams, {
+          via: "spawn",
+          actor: { type: "agent", id: requesterKey },
+        }));
+    const response = await createGatewayCall<{
       key?: string;
       runStarted?: boolean;
       runId?: string;
@@ -285,6 +296,9 @@ export async function maybeSpawnVisibleSession(params: {
       model: resolvedModel,
       task: params.task,
       parentSessionKey: requesterKey,
+      // Declared spawn lineage: without it the child persists as a depth-0 root
+      // and could spawn past maxSpawnDepth.
+      spawnDepth: callerDepth + 1,
       ...(params.raw.context === "fork" ? { fork: true } : {}),
       ...(spawnedCwd ? { cwd: spawnedCwd } : {}),
       ...(worktree ? { worktree: true } : {}),

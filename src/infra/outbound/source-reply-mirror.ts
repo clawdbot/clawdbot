@@ -1,5 +1,6 @@
 // Source reply mirroring records successful same-conversation message-tool
 // sends back into the owning session transcript.
+import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -51,12 +52,6 @@ type SourceReplyThreadPlacement = "match" | "mismatch" | "unknown";
 // Mirror only enough delivered payload detail to preserve transcript context.
 function readStringArray(value: unknown): string[] | undefined {
   return normalizeOptionalTrimmedStringList(value);
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function readFirstString(

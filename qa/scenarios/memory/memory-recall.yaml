@@ -31,10 +31,11 @@ title: Memory recall after context switch
 
 scenario:
   id: memory-recall
-  surface: memory
+  surface: session-memory
+  runtimePairLane: core
   coverage:
     primary:
-      - memory.recall
+      - session-memory.memory-recall
   objective: Verify the agent can store a fact, switch topics, then recall the fact accurately later.
   successCriteria:
     - Agent acknowledges the seeded fact.

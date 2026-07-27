@@ -7,6 +7,7 @@ import {
   buildPairingConnectCloseReason,
   buildPairingConnectErrorDetails,
   buildPairingConnectErrorMessage,
+  ConnectErrorDetailCodes,
   type ConnectPairingRequiredReason,
 } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, errorShape } from "../../../../packages/gateway-protocol/src/index.js";
@@ -19,6 +20,7 @@ import {
   listApprovedPairedDeviceRoles,
   listDevicePairing,
   requestDevicePairing,
+  resolveEffectiveOperatorDeviceIdentity,
 } from "../../../infra/device-pairing.js";
 import {
   isMobilePairingSetupBootstrapProfile,
@@ -54,6 +56,7 @@ const DEFAULT_TRUSTED_PROXY_DEVICE_AUTO_APPROVE_SCOPES = [
   "operator.read",
   "operator.write",
   "operator.approvals",
+  "operator.questions",
 ] as const;
 
 function resolveTrustedProxyDeviceAutoApproveScopes(params: {
@@ -68,7 +71,13 @@ function resolveTrustedProxyDeviceAutoApproveScopes(params: {
     return configuredScopes;
   }
   const configured = new Set(configuredScopes);
-  return normalizeSortedUniqueTrimmedStringList(params.requestedScopes).filter((scope) =>
+  const requestedScopes = normalizeSortedUniqueTrimmedStringList(params.requestedScopes);
+  // Trusted-proxy Control UI tabs can remain open across upgrades. Grant newly
+  // required default UI scopes without widening an explicitly configured cap.
+  if (params.configuredScopes === undefined) {
+    requestedScopes.push("operator.questions");
+  }
+  return normalizeSortedUniqueTrimmedStringList(requestedScopes).filter((scope) =>
     configured.has(scope),
   );
 }
@@ -112,13 +121,76 @@ export async function authorizeGatewayConnectDevice(
     pairingLocality,
     skipLocalBackendSelfPairing,
     skipControlUiPairingForDevice,
+    allowControlUiDeviceAuthMigration,
   } = state;
   let hasServerApprovedDeviceTokenBaseline = false;
+  let connectionAdmittedForControlUiDeviceAuthMigration = false;
+  let allowControlUiDeviceAuthMigrationForUnpairedInstall = false;
   let pairedClientId: string | undefined;
   let pairedBrowserOrigin: string | undefined;
   const browserCopilotOrigin = isBrowserCopilotClient(connectParams.client)
     ? normalizeChromeExtensionOrigin(requestOrigin)
     : undefined;
+  const deviceAuthMigrationScopes =
+    authMethod !== "trusted-proxy" ||
+    roleScopesAllow({
+      role: "operator",
+      requestedScopes: ["operator.pairing"],
+      allowedScopes: scopes,
+    })
+      ? ["operator.pairing"]
+      : [];
+  if (allowControlUiDeviceAuthMigration) {
+    const pairingSnapshot = await listDevicePairing();
+    const existingOperator = pairingSnapshot.paired
+      .map(resolveEffectiveOperatorDeviceIdentity)
+      .find(
+        (candidate) =>
+          candidate &&
+          roleScopesAllow({
+            role: "operator",
+            requestedScopes: ["operator.pairing"],
+            allowedScopes: candidate.scopes,
+          }),
+      );
+    if (existingOperator) {
+      // The transition is only for installs whose retired bypass left them
+      // without any trusted operator. Existing paired operators keep the
+      // normal owner-approval boundary for every other browser.
+      buildRequestContext().completeControlUiDeviceAuthMigration?.({
+        deviceId: existingOperator.deviceId,
+        publicKey: existingOperator.publicKey,
+        scopes: existingOperator.scopes,
+      });
+      if (!device) {
+        const message =
+          "control ui requires device identity (use HTTPS or localhost secure context)";
+        setHandshakeState("failed");
+        send({
+          type: "res",
+          id: frame.id,
+          ok: false,
+          error: errorShape(ErrorCodes.INVALID_REQUEST, message, {
+            details: { code: ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED },
+          }),
+        });
+        close(1008, truncateCloseReason(message));
+        return undefined;
+      }
+    } else {
+      allowControlUiDeviceAuthMigrationForUnpairedInstall = true;
+    }
+  }
+  if (
+    !device &&
+    allowControlUiDeviceAuthMigrationForUnpairedInstall &&
+    deviceAuthMigrationScopes.length > 0
+  ) {
+    // Plain-HTTP browsers cannot create a device identity. Preserve the exact
+    // legacy shared-auth posture until the operator reopens this UI through a
+    // secure context; never mint or approve a device without a signed key.
+    connectionAdmittedForControlUiDeviceAuthMigration = true;
+  }
   if (device && devicePublicKey) {
     const formatAuditList = (items: string[] | undefined): string => {
       const normalized = normalizeSortedUniqueTrimmedStringList(items);
@@ -202,9 +274,14 @@ export async function authorizeGatewayConnectDevice(
       const trustedProxyAutoApproveConfig =
         configSnapshot.gateway?.auth?.trustedProxy?.deviceAutoApprove;
       const trustedProxyUser = authResult.user?.trim();
+      // A scope upgrade from a device whose paired public key matches the one
+      // this connect just proved by signature is the same physical browser
+      // behind the SSO proxy — auto-approvable like a first pairing. A key
+      // mismatch stays a manual owner decision (possible deviceId squat).
+      const isTrustedProxySameKeyUpgrade =
+        reason === "scope-upgrade" && existingPairedDevice?.publicKey === devicePublicKey;
       const allowTrustedProxyDeviceAutoApproval =
-        reason === "not-paired" &&
-        !existingPairedDevice &&
+        ((reason === "not-paired" && !existingPairedDevice) || isTrustedProxySameKeyUpgrade) &&
         role === "operator" &&
         (isBrowserOperatorUi || isWebchat) &&
         authMethod === "trusted-proxy" &&
@@ -275,10 +352,18 @@ export async function authorizeGatewayConnectDevice(
           : undefined;
       const bootstrapApprovalProfile =
         setupCodeMobileBootstrapProfile ?? controlUiOperatorBootstrapProfile;
+      const pairingRequestScopes =
+        allowControlUiDeviceAuthMigrationForUnpairedInstall &&
+        deviceAuthMigrationScopes.length > 0 &&
+        reason === "not-paired" &&
+        !existingPairedDevice
+          ? uniqueStrings([...scopes, ...deviceAuthMigrationScopes])
+          : scopes;
       const pairing = await requestDevicePairing({
         deviceId: device.id,
         publicKey: devicePublicKey,
         ...clientPairingMetadata,
+        scopes: pairingRequestScopes,
         ...(bootstrapPairingRoles
           ? {
               roles: bootstrapPairingRoles,
@@ -294,7 +379,8 @@ export async function authorizeGatewayConnectDevice(
               allowControlUiOperatorBootstrapPairing,
       });
       const trustedProxyAutoApproveScopes =
-        allowTrustedProxyDeviceAutoApproval && pairing.request.isRepair !== true
+        allowTrustedProxyDeviceAutoApproval &&
+        (pairing.request.isRepair !== true || isTrustedProxySameKeyUpgrade)
           ? resolveTrustedProxyControlUiScopes({
               requestedScopes: resolveTrustedProxyDeviceAutoApproveScopes({
                 requestedScopes: scopes,
@@ -337,7 +423,8 @@ export async function authorizeGatewayConnectDevice(
         return replacementPending?.requestId;
       };
       const inlineApprovalAttempted =
-        trustedProxyAutoApproveScopes !== null || pairing.request.silent === true;
+        !allowControlUiDeviceAuthMigrationForUnpairedInstall &&
+        (trustedProxyAutoApproveScopes !== null || pairing.request.silent === true);
       if (inlineApprovalAttempted) {
         approved =
           trustedProxyAutoApproveScopes !== null
@@ -443,12 +530,25 @@ export async function authorizeGatewayConnectDevice(
       });
       // Re-resolve: another connection may have superseded/approved the request since we created it
       recoveryRequestId = await resolveLivePendingRequestId();
+      const pairingResolved =
+        inlineApprovalAttempted &&
+        (approved?.status === "approved" || resolvedByConcurrentApproval);
       if (
-        !(
-          inlineApprovalAttempted &&
-          (approved?.status === "approved" || resolvedByConcurrentApproval)
-        )
+        allowControlUiDeviceAuthMigrationForUnpairedInstall &&
+        deviceAuthMigrationScopes.length > 0 &&
+        reason === "not-paired" &&
+        !existingPairedDevice &&
+        !pairingResolved &&
+        recoveryRequestId
       ) {
+        // A shipped break-glass configuration can leave an install with no
+        // approved browser. Keep only this signed, shared-authenticated
+        // operator online long enough to approve its own pending request.
+        connectionAdmittedForControlUiDeviceAuthMigration = true;
+        scopes = deviceAuthMigrationScopes;
+        return true;
+      }
+      if (!pairingResolved) {
         const exposeApprovedAccess = existingPairedDevice?.publicKey === devicePublicKey;
         const approvedRoles = exposeApprovedAccess
           ? listApprovedPairedDeviceRoles(existingPairedDevice)
@@ -520,12 +620,16 @@ export async function authorizeGatewayConnectDevice(
         if (!ok) {
           return undefined;
         }
-        const approvedDevice = await getPairedDevice(device.id);
-        pairedClientId =
-          approvedDevice?.publicKey === devicePublicKey ? approvedDevice.clientId : undefined;
-        pairedBrowserOrigin =
-          approvedDevice?.publicKey === devicePublicKey ? approvedDevice.browserOrigin : undefined;
-        hasServerApprovedDeviceTokenBaseline = true;
+        if (!connectionAdmittedForControlUiDeviceAuthMigration) {
+          const approvedDevice = await getPairedDevice(device.id);
+          pairedClientId =
+            approvedDevice?.publicKey === devicePublicKey ? approvedDevice.clientId : undefined;
+          pairedBrowserOrigin =
+            approvedDevice?.publicKey === devicePublicKey
+              ? approvedDevice.browserOrigin
+              : undefined;
+          hasServerApprovedDeviceTokenBaseline = true;
+        }
       } else if (
         skipControlUiPairingForDevice ||
         (skipLocalBackendSelfPairing && authMethod !== "device-token")
@@ -573,6 +677,12 @@ export async function authorizeGatewayConnectDevice(
     return undefined;
   }
 
+  if (connectionAdmittedForControlUiDeviceAuthMigration) {
+    // Temporary upgrade admission is gateway-wide, so cap authority here before
+    // client registration, hello publication, or token issuance can observe it.
+    scopes = deviceAuthMigrationScopes;
+  }
+
   const { deviceToken, bootstrapDeviceTokens } = await issueGatewayConnectDeviceTokens({
     state: { ...state, scopes, handoffBootstrapProfile },
     scopes,
@@ -585,5 +695,6 @@ export async function authorizeGatewayConnectDevice(
     handoffBootstrapProfile,
     deviceToken,
     bootstrapDeviceTokens,
+    controlUiDeviceAuthMigrationPending: connectionAdmittedForControlUiDeviceAuthMigration,
   };
 }

@@ -25,6 +25,7 @@ const DASHBOARD_ACTIONS = [
   "tab_update",
   "tab_delete",
   "tabs_reorder",
+  "widget_put",
   "widget_move",
   "widget_resize",
   "widget_remove",
@@ -34,6 +35,8 @@ const DASHBOARD_ACTIONS = [
 const BOARD_TAB_ID_PATTERN = "^[a-z0-9-]{1,40}$";
 const BOARD_TAB_ID_REGEX = /^[a-z0-9-]{1,40}$/;
 const BOARD_WIDGET_NAME_PATTERN = "^[a-z0-9][a-z0-9._-]{0,63}$";
+const BOARD_PLUGIN_KIND_PATTERN = "^[a-z0-9][a-z0-9-]{0,63}:[a-z0-9][a-z0-9._-]{0,63}$";
+const BOARD_PLUGIN_KIND_REGEX = /^[a-z0-9][a-z0-9-]{0,63}:[a-z0-9][a-z0-9._-]{0,63}$/;
 
 const DashboardToolSchema = Type.Object(
   {
@@ -65,6 +68,18 @@ const DashboardToolSchema = Type.Object(
     ),
     sizeW: Type.Optional(Type.Integer({ minimum: 1, maximum: 12 })),
     sizeH: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
+    size: Type.Optional(Type.String({ enum: ["sm", "md", "lg", "xl", "full"] })),
+    pluginKind: Type.Optional(
+      Type.String({
+        pattern: BOARD_PLUGIN_KIND_PATTERN,
+        description: "Plugin widget kind, for example workboard:card or workboard:mini",
+      }),
+    ),
+    props: Type.Optional(
+      Type.Record(Type.String(), Type.Unknown(), {
+        description: "Plugin-owned JSON props (maximum 8KB encoded)",
+      }),
+    ),
   },
   { additionalProperties: false },
 );
@@ -123,6 +138,25 @@ function readTabId(params: Record<string, unknown>): string {
     throw new ToolInputError("tabId must be a lowercase slug up to 40 characters");
   }
   return tabId;
+}
+
+function readOptionalTabId(params: Record<string, unknown>): string | undefined {
+  const tabId = readStringParam(params, "tabId");
+  if (tabId !== undefined && !BOARD_TAB_ID_REGEX.test(tabId)) {
+    throw new ToolInputError("tabId must be a lowercase slug up to 40 characters");
+  }
+  return tabId;
+}
+
+function readPluginProps(params: Record<string, unknown>): Record<string, unknown> | undefined {
+  const props = params.props;
+  if (props === undefined) {
+    return undefined;
+  }
+  if (!props || typeof props !== "object" || Array.isArray(props)) {
+    throw new ToolInputError("props must be an object");
+  }
+  return props as Record<string, unknown>;
 }
 
 function opForAction(action: string, params: Record<string, unknown>): BoardOp {
@@ -213,7 +247,7 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
     label: "Dashboard",
     name: "dashboard",
     description:
-      "Read and arrange this session dashboard. Widgets use stable names. Sizes: sm=3x3, md=6x4, lg=8x6, xl=12x8, full=12x8 single-widget emphasis.",
+      "Read and arrange this session dashboard. Widgets use stable names. Create trusted plugin widgets with widget_put; examples: workboard:card props {cardId}, workboard:mini props {boardId, limit}. Sizes: sm=3x3, md=6x4, lg=8x6, xl=12x8, full=12x8 single-widget emphasis.",
     parameters: DashboardToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
@@ -245,6 +279,38 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
           ok: true,
           delivered,
         });
+      }
+      if (action === "widget_put") {
+        const pluginKind = readStringParam(params, "pluginKind", { required: true });
+        if (!BOARD_PLUGIN_KIND_REGEX.test(pluginKind)) {
+          throw new ToolInputError("pluginKind must use the <pluginId>:<name> format");
+        }
+        const title = readStringParam(params, "title");
+        const tabId = readOptionalTabId(params);
+        const size = readStringParam(params, "size");
+        const after = readStringParam(params, "after");
+        const props = readPluginProps(params);
+        return snapshotResult(
+          await gatewayCall<BoardSnapshot>("board.widget.put", {
+            sessionKey,
+            name: readStringParam(params, "name", { required: true }),
+            ...(title !== undefined ? { title } : {}),
+            content: {
+              kind: "plugin",
+              pluginKind,
+              ...(props !== undefined ? { props } : {}),
+            },
+            ...(tabId || size || after
+              ? {
+                  placement: {
+                    ...(tabId ? { tabId } : {}),
+                    ...(size ? { size } : {}),
+                    ...(after ? { after } : {}),
+                  },
+                }
+              : {}),
+          }),
+        );
       }
       return snapshotResult(
         await gatewayCall<BoardSnapshot>("board.update", {

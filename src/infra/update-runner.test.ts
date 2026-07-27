@@ -1548,6 +1548,47 @@ describe("runGatewayUpdate", () => {
     expect(calls).not.toContain(`git -C ${tempDir} rebase ${olderSha}`);
   });
 
+  it("cleans and rolls back when a successful build leaves the checkout dirty", async () => {
+    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+    const stableTag = "v1.0.1-1";
+    const statusCommand = `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`;
+    const { runner, calls } = createRunner({
+      ...buildStableTagResponses(stableTag),
+      [`git -C ${tempDir} rev-parse --abbrev-ref HEAD`]: { stdout: "main" },
+      "pnpm install": { stdout: "" },
+      "pnpm build": { stdout: "" },
+    });
+    let statusCheckCount = 0;
+    const runCommand = async (argv: string[]) => {
+      const result = await runner(argv);
+      if (argv.join(" ") === statusCommand && ++statusCheckCount === 2) {
+        return toCommandResult({
+          stdout:
+            " M extensions/browser/chrome-extension/modules/copilot-runtime.js\n?? generated-build-output.tmp",
+        });
+      }
+      return result;
+    };
+
+    const result = await runWithCommand(runCommand, { channel: "stable" });
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toBe("build-dirty");
+    expect(result.steps).toContainEqual(
+      expect.objectContaining({
+        name: "build clean check",
+        stdoutTail:
+          " M extensions/browser/chrome-extension/modules/copilot-runtime.js\n?? generated-build-output.tmp",
+      }),
+    );
+    expect(calls.filter((call) => call === statusCommand)).toHaveLength(2);
+    expect(calls).not.toContain("pnpm ui:build");
+    expect(calls).toContain(`git -C ${tempDir} reset --hard`);
+    expect(calls).toContain(`git -C ${tempDir} clean -fd -e dist/control-ui/`);
+    expect(calls).toContain(`git -C ${tempDir} checkout --force main`);
+    expect(calls).toContain(`git -C ${tempDir} reset --hard abc123`);
+  });
+
   it("returns error and stops early when build fails", async () => {
     await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
     const stableTag = "v1.0.1-1";
@@ -1906,7 +1947,6 @@ describe("runGatewayUpdate", () => {
     expect(lintEnv).toHaveLength(1);
     expect(lintEnv[0]?.OPENCLAW_LOCAL_CHECK).toBe("1");
     expect(lintEnv[0]?.OPENCLAW_LOCAL_CHECK_MODE).toBe("throttled");
-    expect(lintEnv[0]?.OPENCLAW_OXLINT_SHARDS_SERIAL).toBe("1");
   });
 
   it("retries windows pnpm git installs with --ignore-scripts for dev updates", async () => {

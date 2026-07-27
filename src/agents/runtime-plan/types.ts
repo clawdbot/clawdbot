@@ -41,6 +41,7 @@ type AgentRuntimeFailoverReason =
   | "billing"
   | "server_error"
   | "timeout"
+  | "tls_certificate"
   | "context_overflow"
   | "model_not_found"
   | "session_expired"
@@ -88,11 +89,17 @@ type AgentRuntimeTextTransforms = {
 /** Resolved provider runtime handle forwarded to plugin-owned hooks. */
 type AgentRuntimeProviderHandle = {
   provider: string;
+  modelId?: string | null;
   config?: AgentRuntimeConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   applyAutoEnable?: boolean;
   bundledProviderVitestCompat?: boolean;
+};
+
+type PreparedAgentRuntimeProviderHandle = AgentRuntimeProviderHandle & {
+  modelId: string | null;
+  prepared: true;
 };
 
 type AgentRuntimeInteractiveButtonStyle = "primary" | "secondary" | "success" | "danger";
@@ -264,6 +271,10 @@ type AgentRuntimeReplyPayloadLocation = {
 /** Portable reply payload emitted by agent runtimes before channel rendering. */
 type AgentRuntimeReplyPayload = {
   text?: string;
+  fallbackText?: {
+    text: string;
+    replacesPayloadIndex?: number;
+  };
   mediaUrl?: string;
   mediaUrls?: string[];
   trustedLocalMedia?: boolean;
@@ -510,7 +521,7 @@ type AgentRuntimeTransportPlan = {
 /** Complete prepared runtime plan consumed by embedded-agent attempts. */
 export type AgentRuntimePlan = {
   resolvedRef: AgentRuntimeResolvedRef;
-  providerRuntimeHandle?: AgentRuntimeProviderHandle;
+  providerRuntimeHandle?: PreparedAgentRuntimeProviderHandle;
   auth: AgentRuntimeAuthPlan;
   prompt: AgentRuntimePromptPlan;
   tools: AgentRuntimeToolPlan;
@@ -543,7 +554,7 @@ export type BuildAgentRuntimeDeliveryPlanParams = {
   agentDir?: string;
   provider: string;
   modelId: string;
-  providerRuntimeHandle?: AgentRuntimeProviderHandle;
+  providerRuntimeHandle?: PreparedAgentRuntimeProviderHandle;
 };
 
 /** Inputs needed to build the full prepared runtime plan. */
@@ -571,5 +582,8 @@ export type BuildAgentRuntimePlanParams = {
   thinkingLevel?: AgentRuntimeThinkLevel;
   extraParamsOverride?: Record<string, unknown>;
   resolvedTransport?: AgentRuntimeTransport;
-  providerRuntimeHandle?: AgentRuntimeProviderHandle;
+  /** Omit only when a standalone caller intentionally resolves provider hooks lazily. */
+  providerRuntimeHandle?: PreparedAgentRuntimeProviderHandle;
+  /** Lifecycle-owned plugin metadata prepared before the attempt starts. */
+  metadataSnapshot?: AgentRuntimePreparedMetadataSnapshot;
 };

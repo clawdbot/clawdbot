@@ -112,8 +112,6 @@ export async function prepareCodexAttemptTurnRequest(
       turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
       skillsCollaborationInstructions: context.skillsCollaborationInstructions,
       memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
-      heartbeatCollaborationInstructions:
-        workspaceBootstrapContext.heartbeatCollaborationInstructions,
       preserveNativeTurnSettings: usesSupervisionConnection,
     });
     codexModelCallDiagnostics.setRequestPayloadBytes(utf8JsonByteLength(turnStartParams));

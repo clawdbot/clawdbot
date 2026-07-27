@@ -18,15 +18,25 @@ import { resolveUserPath } from "../utils.js";
 export const WORKSPACE_SETUP_STATE_VERSION = 1 as const;
 export const WORKSPACE_ATTESTATION_RECENT_MS = 24 * 60 * 60 * 1000;
 export const WORKSPACE_LEGACY_STATE_MIGRATION_KIND = "legacy-workspace-setup-files";
-export const WORKSPACE_ATTESTED_BOOTSTRAP_FILENAMES: ReadonlySet<string> = new Set([
-  "AGENTS.md",
-  "SOUL.md",
-  "TOOLS.md",
-  "IDENTITY.md",
-  "USER.md",
-  "HEARTBEAT.md",
-]);
+const MAX_WORKSPACE_ATTESTATION_FILENAME_LENGTH = 255;
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/u;
+// Attested names are joined onto the workspace dir and read back, so keep the
+// accepted set closed rather than denying unsafe forms one at a time: a plain
+// ASCII markdown basename excludes separators, traversal, colons, NUL, and the
+// Win32 superscript/`CONIN$` device aliases in one rule.
+const SAFE_ATTESTATION_BASENAME = /^[A-Za-z0-9._-]+\.md$/u;
+// Win32 keeps these stems special even with an extension, so `NUL.md` names a
+// device rather than a workspace file; the charset above cannot catch them.
+const WINDOWS_RESERVED_DEVICE_STEMS = /^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])$/iu;
+
+export function isSafeWorkspaceAttestationFilename(filename: string): boolean {
+  return (
+    filename.length <= MAX_WORKSPACE_ATTESTATION_FILENAME_LENGTH &&
+    SAFE_ATTESTATION_BASENAME.test(filename) &&
+    !filename.startsWith(".") &&
+    !WINDOWS_RESERVED_DEVICE_STEMS.test(filename.split(".")[0] ?? "")
+  );
+}
 
 function isCanonicalIsoTimestamp(value: string): boolean {
   const timestamp = new Date(value);
@@ -322,8 +332,10 @@ function readSnapshotFromDatabase(params: {
         .orderBy("filename", "asc"),
     ).rows;
     for (const row of hashRows) {
+      // Validate names structurally rather than against today's bootstrap set:
+      // retiring a seeded file must not make an existing attestation unreadable.
       if (
-        !WORKSPACE_ATTESTED_BOOTSTRAP_FILENAMES.has(row.filename) ||
+        !isSafeWorkspaceAttestationFilename(row.filename) ||
         !SHA256_HEX_PATTERN.test(row.sha256)
       ) {
         throw new Error("workspace attestation hash row is invalid");
@@ -466,7 +478,7 @@ export function replaceWorkspaceAttestation(params: {
     assertCanonicalIntegerTimestamp(params.nowMs, "attestation update");
   }
   for (const [filename, sha256] of params.generatedHashes) {
-    if (!WORKSPACE_ATTESTED_BOOTSTRAP_FILENAMES.has(filename) || !SHA256_HEX_PATTERN.test(sha256)) {
+    if (!isSafeWorkspaceAttestationFilename(filename) || !SHA256_HEX_PATTERN.test(sha256)) {
       throw new Error("workspace attestation hash is invalid");
     }
   }

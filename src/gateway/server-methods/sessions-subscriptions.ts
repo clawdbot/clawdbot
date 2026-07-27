@@ -10,7 +10,7 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { canReviewOperatorApproval } from "../operator-approval-authorization.js";
 import { APPROVALS_SCOPE } from "../operator-scopes.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadSessionEntryReadOnly } from "../session-utils.js";
 import { requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -81,7 +81,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
       return;
     }
     const requestedAgentId = requestedAgent.agentId;
-    const { canonicalKey } = loadSessionEntry(key, { agentId: requestedAgentId });
+    const { canonicalKey } = loadSessionEntryReadOnly(key, { agentId: requestedAgentId });
     const subscriptionKey = resolveSessionMessageSubscriptionKey({
       canonicalKey,
       agentId: requestedAgentId,
@@ -163,7 +163,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
       return;
     }
     const requestedAgentId = requestedAgent.agentId;
-    const { canonicalKey } = loadSessionEntry(key, { agentId: requestedAgentId });
+    const { canonicalKey } = loadSessionEntryReadOnly(key, { agentId: requestedAgentId });
     const subscriptionKey = resolveSessionMessageSubscriptionKey({
       canonicalKey,
       agentId: requestedAgentId,

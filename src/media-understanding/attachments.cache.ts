@@ -121,7 +121,7 @@ export class MediaAttachmentCache {
   private readonly attachments: MediaAttachment[];
   private readonly localPathRoots: readonly string[];
   private readonly ssrfPolicy: SsrFPolicy | undefined;
-  private readonly workspaceDir?: string;
+  private readonly fallbackWorkspaceDir?: string;
   private canonicalLocalPathRoots?: Promise<readonly string[]>;
 
   constructor(attachments: MediaAttachment[], options?: MediaAttachmentCacheOptions) {
@@ -131,7 +131,7 @@ export class MediaAttachmentCache {
       options?.includeDefaultLocalPathRoots === false
         ? mergeInboundPathRoots(options.localPathRoots)
         : mergeInboundPathRoots(options?.localPathRoots, getDefaultLocalPathRoots());
-    this.workspaceDir = options?.workspaceDir ? path.resolve(options.workspaceDir) : undefined;
+    this.fallbackWorkspaceDir = options?.workspaceDir;
     for (const attachment of attachments) {
       this.entries.set(attachment.index, { attachment });
     }
@@ -351,8 +351,9 @@ export class MediaAttachmentCache {
     if (inboundReference) {
       return inboundReference.physicalPath;
     }
-    if (this.workspaceDir) {
-      return path.resolve(this.workspaceDir, rawPath);
+    const workspaceDir = attachment.workspaceDir ?? this.fallbackWorkspaceDir;
+    if (workspaceDir) {
+      return path.resolve(workspaceDir, rawPath);
     }
     if (!path.isAbsolute(rawPath)) {
       const cwdCandidate = path.resolve(rawPath);

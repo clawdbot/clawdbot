@@ -36,6 +36,17 @@ const defaultGatewayMock = async (
   if (method === "cron.status") {
     return { enabled: true };
   }
+  if (method === "cron.list") {
+    return {
+      jobs: [],
+      snapshotRevision: "test-empty-cron-inventory",
+      total: 0,
+      offset: 0,
+      limit: 200,
+      hasMore: false,
+      nextOffset: null,
+    };
+  }
   return { ok: true, params };
 };
 callGatewayFromCli.mockImplementation(defaultGatewayMock);
@@ -60,7 +71,15 @@ vi.mock("../runtime.js", () => ({
 type CronUpdatePatch = {
   patch?: {
     deleteAfterRun?: boolean;
-    schedule?: { kind?: string; expr?: string; tz?: string; staggerMs?: number };
+    schedule?: {
+      kind?: string;
+      expr?: string;
+      tz?: string;
+      staggerMs?: number;
+      command?: string[];
+      mode?: string;
+      match?: string;
+    };
     payload?: {
       kind?: string;
       argv?: string[];
@@ -90,7 +109,19 @@ type CronUpdatePatch = {
 
 type CronAddParams = {
   name?: string;
-  schedule?: { kind?: string; at?: string; expr?: string; everyMs?: number; staggerMs?: number };
+  schedule?: {
+    kind?: string;
+    at?: string;
+    expr?: string;
+    everyMs?: number;
+    staggerMs?: number;
+    command?: string[];
+    cwd?: string;
+    mode?: string;
+    match?: string;
+    batchMs?: number;
+    maxBatchBytes?: number;
+  };
   payload?: {
     kind?: string;
     argv?: string[];
@@ -631,6 +662,41 @@ describe("cron cli", () => {
     expect(params?.delivery?.mode).toBe("none");
   });
 
+  it("creates stream schedules from exact argv flags", async () => {
+    await runCronCommand([
+      "cron",
+      "add",
+      "--name",
+      "events",
+      "--stream-command",
+      '["node","events.mjs"]',
+      "--stream-cwd",
+      "/srv/app",
+      "--stream-mode",
+      "match",
+      "--stream-match",
+      "^ready:",
+      "--stream-batch-ms",
+      "100",
+      "--stream-max-batch-bytes",
+      "2048",
+      "--message",
+      "handle events",
+      "--session",
+      "isolated",
+    ]);
+
+    expect(getGatewayCallParams<CronAddParams>("cron.add")?.schedule).toEqual({
+      kind: "stream",
+      command: ["node", "events.mjs"],
+      cwd: "/srv/app",
+      mode: "match",
+      match: "^ready:",
+      batchMs: 100,
+      maxBatchBytes: 2_048,
+    });
+  });
+
   it.each(["", "0", "-1", "1.5", "1000ms"])(
     "rejects invalid cron add --timeout-seconds value %j",
     async (timeoutSeconds) => {
@@ -844,14 +910,19 @@ describe("cron cli", () => {
     await runCronCommand(["cron", "list"]);
 
     const listCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.list");
-    expect(listCall?.[2]).toEqual({ includeDisabled: false });
+    expect(listCall?.[2]).toEqual({ includeDisabled: false, limit: 200, offset: 0 });
   });
 
   it("sends normalized agent id on cron list --agent", async () => {
     await runCronCommand(["cron", "list", "--agent", " Ops "]);
 
     const listCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.list");
-    expect(listCall?.[2]).toEqual({ includeDisabled: false, agentId: "ops" });
+    expect(listCall?.[2]).toEqual({
+      includeDisabled: false,
+      agentId: "ops",
+      limit: 200,
+      offset: 0,
+    });
   });
 
   it("routes cron get to cron.get with the provided id", async () => {
@@ -883,7 +954,13 @@ describe("cron cli", () => {
           const offset = (params as { offset?: number }).offset ?? 0;
           if (offset === 0) {
             return {
-              jobs: [createCronJob("first-page", "First Page")],
+              jobs: Array.from({ length: 200 }, (_, index) =>
+                createCronJob(`first-page-${index}`, `First Page ${index}`),
+              ),
+              snapshotRevision: "test-stable-cron-show-inventory",
+              total: 201,
+              offset: 0,
+              limit: 200,
               hasMore: true,
               nextOffset: 200,
             };
@@ -892,6 +969,10 @@ describe("cron cli", () => {
           targetJob.state.lastDiagnosticSummary = "exec stderr tail";
           return {
             jobs: [targetJob],
+            snapshotRevision: "test-stable-cron-show-inventory",
+            total: 201,
+            offset: 200,
+            limit: 200,
             hasMore: false,
             nextOffset: null,
             deliveryPreviews: {
@@ -1016,6 +1097,21 @@ describe("cron cli", () => {
       "* * * * *",
       "--system-event",
       "tick",
+    ]);
+
+    expectNoRuntimeErrorContaining("No --agent specified");
+  });
+
+  it("does not warn when --command is used (no agent needed)", async () => {
+    await runCronCommand([
+      "cron",
+      "add",
+      "--name",
+      "Command",
+      "--cron",
+      "* * * * *",
+      "--command",
+      "printf ok",
     ]);
 
     expectNoRuntimeErrorContaining("No --agent specified");
@@ -1579,6 +1675,40 @@ describe("cron cli", () => {
     );
     expect(patch?.patch?.schedule?.kind).toBe("cron");
     expect(patch?.patch?.schedule?.staggerMs).toBe(30_000);
+  });
+
+  it("merges partial match metadata when replacing a stream command", async () => {
+    const existing = {
+      kind: "stream",
+      command: ["node", "events.mjs"],
+      mode: "match",
+      match: "^ready:",
+    };
+    const replacedMatch = await runCronEditWithScheduleLookup(existing, [
+      "--stream-command",
+      '["node","replacement.mjs"]',
+      "--stream-match",
+      "^updated:",
+    ]);
+    expect(replacedMatch.patch?.schedule).toMatchObject({
+      kind: "stream",
+      command: ["node", "replacement.mjs"],
+      mode: "match",
+      match: "^updated:",
+    });
+
+    const preservedMatch = await runCronEditWithScheduleLookup(existing, [
+      "--stream-command",
+      '["node","replacement.mjs"]',
+      "--stream-mode",
+      "match",
+    ]);
+    expect(preservedMatch.patch?.schedule).toMatchObject({
+      kind: "stream",
+      command: ["node", "replacement.mjs"],
+      mode: "match",
+      match: "^ready:",
+    });
   });
 
   it("applies --exact to existing cron job without requiring --cron on edit", async () => {

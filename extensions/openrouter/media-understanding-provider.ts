@@ -141,6 +141,7 @@ async function transcribeOpenRouterAudio(
       ...(temperature !== undefined ? { temperature } : {}),
     },
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
     fetchFn,
     allowPrivateNetwork,
     dispatcherPolicy,

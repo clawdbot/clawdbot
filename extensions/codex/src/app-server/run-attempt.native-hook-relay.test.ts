@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as approvalBridge from "./approval-bridge.js";
+import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import {
@@ -888,7 +889,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
 
     const result = await run;
 
-    expect(result.aborted).toBe(true);
+    expect(readAttemptTerminal(result).aborted).toBe(true);
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
     await expect(
       invokeNativeHookRelay({

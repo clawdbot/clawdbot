@@ -413,16 +413,19 @@ describe("lmstudio setup", () => {
         {
           type: "llm",
           key: "llama3.3-70b-instruct",
+          max_context_length: 65_536,
           capabilities: { trained_for_tool_use: true },
         },
         {
           type: "llm",
           key: "qwen3.5-4b-instruct",
+          max_context_length: 65_536,
           capabilities: { trained_for_tool_use: true },
         },
         {
           type: "llm",
           key: "nomic-embed-text",
+          max_context_length: 65_536,
           capabilities: { trained_for_tool_use: true },
         },
       ],
@@ -431,6 +434,49 @@ describe("lmstudio setup", () => {
     const result = await prepareAppGuidedLmstudioSetup({ config: {}, env: {} });
 
     expect(result?.defaultModel).toBe("lmstudio/qwen3.5-4b-instruct");
+  });
+
+  it("skips a preferred model loaded with less than 16k context", async () => {
+    fetchLmstudioModelsMock.mockResolvedValue({
+      reachable: true,
+      status: 200,
+      models: [
+        {
+          type: "llm",
+          key: "llama3.3-70b-instruct",
+          max_context_length: 65_536,
+          loaded_instances: [{ id: "llama", config: { context_length: 32_768 } }],
+          capabilities: { trained_for_tool_use: true },
+        },
+        {
+          type: "llm",
+          key: "qwen3.5-4b-instruct",
+          max_context_length: 65_536,
+          loaded_instances: [{ id: "qwen", config: { context_length: 8_192 } }],
+          capabilities: { trained_for_tool_use: true },
+        },
+      ],
+    });
+
+    const result = await prepareAppGuidedLmstudioSetup({ config: {}, env: {} });
+
+    expect(result?.defaultModel).toBe("lmstudio/llama3.3-70b-instruct");
+  });
+
+  it("does not auto-detect a model without measured or advertised context", async () => {
+    fetchLmstudioModelsMock.mockResolvedValue({
+      reachable: true,
+      status: 200,
+      models: [
+        {
+          type: "llm",
+          key: "qwen3.5-4b-instruct",
+          capabilities: { trained_for_tool_use: true },
+        },
+      ],
+    });
+
+    await expect(prepareAppGuidedLmstudioSetup({ config: {}, env: {} })).resolves.toBeNull();
   });
 
   it("non-interactive setup discovers catalog and writes LM Studio provider config", async () => {

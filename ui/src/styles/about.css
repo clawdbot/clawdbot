@@ -219,7 +219,13 @@
   }
 }
 
-/* Commit hash + copy button cluster inside the build facts grid. */
+/* About labels are short, so the shared 120px settings label track leaves an
+   oversized gutter here. Keep the values close while preserving room to wrap. */
+.about-build-grid {
+  grid-template-columns: max-content minmax(0, 1fr);
+}
+
+/* Commit hash, age, and copy button cluster inside the build facts grid. */
 .about-commit {
   display: inline-flex;
   align-items: center;

@@ -15,6 +15,7 @@ const MUTATING_TOOL_NAMES = new Set([
   "gateway",
   "canvas",
   "computer",
+  "mobile_ui",
   "conversations_send",
   "conversations_turn",
   "nodes",

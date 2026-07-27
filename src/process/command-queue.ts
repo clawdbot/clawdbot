@@ -242,6 +242,27 @@ function completeTask(state: LaneState, taskId: number, taskGeneration: number):
   return true;
 }
 
+function retireIdleScopedCommandLane(state: LaneState): void {
+  if (
+    state.draining ||
+    state.activeTaskIds.size > 0 ||
+    state.queue.length > 0 ||
+    state.maxConcurrent !== 1 ||
+    (!state.lane.startsWith("session:") &&
+      !state.lane.startsWith("nested:") &&
+      !state.lane.startsWith("context-engine-turn-maintenance:"))
+  ) {
+    return;
+  }
+
+  const lanes = getQueueState().lanes;
+  // A completed generation may race a recreated lane. Only retire the exact
+  // idle scoped state after its pump has released the draining guard.
+  if (lanes.get(state.lane) === state) {
+    lanes.delete(state.lane);
+  }
+}
+
 function hasPendingActiveTasks(taskIds: Set<number>): boolean {
   const queueState = getQueueState();
   for (const state of queueState.lanes.values()) {
@@ -507,6 +528,7 @@ function drainLane(lane: string) {
       }
     } finally {
       state.draining = false;
+      retireIdleScopedCommandLane(state);
     }
   };
 
@@ -612,12 +634,6 @@ export function isCommandLaneTaskMarkerCurrent(marker: CommandLaneTaskMarker | u
   }
   const state = getQueueState().lanes.get(normalizeLane(marker.lane));
   return state?.generation === marker.generation && state.activeTaskIds.has(marker.taskId);
-}
-
-export function getCommandLaneSnapshots(): CommandLaneSnapshot[] {
-  return Array.from(getQueueState().lanes.values(), createCommandLaneSnapshot).toSorted((a, b) =>
-    a.lane.localeCompare(b.lane),
-  );
 }
 
 export function getTotalQueueSize() {

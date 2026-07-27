@@ -36,7 +36,7 @@ import {
 import { getWhatsAppRuntime } from "./runtime.js";
 import { sendTypingWhatsApp } from "./send.js";
 import { resolveWhatsAppOutboundSessionRoute } from "./session-route.js";
-import { whatsappSetupAdapter } from "./setup-core.js";
+import { whatsappSetupAdapter, whatsappSetupContract } from "./setup-core.js";
 import { createWhatsAppPluginBase, whatsappSetupWizardProxy } from "./shared.js";
 import { detectWhatsAppLegacyStateMigrations } from "./state-migrations.js";
 import { collectWhatsAppStatusIssues } from "./status-issues.js";
@@ -61,6 +61,11 @@ function resolveWhatsAppTargetInfo(raw: string) {
   };
 }
 
+function resolveWhatsAppMessageActionTarget(params: { args: Record<string, unknown> }) {
+  const chatJid = params.args.chatJid;
+  return typeof chatJid === "string" ? normalizeWhatsAppMessagingTarget(chatJid) : undefined;
+}
+
 export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
   createChatChannelPlugin<ResolvedWhatsAppAccount>({
     pairing: {
@@ -82,6 +87,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         },
         setupWizard: whatsappSetupWizardProxy,
         setup: whatsappSetupAdapter,
+        setupContract: whatsappSetupContract,
         isConfigured: async (account) => await isWhatsAppAuthConfigured(account.authDir),
       }),
       agentTools: () => [createWhatsAppLoginTool()],
@@ -154,6 +160,13 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           (await loadWhatsAppDirectoryConfig()).listWhatsAppDirectoryGroupsLive(params),
       },
       actions: {
+        messageActionTargetAliases: {
+          react: {
+            aliases: ["chatJid", "messageId"],
+            deliveryTargetAliases: ["chatJid"],
+            resolveDeliveryTarget: resolveWhatsAppMessageActionTarget,
+          },
+        },
         describeMessageTool: ({ cfg, accountId }) =>
           describeWhatsAppMessageActions({ cfg, accountId }),
         supportsAction: ({ action }) => action === "react" || action === "upload-file",

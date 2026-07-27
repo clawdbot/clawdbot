@@ -15,6 +15,7 @@ type McpAppPreviewDescriptor = {
   toolName?: string;
   uiResourceUri?: string;
   toolCallId?: string;
+  originSessionKey?: string;
   resultMetaState?: "unavailable";
 };
 
@@ -68,6 +69,7 @@ function coerceMcpAppDescriptor(
   const toolName = getRecordStringField(record, "toolName");
   const uiResourceUri = getRecordStringField(record, "uiResourceUri");
   const toolCallId = getRecordStringField(record, "toolCallId");
+  const originSessionKey = getRecordStringField(record, "originSessionKey");
   const resultMetaState = record?.resultMetaState === "unavailable" ? "unavailable" : undefined;
   const hasCompleteDescriptor = Boolean(
     serverName &&
@@ -86,6 +88,7 @@ function coerceMcpAppDescriptor(
         toolName,
         uiResourceUri,
         toolCallId,
+        ...(originSessionKey && originSessionKey.length <= 512 ? { originSessionKey } : {}),
         ...(resultMetaState ? { resultMetaState } : {}),
       }
     : { viewId };

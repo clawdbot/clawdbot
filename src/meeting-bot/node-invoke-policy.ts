@@ -2,6 +2,7 @@ import type {
   OpenClawPluginNodeInvokePolicy,
   OpenClawPluginNodeInvokePolicyResult,
 } from "../plugins/plugin-registration.types.js";
+import { isMeetingAudioBase64 } from "./audio-base64.js";
 
 export type MeetingBrowserNodeStartConfig = {
   launch: boolean;
@@ -9,6 +10,7 @@ export type MeetingBrowserNodeStartConfig = {
   joinTimeoutMs: number;
   audioInputCommand?: string[];
   audioOutputCommand?: string[];
+  bargeInInputCommand?: string[];
   audioBridgeCommand?: string[];
   audioBridgeHealthCommand?: string[];
 };
@@ -19,6 +21,7 @@ export type MeetingBrowserNodePolicyOptions = {
   deniedCode: string;
   supportedModes: ReadonlySet<string>;
   normalizeUrl(input: unknown): string;
+  useConfiguredSetupCommands?: boolean;
   start: MeetingBrowserNodeStartConfig;
 };
 
@@ -194,6 +197,12 @@ function buildForwardParams(
       if (!base64) {
         return denyMissing(options, action, "base64");
       }
+      if (!isMeetingAudioBase64(base64)) {
+        return {
+          approved: false,
+          result: denied(options, "base64 must be a valid audio payload"),
+        };
+      }
       forwarded.bridgeId = bridgeId;
       forwarded.base64 = base64;
       return approved(forwarded);
@@ -223,6 +232,20 @@ export function createMeetingBrowserNodeInvokePolicy(
       }
       const params = asRecord(ctx.params);
       const action = readString(params.action);
+      if (action === "setup" && options.useConfiguredSetupCommands) {
+        const setupParams: Record<string, unknown> = { action };
+        for (const key of [
+          "audioInputCommand",
+          "audioOutputCommand",
+          "bargeInInputCommand",
+        ] as const) {
+          const command = copyCommand(options.start[key]);
+          if (command) {
+            setupParams[key] = command;
+          }
+        }
+        return await ctx.invokeNode({ params: setupParams });
+      }
       const decision =
         action === "start"
           ? buildStartParams(params, options)

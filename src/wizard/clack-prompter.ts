@@ -16,7 +16,11 @@ import {
   text,
 } from "@clack/prompts";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import {
+  stripAnsi,
+  truncateToVisibleWidth,
+  visibleWidth,
+} from "../../packages/terminal-core/src/ansi.js";
 import { note as emitNote } from "../../packages/terminal-core/src/note.js";
 import { styleSelectParams } from "../../packages/terminal-core/src/prompt-select-styled-params.js";
 import {
@@ -40,6 +44,29 @@ import { WizardCancelledError, WizardNavigationError } from "./prompts.js";
 // Same species as the pixel-mascot banner, compressed into a four-column
 // spinner for long-running wizard steps.
 const CLAW_SPINNER_FRAMES = ["(\\/)", "(||)", "(--)", "(||)"];
+const SPINNER_DECORATION_COLUMNS = 10;
+
+function readProgressColumns(): number | undefined {
+  const columns = process.stdout.columns;
+  if (typeof columns !== "number" || !Number.isFinite(columns) || columns <= 0) {
+    return undefined;
+  }
+  return columns;
+}
+
+function clampProgressLabel(label: string, columns: number | undefined): string {
+  if (columns === undefined) {
+    return label;
+  }
+  const maxLabelWidth = columns - SPINNER_DECORATION_COLUMNS;
+  if (maxLabelWidth <= 0) {
+    return "";
+  }
+  if (visibleWidth(label) <= maxLabelWidth) {
+    return label;
+  }
+  return `${truncateToVisibleWidth(label, maxLabelWidth - 1)}…`;
+}
 
 // Clack-backed WizardPrompter implementation for interactive CLI setup. It
 // converts the generic wizard prompt contract into styled Clack prompts.
@@ -334,7 +361,25 @@ export function createClackPrompter(): WizardPrompter {
             styleFrame: theme.accent,
           })
         : spinner();
-      spin.start(theme.accent(label));
+      let currentLabel = label;
+      let maxColumns = readProgressColumns();
+      const renderLabel = () => theme.accent(clampProgressLabel(currentLabel, maxColumns));
+      const handleResize = () => {
+        const columns = readProgressColumns();
+        if (maxColumns === undefined || columns === undefined || columns >= maxColumns) {
+          return;
+        }
+        // Clack snapshots its erase width when the spinner is created. Only
+        // tighten our label budget so later terminal growth cannot exceed it.
+        maxColumns = columns;
+        spin.message(renderLabel());
+      };
+      if (maxColumns !== undefined) {
+        process.stdout.on("resize", handleResize);
+      }
+      // Clack erases using bare-message wrapping but writes the frame and dots too.
+      // Keeping animated labels to one row prevents long scans from leaking a line each tick.
+      spin.start(renderLabel());
       const osc = createCliProgress({
         label,
         indeterminate: true,
@@ -345,10 +390,12 @@ export function createClackPrompter(): WizardPrompter {
       // display command progress outside the prompt line.
       return {
         update: (message) => {
-          spin.message(theme.accent(message));
+          currentLabel = message;
+          spin.message(renderLabel());
           osc.setLabel(message);
         },
         stop: (message) => {
+          process.stdout.off("resize", handleResize);
           osc.done();
           if (message === undefined) {
             spin.clear();

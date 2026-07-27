@@ -642,9 +642,8 @@ Non-deprecated helpers worth knowing:
 The legacy `InteractiveReply*` types and conversion helpers are marked
 `@deprecated` in the SDK:
 
-- `InteractiveReply`, `InteractiveReplyBlock`, `InteractiveReplyButton`,
-  `InteractiveReplyOption`, `InteractiveReplySelectBlock`, and
-  `InteractiveReplyTextBlock`
+- `InteractiveReply`, `InteractiveReplyBlock`, `InteractiveReplyButton`, and
+  `InteractiveReplyOption`
 - `normalizeInteractiveReply(...)`
 - `hasInteractiveReplyBlocks(...)`
 - `interactiveReplyToPresentation(...)`
@@ -660,8 +659,6 @@ them; send `presentation` and let core/channel adaptation handle rendering.
 
 Approval helpers also have presentation-first replacements:
 
-- use `buildApprovalPresentationFromActionDescriptors(...)` instead of
-  `buildApprovalInteractiveReplyFromActionDescriptors(...)`
 - use `buildApprovalPresentation(...)` instead of
   `buildApprovalInteractiveReply(...)`
 - use `buildExecApprovalPresentation(...)` instead of

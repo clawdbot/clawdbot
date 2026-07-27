@@ -44,6 +44,7 @@ import { discoverLmstudioModels, fetchLmstudioModels } from "./models.fetch.js";
 import {
   mapLmstudioWireModelsToConfig,
   type LmstudioModelWire,
+  resolveLmstudioEffectiveContextWindow,
   resolveLmstudioInferenceBase,
 } from "./models.js";
 import {
@@ -66,6 +67,8 @@ type ProviderPromptText = (params: {
 
 type ProviderPromptNote = (message: string, title?: string) => Promise<void> | void;
 type LmstudioDiscoveryResult = Awaited<ReturnType<typeof fetchLmstudioModels>>;
+const LMSTUDIO_APP_GUIDED_MIN_CONTEXT_TOKENS = 16_384;
+
 type LmstudioSetupDiscovery = {
   discovery: LmstudioDiscoveryResult;
   models: ModelDefinitionConfig[];
@@ -354,7 +357,12 @@ function collectAppGuidedLmstudioModelIds(discovery: LmstudioDiscoveryResult): S
   return new Set(
     discovery.models.flatMap((entry) => {
       const id = entry.key?.trim();
-      return entry.type === "llm" && entry.capabilities?.trained_for_tool_use === true && id
+      if (entry.type !== "llm" || entry.capabilities?.trained_for_tool_use !== true || !id) {
+        return [];
+      }
+      const effectiveContextWindow = resolveLmstudioEffectiveContextWindow(entry);
+      return effectiveContextWindow !== null &&
+        effectiveContextWindow >= LMSTUDIO_APP_GUIDED_MIN_CONTEXT_TOKENS
         ? [id]
         : [];
     }),

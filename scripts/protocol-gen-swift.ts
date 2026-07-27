@@ -408,6 +408,27 @@ function emitStruct(name: string, schema: JsonSchema): string {
   return lines.join("\n");
 }
 
+function emitBoardEventParamsModels(schema: JsonSchema): string {
+  const variants = schema.anyOf ?? schema.oneOf ?? [];
+  const legacy = variants.find(
+    (variant) =>
+      variant.type === "object" &&
+      variant.properties?.sessionKey &&
+      variant.properties.widget &&
+      variant.properties.payload,
+  );
+  const ticket = variants.find(
+    (variant) =>
+      variant.type === "object" && variant.properties?.ticket && variant.properties.payload,
+  );
+  if (!legacy || !ticket) {
+    throw new Error("BoardEventParams must retain legacy and ticket object variants");
+  }
+  // BoardEventParams shipped as the legacy struct before the schema became a
+  // union. Preserve that source API and expose the ticket form separately.
+  return `${emitStruct("BoardEventParams", legacy)}\n${emitStruct("BoardTicketEventParams", ticket)}`;
+}
+
 function emitStructCustomCodable(
   name: string,
   props: Record<string, JsonSchema>,
@@ -568,6 +589,45 @@ function swiftUnionCaseName(value: boolean | number | string | null, fallback: s
   return safeName(String(value));
 }
 
+function emitDiscriminatedUnionCompatibility(name: string): string[] {
+  if (name !== "GatewayErrorDetails") {
+    return [];
+  }
+  // GatewayErrorDetails shipped as the missing-scope struct before it gained an expiry variant.
+  // Keep its initializer and property access source-compatible while the enum carries both cases.
+  return [
+    "    public init(code: String, missingscope: String, requiredscopes: [String]) {",
+    "        self = .missingScope(",
+    "            MissingScopeErrorDetails(",
+    "                code: code,",
+    "                missingscope: missingscope,",
+    "                requiredscopes: requiredscopes",
+    "            )",
+    "        )",
+    "    }",
+    "",
+    "    public var code: String {",
+    "        switch self {",
+    "        case .missingScope(let value): value.code",
+    "        case .mcpAppViewExpired(let value): value.code",
+    "        case .unknownAgentId(let value): value.code",
+    "        case .wizardNotFound(let value): value.code",
+    "        }",
+    "    }",
+    "",
+    "    public var missingscope: String {",
+    "        if case .missingScope(let value) = self { return value.missingscope }",
+    '        return ""',
+    "    }",
+    "",
+    "    public var requiredscopes: [String] {",
+    "        if case .missingScope(let value) = self { return value.requiredscopes }",
+    "        return []",
+    "    }",
+    "",
+  ];
+}
+
 function emitDiscriminatedUnion(name: string, schema: JsonSchema): string | undefined {
   const branches = schema.oneOf ?? schema.anyOf;
   if (!branches || branches.length < 2) {
@@ -627,6 +687,7 @@ function emitDiscriminatedUnion(name: string, schema: JsonSchema): string | unde
       `public enum ${name}: Codable, Sendable {`,
       ...resolvedCases.map((entry) => `    case ${entry.caseName}(${entry.branchName})`),
       "",
+      ...emitDiscriminatedUnionCompatibility(name),
       "    private enum CodingKeys: String, CodingKey {",
       `        case discriminator = "${discriminator}"`,
       "    }",
@@ -741,13 +802,17 @@ async function generate() {
     if (name === "GatewayFrame") {
       continue;
     }
+    if (name === "BoardEventParams") {
+      parts.push(emitBoardEventParamsModels(schema));
+      continue;
+    }
     if (schema.type === "object") {
       parts.push(emitStruct(name, schema));
     }
   }
 
   for (const [name, schema] of definitions) {
-    if (name === "GatewayFrame") {
+    if (name === "GatewayFrame" || name === "BoardEventParams") {
       continue;
     }
     const union = emitDiscriminatedUnion(name, schema);

@@ -4,10 +4,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { formatErrorMessage } from "../infra/errors.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { root as createFsRoot, type Root as FsSafeRoot } from "../infra/fs-safe.js";
+import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isRecord } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
@@ -318,8 +318,13 @@ async function withConfigMutationSnapshotLock<T>(
  * Run a multi-phase operation under the canonical cross-process write lock.
  * Nested mutation helpers are reentrant through activeConfigMutationLocks.
  */
-export async function withConfigMutationExclusive<T>(fn: () => Promise<T>): Promise<T> {
-  return await withConfigMutationSnapshotLock({}, async () => await fn());
+export async function withConfigMutationExclusive<T>(
+  fn: (config: OpenClawConfig) => Promise<T>,
+): Promise<T> {
+  return await withConfigMutationSnapshotLock(
+    {},
+    async (prepared) => await fn(prepared.snapshot.sourceConfig),
+  );
 }
 
 function getChangedTopLevelKeys(base: unknown, next: unknown): string[] {

@@ -103,6 +103,15 @@ Keep the tmux session running so later `op read` / `op run` commands reuse the s
 
 Use the same `SOCKET` and `SESSION` values for every follow-up command in this standalone signin flow. The `-S "$SOCKET"` flag selects the tmux server socket; keep it in a user-owned `0700` directory, do not share it between users, and choose a new session name for each new signin attempt.
 
+## Browser sign-in (1Password for Claude)
+
+If the session exposes Claude in Chrome credential tools (`request_credentials`, `autofill_credential`, `enter_verification_code`), prefer them over `op` for signing in to websites: 1Password fills the page directly and the secret never enters context. Rules:
+
+- Request every credential the task needs in one `request_credentials` call before navigating.
+- Approval is a 1Password prompt on the gateway host. If it stays pending, tell the user which host to unlock ("1Password is waiting for approval on this Mac") instead of retrying.
+- Never ask the user to send passwords or one-time codes through chat; codes go through `enter_verification_code` only.
+- Do not fall back to `op read` for a website password just because the browser flow needs approval; that defeats the no-exposure design. Use `op` for secrets consumed by commands and config, not for web logins when the browser flow exists.
+
 ## Guardrails
 
 - Never paste secrets into logs, chat, or code.

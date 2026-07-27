@@ -13,7 +13,10 @@ export { loadOrCreateProcessDeviceIdentity } from "../infra/device-identity.js";
 export { requestHeartbeat } from "../infra/heartbeat-wake.js";
 export { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 export { resolveOutboundTarget } from "../infra/outbound/targets.js";
-export { registerApnsRegistration } from "../infra/push-apns.js";
+export {
+  ApnsRegistrationPairingChangedError,
+  registerApnsRegistration,
+} from "../infra/push-apns.js";
 export { enqueueSystemEvent } from "../infra/system-events.js";
 export { deleteMediaBuffer } from "../media/store.js";
 export { normalizeMainKey } from "../routing/session-key.js";

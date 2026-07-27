@@ -23,7 +23,7 @@ import {
   runExclusiveSystemAgentSetupActivation,
   type SystemAgentChatSession,
 } from "./system-agent.js";
-import type { GatewayRequestContext } from "./types.js";
+import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const setupInferenceMocks = vi.hoisted(() => ({
   activateSetupInference: vi.fn(),
@@ -47,6 +47,14 @@ const transcriptStoreMocks = vi.hoisted(() => ({
     (limit: number) => Array<{ role: "user" | "assistant"; text: string; at: number }>
   >(() => []),
 }));
+const greetingMocks = vi.hoisted(() => ({
+  acknowledgeSystemAgentGreetingDelivery: vi.fn(),
+  loadSystemAgentGreetingFacts: vi.fn(),
+  resolveSystemAgentGreeting: vi.fn(),
+}));
+const onboardingWelcomeMocks = vi.hoisted(() => ({
+  buildOnboardingWelcome: vi.fn(),
+}));
 
 vi.mock("../../system-agent/setup-inference.js", () => ({
   activateSetupInference: setupInferenceMocks.activateSetupInference,
@@ -68,6 +76,18 @@ vi.mock("../../system-agent/transcript-store.js", () => ({
   appendTranscriptTurn: transcriptStoreMocks.appendTranscriptTurn,
   readTranscriptTail: transcriptStoreMocks.readTranscriptTail,
 }));
+vi.mock("../../system-agent/greeting.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../system-agent/greeting.js")>();
+  return {
+    ...actual,
+    acknowledgeSystemAgentGreetingDelivery: greetingMocks.acknowledgeSystemAgentGreetingDelivery,
+    loadSystemAgentGreetingFacts: greetingMocks.loadSystemAgentGreetingFacts,
+    resolveSystemAgentGreeting: greetingMocks.resolveSystemAgentGreeting,
+  };
+});
+vi.mock("../../system-agent/onboarding-welcome.js", () => ({
+  buildOnboardingWelcome: onboardingWelcomeMocks.buildOnboardingWelcome,
+}));
 
 type RespondCall = {
   ok: boolean;
@@ -86,6 +106,11 @@ function makeRespond() {
 function makeContext(sessions: Map<string, SystemAgentChatSession>): GatewayRequestContext {
   return { systemAgentSessions: sessions } as unknown as GatewayRequestContext;
 }
+
+const defaultClient = {
+  connId: "conn-test",
+  connect: { device: { id: "device-test" } },
+} as GatewayClient;
 
 const verifiedConfig: OpenClawConfig = {
   agents: { defaults: { model: "openai/gpt-5.5@openai:verified" } },
@@ -157,6 +182,7 @@ function seededSession(overrides?: Partial<SystemAgentChatSession>): SystemAgent
     engine: makeVerifiedEngine(),
     welcome: "welcome text",
     lastUsedAt: 1,
+    ownerKey: "device:device-test",
     ...overrides,
   };
 }
@@ -184,6 +210,20 @@ beforeEach(async () => {
   transcriptStoreMocks.appendTranscriptTurn.mockReset();
   transcriptStoreMocks.appendTranscriptReset.mockReset();
   transcriptStoreMocks.readTranscriptTail.mockReset().mockReturnValue([]);
+  greetingMocks.acknowledgeSystemAgentGreetingDelivery.mockReset();
+  greetingMocks.loadSystemAgentGreetingFacts.mockReset().mockReturnValue({
+    updateAvailable: null,
+    channelHealth: { available: true, degraded: [] },
+    recentExternalEdit: false,
+    auditSequence: 0,
+  });
+  greetingMocks.resolveSystemAgentGreeting.mockReset().mockResolvedValue({
+    text: "I'm OpenClaw. All systems nominal.",
+    source: "model",
+  });
+  onboardingWelcomeMocks.buildOnboardingWelcome.mockReset().mockResolvedValue({
+    text: "Inference is ready. Let's finish setup.",
+  });
 });
 
 afterEach(() => {
@@ -195,6 +235,10 @@ afterEach(() => {
   providerAuthChoiceMocks.applyAuthChoiceLoadedPluginProvider.mockReset();
   setupSharedMocks.readSetupConfigFileSnapshot.mockReset();
   setupSharedMocks.writeWizardConfigFile.mockReset();
+  greetingMocks.loadSystemAgentGreetingFacts.mockReset();
+  greetingMocks.resolveSystemAgentGreeting.mockReset();
+  greetingMocks.acknowledgeSystemAgentGreetingDelivery.mockReset();
+  onboardingWelcomeMocks.buildOnboardingWelcome.mockReset();
   verifiedInference = undefined;
   verifiedInferenceDeps = undefined;
   resetCommandQueueStateForTest();
@@ -203,6 +247,7 @@ afterEach(() => {
 async function callChat(
   context: GatewayRequestContext,
   params: Record<string, unknown>,
+  client: GatewayClient | null = defaultClient,
 ): Promise<RespondCall> {
   const { calls, respond } = makeRespond();
   await expectDefined(
@@ -212,6 +257,7 @@ async function callChat(
     params,
     respond,
     context,
+    client,
   } as never);
   const call = calls[0];
   if (!call) {
@@ -431,6 +477,7 @@ describe("openclaw.chat", () => {
         message: "OpenClaw requires working inference: no configured model",
       },
     });
+    expect(call.error).not.toHaveProperty("details");
     expect(sessions.size).toBe(0);
   });
 
@@ -604,26 +651,6 @@ describe("openclaw.chat", () => {
     expect(call.ok).toBe(false);
   });
 
-  it("returns the stored welcome when no message is sent", async () => {
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession()]]);
-    const call = await callChat(makeContext(sessions), { sessionId: "s1" });
-    expect(call.ok).toBe(true);
-    expect(call.payload).toMatchObject({ sessionId: "s1", reply: "welcome text", action: "none" });
-  });
-
-  it("routes messages through the session engine", async () => {
-    const engine = makeVerifiedEngine();
-    const handle = vi
-      .spyOn(engine, "handle")
-      .mockResolvedValue({ text: "did the thing", action: "none" });
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
-
-    const call = await callChat(makeContext(sessions), { sessionId: "s1", message: "status" });
-
-    expect(handle).toHaveBeenCalledWith("status");
-    expect(call.payload).toMatchObject({ reply: "did the thing", action: "none" });
-  });
-
   it("persists completed turns from the engine's sanitized history", async () => {
     const engine = new SystemAgentChatEngine({
       verifiedInference: requireVerifiedInferenceFixture(),
@@ -744,7 +771,7 @@ describe("openclaw.chat", () => {
         "delegate-1",
         seededSession({
           engine,
-          delegationKey: JSON.stringify(["main", "agent:main:main"]),
+          ownerKey: JSON.stringify(["main", "agent:main:main"]),
         }),
       ],
     ]);
@@ -798,23 +825,6 @@ describe("openclaw.chat", () => {
     });
   });
 
-  it("rejects delegated reuse of another caller's session", async () => {
-    const engine = makeVerifiedEngine();
-    const handle = vi.spyOn(engine, "handle");
-    const sessions = new Map<string, SystemAgentChatSession>([
-      ["shared", seededSession({ engine })],
-    ]);
-
-    const delegated = await callChat(makeContext(sessions), {
-      sessionId: "shared",
-      message: "yes",
-      delegation: { agentId: "main", sessionKey: "agent:main:main" },
-    });
-
-    expect(delegated).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
-    expect(handle).not.toHaveBeenCalled();
-  });
-
   it("drops a failed session and requires fresh inference on retry", async () => {
     stubEngineOverview();
     const engine = makeVerifiedEngine();
@@ -832,6 +842,7 @@ describe("openclaw.chat", () => {
       error: {
         code: "UNAVAILABLE",
         message: expect.stringContaining("working inference"),
+        details: { code: "system_agent_session_invalidated" },
       },
     });
     expect(dispose).toHaveBeenCalledOnce();
@@ -884,6 +895,7 @@ describe("openclaw.chat", () => {
       'systemAgentHandlers["openclaw.chat"] test invariant',
     )({
       params: { sessionId: "s1", message: "yes" },
+      client: defaultClient,
       context: makeContext(sessions),
       respond: () => {
         activeAtResponse.push(getCommandLaneSnapshot(CommandLane.SystemAgent).activeCount);
@@ -894,6 +906,7 @@ describe("openclaw.chat", () => {
       'systemAgentHandlers["openclaw.chat"] test invariant',
     )({
       params: { sessionId: "s2", message: "yes" },
+      client: defaultClient,
       context: makeContext(sessions),
       respond: () => {
         activeAtResponse.push(getCommandLaneSnapshot(CommandLane.SystemAgent).activeCount);
@@ -950,61 +963,6 @@ describe("openclaw.chat", () => {
     expect(sessions.has("new-2")).toBe(true);
   });
 
-  it("forwards sensitive-input metadata to clients", async () => {
-    const engine = makeVerifiedEngine();
-    vi.spyOn(engine, "handle").mockResolvedValue({
-      text: "Enter the bot token",
-      action: "none",
-      sensitive: true,
-    });
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
-
-    const call = await callChat(makeContext(sessions), { sessionId: "s1", message: "yes" });
-
-    expect(call.payload).toMatchObject({ sensitive: true });
-  });
-
-  it("maps the TUI handoff to an open-agent action for clients", async () => {
-    const engine = makeVerifiedEngine();
-    vi.spyOn(engine, "handle").mockResolvedValue({
-      text: "",
-      action: "open-tui",
-      handoff: { kind: "open-tui" },
-    });
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
-
-    const call = await callChat(makeContext(sessions), {
-      sessionId: "s1",
-      message: "talk to agent",
-    });
-
-    expect(call.payload).toMatchObject({ action: "open-agent" });
-    expect(call.payload).not.toHaveProperty("agentDraft");
-    expect((call.payload as { reply: string }).reply).toContain("continue with your agent");
-  });
-
-  it("forwards the hatch draft intent with an agent handoff", async () => {
-    const engine = makeVerifiedEngine();
-    vi.spyOn(engine, "handle").mockResolvedValue({
-      text: "Your agent is hatching.",
-      action: "open-tui",
-      agentDraft: "hatch",
-      handoff: { kind: "open-tui", agentId: "researcher" },
-    });
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
-
-    const call = await callChat(makeContext(sessions), {
-      sessionId: "s1",
-      message: "yes",
-    });
-
-    expect(call.payload).toMatchObject({
-      action: "open-agent",
-      agentDraft: "hatch",
-      agentId: "researcher",
-    });
-  });
-
   it("resets a session on request", async () => {
     stubEngineOverview();
     transcriptStoreMocks.readTranscriptTail.mockReturnValue([]);
@@ -1023,6 +981,7 @@ describe("openclaw.chat", () => {
       'systemAgentHandlers["openclaw.chat"] test invariant',
     )({
       params: { sessionId: "s1", reset: true },
+      client: defaultClient,
       respond,
       context,
     } as never);

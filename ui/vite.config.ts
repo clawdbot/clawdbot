@@ -301,31 +301,31 @@ function sourcePackageAlias(packageId: string, subpath?: string): ControlUiViteA
 export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
   return [
     sourcePackageAlias("normalization-core", "number-coercion"),
+    sourcePackageAlias("normalization-core", "phone-presentation"),
     sourcePackageAlias("normalization-core", "record-coerce"),
     sourcePackageAlias("normalization-core", "string-coerce"),
     sourcePackageAlias("normalization-core", "string-normalization"),
     sourcePackageAlias("normalization-core", "utf16-slice"),
     sourcePackageAlias("normalization-core"),
+    sourcePackageAlias("session-url-contract", "parse"),
+    sourcePackageAlias("session-url-contract"),
     sourcePackageAlias("workboard-contract"),
   ];
 }
 
-export function resolveExternalPackageAliasesForVite(): ControlUiViteAlias[] {
+export function resolveExternalPackageAliasesForVite(
+  resolvePackage: (specifier: string) => string = require.resolve,
+): ControlUiViteAlias[] {
+  const packageRoot = (specifier: string) =>
+    path.dirname(resolvePackage(`${specifier}/package.json`));
   return [
     {
       find: "@openclaw/libterminal/browser",
-      replacement: path.join(
-        repoRoot,
-        "node_modules",
-        "@openclaw",
-        "libterminal",
-        "dist",
-        "browser.js",
-      ),
+      replacement: path.join(packageRoot("@openclaw/libterminal"), "dist/browser.js"),
     },
     {
       find: "@openclaw/uirouter",
-      replacement: path.join(repoRoot, "node_modules", "@openclaw", "uirouter", "dist", "index.js"),
+      replacement: path.join(packageRoot("@openclaw/uirouter"), "dist/index.js"),
     },
   ];
 }

@@ -154,17 +154,75 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   return true;
 }
 
+// A restarting gateway is the common case behind this banner: the stale chunk
+// exists precisely because the gateway was just updated. Give the restart time
+// to finish rather than declining the reload on the first failed probe.
+const REACHABLE_WAIT_TIMEOUT_MS = 30_000;
+const REACHABLE_WAIT_INTERVAL_MS = 1_000;
+
 /**
- * User-initiated retry: bypasses the automatic-reload rate guard but keeps the
- * reachability probe — reloading against an unreachable gateway replaces the
- * recoverable panel error with a fatal navigation error in app webviews.
+ * Keeps the advertised bound local instead of trusting the probe to time out:
+ * the default probe aborts itself, but a caller-supplied one need not, and a
+ * probe that never settles would strand the caller's pending UI forever.
  */
-export async function retryStaleChunkReload(deps: StaleChunkReloadDeps = {}): Promise<boolean> {
-  if (!(await probeControlUiDocument())) {
-    return false;
+async function probeWithinDeadline(
+  probe: () => Promise<boolean>,
+  remainingMs: number,
+): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), remainingMs);
+  });
+  try {
+    return await Promise.race([probe(), expired]);
+  } finally {
+    clearTimeout(timer);
   }
-  (deps.reload ?? reloadControlUiDocument)();
-  return true;
+}
+
+/**
+ * User-initiated retry that survives the restart which caused the stale chunk:
+ * poll until the gateway answers, then reload. Returns false only when it stays
+ * unreachable for the whole window, so callers keep the recoverable panel error
+ * instead of navigating into a fatal error page.
+ */
+export async function retryStaleChunkReloadWhenReachable(
+  deps: StaleChunkReloadDeps & {
+    timeoutMs?: number;
+    intervalMs?: number;
+    probe?: () => Promise<boolean>;
+    wait?: (ms: number) => Promise<void>;
+  } = {},
+): Promise<boolean> {
+  const now = deps.now ?? Date.now;
+  const probe = deps.probe ?? probeControlUiDocument;
+  const wait =
+    deps.wait ??
+    ((ms: number) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }));
+  const intervalMs = deps.intervalMs ?? REACHABLE_WAIT_INTERVAL_MS;
+  const deadline = now() + (deps.timeoutMs ?? REACHABLE_WAIT_TIMEOUT_MS);
+  for (let attempt = 0; ; attempt += 1) {
+    const remaining = deadline - now();
+    // The interval wait can carry the loop past the deadline, so re-check here:
+    // only the first attempt may probe from outside the window.
+    if (attempt > 0 && remaining <= 0) {
+      return false;
+    }
+    // The first attempt always probes, so timeoutMs: 0 means "single shot"
+    // rather than "never ask"; the probe's own abort bounds that case.
+    const reachable = remaining > 0 ? await probeWithinDeadline(probe, remaining) : await probe();
+    if (reachable) {
+      (deps.reload ?? reloadControlUiDocument)();
+      return true;
+    }
+    if (now() >= deadline) {
+      return false;
+    }
+    await wait(intervalMs);
+  }
 }
 
 /**
@@ -195,7 +253,9 @@ export function installMissingStylesheetRecovery(
       getComputedStyle(document.documentElement).getPropertyValue("--openclaw-css-ok").trim() ===
       "1");
   const schedule = deps.schedule ?? scheduleStaleChunkReload;
-  const retry = deps.retry ?? retryStaleChunkReload;
+  // Single-shot (timeoutMs: 0) keeps the stylesheet banner's existing
+  // behavior; only the lazy-route button waits out a restart.
+  const retry = deps.retry ?? (() => retryStaleChunkReloadWhenReachable({ timeoutMs: 0 }));
   let detected = false;
   let uninstalled = false;
   let banner: HTMLDivElement | null = null;

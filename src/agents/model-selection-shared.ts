@@ -17,11 +17,12 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime-state.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveAgentConfig } from "./agent-scope-config.js";
 import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import { findModelCatalogEntry } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import { resolveCatalogOwnedModelCompat } from "./model-compat-catalog.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
   normalizeConfiguredProviderCatalogModelId,
@@ -30,12 +31,11 @@ import {
 import {
   type ModelManifestNormalizationContext,
   type ModelRef,
-  findNormalizedProviderValue,
   modelKey,
   normalizeModelRef,
   normalizeProviderId,
-  parseModelRef,
-} from "./model-selection-normalize.js";
+} from "./model-ref-shared.js";
+import { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
 
 // Shared model-selection helpers for config aliases, allowlists, provider
 // inference, and configured catalog rows used by CLI and runtime selectors.
@@ -98,15 +98,11 @@ function resolveManifestPluginsForModelIdNormalization(params: {
     if (currentManifestPlugins) {
       return currentManifestPlugins;
     }
-    return loadManifestMetadataSnapshot({
-      config: params.cfg,
-      env: process.env,
-    }).plugins;
   }
   return loadManifestMetadataSnapshot({
     config: params.cfg,
-    workspaceDir,
     env: process.env,
+    ...(workspaceDir ? { workspaceDir } : {}),
   }).plugins;
 }
 
@@ -136,10 +132,7 @@ function createModelManifestPluginContext(params: {
 function listModelAliasCandidates(cfg: OpenClawConfig, agentId?: string): ModelAliasCandidate[] {
   const modelMaps = [cfg.agents?.defaults?.models];
   if (agentId) {
-    const normalizedAgentId = normalizeAgentId(agentId);
-    const agentModels = cfg.agents?.list?.find(
-      (entry) => normalizeAgentId(entry.id) === normalizedAgentId,
-    )?.models;
+    const agentModels = resolveAgentConfig(cfg, agentId)?.models;
     modelMaps.push(agentModels);
   }
   return modelMaps.flatMap((models) =>
@@ -706,10 +699,12 @@ function applyModelCatalogMetadata(params: {
     params.entry.params || configuredEntry?.params
       ? { ...params.entry.params, ...configuredEntry?.params }
       : undefined;
-  const nextCompat =
-    params.entry.compat || configuredEntry?.compat
-      ? { ...params.entry.compat, ...configuredEntry?.compat }
-      : undefined;
+  const nextCompat = resolveCatalogOwnedModelCompat({
+    catalogRoute: params.entry,
+    catalogCompat: params.entry.compat,
+    configuredRoute: configuredEntry,
+    configuredCompat: configuredEntry?.compat,
+  });
 
   return {
     ...params.entry,
@@ -1354,17 +1349,15 @@ function resolveConfiguredModelManifestPlugins(params: {
   }
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   if (!workspaceDir) {
-    return (
-      getCurrentPluginMetadataSnapshot({
-        config: params.cfg,
-        env: process.env,
-      })?.plugins ?? []
-    );
+    return getCurrentPluginMetadataSnapshot({
+      config: params.cfg,
+      env: process.env,
+    })?.plugins;
   }
   return loadManifestMetadataSnapshot({
     config: params.cfg,
-    workspaceDir,
     env: process.env,
+    ...(workspaceDir ? { workspaceDir } : {}),
   }).plugins;
 }
 
@@ -1488,7 +1481,7 @@ export function normalizeModelSelection(value: unknown): string | undefined {
 }
 
 const DEFAULT_MODEL_POLICY_ALLOW_CONFIG_PATH = "agents.defaults.modelPolicy.allow";
-const AGENT_MODEL_POLICY_ALLOW_CONFIG_PATH = "agents.list[].modelPolicy.allow";
+const AGENT_MODEL_POLICY_ALLOW_CONFIG_PATH = "agents.entries.*.modelPolicy.allow";
 
 function resolvePolicyAliasAgentId(
   configPath: string | null,
@@ -1503,10 +1496,7 @@ export function resolveConfiguredModelPolicyAllow(params: {
 }): { refs: readonly string[]; configPath: string | null; repairConfigPath: string } {
   const defaults = params.cfg?.agents?.defaults;
   if (params.agentId) {
-    const normalizedAgentId = normalizeAgentId(params.agentId);
-    const agent = params.cfg?.agents?.list?.find(
-      (entry) => normalizeAgentId(entry.id) === normalizedAgentId,
-    );
+    const agent = params.cfg ? resolveAgentConfig(params.cfg, params.agentId) : undefined;
     const agentPolicy = agent?.modelPolicy;
     if (hasExplicitModelPolicyAllow(agentPolicy)) {
       return {

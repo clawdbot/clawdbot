@@ -49,7 +49,7 @@ const autoMigrateLegacyStateDir = vi.hoisted(() =>
 );
 const autoMigrateLegacyState = vi.hoisted(() =>
   vi.fn(
-    async (): Promise<StateMigrationResult> => ({
+    async (_params?: unknown): Promise<StateMigrationResult> => ({
       migrated: true,
       skipped: false,
       changes: ["imported"],
@@ -76,6 +76,9 @@ const autoMigrateLegacyTaskStateSidecars = vi.hoisted(() =>
       warnings: [],
     }),
   ),
+);
+const migrateLegacyMediaPersistence = vi.hoisted(() =>
+  vi.fn(() => ({ changes: [], warnings: [] })),
 );
 const repairLegacyCronStoreWithoutPrompt = vi.hoisted(() =>
   vi.fn(
@@ -156,6 +159,7 @@ vi.mock("./doctor-state-migrations.js", () => ({
   autoMigrateLegacyStateDir,
   autoMigrateLegacyPluginDoctorState,
   autoMigrateLegacyTaskStateSidecars,
+  migrateLegacyMediaPersistence,
 }));
 
 vi.mock("./doctor/cron/legacy-repair.js", () => ({
@@ -905,16 +909,18 @@ describe("runDoctorConfigPreflight state migration", () => {
     const parsedConfig = { $include: "memory-search.json" };
     const resolvedConfig = {
       cron: { webhook: "https://example.invalid/cron-finished" },
-      agents: {
-        defaults: {
-          memorySearch: {
-            store: {
-              path: "/custom/memory-{agentId}.sqlite",
-              vector: { enabled: false },
-            },
+      memory: {
+        search: {
+          store: {
+            path: "/custom/memory-{agentId}.sqlite",
+            vector: { enabled: false },
           },
         },
-        list: [{ id: "main" }],
+      },
+
+      agents: {
+        defaults: {},
+        entries: { main: {} },
       },
     };
     readConfigFileSnapshot.mockResolvedValueOnce({
@@ -925,9 +931,9 @@ describe("runDoctorConfigPreflight state migration", () => {
       parsed: parsedConfig,
       legacyIssues: [
         {
-          path: "agents.defaults.memorySearch.store.path",
+          path: "memory.search.store.path",
           message:
-            "agents.defaults.memorySearch.store.path is legacy; memory indexes now live in each agent database.",
+            "memory.search.store.path is legacy; memory indexes now live in each agent database.",
         },
       ],
       warnings: [],
@@ -942,30 +948,32 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(repairLegacyCronStoreWithoutPrompt).toHaveBeenCalledWith({
       cfg: expect.objectContaining({
         cron: expect.objectContaining({ webhook: "https://example.invalid/cron-finished" }),
-        agents: expect.objectContaining({
-          defaults: expect.objectContaining({
-            memorySearch: {
-              store: {
-                vector: { enabled: false },
-              },
+        memory: expect.objectContaining({
+          search: expect.objectContaining({
+            store: {
+              vector: { enabled: false },
             },
           }),
-          list: [{ id: "main" }],
+        }),
+        agents: expect.objectContaining({
+          defaults: expect.objectContaining({}),
+          entries: { main: { default: true } },
         }),
       }),
       migrateCodexModelRefs: false,
     });
     expect(autoMigrateLegacyState).toHaveBeenCalledWith({
       cfg: expect.objectContaining({
-        agents: expect.objectContaining({
-          defaults: expect.objectContaining({
-            memorySearch: {
-              store: {
-                vector: { enabled: false },
-              },
+        memory: expect.objectContaining({
+          search: expect.objectContaining({
+            store: {
+              vector: { enabled: false },
             },
           }),
-          list: [{ id: "main" }],
+        }),
+        agents: expect.objectContaining({
+          defaults: expect.objectContaining({}),
+          entries: { main: { default: true } },
         }),
       }),
       pluginDoctorConfig: resolvedConfig,
@@ -978,15 +986,17 @@ describe("runDoctorConfigPreflight state migration", () => {
   it("keeps plugin state migrations for partially valid legacy config repairs", async () => {
     const resolvedConfig = {
       gateway: { mode: "local", port: "not-a-port" },
-      agents: {
-        defaults: {
-          memorySearch: {
-            store: {
-              path: "/custom/memory-{agentId}.sqlite",
-              vector: { enabled: false },
-            },
+      memory: {
+        search: {
+          store: {
+            path: "/custom/memory-{agentId}.sqlite",
+            vector: { enabled: false },
           },
         },
+      },
+
+      agents: {
+        defaults: {},
         list: [{ id: "main" }],
       },
     };
@@ -998,9 +1008,9 @@ describe("runDoctorConfigPreflight state migration", () => {
       parsed: resolvedConfig,
       legacyIssues: [
         {
-          path: "agents.defaults.memorySearch.store.path",
+          path: "memory.search.store.path",
           message:
-            "agents.defaults.memorySearch.store.path is legacy; memory indexes now live in each agent database.",
+            "memory.search.store.path is legacy; memory indexes now live in each agent database.",
         },
       ],
       warnings: [],
@@ -1023,7 +1033,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(note).toHaveBeenCalledWith("- task-imported", "Doctor changes");
   });
 
-  it("limits invalid-config preflight to config-independent state migration", async () => {
+  it("runs config-independent state migration for invalid config", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       exists: true,
       valid: false,
@@ -1040,9 +1050,23 @@ describe("runDoctorConfigPreflight state migration", () => {
       invalidConfigNote: false,
     });
 
-    expect(autoMigrateLegacyState).not.toHaveBeenCalled();
-    expect(repairLegacyCronStoreWithoutPrompt).not.toHaveBeenCalled();
-    expect(autoMigrateLegacyTaskStateSidecars).toHaveBeenCalledWith({ env: process.env });
-    expect(note).toHaveBeenCalledWith("- task-imported", "Doctor changes");
+    expect(autoMigrateLegacyState).toHaveBeenCalledOnce();
+    const migrationParams = autoMigrateLegacyState.mock.calls[0]?.[0] as
+      | {
+          cfg?: unknown;
+          pluginDoctorConfig?: unknown;
+          env?: NodeJS.ProcessEnv;
+        }
+      | undefined;
+    expect(migrationParams?.cfg).not.toHaveProperty("cron.store");
+    expect(migrationParams?.pluginDoctorConfig).toEqual({
+      cron: { store: "/tmp/legacy-cron.json" },
+    });
+    expect(migrationParams?.env).toBe(process.env);
+    expect(repairLegacyCronStoreWithoutPrompt).toHaveBeenCalledWith({
+      cfg: migrationParams?.cfg,
+      migrateCodexModelRefs: false,
+    });
+    expect(autoMigrateLegacyTaskStateSidecars).not.toHaveBeenCalled();
   });
 });

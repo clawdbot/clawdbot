@@ -33,6 +33,14 @@ const isRestartEnabledMock = vi.fn(() => true);
 const readPackageVersionMock = vi.fn(async () => "1.0.0");
 const detectRespawnSupervisorMock = vi.fn<() => RespawnSupervisor | null>(() => null);
 const normalizeUpdateChannelMock = vi.fn((): UpdateChannel | null => null);
+const getUpdateAvailableMock = vi.fn(
+  () =>
+    null as {
+      currentVersion: string;
+      latestVersion: string;
+      channel: string;
+    } | null,
+);
 const readConfigFileSnapshotMock = vi.fn<() => Promise<ConfigFileSnapshot>>();
 type ManagedServiceUpdateHandoffResult = Awaited<
   ReturnType<
@@ -141,6 +149,10 @@ vi.mock("../../infra/update-channels.js", () => ({
   normalizeUpdateChannel: normalizeUpdateChannelMock,
 }));
 
+vi.mock("../../infra/update-startup.js", () => ({
+  getUpdateAvailable: getUpdateAvailableMock,
+}));
+
 vi.mock("../../infra/update-runner.js", () => ({
   resolveUpdateInstallSurface: resolveUpdateInstallSurfaceMock,
   runGatewayUpdate: runGatewayUpdateMock,
@@ -210,6 +222,8 @@ beforeEach(() => {
   readPackageVersionMock.mockResolvedValue("1.0.0");
   normalizeUpdateChannelMock.mockReset();
   normalizeUpdateChannelMock.mockReturnValue(null);
+  getUpdateAvailableMock.mockReset();
+  getUpdateAvailableMock.mockReturnValue(null);
   readConfigFileSnapshotMock.mockReset();
   readConfigFileSnapshotMock.mockResolvedValue({
     path: "/tmp/openclaw.json",
@@ -1006,6 +1020,11 @@ describe("update.run post-core plugin finalize", () => {
 
 describe("update.status", () => {
   it("refreshes the latest update sentinel before responding", async () => {
+    getUpdateAvailableMock.mockReturnValueOnce({
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "latest",
+    });
     getLatestUpdateRestartSentinelMock.mockReturnValueOnce({
       kind: "update",
       status: "skipped",
@@ -1036,12 +1055,19 @@ describe("update.status", () => {
     expect(respond).toHaveBeenCalledTimes(1);
     const [ok, response] = firstMockCall(respond, "update status response") as [
       boolean,
-      { sentinel?: { kind?: string; status?: string } } | undefined,
+      (
+        | {
+            sentinel?: { kind?: string; status?: string };
+            updateAvailable?: { latestVersion?: string } | null;
+          }
+        | undefined
+      ),
     ];
     expect(ok).toBe(true);
     expect(refreshLatestUpdateRestartSentinelMock).toHaveBeenCalledTimes(1);
     expect(response?.sentinel?.kind).toBe("update");
     expect(response?.sentinel?.status).toBe("ok");
+    expect(response?.updateAvailable?.latestVersion).toBe("2.0.0");
   });
 
   it("falls back to the cached update sentinel when refresh fails", async () => {

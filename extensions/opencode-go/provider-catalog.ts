@@ -23,6 +23,16 @@ const OPENCODE_GO_KIMI_NO_REASONING_MODEL_IDS = new Set([
 const OPENCODE_GO_MODELS_ENDPOINT = "https://opencode.ai/zen/go/v1/models";
 const OPENCODE_GO_MODELS_TIMEOUT_MS = 5_000;
 const OPENCODE_GO_MODELS_CACHE_TTL_MS = 60_000;
+// OpenCode Go exposes only high/max provider effort for DeepSeek V4. Lower
+// OpenClaw levels retain their existing high-effort behavior.
+const OPENCODE_GO_DEEPSEEK_V4_THINKING_LEVEL_MAP = {
+  minimal: "high",
+  low: "high",
+  medium: "high",
+  high: "high",
+  xhigh: "max",
+  max: "max",
+} as const;
 
 type OpencodeGoModelDefinition = ModelDefinitionConfig & {
   provider: typeof PROVIDER_ID;
@@ -40,6 +50,7 @@ const OPENCODE_GO_MODELS = (
       provider: PROVIDER_ID,
       baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
       reasoning: true,
+      thinkingLevelMap: OPENCODE_GO_DEEPSEEK_V4_THINKING_LEVEL_MAP,
       input: ["text"],
       cost: {
         input: 1.74,
@@ -62,6 +73,7 @@ const OPENCODE_GO_MODELS = (
       provider: PROVIDER_ID,
       baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
       reasoning: true,
+      thinkingLevelMap: OPENCODE_GO_DEEPSEEK_V4_THINKING_LEVEL_MAP,
       input: ["text"],
       cost: {
         input: 0.14,

@@ -1,7 +1,10 @@
 /** Main doctor config flow: preflight, migrations, previews, repairs, and final write decision. */
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { readAgentRosterProperty } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { configIncludeOwnsAgentRoster } from "../config/agent-roster-provenance.js";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
@@ -9,6 +12,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import {
   noteImplicitFallbackClobberWarnings,
   noteOpencodeProviderOverrides,
+  noteSandboxOriginProxyWarning,
 } from "./doctor-config-analysis.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
@@ -20,6 +24,8 @@ import {
   applyUnknownConfigKeyStep,
 } from "./doctor/shared/config-flow-steps.js";
 import { applyDoctorConfigMutation } from "./doctor/shared/config-mutation-state.js";
+import { materializeDefaultAgentRoles } from "./doctor/shared/default-agent-role-materialization.js";
+import { isSingleTopLevelIncludeMigration } from "./doctor/shared/include-migration-ownership.js";
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 
 function hasLegacyInternalHookHandlers(raw: unknown): boolean {
@@ -167,6 +173,44 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   pendingChanges = pendingChanges || legacyStep.state.pendingChanges;
   fixHints = legacyStep.state.fixHints;
   const legacyMigrationPartiallyValid = legacyStep.partiallyValid === true;
+  const rosterMigrationNeeded = [snapshot.sourceConfigBeforeMigrations, snapshot.parsed].some(
+    (source) => source !== undefined && migratePersistedImplicitMainRoster(source).changed,
+  );
+  const includeOwnsRoster = configIncludeOwnsAgentRoster(snapshot);
+  if (snapshot.exists && rosterMigrationNeeded && !includeOwnsRoster) {
+    // Runtime roster normalization is read-only; doctor --fix owns persistence.
+    const migrated = migratePersistedImplicitMainRoster(candidate).config as OpenClawConfig;
+    const migratedRoster = readAgentRosterProperty(migrated);
+    const migratedEntries = migratedRoster?.kind === "entries" ? migratedRoster.value : undefined;
+    const { list: _legacyList, ...candidateAgents } = candidate.agents ?? {};
+    const rosterRepair = {
+      config: {
+        ...candidate,
+        agents: {
+          ...candidateAgents,
+          entries: migratedEntries as NonNullable<OpenClawConfig["agents"]>["entries"],
+        },
+      },
+      changes: ["Persisted agents.entries with exactly one explicit default agent."],
+    };
+    emitDoctorChangesPanel(rosterRepair.changes, shouldRepair);
+    ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
+      state: { cfg, candidate, pendingChanges, fixHints },
+      mutation: rosterRepair,
+      shouldRepair,
+      fixHint: `Run "${doctorFixCommand}" to persist the explicit agent roster.`,
+    }));
+  }
+  const defaultRoleMaterialization = materializeDefaultAgentRoles(candidate);
+  if (defaultRoleMaterialization.changes.length > 0) {
+    emitDoctorChangesPanel(defaultRoleMaterialization.changes, shouldRepair);
+    ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
+      state: { cfg, candidate, pendingChanges, fixHints },
+      mutation: defaultRoleMaterialization,
+      shouldRepair,
+      fixHint: `Run "${doctorFixCommand}" to persist explicit ambient agent targets.`,
+    }));
+  }
   const { collectBlockedLegacyOpenAICodexProviderPlan } =
     await import("./doctor/shared/legacy-config-migrations.runtime.models.js");
   const blockedCodexProviderPlan = collectBlockedLegacyOpenAICodexProviderPlan(candidate);
@@ -415,9 +459,17 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note,
   });
   cfg = finalized.cfg;
+  const singleTopLevelIncludeWrite =
+    finalized.shouldWriteConfig &&
+    isSingleTopLevelIncludeMigration({
+      parsed: snapshot.parsed,
+      sourceConfig: snapshot.sourceConfig,
+      candidate: cfg,
+    });
 
   noteOpencodeProviderOverrides(cfg);
   noteImplicitFallbackClobberWarnings(cfg);
+  noteSandboxOriginProxyWarning(cfg);
 
   return {
     cfg,
@@ -426,6 +478,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     sourceConfigValid: snapshot.valid,
     ...(sourceLastTouchedVersion ? { sourceLastTouchedVersion } : {}),
     ...(legacyMigrationPartiallyValid ? { skipPluginValidationOnWrite: true } : {}),
+    ...(singleTopLevelIncludeWrite ? { skipWizardMetadataForIncludeWrite: true } : {}),
     ...(shouldRepairCronCodexModelRefsAfterConfigWrite
       ? { shouldRepairCronCodexModelRefsAfterConfigWrite: true }
       : {}),

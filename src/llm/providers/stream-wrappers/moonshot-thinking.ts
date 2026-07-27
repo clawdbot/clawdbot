@@ -2,7 +2,7 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { StreamFn } from "../../../agents/runtime/index.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
-import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
+import { streamSimple } from "../../stream.js";
 
 type MoonshotThinkingType = "enabled" | "disabled";
 type MoonshotThinkingKeep = "all";
@@ -17,13 +17,11 @@ const MOONSHOT_FIXED_SAMPLING_FIELDS = [
   "presence_penalty",
   "frequency_penalty",
 ] as const;
-const llmRuntimeLoader = createLazyImportLoader(() => import("openclaw/plugin-sdk/llm"));
 type MoonshotK27CodeModel = (typeof MOONSHOT_K2_7_CODE_MODEL_IDS)[number];
 type MoonshotAlwaysThinkingModel = MoonshotK27CodeModel | "kimi-k3";
 
 async function loadDefaultStreamFn(): Promise<StreamFn> {
-  const runtime = await llmRuntimeLoader.load();
-  return runtime.streamSimple;
+  return streamSimple;
 }
 
 function normalizeMoonshotThinkingType(value: unknown): MoonshotThinkingType | undefined {

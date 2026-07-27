@@ -1,8 +1,11 @@
 // Discord plugin module implements message media behavior.
 import { StickerFormatType, type APIAttachment, type APIStickerItem } from "discord-api-types/v10";
+import {
+  formatMediaPlaceholderText,
+  type MediaPlaceholderTextFact,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { getFileExtension, normalizeMimeType } from "openclaw/plugin-sdk/media-mime";
 import { saveRemoteMedia, type FetchLike } from "openclaw/plugin-sdk/media-runtime";
-import { buildMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -46,12 +49,7 @@ const AUDIO_ATTACHMENT_EXTENSIONS = new Set([
 
 const DISCORD_STICKER_ASSET_BASE_URL = "https://media.discordapp.net/stickers";
 
-export type DiscordMediaInfo = {
-  path: string;
-  contentType?: string;
-  kind?: "audio";
-  placeholder: string;
-};
+export type DiscordMediaInfo = Pick<MediaPlaceholderTextFact, "contentType" | "kind" | "path">;
 
 type DiscordMediaResolveOptions = {
   fetchImpl?: FetchLike;
@@ -103,24 +101,34 @@ function resolveEffectiveMediaType(params: {
 function resolveDiscordMediaClassification(params: {
   attachment: APIAttachment;
   fetchedContentType?: string | null;
-}): { contentType?: string; kind?: "audio" } {
+}): Pick<DiscordMediaInfo, "contentType" | "kind"> {
   const contentType = resolveEffectiveMediaType({
     declaredContentType: params.attachment.content_type,
     fetchedContentType: params.fetchedContentType,
   });
   const mime = normalizeMimeType(contentType);
-  const kind =
+  const audioKind =
     mime?.startsWith("audio/") ||
     hasDiscordVoiceAttachmentFields(params.attachment) ||
     (isDiscordAudioAttachmentFileName(params.attachment.filename ?? params.attachment.url) &&
       !isDefinitiveMediaType(contentType))
       ? "audio"
       : undefined;
+  const kind =
+    audioKind ??
+    (!isDefinitiveMediaType(contentType)
+      ? isImageAttachment(params.attachment)
+        ? "image"
+        : "document"
+      : undefined);
 
   return {
     // Inbound projection prefers MIME over kind. A native voice classification
-    // must therefore replace a non-audio MIME rather than be masked by it.
-    contentType: kind === "audio" && !mime?.startsWith("audio/") ? undefined : contentType,
+    // or filename fallback must replace a non-definitive MIME rather than be masked by it.
+    contentType:
+      (audioKind && !mime?.startsWith("audio/")) || (kind && !isDefinitiveMediaType(contentType))
+        ? undefined
+        : contentType,
     ...(kind ? { kind } : {}),
   };
 }
@@ -367,6 +375,7 @@ async function appendResolvedMediaFromAttachments(params: {
       logVerbose(
         `${params.errorPrefix} ${attachment.id ?? attachment.filename ?? "attachment"}: missing url`,
       );
+      params.out.push(resolveDiscordMediaClassification({ attachment }));
       continue;
     }
     try {
@@ -389,16 +398,13 @@ async function appendResolvedMediaFromAttachments(params: {
       params.out.push({
         path: saved.path,
         ...classification,
-        placeholder: inferPlaceholder(classification),
       });
     } catch (err) {
       const id = attachment.id ?? attachmentUrl;
       logVerbose(`${params.errorPrefix} ${id}: ${String(err)}`);
       const classification = resolveDiscordMediaClassification({ attachment });
       params.out.push({
-        path: attachmentUrl,
         ...classification,
-        placeholder: inferPlaceholder(classification),
       });
     }
   }
@@ -491,7 +497,7 @@ async function appendResolvedMediaFromStickers(params: {
         params.out.push({
           path: saved.path,
           contentType: saved.contentType,
-          placeholder: "<media:sticker>",
+          kind: "sticker",
         });
         lastError = null;
         break;
@@ -504,30 +510,12 @@ async function appendResolvedMediaFromStickers(params: {
       const fallback = candidates[0];
       if (fallback) {
         params.out.push({
-          path: fallback.url,
           contentType: inferStickerContentType(sticker),
-          placeholder: "<media:sticker>",
+          kind: "sticker",
         });
       }
     }
   }
-}
-
-function inferPlaceholder(media: Pick<DiscordMediaInfo, "contentType" | "kind">): string {
-  if (media.kind === "audio") {
-    return "<media:audio>";
-  }
-  const mime = normalizeMimeType(media.contentType) ?? "";
-  if (mime.startsWith("image/")) {
-    return "<media:image>";
-  }
-  if (mime.startsWith("video/")) {
-    return "<media:video>";
-  }
-  if (mime.startsWith("audio/")) {
-    return "<media:audio>";
-  }
-  return "<media:document>";
 }
 
 function isImageAttachment(attachment: APIAttachment): boolean {
@@ -542,48 +530,23 @@ function isImageAttachment(attachment: APIAttachment): boolean {
   return /\.(avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/.test(name);
 }
 
-function buildDiscordAttachmentPlaceholder(attachments?: APIAttachment[]): string {
-  if (!attachments || attachments.length === 0) {
-    return "";
-  }
-  const count = attachments.length;
-  const allImages = attachments.every(isImageAttachment);
-  const label = allImages ? "image" : "file";
-  const suffix = count === 1 ? label : `${label}s`;
-  const tag = allImages ? "<media:image>" : "<media:document>";
-  return `${tag} (${count} ${suffix})`;
+function resolveDiscordTextMediaFacts(params: {
+  attachments?: APIAttachment[];
+  stickers?: APIStickerItem[];
+}): MediaPlaceholderTextFact[] {
+  return [
+    ...(params.attachments ?? []).map((attachment) => {
+      const classification = resolveDiscordMediaClassification({ attachment });
+      return classification;
+    }),
+    ...(params.stickers ?? []).map(() => ({ kind: "sticker" as const })),
+  ];
 }
 
-function buildDiscordStickerPlaceholder(stickers?: APIStickerItem[]): string {
-  if (!stickers || stickers.length === 0) {
-    return "";
-  }
-  const count = stickers.length;
-  const label = count === 1 ? "sticker" : "stickers";
-  return `<media:sticker> (${count} ${label})`;
-}
-
-export function buildDiscordMediaPlaceholder(params: {
+/** Renders native Discord media only for transcript surfaces that cannot carry facts. */
+export function formatDiscordMediaText(params: {
   attachments?: APIAttachment[];
   stickers?: APIStickerItem[];
 }): string {
-  const attachmentText = buildDiscordAttachmentPlaceholder(params.attachments);
-  const stickerText = buildDiscordStickerPlaceholder(params.stickers);
-  if (attachmentText && stickerText) {
-    return `${attachmentText}\n${stickerText}`;
-  }
-  return attachmentText || stickerText || "";
-}
-
-export function buildDiscordMediaPayload(
-  mediaList: Array<{ path: string; contentType?: string }>,
-): {
-  MediaPath?: string;
-  MediaType?: string;
-  MediaUrl?: string;
-  MediaPaths?: string[];
-  MediaUrls?: string[];
-  MediaTypes?: string[];
-} {
-  return buildMediaPayload(mediaList);
+  return formatMediaPlaceholderText(resolveDiscordTextMediaFacts(params));
 }

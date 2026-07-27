@@ -21,24 +21,17 @@ function writeMigratedSessionState(stateDir: string): void {
   const db = new DatabaseSync(join(agentDbDir, "openclaw-agent.sqlite"));
   try {
     db.exec(`
-      CREATE TABLE sessions (
+      CREATE TABLE session_nodes (
+        session_key TEXT PRIMARY KEY,
+        current_session_id TEXT NOT NULL,
+        entry_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE session_windows (
         session_id TEXT PRIMARY KEY,
         session_key TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
-      );
-      CREATE TABLE session_routes (
-        session_key TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        updated_at INTEGER NOT NULL,
-        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
-      );
-      CREATE TABLE session_entries (
-        session_key TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        entry_json TEXT NOT NULL,
-        updated_at INTEGER NOT NULL,
-        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
       );
       CREATE TABLE transcript_events (
         session_id TEXT NOT NULL,
@@ -46,19 +39,15 @@ function writeMigratedSessionState(stateDir: string): void {
         event_json TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         PRIMARY KEY (session_id, seq),
-        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+        FOREIGN KEY (session_id) REFERENCES session_windows(session_id) ON DELETE CASCADE
       );
     `);
     const insertSession = db.prepare(`
-      INSERT INTO sessions (session_id, session_key, created_at, updated_at)
+      INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
       VALUES (?, ?, ?, ?)
     `);
-    const insertRoute = db.prepare(`
-      INSERT INTO session_routes (session_key, session_id, updated_at)
-      VALUES (?, ?, ?)
-    `);
     const insertEntry = db.prepare(`
-      INSERT INTO session_entries (session_key, session_id, entry_json, updated_at)
+      INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
       VALUES (?, ?, ?, ?)
     `);
     const insertTranscript = db.prepare(`
@@ -88,7 +77,6 @@ function writeMigratedSessionState(stateDir: string): void {
     ];
     for (const { entry, sessionId, sessionKey } of migratedSessions) {
       insertSession.run(sessionId, sessionKey, 1710000000000, 1710000000000);
-      insertRoute.run(sessionKey, sessionId, 1710000000000);
       insertEntry.run(sessionKey, sessionId, JSON.stringify(entry), 1710000000000);
       insertTranscript.run(
         sessionId,

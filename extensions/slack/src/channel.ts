@@ -71,7 +71,11 @@ import type { SlackProbe } from "./probe.js";
 import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 import { getOptionalSlackRuntime } from "./runtime.js";
 import { slackSecurityAdapter } from "./security.js";
-import { createSlackSetupWizardProxy, slackSetupAdapter } from "./setup-core.js";
+import {
+  createSlackSetupWizardProxy,
+  slackSetupAdapter,
+  slackSetupContract,
+} from "./setup-core.js";
 import {
   createSlackPluginBase,
   isSlackPluginAccountConfigured,
@@ -622,6 +626,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
     ...createSlackPluginBase({
       setupWizard: createSlackSetupWizardProxy(loadSlackSetupSurfaceModule),
       setup: slackSetupAdapter,
+      setupContract: slackSetupContract,
     }),
     allowlist: {
       ...buildLegacyDmAccountAllowlistAdapter({
@@ -796,7 +801,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
           snapshot,
           snapshot.identity === "user"
             ? {
-                identity: "user",
+                postAs: "user",
                 userTokenSource: snapshot.userTokenSource ?? "none",
                 ...(snapshot.mode === "http"
                   ? { signingSecretSource: snapshot.signingSecretSource ?? "none" }
@@ -872,7 +877,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       },
       resolveAccountSnapshot: ({ account }) => {
         const mode = account.config.mode ?? "socket";
-        const identity = account.config.identity ?? "bot";
+        const identity = account.config.postAs ?? "bot";
         const credentialConfigured =
           mode === "http"
             ? resolveConfiguredFromRequiredCredentialStatuses(account, [

@@ -16,7 +16,7 @@ const { execOpenPathMock, loadGatewayRuntimeConfigSchemaMock } = vi.hoisted(() =
   execOpenPathMock: vi.fn(),
   loadGatewayRuntimeConfigSchemaMock: vi.fn(() => ({
     schema: { type: "object" },
-    uiHints: undefined,
+    uiHints: undefined as Record<string, { advanced?: boolean }> | undefined,
     version: "test-schema",
   })),
 }));
@@ -129,6 +129,27 @@ describe("config.openFile", () => {
 });
 
 describe("config schema response cache", () => {
+  it("returns resolved tier metadata through config.schema", async () => {
+    loadGatewayRuntimeConfigSchemaMock.mockReturnValueOnce({
+      schema: { type: "object" },
+      uiHints: { "gateway.port": { advanced: false } },
+      version: "test-schema",
+    });
+    const harness = createConfigHandlerHarness({ method: "config.schema" });
+    await expectDefined(
+      configHandlers["config.schema"],
+      'configHandlers["config.schema"] test invariant',
+    )(harness.options);
+
+    expect(harness.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        uiHints: { "gateway.port": { advanced: false } },
+      }),
+      undefined,
+    );
+  });
+
   it("reuses a recent schema build across burst config requests", () => {
     loadConfigSchemaResponseForTests();
     loadConfigSchemaResponseForTests();

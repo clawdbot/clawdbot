@@ -66,6 +66,7 @@ function normalizeMockProviderId(providerId?: string): string {
 type SessionManagerMocks = {
   getLeafEntry: UnknownMock;
   getEntry: UnknownMock;
+  getBoundaryCount: UnknownMock;
   branch: UnknownMock;
   resetLeaf: UnknownMock;
   buildSessionContext: Mock<() => { messages: AgentMessage[] }>;
@@ -74,7 +75,7 @@ type SessionManagerMocks = {
   appendCustomEntry: UnknownMock;
   appendSessionInfo: UnknownMock;
   appendLabelChange: UnknownMock;
-  replacePersistedTranscript: UnknownMock;
+  flushPendingPersistence: UnknownMock;
   flushPendingToolResults: UnknownMock;
   clearPendingToolResults: UnknownMock;
   clearNextUserMessagePersistenceSuppression: UnknownMock;
@@ -216,7 +217,9 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const prepareSessionManagerForRunMock = vi.fn(async (_params?: unknown) => undefined);
   const detectAndLoadPromptImagesMock = vi.fn(async () => ({
     images: [],
+    imageFactIndexes: [],
     detectedRefs: [],
+    failedMediaCount: 0,
     loadedCount: 0,
     skippedCount: 0,
   }));
@@ -234,6 +237,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const sessionManager = {
     getLeafEntry: vi.fn(() => null),
     getEntry: vi.fn(() => undefined),
+    getBoundaryCount: vi.fn(() => 0),
     branch: vi.fn(),
     resetLeaf: vi.fn(),
     buildSessionContext: vi.fn<() => { messages: AgentMessage[] }>(() => ({ messages: [] })),
@@ -242,7 +246,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     appendCustomEntry: vi.fn(),
     appendSessionInfo: vi.fn(),
     appendLabelChange: vi.fn(),
-    replacePersistedTranscript: vi.fn(),
+    flushPendingPersistence: vi.fn(),
     flushPendingToolResults: vi.fn(),
     clearPendingToolResults: vi.fn(),
     clearNextUserMessagePersistenceSuppression: vi.fn(),
@@ -406,6 +410,11 @@ vi.mock("../../sessions/index.js", () => {
     },
   };
 });
+
+vi.mock("../../sessions/sdk.js", () => ({
+  createAgentSessionForEmbeddedRunner: (...args: unknown[]) =>
+    hoisted.createAgentSessionMock(...args),
+}));
 
 vi.mock("../../subagent-spawn.js", () => ({
   SUBAGENT_SPAWN_MODES: ["run", "session"],
@@ -1115,6 +1124,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.trajectoryEvents.length = 0;
   hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
   hoisted.sessionManager.getEntry.mockReset().mockReturnValue(undefined);
+  hoisted.sessionManager.getBoundaryCount.mockReset().mockReturnValue(0);
   hoisted.sessionManager.branch.mockReset();
   hoisted.sessionManager.resetLeaf.mockReset();
   hoisted.sessionManager.clearNextUserMessagePersistenceSuppression.mockReset();
@@ -1126,7 +1136,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.sessionManager.appendCustomEntry.mockReset();
   hoisted.sessionManager.appendSessionInfo.mockReset();
   hoisted.sessionManager.appendLabelChange.mockReset();
-  hoisted.sessionManager.replacePersistedTranscript.mockReset();
+  hoisted.sessionManager.flushPendingPersistence.mockReset();
   if (params.subscribeImpl) {
     hoisted.subscribeEmbeddedAgentSessionMock.mockImplementation(params.subscribeImpl);
   }

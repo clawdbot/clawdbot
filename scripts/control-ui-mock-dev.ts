@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import qrcode from "qrcode";
 import { createServer, type Plugin, type ViteDevServer } from "vite";
+import type { UserProfile } from "../packages/gateway-protocol/src/index.js";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
 import {
@@ -23,17 +24,31 @@ import { buildSkillWorkshopMocks } from "./control-ui-mock-skill-workshop.js";
 
 type CliOptions = {
   allowedHosts: string[];
-  fixture?: "board";
+  fixture?: "board" | "swarm";
   host: string;
   port: number;
 };
 
 type SessionListOptions = {
+  creators?: readonly SessionCreatorFixture[];
   hasMore: boolean;
   nextOffset: number | null;
   offset?: number;
   totalCount: number;
 };
+
+type SessionCreatorFixture = { type: "human" | "agent"; id: string; label: string };
+
+// Two creator identities so the sidebar's collaborative ownership chrome
+// (owner avatars + People filter) renders in the mock harness.
+const MOCK_SESSION_CREATORS: readonly SessionCreatorFixture[] = [
+  { type: "human", id: "profile-peter", label: "Peter" },
+  { type: "human", id: "profile-mira", label: "Mira" },
+];
+const [MOCK_CREATOR_PETER, MOCK_CREATOR_MIRA] = MOCK_SESSION_CREATORS as [
+  SessionCreatorFixture,
+  SessionCreatorFixture,
+];
 
 const SESSION_PAGE_SIZE = 50;
 const TOTAL_MOCK_SESSIONS = 650;
@@ -41,6 +56,8 @@ const TOTAL_TELEGRAM_SESSIONS = 180;
 const ATTENTION_FIXTURE_EXPIRES_AT = Date.parse("2099-01-01T00:00:00.000Z");
 const NARRATION_DEMO_SESSION_KEY = "agent:main:sidebar-narration-demo";
 const NARRATION_DEMO_RUN_ID = "mock-sidebar-narration-run";
+const OBSERVER_DEMO_SESSION_KEY = "agent:main:session-observer-demo";
+const OBSERVER_DEMO_RUN_ID = "mock-session-observer-run";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const uiRoot = path.join(repoRoot, "ui");
@@ -50,16 +67,35 @@ const boardFixtureHtml = `<!doctype html>
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
     <title>OpenClaw Board Fixture</title>
+    <script>
+      // This standalone fixture bypasses app bootstrap, so mirror its root theme contract.
+      const mediaQuery = matchMedia("(prefers-color-scheme: light)");
+      const applyTheme = () => {
+        const mode = mediaQuery.matches ? "light" : "dark";
+        document.documentElement.dataset.theme = mode;
+        document.documentElement.dataset.themeMode = mode;
+        document.documentElement.classList.toggle("wa-light", mode === "light");
+        document.documentElement.classList.toggle("wa-dark", mode === "dark");
+        document.documentElement.style.colorScheme = mode;
+      };
+      applyTheme();
+      if (typeof mediaQuery.addEventListener === "function") {
+        mediaQuery.addEventListener("change", applyTheme);
+      } else {
+        mediaQuery.addListener(applyTheme);
+      }
+    </script>
     <link rel="stylesheet" href="/src/styles.css" />
     <style>
-      body { margin: 0; min-width: 320px; min-height: 100vh; background: #0f1115; }
+      body { margin: 0; min-width: 320px; min-height: 100vh; background: var(--bg); }
       .board-fixture-shell { box-sizing: border-box; margin: 0 auto; max-width: 1440px; padding: 36px; }
       .board-fixture-header { align-items: end; display: flex; justify-content: space-between; margin-bottom: 24px; }
-      .board-fixture-header span { color: #747e8d; font: 10px ui-monospace, monospace; letter-spacing: .15em; }
-      .board-fixture-header h1 { color: #e5e7eb; font-size: 24px; letter-spacing: -.03em; margin: 5px 0 0; }
-      .board-fixture-status { color: #8892a0; font: 11px ui-monospace, monospace; }
-      .board-fixture-status i { background: #4ec9a8; border-radius: 50%; display: inline-block; height: 7px; margin-right: 6px; width: 7px; }
+      .board-fixture-header span { color: var(--muted); font: 10px ui-monospace, monospace; letter-spacing: .15em; }
+      .board-fixture-header h1 { color: var(--text-strong); font-size: 24px; letter-spacing: -.03em; margin: 5px 0 0; }
+      .board-fixture-status { color: var(--muted); font: 11px ui-monospace, monospace; }
+      .board-fixture-status i { background: var(--accent-2); border-radius: 50%; display: inline-block; height: 7px; margin-right: 6px; width: 7px; }
       @media (max-width: 700px) { .board-fixture-shell { padding: 18px; } }
     </style>
   </head>
@@ -104,11 +140,11 @@ function parseArgs(args: string[]): CliOptions {
   return options;
 }
 
-function parseFixture(value: string | undefined): "board" | undefined {
+function parseFixture(value: string | undefined): "board" | "swarm" | undefined {
   if (!value) {
     return undefined;
   }
-  if (value !== "board") {
+  if (value !== "board" && value !== "swarm") {
     throw new Error(`Unknown Control UI mock fixture: ${value}`);
   }
   return value;
@@ -153,6 +189,7 @@ function sessionsListResponse(sessions: unknown[], options: SessionListOptions) 
     hasMore: options.hasMore,
     limitApplied: 50,
     nextOffset: options.nextOffset,
+    ...(options.creators ? { creators: options.creators } : {}),
     offset: options.offset ?? 0,
     path: "",
     sessions,
@@ -161,11 +198,16 @@ function sessionsListResponse(sessions: unknown[], options: SessionListOptions) 
   };
 }
 
-function pagedSessionsListResponse(sessions: unknown[], offset: number) {
+function pagedSessionsListResponse(
+  sessions: unknown[],
+  offset: number,
+  creators?: readonly SessionCreatorFixture[],
+) {
   const normalizedOffset = Math.max(0, Math.floor(offset));
   const page = sessions.slice(normalizedOffset, normalizedOffset + SESSION_PAGE_SIZE);
   const nextOffset = normalizedOffset + SESSION_PAGE_SIZE;
   return sessionsListResponse(page, {
+    creators,
     hasMore: nextOffset < sessions.length,
     nextOffset: nextOffset < sessions.length ? nextOffset : null,
     offset: normalizedOffset,
@@ -196,17 +238,18 @@ function buildSessionRows(params: {
 function buildSessionListCases(
   sessions: unknown[],
   matchBase: Record<string, unknown> = {},
+  creators?: readonly SessionCreatorFixture[],
 ): Array<{ match: Record<string, unknown>; response: unknown }> {
   const cases: Array<{ match: Record<string, unknown>; response: unknown }> = [];
   for (let offset = SESSION_PAGE_SIZE; offset < sessions.length; offset += SESSION_PAGE_SIZE) {
     cases.push({
       match: { ...matchBase, offset },
-      response: pagedSessionsListResponse(sessions, offset),
+      response: pagedSessionsListResponse(sessions, offset, creators),
     });
   }
   cases.push({
     match: matchBase,
-    response: pagedSessionsListResponse(sessions, 0),
+    response: pagedSessionsListResponse(sessions, 0, creators),
   });
   return cases;
 }
@@ -585,13 +628,14 @@ function buildProfileUsageMocks(baseTime: number) {
  * across a few real section keys, and `config.get` returns a matching
  * snapshot with the hash `config.set`/`config.apply` are guarded by.
  */
-function buildConfigMocks() {
+function buildConfigMocks(options: { swarmEnabled?: boolean } = {}) {
   const config = {
     logging: { level: "info", consoleTimestamps: true },
     messages: { queueLimit: 5, responsePrefix: "" },
     gateway: { port: 18789, bind: "127.0.0.1" },
     agents: { defaults: { thinkingDefault: "medium" } },
     models: { mode: "merge" },
+    ...(options.swarmEnabled ? { tools: { swarm: true } } : {}),
     mcp: {
       servers: {
         context7: { url: "https://mcp.context7.com/mcp", transport: "streamable-http" },
@@ -777,8 +821,20 @@ function searchPrefixes(term: string): string[] {
   return Array.from({ length: term.length }, (_value, index) => term.slice(0, index + 1));
 }
 
-async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario> {
+async function createChatPickerScenario(
+  fixture?: CliOptions["fixture"],
+): Promise<ControlUiMockGatewayScenario> {
   const baseTime = Date.parse("2026-05-22T09:00:00.000Z");
+  const selfProfile: UserProfile = {
+    id: "presence-riley",
+    displayName: "Riley",
+    avatarMime: null,
+    mergedInto: null,
+    createdAt: baseTime,
+    updatedAt: baseTime,
+    emails: ["riley@example.com"],
+    hasAvatar: false,
+  };
   const devicePairSetupCode = Buffer.from(
     JSON.stringify({
       url: "wss://gateway.example.test",
@@ -1029,11 +1085,77 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       runtimeMs: 200_000,
     },
   );
+  const swarmGroupId = "swarm:agent:main:main:mock-turn";
+  const swarmChildRows =
+    fixture === "swarm"
+      ? [
+          sessionRow("agent:main:subagent:swarm-plan", "National polling", baseTime - 9_000, {
+            parentSessionKey: "agent:main:main",
+            spawnedBy: "agent:main:main",
+            swarmGroupId,
+            swarmPhase: "Research",
+            swarmPhaseRank: 0,
+            status: "done",
+          }),
+          sessionRow("agent:main:subagent:swarm-work", "Work and labor", baseTime - 8_000, {
+            hasActiveRun: true,
+            parentSessionKey: "agent:main:main",
+            spawnedBy: "agent:main:main",
+            swarmGroupId,
+            swarmLog: "Comparing labor, education, and consumer signals.",
+            swarmPhase: "Research",
+            swarmPhaseRank: 0,
+            status: "running",
+          }),
+          sessionRow("agent:main:subagent:swarm-health", "Health", baseTime - 7_000, {
+            hasActiveRun: true,
+            parentSessionKey: "agent:main:main",
+            spawnedBy: "agent:main:main",
+            swarmGroupId,
+            swarmPhase: "Research",
+            swarmPhaseRank: 0,
+            status: "running",
+          }),
+          sessionRow("agent:main:subagent:swarm-trust", "Governance and trust", baseTime - 6_000, {
+            parentSessionKey: "agent:main:main",
+            spawnedBy: "agent:main:main",
+            subagentRunState: "active",
+            swarmGroupId,
+            swarmPhase: "Research",
+            swarmPhaseRank: 0,
+            status: undefined,
+          }),
+          sessionRow("agent:main:subagent:swarm-media", "Media signals", baseTime - 5_000, {
+            parentSessionKey: "agent:main:main",
+            spawnedBy: "agent:main:main",
+            swarmGroupId,
+            swarmPhase: "Research",
+            swarmPhaseRank: 0,
+            status: "failed",
+          }),
+        ]
+      : [];
   const sessions = [
     sessionRow("agent:main:main", "Molty", baseTime - 1_000, {
-      childSessions: ["agent:main:lisbon-trip"],
+      childSessions: ["agent:main:lisbon-trip", ...swarmChildRows.map((row) => row.key)],
+    }),
+    ...swarmChildRows,
+    sessionRow(OBSERVER_DEMO_SESSION_KEY, "Session observer demo", baseTime - 3_000, {
+      activeRunIds: [OBSERVER_DEMO_RUN_ID],
+      hasActiveRun: true,
+      lastReadAt: baseTime + 2_000,
+      observerDigest: {
+        headline: "Opening the focused observer tests",
+        health: "on-track",
+        revision: 1,
+        runId: OBSERVER_DEMO_RUN_ID,
+        updatedAt: baseTime - 2_000,
+      },
+      startedAt: baseTime - 4_000,
+      status: "running",
     }),
     sessionRow(NARRATION_DEMO_SESSION_KEY, "Sidebar narration demo", baseTime - 15_000, {
+      createdActor: MOCK_CREATOR_MIRA,
       hasActiveRun: true,
       startedAt: baseTime - 45_000,
       status: "running",
@@ -1045,13 +1167,34 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       pinned: true,
       icon: "name:spark",
     }),
-    sessionRow("agent:main:production-export", "Production export", baseTime - 75_000),
+    sessionRow("agent:main:production-export", "Production export", baseTime - 75_000, {
+      category: "Research",
+      createdActor: MOCK_CREATOR_MIRA,
+      execCwd: "/Users/peter/Projects/clawdbot",
+    }),
     sessionRow("agent:main:model-budget", "Model budget review", baseTime - 80_000, {
+      category: "Research",
+      execCwd: "/Users/peter/Projects/openclaw",
       status: "failed",
       lastRunError: "Model out of credits: openai/gpt-5.6",
     }),
+    sessionRow("agent:main:work-openclaw", "OpenClaw work checkout", baseTime - 85_000, {
+      createdActor: MOCK_CREATOR_PETER,
+      execCwd: "/Users/peter/Work/openclaw",
+      lastReadAt: baseTime - 120_000,
+      observerDigest: {
+        headline: "Done: fixed the flaky retry-window test",
+        health: "done",
+        revision: 1,
+        runId: "mock-idle-final-run",
+        updatedAt: baseTime - 40_000,
+      },
+      unread: true,
+    }),
     mainChildRow,
     sessionRow("agent:main:home-server", "Home server migration", baseTime - 240_000, {
+      execCwd: "/Users/peter/Projects",
+      execNode: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
       pinned: true,
       icon: "🛠️",
     }),
@@ -1081,6 +1224,8 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
   const archivedSessions = [
     sessionRow("agent:main:archived-launch-notes", "Archived launch notes", baseTime - 86_400_000, {
       archived: true,
+      archivedBy: MOCK_CREATOR_MIRA,
+      createdActor: MOCK_CREATOR_PETER,
       totalTokens: 42_000,
     }),
     sessionRow(
@@ -1115,7 +1260,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
   const modelProviders = buildModelProviderMocks(Date.now());
   const skillWorkshop = buildSkillWorkshopMocks(Date.now());
   const channelWizard = buildChannelWizardMocks();
-  const configMocks = buildConfigMocks();
+  const configMocks = buildConfigMocks({ swarmEnabled: fixture === "swarm" });
   return {
     assistantAgentId: "main",
     assistantName: "Molty",
@@ -1126,10 +1271,121 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       "question.list",
       "sessions.diff",
       "sessions.files.set",
+      "system.info",
     ],
     historyMessages: buildScrollableChatHistory(baseTime),
+    // Lights up the footer facepile and who's-online roster; the email-only
+    // entry keeps the roster's no-display-name row exercised.
+    presenceUsers: [
+      {
+        self: true,
+        id: selfProfile.id,
+        name: selfProfile.displayName ?? undefined,
+        email: selfProfile.emails[0],
+      },
+      { id: "presence-colin", name: "Colin", email: "colin@example.com" },
+      { id: "presence-patricia", email: "patricia.erichsen@example.com" },
+    ],
     methodResponses: {
       ...buildBackgroundTasksMock(baseTime),
+      "users.self": { profile: selfProfile },
+      // Custom session group catalog so the sidebar's category zone (and its
+      // drag-reordering against built-in sections) is exercised in the mock.
+      "sessions.groups.list": { groups: [{ name: "Research", position: 0 }] },
+      "system.info": {
+        machineName: "Peters-Mac-Studio",
+        hostname: "peters-mac-studio.local",
+        platform: "darwin",
+        release: "25.0.0",
+        arch: "arm64",
+        osLabel: "macOS 26.5",
+        nodeVersion: "24.15.0",
+        pid: 4242,
+        uptimeMs: 86_400_000,
+        cpuCount: 16,
+        memoryTotalBytes: 68_719_476_736,
+        memoryFreeBytes: 34_359_738_368,
+        defaultAgentUtilityModel: {
+          status: "auto",
+          model: "anthropic/claude-haiku-4-5",
+        },
+      },
+      "fs.listDir": {
+        cases: [
+          {
+            match: { path: "/Users/peter/Projects/openclaw" },
+            response: {
+              path: "/Users/peter/Projects/openclaw",
+              parent: "/Users/peter/Projects",
+              home: "/Users/peter",
+              entries: [
+                { name: "ui", path: "/Users/peter/Projects/openclaw/ui" },
+                { name: "src", path: "/Users/peter/Projects/openclaw/src" },
+                { name: "docs", path: "/Users/peter/Projects/openclaw/docs" },
+                { name: "packages", path: "/Users/peter/Projects/openclaw/packages" },
+              ],
+            },
+          },
+          {
+            match: { path: "/Users/peter/Projects" },
+            response: {
+              path: "/Users/peter/Projects",
+              parent: "/Users/peter",
+              home: "/Users/peter",
+              entries: [
+                { name: "openclaw", path: "/Users/peter/Projects/openclaw" },
+                { name: "clawdbot", path: "/Users/peter/Projects/clawdbot" },
+                { name: "sweetistics", path: "/Users/peter/Projects/sweetistics" },
+                { name: "Peekaboo", path: "/Users/peter/Projects/Peekaboo" },
+              ],
+            },
+          },
+          {
+            match: {},
+            response: {
+              path: "/Users/peter",
+              parent: "/Users",
+              home: "/Users/peter",
+              entries: [
+                { name: "Projects", path: "/Users/peter/Projects" },
+                { name: "Downloads", path: "/Users/peter/Downloads" },
+                { name: ".config", path: "/Users/peter/.config", hidden: true },
+              ],
+            },
+          },
+        ],
+      },
+      "worktrees.branches": {
+        cases: [
+          {
+            match: { repoRoot: "/Users/peter/Projects/openclaw" },
+            response: {
+              repoRoot: "/Users/peter/Projects/openclaw",
+              branches: [
+                { kind: "local", name: "main" },
+                { kind: "local", name: "steipete/place-picker" },
+              ],
+              defaultBranch: "main",
+              headBranch: "main",
+            },
+          },
+          {
+            match: { repoRoot: "/Users/peter/Projects/clawdbot" },
+            response: {
+              repoRoot: "/Users/peter/Projects/clawdbot",
+              branches: [
+                { kind: "local", name: "main" },
+                { kind: "local", name: "steipete/storage-selector-design" },
+              ],
+              defaultBranch: "main",
+              headBranch: "main",
+            },
+          },
+        ],
+      },
+      "environments.list": {
+        profiles: [{ id: "aws", providerId: "aws" }],
+      },
       // config.set/config.apply are served statefully by the mock gateway
       // (raw persists, hash advances) because config.get ships a raw fixture.
       "config.get": configMocks.get,
@@ -1159,17 +1415,20 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
           },
         ],
       },
-      "exec.approval.list": [
-        {
-          id: "mock-production-export-approval",
-          request: {
-            command: "openclaw export --target production",
-            sessionKey: "agent:main:production-export",
-          },
-          createdAtMs: baseTime - 75_000,
-          expiresAtMs: ATTENTION_FIXTURE_EXPIRES_AT,
-        },
-      ],
+      "exec.approval.list":
+        fixture === "swarm"
+          ? []
+          : [
+              {
+                id: "mock-production-export-approval",
+                request: {
+                  command: "openclaw export --target production",
+                  sessionKey: "agent:main:production-export",
+                },
+                createdAtMs: baseTime - 75_000,
+                expiresAtMs: ATTENTION_FIXTURE_EXPIRES_AT,
+              },
+            ],
       "plugin.approval.list": [],
       "openclaw.approval.list": [],
       "sessions.patch": { ok: true },
@@ -1316,6 +1575,9 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
             nodeId: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
             displayName: "Mac Studio",
             platform: "darwin",
+            deviceFamily: "Mac",
+            modelIdentifier: "Mac14,12",
+            remoteIp: "192.168.1.11",
             version: "2026.6.11",
             connected: true,
             paired: true,
@@ -1335,8 +1597,11 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
             nodeId: "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
             displayName: "Mac Studio",
             platform: "darwin",
+            deviceFamily: "Mac",
+            modelIdentifier: "Mac15,14",
+            remoteIp: "192.168.1.12",
             version: "2026.6.10",
-            connected: false,
+            connected: true,
             paired: true,
             approvalState: "approved",
             lastSeenAtMs: baseTime - 82_800_000,
@@ -1347,14 +1612,22 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
             nodeId: "11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff",
             displayName: "iPhone",
             platform: "iOS 26.4",
+            deviceFamily: "iPhone",
+            modelIdentifier: "iPhone17,2",
+            remoteIp: "192.168.1.30",
             version: "2026.6.11",
-            connected: false,
+            connected: true,
             paired: true,
-            approvalState: "pending-reapproval",
-            pendingRequestId: "mock-node-reapproval",
+            approvalState: "approved",
             lastSeenAtMs: baseTime - 3_600_000,
             caps: ["camera", "canvas", "contacts", "device", "location"],
-            commands: ["camera.list", "contacts.search", "device.info", "location.get"],
+            commands: [
+              "camera.list",
+              "contacts.search",
+              "device.info",
+              "location.get",
+              "system.run",
+            ],
           },
         ],
       },
@@ -1495,12 +1768,23 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
           },
         ],
       },
+      "sessions.companion.ask": {
+        cases: [
+          {
+            match: { sessionKey: OBSERVER_DEMO_SESSION_KEY },
+            response: {
+              answer: "It is rerunning the focused test to check whether the latest fix is stable.",
+              ts: baseTime + 2_000,
+            },
+          },
+        ],
+      },
       "sessions.list": {
         cases: [
           // Child fetches must precede the catch-all page case (subset match).
           {
             match: { spawnedBy: "agent:main:main" },
-            response: pagedSessionsListResponse([mainChildRow], 0),
+            response: pagedSessionsListResponse([mainChildRow, ...swarmChildRows], 0),
           },
           {
             match: { spawnedBy: "agent:main:tax-research" },
@@ -1512,7 +1796,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
             ...searchPrefixes("claude-sonnet-4-6"),
             ...searchPrefixes("anthropic"),
           ]),
-          ...buildSessionListCases([...sessions, ...archivedSessions]),
+          ...buildSessionListCases([...sessions, ...archivedSessions], {}, MOCK_SESSION_CREATORS),
         ],
       },
     },
@@ -1520,6 +1804,44 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     repeatingSessionEvents: {
       intervalMs: 3_000,
       events: [
+        {
+          event: "session.observer",
+          payload: {
+            headline: "Reading the failing test and its board caller",
+            health: "on-track",
+            revision: 2,
+            runId: OBSERVER_DEMO_RUN_ID,
+            sessionKey: OBSERVER_DEMO_SESSION_KEY,
+            updatedAt: baseTime + 1_000,
+          },
+        },
+        {
+          event: "session.observer",
+          payload: {
+            assessment:
+              "The first fix was incomplete, so the agent is narrowing the assertion path.",
+            headline: "Third run of the same vitest file - two assertions still failing",
+            health: "grinding",
+            planProgress: { completed: 2, total: 4 },
+            revision: 3,
+            runId: OBSERVER_DEMO_RUN_ID,
+            sessionKey: OBSERVER_DEMO_SESSION_KEY,
+            updatedAt: baseTime + 4_000,
+          },
+        },
+        {
+          event: "session.observer",
+          payload: {
+            assessment: "Repeated identical failures suggest the current approach needs a reset.",
+            headline: "Same failure five runs in a row - it may be circling",
+            health: "stuck",
+            planProgress: { completed: 2, total: 4 },
+            revision: 4,
+            runId: OBSERVER_DEMO_RUN_ID,
+            sessionKey: OBSERVER_DEMO_SESSION_KEY,
+            updatedAt: baseTime + 7_000,
+          },
+        },
         {
           event: "agent",
           payload: {
@@ -1544,6 +1866,8 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     },
     sessionArchiveFiltering: true,
     sessionKey: "agent:main:main",
+    workspace: "/Users/peter/Projects/openclaw",
+    workspaceGit: true,
   };
 }
 
@@ -1618,7 +1942,7 @@ async function waitForShutdown(): Promise<void> {
 }
 
 const options = parseArgs(process.argv.slice(2));
-const scenario = await createChatPickerScenario();
+const scenario = await createChatPickerScenario(options.fixture);
 const server = await createServer({
   base: "/",
   cacheDir: path.join(repoRoot, ".artifacts", "control-ui-mock-vite"),

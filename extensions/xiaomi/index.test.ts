@@ -319,6 +319,9 @@ describe("xiaomi provider plugin", () => {
       "text",
       "image",
     ]);
+    for (const model of configured.provider.models ?? []) {
+      expect(model.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+    }
   });
 
   it("rejects token-plan keys on the pay-as-you-go auth choice", async () => {

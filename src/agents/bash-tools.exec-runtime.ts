@@ -54,7 +54,7 @@ import {
 } from "./bash-tools.shared.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import { maybeWrapCommandWithShellSnapshot } from "./shell-snapshot.js";
-import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
+import { createStreamingBinaryOutputSanitizer, getShellConfig } from "./shell-utils.js";
 
 export { execSchema } from "./bash-tools.schemas.js";
 
@@ -694,16 +694,20 @@ export async function runExecProcess(opts: {
     });
   };
 
+  // One parser per stream so ESC sequences split across chunks are not mangled.
+  const sanitizeStdout = createStreamingBinaryOutputSanitizer();
+  const sanitizeStderr = createStreamingBinaryOutputSanitizer();
+
   const handleStdout = (data: string) => {
     const raw = data;
-    // Detect smkx/rmkx BEFORE sanitizeBinaryOutput strips ESC sequences.
+    // Detect smkx/rmkx BEFORE the sanitizer strips ESC sequences.
     // Note: PTY chunking is arbitrary, but smkx/rmkx sequences are typically short (4-5 bytes)
     // and sent atomically by terminals. Split across chunks is rare in practice.
     const mode = detectCursorKeyMode(raw);
     if (mode) {
       session.cursorKeyMode = mode;
     }
-    const str = sanitizeBinaryOutput(raw);
+    const str = sanitizeStdout(raw);
     for (const chunk of chunkString(str)) {
       appendOutput(session, "stdout", chunk);
       emitUpdate();
@@ -711,7 +715,7 @@ export async function runExecProcess(opts: {
   };
 
   const handleStderr = (data: string) => {
-    const str = sanitizeBinaryOutput(data);
+    const str = sanitizeStderr(data);
     for (const chunk of chunkString(str)) {
       appendOutput(session, "stderr", chunk);
       emitUpdate();

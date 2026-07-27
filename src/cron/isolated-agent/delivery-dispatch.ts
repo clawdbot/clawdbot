@@ -23,6 +23,7 @@ import type { TtsAutoMode } from "../../config/types.tts.js";
 import { isSuppressedControlReplyText } from "../../gateway/control-reply-text.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { isProvenDeliveryNotSentError } from "../../infra/delivery-recovery.shared.js";
+import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   NormalizedOutboundPayload,
@@ -40,11 +41,7 @@ import { normalizeTargetForProvider } from "../../infra/outbound/target-normaliz
 import { retryAsync } from "../../infra/retry.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
-import {
-  isCronSessionKey,
-  parseThreadSessionSuffix,
-  resolveAgentIdFromSessionKey,
-} from "../../routing/session-key.js";
+import { isCronSessionKey, parseThreadSessionSuffix } from "../../routing/session-key.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
@@ -294,7 +291,7 @@ function cloneDeliveryResults(
 }
 
 function pruneCompletedDirectCronDeliveries(now: number) {
-  const ttlMs = process.env.OPENCLAW_TEST_FAST === "1" ? 60_000 : 24 * 60 * 60 * 1000;
+  const ttlMs = isFastTestRuntimeEnv() ? 60_000 : 24 * 60 * 60 * 1000;
   for (const [key, entry] of COMPLETED_DIRECT_CRON_DELIVERIES) {
     if (now - entry.ts >= ttlMs) {
       COMPLETED_DIRECT_CRON_DELIVERIES.delete(key);
@@ -453,6 +450,38 @@ function resolveCronAwarenessText(params: {
     ? pickLastNonEmptyTextFromPayloads(params.deliveryPayloads)
     : (normalizeOptionalString(params.outputText) ??
         normalizeOptionalString(params.synthesizedText));
+}
+
+function resolveDirectCronSummaryFallbackText(params: {
+  outputText?: string;
+  summary?: string;
+  synthesizedText?: string;
+}): string | undefined {
+  return (
+    normalizeOptionalString(params.outputText) ??
+    normalizeOptionalString(params.summary) ??
+    normalizeOptionalString(params.synthesizedText)
+  );
+}
+
+function shouldAttachDirectCronFallbackText(payload: ReplyPayload): boolean {
+  return (
+    Boolean(payload.channelData) &&
+    !hasReplyPayloadContent(payload, { trimText: true, hasChannelData: false })
+  );
+}
+
+function resolveDirectCronFallbackSourceIndex(
+  payloads: ReplyPayload[],
+  fallbackText: string | undefined,
+): number | undefined {
+  if (!fallbackText) {
+    return undefined;
+  }
+  const index = payloads.findLastIndex(
+    (payload) => normalizeOptionalString(payload.text) === fallbackText,
+  );
+  return index >= 0 ? index : undefined;
 }
 
 function formatTargetCronDeliveryAwarenessText(text: string): string {
@@ -957,9 +986,7 @@ function isTransientDirectCronDeliveryError(error: unknown): boolean {
   return isProvenDeliveryNotSentError(error);
 }
 function resolveDirectCronRetryDelaysMs(): readonly number[] {
-  return process.env.NODE_ENV === "test" && process.env.OPENCLAW_TEST_FAST === "1"
-    ? [0, 0, 0]
-    : [5_000, 10_000, 20_000];
+  return isFastTestRuntimeEnv() ? [0, 0, 0] : [5_000, 10_000, 20_000];
 }
 
 async function retryTransientDirectCronDelivery<T>(params: {
@@ -1096,23 +1123,61 @@ export async function dispatchCronDelivery(
       delivery,
     });
     try {
-      const rawPayloads =
-        deliveryPayloads.length > 0
-          ? deliveryPayloads
-          : synthesizedText
-            ? [{ text: synthesizedText }]
-            : [];
-      const normalizedPayloads = rawPayloads
-        .map((p) => {
-          if (!p.text) {
-            return p;
-          }
-          const normalized = normalizeSilentReplyText(p.text);
-          return Object.assign({}, p, {
-            text: normalized.strippedTrailingSilentToken ? undefined : normalized.text,
-          });
-        })
-        .filter((p) => hasReplyPayloadContent(p, { trimText: true }));
+      const summaryFallbackText = resolveDirectCronSummaryFallbackText({
+        outputText,
+        summary,
+        synthesizedText,
+      });
+      const normalizedSummaryFallback = summaryFallbackText
+        ? normalizeSilentReplyText(summaryFallbackText)
+        : undefined;
+      const normalizedSummaryFallbackText =
+        normalizedSummaryFallback?.strippedTrailingSilentToken === true
+          ? undefined
+          : normalizedSummaryFallback?.text;
+      const normalizeDirectPayload = (payload: ReplyPayload): ReplyPayload => {
+        const normalized = payload.text ? normalizeSilentReplyText(payload.text) : undefined;
+        return normalized
+          ? {
+              ...payload,
+              text: normalized.strippedTrailingSilentToken ? undefined : normalized.text,
+            }
+          : payload;
+      };
+      const normalizedDeliveryPayloads = deliveryPayloads
+        .map(normalizeDirectPayload)
+        .filter((payload) => hasReplyPayloadContent(payload, { trimText: true }));
+      const existingFallbackSourceIndex = resolveDirectCronFallbackSourceIndex(
+        normalizedDeliveryPayloads,
+        normalizedSummaryFallbackText,
+      );
+      const needsFallbackSource =
+        Boolean(normalizedSummaryFallbackText) &&
+        normalizedDeliveryPayloads.some(shouldAttachDirectCronFallbackText) &&
+        existingFallbackSourceIndex === undefined;
+      const fallbackSourceIndex = needsFallbackSource ? 0 : existingFallbackSourceIndex;
+      const directPayloads = needsFallbackSource
+        ? [{ text: normalizedSummaryFallbackText }, ...normalizedDeliveryPayloads]
+        : normalizedDeliveryPayloads;
+      let normalizedPayloads: ReplyPayload[] = [];
+      for (const payload of directPayloads) {
+        normalizedPayloads.push(
+          shouldAttachDirectCronFallbackText(payload) && normalizedSummaryFallbackText
+            ? {
+                ...payload,
+                fallbackText: {
+                  text: normalizedSummaryFallbackText,
+                  ...(fallbackSourceIndex !== undefined
+                    ? { replacesPayloadIndex: fallbackSourceIndex }
+                    : {}),
+                },
+              }
+            : payload,
+        );
+      }
+      if (normalizedPayloads.length === 0 && normalizedSummaryFallbackText) {
+        normalizedPayloads = [{ text: normalizedSummaryFallbackText }];
+      }
       if (normalizedPayloads.length === 0) {
         return await finishSilentReplyDelivery();
       }
@@ -1354,7 +1419,9 @@ export async function dispatchCronDelivery(
           // are folded into mirrorText so media does not replace delivered text.
           mediaUrls: undefined,
           storePath: resolveStorePath(params.cfgWithAgentDefaults.session?.store, {
-            agentId: resolveAgentIdFromSessionKey(deliverySessionKey),
+            // This mirror already carries the admitted run owner. Re-parsing a
+            // route alias can reject legacy keys or select a different store.
+            agentId: params.agentId,
           }),
           idempotencyKey: deliveryIdempotencyKey,
           config: params.cfgWithAgentDefaults,

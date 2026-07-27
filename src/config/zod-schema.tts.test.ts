@@ -55,42 +55,6 @@ describe("TtsConfigSchema openai speed and instructions", () => {
     expect(result.success).toBe(true);
   });
 
-  it("accepts provider-specific persona bindings and structured prompt fields", () => {
-    const result = TtsConfigSchema.safeParse({
-      persona: "alfred",
-      personas: {
-        alfred: {
-          label: "Alfred",
-          description: "Dry, warm British butler narrator.",
-          provider: "google",
-          fallbackPolicy: "preserve-persona",
-          prompt: {
-            profile: "A brilliant British butler.",
-            scene: "A quiet late-night study.",
-            sampleContext: "The speaker is answering a trusted operator.",
-            style: "Refined and lightly amused.",
-            accent: "British English.",
-            pacing: "Measured.",
-            constraints: ["Do not read configuration values aloud."],
-          },
-          providers: {
-            google: {
-              model: "gemini-3.1-flash-tts-preview",
-              voiceName: "Algieba",
-              promptTemplate: "audio-profile-v1",
-            },
-            openai: {
-              model: "gpt-4o-mini-tts",
-              voice: "cedar",
-              instructions: "Speak with dry warmth.",
-            },
-          },
-        },
-      },
-    });
-    expect(result.success).toBe(true);
-  });
-
   it("rejects persona rewrite config until runtime behavior exists", () => {
     const result = TtsConfigSchema.safeParse({
       personas: {

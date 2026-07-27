@@ -21,17 +21,15 @@ import {
   resolveClawHubSkillVerificationTarget,
 } from "../skills/lifecycle/clawhub.js";
 import {
-  acknowledgeOnboardingRecommendations,
-  clearPendingOnboardingRecommendations,
-  readOnboardingRecommendations,
-  updatePendingOnboardingRecommendations,
-  writeOnboardingRecommendationsOffer,
+  createOnboardingRecommendationsStore,
+  type OnboardingRecommendationsStore,
   type OnboardingRecommendationsRecord,
 } from "../state/onboarding-recommendations.js";
 import {
   getSetupAppRecommendations,
   type SetupAppRecommendationMatch,
   type SetupAppRecommendationsResult,
+  type SetupAppScanPhase,
 } from "../system-agent/setup-app-recommendations.js";
 import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
@@ -39,16 +37,18 @@ import type { WizardPrompter } from "./prompts.js";
 const SKIP_VALUE = "__skip__";
 
 type SetupAppRecommendationDeps = {
-  recommend?: () => Promise<SetupAppRecommendationsResult>;
+  recommend?: (
+    onPhase?: (phase: SetupAppScanPhase) => void,
+  ) => Promise<SetupAppRecommendationsResult>;
   ensurePlugin?: typeof ensureOnboardingPluginInstalled;
   installSkill?: typeof installSkillFromClawHub;
   isSkillInstalled?: (params: { workspaceDir: string; skillRef: string }) => Promise<boolean>;
   resolveOfficialEntry?: (pluginId: string) => OnboardingPluginInstallEntry | undefined;
   readStored?: () => OnboardingRecommendationsRecord | null;
-  writeOffer?: typeof writeOnboardingRecommendationsOffer;
-  acknowledgeStored?: typeof acknowledgeOnboardingRecommendations;
-  updatePendingStored?: typeof updatePendingOnboardingRecommendations;
-  clearPendingStored?: typeof clearPendingOnboardingRecommendations;
+  writeOffer?: OnboardingRecommendationsStore["writeOffer"];
+  acknowledgeStored?: OnboardingRecommendationsStore["acknowledge"];
+  updatePendingStored?: OnboardingRecommendationsStore["updatePending"];
+  clearPendingStored?: OnboardingRecommendationsStore["clearPending"];
   deferOfferToBootstrap?: () => boolean;
 };
 
@@ -129,8 +129,8 @@ export async function setupAppRecommendations(params: {
   const platform = params.platform ?? process.platform;
   // Product decision: default-on "magical" scan with a kill switch, not
   // consent-first. App labels/bundle ids go to the user's configured model and
-  // ClawHub search; the scanning progress line and the results note disclose
-  // this, and wizard.appRecommendations=false disables the step entirely.
+  // ClawHub search; a static disclosure stays in scrollback before app names
+  // leave the machine, while results repeat it. The config flag disables the step.
   if (
     params.config.wizard?.appRecommendations === false ||
     platform !== "darwin" ||
@@ -138,13 +138,13 @@ export async function setupAppRecommendations(params: {
   ) {
     return unchangedOutcome(params.config);
   }
-  const readStored = params.deps?.readStored ?? readOnboardingRecommendations;
+  const store = createOnboardingRecommendationsStore({ workspaceDir: params.workspaceDir });
+  const readStored = params.deps?.readStored ?? store.read;
   const storedRecord = readStored();
   if (typeof storedRecord?.acceptedAt === "number") {
     return unchangedOutcome(params.config);
   }
-  const clearPendingStored =
-    params.deps?.clearPendingStored ?? clearPendingOnboardingRecommendations;
+  const clearPendingStored = params.deps?.clearPendingStored ?? store.clearPending;
   // Pending recommendations are rebuildable cache. Rescan legacy bare
   // ClawHub ids instead of installing without a publisher identity.
   const hasLegacyClawHubId = storedRecord?.matches.some(
@@ -156,10 +156,9 @@ export async function setupAppRecommendations(params: {
     }
   }
   const stored = hasLegacyClawHubId ? null : storedRecord;
-  const writeOffer = params.deps?.writeOffer ?? writeOnboardingRecommendationsOffer;
-  const acknowledgeStored = params.deps?.acknowledgeStored ?? acknowledgeOnboardingRecommendations;
-  const updatePendingStored =
-    params.deps?.updatePendingStored ?? updatePendingOnboardingRecommendations;
+  const writeOffer = params.deps?.writeOffer ?? store.writeOffer;
+  const acknowledgeStored = params.deps?.acknowledgeStored ?? store.acknowledge;
+  const updatePendingStored = params.deps?.updatePendingStored ?? store.updatePending;
   const deferOfferToBootstrap =
     params.deps?.deferOfferToBootstrap ??
     (() => existsSync(path.join(params.workspaceDir, DEFAULT_BOOTSTRAP_FILENAME)));
@@ -193,14 +192,35 @@ export async function setupAppRecommendations(params: {
     appLabels = [...new Set(stored.matches.map((match) => match.appLabel))];
     recordResult = commitStoredResult;
   } else {
+    const scanDisclosure = t("wizard.appRecommendations.scanDisclosure");
+    // Gateway wizards must show the disclosure on the client before app names
+    // leave the machine; CLI plain output preserves the same ordering locally.
+    if (params.prompter.plain) {
+      await params.prompter.plain(scanDisclosure);
+    } else {
+      params.runtime.log(scanDisclosure);
+    }
     const progress = params.prompter.progress(t("wizard.appRecommendations.scanning"));
+    const scanPhaseMessage = (phase: SetupAppScanPhase): string => {
+      if (phase.kind === "candidates") {
+        return t(
+          phase.appCount === 1
+            ? "wizard.appRecommendations.scanningCandidate"
+            : "wizard.appRecommendations.scanningCandidates",
+          { count: phase.appCount, sample: phase.sampleLabels.join(", ") },
+        );
+      }
+      return t("wizard.appRecommendations.scanningMatch");
+    };
+    const onPhase = (phase: SetupAppScanPhase) => progress.update(scanPhaseMessage(phase));
     let result: SetupAppRecommendationsResult;
     try {
       result = params.deps?.recommend
-        ? await params.deps.recommend()
+        ? await params.deps.recommend(onPhase)
         : await getSetupAppRecommendations({
             inventorySource: async () => await scanInstalledApps({ platform }),
             runtime: params.runtime,
+            onPhase,
           });
     } catch (error) {
       progress.stop();

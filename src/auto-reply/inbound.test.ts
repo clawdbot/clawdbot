@@ -369,41 +369,19 @@ describe("finalizeInboundContext", () => {
     expect(ctx.BodyForCommands).toBe("say hi");
   });
 
-  it("fills MediaType/MediaTypes defaults only when media exists", () => {
+  it("fills a generic content type only when media exists", () => {
     const withMedia: MsgContext = {
       Body: "hi",
-      MediaPath: "/tmp/file.bin",
+      media: [{ path: "/tmp/file.bin" }],
     };
     const outWithMedia = finalizeInboundContext(withMedia);
-    expect(outWithMedia.MediaType).toBe("application/octet-stream");
-    expect(outWithMedia.MediaTypes).toEqual(["application/octet-stream"]);
+    expect(outWithMedia.media).toEqual([
+      expect.objectContaining({ path: "/tmp/file.bin", contentType: "application/octet-stream" }),
+    ]);
 
     const withoutMedia: MsgContext = { Body: "hi" };
     const outWithoutMedia = finalizeInboundContext(withoutMedia);
-    expect(outWithoutMedia.MediaType).toBeUndefined();
-    expect(outWithoutMedia.MediaTypes).toBeUndefined();
-  });
-
-  it("pads MediaTypes to match MediaPaths/MediaUrls length", () => {
-    const ctx: MsgContext = {
-      Body: "hi",
-      MediaPaths: ["/tmp/a", "/tmp/b"],
-      MediaTypes: ["image/png"],
-    };
-    const out = finalizeInboundContext(ctx);
-    expect(out.MediaType).toBe("image/png");
-    expect(out.MediaTypes).toEqual(["image/png", "application/octet-stream"]);
-  });
-
-  it("derives MediaType from MediaTypes when missing", () => {
-    const ctx: MsgContext = {
-      Body: "hi",
-      MediaPath: "/tmp/a",
-      MediaTypes: ["image/jpeg"],
-    };
-    const out = finalizeInboundContext(ctx);
-    expect(out.MediaType).toBe("image/jpeg");
-    expect(out.MediaTypes).toEqual(["image/jpeg"]);
+    expect(outWithoutMedia.media).toBeUndefined();
   });
 });
 
@@ -1042,7 +1020,7 @@ describe("initSessionState BodyStripped", () => {
     const cfg = { session: { store: storePath } } as OpenClawConfig;
 
     const result = await initSessionState({
-      ctx: {
+      ctx: finalizeInboundContext({
         Body: "[WhatsApp 123@g.us] ping",
         BodyForAgent: "ping",
         ChatType: "group",
@@ -1050,7 +1028,7 @@ describe("initSessionState BodyStripped", () => {
         SenderE164: "+222",
         SenderId: "222@s.whatsapp.net",
         SessionKey: "agent:main:whatsapp:group:123@g.us",
-      },
+      }),
       cfg,
       commandAuthorized: true,
     });
@@ -1064,14 +1042,14 @@ describe("initSessionState BodyStripped", () => {
     const cfg = { session: { store: storePath } } as OpenClawConfig;
 
     const result = await initSessionState({
-      ctx: {
+      ctx: finalizeInboundContext({
         Body: "[WhatsApp +1] ping",
         BodyForAgent: "ping",
         ChatType: "direct",
         SenderName: "Bob",
         SenderE164: "+222",
         SessionKey: "agent:main:whatsapp:dm:+222",
-      },
+      }),
       cfg,
       commandAuthorized: true,
     });

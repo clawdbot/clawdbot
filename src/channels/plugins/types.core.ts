@@ -25,6 +25,7 @@ import type { ChannelMessageCapability } from "./message-capabilities.js";
 
 export type { ChannelId } from "./channel-id.types.js";
 export type { ChannelLegacyStateMigrationPlan } from "./legacy-state-migration.types.js";
+export type { ChannelSetupInput } from "./setup-input.js";
 
 type ChannelExposure = {
   configured?: boolean;
@@ -93,60 +94,6 @@ export type ChannelMessageToolDiscovery = {
    * by action so unrelated actions do not inherit another action's media args.
    */
   mediaSourceParams?: ChannelMessageToolMediaSourceParams | null;
-};
-
-/** Shared setup input bag used by CLI, onboarding, and setup adapters. */
-export type ChannelSetupInput = {
-  name?: string;
-  token?: string;
-  privateKey?: string;
-  tokenFile?: string;
-  secret?: string;
-  secretFile?: string;
-  botToken?: string;
-  appToken?: string;
-  userToken?: string;
-  signingSecret?: string;
-  identity?: "bot" | "user";
-  mode?: "socket" | "http" | "relay";
-  signalNumber?: string;
-  cliPath?: string;
-  dbPath?: string;
-  service?: "imessage" | "sms" | "auto";
-  region?: string;
-  authDir?: string;
-  httpUrl?: string;
-  httpHost?: string;
-  httpPort?: string;
-  webhookPath?: string;
-  webhookUrl?: string;
-  audienceType?: string;
-  audience?: string;
-  useEnv?: boolean;
-  homeserver?: string;
-  dangerouslyAllowPrivateNetwork?: boolean;
-  /** @deprecated Compatibility alias; prefer dangerouslyAllowPrivateNetwork. */
-  allowPrivateNetwork?: boolean;
-  proxy?: string;
-  userId?: string;
-  accessToken?: string;
-  password?: string;
-  deviceName?: string;
-  avatarUrl?: string;
-  initialSyncLimit?: number;
-  profile?: string;
-  ship?: string;
-  url?: string;
-  baseUrl?: string;
-  relayUrls?: string;
-  code?: string;
-  groupChannels?: string[];
-  dmAllowlist?: string[];
-  autoDiscoverChannels?: boolean;
-  workspace?: string;
-  defaultTo?: string;
-  allowFrom?: string[];
-  agentActivity?: boolean;
 };
 
 export type ChannelStatusIssue = {
@@ -279,6 +226,8 @@ export type ChannelGroupContext = {
   groupChannel?: string | null;
   groupSpace?: string | null;
   accountId?: string | null;
+  /** Trusted host instruction to ignore toolsBySender for non-ingress work. */
+  senderPolicyMode?: "always" | "never";
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;

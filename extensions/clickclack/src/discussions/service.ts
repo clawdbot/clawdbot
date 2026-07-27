@@ -22,6 +22,7 @@ import {
   type ClickClackDiscussionBinding,
   type ClickClackDiscussionBindingStore,
 } from "./binding-store.js";
+import { controlSessionUrl } from "./control-session-url.js";
 import {
   discussionAccounts,
   normalizedServerBaseUrl,
@@ -39,7 +40,6 @@ import {
 import {
   assertChannelPatch,
   assertManagedChannelListContract,
-  controlSessionUrl,
   openClickClackDiscussionBinding,
   resolveAvailableChannelName,
 } from "./service-open.js";
@@ -93,7 +93,7 @@ export class ClickClackDiscussionService {
     this.#store = getClickClackDiscussionBindingStore(runtime);
     this.#clientFactory =
       options.clientFactory ??
-      ((account) => createClickClackClient({ baseUrl: account.baseUrl, token: account.token }));
+      ((account) => createClickClackClient({ baseUrl: account.apiEndpoint, token: account.token }));
     this.#installationId = options.installationId ?? getClickClackDiscussionInstallationId(runtime);
     this.#bindingGenerationFactory = options.bindingGenerationFactory ?? randomUUID;
     this.#timersEnabled = options.startTimer !== false;
@@ -334,7 +334,16 @@ export class ClickClackDiscussionService {
     const deleted = entry === undefined;
     const label = entry ? resolveDiscussionLabel(entry.label, sessionKey) : binding.label;
     const section = entry?.category?.trim() || account.discussions.section;
-    const externalUrl = controlSessionUrl(account.discussions.controlUrlBase, sessionKey) ?? "";
+    // Binding ownership follows global session routing; unscoped link decoration
+    // follows the ClickClack account agent so reconciliation keeps the URL stable.
+    const externalUrl =
+      controlSessionUrl(
+        account.discussions.controlUrlBase,
+        sessionKey,
+        account.agentId ?? "main",
+        this.#currentConfig().session?.mainKey,
+        label,
+      ) ?? "";
     const patch: {
       archived?: boolean;
       external_url?: string;

@@ -34,6 +34,22 @@ export type GatewayReloadPlan = {
   noopPaths: string[];
 };
 
+export function isNoopGatewayReloadPlan(plan: GatewayReloadPlan): boolean {
+  return (
+    !plan.restartGateway &&
+    plan.hotReasons.length === 0 &&
+    !plan.reloadHooks &&
+    !plan.restartGmailWatcher &&
+    !plan.restartCron &&
+    !plan.restartHeartbeat &&
+    !plan.restartHealthMonitor &&
+    !plan.reloadPlugins &&
+    !plan.disposeMcpRuntimes &&
+    plan.restartChannels.size === 0 &&
+    (plan.restartChannelAccounts?.size ?? 0) === 0
+  );
+}
+
 type ReloadRule = {
   prefix: string;
   kind: "restart" | "hot" | "none";
@@ -96,16 +112,12 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
     actions: ["restart-heartbeat"],
   },
   {
-    prefix: "models.pricing",
-    kind: "restart",
-  },
-  {
     prefix: "models",
     kind: "hot",
     actions: ["restart-heartbeat"],
   },
   {
-    prefix: "agents.list",
+    prefix: "agents.entries",
     kind: "hot",
     actions: ["restart-heartbeat"],
   },

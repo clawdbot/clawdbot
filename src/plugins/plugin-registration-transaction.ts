@@ -32,6 +32,10 @@ import {
   restoreMemoryPluginState,
 } from "./memory-state.js";
 import type { PluginRegistry } from "./registry-types.js";
+import {
+  getSessionDiscussionProvider,
+  restoreSessionDiscussionProvider,
+} from "./session-discussion-registry.js";
 
 export type PluginProcessGlobalState = {
   agentHarnesses: ReturnType<typeof listRegisteredAgentHarnesses>;
@@ -45,6 +49,7 @@ export type PluginProcessGlobalState = {
   memoryEmbeddingProviders: ReturnType<typeof listRegisteredMemoryEmbeddingProviders>;
   memoryPromptPreparations: ReturnType<typeof listMemoryPromptPreparations>;
   memoryPromptSupplements: ReturnType<typeof listMemoryPromptSupplements>;
+  sessionDiscussionProvider: ReturnType<typeof getSessionDiscussionProvider>;
 };
 
 export function snapshotPluginProcessGlobalState(): PluginProcessGlobalState {
@@ -60,6 +65,7 @@ export function snapshotPluginProcessGlobalState(): PluginProcessGlobalState {
     memoryEmbeddingProviders: listRegisteredMemoryEmbeddingProviders(),
     memoryPromptPreparations: listMemoryPromptPreparations(),
     memoryPromptSupplements: listMemoryPromptSupplements(),
+    sessionDiscussionProvider: getSessionDiscussionProvider(),
   };
 }
 
@@ -77,6 +83,7 @@ export function restorePluginProcessGlobalState(state: PluginProcessGlobalState)
     promptPreparations: state.memoryPromptPreparations,
     promptSupplements: state.memoryPromptSupplements,
   });
+  restoreSessionDiscussionProvider(state.sessionDiscussionProvider);
 }
 
 function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistry {
@@ -86,7 +93,7 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistry {
         return [key, [...value]];
       }
       if (value instanceof Map) {
-        return [key, new Map(value)];
+        return [key, new Map(value as ReadonlyMap<unknown, unknown>)];
       }
       if (value && typeof value === "object") {
         return [key, { ...value }];

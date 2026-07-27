@@ -6,6 +6,7 @@ import android.app.Activity
 import android.app.RemoteInput
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -38,27 +39,131 @@ import androidx.wear.input.RemoteInputIntentHelper
 import kotlinx.coroutines.delay
 import java.util.Locale
 
+internal const val extraWearLaunchTarget = "openclaw.wear.launchTarget"
+
+internal enum class WearLaunchTarget(
+  val rawValue: String,
+  val initialPage: WearHomePage,
+) {
+  Chat("chat", WearHomePage.Chat),
+  Voice("voice", WearHomePage.Voice),
+  ;
+
+  companion object {
+    fun fromRawValue(raw: String?): WearLaunchTarget = entries.firstOrNull { target -> target.rawValue == raw?.trim()?.lowercase() } ?: Chat
+  }
+}
+
+internal fun parseWearLaunchTarget(intent: Intent?): WearLaunchTarget = WearLaunchTarget.fromRawValue(intent?.getStringExtra(extraWearLaunchTarget))
+
+internal fun consumeWearLaunchTarget(intent: Intent?): WearLaunchTarget =
+  parseWearLaunchTarget(intent).also {
+    intent?.removeExtra(extraWearLaunchTarget)
+  }
+
+internal data class WearNavigationRequest(
+  val id: Int,
+  val target: WearLaunchTarget,
+)
+
+internal data class WearLaunchState(
+  val initialTarget: WearLaunchTarget = WearLaunchTarget.Chat,
+  val navigationRequest: WearNavigationRequest? = null,
+  val nextRequestId: Int = 0,
+) {
+  fun next(intent: Intent?): WearLaunchState {
+    val requestId = nextRequestId + 1
+    return copy(
+      navigationRequest =
+        WearNavigationRequest(
+          id = requestId,
+          target = consumeWearLaunchTarget(intent),
+        ),
+      nextRequestId = requestId,
+    )
+  }
+
+  fun handled(requestId: Int): WearLaunchState = if (navigationRequest?.id == requestId) copy(navigationRequest = null) else this
+
+  companion object {
+    fun initial(intent: Intent?): WearLaunchState = WearLaunchState(initialTarget = consumeWearLaunchTarget(intent))
+  }
+}
+
+@Composable
+internal fun WearLaunchContent(
+  launchState: WearLaunchState,
+  content: @Composable (WearHomePage, WearNavigationRequest?) -> Unit,
+) {
+  // Warm launches are pager events. Keeping this composition identity stable preserves
+  // pending-reply, autospeak, and real-time UI state owned below this boundary.
+  content(launchState.initialTarget.initialPage, launchState.navigationRequest)
+}
+
+internal fun shouldRecreateForScreenshotMode(
+  currentScene: WearScreenshotScene?,
+  intent: Intent?,
+  screenshotModeEnabled: Boolean,
+): Boolean =
+  screenshotModeEnabled &&
+    (currentScene != null || parseWearScreenshotModeIntent(intent) != null)
+
 class MainActivity : ComponentActivity() {
   private val viewModel: WearViewModel by viewModels()
+  private var screenshotScene: WearScreenshotScene? = null
+  private var launchState by mutableStateOf(WearLaunchState())
+
+  private val screenshotModeEnabled: Boolean
+    get() = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-    setContent {
-      OpenClawWearApp(
-        viewModel = viewModel,
-        settingsStore = remember { WearSettingsStore(applicationContext) },
-        speaker = remember { WearReplySpeaker(applicationContext) },
-      )
+    if (screenshotModeEnabled) {
+      screenshotScene = parseWearScreenshotModeIntent(intent)
     }
+    launchState = WearLaunchState.initial(intent)
+    setContent {
+      val scene = screenshotScene
+      if (scene == null) {
+        WearLaunchContent(launchState) { initialPage, navigationRequest ->
+          OpenClawWearApp(
+            viewModel = viewModel,
+            settingsStore = remember { WearSettingsStore(applicationContext) },
+            speaker = remember { WearReplySpeaker(applicationContext) },
+            initialPage = initialPage,
+            navigationRequest = navigationRequest,
+            onNavigationRequestHandled = { requestId ->
+              launchState = launchState.handled(requestId)
+            },
+          )
+        }
+      } else {
+        OpenClawWearScreenshotApp(scene)
+      }
+    }
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    if (shouldRecreateForScreenshotMode(screenshotScene, intent, screenshotModeEnabled)) {
+      recreate()
+      return
+    }
+    launchState = launchState.next(intent)
   }
 
   override fun onStart() {
     super.onStart()
-    (application as WearApplication).onActivityStarted()
+    if (screenshotScene == null) {
+      (application as WearApplication).onActivityStarted()
+    }
   }
 
   override fun onStop() {
-    (application as WearApplication).onActivityStopped()
+    if (screenshotScene == null) {
+      (application as WearApplication).onActivityStopped()
+    }
     super.onStop()
   }
 }
@@ -68,6 +173,9 @@ internal fun OpenClawWearApp(
   viewModel: WearViewModel,
   settingsStore: WearSettingsStore,
   speaker: WearReplySpeaker,
+  initialPage: WearHomePage = WearHomePage.Chat,
+  navigationRequest: WearNavigationRequest? = null,
+  onNavigationRequestHandled: (Int) -> Unit = {},
 ) {
   val state by viewModel.state.collectAsState()
   val snapshot = state.toConversationSnapshot()
@@ -211,13 +319,13 @@ internal fun OpenClawWearApp(
     state.messages,
     state.activeRunId,
     state.sending,
-    state.error,
+    state.failure,
     awaitingReply,
   ) {
     if (!awaitingReply) return@LaunchedEffect
     val activeSnapshot = snapshot
     if (
-      state.error != null ||
+      state.failure != null ||
       activeSnapshot == null ||
       activeSnapshot.activeSessionId != awaitingReplySessionId
     ) {
@@ -268,15 +376,13 @@ internal fun OpenClawWearApp(
   }
 
   val failure =
-    when {
-      state.phoneNodeId == null && !state.loading -> WearConversationFailure.PHONE_UNAVAILABLE
-      state.error?.contains("update", ignoreCase = true) == true ->
-        WearConversationFailure.INCOMPATIBLE
-      else -> null
-    }
+    state.failure
+      ?: WearConversationFailure.PHONE_UNAVAILABLE.takeIf {
+        state.phoneNodeId == null && !state.loading
+      }
   val resolvedInteraction =
     when {
-      state.error != null -> WearInteractionState.ERROR
+      state.failure != null -> WearInteractionState.ERROR
       state.sending -> WearInteractionState.SENDING
       state.activeRunId != null -> WearInteractionState.AGENT_WORKING
       else -> interaction
@@ -292,6 +398,7 @@ internal fun OpenClawWearApp(
         speaking = speaking,
         realtimeCapturing = state.realtimeCapturing,
         realtimePlaying = state.realtimePlaying,
+        realtimeMouthLevel = state.realtimeMouthLevel,
         realtimePlaybackFailed = state.realtimePlaybackFailed,
         realtimeThinkingOverride = realtimeThinkingTurnId != null,
         actionBusy =
@@ -309,6 +416,9 @@ internal fun OpenClawWearApp(
         themeMode = themeMode,
         autoSpeak = autoSpeak,
         notificationsGranted = notificationsGranted,
+        initialPage = initialPage,
+        navigationRequest = navigationRequest,
+        onNavigationRequestHandled = onNavigationRequestHandled,
         onTalk = {
           if (!state.connected || snapshot?.activeSessionId == null) return@OpenClawWearScreens
           interaction = WearInteractionState.LISTENING

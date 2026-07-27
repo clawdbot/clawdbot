@@ -145,12 +145,8 @@ export function resolveBootstrapTotalMaxChars(
 }
 
 export function resolveBootstrapPromptTruncationWarningMode(
-  cfg?: OpenClawConfig,
+  _cfg?: OpenClawConfig,
 ): "off" | "once" | "always" {
-  const raw = cfg?.agents?.defaults?.bootstrapPromptTruncationWarning;
-  if (raw === "off" || raw === "once" || raw === "always") {
-    return raw;
-  }
   return DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE;
 }
 

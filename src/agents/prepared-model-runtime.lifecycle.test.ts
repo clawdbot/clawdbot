@@ -107,7 +107,8 @@ describe("prepared model runtime snapshots", () => {
     getTesting().resetPreparedModelRuntimeSnapshotsForTest();
     mocks.discoverAuthStorage.mockClear();
     mocks.discoverModels.mockClear();
-    mocks.ensureOpenClawModelsJson.mockClear();
+    mocks.ensureOpenClawModelsJson.mockReset();
+    mocks.ensureOpenClawModelsJson.mockResolvedValue({ agentDir: "/tmp/agent", wrote: false });
     mocks.buildPreparedModelCatalogSnapshot.mockClear();
     mocks.ensureRuntimePluginsLoaded.mockClear();
     mocks.loadStaticCatalog.mockClear();
@@ -307,6 +308,54 @@ describe("prepared model runtime snapshots", () => {
       "prepared model runtime owner was not committed",
     );
     firstLease.release();
+  });
+
+  it("activates a standalone lease on a configless gateway with no configured owners", async () => {
+    mocks.configuredAgentIds = [];
+    const config = {};
+    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+    const input = {
+      agentId: "openclaw",
+      config,
+      agentDir: "/tmp/unused-agent",
+      inheritedAuthDir: "/tmp/unused-agent",
+      workspaceDir: "/tmp/configless-workspace",
+    };
+    const lease = await acquireAgentRunPreparedModelRuntime(input);
+    expect(lease.snapshot.agentDir).toBe("/tmp/unused-agent");
+    lease.release();
+  });
+
+  it("activates a standalone lease for a configless runtime while another agent is configured", async () => {
+    mocks.configuredAgentIds = ["other"];
+    const config = {};
+    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+    const input = {
+      agentId: "openclaw",
+      config,
+      agentDir: "/tmp/unused-agent",
+      inheritedAuthDir: "/tmp/unused-agent",
+      workspaceDir: "/tmp/configless-mixed-workspace",
+    };
+    const lease = await acquireAgentRunPreparedModelRuntime(input);
+    expect(lease.snapshot.agentDir).toBe("/tmp/unused-agent");
+    lease.release();
+  });
+
+  it("rejects an ordinary unconfigured agent on an active gateway", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const config = {};
+    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+
+    await expect(
+      acquireAgentRunPreparedModelRuntime({
+        agentId: "missing",
+        config,
+        agentDir: "/tmp/configured-missing",
+        inheritedAuthDir: "/tmp/unused-agent",
+        workspaceDir: "/tmp/workspace-missing",
+      }),
+    ).rejects.toThrow("prepared model runtime owner was not committed");
   });
 
   it("rebases a stale dynamic owner onto the committed configured generation", async () => {
@@ -698,6 +747,22 @@ describe("prepared model runtime snapshots", () => {
         }),
       ).rejects.toBe(refreshError);
     }
+  });
+
+  it("does not replay an auth mutation that occurs before the first owner is registered", async () => {
+    getTesting().setModelRuntimeBuildTimeoutMsForTest(100);
+    mocks.configuredAgentIds = ["default"];
+    mocks.ensureRuntimePluginsLoaded.mockImplementationOnce(() => {
+      mocks.mutationListener?.({ affectsInheritedStores: true });
+    });
+    mocks.ensureOpenClawModelsJson
+      .mockResolvedValueOnce({ agentDir: "/tmp/unused-agent", wrote: false })
+      .mockImplementationOnce(async () => await new Promise<never>(() => {}));
+
+    await expect(
+      refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true, catalogMode: "static" }),
+    ).resolves.toBeUndefined();
+    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
   });
 
   it("awaits auth invalidation queued during lifecycle publication", async () => {

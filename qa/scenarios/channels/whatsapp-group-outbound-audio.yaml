@@ -3,7 +3,8 @@ scenario:
   id: whatsapp-group-outbound-audio
   surface: channels
   coverage:
-    primary: [channels.group-messages]
+    primary:
+      - whatsapp.outbound-audio
   execution:
     profiles: { "whatsapp:mock-default": 22 }
     kind: flow

@@ -33,6 +33,7 @@ type WorkflowJob = {
   env?: Record<string, string>;
   if?: string;
   needs?: string | string[];
+  outputs?: Record<string, string>;
   permissions?: Record<string, string>;
   "runs-on"?: string;
   steps?: WorkflowStep[];
@@ -83,12 +84,24 @@ describe("OpenClaw performance workflow", () => {
 
   it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const kovaRef = "f3d037b5b8aacd6adf8ef1dd2ea4c1d778ec7c6c";
+    const canonicalKovaRef = "517952b835640a368c4af6dfe6dc8365ae841b57";
+    const legacyKovaRef = "f3d037b5b8aacd6adf8ef1dd2ea4c1d778ec7c6c";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
+    const resolveTarget = findStep("Resolve OpenClaw target ref", "resolve_target");
 
-    expect(workflow).toContain(`default: ${kovaRef}`);
-    expect(workflow).toContain(`inputs.kova_ref || '${kovaRef}'`);
+    expect(workflow).toContain(`KOVA_CANONICAL_CONFIG_REF: ${canonicalKovaRef}`);
+    expect(workflow).toContain(`KOVA_LEGACY_LIST_CONFIG_REF: ${legacyKovaRef}`);
+    expect(readWorkflow().jobs?.resolve_target?.outputs?.kova_ref).toBe(
+      "${{ steps.resolve.outputs.kova_ref }}",
+    );
+    expect(resolveTarget.env?.KOVA_REF_INPUT).toBe("${{ inputs.kova_ref }}");
+    expect(resolveTarget.run).toContain("zod-schema.agent-defaults.ts?ref=${resolved_sha}");
+    expect(resolveTarget.run).toContain("KOVA_CANONICAL_CONFIG_REF");
+    expect(resolveTarget.run).toContain("KOVA_LEGACY_LIST_CONFIG_REF");
+    expect(readWorkflow().jobs?.kova?.env?.KOVA_REF).toBe(
+      "${{ needs.resolve_target.outputs.kova_ref }}",
+    );
     expect(installRun).toContain(
       'npm --prefix "$KOVA_SRC" ci --ignore-scripts --no-audit --no-fund',
     );
@@ -112,9 +125,9 @@ describe("OpenClaw performance workflow", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
     const installRun = findStep("Install OCM and Kova").run ?? "";
 
-    expect(workflow).toContain("OCM_VERSION: v0.2.25");
+    expect(workflow).toContain("OCM_VERSION: v0.2.29");
     expect(workflow).toContain(
-      "OCM_LINUX_X64_SHA256: 57530199d21eb5bfa29695749928b40fd2869484c7edff69b7c65bfc84f2f1aa",
+      "OCM_LINUX_X64_SHA256: d966098d6ba2bc10891be3c76e162a37b07f28c4f51da75d2eb509886eb7e1cf",
     );
     expect(installRun).toContain(
       '"https://github.com/shakkernerd/ocm/releases/download/${OCM_VERSION}/ocm-x86_64-unknown-linux-gnu.tar.gz"',
@@ -315,7 +328,7 @@ describe("OpenClaw performance workflow", () => {
       "${{ steps.prepare.outputs.ready == 'true' && steps.prepare.outputs.already_published != 'true' }}",
     );
     expect(appToken.uses).toBe(
-      "actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3",
+      "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
     );
     expect(appToken.with).toEqual({
       "client-id": "Iv23liOECG0slfuhz093",

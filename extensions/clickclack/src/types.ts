@@ -16,6 +16,7 @@ export type ClickClackAccountConfig = {
   name?: string;
   enabled?: boolean;
   baseUrl?: string;
+  apiBaseUrl?: string;
   token?: unknown;
   tokenFile?: string;
   workspace?: string;
@@ -56,6 +57,7 @@ export type ResolvedClickClackAccount = {
   configured: boolean;
   name?: string;
   baseUrl: string;
+  apiEndpoint: string;
   token: string;
   workspace: string;
   botUserId?: string;
@@ -103,6 +105,8 @@ export type ClickClackBotCommand = {
 
 /** One-time bot token and installer context returned by setup-code claim. */
 export type ClickClackSetupCodeClaim = {
+  contract_version?: 1;
+  api_base_url?: string;
   token: string;
   bot: {
     id: string;

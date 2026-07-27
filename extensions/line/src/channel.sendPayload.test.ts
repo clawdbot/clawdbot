@@ -237,13 +237,14 @@ describe("line outbound sendPayload", () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
     const cfg = { channels: { line: {} } } as OpenClawConfig;
+    const altText = "a".repeat(1600);
 
     const payload = {
       channelData: {
         line: {
           quickReplies: ["One", "Two"],
           flexMessage: {
-            altText: "Card",
+            altText,
             contents: { type: "bubble" },
           },
         },
@@ -264,7 +265,7 @@ describe("line outbound sendPayload", () => {
       [
         {
           type: "flex",
-          altText: "Card",
+          altText: "a".repeat(1500),
           contents: { type: "bubble" },
           quickReply: { items: ["One", "Two"] },
         },

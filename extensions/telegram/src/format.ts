@@ -211,11 +211,10 @@ const TELEGRAM_ATTR_HTML_TAG_PATTERNS = new Map([
   ["a", /^\s+href="[^"]+"\s*$/],
   ["span", /^\s+class="tg-spoiler"\s*$/],
   ["tg-emoji", /^\s+emoji-id="[^"]+"\s*$/],
-  ["tg-time", /^\s+datetime="[^"]+"\s*$/],
+  ["tg-time", /^\s+unix="[1-9]\d*"(?:\s+format="(?:r|w?[dD]?[tT]?)")?\s*$/],
   ["blockquote", /^(\s+expandable)?\s*$/],
 ]);
 const TELEGRAM_CODE_LANGUAGE_ATTR_PATTERN = /^\s+class="language-[^"]+"\s*$/;
-const TELEGRAM_VOID_HTML_TAGS = new Set(["br", "hr", "img", "input", "tg-map"]);
 
 type TelegramHtmlTagSupport = {
   simpleTags: ReadonlySet<string>;
@@ -290,7 +289,7 @@ function preserveTelegramHtmlTag(
   if (closing) {
     return popLastTagName(openTags, tagName) ? rawTag : escapeTag(rawTag);
   }
-  if (TELEGRAM_VOID_HTML_TAGS.has(tagName) || rawTag.trimEnd().endsWith("/>")) {
+  if (rawTag.trimEnd().endsWith("/>")) {
     return rawTag;
   }
   openTags.push(tagName);
@@ -656,8 +655,6 @@ type TelegramHtmlTag = {
   closeTag: string;
 };
 
-const TELEGRAM_SELF_CLOSING_HTML_TAGS = TELEGRAM_VOID_HTML_TAGS;
-
 function buildTelegramHtmlOpenPrefix(tags: TelegramHtmlTag[]): string {
   return tags.map((tag) => tag.openTag).join("");
 }
@@ -800,9 +797,7 @@ function splitTelegramHtmlChunksRaw(html: string, limit: number): string[] {
     const rawTag = tag.raw;
     const isClosing = tag.closing;
     const tagName = tag.name;
-    const isSelfClosing =
-      !isClosing &&
-      (TELEGRAM_SELF_CLOSING_HTML_TAGS.has(tagName) || rawTag.trimEnd().endsWith("/>"));
+    const isSelfClosing = !isClosing && rawTag.trimEnd().endsWith("/>");
 
     if (!isClosing) {
       const nextCloseLength = isSelfClosing ? 0 : `</${tagName}>`.length;

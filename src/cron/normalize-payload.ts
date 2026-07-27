@@ -44,7 +44,7 @@ function normalizeCommandEnv(value: unknown): Record<string, string> {
   return Object.fromEntries(entries);
 }
 
-function normalizeCommandArgv(value: unknown): string[] | undefined {
+export function normalizeCronCommandArgv(value: unknown): string[] | undefined {
   if (!Array.isArray(value) || value.length === 0) {
     return undefined;
   }
@@ -149,7 +149,7 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
     }
   }
   if ("argv" in next) {
-    const argv = normalizeCommandArgv(next.argv);
+    const argv = normalizeCronCommandArgv(next.argv);
     if (Array.isArray(argv) && argv.length > 0) {
       next.argv = argv;
     } else {

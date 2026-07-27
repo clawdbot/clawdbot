@@ -1,7 +1,5 @@
 // Persists pairing challenges and approved channel account bindings in shared SQLite state.
 import crypto from "node:crypto";
-import os from "node:os";
-import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeNullableString,
@@ -10,11 +8,9 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { getPairingAdapter } from "../channels/plugins/pairing.js";
 import type { ChannelPairingAdapter } from "../channels/plugins/pairing.types.js";
-import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
-import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import { resolveAllowFromAccountId, safeAccountKey, safeChannelKey } from "./pairing-store-keys.js";
+import { resolveAllowFromAccountId } from "./pairing-store-keys.js";
 import {
   readChannelPairingState,
   readChannelPairingStateFromDatabase,
@@ -24,24 +20,11 @@ import {
 } from "./pairing-store-sqlite.js";
 import type { PairingChannel } from "./pairing-store.types.js";
 
-/** @deprecated Compatibility helper for doctor/plugin migrations of the retired JSON store. */
-export function resolveChannelAllowFromPath(
-  channel: PairingChannel,
-  env: NodeJS.ProcessEnv = process.env,
-  accountId?: string,
-): string {
-  const stateDir = resolveStateDir(env, () => resolveRequiredHomeDir(env, os.homedir));
-  const credentialsDir = resolveOAuthDir(env, stateDir);
-  const normalizedAccountId = normalizeOptionalString(accountId);
-  const suffix = normalizedAccountId ? `-${safeAccountKey(normalizedAccountId)}` : "";
-  return path.join(credentialsDir, `${safeChannelKey(channel)}${suffix}-allowFrom.json`);
-}
-
 const PAIRING_CODE_LENGTH = 8;
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const PAIRING_CODE_MAX_ATTEMPTS = 500;
-const PAIRING_PENDING_TTL_MS = 60 * 60 * 1000;
-const PAIRING_PENDING_MAX = 3;
+export const CHANNEL_PAIRING_PENDING_TTL_MS = 60 * 60 * 1000;
+export const CHANNEL_PAIRING_PENDING_MAX = 3;
 
 export type PairingRequest = {
   id: string;
@@ -50,6 +33,19 @@ export type PairingRequest = {
   lastSeenAt: string;
   meta?: Record<string, string>;
 };
+
+/** Stable opaque id for approving a request without exposing its human pairing code. */
+export function resolveChannelPairingRequestId(
+  channel: PairingChannel,
+  request: PairingRequest,
+): string {
+  const accountId = resolvePairingRequestAccountId(request);
+  return crypto
+    .createHash("sha256")
+    .update(`${channel}\0${accountId}\0${request.id}\0${request.createdAt}`)
+    .digest("base64url")
+    .slice(0, 32);
+}
 
 function parseTimestamp(value: string | undefined): number | null {
   if (!value) {
@@ -61,7 +57,7 @@ function parseTimestamp(value: string | undefined): number | null {
 
 function isExpired(entry: PairingRequest, nowMs: number): boolean {
   const createdAt = parseTimestamp(entry.createdAt);
-  return createdAt === null || nowMs - createdAt > PAIRING_PENDING_TTL_MS;
+  return createdAt === null || nowMs - createdAt > CHANNEL_PAIRING_PENDING_TTL_MS;
 }
 
 function pruneExpiredRequests(reqs: PairingRequest[], nowMs: number) {
@@ -263,7 +259,7 @@ export async function listChannelPairingRequests(
   return runOpenClawStateWriteTransaction((database) => {
     const state = readChannelPairingStateFromDatabase(database, channel);
     const expired = pruneExpiredRequests(state.requests, Date.now());
-    const capped = pruneExcessRequestsByAccount(expired.requests, PAIRING_PENDING_MAX);
+    const capped = pruneExcessRequestsByAccount(expired.requests, CHANNEL_PAIRING_PENDING_MAX);
     if (expired.removed || capped.removed) {
       state.requests = capped.requests;
       writeChannelPairingStateToDatabase(database, channel, state);
@@ -326,17 +322,17 @@ export async function upsertChannelPairingRequest(params: {
         lastSeenAt: now,
         meta,
       };
-      state.requests = pruneExcessRequestsByAccount(requests, PAIRING_PENDING_MAX).requests;
+      state.requests = pruneExcessRequestsByAccount(requests, CHANNEL_PAIRING_PENDING_MAX).requests;
       writeChannelPairingStateToDatabase(database, params.channel, state);
       return { code, created: false };
     }
 
-    const capped = pruneExcessRequestsByAccount(requests, PAIRING_PENDING_MAX);
+    const capped = pruneExcessRequestsByAccount(requests, CHANNEL_PAIRING_PENDING_MAX);
     requests = capped.requests;
     const accountRequestCount = requests.filter((request) =>
       requestMatchesAccountId(request, accountId),
     ).length;
-    if (PAIRING_PENDING_MAX > 0 && accountRequestCount >= PAIRING_PENDING_MAX) {
+    if (CHANNEL_PAIRING_PENDING_MAX > 0 && accountRequestCount >= CHANNEL_PAIRING_PENDING_MAX) {
       if (expired.removed || capped.removed) {
         state.requests = requests;
         writeChannelPairingStateToDatabase(database, params.channel, state);
@@ -351,26 +347,25 @@ export async function upsertChannelPairingRequest(params: {
   }, sqliteOptionsForEnv(env));
 }
 
-export async function approveChannelPairingCode(params: {
+type ResolvePairingRequestParams = {
   channel: PairingChannel;
-  code: string;
   accountId?: string;
   env?: NodeJS.ProcessEnv;
   pairingAdapter?: ChannelPairingAdapter;
-}): Promise<{ id: string; entry?: PairingRequest } | null> {
-  const env = params.env ?? process.env;
-  const code = (normalizeNullableString(params.code) ?? "").toUpperCase();
-  if (!code) {
-    return null;
-  }
+  matches: (request: PairingRequest) => boolean;
+  approve: boolean;
+};
 
+async function resolveChannelPairingRequest(
+  params: ResolvePairingRequestParams,
+): Promise<{ id: string; entry: PairingRequest } | null> {
+  const env = params.env ?? process.env;
   return runOpenClawStateWriteTransaction((database) => {
     const state = readChannelPairingStateFromDatabase(database, params.channel);
     const pruned = pruneExpiredRequests(state.requests, Date.now());
     const accountId = normalizePairingAccountId(params.accountId);
     const index = pruned.requests.findIndex(
-      (request) =>
-        request.code.toUpperCase() === code && requestMatchesAccountId(request, accountId),
+      (request) => requestMatchesAccountId(request, accountId) && params.matches(request),
     );
     if (index < 0) {
       if (pruned.removed) {
@@ -385,26 +380,87 @@ export async function approveChannelPairingCode(params: {
     }
     pruned.requests.splice(index, 1);
     state.requests = pruned.requests;
-    const allowAccountId = resolveAllowFromAccountId(
-      normalizeOptionalString(params.accountId) ?? normalizeOptionalString(entry.meta?.accountId),
-    );
-    const currentAllow = state.allowFrom?.[allowAccountId] ?? [];
-    const adapter = resolvePairingAdapter(params.channel, params.pairingAdapter);
-    // Channels with key-bound handoffs can persist an opaque approval token
-    // derived from request metadata instead of a durable sender allowlist id.
-    const approvalEntry = adapter?.resolveApprovalStoreEntry
-      ? adapter.resolveApprovalStoreEntry({
-          id: entry.id,
-          ...(entry.meta ? { meta: entry.meta } : {}),
-        })
-      : entry.id;
-    const normalizedAllow =
-      approvalEntry == null ? "" : normalizeAllowFromInput(params.channel, approvalEntry, adapter);
-    if (normalizedAllow && !currentAllow.includes(normalizedAllow)) {
-      state.allowFrom ??= {};
-      state.allowFrom[allowAccountId] = [...currentAllow, normalizedAllow];
+
+    if (params.approve) {
+      const allowAccountId = resolveAllowFromAccountId(
+        normalizeOptionalString(params.accountId) ?? normalizeOptionalString(entry.meta?.accountId),
+      );
+      const currentAllow = state.allowFrom?.[allowAccountId] ?? [];
+      const adapter = resolvePairingAdapter(params.channel, params.pairingAdapter);
+      // Channels with key-bound handoffs can persist an opaque approval token
+      // derived from request metadata instead of a durable sender allowlist id.
+      const approvalEntry = adapter?.resolveApprovalStoreEntry
+        ? adapter.resolveApprovalStoreEntry({
+            id: entry.id,
+            ...(entry.meta ? { meta: entry.meta } : {}),
+          })
+        : entry.id;
+      const normalizedAllow =
+        approvalEntry == null
+          ? ""
+          : normalizeAllowFromInput(params.channel, approvalEntry, adapter);
+      if (normalizedAllow && !currentAllow.includes(normalizedAllow)) {
+        state.allowFrom ??= {};
+        state.allowFrom[allowAccountId] = [...currentAllow, normalizedAllow];
+      }
     }
+
     writeChannelPairingStateToDatabase(database, params.channel, state);
     return { id: entry.id, entry };
   }, sqliteOptionsForEnv(env));
+}
+
+export async function approveChannelPairingCode(params: {
+  channel: PairingChannel;
+  code: string;
+  accountId?: string;
+  env?: NodeJS.ProcessEnv;
+  pairingAdapter?: ChannelPairingAdapter;
+}): Promise<{ id: string; entry: PairingRequest } | null> {
+  const code = (normalizeNullableString(params.code) ?? "").toUpperCase();
+  if (!code) {
+    return null;
+  }
+  return resolveChannelPairingRequest({
+    ...params,
+    matches: (request) => request.code.toUpperCase() === code,
+    approve: true,
+  });
+}
+
+/** Approves a pending request by opaque id without exposing its pairing code. */
+export async function approveChannelPairingRequest(params: {
+  channel: PairingChannel;
+  requestId: string;
+  accountId: string;
+  env?: NodeJS.ProcessEnv;
+  pairingAdapter?: ChannelPairingAdapter;
+}): Promise<{ id: string; entry: PairingRequest } | null> {
+  const requestId = normalizeOptionalString(params.requestId);
+  if (!requestId) {
+    return null;
+  }
+  return resolveChannelPairingRequest({
+    ...params,
+    matches: (request) => resolveChannelPairingRequestId(params.channel, request) === requestId,
+    approve: true,
+  });
+}
+
+/** Dismisses a pending request without blocking the sender from requesting again. */
+export async function dismissChannelPairingRequest(params: {
+  channel: PairingChannel;
+  requestId: string;
+  accountId: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<{ id: string; entry: PairingRequest } | null> {
+  const requestId = normalizeOptionalString(params.requestId);
+  if (!requestId) {
+    return null;
+  }
+  return resolveChannelPairingRequest({
+    ...params,
+    matches: (request) => resolveChannelPairingRequestId(params.channel, request) === requestId,
+    approve: false,
+  });
 }

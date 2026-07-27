@@ -20,6 +20,11 @@ import {
 } from "./approval-intent.js";
 import type { SystemAgentAssistantPlanner, SystemAgentAssistantTurn } from "./assistant.js";
 import { approvalQuestion } from "./dialogue.js";
+import type {
+  SystemAgentGreetingFacts,
+  SystemAgentGreetingPlan,
+  SystemAgentGreetingPlanner,
+} from "./greeting.js";
 import {
   SystemAgentInferenceUnavailableError,
   isSystemAgentInferenceUnavailableError,
@@ -59,6 +64,8 @@ export type SystemAgentChatEngineOptions = {
   yes?: boolean;
   deps?: SystemAgentCommandDeps;
   planWithAssistant?: SystemAgentAssistantPlanner;
+  /** Test seam for the one-shot cached caretaker greeting. */
+  planGreeting?: SystemAgentGreetingPlanner;
   /** Test seam for the embedded agent-loop turn runner. */
   runAgentTurn?: SystemAgentTurnRunner;
   /** Test seam for the approval-intent classifier. */
@@ -291,9 +298,11 @@ function parseWizardAnswer(step: WizardStep, text: string): { value: unknown } |
   }
   const options = step.options ?? [];
   const matchOption = (token: string) => {
-    const index = Number(token);
-    if (Number.isInteger(index) && index >= 1 && index <= options.length) {
-      return options[index - 1];
+    if (/^\d+$/.test(token)) {
+      const index = Number(token);
+      if (Number.isSafeInteger(index) && index >= 1 && index <= options.length) {
+        return options[index - 1];
+      }
     }
     const lower = token.toLowerCase();
     return options.find(
@@ -990,6 +999,28 @@ export class SystemAgentChatEngine {
       ? await this.opts.deps.loadOverview()
       : await loadSystemAgentOverview();
     return { ...overview, defaultModel: verifiedRoute.modelLabel };
+  }
+
+  async planGreeting(params: {
+    overview: SystemAgentOverview;
+    facts: SystemAgentGreetingFacts;
+    timeoutMs: number;
+  }): Promise<SystemAgentGreetingPlan | null> {
+    const planner = this.opts.planGreeting;
+    const plan = planner
+      ? await planner(params)
+      : await import("./assistant.js").then(({ planSystemAgentGreetingWithConfiguredModel }) =>
+          planSystemAgentGreetingWithConfiguredModel({
+            ...params,
+            verifiedInference: this.verifiedInference,
+            deps: this.opts.deps,
+          }),
+        );
+    if (plan) {
+      // Custom planners do not inherit the configured planner's cleanup guard.
+      await this.requireVerifiedInference();
+    }
+    return plan;
   }
 
   private async requireVerifiedInference() {

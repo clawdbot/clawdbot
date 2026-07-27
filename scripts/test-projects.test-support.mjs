@@ -24,7 +24,10 @@ import { isCodexExtensionRoot } from "../test/vitest/vitest.extension-codex-path
 import { isDiffsExtensionRoot } from "../test/vitest/vitest.extension-diffs-paths.mjs";
 import { isFeishuExtensionRoot } from "../test/vitest/vitest.extension-feishu-paths.mjs";
 import { isIrcExtensionRoot } from "../test/vitest/vitest.extension-irc-paths.mjs";
-import { isMatrixExtensionRoot } from "../test/vitest/vitest.extension-matrix-paths.mjs";
+import {
+  isMatrixExtensionRoot,
+  matrixExtensionTestRoots,
+} from "../test/vitest/vitest.extension-matrix-paths.mjs";
 import { isMattermostExtensionRoot } from "../test/vitest/vitest.extension-mattermost-paths.mjs";
 import { isMediaExtensionRoot } from "../test/vitest/vitest.extension-media-paths.mjs";
 import { isMemoryExtensionRoot } from "../test/vitest/vitest.extension-memory-paths.mjs";
@@ -67,6 +70,7 @@ import {
   listChangedPathsFromGit as listChangedPathsFromGitSource,
 } from "./changed-lanes.mjs";
 import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
+import { createExtensionTestProcessTargetChunks } from "./lib/extension-test-plan.mjs";
 import { isCiLikeEnv, resolveLocalFullSuiteProfile } from "./lib/vitest-local-scheduling.mjs";
 import {
   DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS,
@@ -470,15 +474,19 @@ const GITHUB_YAML_PINNING_GUARD_TEST_TARGETS = ["test/scripts/ci-workflow-guards
 const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
   [
     ".github/workflows/ci-build-artifacts-testbox.yml",
-    ["test/scripts/package-acceptance-workflow.test.ts"],
+    ["test/scripts/install-trufflehog.test.ts", "test/scripts/package-acceptance-workflow.test.ts"],
   ],
   [
     ".github/workflows/ci-check-arm-testbox.yml",
-    ["test/scripts/package-acceptance-workflow.test.ts"],
+    ["test/scripts/install-trufflehog.test.ts", "test/scripts/package-acceptance-workflow.test.ts"],
   ],
   [
     ".github/workflows/ci-check-testbox.yml",
-    ["test/scripts/changed-lanes.test.ts", "test/scripts/package-acceptance-workflow.test.ts"],
+    [
+      "test/scripts/changed-lanes.test.ts",
+      "test/scripts/install-trufflehog.test.ts",
+      "test/scripts/package-acceptance-workflow.test.ts",
+    ],
   ],
   [
     ".github/workflows/ci.yml",
@@ -709,7 +717,11 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   [".github/actions/ensure-base-commit/action.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
   [
     ".github/actions/setup-node-env/action.yml",
-    ["test/scripts/package-acceptance-workflow.test.ts", "test/scripts/ci-workflow-guards.test.ts"],
+    [
+      "test/scripts/install-trufflehog.test.ts",
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/ci-workflow-guards.test.ts",
+    ],
   ],
   [
     ".github/actions/setup-node-env/dependency-fingerprint.mjs",
@@ -784,6 +796,9 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/lib/ci-changed-node-test-plan.mjs", ["test/scripts/ci-changed-node-test-plan.test.ts"]],
   ["scripts/check.mjs", ["test/scripts/check.test.ts"]],
   ["scripts/check-changed.mjs", ["test/scripts/changed-lanes.test.ts"]],
+  ["scripts/check-env-var-count.mjs", ["test/scripts/check-env-var-count.test.ts"]],
+  ["scripts/check-env-var-count.d.mts", ["test/scripts/check-env-var-count.test.ts"]],
+  ["config/env-var-count-budget.txt", ["test/scripts/check-env-var-count.test.ts"]],
   ["scripts/check-max-lines-ratchet.mjs", ["test/scripts/check-max-lines-ratchet.test.ts"]],
   [
     "scripts/check-native-state-schema-version.mjs",
@@ -1098,6 +1113,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/github/resolve-openclaw-ref.sh", ["test/scripts/resolve-openclaw-ref.test.ts"]],
   ["scripts/ci-hydrate-testbox-env.sh", ["test/scripts/ci-hydrate-testbox-env.test.ts"]],
+  ["scripts/install-trufflehog.sh", ["test/scripts/install-trufflehog.test.ts"]],
   [
     "scripts/github/run-openclaw-cross-os-release-checks.sh",
     ["test/scripts/openclaw-cross-os-release-workflow.test.ts"],
@@ -1114,6 +1130,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["apps/android/fastlane/Fastfile", ["test/scripts/android-release-fastlane-gates.test.ts"]],
   ["scripts/ios-release-archive.sh", ["test/scripts/ios-release-wrapper-args.test.ts"]],
+  ["scripts/ios-release-cut.sh", ["test/scripts/ios-release-plan.test.ts"]],
+  ["scripts/ios-release-cut.ts", ["test/scripts/ios-release-plan.test.ts"]],
+  ["scripts/ios-release-plan.sh", ["test/scripts/ios-release-plan.test.ts"]],
+  ["scripts/ios-release-plan.ts", ["test/scripts/ios-release-plan.test.ts"]],
   [
     "scripts/ios-release-prepare.sh",
     ["test/scripts/ios-release-prepare.test.ts", "test/scripts/ios-release-wrapper-args.test.ts"],
@@ -1289,7 +1309,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/lib/format-generated-module.mjs", ["test/scripts/format-generated-module.test.ts"]],
   ["scripts/lib/ios-version.ts", ["test/scripts/ios-version.test.ts"]],
+  ["scripts/lib/ios-release-plan.ts", ["test/scripts/ios-release-plan.test.ts"]],
+  ["scripts/lib/ios-fastlane.sh", ["test/scripts/ios-release-wrapper-args.test.ts"]],
   ["scripts/lib/live-docker-stage.sh", ["test/scripts/live-docker-stage.test.ts"]],
+  ["scripts/live-docker-stage-private-sdk-exports.mjs", ["test/scripts/live-docker-stage.test.ts"]],
   [
     "scripts/lib/local-heavy-check-runtime.d.mts",
     ["test/scripts/local-heavy-check-runtime.test.ts"],
@@ -1337,6 +1360,8 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   ["scripts/lib/npm-verify-exec.ts", ["test/scripts/npm-verify-exec.test.ts"]],
+  ["scripts/lib/numeric-options.mjs", ["test/scripts/numeric-options.test.ts"]],
+  ["scripts/lib/numeric-options.d.mts", ["test/scripts/numeric-options.test.ts"]],
   ["scripts/lib/openclaw-test-state.mjs", ["test/scripts/openclaw-test-state.test.ts"]],
   [
     "scripts/lib/workspace-bootstrap-smoke.mjs",
@@ -1388,6 +1413,29 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
       "test/scripts/release-upgrade-baseline.test.ts",
       "test/scripts/android-version.test.ts",
       "test/scripts/ios-version.test.ts",
+      "test/scripts/upgrade-survivor-baselines.test.ts",
+      "test/scripts/upgrade-survivor-config-recipe.test.ts",
+    ],
+  ],
+  [
+    "scripts/lib/release-version.mjs",
+    [
+      "test/release-version.test.ts",
+      "test/npm-publish-plan.test.ts",
+      "test/openclaw-npm-release-check.test.ts",
+      "test/openclaw-npm-postpublish-verify.test.ts",
+      "test/plugin-npm-release.test.ts",
+      "test/plugin-clawhub-release.test.ts",
+      "test/scripts/android-version.test.ts",
+      "test/scripts/android-pin-version.test.ts",
+      "test/scripts/docker-release-policy.test.ts",
+      "test/scripts/ios-version.test.ts",
+      "test/scripts/openclaw-npm-extended-stable-release.test.ts",
+      "test/scripts/openclaw-npm-publish.test.ts",
+      "test/scripts/release-preflight.test.ts",
+      "test/scripts/release-prepare.test.ts",
+      "test/scripts/release-upgrade-baseline.test.ts",
+      "test/scripts/release-version.test.ts",
       "test/scripts/upgrade-survivor-baselines.test.ts",
       "test/scripts/upgrade-survivor-config-recipe.test.ts",
     ],
@@ -1566,7 +1614,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/docker-e2e-rerun.mjs", ["test/scripts/docker-e2e-helper-cli.test.ts"]],
   ["scripts/docker-e2e-timings.mjs", ["test/scripts/docker-e2e-helper-cli.test.ts"]],
   ["scripts/e2e/bun-global-install-smoke.sh", ["test/scripts/test-install-sh-docker.test.ts"]],
-  ["scripts/generate-npm-shrinkwrap.mjs", ["test/scripts/generate-npm-shrinkwrap.test.ts"]],
+  ["scripts/generate-npm-package-lock.mjs", ["test/scripts/generate-npm-package-lock.test.ts"]],
   ["scripts/npm-runner.d.mts", ["test/scripts/npm-runner.test.ts"]],
   ["scripts/pnpm-runner.d.mts", ["test/scripts/pnpm-runner.test.ts"]],
   [
@@ -1650,12 +1698,6 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/zai-fallback-repro.ts", ["test/scripts/zai-fallback-repro.test.ts"]],
   ["scripts/fixtures/packed-plugin-sdk-type-smoke.ts", ["test/release-check.test.ts"]],
-  ["scripts/repro/code-mode-namespace-live.ts", ["test/scripts/code-mode-namespace-live.test.ts"]],
-  ["scripts/repro/tool-surface-live-bench.ts", ["test/scripts/tool-surface-live-bench.test.ts"]],
-  [
-    "scripts/repro/code-mode-namespace-live-docker.sh",
-    ["test/scripts/code-mode-namespace-live.test.ts", "test/scripts/docker-build-helper.test.ts"],
-  ],
   ["scripts/lib/extension-test-plan.mjs", ["test/scripts/test-extension.test.ts"]],
   ["scripts/lib/extension-vitest-paths.mjs", ["test/scripts/test-extension.test.ts"]],
   ["scripts/lib/vitest-batch-runner.mjs", ["test/scripts/test-extension.test.ts"]],
@@ -1689,7 +1731,6 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
       "test/scripts/plugin-prerelease-test-plan.test.ts",
     ],
   ],
-  ["scripts/measure-rpc-rtt.mjs", ["test/scripts/measure-rpc-rtt.test.ts"]],
   [
     "scripts/e2e/telegram-user-crabbox-proof.ts",
     ["test/scripts/telegram-user-crabbox-proof.test.ts"],
@@ -1719,10 +1760,6 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
       "test/scripts/browser-cdp-snapshot.test.ts",
       "test/scripts/e2e-helper-env-limits.test.ts",
     ],
-  ],
-  [
-    "scripts/e2e/channel-plugin-trust-docker.sh",
-    ["test/scripts/docker-build-helper.test.ts", "test/scripts/test-projects.test.ts"],
   ],
   [
     "scripts/e2e/config-reload-source-docker.sh",
@@ -2217,6 +2254,7 @@ const TOOLING_DECLARATION_SOURCE_MIRRORS = [
   ["scripts/lib/local-build-metadata-paths.d.mts", "scripts/lib/local-build-metadata-paths.mjs"],
   ["scripts/lib/local-build-metadata.d.mts", "scripts/lib/local-build-metadata.mjs"],
   ["scripts/lib/plugin-sdk-entries.d.mts", "scripts/lib/plugin-sdk-entries.mjs"],
+  ["scripts/lib/release-version.d.mts", "scripts/lib/release-version.mjs"],
   ["scripts/lib/vitest-local-scheduling.d.mts", "scripts/lib/vitest-local-scheduling.mjs"],
   ["scripts/run-node.d.mts", "scripts/run-node.mjs"],
   ["scripts/stage-bundled-plugin-runtime.d.mts", "scripts/stage-bundled-plugin-runtime.mjs"],
@@ -2312,6 +2350,7 @@ const APPCAST_TEST_TARGETS = ["test/appcast.test.ts", "test/scripts/make-appcast
 const CODEX_VERSION_CONTRACT_TEST_TARGETS = [
   "extensions/codex/src/manifest.test.ts",
   "extensions/openai/openai-provider.test.ts",
+  "test/scripts/codex-client-version-contract.test.ts",
 ];
 const SOURCE_TEST_TARGETS = new Map([
   ...PRECISE_SOURCE_TEST_TARGETS,
@@ -2364,7 +2403,47 @@ const SOURCE_TEST_TARGETS = new Map([
   ],
   ["src/plugin-sdk/reply-runtime.ts", ["src/plugins/contracts/plugin-sdk-subpaths.test.ts"]],
   ["extensions/google-meet/index.ts", ["extensions/google-meet/index.test.ts"]],
-  ["extensions/google-meet/src/cli.ts", ["extensions/google-meet/src/cli.test.ts"]],
+  [
+    "extensions/google-meet/src/cli.ts",
+    [
+      "extensions/google-meet/src/cli-artifacts.test.ts",
+      "extensions/google-meet/src/cli-runtime.test.ts",
+      "extensions/google-meet/src/cli.test.ts",
+    ],
+  ],
+  [
+    "extensions/google-meet/src/cli-artifact-commands.ts",
+    ["extensions/google-meet/src/cli-artifacts.test.ts"],
+  ],
+  [
+    "extensions/google-meet/src/cli-export.ts",
+    ["extensions/google-meet/src/cli-artifacts.test.ts"],
+  ],
+  [
+    "extensions/google-meet/src/cli-space-commands.ts",
+    ["extensions/google-meet/src/cli-artifacts.test.ts"],
+  ],
+  [
+    "extensions/google-meet/src/cli-runtime-commands.ts",
+    ["extensions/google-meet/src/cli-runtime.test.ts"],
+  ],
+  ["extensions/google-meet/src/cli-doctor.ts", ["extensions/google-meet/src/cli.test.ts"]],
+  [
+    "extensions/google-meet/src/cli-command-context.ts",
+    [
+      "extensions/google-meet/src/cli-artifacts.test.ts",
+      "extensions/google-meet/src/cli-runtime.test.ts",
+      "extensions/google-meet/src/cli.test.ts",
+    ],
+  ],
+  [
+    "extensions/google-meet/src/cli-shared.ts",
+    [
+      "extensions/google-meet/src/cli-artifacts.test.ts",
+      "extensions/google-meet/src/cli-runtime.test.ts",
+      "extensions/google-meet/src/cli.test.ts",
+    ],
+  ],
   ["extensions/google-meet/src/create.ts", ["extensions/google-meet/index.test.ts"]],
   ["extensions/google-meet/src/oauth.ts", ["extensions/google-meet/src/oauth.test.ts"]],
   [
@@ -2720,6 +2799,22 @@ function createBroadToolingScriptPlans({ config, forwardedArgs, includePatterns,
     : null;
 }
 
+function createBoundedExtensionPlans({ config, forwardedArgs, roots, watchMode }) {
+  if (watchMode) {
+    return null;
+  }
+  const chunks = createExtensionTestProcessTargetChunks(config, roots, forwardedArgs);
+  if (chunks.length <= 1) {
+    return null;
+  }
+  return chunks.map((includePatterns) => ({
+    config,
+    forwardedArgs,
+    includePatterns,
+    watchMode,
+  }));
+}
+
 function expandBroadToolingScriptTargets(targetArgs, cwd, watchMode) {
   if (watchMode) {
     return targetArgs;
@@ -2790,6 +2885,8 @@ function isPathLikeTargetArg(arg, cwd) {
     isFileLikeTarget(arg) ||
     isVitestConfigPathLikeTarget(relative) ||
     isExistingPathTarget(arg, cwd) ||
+    (path.posix.extname(relative) === "" &&
+      /^(?:src|test|extensions|ui|packages|apps)\//u.test(relative)) ||
     Boolean(resolveExplicitTestPrefixTargets(arg, cwd)?.length)
   );
 }
@@ -3048,6 +3145,9 @@ export function findUnmatchedExplicitTestTargets(args, cwd = process.cwd()) {
       unmatched.push({
         target: targetArg,
         reason: "path-does-not-exist",
+        ...(path.posix.extname(relative) === ""
+          ? { includePattern: `${relative}{,.*}.{test,spec}.{js,jsx,ts,tsx,mjs,cjs,mts,cts}` }
+          : {}),
       });
       continue;
     }
@@ -3638,17 +3738,9 @@ function resolveK8sManifestTargets(changedPath) {
 function resolveParallelsToolingTestTargets(changedPath) {
   if (
     !/^scripts\/e2e\/parallels\/[^/]+\.ts$/u.test(changedPath) &&
-    !/^scripts\/e2e\/parallels-(?:linux|macos|npm-update|windows)-smoke\.sh$/u.test(changedPath) &&
-    !/^scripts\/e2e\/lib\/parallels-package\/build-info-commit\.mjs$/u.test(changedPath) &&
-    !/^scripts\/e2e\/lib\/parallels-(?:macos|package)-common\.sh$/u.test(changedPath)
+    !/^scripts\/e2e\/parallels-(?:linux|macos|npm-update|windows)-smoke\.sh$/u.test(changedPath)
   ) {
     return null;
-  }
-  if (
-    /^scripts\/e2e\/lib\/parallels-package\/build-info-commit\.mjs$/u.test(changedPath) ||
-    /^scripts\/e2e\/lib\/parallels-(?:macos|package)-common\.sh$/u.test(changedPath)
-  ) {
-    return ["test/scripts/parallels-lib-helpers.test.ts"];
   }
   const targets = ["test/scripts/parallels-smoke-model.test.ts"];
   if (
@@ -4419,12 +4511,19 @@ export function buildVitestRunPlans(
         ? [FULL_EXTENSIONS_VITEST_CONFIG]
         : listFullExtensionVitestProjectConfigs();
       for (const config of configs) {
-        plans.push({
+        const plan = {
           config,
           forwardedArgs: nonTargetArgs,
           includePatterns: null,
           watchMode,
+        };
+        const boundedPlans = createBoundedExtensionPlans({
+          config,
+          forwardedArgs: nonTargetArgs,
+          roots: matrixExtensionTestRoots,
+          watchMode,
         });
+        plans.push(...(boundedPlans ?? [plan]));
       }
       continue;
     }
@@ -4457,6 +4556,29 @@ export function buildVitestRunPlans(
     });
     if (broadToolingScriptPlans) {
       plans.push(...broadToolingScriptPlans);
+      continue;
+    }
+    const boundedExtensionRoots = grouped.flatMap((targetArg) => {
+      const root = toRepoRelativeTarget(targetArg, cwd);
+      return isMatrixExtensionRoot(root) && isExistingDirectoryTarget(targetArg, cwd) ? [root] : [];
+    });
+    const boundedRootsCoverGroupedTargets = grouped.every((targetArg) => {
+      const relativeTarget = toRepoRelativeTarget(targetArg, cwd);
+      return boundedExtensionRoots.some(
+        (root) => relativeTarget === root || relativeTarget.startsWith(`${root}/`),
+      );
+    });
+    const boundedExtensionPlans =
+      boundedExtensionRoots.length > 0 && boundedRootsCoverGroupedTargets
+        ? createBoundedExtensionPlans({
+            config,
+            forwardedArgs: forwardedPlanArgs,
+            roots: boundedExtensionRoots,
+            watchMode,
+          })
+        : null;
+    if (boundedExtensionPlans) {
+      plans.push(...boundedExtensionPlans);
       continue;
     }
     plans.push({
@@ -4524,6 +4646,12 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
           chunks = splitTargetChunks(
             resolveGatewayServerFullSuiteTargets(cwd),
             GATEWAY_SERVER_FULL_SUITE_TARGET_CHUNK_COUNT,
+          );
+        } else if (config === EXTENSION_MATRIX_VITEST_CONFIG) {
+          chunks = createExtensionTestProcessTargetChunks(
+            config,
+            matrixExtensionTestRoots,
+            forwardedArgs,
           );
         }
         if (chunks.length > 0) {

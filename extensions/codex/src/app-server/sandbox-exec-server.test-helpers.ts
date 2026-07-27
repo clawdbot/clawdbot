@@ -15,6 +15,7 @@ type RpcResponse = {
 /** Builds a minimal enabled sandbox context with overridable backend and fs bridge hooks. */
 export function createSandboxContext(overrides: {
   buildExecSpec?: NonNullable<SandboxContext["backend"]>["buildExecSpec"];
+  copyFile?: NonNullable<SandboxContext["fsBridge"]>["copyFile"];
   finalizeExec?: NonNullable<SandboxContext["backend"]>["finalizeExec"];
   mkdirp?: NonNullable<SandboxContext["fsBridge"]>["mkdirp"];
   readFile?: NonNullable<SandboxContext["fsBridge"]>["readFile"];
@@ -61,6 +62,7 @@ export function createSandboxContext(overrides: {
         relativePath: filePath,
         containerPath: filePath,
       }),
+      copyFile: overrides.copyFile ?? (async () => undefined),
       readFile: overrides.readFile ?? (async () => Buffer.alloc(0)),
       writeFile: overrides.writeFile ?? (async () => undefined),
       mkdirp: overrides.mkdirp ?? (async () => undefined),

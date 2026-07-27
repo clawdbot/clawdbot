@@ -11,7 +11,7 @@ import { messageAction } from "./actions.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
 import { validateLineMediaUrl } from "./outbound-media.js";
 import { createLineSendReceipt } from "./send-receipt.js";
-import type { LineSendResult } from "./types.js";
+import type { LineOutboundMediaKind, LineSendResult } from "./types.js";
 
 type Message = messagingApi.Message;
 type TextMessage = messagingApi.TextMessage;
@@ -56,7 +56,7 @@ interface LineSendOpts {
   accountId?: string;
   verbose?: boolean;
   mediaUrl?: string;
-  mediaKind?: "image" | "video" | "audio";
+  mediaKind?: LineOutboundMediaKind;
   previewImageUrl?: string;
   durationMs?: number;
   trackingId?: string;

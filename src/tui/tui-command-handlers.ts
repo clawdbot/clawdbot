@@ -19,7 +19,12 @@ import {
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { helpText, isSharedTextCommand, parseCommand } from "./commands.js";
+import {
+  formatTuiLevelCommandUsage,
+  helpText,
+  isSharedTextCommand,
+  parseCommand,
+} from "./commands.js";
 import type { ChatLog } from "./components/chat-log.js";
 import {
   createFilterableSelectList,
@@ -174,6 +179,17 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   const hasUnsafeSessionRollover = () =>
     hasTrackedAbortTarget() || state.activityStatus === "finishing context";
 
+  const rejectUnsafeSessionRollover = (command: "new" | "reset") => {
+    if (!hasUnsafeSessionRollover()) {
+      return false;
+    }
+    // Reset interrupts admitted Gateway work, so both rollover commands must
+    // reject active, queued, and finishing runs before mutating the session.
+    chatLog.addSystem(`abort the current run before /${command}`);
+    tui.requestRender();
+    return true;
+  };
+
   const currentSessionPatchTarget = () => ({
     key: state.currentSessionKey,
     ...(state.currentSessionKey === "global" ? { agentId: state.currentAgentId } : {}),
@@ -237,12 +253,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
 
   const openAgentSelector = async () => {
     await refreshAgents();
-    if (state.agents.length === 0) {
+    const selectableAgents = state.agents.filter((agent) => agent.kind !== "system");
+    if (selectableAgents.length === 0) {
       chatLog.addSystem("no agents found");
       tui.requestRender();
       return;
     }
-    const items = state.agents.map((agent: AgentSummary) => ({
+    const items = selectableAgents.map((agent: AgentSummary) => ({
       value: agent.id,
       label: agent.name ? `${agent.id} (${agent.name})` : agent.id,
       description: agent.id === state.agentDefaultId ? "default" : "",
@@ -569,7 +586,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "verbose":
         if (!args) {
-          chatLog.addSystem("usage: /verbose <on|off>");
+          chatLog.addSystem(`usage: ${formatTuiLevelCommandUsage("verbose")}`);
           break;
         }
         try {
@@ -629,7 +646,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "reasoning":
         if (!args) {
-          chatLog.addSystem("usage: /reasoning <on|off>");
+          chatLog.addSystem(`usage: ${formatTuiLevelCommandUsage("reasoning")}`);
           break;
         }
         try {
@@ -730,9 +747,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       }
       case "new":
-        if (hasUnsafeSessionRollover()) {
-          chatLog.addSystem("abort the current run before /new");
-          tui.requestRender();
+        if (rejectUnsafeSessionRollover("new")) {
           break;
         }
         sessionCreationInFlight = true;
@@ -763,6 +778,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         break;
       case "reset":
+        if (rejectUnsafeSessionRollover("reset")) {
+          break;
+        }
         try {
           // Clear token counts immediately to avoid stale display (#1523)
           state.sessionInfo.inputTokens = null;

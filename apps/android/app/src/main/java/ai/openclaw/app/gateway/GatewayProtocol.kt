@@ -119,6 +119,24 @@ data class QuestionListResult(
 )
 
 @Serializable
+data class SessionObserverPlanProgress(
+  val completed: Long,
+  val total: Long,
+)
+
+@Serializable
+data class SessionObserverDigest(
+  val sessionKey: String,
+  val runId: String? = null,
+  val revision: Long,
+  val updatedAt: Long,
+  val headline: String,
+  val assessment: String? = null,
+  val health: String,
+  val planProgress: SessionObserverPlanProgress? = null,
+)
+
+@Serializable
 data class GatewayEventFrameStateVersion(
   val presence: Long,
   val health: Long,
@@ -235,6 +253,7 @@ enum class GatewayMethod(
   BoardUpdate("board.update"),
   BoardWidgetPut("board.widget.put"),
   BoardWidgetGrant("board.widget.grant"),
+  BoardWidgetAppView("board.widget.appView"),
   BoardEvent("board.event"),
   AuditList("audit.list"),
   AuditActivityList("audit.activity.list"),
@@ -367,6 +386,8 @@ enum class GatewayMethod(
   CronGet("cron.get"),
   CronList("cron.list"),
   CronStatus("cron.status"),
+  CronScratchGet("cron.scratch.get"),
+  CronScratchSet("cron.scratch.set"),
   CronAdd("cron.add"),
   CronUpdate("cron.update"),
   CronRemove("cron.remove"),
@@ -395,6 +416,9 @@ enum class GatewayMethod(
   TerminalInput("terminal.input"),
   TerminalResize("terminal.resize"),
   TerminalClose("terminal.close"),
+  ChannelsPairingList("channels.pairing.list"),
+  ChannelsPairingApprove("channels.pairing.approve"),
+  ChannelsPairingDismiss("channels.pairing.dismiss"),
   AssistantMediaGet("assistant.media.get"),
   SessionsGet("sessions.get"),
   SessionsResolve("sessions.resolve"),
@@ -458,6 +482,21 @@ enum class GatewayMethod(
   ConversationsList("conversations.list"),
   SessionDiscussionInfo("session.discussion.info"),
   SessionDiscussionOpen("session.discussion.open"),
+  BoardPromptAuthorize("board.prompt.authorize"),
+  BoardDataRead("board.data.read"),
+  BoardAction("board.action"),
+  SessionsObserverVisibility("sessions.observer.visibility"),
+  SessionVisibilitySet("session.visibility.set"),
+  SessionMembersList("session.members.list"),
+  SessionMembersAdd("session.members.add"),
+  SessionMembersRemove("session.members.remove"),
+  SessionSuggestionsAdd("session.suggestions.add"),
+  SessionSuggestionsList("session.suggestions.list"),
+  SessionSuggestionsResolve("session.suggestions.resolve"),
+  SessionTyping("session.typing"),
+  SessionsCompanionAsk("sessions.companion.ask"),
+  SessionsCompanionState("sessions.companion.state"),
+  SessionsCompanionReset("sessions.companion.reset"),
 }
 
 enum class GatewayEvent(
@@ -469,7 +508,11 @@ enum class GatewayEvent(
   UiCommand("ui.command"),
   SessionApproval("session.approval"),
   SessionMessage("session.message"),
+  SessionObserver("session.observer"),
   SessionOperation("session.operation"),
+  SessionSharing("session.sharing"),
+  SessionSuggestion("session.suggestion"),
+  SessionTyping("session.typing"),
   SessionTool("session.tool"),
   SessionsChanged("sessions.changed"),
   Presence("presence"),

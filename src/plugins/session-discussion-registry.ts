@@ -39,3 +39,15 @@ export function registerSessionDiscussionProvider(provider: SessionDiscussionPro
 export function getSessionDiscussionProvider(): SessionDiscussionProvider | undefined {
   return getRegistry().provider;
 }
+
+/** Clears the process-wide provider before a new active plugin registry is assembled. */
+export function clearSessionDiscussionProvider(): void {
+  getRegistry().provider = undefined;
+}
+
+/** Restores the provider when a plugin registration transaction does not become active. */
+export function restoreSessionDiscussionProvider(
+  provider: SessionDiscussionProvider | undefined,
+): void {
+  getRegistry().provider = provider;
+}

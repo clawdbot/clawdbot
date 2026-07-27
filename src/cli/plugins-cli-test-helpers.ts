@@ -3,6 +3,7 @@ import { Command } from "commander";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
 import { getRuntimeConfig } from "../config/config.js";
+import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { CliMockOutputRuntime } from "./test-runtime-capture.js";
@@ -11,6 +12,8 @@ type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
 type LoadConfigFn = (typeof import("../config/config.js"))["loadConfig"];
 type ParseClawHubPluginSpecFn = (typeof import("../infra/clawhub.js"))["parseClawHubPluginSpec"];
+type ReportClawHubPluginInstallTelemetryFn =
+  (typeof import("../infra/clawhub.js"))["reportClawHubPluginInstallTelemetry"];
 type InstallPluginFromMarketplaceFn =
   (typeof import("../plugins/marketplace.js"))["installPluginFromMarketplace"];
 type InstallPluginFromGitSpecFn =
@@ -41,6 +44,11 @@ function createEmptyUninstallActions() {
 }
 
 let mockInstalledPluginIndexInstallRecords: PluginInstallRecordMap = {};
+let mockHookInstallRecords: Record<string, HookInstallRecord> = {};
+
+export function setHookInstallRecords(records: Record<string, HookInstallRecord>): void {
+  mockHookInstallRecords = structuredClone(records);
+}
 
 function clonePluginInstallRecords(records: PluginInstallRecordMap): PluginInstallRecordMap {
   // Tests mutate records freely; clone to keep helper state from leaking across assertions.
@@ -106,6 +114,8 @@ export const installPluginFromNpmPackArchive: AsyncUnknownMock = vi.fn();
 export const installPluginFromPath: AsyncUnknownMock = vi.fn();
 export const installPluginFromClawHub: AsyncUnknownMock = vi.fn();
 export const parseClawHubPluginSpec: Mock<ParseClawHubPluginSpecFn> = vi.fn();
+export const reportClawHubPluginInstallTelemetry: Mock<ReportClawHubPluginInstallTelemetryFn> =
+  vi.fn(async () => undefined);
 export const findBundledPluginSourceMock: UnknownMock = vi.fn();
 export const installHooksFromNpmSpec: AsyncUnknownMock = vi.fn();
 export const installHooksFromPath: AsyncUnknownMock = vi.fn();
@@ -658,6 +668,7 @@ vi.mock("../hooks/install.js", () => ({
 }));
 
 vi.mock("../hooks/installs.js", () => ({
+  readHookInstalls: () => structuredClone(mockHookInstallRecords),
   recordHookInstall: ((
     ...args: Parameters<(typeof import("../hooks/installs.js"))["recordHookInstall"]>
   ) =>
@@ -696,6 +707,18 @@ vi.mock("../infra/clawhub.js", () => ({
       parseClawHubPluginSpec,
       ...args,
     )) as (typeof import("../infra/clawhub.js"))["parseClawHubPluginSpec"],
+  reportClawHubPluginInstallTelemetry: ((
+    ...args: Parameters<
+      (typeof import("../infra/clawhub.js"))["reportClawHubPluginInstallTelemetry"]
+    >
+  ) =>
+    invokeMock<
+      Parameters<(typeof import("../infra/clawhub.js"))["reportClawHubPluginInstallTelemetry"]>,
+      ReturnType<(typeof import("../infra/clawhub.js"))["reportClawHubPluginInstallTelemetry"]>
+    >(
+      reportClawHubPluginInstallTelemetry,
+      ...args,
+    )) as (typeof import("../infra/clawhub.js"))["reportClawHubPluginInstallTelemetry"],
 }));
 
 const { registerPluginsCli } = await import("./plugins-cli.js");
@@ -741,6 +764,7 @@ export function resetPluginsCliTestState() {
   applyPluginUninstallDirectoryRemoval.mockReset();
   updateNpmInstalledPlugins.mockReset();
   updateNpmInstalledHookPacks.mockReset();
+  mockHookInstallRecords = {};
   promptText.mockReset();
   promptYesNo.mockReset();
   installPluginFromGitSpec.mockReset();
@@ -750,6 +774,8 @@ export function resetPluginsCliTestState() {
   installPluginFromPath.mockReset();
   installPluginFromClawHub.mockReset();
   parseClawHubPluginSpec.mockReset();
+  reportClawHubPluginInstallTelemetry.mockReset();
+  reportClawHubPluginInstallTelemetry.mockResolvedValue(undefined);
   findBundledPluginSourceMock.mockReset();
   installHooksFromNpmSpec.mockReset();
   installHooksFromPath.mockReset();

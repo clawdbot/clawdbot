@@ -138,6 +138,153 @@ async function writeDesktopMetadata(
   await fs.writeFile(path.join(dir, `local_${name}.json`), JSON.stringify(metadata));
 }
 
+function encodeVarint(value: number): Buffer {
+  const bytes: number[] = [];
+  let remaining = value;
+  while (remaining >= 0x80) {
+    bytes.push((remaining & 0x7f) | 0x80);
+    remaining = Math.floor(remaining / 0x80);
+  }
+  bytes.push(remaining);
+  return Buffer.from(bytes);
+}
+
+function snappyLiteralChunk(value: Buffer): Buffer {
+  if (value.length <= 60) {
+    return Buffer.concat([Buffer.from([(value.length - 1) << 2]), value]);
+  }
+  const length = value.length - 1;
+  const lengthBytes: number[] = [];
+  let remaining = length;
+  while (remaining > 0) {
+    lengthBytes.push(remaining & 0xff);
+    remaining = Math.floor(remaining / 0x100);
+  }
+  return Buffer.concat([Buffer.from([(59 + lengthBytes.length) << 2, ...lengthBytes]), value]);
+}
+
+const CLAUDE_GROUP_USER_KEY = Buffer.from("_https://claude.ai\0\x01dframe-store", "latin1");
+
+function levelDbInternalKey(sequence: number, kind = 1): Buffer {
+  const trailer = Buffer.alloc(8);
+  trailer[0] = kind;
+  let remaining = sequence;
+  for (let index = 1; index < trailer.length; index += 1) {
+    trailer[index] = remaining & 0xff;
+    remaining = Math.floor(remaining / 0x100);
+  }
+  return Buffer.concat([CLAUDE_GROUP_USER_KEY, trailer]);
+}
+
+function levelDbDataBlock(
+  entries: Array<{ sequence: number; value: string | Buffer; kind?: number }>,
+): Buffer {
+  const encoded: Buffer[] = [];
+  let previousKey: Uint8Array = Buffer.alloc(0);
+  for (const entry of entries) {
+    const key = levelDbInternalKey(entry.sequence, entry.kind ?? 1);
+    let shared = 0;
+    while (shared < previousKey.length && previousKey[shared] === key[shared]) {
+      shared += 1;
+    }
+    const value = Buffer.from(entry.value);
+    encoded.push(
+      encodeVarint(shared),
+      encodeVarint(key.length - shared),
+      encodeVarint(value.length),
+      key.subarray(shared),
+      value,
+    );
+    previousKey = key;
+  }
+  return Buffer.concat([
+    ...encoded,
+    Buffer.alloc(4), // one restart at the first entry
+    Buffer.from([1, 0, 0, 0]),
+  ]);
+}
+
+function snappyGroupRecords(groupId: string, groupName: string, localSessionId: string): Buffer {
+  const group = `{"id":"${groupId}","name":"${groupName}"}`;
+  const assignmentPrefix = `{"code:${localSessionId}":"`;
+  const key = levelDbInternalKey(1);
+  const valueLength =
+    Buffer.byteLength(group) + Buffer.byteLength(assignmentPrefix) + groupId.length + 2;
+  const firstChunk = Buffer.concat([
+    encodeVarint(0),
+    encodeVarint(key.length),
+    encodeVarint(valueLength),
+    key,
+    Buffer.from(`${group}${assignmentPrefix}`),
+  ]);
+  const groupIdOffset = firstChunk.length - firstChunk.indexOf(groupId);
+  const tail = Buffer.concat([Buffer.from('"}'), Buffer.alloc(4), Buffer.from([1, 0, 0, 0])]);
+  const decodedLength = firstChunk.length + groupId.length + tail.length;
+  return Buffer.concat([
+    encodeVarint(decodedLength),
+    snappyLiteralChunk(firstChunk),
+    Buffer.from([((groupId.length - 1) << 2) | 2, groupIdOffset & 0xff, groupIdOffset >> 8]),
+    snappyLiteralChunk(tail),
+  ]);
+}
+
+function levelDbTable(data: Buffer, compression: 0 | 1): Buffer {
+  const dataWithTrailer = Buffer.concat([data, Buffer.from([compression, 0, 0, 0, 0])]);
+  const handle = Buffer.concat([encodeVarint(0), encodeVarint(data.length)]);
+  const indexEntry = Buffer.concat([Buffer.from([0, 1, handle.length, 0x78]), handle]);
+  const index = Buffer.concat([
+    indexEntry,
+    Buffer.alloc(4), // one restart at the start of the index block
+    Buffer.from([1, 0, 0, 0]),
+  ]);
+  const indexWithTrailer = Buffer.concat([index, Buffer.alloc(5)]);
+  const footer = Buffer.alloc(48);
+  Buffer.concat([
+    encodeVarint(0),
+    encodeVarint(0),
+    encodeVarint(dataWithTrailer.length),
+    encodeVarint(index.length),
+  ]).copy(footer);
+  return Buffer.concat([dataWithTrailer, indexWithTrailer, footer]);
+}
+
+async function writeDesktopGroupStore(
+  home: string,
+  groupId: string,
+  groupName: string,
+  localSessionId: string,
+): Promise<void> {
+  const dir = path.join(
+    home,
+    "Library",
+    "Application Support",
+    "Claude",
+    "Local Storage",
+    "leveldb",
+  );
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(
+    path.join(dir, "000001.ldb"),
+    levelDbTable(snappyGroupRecords(groupId, groupName, localSessionId), 1),
+  );
+}
+
+async function writeDesktopGroupStoreEntries(
+  home: string,
+  entries: Array<{ sequence: number; value: string | Buffer; kind?: number }>,
+): Promise<void> {
+  const dir = path.join(
+    home,
+    "Library",
+    "Application Support",
+    "Claude",
+    "Local Storage",
+    "leveldb",
+  );
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, "000001.ldb"), levelDbTable(levelDbDataBlock(entries), 0));
+}
+
 async function writeBrokenClaudeNpmShim(binDir: string): Promise<string> {
   await fs.mkdir(binDir, { recursive: true });
   const executable = path.join(binDir, process.platform === "win32" ? "claude.cmd" : "claude");
@@ -199,6 +346,86 @@ function sdkCliMessage(sessionId: string, text: string): Record<string, unknown>
     cwd: `/work/${sessionId}`,
     version: "2.1.204",
   };
+}
+
+async function writeLongPagedTranscript(params: {
+  home: string;
+  sessionId: string;
+  truncated?: boolean;
+}): Promise<string> {
+  const oldUser = "old user ".repeat(20_000);
+  await writeProject({
+    home: params.home,
+    entries: [
+      {
+        sessionId: params.sessionId,
+        fullPath: path.join(
+          params.home,
+          ".claude",
+          "projects",
+          "-workspace",
+          `${params.sessionId}.jsonl`,
+        ),
+        summary: "Transcript",
+        modified: "2026-07-04T00:00:00.000Z",
+        isSidechain: false,
+      },
+    ],
+    transcripts: {
+      [params.sessionId]: params.truncated
+        ? [
+            message(params.sessionId, "user", oldUser, 1),
+            message(params.sessionId, "assistant", "new assistant", 2),
+          ]
+        : [
+            { type: "queue-operation", sessionId: params.sessionId },
+            message(params.sessionId, "user", oldUser, 1),
+            message(params.sessionId, "assistant", "old assistant", 2),
+            message(params.sessionId, "user", "new user", 3),
+            message(params.sessionId, "assistant", "new assistant", 4),
+          ],
+    },
+  });
+  return oldUser;
+}
+
+// Cap positional reads on one transcript; a zero cap simulates mid-window EOF.
+function injectTranscriptShortReads(
+  sessionId: string,
+  plan: (input: {
+    length: number;
+    position: number;
+    call: number;
+    firstPosition: number;
+  }) => number,
+): void {
+  const realOpen = fs.open.bind(fs);
+  vi.spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+    const handle = await realOpen(...args);
+    const [target] = args;
+    if (typeof target === "string" && target.endsWith(`${sessionId}.jsonl`)) {
+      const realRead = handle.read.bind(handle) as (
+        buffer: Buffer,
+        offset: number,
+        length: number,
+        position: number,
+      ) => Promise<{ bytesRead: number; buffer: Buffer }>;
+      let call = 0;
+      let firstPosition = -1;
+      Object.defineProperty(handle, "read", {
+        configurable: true,
+        value: (buffer: Buffer, offset: number, length: number, position: number) => {
+          if (firstPosition < 0) {
+            firstPosition = position;
+          }
+          const allowed = plan({ length, position, call, firstPosition });
+          call += 1;
+          return realRead(buffer, offset, allowed, position);
+        },
+      });
+    }
+    return handle;
+  });
 }
 
 afterEach(async () => {
@@ -384,6 +611,33 @@ describe("Claude session catalog", () => {
     expect(provider?.resolveCreateSession?.({})).toBeUndefined();
   });
 
+  it("detects a Claude CLI route pinned to a non-default Claude model", () => {
+    // Regression: route detection previously probed only the packaged default
+    // model id, so bumping that default silently stopped advertising session
+    // creation for configs routing an older Claude model.
+    for (const routedModel of ["anthropic/claude-opus-4-8", "anthropic/claude-sonnet-4-6"]) {
+      const config = {
+        agents: { defaults: { models: { [routedModel]: { agentRuntime: { id: "claude-cli" } } } } },
+      } as unknown as OpenClawConfig;
+      let provider: SessionCatalogProvider | undefined;
+      const api = {
+        id: "anthropic",
+        config,
+        runtime: { config: { current: () => config } },
+        registerSessionCatalog: (candidate: SessionCatalogProvider) => {
+          provider = candidate;
+        },
+      } as unknown as OpenClawPluginApi;
+
+      registerClaudeSessionCatalog(api);
+
+      expect(provider?.resolveCreateSession?.({})).toEqual({
+        model: routedModel,
+        agentRuntime: "claude-cli",
+      });
+    }
+  });
+
   it("resolves creation against the requested agent's runtime policy", () => {
     const config = {
       agents: {
@@ -453,6 +707,48 @@ describe("Claude session catalog", () => {
     registerClaudeSessionCatalog(api);
 
     expect(provider?.resolveCreateSession?.({})).toBeUndefined();
+  });
+
+  it("uses the requested agent's model allowlist for creation", () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-8" },
+          models: {
+            "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+        list: [
+          { id: "main", default: true },
+          {
+            id: "research",
+            model: { primary: "anthropic/claude-sonnet-4-8" },
+            models: {
+              "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+              "anthropic/claude-sonnet-4-8": { agentRuntime: { id: "claude-cli" } },
+            },
+            modelPolicy: { allow: ["anthropic/claude-sonnet-4-8"] },
+          },
+        ],
+      },
+    } satisfies OpenClawConfig;
+    let provider: SessionCatalogProvider | undefined;
+    const api = {
+      id: "anthropic",
+      config,
+      runtime: { config: { current: () => config } },
+      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
+        provider = candidate;
+      },
+    } as unknown as OpenClawPluginApi;
+
+    registerClaudeSessionCatalog(api);
+
+    expect(provider?.resolveCreateSession?.({ agentId: "main" })).toEqual({
+      model: "anthropic/claude-opus-4-8",
+      agentRuntime: "claude-cli",
+    });
+    expect(provider?.resolveCreateSession?.({ agentId: "research" })).toBeUndefined();
   });
 
   it.each([
@@ -627,6 +923,7 @@ describe("Claude session catalog", () => {
                 status: "stored",
                 source: "claude-cli",
                 modelProvider: "anthropic",
+                pullRequest: { numbers: [1234], state: "open" },
                 archived: false,
               },
             ],
@@ -663,6 +960,7 @@ describe("Claude session catalog", () => {
     const hosts = await provider?.list({ hostIds: ["node:node-a"] });
     expect(hosts?.[0]?.sessions[0]).toMatchObject({
       threadId,
+      pullRequest: { numbers: [1234], state: "open" },
       canContinue: true,
       canOpenTerminal: true,
     });
@@ -896,7 +1194,273 @@ describe("Claude session catalog", () => {
     );
   });
 
-  it("rejects sidechain, unindexed, and symlink-escaped transcript ids", async () => {
+  it("imports a Claude Desktop custom group for its matching catalog row", async () => {
+    const home = await createHome();
+    const sessionId = "desktop-custom-group";
+    const localSessionId = "local_11111111-1111-1111-1111-111111111111";
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId,
+          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
+          projectPath: "/work/openclaw",
+          isSidechain: false,
+        },
+      ],
+      transcripts: { [sessionId]: [message(sessionId, "user", "custom group prompt", 1)] },
+    });
+    await writeDesktopMetadata(home, "custom-group", {
+      sessionId: localSessionId,
+      cliSessionId: sessionId,
+      cwd: "/work/openclaw",
+      title: "Desktop custom group",
+    });
+    await writeDesktopGroupStore(
+      home,
+      "cg-22222222-2222-2222-2222-222222222222",
+      "Release",
+      localSessionId,
+    );
+
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
+      sessions: [{ threadId: sessionId, customGroup: "Release", source: "claude-desktop" }],
+    });
+  });
+
+  it("retains the current Claude Desktop pull request when history is truncated", async () => {
+    const home = await createHome();
+    const sessionId = "desktop-pull-requests";
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId,
+          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
+          projectPath: "/work/openclaw",
+          isSidechain: false,
+        },
+      ],
+      transcripts: { [sessionId]: [message(sessionId, "user", "pull request prompt", 1)] },
+    });
+    await writeDesktopMetadata(home, "pull-requests", {
+      sessionId: "local_aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      cliSessionId: sessionId,
+      cwd: "/work/openclaw",
+      title: "Desktop pull requests",
+      prNumber: 111772,
+      prs: [
+        { prNumber: 111772, state: "MERGED" },
+        { prNumber: 111179, state: "MERGED", dismissed: true },
+        ...Array.from({ length: 1_000 }, (_value, index) => ({
+          prNumber: index + 1,
+          state: "CLOSED",
+        })),
+      ],
+    });
+
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
+      sessions: [
+        {
+          threadId: sessionId,
+          pullRequest: {
+            numbers: [...Array.from({ length: 19 }, (_value, index) => index + 982), 111772],
+            state: "merged",
+          },
+          source: "claude-desktop",
+        },
+      ],
+    });
+  });
+
+  it("adds the current Claude Desktop pull request when history omits it", async () => {
+    const home = await createHome();
+    const sessionId = "desktop-current-pull-request";
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId,
+          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
+          projectPath: "/work/openclaw",
+          isSidechain: false,
+        },
+      ],
+      transcripts: { [sessionId]: [message(sessionId, "user", "draft prompt", 1)] },
+    });
+    await writeDesktopMetadata(home, "current-pull-request", {
+      sessionId: "local_bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      cliSessionId: sessionId,
+      cwd: "/work/openclaw",
+      title: "Desktop pull request",
+      prNumber: 107302,
+      prState: "OPEN",
+      prs: [{ prNumber: 107301, state: "CLOSED" }],
+    });
+
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
+      sessions: [
+        {
+          threadId: sessionId,
+          pullRequest: { numbers: [107301, 107302], state: "open" },
+          source: "claude-desktop",
+        },
+      ],
+    });
+  });
+
+  it("skips custom group names spliced with decoder garbage", async () => {
+    const home = await createHome();
+    const sessionId = "desktop-garbage-group";
+    const localSessionId = "local_33333333-3333-3333-3333-333333333333";
+    const groupId = "cg-44444444-4444-4444-4444-444444444444";
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId,
+          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
+          projectPath: "/work/openclaw",
+          isSidechain: false,
+        },
+      ],
+      transcripts: { [sessionId]: [message(sessionId, "user", "garbage group prompt", 1)] },
+    });
+    await writeDesktopMetadata(home, "garbage-group", {
+      sessionId: localSessionId,
+      cliSessionId: sessionId,
+      cwd: "/work/openclaw",
+      title: "Desktop garbage group",
+    });
+    // Keep the control-byte guard as defense in depth for malformed decoded values.
+    await writeDesktopGroupStoreEntries(home, [
+      {
+        sequence: 1,
+        value:
+          `{"id":"${groupId}","name":"Rele\u0012)\fase"}` +
+          `{"id":"${groupId}","name":"Release"}` +
+          `{"code:${localSessionId}":"${groupId}"}`,
+      },
+    ]);
+
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
+      sessions: [{ threadId: sessionId, customGroup: "Release", source: "claude-desktop" }],
+    });
+  });
+
+  it("uses the highest-sequence Claude Desktop custom group value", async () => {
+    const home = await createHome();
+    const sessionId = "desktop-newest-custom-group";
+    const localSessionId = "local_55555555-5555-5555-5555-555555555555";
+    const groupId = "cg-66666666-6666-6666-6666-666666666666";
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId,
+          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
+          projectPath: "/work/openclaw",
+          isSidechain: false,
+        },
+      ],
+      transcripts: { [sessionId]: [message(sessionId, "user", "newest group prompt", 1)] },
+    });
+    await writeDesktopMetadata(home, "newest-custom-group", {
+      sessionId: localSessionId,
+      cliSessionId: sessionId,
+      cwd: "/work/openclaw",
+      title: "Desktop newest custom group",
+    });
+    await writeDesktopGroupStoreEntries(home, [
+      {
+        sequence: 1,
+        value: `{"id":"${groupId}","name":"Old"}{"code:${localSessionId}":"${groupId}"}`,
+      },
+      {
+        sequence: 2,
+        value: `{"id":"${groupId}","name":"New"}{"code:${localSessionId}":"${groupId}"}`,
+      },
+    ]);
+
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
+      sessions: [{ threadId: sessionId, customGroup: "New", source: "claude-desktop" }],
+    });
+  });
+
+  it("reads custom groups from a UTF-16 encoded Local Storage value", async () => {
+    const home = await createHome();
+    const sessionId = "desktop-utf16-group";
+    const localSessionId = "local_77777777-7777-7777-7777-777777777777";
+    const groupId = "cg-88888888-8888-8888-8888-888888888888";
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId,
+          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
+          projectPath: "/work/openclaw",
+          isSidechain: false,
+        },
+      ],
+      transcripts: { [sessionId]: [message(sessionId, "user", "utf16 group prompt", 1)] },
+    });
+    await writeDesktopMetadata(home, "utf16-group", {
+      sessionId: localSessionId,
+      cliSessionId: sessionId,
+      cwd: "/work/openclaw",
+      title: "Desktop utf16 group",
+    });
+    // Chromium switches a whole value to UTF-16 when any character escapes Latin-1,
+    // so the ASCII JSON arrives with interleaved NUL bytes.
+    const records = `{"id":"${groupId}","name":"Release"}{"code:${localSessionId}":"${groupId}"}`;
+    await writeDesktopGroupStoreEntries(home, [
+      { sequence: 1, value: Buffer.from(records, "utf16le") },
+    ]);
+
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
+      sessions: [{ threadId: sessionId, customGroup: "Release", source: "claude-desktop" }],
+    });
+  });
+
+  it("drops custom groups once a newer entry no longer carries them", async () => {
+    const home = await createHome();
+    const sessionId = "desktop-deleted-group";
+    const localSessionId = "local_99999999-9999-9999-9999-999999999999";
+    const groupId = "cg-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId,
+          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
+          projectPath: "/work/openclaw",
+          isSidechain: false,
+        },
+      ],
+      transcripts: { [sessionId]: [message(sessionId, "user", "deleted group prompt", 1)] },
+    });
+    await writeDesktopMetadata(home, "deleted-group", {
+      sessionId: localSessionId,
+      cliSessionId: sessionId,
+      cwd: "/work/openclaw",
+      title: "Desktop deleted group",
+    });
+    // Removing the last custom group rewrites the store without any records; the older
+    // value must not win on sequence.
+    await writeDesktopGroupStoreEntries(home, [
+      {
+        sequence: 1,
+        value: `{"id":"${groupId}","name":"Release"}{"code:${localSessionId}":"${groupId}"}`,
+      },
+      { sequence: 2, value: "{}" },
+    ]);
+
+    const page = await listLocalClaudeSessionPage({}, home);
+    expect(page.sessions[0]).toMatchObject({ threadId: sessionId, source: "claude-desktop" });
+    expect(page.sessions[0]).not.toHaveProperty("customGroup");
+  });
+
+  it("discovers CLI fallback transcripts and rejects sidechains, foreign entrypoints, and escapes", async () => {
     const home = await createHome();
     const projectDir = path.join(home, ".claude", "projects", "-workspace");
     const escapedId = "escaped-session";
@@ -915,19 +1479,40 @@ describe("Claude session catalog", () => {
       transcripts: {
         "sidechain-session": [message("sidechain-session", "user", "sidechain", 1)],
         "unindexed-session": [message("unindexed-session", "user", "unindexed", 1)],
+        "cli-session": [
+          {
+            ...message("cli-session", "user", "Interactive CLI prompt", 1),
+            entrypoint: "cli",
+            cwd: "/work/cli",
+            version: "2.1.216",
+          },
+        ],
         "sdk-cli-session": [
           {
-            ...message("sdk-cli-session", "user", "CLI prompt", 1),
+            ...message("sdk-cli-session", "user", "Headless CLI prompt", 1),
             entrypoint: "sdk-cli",
             cwd: "/work/sdk",
             version: "2.1.204",
           },
         ],
+        "cli-sidechain-session": [
+          {
+            ...message("cli-sidechain-session", "user", "interactive sidechain", 1),
+            entrypoint: "cli",
+            isSidechain: true,
+          },
+        ],
         "discovered-sidechain": [
           {
-            ...message("discovered-sidechain", "user", "sidechain", 1),
+            ...message("discovered-sidechain", "user", "headless sidechain", 1),
             entrypoint: "sdk-cli",
             isSidechain: true,
+          },
+        ],
+        "foreign-entrypoint-session": [
+          {
+            ...message("foreign-entrypoint-session", "user", "SDK session", 1),
+            entrypoint: "sdk-ts",
           },
         ],
       },
@@ -942,27 +1527,49 @@ describe("Claude session catalog", () => {
       title: "Desktop sidechain",
       isArchived: false,
     });
+    await writeDesktopMetadata(home, "cli-sidechain", {
+      cliSessionId: "cli-sidechain-session",
+      title: "Interactive Desktop sidechain",
+      isArchived: false,
+    });
     await writeDesktopMetadata(home, "discovered-sidechain", {
       cliSessionId: "discovered-sidechain",
-      title: "Discovered Desktop sidechain",
+      title: "Headless Desktop sidechain",
       isArchived: false,
     });
 
-    expect((await listLocalClaudeSessionPage({}, home)).sessions).toEqual([
-      expect.objectContaining({
-        threadId: "sdk-cli-session",
-        name: "CLI prompt",
-        source: "claude-cli",
-      }),
+    const sessions = (await listLocalClaudeSessionPage({}, home)).sessions;
+    expect(sessions.map((session) => session.threadId).toSorted()).toEqual([
+      "cli-session",
+      "sdk-cli-session",
     ]);
-    await expect(
-      readLocalClaudeTranscriptPage({ threadId: "sdk-cli-session", limit: 1 }, home),
-    ).resolves.toEqual(
-      expect.objectContaining({ items: [expect.objectContaining({ text: "CLI prompt" })] }),
+    expect(sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          threadId: "cli-session",
+          name: "Interactive CLI prompt",
+          source: "claude-cli",
+        }),
+        expect.objectContaining({
+          threadId: "sdk-cli-session",
+          name: "Headless CLI prompt",
+          source: "claude-cli",
+        }),
+      ]),
     );
+    for (const [threadId, text] of [
+      ["cli-session", "Interactive CLI prompt"],
+      ["sdk-cli-session", "Headless CLI prompt"],
+    ] as const) {
+      await expect(readLocalClaudeTranscriptPage({ threadId, limit: 1 }, home)).resolves.toEqual(
+        expect.objectContaining({ items: [expect.objectContaining({ text })] }),
+      );
+    }
     for (const threadId of [
       "sidechain-session",
+      "cli-sidechain-session",
       "discovered-sidechain",
+      "foreign-entrypoint-session",
       "unindexed-session",
       escapedId,
     ]) {
@@ -1087,28 +1694,7 @@ describe("Claude session catalog", () => {
   it("reads newest transcript messages first by page while returning each page chronologically", async () => {
     const home = await createHome();
     const sessionId = "transcript-session";
-    const oldUser = "old user ".repeat(20_000);
-    await writeProject({
-      home,
-      entries: [
-        {
-          sessionId,
-          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
-          summary: "Transcript",
-          modified: "2026-07-04T00:00:00.000Z",
-          isSidechain: false,
-        },
-      ],
-      transcripts: {
-        [sessionId]: [
-          { type: "queue-operation", sessionId },
-          message(sessionId, "user", oldUser, 1),
-          message(sessionId, "assistant", "old assistant", 2),
-          message(sessionId, "user", "new user", 3),
-          message(sessionId, "assistant", "new assistant", 4),
-        ],
-      },
-    });
+    const oldUser = await writeLongPagedTranscript({ home, sessionId });
 
     const latest = await readLocalClaudeTranscriptPage({ threadId: sessionId, limit: 2 }, home);
     expect(latest.items.map((item) => item.text)).toEqual(["new assistant", "new user"]);
@@ -1213,6 +1799,41 @@ describe("Claude session catalog", () => {
     await expect(
       provider.read({ hostId: "node:node-a", threadId: "session-a", limit: 1 }),
     ).rejects.toThrow("Claude node returned an invalid transcript page");
+  });
+
+  it("pages transcripts identically when every reverse-scan read returns short", async () => {
+    const home = await createHome();
+    const sessionId = "short-read-session";
+    const oldUser = await writeLongPagedTranscript({ home, sessionId });
+
+    // The fixture spans multiple 128 KiB windows; each is filled in 4 KiB reads.
+    injectTranscriptShortReads(sessionId, ({ length }) => Math.min(length, 4096));
+
+    const latest = await readLocalClaudeTranscriptPage({ threadId: sessionId, limit: 2 }, home);
+    expect(latest.items.map((item) => item.text)).toEqual(["new assistant", "new user"]);
+    expect(latest.nextCursor).toEqual(expect.any(String));
+
+    const older = await readLocalClaudeTranscriptPage(
+      { threadId: sessionId, limit: 2, cursor: latest.nextCursor },
+      home,
+    );
+    expect(older.items.map((item) => item.text)).toEqual(["old assistant", oldUser]);
+    expect(older.nextCursor).toBeUndefined();
+  });
+
+  it("still reports a truncated transcript when a reverse-scan read hits EOF mid-window", async () => {
+    const home = await createHome();
+    const sessionId = "truncated-read-session";
+    await writeLongPagedTranscript({ home, sessionId, truncated: true });
+
+    // Return one partial reverse read, then simulate truncation with zero bytes.
+    injectTranscriptShortReads(sessionId, ({ length, call, firstPosition }) =>
+      firstPosition === 0 ? length : call === 0 ? Math.min(length, 8) : 0,
+    );
+
+    await expect(
+      readLocalClaudeTranscriptPage({ threadId: sessionId, limit: 2 }, home),
+    ).rejects.toThrow("Claude transcript changed while it was being read");
   });
 
   it("advertises terminal resume only when the store and Claude binary exist", async () => {

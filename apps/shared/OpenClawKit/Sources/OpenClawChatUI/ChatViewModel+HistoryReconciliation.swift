@@ -742,7 +742,7 @@ extension OpenClawChatViewModel {
         }
         // Durable outbox rows remain authoritative until canonical history
         // confirms their idempotency key. Keep their bubbles through lagging
-        // snapshots, including across app relaunches and session switches.
+        // snapshots; a cold open reconstructs them from client state.
         retainedMessageIDs.formUnion(self.outboxCommandIDsByMessageID.keys)
         var nextMessages = if preservingOptimisticLocalMessages {
             Self.reconcileRunRefreshMessages(
@@ -794,11 +794,10 @@ extension OpenClawChatViewModel {
         // An empty post-send refresh is incomplete by contract: reconciliation
         // preserves the visible transcript, so preserve its last canonical cache too.
         if !preservingOptimisticLocalMessages || !incoming.isEmpty {
-            // Persist the reconciled transcript, including durable outbox
-            // rows retained while canonical history catches up.
+            // The cache store writes only gateway-derived rows. It filters
+            // locally retained outbox bubbles until history proves their keys.
             persistTranscriptToCache(
-                sessionKey: request.session.key,
-                agentID: request.session.agentID,
+                session: request.session,
                 messages: nextMessages,
                 canonicalMessageIdempotencyKeys: Set(incoming.compactMap(\.idempotencyKey)))
         }

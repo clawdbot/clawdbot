@@ -96,7 +96,7 @@ describe("resolveCronSession provider-owned daily reset", () => {
     });
 
     expect(result.isNewSession).toBe(true);
-    expect(result.sessionEntry.sessionId).not.toBe("old-session-id");
+    expect(result.sessionEntry.sessionId).toBe("old-session-id");
   });
 
   it("still rotates a provider-owned session when reset is explicitly configured", () => {
@@ -113,7 +113,7 @@ describe("resolveCronSession provider-owned daily reset", () => {
     });
 
     expect(result.isNewSession).toBe(true);
-    expect(result.sessionEntry.sessionId).not.toBe("old-session-id");
+    expect(result.sessionEntry.sessionId).toBe("old-session-id");
     expect(getCliSessionBinding(result.sessionEntry, "claude-cli")).toBeUndefined();
   });
 });

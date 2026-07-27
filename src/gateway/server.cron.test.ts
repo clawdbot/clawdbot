@@ -1094,7 +1094,7 @@ describe("gateway server cron", () => {
         mainKey: "main",
       },
       agents: {
-        list: [{ id: "ops", default: true }],
+        entries: { ops: { default: true } },
       },
       channels: {
         telegram: {
@@ -1190,7 +1190,7 @@ describe("gateway server cron", () => {
         mainKey: "main",
       },
       agents: {
-        list: [{ id: "ops", default: true }],
+        entries: { ops: { default: true } },
       },
       channels: {
         telegram: {
@@ -1221,7 +1221,7 @@ describe("gateway server cron", () => {
           mainKey: "main",
         },
         agents: {
-          list: [{ id: "main", default: true }, { id: "ops" }],
+          entries: { main: { default: true }, ops: {} },
         },
         channels: {
           telegram: {
@@ -1230,11 +1230,7 @@ describe("gateway server cron", () => {
         },
       });
 
-      const agentIds =
-        cronState
-          .getRuntimeConfig()
-          .agents?.list?.map((agent) => agent.id)
-          .filter((id): id is string => typeof id === "string") ?? [];
+      const agentIds = Object.keys(cronState.getRuntimeConfig().agents?.entries ?? {});
       expect(agentIds).toContain("main");
       expect(agentIds).toContain("ops");
 
@@ -1295,6 +1291,9 @@ describe("gateway server cron", () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-log-",
       cronEnabled: true,
+    });
+    await writeCronConfig({
+      agents: { entries: { main: { default: true }, writer: {} } },
     });
     const events = createCronEventCollector();
     const cronState = await createDirectCronState({ broadcast: events["broadcast"] });
@@ -1395,7 +1394,7 @@ describe("gateway server cron", () => {
         | undefined;
       expect(statusPayload?.enabled).toBe(true);
       const storePath = typeof statusPayload?.storePath === "string" ? statusPayload.storePath : "";
-      expect(storePath).toContain("jobs.json");
+      expect(storePath).toContain("openclaw.sqlite");
 
       const autoRes = await directCronReq(cronState, "cron.add", {
         name: "auto run test",
@@ -1964,7 +1963,9 @@ describe("gateway server cron", () => {
 
     await writeCronConfig({
       cron: {
-        failureDestination: {
+        failureAlert: {
+          enabled: true,
+          after: 1,
           mode: "webhook",
           to: "https://hook.example/cron",
         },

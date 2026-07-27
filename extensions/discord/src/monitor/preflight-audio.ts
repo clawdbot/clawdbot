@@ -75,7 +75,7 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
   const hasTypedText = Boolean(params.message.content?.trim());
   const needsPreflightTranscription =
     hasAudioAttachment &&
-    // `baseText` includes media placeholders; gate on typed text only.
+    // Caption text suppresses preflight; media-only messages remain eligible.
     !hasTypedText &&
     (params.isDirectMessage || (params.shouldRequireMention && params.mentionRegexes.length > 0));
 
@@ -95,17 +95,14 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
           hasTypedText,
         };
       }
-      const audioUrls = audioAttachments
-        .map((att) => att.url)
-        .map((url) => normalizeOptionalString(url))
-        .filter((url): url is string => Boolean(url));
-      if (audioUrls.length > 0) {
+      const media = audioAttachments.flatMap((attachment) => {
+        const url = normalizeOptionalString(attachment.url);
+        return url ? [{ url, contentType: inferAudioAttachmentMime(attachment) }] : [];
+      });
+      if (media.length > 0) {
         transcript = await transcribeFirstAudio({
           ctx: {
-            MediaUrls: audioUrls,
-            MediaTypes: audioAttachments
-              .map((att) => inferAudioAttachmentMime(att))
-              .filter((contentType): contentType is string => Boolean(contentType)),
+            media,
           },
           cfg: params.cfg,
           agentDir: undefined,

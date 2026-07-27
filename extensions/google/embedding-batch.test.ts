@@ -206,6 +206,42 @@ function makeOversizedResponse(status = 200): {
 }
 
 describe("Google embedding-batch bounded JSON reads", () => {
+  it("clamps polling to the remaining batch timeout", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const fetchMock = stubBatchFetch();
+
+    const result = runGeminiEmbeddingBatches({
+      gemini: makeGeminiClient(),
+      agentId: "main",
+      requests: singleRequest(),
+      wait: true,
+      concurrency: 1,
+      pollIntervalMs: 2_000,
+      timeoutMs: 1_000,
+      debug: (message) => {
+        if (message.includes("batches/b-0 pending")) {
+          vi.setSystemTime(500);
+        }
+      },
+    });
+
+    for (let attempt = 0; attempt < 100 && setTimeoutSpy.mock.calls.length === 0; attempt++) {
+      await Promise.resolve();
+    }
+    expect(setTimeoutSpy).toHaveBeenCalledTimes(1);
+    expect(setTimeoutSpy.mock.calls[0]?.[1]).toBe(500);
+    const rejection = expect(result).rejects.toThrow(
+      "gemini batch batches/b-0 timed out after 1000ms",
+    );
+    await vi.runAllTimersAsync();
+    await rejection;
+    expect(
+      fetchMock.mock.calls.filter(([input]) => fetchInputUrl(input).includes("/batches/")),
+    ).toHaveLength(0);
+  });
+
   it.each([
     { stage: "upload", label: "gemini.batch-file-upload" },
     { stage: "create", label: "gemini.batch-create" },

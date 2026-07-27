@@ -106,7 +106,7 @@ export function createWebPushCapability(gateway: ApplicationGateway): WebPushCap
   void readExistingSubscription().catch(() => {});
   const stopGateway = gateway.subscribe((gatewaySnapshot) => {
     const client = gatewaySnapshot.client;
-    const connected = gatewaySnapshot.connected && client !== null;
+    const connected = gatewaySnapshot.phase === "connected" && client !== null;
     if (connected && !wasConnected && client) {
       void reconcile(client);
     }

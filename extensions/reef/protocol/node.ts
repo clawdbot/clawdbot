@@ -1,7 +1,13 @@
-import { mkdir, open as openFile, readFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { open as openFile, readFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { gcm } from "@noble/ciphers/aes.js";
 import { concatBytes, randomBytes } from "@noble/hashes/utils.js";
+import {
+  canonicalPathFromExistingAncestor,
+  ensureDurableDirectory,
+  syncDirectory,
+  type DirectorySyncOutcome,
+} from "openclaw/plugin-sdk/file-access-runtime";
 import { createAuditEntry, verifyChain, type AuditEntry, type AuditStore } from "./audit.js";
 import { canonicalBytes } from "./canonical.js";
 import { base64, decodeUtf8, fromBase64 } from "./encoding.js";
@@ -273,15 +279,32 @@ function replayKey(peer: string, id: string): string {
   return `${peer}\n${id}`;
 }
 
+function requireJournalDirectorySync(
+  outcome: DirectorySyncOutcome | { status: "not-needed" },
+): void {
+  if (outcome.status !== "unsupported" || process.platform === "win32") {
+    return;
+  }
+  const code = outcome.code ? ` (${outcome.code})` : "";
+  throw new Error(`Reef journal directory does not support crash-durable synchronization${code}.`);
+}
+
 async function appendDurably(path: string, contents: string): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  const handle = await openFile(path, "a", 0o600);
+  const parent = await ensureDurableDirectory({
+    directoryPath: await canonicalPathFromExistingAncestor(dirname(path)),
+  });
+  requireJournalDirectorySync(parent.parentSync);
+  const journalPath = join(parent.path, basename(path));
+  const handle = await openFile(journalPath, "a", 0o600);
   try {
     await handle.writeFile(contents, "utf8");
     await handle.sync();
   } finally {
     await handle.close();
   }
+  requireJournalDirectorySync(
+    await syncDirectory(parent, { label: "Reef replay journal directory" }),
+  );
 }
 
 function encryptReplayBody(

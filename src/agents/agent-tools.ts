@@ -24,6 +24,7 @@ import type {
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../security/dangerous-tools.js";
+import type { InputProvenance } from "../sessions/input-provenance.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
@@ -69,6 +70,10 @@ import {
   type ResolvedConversationCapabilityProfile,
 } from "./conversation-capability-profile.js";
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
+import {
+  buildConversationToolPolicyPipelineSteps,
+  resolveConversationToolPolicies,
+} from "./conversation-tool-policy-pipeline.js";
 import type { OpenClawCodingToolConstructionPlan } from "./core-tool-factory-descriptors.js";
 import { applyDelegationCapability, type DelegationCapability } from "./delegation-capability.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
@@ -84,20 +89,17 @@ import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 import type { SandboxContext } from "./sandbox.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
 import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
+import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
 import { createCodingTools, createReadTool } from "./sessions/index.js";
 import { PROCESS_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import { createToolFsPolicy, resolveToolFsConfig } from "./tool-fs-policy.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
 import { isToolAllowedByPolicies } from "./tool-policy-match.js";
-import {
-  applyToolPolicyPipeline,
-  buildDefaultToolPolicyPipelineSteps,
-} from "./tool-policy-pipeline.js";
+import { applyToolPolicyPipeline } from "./tool-policy-pipeline.js";
 import {
   expandToolGroups,
   hasRestrictiveAllowPolicy,
-  mergeAlsoAllowPolicy,
   normalizeToolName,
   replaceWithEffectiveToolAllowlist,
 } from "./tool-policy.js";
@@ -118,13 +120,6 @@ import {
 import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
-
-function hasExplicitDenyPolicy(policy?: { deny?: string[] }): boolean {
-  return (
-    Array.isArray(policy?.deny) &&
-    policy.deny.some((entry) => typeof entry === "string" && entry.trim())
-  );
-}
 
 type GuardContainerMount = {
   containerRoot: string;
@@ -344,6 +339,8 @@ type OpenClawCodingToolsOptions = {
   abortSignal?: AbortSignal;
   /** Disable hook-owned diagnostics when an outer runtime owns tool diagnostics. */
   emitBeforeToolCallDiagnostics?: boolean;
+  /** Skip hook wrapping when an outer tool-call boundary owns hook execution. */
+  wrapBeforeToolCallHook?: boolean;
   /**
    * Provider of the currently selected model (used for provider-specific tool quirks).
    * Example: "anthropic", "openai", "google", "openai".
@@ -406,6 +403,8 @@ type OpenClawCodingToolsOptions = {
   allowGatewaySubagentBinding?: boolean;
   /** Runtime-scoped explicit allowlist used to materialize matching plugin tools. */
   runtimeToolAllowlist?: string[];
+  /** True when runtimeToolAllowlist is real parent authority that child sessions inherit. */
+  inheritRuntimeToolAllowlist?: boolean;
   /** Mutable cron creator cap ref for callers that append final runtime tools later. */
   cronCreatorToolAllowlistRef?: CronCreatorToolAllowlistEntry[];
   /** If true, the model has native vision capability */
@@ -463,6 +462,11 @@ type OpenClawCodingToolsOptions = {
   skillUsagePaths?: SkillUsagePath[];
   /** Prepared conversation-scoped facts for callers that already resolved this run context. */
   conversationCapabilityProfile?: ResolvedConversationCapabilityProfile;
+  inputProvenance?: InputProvenance;
+  /** Trusted in-process completion handoff; never derived from model-facing input. */
+  trustedInternalHandoff?: boolean;
+  /** Trusted server-stamped authority for an explicitly capped scheduled run. */
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
 };
 
 function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions): AnyAgentTool[] {
@@ -520,25 +524,12 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       skillsSnapshot: options?.skillsSnapshot,
       sandboxToolPolicy,
       runtimeToolAllowlist: options?.runtimeToolAllowlist,
+      inheritRuntimeToolAllowlist: options?.inheritRuntimeToolAllowlist,
+      inputProvenance: options?.inputProvenance,
+      trustedInternalHandoff: options?.trustedInternalHandoff,
+      scheduledToolPolicy: options?.scheduledToolPolicy,
     });
-  const {
-    agentId,
-    globalPolicy,
-    globalProviderPolicy,
-    agentPolicy,
-    agentProviderPolicy,
-    profile,
-    providerProfile,
-    profilePolicy,
-    providerProfilePolicy,
-    profileAlsoAllow,
-    providerProfileAlsoAllow,
-    groupPolicy,
-    senderPolicy,
-    subagentPolicy,
-    inheritedToolPolicy,
-    runtimePluginToolGrant,
-  } = capabilityProfile.policy;
+  const { agentId, runtimePluginToolGrant } = capabilityProfile.policy;
 
   const enableHeartbeatTool =
     options?.enableHeartbeatTool === true ||
@@ -556,9 +547,6 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
         TOOL_CALL_RAW_TOOL_NAME,
       ]
     : [];
-  const mergeToolSearchControlAllowlist = <TPolicy extends { allow?: string[] }>(
-    policy: TPolicy | undefined,
-  ) => mergeAlsoAllowPolicy(policy, toolSearchControlAllowlist);
   const runtimeToolAllowlistIncludesMessage = expandToolGroups(
     options?.runtimeToolAllowlist ?? [],
   ).some((toolName) => {
@@ -578,14 +566,11 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     ...(forceHeartbeatTool ? [HEARTBEAT_RESPONSE_TOOL_NAME] : []),
     ...toolSearchControlAllowlist,
   ];
-  const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, [
-    ...(profileAlsoAllow ?? []),
-    ...runtimeProfileAlsoAllow,
-  ]);
-  const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(providerProfilePolicy, [
-    ...(providerProfileAlsoAllow ?? []),
-    ...runtimeProfileAlsoAllow,
-  ]);
+  const conversationToolPolicies = resolveConversationToolPolicies({
+    capabilityProfile,
+    additionalProfileAllow: runtimeProfileAlsoAllow,
+    additionalPolicyAllow: toolSearchControlAllowlist,
+  });
   // Prefer sessionKey for process isolation scope to prevent cross-session process visibility/killing.
   // Fallback to agentId if no sessionKey is available (e.g. legacy or global contexts).
   const scopeKey = resolveProcessToolScopeKey({
@@ -594,29 +579,18 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     sessionId: options?.sessionId,
     agentId,
   });
-  const globalPolicyWithToolSearchControls = mergeToolSearchControlAllowlist(globalPolicy);
-  const globalProviderPolicyWithToolSearchControls =
-    mergeToolSearchControlAllowlist(globalProviderPolicy);
-  const agentPolicyWithToolSearchControls = mergeToolSearchControlAllowlist(agentPolicy);
-  const agentProviderPolicyWithToolSearchControls =
-    mergeToolSearchControlAllowlist(agentProviderPolicy);
-  const groupPolicyWithToolSearchControls = mergeToolSearchControlAllowlist(groupPolicy);
-  const senderPolicyWithToolSearchControls = mergeToolSearchControlAllowlist(senderPolicy);
-  const sandboxToolPolicyWithToolSearchControls =
-    mergeToolSearchControlAllowlist(sandboxToolPolicy);
-  const subagentPolicyWithToolSearchControls = mergeToolSearchControlAllowlist(subagentPolicy);
   const allowBackground = isToolAllowedByPolicies("process", [
-    profilePolicyWithAlsoAllow,
-    providerProfilePolicyWithAlsoAllow,
-    globalPolicyWithToolSearchControls,
-    globalProviderPolicyWithToolSearchControls,
-    agentPolicyWithToolSearchControls,
-    agentProviderPolicyWithToolSearchControls,
-    groupPolicyWithToolSearchControls,
-    senderPolicyWithToolSearchControls,
-    sandboxToolPolicyWithToolSearchControls,
-    subagentPolicyWithToolSearchControls,
-    inheritedToolPolicy,
+    conversationToolPolicies.profilePolicy,
+    conversationToolPolicies.providerProfilePolicy,
+    conversationToolPolicies.globalPolicy,
+    conversationToolPolicies.globalProviderPolicy,
+    conversationToolPolicies.agentPolicy,
+    conversationToolPolicies.agentProviderPolicy,
+    conversationToolPolicies.groupPolicy,
+    conversationToolPolicies.senderPolicy,
+    conversationToolPolicies.sandboxPolicy,
+    conversationToolPolicies.subagentPolicy,
+    conversationToolPolicies.inheritedToolPolicy,
   ]);
   options?.recordToolPrepStage?.("tool-policy");
   const execConfig = resolveExecToolConfig({ cfg: options?.config, agentId });
@@ -755,13 +729,15 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
         scopeKey,
         sessionKey: options?.sessionKey,
         runId: options?.runId,
+        // Detached completions return to the live session, not the sandbox policy scope.
+        notifySessionKey: options?.runSessionKey ?? options?.sessionKey,
         sessionId: options?.sessionId,
         sessionStore: options?.config?.session?.store,
         mainKey: options?.config?.session?.mainKey,
         sessionScope: options?.config?.session?.scope,
         eventRouting: resolveEventSessionRoutingPolicy({
           cfg: options?.config,
-          sessionKey: options?.sessionKey,
+          sessionKey: options?.runSessionKey ?? options?.sessionKey,
           channel: options?.messageProvider,
           accountId: options?.agentAccountId,
         }),
@@ -835,9 +811,8 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const shouldInheritEffectiveToolAllowlist =
     toolPolicyInheritanceSources.some(hasRestrictiveAllowPolicy);
   const cronCreatorToolAllowlist = options?.cronCreatorToolAllowlistRef ?? [];
-  const shouldCaptureCronCreatorToolAllowlist = toolPolicyInheritanceSources.some(
-    (policy) => hasRestrictiveAllowPolicy(policy) || hasExplicitDenyPolicy(policy),
-  );
+  const gatewayCallerAccountId =
+    options?.scheduledToolPolicy?.ownerAccountId ?? options?.agentAccountId;
   // Plugin-only plans bypass createOpenClawTools, so the capability gate must
   // apply here too or narrow allowlists leak gated tools onto capless surfaces.
   const pluginToolCallerIdentity =
@@ -850,7 +825,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
           ),
           turnSourceTo:
             options.currentMessagingTarget ?? options.currentChannelId ?? options.messageTo,
-          turnSourceAccountId: options.agentAccountId,
+          turnSourceAccountId: gatewayCallerAccountId,
           turnSourceThreadId: options.currentThreadTs ?? options.messageThreadId,
         }
       : undefined;
@@ -960,6 +935,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
               options?.messageChannel ?? options?.messageProvider,
             ),
             agentAccountId: options?.agentAccountId,
+            gatewayCallerAccountId,
             agentTo: options?.messageTo,
             agentThreadId: options?.messageThreadId,
             nativeChannelId: options?.nativeChannelId,
@@ -987,9 +963,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             toolBindings: options?.toolBindings,
             pluginToolAllowlist,
             pluginToolDenylist,
-            cronCreatorToolAllowlist: shouldCaptureCronCreatorToolAllowlist
-              ? cronCreatorToolAllowlist
-              : undefined,
+            cronCreatorToolAllowlist,
             currentChannelId: options?.currentChannelId,
             currentChatType: options?.chatType,
             currentMessagingTarget: options?.currentMessagingTarget,
@@ -1089,43 +1063,23 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     tools: toolsForModelProvider,
     toolMeta: (tool) => getPluginToolMeta(tool),
     warn: logWarn,
-    steps: [
-      ...buildDefaultToolPolicyPipelineSteps({
-        profilePolicy: profilePolicyWithAlsoAllow,
-        profile,
-        profileUnavailableCoreWarningAllowlist: profilePolicy?.allow,
-        providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
-        providerProfile,
-        providerProfileUnavailableCoreWarningAllowlist: providerProfilePolicy?.allow,
-        globalPolicy: globalPolicyWithToolSearchControls,
-        globalProviderPolicy: globalProviderPolicyWithToolSearchControls,
-        agentPolicy: agentPolicyWithToolSearchControls,
-        agentProviderPolicy: agentProviderPolicyWithToolSearchControls,
-        groupPolicy: groupPolicyWithToolSearchControls,
-        senderPolicy: senderPolicyWithToolSearchControls,
-        agentId,
-        unavailableCoreToolReason,
-      }),
-      {
-        policy: sandboxToolPolicyWithToolSearchControls,
-        label: "sandbox tools.allow",
-        unavailableCoreToolReason,
-      },
-      {
-        policy: ownerOnlyCoreToolPolicy,
-        label: "gateway sender owner-only tools",
-        unavailableCoreToolReason,
-      },
-      {
-        policy: subagentPolicyWithToolSearchControls,
-        label: "subagent tools.allow",
-        unavailableCoreToolReason,
-      },
-      { policy: inheritedToolPolicy, label: "inherited tools", unavailableCoreToolReason },
-    ],
+    steps: buildConversationToolPolicyPipelineSteps({
+      capabilityProfile,
+      policies: conversationToolPolicies,
+      additionalStepsAfterSandbox: [
+        {
+          policy: ownerOnlyCoreToolPolicy,
+          label: "gateway sender owner-only tools",
+          unavailableCoreToolReason,
+        },
+      ],
+      includeRuntimeToolPolicy: true,
+      unavailableCoreToolReason,
+    }),
     auditLogLevel: options?.toolPolicyAuditLogLevel,
     declaredToolAllowlist: buildDeclaredToolAllowlistContext({
       config: options?.config,
+      metadataSnapshot: options?.preparedModelRuntime?.metadataSnapshot,
       workspaceDir: workspaceRoot,
       toolDenylist: pluginToolDenylist,
     }),
@@ -1152,13 +1106,9 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     // never filters the mandatory structured_output tool from this turn.
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, authorizedTools);
   }
-  if (shouldCaptureCronCreatorToolAllowlist) {
-    replaceWithEffectiveCronCreatorToolAllowlist(
-      cronCreatorToolAllowlist,
-      authorizedTools,
-      (tool) => getPluginToolMeta(tool),
-    );
-  }
+  replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, authorizedTools, (tool) =>
+    getPluginToolMeta(tool),
+  );
   options?.recordToolPrepStage?.("authorization-policy");
   // Always normalize tool JSON Schemas before handing them to OpenClaw model runtime.
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.
@@ -1210,11 +1160,16 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     emitDiagnostics: options?.emitBeforeToolCallDiagnostics,
     ...(options?.swarmCollector ? { approvalMode: "deny" as const } : {}),
   };
-  const withHooks = normalized.map((tool) =>
-    isToolWrappedWithBeforeToolCallHook(tool)
-      ? rewrapToolWithBeforeToolCallHook(tool, hookContext, hookOptions)
-      : wrapToolWithBeforeToolCallHook(tool, hookContext, hookOptions),
-  );
+  // MCP and other outer dispatchers execute hooks at their shared call boundary.
+  // Rewrapping here would run plugin authorization and mutation hooks twice.
+  const withHooks =
+    options?.wrapBeforeToolCallHook === false
+      ? normalized
+      : normalized.map((tool) =>
+          isToolWrappedWithBeforeToolCallHook(tool)
+            ? rewrapToolWithBeforeToolCallHook(tool, hookContext, hookOptions)
+            : wrapToolWithBeforeToolCallHook(tool, hookContext, hookOptions),
+        );
   options?.recordToolPrepStage?.("tool-hooks");
   const withAbort = options?.abortSignal
     ? withHooks.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
