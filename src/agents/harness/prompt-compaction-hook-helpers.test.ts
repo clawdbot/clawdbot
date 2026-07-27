@@ -4,6 +4,7 @@ import {
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
+import type { PluginHookBeforePromptBuildEvent } from "../../plugins/types.js";
 import { resolveAgentHarnessBeforePromptBuildResult } from "./prompt-compaction-hook-helpers.js";
 
 afterEach(() => {
@@ -118,5 +119,61 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
     expect(heartbeatHandler).not.toHaveBeenCalled();
     expect(promptHandler).toHaveBeenCalledTimes(1);
     expect(result.prompt).toBe("turn policy\n\ndue commitment");
+  });
+
+  // Codex/Copilot harnesses build before_prompt_build events through
+  // this shared helper. Without forwarding rawBody, channel runs on those
+  // runtimes would expose `undefined` while the embedded runner exposes the
+  // clean user text, breaking the documented hook contract.
+  it("forwards rawBody to the before_prompt_build event for channel runs", async () => {
+    const captured: PluginHookBeforePromptBuildEvent[] = [];
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_prompt_build",
+          handler: vi.fn((event: unknown) => {
+            captured.push(event as PluginHookBeforePromptBuildEvent);
+            return undefined;
+          }),
+        },
+      ]),
+    );
+
+    await resolveAgentHarnessBeforePromptBuildResult({
+      prompt: "decorated prompt with metadata",
+      developerInstructions: "base instructions",
+      messages: [],
+      ctx: { messageProvider: "discord" },
+      rawBody: "hello rawbody",
+    });
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.rawBody).toBe("hello rawbody");
+  });
+
+  it("passes undefined rawBody for non-channel runs", async () => {
+    const captured: PluginHookBeforePromptBuildEvent[] = [];
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_prompt_build",
+          handler: vi.fn((event: unknown) => {
+            captured.push(event as PluginHookBeforePromptBuildEvent);
+            return undefined;
+          }),
+        },
+      ]),
+    );
+
+    await resolveAgentHarnessBeforePromptBuildResult({
+      prompt: "[OpenClaw heartbeat poll]",
+      developerInstructions: "base instructions",
+      messages: [],
+      ctx: { trigger: "heartbeat" },
+    });
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toHaveProperty("rawBody");
+    expect(captured[0]?.rawBody).toBeUndefined();
   });
 });

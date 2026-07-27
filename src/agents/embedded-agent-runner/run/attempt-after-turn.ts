@@ -80,6 +80,8 @@ type CompleteEmbeddedAttemptAfterTurnInput = {
     skillWorkshopAvailable: boolean;
     hookRunner: HookRunner;
     promptStartedAt: number;
+    /** Latest steer-refreshed direct-user rawBody for the agent_end event. */
+    getCurrentRawBody: () => string | undefined;
   };
 };
 
@@ -227,6 +229,7 @@ export async function completeEmbeddedAttemptAfterTurn(
         success: !lifecycleForAgentEnd.aborted && !state.promptError,
         error: state.promptError ? formatErrorMessage(state.promptError) : undefined,
         durationMs: Date.now() - runtime.promptStartedAt,
+        rawBody: runtime.getCurrentRawBody(),
       },
       ctx: buildEmbeddedAgentEndContext({
         run: attempt,

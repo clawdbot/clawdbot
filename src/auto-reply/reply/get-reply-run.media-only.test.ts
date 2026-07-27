@@ -3542,4 +3542,145 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.prompt).toContain("low steer this conversation");
   });
 });
+
+describe("runPreparedReply rawBody hook gating", () => {
+  beforeAll(async () => {
+    ({ runPreparedReply } = await import("./get-reply-run.js"));
+    ({ runReplyAgent } = await import("./agent-runner.runtime.js"));
+    ({ routeReply } = await import("./route-reply.runtime.js"));
+  });
+
+  beforeEach(() => {
+    vi.mocked(runReplyAgent).mockClear();
+    vi.mocked(runReplyAgent).mockResolvedValue({ text: "ok" } as never);
+  });
+
+  function paramsForProvider(
+    provider: string,
+    overrides: {
+      body?: string;
+      rawBody?: string;
+      commandBody?: string;
+      inputProvenance?: { kind: string; sourceTool?: string };
+    } = {},
+  ): Parameters<typeof runPreparedReply>[0] {
+    const body = overrides.body ?? "";
+    return baseParams({
+      ctx: {
+        Body: body,
+        RawBody: overrides.rawBody,
+        CommandBody: overrides.commandBody,
+        ThreadHistoryBody: "",
+        OriginatingChannel: provider,
+        OriginatingTo: "user:1",
+        ChatType: "direct",
+        Provider: provider,
+        InputProvenance: overrides.inputProvenance,
+      } as never,
+      sessionCtx: {
+        Body: body,
+        BodyStripped: body,
+        ThreadHistoryBody: "",
+        Provider: provider,
+        ChatType: "direct",
+        OriginatingChannel: provider,
+        OriginatingTo: "user:1",
+        InputProvenance: overrides.inputProvenance,
+      } as never,
+    });
+  }
+
+  function capturedFollowupRawBody(): unknown {
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0] as
+      | { followupRun?: { rawBody?: unknown } }
+      | undefined;
+    return call?.followupRun?.rawBody;
+  }
+
+  it("passes user text as rawBody for telegram channel runs", async () => {
+    await runPreparedReply(paramsForProvider("telegram", { body: "hello" }));
+    expect(capturedFollowupRawBody()).toBe("hello");
+  });
+
+  it("gates rawBody to undefined for heartbeat runs", async () => {
+    await runPreparedReply(
+      paramsForProvider("heartbeat", {
+        body: "Read HEARTBEAT.md and run any due maintenance.",
+        rawBody: "Read HEARTBEAT.md and run any due maintenance.",
+        commandBody: "Read HEARTBEAT.md and run any due maintenance.",
+      }),
+    );
+    expect(capturedFollowupRawBody()).toBeUndefined();
+  });
+
+  it("gates rawBody to undefined for cron-event runs", async () => {
+    await runPreparedReply(paramsForProvider("cron-event", { body: "scheduled prompt text" }));
+    expect(capturedFollowupRawBody()).toBeUndefined();
+  });
+
+  it("gates rawBody to undefined for exec-event runs", async () => {
+    await runPreparedReply(paramsForProvider("exec-event", { body: "exec event prompt" }));
+    expect(capturedFollowupRawBody()).toBeUndefined();
+  });
+
+  it("prefers CommandBody over Body for channel rawBody", async () => {
+    await runPreparedReply(paramsForProvider("discord", { body: "raw", commandBody: "!cmd" }));
+    expect(capturedFollowupRawBody()).toBe("!cmd");
+  });
+
+  it("passes user text as rawBody for explicit external_user provenance", async () => {
+    await runPreparedReply(
+      paramsForProvider("telegram", {
+        body: "hello",
+        inputProvenance: { kind: "external_user" },
+      }),
+    );
+    expect(capturedFollowupRawBody()).toBe("hello");
+  });
+
+  it("gates rawBody to undefined for inter_session provenance", async () => {
+    await runPreparedReply(
+      paramsForProvider("telegram", {
+        body: "relayed text from another session",
+        inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      }),
+    );
+    expect(capturedFollowupRawBody()).toBeUndefined();
+  });
+
+  it("gates rawBody to undefined for internal_system provenance", async () => {
+    await runPreparedReply(
+      paramsForProvider("telegram", {
+        body: "internal restart sentinel continuation",
+        inputProvenance: { kind: "internal_system", sourceTool: "restart-sentinel" },
+      }),
+    );
+    expect(capturedFollowupRawBody()).toBeUndefined();
+  });
+
+  it("threads rawBody through steer path for non-telegram channels", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
+      mode: "steer",
+      debounceMs: 500,
+      cap: 20,
+      dropPolicy: "summarize",
+    });
+    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
+      .mockReturnValueOnce("active-session")
+      .mockReturnValueOnce("active-session");
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReturnValueOnce(true);
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunStreaming).mockReturnValueOnce(true);
+
+    await runPreparedReply(paramsForProvider("discord", { body: "INTERRUPT" }));
+
+    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call).toMatchObject({
+      shouldSteer: true,
+      isStreaming: true,
+    });
+    expect(call?.followupRun.rawBody).toBe("INTERRUPT");
+  });
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

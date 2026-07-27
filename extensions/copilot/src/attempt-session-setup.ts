@@ -73,6 +73,7 @@ export async function createCopilotSessionSetup(params: {
           messages,
           ctx: hookContext,
           bootstrapContextRunKind: input.bootstrapContextRunKind,
+          rawBody: input.rawBody,
         });
   const attemptInput =
     promptBuild.prompt === input.prompt ? input : { ...input, prompt: promptBuild.prompt };

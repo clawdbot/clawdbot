@@ -51,6 +51,12 @@ export type ReplyBackendQueueMessageOptions = {
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** Prepared channel turn to merge only at transcript persistence. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+  /**
+   * Provenance-gated clean user-input text for hook events. The active run
+   * re-derives its tracked rawBody from this on every injection; omitting it
+   * (internal injections) clears stale direct-user text.
+   */
+  rawBody?: string;
 };
 
 export type ReplyBackendHandle = {

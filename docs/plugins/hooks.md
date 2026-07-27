@@ -619,6 +619,55 @@ Non-bundled plugins that need raw conversation hooks (`before_model_resolve`,
 Prompt-mutating hooks and durable next-turn injections can be disabled per
 plugin with `plugins.entries.<id>.hooks.allowPromptInjection=false`.
 
+### User raw input: `rawBody`
+
+The `before_prompt_build` and `agent_end` events include an optional
+`rawBody?: string` field that carries the user's
+original input text before OpenClaw prepends channel structural context
+(sender labels, message annotations), `buildInboundUserContextPrefix()`
+metadata, or any `before_prompt_build` hook-injected content.
+
+`rawBody` is present when the run originates from a direct end-user
+message on a channel plugin (Telegram, Discord, Slack, iMessage, and
+others), whether that turn runs on the embedded agent or a CLI-backed
+harness. It is `undefined` when the run originates from local `openclaw`
+CLI invocations, heartbeat polls, cron events, or exec events.
+
+`rawBody` is also `undefined` for channel turns whose text was not typed
+by the end user for this session: inter-session handoffs and
+internal-system routed input (for example `sessions_send` relays or
+restart-sentinel continuations) carry a model-facing "not a direct user
+instruction" annotation, so their text is never surfaced as clean
+`rawBody`. Plugins that want the user's literal input can trust `rawBody`
+as direct external input and fall back to `messages` otherwise.
+
+When a user steers an already-running embedded-agent turn
+(`queue.mode=steer` / `steer-backlog`), the active run refreshes
+`rawBody` to the steered message's clean text, so subsequent
+`before_prompt_build` and `agent_end` events on that run report the
+most recent user input rather than the turn's original text. The
+refresh happens only after the steer is accepted into the run; a
+rejected or timed-out steer leaves the previous value in place.
+Injections into an active embedded run that are not direct end-user
+input — `sessions_send` relays, `talk` active-run control, and subagent
+active wakes — clear `rawBody` instead, so a prior direct-user turn's
+text is never reported on their hook events. CLI-backed harness runs
+(Codex, Copilot) do not track steered injections: their hook events
+always report the turn's original `rawBody`.
+
+Treat absence as "use the message content instead", not "the user sent
+an empty message":
+
+```ts
+api.on("before_prompt_build", (event) => {
+  const userText = event.rawBody ?? extractText(event.messages);
+  // … inspect or react to the user's input …
+});
+```
+
+Both events use the same field with identical semantics, so plugins can
+share a single extraction helper across hook phases.
+
 ### Session extensions and next-turn injections
 
 Workflow plugins can persist small JSON-compatible session state with

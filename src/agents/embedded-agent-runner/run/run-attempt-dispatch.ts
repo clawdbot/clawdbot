@@ -230,6 +230,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     skipPreparedUserTurnMessage: runtime.skipPreparedUserTurnMessage,
     currentInboundEventKind: params.currentInboundEventKind,
     currentInboundContext: params.currentInboundContext,
+    rawBody: params.rawBody,
     images: promptMedia.images,
     imageOrder: promptMedia.imageOrder,
     media: promptMedia.media,

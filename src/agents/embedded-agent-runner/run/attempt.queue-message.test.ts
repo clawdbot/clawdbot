@@ -2,7 +2,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../../sessions/user-turn-transcript.test-support.js";
-import { steerActiveSessionWithOptionalDeliveryWait } from "./attempt.queue-message.js";
+import {
+  createQueuedRawBodyTracker,
+  steerActiveSessionWithOptionalDeliveryWait,
+} from "./attempt.queue-message.js";
 
 type EmbeddedAgentActiveSessionSteerTarget = Parameters<
   typeof steerActiveSessionWithOptionalDeliveryWait
@@ -315,5 +318,61 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// The rawBody tracker may only change after queue delivery succeeds, and only
+// in issue order. A rejected or timed-out steer was never accepted into the
+// run, so its rawBody must not surface on later hook events; a slow earlier
+// steer resolving late must not overwrite a newer injection's value.
+describe("createQueuedRawBodyTracker", () => {
+  it("updates to the queued turn's rawBody after successful delivery", async () => {
+    const tracker = createQueuedRawBodyTracker("initial text");
+
+    await tracker.deliver(async () => {}, { steeringMode: "all", rawBody: "steered text" });
+
+    expect(tracker.current()).toBe("steered text");
+  });
+
+  it("clears after an internal injection that omits rawBody", async () => {
+    const tracker = createQueuedRawBodyTracker("direct user text");
+
+    await tracker.deliver(async () => {}, { steeringMode: "all" });
+
+    expect(tracker.current()).toBeUndefined();
+  });
+
+  it("keeps the previous value when delivery rejects", async () => {
+    const tracker = createQueuedRawBodyTracker("previous text");
+
+    await expect(
+      tracker.deliver(
+        async () => {
+          throw new Error("steer rejected");
+        },
+        { steeringMode: "all", rawBody: "rejected text" },
+      ),
+    ).rejects.toThrow("steer rejected");
+
+    expect(tracker.current()).toBe("previous text");
+  });
+
+  it("ignores an earlier steer that resolves after a newer one", async () => {
+    const tracker = createQueuedRawBodyTracker(undefined);
+    let releaseSlow!: () => void;
+    const slowDelivery = new Promise<void>((resolve) => {
+      releaseSlow = resolve;
+    });
+
+    const slow = tracker.deliver(() => slowDelivery, {
+      steeringMode: "all",
+      rawBody: "older steer",
+    });
+    await tracker.deliver(async () => {}, { steeringMode: "all", rawBody: "newer steer" });
+    expect(tracker.current()).toBe("newer steer");
+
+    releaseSlow();
+    await slow;
+    expect(tracker.current()).toBe("newer steer");
   });
 });

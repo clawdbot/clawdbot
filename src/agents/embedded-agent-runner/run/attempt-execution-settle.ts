@@ -131,6 +131,7 @@ export async function runEmbeddedAttemptSettledPhase(
     queueHandle,
     stopAcceptingSteerMessages,
     getBeforeAgentFinalizeRevisionReason,
+    getCurrentRawBody,
   } = preparedStream;
   const { unsubscribe, waitForPendingEvents } = subscription;
   const {
@@ -173,6 +174,9 @@ export async function runEmbeddedAttemptSettledPhase(
         diagnosticTrace: input.diagnostics.diagnosticTrace,
         isRawModelRun: input.isRawModelRun,
         ...(orphanRepair ? { orphanRepair } : {}),
+        // Read at assembly time so a steered turn's refreshed rawBody reaches
+        // before_prompt_build on retry attempts, not just the original value.
+        rawBody: getCurrentRawBody(),
         sessionAgentId: input.setup.sessionAgentId,
         runtimeModel: runtimeInfo.model,
         systemPromptText: sessionRuntimeState.systemPromptText,
@@ -382,6 +386,7 @@ export async function runEmbeddedAttemptSettledPhase(
           ),
           hookRunner,
           promptStartedAt,
+          getCurrentRawBody,
         },
       },
     });

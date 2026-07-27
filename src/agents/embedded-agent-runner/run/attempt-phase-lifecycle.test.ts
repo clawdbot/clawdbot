@@ -141,6 +141,7 @@ describe("embedded attempt phase lifecycle state", () => {
         skillWorkshopAvailable: false,
         hookRunner: null,
         promptStartedAt: Date.now(),
+        getCurrentRawBody: () => undefined,
       },
     });
 
@@ -191,6 +192,7 @@ describe("embedded attempt phase lifecycle state", () => {
         skillWorkshopAvailable: false,
         hookRunner: null,
         promptStartedAt: Date.now(),
+        getCurrentRawBody: () => undefined,
       },
     });
 

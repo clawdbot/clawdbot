@@ -89,6 +89,8 @@ export type RunCliAgentParams = {
   inputProvenance?: InputProvenance;
   /** Selected model provider used for tool policy; distinct from a CLI runtime id. */
   modelProvider?: string;
+  /** Clean direct-user input text forwarded to before_prompt_build/agent_end hooks. */
+  rawBody?: string;
   provider: string;
   model?: string;
   thinkLevel?: ThinkLevel;

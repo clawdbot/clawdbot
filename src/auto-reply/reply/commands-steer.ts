@@ -20,6 +20,7 @@ import type {
   CommandHandlerResult,
   HandleCommandsParams,
 } from "./commands-types.js";
+import { resolveDirectUserRawBody } from "./effective-reply-route.js";
 
 const STEER_USAGE = "Usage: /steer <message>";
 
@@ -181,6 +182,13 @@ export const handleSteerCommand: CommandHandler = async (params, allowTextComman
       ? { sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode }
       : {}),
     taskSuggestionDeliveryMode: params.opts?.taskSuggestionDeliveryMode,
+    // /steer and /tell carry direct user text; without this gated pass the
+    // clear-by-default active runner would report undefined for a real steer.
+    rawBody: resolveDirectUserRawBody({
+      candidate: message,
+      provider: params.ctx.Provider,
+      inputProvenance: params.ctx.InputProvenance ?? params.rootCtx?.InputProvenance,
+    }),
   }).catch((err: unknown): CommandHandlerResult => {
     return continueWithSteerFallback(
       params,

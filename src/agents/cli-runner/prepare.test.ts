@@ -1462,6 +1462,35 @@ describe("prepareCliRunContext", () => {
     expect(hookContext?.channelId).toBe("telegram");
   });
 
+  it("forwards rawBody to the before_prompt_build hook for CLI-backed channel runs", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+      runBeforePromptBuild: vi.fn(async () => undefined),
+    };
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+
+    await fixture.prepare({
+      sessionKey: "agent:main:test",
+      agentId: "main",
+      trigger: "user",
+      // Decorated prompt carries channel metadata; rawBody is the clean text.
+      prompt: "[from alice] please summarize",
+      rawBody: "please summarize",
+      messageChannel: "telegram",
+      messageProvider: "acp",
+      config: {
+        ...createCliBackendConfig(),
+      },
+    });
+
+    expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledTimes(1);
+    const beforePromptBuildCalls = hookRunner.runBeforePromptBuild.mock.calls as unknown as Array<
+      [{ prompt?: string; rawBody?: string }, unknown]
+    >;
+    expect(beforePromptBuildCalls[0]?.[0]?.rawBody).toBe("please summarize");
+    expect(beforePromptBuildCalls[0]?.[0]?.prompt).toBe("[from alice] please summarize");
+  });
+
   it("prepends current-turn context after prompt-build hooks without changing hook or transcript prompt", async () => {
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),

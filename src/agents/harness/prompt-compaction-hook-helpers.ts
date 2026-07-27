@@ -30,6 +30,11 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   messages: unknown[];
   ctx: AgentHarnessHookContext;
   bootstrapContextRunKind?: BootstrapContextRunKind;
+  // Clean direct-user text for the before_prompt_build hook event. Harness
+  // callers must forward their gated rawBody here so these runtimes match the
+  // embedded runner's hook contract; undefined when the run does not
+  // originate from a channel.
+  rawBody?: string;
 }): Promise<AgentHarnessPromptBuildResult> {
   const hookRunner = getGlobalHookRunner();
   // heartbeat_prompt_contribution fires only on heartbeat turns. Harness runtimes
@@ -51,6 +56,7 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   const promptEvent = {
     prompt: params.prompt,
     messages: params.messages,
+    rawBody: params.rawBody,
   };
 
   // Match the embedded runner's lifecycle order: heartbeat contributions are

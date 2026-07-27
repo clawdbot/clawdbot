@@ -16,7 +16,7 @@ import {
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
-import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
+import { resolveDirectUserRawBody, resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { PreparedReplyRunAdmission } from "./get-reply-run-admission.js";
 import {
   buildPersistedMediaImageLayout,
@@ -197,6 +197,17 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     imageSourceIndexes: currentTurnImages.imageSourceIndexes,
   });
   const inputProvenance = ctx.InputProvenance ?? sessionCtx.InputProvenance;
+  // Gate the plugin hook field to direct external-user channel input. System
+  // events (heartbeat, cron, exec) reuse system prompt text in
+  // Body/CommandBody/RawBody, and inter-session/internal-system handoffs carry a
+  // model-facing "not a direct user instruction" annotation (see
+  // input-provenance.ts). Neither may leak to plugins as clean user rawBody, so
+  // only external_user (or unmarked direct-channel) input qualifies.
+  const rawBodyForPluginEvent = resolveDirectUserRawBody({
+    candidate: ctx.CommandBody ?? ctx.RawBody ?? ctx.Body,
+    provider: ctx.Provider,
+    inputProvenance,
+  });
   const userTurnTimestamp = normalizeMessageTimestampMs(ctx.Timestamp);
   // prompt-prelude substitutes MEDIA_ONLY_USER_TEXT as transcriptBody for
   // bodyless turns; storage stays bare (the LLM boundary re-injects it), while
@@ -306,6 +317,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
     turnAdoptionLifecycle: opts?.turnAdoptionLifecycle,
     onReplyAdmissionWaitChange: opts?.onReplyAdmissionWaitChange,
+    rawBody: rawBodyForPluginEvent,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),

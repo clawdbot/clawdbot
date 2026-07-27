@@ -36,6 +36,7 @@ export async function finalizeCopilotAttempt(
           ? { error: "Copilot SDK turn timed out." }
           : {}),
       durationMs: now() - attemptStartedAt,
+      rawBody: params.rawBody,
     },
     ctx,
   };

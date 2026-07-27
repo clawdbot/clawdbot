@@ -253,6 +253,7 @@ export async function runCliFallbackCandidate(params: {
             currentInboundContext: turn.followupRun.currentInboundContext,
             inputProvenance: turn.followupRun.run.inputProvenance,
             modelProvider: params.provider,
+            rawBody: turn.followupRun.rawBody,
             provider: params.cliExecutionProvider,
             execOverrides: turn.followupRun.run.execOverrides,
             bashElevated: turn.followupRun.run.bashElevated,

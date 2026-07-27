@@ -86,6 +86,8 @@ export type FollowupRun = {
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
   /** Dispatch-scoped freshness owner for a queued delivery-barrier wait. */
   onReplyAdmissionWaitChange?: (waiting: boolean) => void;
+  /** The user's original input text before channel context and metadata. Threaded to plugin hooks. */
+  rawBody?: string;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;

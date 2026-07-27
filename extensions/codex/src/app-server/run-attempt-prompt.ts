@@ -181,6 +181,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       messages: structuredClone(historyState.messages),
       ctx: hookContext,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
+      rawBody: params.rawBody,
     });
   const resolveShiftedPromptInputRange = (
     prompt: string,

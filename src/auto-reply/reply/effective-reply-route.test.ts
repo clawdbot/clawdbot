@@ -5,7 +5,11 @@ import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migration
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
-import { isSystemEventProvider, resolveEffectiveReplyRoute } from "./effective-reply-route.js";
+import {
+  isSystemEventProvider,
+  resolveDirectUserRawBody,
+  resolveEffectiveReplyRoute,
+} from "./effective-reply-route.js";
 
 type EffectiveReplyRouteParams = Parameters<typeof resolveEffectiveReplyRoute>[0];
 type EffectiveReplyRouteContext = EffectiveReplyRouteParams["ctx"];
@@ -417,5 +421,67 @@ describe("isSystemEventProvider", () => {
     expect(isSystemEventProvider("exec-event")).toBe(true);
     expect(isSystemEventProvider("slack")).toBe(false);
     expect(isSystemEventProvider(undefined)).toBe(false);
+  });
+});
+
+describe("resolveDirectUserRawBody", () => {
+  it("returns the candidate for direct external-user channel input", () => {
+    expect(
+      resolveDirectUserRawBody({
+        candidate: "hello",
+        provider: "telegram",
+        inputProvenance: undefined,
+      }),
+    ).toBe("hello");
+    expect(
+      resolveDirectUserRawBody({
+        candidate: "hello",
+        provider: "discord",
+        inputProvenance: { kind: "external_user" },
+      }),
+    ).toBe("hello");
+  });
+
+  it("clears for system-event providers", () => {
+    for (const provider of ["heartbeat", "cron-event", "exec-event"]) {
+      expect(
+        resolveDirectUserRawBody({
+          candidate: "system text",
+          provider,
+          inputProvenance: undefined,
+        }),
+      ).toBeUndefined();
+    }
+  });
+
+  it("clears for inter-session and internal-system provenance", () => {
+    expect(
+      resolveDirectUserRawBody({
+        candidate: "relayed text",
+        provider: "telegram",
+        inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveDirectUserRawBody({
+        candidate: "routed text",
+        provider: "telegram",
+        inputProvenance: { kind: "internal_system" },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("clears empty and whitespace-only candidates (media-only messages)", () => {
+    // rawBody must stay nullish here so the documented
+    // `event.rawBody ?? extractText(messages)` fallback fires for plugins.
+    for (const candidate of [undefined, "", "  \n"]) {
+      expect(
+        resolveDirectUserRawBody({
+          candidate,
+          provider: "telegram",
+          inputProvenance: undefined,
+        }),
+      ).toBeUndefined();
+    }
   });
 });

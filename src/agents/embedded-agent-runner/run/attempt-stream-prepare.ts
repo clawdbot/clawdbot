@@ -42,7 +42,10 @@ import {
   requiresCompletionRequiredAsyncTaskWait,
   type AsyncStartedToolMeta,
 } from "./attempt.async-tasks.js";
-import { steerActiveSessionWithOptionalDeliveryWait } from "./attempt.queue-message.js";
+import {
+  createQueuedRawBodyTracker,
+  steerActiveSessionWithOptionalDeliveryWait,
+} from "./attempt.queue-message.js";
 import { buildEmbeddedSubscriptionParams } from "./attempt.subscription-cleanup.js";
 import {
   resolveFinalAssistantRawText,
@@ -353,6 +356,10 @@ export function prepareEmbeddedAttemptStream(input: {
     input.abortRun(false, reason === "restart" ? createAgentRunRestartAbortError() : undefined);
   };
   let acceptingSteerMessages = true;
+  // Latest user-input rawBody for before_prompt_build / agent_end events.
+  // Queued injections refresh it after delivery, in issue order (see
+  // createQueuedRawBodyTracker for the ordering contract).
+  const rawBodyTracker = createQueuedRawBodyTracker(attempt.rawBody);
   const queueHandle: AttemptStreamQueueHandle = {
     kind: "embedded",
     runId: attempt.runId,
@@ -360,11 +367,15 @@ export function prepareEmbeddedAttemptStream(input: {
       if (options?.steeringMode) {
         input.activeSession.agent.steeringMode = options.steeringMode;
       }
-      await steerActiveSessionWithOptionalDeliveryWait(
-        input.activeSession,
-        text,
+      await rawBodyTracker.deliver(
+        () =>
+          steerActiveSessionWithOptionalDeliveryWait(
+            input.activeSession,
+            text,
+            options,
+            attempt.sessionKey,
+          ),
         options,
-        attempt.sessionKey,
       );
     },
     isStreaming: () => input.activeSession.isStreaming,
@@ -393,6 +404,7 @@ export function prepareEmbeddedAttemptStream(input: {
     queueHandle,
     toolSearchCatalogExecutor,
     getBeforeAgentFinalizeRevisionReason: () => beforeAgentFinalizeRevisionReason,
+    getCurrentRawBody: rawBodyTracker.current,
     stopAcceptingSteerMessages: () => {
       acceptingSteerMessages = false;
     },

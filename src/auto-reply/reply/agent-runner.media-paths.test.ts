@@ -437,6 +437,10 @@ describe("runReplyAgent media path normalization", () => {
       }),
     );
 
+    // Gated/clear case: followupRun.rawBody is undefined (e.g. inter_session /
+    // internal_system steered input), so the steer payload still carries the
+    // rawBody key set to undefined. Key presence resets the active run's
+    // currentRawBody instead of leaving the previous direct-user text stale.
     expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).toHaveBeenLastCalledWith(
       "session",
       "generate chart",
@@ -444,8 +448,13 @@ describe("runReplyAgent media path normalization", () => {
         steeringMode: "all",
         isInboundUserMessage: true,
         taskSuggestionDeliveryMode: "gateway",
+        rawBody: undefined,
       },
     );
+    const lastSteerOptions = queueEmbeddedAgentMessageWithOutcomeAsyncMock.mock.calls.at(
+      -1,
+    )?.[2] as Record<string, unknown> | undefined;
+    expect(lastSteerOptions && "rawBody" in lastSteerOptions).toBe(true);
     expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
   });
 
@@ -554,9 +563,50 @@ describe("runReplyAgent media path normalization", () => {
         steeringMode: "all",
         isInboundUserMessage: true,
         taskSuggestionDeliveryMode: undefined,
+        rawBody: undefined,
       },
     );
     expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
+  });
+
+  it("threads a direct-user rawBody through the steer payload", async () => {
+    queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
+      queued: true,
+      sessionId,
+      target: "embedded_run",
+      gatewayHealth: "live",
+    }));
+
+    await runReplyAgent(
+      makeRunReplyAgentParams({
+        resolvedQueue: { mode: "steer" } as QueueSettings,
+        shouldSteer: true,
+        shouldFollowup: true,
+        isActive: true,
+        isStreaming: true,
+        followupRun: createMockFollowupRun({
+          prompt: "generate chart",
+          rawBody: "generate chart",
+          run: {
+            agentId: "main",
+            agentDir: "/tmp/agent",
+            messageProvider: "whatsapp",
+            workspaceDir: "/tmp/workspace",
+          },
+        }) as unknown as FollowupRun,
+      }),
+    );
+
+    expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).toHaveBeenLastCalledWith(
+      "session",
+      "generate chart",
+      {
+        steeringMode: "all",
+        isInboundUserMessage: true,
+        taskSuggestionDeliveryMode: undefined,
+        rawBody: "generate chart",
+      },
+    );
   });
 
   it("queues active prompts in followup mode without steering", async () => {

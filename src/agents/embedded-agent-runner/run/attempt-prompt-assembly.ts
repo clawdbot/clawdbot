@@ -78,6 +78,8 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   diagnosticTrace: DiagnosticTraceContext;
   isRawModelRun: boolean;
   orphanRepair?: OrphanRepairPlan;
+  /** Gated direct-user text for the before_prompt_build hook event. */
+  rawBody?: string;
   sessionAgentId: string;
   runtimeModel: string;
   systemPromptText: string;
@@ -127,6 +129,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
           config: attempt.config ?? getRuntimeConfig(),
           prompt: attempt.prompt,
           messages: promptBuildMessages,
+          rawBody: input.rawBody,
           hookCtx,
           hookRunner: input.hookRunner,
           bootstrapContextRunKind: attempt.bootstrapContextRunKind,

@@ -215,6 +215,7 @@ export async function runEmbeddedFallbackCandidate(params: {
         userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
         currentInboundEventKind: turn.followupRun.currentInboundEventKind,
         currentInboundContext: turn.followupRun.currentInboundContext,
+        rawBody: turn.followupRun.rawBody,
         extraSystemPrompt: turn.followupRun.run.extraSystemPrompt,
         sourceReplyDeliveryMode: turn.followupRun.run.sourceReplyDeliveryMode,
         forceMessageTool: turn.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",

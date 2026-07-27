@@ -231,6 +231,7 @@ export async function startCodexAttemptTurn(
           success: false,
           error: message,
           durationMs: Date.now() - attemptStartedAt,
+          rawBody: params.rawBody,
         },
         ctx: hookContext,
         hookRunner,

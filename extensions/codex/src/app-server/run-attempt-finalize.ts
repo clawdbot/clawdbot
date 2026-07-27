@@ -432,6 +432,7 @@ export async function finalizeCodexAttempt(
       success: !finalAborted && !finalPromptError,
       ...(finalPromptError ? { error: formatErrorMessage(finalPromptError) } : {}),
       durationMs: Date.now() - attemptStartedAt,
+      rawBody: params.rawBody,
     },
     ctx: hookContext,
     hookRunner,
