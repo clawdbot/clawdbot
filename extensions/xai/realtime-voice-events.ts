@@ -8,6 +8,8 @@ import {
 } from "./realtime-voice-config.js";
 import { XaiRealtimeVoiceProtocol } from "./realtime-voice-protocol.js";
 
+export class XaiRealtimeMalformedAudioError extends Error {}
+
 export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
   private assistantTranscriptBuffer = "";
   private assistantTranscriptFinalized = false;
@@ -15,7 +17,7 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
 
   protected abstract onSessionUpdated(): void;
 
-  protected handleEvent(event: XaiRealtimeEvent): Error | undefined {
+  protected handleEvent(event: XaiRealtimeEvent): void {
     this.config.onEvent?.({
       direction: "server",
       type: event.type,
@@ -73,7 +75,9 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
         }
         const canonicalAudio = canonicalizeBase64(audioDelta);
         if (!canonicalAudio) {
-          return new Error("xAI realtime voice stream returned malformed base64 audio data");
+          throw new XaiRealtimeMalformedAudioError(
+            "xAI realtime voice stream returned malformed base64 audio data",
+          );
         }
         this.config.onAudio(Buffer.from(canonicalAudio, "base64"));
         if (event.item_id && event.item_id !== this.lastAssistantItemId) {

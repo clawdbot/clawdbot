@@ -23,7 +23,7 @@ import {
   toXaiRealtimeWsUrl,
   type XaiRealtimeEvent,
 } from "./realtime-voice-config.js";
-import { XaiRealtimeVoiceEvents } from "./realtime-voice-events.js";
+import { XaiRealtimeMalformedAudioError, XaiRealtimeVoiceEvents } from "./realtime-voice-events.js";
 import { xaiUserAgentHeaderFor } from "./src/xai-user-agent.js";
 
 export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements RealtimeVoiceBridge {
@@ -263,15 +263,15 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
             rejectStartup(new Error(readXaiRealtimeErrorDetail(event.error)));
             return;
           }
-          const eventFailure = this.handleEvent(event);
-          if (eventFailure) {
-            failConnection(eventFailure);
-            return;
-          }
+          this.handleEvent(event);
           if (event.type === "session.updated") {
             settleResolve();
           }
         } catch (error) {
+          if (error instanceof XaiRealtimeMalformedAudioError) {
+            failConnection(error);
+            return;
+          }
           console.error("[xai] realtime event parse failed:", error);
         }
       });
