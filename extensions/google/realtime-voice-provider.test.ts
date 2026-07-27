@@ -1122,6 +1122,53 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(requireFirstAudio(onAudio)).toEqual(pcm24k);
   });
 
+  it.each([
+    ["invalid alphabet", "not-base64!"],
+    ["non-canonical pad bits", "ZE=="],
+  ])("terminates the session for %s in output audio", async (_scenario, data) => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onAudio = vi.fn();
+    const onError = vi.fn();
+    const onClose = vi.fn();
+    const onTranscript = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      onAudio,
+      onClearAudio: vi.fn(),
+      onError,
+      onClose,
+      onTranscript,
+    });
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onmessage({
+      setupComplete: { sessionId: "session-1" },
+      serverContent: {
+        outputTranscription: { text: "finalize me" },
+        modelTurn: {
+          parts: [{ inlineData: { mimeType: "audio/pcm;rate=24000", data } }],
+        },
+      },
+    });
+
+    expect(onAudio).not.toHaveBeenCalled();
+    expect(onTranscript.mock.calls).toEqual([
+      ["assistant", "finalize me", false],
+      ["assistant", "finalize me", true],
+    ]);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Google Live stream returned malformed base64 audio data",
+      }),
+    );
+    expect(onClose).toHaveBeenCalledWith("error");
+    expect(session.close).toHaveBeenCalledTimes(1);
+    await expect(bridge.connect()).rejects.toThrow(
+      "Google Live stream returned malformed base64 audio data",
+    );
+  });
+
   it("uses official output transcription instead of model-turn text", async () => {
     const provider = buildGoogleRealtimeVoiceProvider();
     const onTranscript = vi.fn();

@@ -3261,6 +3261,15 @@ describe("memory plugin e2e", () => {
     expect(() => normalizeEmbeddingVector("abc")).toThrow(
       "Base64 embedding response has invalid byte length",
     );
+    expect(() => normalizeEmbeddingVector("!!!!")).toThrow(
+      "Base64 embedding response is malformed",
+    );
+    expect(() => normalizeEmbeddingVector("ZE==")).toThrow(
+      "Base64 embedding response is malformed",
+    );
+    expect(() => normalizeEmbeddingVector("AQIDBE==")).toThrow(
+      "Base64 embedding response is malformed",
+    );
     expect(() => normalizeEmbeddingVector(undefined)).toThrow(
       "Embedding response is missing a vector",
     );
