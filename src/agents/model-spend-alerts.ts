@@ -138,13 +138,21 @@ export function recordConfiguredModelSpendCall(params: {
       database.db,
       db
         .selectFrom("model_spend_daily")
-        .select(["spend_microusd", "tracking_incomplete"])
+        .select(["spend_microusd", "spend_nanousd_remainder", "tracking_incomplete"])
         .where("day_key", "=", dayKey)
         .where("timezone", "=", timeZone)
         .where("provider", "=", provider)
         .limit(1),
     ).rows[0];
-    const nextSpend = (current?.spend_microusd ?? 0) + cost.costMicroUsd;
+    // Persist the sub-micro remainder so small calls eventually carry into the
+    // integer threshold total instead of being rounded upward per call.
+    const accumulatedNanoUsdRemainder =
+      (current?.spend_nanousd_remainder ?? 0) + cost.costNanoUsdRemainder;
+    const nextSpend =
+      (current?.spend_microusd ?? 0) +
+      cost.costMicroUsd +
+      Math.floor(accumulatedNanoUsdRemainder / 1_000);
+    const nextNanoUsdRemainder = accumulatedNanoUsdRemainder % 1_000;
     if (!Number.isSafeInteger(nextSpend)) {
       throw new Error("model-spend daily total exceeded the supported integer range");
     }
@@ -158,6 +166,7 @@ export function recordConfiguredModelSpendCall(params: {
           timezone: timeZone,
           provider,
           spend_microusd: nextSpend,
+          spend_nanousd_remainder: nextNanoUsdRemainder,
           last_alerted_threshold_microusd: 0,
           tracking_incomplete: trackingIncomplete,
           tracking_incomplete_alerted: 0,
@@ -166,6 +175,7 @@ export function recordConfiguredModelSpendCall(params: {
         .onConflict((conflict) =>
           conflict.columns(["day_key", "timezone", "provider"]).doUpdateSet({
             spend_microusd: nextSpend,
+            spend_nanousd_remainder: nextNanoUsdRemainder,
             tracking_incomplete: trackingIncomplete,
             updated_at: nowMs,
           }),

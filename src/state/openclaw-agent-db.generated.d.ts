@@ -172,6 +172,7 @@ export interface ModelSpendDaily {
   last_alerted_threshold_microusd: Generated<number>;
   provider: string;
   spend_microusd: Generated<number>;
+  spend_nanousd_remainder: Generated<number>;
   timezone: string;
   tracking_incomplete: Generated<number>;
   tracking_incomplete_alerted: Generated<number>;

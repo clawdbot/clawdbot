@@ -537,6 +537,8 @@ CREATE TABLE IF NOT EXISTS model_spend_daily (
   timezone TEXT NOT NULL,
   provider TEXT NOT NULL,
   spend_microusd INTEGER NOT NULL DEFAULT 0 CHECK (spend_microusd >= 0),
+  spend_nanousd_remainder INTEGER NOT NULL DEFAULT 0
+    CHECK (spend_nanousd_remainder >= 0 AND spend_nanousd_remainder < 1000),
   last_alerted_threshold_microusd INTEGER NOT NULL DEFAULT 0
     CHECK (last_alerted_threshold_microusd >= 0),
   tracking_incomplete INTEGER NOT NULL DEFAULT 0 CHECK (tracking_incomplete IN (0, 1)),

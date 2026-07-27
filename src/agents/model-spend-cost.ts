@@ -11,15 +11,31 @@ import { normalizeUsage, type UsageLike } from "./usage.js";
 
 type ResolvedModelSpendCost = {
   costMicroUsd: number;
+  costNanoUsdRemainder: number;
   trackingComplete: boolean;
 };
 
-function ceilUsdToMicroUsd(value: number): number {
-  const microUsd = Math.ceil(value * MICRO_USD_PER_USD);
-  if (!Number.isSafeInteger(microUsd) || microUsd < 0) {
+function splitUsdCost(value: number): Pick<
+  ResolvedModelSpendCost,
+  "costMicroUsd" | "costNanoUsdRemainder"
+> {
+  const scaledMicroUsd = value * MICRO_USD_PER_USD;
+  let costMicroUsd = Math.floor(scaledMicroUsd);
+  let costNanoUsdRemainder = Math.round((scaledMicroUsd - costMicroUsd) * 1_000);
+  if (costNanoUsdRemainder === 1_000) {
+    costMicroUsd += 1;
+    costNanoUsdRemainder = 0;
+  }
+  if (
+    !Number.isSafeInteger(costMicroUsd) ||
+    costMicroUsd < 0 ||
+    !Number.isSafeInteger(costNanoUsdRemainder) ||
+    costNanoUsdRemainder < 0 ||
+    costNanoUsdRemainder >= 1_000
+  ) {
     throw new Error(`model-spend USD value is outside the supported range: ${value}`);
   }
-  return microUsd;
+  return { costMicroUsd, costNanoUsdRemainder };
 }
 
 export function resolveModelSpendCostMicroUsd(params: {
@@ -35,12 +51,12 @@ export function resolveModelSpendCostMicroUsd(params: {
     Number.isFinite(providerBilledTotal) &&
     providerBilledTotal >= 0
   ) {
-    return { costMicroUsd: ceilUsdToMicroUsd(providerBilledTotal), trackingComplete: true };
+    return { ...splitUsdCost(providerBilledTotal), trackingComplete: true };
   }
 
   const usage = normalizeUsage(params.usage);
   if (!usage) {
-    return { costMicroUsd: 0, trackingComplete: false };
+    return { costMicroUsd: 0, costNanoUsdRemainder: 0, trackingComplete: false };
   }
   const buckets = [usage.input, usage.output, usage.cacheRead, usage.cacheWrite];
   const knownTokenTotal = buckets.reduce<number>((sum, bucket) => sum + (bucket ?? 0), 0);
@@ -81,7 +97,7 @@ export function resolveModelSpendCostMicroUsd(params: {
       : total;
   }, 0);
   return {
-    costMicroUsd: ceilUsdToMicroUsd(knownUsd),
+    ...splitUsdCost(knownUsd),
     trackingComplete: usageComplete && pricingComplete,
   };
 }

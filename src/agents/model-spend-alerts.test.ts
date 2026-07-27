@@ -108,25 +108,29 @@ function preparePendingModelSpendAlert(params: { cfg: OpenClawConfig; agentId: s
 }
 
 describe("model spend alerts", () => {
-  it("prefers provider-billed totals and rounds calculated pricing upward to micro-USD", () => {
+  it("prefers provider-billed totals and preserves nano-USD pricing precision", () => {
     expect(
       resolveModelSpendCostMicroUsd({
         model: model(),
         usage: billedUsage(1.2345671),
       }),
-    ).toEqual({ costMicroUsd: 1_234_568, trackingComplete: true });
+    ).toEqual({
+      costMicroUsd: 1_234_567,
+      costNanoUsdRemainder: 100,
+      trackingComplete: true,
+    });
     expect(
       resolveModelSpendCostMicroUsd({
         model: model(),
         usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
       }),
-    ).toEqual({ costMicroUsd: 3, trackingComplete: true });
+    ).toEqual({ costMicroUsd: 3, costNanoUsdRemainder: 0, trackingComplete: true });
     expect(
       resolveModelSpendCostMicroUsd({
         model: model(),
         usage: { input: 1 },
       }),
-    ).toEqual({ costMicroUsd: 1, trackingComplete: false });
+    ).toEqual({ costMicroUsd: 1, costNanoUsdRemainder: 0, trackingComplete: false });
     expect(
       resolveModelSpendCostMicroUsd({
         model: model({ cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } }),
@@ -138,7 +142,11 @@ describe("model spend alerts", () => {
           total: 3_000_000,
         },
       }),
-    ).toEqual({ costMicroUsd: 3_000_000, trackingComplete: false });
+    ).toEqual({
+      costMicroUsd: 3_000_000,
+      costNanoUsdRemainder: 0,
+      trackingComplete: false,
+    });
     for (const invalidOutputRate of [-1, Number.POSITIVE_INFINITY]) {
       expect(
         resolveModelSpendCostMicroUsd({
@@ -153,7 +161,11 @@ describe("model spend alerts", () => {
             total: 2_000_000,
           },
         }),
-      ).toEqual({ costMicroUsd: 1_000_000, trackingComplete: false });
+      ).toEqual({
+        costMicroUsd: 1_000_000,
+        costNanoUsdRemainder: 0,
+        trackingComplete: false,
+      });
     }
   });
 
@@ -184,15 +196,45 @@ describe("model spend alerts", () => {
     withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
       const precise = config({ everyUsd: 1.000_007 });
       record({ total: 1.000_006_1, cfg: precise, nowMs: 1_000 });
+      expect(preparePendingModelSpendAlert({ cfg: precise, agentId: "main" })).toBeUndefined();
+      record({ total: 0.000_000_9, cfg: precise, nowMs: 2_000 });
       expect(preparePendingModelSpendAlert({ cfg: precise, agentId: "main" })?.text).toContain(
         "crossed $1.000007",
       );
 
       const changed = config({ everyUsd: 2 });
-      record({ total: 1, cfg: changed, nowMs: 2_000 });
+      record({ total: 1, cfg: changed, nowMs: 3_000 });
       const next = preparePendingModelSpendAlert({ cfg: changed, agentId: "main" });
       expect(next?.text).toContain("reached $2.000007");
       expect(next?.text).toContain("crossed $2.00");
+    });
+  });
+
+  it("accumulates sub-micro provider charges without per-call upward bias", () => {
+    const stateDir = tempDirs.make("openclaw-model-spend-sub-micro-");
+    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+      const cfg = config({ everyUsd: 0.000_001 });
+      for (let index = 0; index < 9; index += 1) {
+        record({ total: 0.000_000_1, cfg });
+      }
+      const beforeThreshold = openOpenClawAgentDatabase({ agentId: "main" })
+        .db.prepare(
+          "SELECT spend_microusd, spend_nanousd_remainder FROM model_spend_daily WHERE provider = ?",
+        )
+        .get("deepseek");
+      expect(beforeThreshold).toEqual({ spend_microusd: 0, spend_nanousd_remainder: 900 });
+      expect(preparePendingModelSpendAlert({ cfg, agentId: "main" })).toBeUndefined();
+
+      record({ total: 0.000_000_1, cfg });
+      const atThreshold = openOpenClawAgentDatabase({ agentId: "main" })
+        .db.prepare(
+          "SELECT spend_microusd, spend_nanousd_remainder FROM model_spend_daily WHERE provider = ?",
+        )
+        .get("deepseek");
+      expect(atThreshold).toEqual({ spend_microusd: 1, spend_nanousd_remainder: 0 });
+      expect(preparePendingModelSpendAlert({ cfg, agentId: "main" })?.text).toContain(
+        "reached $0.000001",
+      );
     });
   });
 
