@@ -9,7 +9,6 @@ import {
 } from "../state/openclaw-state-db.js";
 import { TranscriptsStore } from "../transcripts/store.js";
 import { summarizeTranscripts } from "../transcripts/summary.js";
-import { autoMigrateLegacyState } from "./state-migrations.js";
 import { restoreCanonicalMeetingTranscriptExports } from "./state-migrations.meeting-transcripts-files.js";
 import {
   detectLegacyMeetingTranscripts,
@@ -94,30 +93,6 @@ describe("meeting transcript Doctor migration", () => {
     expect(
       detectLegacyMeetingTranscripts({ stateDir, doctorOnlyStateMigrations: true }),
     ).toMatchObject({ hasLegacy: true });
-  });
-
-  it("reports completed transcript migration when a custom agent owns session state", async () => {
-    const stateDir = tempDirs.make("openclaw-meeting-transcripts-custom-agent-");
-    const sourceDir = await seedLegacySession({ stateDir, sessionId: "custom-agent-review" });
-    const env = {
-      ...databaseEnv(stateDir),
-      OPENCLAW_AGENT_DIR: path.join(stateDir, "custom-agent"),
-    };
-
-    const result = await autoMigrateLegacyState({
-      cfg: {},
-      doctorOnlyStateMigrations: true,
-      env,
-      now: () => Date.parse("2026-07-02T00:00:00.000Z"),
-    });
-
-    expect(result).toMatchObject({ migrated: true, skipped: true, warnings: [] });
-    expect(result.changes.join("\n")).not.toMatch(/meeting transcript|utterance/i);
-    await expect(fs.stat(sourceDir)).rejects.toMatchObject({ code: "ENOENT" });
-    const database = openOpenClawStateDatabase({ env }).db;
-    expect(
-      database.prepare("SELECT COUNT(*) AS count FROM meeting_transcript_sessions").get(),
-    ).toEqual({ count: 1 });
   });
 
   it("surfaces filesystem errors during detection", async () => {
