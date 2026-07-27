@@ -324,6 +324,41 @@ describe("LINE send helpers", () => {
     expect(message.actions[0]?.type).toBe("uri");
   });
 
+  it("counts imagemap message text in UTF-16 units at both outbound API boundaries", async () => {
+    const area = { x: 0, y: 0, width: 1040, height: 1040 };
+    const exactText = "😀".repeat(200);
+    const message = {
+      type: "imagemap",
+      baseUrl: "https://e.example/imagemap",
+      altText: "Map",
+      baseSize: { width: 1040, height: 1040 },
+      actions: [
+        { type: "message", label: "Exact", text: exactText, area },
+        { type: "message", label: "Too long", text: `${exactText}😀`, area },
+      ],
+    };
+
+    await sendModule.pushMessagesLine("U123", [message] as never, { cfg: LINE_TEST_CFG });
+    await sendModule.replyMessageLine("reply-token", [message] as never, { cfg: LINE_TEST_CFG });
+
+    const pushed = pushMessageMock.mock.calls[0]?.[0] as {
+      messages: Array<{ actions: unknown[] }>;
+    };
+    const replied = replyMessageMock.mock.calls[0]?.[0] as {
+      messages: Array<{ actions: unknown[] }>;
+    };
+    expect(pushed.messages[0]?.actions).toEqual(replied.messages[0]?.actions);
+    expect(pushed.messages[0]?.actions).toEqual([
+      { type: "message", label: "Exact", text: exactText, area },
+      {
+        type: "message",
+        label: "Unavailable",
+        text: "Action unavailable: message text exceeds LINE's limit.",
+        area,
+      },
+    ]);
+  });
+
   it("counts imagemap video-link labels in UTF-16 units", async () => {
     const message = {
       type: "imagemap",

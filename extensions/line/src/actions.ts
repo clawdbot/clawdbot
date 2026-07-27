@@ -192,7 +192,7 @@ function normalizeImagemapAction(action: ImagemapAction): ImagemapAction {
   }
 
   if (action.type === "message") {
-    const text = truncateLineActionText(action.text, LINE_IMAGEMAP_MESSAGE_TEXT_LIMIT);
+    const text = truncateUtf16Safe(action.text, LINE_IMAGEMAP_MESSAGE_TEXT_LIMIT);
     if (text !== action.text) {
       return unavailableImagemapAction("Action", "message text exceeds LINE's limit.", action.area);
     }
@@ -253,6 +253,8 @@ export function normalizeLineMessageActions(message: Message): Message {
     const actions = message.actions.map(normalizeImagemapAction);
     const videoResult = message.video ? normalizeImagemapVideo(message.video) : undefined;
     if (videoResult?.fallbackAction) {
+      // At LINE's 50-action cap, silently drop the invalid video link so its
+      // warning never displaces a valid action.
       if (actions.length < LINE_IMAGEMAP_ACTION_LIMIT) {
         actions.push(videoResult.fallbackAction);
       }
