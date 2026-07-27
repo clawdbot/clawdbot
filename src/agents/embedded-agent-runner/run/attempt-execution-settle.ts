@@ -47,22 +47,31 @@ function cleanupEmbeddedAttemptStreamExecution(input: StreamCleanupInput): void 
       `run cleanup: runId=${attempt.runId} sessionId=${attempt.sessionId} aborted=${terminal.aborted} timedOut=${terminal.timedOut}`,
     );
   }
-  try {
-    input.unsubscribe();
-  } catch (error) {
-    // A throwing unsubscribe indicates a resource leak, but must not mask the run error.
-    log.error(
-      `CRITICAL: unsubscribe failed, possible resource leak: runId=${attempt.runId} ${String(error)}`,
-    );
+  // Every release belongs to this owner; one broken callback must not strand
+  // the active run or mask the prompt failure that caused teardown.
+  for (const [name, cleanup] of [
+    ["unsubscribe", input.unsubscribe],
+    ["backend detach", () => attempt.replyOperation?.detachBackend(input.queueHandle)],
+    [
+      "active run cleanup",
+      () =>
+        clearActiveEmbeddedRun(
+          attempt.sessionId,
+          input.queueHandle,
+          attempt.sessionKey,
+          attempt.sessionFile,
+        ),
+    ],
+    ["abort listener cleanup", input.removeAttemptAbortSignalListener],
+  ] as const) {
+    try {
+      cleanup();
+    } catch (error) {
+      log.error(
+        `CRITICAL: ${name} failed, possible resource leak: runId=${attempt.runId} ${String(error)}`,
+      );
+    }
   }
-  attempt.replyOperation?.detachBackend(input.queueHandle);
-  clearActiveEmbeddedRun(
-    attempt.sessionId,
-    input.queueHandle,
-    attempt.sessionKey,
-    attempt.sessionFile,
-  );
-  input.removeAttemptAbortSignalListener();
 }
 
 export async function runEmbeddedAttemptSettledPhase(
