@@ -3,6 +3,13 @@ import {
   QA_AGENTIC_PARITY_SCENARIO_TITLES,
   QA_AGENTIC_PARITY_TOOL_BACKED_SCENARIO_TITLES,
 } from "./agentic-parity.js";
+import {
+  compareRuntimeWallClockMs,
+  formatRuntimeSpeedComparison,
+  formatRuntimeWallClockMs,
+  summarizeRuntimeParityTiming,
+  type QaRuntimeTiming,
+} from "./runtime-parity-timing.js";
 import type {
   RuntimeId,
   RuntimeParityDrift,
@@ -81,17 +88,6 @@ type QaRuntimeParityScenarioReport = {
   speedupPercent: number | null;
 };
 
-type QaRuntimeWallClockMetrics = {
-  totalWallClockMs: number | null;
-  p50WallClockMs: number | null;
-  p90WallClockMs: number | null;
-};
-
-type QaRuntimeSpeedComparison = {
-  fasterRuntime: RuntimeId | "tie" | null;
-  speedupPercent: number | null;
-};
-
 type QaRuntimeParityReport = {
   runtimePair: [RuntimeId, RuntimeId];
   comparedAt: string;
@@ -102,10 +98,7 @@ type QaRuntimeParityReport = {
   failedScenarios: number;
   driftCounts: Record<RuntimeParityDrift, number>;
   scenarios: QaRuntimeParityScenarioReport[];
-  timing: QaRuntimeSpeedComparison & {
-    openclaw: QaRuntimeWallClockMetrics;
-    codex: QaRuntimeWallClockMetrics;
-  };
+  timing: QaRuntimeTiming;
   pass: boolean;
   failures: string[];
   notes: string[];
@@ -317,56 +310,6 @@ function normalizeRuntimePair(
     return pair;
   }
   return ["openclaw", "codex"];
-}
-
-function compareRuntimeWallClockMs(
-  openclawWallClockMs: number | null,
-  codexWallClockMs: number | null,
-): QaRuntimeSpeedComparison {
-  if (openclawWallClockMs === null || codexWallClockMs === null) {
-    return { fasterRuntime: null, speedupPercent: null };
-  }
-  if (openclawWallClockMs === codexWallClockMs) {
-    return { fasterRuntime: "tie", speedupPercent: 0 };
-  }
-  const fasterRuntime = openclawWallClockMs < codexWallClockMs ? "openclaw" : "codex";
-  const fasterWallClockMs = Math.min(openclawWallClockMs, codexWallClockMs);
-  const slowerWallClockMs = Math.max(openclawWallClockMs, codexWallClockMs);
-  return {
-    fasterRuntime,
-    speedupPercent:
-      fasterWallClockMs === 0
-        ? null
-        : ((slowerWallClockMs - fasterWallClockMs) / fasterWallClockMs) * 100,
-  };
-}
-
-function summarizeRuntimeWallClock(values: number[]): QaRuntimeWallClockMetrics {
-  if (values.length === 0) {
-    return { totalWallClockMs: null, p50WallClockMs: null, p90WallClockMs: null };
-  }
-  const sorted = values.toSorted((left, right) => left - right);
-  const percentile = (value: number) =>
-    sorted[Math.min(sorted.length - 1, Math.ceil((value / 100) * sorted.length) - 1)] ?? null;
-  return {
-    totalWallClockMs: sorted.reduce((total, value) => total + value, 0),
-    p50WallClockMs: percentile(50),
-    p90WallClockMs: percentile(90),
-  };
-}
-
-function formatRuntimeWallClockMs(value: number | null): string {
-  return value === null ? "N/A" : `${value} ms`;
-}
-
-function formatRuntimeSpeedComparison(comparison: QaRuntimeSpeedComparison): string {
-  if (comparison.fasterRuntime === null || comparison.speedupPercent === null) {
-    return "N/A";
-  }
-  if (comparison.fasterRuntime === "tie") {
-    return "tie";
-  }
-  return `${comparison.fasterRuntime} ${comparison.speedupPercent.toFixed(1)}% faster`;
 }
 
 function requiredCoverageStatus(
@@ -788,20 +731,6 @@ export function buildQaRuntimeParityReport(params: {
   if (scenarios.length === 0 || totalScenarios <= 0) {
     failures.push("Runtime parity report has no executed scenarios.");
   }
-  const openclawTiming = summarizeRuntimeWallClock(
-    scenarios.flatMap((scenario) =>
-      scenario.openclawWallClockMs === null ? [] : [scenario.openclawWallClockMs],
-    ),
-  );
-  const codexTiming = summarizeRuntimeWallClock(
-    scenarios.flatMap((scenario) =>
-      scenario.codexWallClockMs === null ? [] : [scenario.codexWallClockMs],
-    ),
-  );
-  const hasTimingCaptures = scenarios.some(
-    (scenario) => scenario.openclawWallClockMs !== null && scenario.codexWallClockMs !== null,
-  );
-
   return {
     runtimePair,
     comparedAt: params.comparedAt ?? new Date().toISOString(),
@@ -812,14 +741,7 @@ export function buildQaRuntimeParityReport(params: {
     failedScenarios,
     driftCounts,
     scenarios,
-    timing: {
-      openclaw: openclawTiming,
-      codex: codexTiming,
-      ...compareRuntimeWallClockMs(
-        hasTimingCaptures ? openclawTiming.totalWallClockMs : null,
-        hasTimingCaptures ? codexTiming.totalWallClockMs : null,
-      ),
-    },
+    timing: summarizeRuntimeParityTiming(scenarios),
     pass: failures.length === 0 && failedScenarios === 0,
     failures,
     notes: [
