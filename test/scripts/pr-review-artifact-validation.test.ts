@@ -102,7 +102,7 @@ function runValidation(
   );
 }
 
-function runMergeVerification(checks: "api-error" | "invalid-json" | "no-required") {
+function runMergeVerification(checks: "api-error" | "invalid-json" | "no-required" | "pending") {
   const fixtureRoot = tempDirs.make("openclaw-pr-merge-verification-");
   const localDir = join(fixtureRoot, ".local");
   const head = "a".repeat(40);
@@ -114,7 +114,9 @@ function runMergeVerification(checks: "api-error" | "invalid-json" | "no-require
       ? "echo 'GitHub API unavailable' >&2; return 1"
       : checks === "no-required"
         ? "echo \"no required checks reported on the 'review-branch' branch\" >&2; return 1"
-        : "printf '%s\\n' 'not valid JSON'";
+        : checks === "pending"
+          ? `printf '%s\\n' '[{"name":"CI","bucket":"pending","state":"IN_PROGRESS"}]'; return 8`
+          : "printf '%s\\n' 'not valid JSON'";
 
   return spawnSync(
     "bash",
@@ -270,6 +272,15 @@ describePosix("scripts/pr review artifact validation", () => {
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(result.stdout).toContain("No required checks configured for this PR.");
     expect(result.stdout).toContain("merge-verify passed for PR #42");
+  });
+
+  it("preserves GitHub CLI pending-check evidence from exit status eight", () => {
+    const result = runMergeVerification("pending");
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("Required checks are still pending.");
+    expect(result.stderr).not.toContain("unable to verify the required GitHub checks");
+    expect(result.stdout).not.toContain("merge-verify passed");
   });
 
   it("rejects merge verification when GitHub returns malformed check evidence", () => {

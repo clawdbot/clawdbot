@@ -137,8 +137,16 @@ merge_verify() {
   gh pr checks "$pr" --required --watch --fail-fast >.local/merge-checks-watch.log 2>&1 || true
   local checks_json
   local checks_err_file
+  local checks_exit_status
   checks_err_file=$(mktemp)
-  if ! checks_json=$(gh pr checks "$pr" --required --json name,bucket,state 2>"$checks_err_file"); then
+  if checks_json=$(gh pr checks "$pr" --required --json name,bucket,state 2>"$checks_err_file"); then
+    checks_exit_status=0
+  else
+    checks_exit_status=$?
+  fi
+  # gh documents exit 8 for pending checks even when it emits valid JSON. Let
+  # the checked evidence below reject pending checks without hiding API errors.
+  if [ "$checks_exit_status" -ne 0 ] && [ "$checks_exit_status" -ne 8 ]; then
     local checks_error
     checks_error=$(cat "$checks_err_file")
     case "$checks_error" in

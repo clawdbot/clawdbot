@@ -13,7 +13,7 @@ const describePosix = process.platform === "win32" ? describe.skip : describe;
 type MergeScenario = {
   auto?: boolean;
   autoResult?: "enabled" | "inconclusive" | "unavailable";
-  checks?: "fail" | "green";
+  checks?: "fail" | "green" | "pending";
   existingAutoMethod?: "" | "MERGE" | "REBASE" | "SQUASH";
   mergeStateStatus?: string;
   mergeable?: string;
@@ -61,7 +61,9 @@ function runMerge(scenario: MergeScenario = {}) {
   const checks =
     scenario.checks === "fail"
       ? [{ name: "CI", bucket: "fail", state: "FAILURE" }]
-      : [{ name: "CI", bucket: "pass", state: "SUCCESS" }];
+      : scenario.checks === "pending"
+        ? [{ name: "CI", bucket: "pending", state: "IN_PROGRESS" }]
+        : [{ name: "CI", bucket: "pass", state: "SUCCESS" }];
 
   const shell = `
 set -euo pipefail
@@ -104,7 +106,10 @@ gh() {
   case "$1 $2" in
     "pr checks")
       case " $* " in
-        *" --json "*) printf '%s\\n' "$OPENCLAW_TEST_CHECKS_JSON" ;;
+        *" --json "*)
+          printf '%s\\n' "$OPENCLAW_TEST_CHECKS_JSON"
+          return "$OPENCLAW_TEST_CHECKS_EXIT_STATUS"
+          ;;
       esac
       ;;
     "pr view")
@@ -175,6 +180,7 @@ merge_run 123 "$OPENCLAW_TEST_AUTO_REQUESTED"
       OPENCLAW_TEST_AUTO_REQUESTED: scenario.auto ? "true" : "false",
       OPENCLAW_TEST_AUTO_RESULT: scenario.autoResult ?? "enabled",
       OPENCLAW_TEST_AUTO_STATE: autoState,
+      OPENCLAW_TEST_CHECKS_EXIT_STATUS: scenario.checks === "pending" ? "8" : "0",
       OPENCLAW_TEST_CHECKS_JSON: JSON.stringify(checks),
       OPENCLAW_TEST_DISABLED_AUTO_META: disabledAutoMeta,
       OPENCLAW_TEST_GH_CALLS: calls,
@@ -216,6 +222,15 @@ describePosix("scripts/pr merge-run", () => {
 
     expect(result.status).toBe(1);
     expect(result.stdout).toContain("Required checks are failing.");
+    expect(result.calls).not.toContain("pr merge");
+  });
+
+  it("does not mistake pending required checks for a GitHub API failure", () => {
+    const result = runMerge({ auto: true, checks: "pending" });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("Required checks are still pending.");
+    expect(result.stderr).not.toContain("unable to verify the required GitHub checks");
     expect(result.calls).not.toContain("pr merge");
   });
 
