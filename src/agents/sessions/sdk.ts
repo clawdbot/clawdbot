@@ -74,7 +74,7 @@ export interface CreateAgentSessionOptions {
   /** Global config directory. Default: ~/.openclaw/agents/default */
   agentDir?: string;
 
-  /** Auth storage for credentials. Default: AuthStorage.create(agentDir/auth.json) */
+  /** Auth storage for credentials. Default: canonical per-agent SQLite auth profiles. */
   authStorage?: AuthStorage;
   /** Model registry. Default: ModelRegistry.create(authStorage, agentDir/models.json) */
   modelRegistry?: ModelRegistry;
@@ -300,9 +300,8 @@ async function createAgentSessionImpl(
   let resourceLoader = options.resourceLoader;
 
   // Use provided or create AuthStorage and ModelRegistry
-  const authPath = options.agentDir ? join(agentDir, "auth.json") : undefined;
   const modelsPath = options.agentDir ? join(agentDir, "models.json") : undefined;
-  const authStorage = options.authStorage ?? AuthStorage.create(authPath);
+  const authStorage = options.authStorage ?? AuthStorage.forAgent(agentDir);
   const modelRegistry = options.modelRegistry ?? ModelRegistry.create(authStorage, modelsPath);
 
   const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);

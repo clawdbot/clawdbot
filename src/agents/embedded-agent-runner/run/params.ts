@@ -15,6 +15,7 @@ import type { ChatType } from "../../../channels/chat-type.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ImageContent } from "../../../llm/types.js";
+import type { MediaFact } from "../../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../../plugins/hook-types.js";
 import type { RuntimePluginToolGrant } from "../../../plugins/runtime/tool-grant.js";
@@ -42,6 +43,7 @@ import type { ExpectedAgentHarnessRuntimeArtifact } from "../../harness/runtime-
 import type { AgentInternalEvent } from "../../internal-events.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import type { ScheduledToolPolicyContext } from "../../scheduled-tool-policy.js";
 import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
 import type { PromptMode } from "../../system-prompt.types.js";
 import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
@@ -189,6 +191,8 @@ export type RunEmbeddedAgentParams = {
   currentInboundContext?: CurrentInboundPromptContext;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
+  /** Ordered facts represented by attachment text in the current prompt. */
+  media?: MediaFact[];
   /** Optional client-provided tools (OpenResponses hosted tools). */
   clientTools?: ClientToolDefinition[];
   /** Disable built-in tools for this run (LLM-only mode). */
@@ -233,6 +237,8 @@ export type RunEmbeddedAgentParams = {
   runtimePluginToolGrant?: RuntimePluginToolGrant;
   /** Trusted in-process subagent-completion handoff; never derived from public input. */
   trustedInternalHandoff?: boolean;
+  /** Trusted server-stamped authority for an explicitly capped scheduled run. */
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
   /** Seen bootstrap truncation warning signatures for this session (once mode dedupe). */
   bootstrapPromptWarningSignaturesSeen?: string[];
   /** Last shown bootstrap truncation warning signature for this session. */
@@ -325,6 +331,11 @@ export type RunEmbeddedAgentParams = {
    * final answer for silence.
    */
   allowEmptyAssistantReplyAsSilent?: boolean;
+  /**
+   * Whether this run still owes a visible reply after settled non-reporting tools.
+   * Exact configured silence and committed delivery remain terminal outcomes.
+   */
+  terminalReplyExpectation?: "required" | "optional";
   authProfileFailurePolicy?: AuthProfileFailurePolicy;
   /**
    * One-shot helper runs may opt in to executing through the provider's CLI

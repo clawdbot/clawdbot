@@ -10,10 +10,12 @@ import {
   registerInternalHook,
   type InternalHookEvent,
 } from "../hooks/internal-hooks.js";
+import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { buildTaskStatusSnapshot } from "../tasks/task-status.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { compactToolOutputHint } from "./tool-schema-hints.js";
 
 const loadSessionStoreMock = vi.fn();
@@ -320,6 +322,11 @@ vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
+  isPluginMetadataSnapshotCompatible: () => true,
+  resolvePluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
+}));
 vi.mock("../plugins/provider-thinking.js", () => ({
   resolveProviderBinaryThinking: () => undefined,
   resolveProviderDefaultThinkingLevel: () => undefined,
@@ -388,7 +395,13 @@ beforeAll(async () => {
   await getSessionStatusTool("agent:main:spawned").execute("warm-spawned-workspace-status", {});
 });
 
-function resetSessionStore(store: Record<string, SessionEntry>) {
+function resetSessionStore(inputStore: Record<string, SessionEntry>) {
+  const store = Object.fromEntries(
+    Object.entries(inputStore).map(([key, entry]) => [
+      key,
+      normalizeLegacySessionEntryDelivery(entry),
+    ]),
+  ) as Record<string, SessionEntry>;
   buildStatusMessageMock.mockClear();
   resolveQueueSettingsMock.mockClear();
   resolveQueueSettingsMock.mockReturnValue({ mode: "interrupt" });
@@ -909,13 +922,15 @@ describe("session_status tool", () => {
       [sessionKey]: {
         sessionId: "s-discord-origin-webchat-active",
         updatedAt: 10,
-        origin: { provider: "discord", accountId: "bot-primary" },
-        deliveryContext: {
-          channel: "discord",
-          to: "channel:1489550370136129537",
-          accountId: "bot-primary",
-          threadId: "thread-origin",
-        },
+        delivery: normalizeSessionDeliveryState({
+          origin: { provider: "discord", accountId: "bot-primary" },
+          context: {
+            channel: "discord",
+            to: "channel:1489550370136129537",
+            accountId: "bot-primary",
+            threadId: "thread-origin",
+          },
+        }),
       },
     });
 
@@ -947,7 +962,11 @@ describe("session_status tool", () => {
     };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe(sessionKey);
-    expect(details.origin).toEqual({ provider: "discord", accountId: "bot-primary" });
+    expect(details.origin).toEqual({
+      provider: "discord",
+      accountId: "bot-primary",
+      threadId: "thread-origin",
+    });
     expect(details.active).toEqual({
       channel: "webchat",
       to: "control-ui-conversation",
@@ -981,10 +1000,12 @@ describe("session_status tool", () => {
       [targetKey]: {
         sessionId: "s-target",
         updatedAt: 10,
-        deliveryContext: {
-          channel: "discord",
-          to: "channel:1489550370136129537",
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "discord",
+            to: "channel:1489550370136129537",
+          },
+        }),
       },
     });
     mockConfig = {
@@ -1025,10 +1046,12 @@ describe("session_status tool", () => {
       [policyKey]: {
         sessionId: "s-policy",
         updatedAt: 5,
-        deliveryContext: {
-          channel: "telegram",
-          to: "telegram:direct:1234",
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "telegram",
+            to: "telegram:direct:1234",
+          },
+        }),
       },
       [runKey]: {
         sessionId: "s-run",
@@ -1383,13 +1406,13 @@ describe("session_status tool", () => {
     expect(saved.sessionId).toMatch(UUID_RE);
   });
 
-  it("preserves an existing legacy main row when implicit fallback mutates model state", async () => {
+  it("preserves an existing canonical main row when implicit fallback mutates model state", async () => {
     resetSessionStore({
       main: {
         sessionId: "legacy-main-session",
         updatedAt: 10,
         label: "Legacy Main",
-        lastChannel: "telegram",
+        delivery: { kind: "none" },
       },
     });
 
@@ -1411,7 +1434,7 @@ describe("session_status tool", () => {
     expect(savedStore.main).toMatchObject({
       sessionId: "legacy-main-session",
       label: "Legacy Main",
-      lastChannel: "telegram",
+      delivery: { kind: "none" },
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet-4-6",
       liveModelSwitchPending: true,
@@ -1981,12 +2004,15 @@ describe("session_status tool", () => {
     }
   });
 
-  it("falls back to origin.provider when resolving queue settings", async () => {
+  it("uses canonical delivery state when resolving queue settings", async () => {
     resetSessionStore({
       main: {
         sessionId: "status-origin-provider",
         updatedAt: 10,
-        origin: { provider: "quietchat" },
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "quietchat", to: "quietchat:status" },
+          origin: { provider: "quietchat" },
+        }),
       },
     });
 
@@ -1996,7 +2022,9 @@ describe("session_status tool", () => {
 
     const queueArg = mockCallArg(resolveQueueSettingsMock) as Record<string, unknown>;
     expect(queueArg.channel).toBe("quietchat");
-    expectRecordFields(queueArg.sessionEntry, { origin: { provider: "quietchat" } });
+    expect(queueArg.sessionEntry).toMatchObject({
+      delivery: { kind: "external", origin: { provider: "quietchat" } },
+    });
   });
 
   it("resolves sessionId inputs", async () => {

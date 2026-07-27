@@ -12,6 +12,7 @@ import {
   type MainSessionRecoveryPendingTarget,
   type MainSessionRecoveryOwnerLease,
 } from "../../agents/main-session-recovery-store.js";
+import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import {
   setChannelSourceTurnId,
@@ -20,6 +21,7 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveAgentIdFromSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import {
@@ -76,6 +78,7 @@ export function startAgentRunExecution(params: {
   message: string;
   images: Array<{ type: "image"; data: string; mimeType: string }>;
   imageOrder: PromptImageOrderEntry[];
+  media: MediaFact[];
   effectiveTranscriptInputText: string;
   inputProvenance?: InputProvenance;
   runId: string;
@@ -313,6 +316,7 @@ export function startAgentRunExecution(params: {
           message,
           images: params.images,
           imageOrder: params.imageOrder,
+          media: params.media,
           agentId: ingressAgentId,
           provider: prepared.effectiveProviderOverride,
           model: prepared.effectiveModelOverride,
@@ -347,6 +351,12 @@ export function startAgentRunExecution(params: {
           runtimePluginToolGrant,
           trustedInternalHandoff,
           toolsAllowIsDefault: params.restoredCronContinuation?.toolsAllowIsDefault,
+          scheduledToolPolicy: params.restoredCronContinuation
+            ? resolveScheduledToolPolicyContext({
+                toolsAllow: params.restoredCronContinuation.toolsAllow,
+                scheduledToolPolicy: params.restoredCronContinuation.scheduledToolPolicy,
+              })
+            : undefined,
           requireExplicitMessageTarget:
             params.restoredCronContinuation?.cliSessionBindingFacts?.requireExplicitMessageTarget,
           cliSessionBindingFacts: params.restoredCronContinuation?.cliSessionBindingFacts,

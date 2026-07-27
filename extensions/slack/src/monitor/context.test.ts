@@ -54,7 +54,6 @@ function createTestContext(params?: {
     typingReaction: "",
     ackReactionScope: "group-mentions",
     mediaMaxBytes: 20 * 1024 * 1024,
-    removeAckAfterReply: false,
   });
 }
 

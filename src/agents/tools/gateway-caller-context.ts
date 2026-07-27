@@ -9,6 +9,8 @@ import type { AnyAgentTool } from "./common.js";
 type GatewayToolCallerIdentity = {
   agentId: string;
   sessionKey: string;
+  /** Host-signed capability for the scheduled run's existing self-management surface. */
+  cronSelfManagementJobId?: string;
   // Trusted run context, carried separately from model-authored tool arguments.
   turnSourceChannel?: string;
   turnSourceTo?: string;
@@ -44,6 +46,9 @@ export async function withGatewayToolCallerIdentity<T>(
     {
       agentId: identity.agentId.trim(),
       sessionKey: identity.sessionKey.trim(),
+      ...(identity.cronSelfManagementJobId?.trim()
+        ? { cronSelfManagementJobId: identity.cronSelfManagementJobId.trim() }
+        : {}),
       ...(identity.turnSourceChannel?.trim()
         ? { turnSourceChannel: identity.turnSourceChannel.trim() }
         : {}),

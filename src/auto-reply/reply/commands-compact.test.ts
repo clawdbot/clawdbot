@@ -43,6 +43,7 @@ function buildCompactParams(
       Surface: "whatsapp",
       CommandSource: "text",
       CommandBody: commandBodyNormalized,
+      commandText: commandBodyNormalized,
     },
     command: {
       commandBodyNormalized,
@@ -155,6 +156,7 @@ describe("handleCompactCommand", () => {
           Surface: "whatsapp",
           CommandSource: "text",
           CommandBody: "/compact: focus on decisions",
+          commandText: "/compact: focus on decisions",
           From: "+15550001",
           To: "+15550002",
           SenderName: "Alice",

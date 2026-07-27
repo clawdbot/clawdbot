@@ -23,6 +23,7 @@ import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { recordSessionStateEvent } from "../../sessions/session-state-events.js";
 import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
+import { createSessionCatalogRequestEntrySnapshot } from "./session-catalog-entry-snapshot.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -199,6 +200,10 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     const search = normalizeSessionCatalogSearch(request.search);
     const progressId = request.progressId;
     const progressConnId = progressId && client?.connId ? client.connId : undefined;
+    const requestEntries = createSessionCatalogRequestEntrySnapshot({
+      cfg: config,
+      fallbackAgentId: resolvedAgent.agentId,
+    });
     const catalogList = await Promise.all(
       selected.map(async (provider): Promise<SessionCatalog> => {
         const createTarget = resolveProviderCreateTarget(provider, resolvedAgent.agentId);
@@ -212,7 +217,12 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
                 {
                   progressId,
                   agentId: resolvedAgent.agentId,
-                  catalog: catalogResult(provider, [host], undefined, createSession),
+                  catalog: catalogResult(
+                    provider,
+                    [requestEntries.projectHostCreatedActors(host)],
+                    undefined,
+                    createSession,
+                  ),
                 },
                 new Set([progressConnId]),
                 { dropIfSlow: true },
@@ -225,9 +235,15 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
             limitPerHost: request.limitPerHost,
             hostIds: request.hostIds,
             ...(request.cursors !== undefined ? { cursors: request.cursors } : {}),
+            sessionEntries: requestEntries.sessionEntries,
             ...(onHost ? { onHost } : {}),
           });
-          return catalogResult(provider, hosts, undefined, createSession);
+          return catalogResult(
+            provider,
+            hosts.map(requestEntries.projectHostCreatedActors),
+            undefined,
+            createSession,
+          );
         } catch (error) {
           return catalogResult(provider, [], catalogError(error), createSession);
         }

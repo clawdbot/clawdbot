@@ -6,13 +6,14 @@ description: Manage OpenClaw GitHub Actions and Blacksmith CI capacity, runner-r
 # OpenClaw CI Limits
 
 Use this skill for CI capacity changes, not ordinary test failure triage. The
-goal is to keep OpenClaw fast while staying below GitHub's self-hosted runner
-registration edge limit.
+goal is to keep OpenClaw fast while distinguishing runner registration, runner
+availability, Blacksmith control-plane health, and downstream queue drains.
 
 ## Core Facts
 
-- The scarce resource is Blacksmith runner registrations, not Blacksmith vCPU
-  capacity.
+- Do not assume the scarce resource. Prove whether pressure is runner
+  registrations, eligible runner availability, Blacksmith capacity/control
+  plane, workflow dependencies, test runtime, or a downstream queue writer.
 - GitHub runner registrations for `openclaw` currently report a 10,000 per
   5-minute bucket in `actions_runner_registration`. Verify the live bucket
   before each tuning pass because GitHub can change it. The `openclaw`
@@ -36,11 +37,21 @@ Before changing CI, collect current pressure:
 ghx api rate_limit --jq '{core:.resources.core,graphql:.resources.graphql,search:.resources.search,actions_runner_registration:.resources.actions_runner_registration}'
 ghx run list -R openclaw/openclaw --limit 20 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
 ghx run list -R openclaw/clawsweeper --limit 20 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
+ghx api repos/openclaw/clawsweeper/actions/runs/<run-id>/jobs --paginate --jq '.jobs[] | {id,name,status,conclusion,labels,created_at,started_at,completed_at,runner_name,runner_group_name}'
+blacksmith testbox list --all
 curl -fsS https://clawsweeper.openclaw.ai/api/status | jq '{generated_at,fleet,diagnostics:{errors:.diagnostics.errors}}'
-curl -fsS https://clawsweeper.openclaw.ai/api/exact-review-queue | jq '.'
+curl -fsS https://clawsweeper.openclaw.ai/api/exact-review-queue | jq '{generated_at,review:.lanes.review,publication:.lanes.publication,state_writer,state_append}'
 node scripts/ci-run-timings.mjs --latest-main
 node scripts/ci-run-timings.mjs --recent 10
 ```
+
+For a suspicious queued run, inspect its jobs. A run-level `queued` status does
+not reveal whether the job is waiting on dependencies or has no eligible
+runner. Compare `created_at`, `started_at`, `labels`, and `runner_name`. Recheck
+stale queued runs live before canceling them; cancel only runs proven obsolete.
+
+`scripts/ci-run-timings.mjs` start delay can include workflow dependency wait
+plus runner queue time. It is trend evidence, not runner-pressure proof alone.
 
 Read:
 
@@ -62,12 +73,29 @@ Classify the issue before changing caps:
   Blacksmith job count.
 - **Blacksmith capacity:** Blacksmith dashboard shows actual concurrency caps or
   unavailable capacity. Do not solve this with GitHub workflow fanout alone.
+- **Blacksmith Testbox control plane:** list, warm, status, or run calls time out
+  before a lease is returned. This is separate from Actions runner registration
+  and Actions job capacity. Trusted source may use the documented local
+  fallback; untrusted source stays blocked.
+- **Unavailable runner label:** a job is queued with a custom `runs-on` label,
+  `started_at` and `runner_name` remain empty, and no eligible runner exists.
+  Restore an available hosted or registered label; fanout cannot fix it.
+- **Workflow dependency wait:** the job is queued but required predecessors are
+  not terminal. Fix or wait for the dependency; do not call the whole delay
+  runner queue pressure.
 - **OpenClaw test runtime:** jobs start quickly but one lane dominates wall time.
   Use `$openclaw-test-performance` instead of runner tuning.
 - **Real failing CI:** one job fails after starting. Use `$github:gh-fix-ci` or
   `$openclaw-testing`, not this skill.
-- **ClawSweeper backlog:** exact-review queue grows while CI is healthy. Tune
-  ClawSweeper workers in `openclaw/clawsweeper`, not OpenClaw CI.
+- **ClawSweeper review backlog:** review pending/ready grows while publication
+  and state writers remain healthy. Tune review admission/workers in
+  `openclaw/clawsweeper`.
+- **ClawSweeper publication backlog:** publication pending/ready and oldest age
+  grow, net drain is zero or negative, or dead letters rise. Inspect publication
+  batches, state-writer coordination, and GitHub mutation latency first.
+- **State materializer/append backlog:** `state_append.pending_rows`,
+  `pending_bytes`, or oldest age grows while the materializer is queued or
+  absent. Recover that sole drain first; more review workers make it worse.
 
 ## Registration Budget Math
 
@@ -120,6 +148,8 @@ Do not:
 - delete coverage just to reduce runner count;
 - treat cancelled superseded pull-request runs as failures without checking the
   newest run for the same ref.
+- cancel old queued runs from a stale snapshot; re-query the exact run first and
+  preserve any current run that still owns live work.
 
 ## Current OpenClaw Knobs
 
@@ -204,5 +234,10 @@ Report:
 - exact PR/commit landed;
 - expected registration reduction or added headroom;
 - CI run status and slowest/queued jobs;
+- queued job labels, runner assignment, and dependency state for any outlier;
+- Blacksmith Actions runner evidence separately from Testbox control-plane
+  health;
 - ClawSweeper queue pending, dispatching, leased, oldest pending age;
+- publication net drain/dead letters, state-writer queued/waiting, and state
+  append rows/bytes/oldest item;
 - any real failures that remain outside runner registration.

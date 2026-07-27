@@ -151,7 +151,7 @@ describe("fs.listDir", () => {
   it("rejects node listings blocked by the live command policy", async () => {
     const invoke = vi.fn();
     const context = {
-      getRuntimeConfig: () => ({ gateway: { nodes: { denyCommands: ["fs.listDir"] } } }),
+      getRuntimeConfig: () => ({ gateway: { nodes: { commands: { deny: ["fs.listDir"] } } } }),
       nodeRegistry: {
         get: vi.fn().mockReturnValue({
           connId: "conn-1",

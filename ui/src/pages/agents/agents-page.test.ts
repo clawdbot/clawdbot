@@ -54,8 +54,9 @@ function snapshot(
 ): ApplicationGatewaySnapshot {
   return {
     client,
-    connected,
-    reconnecting: false,
+    phase: connected ? "connected" : "stopped",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",

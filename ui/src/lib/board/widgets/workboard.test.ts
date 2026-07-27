@@ -67,8 +67,7 @@ function createContext(
     gateway: {
       snapshot: {
         client: { request } as never,
-        connected: true,
-        reconnecting: false,
+        phase: "connected",
         hello: null,
         assistantAgentId: null,
         sessionKey: "agent:main:test",
@@ -162,6 +161,38 @@ describe("Workboard plugin widgets", () => {
     expect(element.textContent).toContain("Running card");
     expect(element.textContent).toContain("Ready card");
     expect(element.querySelector("a")?.getAttribute("href")).toBe("/control/workboard?board=ops");
+  });
+
+  it("aggregates every board when no boardId prop is set", async () => {
+    const mixedCards = [
+      ...cards,
+      {
+        id: "card-unscoped",
+        title: "Unscoped card",
+        status: "running",
+        priority: "normal",
+        labels: [],
+        position: 3,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const request = vi.fn(async () => ({
+      cards: mixedCards,
+      statuses: ["ready", "running", "done"],
+    }));
+    const element = document.createElement("openclaw-workboard-mini-widget");
+    element.widget = pluginWidget("workboard:mini", {});
+    element.sessionKey = "agent:main:test";
+    await mount(element, createContext(request), request);
+
+    const counts = [...element.querySelectorAll(".workboard-widget-mini__counts span")].map(
+      (entry) => entry.textContent?.replace(/\s+/g, " ").trim(),
+    );
+    expect(counts).toContain("2 Running");
+    expect(element.querySelector("header strong")?.textContent).toBe("All boards");
+    expect(element.textContent).toContain("Unscoped card");
+    expect(element.querySelector("a")?.getAttribute("href")).toBe("/control/workboard");
   });
 
   it("retries a transient initial list failure without reconnecting", async () => {

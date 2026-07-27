@@ -1,5 +1,4 @@
 // Codex tests cover attempt results plugin behavior.
-import type { EmbeddedRunAttemptResult } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
 import {
   buildCodexAppServerPromptTimeoutOutcome,
@@ -7,15 +6,11 @@ import {
   isInvalidCodexImagePayloadError,
   resolveCodexAppServerReplayBlockedReason,
 } from "./attempt-results.js";
+import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 
 function createResult(overrides: Partial<EmbeddedRunAttemptResult> = {}): EmbeddedRunAttemptResult {
   return {
-    aborted: false,
-    externalAbort: false,
-    timedOut: false,
-    idleTimedOut: false,
-    timedOutDuringCompaction: false,
-    timedOutDuringToolExecution: false,
+    terminal: { kind: "ok" },
     sessionIdUsed: "session-1",
     messagesSnapshot: [],
     assistantTexts: [],

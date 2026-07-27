@@ -20,7 +20,7 @@ import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   externalCliDiscoveryForConfigStatus,
   listProfilesForProvider,
-  removeAuthProfilesWithLock,
+  removeAuthProfilesAcrossOwnerStores,
   removeProviderAuthProfilesWithLock,
   resolvePersistedAuthProfileOwnerAgentDir,
 } from "../../agents/auth-profiles.js";
@@ -207,9 +207,7 @@ function readLogoutProfileSelection(params: Record<string, unknown>): LogoutProf
 function createAuthLogoutAbortOps(context: GatewayRequestContext): ChatAbortOps {
   return {
     chatAbortControllers: context.chatAbortControllers,
-    chatRunBuffers: context.chatRunBuffers,
-    chatAbortedRuns: context.chatAbortedRuns,
-    clearChatRunState: context.clearChatRunState,
+    chatRunState: context.chatRunState,
     removeChatRun: context.removeChatRun,
     agentRunSeq: context.agentRunSeq,
     broadcast: context.broadcast,
@@ -237,36 +235,6 @@ async function removeProviderAuthProfilesAcrossOwnerStores(params: {
   for (const ownerAgentDir of ownerAgentDirs) {
     const updatedStore = await removeProviderAuthProfilesWithLock({
       provider: params.provider,
-      agentDir: ownerAgentDir,
-    });
-    if (!updatedStore) {
-      return false;
-    }
-  }
-  return true;
-}
-
-// Targeted UI logout preserves API-key and unrelated profiles. Ownership is
-// resolved before each locked store mutation so inherited profiles stay gone.
-async function removeAuthProfilesAcrossOwnerStores(params: {
-  agentDir: string;
-  profileIds: string[];
-}): Promise<boolean> {
-  const profilesByOwner = new Map<string | undefined, Set<string>>([
-    [params.agentDir, new Set(params.profileIds)],
-  ]);
-  for (const profileId of params.profileIds) {
-    const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
-      agentDir: params.agentDir,
-      profileId,
-    });
-    const ownerProfiles = profilesByOwner.get(ownerAgentDir) ?? new Set<string>();
-    ownerProfiles.add(profileId);
-    profilesByOwner.set(ownerAgentDir, ownerProfiles);
-  }
-  for (const [ownerAgentDir, profileIds] of profilesByOwner) {
-    const updatedStore = await removeAuthProfilesWithLock({
-      profileIds: [...profileIds],
       agentDir: ownerAgentDir,
     });
     if (!updatedStore) {

@@ -85,6 +85,7 @@ struct SettingsProTab: View {
     @State var diagnosticsLastRunText = "Not run"
     @State var diagnosticsIssueCount: Int?
     @State var showTalkIssueDetails = false
+    @State var systemAgentChatStore = IOSSystemAgentChatStore()
     @State private var navigationPath: [SettingsRoute] = []
     let initialRoute: SettingsRoute?
     let directRoute: SettingsRoute?
@@ -191,6 +192,9 @@ struct SettingsProTab: View {
                     self.applyPendingLocationModeIfAvailable()
                     self.refreshNotificationSettings()
                 }
+            }
+            .onChange(of: self.appModel.locationAuthorizationSnapshot) { _, _ in
+                self.refreshLocationPermissionSummary()
             }
             .onChange(of: self.locationModeRaw) { _, newValue in
                 self.handleLocationModeChange(newValue)

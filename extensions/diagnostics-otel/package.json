@@ -18,7 +18,7 @@
     "@opentelemetry/sdk-metrics": "2.9.0",
     "@opentelemetry/sdk-node": "0.220.0",
     "@opentelemetry/sdk-trace-base": "2.9.0",
-    "@opentelemetry/semantic-conventions": "1.41.1"
+    "@opentelemetry/semantic-conventions": "1.43.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

@@ -34,6 +34,7 @@ import {
   formatGatewayStartupOutcomes,
   type GatewayStartupOutcomeRecorder,
 } from "./server-startup-outcomes.js";
+import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
 import { warmMacOSSystemCaOffMainThread } from "./system-ca-warmup.js";
 const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
@@ -44,13 +45,7 @@ const AGENT_RUNTIME_PLUGIN_PREWARM_START_DELAY_MS = 0;
 const DEFERRED_SIDECAR_START_DELAY_MS = 100;
 const SESSION_LOCK_CLEANUP_CONCURRENCY = 4;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
-const QMD_STARTUP_IDLE_DELAY_MS = 120_000;
 type Awaitable<T> = T | Promise<T>;
-type GatewayStartupTrace = {
-  detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
-  mark: (name: string) => void;
-  measure: <T>(name: string, run: () => Awaitable<T>) => Promise<T>;
-};
 
 type GatewayMemoryStartupPolicy =
   | { mode: "off" }
@@ -86,15 +81,6 @@ export function stopPostReadySidecarsAfterCloseStarted(params: {
   for (const postReadySidecar of params.postReadySidecars) {
     void postReadySidecar.stop();
   }
-}
-
-/** Measure a post-attach startup step when tracing is active. */
-async function measureStartup<T>(
-  startupTrace: GatewayStartupTrace | undefined,
-  name: string,
-  run: () => Awaitable<T>,
-): Promise<T> {
-  return startupTrace ? startupTrace.measure(name, run) : await run();
 }
 
 /** Measure provider-auth warming without letting event-loop stalls hide in wall time. */
@@ -133,21 +119,7 @@ function shouldSkipStartupModelPrewarm(env: NodeJS.ProcessEnv = process.env): bo
 }
 
 function resolveGatewayMemoryStartupPolicy(cfg: OpenClawConfig): GatewayMemoryStartupPolicy {
-  if (cfg.memory?.backend !== "qmd") {
-    return { mode: "off" };
-  }
-  const startup = cfg.memory.qmd?.update?.startup;
-  if (startup === "immediate") {
-    return { mode: "immediate" };
-  }
-  if (startup === "idle") {
-    const rawDelayMs = cfg.memory.qmd?.update?.startupDelayMs;
-    const delayMs =
-      typeof rawDelayMs === "number" && Number.isFinite(rawDelayMs) && rawDelayMs >= 0
-        ? Math.floor(rawDelayMs)
-        : QMD_STARTUP_IDLE_DELAY_MS;
-    return { mode: "idle", delayMs };
-  }
+  void cfg;
   return { mode: "off" };
 }
 

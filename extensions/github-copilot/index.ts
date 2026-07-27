@@ -23,7 +23,7 @@ import {
 import { PUBLIC_GITHUB_COPILOT_DOMAIN, resolveGithubCopilotDomain } from "./domain.js";
 import { createGithubCopilotDynamicModelHooks } from "./dynamic-models.js";
 import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
-import { resolveCopilotExtendedThinkingLevels } from "./model-metadata.js";
+import { DEFAULT_COPILOT_MODEL, resolveCopilotExtendedThinkingLevels } from "./model-metadata.js";
 import { PROVIDER_ID } from "./models.js";
 import {
   buildGithubCopilotReplayPolicy,
@@ -42,7 +42,6 @@ const COPILOT_ENV_VARS: [string, string, string] = [
   "GH_TOKEN",
   "GITHUB_TOKEN",
 ];
-const DEFAULT_COPILOT_MODEL = "github-copilot/claude-opus-4.7";
 const DEFAULT_COPILOT_PROFILE_ID = "github-copilot:github";
 
 type GithubCopilotPluginConfig = {

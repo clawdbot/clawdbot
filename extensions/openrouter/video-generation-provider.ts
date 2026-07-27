@@ -1,5 +1,6 @@
 // Openrouter provider module implements model/runtime integration.
 import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -36,7 +37,6 @@ const DEFAULT_TIMEOUT_MS = 600_000;
 const DEFAULT_HTTP_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
-const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
 const SUPPORTED_ASPECT_RATIOS = ["16:9", "9:16"] as const;
 const OPENROUTER_VIDEO_MALFORMED_RESPONSE = "OpenRouter video generation response malformed";
 const SUPPORTED_DURATION_SECONDS = [4, 6, 8] as const;
@@ -369,14 +369,6 @@ function resolveDeliverableOpenRouterVideoUrl(value: string | undefined): string
   }
 }
 
-function resolveGeneratedVideoMaxBytes(req: VideoGenerationRequest): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
-}
-
 async function downloadOpenRouterVideo(params: {
   url: string;
   deliveryUrl?: string;
@@ -567,7 +559,7 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
           }),
           allowPrivateNetwork,
           dispatcherPolicy,
-          maxBytes: resolveGeneratedVideoMaxBytes(req),
+          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "video"),
         });
 
         return {

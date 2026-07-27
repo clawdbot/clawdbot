@@ -150,7 +150,7 @@ A node can be connected and device-paired while its effective `caps` and `comman
 
 Camera devices must be readable by the service user, commonly through the `video` group. Camera clips use the default PulseAudio or PipeWire source when `includeAudio` is true; microphone audio exists only as that clip track, not as a standalone command. Location requires the node-service user to be permitted by the host's GeoClue policy.
 
-`camera.snap` and `camera.clip` also require explicit Gateway arming through `gateway.nodes.allowCommands`. See [Camera capture](/nodes/camera) and [Location command](/nodes/location-command) for payloads, limits, and errors.
+`camera.snap` and `camera.clip` also require explicit Gateway arming through `gateway.nodes.commands.allow`. See [Camera capture](/nodes/camera) and [Location command](/nodes/location-command) for payloads, limits, and errors.
 
 ## Install
 

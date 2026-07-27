@@ -118,6 +118,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
       : undefined;
   const toolSearchTargetTranscriptProjections: ToolSearchTargetTranscriptProjection[] = [];
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
+  const inheritedToolAllowlist: string[] = [];
   const spawnWorkspaceDir =
     params.effectiveCwd !== params.effectiveWorkspace
       ? params.resolvedWorkspace
@@ -173,6 +174,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     runtimePluginToolGrant: attempt.runtimePluginToolGrant,
     inputProvenance: attempt.inputProvenance,
     trustedInternalHandoff: attempt.trustedInternalHandoff,
+    scheduledToolPolicy: attempt.scheduledToolPolicy,
   });
   const localModelLeanEnabled = isLocalModelLeanEnabled({
     config: attempt.config,
@@ -302,6 +304,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           enableHeartbeatTool: attempt.enableHeartbeatTool,
           forceHeartbeatTool: attempt.forceHeartbeatTool,
           runtimeToolAllowlist: effectiveToolsAllow,
+          inheritedToolAllowlistRef: inheritedToolAllowlist,
           cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
           authProfileStore: attempt.authProfileStore,
           recordToolPrepStage: params.markCoreToolStage,
@@ -310,6 +313,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           skillsSnapshot: params.skillsSnapshot,
           skillUsagePaths: params.skillUsagePaths,
           conversationCapabilityProfile: runtimeCapabilityProfile,
+          scheduledToolPolicy: attempt.scheduledToolPolicy,
           onYield: params.onYield,
         });
         params.markCoreToolStage("attempt:create-openclaw-coding-tools");
@@ -333,6 +337,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     computerContextEpoch,
     cronCreatorToolAllowlist,
     effectiveToolsAllow,
+    inheritedToolAllowlist,
     localModelLeanEnabled,
     localModelLeanPreserveToolNames,
     replaySafetyOptions,

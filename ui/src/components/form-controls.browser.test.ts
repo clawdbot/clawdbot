@@ -38,6 +38,7 @@ function controlsHtml() {
       <label class="field"><input type="text" value="field input" /></label>
       <label class="field"><textarea>field textarea</textarea></label>
       <label class="field"><select><option>field select</option></select></label>
+      <label class="field"><select class="settings-select"><option>field settings select</option></select></label>
       <label class="field checkbox"><input type="checkbox" /><span>field checkbox</span></label>
       <label class="field checkbox"><input type="radio" /><span>field radio</span></label>
       <input class="settings-sidebar__search-input" value="settings search" />
@@ -221,16 +222,17 @@ describeBrowserLayout("touch-primary form controls", () => {
     }
   });
 
-  it("keeps native select affordances visible in light mode", async () => {
+  it("keeps settings select affordances visible in light mode", async () => {
     const fixture = await openMobileFixture();
     const { page } = fixture;
     try {
-      const selects = await page.locator(".field select").evaluateAll((nodes) =>
+      const selects = await page.locator(".field select.settings-select").evaluateAll((nodes) =>
         nodes.map((node) => {
           const style = getComputedStyle(node as HTMLElement);
           return {
             image: style.backgroundImage,
             paddingRight: Number.parseFloat(style.paddingRight),
+            positionX: style.backgroundPositionX,
             repeat: style.backgroundRepeat,
           };
         }),
@@ -240,6 +242,7 @@ describeBrowserLayout("touch-primary form controls", () => {
       for (const select of selects) {
         expect(select.image).not.toBe("none");
         expect(select.paddingRight).toBeGreaterThanOrEqual(32);
+        expect(select.positionX).toBe("calc(100% - 10px)");
         expect(select.repeat).toContain("no-repeat");
       }
     } finally {

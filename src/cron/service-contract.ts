@@ -10,6 +10,7 @@ import type {
   CronRunResult,
   CronStatusSummary,
   CronUpdateInput,
+  CronUpdateOptions,
   CronUpdatePrecondition,
   CronUpdateResult,
   CronWakeMode,
@@ -41,13 +42,14 @@ export interface CronServiceContract {
   list(opts?: { includeDisabled?: boolean }): Promise<CronListResult>;
   listPage(opts?: CronListPageOptions): Promise<CronListPageResult>;
   add(input: CronAddInput, opts?: CronAddOptions): Promise<CronAddResult>;
-  update(id: string, patch: CronUpdateInput): Promise<CronUpdateResult>;
+  update(id: string, patch: CronUpdateInput, opts?: CronUpdateOptions): Promise<CronUpdateResult>;
   updateWithPrecondition(
     id: string,
     patch: CronUpdateInput,
     precondition: CronUpdatePrecondition,
+    opts?: CronUpdateOptions,
   ): Promise<CronUpdateResult>;
-  remove(id: string): Promise<CronRemoveResult>;
+  remove(id: string, opts?: { systemOwned?: boolean }): Promise<CronRemoveResult>;
   run(id: string, mode?: CronRunMode, opts?: CronServiceRunOptions): Promise<CronServiceRunResult>;
   enqueueRun(id: string, mode?: CronRunMode): Promise<CronServiceRunResult>;
   getJob(id: string): CronJob | undefined;

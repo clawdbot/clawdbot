@@ -246,7 +246,7 @@ describe("slackSetupWizard.prepare", () => {
 
     expect(result.cfg.channels?.slack).toMatchObject({
       enabled: true,
-      identity: "user",
+      postAs: "user",
       userToken: "test-user-token",
       appToken: "test-app-token",
     });
@@ -291,7 +291,7 @@ describe("slackSetupWizard.prepare", () => {
 
     expect(result.cfg.channels?.slack).toMatchObject({
       enabled: true,
-      identity: "user",
+      postAs: "user",
       mode: "http",
       userToken: "test-user-token",
       signingSecret: "test-signing-secret",
@@ -330,7 +330,7 @@ describe("slackSetupWizard.prepare", () => {
         channels: {
           slack: {
             accounts: {
-              work: { identity: "user", userToken: userTokenRef },
+              work: { postAs: "user", userToken: userTokenRef },
             },
           },
         },
@@ -340,7 +340,7 @@ describe("slackSetupWizard.prepare", () => {
     });
 
     expect(result.cfg.channels?.slack?.accounts?.work).toMatchObject({
-      identity: "user",
+      postAs: "user",
       userToken: userTokenRef,
       appToken: "test-app-token",
     });
@@ -350,7 +350,7 @@ describe("slackSetupWizard.prepare", () => {
     { name: "new setup", cfg: {} as OpenClawConfig },
     {
       name: "switch from user identity",
-      cfg: { channels: { slack: { identity: "user" } } } as OpenClawConfig,
+      cfg: { channels: { slack: { postAs: "user" } } } as OpenClawConfig,
     },
   ])("keeps bot identity implicit for $name", async ({ cfg }) => {
     vi.stubEnv("SLACK_BOT_TOKEN", "");
@@ -387,7 +387,7 @@ describe("slackSetupWizard.prepare", () => {
     expect(JSON.stringify(result.cfg.channels?.slack)).toBe(
       '{"enabled":true,"botToken":"test-bot-token","appToken":"test-app-token"}',
     );
-    expect(result.cfg.channels?.slack).not.toHaveProperty("identity");
+    expect(result.cfg.channels?.slack).not.toHaveProperty("postAs");
   });
 
   it("keeps a named bot override when the channel default is user identity", async () => {
@@ -413,7 +413,7 @@ describe("slackSetupWizard.prepare", () => {
       cfg: {
         channels: {
           slack: {
-            identity: "user",
+            postAs: "user",
             userToken: "test-user-token",
             appToken: "test-user-app-token",
             accounts: {
@@ -426,10 +426,10 @@ describe("slackSetupWizard.prepare", () => {
       options: { secretInputMode: "plaintext" as const },
     });
 
-    expect(result.cfg.channels?.slack?.identity).toBe("user");
+    expect(result.cfg.channels?.slack?.postAs).toBe("user");
     expect(result.cfg.channels?.slack?.accounts?.work).toMatchObject({
       enabled: true,
-      identity: "bot",
+      postAs: "bot",
       botToken: "test-bot-token",
       appToken: "test-app-token",
     });
@@ -443,7 +443,7 @@ describe("slackSetupWizard.prepare", () => {
       cfg: {
         channels: {
           slack: {
-            identity: "user",
+            postAs: "user",
             userToken: "test-user-token",
             appToken: "test-app-token",
           },
@@ -458,7 +458,7 @@ describe("slackSetupWizard.prepare", () => {
       userToken: "test-user-token",
       appToken: "test-app-token",
     });
-    expect(result?.cfg.channels?.slack).not.toHaveProperty("identity");
+    expect(result?.cfg.channels?.slack).not.toHaveProperty("postAs");
   });
 
   it("does not print the manifest after Slack credentials are configured", async () => {
@@ -539,7 +539,7 @@ describe("slackSetupWizard.status", () => {
     {
       name: "Socket Mode",
       slack: {
-        identity: "user" as const,
+        postAs: "user" as const,
         userToken: "test-user-token",
         appToken: "test-app-token",
       },
@@ -547,7 +547,7 @@ describe("slackSetupWizard.status", () => {
     {
       name: "HTTP mode",
       slack: {
-        identity: "user" as const,
+        postAs: "user" as const,
         mode: "http" as const,
         userToken: "test-user-token",
         signingSecret: "test-signing-secret",

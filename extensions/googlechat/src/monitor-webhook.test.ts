@@ -18,6 +18,7 @@ vi.mock("openclaw/plugin-sdk/webhook-request-guards", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/webhook-targets", () => ({
+  normalizeWebhookPath: (raw: string) => raw,
   resolveWebhookTargetWithAuthOrReject,
   withResolvedWebhookRequestPipeline,
 }));

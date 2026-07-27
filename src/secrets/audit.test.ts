@@ -279,7 +279,7 @@ describe("secrets audit", () => {
     expectFindingCode(report, "PLAINTEXT_FOUND");
   });
 
-  it("does not mutate legacy auth.json during audit", async () => {
+  it("does not inspect or mutate legacy auth.json during audit", async () => {
     await writeJsonFile(fixture.authJsonPath, {
       openai: {
         type: "api_key",
@@ -289,17 +289,35 @@ describe("secrets audit", () => {
 
     const report = await runSecretsAudit({ env: fixture.env });
     expectFindingCode(report, "LEGACY_RESIDUE");
+    expect(report.filesScanned).not.toContain(fixture.authJsonPath);
     const authJsonStat = await fs.stat(fixture.authJsonPath);
     expect(authJsonStat.isFile()).toBe(true);
     await expectPathMissing(fixture.authStorePath);
   });
 
-  it("reports malformed sidecar JSON as findings instead of crashing", async () => {
+  it("ignores malformed legacy auth JSON instead of reading it", async () => {
     await fs.writeFile(fixture.authJsonPath, "{invalid-json", "utf8");
 
     const report = await runSecretsAudit({ env: fixture.env });
+    expectFindingCode(report, "LEGACY_RESIDUE");
     expectFindingFile(report, fixture.authJsonPath);
-    expectFindingCode(report, "REF_UNRESOLVED");
+  });
+
+  it("reports Doctor-created auth archives without reading their contents", async () => {
+    const archivePaths = [
+      `${fixture.authJsonPath}.migrated-2026-07-25T12-00-00.000Z-fake`,
+      `${fixture.authJsonPath}.sqlite-import.1753430400000.bak`,
+    ];
+    for (const archivePath of archivePaths) {
+      await fs.writeFile(archivePath, "opaque fake credential bytes", "utf8");
+    }
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expectFindingCode(report, "LEGACY_RESIDUE");
+    for (const archivePath of archivePaths) {
+      expectFindingFile(report, archivePath);
+      expect(report.filesScanned).not.toContain(archivePath);
+    }
   });
 
   it("skips exec ref resolution during audit unless explicitly allowed", async () => {

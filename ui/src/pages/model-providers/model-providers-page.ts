@@ -158,7 +158,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     if (!this.context.agents.state.agentsList && !this.context.agents.state.agentsLoading) {
       void this.context.agents.ensureList();
     }
-    if (!snapshot.connected || !snapshot.client || this.refreshing) {
+    if (snapshot.phase !== "connected" || !snapshot.client || this.refreshing) {
       return;
     }
     const stale = this.data === null || this.data.updatedAt === null;
@@ -265,7 +265,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
 
   private mutationBlockedReason(): string | null {
     const snapshot = this.context.gateway.snapshot;
-    if (!snapshot.connected) {
+    if (snapshot.phase !== "connected") {
       return t("modelProviders.readOnly.disconnected");
     }
     if (!hasOperatorAdminAccess(snapshot.hello?.auth ?? null)) {
@@ -585,8 +585,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     const advertised = isGatewayMethodAdvertised(gatewaySnapshot, "models.probe");
     const blockedReason = this.mutationBlockedReason();
     const body = renderModelProviders({
-      connected: gatewaySnapshot.connected,
-      loading: gatewaySnapshot.connected && this.data === null,
+      connected: gatewaySnapshot.phase === "connected",
+      loading: gatewaySnapshot.phase === "connected" && this.data === null,
       refreshing: this.refreshing,
       error: data.error,
       updatedAt: data.updatedAt,

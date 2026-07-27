@@ -106,6 +106,7 @@ export function createWebOnMessageHandler(params: {
       route,
       groupHistoryKey,
       groupHistories: params.groupHistories,
+      groupHistoryLimit: params.groupHistoryLimit,
       groupMemberNames: params.groupMemberNames,
       connectionId: params.connectionId,
       verbose: params.verbose,

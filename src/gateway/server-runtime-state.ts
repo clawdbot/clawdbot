@@ -44,7 +44,6 @@ import {
   createChatRunState,
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
-  createToolEventRecipientRegistry,
 } from "./server-chat-state.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import {
@@ -67,6 +66,7 @@ import {
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayTlsRuntime } from "./server/tls.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { canReceiveSessionEvent } from "./session-sharing.js";
 
 type GatewayPluginRequestHandler = (
   req: IncomingMessage,
@@ -142,9 +142,6 @@ export async function createGatewayRuntimeState(params: {
   agentRunSeq: Map<string, number>;
   dedupe: Map<string, DedupeEntry>;
   chatRunState: ReturnType<typeof createChatRunState>;
-  chatRunBuffers: Map<string, string>;
-  chatDeltaSentAt: Map<string, number>;
-  chatDeltaLastBroadcastLen: Map<string, number>;
   addChatRun: (sessionId: string, entry: ChatRunRegistration) => void;
   removeChatRun: (
     sessionId: string,
@@ -153,7 +150,7 @@ export async function createGatewayRuntimeState(params: {
   ) => ChatRunEntry | undefined;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatQueuedTurns: Map<string, import("./chat-queued-turns.js").QueuedChatTurnEntry>;
-  toolEventRecipients: ReturnType<typeof createToolEventRecipientRegistry>;
+  toolEventRecipients: ReturnType<typeof createChatRunState>["toolEventRecipients"];
   sessionEventSubscribers: ReturnType<typeof createSessionEventSubscriberRegistry>;
   sessionMessageSubscribers: ReturnType<typeof createSessionMessageSubscriberRegistry>;
   getWorkerIngressEndpoint: () => { host: "127.0.0.1"; port: number } | undefined;
@@ -174,7 +171,19 @@ export async function createGatewayRuntimeState(params: {
     const clients = new Set<GatewayWsClient>();
     const sessionEventSubscribers = createSessionEventSubscriberRegistry();
     const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
-    const gatewayBroadcaster = createGatewayBroadcaster({ clients, sessionMessageSubscribers });
+    const gatewayBroadcaster = createGatewayBroadcaster({
+      clients,
+      sessionMessageSubscribers,
+      canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) =>
+        canReceiveSessionEvent({
+          cfg: loadRuntimeConfig(),
+          client,
+          sessionKeys,
+          agentId,
+          event,
+          payload,
+        }),
+    });
 
     let loadedHooksRequestHandler: HooksRequestHandler | null = null;
     const handleHooksRequest: HooksRequestHandler = async (req, res) => {
@@ -512,14 +521,11 @@ export async function createGatewayRuntimeState(params: {
     const dedupe = new Map<string, DedupeEntry>();
     const chatRunState = createChatRunState();
     const chatRunRegistry = chatRunState.registry;
-    const chatRunBuffers = chatRunState.buffers;
-    const chatDeltaSentAt = chatRunState.deltaSentAt;
-    const chatDeltaLastBroadcastLen = chatRunState.deltaLastBroadcastLen;
     const addChatRun = chatRunRegistry.add;
     const removeChatRun = chatRunRegistry.remove;
     const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
     const chatQueuedTurns = new Map<string, import("./chat-queued-turns.js").QueuedChatTurnEntry>();
-    const toolEventRecipients = createToolEventRecipientRegistry();
+    const toolEventRecipients = chatRunState.toolEventRecipients;
 
     return {
       releasePluginRouteRegistry: () => {
@@ -544,9 +550,6 @@ export async function createGatewayRuntimeState(params: {
       agentRunSeq,
       dedupe,
       chatRunState,
-      chatRunBuffers,
-      chatDeltaSentAt,
-      chatDeltaLastBroadcastLen,
       addChatRun,
       removeChatRun,
       chatAbortControllers,

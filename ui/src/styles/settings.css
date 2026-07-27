@@ -437,10 +437,20 @@ wa-radio-group.settings-segmented::part(radios) {
 select.settings-select {
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
+  /* background-color, not the background shorthand: the shorthand resets the
+     .field select chevron longhands (image/repeat/position) and tiles the
+     arrow across Model Providers selects. */
+  background-color: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
   color: var(--text);
   padding: 7px 10px;
   transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+/* Inside generic .field wrappers (Model Providers) the select is
+   appearance: none with a background chevron; the padding shorthand above
+   collapses its 36px gutter to 10px and long model names run under the arrow. */
+.field select.settings-select {
+  padding-right: 36px;
 }
 
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select {

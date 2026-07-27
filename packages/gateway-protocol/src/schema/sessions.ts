@@ -9,6 +9,12 @@ import { NonEmptyString, SessionLabelString } from "./primitives.js";
 import { SessionsCreateParamsSchema } from "./sessions-create.js";
 
 export { SessionsCreateParamsSchema };
+export {
+  SessionCreatedActorSchema,
+  SessionRowSchema,
+  type SessionCreatedActor,
+  type SessionRow,
+} from "./sessions-row.js";
 
 export const SESSION_OBSERVER_HEALTH_VALUES = [
   "on-track",
@@ -40,6 +46,7 @@ export const SessionObserverPlanProgressSchema = closedObject({
 /** Live session status judgment broadcast to subscribed operator clients. */
 export const SessionObserverDigestSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   runId: Type.Optional(NonEmptyString),
   revision: Type.Integer({ minimum: 1 }),
   updatedAt: Type.Integer({ minimum: 0 }),
@@ -47,6 +54,55 @@ export const SessionObserverDigestSchema = closedObject({
   assessment: Type.Optional(Type.String({ minLength: 1, maxLength: 320 })),
   health: SessionObserverHealthSchema,
   planProgress: Type.Optional(SessionObserverPlanProgressSchema),
+});
+
+/** Declares whether this connection currently renders session observer output. */
+export const SessionsObserverVisibilityParamsSchema = closedObject({
+  visible: Type.Boolean(),
+});
+
+/** Acknowledges a connection's observer visibility declaration. */
+export const SessionsObserverVisibilityResultSchema = closedObject({
+  ok: Type.Literal(true),
+});
+
+/** One bounded question/answer exchange in the ephemeral session companion. */
+export const SessionCompanionExchangeSchema = closedObject({
+  question: Type.String({ minLength: 1, maxLength: 400 }),
+  answer: Type.String({ minLength: 1, maxLength: 1200 }),
+  ts: Type.Integer({ minimum: 0 }),
+});
+
+/** Asks the read-only companion about one session and its workspace. */
+export const SessionsCompanionAskParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  question: Type.String({ minLength: 1, maxLength: 400 }),
+});
+
+/** Companion answer returned only to the requesting operator. */
+export const SessionsCompanionAskResultSchema = closedObject({
+  answer: Type.String({ minLength: 1, maxLength: 1200 }),
+  ts: Type.Integer({ minimum: 0 }),
+});
+
+/** Selects the in-memory companion thread for one session. */
+export const SessionsCompanionStateParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+});
+
+/** Current bounded exchanges for one session companion thread. */
+export const SessionsCompanionStateResultSchema = closedObject({
+  exchanges: Type.Array(SessionCompanionExchangeSchema, { maxItems: 24 }),
+});
+
+/** Selects the in-memory companion thread to clear. */
+export const SessionsCompanionResetParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+});
+
+/** Acknowledges clearing one companion thread. */
+export const SessionsCompanionResetResultSchema = closedObject({
+  ok: Type.Literal(true),
 });
 
 /**
@@ -160,6 +216,8 @@ export const SessionsFilesListParamsSchema = closedObject({
 export const SessionsFilesListResultSchema = closedObject({
   sessionKey: NonEmptyString,
   root: Type.Optional(NonEmptyString),
+  /** Whether the session workspace directory is inside a git checkout; absent when the workspace root is unknown or the gateway predates the field. */
+  gitCheckout: Type.Optional(Type.Boolean()),
   files: Type.Array(SessionFileEntrySchema),
   browser: Type.Optional(SessionFileBrowserResultSchema),
 });
@@ -275,11 +333,18 @@ export const SessionsListParamsSchema = closedObject({
    */
   includeLastMessage: Type.Optional(Type.Boolean()),
   label: Type.Optional(SessionLabelString),
+  /** Limit rows to sessions with an explicitly stored Control UI face preference. */
+  boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
+  /** Filter rows by their permanent creator identity. */
+  creatorId: Type.Optional(NonEmptyString),
   spawnedBy: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
   search: Type.Optional(Type.String()),
-  /** True lists archived sessions; false or omitted lists active sessions. */
-  archived: Type.Optional(Type.Boolean()),
+  /**
+   * True lists archived sessions; "all" lists archived and active;
+   * false or omitted lists active sessions.
+   */
+  archived: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("all")])),
 });
 
 /** Searches one agent's indexed session transcripts, optionally within selected sessions. */
@@ -359,6 +424,8 @@ export const SessionsCreateResultSchema = Type.Object(
     sessionId: Type.Optional(NonEmptyString),
     entry: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
     runStarted: Type.Optional(Type.Boolean()),
+    runId: Type.Optional(NonEmptyString),
+    messageSeq: Type.Optional(Type.Integer({ minimum: 1 })),
     runError: Type.Optional(ErrorShapeSchema),
     worktree: Type.Optional(SessionWorktreeInfoSchema),
   },
@@ -395,15 +462,21 @@ export const SessionsAbortParamsSchema = closedObject({
   key: Type.Optional(NonEmptyString),
   runId: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
+  /** Also discard followup and lane queues for a key-only non-global session abort. */
+  clearQueued: Type.Optional(Type.Boolean()),
 });
 
 /** Mutable per-session preferences and routing metadata. */
 export const SessionsPatchParamsSchema = closedObject({
   key: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  /** Reject the mutation if the session was reset or replaced before it commits. */
+  expectedSessionId: Type.Optional(NonEmptyString),
+  expectedLifecycleRevision: Type.Optional(NonEmptyString),
   label: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
   /** User-defined organization bucket ("category", not chat-group); null clears it. */
   category: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
+  boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
   icon: Type.Optional(
     Type.Union([NonEmptyString, Type.Null()], {
       description: "Sidebar icon: one emoji, name:<id>, or svg:<svg ...>...</svg>.",
@@ -444,17 +517,7 @@ export const SessionsPatchParamsSchema = closedObject({
   execAsk: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   execNode: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  spawnedBy: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   completionOwnerSessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  spawnedWorkspaceDir: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  spawnedCwd: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  spawnDepth: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
-  subagentRole: Type.Optional(
-    Type.Union([Type.Literal("orchestrator"), Type.Literal("leaf"), Type.Null()]),
-  ),
-  subagentControlScope: Type.Optional(
-    Type.Union([Type.Literal("children"), Type.Literal("none"), Type.Null()]),
-  ),
   inheritedToolPolicyVersion: Type.Optional(Type.Union([Type.Literal(1), Type.Null()])),
   inheritedToolAllow: Type.Optional(Type.Union([Type.Array(NonEmptyString), Type.Null()])),
   inheritedToolDeny: Type.Optional(Type.Union([Type.Array(NonEmptyString), Type.Null()])),
@@ -516,14 +579,18 @@ export const SessionGroupSchema = closedObject({
   position: Type.Integer({ minimum: 0 }),
 });
 
+const SidebarSectionIdString = Type.String({ minLength: 1, maxLength: 512 });
+
 /** Custom session group catalog in display order. */
 export const SessionsGroupsListResultSchema = closedObject({
   groups: Type.Array(SessionGroupSchema),
+  sectionOrder: Type.Optional(Type.Array(SidebarSectionIdString, { maxItems: 232 })),
 });
 
 /** Replaces the ordered group catalog; creates listed names, keeps member categories untouched. */
 export const SessionsGroupsPutParamsSchema = closedObject({
   names: Type.Array(SessionLabelString, { maxItems: 200 }),
+  sectionOrder: Type.Optional(Type.Array(SidebarSectionIdString, { maxItems: 232 })),
 });
 
 /** Renames a group and repoints every member session's category. */
@@ -539,6 +606,7 @@ export const SessionsGroupsDeleteParamsSchema = closedObject({ name: SessionLabe
 export const SessionsGroupsMutationResultSchema = closedObject({
   ok: Type.Literal(true),
   groups: Type.Array(SessionGroupSchema),
+  sectionOrder: Type.Optional(Type.Array(SidebarSectionIdString, { maxItems: 232 })),
   updatedSessions: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
@@ -590,13 +658,20 @@ export const SessionsForkParamsSchema = closedObject({
   entryId: NonEmptyString,
 });
 
+const SessionEditorAttachmentSchema = closedObject({
+  mimeType: Type.String(),
+  data: Type.String(),
+});
+
 export const SessionsRewindResultSchema = closedObject({
   editorText: Type.Optional(Type.String()),
+  editorAttachments: Type.Optional(Type.Array(SessionEditorAttachmentSchema)),
 });
 
 export const SessionsForkResultSchema = closedObject({
   sessionKey: NonEmptyString,
   editorText: Type.Optional(Type.String()),
+  editorAttachments: Type.Optional(Type.Array(SessionEditorAttachmentSchema)),
 });
 
 export const SessionBranchSchema = closedObject({
@@ -737,6 +812,19 @@ export type SessionOperationEvent = Static<typeof SessionOperationEventSchema>;
 export type SessionObserverHealth = Static<typeof SessionObserverHealthSchema>;
 export type SessionObserverPlanProgress = Static<typeof SessionObserverPlanProgressSchema>;
 export type SessionObserverDigest = Static<typeof SessionObserverDigestSchema>;
+export type SessionsObserverVisibilityParams = Static<
+  typeof SessionsObserverVisibilityParamsSchema
+>;
+export type SessionsObserverVisibilityResult = Static<
+  typeof SessionsObserverVisibilityResultSchema
+>;
+export type SessionCompanionExchange = Static<typeof SessionCompanionExchangeSchema>;
+export type SessionsCompanionAskParams = Static<typeof SessionsCompanionAskParamsSchema>;
+export type SessionsCompanionAskResult = Static<typeof SessionsCompanionAskResultSchema>;
+export type SessionsCompanionStateParams = Static<typeof SessionsCompanionStateParamsSchema>;
+export type SessionsCompanionStateResult = Static<typeof SessionsCompanionStateResultSchema>;
+export type SessionsCompanionResetParams = Static<typeof SessionsCompanionResetParamsSchema>;
+export type SessionsCompanionResetResult = Static<typeof SessionsCompanionResetResultSchema>;
 export type SessionsCompactionListParams = Static<typeof SessionsCompactionListParamsSchema>;
 export type SessionsCompactionGetParams = Static<typeof SessionsCompactionGetParamsSchema>;
 export type SessionsCompactionBranchParams = Static<typeof SessionsCompactionBranchParamsSchema>;

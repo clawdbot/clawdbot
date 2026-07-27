@@ -339,7 +339,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
       } as never),
     ).rejects.toMatchObject({
       name: "UnresolvedSecretInputError",
-      path: "agents.*.memorySearch.remote.apiKey",
+      path: "memory.search.remote.apiKey",
     });
     expect(resolveFirstGithubTokenMock).not.toHaveBeenCalled();
     expect(resolveCopilotApiTokenMock).not.toHaveBeenCalled();

@@ -222,7 +222,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     const dispatcher = createDispatcher();
     const coordinator = createAcpDispatchDeliveryCoordinator({
       cfg: createAcpTestConfig({
-        messages: { tts: { enabled: true } },
+        tts: { enabled: true },
       }),
       ctx: buildTestCtx({
         Provider: "visiblechat",
@@ -513,7 +513,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     const dispatcher = createDispatcher();
     const coordinator = createAcpDispatchDeliveryCoordinator({
       cfg: createAcpTestConfig({
-        messages: { tts: { enabled: true } },
+        tts: { enabled: true },
       }),
       ctx: buildTestCtx({
         Provider: "visiblechat",
@@ -544,7 +544,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     const dispatcher = createDispatcher();
     const coordinator = createAcpDispatchDeliveryCoordinator({
       cfg: createAcpTestConfig({
-        messages: { tts: { enabled: true } },
+        tts: { enabled: true },
       }),
       ctx: buildTestCtx({
         Provider: "visiblechat",

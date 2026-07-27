@@ -295,7 +295,7 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
   create: async (options) => {
     const explicitValue = normalizeResolvedSecretInputString({
       value: options.remote?.apiKey,
-      path: "agents.*.memorySearch.remote.apiKey",
+      path: "memory.search.remote.apiKey",
     });
     const value = explicitValue
       ? explicitValue

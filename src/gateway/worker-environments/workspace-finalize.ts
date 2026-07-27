@@ -5,25 +5,31 @@ import type {
 import type { WorkerWorkspaceApplyResult } from "./workspace-reconcile.js";
 
 export class WorkerWorkspaceFinalFenceError extends Error {
-  readonly retryableForReclaim: boolean;
+  readonly reclaimDisposition: "retry" | "preserve-result";
 
-  constructor(cause: unknown, options: { retryableForReclaim: boolean }) {
+  constructor(cause: unknown, reclaimDisposition: "retry" | "preserve-result") {
     super(cause instanceof Error ? cause.message : "Worker workspace quiescence failed", { cause });
     this.name = "WorkerWorkspaceFinalFenceError";
-    this.retryableForReclaim = options.retryableForReclaim;
+    this.reclaimDisposition = reclaimDisposition;
   }
 }
 
 async function runFinalFenceStep(
   operation: () => Promise<void>,
-  options: { retryableForReclaim: boolean },
+  reclaimDisposition: WorkerWorkspaceFinalFenceError["reclaimDisposition"],
 ): Promise<void> {
   try {
     await operation();
   } catch (error) {
-    throw new WorkerWorkspaceFinalFenceError(error, options);
+    throw new WorkerWorkspaceFinalFenceError(error, reclaimDisposition);
   }
 }
+
+const runRetryableFinalFenceStep = async (operation: () => Promise<void>): Promise<void> =>
+  await runFinalFenceStep(operation, "retry");
+
+const runResultPreservingFinalFenceStep = async (operation: () => Promise<void>): Promise<void> =>
+  await runFinalFenceStep(operation, "preserve-result");
 
 /** Rechecks both owners after renewing the remote quiescence lease. */
 export async function verifyReconciledWorkspaceFinal(
@@ -32,28 +38,19 @@ export async function verifyReconciledWorkspaceFinal(
 ): Promise<WorkerWorkspaceApplyResult | undefined> {
   if (reconciliation.applyPreparedStagedResult && reconciliation.publishStagedResult) {
     try {
-      await runFinalFenceStep(async () => await reconciliation.verifyStable(), {
-        retryableForReclaim: true,
-      });
-      await runFinalFenceStep(async () => await quiescence.assertActive(), {
-        retryableForReclaim: true,
-      });
-      await runFinalFenceStep(async () => await reconciliation.verifyStable(), {
-        retryableForReclaim: true,
-      });
+      // Fence the prepared remote capture before quiescence renewal can enroll late writers.
+      await runRetryableFinalFenceStep(async () => await reconciliation.verifyStable());
+      // Renew quiescence and freeze any writers that appeared after the prepared capture.
+      await runRetryableFinalFenceStep(async () => await quiescence.assertActive());
+      // Keep this fence: a late writer can mutate before renewal enrolls and SIGSTOPs it.
+      await runRetryableFinalFenceStep(async () => await reconciliation.verifyStable());
       await reconciliation.applyPreparedStagedResult();
       await reconciliation.verifyLocalStable();
-      // Applying can outlive the lease renewed above. Only publish the candidate
-      // after both owners pass a fresh fence, so restart recovery cannot adopt it early.
-      await runFinalFenceStep(async () => await quiescence.assertActive(), {
-        retryableForReclaim: false,
-      });
-      await runFinalFenceStep(async () => await reconciliation.verifyStable(), {
-        retryableForReclaim: false,
-      });
-      await runFinalFenceStep(async () => await reconciliation.verifyLocalStable(), {
-        retryableForReclaim: false,
-      });
+      // Renew after apply so lease expiry cannot race the final publish gate.
+      await runResultPreservingFinalFenceStep(async () => await quiescence.assertActive());
+      // Recheck the remote owner after apply before publishing the prepared result.
+      await runResultPreservingFinalFenceStep(async () => await reconciliation.verifyStable());
+      await runResultPreservingFinalFenceStep(async () => await reconciliation.verifyLocalStable());
       await reconciliation.publishStagedResult();
       return reconciliation.getAppliedWorkspaceResult?.();
     } catch (error) {
@@ -61,15 +58,13 @@ export async function verifyReconciledWorkspaceFinal(
       throw error;
     }
   }
-  const retryableForReclaim = !reconciliation.changed;
-  await runFinalFenceStep(async () => await reconciliation.verifyStable(), { retryableForReclaim });
-  await runFinalFenceStep(async () => await reconciliation.verifyLocalStable(), {
-    retryableForReclaim,
-  });
-  await runFinalFenceStep(async () => await quiescence.assertActive(), { retryableForReclaim });
-  await runFinalFenceStep(async () => await reconciliation.verifyStable(), { retryableForReclaim });
-  await runFinalFenceStep(async () => await reconciliation.verifyLocalStable(), {
-    retryableForReclaim,
-  });
+  const runFenceStep = reconciliation.changed
+    ? runResultPreservingFinalFenceStep
+    : runRetryableFinalFenceStep;
+  await runFenceStep(async () => await reconciliation.verifyStable());
+  await runFenceStep(async () => await reconciliation.verifyLocalStable());
+  await runFenceStep(async () => await quiescence.assertActive());
+  await runFenceStep(async () => await reconciliation.verifyStable());
+  await runFenceStep(async () => await reconciliation.verifyLocalStable());
   return reconciliation.getAppliedWorkspaceResult?.();
 }

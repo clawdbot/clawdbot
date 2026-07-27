@@ -44,7 +44,7 @@ function createSessionContext(
     gateway: {
       snapshot: {
         client,
-        connected: true,
+        phase: "connected",
         hello: { features: { methods: ["taskSuggestions.list"] } },
       },
     },
@@ -82,7 +82,7 @@ function createTestChatPane(params: { client: GatewayBrowserClient; sessions: Se
     sessionsError: null,
     sessionsLoading: false,
     sidebarContent: null,
-    sidebarOpen: false,
+    sidebarLayout: { columns: [] },
     chatScrollGeneration: 0,
     chatScrollCommitCleanup: null,
     handleChatScroll: vi.fn(),

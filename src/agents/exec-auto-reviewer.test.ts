@@ -21,6 +21,37 @@ const input = {
   },
 };
 
+function createReviewerHarness(decision: "allow" | "ask" = "allow") {
+  const prepare = vi.fn(async () => ({
+    selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
+    model: { provider: "openrouter", id: "reviewer", api: "openai" as const },
+    auth: { apiKey: "redacted", mode: "env" as const },
+  }));
+  const complete = vi.fn(async () => ({
+    stopReason: "stop" as const,
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify({
+          decision,
+          risk: decision === "allow" ? "low" : "medium",
+          rationale: "reviewer fixture",
+        }),
+      },
+    ],
+  }));
+  const reviewer = createModelExecAutoReviewer({
+    cfg: {},
+    deps: {
+      prepareSimpleCompletionModelForAgent:
+        prepare as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+      completeWithPreparedSimpleCompletionModel:
+        complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
+    },
+  });
+  return { reviewer, prepare, complete };
+}
+
 async function reviewExecResponse(text: string) {
   const prepare = vi.fn(async () => ({
     selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
@@ -534,5 +565,98 @@ describe("createModelExecAutoReviewer", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps repeated gateway reviews bound to one-shot approval", async () => {
+    const { reviewer, prepare, complete } = createReviewerHarness();
+
+    await expect(reviewer(input)).resolves.toMatchObject({
+      decision: "allow-once",
+      risk: "low",
+    });
+    await expect(reviewer(input)).resolves.toMatchObject({
+      decision: "allow-once",
+      risk: "low",
+    });
+
+    expect(prepare).toHaveBeenCalledTimes(2);
+    expect(complete).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps simultaneous gateway approvals one-shot under concurrency", async () => {
+    const { reviewer, prepare, complete } = createReviewerHarness();
+
+    const decisions = await Promise.all(
+      Array.from({ length: 24 }, () => Promise.resolve(reviewer(input))),
+    );
+
+    expect(decisions).toHaveLength(24);
+    expect(decisions).toEqual(
+      Array.from({ length: 24 }, () =>
+        expect.objectContaining({ decision: "allow-once", risk: "low" }),
+      ),
+    );
+    expect(prepare).toHaveBeenCalledTimes(24);
+    expect(complete).toHaveBeenCalledTimes(24);
+  });
+
+  it.each([
+    ["resolved executable", { resolvedPath: "/tmp/shadow/git" }],
+    ["working directory", { cwd: "/other-repo" }],
+    ["environment", { envKeys: ["REVIEW_SCOPE"] }],
+    ["approval reason", { reason: "allowlist-miss" as const }],
+    ["agent", { agent: { id: "other-agent", sessionKey: "agent:other:main" } }],
+    ["command analysis", { analysis: { ...input.analysis, durableApprovalMatched: true } }],
+  ])("does not reuse a gateway review across a changed %s", async (_label, changes) => {
+    const { reviewer, prepare, complete } = createReviewerHarness();
+
+    await reviewer(input);
+    await reviewer({ ...input, ...changes });
+
+    expect(prepare).toHaveBeenCalledTimes(2);
+    expect(complete).toHaveBeenCalledTimes(2);
+  });
+
+  it("never caches reviews without a bound gateway executable", async () => {
+    const { reviewer, prepare, complete } = createReviewerHarness();
+    const unbound = { ...input, resolvedPath: undefined };
+
+    await reviewer(unbound);
+    await reviewer(unbound);
+
+    expect(prepare).toHaveBeenCalledTimes(2);
+    expect(complete).toHaveBeenCalledTimes(2);
+  });
+
+  it("never reuses gateway review authority for a node-host request", async () => {
+    const { reviewer, prepare, complete } = createReviewerHarness();
+    const nodeInput = { ...input, host: "node" as const };
+
+    await reviewer(nodeInput);
+    await reviewer(nodeInput);
+
+    expect(prepare).toHaveBeenCalledTimes(2);
+    expect(complete).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache decisions requiring human approval", async () => {
+    const { reviewer, prepare, complete } = createReviewerHarness("ask");
+
+    await expect(reviewer(input)).resolves.toMatchObject({ decision: "ask" });
+    await expect(reviewer(input)).resolves.toMatchObject({ decision: "ask" });
+
+    expect(prepare).toHaveBeenCalledTimes(2);
+    expect(complete).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retain failed reviewer completions", async () => {
+    const { reviewer, prepare, complete } = createReviewerHarness();
+    complete.mockRejectedValueOnce(new Error("reviewer temporarily unavailable"));
+
+    await expect(reviewer(input)).resolves.toMatchObject({ decision: "ask" });
+    await expect(reviewer(input)).resolves.toMatchObject({ decision: "allow-once" });
+
+    expect(prepare).toHaveBeenCalledTimes(2);
+    expect(complete).toHaveBeenCalledTimes(2);
   });
 });

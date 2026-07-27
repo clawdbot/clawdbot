@@ -3,13 +3,12 @@ title: Long-context progress watchdog
 scenario:
   id: long-context-progress-watchdog
   surface: runtime
-  runtimeParityTier: live-only
   coverage:
     primary:
-      - runtime.gateway-log-sentinel.codex-progress
+      - session-memory.codex-progress-sentinel
     secondary:
-      - runtime.long-context
-      - runtime.codex-app-server
+      - session-memory.token-pressure-long-context
+      - openai.codex-harness
   objective: Fail live proof when long-context activity triggers Codex app-server timeout or stalled-progress sentinels.
   successCriteria:
     - Gateway config routes the selected QA model through the Codex app-server runtime.

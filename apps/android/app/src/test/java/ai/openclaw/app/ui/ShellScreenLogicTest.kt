@@ -781,6 +781,7 @@ class ShellScreenLogicTest {
   fun settingsSectionTitlesGroupPowerSettingsByMeaning() {
     assertEquals("Connection", settingsSectionTitleForRoute(SettingsRoute.Gateway).resolveNativeText())
     assertEquals("Connection", settingsSectionTitleForRoute(SettingsRoute.NodesDevices).resolveNativeText())
+    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.SystemAgent).resolveNativeText())
     assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.ProvidersModels).resolveNativeText())
     assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.Approvals).resolveNativeText())
     assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.CronJobs).resolveNativeText())

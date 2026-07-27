@@ -44,6 +44,21 @@ describe("opencode provider plugin", () => {
   beforeEach(() => {
     clearLiveCatalogCacheForTests();
   });
+
+  it("registers only the Zen auth choice from its own provider manifest", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(provider.id).toBe("opencode");
+    expect(provider.envVars).toEqual(["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"]);
+    expect(provider.auth.map((method) => method.id)).toEqual(["api-key"]);
+    expect(provider.auth.map((method) => method.wizard?.choiceId)).toEqual(["opencode-zen"]);
+    expect(provider.auth[0]?.wizard).toMatchObject({
+      choiceLabel: "OpenCode Zen catalog",
+      groupId: "opencode",
+      groupHint: "Shared API key for Zen + Go catalogs",
+    });
+  });
+
   it("registers image media understanding through the OpenCode plugin", async () => {
     const { mediaProviders } = await registerProviderPlugin({
       plugin,
@@ -84,6 +99,7 @@ describe("opencode provider plugin", () => {
 
     const expectedModelIds = [
       "claude-fable-5",
+      "claude-opus-5",
       "claude-opus-4-8",
       "claude-opus-4-7",
       "claude-opus-4-6",
@@ -137,7 +153,8 @@ describe("opencode provider plugin", () => {
       "big-pickle",
       "deepseek-v4-flash-free",
       "mimo-v2.5-free",
-      "hy3-free",
+      "laguna-s-2.1-free",
+      "ling-3.0-flash-free",
       "nemotron-3-ultra-free",
       "north-mini-code-free",
     ];
@@ -266,15 +283,6 @@ describe("opencode provider plugin", () => {
         ],
       },
     });
-    expect(requireMapEntry(models, "hy3-free")).toMatchObject({
-      name: "Hy3 Free",
-      api: "openai-completions",
-      baseUrl: "https://opencode.ai/zen/v1",
-      input: ["text"],
-      contextWindow: 256_000,
-      maxTokens: 64_000,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    });
     expect(requireMapEntry(models, "kimi-k2.7-code")).toMatchObject({
       name: "Kimi K2.7 Code",
       api: "openai-completions",
@@ -318,17 +326,54 @@ describe("opencode provider plugin", () => {
       throw new Error("expected manifest opencode models");
     }
     expect(manifestModels.map((model) => requireRecord(model, "manifest model").id)).toEqual([
+      "claude-opus-5",
       "claude-opus-4-8",
+      "gpt-5.6-sol",
       "gpt-5.5",
+      "gemini-3.6-flash",
       "gemini-3.1-pro",
+      "minimax-m3",
       "minimax-m2.7",
+      "big-pickle",
+      "deepseek-v4-flash-free",
+      "mimo-v2.5-free",
+      "laguna-s-2.1-free",
+      "ling-3.0-flash-free",
+      "nemotron-3-ultra-free",
+      "north-mini-code-free",
     ]);
+    const manifestClaude48 = requireRecord(
+      manifestModels.find(
+        (model) => requireRecord(model, "manifest model").id === "claude-opus-4-8",
+      ),
+      "manifest claude-opus-4-8",
+    );
+    expect(manifestClaude48).toMatchObject({
+      status: "deprecated",
+      replacedBy: "claude-opus-5",
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    });
+    const manifestGpt55 = requireRecord(
+      manifestModels.find((model) => requireRecord(model, "manifest model").id === "gpt-5.5"),
+      "manifest gpt-5.5",
+    );
+    expect(manifestGpt55).toMatchObject({
+      status: "deprecated",
+      replacedBy: "gpt-5.6-sol",
+      contextWindow: 1_050_000,
+    });
     const manifestMiniMax = requireRecord(
       manifestModels.find((model) => requireRecord(model, "manifest model").id === "minimax-m2.7"),
       "manifest minimax-m2.7",
     );
     expect(manifestMiniMax.api).toBe("openai-completions");
     expect(manifestMiniMax.baseUrl).toBe("https://opencode.ai/zen/v1");
+    expect(manifestMiniMax).toMatchObject({
+      status: "deprecated",
+      replacedBy: "minimax-m3",
+      cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0 },
+    });
   });
 
   it("keeps documented OpenCode Zen example models resolvable", async () => {
@@ -376,6 +421,7 @@ describe("opencode provider plugin", () => {
 
     const verifiedCostExamples = new Map([
       ["claude-fable-5", { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 }],
+      ["claude-opus-5", { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }],
       ["claude-opus-4-8", { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }],
       ["claude-opus-4-5", { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }],
       ["claude-opus-4-1", { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 }],
@@ -433,9 +479,11 @@ describe("opencode provider plugin", () => {
       ],
       ["gpt-5.4-mini", { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 }],
       ["glm-5.2", { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 }],
-      ["hy3-free", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }],
       ["kimi-k2.7-code", { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0 }],
-      ["minimax-m2.7", { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 }],
+      ["laguna-s-2.1-free", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }],
+      ["ling-3.0-flash-free", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }],
+      ["minimax-m2.5", { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0 }],
+      ["minimax-m2.7", { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0 }],
       ["minimax-m3", { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0 }],
     ] as const);
 
@@ -473,12 +521,12 @@ describe("opencode provider plugin", () => {
       throw new Error("expected OpenCode Zen static provider");
     }
 
-    expect(result.provider.models).toHaveLength(57);
+    expect(result.provider.models).toHaveLength(59);
+    expect(result.provider.models.map((model) => model.id)).toContain("claude-opus-5");
     expect(result.provider.models.map((model) => model.id)).toContain("claude-opus-4-8");
     expect(result.provider.models.map((model) => model.id)).toContain("claude-sonnet-5");
     expect(result.provider.models.map((model) => model.id)).toContain("glm-5.2");
     expect(result.provider.models.map((model) => model.id)).toContain("grok-4.5");
-    expect(result.provider.models.map((model) => model.id)).toContain("hy3-free");
     expect(result.provider.models.map((model) => model.id)).toContain("kimi-k2.7-code");
     expect(result.provider.models.map((model) => model.id)).toContain("minimax-m2.7");
     expect(result.provider.models.map((model) => model.id)).toContain("minimax-m3");
@@ -497,7 +545,8 @@ describe("opencode provider plugin", () => {
       throw new Error("expected registered OpenCode Zen static provider");
     }
 
-    expect(result.provider.models).toHaveLength(57);
+    expect(result.provider.models).toHaveLength(59);
+    expect(result.provider.models.map((model) => model.id)).toContain("claude-opus-5");
     expect(result.provider.models.map((model) => model.id)).toContain("claude-sonnet-5");
     expect(result.provider.models.map((model) => model.id)).toContain("gpt-5.6-sol");
     expect(result.provider.models.map((model) => model.id)).toContain("minimax-m3");

@@ -11,6 +11,7 @@ const TOUCH_DELAY = 450;
 const TOUCH_VISIBLE = 900;
 const SKIP_DELAY = 300;
 const MOVE_LIMIT = 10;
+const RICH_CONTENT_CLOSE_DELAY = 100;
 
 let nextTooltipId = 0;
 
@@ -94,13 +95,17 @@ class Tooltip extends OpenClawLitElement {
 
   private triggerElement: HTMLElement | null = null;
   private openTimer: number | null = null;
+  private closeTimer: number | null = null;
   private touchTimer: number | null = null;
   private touchCloseTimer: number | null = null;
   private touchStart: { x: number; y: number } | null = null;
+  private triggerHovered = false;
+  private contentHovered = false;
   private suppressPointerFocus = false;
   private describedBy: string | null = null;
   private descriptionCaptured = false;
   private descriptionElement: HTMLSpanElement | null = null;
+  private richContentObserver: MutationObserver | null = null;
   private tooltipProvider: TooltipProvider | null = null;
   private readonly tooltipId = createTooltipId();
   private readonly descriptionId = `${this.tooltipId}-description`;
@@ -111,27 +116,36 @@ class Tooltip extends OpenClawLitElement {
     }
 
     wa-tooltip {
-      --max-width: min(260px, calc(100vw - 16px));
+      --max-width: var(--openclaw-tooltip-max-width, min(260px, calc(100vw - 16px)));
+      --wa-tooltip-arrow-size: 6px;
+      --wa-tooltip-background-color: color-mix(in srgb, var(--card) 94%, black 6%);
+      --wa-tooltip-border-color: color-mix(in srgb, var(--border-strong) 84%, transparent);
+      --wa-tooltip-border-width: 1px;
+      --wa-tooltip-border-style: solid;
+      --wa-tooltip-content-color: var(--text);
+      --wa-tooltip-border-radius: var(--radius-md);
       font-family: var(--font-body);
     }
 
     wa-tooltip::part(body) {
       padding: 7px 9px;
-      border: 1px solid color-mix(in srgb, var(--border-strong) 84%, transparent);
-      border-radius: var(--radius-md);
-      background: color-mix(in srgb, var(--card) 94%, black 6%);
       box-shadow: var(--shadow-md);
-      color: var(--text);
       font-size: 12px;
       font-weight: 500;
       line-height: 1.35;
-      text-align: center;
       overflow-wrap: anywhere;
-      white-space: normal;
     }
 
     .tooltip-content {
+      display: block;
+      text-align: center;
       white-space: pre-line;
+    }
+
+    .tooltip-rich-content {
+      display: block;
+      pointer-events: auto;
+      text-align: left;
     }
   `;
 
@@ -143,11 +157,16 @@ class Tooltip extends OpenClawLitElement {
 
   protected override updated() {
     this.attachTrigger();
+    this.syncDescription();
     this.syncWebAwesomeTooltip();
   }
 
   override disconnectedCallback() {
     this.close();
+    this.triggerHovered = false;
+    this.contentHovered = false;
+    this.richContentObserver?.disconnect();
+    this.richContentObserver = null;
     this.tooltipProvider = null;
     this.detachTrigger();
     super.disconnectedCallback();
@@ -166,7 +185,7 @@ class Tooltip extends OpenClawLitElement {
   }
 
   private attachTrigger() {
-    const slot = this.renderRoot.querySelector("slot");
+    const slot = this.renderRoot.querySelector<HTMLSlotElement>("slot:not([name])");
     const trigger = slot
       ?.assignedElements({ flatten: true })
       .find((element): element is HTMLElement => element instanceof HTMLElement);
@@ -233,11 +252,33 @@ class Tooltip extends OpenClawLitElement {
 
   private readonly handlePointerEnter = (event: PointerEvent) => {
     if (event.pointerType !== "touch") {
+      this.triggerHovered = true;
+      this.clearCloseTimer();
       this.scheduleOpen();
     }
   };
 
-  private readonly handlePointerLeave = () => this.close();
+  private readonly handlePointerLeave = (event: PointerEvent) => {
+    if (event.pointerType !== "touch") {
+      this.triggerHovered = false;
+      this.maybeClose();
+    }
+  };
+
+  private readonly handleContentPointerEnter = (event: PointerEvent) => {
+    if (event.pointerType !== "touch") {
+      this.contentHovered = true;
+      this.clearCloseTimer();
+      this.show();
+    }
+  };
+
+  private readonly handleContentPointerLeave = (event: PointerEvent) => {
+    if (event.pointerType !== "touch") {
+      this.contentHovered = false;
+      this.maybeClose();
+    }
+  };
 
   private readonly handlePointerDown = (event: PointerEvent) => {
     if (event.pointerType !== "touch") {
@@ -286,7 +327,16 @@ class Tooltip extends OpenClawLitElement {
       this.show();
     }
   };
-  private readonly handleFocusOut = () => this.close();
+  private readonly handleFocusOut = (event: FocusEvent) => {
+    if (
+      (event.relatedTarget instanceof Node && this.contains(event.relatedTarget)) ||
+      this.triggerHovered ||
+      this.contentHovered
+    ) {
+      return;
+    }
+    this.close();
+  };
   private readonly handleClick = () => this.close();
   private readonly handleDocumentPointerUp = () => {
     document.removeEventListener("pointerup", this.handleDocumentPointerUp);
@@ -311,10 +361,10 @@ class Tooltip extends OpenClawLitElement {
 
   private show() {
     const tooltip = this.webAwesomeTooltip;
-    if (!tooltip || !this.triggerElement || !this.content || this.isRedundant()) {
+    if (!tooltip || !this.triggerElement || !this.tooltipText || this.isRedundant()) {
       return;
     }
-    this.clearTimers();
+    this.clearTimers(false);
     this.provider?.openTooltip(this);
     this.syncDescription();
     tooltip.open = true;
@@ -322,6 +372,8 @@ class Tooltip extends OpenClawLitElement {
 
   private close() {
     this.clearTimers();
+    this.triggerHovered = false;
+    this.contentHovered = false;
     this.touchStart = null;
     if (this.webAwesomeTooltip?.open) {
       this.webAwesomeTooltip.open = false;
@@ -337,6 +389,9 @@ class Tooltip extends OpenClawLitElement {
   }
 
   private isRedundant() {
+    if (this.richContentText) {
+      return false;
+    }
     const trigger = this.triggerElement;
     if (!trigger) {
       return false;
@@ -366,7 +421,7 @@ class Tooltip extends OpenClawLitElement {
       this.append(description);
       this.descriptionElement = description;
     }
-    this.descriptionElement.textContent = this.content;
+    this.descriptionElement.textContent = this.tooltipText;
     const ids = new Set((current ?? "").split(/\s+/u).filter(Boolean));
     ids.add(this.descriptionId);
     trigger.setAttribute("aria-describedby", [...ids].join(" "));
@@ -394,10 +449,48 @@ class Tooltip extends OpenClawLitElement {
     }
   }
 
-  private clearTimers() {
+  private clearCloseTimer() {
+    if (this.closeTimer !== null) {
+      window.clearTimeout(this.closeTimer);
+      this.closeTimer = null;
+    }
+  }
+
+  private shouldRemainOpen() {
+    const activeElement = document.activeElement;
+    return (
+      this.triggerHovered ||
+      this.contentHovered ||
+      (activeElement instanceof Node && this.contains(activeElement))
+    );
+  }
+
+  private maybeClose() {
+    this.clearCloseTimer();
+    if (this.shouldRemainOpen()) {
+      return;
+    }
+    if (!this.richContentText) {
+      this.close();
+      return;
+    }
+    this.closeTimer = window.setTimeout(() => {
+      this.closeTimer = null;
+      if (!this.shouldRemainOpen()) {
+        this.close();
+      }
+    }, RICH_CONTENT_CLOSE_DELAY);
+  }
+
+  private clearTimers(resetHover = true) {
     if (this.openTimer !== null) {
       window.clearTimeout(this.openTimer);
       this.openTimer = null;
+    }
+    this.clearCloseTimer();
+    if (resetHover) {
+      this.triggerHovered = false;
+      this.contentHovered = false;
     }
     this.clearTouchTimer();
     if (this.touchCloseTimer !== null) {
@@ -406,11 +499,56 @@ class Tooltip extends OpenClawLitElement {
     }
   }
 
+  private get richContentText() {
+    const slot = this.renderRoot.querySelector<HTMLSlotElement>('slot[name="content"]');
+    return normalizeTooltipText(
+      slot
+        ?.assignedNodes({ flatten: true })
+        .map((node) => node.textContent ?? "")
+        .join(" ") ?? "",
+    );
+  }
+
+  private get tooltipText() {
+    return this.richContentText || this.content;
+  }
+
+  private observeRichContent() {
+    this.richContentObserver?.disconnect();
+    this.richContentObserver ??= new MutationObserver(() => this.syncDescription());
+    const slot = this.renderRoot.querySelector<HTMLSlotElement>('slot[name="content"]');
+    for (const node of slot?.assignedNodes({ flatten: true }) ?? []) {
+      this.richContentObserver.observe(node, {
+        characterData: true,
+        childList: true,
+        subtree: true,
+      });
+    }
+  }
+
+  private readonly handleContentSlotChange = () => {
+    this.observeRichContent();
+    this.syncDescription();
+    if (!this.tooltipText) {
+      this.close();
+    }
+  };
+
   override render() {
-    const tooltipContent = html`<span class="tooltip-content">${this.content}</span>`;
     return html`
       <slot @slotchange=${() => this.attachTrigger()}></slot>
-      <wa-tooltip id=${this.tooltipId} trigger="manual">${tooltipContent}</wa-tooltip>
+      <wa-tooltip id=${this.tooltipId} trigger="manual">
+        <span class="tooltip-content">${this.content}</span>
+        <span
+          class="tooltip-rich-content"
+          @pointerenter=${this.handleContentPointerEnter}
+          @pointerleave=${this.handleContentPointerLeave}
+          @focusin=${this.handleFocusIn}
+          @focusout=${this.handleFocusOut}
+        >
+          <slot name="content" @slotchange=${this.handleContentSlotChange}></slot>
+        </span>
+      </wa-tooltip>
     `;
   }
 }

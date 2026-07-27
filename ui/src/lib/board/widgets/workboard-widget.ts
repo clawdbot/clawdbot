@@ -41,7 +41,7 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
       sync();
       const unsubscribeSnapshot = gateway.subscribe(sync);
       const unsubscribeEvents = gateway.subscribeEvents((event) => {
-        if (event.event === WORKBOARD_CHANGED_EVENT && gateway.snapshot.connected) {
+        if (event.event === WORKBOARD_CHANGED_EVENT && gateway.snapshot.phase === "connected") {
           void this.refresh(true);
         }
       });
@@ -120,7 +120,7 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
   }
 
   private syncGateway(snapshot: ApplicationContext["gateway"]["snapshot"] | undefined): void {
-    const nextClient = snapshot?.connected ? snapshot.client : null;
+    const nextClient = snapshot?.phase === "connected" ? snapshot.client : null;
     if (this.client === nextClient) {
       return;
     }

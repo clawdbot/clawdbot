@@ -6286,6 +6286,54 @@
       ]
     },
     {
+      "locale": "hi",
+      "source": "Open Chat",
+      "translations": [
+        "Chat खोलें",
+        "चैट खोलें"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Open Chat",
+      "translations": [
+        "Buka Chat",
+        "Buka Obrolan"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Open Chat",
+      "translations": [
+        "Apri Chat",
+        "Apri chat"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Open Chat",
+      "translations": [
+        "Abrir Chat",
+        "Abrir chat"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Open Chat",
+      "translations": [
+        "เปิดแชต",
+        "เปิดแชท"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Open Chat",
+      "translations": [
+        "Chat'i Aç",
+        "Sohbeti Aç"
+      ]
+    },
+    {
       "locale": "es",
       "source": "Open Settings",
       "translations": [
@@ -7720,7 +7768,8 @@
       "source": "Retry",
       "translations": [
         "Erneut versuchen",
-        "Retry"
+        "Retry",
+        "Wiederholen"
       ]
     },
     {
@@ -7801,6 +7850,7 @@
       "locale": "pl",
       "source": "Retry",
       "translations": [
+        "Ponów",
         "Ponów próbę",
         "Retry",
         "Spróbuj ponownie"
@@ -7835,7 +7885,8 @@
       "source": "Retry",
       "translations": [
         "Retry",
-        "ลองอีกครั้ง"
+        "ลองอีกครั้ง",
+        "ลองใหม่"
       ]
     },
     {

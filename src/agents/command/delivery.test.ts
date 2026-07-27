@@ -9,6 +9,7 @@ import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { createAgentRunRestartAbortError } from "../run-termination.js";
 import { deliverAgentCommandResult } from "./delivery.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -387,9 +388,7 @@ describe("deliverAgentCommandResult payload normalization", () => {
   it("renders response prefix templates with the selected runtime model", async () => {
     const delivered = await deliverAgentCommandResult({
       cfg: {
-        messages: {
-          responsePrefix: "[{modelFull}]",
-        },
+        channels: { slack: { responsePrefix: "[{modelFull}]" } },
       } as OpenClawConfig,
       deps: {} as CliDeps,
       runtime: { log: vi.fn() } as never,
@@ -499,11 +498,13 @@ describe("deliverAgentCommandResult payload normalization", () => {
     const resolveFreshSessionEntryForDelivery = vi.fn(async () => ({
       sessionId: "session-1",
       updatedAt: 2,
-      deliveryContext: {
-        channel: "slack",
-        to: "#fresh",
-        accountId: "workspace-1",
-      },
+      delivery: normalizeSessionDeliveryState({
+        context: {
+          channel: "slack",
+          to: "#fresh",
+          accountId: "workspace-1",
+        },
+      }),
     }));
 
     const delivered = await deliverAgentCommandResult({
@@ -556,11 +557,13 @@ describe("deliverAgentCommandResult payload normalization", () => {
     const resolveFreshSessionEntryForDelivery = vi.fn(async () => ({
       sessionId: "session-2",
       updatedAt: 2,
-      deliveryContext: {
-        channel: "slack",
-        to: "#fresh",
-        accountId: "workspace-1",
-      },
+      delivery: normalizeSessionDeliveryState({
+        context: {
+          channel: "slack",
+          to: "#fresh",
+          accountId: "workspace-1",
+        },
+      }),
     }));
 
     const delivered = await deliverAgentCommandResult({
@@ -1005,7 +1008,7 @@ describe("deliverAgentCommandResult payload normalization", () => {
   it("dedupes sent text after applying the delivery response prefix", async () => {
     const delivered = await deliverAgentCommandResult({
       cfg: {
-        messages: { responsePrefix: "Bot:" },
+        channels: { slack: { responsePrefix: "Bot:" } },
       } as OpenClawConfig,
       deps: {} as CliDeps,
       runtime: { log: vi.fn(), error: vi.fn() } as never,
@@ -1040,7 +1043,7 @@ describe("deliverAgentCommandResult payload normalization", () => {
 
     const delivered = await deliverAgentCommandResult({
       cfg: {
-        messages: { responsePrefix: "[{modelFull}]" },
+        channels: { slack: { responsePrefix: "[{modelFull}]" } },
       } as OpenClawConfig,
       deps: {} as CliDeps,
       runtime: { log: vi.fn(), error: vi.fn() } as never,

@@ -7,11 +7,11 @@ import {
   clearSessionGoal,
   createSessionGoal,
   formatSessionGoalStatus,
-  getSessionEntry,
   getSessionGoal,
   updateSessionGoalObjective,
   updateSessionGoalStatus,
 } from "../../config/sessions.js";
+import { loadSessionEntry as getSessionEntry } from "../../config/sessions/session-accessor.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import type {
@@ -126,7 +126,13 @@ function applyGoalPromptToContext(ctx: HandleCommandsParams["ctx"], message: str
     BodyForCommands?: string;
     BodyForAgent?: string;
     BodyStripped?: string;
+    commandText?: string;
+    agentText?: string;
+    rawText?: string;
   };
+  mutableCtx.commandText = message;
+  mutableCtx.agentText = message;
+  mutableCtx.rawText = message;
   mutableCtx.Body = message;
   mutableCtx.RawBody = message;
   mutableCtx.CommandBody = message;

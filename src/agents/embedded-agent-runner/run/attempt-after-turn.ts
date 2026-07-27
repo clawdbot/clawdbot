@@ -216,7 +216,10 @@ export async function completeEmbeddedAttemptAfterTurn(
   });
   runtime.anthropicPayloadLogger?.recordUsage(state.messagesSnapshot, state.promptError);
 
-  if (!state.beforeAgentFinalizeRevisionReason) {
+  if (
+    attempt.operation !== "settled-tool-finalization" &&
+    !state.beforeAgentFinalizeRevisionReason
+  ) {
     const lifecycleForAgentEnd = input.readLifecycleState();
     runAgentEndSideEffects({
       event: {

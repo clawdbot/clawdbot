@@ -395,22 +395,6 @@ extension OpenClawChatCommandOutbox {
 
     // periphery:ignore - protocol-typed callers require this forwarding convenience overload.
     public func markCommandRetriedIfPresent(
-        id: String,
-        expectation: OpenClawChatOutboxRetryExpectation,
-        agentID: String?,
-        deliverySessionKey: String,
-        routingContract: String) async -> OpenClawChatOutboxUpdateResult
-    {
-        await self.markCommandRetriedIfPresent(
-            id: id,
-            expectation: expectation,
-            agentID: agentID,
-            deliverySessionKey: deliverySessionKey,
-            routingContract: routingContract,
-            replacementID: nil)
-    }
-
-    public func markCommandRetriedIfPresent(
         id _: String,
         expectation _: OpenClawChatOutboxRetryExpectation,
         agentID _: String?,

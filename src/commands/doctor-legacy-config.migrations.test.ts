@@ -714,7 +714,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     });
 
-    expect(res.config.agents?.defaults?.imageGenerationModel).toEqual({
+    expect(res.config.agents?.defaults?.mediaModels?.image).toEqual({
       primary: "google/gemini-3-pro-image-preview",
     });
     expect(res.config.models?.providers?.google?.apiKey).toEqual({
@@ -728,7 +728,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.config.models?.providers?.google?.models).toStrictEqual([]);
     expect(res.config.skills?.entries).toBeUndefined();
     expect(res.changes).toEqual([
-      "Moved skills.entries.nano-banana-pro → agents.defaults.imageGenerationModel.primary (google/gemini-3-pro-image-preview).",
+      "Moved skills.entries.nano-banana-pro → agents.defaults.mediaModels.image.primary (google/gemini-3-pro-image-preview).",
       "Moved skills.entries.nano-banana-pro.apiKey → models.providers.google.apiKey.",
       "Removed legacy skills.entries.nano-banana-pro.",
     ]);
@@ -857,19 +857,18 @@ describe("normalizeCompatibilityConfigValues", () => {
       'Removed duplicate agents.defaults.model fallback "openai/gpt-5.6-sol" after selecting it as the default primary.',
       'Removed stale agents.defaults.models entry "deleted/models-add-row" (provider "deleted" is unavailable).',
       'Added agents.defaults.models entry "openai/gpt-5.6-sol" to keep the repaired allowlist restrictive.',
-      'Removed stale agents.list[0].model "deleted/agent-primary" so agent "main" inherits the default model (provider "deleted" is unavailable).',
-      'Removed stale agents.list[0].models entry "deleted/agent-models-add-row" (provider "deleted" is unavailable).',
-      'Added agents.list[0].models entry "openai/gpt-5.6-sol" to keep the repaired allowlist restrictive.',
+      'Removed stale agents.list.main.model "deleted/agent-primary" so agent "main" inherits the default model (provider "deleted" is unavailable).',
+      'Removed stale agents.list.main.models entry "deleted/agent-models-add-row" (provider "deleted" is unavailable).',
+      'Added agents.list.main.models entry "openai/gpt-5.6-sol" to keep the repaired allowlist restrictive.',
     ]);
   });
 
-  it("preserves configured CLI backends and agent-local models.json providers", () => {
+  it("preserves plugin-owned CLI providers and agent-local models.json providers", () => {
     const result = repairStaleAgentModelRefs(
       {
         agents: {
           defaults: {
             model: "my-cli/model",
-            cliBackends: { "my-cli": { command: "my-cli" } },
           },
           list: [
             { id: "worker", model: "agent-local/model" },
@@ -878,7 +877,7 @@ describe("normalizeCompatibilityConfigValues", () => {
         },
       } as OpenClawConfig,
       {
-        pluginProviderIds: new Set(["anthropic"]),
+        pluginProviderIds: new Set(["anthropic", "my-cli"]),
         persistedProviderIdsByAgentId: new Map([["worker", new Set(["agent-local"])]]),
       },
     );
@@ -910,6 +909,33 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(result.changes).toEqual([
       'Replaced stale agents.defaults.model "agent-local/model" with default "openai/gpt-5.6-sol" (provider "agent-local" is unavailable).',
     ]);
+  });
+
+  it("evaluates and repairs every canonical keyed agent", () => {
+    const result = repairStaleAgentModelRefs(
+      {
+        agents: {
+          defaults: { model: "agent-local/model" },
+          entries: {
+            main: { default: true },
+            worker: { model: "deleted/worker" },
+          },
+        },
+      } as OpenClawConfig,
+      {
+        pluginProviderIds: new Set(),
+        persistedProviderIdsByAgentId: new Map([
+          ["main", new Set(["agent-local"])],
+          ["worker", new Set()],
+        ]),
+      },
+    );
+
+    expect(result.config.agents?.defaults?.model).toBe("openai/gpt-5.6-sol");
+    expect(result.config.agents?.entries?.worker?.model).toBeUndefined();
+    expect(result.changes).toContain(
+      'Removed stale agents.entries.worker.model "deleted/worker" so agent "worker" inherits the default model (provider "deleted" is unavailable).',
+    );
   });
 
   it("keeps a repaired model allowlist restrictive", () => {
@@ -1599,8 +1625,8 @@ describe("normalizeCompatibilityConfigValues", () => {
     const res = normalizeCompatibilityConfigValues({
       agents: {
         defaults: {
-          imageGenerationModel: {
-            primary: "fal/fal-ai/flux/dev",
+          mediaModels: {
+            image: { primary: "fal/fal-ai/flux/dev" },
           },
         },
       },
@@ -1623,7 +1649,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     });
 
-    expect(res.config.agents?.defaults?.imageGenerationModel).toEqual({
+    expect(res.config.agents?.defaults?.mediaModels?.image).toEqual({
       primary: "fal/fal-ai/flux/dev",
     });
     expect(res.config.models?.providers?.google?.apiKey).toBe("existing-google-key");

@@ -116,6 +116,71 @@ describe("provider failover hook structured signals", () => {
     ).toBe("billing");
   });
 
+  it("classifies raw and typed invalid-request errors through one core mapping", () => {
+    providerRuntimeMocks.classifyProviderPluginError.mockReturnValue(undefined);
+    const raw =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"messages.27.content.1: thinking blocks cannot be modified"}}';
+
+    expect(classifyFailoverSignal({ provider: "anthropic", message: raw })).toEqual({
+      kind: "reason",
+      reason: "format",
+    });
+    expect(
+      classifyFailoverSignal({
+        provider: "anthropic",
+        errorType: "invalid_request_error",
+        message: "thinking blocks cannot be modified",
+      }),
+    ).toEqual({ kind: "reason", reason: "format" });
+    expect(
+      classifyAssistantFailoverReason(
+        makeAssistantMessageFixture({
+          provider: "anthropic",
+          errorMessage: raw,
+        }),
+      ),
+    ).toBe("format");
+    expect(classifyProviderRuntimeFailureKind(raw)).toBe("schema");
+  });
+
+  it("keeps specific raw API error classifications ahead of invalid-request format", () => {
+    providerRuntimeMocks.classifyProviderPluginError.mockReturnValue(undefined);
+
+    expect(
+      classifyFailoverSignal({
+        provider: "anthropic",
+        message:
+          '{"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}',
+      }),
+    ).toEqual({ kind: "context_overflow" });
+    expect(
+      classifyFailoverSignal({
+        provider: "anthropic",
+        message:
+          '{"type":"error","error":{"type":"invalid_request_error","message":"You are out of extra usage. Add more at claude.ai/settings/usage"}}',
+      }),
+    ).toEqual({ kind: "reason", reason: "billing" });
+  });
+
+  it("keeps specific typed API error classifications ahead of invalid-request format", () => {
+    providerRuntimeMocks.classifyProviderPluginError.mockReturnValue(undefined);
+
+    expect(
+      classifyFailoverSignal({
+        provider: "anthropic",
+        errorType: "invalid_request_error",
+        message: "Request size exceeds model context window",
+      }),
+    ).toEqual({ kind: "context_overflow" });
+    expect(
+      classifyFailoverSignal({
+        provider: "anthropic",
+        errorType: "invalid_request_error",
+        message: "You are out of extra usage. Add more at claude.ai/settings/usage",
+      }),
+    ).toEqual({ kind: "reason", reason: "billing" });
+  });
+
   it("lets structured billing details override an ambiguous quota message", () => {
     providerRuntimeMocks.classifyProviderPluginError.mockReturnValue(undefined);
     const message = makeAssistantMessageFixture({

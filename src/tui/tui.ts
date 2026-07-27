@@ -13,7 +13,6 @@ import {
   Text,
   TUI,
 } from "@earendil-works/pi-tui";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
@@ -35,6 +34,7 @@ import {
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
+  toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { getSlashCommands, shouldSubmitExactArgumentCompletion } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
@@ -97,10 +97,8 @@ const OPENCLAW_CLI_WRAPPER_PATH = fileURLToPath(new URL("../../openclaw.mjs", im
 const OPENCLAW_RUN_NODE_SCRIPT_PATH = fileURLToPath(
   new URL("../../scripts/run-node.mjs", import.meta.url),
 );
-const OPENCLAW_DIST_ENTRY_JS_PATH = fileURLToPath(new URL("../../dist/entry.js", import.meta.url));
-const OPENCLAW_DIST_ENTRY_MJS_PATH = fileURLToPath(
-  new URL("../../dist/entry.mjs", import.meta.url),
-);
+const DIST_ENTRY_JS_PATH = fileURLToPath(new URL("../../dist/entry.js", import.meta.url));
+const DIST_ENTRY_MJS_PATH = fileURLToPath(new URL("../../dist/entry.mjs", import.meta.url));
 
 const OPENAI_CODEX_PROVIDER = "openai";
 const CODEX_CLI_LOOKUP_TIMEOUT_MS = 5_000;
@@ -146,8 +144,7 @@ export function resolveLocalAuthCliInvocation(params?: {
   hasRunNodeScript?: boolean;
 }): { command: string; args: string[] } {
   const hasDistEntry =
-    params?.hasDistEntry ??
-    (existsSync(OPENCLAW_DIST_ENTRY_JS_PATH) || existsSync(OPENCLAW_DIST_ENTRY_MJS_PATH));
+    params?.hasDistEntry ?? (existsSync(DIST_ENTRY_JS_PATH) || existsSync(DIST_ENTRY_MJS_PATH));
   const hasRunNodeScript = params?.hasRunNodeScript ?? existsSync(OPENCLAW_RUN_NODE_SCRIPT_PATH);
   const command = params?.execPath ?? process.execPath;
   const wrapperPath = params?.wrapperPath ?? OPENCLAW_CLI_WRAPPER_PATH;
@@ -216,10 +213,11 @@ export function resolveTuiSessionKey(params: {
   if (trimmed === "global" || trimmed === "unknown") {
     return trimmed;
   }
-  if (trimmed.startsWith("agent:")) {
-    return normalizeLowercaseStringOrEmpty(trimmed);
-  }
-  return `agent:${params.currentAgentId}:${normalizeLowercaseStringOrEmpty(trimmed)}`;
+  return toAgentStoreSessionKey({
+    agentId: params.currentAgentId,
+    requestKey: trimmed,
+    mainKey: params.sessionMainKey,
+  });
 }
 
 export function resolveInitialTuiAgentId(params: {
@@ -1377,11 +1375,13 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     handleAgentEvent,
     handleBtwEvent,
     handleSessionsChangedEvent,
+    handleSessionMessageEvent,
     pauseStreamingWatchdog,
     reconnectStreamingWatchdog,
     consumeCompletedRunForPendingSend,
     isRunObserved,
     flushPendingHistoryRefreshIfIdle,
+    dispose: disposeEventHandlers,
   } = createEventHandlers({
     chatLog,
     btw,
@@ -1419,6 +1419,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       exitReason: result?.exitReason ?? "exit",
       ...(result?.systemAgentMessage ? { systemAgentMessage: result.systemAgentMessage } : {}),
     };
+    disposeEventHandlers();
     pluginApprovals?.dispose();
     taskSuggestions?.dispose();
     beginTuiShutdown({
@@ -1618,6 +1619,9 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     if (evt.event === "sessions.changed") {
       handleSessionsChangedEvent(evt.payload);
     }
+    if (evt.event === "session.message") {
+      handleSessionMessageEvent(evt.payload);
+    }
   };
 
   client.onConnected = () => {
@@ -1744,6 +1748,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   client.start();
   await new Promise<void>((resolve) => {
     const finish = () => {
+      disposeEventHandlers();
       pluginApprovals?.dispose();
       taskSuggestions?.dispose();
       if (isLocalMode) {

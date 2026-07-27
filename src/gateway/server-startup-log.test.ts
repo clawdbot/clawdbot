@@ -57,13 +57,7 @@ describe("gateway startup log", () => {
     const warn = vi.fn();
 
     await logGatewayStartup({
-      cfg: {
-        gateway: {
-          controlUi: {
-            dangerouslyDisableDeviceAuth: true,
-          },
-        },
-      },
+      cfg: { hooks: { gmail: { allowUnsafeExternalContent: true } } },
       bindHost: "127.0.0.1",
       loadedPluginIds: [],
       port: 18789,
@@ -73,7 +67,7 @@ describe("gateway startup log", () => {
 
     expect(warn.mock.calls).toEqual([
       [
-        "security warning: dangerous config flags enabled: gateway.controlUi.dangerouslyDisableDeviceAuth=true. Run `openclaw security audit`.",
+        "security warning: dangerous config flags enabled: hooks.gmail.allowUnsafeExternalContent=true. Run `openclaw security audit`.",
       ],
     ]);
   });

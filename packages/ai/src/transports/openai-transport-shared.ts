@@ -6,6 +6,7 @@ import {
   type OpenAICompletionsToolChoice,
   type OpenAIReasoningEffort,
 } from "../internal/openai.js";
+import { transportAbortError } from "./transport-stream-shared.js";
 
 const MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
 const MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
@@ -94,7 +95,7 @@ type ModelStreamCooperativeScheduler = {
 
 export function throwIfModelStreamAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
-    throw new Error("Request was aborted");
+    throw transportAbortError(signal);
   }
 }
 

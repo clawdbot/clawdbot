@@ -2312,10 +2312,8 @@ describe("runMessageAction plugin dispatch", () => {
               enabled: true,
             },
           },
-          messages: {
-            tts: {
-              auto: "tagged",
-            },
+          tts: {
+            auto: "tagged",
           },
         } as OpenClawConfig,
         action: "send",
@@ -2389,10 +2387,8 @@ describe("runMessageAction plugin dispatch", () => {
               enabled: true,
             },
           },
-          messages: {
-            tts: {
-              auto: "tagged",
-            },
+          tts: {
+            auto: "tagged",
           },
         } as OpenClawConfig,
         action: "send",
@@ -2835,7 +2831,10 @@ describe("runMessageAction plugin dispatch", () => {
     const handleAction = vi.fn(
       async ({ cfg, params }: { cfg: OpenClawConfig; params: Record<string, unknown> }) => {
         const message = typeof params.message === "string" ? params.message : "";
-        const responsePrefix = cfg.messages?.responsePrefix;
+        const responsePrefix = Object.values(cfg.channels ?? {}).find(
+          (entry): entry is { responsePrefix?: string } =>
+            typeof entry === "object" && entry !== null && "responsePrefix" in entry,
+        )?.responsePrefix;
         const rawMessage =
           responsePrefix && message.startsWith(`${responsePrefix} `)
             ? message.slice(responsePrefix.length + 1)
@@ -2936,6 +2935,51 @@ describe("runMessageAction plugin dispatch", () => {
       );
       expect(gatewayActionParams).not.toHaveProperty("message");
       expectRecordFields(gatewayActionParams, { presentation }, "gateway action params");
+    });
+
+    it("omits a blank shared-schema location from gateway-routed sends", async () => {
+      const cfg = {
+        channels: {
+          cardchat: {
+            enabled: true,
+          },
+        },
+        messages: { responsePrefix: "[Nexus]" },
+      } as OpenClawConfig;
+      mocks.callGatewayLeastPrivilege.mockResolvedValueOnce({
+        ok: true,
+        messageId: "card-location",
+      });
+
+      const result = await runMessageAction({
+        cfg,
+        action: "send",
+        params: {
+          channel: "cardchat",
+          target: "channel:test-card",
+          message: "hello",
+          location: "",
+        },
+        gateway: {
+          clientName: "cli",
+          mode: "cli",
+        },
+        dryRun: false,
+      });
+
+      expect(result.kind).toBe("send");
+      expect(result.handledBy).toBe("plugin");
+      expect(handleAction).not.toHaveBeenCalled();
+      const gatewayCall = readMockCallArg(
+        mocks.callGatewayLeastPrivilege,
+        "gateway least privilege call",
+      );
+      const gatewayActionParams = readRecordField(
+        readRecordField(gatewayCall, "params", "gateway call params"),
+        "params",
+        "gateway action params",
+      );
+      expect(gatewayActionParams).not.toHaveProperty("location");
     });
 
     it("keeps gateway-routed chart presentations on the gateway", async () => {
@@ -3106,9 +3150,9 @@ describe("runMessageAction plugin dispatch", () => {
           channels: {
             cardchat: {
               enabled: true,
+              responsePrefix: "[Nexus]",
             },
           },
-          messages: { responsePrefix: "[Nexus]" },
         } as OpenClawConfig,
         action: "send",
         params: {

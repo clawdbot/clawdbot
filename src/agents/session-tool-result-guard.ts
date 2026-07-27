@@ -792,9 +792,6 @@ export function installSessionToolResultGuard(
     if (nextRole === "toolResult") {
       const id = extractToolResultId(nextMessage as Extract<AgentMessage, { role: "toolResult" }>);
       const toolName = id ? pendingState.getToolName(id) : undefined;
-      if (id) {
-        pendingState.delete(id);
-      }
       const normalizedToolResult = normalizePersistedToolResultName(nextMessage, toolName);
       // Apply hard size cap before persistence to prevent oversized tool results
       // from consuming the entire context window on subsequent LLM calls.
@@ -812,6 +809,10 @@ export function installSessionToolResultGuard(
       const persisted = applyBeforeWriteHook(transformed);
       if (!persisted) {
         return undefined;
+      }
+      // A blocked result must remain pending so the next message can repair its tool-call pair.
+      if (id) {
+        pendingState.delete(id);
       }
       return appendMessageAndCacheTranscriptSeq(
         capToolResultForPersistence(persisted.message, maxToolResultChars, redactionConfig),

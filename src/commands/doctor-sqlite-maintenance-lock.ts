@@ -73,27 +73,65 @@ function assertMaintenancePathsOwnedByStateDir(
       );
     }
   }
-  assertDoctorSqliteMaintenancePathsNotHardLinked(operation, protectedPaths);
+  assertDoctorSqliteMaintenancePathsNotAliased(operation, protectedPaths, [stateDir]);
 }
 
 /** Reject file aliases that destructive SQLite maintenance would mutate in place. */
-export function assertDoctorSqliteMaintenancePathsNotHardLinked(
+export function assertDoctorSqliteMaintenancePathsNotAliased(
   operation: string,
   protectedPaths: readonly string[],
+  ownershipRoots: readonly string[] = [],
 ): void {
+  const resolvedRoots = ownershipRoots.map((candidate) => path.resolve(candidate));
   for (const protectedPath of new Set(protectedPaths.map((candidate) => path.resolve(candidate)))) {
+    assertPathComponentsNotSymbolicLinks(operation, protectedPath, resolvedRoots);
     let stat: fs.Stats;
     try {
-      stat = fs.statSync(protectedPath);
+      stat = fs.lstatSync(protectedPath);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         continue;
       }
       throw error;
     }
+    if (stat.isSymbolicLink()) {
+      throw new Error(
+        `Cannot run ${operation} for a symbolic-link path: ${protectedPath}. Replace the symbolic link with an owned regular file and retry.`,
+      );
+    }
     if (stat.isFile() && stat.nlink > 1) {
       throw new Error(
         `Cannot run ${operation} for a hard-linked path: ${protectedPath}. Remove the additional hard link and retry.`,
+      );
+    }
+  }
+}
+
+function assertPathComponentsNotSymbolicLinks(
+  operation: string,
+  protectedPath: string,
+  ownershipRoots: readonly string[],
+): void {
+  const rootPath = ownershipRoots.find((candidate) => isPathInside(candidate, protectedPath));
+  if (!rootPath) {
+    return;
+  }
+  const relativePath = path.relative(rootPath, protectedPath);
+  let currentPath = rootPath;
+  for (const segment of relativePath.split(path.sep).filter(Boolean)) {
+    currentPath = path.join(currentPath, segment);
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(currentPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return;
+      }
+      throw error;
+    }
+    if (stat.isSymbolicLink()) {
+      throw new Error(
+        `Cannot run ${operation} through a symbolic-link path component: ${currentPath}. Replace the symbolic link with an owned directory or regular file and retry.`,
       );
     }
   }

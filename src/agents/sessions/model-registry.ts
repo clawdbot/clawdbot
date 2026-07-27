@@ -24,7 +24,7 @@ import { resolveModelPluginMetadataSnapshot } from "../model-discovery-context.j
 import {
   filterGeneratedPluginModelCatalogProviders,
   isGeneratedPluginModelCatalog,
-  listPluginModelCatalogFiles,
+  loadPersistedPluginModelCatalogs,
   type PluginModelCatalogMetadataSnapshot,
 } from "../plugin-model-catalog.js";
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
@@ -129,6 +129,7 @@ const OpenAICompletionsCompatSchema = Type.Object({
   openRouterRouting: Type.Optional(OpenRouterRoutingSchema),
   vercelGatewayRouting: Type.Optional(VercelGatewayRoutingSchema),
   supportsStrictMode: Type.Optional(Type.Boolean()),
+  supportsJsonSchemaResponseFormat: Type.Optional(Type.Boolean()),
   supportsLongCacheRetention: Type.Optional(Type.Boolean()),
 });
 
@@ -447,8 +448,8 @@ export class ModelRegistry {
   }
 
   private loadModels(): void {
-    // Load configured models and request settings from models.json plus
-    // generated plugin-owned catalog shards under the agent plugin state.
+    // Keep authored models.json separate from rebuildable provider catalogs
+    // owned by the agent SQLite cache.
     const { models: customModels, error } = this.modelsJsonPath
       ? this.loadCustomModels(this.modelsJsonPath)
       : emptyCustomModelsResult();
@@ -476,18 +477,19 @@ export class ModelRegistry {
     modelsJsonPath: string,
     options: {
       catalogPluginId?: string;
+      contents?: string;
       includePluginCatalogs?: boolean;
       requireGeneratedCatalog?: boolean;
     } = {
       includePluginCatalogs: true,
     },
   ): CustomModelsResult {
-    if (!existsSync(modelsJsonPath)) {
+    if (options.contents === undefined && !existsSync(modelsJsonPath)) {
       return emptyCustomModelsResult();
     }
 
     try {
-      const content = readFileSync(modelsJsonPath, "utf-8");
+      const content = options.contents ?? readFileSync(modelsJsonPath, "utf-8");
       const parsed = JSON.parse(stripJsonComments(content)) as unknown;
       if (options.requireGeneratedCatalog === true && !isGeneratedPluginModelCatalog(parsed)) {
         return emptyCustomModelsResult();
@@ -536,12 +538,28 @@ export class ModelRegistry {
       );
       const pluginCatalogErrors: string[] = [];
       if (options.includePluginCatalogs !== false) {
-        for (const pluginCatalog of listPluginModelCatalogFiles(dirname(modelsJsonPath))) {
-          const pluginResult = this.loadCustomModels(pluginCatalog.path, {
-            catalogPluginId: pluginCatalog.pluginId,
-            includePluginCatalogs: false,
-            requireGeneratedCatalog: true,
-          });
+        let pluginCatalogs: ReturnType<typeof loadPersistedPluginModelCatalogs>["catalogs"] = [];
+        try {
+          const loaded = loadPersistedPluginModelCatalogs(dirname(modelsJsonPath));
+          pluginCatalogs = loaded.catalogs;
+          pluginCatalogErrors.push(...loaded.warnings);
+        } catch (error) {
+          pluginCatalogErrors.push(
+            `Failed to load generated plugin model catalogs: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+        for (const pluginCatalog of pluginCatalogs) {
+          const pluginResult = this.loadCustomModels(
+            `sqlite:plugin-model-catalog/${pluginCatalog.pluginId}`,
+            {
+              catalogPluginId: pluginCatalog.pluginId,
+              contents: pluginCatalog.contents,
+              includePluginCatalogs: false,
+              requireGeneratedCatalog: true,
+            },
+          );
           if (pluginResult.error) {
             pluginCatalogErrors.push(pluginResult.error);
             continue;

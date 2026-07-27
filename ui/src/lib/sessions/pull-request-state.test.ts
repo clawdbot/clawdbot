@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
+import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { createSessionCapability } from "./index.ts";
 
 function sessionsResult(sessions: SessionsListResult["sessions"]): SessionsListResult {
@@ -16,7 +17,7 @@ function sessionsResult(sessions: SessionsListResult["sessions"]): SessionsListR
 function createGatewayHarness(client: GatewayBrowserClient) {
   let snapshot = {
     client: client as GatewayBrowserClient | null,
-    connected: true,
+    phase: "connected" as ApplicationGatewayPhase,
     sessionKey: "agent:main:main",
     assistantAgentId: "main",
     hello: null,
@@ -36,7 +37,11 @@ function createGatewayHarness(client: GatewayBrowserClient) {
       },
     },
     publish(connected: boolean, nextClient: GatewayBrowserClient | null = snapshot.client) {
-      snapshot = { ...snapshot, client: nextClient, connected };
+      snapshot = {
+        ...snapshot,
+        client: nextClient,
+        phase: connected ? "connected" : "reconnecting",
+      };
       for (const listener of listeners) {
         listener(snapshot);
       }

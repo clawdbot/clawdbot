@@ -2,10 +2,11 @@ title: WhatsApp context command reply
 
 scenario:
   id: whatsapp-context-command
-  surface: channel-framework
-  category: channel-framework.channel-actions-commands-and-approvals
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
   coverage:
-    primary: [channels.native-commands]
+    primary:
+      - channels.channel-native-commands
   objective: Verify WhatsApp returns the current context breakdown.
   successCriteria:
     - The context list command succeeds in a WhatsApp DM.

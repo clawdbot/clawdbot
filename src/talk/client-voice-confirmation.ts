@@ -64,9 +64,17 @@ function requiresHighImpactVoiceConfirmation(toolName: string, params: unknown):
     return false;
   }
   if (
-    ["message", "gateway", "nodes", "browser", "computer", "canvas", "cron", "process"].includes(
-      normalizedTool,
-    )
+    [
+      "message",
+      "gateway",
+      "nodes",
+      "browser",
+      "computer",
+      "mobile_ui",
+      "canvas",
+      "cron",
+      "process",
+    ].includes(normalizedTool)
   ) {
     return true;
   }

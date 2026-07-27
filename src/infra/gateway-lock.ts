@@ -16,7 +16,7 @@ import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js"
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import { sha256HexPrefix } from "./crypto-digest.js";
 import { isGatewayArgv, isOpenClawCommandArgv, parseProcCmdline } from "./gateway-process-argv.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { isSqliteLockError } from "./sqlite-transaction.js";
 import {
   readWindowsProcessArgsSync,
@@ -115,8 +115,7 @@ type GatewayLockCoordinator = {
 };
 
 function tryAcquireGatewayLockCoordinator(lockPath: string): GatewayLockCoordinator | null {
-  const { DatabaseSync } = requireNodeSqlite();
-  const coordinatorDb: DatabaseSync = new DatabaseSync(`${lockPath}.sqlite`);
+  const coordinatorDb: DatabaseSync = openNodeSqliteDatabase(`${lockPath}.sqlite`);
   try {
     coordinatorDb.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;");
   } catch (error) {
