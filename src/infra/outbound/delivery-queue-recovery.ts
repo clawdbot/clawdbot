@@ -134,6 +134,15 @@ function needsUnknownSendReconciliation(entry: QueuedDelivery): boolean {
   );
 }
 
+function hasActiveBoundedDeliveryOwner(entry: QueuedDelivery, now: number): boolean {
+  return (
+    typeof entry.completionRetention === "object" &&
+    entry.recoveryState === "producer_claimed" &&
+    typeof entry.availableAt === "number" &&
+    entry.availableAt > now
+  );
+}
+
 function queuedDeadLetterAuditTerminals(entry: QueuedDelivery) {
   if (needsUnknownSendReconciliation(entry)) {
     return uniformOutboundAuditTerminals(entry.payloads.length, {
@@ -420,7 +429,7 @@ function recoveryPlatformAttemptId(
   return claimedAttemptId !== undefined
     ? claimedAttemptId
     : typeof entry.completionRetention === "object"
-      ? (entry.platformSendAttemptId ?? entry.producerClaimId ?? null)
+      ? null
       : undefined;
 }
 
@@ -654,7 +663,12 @@ async function drainQueuedEntry(opts: {
         if (entry.deliveryCompletion) {
           completeDurableDelivery(entry.deliveryCompletion, result);
         }
-        await ackRecoveredDelivery(entry, opts.stateDir);
+        await ackRecoveredDelivery(
+          entry,
+          opts.stateDir,
+          undefined,
+          typeof entry.completionRetention === "object" ? entry.platformSendAttemptId : undefined,
+        );
         await runReconciledSentCommitHooks({
           entry,
           cfg: opts.cfg,
@@ -679,7 +693,13 @@ async function drainQueuedEntry(opts: {
         opts.log.warn(`Delivery entry ${entry.id} ${errMsg}`);
         opts.onFailed?.(entry, errMsg);
         try {
-          await recordRecoveredFailure(failDelivery, entry, errMsg, opts.stateDir);
+          await recordRecoveredFailure(
+            failDelivery,
+            entry,
+            errMsg,
+            opts.stateDir,
+            typeof entry.completionRetention === "object" ? entry.platformSendAttemptId : undefined,
+          );
           return "failed";
         } catch (failErr) {
           if (getErrnoCode(failErr) === "ENOENT") {
@@ -900,7 +920,7 @@ async function drainQueuedEntry(opts: {
     }
     if (postSendState !== "acked") {
       try {
-        await (results.length === 0 && entry.completionRetention
+        await (results.length === 0 && typeof entry.completionRetention === "object"
           ? ackRecoveredDelivery(
               entry,
               opts.stateDir,
@@ -1073,13 +1093,22 @@ export async function drainPendingDeliveries(opts: {
       // Poll-driven reconnect drains can repeat while a live send owns its
       // claim. Leave conflicts silent so reconnect polling cannot starve it.
       onEntry: async (currentEntry) => {
-        const admission = await applyRecoveryDeliveryAdmission({
-          entry: currentEntry,
-          cfg: opts.cfg,
-          log: opts.log,
-          stateDir: opts.stateDir,
-          logLabel: opts.logLabel,
-        });
+        if (hasActiveBoundedDeliveryOwner(currentEntry, Date.now())) {
+          return;
+        }
+        // An observed platform UUID is evidence to reconcile, not ownership
+        // authorizing admission failure or recipient-state mutation.
+        const admission =
+          typeof currentEntry.completionRetention === "object" &&
+          needsUnknownSendReconciliation(currentEntry)
+            ? "allowed"
+            : await applyRecoveryDeliveryAdmission({
+                entry: currentEntry,
+                cfg: opts.cfg,
+                log: opts.log,
+                stateDir: opts.stateDir,
+                logLabel: opts.logLabel,
+              });
         if (admission !== "allowed") {
           return;
         }
@@ -1195,13 +1224,21 @@ export async function recoverPendingDeliveries(opts: {
       opts.log.info(`Recovery skipped for delivery ${entry.id}: already gone`);
     },
     onEntry: async (currentEntry) => {
-      const admission = await applyRecoveryDeliveryAdmission({
-        entry: currentEntry,
-        cfg: opts.cfg,
-        log: opts.log,
-        stateDir: opts.stateDir,
-        logLabel: "Recovery",
-      });
+      if (hasActiveBoundedDeliveryOwner(currentEntry, Date.now())) {
+        opts.log.info(`Recovery skipped for delivery ${currentEntry.id}: active platform owner`);
+        return "continue";
+      }
+      const admission =
+        typeof currentEntry.completionRetention === "object" &&
+        needsUnknownSendReconciliation(currentEntry)
+          ? "allowed"
+          : await applyRecoveryDeliveryAdmission({
+              entry: currentEntry,
+              cfg: opts.cfg,
+              log: opts.log,
+              stateDir: opts.stateDir,
+              logLabel: "Recovery",
+            });
       if (admission !== "allowed") {
         if (admission === "failed") {
           summary.failed += 1;

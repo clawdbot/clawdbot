@@ -650,7 +650,7 @@ async function deliverOutboundPayloadsWithQueueCleanup(
             : postSendState === "failed"
               ? false
               : await (
-                  results.length === 0 && params.completionRetention
+                  results.length === 0 && typeof params.completionRetention === "object"
                     ? ackOwnedQueue({ suppressCompletionReceipt: true })
                     : ackOwnedQueue()
                 )

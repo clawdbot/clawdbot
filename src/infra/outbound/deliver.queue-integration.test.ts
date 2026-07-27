@@ -16,11 +16,12 @@ import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { collectEntrySpoolPaths, stageQueuePayloadMedia } from "./delivery-queue-media-spool.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
-import { loadPendingDeliveries } from "./delivery-queue-storage.js";
+import { loadPendingDeliveries, reserveDeliveryAttempt } from "./delivery-queue-storage.js";
 import {
   claimDeliveryPlatformSendAttempt,
   drainPendingDeliveries,
   enqueueDeliveryOnce,
+  recoverPendingDeliveries,
   type DeliverFn,
 } from "./delivery-queue.js";
 import {
@@ -146,22 +147,75 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
         payloads: [{ text: "live producer owns this send" }],
         queuePolicy: "required",
         completionRetention: boundedCronCompletionRetention,
+        maxRetries: 1,
       },
       deliveryIntentId,
       tmpDir,
     );
     const producerClaimId = await claimDeliveryPlatformSendAttempt(deliveryIntentId, tmpDir);
     expect(producerClaimId).toEqual(expect.any(String));
+    if (!producerClaimId) {
+      throw new Error("test invariant: active producer must own its bounded delivery");
+    }
+    await reserveDeliveryAttempt(deliveryIntentId, 1, tmpDir, producerClaimId);
 
     const deliver = vi.fn<DeliverFn>(async () => []);
     await drainMatrixReconnect({ deliver, stateDir: tmpDir });
+    await recoverPendingDeliveries({
+      cfg: {} as OpenClawConfig,
+      deliver,
+      log: createRecoveryLog(),
+      stateDir: tmpDir,
+    });
 
     expect(deliver).not.toHaveBeenCalled();
     expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
       id: deliveryIntentId,
       recoveryState: "producer_claimed",
       producerClaimId,
+      attemptCount: 1,
     });
+  });
+
+  it("retains permanent receipts when stable delivery is intentionally suppressed", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const sendMatrix = vi.fn();
+    const liveIntentId = "permanent-matrix-suppressed-live";
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {} as OpenClawConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+        deliveryIntentId: liveIntentId,
+        completionRetention: "permanent",
+        reusePendingDeliveryIntent: true,
+      }),
+    ).resolves.toEqual([]);
+    expect(getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, liveIntentId, tmpDir)).toBe(
+      "completed",
+    );
+
+    const recoveryIntentId = "permanent-matrix-suppressed-recovery";
+    await enqueueDeliveryOnce(
+      {
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "" }],
+        queuePolicy: "required",
+        completionRetention: "permanent",
+      },
+      recoveryIntentId,
+      tmpDir,
+    );
+    await drainMatrixReconnect({ deliver: vi.fn<DeliverFn>(async () => []), stateDir: tmpDir });
+    expect(
+      getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, recoveryIntentId, tmpDir),
+    ).toBe("completed");
+    expect(sendMatrix).not.toHaveBeenCalled();
   });
 
   it("fences recovered stable intents at the real Matrix provider boundary", async () => {
