@@ -188,12 +188,12 @@ describe("stripSessionsYieldArtifacts", () => {
 
     stripSessionsYieldArtifacts(session);
 
-    const branch = sessionManager.getBranch();
+    const entries = sessionManager.getEntries();
     expect(
-      branch.some((entry) => entry.type === "custom" && entry.customType === "plugin-state"),
+      entries.some((entry) => entry.type === "custom" && entry.customType === "plugin-state"),
     ).toBe(true);
     expect(
-      branch.some(
+      entries.some(
         (entry) =>
           (entry.type === "message" && entry.message.role === "assistant") ||
           (entry.type === "custom_message" &&
