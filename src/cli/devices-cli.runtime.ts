@@ -928,6 +928,20 @@ export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void>
   }
   if (list.paired?.length) {
     const tableWidth = getTerminalTableWidth();
+    const rows = list.paired.map((device) => ({
+      Device: sanitizeForLog(
+        device.operatorLabel || device.displayName || device.clientId || device.deviceId,
+      ),
+      "Device ID": sanitizeForLog(device.deviceId),
+      Roles: device.roles?.length
+        ? device.roles.map((role) => sanitizeForLog(role)).join(", ")
+        : "",
+      Scopes: device.scopes?.length
+        ? device.scopes.map((scope) => sanitizeForLog(scope)).join(", ")
+        : "",
+      Tokens: formatTokenSummary(device.tokens),
+      IP: device.remoteIp ? sanitizeForLog(device.remoteIp) : "",
+    }));
     defaultRuntime.log(`${theme.heading("Paired")} ${theme.muted(`(${list.paired.length})`)}`);
     defaultRuntime.log(
       renderTable({
@@ -940,22 +954,13 @@ export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void>
           { key: "Tokens", header: "Tokens", minWidth: 12, flex: true },
           { key: "IP", header: "IP", minWidth: 12 },
         ],
-        rows: list.paired.map((device) => ({
-          Device: sanitizeForLog(
-            device.operatorLabel || device.displayName || device.clientId || device.deviceId,
-          ),
-          "Device ID": sanitizeForLog(device.deviceId),
-          Roles: device.roles?.length
-            ? device.roles.map((role) => sanitizeForLog(role)).join(", ")
-            : "",
-          Scopes: device.scopes?.length
-            ? device.scopes.map((scope) => sanitizeForLog(scope)).join(", ")
-            : "",
-          Tokens: formatTokenSummary(device.tokens),
-          IP: device.remoteIp ? sanitizeForLog(device.remoteIp) : "",
-        })),
+        rows,
       }).trimEnd(),
     );
+    defaultRuntime.log(theme.muted("Full device IDs"));
+    for (const row of rows) {
+      defaultRuntime.log(`  ${row["Device ID"]}  ${row.Device}`);
+    }
     const nodeApprovalNotices = await findPairedDevicePendingNodeApprovalNotices(opts, list.paired);
     for (const notice of nodeApprovalNotices) {
       defaultRuntime.log(theme.warn(formatNodeApprovalNotice(notice)));

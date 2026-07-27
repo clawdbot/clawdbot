@@ -1250,16 +1250,18 @@ describe("devices cli list", () => {
   });
 
   it("shows a deviceId column so identical display names are distinguishable for remove", async () => {
+    const deviceIdA = "a".repeat(64);
+    const deviceIdB = "b".repeat(64);
     callGateway.mockResolvedValueOnce({
       pending: [],
       paired: [
         pairedDevice({
-          deviceId: "dev-a",
+          deviceId: deviceIdA,
           displayName: "OpenClaw Desktop",
           clientId: "openclaw-macos",
         }),
         pairedDevice({
-          deviceId: "dev-b",
+          deviceId: deviceIdB,
           displayName: "OpenClaw Desktop",
           clientId: "openclaw-macos",
         }),
@@ -1270,8 +1272,9 @@ describe("devices cli list", () => {
 
     const output = stripAnsi(readRuntimeOutput());
     expect(output).toContain("Device ID");
-    expect(output).toContain("dev-a");
-    expect(output).toContain("dev-b");
+    expect(output).toContain("Full device IDs");
+    expect(output.split("\n")).toContain(`  ${deviceIdA}  OpenClaw Desktop`);
+    expect(output.split("\n")).toContain(`  ${deviceIdB}  OpenClaw Desktop`);
   });
 });
 
