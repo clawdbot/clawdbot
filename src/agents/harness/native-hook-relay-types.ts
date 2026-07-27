@@ -117,7 +117,7 @@ type NativeHookRelayCommandOptions = {
   timeoutMs?: number;
 };
 
-type NativeHookRelayCommandForEventOptions = {
+export type NativeHookRelayCommandForEventOptions = {
   timeoutMs?: number;
 };
 

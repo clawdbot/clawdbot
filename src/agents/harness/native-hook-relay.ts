@@ -69,6 +69,7 @@ export { isNativeHookRelayBridgeStaleRegistrationError } from "./native-hook-rel
 export { buildNativeHookRelayCommand } from "./native-hook-relay-command.js";
 export { resolveNativeHookRelayDeferredToolApproval } from "./native-hook-relay-permissions.js";
 export type {
+  NativeHookRelayCommandForEventOptions,
   NativeHookRelayEvent,
   NativeHookRelayProcessResponse,
   NativeHookRelayProvider,

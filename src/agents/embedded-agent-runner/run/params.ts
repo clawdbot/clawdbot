@@ -309,6 +309,8 @@ export type RunEmbeddedAgentParams = {
    * final lifecycle "end" or "error" after fallback and post-turn work settle.
    */
   deferTerminalLifecycle?: boolean;
+  /** @deprecated Use deferTerminalLifecycle. */
+  deferTerminalLifecycleEnd?: boolean;
   lane?: string;
   enqueue?: CommandQueueEnqueueFn;
   extraSystemPrompt?: string;

@@ -329,7 +329,8 @@ export async function dispatchEmbeddedRunAttempt(input: {
     onToolResult: control.onToolResult,
     onAgentToolResult: params.onAgentToolResult,
     onAgentEvent: control.onAgentEvent,
-    deferTerminalLifecycle: params.deferTerminalLifecycle,
+    // Normalize the shipped harness alias once; attempt internals consume only the canonical flag.
+    deferTerminalLifecycle: params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
     onExecutionPhase: params.onExecutionPhase,
     extraSystemPrompt: appendIncognitoSystemPrompt({
       agentId: runtime.agentId,
