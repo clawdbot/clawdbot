@@ -133,7 +133,7 @@ export type {
   TtsPersonaFallbackPolicy,
   TtsProvider,
 } from "../config/types.js";
-export { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+export { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 // SDK-facing names are a shipped plugin contract; internals route through the
 // session accessor so the storage backend can change beneath them.
 export {

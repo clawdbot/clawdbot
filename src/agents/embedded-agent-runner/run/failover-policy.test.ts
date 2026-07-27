@@ -95,6 +95,23 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("sends prompt TLS certificate failures directly to model fallback", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "prompt",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "tls_certificate",
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "tls_certificate",
+    });
+  });
+
   it("surfaces max-turn prompt failures without profile rotation or model fallback", () => {
     expect(
       resolveRunFailoverDecision({
@@ -272,6 +289,28 @@ describe("resolveRunFailoverDecision", () => {
     ).toEqual({
       action: "fallback_model",
       reason: "rate_limit",
+    });
+  });
+
+  it("sends assistant TLS certificate failures directly to model fallback", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "tls_certificate",
+        timedOut: false,
+        idleTimedOut: false,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: false,
+        timedOutByRunBudget: false,
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "tls_certificate",
     });
   });
 

@@ -16,6 +16,7 @@ type SessionBoundaryAttempt = Pick<
   EmbeddedRunAttemptParams,
   | "config"
   | "onUserMessagePersistenceInvalidated"
+  | "operation"
   | "prompt"
   | "suppressNextUserMessagePersistence"
   | "trigger"
@@ -41,6 +42,7 @@ export function prepareEmbeddedAttemptSessionBoundary(input: {
   setCurrentUserTimestampOverride: (override: CurrentUserTimestampOverride | undefined) => void;
 } {
   const { activeSession, attempt, isRawModelRun, sessionManager } = input;
+  const preserveExactPrompt = isRawModelRun || attempt.operation === "settled-tool-finalization";
   if (isRawModelRun) {
     // Raw probes measure only the requested provider prompt. Restored history,
     // queued work, and the normal system prompt would contaminate it.
@@ -48,7 +50,7 @@ export function prepareEmbeddedAttemptSessionBoundary(input: {
     input.setActiveSessionSystemPrompt("");
   }
 
-  const orphanRepair = isRawModelRun
+  const orphanRepair = preserveExactPrompt
     ? undefined
     : resolveOrphanRepairPlan({
         sessionManager,
@@ -78,13 +80,13 @@ export function prepareEmbeddedAttemptSessionBoundary(input: {
 
   // This is the single timestamping source for user messages sent to the LLM.
   // Raw probes retain exact prompt bytes.
-  const boundaryTimezone = isRawModelRun
+  const boundaryTimezone = preserveExactPrompt
     ? undefined
     : resolveUserTimezone(attempt.config?.agents?.defaults?.userTimezone);
-  const includeBoundaryTimestamp = !isRawModelRun;
+  const includeBoundaryTimestamp = !preserveExactPrompt;
   let currentUserTimestampOverride: CurrentUserTimestampOverride | undefined;
   const buildBoundaryOptions = (): LlmBoundaryOptions => {
-    if (isRawModelRun) {
+    if (preserveExactPrompt) {
       return { projectPersistedSenderContext: false };
     }
     const userTranscriptContexts = input.getUserTranscriptContexts();

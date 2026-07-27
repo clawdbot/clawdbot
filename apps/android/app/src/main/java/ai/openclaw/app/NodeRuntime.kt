@@ -14,6 +14,7 @@ import ai.openclaw.app.chat.ChatPlanStep
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSessionDeletion
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.ChatSwarmGroup
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
 import ai.openclaw.app.chat.ChatTranscriptAnchorState
 import ai.openclaw.app.chat.ChatTranscriptCache
@@ -28,6 +29,7 @@ import ai.openclaw.app.chat.MessageSpeechController
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.chat.SessionBranch
+import ai.openclaw.app.chat.SessionForkResult
 import ai.openclaw.app.chat.SessionRewindResult
 import ai.openclaw.app.chat.SystemSpeechSpeaker
 import ai.openclaw.app.gateway.DeviceAuthEntry
@@ -78,6 +80,7 @@ import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.node.InvokeDispatcher
 import ai.openclaw.app.node.LocationCaptureManager
 import ai.openclaw.app.node.LocationHandler
+import ai.openclaw.app.node.MobileUiHandler
 import ai.openclaw.app.node.MotionHandler
 import ai.openclaw.app.node.NodePresenceAliveBeacon
 import ai.openclaw.app.node.NotificationsHandler
@@ -92,6 +95,9 @@ import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.node.invokeErrorFromThrowable
 import ai.openclaw.app.node.parseHexColorArgb
 import ai.openclaw.app.protocol.OpenClawCanvasA2UIAction
+import ai.openclaw.app.systemagent.SystemAgentChatController
+import ai.openclaw.app.systemagent.SystemAgentChatState
+import ai.openclaw.app.systemagent.SystemAgentGatewayAccess
 import ai.openclaw.app.voice.AndroidOnDeviceVoiceWakeRecognizer
 import ai.openclaw.app.voice.GatewayTranscriptionSession
 import ai.openclaw.app.voice.MicCaptureManager
@@ -608,6 +614,35 @@ internal enum class NodeRuntimeMode {
   ScreenshotFixture,
 }
 
+internal class SessionObserverVisibility(
+  private val isVisible: () -> Boolean,
+  private val captureLease: () -> GatewaySession.RequestLease?,
+) {
+  private val mutex = Mutex()
+  private var appliedLease: GatewaySession.RequestLease? = null
+  private var appliedVisibility: Boolean? = null
+
+  suspend fun sync() {
+    mutex.withLock {
+      val lease = captureLease() ?: return@withLock
+      val visible = isVisible()
+      // Socket-bound declarations must survive reconnect without duplicate
+      // foreground RPCs or leaking a queued update onto the next gateway.
+      if (appliedVisibility == visible && appliedLease?.isCurrent() == true) return@withLock
+      // A timeout can mean the Gateway applied this change but lost its reply.
+      // Invalidate the old confirmation first so the next sync cannot skip recovery.
+      appliedLease = null
+      appliedVisibility = null
+      lease.request(
+        GatewayMethod.SessionsObserverVisibility.rawValue,
+        """{"visible":$visible}""",
+      )
+      appliedLease = lease
+      appliedVisibility = visible
+    }
+  }
+}
+
 private fun openAndroidChatStores(
   context: Context,
   prefs: SecurePrefs,
@@ -917,6 +952,9 @@ class NodeRuntime private constructor(
       sms = sms,
     )
 
+  private val mobileUiHandler = MobileUiHandler()
+  private var lastMobileUiConnected = mobileUiHandler.isConnected.value
+
   private val a2uiHandler: A2UIHandler =
     A2UIHandler(
       canvas = canvas,
@@ -940,6 +978,9 @@ class NodeRuntime private constructor(
         voiceWakeManager.isAvailable &&
           hasRecordAudioPermission() &&
           isVoiceWakeWordsReadyForCurrentGateway()
+      },
+      mobileUiAvailable = {
+        SensitiveFeatureConfig.accessibilityControlEnabled && mobileUiHandler.isConnected.value
       },
       inlineWidgetsAvailable = { WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE) },
       manualTls = { endpoint ->
@@ -976,6 +1017,7 @@ class NodeRuntime private constructor(
       a2uiHandler = a2uiHandler,
       debugHandler = debugHandler,
       callLogHandler = callLogHandler,
+      mobileUiHandler = mobileUiHandler,
       isForeground = { _isForeground.value },
       cameraEnabled = { cameraEnabled.value },
       locationEnabled = { locationMode.value != LocationMode.Off },
@@ -995,6 +1037,9 @@ class NodeRuntime private constructor(
       onCanvasA2uiReset = { _canvasA2uiHydrated.value = false },
       motionActivityAvailable = { motionHandler.isActivityAvailable() },
       motionPedometerAvailable = { motionHandler.isPedometerAvailable() },
+      mobileUiAvailable = {
+        SensitiveFeatureConfig.accessibilityControlEnabled && mobileUiHandler.isConnected.value
+      },
     )
 
   /**
@@ -1158,6 +1203,7 @@ class NodeRuntime private constructor(
   val skillsErrorText: StateFlow<String?> = _skillsErrorText.resolveOptionalNativeText()
   private val _clawHubSkillMethodsAvailable = MutableStateFlow(false)
   val clawHubSkillMethodsAvailable: StateFlow<Boolean> = _clawHubSkillMethodsAvailable.asStateFlow()
+  private val systemAgentChatSupported = MutableStateFlow<Boolean?>(null)
   private val _skillMutationKeys = MutableStateFlow<Set<String>>(emptySet())
   val skillMutationKeys: StateFlow<Set<String>> = _skillMutationKeys.asStateFlow()
   private val _clawHubSkillSearchState = MutableStateFlow(GatewayClawHubSkillSearchState())
@@ -1286,7 +1332,7 @@ class NodeRuntime private constructor(
   private var nodeConnectionProblem: GatewayConnectionProblem? = null
   private val gatewayStatusLock = Any()
 
-  private val operatorSession =
+  private val operatorSession: GatewaySession =
     GatewaySession(
       scope = scope,
       identityStore = identityStore,
@@ -1314,6 +1360,9 @@ class NodeRuntime private constructor(
           operatorConnected = true
           operatorStatusText = "Connected"
         }
+        // Method and scope snapshots are synchronous above; refresh only after both so
+        // this route cannot inherit readiness from the connection it replaced.
+        systemAgentChatController.refresh(startIfNeeded = false)
         micCapture.onGatewayConnectionChanged(true)
         wearProxyBridge()?.publishConnection(connected = true, status = "Connected")
         scope.launch {
@@ -1337,6 +1386,7 @@ class NodeRuntime private constructor(
           operatorStatusText = message
           operatorConnectionProblem = gatewayProblemAfterDisconnect(operatorConnectionProblem, message)
         }
+        systemAgentChatController.refresh(startIfNeeded = false)
         micCapture.onGatewayConnectionChanged(false)
         wearProxyBridge()?.publishConnection(
           connected = false,
@@ -1352,6 +1402,7 @@ class NodeRuntime private constructor(
           operatorStatusText = problem.message
           operatorConnectionProblem = problem
         }
+        systemAgentChatController.refresh(startIfNeeded = false)
         micCapture.onGatewayConnectionChanged(false)
         wearProxyBridge()?.publishConnection(
           connected = false,
@@ -1364,6 +1415,42 @@ class NodeRuntime private constructor(
       },
       customHeadersProvider = prefs::loadGatewayCustomHeaders,
     )
+
+  private val sessionObserverVisibility =
+    SessionObserverVisibility(
+      isVisible = { _isForeground.value },
+      captureLease = { operatorSession.captureRequestLease() },
+    )
+
+  private val systemAgentChatController by lazy {
+    SystemAgentChatController(
+      scope = scope,
+      access = {
+        SystemAgentGatewayAccess(
+          connected = operatorConnected,
+          hasAdminScope = _operatorScopes.value.any { it == OperatorAdminScope },
+          supportsMethod = systemAgentChatSupported.value,
+          gatewayId =
+            when (mode) {
+              NodeRuntimeMode.Live -> operatorSession.currentEndpointStableId()
+              NodeRuntimeMode.ScreenshotFixture -> AndroidScreenshotFixture.gatewayId
+            },
+        )
+      },
+      captureLease = { gatewayId ->
+        when (mode) {
+          NodeRuntimeMode.Live -> operatorSession.captureRequestLease(gatewayId)
+          NodeRuntimeMode.ScreenshotFixture ->
+            GatewaySession.RequestLease(endpointStableId = AndroidScreenshotFixture.gatewayId) { method, paramsJson, _ ->
+              AndroidScreenshotFixture.request(method, paramsJson)
+            }
+        }
+      },
+      json = json,
+    )
+  }
+  internal val systemAgentChatState: StateFlow<SystemAgentChatState>
+    get() = systemAgentChatController.state
 
   private data class SecondaryOperatorRuntime(
     val endpoint: GatewayEndpoint,
@@ -1549,9 +1636,21 @@ class NodeRuntime private constructor(
 
   private suspend fun subscribeOperatorSessionEvents() {
     try {
-      operatorSession.request("sessions.subscribe", null)
+      operatorSession.request(GatewayMethod.SessionsSubscribe.rawValue, null)
     } catch (err: Throwable) {
       Log.d("OpenClawRuntime", "sessions.subscribe failed: ${err.message ?: err::class.java.simpleName}")
+    }
+    syncSessionObserverVisibility()
+  }
+
+  private suspend fun syncSessionObserverVisibility() {
+    try {
+      sessionObserverVisibility.sync()
+    } catch (err: Throwable) {
+      Log.d(
+        "OpenClawRuntime",
+        "sessions.observer.visibility failed: ${err.message ?: err::class.java.simpleName}",
+      )
     }
   }
 
@@ -2744,6 +2843,7 @@ class NodeRuntime private constructor(
   val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = chat.questions
   val chatPlanSteps: StateFlow<List<ChatPlanStep>> = chat.planSteps
   val chatSessions: StateFlow<List<ChatSessionEntry>> = chat.sessions
+  val chatSwarmGroups: StateFlow<List<ChatSwarmGroup>> = chat.swarmGroups
   val chatSessionBranches: StateFlow<List<SessionBranch>> = chat.sessionBranches
   val chatSessionBranchesLoading: StateFlow<Boolean> = chat.sessionBranchesLoading
   val chatSessionBranchSwitching: StateFlow<Boolean> = chat.sessionBranchSwitching
@@ -2790,6 +2890,7 @@ class NodeRuntime private constructor(
       )
     _cronJobs.value = parseScreenshotCronJobs()
     _operatorScopes.value = listOf(OperatorAdminScope)
+    systemAgentChatSupported.value = true
     _nodesDevicesSummary.value = AndroidScreenshotFixture.nodes
     _channelsSummary.value = AndroidScreenshotFixture.channels
     _nodeCapabilityApproval.value = GatewayNodeCapabilityApproval.Approved
@@ -2803,6 +2904,7 @@ class NodeRuntime private constructor(
       operatorConnectionProblem = null
       nodeConnectionProblem = null
     }
+    systemAgentChatController.refresh(startIfNeeded = false)
     chat.refreshSessions(limit = 20)
   }
 
@@ -2879,6 +2981,13 @@ class NodeRuntime private constructor(
 
     if (mode == NodeRuntimeMode.Live) {
       invalidateVoiceWakeWordsForGateway()
+      scope.launch {
+        mobileUiHandler.isConnected.collect { connected ->
+          if (connected == lastMobileUiConnected) return@collect
+          lastMobileUiConnected = connected
+          refreshNodeSurfaceAfterSettingsChange()
+        }
+      }
     }
     reconcileVoiceWakeCaptureSuppression()
     voiceWakeManager.setForeground(initialForeground)
@@ -2926,9 +3035,15 @@ class NodeRuntime private constructor(
 
   /** Updates foreground state and triggers reconnect/presence behavior on app visibility changes. */
   fun setForeground(value: Boolean) {
+    val visibilityChanged = _isForeground.value != value
     _isForeground.value = value
     voiceWakeManager.setForeground(value)
     if (mode == NodeRuntimeMode.ScreenshotFixture) return
+    if (visibilityChanged) {
+      scope.launch {
+        syncSessionObserverVisibility()
+      }
+    }
     if (!value) {
       voiceLifecycleEpoch.incrementAndGet()
     }
@@ -4926,7 +5041,7 @@ class NodeRuntime private constructor(
 
   suspend fun rewindChatAtEntry(entryId: String): SessionRewindResult? = chat.rewindSessionAtEntryResult(chatSessionKey.value, entryId)
 
-  suspend fun forkChatAtEntry(entryId: String): Pair<String, String?>? = chat.forkSessionAtEntry(chatSessionKey.value, entryId)
+  suspend fun forkChatAtEntry(entryId: String): SessionForkResult? = chat.forkSessionAtEntry(chatSessionKey.value, entryId)
 
   suspend fun refreshChatSessionBranches(): Boolean = chat.refreshSessionBranches()
 
@@ -4950,6 +5065,39 @@ class NodeRuntime private constructor(
     stopMessageSpeech()
     chat.switchSession(sessionKey, ownerAgentId)
   }
+
+  internal fun refreshSystemAgentChat() {
+    systemAgentChatController.refresh()
+  }
+
+  internal fun clearSystemAgentChatInput() {
+    systemAgentChatController.clearInputForBackground()
+  }
+
+  internal fun sendSystemAgentChatInput() {
+    systemAgentChatController.sendInput()
+  }
+
+  internal fun setSystemAgentChatInput(value: String) {
+    systemAgentChatController.setInput(value)
+  }
+
+  internal fun answerSystemAgentQuestion(
+    messageId: String,
+    optionLabel: String,
+  ) {
+    systemAgentChatController.answerQuestion(messageId, optionLabel)
+  }
+
+  internal fun skipSystemAgentQuestion(messageId: String) {
+    systemAgentChatController.skipQuestion(messageId)
+  }
+
+  internal fun restartSystemAgentChat() {
+    systemAgentChatController.restart()
+  }
+
+  internal fun consumeSystemAgentChatHandoff() = systemAgentChatController.openHandoff()
 
   fun selectChatAgent(agentId: String) {
     val normalizedAgentId = agentId.trim()
@@ -7264,6 +7412,7 @@ class NodeRuntime private constructor(
     synchronized(gatewayMethodsLock) {
       gatewayApprovalRpcFamily = selectGatewayApprovalRpcFamily(methods)
       _clawHubSkillMethodsAvailable.value = supportsClawHubSkillManagement(methods)
+      systemAgentChatSupported.value = GatewayMethod.OpenclawChat.rawValue in methods
       gatewayMethodsEpoch += 1
     }
   }

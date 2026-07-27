@@ -211,6 +211,26 @@ describe("slack config schema", () => {
     );
   });
 
+  it("accepts account allowlist policy inherited from the channel", () => {
+    expectSlackConfigValid({
+      allowFrom: ["U123"],
+      botToken: "fake",
+      appToken: "fake",
+      accounts: {
+        work: { dmPolicy: "allowlist", botToken: "fake", appToken: "fake" },
+      },
+    });
+  });
+
+  it("accepts progress commentary in streaming config", () => {
+    expectSlackConfigValid({
+      streaming: {
+        mode: "progress",
+        progress: { commentary: true },
+      },
+    });
+  });
+
   it("rejects legacy nested DM access keys", () => {
     expectSlackConfigIssue({ dm: { policy: "open", allowFrom: ["U123"] } }, "dm");
   });

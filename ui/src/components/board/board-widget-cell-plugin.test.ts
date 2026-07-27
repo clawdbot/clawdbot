@@ -78,7 +78,7 @@ describe("plugin board widget cells", () => {
     const context = {
       gateway: {
         snapshot: {
-          connected: false,
+          phase: "stopped",
           hello: {
             controlUiWidgetKinds: [
               { pluginId: "workboard", kind: "workboard:card", label: "Workboard card" },

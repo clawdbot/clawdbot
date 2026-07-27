@@ -285,7 +285,6 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
   expect(checkpoint.payload?.checkpoint.preCompaction.sessionFile).toBeUndefined();
 
   const sessionManagerOpenSpy = vi.spyOn(SessionManager, "open");
-  const sessionManagerForkFromSpy = vi.spyOn(SessionManager, "forkFrom");
   let branched: Awaited<
     ReturnType<
       typeof rpcReq<{
@@ -319,10 +318,8 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
       checkpointId: "checkpoint-1",
     });
     expect(sessionManagerOpenSpy).not.toHaveBeenCalled();
-    expect(sessionManagerForkFromSpy).not.toHaveBeenCalled();
   } finally {
     sessionManagerOpenSpy.mockRestore();
-    sessionManagerForkFromSpy.mockRestore();
   }
   expect(branched.ok).toBe(true);
   expect(branched.payload?.sourceKey).toBe("agent:main:main");
@@ -351,7 +348,6 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
   expect(branchedEntry?.compactionCheckpoints).toBeUndefined();
 
   const restoreSessionManagerOpenSpy = vi.spyOn(SessionManager, "open");
-  const restoreSessionManagerForkFromSpy = vi.spyOn(SessionManager, "forkFrom");
   let restored: Awaited<
     ReturnType<
       typeof rpcReq<{
@@ -385,10 +381,8 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
       checkpointId: "checkpoint-1",
     });
     expect(restoreSessionManagerOpenSpy).not.toHaveBeenCalled();
-    expect(restoreSessionManagerForkFromSpy).not.toHaveBeenCalled();
   } finally {
     restoreSessionManagerOpenSpy.mockRestore();
-    restoreSessionManagerForkFromSpy.mockRestore();
   }
   expect(restored.ok).toBe(true);
   expect(restored.payload?.key).toBe("agent:main:main");
@@ -1126,7 +1120,7 @@ test("sessions.reset waits for terminal compaction before replacing the session"
   expect(reset.ok).toBe(true);
   const resetSessionId = reset.payload?.entry.sessionId;
   expect(resetSessionId).toBeTruthy();
-  expect(resetSessionId).not.toBe("sess-compact-reset");
+  expect(resetSessionId).toBe("sess-compact-reset");
   const resetEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
   expect(resetEntry?.sessionId).toBe(resetSessionId);
   ws.close();

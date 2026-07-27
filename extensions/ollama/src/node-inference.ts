@@ -1,4 +1,5 @@
 import { jsonResult } from "openclaw/plugin-sdk/channel-actions";
+import { formatErrorMessage as errorMessage } from "openclaw/plugin-sdk/error-runtime";
 // Ollama node inference exposes local models to agents through paired node hosts.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
@@ -92,10 +93,6 @@ function readNodeCommandParams(paramsJSON?: string | null): Record<string, unkno
     throw new Error("node inference params must be a JSON object");
   }
   return parsed;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error && error.message ? error.message : String(error);
 }
 
 function durationMs(value: unknown): number | undefined {

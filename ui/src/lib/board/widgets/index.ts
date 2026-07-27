@@ -1,12 +1,12 @@
 import type { TemplateResult } from "lit";
 import type { GatewayControlUiPluginWidgetKind } from "../../../api/gateway.ts";
-import type { GatewaySessionRow } from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
 import type { BoardViewWidget } from "../view-types.ts";
-import { renderSwarmWidget } from "./swarm.ts";
+import type { BoardObserverContext } from "../view-types.ts";
+import { renderObserverWidget } from "./observer.ts";
 
 type BuiltinBoardWidgetRenderer = (context: {
-  sessions: readonly GatewaySessionRow[];
+  observer?: BoardObserverContext;
   sessionKey: string;
 }) => TemplateResult;
 
@@ -43,7 +43,7 @@ const PLUGIN_WIDGET_KIND_CONTRIBUTIONS: Record<string, PluginWidgetKindContribut
 const pluginRendererPromises = new Map<string, Promise<PluginBoardWidgetRenderer>>();
 
 const BUILTIN_WIDGET_RENDERERS: Record<string, BuiltinBoardWidgetRenderer> = {
-  swarm: renderSwarmWidget,
+  observer: renderObserverWidget,
 };
 
 export function getBuiltinWidgetRenderer(

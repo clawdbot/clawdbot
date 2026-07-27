@@ -154,7 +154,7 @@ Further restrict tools for specific providers or models. Order: base profile →
 
 ### `tools.toolsBySender`
 
-Restricts tools for a specific requester identity. This is defense-in-depth on top of channel access control; sender values must come from the channel adapter, not message text.
+Restricts tools for the current turn's originating requester. This is defense-in-depth on top of channel access control; sender values must come from the channel adapter, not message text. It does not authenticate other content in the model prompt; see [Requester-scoped controls and prompt context](/gateway/security#requester-scoped-controls-and-prompt-context).
 
 ```json5
 {
@@ -278,7 +278,7 @@ Configures inbound media understanding (image/audio/video):
         {
           type: "cli",
           command: "whisper",
-          args: ["--model", "base", "{{MediaPath}}"],
+          args: ["--model", "base", "{{AttachmentPath}}"],
           capabilities: ["audio"],
         },
         { provider: "ollama", model: "gemma4:26b", capabilities: ["image"] },
@@ -305,7 +305,7 @@ Configures inbound media understanding (image/audio/video):
     **CLI entry** (`type: "cli"`):
 
     - `command`: executable to run
-    - `args`: templated args (supports `{{MediaPath}}`, `{{Prompt}}`, `{{MaxChars}}`, etc.; `openclaw doctor --fix` migrates deprecated `{input}` placeholders to `{{MediaPath}}`)
+    - `args`: templated args (supports `{{AttachmentPath}}`, `{{AttachmentUrl}}`, `{{AttachmentContentType}}`, `{{AttachmentDir}}`, `{{AttachmentIndex}}`, `{{Prompt}}`, `{{MaxChars}}`, etc.; `openclaw doctor --fix` migrates deprecated `{input}` placeholders to `{{AttachmentPath}}`). The older `{{MediaPath}}`, `{{MediaUrl}}`, `{{MediaType}}`, and `{{MediaDir}}` aliases remain available during their compatibility window but are deprecated.
 
     **Common fields:**
 
@@ -403,25 +403,25 @@ Controls inline attachment support for `sessions_spawn`.
   </Accordion>
 </AccordionGroup>
 
-<a id="toolsexperimental"></a>
+<a id="toolsupdateplan"></a>
 
-### `tools.experimental`
+### `tools.updatePlan`
 
-Experimental built-in tool flags. Default off unless a strict-agentic GPT-5 auto-enable rule applies.
+Kill switch for the structured `update_plan` checklist tool used for non-trivial multi-step work tracking.
 
 ```json5
 {
   tools: {
-    experimental: {
-      planTool: true, // enable experimental update_plan
-    },
+    updatePlan: false, // hide update_plan from every run
   },
 }
 ```
 
-- `planTool`: enables the structured `update_plan` tool for non-trivial multi-step work tracking.
-- Default: `false` unless `agents.defaults.embeddedAgent.executionContract` (or a per-agent override) is set to `"strict-agentic"` for an `openai` provider run against a GPT-5-family model id (this covers OpenAI Codex CLI runs too, since Codex auth/model routing lives under the `openai` provider). Set `true` to force the tool on outside that scope, or `false` to keep it off even for strict-agentic GPT-5 runs.
-- When enabled, the system prompt also adds usage guidance so the model only uses it for substantial work and keeps at most one step `in_progress`.
+- Default: `true` for every provider and model. Set `false` to keep the tool off; there is no model-specific auto-enable rule.
+- The tool description adds usage guidance so the model only uses it for substantial work and keeps at most one step `in_progress`.
+- `tools.deny: ["update_plan"]` also removes the tool, so use whichever surface already carries your tool policy.
+
+Older configs used `tools.experimental.planTool`. Run `openclaw doctor --fix` to move the value to `tools.updatePlan`.
 
 ### `agents.defaults.subagents`
 
@@ -542,11 +542,38 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     - `models.providers.*.models.*.input`: model input modalities. Use `["text"]` for text-only models and `["text", "image"]` for native image/vision models. Image attachments are only injected into agent turns when the selected model is marked image-capable.
     - `models.providers.*.models.*.contextWindow`: native model context window metadata. This overrides provider-level `contextWindow` for that model.
     - `models.providers.*.models.*.contextTokens`: optional runtime context cap. This overrides provider-level `contextTokens`; use it when you want a smaller effective context budget than the model's native `contextWindow`; `openclaw models list` shows both values when they differ.
-    - `models.providers.*.models.*.compat.supportsDeveloperRole`: optional compatibility hint. For `api: "openai-completions"` with a non-empty non-native `baseUrl` (host not `api.openai.com`), OpenClaw forces this to `false` at runtime. Empty/omitted `baseUrl` keeps default OpenAI behavior.
-    - `models.providers.*.models.*.compat.requiresStringContent`: optional compatibility hint for string-only OpenAI-compatible chat endpoints. When `true`, OpenClaw flattens pure text `messages[].content` arrays into plain strings before sending the request.
-    - `models.providers.*.models.*.compat.strictMessageKeys`: optional compatibility hint for strict OpenAI-compatible chat endpoints. When `true`, OpenClaw strips outgoing Chat Completions message objects to `role` and `content` before sending the request.
-    - `models.providers.*.models.*.compat.thinkingFormat`: optional thinking payload hint. Use `"together"` for Together-style `reasoning.enabled`, `"qwen"` for top-level `enable_thinking`, or `"qwen-chat-template"` for `chat_template_kwargs.enable_thinking` on Qwen-family OpenAI-compatible servers that support request-level chat-template kwargs, such as vLLM. Configured vLLM Qwen models expose binary `/think` choices (`off`, `on`) for these formats.
-    - `models.providers.*.models.*.compat.requiresReasoningContentOnAssistantMessages`: optional compatibility hint for DeepSeek-style Chat Completions backends that require prior assistant messages to keep `reasoning_content` on replay. When `true`, OpenClaw preserves that field on outgoing assistant messages. Use this when wiring a custom DeepSeek-compatible proxy that rejects requests after stripped reasoning. Default `false`.
+
+    #### Custom provider capability declarations
+
+    Provider catalogs own `compat` for bundled and catalog-known model routes. Do not copy those flags into config: OpenClaw uses the catalog row when the configured `api` and `baseUrl` still identify that route. `openclaw doctor --fix` removes matching legacy overrides and reports divergent values for review.
+
+    A `compat` block remains supported for a genuinely custom provider, custom model, or catalog model routed to a different endpoint. Set only capabilities verified against that endpoint:
+
+    | Custom-route key | Runtime contract |
+    | --- | --- |
+    | `supportsStore` | Accepts the OpenAI `store` request field. |
+    | `supportsPromptCacheKey` | Accepts OpenAI prompt-cache/session-affinity keys. |
+    | `supportsDeveloperRole` | Accepts `developer` messages instead of requiring `system`. |
+    | `supportsReasoningEffort` | Accepts a reasoning-effort control. |
+    | `supportsTemperature` | Accepts `temperature` for this model and adapter. |
+    | `supportsUsageInStreaming` | Emits usage metadata in streaming responses. |
+    | `supportsTools` | Supports structured tool/function calling. Set `false` to disable tools. |
+    | `supportsStrictMode` | Accepts strict tool schemas. |
+    | `requiresStringContent` | Requires plain-string Chat Completions message content. |
+    | `strictMessageKeys` | Requires outgoing messages to contain only accepted keys. |
+    | `visibleReasoningDetailTypes` | Names reasoning detail block types safe to show in transcripts. |
+    | `supportedReasoningEfforts` | Lists the endpoint's accepted reasoning labels. |
+    | `reasoningEffortMap` | Maps OpenClaw thinking labels to endpoint-specific labels. |
+    | `maxTokensField` | Selects `max_tokens` or `max_completion_tokens`. |
+    | `thinkingFormat` | Selects the endpoint's reasoning payload dialect. |
+    | `requiresToolResultName` | Requires a tool name on tool-result messages. |
+    | `requiresAssistantAfterToolResult` | Requires an assistant message after tool results. |
+    | `requiresThinkingAsText` | Replays reasoning as text rather than structured content. |
+    | `requiresReasoningContentOnAssistantMessages` | Preserves DeepSeek-style `reasoning_content` during replay. |
+    | `toolSchemaProfile` | Selects a provider-defined tool-schema normalization profile. |
+    | `unsupportedToolSchemaKeywords` | Removes named JSON Schema keywords rejected by the endpoint. |
+    | `toolCallArgumentsEncoding` | Selects the endpoint's tool-call argument encoding. |
+    | `requiresOpenAiAnthropicToolPayload` | Converts OpenAI-shaped tool calls to Anthropic-family payloads. |
 
   </Accordion>
   <Accordion title="Amazon Bedrock discovery">

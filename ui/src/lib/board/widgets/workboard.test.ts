@@ -67,8 +67,7 @@ function createContext(
     gateway: {
       snapshot: {
         client: { request } as never,
-        connected: true,
-        reconnecting: false,
+        phase: "connected",
         hello: null,
         assistantAgentId: null,
         sessionKey: "agent:main:test",

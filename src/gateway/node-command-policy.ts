@@ -31,6 +31,10 @@ const SCREEN_DANGEROUS_COMMANDS = ["screen.record"];
 // commands.allow opt-in (arming).
 const COMPUTER_DANGEROUS_COMMANDS = ["computer.act"];
 
+// Android accessibility tree reads and UI actions expose or control sensitive
+// on-screen content. Keep both declarable, but require explicit arming.
+const MOBILE_UI_DANGEROUS_COMMANDS = ["mobile.ui.observe", "mobile.ui.act"];
+
 const ANDROID_DEVICE_COMMANDS = [
   ...MOBILE_NODE_COMMANDS.device,
   "device.permissions",
@@ -101,6 +105,7 @@ export const DEFAULT_DANGEROUS_NODE_COMMANDS = [
   ...CAMERA_DANGEROUS_COMMANDS,
   ...SCREEN_DANGEROUS_COMMANDS,
   ...COMPUTER_DANGEROUS_COMMANDS,
+  ...MOBILE_UI_DANGEROUS_COMMANDS,
   ...CONTACTS_DANGEROUS_COMMANDS,
   ...CALENDAR_DANGEROUS_COMMANDS,
   ...REMINDERS_DANGEROUS_COMMANDS,
@@ -133,6 +138,9 @@ export const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...REMINDERS_COMMANDS,
     ...PHOTOS_COMMANDS,
     ...MOTION_COMMANDS,
+    // Dangerous: pairing may approve the advertised surface, while runtime
+    // policy strips it until gateway.nodes.commands.allow explicitly arms it.
+    ...MOBILE_UI_DANGEROUS_COMMANDS,
   ],
   macos: [
     ...CAMERA_COMMANDS,

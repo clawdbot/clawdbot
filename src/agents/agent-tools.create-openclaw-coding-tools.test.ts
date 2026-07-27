@@ -535,6 +535,23 @@ describe("createOpenClawCodingTools", () => {
     expect(inheritedAllow?.includes("exec")).toBe(false);
   });
 
+  it("keeps restricted spawn inheritance in the caller-owned runtime snapshot", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const inheritedToolAllowlistRef: string[] = [];
+
+    createOpenClawCodingTools({
+      config: { tools: { allow: ["read", "sessions_spawn"] } },
+      inheritedToolAllowlistRef,
+    });
+
+    expect(latestCreateOpenClawToolsOptions().inheritedToolAllowlist).toBe(
+      inheritedToolAllowlistRef,
+    );
+    expectListIncludes(inheritedToolAllowlistRef, ["read", "sessions_spawn"]);
+    expect(inheritedToolAllowlistRef).not.toContain("exec");
+  });
+
   it("preserves runtime-allowed message through restrictive profiles", () => {
     const tools = createOpenClawCodingTools({
       config: { tools: { profile: "minimal" } },
@@ -908,7 +925,7 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
-  it("wraps plugin-only tools with trusted caller routing context", async () => {
+  it("wraps plugin-only tools with scheduled creator authority and live routing context", async () => {
     let observedIdentity: unknown;
     const resolvePluginToolsSpy = vi
       .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
@@ -934,6 +951,12 @@ describe("createOpenClawCodingTools", () => {
         messageChannel: "discord",
         messageTo: "channel:123",
         agentAccountId: "work",
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey: "agent:main:discord:group:ops",
+          ownerAccountId: "creator",
+        },
         messageThreadId: "42",
         includeCoreTools: false,
         runtimeToolAllowlist: ["file_fetch"],
@@ -952,7 +975,7 @@ describe("createOpenClawCodingTools", () => {
         sessionKey: "agent:main:telegram:direct:alice",
         turnSourceChannel: "discord",
         turnSourceTo: "channel:123",
-        turnSourceAccountId: "work",
+        turnSourceAccountId: "creator",
         turnSourceThreadId: "42",
       });
     } finally {
@@ -1003,6 +1026,27 @@ describe("createOpenClawCodingTools", () => {
     expect(latestCreateOpenClawToolsOptions().messageActionTurnCapability).toBe(
       "turn-capability-1",
     );
+  });
+
+  it("separates scheduled Gateway authority from the live delivery account", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: testConfig,
+      agentAccountId: "delivery",
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
+        ownerSessionKey: "agent:main:discord:group:ops",
+        ownerAccountId: "creator",
+      },
+    });
+
+    expect(latestCreateOpenClawToolsOptions()).toMatchObject({
+      agentAccountId: "delivery",
+      gatewayCallerAccountId: "creator",
+    });
   });
 
   it("forwards auth profiles to plugin-only tool construction", () => {
@@ -1194,6 +1238,19 @@ describe("createOpenClawCodingTools", () => {
     expectListIncludes(cronAllowNames, ["read", "cron"]);
     expect(cronAllowNames?.includes("exec")).toBe(false);
     expect(cronAllowNames?.includes("process")).toBe(false);
+  });
+
+  it("passes the final unrestricted tool surface to cron-created agent turns", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({ config: {} });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    const cronAllowNames = cronCreatorToolNames(
+      latestCreateOpenClawToolsOptions().cronCreatorToolAllowlist,
+    );
+    expectListIncludes(cronAllowNames, ["read", "cron", "exec"]);
   });
 
   it("lets embedded attempts refresh a caller-owned cron creator tool surface", () => {
@@ -1780,7 +1837,6 @@ describe("createOpenClawCodingTools", () => {
       modelCompat: {
         toolSchemaProfile: "xai",
         unsupportedToolSchemaKeywords: Array.from(XAI_UNSUPPORTED_SCHEMA_KEYWORDS),
-        nativeWebSearchTool: true,
         toolCallArgumentsEncoding: "html-entities",
       },
     });

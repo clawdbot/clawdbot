@@ -4,6 +4,7 @@ import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { loadCronQuarantineFile, resolveCronJobsStorePath } from "../../../cron/store.js";
 import type { HealthFinding } from "../../../flows/health-checks.js";
+import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
 import { shortenHomePath } from "../../../utils.js";
 import type { DoctorPrompter, DoctorOptions } from "../../doctor-prompter.js";
 import { countStaleDreamingJobs } from "./dreaming-payload-migration.js";
@@ -15,6 +16,7 @@ import {
 } from "./legacy-repair.js";
 import {
   formatLegacyIssuePreview,
+  formatScheduledToolPolicyAdvisory,
   formatUnresolvedCommandPromptAdvisory,
   formatUnresolvedShellPromptAdvisory,
 } from "./repair-plan.js";
@@ -28,10 +30,6 @@ export {
 
 function pluralize(count: number, noun: string) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 function readLegacyCronStorePath(cfg: OpenClawConfig): string | undefined {
@@ -200,6 +198,29 @@ export async function collectLegacyCronStoreHealthFindings(params: {
         requirement: "legacy-cron-store-shape",
       }),
     );
+  }
+  for (const [names, requirement, description] of [
+    [
+      normalized.legacyScheduledToolPolicyJobs,
+      "cron-scheduled-authority-reauthorization",
+      "require explicit scheduled authority reauthorization",
+    ],
+    [
+      normalized.invalidScheduledToolPolicyJobs,
+      "cron-scheduled-authority-valid",
+      "have invalid scheduled authority provenance",
+    ],
+  ] as const) {
+    if (names.length > 0) {
+      findings.push(
+        legacyCronStoreFinding({
+          message: `${pluralize(names.length, "tool-bearing cron job")} ${description}.`,
+          path: storePath,
+          requirement,
+          fixHint: `Review with ${formatCliCommand("openclaw cron list")} and reauthorize with ${formatCliCommand("openclaw cron edit <id> --tools <tool,...>")}.`,
+        }),
+      );
+    }
   }
 
   if (sqliteProjectionBackfillCount > 0) {
@@ -375,6 +396,13 @@ export async function maybeRepairLegacyCronStore(params: {
   );
   if (shellPromptAdvisory) {
     note(shellPromptAdvisory, "Cron");
+  }
+  const scheduledToolPolicyAdvisory = formatScheduledToolPolicyAdvisory({
+    legacyJobs: normalized.legacyScheduledToolPolicyJobs,
+    invalidJobs: normalized.invalidScheduledToolPolicyJobs,
+  });
+  if (scheduledToolPolicyAdvisory) {
+    note(scheduledToolPolicyAdvisory, "Cron");
   }
   const previewLines = formatLegacyIssuePreview(normalized.issues);
   if (legacyStoreDetected) {

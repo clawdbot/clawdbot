@@ -627,6 +627,75 @@ describe("gateway/node-command-policy", () => {
     expect(resolveNodeCommandAllowlist(armedCfg, macNode).has("computer.act")).toBe(true);
   });
 
+  it("keeps mobile UI commands dangerous until Android operators explicitly arm them", () => {
+    const node = {
+      platform: "android",
+      deviceFamily: "Android",
+      commands: ["mobile.ui.observe", "mobile.ui.act"],
+      approvedCommands: ["mobile.ui.observe", "mobile.ui.act"],
+    };
+    const unarmed = resolveNodeCommandAllowlist({} as OpenClawConfig, node);
+    expect(unarmed.has("mobile.ui.observe")).toBe(false);
+    expect(unarmed.has("mobile.ui.act")).toBe(false);
+
+    const armed = resolveNodeCommandAllowlist(
+      {
+        gateway: {
+          nodes: { commands: { allow: ["mobile.ui.observe", "mobile.ui.act"] } },
+        },
+      } as OpenClawConfig,
+      node,
+    );
+    expect(armed.has("mobile.ui.observe")).toBe(true);
+    expect(armed.has("mobile.ui.act")).toBe(true);
+    expect(
+      isNodeCommandAllowed({
+        command: "mobile.ui.act",
+        declaredCommands: node.commands,
+        allowlist: armed,
+      }),
+    ).toEqual({ ok: true });
+
+    const denied = resolveNodeCommandAllowlist(
+      {
+        gateway: {
+          nodes: {
+            commands: {
+              allow: ["mobile.ui.observe", "mobile.ui.act"],
+              deny: ["mobile.ui.act"],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      node,
+    );
+    expect(denied.has("mobile.ui.observe")).toBe(true);
+    expect(denied.has("mobile.ui.act")).toBe(false);
+  });
+
+  it("keeps mobile UI commands declarable only on Android pairing surfaces", () => {
+    const freshSetup = {
+      gateway: {
+        nodes: { denyCommands: ["mobile.ui.observe", "mobile.ui.act"] },
+      },
+    } as OpenClawConfig;
+    const androidPairing = resolveNodePairingCommandAllowlist(freshSetup, {
+      platform: "android",
+      deviceFamily: "Android",
+      commands: ["mobile.ui.observe", "mobile.ui.act"],
+    });
+    expect(androidPairing.has("mobile.ui.observe")).toBe(true);
+    expect(androidPairing.has("mobile.ui.act")).toBe(true);
+
+    const iosPairing = resolveNodePairingCommandAllowlist({} as OpenClawConfig, {
+      platform: "ios",
+      deviceFamily: "iPhone",
+      commands: ["mobile.ui.observe", "mobile.ui.act"],
+    });
+    expect(iosPairing.has("mobile.ui.observe")).toBe(false);
+    expect(iosPairing.has("mobile.ui.act")).toBe(false);
+  });
+
   it("requires explicit gateway opt-in for iOS health summaries", () => {
     const node = {
       platform: "iOS 18.4.0",

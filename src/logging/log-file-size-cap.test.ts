@@ -79,6 +79,33 @@ describe("log file size cap", () => {
     expect(rotationWarnings).toHaveLength(0);
   });
 
+  it("structures rotation failure diagnostics for JSON console output", () => {
+    fs.writeFileSync(logPath, "seed");
+    vi.spyOn(fs, "renameSync").mockImplementation(() => {
+      throw new Error("rotation denied");
+    });
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true as unknown as ReturnType<typeof process.stderr.write>);
+    setLoggerOverride({
+      level: "info",
+      file: logPath,
+      maxFileBytes: 1,
+      consoleLevel: "info",
+      consoleStyle: "json",
+    });
+
+    getLogger().error("rotation diagnostic");
+
+    const warning = stderrSpy.mock.calls
+      .map(([firstArg]) => String(firstArg))
+      .find((line) => line.includes("log file rotation failed"));
+    expect(JSON.parse(warning ?? "")).toMatchObject({
+      level: "warn",
+      message: expect.stringContaining("log file rotation failed"),
+    });
+  });
+
   it("keeps cached default rolling loggers on the current-day file", () => {
     const logDir = path.dirname(logPath);
     const firstDay = path.join(logDir, "openclaw-2026-01-01.log");
@@ -95,5 +122,23 @@ describe("log file size cap", () => {
     expect(fs.readFileSync(firstDay, "utf8")).toContain("first day");
     expect(fs.readFileSync(secondDay, "utf8")).toContain("second day");
     expect(fs.readFileSync(firstDay, "utf8")).not.toContain("second day");
+  });
+
+  it("keeps an explicit profile-shaped log path stable across date changes", () => {
+    const logDir = path.dirname(logPath);
+    const configured = path.join(logDir, "openclaw-dev-2026-01-01.log");
+    const inferredNextDay = path.join(logDir, "openclaw-dev-2026-01-02.log");
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T08:00:00Z"));
+    setLoggerOverride({ level: "info", file: configured });
+    const logger = getLogger();
+
+    logger.info({ message: "first day" });
+    vi.setSystemTime(new Date("2026-01-02T08:00:00Z"));
+    logger.info({ message: "second day" });
+
+    expect(fs.readFileSync(configured, "utf8")).toContain("first day");
+    expect(fs.readFileSync(configured, "utf8")).toContain("second day");
+    expect(fs.existsSync(inferredNextDay)).toBe(false);
   });
 });

@@ -16,7 +16,11 @@ import type {
 
 /** Workspace bootstrap-file injection policy for agent system prompts. */
 export type AgentContextInjection = "always" | "continuation-skip" | "never";
-/** Optional bootstrap files that setup can skip while still creating required agent files. */
+/**
+ * Optional bootstrap files that setup can skip while still creating required
+ * agent files. "HEARTBEAT.md" stays accepted as legacy config input even
+ * though workspace setup no longer writes it.
+ */
 export type OptionalBootstrapFileName = "SOUL.md" | "USER.md" | "HEARTBEAT.md" | "IDENTITY.md";
 /** Embedded runner behavior contract used by strict-agentic provider flows. */
 export type EmbeddedAgentExecutionContract = "default" | "strict-agentic";
@@ -96,95 +100,8 @@ export type AgentStartupContextConfig = {
 export type AgentContextLimitsConfig = {
   /** Default max chars returned by memory_get before truncation metadata/notice (default: 12000). */
   memoryGetMaxChars?: number;
-  /** Default line window for memory_get when lines is omitted (default: 120). */
-  memoryGetDefaultLines?: number;
-  /** Advanced max chars for a single live tool result; unset uses model-context auto cap. */
-  toolResultMaxChars?: number;
   /** Max chars retained from post-compaction AGENTS.md context injection (default: 1800). */
   postCompactionMaxChars?: number;
-};
-
-export type CliBackendConfig = {
-  /** CLI command to execute (absolute path or on PATH). */
-  command: string;
-  /** Base args applied to every invocation. */
-  args?: string[];
-  /** Output parsing mode (default: json). */
-  output?: "json" | "text" | "jsonl";
-  /** Output parsing mode when resuming a CLI session. */
-  resumeOutput?: "json" | "text" | "jsonl";
-  /** JSONL event dialect for CLIs with provider-specific stream formats. */
-  jsonlDialect?: "claude-stream-json" | "gemini-stream-json";
-  /** Long-lived CLI process mode. */
-  liveSession?: "claude-stdio";
-  /** Prompt input mode (default: arg). */
-  input?: "arg" | "stdin";
-  /** Max prompt length for arg mode (if exceeded, stdin is used). */
-  maxPromptArgChars?: number;
-  /** Extra env vars injected for this CLI. */
-  env?: Record<string, string>;
-  /** Env vars to remove before launching this CLI. */
-  clearEnv?: string[];
-  /** Flag used to pass model id (e.g. --model). */
-  modelArg?: string;
-  /** Model aliases mapping (config model id → CLI model id). */
-  modelAliases?: Record<string, string>;
-  /** Args used to pass a session id (use {sessionId} placeholder). */
-  sessionArgs?: string[];
-  /** Alternate args to use when resuming a session (use {sessionId} placeholder). */
-  resumeArgs?: string[];
-  /** Argument appended to one explicitly forked resume invocation. */
-  forkArg?: string;
-  /** When to pass session ids. */
-  sessionMode?: "always" | "existing" | "none";
-  /** JSON fields to read session id from (in order). */
-  sessionIdFields?: string[];
-  /** Flag used to pass system prompt. */
-  systemPromptArg?: string;
-  /** Flag used to pass a system prompt file. */
-  systemPromptFileArg?: string;
-  /** Config override flag used to pass a system prompt file (e.g. -c). */
-  systemPromptFileConfigArg?: string;
-  /** Config override key used to pass a system prompt file. */
-  systemPromptFileConfigKey?: string;
-  /** System prompt behavior (append vs replace). */
-  systemPromptMode?: "append" | "replace";
-  /** When to send system prompt. */
-  systemPromptWhen?: "first" | "always" | "never";
-  /** Flag used to pass image paths. */
-  imageArg?: string;
-  /** How to pass multiple images. */
-  imageMode?: "repeat" | "list";
-  /** Where staged image files should live before handing them to the CLI. */
-  imagePathScope?: "temp" | "workspace";
-  /** Serialize runs for this CLI. */
-  serialize?: boolean;
-  /** Opt in to bounded raw transcript reseed before compaction for safe session resets. */
-  reseedFromRawTranscriptWhenUncompacted?: boolean;
-  /** Runtime reliability tuning for this backend's process lifecycle. */
-  reliability?: {
-    /** No-output watchdog tuning (fresh vs resumed runs). */
-    watchdog?: {
-      /** Fresh/new sessions (non-resume). */
-      fresh?: {
-        /** Fraction of overall timeout used when fixed timeout is not set. */
-        noOutputTimeoutRatio?: number;
-        /** Lower bound for computed watchdog timeout. */
-        minMs?: number;
-        /** Upper bound for computed watchdog timeout. */
-        maxMs?: number;
-      };
-      /** Resume sessions. */
-      resume?: {
-        /** Fraction of overall timeout used when fixed timeout is not set. */
-        noOutputTimeoutRatio?: number;
-        /** Lower bound for computed watchdog timeout. */
-        minMs?: number;
-        /** Upper bound for computed watchdog timeout. */
-        maxMs?: number;
-      };
-    };
-  };
 };
 
 export type AgentDefaultsConfig = {
@@ -237,7 +154,7 @@ export type AgentDefaultsConfig = {
   modelPolicy?: AgentModelPolicyConfig;
   /** Agent working directory (preferred). Used as the default cwd for agent runs. */
   workspace?: string;
-  /** Optional default allowlist of skills for agents that do not set agents.list[].skills. */
+  /** Optional default allowlist of skills for agents that do not set agents.entries.*.skills. */
   skills?: string[];
   /** Silent-reply policy by conversation type. */
   silentReply?: SilentReplyPolicyShape;
@@ -248,9 +165,9 @@ export type AgentDefaultsConfig = {
   skipBootstrap?: boolean;
   /**
    * List of optional bootstrap filenames to skip writing to the workspace root.
-   * Applies to: SOUL.md, USER.md, HEARTBEAT.md, IDENTITY.md.
-   * Required workspace setup such as AGENTS.md and TOOLS.md still runs.
-   * Example: ["SOUL.md", "USER.md", "HEARTBEAT.md", "IDENTITY.md"]
+   * Applies to: SOUL.md, USER.md, IDENTITY.md ("HEARTBEAT.md" is accepted but a no-op).
+   * Required workspace setup such as AGENTS.md still runs.
+   * Example: ["SOUL.md", "USER.md", "IDENTITY.md"]
    */
   skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
   /**
@@ -298,8 +215,6 @@ export type AgentDefaultsConfig = {
    */
   /** Optional context window cap (used for runtime estimates + status %). */
   contextTokens?: number;
-  /** Optional CLI backends for text-only fallback (claude-cli, etc.). */
-  cliBackends?: Record<string, CliBackendConfig>;
   /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
   contextPruning?: AgentContextPruningConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
@@ -371,6 +286,8 @@ export type AgentDefaultsConfig = {
   typingMode?: TypingMode;
   /** Periodic background heartbeat runs. */
   heartbeat?: {
+    /** Agent that owns ambient heartbeat runs when no per-agent heartbeat is configured. */
+    agentId?: string;
     /** Heartbeat interval (duration string, default unit: minutes; default: 30m). */
     every?: string;
     /** Optional active-hours window (local time); heartbeats run only inside this window. */
@@ -394,24 +311,28 @@ export type AgentDefaultsConfig = {
     to?: string;
     /** Optional account id for multi-account channels. */
     accountId?: string;
-    /** Override the heartbeat prompt body (default: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK."). */
+    /** Override the heartbeat prompt body. The default treats scratch as monitor prose and directs recurring work to cron jobs. */
     prompt?: string;
     /** Run timeout in seconds for heartbeat agent turns. Unset uses global timeout or heartbeat cadence capped at 600 seconds. */
     timeoutSeconds?: number;
     /**
      * If true, run heartbeat turns with lightweight bootstrap context.
-     * Lightweight mode keeps only HEARTBEAT.md from workspace bootstrap files.
+     * Lightweight mode skips workspace bootstrap files; monitor scratch is
+     * injected by the heartbeat runner either way.
      */
     lightContext?: boolean;
     /**
      * If true, run heartbeat turns in an isolated session with no prior
-     * conversation history. The heartbeat only sees its bootstrap context
-     * (HEARTBEAT.md when lightContext is also enabled). Dramatically reduces
-     * per-heartbeat token cost by avoiding the full session transcript.
+     * conversation history. Dramatically reduces per-heartbeat token cost by
+     * avoiding the full session transcript.
      */
     isolatedSession?: boolean;
   };
-  /** Max concurrent agent runs across all conversations. Default: 4. */
+  /** Owner for ambient OpenClaw system-agent/Custodian inference. */
+  systemAgent?: {
+    agentId?: string;
+  };
+  /** Max concurrent agent runs across all conversations. Default: min(16, max(8, available CPU parallelism)). */
   maxConcurrent?: number;
   /** Sub-agent defaults (spawned via sessions_spawn). */
   subagents?: {

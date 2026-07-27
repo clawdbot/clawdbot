@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { ADMIN_SCOPE } from "../gateway/method-scopes.js";
 import { startGatewayServer } from "../gateway/server.js";
 import {

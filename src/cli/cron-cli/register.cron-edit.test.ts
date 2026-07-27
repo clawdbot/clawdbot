@@ -323,6 +323,26 @@ describe("cron edit command", () => {
     );
   });
 
+  it("stores an explicit wildcard with --clear-tools", async () => {
+    const program = createCronProgram();
+
+    await program.parseAsync(["edit", "job-1", "--clear-tools"], { from: "user" });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "cron.update",
+      expect.objectContaining({ clearTools: true }),
+      {
+        id: "job-1",
+        patch: {
+          payload: {
+            kind: "agentTurn",
+            toolsAllow: ["*"],
+          },
+        },
+      },
+    );
+  });
+
   it("clears the thinking override with --clear-thinking (CLI parity with cron.update thinking:null)", async () => {
     const program = createCronProgram();
 

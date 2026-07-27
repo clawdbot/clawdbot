@@ -25,6 +25,7 @@ type NodeInvokePolicyContext = Parameters<RegisteredNodeInvokePolicy["handle"]>[
 
 const PHONE_CONTROL_STATE_PREFIX = "openclaw-phone-control-test-";
 const WRITE_COMMANDS = ["calendar.add", "contacts.add", "reminders.add", "sms.send"] as const;
+const MOBILE_UI_COMMANDS = ["mobile.ui.observe", "mobile.ui.act"] as const;
 const FRESH_SETUP_DENY_COMMANDS = [
   "calendar.add",
   "computer.act",
@@ -338,7 +339,7 @@ describe("phone-control plugin", () => {
 
   it("arms computer.act as the computer group", async () => {
     await withRegisteredPhoneControl(async ({ command, policy, writeConfigFile, getConfig }) => {
-      expect(policy.commands).toStrictEqual(["computer.act"]);
+      expect(policy.commands).toStrictEqual(["computer.act", ...MOBILE_UI_COMMANDS]);
       const res = await command.handler({
         ...createCommandContext("arm computer 30s"),
         channel: "webchat",
@@ -357,6 +358,49 @@ describe("phone-control plugin", () => {
       expect(commands.deny).toStrictEqual([...WRITE_COMMANDS]);
       expect(text).toContain("computer.act");
     });
+  });
+
+  it("arms both mobile UI commands as an explicit mobile-ui group", async () => {
+    await withRegisteredPhoneControl(
+      async ({ command, policy, writeConfigFile, getConfig }) => {
+        const res = await command.handler({
+          ...createCommandContext("arm mobile-ui 30s"),
+          channel: "webchat",
+          gatewayClientScopes: ["operator.admin"],
+        });
+        const text = res?.text ?? "";
+        const nodes = (
+          getConfig().gateway as {
+            nodes?: { commands?: { allow?: string[]; deny?: string[] } };
+          }
+        ).nodes;
+        if (!nodes) {
+          throw new Error("phone-control command did not persist gateway node config");
+        }
+
+        expect(writeConfigFile).toHaveBeenCalledTimes(1);
+        expect(nodes.commands?.allow).toEqual([...MOBILE_UI_COMMANDS].toSorted());
+        expect(nodes.commands?.deny).toEqual(["computer.act", ...WRITE_COMMANDS].toSorted());
+        expect(text).toContain("mobile.ui.observe");
+        expect(text).toContain("mobile.ui.act");
+
+        const { ctx, invokeNode } = createPolicyContext(getConfig(), {}, "mobile.ui.observe");
+        await expect(policy.handle(ctx)).resolves.toMatchObject({ ok: true });
+        expect(invokeNode).toHaveBeenCalledTimes(1);
+      },
+      {
+        initialConfig: {
+          gateway: {
+            nodes: {
+              commands: {
+                allow: [],
+                deny: [...FRESH_SETUP_DENY_COMMANDS, ...MOBILE_UI_COMMANDS],
+              },
+            },
+          },
+        },
+      },
+    );
   });
 
   it("persists the preparing lease before widening computer config", async () => {

@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   ensureAuthProfileStore,
   findPersistedAuthProfileCredential,
@@ -24,9 +25,11 @@ import { hasUsableOAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { resolveCodexAppServerHomeDir, withEphemeralCodexAuthStore } from "./auth-start-options.js";
 import type { CodexAppServerClient } from "./client.js";
 import { ensureCodexComputerUseSharedPluginCache } from "./computer-use-cache.js";
+import { ensureCodexComputerUseServiceApp } from "./computer-use-service.js";
 import {
   resolveCodexAppServerUserHomeDir,
   resolveCodexComputerUseConfig,
+  type CodexAppServerHomeScope,
   type CodexAppServerStartOptions,
 } from "./config.js";
 import {
@@ -257,11 +260,17 @@ export async function resolveCodexAppServerPreparedAuthHandoff(params: {
   authProfileId?: string;
   authProfileStore: AuthProfileStore;
   agentDir?: string;
+  homeScope?: CodexAppServerHomeScope;
   config?: AuthProfileOrderConfig;
   subscriptionProfileRequiredError: string;
   subscriptionProfileUnusableError: string;
 }) {
-  if (params.authRequirement === "api-key") {
+  // A user-home app-server owns the operator's native Codex account. Codex persists
+  // api-key logins into CODEX_HOME/auth.json and swaps the live account for external
+  // token logins, so a prepared OpenClaw handoff here would rewrite the account that
+  // Codex CLI and Desktop share. Native homes are verified, never logged into.
+  const usesNativeHome = params.homeScope === "user";
+  if (params.authRequirement === "api-key" && !usesNativeHome) {
     const apiKey = params.resolvedApiKey?.trim();
     if (!apiKey) {
       throw new Error("Prepared Codex API-key route is missing its resolved API key.");
@@ -279,7 +288,7 @@ export async function resolveCodexAppServerPreparedAuthHandoff(params: {
     agentDir: params.agentDir,
     config: params.config,
   });
-  if (params.authRequirement !== "subscription") {
+  if (usesNativeHome || params.authRequirement !== "subscription") {
     return { authProfileId, nativeAuthProfile };
   }
   if (!authProfileId || !nativeAuthProfile) {
@@ -437,10 +446,23 @@ async function withCodexHomeEnvironment(
     ? startOptions.env[HOME_ENV_VAR]
     : undefined;
   await fs.mkdir(codexHome, { recursive: true });
+  const computerUseConfig = resolveCodexComputerUseConfig({ pluginConfig });
   await ensureCodexComputerUseSharedPluginCache({
     codexHome,
-    config: resolveCodexComputerUseConfig({ pluginConfig }),
+    config: computerUseConfig,
   });
+  if (computerUseConfig.enabled && computerUseConfig.autoInstall) {
+    try {
+      await ensureCodexComputerUseServiceApp({
+        codexHome,
+        appServerCommand: startOptions.command,
+      });
+    } catch (error) {
+      throw new AgentHarnessPreflightError("Codex Computer Use client provisioning failed.", {
+        cause: error,
+      });
+    }
+  }
   if (nativeHome) {
     await fs.mkdir(nativeHome, { recursive: true });
   }

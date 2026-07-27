@@ -236,15 +236,7 @@ describe("runAgentTurnWithFallback: runtime selection", () => {
     const followupRun = createFollowupRun();
     followupRun.run.provider = "openai";
     followupRun.run.model = "gpt-5.4";
-    followupRun.run.config = {
-      agents: {
-        defaults: {
-          cliBackends: {
-            codex: { command: "codex" },
-          },
-        },
-      },
-    };
+    followupRun.run.config = {};
 
     const result = await runAgentTurnWithFallback({
       ...createMinimalRunAgentTurnParams({ followupRun }),

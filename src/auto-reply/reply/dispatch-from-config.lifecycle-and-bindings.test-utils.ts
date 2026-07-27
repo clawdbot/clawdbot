@@ -15,7 +15,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import type { MsgContext } from "../templating.js";
+import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { shouldBypassPluginOwnedBindingForCommand } from "./dispatch-from-config.plugin-binding.js";
 import {
@@ -48,6 +48,7 @@ import {
   globalBeforeAll0,
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
+import { finalizeInboundContextForSdk } from "./inbound-context.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 beforeAll(globalBeforeAll0);
@@ -1370,14 +1371,8 @@ describe("dispatchReplyFromConfig", () => {
       expect(params.sessionKey).toBe("agent:main:imessage:direct:user");
       expect(params.workspaceDir).toContain(".openclaw/workspace");
       expect(params.remoteMediaMode).toBe("cache");
-      params.ctx.MediaPath = stagedPath;
-      params.ctx.MediaPaths = [stagedPath];
-      params.ctx.MediaUrl = stagedPath;
-      params.ctx.MediaUrls = [stagedPath];
-      params.sessionCtx.MediaPath = stagedPath;
-      params.sessionCtx.MediaPaths = [stagedPath];
-      params.sessionCtx.MediaUrl = stagedPath;
-      params.sessionCtx.MediaUrls = [stagedPath];
+      params.ctx.media = [{ path: stagedPath, url: stagedPath, contentType: "image/jpeg" }];
+      params.sessionCtx.media = params.ctx.media;
       return { staged: new Map([[rawPath, stagedPath]]) };
     });
     hookMocks.runner.hasHooks.mockImplementation(
@@ -1438,12 +1433,7 @@ describe("dispatchReplyFromConfig", () => {
       Body: "what is this?",
       MessageSid: "msg-claim-imessage-media",
       SessionKey: "agent:main:imessage:direct:user",
-      MediaPath: rawPath,
-      MediaPaths: [rawPath],
-      MediaUrl: rawPath,
-      MediaUrls: [rawPath],
-      MediaType: "image/jpeg",
-      MediaTypes: ["image/jpeg"],
+      media: [{ path: rawPath, url: rawPath, contentType: "image/jpeg" }],
       MediaRemoteHost: "user@gateway-host",
     });
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
@@ -1452,9 +1442,9 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
     expect(order).toEqual(["stage", "claim"]);
-    expect(ctx.MediaStaged).not.toBe(true);
-    expect(ctx.MediaPath).toBe(rawPath);
-    expect(ctx.MediaPaths).toEqual([rawPath]);
+    expect(ctx.media).toEqual([
+      expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
+    ]);
     expect(stageSandboxMediaMocks.stageSandboxMedia).toHaveBeenCalledTimes(1);
     expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-imessage-codex-media");
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
@@ -1484,18 +1474,13 @@ describe("dispatchReplyFromConfig", () => {
       Body: "what is this?",
       MessageSid: "msg-ordinary-imessage-media",
       SessionKey: "agent:main:imessage:direct:user",
-      MediaPath: rawPath,
-      MediaPaths: [rawPath],
-      MediaUrl: rawPath,
-      MediaUrls: [rawPath],
-      MediaType: "image/jpeg",
-      MediaTypes: ["image/jpeg"],
+      media: [{ path: rawPath, url: rawPath, contentType: "image/jpeg" }],
       MediaRemoteHost: "user@gateway-host",
     });
     const replyResolver = vi.fn(async (receivedCtx: MsgContext) => {
-      expect(receivedCtx.MediaStaged).not.toBe(true);
-      expect(receivedCtx.MediaPath).toBe(rawPath);
-      expect(receivedCtx.MediaPaths).toEqual([rawPath]);
+      expect(receivedCtx.media).toEqual([
+        expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
+      ]);
       return { text: "agent reply" } satisfies ReplyPayload;
     });
 
@@ -1504,9 +1489,9 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(stageSandboxMediaMocks.stageSandboxMedia).not.toHaveBeenCalled();
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
-    expect(ctx.MediaStaged).not.toBe(true);
-    expect(ctx.MediaPath).toBe(rawPath);
-    expect(ctx.MediaPaths).toEqual([rawPath]);
+    expect(ctx.media).toEqual([
+      expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
+    ]);
   });
 
   it("does not cache-stage remote iMessage media for message_received-only hooks", async () => {
@@ -1517,41 +1502,50 @@ describe("dispatchReplyFromConfig", () => {
     const rawPath = "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg";
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "imessage",
-      Surface: "imessage",
-      OriginatingChannel: "imessage",
-      OriginatingTo: "imessage:chat:ordinary-hook",
-      To: "imessage:chat:ordinary-hook",
-      AccountId: "default",
-      SenderId: "user-9",
-      CommandAuthorized: true,
-      WasMentioned: false,
-      CommandBody: "what is this?",
-      RawBody: "what is this?",
-      Body: "what is this?",
-      MessageSid: "msg-ordinary-imessage-hook-media",
-      SessionKey: "agent:main:imessage:direct:user",
-      MediaPath: rawPath,
-      MediaPaths: [rawPath],
-      MediaUrl: rawPath,
-      MediaUrls: [rawPath],
-      MediaType: "image/jpeg",
-      MediaTypes: ["image/jpeg"],
-      MediaRemoteHost: "user@gateway-host",
-    });
+    const ctx = finalizeInboundContextForSdk(
+      buildTestCtx({
+        Provider: "imessage",
+        Surface: "imessage",
+        OriginatingChannel: "imessage",
+        OriginatingTo: "imessage:chat:ordinary-hook",
+        To: "imessage:chat:ordinary-hook",
+        AccountId: "default",
+        SenderId: "user-9",
+        CommandAuthorized: true,
+        WasMentioned: false,
+        CommandBody: "what is this?",
+        RawBody: "what is this?",
+        Body: "what is this?",
+        MessageSid: "msg-ordinary-imessage-hook-media",
+        SessionKey: "agent:main:imessage:direct:user",
+        media: [{ path: rawPath, url: rawPath, contentType: "image/jpeg" }],
+        MediaRemoteHost: "user@gateway-host",
+      }),
+    );
     const replyResolver = vi.fn(async (receivedCtx: MsgContext) => {
-      expect(receivedCtx.MediaStaged).not.toBe(true);
-      expect(receivedCtx.MediaPath).toBe(rawPath);
-      expect(receivedCtx.MediaPaths).toEqual([rawPath]);
+      expect(receivedCtx.media).toEqual([
+        expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
+      ]);
       return { text: "agent reply" } satisfies ReplyPayload;
     });
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     const [event] = firstMockCall(hookMocks.runner.runMessageReceived, "message received hook") as
-      | [{ metadata?: Record<string, unknown> }]
+      | [
+          {
+            media?: unknown[];
+            originalMedia?: Array<Record<string, unknown>>;
+            mediaStagingPending?: boolean;
+            metadata?: Record<string, unknown>;
+          },
+        ]
       | [];
+    expect(event?.media).toBeUndefined();
+    expect(event?.originalMedia).toEqual([
+      expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
+    ]);
+    expect(event?.mediaStagingPending).toBe(true);
     expect(event?.metadata?.mediaPath).toBeUndefined();
     expect(event?.metadata?.mediaPaths).toBeUndefined();
     expect(event?.metadata?.mediaUrl).toBeUndefined();
@@ -1573,6 +1567,9 @@ describe("dispatchReplyFromConfig", () => {
           unknown,
           unknown,
           {
+            media?: unknown[];
+            originalMedia?: Array<Record<string, unknown>>;
+            mediaStagingPending?: boolean;
             metadata?: Record<string, unknown>;
           },
         ]
@@ -1581,11 +1578,16 @@ describe("dispatchReplyFromConfig", () => {
     expect(internalHookCall?.[3]?.metadata?.mediaRemoteHost).toBe("user@gateway-host");
     expect(internalHookCall?.[3]?.metadata?.originalMediaPath).toBe(rawPath);
     expect(internalHookCall?.[3]?.metadata?.originalMediaPaths).toEqual([rawPath]);
+    expect(internalHookCall?.[3]?.media).toBeUndefined();
+    expect(internalHookCall?.[3]?.originalMedia).toEqual([
+      expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
+    ]);
+    expect(internalHookCall?.[3]?.mediaStagingPending).toBe(true);
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(stageSandboxMediaMocks.stageSandboxMedia).not.toHaveBeenCalled();
-    expect(ctx.MediaStaged).not.toBe(true);
-    expect(ctx.MediaPath).toBe(rawPath);
-    expect(ctx.MediaPaths).toEqual([rawPath]);
+    expect(ctx.media).toEqual([
+      expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
+    ]);
   });
 
   it("routes Discord thread plugin-owned bindings by raw thread id", async () => {

@@ -208,6 +208,7 @@ export async function processMessage(params: {
   buildCombinedEchoKey: (p: { sessionKey: string; combinedBody: string }) => string;
   maxMediaTextChunkLimit?: number;
   groupHistory?: GroupHistoryEntry[];
+  groupHistoryLimit?: number;
   suppressGroupHistoryClear?: boolean;
   ackAlreadySent?: boolean;
   ackReaction?: AckReactionHandle | null;
@@ -484,6 +485,7 @@ export async function processMessage(params: {
       authorized: commandAuthorized,
     },
     groupHistory: visibleGroupHistory,
+    groupHistoryLimit: params.groupHistoryLimit,
     groupMemberRoster: params.groupMemberNames.get(params.groupHistoryKey),
     groupSystemPrompt: conversationSystemPrompt,
     msg: params.msg,

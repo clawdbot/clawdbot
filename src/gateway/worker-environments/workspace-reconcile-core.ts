@@ -380,6 +380,23 @@ export function changedPaths(
   );
 }
 
+export function changedEntryPaths(
+  base: WorkerWorkspaceManifest,
+  current: WorkerWorkspaceManifest,
+): Set<string> {
+  const baseByPath = new Map(
+    reconciliationEntries(base.entries).map((entry) => [entry.path, entry]),
+  );
+  const currentByPath = new Map(
+    reconciliationEntries(current.entries).map((entry) => [entry.path, entry]),
+  );
+  return new Set(
+    [...new Set([...baseByPath.keys(), ...currentByPath.keys()])].filter(
+      (entryPath) => !sameEntry(baseByPath.get(entryPath), currentByPath.get(entryPath)),
+    ),
+  );
+}
+
 export async function applyWorkspaceDirectoryChanges(params: {
   root: string;
   base: WorkerWorkspaceManifest;

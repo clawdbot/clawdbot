@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 
 type RestartSentinel = NonNullable<
   Awaited<ReturnType<typeof import("../infra/restart-sentinel.js").readRestartSentinel>>
@@ -291,7 +292,8 @@ vi.mock("./session-utils.js", () => ({
   loadSessionEntry: mocks.loadSessionEntry,
 }));
 
-vi.mock("../utils/delivery-context.shared.js", () => ({
+vi.mock("../utils/delivery-context.shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils/delivery-context.shared.js")>()),
   deliveryContextFromSession: mocks.deliveryContextFromSession,
   mergeDeliveryContext: mocks.mergeDeliveryContext,
   normalizeSessionDeliveryFields: mocks.normalizeSessionDeliveryFields,
@@ -2614,7 +2616,10 @@ describe("scheduleRestartSentinelWake", () => {
       entry: {
         sessionId: "agent:main:group",
         updatedAt: 0,
-        origin: { provider: "telegram", chatType: "group" },
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "telegram" },
+          origin: { provider: "telegram", chatType: "group" },
+        }),
       },
       store: {},
       storePath: "/tmp/sessions.json",
@@ -2659,7 +2664,10 @@ describe("scheduleRestartSentinelWake", () => {
       entry: {
         sessionId: "agent:main:telegram:group:-1003826723328:topic:13757",
         updatedAt: 0,
-        origin: { provider: "telegram", chatType: "group" },
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "telegram" },
+          origin: { provider: "telegram", chatType: "group" },
+        }),
       },
       store: {},
       storePath: "/tmp/sessions.json",
@@ -3294,7 +3302,10 @@ describe("scheduleRestartSentinelWake", () => {
         entry: {
           sessionId: "agent:main:matrix:channel:!lowercased:example.org:thread:$thread-event",
           updatedAt: 0,
-          origin: { provider: "matrix", accountId: "acct-thread", threadId: "$thread-event" },
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "matrix", accountId: "acct-thread", threadId: "$thread-event" },
+            origin: { provider: "matrix", accountId: "acct-thread", threadId: "$thread-event" },
+          }),
         },
         store: {},
         storePath: "/tmp/sessions.json",
@@ -3307,8 +3318,9 @@ describe("scheduleRestartSentinelWake", () => {
         entry: {
           sessionId: "agent:main:matrix:channel:!lowercased:example.org",
           updatedAt: 0,
-          lastChannel: "matrix",
-          lastTo: "room:!MixedCase:example.org",
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "matrix", to: "room:!MixedCase:example.org" },
+          }),
         },
         store: {},
         storePath: "/tmp/sessions.json",

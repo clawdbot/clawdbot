@@ -449,7 +449,7 @@ describe("Codex app-server dynamic tool build", () => {
     expect(webSearchAllowed).toBe(false);
   });
 
-  it("forwards trusted completion lineage to tool and web-search policy construction", async () => {
+  it("forwards trusted completion and scheduled authority to policy construction", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
@@ -459,7 +459,14 @@ describe("Codex app-server dynamic tool build", () => {
       sourceSessionKey: "agent:main:subagent:codex-child",
       sourceTool: "subagent_announce",
     };
+    params.config = {};
     params.trustedInternalHandoff = true;
+    params.scheduledToolPolicy = {
+      version: 1,
+      mode: "account",
+      ownerSessionKey: "agent:main:discord:group:ops",
+      ownerAccountId: "default",
+    };
     let receivedOptions: unknown;
     setOpenClawCodingToolsFactoryForTests((options) => {
       receivedOptions = options;
@@ -471,11 +478,13 @@ describe("Codex app-server dynamic tool build", () => {
     expect(receivedOptions).toMatchObject({
       inputProvenance: params.inputProvenance,
       trustedInternalHandoff: true,
+      scheduledToolPolicy: params.scheduledToolPolicy,
     });
     expect(hoisted.resolveWebSearchToolPolicy).toHaveBeenCalledWith(
       expect.objectContaining({
         inputProvenance: params.inputProvenance,
         trustedInternalHandoff: true,
+        scheduledToolPolicy: params.scheduledToolPolicy,
       }),
     );
   });
@@ -1523,6 +1532,15 @@ describe("Codex app-server dynamic tool build", () => {
     expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
 
     params.toolsAllow = ["message"];
+    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+  });
+
+  it("disables Codex native tool surfaces when all tools are disabled", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = true;
+    params.toolsAllow = undefined;
+
     expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
   });
 

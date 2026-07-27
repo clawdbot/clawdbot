@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { DEFAULT_DANGEROUS_NODE_COMMANDS } from "../gateway/node-command-policy.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { withSecureTestNodeExecPath } from "../secrets/test-node-command.test-support.js";
 import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
 
 const mocks = vi.hoisted(() => ({
@@ -24,6 +25,7 @@ vi.mock("../infra/tailscale.js", () => ({
 }));
 
 import { configureGatewayForSetup } from "./setup.gateway-config.js";
+import { resolveQuickstartGatewayDefaults } from "./setup.shared.js";
 
 describe("configureGatewayForSetup", () => {
   function createPrompter(params: { selectQueue: string[]; textQueue: Array<string | undefined> }) {
@@ -312,30 +314,106 @@ describe("configureGatewayForSetup", () => {
       textQueue: [],
     });
 
-    const result = await configureGatewayForSetup({
-      flow: "quickstart",
-      baseConfig: {},
-      nextConfig: {
-        secrets: {
-          providers: {
-            gatewaytokens: {
-              source: "exec",
-              command: process.execPath,
-              args: [
-                "-e",
-                "let input='';process.stdin.setEncoding('utf8');process.stdin.on('data',d=>input+=d);process.stdin.on('end',()=>{const req=JSON.parse(input||'{}');const values={};for(const id of req.ids||[]){values[id]='token-from-exec';}process.stdout.write(JSON.stringify({protocolVersion:1,values}));});",
-              ],
+    const result = await withSecureTestNodeExecPath(async () =>
+      configureGatewayForSetup({
+        flow: "quickstart",
+        baseConfig: {},
+        nextConfig: {
+          secrets: {
+            providers: {
+              gatewaytokens: {
+                source: "exec",
+                command: process.execPath,
+                args: [
+                  "-e",
+                  "let input='';process.stdin.setEncoding('utf8');process.stdin.on('data',d=>input+=d);process.stdin.on('end',()=>{const req=JSON.parse(input||'{}');const values={};for(const id of req.ids||[]){values[id]='token-from-exec';}process.stdout.write(JSON.stringify({protocolVersion:1,values}));});",
+                ],
+              },
             },
           },
         },
-      },
-      localPort: 18789,
-      quickstartGateway,
-      prompter,
-      runtime,
-    });
+        localPort: 18789,
+        quickstartGateway,
+        prompter,
+        runtime,
+      }),
+    );
 
     expect(result.nextConfig.gateway?.auth?.token).toEqual(quickstartGateway.token);
     expect(result.settings.gatewayToken).toBe("token-from-exec");
+  });
+
+  it("persists an explicit classic quickstart env token ref", async () => {
+    const previous = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "token-from-env-ref";
+    try {
+      const quickstartGateway = resolveQuickstartGatewayDefaults(
+        {},
+        { gatewayTokenRefEnv: "OPENCLAW_GATEWAY_TOKEN" },
+      );
+      const result = await configureGatewayForSetup({
+        flow: "quickstart",
+        baseConfig: {},
+        nextConfig: {},
+        localPort: 18789,
+        quickstartGateway,
+        prompter: createPrompter({ selectQueue: [], textQueue: [] }),
+        runtime: createRuntime(),
+      });
+
+      expect(result.nextConfig.gateway?.auth).toEqual({
+        mode: "token",
+        token: {
+          source: "env",
+          provider: "default",
+          id: "OPENCLAW_GATEWAY_TOKEN",
+        },
+      });
+      expect(result.settings.gatewayToken).toBe("token-from-env-ref");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = previous;
+      }
+    }
+  });
+
+  it("persists classic quickstart overrides through gateway safety normalization", async () => {
+    const password = ["classic", "gateway", "placeholder"].join("-");
+    mocks.getTailnetHostname.mockResolvedValue("test-tailnet.ts.net");
+    const note = vi.fn(async () => {});
+    const prompter = buildWizardPrompter({ note });
+    const quickstartGateway = resolveQuickstartGatewayDefaults(
+      {},
+      {
+        gatewayPort: 19001,
+        gatewayBind: "lan",
+        gatewayAuth: "token",
+        gatewayToken: "unused-token",
+        gatewayPassword: password,
+        tailscale: "funnel",
+        tailscaleResetOnExit: true,
+      },
+    );
+
+    const result = await configureGatewayForSetup({
+      flow: "quickstart",
+      baseConfig: {},
+      nextConfig: {},
+      localPort: 18789,
+      quickstartGateway,
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    expect(result.nextConfig.gateway).toMatchObject({
+      port: 19001,
+      bind: "loopback",
+      auth: { mode: "password", password },
+      tailscale: { mode: "funnel", resetOnExit: true },
+    });
+    expect(result.nextConfig.gateway?.auth?.token).toBeUndefined();
+    expect(JSON.stringify(note.mock.calls)).not.toContain(password);
   });
 });

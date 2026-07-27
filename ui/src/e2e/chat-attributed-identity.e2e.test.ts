@@ -5,6 +5,7 @@ import { chromium, expect, type Browser, type Page } from "playwright/test";
 import { afterAll, beforeAll, describe, it } from "vitest";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -19,8 +20,12 @@ const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? descri
 let browser: Browser;
 let server: ControlUiE2eServer;
 
+function resolveArtifactDir(): string | undefined {
+  return process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim() || undefined;
+}
+
 async function captureProof(page: Page, name: string) {
-  const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+  const artifactDir = resolveArtifactDir();
   if (!artifactDir) {
     return;
   }
@@ -43,7 +48,16 @@ describeControlUiE2e("Control UI attributed chat identity", () => {
   });
 
   it("uses one avatar placement and keeps shared-thread authors readable", async () => {
-    const context = await browser.newContext({ viewport: { height: 760, width: 1180 } });
+    const artifactDir = resolveArtifactDir();
+    if (artifactDir) {
+      await fs.mkdir(artifactDir, { recursive: true });
+    }
+    const context = await browser.newContext({
+      viewport: { height: 760, width: 1180 },
+      ...(artifactDir
+        ? { recordVideo: { dir: artifactDir, size: { height: 760, width: 1180 } } }
+        : {}),
+    });
     const page = await context.newPage();
     const now = Date.now();
     await installMockGateway(page, {
@@ -61,7 +75,12 @@ describeControlUiE2e("Control UI attributed chat identity", () => {
           role: "user",
           content: "Can we keep one clear avatar and show who wrote each message?",
           timestamp: now - 120_000,
-          __openclaw: { senderId: "profile-riley", senderName: "Riley" },
+          __openclaw: {
+            id: "riley-message",
+            senderId: "profile-riley",
+            senderName: "Riley",
+            seq: 2,
+          },
         },
         {
           role: "assistant",
@@ -72,17 +91,24 @@ describeControlUiE2e("Control UI attributed chat identity", () => {
           role: "user",
           content: "This is much easier to scan in a team conversation.",
           timestamp: now - 30_000,
-          __openclaw: { senderId: "profile-colin", senderName: "Colin" },
+          __openclaw: {
+            id: "colin-message",
+            senderId: "profile-colin",
+            senderName: "Colin",
+            seq: 4,
+          },
         },
       ],
     });
 
-    await page.goto(`${server.baseUrl}chat?session=agent%3Amain%3Amain`);
+    await page.goto(controlUiSessionUrl(server.baseUrl, "agent:main:main"));
     await page.getByText("This is much easier to scan in a team conversation.").waitFor();
 
     const userGroups = page.locator(".chat-group.user");
     await expect(userGroups).toHaveCount(2);
     await expect(page.locator(".chat-avatar.user")).toHaveCount(2);
+    await expect(page.locator(".chat-avatar.user")).toHaveText(["R", "C"]);
+    await expect(page.locator(".sidebar-identity-card openclaw-viewer-avatar")).toContainText("R");
 
     await expect(
       page.locator(".chat-group-footer--persistent-identity .chat-sender-name"),
@@ -96,6 +122,23 @@ describeControlUiE2e("Control UI attributed chat identity", () => {
     await expect(hoverDetails).toHaveCSS("opacity", "1");
     await expect(page.locator(".chat-author-avatar")).toHaveCount(0);
     await captureProof(page, "after-hover.png");
+
+    const footerOrder = await userGroups
+      .last()
+      .locator(".chat-group-footer")
+      .locator("button, .chat-sender-name, .chat-group-timestamp")
+      .evaluateAll((elements) =>
+        elements.map((element) => {
+          if (element.classList.contains("chat-sender-name")) {
+            return "name";
+          }
+          if (element.classList.contains("chat-group-timestamp")) {
+            return "time";
+          }
+          return element.getAttribute("aria-label");
+        }),
+      );
+    expect(footerOrder).toEqual(["Reply to message", "Hide message", "Rewind", "name", "time"]);
 
     await context.close();
   });

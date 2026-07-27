@@ -138,7 +138,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
           });
           blocked.push(latest);
         }
-        if (latest.status === "ready") {
+        if (latest.status === "ready" && !latest.metadata?.archivedAt) {
           latest = await this.recordDispatch(latest, now);
         }
         if (await this.shouldAutoOrchestrate(latest)) {

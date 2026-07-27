@@ -5,9 +5,9 @@ scenario:
   surface: cron
   coverage:
     primary:
-      - scheduling.cron
+      - automation.isolated-cron-execution
     secondary:
-      - scheduling.cron-rpcs
+      - automation.cron-rpcs
   objective: Verify quiet condition-watcher ticks persist state without run rows, then one natural fired tick runs the payload and disarms a once trigger.
   successCriteria:
     - At least two quiet trigger evaluations persist replacement state without creating run history.

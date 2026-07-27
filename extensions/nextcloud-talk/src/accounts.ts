@@ -1,12 +1,11 @@
 // Nextcloud Talk plugin module implements accounts behavior.
 import {
-  createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
   hasConfiguredAccountValue,
   normalizeAccountId,
   resolveAccountWithDefaultFallback,
-  resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-core";
+import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -46,8 +45,10 @@ export type ResolvedNextcloudTalkAccount = {
 const {
   listAccountIds: listNextcloudTalkAccountIdsInternal,
   resolveDefaultAccountId: resolveDefaultNextcloudTalkAccountId,
-} = createAccountListHelpers("nextcloud-talk", {
+  resolveAccountConfig: mergeNextcloudTalkAccountConfig,
+} = createAccountListHelpers<NextcloudTalkAccountConfig>("nextcloud-talk", {
   normalizeAccountId,
+  omitKeys: ["defaultAccount"],
   hasImplicitDefaultAccount: (cfg) => {
     const channel = cfg.channels?.["nextcloud-talk"];
     return Boolean(
@@ -64,21 +65,6 @@ export function listNextcloudTalkAccountIds(cfg: CoreConfig): string[] {
   const ids = listNextcloudTalkAccountIdsInternal(cfg);
   debugAccounts("listNextcloudTalkAccountIds", ids);
   return ids;
-}
-
-function mergeNextcloudTalkAccountConfig(
-  cfg: CoreConfig,
-  accountId: string,
-): NextcloudTalkAccountConfig {
-  return resolveMergedAccountConfig<NextcloudTalkAccountConfig>({
-    channelConfig: cfg.channels?.["nextcloud-talk"] as NextcloudTalkAccountConfig | undefined,
-    accounts: cfg.channels?.["nextcloud-talk"]?.accounts as
-      | Record<string, Partial<NextcloudTalkAccountConfig>>
-      | undefined,
-    accountId,
-    omitKeys: ["defaultAccount"],
-    normalizeAccountId,
-  });
 }
 
 function resolveNextcloudTalkSecret(

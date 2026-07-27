@@ -162,17 +162,117 @@ describe("mock gateway stateful config", () => {
 });
 
 describe("mock gateway stateful sessions", () => {
+  it("makes a newly created session visible to the next sessions.list", async () => {
+    const sessionKey = "agent:main:created-session";
+    const script = createControlUiMockGatewayInitScript({
+      methodResponses: {
+        "sessions.create": { key: sessionKey, runStarted: true },
+      },
+    });
+    window.sessionStorage.clear();
+    // oxlint-disable-next-line typescript/no-implied-eval -- Executes the generated init script standalone, proving it captures no module closures.
+    new Function(script)();
+
+    const socket = new WebSocket("ws://mock-gateway");
+    const frames: ResponseFrame[] = [];
+    socket.addEventListener("message", (event) => {
+      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    });
+    await flushMockTimers();
+
+    socket.send(
+      JSON.stringify({
+        type: "req",
+        id: "create-1",
+        method: "sessions.create",
+        params: { agentId: "main" },
+      }),
+    );
+    await flushMockTimers();
+    expect(frames.find((frame) => frame.id === "create-1")?.payload).toEqual({
+      key: sessionKey,
+      runStarted: true,
+    });
+
+    socket.send(
+      JSON.stringify({
+        type: "req",
+        id: "list-1",
+        method: "sessions.list",
+        params: { agentId: "main", search: "created-session" },
+      }),
+    );
+    await flushMockTimers();
+    expect(frames.find((frame) => frame.id === "list-1")?.payload).toMatchObject({
+      count: 2,
+      sessions: [
+        expect.objectContaining({ key: "main" }),
+        expect.objectContaining({
+          key: sessionKey,
+          hasActiveRun: true,
+          status: "running",
+        }),
+      ],
+    });
+    socket.close();
+  });
+
+  it("does not publish a rejected session creation to sessions.list", async () => {
+    const sessionKey = "agent:main:rejected-session";
+    const script = createControlUiMockGatewayInitScript({
+      methodResponses: {
+        "sessions.create": {
+          __mockError: { code: "INVALID_REQUEST", message: "session creation rejected" },
+        },
+      },
+    });
+    window.sessionStorage.clear();
+    // oxlint-disable-next-line typescript/no-implied-eval -- Executes the generated init script standalone, proving it captures no module closures.
+    new Function(script)();
+
+    const socket = new WebSocket("ws://mock-gateway");
+    const frames: ResponseFrame[] = [];
+    socket.addEventListener("message", (event) => {
+      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    });
+    await flushMockTimers();
+
+    socket.send(
+      JSON.stringify({
+        type: "req",
+        id: "rejected-create",
+        method: "sessions.create",
+        params: { agentId: "main", key: sessionKey },
+      }),
+    );
+    await flushMockTimers();
+    socket.send(
+      JSON.stringify({
+        type: "req",
+        id: "list-after-rejection",
+        method: "sessions.list",
+        params: { agentId: "main", search: "rejected-session" },
+      }),
+    );
+    await flushMockTimers();
+
+    const listed = frames.find((frame) => frame.id === "list-after-rejection")?.payload;
+    expect(listed).toMatchObject({ count: 1, sessions: [{ key: "main" }] });
+    expect(JSON.stringify(listed)).not.toContain(sessionKey);
+    socket.close();
+  });
+
   it("cycles subscription-scoped session events and stops after unsubscribe", async () => {
     const sessionKey = "agent:main:sidebar-narration-demo";
     const script = createControlUiMockGatewayInitScript({
       methodResponses: {
-        "sessions.observer.ask": {
+        "sessions.companion.ask": {
           cases: [
             {
               match: { sessionKey },
               response: {
                 answer: "It is rerunning the focused test to verify the latest fix.",
-                digestRevision: 1,
+                ts: 1_000,
               },
             },
           ],
@@ -236,15 +336,15 @@ describe("mock gateway stateful sessions", () => {
     socket.send(
       JSON.stringify({
         type: "req",
-        id: "observer-ask-1",
-        method: "sessions.observer.ask",
+        id: "companion-ask-1",
+        method: "sessions.companion.ask",
         params: { sessionKey, question: "Why is it rerunning that test?" },
       }),
     );
     await flushMockTimers();
-    expect(frames.find((frame) => frame.id === "observer-ask-1")?.payload).toEqual({
+    expect(frames.find((frame) => frame.id === "companion-ask-1")?.payload).toEqual({
       answer: "It is rerunning the focused test to verify the latest fix.",
-      digestRevision: 1,
+      ts: 1_000,
     });
     expect(frames.find((frame) => frame.event === "agent")?.payload).toMatchObject({
       sessionKey,

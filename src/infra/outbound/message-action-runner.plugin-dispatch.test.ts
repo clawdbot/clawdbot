@@ -2937,6 +2937,51 @@ describe("runMessageAction plugin dispatch", () => {
       expectRecordFields(gatewayActionParams, { presentation }, "gateway action params");
     });
 
+    it("omits a blank shared-schema location from gateway-routed sends", async () => {
+      const cfg = {
+        channels: {
+          cardchat: {
+            enabled: true,
+          },
+        },
+        messages: { responsePrefix: "[Nexus]" },
+      } as OpenClawConfig;
+      mocks.callGatewayLeastPrivilege.mockResolvedValueOnce({
+        ok: true,
+        messageId: "card-location",
+      });
+
+      const result = await runMessageAction({
+        cfg,
+        action: "send",
+        params: {
+          channel: "cardchat",
+          target: "channel:test-card",
+          message: "hello",
+          location: "",
+        },
+        gateway: {
+          clientName: "cli",
+          mode: "cli",
+        },
+        dryRun: false,
+      });
+
+      expect(result.kind).toBe("send");
+      expect(result.handledBy).toBe("plugin");
+      expect(handleAction).not.toHaveBeenCalled();
+      const gatewayCall = readMockCallArg(
+        mocks.callGatewayLeastPrivilege,
+        "gateway least privilege call",
+      );
+      const gatewayActionParams = readRecordField(
+        readRecordField(gatewayCall, "params", "gateway call params"),
+        "params",
+        "gateway action params",
+      );
+      expect(gatewayActionParams).not.toHaveProperty("location");
+    });
+
     it("keeps gateway-routed chart presentations on the gateway", async () => {
       const presentation = {
         blocks: [

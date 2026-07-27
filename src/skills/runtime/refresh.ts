@@ -23,7 +23,6 @@ export { registerSkillsChangeListener } from "./refresh-state.js";
 type SkillsPathWatchState = {
   watcher: FSWatcher;
   depth: number;
-  debounceMs: number;
   timer?: ReturnType<typeof setTimeout>;
   pendingPath?: string;
   readonly subscribers: Set<string>;
@@ -52,6 +51,7 @@ const MAX_SYMLINK_WATCH_TARGETS_PER_ROOT = 100;
 const MAX_SYMLINK_WATCH_DIRECTORY_SCANS_PER_ROOT = 200;
 const MAX_SYMLINK_WATCH_RAW_ENTRIES_PER_ROOT = 2_000;
 const RAW_SKILL_FILE_POLL_INTERVAL_MS = 100;
+const SKILLS_WATCH_DEBOUNCE_MS = 250;
 // One watcher per unique watched directory. Agent workspaces that include the
 // same shared skill root (the global skills dir, the home skills dir, or a
 // configured extra/plugin dir) subscribe to the same watcher instead of each
@@ -467,11 +467,6 @@ async function waitForStableSkillFile(filePath: string, stabilityMs: number): Pr
   }
 }
 
-function resolveWatchDebounceMs(config?: OpenClawConfig): number {
-  const raw = config?.skills?.load?.watchDebounceMs;
-  return typeof raw === "number" && Number.isFinite(raw) ? Math.max(0, raw) : 250;
-}
-
 function resolveSkillsWatcherUsePolling(): boolean {
   const envPolling = process.env.CHOKIDAR_USEPOLLING;
   if (envPolling === undefined) {
@@ -502,7 +497,7 @@ function sameWatchTargets(a: WatchTarget[], b: WatchTarget[]): boolean {
   return true;
 }
 
-function createSkillsPathWatcher(target: WatchTarget, debounceMs: number): SkillsPathWatchState {
+function createSkillsPathWatcher(target: WatchTarget): SkillsPathWatchState {
   const usePolling = resolveSkillsWatcherUsePolling();
   const watcher = chokidar.watch(target.path, {
     ignoreInitial: true,
@@ -512,7 +507,7 @@ function createSkillsPathWatcher(target: WatchTarget, debounceMs: number): Skill
     // so watcher invalidation must observe that whole decision surface.
     depth: target.depth,
     awaitWriteFinish: {
-      stabilityThreshold: debounceMs,
+      stabilityThreshold: SKILLS_WATCH_DEBOUNCE_MS,
       pollInterval: 100,
     },
     ignored: (watchPath, stats) => shouldIgnoreSkillsWatchPath(watchPath, stats, { usePolling }),
@@ -521,7 +516,6 @@ function createSkillsPathWatcher(target: WatchTarget, debounceMs: number): Skill
   const state: SkillsPathWatchState = {
     watcher,
     depth: target.depth,
-    debounceMs,
     subscribers: new Set<string>(),
   };
 
@@ -544,10 +538,10 @@ function createSkillsPathWatcher(target: WatchTarget, debounceMs: number): Skill
           changedPath: pendingPath,
         });
       }
-    }, debounceMs);
+    }, SKILLS_WATCH_DEBOUNCE_MS);
   };
   const scheduleRawSkillFile = (changedPath: string) => {
-    void waitForStableSkillFile(changedPath, debounceMs)
+    void waitForStableSkillFile(changedPath, SKILLS_WATCH_DEBOUNCE_MS)
       .catch((err: unknown) => {
         log.warn(`skills watcher stability check failed (${changedPath}): ${String(err)}`);
       })
@@ -586,26 +580,18 @@ function teardownSkillsPathWatcher(state: SkillsPathWatchState): void {
   void state.watcher.close().catch(() => {});
 }
 
-function subscribeWorkspaceToPath(
-  workspaceDir: string,
-  watchTarget: WatchTarget,
-  debounceMs: number,
-): void {
+function subscribeWorkspaceToPath(workspaceDir: string, watchTarget: WatchTarget): void {
   const existing = pathWatchers.get(watchTarget.key);
-  if (existing && existing.debounceMs === debounceMs && existing.depth >= watchTarget.depth) {
+  if (existing && existing.depth >= watchTarget.depth) {
     existing.subscribers.add(workspaceDir);
     return;
   }
   if (existing) {
-    // Debounce changed (config reload): rebuild the shared watcher while
-    // preserving existing subscribers. Debounce is a gateway-global config
-    // value, so all workspaces normally request the same value and this branch
-    // does not fire; if it does, the most recent requested debounce wins for
-    // every subscriber of the shared path (last-writer-wins).
-    const next = createSkillsPathWatcher(
-      { ...watchTarget, depth: Math.max(existing.depth, watchTarget.depth) },
-      debounceMs,
-    );
+    // A deeper target needs a rebuilt watcher while preserving subscribers.
+    const next = createSkillsPathWatcher({
+      ...watchTarget,
+      depth: Math.max(existing.depth, watchTarget.depth),
+    });
     for (const subscriber of existing.subscribers) {
       next.subscribers.add(subscriber);
     }
@@ -614,7 +600,7 @@ function subscribeWorkspaceToPath(
     pathWatchers.set(watchTarget.key, next);
     return;
   }
-  const state = createSkillsPathWatcher(watchTarget, debounceMs);
+  const state = createSkillsPathWatcher(watchTarget);
   state.subscribers.add(workspaceDir);
   pathWatchers.set(watchTarget.key, state);
 }
@@ -666,7 +652,6 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
   }
   const now = Date.now();
   const watchEnabled = params.config?.skills?.load?.watch !== false;
-  const debounceMs = resolveWatchDebounceMs(params.config);
   const previousTargets = workspaceWatchTargets.get(workspaceDir) ?? [];
 
   if (!watchEnabled) {
@@ -678,14 +663,10 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
   workspaceWatchLastEnsuredAt.set(workspaceDir, now);
   const watchTargets = resolveWatchTargets(workspaceDir, params.config);
   const targetsUnchanged = sameWatchTargets(previousTargets, watchTargets);
-  const debounceUnchanged = watchTargets.every(
-    // undefined for paths not yet watched -> false -> fall through to subscribe.
-    (watchTarget) => {
-      const pathWatcher = pathWatchers.get(watchTarget.key);
-      return pathWatcher?.debounceMs === debounceMs && pathWatcher.depth >= watchTarget.depth;
-    },
+  const watcherDepthsCoverTargets = watchTargets.every(
+    (watchTarget) => (pathWatchers.get(watchTarget.key)?.depth ?? -1) >= watchTarget.depth,
   );
-  if (targetsUnchanged && debounceUnchanged) {
+  if (targetsUnchanged && watcherDepthsCoverTargets) {
     evictIdleWorkspaceWatchStates(now);
     return;
   }
@@ -698,7 +679,7 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
     }
   }
   for (const watchTarget of watchTargets) {
-    subscribeWorkspaceToPath(workspaceDir, watchTarget, debounceMs);
+    subscribeWorkspaceToPath(workspaceDir, watchTarget);
   }
   workspaceWatchTargets.set(workspaceDir, watchTargets);
 

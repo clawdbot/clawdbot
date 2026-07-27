@@ -146,7 +146,7 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError(
       '{"type":"error","error":{"message":"SECRET\\nCANARY","type":"invalid_request_error"}}',
     );
-    expect(formatAssistantErrorText(msg)).toBe("LLM error invalid_request_error: SECRET\nCANARY");
+    expect(formatAssistantErrorText(msg)).toBe("LLM request rejected: SECRET\nCANARY");
     expect(formatUserFacingAssistantErrorText(msg)).toBe(
       "LLM request failed: provider rejected the request schema or tool payload.",
     );
@@ -548,6 +548,16 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError("407 Proxy Authentication Required");
     expect(formatAssistantErrorText(msg)).toBe(
       "LLM request failed: proxy or tunnel configuration blocked the provider request.",
+    );
+  });
+
+  it("returns a certificate-specific message for TLS validation failures", () => {
+    const msg = makeAssistantError(
+      "Hostname/IP does not match certificate's altnames: Host: api.example.com",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM request failed: TLS certificate validation rejected the provider endpoint. " +
+        "Check the endpoint hostname, proxy, and local certificate trust.",
     );
   });
 

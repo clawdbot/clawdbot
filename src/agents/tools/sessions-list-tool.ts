@@ -15,9 +15,9 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { readSessionTitleFieldsFromTranscriptAsync } from "../../gateway/session-transcript-readers.js";
 import { deriveSessionTitle } from "../../gateway/session-utils.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { getSessionStateVersions } from "../../sessions/session-state-events.js";
-import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
+import { resolveDefaultAgentId } from "../agent-scope-config.js";
 import {
   optionalNonNegativeIntegerSchema,
   optionalPositiveIntegerSchema,
@@ -203,25 +203,35 @@ export function createSessionsListTool(opts?: {
         },
       });
 
-      const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
+      // Cross-session tool output is copied into durable transcripts, so exposing
+      // incognito rows here would defeat their process-only lifetime.
+      const sessions = (Array.isArray(list?.sessions) ? list.sessions : []).filter(
+        (entry) => !entry || typeof entry !== "object" || !isIncognitoSessionKey(entry.key),
+      );
+      const defaultAgentId = resolveDefaultAgentId(cfg);
       const stateVersions = getSessionStateVersions(
-        sessions.flatMap((entry) =>
-          entry && typeof entry === "object" && typeof entry.key === "string"
-            ? [
-                {
-                  sessionKey: entry.key,
-                  agentId:
-                    typeof entry.agentId === "string" && entry.agentId
-                      ? entry.agentId
-                      : resolveAgentIdFromSessionKey(entry.key),
-                },
-              ]
-            : [],
-        ),
+        sessions.flatMap((entry) => {
+          if (!entry || typeof entry !== "object" || typeof entry.key !== "string") {
+            return [];
+          }
+          let stateAgentId =
+            typeof entry.agentId === "string" && entry.agentId ? entry.agentId : undefined;
+          if (!stateAgentId) {
+            try {
+              stateAgentId = resolveAgentIdFromSessionKey(entry.key, defaultAgentId);
+            } catch {
+              // Malformed rows remain subject to the fail-closed visibility checker below,
+              // but cannot participate in agent state-version lookup.
+              return [];
+            }
+          }
+          return [{ sessionKey: entry.key, agentId: stateAgentId }];
+        }),
       );
       const storePath = typeof list?.path === "string" ? list.path : undefined;
       const visibilityGuard = createSessionVisibilityRowChecker({
         action: "list",
+        defaultAgentId,
         requesterSessionKey: effectiveRequesterKey,
         visibility,
         a2aPolicy,
@@ -281,14 +291,11 @@ export function createSessionsListTool(opts?: {
           mainKey,
         });
 
-        const entryChannel = typeof entry.channel === "string" ? entry.channel : undefined;
-        const entryOrigin =
-          entry.origin && typeof entry.origin === "object"
-            ? (entry.origin as Record<string, unknown>)
-            : undefined;
+        const entryChannel = readStringValue(entry.channel);
+        const entryOrigin = entry.origin as Record<string, unknown> | undefined;
         const originChannel =
           typeof entryOrigin?.provider === "string" ? entryOrigin.provider : undefined;
-        const deliveryContext = deliveryContextFromSession(entry);
+        const deliveryContext = entry.deliveryContext;
         const deliveryChannel = readStringValue(deliveryContext?.channel);
         const lastChannel = deliveryChannel ?? readStringValue(entry.lastChannel);
         const derivedChannel = deriveChannel({
@@ -301,7 +308,7 @@ export function createSessionsListTool(opts?: {
         const sessionId = readStringValue(entry.sessionId);
         const sessionFileRaw = (entry as { sessionFile?: unknown }).sessionFile;
         const sessionFile = readStringValue(sessionFileRaw);
-        const resolvedAgentId = resolveAgentIdFromSessionKey(key);
+        const resolvedAgentId = resolveAgentIdFromSessionKey(key, defaultAgentId);
         // Version lookup keys on the store-owning agent (gateway row agentId), not the
         // key-derived agent: bare "global" keys parse to the default agent id.
         const stateVersionAgentId =
@@ -318,11 +325,13 @@ export function createSessionsListTool(opts?: {
               ? entry.spawnedBy
               : undefined;
         const parentSessionKey = parentSessionKeyRaw
-          ? resolveDisplaySessionKey({
-              key: parentSessionKeyRaw,
-              alias,
-              mainKey,
-            })
+          ? isIncognitoSessionKey(parentSessionKeyRaw)
+            ? undefined
+            : resolveDisplaySessionKey({
+                key: parentSessionKeyRaw,
+                alias,
+                mainKey,
+              })
           : undefined;
         const updatedAt = typeof entry.updatedAt === "number" ? entry.updatedAt : undefined;
         const model = readStringValue(entry.model);
@@ -334,7 +343,10 @@ export function createSessionsListTool(opts?: {
           typeof entry.abortedLastRun === "boolean" ? entry.abortedLastRun : undefined;
         const childSessions = Array.isArray(entry.childSessions)
           ? entry.childSessions
-              .filter((value): value is string => typeof value === "string")
+              .filter(
+                (value): value is string =>
+                  typeof value === "string" && !isIncognitoSessionKey(value),
+              )
               .map((value) =>
                 resolveDisplaySessionKey({
                   key: value,

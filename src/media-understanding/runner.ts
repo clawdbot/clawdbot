@@ -40,7 +40,7 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { logWarn } from "../logger.js";
 import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-roots.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
-import { resolveMediaFacts } from "../media/media-facts.js";
+import { normalizeMediaFacts } from "../media/media-facts.js";
 import { runExec } from "../process/exec.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
@@ -346,7 +346,7 @@ export function resolveMediaAttachmentLocalRoots(params: {
   ctx: MsgContext;
   workspaceDir?: string;
 }): readonly string[] {
-  const workspaceDirs = resolveMediaFacts(params.ctx).flatMap((fact) =>
+  const workspaceDirs = normalizeMediaFacts(params.ctx.media).flatMap((fact) =>
     fact.workspaceDir ? [path.resolve(fact.workspaceDir)] : [],
   );
   return mergeInboundPathRoots(
@@ -511,9 +511,9 @@ async function resolveAntigravityCliEntry(
     args: [
       "--sandbox",
       "--add-dir",
-      "{{MediaDir}}",
+      "{{AttachmentDir}}",
       "--print",
-      "{{Prompt}} Inspect {{MediaPath}} and reply with only the requested media description.",
+      "{{Prompt}} Inspect {{AttachmentPath}} and reply with only the requested media description.",
     ],
   };
 }
@@ -902,7 +902,7 @@ async function runAttachmentEntries(params: {
   capability: MediaUnderstandingCapability;
   cfg: OpenClawConfig;
   ctx: MsgContext;
-  attachmentIndex: number;
+  attachment: MediaAttachment;
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
@@ -915,6 +915,7 @@ async function runAttachmentEntries(params: {
   attempts: MediaUnderstandingModelDecision[];
 }> {
   const { entries, capability } = params;
+  const attachmentIndex = params.attachment.index;
   const attempts: MediaUnderstandingModelDecision[] = [];
   for (const candidate of entries) {
     const { entry } = candidate;
@@ -927,7 +928,7 @@ async function runAttachmentEntries(params: {
               entry,
               cfg: params.cfg,
               ctx: params.ctx,
-              attachmentIndex: params.attachmentIndex,
+              attachment: params.attachment,
               cache: params.cache,
               config: params.config,
             })
@@ -936,7 +937,7 @@ async function runAttachmentEntries(params: {
               entry,
               cfg: params.cfg,
               ctx: params.ctx,
-              attachmentIndex: params.attachmentIndex,
+              attachmentIndex,
               cache: params.cache,
               agentId: params.agentId,
               agentDir: params.agentDir,
@@ -1140,7 +1141,7 @@ export async function runCapability(params: {
       capability,
       cfg,
       ctx,
-      attachmentIndex: attachment.index,
+      attachment,
       agentId: params.agentId,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,

@@ -2,14 +2,14 @@ title: Remember across conversations
 
 scenario:
   id: remember-across-conversations
-  surface: memory
+  surface: session-memory
   risk: high
   coverage:
     primary:
-      - memory.active-recall
+      - session-memory.active-memory-active-recall
     secondary:
-      - memory.recall
-      - channels.qa-channel
+      - session-memory.active-memory-recall
+      - session-memory.active-memory-qa-channel
   objective: Verify bounded private transcript recall across separate conversations without crossing shared, anchor, disabled, or paused conversation boundaries.
   plugins:
     - active-memory

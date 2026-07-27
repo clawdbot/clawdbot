@@ -80,8 +80,9 @@ describe("video-generation live-test helpers", () => {
 
   it("redacts live API keys for diagnostics", () => {
     expect(redactLiveApiKey(undefined)).toBe("none");
-    expect(redactLiveApiKey("short-key")).toBe("short-key");
-    expect(redactLiveApiKey("sk-proj-1234567890")).toBe("sk-proj-...7890");
+    expect(redactLiveApiKey("   ")).toBe("none");
+    expect(redactLiveApiKey("synthetic-12")).toBe("<redacted>");
+    expect(redactLiveApiKey("synthetic-credential-value")).toBe("<redacted>");
   });
 
   it("runs buffer-backed video-to-video only for supported providers/models", () => {

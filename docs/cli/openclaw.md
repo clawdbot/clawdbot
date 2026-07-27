@@ -180,7 +180,7 @@ setup workspace ~/Projects/work
 `setup` preserves the verified effective model. It does not configure or
 replace inference.
 
-If inference is missing or its live check fails, leave OpenClaw and run `openclaw onboard`. Guided onboarding detects configured models, API keys, and authenticated local CLIs, asks each candidate for a real reply, and persists only a passing route. OpenClaw starts immediately after that boundary and can then configure the workspace, Gateway, channels, agents, plugins, and other optional features.
+If inference is missing or its live check fails, leave OpenClaw and run `openclaw onboard`. Guided onboarding tries the configured model first, then authenticated subscription CLIs, API keys, and remaining supported CLIs; it asks each candidate for a real reply and persists only a passing route. OpenClaw starts immediately after that boundary and can then configure the workspace, Gateway, channels, agents, plugins, and other optional features.
 
 The macOS app skips this ladder entirely when it reaches a configured Gateway
 whose default agent already has a configured model; it opens the normal agent

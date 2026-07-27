@@ -63,6 +63,38 @@ function deprecatedCompatRecord<Code extends string>(
 // architecture because ownership and config footprint can shift during rollout.
 const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   deprecatedCompatRecord({
+    code: "doctor-cli-backends-plugin-registration",
+    deprecated: "2026-07-21",
+    warningStarts: "2026-07-21",
+    removeAfter: "2026-09-22",
+    owner: "agent-runtime",
+    introduced: "2026-07-21",
+    source: "agents.defaults.cliBackends adapter DSL",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.cli-backends.ts",
+    replacement: "registerCliBackend plugin registrations and model-scoped agentRuntime.id",
+    docsPath: "/plugins/cli-backend-plugins",
+    tests: [
+      "src/commands/doctor/shared/legacy-config-migrations.runtime.cli-backends.test.ts",
+      "src/config/dead-config-keys.test.ts",
+    ],
+  }),
+  deprecatedCompatRecord({
+    code: "doctor-model-compat-catalog-ownership",
+    deprecated: "2026-07-21",
+    warningStarts: "2026-07-21",
+    removeAfter: "2026-09-22",
+    owner: "provider",
+    introduced: "2026-07-21",
+    source: "model compat capability ownership moved from known-model config to provider catalogs",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.models.ts",
+    replacement: "provider catalog compat metadata, with config compat reserved for custom routes",
+    docsPath: "/gateway/config-tools",
+    tests: [
+      "src/commands/doctor/shared/legacy-config-migrations.runtime.models.test.ts",
+      "src/config/dead-config-keys.test.ts",
+    ],
+  }),
+  deprecatedCompatRecord({
     code: "doctor-tier-eval-tranche",
     deprecated: "2026-07-20",
     warningStarts: "2026-07-20",
@@ -404,7 +436,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     docsPath: "/channels/channel-routing",
     tests: ["src/commands/doctor/shared/channel-legacy-config-migrate.test.ts"],
     notes:
-      "Bundled channel schemas are nested-only; doctor keeps this migration to move shipped configs during upgrade. src/channels/streaming.ts retains a warn-once flat-key fallback for external SDK plugin configs until the next release train.",
+      "Runtime reads are nested-only; doctor keeps this migration to move shipped configs during upgrade.",
   }),
   deprecatedCompatRecord({
     code: "doctor-webchat-channel-config",

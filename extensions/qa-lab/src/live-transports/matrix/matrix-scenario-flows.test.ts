@@ -5,6 +5,17 @@ import {
   readQaScenarioExecutionConfig,
 } from "../../scenario-catalog.js";
 
+const MATRIX_MENTION_GATE_PRIMARY_SCENARIOS = [
+  "matrix-allowbots-default-block",
+  "matrix-allowbots-mentions-mentioned-room",
+  "matrix-allowbots-mentions-unmentioned-open-room-block",
+  "matrix-allowbots-room-override-blocks-account-true",
+  "matrix-allowbots-room-override-enables-account-off",
+  "matrix-allowbots-self-sender-ignored",
+  "matrix-allowbots-true-unmentioned-open-room",
+  "matrix-mention-metadata-spoof-block",
+] as const;
+
 function readModuleBinding(
   scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number],
 ) {
@@ -99,6 +110,20 @@ describe("Matrix QA Lab scenario flows", () => {
     }
   });
 
+  it("applies the portable thread override through Matrix flow preparation", () => {
+    expect(readQaScenarioById("thread-reply-override").execution).toMatchObject({
+      kind: "flow",
+      channel: "matrix",
+      timeoutMs: 60_000,
+      retryCount: 0,
+      config: {
+        matrixConfigOverrides: {
+          threadReplies: "always",
+        },
+      },
+    });
+  });
+
   it("runs the allowlist scenario through its config-file reload owner", () => {
     const scenario = catalog.scenarios.find((entry) => entry.id === "matrix-allowlist-hot-reload");
     expect(scenario?.execution.kind).toBe("flow");
@@ -111,6 +136,21 @@ describe("Matrix QA Lab scenario flows", () => {
       call: "scenarioModule.runMatrixQaAllowlistHotReloadScenario",
       args: [{ expr: "scenarioContext" }],
       saveAs: "result",
+    });
+  });
+
+  it("attributes Matrix admission and media evidence to behavior the flows execute", () => {
+    for (const scenarioId of MATRIX_MENTION_GATE_PRIMARY_SCENARIOS) {
+      expect(readQaScenarioById(scenarioId).coverage, scenarioId).toEqual({
+        primary: ["matrix.mention-gates"],
+      });
+    }
+    expect(readQaScenarioById("matrix-mxid-prefixed-command-block").coverage).toEqual({
+      primary: ["matrix.mention-gates"],
+      secondary: ["channels.channel-native-commands"],
+    });
+    expect(readQaScenarioById("matrix-unsupported-media-safe").coverage).toEqual({
+      primary: ["channels.inbound-media-normalization"],
     });
   });
 

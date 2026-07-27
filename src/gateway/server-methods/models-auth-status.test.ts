@@ -9,6 +9,7 @@ import { NON_ENV_SECRETREF_MARKER } from "../../agents/model-auth-markers.js";
 import type { UsageSummary } from "../../infra/provider-usage.types.js";
 import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createChatRunState } from "../server-chat-state.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 type BuildAuthHealthSummary = typeof import("../../agents/auth-health.js").buildAuthHealthSummary;
@@ -39,9 +40,7 @@ const mocks = vi.hoisted(() => ({
     return { version: 1, profiles: {} };
   }),
   listProfilesForProvider: vi.fn((): string[] => []),
-  removeAuthProfilesWithLock: vi.fn(
-    async (): Promise<AuthProfileStore | null> => ({ version: 1, profiles: {} }),
-  ),
+  removeAuthProfilesAcrossOwnerStores: vi.fn(async (): Promise<boolean> => true),
   removeProviderAuthProfilesWithLock: vi.fn(
     async (): Promise<AuthProfileStore | null> => ({ version: 1, profiles: {} }),
   ),
@@ -78,7 +77,7 @@ vi.mock("../../agents/auth-profiles.js", async () => {
     ensureAuthProfileStoreWithoutExternalProfiles:
       mocks.ensureAuthProfileStoreWithoutExternalProfiles,
     listProfilesForProvider: mocks.listProfilesForProvider,
-    removeAuthProfilesWithLock: mocks.removeAuthProfilesWithLock,
+    removeAuthProfilesAcrossOwnerStores: mocks.removeAuthProfilesAcrossOwnerStores,
     removeProviderAuthProfilesWithLock: mocks.removeProviderAuthProfilesWithLock,
     resolvePersistedAuthProfileOwnerAgentDir: mocks.resolvePersistedAuthProfileOwnerAgentDir,
     clearRuntimeAuthProfileStoreSnapshots: mocks.clearRuntimeAuthProfileStoreSnapshots,
@@ -178,14 +177,7 @@ function createLogoutOptions(
   const context = {
     getRuntimeConfig: mocks.getRuntimeConfig,
     chatAbortControllers: new Map(),
-    chatRunBuffers: new Map(),
-    chatDeltaSentAt: new Map(),
-    chatDeltaLastBroadcastLen: new Map(),
-    chatDeltaLastBroadcastText: new Map(),
-    agentDeltaSentAt: new Map(),
-    bufferedAgentEvents: new Map(),
-    chatAbortedRuns: new Map(),
-    clearChatRunState: vi.fn(),
+    chatRunState: createChatRunState(),
     removeChatRun: vi.fn(),
     agentRunSeq: new Map(),
     broadcast: vi.fn(),
@@ -247,7 +239,7 @@ function resetAuthStatusMocks(): void {
     profiles: {},
   });
   mocks.listProfilesForProvider.mockReturnValue([]);
-  mocks.removeAuthProfilesWithLock.mockResolvedValue({ version: 1, profiles: {} });
+  mocks.removeAuthProfilesAcrossOwnerStores.mockResolvedValue(true);
   mocks.removeProviderAuthProfilesWithLock.mockResolvedValue({ version: 1, profiles: {} });
   mocks.resolvePersistedAuthProfileOwnerAgentDir.mockImplementation(
     (params: { agentDir?: string }) => params.agentDir,
@@ -1284,7 +1276,7 @@ describe("models.authLogout", () => {
     expect(mocks.resolveAgentDir).not.toHaveBeenCalled();
     expect(mocks.ensureAuthProfileStoreWithoutExternalProfiles).not.toHaveBeenCalled();
     expect(mocks.removeProviderAuthProfilesWithLock).not.toHaveBeenCalled();
-    expect(mocks.removeAuthProfilesWithLock).not.toHaveBeenCalled();
+    expect(mocks.removeAuthProfilesAcrossOwnerStores).not.toHaveBeenCalled();
     const [ok, payload, error] = firstRespondCall(opts) ?? [];
     expect(ok).toBe(false);
     expect(payload).toBeUndefined();
@@ -1344,7 +1336,7 @@ describe("models.authLogout", () => {
 
     await logoutHandler(opts);
 
-    expect(mocks.removeAuthProfilesWithLock).toHaveBeenCalledWith({
+    expect(mocks.removeAuthProfilesAcrossOwnerStores).toHaveBeenCalledWith({
       profileIds: ["openrouter:oauth"],
       agentDir: "/tmp/agent",
     });
@@ -1374,7 +1366,7 @@ describe("models.authLogout", () => {
 
     await logoutHandler(opts);
 
-    expect(mocks.removeAuthProfilesWithLock).not.toHaveBeenCalled();
+    expect(mocks.removeAuthProfilesAcrossOwnerStores).not.toHaveBeenCalled();
     expect(mocks.removeProviderAuthProfilesWithLock).not.toHaveBeenCalled();
     const [ok, , error] = firstRespondCall(opts) ?? [];
     expect(ok).toBe(false);
@@ -1404,7 +1396,7 @@ describe("models.authLogout", () => {
 
     await logoutHandler(opts);
 
-    expect(mocks.removeAuthProfilesWithLock).not.toHaveBeenCalled();
+    expect(mocks.removeAuthProfilesAcrossOwnerStores).not.toHaveBeenCalled();
     expect(mocks.removeProviderAuthProfilesWithLock).not.toHaveBeenCalled();
     expect(activeRun.controller.signal.aborted).toBe(false);
     const [ok, , error] = firstRespondCall(opts) ?? [];
@@ -1525,38 +1517,6 @@ describe("models.authLogout", () => {
     });
     expect(mocks.removeProviderAuthProfilesWithLock).toHaveBeenCalledWith({
       provider: "openrouter",
-      agentDir: undefined,
-    });
-    const [ok] = firstRespondCall(opts) ?? [];
-    expect(ok).toBe(true);
-  });
-
-  it("cleans requester references when targeted auth is inherited", async () => {
-    const profileId = "openrouter:main";
-    mocks.ensureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
-      version: 1,
-      profiles: {
-        [profileId]: {
-          type: "oauth",
-          provider: "openrouter",
-          access: "access",
-          refresh: "refresh",
-          expires: 1_000_000,
-        },
-      },
-    });
-    mocks.listProfilesForProvider.mockReturnValue([profileId]);
-    mocks.resolvePersistedAuthProfileOwnerAgentDir.mockReturnValue(undefined);
-    const opts = createLogoutOptions({ provider: "openrouter", profileIds: [profileId] });
-
-    await logoutHandler(opts);
-
-    expect(mocks.removeAuthProfilesWithLock).toHaveBeenCalledWith({
-      profileIds: [profileId],
-      agentDir: "/tmp/agent",
-    });
-    expect(mocks.removeAuthProfilesWithLock).toHaveBeenCalledWith({
-      profileIds: [profileId],
       agentDir: undefined,
     });
     const [ok] = firstRespondCall(opts) ?? [];

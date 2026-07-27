@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Full Release Validation stages, child workflows, release profiles, rerun handles, and evidence"
 title: "Full release validation"
 read_when:
@@ -35,11 +36,33 @@ report that same workflow SHA. Pass
 reachable from current `origin/main`. The workflow never creates or updates
 repository refs itself.
 
-When the Code SHA is green, generate and commit only `CHANGELOG.md`. This new
-commit is the **Release SHA**. Run the same helper for the Release SHA. Product
-evidence is reused only when GitHub proves the Release SHA descends from the
-Code SHA and the complete changed path set is exactly `CHANGELOG.md`; npm
-preflight and package/install acceptance still run on the Release SHA.
+## Extended-stable exception
+
+Extended-stable publish requires a run whose workflow and target are both the
+canonical branch:
+
+```bash
+gh workflow run full-release-validation.yml \
+  --ref extended-stable/YYYY.M.33 \
+  -f ref=extended-stable/YYYY.M.33 \
+  -f release_profile=stable
+```
+
+Do not use `pnpm ci:full-release` or `release-ci/*`. Publish binds the run's
+branch, head/target SHA, manifest `workflowRef`, ID, and attempt to the canonical
+branch and release commit.
+
+Backport product failures; make the smallest behavior-preserving repair for
+frozen-target tooling; retry provider, approval, or runner failures without a
+source change. Any branch change needs a complete new run. Do not omit required
+package, installer, update, channel, or live behavior because the target is old.
+
+For a regular release, when the Code SHA is green, generate and commit only
+`CHANGELOG.md`. This new commit is the **Release SHA**. Run the same helper for
+the Release SHA. Product evidence is reused only when GitHub proves the Release
+SHA descends from the Code SHA and the complete changed path set is exactly
+`CHANGELOG.md`; npm preflight and package/install acceptance still run on the
+Release SHA.
 
 `release_profile=stable` and `release_profile=full` always run the exhaustive
 live/Docker soak. Pass `run_release_soak=true` to include the same soak lanes
@@ -146,8 +169,8 @@ artifact when package or Docker-facing stages need it.
 | Package Acceptance       | **Job:** `Run package acceptance`<br />**Backing workflow:** `Package Acceptance`<br />**Tests:** offline plugin package fixtures, plugin update, the canonical mock-OpenAI Telegram package E2E, and published-upgrade survivor checks against the same tarball. Blocking release checks use the default latest published baseline; soak checks (`run_release_soak=true`) expand to the last 4 stable npm releases plus 3 pinned historical versions (`2026.4.23`, `2026.5.2`, `2026.4.15`), run against reported-issue upgrade fixtures.<br />**Rerun:** `rerun_group=package`. |
 | Maturity scorecard       | **Job:** `Render maturity scorecard release docs`<br />**Backing workflow:** `maturity-scorecard.yml`<br />**Tests:** renders the advisory maturity scorecard docs against the target ref. Only runs when `run_maturity_scorecard=true` is passed.<br />**Rerun:** `rerun_group=qa` with `run_maturity_scorecard=true`.                                                                                                                                                                                                                                                           |
 | QA parity                | **Job:** `Run QA Lab parity lane` and `Run QA Lab parity report`<br />**Backing workflow:** direct jobs<br />**Tests:** candidate and baseline agentic parity packs, then the parity report.<br />**Rerun:** `rerun_group=qa-parity` or `rerun_group=qa`.                                                                                                                                                                                                                                                                                                                         |
-| QA runtime parity        | **Job:** `Run QA Lab runtime parity lane`<br />**Backing workflow:** direct job<br />**Tests:** an `openclaw`/`codex` runtime-pair agentic parity lane (`pnpm openclaw qa suite --runtime-pair openclaw,codex`), including a standard tier and, with `run_release_soak=true`, a soak tier. Advisory: individual failures do not block the release-check verifier.<br />**Rerun:** `rerun_group=qa-parity` or `rerun_group=qa`.                                                                                                                                                    |
-| QA runtime tool coverage | **Job:** `Enforce QA Lab runtime tool coverage`<br />**Backing workflow:** direct job<br />**Tests:** dynamic tool drift between `openclaw` and `codex` in the standard runtime-parity tier (`pnpm openclaw qa coverage --tools`), using the QA runtime parity lane's output. Blocking: this job is not advisory-overridable.<br />**Rerun:** `rerun_group=qa-parity` or `rerun_group=qa`.                                                                                                                                                                                        |
+| QA runtime parity        | **Job:** `Verify QA Lab runtime-pair lanes`<br />**Backing workflow:** direct job<br />**Tests:** the canonical core `openclaw`/`codex` lane (`pnpm openclaw qa suite --runtime-pair openclaw,codex --runtime-pair-lane core`) and, with `run_release_soak=true`, the soak lane. Advisory: individual lane jobs do not block the release-check verifier.<br />**Rerun:** `rerun_group=qa-parity` or `rerun_group=qa`.                                                                                                                                                             |
+| QA runtime tool coverage | **Job:** `Enforce QA Lab runtime tool coverage`<br />**Backing workflow:** direct job<br />**Tests:** dynamic tool drift between `openclaw` and `codex` in the canonical core runtime-pair lane (`pnpm openclaw qa coverage --tools`), using that lane's output. Blocking: this job is not advisory-overridable.<br />**Rerun:** `rerun_group=qa-parity` or `rerun_group=qa`.                                                                                                                                                                                                     |
 | QA live Matrix           | **Job:** `Run QA Live Matrix profile`<br />**Backing workflow:** `QA-Lab - All Lanes` reusable workflow<br />**Tests:** parity-proven YAML scenarios through the shared Matrix live adapter in the `qa-live-shared` environment.<br />**Rerun:** `rerun_group=qa-live` or `rerun_group=qa`; use `live_suite_filter=qa-live-matrix` for a focused Matrix rerun.                                                                                                                                                                                                                    |
 | QA live Telegram         | **Job:** `Run QA Lab live Telegram lane`<br />**Backing workflow:** trusted `OpenClaw Release Telegram QA` dispatch<br />**Tests:** live Telegram QA with Convex CI credential leases.<br />**Rerun:** `rerun_group=qa-live` or `rerun_group=qa`.                                                                                                                                                                                                                                                                                                                                 |
 | QA live Discord          | **Job:** `Run QA Lab live Discord lane`<br />**Backing workflow:** direct advisory job<br />**Tests:** live Discord QA with Convex CI credential leases when `OPENCLAW_RELEASE_QA_DISCORD_LIVE_CI_ENABLED` is enabled.<br />**Rerun:** `rerun_group=qa-live` with `live_suite_filter=qa-live-discord`.                                                                                                                                                                                                                                                                            |
@@ -272,8 +295,11 @@ Keep the `Full Release Validation` summary as the release-level index. It links
 child run ids and includes slowest-job tables. For failures, inspect the child
 workflow first, then rerun the smallest matching handle above.
 
-Record both Code SHA and Release SHA, the reuse policy and changed-path set, the
-green Code SHA parent run, and the lightweight Release SHA parent run.
+For a regular release, record both Code SHA and Release SHA, the reuse policy
+and changed-path set, the green Code SHA parent run, and the lightweight Release
+SHA parent run. For extended-stable, record the canonical branch, exact release
+SHA, fresh parent run id and attempt, workflow ref, every child run, and any
+frozen-target compatibility repair or intentional omission.
 
 Useful artifacts:
 

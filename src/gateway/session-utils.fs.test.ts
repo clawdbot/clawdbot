@@ -633,6 +633,57 @@ describe("readSessionMessages", () => {
     ]);
   });
 
+  test("applies reset kept-tail projection to file-backed history", async () => {
+    const sessionId = "test-session-reset-boundary";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 3, id: sessionId },
+      { type: "message", id: "old", parentId: null, message: { role: "user", content: "old" } },
+      {
+        type: "message",
+        id: "kept-user",
+        parentId: "old",
+        message: { role: "user", content: "kept question" },
+      },
+      {
+        type: "message",
+        id: "kept-tool",
+        parentId: "kept-user",
+        message: { role: "toolResult", content: "hidden tool" },
+      },
+      {
+        type: "message",
+        id: "kept-assistant",
+        parentId: "kept-tool",
+        message: { role: "assistant", content: "kept answer" },
+      },
+      {
+        type: "reset",
+        id: "reset-boundary",
+        parentId: "kept-assistant",
+        timestamp: "2026-07-22T00:00:00.000Z",
+        reason: "new",
+        firstKeptEntryId: "kept-user",
+      },
+      {
+        type: "message",
+        id: "post-reset",
+        parentId: "reset-boundary",
+        message: { role: "user", content: "new turn" },
+      },
+    ]);
+
+    const messages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
+      mode: "full",
+      reason: "test reset boundary",
+    });
+
+    expect(messages.map((message) => (message as { content?: unknown }).content)).toEqual([
+      "kept question",
+      "kept answer",
+      "new turn",
+    ]);
+  });
+
   test("keeps parentless linear history after a leaf control", async () => {
     const sessionId = "test-linear-with-opaque-link";
     writeTranscript(tmpDir, sessionId, [
@@ -714,6 +765,7 @@ describe("readSessionMessages", () => {
       maxBytes: 2048,
       allowResetArchiveFallback: true,
     });
+    expect(recent.transcriptSource).toBe("reset-archive");
     expect(recent.totalMessages).toBe(2);
     expect(recent.messages).toHaveLength(1);
     expectMessageFields(recent.messages[0], {
@@ -1100,7 +1152,7 @@ describe("readSessionMessages", () => {
         timestamp: "2026-04-27T00:00:01.000Z",
         message: {
           role: "user",
-          content: "Sender (untrusted metadata): webchat\n\noriginal wrapped prompt",
+          content: "Sender: webchat\n\noriginal wrapped prompt",
           timestamp: 1,
         },
       },
@@ -1227,7 +1279,7 @@ describe("readSessionMessages", () => {
   test("reads only the active SessionManager branch after a transcript rewrite", () => {
     const sessionId = "branched-session";
     const sessionManager = SessionManager.create(tmpDir, tmpDir);
-    const decoratedPrompt = 'Sender (untrusted metadata):\n```json\n{"label":"ui"}\n```\n\nhello';
+    const decoratedPrompt = 'Sender:\n```json\n{"label":"ui"}\n```\n\nhello';
     const visiblePrompt = "hello";
     sessionManager.appendMessage({
       role: "user",

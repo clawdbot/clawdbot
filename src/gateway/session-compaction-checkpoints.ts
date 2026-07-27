@@ -739,7 +739,7 @@ function shouldRouteCheckpointSessionMutationToSqlite(params: {
  *
  * The branch/restore operations own the transcript fork plus session entry
  * update so a SQLite implementation can copy transcript rows and update
- * `session_entries.entry_json` inside one write transaction.
+ * `session_nodes.entry_json` inside one write transaction.
  */
 export function createFileBackedCompactionCheckpointStore(): CompactionCheckpointStore {
   return {

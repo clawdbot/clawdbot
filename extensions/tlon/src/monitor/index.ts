@@ -1,7 +1,7 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { createChannelInboundEnvelopeBuilder } from "openclaw/plugin-sdk/channel-inbound";
 import { bindIngressLifecycleToReplyOptions } from "openclaw/plugin-sdk/channel-outbound";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import type { GetReplyOptions, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -29,7 +29,7 @@ import { createTlonCitationResolver } from "./cites.js";
 import { fetchAllChannels, fetchInitData } from "./discovery.js";
 import { cacheMessage, fetchThreadHistory, getChannelHistory } from "./history.js";
 import { createTlonIngressMonitor, type TlonIngressLifecycle } from "./ingress.js";
-import { downloadMessageImages } from "./media.js";
+import { buildTlonInboundMediaPrompt, downloadMessageImages } from "./media.js";
 import {
   applyTlonSettingsOverrides,
   buildTlonSettingsMigrations,
@@ -495,19 +495,13 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       }
     }
 
-    let bodyWithAttachments = messageText;
-    if (attachments.length > 0) {
-      const mediaLines = attachments
-        .map((a) => `[media attached: ${a.path} (${a.contentType}) | ${a.path}]`)
-        .join("\n");
-      bodyWithAttachments = mediaLines + "\n" + messageText;
-    }
+    const promptMedia = buildTlonInboundMediaPrompt(messageText, attachments);
 
     const body = createChannelInboundEnvelopeBuilder({ cfg, route })({
       channel: "Tlon",
       from: fromLabel,
       timestamp,
-      body: bodyWithAttachments,
+      body: promptMedia.body,
     });
 
     const commandBody = isGroup ? stripBotMention(messageText, botShipName) : messageText;
@@ -595,6 +589,10 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       runtime.log?.(`[tlon] Now tracking thread for future replies: ${parentId}`);
     };
 
+    const replyOptions: GetReplyOptions = {
+      ...(turnAdoptionLifecycle ? bindIngressLifecycleToReplyOptions(turnAdoptionLifecycle) : {}),
+      ...(promptMedia.media.length > 0 ? { media: promptMedia.media } : {}),
+    };
     await core.channel.inbound.dispatch({
       channel: "tlon",
       accountId: route.accountId,
@@ -654,9 +652,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         responsePrefix,
         humanDelay,
       },
-      ...(turnAdoptionLifecycle
-        ? { replyOptions: bindIngressLifecycleToReplyOptions(turnAdoptionLifecycle) }
-        : {}),
+      ...(turnAdoptionLifecycle || promptMedia.media.length > 0 ? { replyOptions } : {}),
       record: {
         onRecordError: (err) => {
           runtime.error?.(`[tlon] failed updating session meta: ${String(err)}`);

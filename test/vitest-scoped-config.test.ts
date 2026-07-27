@@ -714,8 +714,8 @@ describe("scoped vitest configs", () => {
     expectThreadedNonIsolatedRunner(defaultExtensionsConfig);
   });
 
-  it("serializes Telegram extension files that share process globals", () => {
-    expectThreadedNonIsolatedRunner(defaultExtensionTelegramConfig);
+  it("serializes and isolates Telegram extension files with conflicting mocks", () => {
+    expectThreadedIsolatedRunner(defaultExtensionTelegramConfig);
     expect(requireTestConfig(defaultExtensionTelegramConfig).fileParallelism).toBe(false);
   });
 

@@ -793,13 +793,11 @@ describe("xai provider plugin", () => {
     const normalizedCompat = normalized?.compat as
       | {
           toolSchemaProfile?: string;
-          nativeWebSearchTool?: boolean;
           toolCallArgumentsEncoding?: string;
           unsupportedToolSchemaKeywords?: string[];
         }
       | undefined;
     expect(normalizedCompat?.toolSchemaProfile).toBe("xai");
-    expect(normalizedCompat?.nativeWebSearchTool).toBe(true);
     expect(normalizedCompat?.toolCallArgumentsEncoding).toBe("html-entities");
     expect(normalizedCompat?.unsupportedToolSchemaKeywords).toEqual(["minContains", "maxContains"]);
   });

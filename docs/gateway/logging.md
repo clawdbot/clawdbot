@@ -25,7 +25,7 @@ agent model: openai/gpt-5.6-sol (thinking=medium, fast=on)
 
 ## File-based logger
 
-- Default rolling log file is under `/tmp/openclaw/` (one file per day): `openclaw-YYYY-MM-DD.log`, dated by the gateway host's local timezone. If that directory is unsafe or unwritable (wrong owner, world-writable, a symlink), OpenClaw falls back to a user-scoped `os.tmpdir()/openclaw-<uid>` path instead; on Windows it always uses that OS-tmpdir fallback.
+- Default rolling log files are under `/tmp/openclaw/` (one file per day), dated by the gateway host's local timezone. The default profile uses `openclaw-YYYY-MM-DD.log`; named profiles use `openclaw-<profile>-YYYY-MM-DD.log` (for example, `openclaw-dev-YYYY-MM-DD.log`). If that directory is unsafe or unwritable (wrong owner, world-writable, a symlink), OpenClaw falls back to a user-scoped `os.tmpdir()/openclaw-<uid>` path instead; on Windows it always uses that OS-tmpdir fallback.
 - Active log files rotate at `logging.maxFileBytes` (default: 100 MB), keeping up to five numbered archives (`.1` through `.5`) and continuing to write a fresh active file.
 - Configure the log file path and level via `~/.openclaw/openclaw.json`: `logging.file`, `logging.level`.
 - The file format is one JSON object per line.
@@ -52,7 +52,7 @@ The CLI captures `console.log/info/warn/error/debug/trace`, writes them to file 
 Tune console verbosity independently:
 
 - `logging.consoleLevel` (default `info`)
-- `logging.consoleStyle` (`pretty` | `compact` | `json`; defaults to `pretty` on a TTY, `compact` otherwise)
+- `logging.consoleStyle` (`pretty` | `json`). When unset, output is `pretty` on a TTY and the automatic `compact` style otherwise. `compact` is no longer a settable value; `openclaw doctor --fix` maps a stored one to `pretty`.
 
 ## Redaction
 

@@ -13,7 +13,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { resolveStorePath } from "../config/sessions.js";
-import { listSessionEntries } from "../config/sessions/session-accessor.js";
+import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   isAcpSessionKey,
@@ -105,10 +105,9 @@ function readSessionStore(
 ): Record<string, SessionCapabilityEntry> {
   try {
     return Object.fromEntries(
-      listSessionEntries({ agentId, storePath, clone: false }).map(({ sessionKey, entry }) => [
-        sessionKey,
-        entry,
-      ]),
+      listSessionEntriesReadOnly({ agentId, storePath, clone: false }).map(
+        ({ sessionKey, entry }) => [sessionKey, entry],
+      ),
     );
   } catch {
     return {};

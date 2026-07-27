@@ -3,11 +3,13 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeCronJobCreate } from "../cron/normalize.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { applyClawAddPlan } from "./add.js";
+import { markClawCronRefRemoved, readClawCronRefs } from "./cron.js";
 import { claimClawAgentConfigRemoval } from "./lifecycle-config-removal.js";
 import { applyClawRemovePlan, buildClawRemovePlan, readClawStatus } from "./lifecycle-state.js";
 import { buildClawAddPlan } from "./lifecycle.js";
@@ -24,7 +26,51 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const packageIntegrity = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-async function fixture(params: { id?: string; name?: string; withFile?: boolean } = {}) {
+function cronReadView(agentId: string, ref: ReturnType<typeof readClawCronRefs>[number]) {
+  const job = ref.job;
+  const normalized = normalizeCronJobCreate({
+    name: job.name ?? job.id,
+    declarationKey: ref.declarationKey,
+    ...(job.name ? { displayName: job.name } : {}),
+    owner: { agentId },
+    enabled: true,
+    agentId,
+    schedule: {
+      kind: "cron",
+      expr: job.schedule.cron,
+      ...(job.schedule.timezone ? { tz: job.schedule.timezone } : {}),
+    },
+    sessionTarget: job.session === "main" ? `session:agent:${agentId}:main` : job.session,
+    wakeMode: "now",
+    payload: { kind: "agentTurn", message: job.message },
+    delivery: job.delivery
+      ? {
+          mode: job.delivery.mode,
+          ...(job.delivery.channel ? { channel: job.delivery.channel } : {}),
+        }
+      : { mode: "none" },
+  });
+  if (!normalized || !ref.schedulerJobId) {
+    throw new Error("expected complete cron provenance");
+  }
+  return {
+    ...normalized,
+    id: ref.schedulerJobId,
+    createdAtMs: 1,
+    updatedAtMs: 1,
+    state: {},
+  };
+}
+
+async function fixture(
+  params: {
+    id?: string;
+    name?: string;
+    withFile?: boolean;
+    withCron?: boolean;
+    withMcp?: boolean;
+  } = {},
+) {
   const root = tempDirs.make("openclaw-claw-remove-");
   if (params.withFile) {
     await writeFile(join(root, "SOUL.md"), "managed\n", "utf8");
@@ -33,6 +79,25 @@ async function fixture(params: { id?: string; name?: string; withFile?: boolean 
     schemaVersion: 1,
     agent: { id: params.id ?? "worker", name: "Worker" },
     workspace: params.withFile ? { bootstrapFiles: { "SOUL.md": { source: "SOUL.md" } } } : {},
+    mcpServers: params.withMcp
+      ? {
+          docs: {
+            command: "uvx",
+            args: ["docs-mcp"],
+            env: { DOCS_TOKEN: "${DOCS_TOKEN}" },
+          },
+        }
+      : {},
+    cronJobs: params.withCron
+      ? [
+          {
+            id: "daily-report",
+            schedule: { cron: "0 9 * * *", timezone: "UTC" },
+            session: "isolated",
+            message: "Prepare report",
+          },
+        ]
+      : [],
   });
   if (!parsed.ok) {
     throw new Error(JSON.stringify(parsed.diagnostics));
@@ -55,7 +120,9 @@ async function fixture(params: { id?: string; name?: string; withFile?: boolean 
   return { root, plan, env: { OPENCLAW_STATE_DIR: join(root, "state") } };
 }
 
-async function addFixture(params: { withFile?: boolean } = {}) {
+async function addFixture(
+  params: { withFile?: boolean; withCron?: boolean; withMcp?: boolean } = {},
+) {
   const current = await fixture(params);
   let config: OpenClawConfig = {};
   await applyClawAddPlan(current.plan, {
@@ -64,8 +131,16 @@ async function addFixture(params: { withFile?: boolean } = {}) {
     commitConfig: async (transform) => {
       config = transform(config);
     },
+    cronGateway: { add: async () => ({ id: "scheduler-daily" }) },
+    ...(params.withMcp ? { installMcpServers: async () => [] } : {}),
   });
-  return { ...current, getConfig: () => config };
+  return {
+    ...current,
+    getConfig: () => config,
+    commitConfig: async (transform: (current: OpenClawConfig) => OpenClawConfig) => {
+      config = transform(config);
+    },
+  };
 }
 
 describe("Claw status and remove", () => {
@@ -264,6 +339,42 @@ describe("Claw status and remove", () => {
     );
   });
 
+  it("does not treat Claw-owned cron jobs as external agent blockers", async () => {
+    const current = await addFixture({ withCron: true });
+    const database = openOpenClawStateDatabase({ env: current.env });
+    database.db
+      .prepare(
+        `INSERT INTO cron_jobs (
+           store_key, job_id, name, enabled, created_at_ms, agent_id, owner_agent_id,
+           schedule_kind, session_target, wake_mode, payload_kind, job_json, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "default",
+        "scheduler-daily",
+        "Claw job",
+        1,
+        1,
+        "worker",
+        "worker",
+        "cron",
+        "isolated",
+        "now",
+        "agentTurn",
+        "{}",
+        1,
+      );
+
+    const plan = await buildClawRemovePlan("worker", {
+      env: current.env,
+      config: current.getConfig(),
+    });
+
+    expect(plan.blockers).not.toContainEqual(
+      expect.objectContaining({ code: "agent_job_attached" }),
+    );
+  });
+
   it("removes the agent and unchanged files but only releases package refs", async () => {
     const current = await addFixture({ withFile: true });
     persistClawPackageRef(
@@ -300,6 +411,247 @@ describe("Claw status and remove", () => {
     await expect(readFile(join(current.plan.agent.workspace, "SOUL.md"), "utf8")).rejects.toThrow();
     await expect(readClawStatus("worker", { env: current.env, config })).resolves.toMatchObject({
       summary: { claws: 0 },
+    });
+  });
+
+  it("removes scheduler-owned cron jobs before agent config", async () => {
+    const current = await addFixture({ withCron: true });
+    const plan = await buildClawRemovePlan("worker", {
+      env: current.env,
+      config: current.getConfig(),
+    });
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({
+        kind: "cronJob",
+        id: "daily-report",
+        action: "remove",
+        target: "scheduler-daily",
+      }),
+    );
+    let config = current.getConfig();
+    const order: string[] = [];
+    const result = await applyClawRemovePlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env: current.env,
+      config,
+      cronGateway: {
+        get: async () =>
+          cronReadView("worker", readClawCronRefs("worker", { env: current.env })[0]!),
+        remove: async (id) => {
+          order.push(`cron:${id}`);
+          return { ok: true };
+        },
+      },
+      commitConfig: async (transform) => {
+        order.push("config");
+        config = transform(config);
+      },
+    });
+    expect(order).toEqual(["cron:scheduler-daily", "config"]);
+    expect(result).toMatchObject({
+      status: "complete",
+      cronJobs: [
+        { manifestId: "daily-report", schedulerJobId: "scheduler-daily", action: "removed" },
+      ],
+    });
+  });
+
+  it("accepts the scheduler's default tool cap when removing a Claw cron job", async () => {
+    const current = await addFixture({ withCron: true });
+    const plan = await buildClawRemovePlan("worker", {
+      env: current.env,
+      config: current.getConfig(),
+    });
+    const ref = readClawCronRefs("worker", { env: current.env })[0]!;
+    const live = cronReadView("worker", ref);
+    const remove = vi.fn().mockResolvedValue({ ok: true });
+
+    const result = await applyClawRemovePlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env: current.env,
+      config: current.getConfig(),
+      commitConfig: current.commitConfig,
+      cronGateway: {
+        get: async () => ({
+          ...live,
+          payload: { ...live.payload, toolsAllow: ["*"] },
+        }),
+        remove,
+      },
+    });
+
+    expect(remove).toHaveBeenCalledWith(ref.schedulerJobId);
+    expect(result).toMatchObject({
+      status: "complete",
+      agentRemoved: true,
+      cronJobs: [{ manifestId: "daily-report", action: "removed" }],
+    });
+  });
+
+  it("fails removal planning when source MCP config cannot be read", async () => {
+    const current = await addFixture({ withCron: true });
+
+    await expect(
+      buildClawRemovePlan("worker", {
+        env: current.env,
+        config: current.getConfig(),
+        listMcpServers: async () => ({
+          ok: false,
+          path: "config",
+          error: "Config file is invalid.",
+        }),
+      }),
+    ).rejects.toMatchObject({ code: "mcp_config_unavailable" });
+  });
+
+  it("removes cron before the canonical agent config lifecycle", async () => {
+    const current = await addFixture({ withCron: true });
+    const plan = await buildClawRemovePlan("worker", {
+      env: current.env,
+      config: current.getConfig(),
+    });
+    const calls: string[] = [];
+
+    const result = await applyClawRemovePlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env: current.env,
+      config: current.getConfig(),
+      commitConfig: current.commitConfig,
+      cronGateway: {
+        get: async () =>
+          cronReadView("worker", readClawCronRefs("worker", { env: current.env })[0]!),
+        remove: async (id) => {
+          calls.push(`cron:${id}`);
+          return { ok: true };
+        },
+      },
+    });
+
+    expect(calls).toEqual(["cron:scheduler-daily"]);
+    expect(result).toMatchObject({
+      status: "complete",
+      agentRemoved: true,
+      cronJobs: [{ manifestId: "daily-report", action: "removed" }],
+    });
+  });
+
+  it("retains the agent when recurring work cannot be disabled", async () => {
+    const current = await addFixture({ withCron: true });
+    const plan = await buildClawRemovePlan("worker", {
+      env: current.env,
+      config: current.getConfig(),
+    });
+    const result = await applyClawRemovePlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env: current.env,
+      config: current.getConfig(),
+      cronGateway: {
+        get: async () =>
+          cronReadView("worker", readClawCronRefs("worker", { env: current.env })[0]!),
+        remove: async () => {
+          throw new Error("scheduler unavailable");
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "partial",
+      agentRemoved: false,
+      error: { code: "cron_cleanup_failed", message: "scheduler unavailable" },
+      cronJobs: [{ manifestId: "daily-report", action: "error" }],
+    });
+  });
+
+  it("reconciles a lost cron.remove response when the gateway confirms absence", async () => {
+    const current = await addFixture({ withCron: true });
+    const plan = await buildClawRemovePlan("worker", {
+      env: current.env,
+      config: current.getConfig(),
+    });
+    const ref = readClawCronRefs("worker", { env: current.env })[0]!;
+    let present = true;
+    let config = current.getConfig();
+
+    const result = await applyClawRemovePlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env: current.env,
+      config,
+      commitConfig: async (transform) => {
+        config = transform(config);
+      },
+      cronGateway: {
+        get: async () => (present ? cronReadView("worker", ref) : undefined),
+        remove: async () => {
+          present = false;
+          throw new Error("response lost");
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "complete",
+      cronJobs: [{ manifestId: "daily-report", action: "removed" }],
+    });
+  });
+
+  it("preserves a live cron job that changed after planning", async () => {
+    const current = await addFixture({ withCron: true });
+    const plan = await buildClawRemovePlan("worker", {
+      env: current.env,
+      config: current.getConfig(),
+    });
+    const remove = vi.fn();
+
+    const result = await applyClawRemovePlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env: current.env,
+      config: current.getConfig(),
+      cronGateway: {
+        get: async () => ({
+          ...cronReadView("worker", readClawCronRefs("worker", { env: current.env })[0]!),
+          schedule: { kind: "cron", expr: "0 12 * * *", tz: "UTC" },
+        }),
+        remove,
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "partial",
+      agentRemoved: false,
+      error: { code: "cron_cleanup_failed", message: expect.stringContaining("changed") },
+    });
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("finishes local cleanup without repeating a confirmed remote cron removal", async () => {
+    const current = await addFixture({ withCron: true });
+    markClawCronRefRemoved("worker", "daily-report", { env: current.env });
+    const plan = await buildClawRemovePlan("worker", {
+      env: current.env,
+      config: current.getConfig(),
+    });
+    let config = current.getConfig();
+    const remoteRemovals: string[] = [];
+
+    const result = await applyClawRemovePlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env: current.env,
+      config,
+      commitConfig: async (transform) => {
+        config = transform(config);
+      },
+      cronGateway: {
+        remove: async (id) => {
+          remoteRemovals.push(id);
+          return { ok: true };
+        },
+      },
+    });
+
+    expect(remoteRemovals).toEqual([]);
+    expect(result).toMatchObject({
+      status: "complete",
+      cronJobs: [{ manifestId: "daily-report", action: "removed" }],
     });
   });
 

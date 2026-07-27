@@ -19,22 +19,37 @@ import {
 } from "../ui/vite.config.ts";
 import { buildBackgroundTasksMock } from "./control-ui-mock-background-tasks.ts";
 import { buildChannelsStatusMock, buildChannelWizardMocks } from "./control-ui-mock-channels.ts";
+import { buildCronMocks } from "./control-ui-mock-cron.ts";
 import { buildPluginCatalogMock } from "./control-ui-mock-plugins.ts";
 import { buildSkillWorkshopMocks } from "./control-ui-mock-skill-workshop.js";
 
 type CliOptions = {
   allowedHosts: string[];
-  fixture?: "board";
+  fixture?: "approval" | "board" | "swarm";
   host: string;
   port: number;
 };
 
 type SessionListOptions = {
+  creators?: readonly SessionCreatorFixture[];
   hasMore: boolean;
   nextOffset: number | null;
   offset?: number;
   totalCount: number;
 };
+
+type SessionCreatorFixture = { type: "human" | "agent"; id: string; label: string };
+
+// Two creator identities so the sidebar's collaborative ownership chrome
+// (owner avatars + People filter) renders in the mock harness.
+const MOCK_SESSION_CREATORS: readonly SessionCreatorFixture[] = [
+  { type: "human", id: "profile-peter", label: "Peter" },
+  { type: "human", id: "profile-mira", label: "Mira" },
+];
+const [MOCK_CREATOR_PETER, MOCK_CREATOR_MIRA] = MOCK_SESSION_CREATORS as [
+  SessionCreatorFixture,
+  SessionCreatorFixture,
+];
 
 const SESSION_PAGE_SIZE = 50;
 const TOTAL_MOCK_SESSIONS = 650;
@@ -126,11 +141,11 @@ function parseArgs(args: string[]): CliOptions {
   return options;
 }
 
-function parseFixture(value: string | undefined): "board" | undefined {
+function parseFixture(value: string | undefined): CliOptions["fixture"] {
   if (!value) {
     return undefined;
   }
-  if (value !== "board") {
+  if (value !== "approval" && value !== "board" && value !== "swarm") {
     throw new Error(`Unknown Control UI mock fixture: ${value}`);
   }
   return value;
@@ -175,6 +190,7 @@ function sessionsListResponse(sessions: unknown[], options: SessionListOptions) 
     hasMore: options.hasMore,
     limitApplied: 50,
     nextOffset: options.nextOffset,
+    ...(options.creators ? { creators: options.creators } : {}),
     offset: options.offset ?? 0,
     path: "",
     sessions,
@@ -183,11 +199,16 @@ function sessionsListResponse(sessions: unknown[], options: SessionListOptions) 
   };
 }
 
-function pagedSessionsListResponse(sessions: unknown[], offset: number) {
+function pagedSessionsListResponse(
+  sessions: unknown[],
+  offset: number,
+  creators?: readonly SessionCreatorFixture[],
+) {
   const normalizedOffset = Math.max(0, Math.floor(offset));
   const page = sessions.slice(normalizedOffset, normalizedOffset + SESSION_PAGE_SIZE);
   const nextOffset = normalizedOffset + SESSION_PAGE_SIZE;
   return sessionsListResponse(page, {
+    creators,
     hasMore: nextOffset < sessions.length,
     nextOffset: nextOffset < sessions.length ? nextOffset : null,
     offset: normalizedOffset,
@@ -218,17 +239,18 @@ function buildSessionRows(params: {
 function buildSessionListCases(
   sessions: unknown[],
   matchBase: Record<string, unknown> = {},
+  creators?: readonly SessionCreatorFixture[],
 ): Array<{ match: Record<string, unknown>; response: unknown }> {
   const cases: Array<{ match: Record<string, unknown>; response: unknown }> = [];
   for (let offset = SESSION_PAGE_SIZE; offset < sessions.length; offset += SESSION_PAGE_SIZE) {
     cases.push({
       match: { ...matchBase, offset },
-      response: pagedSessionsListResponse(sessions, offset),
+      response: pagedSessionsListResponse(sessions, offset, creators),
     });
   }
   cases.push({
     match: matchBase,
-    response: pagedSessionsListResponse(sessions, 0),
+    response: pagedSessionsListResponse(sessions, 0, creators),
   });
   return cases;
 }
@@ -607,13 +629,14 @@ function buildProfileUsageMocks(baseTime: number) {
  * across a few real section keys, and `config.get` returns a matching
  * snapshot with the hash `config.set`/`config.apply` are guarded by.
  */
-function buildConfigMocks() {
+function buildConfigMocks(options: { swarmEnabled?: boolean } = {}) {
   const config = {
     logging: { level: "info", consoleTimestamps: true },
     messages: { queueLimit: 5, responsePrefix: "" },
     gateway: { port: 18789, bind: "127.0.0.1" },
     agents: { defaults: { thinkingDefault: "medium" } },
     models: { mode: "merge" },
+    ...(options.swarmEnabled ? { tools: { swarm: true } } : {}),
     mcp: {
       servers: {
         context7: { url: "https://mcp.context7.com/mcp", transport: "streamable-http" },
@@ -799,7 +822,9 @@ function searchPrefixes(term: string): string[] {
   return Array.from({ length: term.length }, (_value, index) => term.slice(0, index + 1));
 }
 
-async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario> {
+async function createChatPickerScenario(
+  fixture?: CliOptions["fixture"],
+): Promise<ControlUiMockGatewayScenario> {
   const baseTime = Date.parse("2026-05-22T09:00:00.000Z");
   const selfProfile: UserProfile = {
     id: "presence-riley",
@@ -1061,16 +1086,68 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       runtimeMs: 200_000,
     },
   );
+  const swarmGroupId = "swarm:agent:main:main:mock-turn";
+  const swarmChildRows =
+    fixture === "swarm"
+      ? [
+          sessionRow("agent:main:subagent:swarm-plan", "National polling", baseTime - 9_000, {
+            parentSessionKey: "agent:main:main",
+            spawnedBy: "agent:main:main",
+            swarmGroupId,
+            swarmPhase: "Research",
+            swarmPhaseRank: 0,
+            status: "done",
+          }),
+          sessionRow("agent:main:subagent:swarm-work", "Work and labor", baseTime - 8_000, {
+            hasActiveRun: true,
+            parentSessionKey: "agent:main:main",
+            spawnedBy: "agent:main:main",
+            swarmGroupId,
+            swarmLog: "Comparing labor, education, and consumer signals.",
+            swarmPhase: "Research",
+            swarmPhaseRank: 0,
+            status: "running",
+          }),
+          sessionRow("agent:main:subagent:swarm-health", "Health", baseTime - 7_000, {
+            hasActiveRun: true,
+            parentSessionKey: "agent:main:main",
+            spawnedBy: "agent:main:main",
+            swarmGroupId,
+            swarmPhase: "Research",
+            swarmPhaseRank: 0,
+            status: "running",
+          }),
+          sessionRow("agent:main:subagent:swarm-trust", "Governance and trust", baseTime - 6_000, {
+            parentSessionKey: "agent:main:main",
+            spawnedBy: "agent:main:main",
+            subagentRunState: "active",
+            swarmGroupId,
+            swarmPhase: "Research",
+            swarmPhaseRank: 0,
+            status: undefined,
+          }),
+          sessionRow("agent:main:subagent:swarm-media", "Media signals", baseTime - 5_000, {
+            parentSessionKey: "agent:main:main",
+            spawnedBy: "agent:main:main",
+            swarmGroupId,
+            swarmPhase: "Research",
+            swarmPhaseRank: 0,
+            status: "failed",
+          }),
+        ]
+      : [];
   const sessions = [
     sessionRow("agent:main:main", "Molty", baseTime - 1_000, {
-      childSessions: ["agent:main:lisbon-trip"],
+      childSessions: ["agent:main:lisbon-trip", ...swarmChildRows.map((row) => row.key)],
     }),
+    ...swarmChildRows,
     sessionRow(OBSERVER_DEMO_SESSION_KEY, "Session observer demo", baseTime - 3_000, {
       activeRunIds: [OBSERVER_DEMO_RUN_ID],
       hasActiveRun: true,
+      lastReadAt: baseTime + 2_000,
       observerDigest: {
-        headline: "Third run of the same vitest file - two assertions still failing",
-        health: "grinding",
+        headline: "Opening the focused observer tests",
+        health: "on-track",
         revision: 1,
         runId: OBSERVER_DEMO_RUN_ID,
         updatedAt: baseTime - 2_000,
@@ -1079,6 +1156,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       status: "running",
     }),
     sessionRow(NARRATION_DEMO_SESSION_KEY, "Sidebar narration demo", baseTime - 15_000, {
+      createdActor: MOCK_CREATOR_MIRA,
       hasActiveRun: true,
       startedAt: baseTime - 45_000,
       status: "running",
@@ -1091,14 +1169,18 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       icon: "name:spark",
     }),
     sessionRow("agent:main:production-export", "Production export", baseTime - 75_000, {
+      category: "Research",
+      createdActor: MOCK_CREATOR_MIRA,
       execCwd: "/Users/peter/Projects/clawdbot",
     }),
     sessionRow("agent:main:model-budget", "Model budget review", baseTime - 80_000, {
+      category: "Research",
       execCwd: "/Users/peter/Projects/openclaw",
       status: "failed",
       lastRunError: "Model out of credits: openai/gpt-5.6",
     }),
     sessionRow("agent:main:work-openclaw", "OpenClaw work checkout", baseTime - 85_000, {
+      createdActor: MOCK_CREATOR_PETER,
       execCwd: "/Users/peter/Work/openclaw",
       lastReadAt: baseTime - 120_000,
       observerDigest: {
@@ -1143,6 +1225,8 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
   const archivedSessions = [
     sessionRow("agent:main:archived-launch-notes", "Archived launch notes", baseTime - 86_400_000, {
       archived: true,
+      archivedBy: MOCK_CREATOR_MIRA,
+      createdActor: MOCK_CREATOR_PETER,
       totalTokens: 42_000,
     }),
     sessionRow(
@@ -1176,8 +1260,9 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
   const profileUsage = buildProfileUsageMocks(Date.now());
   const modelProviders = buildModelProviderMocks(Date.now());
   const skillWorkshop = buildSkillWorkshopMocks(Date.now());
+  const cronMocks = buildCronMocks(Date.now());
   const channelWizard = buildChannelWizardMocks();
-  const configMocks = buildConfigMocks();
+  const configMocks = buildConfigMocks({ swarmEnabled: fixture === "swarm" });
   return {
     assistantAgentId: "main",
     assistantName: "Molty",
@@ -1205,7 +1290,11 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     ],
     methodResponses: {
       ...buildBackgroundTasksMock(baseTime),
+      ...cronMocks,
       "users.self": { profile: selfProfile },
+      // Custom session group catalog so the sidebar's category zone (and its
+      // drag-reordering against built-in sections) is exercised in the mock.
+      "sessions.groups.list": { groups: [{ name: "Research", position: 0 }] },
       "system.info": {
         machineName: "Peters-Mac-Studio",
         hostname: "peters-mac-studio.local",
@@ -1329,17 +1418,23 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
           },
         ],
       },
-      "exec.approval.list": [
-        {
-          id: "mock-production-export-approval",
-          request: {
-            command: "openclaw export --target production",
-            sessionKey: "agent:main:production-export",
-          },
-          createdAtMs: baseTime - 75_000,
-          expiresAtMs: ATTENTION_FIXTURE_EXPIRES_AT,
-        },
-      ],
+      // Pending exec approvals reopen as a blocking modal on every page load
+      // (connect-time exec.approval.list recovery), so the demo approval is
+      // opt-in via --fixture=approval instead of polluting the default mock.
+      "exec.approval.list":
+        fixture === "approval"
+          ? [
+              {
+                id: "mock-production-export-approval",
+                request: {
+                  command: "openclaw export --target production",
+                  sessionKey: "agent:main:production-export",
+                },
+                createdAtMs: baseTime - 75_000,
+                expiresAtMs: ATTENTION_FIXTURE_EXPIRES_AT,
+              },
+            ]
+          : [],
       "plugin.approval.list": [],
       "openclaw.approval.list": [],
       "sessions.patch": { ok: true },
@@ -1679,13 +1774,13 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
           },
         ],
       },
-      "sessions.observer.ask": {
+      "sessions.companion.ask": {
         cases: [
           {
             match: { sessionKey: OBSERVER_DEMO_SESSION_KEY },
             response: {
               answer: "It is rerunning the focused test to check whether the latest fix is stable.",
-              digestRevision: 4,
+              ts: baseTime + 2_000,
             },
           },
         ],
@@ -1695,7 +1790,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
           // Child fetches must precede the catch-all page case (subset match).
           {
             match: { spawnedBy: "agent:main:main" },
-            response: pagedSessionsListResponse([mainChildRow], 0),
+            response: pagedSessionsListResponse([mainChildRow, ...swarmChildRows], 0),
           },
           {
             match: { spawnedBy: "agent:main:tax-research" },
@@ -1707,7 +1802,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
             ...searchPrefixes("claude-sonnet-4-6"),
             ...searchPrefixes("anthropic"),
           ]),
-          ...buildSessionListCases([...sessions, ...archivedSessions]),
+          ...buildSessionListCases([...sessions, ...archivedSessions], {}, MOCK_SESSION_CREATORS),
         ],
       },
     },
@@ -1718,7 +1813,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
         {
           event: "session.observer",
           payload: {
-            headline: "Reading the failing test",
+            headline: "Reading the failing test and its board caller",
             health: "on-track",
             revision: 2,
             runId: OBSERVER_DEMO_RUN_ID,
@@ -1729,8 +1824,11 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
         {
           event: "session.observer",
           payload: {
+            assessment:
+              "The first fix was incomplete, so the agent is narrowing the assertion path.",
             headline: "Third run of the same vitest file - two assertions still failing",
             health: "grinding",
+            planProgress: { completed: 2, total: 4 },
             revision: 3,
             runId: OBSERVER_DEMO_RUN_ID,
             sessionKey: OBSERVER_DEMO_SESSION_KEY,
@@ -1740,8 +1838,10 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
         {
           event: "session.observer",
           payload: {
+            assessment: "Repeated identical failures suggest the current approach needs a reset.",
             headline: "Same failure five runs in a row - it may be circling",
             health: "stuck",
+            planProgress: { completed: 2, total: 4 },
             revision: 4,
             runId: OBSERVER_DEMO_RUN_ID,
             sessionKey: OBSERVER_DEMO_SESSION_KEY,
@@ -1848,7 +1948,7 @@ async function waitForShutdown(): Promise<void> {
 }
 
 const options = parseArgs(process.argv.slice(2));
-const scenario = await createChatPickerScenario();
+const scenario = await createChatPickerScenario(options.fixture);
 const server = await createServer({
   base: "/",
   cacheDir: path.join(repoRoot, ".artifacts", "control-ui-mock-vite"),

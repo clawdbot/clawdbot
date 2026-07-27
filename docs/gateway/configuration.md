@@ -63,6 +63,10 @@ field map and defaults.
     available, with a **Raw JSON** editor as an escape hatch. For drill-down
     UIs and other tooling, the gateway also exposes `config.schema.lookup` to
     fetch one path-scoped schema node plus immediate child summaries.
+    Settings show common fields first. Each section keeps its advanced fields
+    in a collapsed **Advanced (N)** group; use **Show advanced** to expand all
+    groups. Settings search always includes both tiers and opens the matching
+    advanced group when needed.
   </Tab>
   <Tab title="Direct edit">
     Edit `~/.openclaw/openclaw.json` directly. The Gateway watches the file and applies changes automatically (see [hot reload](#config-hot-reload)).
@@ -81,6 +85,12 @@ child summaries for drill-down tooling. Field `title`/`description` docs metadat
 carries through nested objects, wildcard (`*`), array-item (`[]`), and `anyOf`/
 `oneOf`/`allOf` branches. Runtime plugin and channel schemas merge in when the
 manifest registry is loaded.
+
+Every config leaf has a common or advanced presentation tier in `uiHints`.
+`advanced: false` marks common settings and `advanced: true` marks advanced
+settings. A leaf inherits the nearest ancestor tier when it has no direct hint;
+paths with no declared ancestor default to advanced. This affects presentation
+only, not validation, defaults, reload behavior, or whether the key can be set.
 
 When validation fails:
 

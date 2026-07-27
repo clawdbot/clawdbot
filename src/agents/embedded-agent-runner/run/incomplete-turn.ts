@@ -9,6 +9,7 @@ import {
   SILENT_REPLY_TOKEN,
 } from "../../../auto-reply/tokens.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
+import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
 import type { MessagingToolSend } from "../../embedded-agent-messaging.types.js";
 import {
@@ -59,8 +60,7 @@ type IncompleteTurnAttempt = Pick<
   | "itemLifecycle"
   | "messagesSnapshot"
   | "replayMetadata"
-  | "promptErrorSource"
-  | "timedOutDuringCompaction"
+  | "terminal"
   | "toolMetas"
 > &
   Partial<Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">>;
@@ -89,7 +89,7 @@ type SilentToolResultAttempt = Pick<
 
 type RunLivenessAttempt = Pick<
   EmbeddedRunAttemptResult,
-  "lastAssistant" | "promptErrorSource" | "replayMetadata" | "timedOutDuringCompaction"
+  "lastAssistant" | "replayMetadata" | "terminal"
 >;
 
 const REPLAY_UNSAFE_FALLBACK_METADATA: EmbeddedRunAttemptResult["replayMetadata"] = {
@@ -139,7 +139,7 @@ const REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
-const TOOL_USE_TERMINAL_CONTINUATION_INSTRUCTION =
+const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
   "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
 
 /**
@@ -232,6 +232,7 @@ export function resolveIncompleteTurnPayloadText(params: {
   aborted: boolean;
   externalAbort: boolean;
   timedOut: boolean;
+  hadPotentialSideEffects?: boolean;
   attempt: IncompleteTurnAttempt;
 }): string | null {
   // Prefer the current attempt's terminal message. The session fallback can
@@ -298,7 +299,8 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
-  return resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects
+  return params.hadPotentialSideEffects ||
+    resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects
     ? "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying."
     : "⚠️ Agent couldn't generate a response. Please try again.";
 }
@@ -494,10 +496,11 @@ export function resolveReplayInvalidFlag(params: {
   attempt: RunLivenessAttempt;
   incompleteTurnText?: string | null;
 }): boolean {
+  const terminal = projectAgentRunAttemptTerminal(params.attempt.terminal);
   return (
     !resolveAttemptReplayMetadata(params.attempt).replaySafe ||
-    params.attempt.promptErrorSource === "compaction" ||
-    params.attempt.timedOutDuringCompaction ||
+    terminal.promptErrorSource === "compaction" ||
+    terminal.timedOutDuringCompaction ||
     Boolean(params.incompleteTurnText)
   );
 }
@@ -513,10 +516,8 @@ export function resolveRunLivenessState(params: {
   if (params.incompleteTurnText) {
     return "abandoned";
   }
-  if (
-    params.attempt.promptErrorSource === "compaction" ||
-    params.attempt.timedOutDuringCompaction
-  ) {
+  const terminal = projectAgentRunAttemptTerminal(params.attempt.terminal);
+  if (terminal.promptErrorSource === "compaction" || terminal.timedOutDuringCompaction) {
     return "paused";
   }
   if ((params.aborted || params.timedOut) && params.payloadCount === 0) {
@@ -666,6 +667,8 @@ function shouldSkipNonVisibleTurnRetry(params: {
   aborted: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
+  /** Reply-optional silent classification tolerates committed side effects; retries never can. */
+  tolerateSideEffects?: boolean;
 }): boolean {
   return Boolean(
     params.aborted ||
@@ -675,19 +678,30 @@ function shouldSkipNonVisibleTurnRetry(params: {
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError ||
     hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns) ||
-    resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects,
+    (params.tolerateSideEffects !== true &&
+      resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects),
   );
 }
 
 /** Allows configured silent handling for replay-safe empty, reasoning-only, or explicit silent turns. */
 export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   allowEmptyAssistantReplyAsSilent?: boolean;
+  onlyExplicitSilentReply?: boolean;
+  terminalReplyExpectation?: "required" | "optional";
   payloadCount: number;
   aborted: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): boolean {
-  if (!params.allowEmptyAssistantReplyAsSilent || shouldSkipNonVisibleTurnRetry(params)) {
+  // "optional" is the run consumer's declaration that no user-facing reply is
+  // owed (e.g. cron without a delivery route). Silence after side-effecting
+  // tools is intentional there; retry is replay-unsafe, so erroring would mark
+  // successful tool-only runs as failures.
+  const terminalReplyOptional = params.terminalReplyExpectation === "optional";
+  if (
+    !params.allowEmptyAssistantReplyAsSilent ||
+    shouldSkipNonVisibleTurnRetry({ ...params, tolerateSideEffects: terminalReplyOptional })
+  ) {
     return false;
   }
   if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
@@ -701,9 +715,13 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   ) {
     return true;
   }
-  // Post-tool empty stops are ambiguous provider failures, not intentional silence.
-  // Let the retry/incomplete-turn paths decide whether replay is safe.
+  if (params.onlyExplicitSilentReply) {
+    return false;
+  }
+  // Post-tool empty stops are ambiguous provider failures when a reply is still
+  // expected; reply-optional runs settle their work in the tools themselves.
   if (
+    !terminalReplyOptional &&
     params.attempt.toolMetas.length > 0 &&
     isEmptyResponseAssistantTurn({
       payloadCount: params.payloadCount,
@@ -760,12 +778,13 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   return REASONING_ONLY_RETRY_INSTRUCTION;
 }
 
-/** Builds a fresh continuation for a clean tool-use terminal turn with settled tool activity. */
-export function resolveToolUseTerminalContinuationInstruction(params: {
+/** Builds one fresh continuation after settled tools ended without a visible final answer. */
+export function resolveSettledToolTerminalContinuationInstruction(params: {
   provider?: string;
   modelId?: string;
   modelApi?: string;
   executionContract?: string;
+  allowEmptyStopContinuation?: boolean;
   payloadCount: number;
   hasTerminalToolPresentation?: boolean;
   aborted: boolean;
@@ -774,6 +793,21 @@ export function resolveToolUseTerminalContinuationInstruction(params: {
   attempt: IncompleteTurnAttempt;
 }): string | null {
   const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  const currentAttemptAssistant = params.attempt.currentAttemptAssistant;
+  const emptyStopAfterSettledTools = Boolean(
+    params.allowEmptyStopContinuation &&
+    currentAttemptAssistant?.stopReason === "stop" &&
+    params.attempt.toolMetas.length > 0 &&
+    params.attempt.toolMetas.every((tool) => tool.isError !== true && tool.asyncStarted !== true) &&
+    params.attempt.itemLifecycle.startedCount > 0 &&
+    params.attempt.itemLifecycle.completedCount === params.attempt.itemLifecycle.startedCount &&
+    params.attempt.itemLifecycle.activeCount === 0 &&
+    !hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns) &&
+    isEmptyResponseAssistantTurn({
+      payloadCount: params.payloadCount,
+      attempt: params.attempt,
+    }),
+  );
   // Idle is not proof of completion: a toolUse terminal whose requested tools never
   // (or only partially) dispatched must keep the incomplete-turn error, or the model
   // could claim skipped side effects succeeded. Lifecycle counts are attempt-cumulative
@@ -811,8 +845,7 @@ export function resolveToolUseTerminalContinuationInstruction(params: {
     params.aborted ||
     params.promptError != null ||
     params.timedOut ||
-    assistant?.stopReason !== "toolUse" ||
-    !allToolsProvenComplete ||
+    (assistant?.stopReason === "toolUse" ? !allToolsProvenComplete : !emptyStopAfterSettledTools) ||
     params.attempt.lastToolError ||
     params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
@@ -833,7 +866,7 @@ export function resolveToolUseTerminalContinuationInstruction(params: {
   ) {
     return null;
   }
-  return TOOL_USE_TERMINAL_CONTINUATION_INSTRUCTION;
+  return SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION;
 }
 
 /**

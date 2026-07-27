@@ -14,7 +14,10 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import { resolveOptionalMediaToolFactoryPlan } from "./openclaw-tools.media-factory-plan.js";
+import {
+  resolveImageToolFactoryAvailable,
+  resolveOptionalMediaToolFactoryPlan,
+} from "./openclaw-tools.media-factory-plan.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "./tool-policy.js";
 import { loadCapabilityMetadataSnapshot } from "./tools/manifest-capability-availability.js";
 import * as pdfModelConfigModule from "./tools/pdf-tool.model-config.js";
@@ -156,6 +159,7 @@ function installSnapshot(
     },
   } satisfies PluginMetadataSnapshot;
   setCurrentPluginMetadataSnapshot(snapshot, { config });
+  return snapshot;
 }
 
 describe("optional media tool factory planning", () => {
@@ -191,6 +195,139 @@ describe("optional media tool factory planning", () => {
     resetPluginRuntimeStateForTest();
     clearSecretsRuntimeSnapshot();
     vi.unstubAllEnvs();
+  });
+
+  it("uses the prepared media family for image-tool availability", () => {
+    const config: OpenClawConfig = {};
+    const snapshot = installSnapshot(config, [
+      createPlugin({
+        id: "media-owner",
+        contracts: { mediaUnderstandingProviders: ["media-owner"] },
+        setupProviders: [{ id: "media-owner" }],
+      }),
+    ]);
+    const base = {
+      config,
+      agentDir: "/agent",
+      authStore: createAuthStore(["media-owner"]),
+    };
+
+    expect(
+      resolveImageToolFactoryAvailable({
+        ...base,
+        preparedModelRuntime: {
+          metadataSnapshot: snapshot,
+          mediaCapabilityProviders: { mediaUnderstandingProviders: [] },
+        } as never,
+      }),
+    ).toBe(false);
+    expect(
+      resolveImageToolFactoryAvailable({
+        ...base,
+        preparedModelRuntime: {
+          metadataSnapshot: snapshot,
+          mediaCapabilityProviders: {
+            mediaUnderstandingProviders: [{ id: "media-owner", capabilities: ["image"] }],
+          },
+        } as never,
+      }),
+    ).toBe(true);
+  });
+
+  it("requires image capability and auth on the same prepared provider", () => {
+    const config: OpenClawConfig = {};
+    const snapshot = installSnapshot(config, [
+      createPlugin({
+        id: "media-owner",
+        contracts: {
+          mediaUnderstandingProviders: ["audio-auth", "image-no-auth"],
+        },
+        setupProviders: [{ id: "audio-auth" }, { id: "image-no-auth" }],
+      }),
+    ]);
+
+    expect(
+      resolveImageToolFactoryAvailable({
+        config,
+        agentDir: "/agent",
+        authStore: createAuthStore(["audio-auth"]),
+        preparedModelRuntime: {
+          metadataSnapshot: snapshot,
+          mediaCapabilityProviders: {
+            mediaUnderstandingProviders: [
+              { id: "audio-auth", capabilities: ["audio"] },
+              { id: "image-no-auth", capabilities: ["image"] },
+            ],
+          },
+        } as never,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps config vision routes while gating OpenAI subscription auth on prepared Codex", () => {
+    vi.stubEnv("OPENAI_API_KEY", "");
+    const config = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://vision.example/v1",
+            models: [{ id: "vision", input: ["text", "image"] }],
+          },
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [{ id: "gpt-image", input: ["text", "image"] }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const snapshot = installSnapshot(config, []);
+    const preparedModelRuntime = {
+      metadataSnapshot: snapshot,
+      mediaCapabilityProviders: { mediaUnderstandingProviders: [] },
+    } as never;
+    const oauthStore = createAuthStore();
+    oauthStore.profiles["openai:default"] = {
+      provider: "openai",
+      type: "oauth",
+      access: "test",
+      refresh: "test",
+      expires: Date.now() + 60_000,
+    };
+
+    expect(
+      resolveImageToolFactoryAvailable({
+        config,
+        agentDir: "/agent",
+        authStore: createAuthStore(["custom"]),
+        preparedModelRuntime,
+      }),
+    ).toBe(true);
+    expect(
+      resolveImageToolFactoryAvailable({
+        config,
+        agentDir: "/agent",
+        authStore: oauthStore,
+        preparedModelRuntime,
+      }),
+    ).toBe(false);
+    for (const [capabilities, expected] of [
+      [["audio"], false],
+      [["image"], true],
+    ] as const) {
+      expect(
+        resolveImageToolFactoryAvailable({
+          config,
+          agentDir: "/agent",
+          authStore: oauthStore,
+          preparedModelRuntime: {
+            metadataSnapshot: snapshot,
+            mediaCapabilityProviders: {
+              mediaUnderstandingProviders: [{ id: "codex", capabilities }],
+            },
+          } as never,
+        }),
+      ).toBe(expected);
+    }
   });
 
   it("skips unavailable generation and PDF factories from snapshot and run auth facts", () => {

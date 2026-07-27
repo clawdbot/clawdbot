@@ -4,7 +4,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.media-rich-content
+      - matrix.media-and-rich-content
   gatewayConfigPatch:
     tools:
       media:

@@ -19,16 +19,19 @@ import {
   getRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import {
   commitExecAuthorizationLocked,
   createExecApprovalPolicySnapshot,
   loadExecApprovals,
-  resolveExecApprovalsPath,
   saveExecApprovals,
 } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { ExecHostResponse } from "../infra/exec-host.js";
+import { formatExecCommand } from "../infra/system-run-command.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 import { handleSystemRunInvoke } from "./invoke-system-run.js";
@@ -79,11 +82,15 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   beforeEach(() => {
     previousOpenClawHome = process.env.OPENCLAW_HOME;
     process.env.OPENCLAW_HOME = sharedOpenClawHome;
-    fs.rmSync(resolveExecApprovalsPath(), { force: true });
+    closeOpenClawStateDatabaseForTest();
+    fs.rmSync(resolveOpenClawStateSqlitePath(), { force: true });
+    execApprovalsStoreTesting.reset();
     clearRuntimeConfigSnapshot();
   });
 
   afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
+    execApprovalsStoreTesting.reset();
     clearRuntimeConfigSnapshot();
     if (previousOpenClawHome === undefined) {
       delete process.env.OPENCLAW_HOME;
@@ -128,12 +135,14 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   }
 
   function bindCurrentPolicyToPlan(plan: SystemRunApprovalPlan): SystemRunApprovalPlan {
+    const agentId = plan.agentId ?? "main";
     return {
       ...plan,
+      agentId,
       sessionKey: plan.sessionKey ?? "agent:main:main",
       policySnapshot: createExecApprovalPolicySnapshot({
         file: loadExecApprovals(),
-        agentId: plan.agentId ?? undefined,
+        agentId,
       }),
     };
   }
@@ -555,21 +564,27 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     let dispatchCommand = command;
     let dispatchRawCommand = params.rawCommand;
     let dispatchCwd = params.cwd;
-    let dispatchAgentId = params.agentId;
+    let dispatchAgentId: string | undefined = params.agentId ?? "main";
     const forwardsDelayedApproval =
       params.approvalSource === "auto-review" ||
       params.approved === true ||
       params.approvalDecision === "allow" ||
       params.approvalDecision === "allow-once" ||
       params.approvalDecision === "allow-always";
-    let systemRunPlan = params.systemRunPlan;
+    let systemRunPlan: SystemRunApprovalPlan | undefined = params.systemRunPlan
+      ? {
+          ...params.systemRunPlan,
+          agentId: params.systemRunPlan.agentId ?? dispatchAgentId,
+          sessionKey: params.systemRunPlan.sessionKey ?? "agent:main:main",
+        }
+      : undefined;
     if (forwardsDelayedApproval && params.prepareDelayedApprovalPlan !== false) {
       if (!systemRunPlan) {
         const prepared = buildSystemRunApprovalPlan({
           command,
           rawCommand: params.rawCommand,
           cwd: params.cwd,
-          agentId: params.agentId,
+          agentId: dispatchAgentId,
           sessionKey: "agent:main:main",
         });
         if (!prepared.ok) {
@@ -793,6 +808,51 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       clearRuntimeConfigSnapshot();
     }
   });
+
+  it.runIf(process.platform !== "win32").each(["bash", "sh", "/bin/sh"])(
+    "does not auto-review direct %s login-shell startup",
+    async (shell) => {
+      const tmp = createFixtureDir("openclaw-system-run-auto-review-login-");
+      setRuntimeConfigSnapshot({ tools: { exec: { mode: "auto" } } });
+      try {
+        const autoReviewer = vi.fn<ExecAutoReviewer>(() => ({
+          decision: "allow-once",
+          rationale: "unsafe startup wrapper must not reach the reviewer",
+          risk: "low",
+        }));
+        const loginCommand = `${shell} -lc "echo auto-review-startup-proof"`;
+        const command = ["/bin/sh", "-lc", loginCommand];
+        // The real plan builder already rejects this wrapper. Exercise the
+        // node trust boundary against a hostile, otherwise well-formed plan.
+        const approvalPlan = {
+          argv: command,
+          cwd: tmp,
+          commandText: formatExecCommand(command),
+          agentId: "main",
+          sessionKey: "agent:main:main",
+        } satisfies SystemRunApprovalPlan;
+
+        const invoke = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command,
+          rawCommand: approvalPlan.commandText,
+          cwd: tmp,
+          systemRunPlan: approvalPlan,
+          resolveExecSecurity: resolveProductionExecSecurity,
+          resolveExecAsk: resolveProductionExecAsk,
+          autoReviewer,
+        });
+
+        expect(autoReviewer).not.toHaveBeenCalled();
+        expect(invoke.runCommand).not.toHaveBeenCalled();
+        expectInvokeErrorMessage(invoke.sendInvokeResult, {
+          message: "SYSTEM_RUN_DENIED: approval required",
+        });
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
+    },
+  );
 
   it("does not auto-review direct system.run security audit suppression edits", async () => {
     const tmp = createFixtureDir("openclaw-system-run-auto-review-suppression-");

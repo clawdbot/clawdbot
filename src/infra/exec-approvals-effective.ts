@@ -1,7 +1,7 @@
 // Resolves effective exec approval policy from config and policy files.
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
   DEFAULT_EXEC_APPROVAL_ASK_FALLBACK,
   resolveExecApprovalAllowedDecisions,
@@ -302,9 +302,11 @@ export function collectExecPolicyScopeSnapshots(params: {
   hostDefaults?: ExecPolicyHostDefaults;
   hostDefaultSource?: string;
 }): ExecPolicyScopeSnapshot[] {
+  const defaultAgentId = resolveDefaultAgentId(params.cfg);
   const snapshots = [
     resolveExecPolicyScopeSnapshot({
       approvals: params.approvals,
+      agentId: defaultAgentId,
       scopeExecConfig: params.cfg.tools?.exec,
       configPath: "tools.exec",
       hostPath: params.hostPath,
@@ -314,23 +316,24 @@ export function collectExecPolicyScopeSnapshots(params: {
     }),
   ];
   const globalExecConfig = params.cfg.tools?.exec;
+  const configuredAgents = listAgentEntries(params.cfg);
   const configAgentIds = new Set(
-    (params.cfg.agents?.list ?? [])
-      .filter((agent) => agent.id !== DEFAULT_AGENT_ID || agent.tools?.exec !== undefined)
+    configuredAgents
+      .filter((agent) => agent.id !== defaultAgentId || agent.tools?.exec !== undefined)
       .map((agent) => agent.id),
   );
   const approvalAgentIds = Object.keys(params.approvals.agents ?? {}).filter(
-    (agentId) => agentId !== "*" && agentId !== "default" && agentId !== DEFAULT_AGENT_ID,
+    (agentId) => agentId !== "*" && agentId !== "default" && agentId !== defaultAgentId,
   );
   const agentIds = sortUniqueStrings([...configAgentIds, ...approvalAgentIds]);
   for (const agentId of agentIds) {
-    const agentConfig = params.cfg.agents?.list?.find((agent) => agent.id === agentId);
+    const agentConfig = configuredAgents.find((agent) => agent.id === agentId);
     snapshots.push(
       resolveExecPolicyScopeSnapshot({
         approvals: params.approvals,
         scopeExecConfig: agentConfig?.tools?.exec,
         globalExecConfig,
-        configPath: `agents.list.${agentId}.tools.exec`,
+        configPath: `agents.entries.${agentId}.tools.exec`,
         hostPath: params.hostPath,
         hostDefaults: params.hostDefaults,
         hostDefaultSource: params.hostDefaultSource,

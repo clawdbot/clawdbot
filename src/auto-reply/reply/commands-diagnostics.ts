@@ -13,6 +13,10 @@ import type {
 } from "../../interactive/payload.js";
 import { executePluginCommand, matchPluginCommand } from "../../plugins/commands.js";
 import type { PluginCommandDiagnosticsSession, PluginCommandResult } from "../../plugins/types.js";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.shared.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectNonOwnerCommand } from "./command-gates.js";
 import {
@@ -490,14 +494,12 @@ function buildCodexDiagnosticsSessions(
       channel: resolveDiagnosticsSessionChannel(entry, params, sessionKey),
       channelId: resolveDiagnosticsSessionChannelId(entry, params, sessionKey),
       accountId:
-        normalizeOptionalString(entry.deliveryContext?.accountId) ??
-        normalizeOptionalString(entry.origin?.accountId) ??
-        normalizeOptionalString(entry.lastAccountId) ??
+        normalizeOptionalString(deliveryContextFromSession(entry)?.accountId) ??
+        normalizeOptionalString(sessionDeliveryOrigin(entry)?.accountId) ??
         (sessionKey === params.sessionKey ? (params.ctx.AccountId ?? undefined) : undefined),
       messageThreadId:
-        entry.deliveryContext?.threadId ??
-        entry.origin?.threadId ??
-        entry.lastThreadId ??
+        deliveryContextFromSession(entry)?.threadId ??
+        sessionDeliveryOrigin(entry)?.threadId ??
         (sessionKey === params.sessionKey &&
         (typeof params.ctx.MessageThreadId === "string" ||
           typeof params.ctx.MessageThreadId === "number")
@@ -516,10 +518,8 @@ function resolveDiagnosticsSessionChannel(
   sessionKey: string,
 ): string | undefined {
   return (
-    normalizeOptionalString(entry.deliveryContext?.channel) ??
-    normalizeOptionalString(entry.origin?.provider) ??
-    normalizeOptionalString(entry.channel) ??
-    normalizeOptionalString(entry.lastChannel) ??
+    normalizeOptionalString(deliveryContextFromSession(entry)?.channel) ??
+    normalizeOptionalString(sessionDeliveryOrigin(entry)?.provider) ??
     (sessionKey === params.sessionKey ? params.command.channel : undefined)
   );
 }
@@ -530,7 +530,7 @@ function resolveDiagnosticsSessionChannelId(
   sessionKey: string,
 ) {
   return (
-    normalizeOptionalString(entry.origin?.nativeChannelId) ??
+    normalizeOptionalString(sessionDeliveryOrigin(entry)?.nativeChannelId) ??
     (sessionKey === params.sessionKey ? params.command.channelId : undefined)
   );
 }

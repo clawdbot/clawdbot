@@ -34,6 +34,13 @@ const GATEWAY_WEBCHAT_RULE: LegacyConfigRule = {
   message: 'gateway.webchat is retired. Run "openclaw doctor --fix".',
 };
 
+const CONTROL_UI_DEVICE_AUTH_MIGRATION_RULE: LegacyConfigRule = {
+  path: ["gateway", "controlUi", "dangerouslyDisableDeviceAuth"],
+  message:
+    'gateway.controlUi.dangerouslyDisableDeviceAuth is retired. OpenClaw will preserve authenticated, pairing-only access for remediation, remove the legacy key, and prompt you to reopen the Control UI over HTTPS or localhost before clicking Secure this browser. Run "openclaw doctor --fix".',
+  match: (value) => typeof value === "boolean",
+};
+
 function isLegacyGatewayBindHostAlias(value: unknown): boolean {
   return normalizeLegacyGatewayBindHostAlias(value) !== null;
 }
@@ -77,6 +84,25 @@ function escapeControlForLog(value: string): string {
 
 /** Legacy config migration specs for gateway runtime config. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "gateway.control-ui-device-auth-bypass->pairing-migration",
+    describe: "Convert the retired Control UI device-auth bypass into explicit pairing",
+    legacyRules: [CONTROL_UI_DEVICE_AUTH_MIGRATION_RULE],
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      const controlUi = getRecord(gateway?.controlUi);
+      if (!controlUi || !Object.hasOwn(controlUi, "dangerouslyDisableDeviceAuth")) {
+        return;
+      }
+      const migrationRequired = controlUi.dangerouslyDisableDeviceAuth === true;
+      delete controlUi.dangerouslyDisableDeviceAuth;
+      changes.push(
+        migrationRequired
+          ? "Preserved the retired Control UI device-auth bypass for remediation. Reopen the Control UI over HTTPS or localhost, then click Secure this browser."
+          : "Removed disabled gateway.controlUi.dangerouslyDisableDeviceAuth legacy config.",
+      );
+    },
+  }),
   defineLegacyConfigMigration({
     id: "gateway.webchat-remove",
     describe: "Remove retired WebChat gateway config",

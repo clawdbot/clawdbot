@@ -14,8 +14,12 @@ type UserTurnSessionEntry = {
   threadId?: string | number;
 } & Record<string, unknown>;
 
-export type PersistedUserTurnMediaInput = Pick<MediaFactInput, "contentType" | "path" | "url"> & {
+export type PersistedUserTurnMediaInput = Pick<
+  MediaFactInput,
+  "contentType" | "hydrationSuppressed" | "messageId" | "path" | "transcribed" | "url"
+> & {
   kind?: string | null;
+  workspaceDir?: string | null;
 };
 
 export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }>;
@@ -23,6 +27,14 @@ export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }>;
 export type UserTurnInput = {
   text?: string | null;
   media?: readonly PersistedUserTurnMediaInput[] | null;
+  /** Restart-safe native image placement; model-visible prompt bytes remain separate. */
+  mediaImageLayout?: {
+    slots: readonly {
+      kind: "inline" | "offloaded";
+      factIndex?: number;
+    }[];
+    suppressedFactIndexes?: readonly number[];
+  } | null;
   timestamp?: number;
   idempotencyKey?: string;
   senderIsOwner?: boolean;

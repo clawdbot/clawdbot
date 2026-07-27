@@ -4,6 +4,7 @@ import type {
   ModelProviderConfig,
   ModelDefinitionConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input-runtime";
 
 /** Provider config input type — partial config without required `models`. */
 type OllamaProviderConfigInput = Omit<Partial<ModelProviderConfig>, "models"> & {
@@ -220,7 +221,10 @@ function hasExplicitRemoteOllamaApiProvider(
 export function shouldUseSyntheticOllamaAuth(
   providerConfig: OllamaProviderConfigInput | undefined,
 ): boolean {
-  if (!hasMeaningfulExplicitOllamaConfig(providerConfig)) {
+  if (
+    coerceSecretRef(providerConfig?.apiKey) ||
+    !hasMeaningfulExplicitOllamaConfig(providerConfig)
+  ) {
     return false;
   }
   return isLocalOllamaBaseUrl(readProviderBaseUrl(providerConfig));
@@ -298,7 +302,15 @@ export async function resolveOllamaDiscoveryResult(params: {
     typeof ollamaKey === "string" &&
     ollamaKey.trim().length > 0 &&
     ollamaKey.trim() !== OLLAMA_DEFAULT_API_KEY;
-  const explicitApiKey = readStringValue(explicit?.apiKey);
+  const explicitApiKeyRef = coerceSecretRef(explicit?.apiKey);
+  const explicitApiKey = explicitApiKeyRef
+    ? readStringValue(ollamaDiscoveryKey)
+    : readStringValue(explicit?.apiKey);
+  // apiKey can be an env-name or managed marker; only discoveryApiKey proves
+  // an explicit SecretRef resolved. Never replace its owner with local auth.
+  if (explicitApiKeyRef && !explicitApiKey) {
+    return null;
+  }
   if (hasExplicitModels && explicit) {
     const discoveredBaseUrl = resolveOllamaApiBase(configuredBaseUrl);
     const api = explicit.api ?? "ollama";

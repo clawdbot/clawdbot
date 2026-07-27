@@ -1,6 +1,6 @@
 // Openrouter provider module implements model/runtime integration.
 import {
-  getCachedLiveProviderModelRows,
+  buildLiveModelProviderConfig,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type {
@@ -196,36 +196,31 @@ export async function buildOpenrouterLiveProvider(params: {
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
 }): Promise<ModelProviderConfig> {
-  const fallback = {
-    ...buildOpenrouterProvider(),
-    ...(params.apiKey ? { apiKey: params.apiKey } : {}),
-  };
-  try {
-    const rows = await getCachedLiveProviderModelRows({
-      providerId: "openrouter",
-      endpoint: OPENROUTER_MODELS_ENDPOINT,
-      apiKey: params.apiKey,
-      discoveryApiKey: params.discoveryApiKey,
-      fetchGuard: params.fetchGuard,
-      signal: params.signal,
-      ttlMs: OPENROUTER_MODELS_CACHE_TTL_MS,
-      auditContext: "openrouter-model-discovery",
-      shouldCacheRows: (modelRows) => parseOpenRouterLiveModels(modelRows).length > 0,
-    });
-    const liveModels = parseOpenRouterLiveModels(rows);
-    if (liveModels.length === 0) {
-      return fallback;
-    }
-    const models = new Map(fallback.models.map((model) => [model.id, model]));
-    for (const model of liveModels) {
-      models.set(model.id, model);
-    }
-    return {
-      ...fallback,
-      models: [...models.values()].toSorted((a, b) => a.id.localeCompare(b.id)),
-    };
-  } catch {
-    // Discovery is advisory; retain the bundled seed when OpenRouter is unavailable.
-    return fallback;
-  }
+  const fallback = buildOpenrouterProvider();
+  return await buildLiveModelProviderConfig({
+    providerId: "openrouter",
+    endpoint: OPENROUTER_MODELS_ENDPOINT,
+    providerConfig: {
+      baseUrl: fallback.baseUrl,
+      api: fallback.api,
+    },
+    models: fallback.models,
+    apiKey: params.apiKey,
+    discoveryApiKey: params.discoveryApiKey,
+    fetchGuard: params.fetchGuard,
+    signal: params.signal,
+    ttlMs: OPENROUTER_MODELS_CACHE_TTL_MS,
+    auditContext: "openrouter-model-discovery",
+    projectRows: (rows, fallbackProvider) => {
+      const liveModels = parseOpenRouterLiveModels(rows);
+      if (liveModels.length === 0) {
+        return [];
+      }
+      const models = new Map(fallbackProvider.models.map((model) => [model.id, model]));
+      for (const model of liveModels) {
+        models.set(model.id, model);
+      }
+      return [...models.values()].toSorted((a, b) => a.id.localeCompare(b.id));
+    },
+  });
 }

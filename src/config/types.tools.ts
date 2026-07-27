@@ -529,11 +529,8 @@ export type ToolsConfig = {
   sandbox?: {
     tools?: ToolAllowDenyPolicyConfig;
   };
-  /** Experimental tool flags. */
-  experimental?: {
-    /** Structured checklist tool; enabled by default. Set false to opt out. */
-    planTool?: boolean;
-  };
+  /** Structured update_plan checklist tool; enabled by default. Set false to opt out. */
+  updatePlan?: boolean;
 };
 
 export type MessageToolsConfig = {

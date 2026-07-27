@@ -3,6 +3,7 @@ import {
   embeddedAgentLog,
   runAgentCleanupStep,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isIncognitoSessionKey } from "../incognito-session.js";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   unsubscribeCodexThreadBestEffort,
@@ -30,7 +31,8 @@ export async function cleanupCodexAttempt(
     releaseSandboxExecEnvironment,
   } = resources;
   const { connection } = prompt.context.runtime;
-  const { params, options, runAbortController } = connection;
+  const { params, options, runAbortController, terminalState, bindingStore, bindingIdentity } =
+    connection;
   const { state, steeringQueueRef, userInputBridgeRef, turnWatches } = turnRuntime;
   const {
     maybeEmitFastModeAutoResetBestEffort,
@@ -75,11 +77,24 @@ export async function cleanupCodexAttempt(
   if (!state.timedOut && !runAbortController.signal.aborted) {
     await steeringQueueRef.current?.flushPending();
   }
-  if (!state.timedOut) {
-    await unsubscribeCodexThreadBestEffort(resourceState.client, {
-      threadId: resourceState.thread.threadId,
-      timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-    });
+  const retainLiveIncognitoThread =
+    terminalState.turnSucceeded && isIncognitoSessionKey(params.sessionKey);
+  const bindingReleased =
+    isIncognitoSessionKey(params.sessionKey) && !retainLiveIncognitoThread
+      ? await bindingStore.mutate(bindingIdentity, {
+          kind: "clear",
+          threadId: resourceState.thread.threadId,
+        })
+      : true;
+  // Successful incognito turns retain the live subscription for cross-turn continuity.
+  if (!state.timedOut && !retainLiveIncognitoThread) {
+    // Clear first: if a newer owner won the binding, its live subscription must remain intact.
+    if (bindingReleased) {
+      await unsubscribeCodexThreadBestEffort(resourceState.client, {
+        threadId: resourceState.thread.threadId,
+        timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+      });
+    }
   }
   userInputBridgeRef.current?.cancelPending();
   turnWatches.clearAllTimers();

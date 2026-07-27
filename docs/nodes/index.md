@@ -74,11 +74,11 @@ the watch app with the Gateway before enabling direct mode.
 
 Use a **node host** when your Gateway runs on one machine and you want commands to execute on another. The model still talks to the **gateway**; the gateway forwards `exec` calls to the **node host** when `host=node` is selected.
 
-| Role         | Responsibility                                                   |
-| ------------ | ---------------------------------------------------------------- |
-| Gateway host | Receives messages, runs the model, routes tool calls.            |
-| Node host    | Executes `system.run`/`system.which` on the node machine.        |
-| Approvals    | Enforced on the node host via `~/.openclaw/exec-approvals.json`. |
+| Role         | Responsibility                                                                           |
+| ------------ | ---------------------------------------------------------------------------------------- |
+| Gateway host | Receives messages, runs the model, routes tool calls.                                    |
+| Node host    | Executes `system.run`/`system.which` on the node machine.                                |
+| Approvals    | Enforced on the node host via `~/.openclaw/state/openclaw.sqlite#exec_approvals_config`. |
 
 Approval note:
 
@@ -232,11 +232,11 @@ operators can ignore skills from every paired node with
 
 ### Headless identity state
 
-The headless node keeps three separate state records:
+The headless node keeps three separate state records in shared SQLite:
 
 - `~/.openclaw/state/openclaw.sqlite` (`node_host_config`): the client instance ID, display name, and Gateway connection metadata.
 - `~/.openclaw/state/openclaw.sqlite` (`device_identities`, key `primary`): the signed device keypair and derived cryptographic device ID.
-- `~/.openclaw/identity/device-auth.json`: paired device auth tokens keyed by cryptographic device ID and role.
+- `~/.openclaw/state/openclaw.sqlite` (`device_auth_tokens`): paired device auth tokens keyed by cryptographic device ID and role.
 
 For a signed node, the Gateway uses the cryptographic device ID for pairing and
 node routing. The client instance ID is only connection metadata. Changing
@@ -244,10 +244,10 @@ node routing. The client instance ID is only connection metadata. Changing
 [Identity and pairing state](/cli/node#identity-and-pairing-state) for the
 supported revoke-and-re-pair flow and upgrade notes.
 
-A retired `identity/device.json` file or interrupted Doctor claim blocks normal
-identity use. Stop the node host and run `openclaw doctor --fix`; Doctor imports
-the validated keypair into SQLite before removing the old file. The identity
-migration leaves `identity/device-auth.json` untouched.
+Retired `identity/device.json` and `identity/device-auth.json` files are
+Doctor-owned migration inputs. Stop the node host and run
+`openclaw doctor --fix`; Doctor imports and verifies their rows in SQLite before
+removing the old files.
 
 ### Allowlist the commands
 
@@ -258,7 +258,8 @@ openclaw approvals allowlist add --node <id|name|ip> "/usr/bin/uname"
 openclaw approvals allowlist add --node <id|name|ip> "/usr/bin/sw_vers"
 ```
 
-Approvals live on the node host at `~/.openclaw/exec-approvals.json`.
+Approvals live on the node host in
+`~/.openclaw/state/openclaw.sqlite#exec_approvals_config`.
 
 ### Point exec at the node
 
@@ -714,7 +715,7 @@ Notes:
 - On Windows node hosts in allowlist mode, shell-wrapper runs via `cmd.exe /c` require approval (allowlist entry alone does not auto-allow the wrapper form).
 - Node hosts ignore `PATH` overrides in `--env` and strip a large, maintained set of interpreter/shell startup variables (for example `NODE_OPTIONS`, `PYTHONPATH`, `BASH_ENV`, `DYLD_*`, `LD_*`) before running a command. If you need extra PATH entries, configure the node host service environment (or install tools in standard locations) instead of passing `PATH` via `--env`.
 - On macOS node mode, `system.run` is gated by exec approvals in the macOS app (Settings → Exec approvals). Ask/allowlist/full behave the same as the headless node host; denied prompts return `SYSTEM_RUN_DENIED`.
-- On headless node host, `system.run` is gated by exec approvals (`~/.openclaw/exec-approvals.json`); on macOS specifically, see the exec-host routing env vars under [Headless node host](#headless-node-host-cross-platform) below.
+- On headless node host, `system.run` is gated by the local SQLite exec approvals row; on macOS specifically, see the exec-host routing env vars under [Headless node host](#headless-node-host-cross-platform) below.
 
 ## Exec node binding
 
@@ -758,7 +759,8 @@ Notes:
 
 - Pairing is still required (the Gateway will show a device pairing prompt).
 - Client instance metadata, signed device identity, and pairing auth use separate state records; see [Headless identity state](#headless-identity-state).
-- Exec approvals are enforced locally via `~/.openclaw/exec-approvals.json` (see [Exec approvals](/tools/exec-approvals)).
+- Exec approvals are enforced locally via
+  `~/.openclaw/state/openclaw.sqlite#exec_approvals_config` (see [Exec approvals](/tools/exec-approvals)).
 - On macOS, the headless node host executes `system.run` locally by default. Set `OPENCLAW_NODE_EXEC_HOST=app` to route `system.run` through the companion app exec host; add `OPENCLAW_NODE_EXEC_FALLBACK=0` to require the app host and fail closed if it is unavailable.
 - Add `--tls` / `--tls-fingerprint` when the Gateway WS uses TLS.
 

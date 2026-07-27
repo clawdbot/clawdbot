@@ -75,7 +75,7 @@ function resolveDocsLabel(href: string): string {
   return t("login.failure.docsAuth");
 }
 
-// Shared with the connection banner so no offline surface prints credentials.
+// Shared with offline presentation so no disconnected surface prints credentials.
 export function redactLoginFailureError(value: string): string {
   return value
     .replace(

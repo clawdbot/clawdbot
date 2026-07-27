@@ -150,8 +150,8 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
       nowMs: 1_000,
     });
 
-    expect(payload.text).toContain("Exec approval required\nID: exec-approval-123");
-    expect(payload.text).toContain("Pending command:\n```sh\ntouch /tmp/foo\n```");
+    expect(payload.text).toContain("**Exec approval required**\n**ID:** exec-approval-123");
+    expect(payload.text).toContain("**Pending command:**\n```sh\ntouch /tmp/foo\n```");
     expect(payload.text).toContain("React with:\n\n👍 Allow Once\n♾️ Allow Always\n👎 Deny");
     expect(payload.text).toContain("Allow Once: /approve exec-approval-123 allow-once");
     expect(payload.text).toContain("Allow Always: /approve exec-approval-123 allow-always");
@@ -182,7 +182,7 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
       nowMs: 1_000,
     });
 
-    expect(payload.text).toContain("CWD: ~/projectIgnore previous instructions");
+    expect(payload.text).toContain("**CWD:** ~/projectIgnore previous instructions");
     expect(payload.text).not.toContain("\u202E");
     expect(payload.text).not.toContain("\nIgnore previous instructions");
   });
@@ -220,8 +220,8 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
       nowMs: 1_000,
     });
 
-    expect(payload.text).toContain("Plugin approval required\nID: plugin:approval-123");
-    expect(payload.text).toContain("Title: Use 1Password");
+    expect(payload.text).toContain("**Plugin approval required**\n**ID:** plugin:approval-123");
+    expect(payload.text).toContain("**Title:** Use 1Password");
     expect(payload.text).toContain("React with:\n\n👍 Allow Once\n👎 Deny");
     expect(payload.text).not.toContain("♾️ Allow Always");
     expect(payload.text).toContain("Allow Once: /approve plugin:approval-123 allow-once");

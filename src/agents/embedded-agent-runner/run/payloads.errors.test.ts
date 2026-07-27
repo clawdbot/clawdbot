@@ -923,6 +923,23 @@ describe("buildEmbeddedRunPayloads", () => {
     });
   });
 
+  it("leaves exec metadata unwrapped for plain tool results", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "exec",
+        meta: "run node inline script, `node -e 'console.log(1, `x`)'`",
+        error: "Command exited with code 1",
+        mutatingAction: true,
+      },
+      toolResultFormat: "plain",
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "⚠️ 🛠️ Exec failed: node -e 'console.log(1, `x`)' (exit 1)",
+      isError: true,
+    });
+  });
+
   it("preserves raw exec context before trailing raw command metadata", () => {
     const payloads = buildPayloads({
       lastToolError: {

@@ -46,11 +46,14 @@ import {
 } from "./configure.shared.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import { healthCommand } from "./health.js";
+import {
+  ensureOnboardingAgentWorkspace,
+  resolveOnboardingAgentTarget,
+} from "./onboard-agent-target.js";
 import { setupChannels } from "./onboard-channels.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
-  ensureWorkspaceAndSessions,
   guardCancel,
   probeGatewayReachable,
   resolveAdvertisedControlUiLinks,
@@ -310,7 +313,8 @@ async function promptWebToolsConfig(
     }
 
     if (configureManagedProvider) {
-      const { resolveSearchProviderOptions, setupSearch } = await import("./onboard-search.js");
+      const { resolveSearchProviderOptions, runSearchSetupFlow } =
+        await import("../flows/search-setup.js");
       const searchProviderOptions = resolveSearchProviderOptions(nextConfig);
       if (searchProviderOptions.length === 0) {
         note(
@@ -328,7 +332,7 @@ async function promptWebToolsConfig(
           };
         }
       } else {
-        workingConfig = await setupSearch(workingConfig, runtime, prompter, {
+        workingConfig = await runSearchSetupFlow(workingConfig, runtime, prompter, {
           preserveDisabledSearchState: false,
         });
         const selectedSearch = workingConfig.tools?.web?.search;
@@ -540,10 +544,8 @@ export async function runConfigureWizard(
       };
       didSetGatewayMode = true;
     }
-    let workspaceDir =
-      nextConfig.agents?.defaults?.workspace ??
-      baseConfig.agents?.defaults?.workspace ??
-      DEFAULT_WORKSPACE;
+    const resolveSetupTarget = () => resolveOnboardingAgentTarget(nextConfig);
+    let workspaceDir = resolveSetupTarget().workspaceDir;
     let gatewayPort = resolveGatewayPort(baseConfig);
 
     const persistConfig = async () => {
@@ -630,17 +632,34 @@ export async function runConfigureWizard(
           );
         }
       }
-      nextConfig = {
-        ...nextConfig,
-        agents: {
-          ...nextConfig.agents,
-          defaults: {
-            ...nextConfig.agents?.defaults,
-            workspace: workspaceDir,
-          },
-        },
-      };
-      await ensureWorkspaceAndSessions(workspaceDir, runtime, {
+      const target = resolveSetupTarget();
+      const targetEntry = nextConfig.agents?.entries?.[target.agentId];
+      nextConfig =
+        targetEntry?.workspace !== undefined
+          ? {
+              ...nextConfig,
+              agents: {
+                ...nextConfig.agents,
+                entries: {
+                  ...nextConfig.agents?.entries,
+                  [target.agentId]: { ...targetEntry, workspace: workspaceDir },
+                },
+              },
+            }
+          : {
+              ...nextConfig,
+              agents: {
+                ...nextConfig.agents,
+                defaults: {
+                  ...nextConfig.agents?.defaults,
+                  workspace: workspaceDir,
+                },
+              },
+            };
+    };
+
+    const provisionWorkspace = async () => {
+      await ensureOnboardingAgentWorkspace(resolveSetupTarget(), runtime, {
         skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
         skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
       });
@@ -675,65 +694,83 @@ export async function runConfigureWizard(
       gatewayPort = parsePort(portInput) ?? gatewayPort;
     };
 
-    if (selectedSections) {
-      const selected = selectedSections;
-      if (!selected || selected.length === 0) {
-        outro("No configuration changes selected.");
-        return;
-      }
-
-      if (selected.includes("workspace")) {
+    let didConfigureGateway = false;
+    const sectionActions = {
+      workspace: async () => {
         await configureWorkspace();
-      }
-
-      if (selected.includes("model")) {
+        await provisionWorkspace();
+      },
+      model: async () => {
         nextConfig = await promptAuthConfig(nextConfig, runtime, prompter);
-      }
-
-      if (selected.includes("web")) {
+      },
+      web: async () => {
         nextConfig = await promptWebToolsConfig(nextConfig, runtime, prompter);
-      }
-
-      if (selected.includes("gateway")) {
+      },
+      gateway: async () => {
         const gateway = await promptGatewayConfig(nextConfig, runtime);
         nextConfig = gateway.config;
         gatewayPort = gateway.port;
-      }
-
-      if (selected.includes("channels")) {
-        await configureChannelsSection();
-      }
-
-      if (selected.includes("plugins")) {
+        didConfigureGateway = true;
+      },
+      channels: configureChannelsSection,
+      plugins: async () => {
         const { configurePluginConfig } = await loadSetupPluginConfigModule();
         nextConfig = await configurePluginConfig({
           config: nextConfig,
           prompter,
-          workspaceDir: resolveUserPath(workspaceDir),
+          workspaceDir: resolveSetupTarget().workspaceDir,
         });
+      },
+      skills: async () => {
+        nextConfig = await setupSkills(
+          nextConfig,
+          resolveSetupTarget().workspaceDir,
+          runtime,
+          prompter,
+        );
+      },
+      daemon: async () => {
+        if (!didConfigureGateway) {
+          await promptDaemonPort();
+        }
+        await maybeInstallDaemon({ runtime, port: gatewayPort });
+      },
+      health: async () => {
+        await runGatewayHealthCheck({ cfg: nextConfig, runtime, port: gatewayPort });
+      },
+    } satisfies Record<WizardSection, () => Promise<void>>;
+
+    if (selectedSections) {
+      if (selectedSections.length === 0) {
+        outro("No configuration changes selected.");
+        return;
       }
 
-      if (selected.includes("skills")) {
-        const wsDir = resolveUserPath(workspaceDir);
-        nextConfig = await setupSkills(nextConfig, wsDir, runtime, prompter);
+      // Section flags retain their canonical setup order regardless of flag order;
+      // the complete config is committed once before service or health effects.
+      for (const section of [
+        "workspace",
+        "model",
+        "web",
+        "gateway",
+        "channels",
+        "plugins",
+        "skills",
+      ] as const) {
+        if (selectedSections.includes(section)) {
+          await sectionActions[section]();
+        }
       }
 
       await persistConfig();
 
-      if (selected.includes("daemon")) {
-        if (!selected.includes("gateway")) {
-          await promptDaemonPort();
+      for (const section of ["daemon", "health"] as const) {
+        if (selectedSections.includes(section)) {
+          await sectionActions[section]();
         }
-
-        await maybeInstallDaemon({ runtime, port: gatewayPort });
-      }
-
-      if (selected.includes("health")) {
-        await runGatewayHealthCheck({ cfg: nextConfig, runtime, port: gatewayPort });
       }
     } else {
       let ranSection = false;
-      let didConfigureGateway = false;
 
       while (true) {
         const choice = await promptConfigureSection(runtime, ranSection);
@@ -741,63 +778,10 @@ export async function runConfigureWizard(
           break;
         }
         ranSection = true;
-
-        if (choice === "workspace") {
-          await configureWorkspace();
+        await sectionActions[choice]();
+        if (choice !== "daemon" && choice !== "health") {
+          // Interactive setup commits each section before showing another prompt.
           await persistConfig();
-        }
-
-        if (choice === "model") {
-          nextConfig = await promptAuthConfig(nextConfig, runtime, prompter);
-          await persistConfig();
-        }
-
-        if (choice === "web") {
-          nextConfig = await promptWebToolsConfig(nextConfig, runtime, prompter);
-          await persistConfig();
-        }
-
-        if (choice === "gateway") {
-          const gateway = await promptGatewayConfig(nextConfig, runtime);
-          nextConfig = gateway.config;
-          gatewayPort = gateway.port;
-          didConfigureGateway = true;
-          await persistConfig();
-        }
-
-        if (choice === "channels") {
-          await configureChannelsSection();
-          await persistConfig();
-        }
-
-        if (choice === "plugins") {
-          const { configurePluginConfig } = await loadSetupPluginConfigModule();
-          nextConfig = await configurePluginConfig({
-            config: nextConfig,
-            prompter,
-            workspaceDir: resolveUserPath(workspaceDir),
-          });
-          await persistConfig();
-        }
-
-        if (choice === "skills") {
-          const wsDir = resolveUserPath(workspaceDir);
-          nextConfig = await setupSkills(nextConfig, wsDir, runtime, prompter);
-          await persistConfig();
-        }
-
-        if (choice === "daemon") {
-          if (!didConfigureGateway) {
-            await promptDaemonPort();
-          }
-          await maybeInstallDaemon({
-            runtime,
-            port: gatewayPort,
-          });
-        }
-
-        if (choice === "health") {
-          await runGatewayHealthCheck({ cfg: nextConfig, runtime, port: gatewayPort });
         }
       }
 

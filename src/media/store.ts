@@ -206,6 +206,9 @@ export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options: CleanOldMed
     recursive: options.recursive ?? true,
     pruneEmptyDirs: options.pruneEmptyDirs,
   });
+  // Trust metadata must not outlive the staged file that it authorizes.
+  const { pruneStaleTrustedGeneratedHtmlMarkers } = await import("./web-media.js");
+  await pruneStaleTrustedGeneratedHtmlMarkers();
 }
 
 function looksLikeUrl(src: string) {

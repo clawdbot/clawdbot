@@ -142,8 +142,12 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
   readonly syncCalls: SyncParams[] = [];
   readonly indexedPaths: string[] = [];
   readonly indexedContents: string[] = [];
+  private pendingSyncWork: Promise<void> = Promise.resolve();
 
-  constructor(sourceRows: SourceStateRow[]) {
+  constructor(
+    sourceRows: SourceStateRow[],
+    private readonly indexSessionUpdates = false,
+  ) {
     super();
     this.sources.add("sessions");
     this.db = {
@@ -194,6 +198,10 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     ).processSessionDeltaBatch();
   }
 
+  async waitForSessionSync(): Promise<void> {
+    await this.pendingSyncWork;
+  }
+
   async combineTargetArchiveFilesForTest(params: {
     sessions?: MemorySyncParams["sessions"];
     archiveFiles?: string[];
@@ -210,6 +218,11 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
 
   isSessionsDirty(): boolean {
     return this.sessionsDirty;
+  }
+
+  markFullSessionRetry(): void {
+    this.sessionsDirty = true;
+    this.sessionsFullRetryDirty = true;
   }
 
   startTranscriptListener(): void {
@@ -242,6 +255,10 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
 
   protected async sync(params?: MemorySyncParams): Promise<void> {
     this.syncCalls.push(params ?? {});
+    this.pendingSyncWork = this.indexSessionUpdates
+      ? this.syncArchiveFiles({ needsFullReindex: false }).then(() => undefined)
+      : Promise.resolve();
+    await this.pendingSyncWork;
   }
 
   protected async withTimeout<T>(
@@ -386,6 +403,14 @@ describe("session startup catch-up", () => {
     await expect(harness.catchUp()).resolves.toEqual([session.marker]);
     expect(harness.getDirtyArchiveFiles()).toEqual([session.marker]);
     expect(harness.isSessionsDirty()).toBe(true);
+    expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
+  });
+
+  it("schedules a full retry when invalidated sessions no longer exist", async () => {
+    const harness = new SessionStartupCatchupHarness([]);
+    harness.markFullSessionRetry();
+
+    await expect(harness.catchUp()).resolves.toEqual([]);
     expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
   });
 
@@ -721,5 +746,77 @@ describe("session startup catch-up", () => {
     expect(harness.getPendingArchiveFiles()).toEqual([session.filePath]);
     expect(harness.getPendingSessionTargets()).toEqual([]);
     harness.stopTranscriptListener();
+  });
+
+  it.each(["reset", "deleted"] as const)(
+    "indexes a %s archive through the live listener debounce path",
+    async (reason) => {
+      vi.useFakeTimers();
+      const session = await writeSessionFile(`thread.jsonl.${reason}.2026-06-23T10-00-00.000Z`);
+      const harness = new SessionStartupCatchupHarness([], true);
+      harness.startTranscriptListener();
+
+      try {
+        emitSessionTranscriptUpdate({ sessionFile: session.filePath });
+
+        expect(harness.getPendingArchiveFiles()).toEqual([session.filePath]);
+
+        await vi.advanceTimersByTimeAsync(6000);
+        await harness.waitForSessionSync();
+
+        expect(harness.getDirtyArchiveFiles()).toEqual([session.filePath]);
+        expect(harness.syncCalls).toEqual([{ reason: "session-delta" }]);
+        expect(harness.indexedPaths).toEqual([
+          `sessions/main/thread.jsonl.${reason}.2026-06-23T10-00-00.000Z`,
+        ]);
+        expect(harness.indexedContents).toEqual(["User: startup catchup"]);
+      } finally {
+        harness.stopTranscriptListener();
+      }
+    },
+  );
+
+  it.each([
+    "thread.jsonl.bak.2026-06-23T10-00-00.000Z",
+    "thread.trajectory.jsonl",
+    "sessions.json",
+  ])("ignores non-corpus session artifact updates for %s", async (fileName) => {
+    vi.useFakeTimers();
+    const session = await writeSessionFile(fileName);
+    const harness = new SessionStartupCatchupHarness([], true);
+    harness.startTranscriptListener();
+
+    try {
+      emitSessionTranscriptUpdate({ sessionFile: session.filePath });
+      await vi.advanceTimersByTimeAsync(6000);
+      await harness.waitForSessionSync();
+
+      expect(harness.getPendingArchiveFiles()).toEqual([]);
+      expect(harness.getDirtyArchiveFiles()).toEqual([]);
+      expect(harness.syncCalls).toEqual([]);
+      expect(harness.indexedPaths).toEqual([]);
+    } finally {
+      harness.stopTranscriptListener();
+    }
+  });
+
+  it("leaves a missing archive update unindexed", async () => {
+    vi.useFakeTimers();
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+    const missingPath = path.join(sessionsDir, "missing.jsonl.reset.2026-06-23T10-00-00.000Z");
+    const harness = new SessionStartupCatchupHarness([], true);
+    harness.startTranscriptListener();
+
+    try {
+      emitSessionTranscriptUpdate({ sessionFile: missingPath });
+      await vi.advanceTimersByTimeAsync(6000);
+      await harness.waitForSessionSync();
+
+      expect(harness.getDirtyArchiveFiles()).toEqual([missingPath]);
+      expect(harness.syncCalls).toEqual([{ reason: "session-delta" }]);
+      expect(harness.indexedPaths).toEqual([]);
+    } finally {
+      harness.stopTranscriptListener();
+    }
   });
 });

@@ -13,6 +13,17 @@ import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
+import {
+  ClawCronInstallError,
+  installClawCronJobs,
+  type ClawCronGateway,
+  type PersistedClawCronRef,
+} from "./cron.js";
+import {
+  ClawMcpInstallError,
+  installClawMcpServers,
+  type PersistedClawMcpServerRef,
+} from "./mcp.js";
 import { ClawPackageInstallError, installClawPackages } from "./packages.js";
 import {
   deleteClawInstallRecord,
@@ -41,6 +52,9 @@ type ClawAddApplyOptions = OpenClawStateDatabaseOptions & {
   createWorkspaceFiles?: typeof createClawWorkspaceFiles;
   runtime?: RuntimeEnv;
   installPackages?: typeof installClawPackages;
+  installMcpServers?: typeof installClawMcpServers;
+  installCronJobs?: typeof installClawCronJobs;
+  cronGateway?: Pick<ClawCronGateway, "add" | "list">;
   nowMs?: number;
 };
 export class ClawAddMutationError extends Error {
@@ -66,6 +80,8 @@ type ClawAddResult = {
   configCommitted: boolean;
   workspaceFiles: PersistedClawWorkspaceFile[];
   packages: PersistedClawPackageRef[];
+  mcpServers: PersistedClawMcpServerRef[];
+  cronJobs: PersistedClawCronRef[];
   installRecord?: PersistedClawInstall;
   error?: {
     code: string;
@@ -76,7 +92,10 @@ type ClawAddResult = {
 
 function hasUnsupportedMutationActions(plan: ClawAddPlan): boolean {
   return plan.actions.some(
-    (action) => !["agent", "workspace", "workspaceFile", "package"].includes(action.kind),
+    (action) =>
+      !["agent", "workspace", "workspaceFile", "package", "mcpServer", "cronJob"].includes(
+        action.kind,
+      ),
   );
 }
 
@@ -140,6 +159,8 @@ function partialResult(params: {
   workspaceFiles?: PersistedClawWorkspaceFile[];
   packages?: PersistedClawPackageRef[];
   installStatus?: ClawInstallStatus;
+  mcpServers?: PersistedClawMcpServerRef[];
+  cronJobs?: PersistedClawCronRef[];
   error: ClawAddResult["error"];
   nowMs?: number;
 }): ClawAddResult {
@@ -156,6 +177,8 @@ function partialResult(params: {
     configCommitted: params.configCommitted,
     workspaceFiles: params.workspaceFiles ?? [],
     packages: params.packages ?? [],
+    mcpServers: params.mcpServers ?? [],
+    cronJobs: params.cronJobs ?? [],
     installRecord: {
       ...params.installRecord,
       status: params.installStatus ?? "partial",
@@ -175,7 +198,7 @@ export async function applyClawAddPlan(
   if (hasUnsupportedMutationActions(plan)) {
     throw new ClawAddMutationError(
       "unsupported_components",
-      "This build can add agent settings, workspace files, and declared packages; MCP servers and cron jobs require later lifecycle slices.",
+      "This build cannot add one or more declared Claw component kinds.",
     );
   }
   if (options.consentPlanIntegrity !== plan.planIntegrity) {
@@ -401,6 +424,8 @@ export async function applyClawAddPlan(
       configCommitted,
       workspaceFiles: workspaceError.createdFiles,
       packages,
+      mcpServers: [],
+      cronJobs: [],
       installRecord: {
         ...installRecord,
         status: "config_committed",
@@ -414,9 +439,10 @@ export async function applyClawAddPlan(
     };
   }
 
+  let cronJobs: PersistedClawCronRef[] = [];
   try {
-    // Package mutation is last: skills now have their workspace, and a package
-    // failure cannot leave a later workspace/configuration step unapplied.
+    // Skills require their workspace. Recurring work is enabled only after all
+    // package mutation succeeds.
     packages = await installPackages(plan, options);
   } catch (error) {
     const packageError =
@@ -440,6 +466,62 @@ export async function applyClawAddPlan(
     });
   }
 
+  const installMcpServers = options.installMcpServers ?? installClawMcpServers;
+  let mcpServers: PersistedClawMcpServerRef[] = [];
+  try {
+    mcpServers = await installMcpServers(plan, options);
+  } catch (error) {
+    const mcpError =
+      error instanceof ClawMcpInstallError
+        ? error
+        : new ClawMcpInstallError(
+            "mcp_install_failed",
+            error instanceof Error ? error.message : String(error),
+            mcpServers,
+          );
+    markInstallStatus(plan.agent.finalId, "config_committed", ["config_committed"], options);
+    return partialResult({
+      plan,
+      installRecord,
+      workspaceCreated,
+      configCommitted,
+      workspaceFiles,
+      packages,
+      mcpServers: mcpError.mcpServers,
+      installStatus: "config_committed",
+      error: { code: mcpError.code, message: mcpError.message },
+      nowMs: options.nowMs,
+    });
+  }
+
+  const installCronJobs = options.installCronJobs ?? installClawCronJobs;
+  try {
+    cronJobs = await installCronJobs(plan, { ...options, gateway: options.cronGateway });
+  } catch (error) {
+    const cronError =
+      error instanceof ClawCronInstallError
+        ? error
+        : new ClawCronInstallError(
+            "cron_install_failed",
+            error instanceof Error ? error.message : String(error),
+            cronJobs,
+          );
+    markInstallStatus(plan.agent.finalId, "config_committed", ["config_committed"], options);
+    return partialResult({
+      plan,
+      installRecord,
+      workspaceCreated,
+      configCommitted,
+      workspaceFiles,
+      packages,
+      mcpServers,
+      cronJobs: cronError.cronJobs,
+      installStatus: "config_committed",
+      error: { code: cronError.code, message: cronError.message },
+      nowMs: options.nowMs,
+    });
+  }
+
   try {
     markInstallStatus(plan.agent.finalId, "complete", ["config_committed", "complete"], options);
     return {
@@ -454,6 +536,8 @@ export async function applyClawAddPlan(
       workspaceCreated,
       configCommitted,
       packages,
+      mcpServers,
+      cronJobs,
       workspaceFiles,
       installRecord: {
         ...installRecord,
@@ -469,6 +553,8 @@ export async function applyClawAddPlan(
       configCommitted,
       workspaceFiles,
       packages,
+      mcpServers,
+      cronJobs,
       error: { code: "provenance_failed", message: (error as Error).message },
     });
   }

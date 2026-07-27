@@ -27,6 +27,10 @@ import {
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
 import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
+import {
+  hasMeaningfulRetiredMediaCarrier,
+  PERSISTED_LEGACY_MEDIA_KEYS,
+} from "../media/media-facts.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import { TRAJECTORY_RUNTIME_FILE_MAX_BYTES, safeTrajectorySessionFileName } from "./paths.js";
 import { isRegularNonSymlinkFile, resolveTrajectoryRuntimeFile } from "./runtime-file.js";
@@ -556,6 +560,12 @@ function buildTranscriptEvents(params: {
           fromHook: entry.fromHook ?? false,
         });
         break;
+      case "reset":
+        push("session.reset", {
+          reason: entry.reason,
+          firstKeptEntryId: entry.firstKeptEntryId,
+        });
+        break;
       case "branch_summary":
         push("session.branch_summary", {
           fromId: entry.fromId,
@@ -603,6 +613,31 @@ function buildTranscriptEvents(params: {
     }
   }
   return events;
+}
+
+function assertCanonicalTrajectoryInputs(
+  entries: readonly SessionEntry[],
+  runtimeEvents: readonly TrajectoryEvent[],
+): void {
+  const branchHasLegacy = entries.some(
+    (entry) =>
+      entry.type === "message" &&
+      isRecord(entry.message) &&
+      (Object.hasOwn(entry.message, "media") ||
+        PERSISTED_LEGACY_MEDIA_KEYS.some((key) => Object.hasOwn(entry.message, key))),
+  );
+  const runtimeHasLegacy = runtimeEvents.some(
+    (event) =>
+      Array.isArray(event.data?.messagesSnapshot) &&
+      event.data.messagesSnapshot.some(
+        (message) => isRecord(message) && hasMeaningfulRetiredMediaCarrier(message),
+      ),
+  );
+  if (branchHasLegacy || runtimeHasLegacy) {
+    throw new Error(
+      "Trajectory export input contains retired top-level media fields; migrate the source transcript before exporting.",
+    );
+  }
 }
 
 function sortTrajectoryEvents(events: TrajectoryEvent[]): TrajectoryEvent[] {
@@ -958,6 +993,9 @@ function buildArtifactsCapture(params: {
     compactionCount: runtimeArtifacts?.compactionCount ?? runtimeCompletion?.compactionCount,
     assistantTexts: runtimeArtifacts?.assistantTexts ?? runtimeCompletion?.assistantTexts,
     finalPromptText: runtimeArtifacts?.finalPromptText ?? runtimeCompletion?.finalPromptText,
+    finalPromptTextOriginalLength:
+      runtimeArtifacts?.finalPromptTextOriginalLength ??
+      runtimeCompletion?.finalPromptTextOriginalLength,
     itemLifecycle: runtimeArtifacts?.itemLifecycle,
     toolMetas: runtimeArtifacts?.toolMetas,
     didSendViaMessagingTool: runtimeArtifacts?.didSendViaMessagingTool,
@@ -1073,8 +1111,10 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
   });
   const runtimeFile = runtimeParse.runtimeFile;
   const runtimeEvents = runtimeParse.events;
+  assertCanonicalTrajectoryInputs(branchEntries, runtimeEvents);
+  const projectedBranchEntries = branchEntries;
   const transcriptEvents = buildTranscriptEvents({
-    entries: branchEntries,
+    entries: projectedBranchEntries,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
@@ -1167,7 +1207,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
         {
           header,
           leafId,
-          entries: branchEntries,
+          entries: projectedBranchEntries,
         },
         redaction,
       ),

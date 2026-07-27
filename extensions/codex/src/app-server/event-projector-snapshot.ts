@@ -2,6 +2,7 @@ import type {
   AgentMessage,
   EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { projectAgentHarnessTranscriptMessageForDisplay } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
@@ -49,5 +50,10 @@ export function buildCodexMessagesSnapshot(params: {
   if (params.lastAssistant) {
     messages.push(attachCodexMirrorIdentity(params.lastAssistant, `${params.turnId}:assistant`));
   }
-  return messages;
+  return messages.map((message) =>
+    projectAgentHarnessTranscriptMessageForDisplay({
+      hidden: params.runParams.trigger === "memory",
+      message,
+    }),
+  );
 }

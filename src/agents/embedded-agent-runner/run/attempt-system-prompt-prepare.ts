@@ -54,7 +54,6 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   bootstrap: PreparedBootstrap;
   capabilityToolNames: Set<string>;
   defaultAgentId: string;
-  deferredDirectoryToolsCallable: boolean;
   effectiveCwd: string;
   effectiveTools: PromptTools;
   effectiveWorkspace: string;
@@ -67,8 +66,21 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   sessionAgentId: string;
   skillsPrompt: string;
   toolSearchCatalogRef?: ToolSearchCatalogRef;
+  toolSearchDirectoryEnabled: boolean;
+  toolSearchRuntimeConfig: EmbeddedRunAttemptParams["config"];
 }) {
   const { attempt } = params;
+  if (attempt.operation === "settled-tool-finalization") {
+    // Finalization resumes the settled transcript with only the host prompt.
+    // Do not invoke provider/plugin contributors or assemble ambient context.
+    params.markStage("system-prompt");
+    return {
+      runtimeChannel: undefined,
+      runtimeInfo: { model: `${attempt.provider}/${attempt.modelId}` },
+      systemPromptReport: undefined,
+      systemPromptText: "",
+    };
+  }
   const machineName = await getMachineDisplayName();
   const runtimeChannel = normalizeMessageChannel(attempt.messageChannel ?? attempt.messageProvider);
   const runtimeCapabilities = collectRuntimeChannelCapabilities({
@@ -129,10 +141,10 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
         accountId: attempt.agentAccountId,
       })
     : undefined;
-  const toolSchemaDirectoryPrompt = params.deferredDirectoryToolsCallable
+  const toolSchemaDirectoryPrompt = params.toolSearchDirectoryEnabled
     ? buildToolSchemaDirectoryPrompt({
         config: attempt.config,
-        runtimeConfig: attempt.config,
+        runtimeConfig: params.toolSearchRuntimeConfig,
         agentId: params.sessionAgentId,
         sessionKey: params.sandboxSessionKey,
         sessionId: attempt.sessionId,
@@ -156,6 +168,9 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     agentId: params.sessionAgentId,
     workspaceDir: params.effectiveWorkspace,
     cwd: params.effectiveCwd,
+    ...(attempt.preparedModelRuntime && Object.hasOwn(attempt.preparedModelRuntime, "repoRoot")
+      ? { preparedRepoRoot: attempt.preparedModelRuntime.repoRoot }
+      : {}),
     runtime: {
       sessionKey: attempt.sessionKey,
       sessionId: attempt.sessionId,

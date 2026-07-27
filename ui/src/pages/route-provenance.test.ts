@@ -45,8 +45,9 @@ function snapshot(
 ): ApplicationGatewaySnapshot {
   return {
     client,
-    connected,
-    reconnecting: !connected,
+    phase: connected ? "connected" : "reconnecting",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
@@ -133,7 +134,7 @@ describe("route preload gateway provenance", () => {
       search: undefined,
       includeGlobal: true,
       includeUnknown: false,
-      showArchived: false,
+      archivedFilter: "active",
     });
     expect(list.mock.calls[0]?.[0]).not.toHaveProperty("activeMinutes");
   });

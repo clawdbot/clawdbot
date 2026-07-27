@@ -43,7 +43,7 @@ import {
 } from "./subagent-registry-completion.js";
 import {
   persistSubagentSessionTiming,
-  resolveArchiveAfterMs,
+  resolveSubagentArchiveAtMs,
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import type {
@@ -659,14 +659,14 @@ export function createSubagentRunManager(params: {
       source.childSessionKey,
     );
     const cfg = params.getRuntimeConfig();
-    const archiveAfterMs = resolveArchiveAfterMs(cfg);
     const spawnMode = source.spawnMode === "session" ? "session" : "run";
-    const archiveAtMs =
-      spawnMode === "session" || source.cleanup === "keep"
-        ? undefined
-        : archiveAfterMs
-          ? now + archiveAfterMs
-          : undefined;
+    const archiveAtMs = resolveSubagentArchiveAtMs({
+      cfg,
+      now,
+      spawnMode,
+      cleanup: source.cleanup,
+      collect: source.collect,
+    });
     const runTimeoutSeconds = replaceParams.runTimeoutSeconds ?? source.runTimeoutSeconds ?? 0;
     const waitTimeoutMs = params.resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
     const preserveFrozenResultFallback = replaceParams.preserveFrozenResultFallback === true;
@@ -790,14 +790,14 @@ export function createSubagentRunManager(params: {
     const now = Date.now();
     const generation = nextSubagentRunGeneration(params.runs.values(), childSessionKey);
     const cfg = params.getRuntimeConfig();
-    const archiveAfterMs = resolveArchiveAfterMs(cfg);
     const spawnMode = registerParams.spawnMode === "session" ? "session" : "run";
-    const archiveAtMs =
-      spawnMode === "session" || registerParams.cleanup === "keep"
-        ? undefined
-        : archiveAfterMs
-          ? now + archiveAfterMs
-          : undefined;
+    const archiveAtMs = resolveSubagentArchiveAtMs({
+      cfg,
+      now,
+      spawnMode,
+      cleanup: registerParams.cleanup,
+      collect: registerParams.collect,
+    });
     const runTimeoutSeconds = registerParams.runTimeoutSeconds ?? 0;
     const waitTimeoutMs = params.resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
     const requesterOrigin = normalizeDeliveryContext(registerParams.requesterOrigin);
@@ -922,11 +922,26 @@ export function createSubagentRunManager(params: {
     const entry =
       params.runs.get(key) ??
       [...params.runs.values()].find((candidate) => candidate.swarmRunId === key);
+    const lifecycleStarted =
+      entry?.execution?.status === "running" &&
+      typeof entry.execution.startedAt === "number" &&
+      entry.swarmLaunchPending === true;
+    const provisionalTerminalBeforeAcceptance =
+      entry?.swarmLaunchPending === true &&
+      typeof entry.endedAt === "number" &&
+      entry.collectorCompletion === undefined;
+    if (provisionalTerminalBeforeAcceptance) {
+      // Cancellation won before Gateway acceptance. The caller must abort the
+      // newly accepted run before freezing completion or releasing the FIFO slot.
+      return false;
+    }
+    // Completion clears swarmLaunchPending, but queuedLaunch remains until the
+    // delayed acceptance response remaps the durable terminal row.
+    const terminalBeforeAcceptance =
+      entry?.collectorCompletion !== undefined && entry.queuedLaunch !== undefined;
     if (
       !entry ||
-      entry.execution?.status !== "queued" ||
-      typeof entry.endedAt === "number" ||
-      entry.collectorCompletion
+      (!terminalBeforeAcceptance && entry.execution?.status !== "queued" && !lifecycleStarted)
     ) {
       return false;
     }
@@ -935,7 +950,7 @@ export function createSubagentRunManager(params: {
     if (conflicting && conflicting !== entry) {
       throw new Error(`collector gateway run id already exists: ${nextRunId}`);
     }
-    const startedAt = Date.now();
+    const acceptedAt = Date.now();
     const previousRunId = entry.runId;
     const previousStartedAt = entry.startedAt;
     const previousSessionStartedAt = entry.sessionStartedAt;
@@ -951,9 +966,45 @@ export function createSubagentRunManager(params: {
       entry.runId = nextRunId;
       params.runs.set(nextRunId, entry);
     }
-    entry.startedAt = startedAt;
-    entry.sessionStartedAt ??= startedAt;
-    entry.execution = { ...entry.execution, status: "running", startedAt };
+    if (terminalBeforeAcceptance) {
+      entry.swarmLaunchPending = false;
+      entry.queuedLaunch = undefined;
+      try {
+        params.persistOrThrow();
+        return true;
+      } catch (error) {
+        if (previousRunId !== nextRunId) {
+          params.runs.delete(nextRunId);
+          entry.runId = previousRunId;
+          params.runs.set(previousRunId, entry);
+        }
+        entry.queuedLaunch = previousQueuedLaunch;
+        entry.swarmRunId = previousSwarmRunId;
+        entry.schedulerSlotId = previousSchedulerSlotId;
+        entry.swarmLaunchPending = previousSwarmLaunchPending;
+        throw error;
+      }
+    }
+    // Gateway acceptance only proves admission. Preserve a lifecycle start that
+    // raced ahead of this response; otherwise leave the run clock unset until
+    // preparation and lane dequeue emit the canonical start event.
+    const lifecycleStartedAt =
+      entry.execution?.status === "running" ? entry.execution.startedAt : undefined;
+    if (typeof lifecycleStartedAt === "number") {
+      entry.startedAt = lifecycleStartedAt;
+      entry.sessionStartedAt ??= lifecycleStartedAt;
+      entry.execution = {
+        ...entry.execution,
+        status: "running",
+        acceptedAt,
+        startedAt: lifecycleStartedAt,
+      };
+    } else {
+      delete entry.startedAt;
+      delete entry.sessionStartedAt;
+      entry.execution = { ...entry.execution, status: "running", acceptedAt };
+      delete entry.execution.startedAt;
+    }
     entry.swarmLaunchPending = false;
     entry.queuedLaunch = undefined;
     let persistedRunning = false;
@@ -964,8 +1015,8 @@ export function createSubagentRunManager(params: {
         runId: entry.taskRunId ?? entry.runId,
         runtime: "subagent",
         sessionKey: entry.childSessionKey,
-        startedAt,
-        lastEventAt: startedAt,
+        startedAt: acceptedAt,
+        lastEventAt: acceptedAt,
       });
     } catch (error) {
       if (previousRunId !== nextRunId) {
@@ -1019,7 +1070,7 @@ export function createSubagentRunManager(params: {
     entry.queuedLaunch = undefined;
     entry.collectorLaunchCleanupPending = true;
     entry.completion = { required: false, resultText: error, capturedAt: endedAt };
-    updateSwarmCollectorCompletion(entry);
+    updateSwarmCollectorCompletion(entry, params.getRuntimeConfig());
     try {
       params.persistOrThrow();
     } catch (persistError) {
@@ -1080,7 +1131,7 @@ export function createSubagentRunManager(params: {
       resultText: entry.outcome?.status === "error" ? (entry.outcome.error ?? error) : error,
       capturedAt: entry.endedAt,
     };
-    updateSwarmCollectorCompletion(entry);
+    updateSwarmCollectorCompletion(entry, params.getRuntimeConfig());
     try {
       params.persistOrThrow();
     } catch (persistError) {
@@ -1238,7 +1289,7 @@ export function createSubagentRunManager(params: {
         supersededAt: existingKillReconciliation?.supersededAt,
       };
       if (wasQueuedCollector && !collectorLaunchInFlight) {
-        updateSwarmCollectorCompletion(entry);
+        updateSwarmCollectorCompletion(entry, params.getRuntimeConfig());
       }
       pendingTaskFinalizations.push({ entry, endedAt: taskEndedAt });
       if (!entriesByChildSessionKey.has(entry.childSessionKey)) {

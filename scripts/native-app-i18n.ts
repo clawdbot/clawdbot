@@ -59,6 +59,8 @@ const TRANSLATIONS_DIR = path.join(ROOT, "apps", ".i18n", "native");
 const SOURCE_ROOTS: Record<NativeI18nSurface, string[]> = {
   android: [
     path.join(ROOT, "apps", "android", "app", "src", "main"),
+    path.join(ROOT, "apps", "android", "app", "src", "play"),
+    path.join(ROOT, "apps", "android", "app", "src", "thirdParty"),
     path.join(ROOT, "apps", "android", "wear", "src", "main", "res", "values"),
   ],
   apple: [
@@ -166,11 +168,45 @@ const APPLE_BUILTIN_UI_CALLS = new Set([
   "Toggle",
   "searchable",
 ]);
-const APPLE_PLIST_STRINGS = /<string>([\s\S]*?)<\/string>/gu;
+const APPLE_PLIST_KEYED_STRINGS = /<key>([^<]+)<\/key>\s*<string>([\s\S]*?)<\/string>/gu;
+// macOS uses this legacy privacy key instead of the *UsageDescription suffix.
+const APPLE_LOCALIZABLE_DESCRIPTION_KEYS = new Set(["NSScreenCaptureDescription"]);
 const GENERATED_PATH_RE = /(?:^|[\\/])(?:build|\.gradle|\.build|DerivedData)(?:$|[\\/])/u;
 const EXCLUDED_PATH_RE = /(?:^|[\\/])(?:Tests?|UITests?|test|Preview(?:s)?)(?:$|[\\/])/u;
 const EXCLUDED_FILE_RE = /(?:Tests?|UITests?|Previews?|Testing)\.(?:swift|kt|kts)$/u;
 const GENERATED_FILE_RE = /(?:^|[\\/])NativeStringResources\.kt$/u;
+// These files emit mobile.ui protocol evidence, not UI copy. Keep their text verbatim so
+// developer-screen diagnostics match the agent-facing action results and snapshot refs.
+const ANDROID_NATIVE_I18N_EXCLUDED_FILES = new Set([
+  path.join(
+    ROOT,
+    "apps",
+    "android",
+    "app",
+    "src",
+    "thirdParty",
+    "java",
+    "ai",
+    "openclaw",
+    "app",
+    "accessibility",
+    "AccessibilityActionExecutor.kt",
+  ),
+  path.join(
+    ROOT,
+    "apps",
+    "android",
+    "app",
+    "src",
+    "thirdParty",
+    "java",
+    "ai",
+    "openclaw",
+    "app",
+    "accessibility",
+    "AccessibilitySnapshotter.kt",
+  ),
+]);
 const BUILD_SETTING_RE = /\$\([A-Za-z0-9_.-]+\)/gu;
 const NATIVE_I18N_LOCALE_SET = new Set<string>(NATIVE_I18N_LOCALES);
 const ANDROID_LANGUAGE_PICKER_PATH =
@@ -194,6 +230,19 @@ function isAsciiAlphaNumeric(character: string): boolean {
     isAsciiUppercaseLetter(character) ||
     (character >= "0" && character <= "9")
   );
+}
+
+function decodeXml(value: string): string {
+  return value
+    .replaceAll("&quot;", '"')
+    .replaceAll("&apos;", "'")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&amp;", "&");
+}
+
+function isLocalizableApplePlistKey(key: string): boolean {
+  return key.endsWith("UsageDescription") || APPLE_LOCALIZABLE_DESCRIPTION_KEYS.has(key);
 }
 
 export function isConditionalBranchIdentifier(source: string): boolean {
@@ -1058,15 +1107,18 @@ export function extractNativeI18nCandidates(
     }
   }
   if (surface === "apple" && repoPath.endsWith(".plist")) {
-    for (const match of source.matchAll(APPLE_PLIST_STRINGS)) {
-      if (match[1]) {
+    for (const match of source.matchAll(APPLE_PLIST_KEYED_STRINGS)) {
+      const key = match[1];
+      const value = match[2];
+      if (key && isLocalizableApplePlistKey(key) && value) {
+        const valueOffset = (match.index ?? 0) + match[0].indexOf(value);
         addCandidate(
           entries,
           surface,
           repoPath,
-          match[1],
+          decodeXml(value),
           "plist-string",
-          lineNumber(source, match.index ?? 0),
+          lineNumber(source, valueOffset),
         );
       }
     }
@@ -1097,6 +1149,7 @@ async function walkFiles(root: string, surface: NativeI18nSurface): Promise<stri
       const allowed = surface === "apple" ? APPLE_EXTENSIONS : ANDROID_EXTENSIONS;
       return entry.isFile() &&
         (allowed.has(extension) || isAndroidValuesXml) &&
+        !ANDROID_NATIVE_I18N_EXCLUDED_FILES.has(fullPath) &&
         !EXCLUDED_FILE_RE.test(entry.name) &&
         !GENERATED_FILE_RE.test(fullPath)
         ? [fullPath]

@@ -28,6 +28,7 @@ import {
   createBoardGrantSnapshot,
   createBoardWidgetPutSnapshot,
   type BoardStore,
+  type BoardSnapshotWithHtmlDocuments,
   type BoardWidgetHtmlDocument,
   type BoardWidgetMcpAppDocument,
 } from "./board-store.js";
@@ -47,7 +48,7 @@ import {
 
 type BoardDatabase = Pick<
   OpenClawAgentKyselyDatabase,
-  "board_tabs" | "board_widgets" | "session_entries"
+  "board_tabs" | "board_widgets" | "session_nodes"
 >;
 type BoardDatabaseHandle = Pick<OpenClawAgentDatabase, "db" | "path">;
 
@@ -159,6 +160,27 @@ function readStoredBoard(database: BoardDatabaseHandle, sessionKey: string): Sto
     },
     { databaseLabel: database.path, operationLabel: "board.read" },
   );
+}
+
+function rowToHtmlDocument(
+  row: Pick<
+    SelectedBoardWidgetRow,
+    "content_kind" | "html" | "revision" | "sha256" | "view_generation" | "grant_state" | "manifest"
+  >,
+): BoardWidgetHtmlDocument | undefined {
+  if (row.content_kind !== "html" || row.html === null || row.view_generation === null) {
+    return undefined;
+  }
+  const manifest = parseManifest(row.manifest);
+  const declared = manifest.declared;
+  return {
+    html: Buffer.from(row.html).toString("utf8"),
+    revision: row.revision,
+    sha256: row.sha256,
+    viewGeneration: row.view_generation,
+    grantState: effectiveGrantState(row.grant_state as BoardWidget["grantState"], manifest),
+    ...(declared ? { declared } : {}),
+  };
 }
 
 function upsertTabs(
@@ -286,16 +308,28 @@ function deleteRemovedTabs(
 
 function hasSession(database: BoardDatabaseHandle, sessionKey: string): boolean {
   const db = getNodeSqliteKysely<BoardDatabase>(database.db);
-  return Boolean(
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("session_entries")
-        .select("session_key")
-        .where("session_key", "=", sessionKey)
-        .limit(1),
-    ).rows[0],
-  );
+  const row = executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("session_nodes")
+      .select("entry_json")
+      .where("session_key", "=", sessionKey)
+      .limit(1),
+  ).rows[0];
+  if (!row) {
+    return false;
+  }
+  try {
+    const entry = JSON.parse(row.entry_json) as unknown;
+    return Boolean(
+      entry &&
+      typeof entry === "object" &&
+      !Array.isArray(entry) &&
+      typeof (entry as { sessionId?: unknown }).sessionId === "string",
+    );
+  } catch {
+    return false;
+  }
 }
 
 function emptyBoardSnapshot(sessionKey: string): BoardSnapshot {
@@ -361,6 +395,33 @@ export class SqliteBoardStore implements BoardStore {
     return cloneBoardSnapshot(
       result.found && result.value ? result.value : emptyBoardSnapshot(resolved.sessionKey),
     );
+  }
+
+  getSnapshotWithHtmlDocuments(sessionKey: string): BoardSnapshotWithHtmlDocuments {
+    const resolved = this.resolve(sessionKey);
+    const result = withOpenClawAgentDatabaseReadOnly(
+      (database) =>
+        hasSession(database, resolved.sessionKey) && boardTablesPresent(database)
+          ? readStoredBoard(database, resolved.sessionKey)
+          : undefined,
+      {
+        agentId: resolved.agentId,
+        ...(resolved.path ? { path: resolved.path } : {}),
+        env: this.options.env,
+      },
+    );
+    const stored = result.found ? result.value : undefined;
+    const htmlDocuments = new Map<string, BoardWidgetHtmlDocument>();
+    for (const row of stored?.widgetRows ?? []) {
+      const document = rowToHtmlDocument(row);
+      if (document) {
+        htmlDocuments.set(row.name, document);
+      }
+    }
+    return {
+      snapshot: cloneBoardSnapshot(stored?.snapshot ?? emptyBoardSnapshot(resolved.sessionKey)),
+      htmlDocuments,
+    };
   }
 
   applyOps(sessionKey: string, ops: readonly BoardOp[]): BoardSnapshot {
@@ -575,19 +636,7 @@ export class SqliteBoardStore implements BoardStore {
         if (!row) {
           return undefined;
         }
-        if (row.content_kind === "html" && row.html !== null && row.view_generation !== null) {
-          const manifest = parseManifest(row.manifest);
-          const declared = manifest.declared;
-          return {
-            html: Buffer.from(row.html).toString("utf8"),
-            revision: row.revision,
-            sha256: row.sha256,
-            viewGeneration: row.view_generation,
-            grantState: effectiveGrantState(row.grant_state as BoardWidget["grantState"], manifest),
-            ...(declared ? { declared } : {}),
-          };
-        }
-        return undefined;
+        return rowToHtmlDocument(row);
       },
       {
         agentId: resolved.agentId,

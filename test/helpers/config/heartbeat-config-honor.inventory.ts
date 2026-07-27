@@ -117,7 +117,7 @@ export const HEARTBEAT_CONFIG_HONOR_INVENTORY: ConfigHonorInventoryRow[] = [
     reloadPaths: ["src/gateway/config-reload-plan.ts"],
     testPaths: [
       "src/infra/heartbeat-runner.returns-default-unset.test.ts",
-      "src/infra/heartbeat-runner.respects-ackmaxchars-heartbeat-acks.test.ts",
+      "src/infra/heartbeat-runner.ack-token-heartbeat-acks.test.ts",
     ],
   },
   {
