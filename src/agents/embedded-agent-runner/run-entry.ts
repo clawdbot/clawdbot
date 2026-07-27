@@ -195,6 +195,21 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
   let candidateIndex = 0;
   const committedSideEffect =
     params.behavior.kind === "command-rpc" ? params.behavior.hasCommittedSideEffect : undefined;
+  const readChannelDeliveryEvidence =
+    params.behavior.kind === "channel-delivery" ? params.behavior.readDeliveryEvidence : undefined;
+  // Thrown candidate errors skip result classification, so without an error-path
+  // backstop the loop advances to the next candidate even when the attempt already
+  // delivered its reply, producing a duplicate visible answer (#113788). Consult the
+  // same live delivery evidence the result classifier already uses so both exit
+  // paths suppress fallback after a delivered reply.
+  const canFallbackAfterError = committedSideEffect
+    ? () => !committedSideEffect()
+    : readChannelDeliveryEvidence
+      ? () => {
+          const evidence = readChannelDeliveryEvidence();
+          return !evidence.hasDirectlySentBlockReply && !evidence.hasBlockReplyPipelineOutput;
+        }
+      : undefined;
   const fallbackResult = await runWithModelFallback<T>({
     ...params.selection,
     ...params.identity,
@@ -250,7 +265,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
               : effectiveClassification;
           },
         }),
-    ...(committedSideEffect ? { canFallbackAfterError: () => !committedSideEffect() } : {}),
+    ...(canFallbackAfterError ? { canFallbackAfterError } : {}),
     ...(params.behavior.kind === "maintenance"
       ? {}
       : {
