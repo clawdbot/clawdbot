@@ -676,6 +676,7 @@ describe("Copilot attempt transcript journal", () => {
       idempotencyKey: "copilot-sdk:sdk-session:assistant-chunk-a",
       stopReason: "toolUse",
     });
+    expect(rows[2]?.message).toMatchObject({ toolCallId: "call-a", toolName: "read" });
     expect(
       bridge.buildAssistantMessage({
         modelRef: { api: "openai-responses", id: "gpt-5", provider: "github-copilot" },
@@ -939,6 +940,37 @@ describe("Copilot attempt transcript journal", () => {
     await journal.barrier("user-requested tool");
 
     expect(journal.snapshot().replayInvalid).toBe(true);
+  });
+
+  it("preserves user-requested identity across an ephemeral completion", async () => {
+    const { journal, session, target } = await createFixture();
+    await journal.persistInitialUser();
+    session.emit(
+      event("tool.user_requested", "user-tool-request", {
+        arguments: { path: "a" },
+        toolCallId: "user-call",
+        toolName: "read",
+      }),
+    );
+    session.emit({
+      ...event("tool.execution_complete", "ephemeral-user-tool-result", {
+        result: { content: "partial" },
+        success: true,
+        toolCallId: "user-call",
+      }),
+      ephemeral: true,
+    } as SessionEvent);
+    session.emit(
+      event("tool.execution_complete", "durable-user-tool-result", {
+        result: { content: "done" },
+        success: true,
+        toolCallId: "user-call",
+      }),
+    );
+    await journal.barrier("user-requested completion");
+
+    expect(transcriptMessages(await readSessionTranscriptEvents(target))).toHaveLength(1);
+    expect(journal.snapshot()).toMatchObject({ replayInvalid: true });
   });
 
   it("hides autopilot users while preserving unknown SDK source provenance", async () => {

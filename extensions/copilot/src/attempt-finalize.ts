@@ -108,6 +108,9 @@ export async function completeCopilotAttempt(params: {
     lastToolError,
     journalValidated:
       transcript !== undefined &&
+      !aborted &&
+      !timedOut &&
+      promptError === undefined &&
       !nativeSessionHistoryUnvalidated &&
       transcriptJournal?.hasFailed() !== true &&
       transcript?.replayInvalid !== true &&

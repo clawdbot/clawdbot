@@ -2402,9 +2402,10 @@ describe("runCopilotAttempt", () => {
     // the attempt as side-effect-safe.
     const sdk = makeFakeSdk({
       onCreateSession: (session) => {
-        session.sendAndWait.mockRejectedValueOnce(
-          new Error("Timeout after 60000ms waiting for session.idle"),
-        );
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("user.message", { content: "hello" });
+          throw new Error("Timeout after 60000ms waiting for session.idle");
+        });
       },
     });
     const pool = makeFakePool(sdk);
@@ -2423,6 +2424,9 @@ describe("runCopilotAttempt", () => {
     // replay-shim incorrectly treated the attempt as side-effect-safe.
     expect(result.replayMetadata?.hadPotentialSideEffects).toBe(true);
     expect(result.replayMetadata?.replaySafe).toBe(false);
+    expect(
+      (result as AgentHarnessAttemptResult & { journalValidated?: boolean }).journalValidated,
+    ).toBe(false);
     sdk.sessions[0]?.emit("session.idle", {});
     await vi.waitFor(() => {
       expect(sdk.sessions[0]?.disconnect).toHaveBeenCalledTimes(1);
@@ -2572,7 +2576,10 @@ describe("runCopilotAttempt", () => {
     const error = new Error("send failed");
     const sdk = makeFakeSdk({
       onCreateSession: (session) => {
-        session.sendAndWait.mockRejectedValueOnce(error);
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("user.message", { content: "hello" });
+          throw error;
+        });
       },
     });
     const pool = makeFakePool(sdk);
@@ -2581,6 +2588,9 @@ describe("runCopilotAttempt", () => {
     const session = requireSession(sdk);
 
     expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBe(error);
+    expect(
+      (result as AgentHarnessAttemptResult & { journalValidated?: boolean }).journalValidated,
+    ).toBe(false);
     expect(session.off).toHaveBeenCalledTimes(session.on.mock.calls.length);
     expect(session.disconnect).toHaveBeenCalledTimes(1);
     expect(pool["release"]).toHaveBeenCalledTimes(1);

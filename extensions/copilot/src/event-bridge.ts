@@ -142,6 +142,7 @@ export function attachEventBridge(
   let streamError: Error | undefined;
   const toolMetas: AgentHarnessAttemptResult["toolMetas"] = [];
   const toolMetaIndexByCallId = new Map<string, number>();
+  const projectedToolNamesByCallId = new Map<string, string>();
   const userRequestedToolCallIds = new Set<string>();
   let startedCount = 0;
   let completedCount = 0;
@@ -349,12 +350,18 @@ export function attachEventBridge(
       };
     }
     const projection = options.transcriptProjection;
-    const wasTrackedUserRequest = userRequestedToolCallIds.delete(event.data.toolCallId);
+    const isDurableRootCompletion = isRootSessionEvent(event) && event.ephemeral !== true;
+    const wasTrackedUserRequest = userRequestedToolCallIds.has(event.data.toolCallId);
     const isUserRequested = event.data.isUserRequested === true || wasTrackedUserRequest;
-    if (projection && isRootSessionEvent(event) && event.ephemeral !== true && isUserRequested) {
+    const projectedToolName = projectedToolNamesByCallId.get(event.data.toolCallId);
+    if (isDurableRootCompletion) {
+      userRequestedToolCallIds.delete(event.data.toolCallId);
+      projectedToolNamesByCallId.delete(event.data.toolCallId);
+    }
+    if (projection && isDurableRootCompletion && isUserRequested) {
       projection.journal.markReplayIncomplete();
     }
-    if (projection && isRootSessionEvent(event) && event.ephemeral !== true && !isUserRequested) {
+    if (projection && isDurableRootCompletion && !isUserRequested) {
       const resultText = event.data.success
         ? (event.data.result?.content ?? "")
         : (event.data.error?.message ?? "Tool execution failed");
@@ -368,7 +375,7 @@ export function attachEventBridge(
         message: {
           role: "toolResult",
           toolCallId: event.data.toolCallId,
-          toolName: toolName ?? event.data.toolDescription?.name ?? "unknown",
+          toolName: toolName ?? event.data.toolDescription?.name ?? projectedToolName ?? "unknown",
           content: [{ type: "text", text: sanitizeToolDetailText(resultText) }],
           ...(hasOwnKeys(details) ? { details } : {}),
           isError: !event.data.success,
@@ -625,6 +632,9 @@ export function attachEventBridge(
       return;
     }
     handledAssistantEventIds.add(event.id);
+    for (const request of event.data.toolRequests ?? []) {
+      projectedToolNamesByCallId.set(request.toolCallId, request.name);
+    }
     const entry = ensureMessageAccumulator(messagesById, messageOrder, event.data.messageId);
     if (typeof event.data.content === "string" && event.data.content.length >= entry.text.length) {
       entry.text = event.data.content;
