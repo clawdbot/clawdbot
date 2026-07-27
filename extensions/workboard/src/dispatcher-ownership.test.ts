@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
+import { CLAIM_RECLAIM_MS } from "./store-constants.js";
 import { WorkboardStore } from "./store.js";
 
 function createMemoryStore(): WorkboardKeyedStore {
@@ -184,6 +185,77 @@ describe("Workboard dispatcher ownership", () => {
     expect(run).toHaveBeenCalledTimes(2);
     await expect(store.get(sameOwner.id)).resolves.toMatchObject({ status: "ready" });
     await expect(store.get(normal.id)).resolves.toMatchObject({ status: "ready" });
+  });
+
+  it("keeps a cross-board running worker slot until its heartbeat grace expires", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const stale = await store.create({
+      title: "Abandoned product worker",
+      status: "running",
+      agentId: "shared-worker",
+      boardId: "product",
+      execution: {
+        id: "stale-execution",
+        kind: "agent-session",
+        mode: "autonomous",
+        status: "running",
+        startedAt: 1,
+        updatedAt: 1,
+      },
+    });
+    const claimed = await store.claim(stale.id, {
+      ownerId: "shared-worker",
+      token: "stale-token",
+      ttlSeconds: 1,
+    });
+    const ready = await store.create({
+      title: "Ready operations recovery",
+      status: "ready",
+      agentId: "shared-worker",
+      boardId: "ops",
+      workspaceAccess: { unrestricted: true },
+    });
+    const run = vi.fn().mockResolvedValue({ runId: "run-after-grace" });
+    const expiresAt = claimed.card.metadata?.claim?.expiresAt;
+    expect(expiresAt).toBeDefined();
+
+    const withinGrace = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: {
+        now: expiresAt! + CLAIM_RECLAIM_MS,
+        maxStarts: 1,
+        boardId: "ops",
+      },
+    });
+
+    expect(withinGrace.started).toEqual([]);
+    expect(run).not.toHaveBeenCalled();
+    await expect(store.get(stale.id)).resolves.toMatchObject({
+      status: "running",
+      execution: { status: "running" },
+      metadata: { claim: { ownerId: "shared-worker" } },
+    });
+
+    const reclaimed = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: {
+        now: expiresAt! + CLAIM_RECLAIM_MS + 1,
+        maxStarts: 1,
+        boardId: "ops",
+      },
+    });
+
+    expect(reclaimed.started).toEqual([
+      expect.objectContaining({ cardId: ready.id, runId: "run-after-grace" }),
+    ]);
+    expect(run).toHaveBeenCalledOnce();
+    await expect(store.get(stale.id)).resolves.toMatchObject({
+      status: "running",
+      execution: { status: "running" },
+      metadata: { claim: { ownerId: "shared-worker" } },
+    });
   });
 
   it("does not let an expired review claim consume worker capacity", async () => {

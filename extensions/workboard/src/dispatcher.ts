@@ -15,6 +15,7 @@ import {
   resolveDispatchWorkspaceAccess,
   type ResolveAgentWorkspaceRuntime,
 } from "./dispatcher-workspace.js";
+import { isWorkboardClaimReclaimable } from "./store-constants.js";
 import { WorkboardStore, type WorkboardDispatchResult } from "./store.js";
 import {
   assertCanonicalWorkboardRootAccess,
@@ -260,10 +261,14 @@ function selectStartableCards(
   }
   const runningByOwner = new Map<string, number>();
   for (const card of cards) {
+    const claim = card.metadata?.claim;
+    // Owner capacity is global but cleanup is board-scoped; retain the same
+    // heartbeat grace as cleanup before a stale running card releases its slot.
     const consumesOwnerSlot =
-      card.status === "running" ||
-      (card.status !== "done" && cardHasActiveClaim(card, now)) ||
-      card.execution?.status === "running";
+      !isWorkboardClaimReclaimable(claim, now) &&
+      (card.status === "running" ||
+        (card.status !== "done" && cardHasActiveClaim(card, now)) ||
+        card.execution?.status === "running");
     if (!consumesOwnerSlot || cardIsArchived(card)) {
       continue;
     }
