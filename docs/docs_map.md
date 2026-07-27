@@ -293,6 +293,27 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Limitations
   - H2: Related
 
+## channels/buzz.md
+
+- Route: /channels/buzz
+- Headings:
+  - H2: What it does
+  - H2: Buzz identity and room model
+  - H2: Before you start
+  - H2: Install
+  - H2: Guided setup
+  - H3: Bot approval
+  - H2: Agent tools and messaging
+  - H3: Route rooms to different agents
+  - H2: Access control
+  - H2: Manual configuration
+  - H3: Bot key storage
+  - H2: Verify the connection
+  - H2: Rotate the bot identity
+  - H2: Current limits and roadmap
+  - H2: Troubleshooting
+  - H2: Related
+
 ## channels/channel-routing.md
 
 - Route: /channels/channel-routing
@@ -2908,6 +2929,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /concepts/queue-steering
 - Headings:
   - H2: Runtime boundary
+  - H2: Why steering waits for the current batch
   - H2: Modes
   - H2: Burst example
   - H2: Scope
@@ -5875,6 +5897,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Compatibility registry
   - H2: Deprecation policy
   - H2: Current compatibility areas
+  - H3: Channel prompt-context identifier aliases
   - H3: WhatsApp inbound callback flat aliases
   - H3: WhatsApp inbound admission fields
   - H2: Plugin inspector package
@@ -7583,6 +7606,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What changed
   - H3: Why
   - H2: Compatibility policy
+  - H3: AuthStorage SQLite migration
   - H3: Published channel setup compatibility
   - H3: Channel setup input field compatibility
   - H4: Verifying readers
@@ -10834,6 +10858,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Options
   - H2: Troubleshooting
   - H2: Connection troubleshooting
+  - H2: Related
+
+## web/urls.md
+
+- Route: /web/urls
+- Headings:
+  - H2: Session and dashboard URLs
+  - H3: Stability contract
+  - H2: Route table
+  - H2: Special documents and startup modes
+  - H2: Remote Gateway handoff
   - H2: Related
 
 ## web/webchat.md

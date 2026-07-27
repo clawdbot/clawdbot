@@ -18,7 +18,12 @@ import {
   createConfigRuntimeEnvBase,
   getPublishedConfigRuntimeEnvState,
 } from "./config-env-vars.js";
+import {
+  applyUnsetPathsForWrite,
+  resolveManagedUnsetPathsForWrite,
+} from "./config-path-mutation.js";
 import { restoreEnvVarRefs } from "./env-preserve.js";
+import { resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "./gateway-env-selection.js";
 import {
@@ -37,11 +42,6 @@ import {
   type ConfigWriteOptions,
   type ConfigWriteResult,
 } from "./io.js";
-import {
-  applyUnsetPathsForWrite,
-  resolveManagedUnsetPathsForWrite,
-  resolveWriteEnvSnapshotForPath,
-} from "./io.write-prepare.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import type { ConfigMutationBase } from "./mutation-types.js";

@@ -115,8 +115,7 @@ export function createHarness(
       kind: "public",
       external_managed: patch.external_managed ?? true,
       external_ref: patch.external_ref ?? "agent:main:main",
-      external_url:
-        patch.external_url ?? "https://control.example/control/chat?session=agent%3Amain%3Amain",
+      external_url: patch.external_url ?? "https://control.example/control/chat/main",
       sidebar_section: patch.sidebar_section ?? "Projects",
       archived: patch.archived ?? false,
       created_at: "2026-07-19T00:00:00.000Z",

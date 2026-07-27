@@ -26,9 +26,13 @@ import {
   readConfigFileSnapshotForWrite,
   resolveConfigSnapshotHash,
 } from "../../config/io.js";
-import { createMergePatch, projectSourceOntoRuntimeShape } from "../../config/io.write-prepare.js";
+import { projectSourceOntoRuntimeShape } from "../../config/io.write-prepare.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
-import { applyMergePatch, isMergePatchObjectKeyAllowed } from "../../config/merge-patch.js";
+import {
+  applyMergePatch,
+  createMergePatch,
+  isMergePatchObjectKeyAllowed,
+} from "../../config/merge-patch.js";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import { normalizeConfigPatchReplacePaths } from "../../config/patch-replace-paths.js";
 import { redactConfigObject, restoreRedactedValues } from "../../config/redact-snapshot.js";

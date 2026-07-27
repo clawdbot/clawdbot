@@ -675,7 +675,7 @@ export async function buildTelegramInboundContextPayload(params: {
           }
         : undefined,
       groupSystemPrompt: isGroup || (!isGroup && groupConfig) ? groupSystemPrompt : undefined,
-      untrustedContext: visiblePromptContext.length > 0 ? visiblePromptContext : undefined,
+      channelStructuredContext: visiblePromptContext.length > 0 ? visiblePromptContext : undefined,
     },
     contextVisibility: contextVisibilityMode,
     extra: {

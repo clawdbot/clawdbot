@@ -15,8 +15,8 @@ import {
   buildPortableAuthProfileStoreForAgentCopy,
   ensureAuthProfileStore,
 } from "../agents/auth-profiles.js";
-import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { logConfigUpdated } from "../config/logging.js";
@@ -257,9 +257,9 @@ export async function agentsAddCommand(
     const defaultAgentId = resolveDefaultAgentId(cfg);
     if (defaultAgentId !== agentId) {
       const sourceAgentDir = resolveAgentDir(cfg, defaultAgentId);
-      const sourceAuthPath = resolveAuthStorePath(sourceAgentDir);
-      const destAuthPath = resolveAuthStorePath(agentDir);
-      const mainAuthPath = resolveAuthStorePath();
+      const sourceAuthPath = resolveAuthProfileDatabasePath(sourceAgentDir);
+      const destAuthPath = resolveAuthProfileDatabasePath(agentDir);
+      const mainAuthPath = resolveAuthProfileDatabasePath();
       const sameAuthPath =
         normalizeLowercaseStringOrEmpty(path.resolve(sourceAuthPath)) ===
         normalizeLowercaseStringOrEmpty(path.resolve(destAuthPath));

@@ -14,6 +14,8 @@ import type {
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
+import type { OpenAIResponsesStreamEvent } from "../transports/openai-responses-stream-internal.js";
+import { transportAbortError } from "../transports/transport-stream-shared.js";
 import type {
   Api,
   AssistantMessage,
@@ -49,7 +51,6 @@ import {
   AZURE_RESPONSES_TEXT_CONTENT_PART_TYPE,
   OPENAI_RESPONSES_OUTPUT_TEXT_CONTENT_PART_TYPE,
   type AzureResponsesTextContentPart,
-  type AzureResponsesTextDeltaEvent,
   isAzureResponsesTextDeltaEvent,
   isResponsesTextContentPartType,
   resolveResponsesMessageSnapshotCollapse,
@@ -113,29 +114,8 @@ type ResponsesTextContentPart =
   | ResponseOutputMessage["content"][number]
   | AzureResponsesTextContentPart;
 type ResponsesStreamOutputMessage = Omit<ResponseOutputMessage, "content"> & {
-  content: ResponsesTextContentPart[];
+  content: ResponsesTextContentPart[] | null;
 };
-type ResponsesContentPartAddedEvent = Extract<
-  ResponseStreamEvent,
-  { type: "response.content_part.added" }
->;
-type ResponsesOutputItemDoneEvent = Extract<
-  ResponseStreamEvent,
-  { type: "response.output_item.done" }
->;
-type AzureResponsesContentPartAddedEvent = Omit<ResponsesContentPartAddedEvent, "part"> & {
-  part: AzureResponsesTextContentPart;
-};
-type AzureResponsesOutputItemDoneEvent = Omit<ResponsesOutputItemDoneEvent, "item"> & {
-  item: ResponsesStreamOutputMessage;
-};
-
-type OpenAIResponsesStreamEvent =
-  | ResponseStreamEvent
-  | AzureResponsesContentPartAddedEvent
-  | AzureResponsesOutputItemDoneEvent
-  | AzureResponsesTextDeltaEvent;
-
 function normalizeResponsesReasoningReplayItem(params: {
   item: ReplayableResponseReasoningItem;
   replayResponsesItemIds: boolean;
@@ -661,7 +641,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     await processResponsesStream(openaiStream, output, stream, model, processStreamOptions);
 
     if (options?.signal?.aborted) {
-      throw new Error("Request was aborted");
+      throw transportAbortError(options.signal);
     }
 
     if (output.stopReason === "aborted" || output.stopReason === "error") {

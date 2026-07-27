@@ -22,6 +22,7 @@ import {
   resolveAuthProfileOrder,
   resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
+import { assertAuthProfileMigrationReady } from "./auth-profiles/legacy-source-diagnostic.js";
 import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.js";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import { assertAuthModeAllowedForModel, isAuthModeAllowedForModel } from "./model-auth-openai.js";
@@ -95,10 +96,13 @@ export async function resolveApiKeyForProvider(params: {
   secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth> {
   const { provider, cfg, profileId, preferredProfile } = params;
+  const agentDir = params.agentDir?.trim() || (cfg ? resolveDefaultAgentDir(cfg) : undefined);
+  // Pending credential files own this agent's auth route until Doctor commits
+  // and archives them; do not fall through to env/config credentials.
+  assertAuthProfileMigrationReady(agentDir);
   // A failed explicit ref owns the provider. Stop before profile/env discovery so requests cannot
   // silently switch credentials while this configured owner is cold.
   assertRuntimeProviderSecretOwnerAvailable({ cfg, provider });
-  const agentDir = params.agentDir?.trim() || (cfg ? resolveDefaultAgentDir(cfg) : undefined);
   let scopedStore: AuthProfileStore | undefined = params.store;
   const getScopedStore = (requestedProfileId?: string) =>
     (scopedStore ??= resolveScopedAuthProfileStore({

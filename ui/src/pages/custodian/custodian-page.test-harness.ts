@@ -72,6 +72,11 @@ export function createContext(
   } as unknown as ApplicationGateway;
   const context = {
     gateway,
+    agents: {
+      state: { agentsList: { mainKey: "main" } },
+      refreshList: vi.fn(),
+    },
+    agentSelection: { state: { selectedId: "main" } },
     basePath: "",
     navigate: vi.fn(),
   } as unknown as ApplicationContext;

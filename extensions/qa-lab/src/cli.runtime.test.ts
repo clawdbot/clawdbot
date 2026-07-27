@@ -1916,6 +1916,7 @@ describe("qa cli runtime", () => {
                 cells: {
                   openclaw: {
                     runtime: "openclaw",
+                    status: "pass",
                     transcriptBytes: '{"role":"assistant"}\n',
                     toolCalls: [{ tool: "read_file", argsHash: "a", resultHash: "r" }],
                     finalText: "done",
@@ -1925,6 +1926,7 @@ describe("qa cli runtime", () => {
                   },
                   codex: {
                     runtime: "codex",
+                    status: "pass",
                     transcriptBytes: '{"role":"assistant"}\n',
                     toolCalls: [{ tool: "read_file", argsHash: "b", resultHash: "r" }],
                     finalText: "done",
@@ -1986,6 +1988,7 @@ describe("qa cli runtime", () => {
                 cells: {
                   openclaw: {
                     runtime: "openclaw",
+                    status: "pass",
                     transcriptBytes: '{"role":"assistant"}\n',
                     toolCalls: [{ tool: "fs.read", argsHash: "a", resultHash: "r" }],
                     finalText: "done",
@@ -1995,6 +1998,7 @@ describe("qa cli runtime", () => {
                   },
                   codex: {
                     runtime: "codex",
+                    status: "pass",
                     transcriptBytes: '{"role":"assistant"}\n',
                     toolCalls: Array.from({ length: 40 }, (_, index) => ({
                       tool: "fs.read",
@@ -2162,6 +2166,7 @@ describe("qa cli runtime", () => {
                 cells: {
                   openclaw: {
                     runtime: "openclaw",
+                    status: "pass",
                     transcriptBytes: "",
                     toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r" }],
                     finalText: "",
@@ -2171,6 +2176,7 @@ describe("qa cli runtime", () => {
                   },
                   codex: {
                     runtime: "codex",
+                    status: "pass",
                     transcriptBytes: "",
                     toolCalls: [],
                     finalText: "",
@@ -2195,7 +2201,10 @@ describe("qa cli runtime", () => {
 
       expect(process.exitCode).toBe(1);
       expectWriteContains(stdoutWrite, "- Verdict: fail");
-      expectWriteContains(stdoutWrite, "web_search missing codex tool call web_search");
+      expectWriteContains(
+        stdoutWrite,
+        "web_search missing successful codex tool call/result web_search",
+      );
     } finally {
       process.exitCode = priorExitCode;
       await fs.rm(repoRoot, { recursive: true, force: true });

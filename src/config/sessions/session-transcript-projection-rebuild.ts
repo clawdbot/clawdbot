@@ -172,7 +172,7 @@ export function prepareSessionTranscriptProjection(
         db,
         kysely
           .selectFrom("transcript_events")
-          .select(["event_json", "seq"])
+          .select(["event_json", "seq", "created_at"])
           .where("session_id", "=", sessionId)
           .orderBy("seq", "asc"),
       ).rows;
@@ -186,11 +186,13 @@ export function prepareSessionTranscriptProjection(
       const ftsRows: TranscriptIndexEntry[] = [];
       let activeMessageCount = 0;
       for (const entry of selectVisibleTranscriptEventEntries(events)) {
-        const indexed = extractTranscriptIndexEntry(entry.event, now);
+        const source = rows[entry.seq - 1];
+        // Stamp timestamp-less events with their own row's created_at (matching the append path);
+        // only fall back to `now` when the source row is somehow missing.
+        const indexed = extractTranscriptIndexEntry(entry.event, source?.created_at ?? now);
         if (indexed) {
           ftsRows.push(indexed);
         }
-        const source = rows[entry.seq - 1];
         if (!source || !shouldProjectActiveEvent(entry.event)) {
           continue;
         }

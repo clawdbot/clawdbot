@@ -6,6 +6,10 @@ import {
   isMeaningfulTranscriptMessage,
   readTerminalSourceReplyDeliveryMirror,
 } from "./embedded-agent-runner/message-visibility.js";
+import {
+  AGENT_RUN_RESTART_ABORT_ERROR,
+  AGENT_RUN_RESTART_ABORT_ERROR_CODE,
+} from "./run-termination.js";
 import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 
 function readDeliveredTerminalSourceReplyToolCallId(
@@ -229,13 +233,16 @@ export function hasReplaySafeCodeModeCheckpointInCurrentTurn(
   return false;
 }
 
-// Generic fetch/undici abort strings plus the gateway's own restart abort
-// reason (run-termination.ts); which one lands depends on whether the provider
-// stream throws or surfaces the abort as an error event.
-const RESTART_ABORT_ERROR_MESSAGES = new Set([
+// Upgrade-window compat: tails persisted before transports preserved the abort
+// reason carry no `errorCode`, and the old process can write one while shutting
+// down for the very upgrade that starts the new one. Read those by their abort
+// text so that run still resumes. Coded tails never consult this set, so a
+// coded non-restart abort stays excluded. Remove once no pre-`errorCode`
+// transcript can reach restart recovery.
+const LEGACY_RESTART_ABORT_ERROR_MESSAGES = new Set([
   "Request was aborted",
   "This operation was aborted",
-  "agent run aborted for restart",
+  AGENT_RUN_RESTART_ABORT_ERROR,
 ]);
 
 function isRestartAbortAssistantMessage(message: unknown): boolean {
@@ -243,13 +250,28 @@ function isRestartAbortAssistantMessage(message: unknown): boolean {
     return false;
   }
   const stopReason = normalizeOptionalString((message as { stopReason?: unknown }).stopReason);
-  if (stopReason !== "error" && stopReason !== "aborted") {
+  // Every row that reaches restart recovery was mid-run when the process went
+  // down, so an "aborted" tail is that interruption whatever detail the
+  // transport persisted with it ("Worker inference aborted.", a provider cancel
+  // message, or nothing).
+  if (stopReason === "aborted") {
+    return true;
+  }
+  if (stopReason !== "error") {
     return false;
+  }
+  // An "error" tail only means the restart when the transport carried the
+  // gateway's own abort code through (transports copy the reason's `code` into
+  // `errorCode`). A provider failure or a first-stream-event timeout carries a
+  // different code and stays unresumable.
+  const errorCode = normalizeOptionalString((message as { errorCode?: unknown }).errorCode);
+  if (errorCode !== undefined) {
+    return errorCode === AGENT_RUN_RESTART_ABORT_ERROR_CODE;
   }
   const errorMessage = normalizeOptionalString(
     (message as { errorMessage?: unknown }).errorMessage,
   );
-  return errorMessage !== undefined && RESTART_ABORT_ERROR_MESSAGES.has(errorMessage);
+  return errorMessage !== undefined && LEGACY_RESTART_ABORT_ERROR_MESSAGES.has(errorMessage);
 }
 
 export function isRestartAbortTailArtifact(message: unknown): boolean {

@@ -92,6 +92,35 @@ describe("background tasks rail state", () => {
     expect(props.tasks?.map((task) => task.id)).toEqual(["task-1"]);
   });
 
+  it("keeps the later recent page's equally current running progress", async () => {
+    const recent = makeTask({
+      id: "task-1",
+      toolUseCount: 2,
+      lastToolName: "write",
+      progressSummary: "Finishing the concurrent task report",
+    });
+    const active = makeTask({
+      id: "task-1",
+      toolUseCount: 2,
+      lastToolName: "write",
+      progressSummary: "Preparing the concurrent task report",
+    });
+    const { host, request } = createHost({
+      request: (method, params) => {
+        expect(method).toBe("tasks.list");
+        const status = (params as { status?: string[] }).status;
+        return Promise.resolve({ tasks: [status ? active : recent] });
+      },
+    });
+
+    createBackgroundTasksProps(host, openSession);
+    await flushAsync();
+
+    expect(request.mock.calls[0]?.[1]).toMatchObject({ status: ["queued", "running"] });
+    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("status");
+    expect(createBackgroundTasksProps(host, openSession).tasks).toEqual([recent]);
+  });
+
   it("loads the snapshot when a task event arrives before any load", async () => {
     const { host, request } = createHost({
       connected: false,
@@ -352,6 +381,81 @@ describe("background tasks rail events", () => {
     handleBackgroundTasksEvent(host, { action: "deleted", taskId: "task-1" });
     props = createBackgroundTasksProps(host, openSession);
     expect(props.tasks?.map((task) => task.id)).toEqual(["task-2"]);
+  });
+
+  it("applies an equally current authoritative terminal event correction", async () => {
+    const completed = makeTask({
+      id: "task-1",
+      status: "completed",
+      updatedAt: 2_000,
+      terminalSummary: "Previous terminal details",
+    });
+    const correction = makeTask({
+      id: "task-1",
+      status: "completed",
+      updatedAt: 2_000,
+      terminalSummary: "Authoritative terminal details",
+    });
+    const { host } = await loadedHost([completed]);
+
+    handleBackgroundTasksEvent(host, { action: "upserted", task: correction });
+
+    expect(createBackgroundTasksProps(host, openSession).tasks).toEqual([correction]);
+  });
+
+  it("does not roll back running tool activity from an equally current event", async () => {
+    const progress = makeTask({
+      id: "task-1",
+      updatedAt: 2_000,
+      toolUseCount: 2,
+      lastToolName: "write",
+    });
+    const stale = makeTask({
+      id: "task-1",
+      updatedAt: 2_000,
+      toolUseCount: 1,
+      lastToolName: "read",
+    });
+    const { host } = await loadedHost([progress]);
+
+    handleBackgroundTasksEvent(host, { action: "upserted", task: stale });
+
+    expect(createBackgroundTasksProps(host, openSession).tasks).toEqual([progress]);
+  });
+
+  it("preserves an opened prompt when a terminal event corrects its output", async () => {
+    const completed = makeTask({
+      id: "task-1",
+      status: "completed",
+      updatedAt: 2_000,
+      terminalSummary: "Previous terminal details",
+    });
+    const prompt = "Inspect the concurrent task owner";
+    const correction = makeTask({
+      id: "task-1",
+      status: "completed",
+      updatedAt: 2_000,
+      terminalSummary: "Authoritative terminal details",
+    });
+    const { host } = createHost({
+      request: (method) =>
+        method === "tasks.get"
+          ? Promise.resolve({ task: { ...completed, prompt } })
+          : Promise.resolve({ tasks: [completed] }),
+    });
+    createBackgroundTasksProps(host, openSession);
+    await flushAsync();
+    createBackgroundTasksProps(host, openSession).onSelectTask(completed);
+    await flushAsync();
+
+    handleBackgroundTasksEvent(host, { action: "upserted", task: correction });
+
+    const props = createBackgroundTasksProps(host, openSession);
+    expect(props.tasks?.[0]?.terminalSummary).toBe("Authoritative terminal details");
+    expect(props.taskDetails.get("task-1")).toMatchObject({
+      prompt,
+      terminalSummary: "Authoritative terminal details",
+    });
   });
 
   it("ignores upserts for other agents", async () => {
