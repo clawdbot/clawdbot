@@ -373,6 +373,63 @@ describe("tool-loop-detection", () => {
       }
     });
 
+    it("blocks an unbroken run of identical calls even when every result differs", () => {
+      const state = createState();
+      const params = { command: "date +%S" };
+
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordSuccessfulCall(state, "exec", params, `second ${i}`, i);
+      }
+
+      const result = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
+
+      expect(result.stuck).toBe(true);
+      if (result.stuck) {
+        expect(result.level).toBe("critical");
+        expect(result.detector).toBe("consecutive_repeat");
+        expect(result.count).toBe(CRITICAL_THRESHOLD);
+      }
+    });
+
+    it("does not escalate to consecutive critical when another call interrupts the run", () => {
+      const state = createState();
+      const params = { command: "date +%S" };
+
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordSuccessfulCall(state, "exec", params, `second ${i}`, i);
+        if (i === 10) {
+          recordSuccessfulCall(state, "read", { path: "/tmp/progress.txt" }, "ok", 1000 + i);
+        }
+      }
+
+      const result = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
+
+      // The windowed generic tier may still warn, but the unbroken-run critical
+      // must not fire once the streak was interrupted.
+      expect(result.stuck).toBe(true);
+      if (result.stuck) {
+        expect(result.level).toBe("warning");
+        expect(result.detector).toBe("generic_repeat");
+      }
+    });
+
+    it("stays at warning level just below the consecutive threshold", () => {
+      const state = createState();
+      const params = { command: "date +%S" };
+
+      for (let i = 0; i < CRITICAL_THRESHOLD - 1; i += 1) {
+        recordSuccessfulCall(state, "exec", params, `second ${i}`, i);
+      }
+
+      const result = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
+
+      expect(result.stuck).toBe(true);
+      if (result.stuck) {
+        expect(result.level).toBe("warning");
+        expect(result.detector).toBe("generic_repeat");
+      }
+    });
+
     it("keeps scoped and unscoped history isolated", () => {
       const state = createState();
       const params = { path: "/same.txt" };
@@ -585,8 +642,11 @@ describe("tool-loop-detection", () => {
       const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
       expect(loopResult.stuck).toBe(true);
       if (loopResult.stuck) {
-        expect(loopResult.level).toBe("warning");
-        expect(loopResult.detector).toBe("generic_repeat");
+        // Changing output must never trip the no-progress GLOBAL breaker; the
+        // unbroken run of identical calls is escalated by the consecutive
+        // detector instead (its message tells the model how to proceed).
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("consecutive_repeat");
       }
     });
 
@@ -615,8 +675,10 @@ describe("tool-loop-detection", () => {
       const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
       expect(loopResult.stuck).toBe(true);
       if (loopResult.stuck) {
-        expect(loopResult.level).toBe("warning");
-        expect(loopResult.detector).toBe("generic_repeat");
+        // Same as above: not the global breaker — the consecutive detector
+        // handles the unbroken identical-args run.
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("consecutive_repeat");
       }
     });
 

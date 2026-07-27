@@ -19,6 +19,7 @@ const log = createSubsystemLogger("agents/loop-detection");
 
 type LoopDetectorKind =
   | "generic_repeat"
+  | "consecutive_repeat"
   | "unknown_tool_repeat"
   | "known_poll_no_progress"
   | "global_circuit_breaker"
@@ -50,6 +51,7 @@ const DEFAULT_LOOP_DETECTION_CONFIG = {
   globalCircuitBreakerThreshold: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
   detectors: {
     genericRepeat: true,
+    consecutiveRepeat: true,
     knownPollNoProgress: true,
     pingPong: true,
   },
@@ -64,6 +66,7 @@ type ResolvedLoopDetectionConfig = {
   globalCircuitBreakerThreshold: number;
   detectors: {
     genericRepeat: boolean;
+    consecutiveRepeat: boolean;
     knownPollNoProgress: boolean;
     pingPong: boolean;
   };
@@ -72,6 +75,29 @@ type ResolvedLoopDetectionConfig = {
 type ToolLoopDetectionScope = {
   runId?: string;
 };
+
+/**
+ * Length of the unbroken tail of history entries matching the current call's
+ * (toolName, argsHash). Unlike the no-progress streak this deliberately ignores
+ * result hashes: an unbroken run of byte-identical calls is a stuck loop even
+ * when every result differs (timestamps, fresh page dumps, rate-limited errors
+ * with new request ids).
+ */
+function getConsecutiveRepeatStreak(
+  history: readonly ToolCallRecord[],
+  toolName: string,
+  currentHash: string,
+): number {
+  let streak = 0;
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const entry = history[i];
+    if (!entry || entry.toolName !== toolName || entry.argsHash !== currentHash) {
+      break;
+    }
+    streak += 1;
+  }
+  return streak;
+}
 
 function selectHistoryForScope(
   history: readonly ToolCallRecord[],
@@ -655,6 +681,36 @@ export function detectToolCallLoop(
       count: noProgressStreak,
       message: `CRITICAL: Called ${toolName} with identical arguments and identical outcomes ${noProgressStreak} times. Session execution blocked to prevent runaway loops.`,
       warningKey: `generic:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
+    };
+  }
+
+  // Consecutive-repeat detector: an unbroken run of byte-identical calls is a
+  // stuck loop even when every result differs, so the no-progress tier above
+  // never fires (its streak resets whenever the result hash changes). This is
+  // the "same tool called with the same arguments N times, escalate regardless
+  // of exact result" circuit breaker asked for in #78865. A blocked call
+  // surfaces the message below to the model as the tool result, which both
+  // breaks the streak and tells the model how to proceed. Known polling tools
+  // and messaging sends are exempt: polling legitimately repeats, and sends
+  // have their own volatility-strip escalation above that understands which
+  // result-side changes count as progress (#89090).
+  const consecutiveStreak = getConsecutiveRepeatStreak(history, toolName, currentHash);
+  if (
+    !knownPollTool &&
+    !isVolatileSendResult(toolName, params) &&
+    resolvedConfig.detectors.consecutiveRepeat &&
+    consecutiveStreak >= resolvedConfig.criticalThreshold
+  ) {
+    log.error(
+      `Critical consecutive loop detected: ${toolName} repeated ${consecutiveStreak} times in a row`,
+    );
+    return {
+      stuck: true,
+      level: "critical",
+      detector: "consecutive_repeat",
+      count: consecutiveStreak,
+      message: `CRITICAL: Called ${toolName} with identical arguments ${consecutiveStreak} times in a row. The results differ, but an unbroken run of identical calls indicates a stuck loop. This call was blocked — change the arguments or approach, or stop and report current progress to the user.`,
+      warningKey: `consecutive:${toolName}:${currentHash}`,
     };
   }
 

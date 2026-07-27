@@ -25,6 +25,10 @@ Set `tools.loopDetection.enabled: false` to silence both guardrails.
 - Detect repetitive sequences that make no progress.
 - Detect high-frequency no-result loops (same tool, same inputs, repeated
   errors).
+- Block unbroken runs of byte-identical calls even when every result differs
+  (timestamps, fresh page dumps, rate-limited errors with new request ids) —
+  the no-progress tier never fires for those because the result hash changes
+  on every call. Known polling tools are exempt.
 - Detect specific repeated-call patterns for known polling tools.
 - Break context-overflow -> compaction -> same-loop cycles instead of letting
   them run indefinitely.
