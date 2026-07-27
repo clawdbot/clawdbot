@@ -19,6 +19,7 @@ import {
   CLAW_OUTPUT_STABILITY,
   type ClawDiagnostic,
   type ClawManifest,
+  type ClawOpenClawProfile,
   type ClawPackage,
   type ClawSourceIdentity,
 } from "./types.js";
@@ -58,6 +59,7 @@ function manualState(state: string): boolean {
 export async function buildClawUpdatePlan(params: {
   agentId: string;
   targetManifest: ClawManifest;
+  targetOpenClawProfile?: ClawOpenClawProfile;
   targetSource: ClawSourceIdentity;
   config: OpenClawConfig;
   sourceMcpServers: Record<string, Record<string, unknown>>;
@@ -79,7 +81,8 @@ export async function buildClawUpdatePlan(params: {
 }): Promise<ClawUpdatePlan> {
   const ownsDatabase = !params.stateOptions?.database;
   const database =
-    params.stateOptions?.database ?? openExistingOpenClawStateDatabaseReadOnly(params.stateOptions);
+    params.stateOptions?.database ??
+    (await openExistingOpenClawStateDatabaseReadOnly(params.stateOptions));
   if (!database) {
     return makeEmptyClawUpdatePlan({
       agentId: params.agentId,
@@ -201,6 +204,7 @@ export async function buildClawUpdatePlan(params: {
     >();
     const targetPlan = await buildClawAddPlan({
       manifest: params.targetManifest,
+      openClawProfile: params.targetOpenClawProfile,
       source: params.targetSource,
       diagnostics: params.diagnostics,
       context: {

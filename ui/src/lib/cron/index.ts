@@ -1187,12 +1187,55 @@ export async function removeCronJob(state: CronState, job: CronJob) {
   });
 }
 
+type CronRunsRequestIdentity = {
+  client: GatewayBrowserClient;
+  agentId: string | null;
+  scope: CronRunScope;
+  jobId: string | null;
+  limit: number;
+  offset: number;
+  statuses: CronRunsStatusValue[];
+  status: CronRunsStatusFilter;
+  deliveryStatuses: CronDeliveryStatus[];
+  query: string;
+  sortDir: CronSortDir;
+  append: boolean;
+};
+
+// The same state owns overview, per-job, filtered, and paginated requests.
+// Only its latest exact request may replace the history, error, or load state.
+const activeCronRunsRequests = new WeakMap<CronState, CronRunsRequestIdentity>();
+
+function ownsCronRunsRequest(state: CronState, request: CronRunsRequestIdentity): boolean {
+  return (
+    activeCronRunsRequests.get(state) === request &&
+    state.connected &&
+    state.client === request.client &&
+    state.cronAgentId === request.agentId &&
+    state.cronRunsScope === request.scope &&
+    (request.scope !== "job" || state.cronRunsJobId === request.jobId) &&
+    state.cronRunsLimit === request.limit &&
+    state.cronRunsStatusFilter === request.status &&
+    state.cronRunsQuery.trim() === request.query &&
+    state.cronRunsSortDir === request.sortDir &&
+    state.cronRunsStatuses.length === request.statuses.length &&
+    state.cronRunsStatuses.every((status, index) => status === request.statuses[index]) &&
+    state.cronRunsDeliveryStatuses.length === request.deliveryStatuses.length &&
+    state.cronRunsDeliveryStatuses.every(
+      (status, index) => status === request.deliveryStatuses[index],
+    ) &&
+    (!request.append ||
+      Math.max(0, state.cronRunsNextOffset ?? state.cronRuns.length) === request.offset)
+  );
+}
+
 export async function loadCronRuns(
   state: CronState,
   jobId: string | null,
   opts?: { append?: boolean },
 ): Promise<CronRunsLoadStatus> {
-  if (!state.client || !state.connected) {
+  const client = state.client;
+  if (!client || !state.connected) {
     return "skipped";
   }
   const scope = state.cronRunsScope;
@@ -1205,37 +1248,40 @@ export async function loadCronRuns(
   if (append && !state.cronRunsHasMore) {
     return "skipped";
   }
+  const request: CronRunsRequestIdentity = {
+    client,
+    agentId: state.cronAgentId,
+    scope,
+    jobId: scope === "job" ? activeJobId : null,
+    limit: state.cronRunsLimit,
+    offset: append ? Math.max(0, state.cronRunsNextOffset ?? state.cronRuns.length) : 0,
+    statuses: [...state.cronRunsStatuses],
+    status: state.cronRunsStatusFilter,
+    deliveryStatuses: [...state.cronRunsDeliveryStatuses],
+    query: state.cronRunsQuery.trim(),
+    sortDir: state.cronRunsSortDir,
+    append,
+  };
+  activeCronRunsRequests.set(state, request);
+  state.cronRunsLoadingMore = append;
   try {
-    if (append) {
-      state.cronRunsLoadingMore = true;
-    }
-    const offset = append ? Math.max(0, state.cronRunsNextOffset ?? state.cronRuns.length) : 0;
-    const res = await state.client.request<CronRunsResult>("cron.runs", {
-      ...(state.cronAgentId ? { agentId: state.cronAgentId } : {}),
-      scope,
-      id: scope === "job" ? (activeJobId ?? undefined) : undefined,
-      limit: state.cronRunsLimit,
-      offset,
-      statuses: state.cronRunsStatuses.length > 0 ? state.cronRunsStatuses : undefined,
-      status: state.cronRunsStatusFilter,
-      deliveryStatuses:
-        state.cronRunsDeliveryStatuses.length > 0 ? state.cronRunsDeliveryStatuses : undefined,
-      query: state.cronRunsQuery.trim() || undefined,
-      sortDir: state.cronRunsSortDir,
+    const res = await client.request<CronRunsResult>("cron.runs", {
+      ...(request.agentId ? { agentId: request.agentId } : {}),
+      scope: request.scope,
+      id: request.jobId ?? undefined,
+      limit: request.limit,
+      offset: request.offset,
+      statuses: request.statuses.length > 0 ? request.statuses : undefined,
+      status: request.status,
+      deliveryStatuses: request.deliveryStatuses.length > 0 ? request.deliveryStatuses : undefined,
+      query: request.query || undefined,
+      sortDir: request.sortDir,
     });
-    // A slower response for a previously selected job (or one arriving after
-    // the pane switched back to all-scope) must not overwrite the current run
-    // pane; callers claim cronRunsJobId/scope before awaiting.
-    const staleJobResponse =
-      scope === "job" && (state.cronRunsScope !== "job" || state.cronRunsJobId !== activeJobId);
-    if (staleJobResponse) {
+    if (!ownsCronRunsRequest(state, request)) {
       return "skipped";
     }
     const entries = Array.isArray(res.entries) ? res.entries : [];
-    state.cronRuns =
-      append && (scope === "all" || state.cronRunsJobId === activeJobId)
-        ? [...state.cronRuns, ...entries]
-        : entries;
+    state.cronRuns = append ? [...state.cronRuns, ...entries] : entries;
     const meta = normalizeCronPageMeta({
       totalRaw: res.total,
       offsetRaw: res.offset,
@@ -1248,10 +1294,13 @@ export async function loadCronRuns(
     state.cronRunsNextOffset = meta.nextOffset;
     return "ok";
   } catch (err) {
+    if (!ownsCronRunsRequest(state, request)) {
+      return "skipped";
+    }
     state.cronError = String(err);
     return "error";
   } finally {
-    if (append) {
+    if (append && activeCronRunsRequests.get(state) === request) {
       state.cronRunsLoadingMore = false;
     }
   }

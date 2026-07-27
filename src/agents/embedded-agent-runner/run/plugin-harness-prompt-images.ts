@@ -1,13 +1,10 @@
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
-import { isImageMediaFact, resolveMediaFacts } from "../../../media/media-facts.js";
+import { isImageMediaFact, readPersistedMediaFacts } from "../../../media/media-facts.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveAttemptWorkspaceSandbox } from "./attempt-setup.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
-import {
-  readPersistedMediaImageLayout,
-  readPersistedPromptMediaFacts,
-} from "./prompt-image-metadata.js";
+import { readPersistedMediaImageLayout } from "./prompt-image-metadata.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 function toTypeOnlyImageFact(
@@ -51,10 +48,7 @@ export async function preparePluginHarnessPromptImages(params: {
   const persistedMessage =
     runParams.userTurnTranscriptRecorder?.message ??
     (await runParams.userTurnTranscriptRecorder?.resolveMessage());
-  const persistedMedia = persistedMessage
-    ? (readPersistedPromptMediaFacts(persistedMessage) ??
-      resolveMediaFacts(persistedMessage as unknown as Parameters<typeof resolveMediaFacts>[0]))
-    : [];
+  const persistedMedia = persistedMessage ? (readPersistedMediaFacts(persistedMessage) ?? []) : [];
   const hydrationMedia = persistedMedia.length > 0 ? persistedMedia : runParams.media;
   if (!hydrationMedia?.some(isImageMediaFact)) {
     return {

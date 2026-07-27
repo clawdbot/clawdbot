@@ -555,7 +555,7 @@ function isEntryEligibleForRecoveryRetry(
   entry: QueuedDelivery,
   now: number,
 ): { eligible: true } | { eligible: false; remainingBackoffMs: number } {
-  const backoff = computeBackoffMs(entry.retryCount + 1);
+  const backoff = computeBackoffMs(entry.retryCount);
   if (backoff <= 0) {
     return { eligible: true };
   }

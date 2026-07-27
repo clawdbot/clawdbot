@@ -68,6 +68,7 @@ function evidenceState(overrides: Partial<UiState> = {}): UiState {
     latestReport: null,
     runnerDraft: null,
     runnerDraftDirty: false,
+    runnerPlanOverride: null,
     scenarioRun: null,
     selectedCaptureEventKey: null,
     selectedCaptureSessionIds: [],

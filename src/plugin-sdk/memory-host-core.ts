@@ -6,10 +6,10 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { sha256Hex, sha256HexPrefix } from "../infra/crypto-digest.js";
+import { syncDirectoryIfSupported } from "../infra/directory-durability.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { sameFileIdentity, type FileIdentityStat } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as createFsSafeRoot } from "../infra/fs-safe.js";
-import { syncDirectoryBestEffort } from "../infra/sqlite-snapshot.js";
 import {
   MAX_MEMORY_HOST_PUBLIC_EXPORT_BYTES,
   serializeMemoryHostEventExport,
@@ -304,7 +304,7 @@ async function materializeMemoryHostEventExport(params: {
             mkdir: true,
             mode: 0o600,
           });
-          await syncDirectoryBestEffort(path.dirname(absolutePath));
+          await syncDirectoryIfSupported(path.dirname(absolutePath));
           publishedIdentity = await publishMemoryHostEventArtifact({
             workspaceRoot,
             owner,
@@ -337,7 +337,7 @@ async function materializeMemoryHostEventExport(params: {
           ) {
             return undefined;
           }
-          await syncDirectoryBestEffort(path.dirname(absolutePath));
+          await syncDirectoryIfSupported(path.dirname(absolutePath));
           publishedIdentity = await publishMemoryHostEventArtifact({
             workspaceRoot,
             owner,
@@ -379,7 +379,7 @@ async function materializeMemoryHostEventExport(params: {
           ) {
             return undefined;
           }
-          await syncDirectoryBestEffort(path.dirname(absolutePath));
+          await syncDirectoryIfSupported(path.dirname(absolutePath));
           if (
             !(await rewriteMemoryHostEventArtifactIfUnchanged({
               workspaceRoot,
@@ -390,7 +390,7 @@ async function materializeMemoryHostEventExport(params: {
           ) {
             return undefined;
           }
-          await syncDirectoryBestEffort(path.dirname(absolutePath));
+          await syncDirectoryIfSupported(path.dirname(absolutePath));
           if (
             !(await rewriteMemoryHostEventArtifactIfUnchanged({
               workspaceRoot,
@@ -401,7 +401,7 @@ async function materializeMemoryHostEventExport(params: {
           ) {
             return undefined;
           }
-          await syncDirectoryBestEffort(path.dirname(absolutePath));
+          await syncDirectoryIfSupported(path.dirname(absolutePath));
         } catch (error) {
           if (isWorkspaceWriteUnavailable(error)) {
             return undefined;
@@ -424,7 +424,7 @@ async function materializeMemoryHostEventExport(params: {
           ) {
             return undefined;
           }
-          await syncDirectoryBestEffort(path.dirname(absolutePath));
+          await syncDirectoryIfSupported(path.dirname(absolutePath));
         } catch (error) {
           if (isWorkspaceWriteUnavailable(error)) {
             return undefined;

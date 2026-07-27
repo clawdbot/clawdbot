@@ -3,8 +3,13 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
+import {
+  confirmSqliteFileIntegrity,
+  isTerminalSqliteIntegrityError,
+  type SqliteIntegrityConfirmation,
+} from "../infra/sqlite-integrity.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import {
   runSqliteImmediateTransactionSync,
@@ -33,6 +38,7 @@ import {
   unregisterOpenClawAgentDatabase,
 } from "./openclaw-agent-db-registry.js";
 import {
+  assertCanonicalAgentMediaPersistenceVersion,
   assertExistingAgentSchemaOwner,
   assertSupportedAgentSchemaVersion,
   readExistingAgentSchemaMeta,
@@ -113,11 +119,30 @@ const terminalOpenLatch = createSqliteTerminalOpenLatch({
   closeByPath: closeOpenClawAgentDatabaseByPath,
 });
 
+/** Reconfirm an advisory worker failure on the live owner connection. */
+export function confirmOpenClawAgentDatabaseIntegrity(
+  pathname: string,
+): SqliteIntegrityConfirmation {
+  const resolvedPath = path.resolve(pathname);
+  closeOpenClawAgentDatabaseByPath(resolvedPath);
+  // Closing breaks process ownership of the pathname. A replacement must
+  // revalidate and claim its schema before the path can become trusted again.
+  validatedAgentDatabasePaths.delete(resolvedPath);
+  return confirmSqliteFileIntegrity(resolvedPath, resolvedPath);
+}
+
 /** Latch background verification damage so later opens fail without rescanning. */
-export function recordOpenClawAgentDatabaseOpenFailure(pathname: string, error: Error): void {
-  // Quarantine revokes this process's trust because doctor may replace the file.
-  validatedAgentDatabasePaths.delete(path.resolve(pathname));
-  terminalOpenLatch.record(pathname, error);
+export function recordOpenClawAgentDatabaseOpenFailure(
+  pathname: string,
+  error: Error,
+  generation?: SqliteFileGeneration,
+): boolean {
+  const recorded = terminalOpenLatch.record(pathname, error, generation);
+  if (recorded) {
+    // Quarantine revokes this process's trust because doctor may replace the file.
+    validatedAgentDatabasePaths.delete(path.resolve(pathname));
+  }
+  return recorded;
 }
 
 /**
@@ -155,10 +180,17 @@ function logSlowAgentDatabaseOpen(params: {
 export function inspectOpenClawAgentDatabaseOwner(
   pathname: string,
 ): OpenClawAgentDatabaseOwnerInspection {
-  const sqlite = requireNodeSqlite();
   let db: DatabaseSync | undefined;
   try {
-    db = new sqlite.DatabaseSync(pathname, { readOnly: true });
+    // A handle this process holds was owner-validated when it was opened, and
+    // ownership never changes afterwards. Answering from it keeps store
+    // resolution off a fresh connection for every row it inspects.
+    const opened = cachedDatabases.get(path.resolve(pathname));
+    if (opened?.db.isOpen) {
+      assertSupportedAgentSchemaVersion(opened.db, pathname);
+      return { status: "owned", agentId: opened.agentId };
+    }
+    db = openNodeSqliteDatabase(pathname, { readOnly: true });
     db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     assertSupportedAgentSchemaVersion(db, pathname);
     const existing = readExistingAgentSchemaMeta(db);
@@ -210,10 +242,9 @@ export function openOpenClawAgentDatabase(
       cachedDatabases.delete(pathname);
       cachedDatabaseOpenFailures.delete(pathname);
     }
-    const sqlite = requireNodeSqlite();
     // After the collision probe, this sentinel is only a cache key: SQLite opens :memory:,
     // and no directory, lease, registry row, WAL sidecar, or file write may be created.
-    const db = new sqlite.DatabaseSync(":memory:");
+    const db = openNodeSqliteDatabase(":memory:");
     configureSqlitePreSchemaPragmas(db, {
       busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
     });
@@ -274,8 +305,7 @@ export function openOpenClawAgentDatabase(
     // Free a slot before constructing the new handle: under real descriptor
     // pressure the 65th open would otherwise fail before eviction could run.
     evictLruAgentDatabaseHandles();
-    const sqlite = requireNodeSqlite();
-    const db = new sqlite.DatabaseSync(pathname);
+    const db = openNodeSqliteDatabase(pathname);
     openedDb = db;
     // Eviction churn must avoid schema/registry busy waits on the event loop while
     // reconcile workers hold write transactions on these same agent databases.
@@ -290,7 +320,8 @@ export function openOpenClawAgentDatabase(
         }
         // Integrity is not process-stable: the file can be damaged while evicted.
         // This guard is read-only (no busy waits), so every physical open pays it.
-        assertAgentDatabaseIntegrityBeforeMutation(db, pathname);
+        assertAgentDatabaseIntegrityBeforeMutation(db, agentId, pathname);
+        assertCanonicalAgentMediaPersistenceVersion(db, pathname);
         configureSqlitePreSchemaPragmas(db, {
           busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
         });
@@ -544,6 +575,17 @@ export function listOpenIncognitoAgentDatabases(): Array<{ agentId: string; stor
     .toSorted(
       (left, right) =>
         left.agentId.localeCompare(right.agentId) || left.storePath.localeCompare(right.storePath),
+    );
+}
+
+/** List process-held agent databases without opening or inspecting fixture state. */
+export function listOpenClawAgentDatabasesForTest(): Array<{ agentId: string; path: string }> {
+  return [...cachedDatabases.values()]
+    .filter((database) => database.db.isOpen)
+    .map((database) => ({ agentId: database.agentId, path: database.path }))
+    .toSorted(
+      (left, right) =>
+        left.agentId.localeCompare(right.agentId) || left.path.localeCompare(right.path),
     );
 }
 

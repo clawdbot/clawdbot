@@ -3,7 +3,10 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.chat.ChatSessionAgentStatus
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.applySessionObserverDigest
+import ai.openclaw.app.chat.clearForeignGlobalObserverDigest
 import ai.openclaw.app.chat.mergeChatSessionEntry
+import ai.openclaw.app.chat.reconcileGlobalObserverDigestOwner
+import ai.openclaw.app.chat.reconcileSessionObserverProjectionOwner
 import ai.openclaw.app.gateway.SessionObserverDigest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -112,6 +115,123 @@ class SessionObserverDigestTest {
       )
 
     assertNull(mergeChatSessionEntry(existing, explicitClear).observerDigest)
+  }
+
+  @Test
+  fun globalObserverEventsRequireTheSelectedAgent() {
+    val running =
+      ChatSessionEntry(
+        key = "global",
+        updatedAtMs = 100,
+        hasActiveRun = true,
+        activeRunIds = listOf("run-work"),
+        status = "running",
+      )
+    val wrongOwner =
+      SessionObserverDigest(
+        sessionKey = "global",
+        agentId = "main",
+        runId = "run-work",
+        revision = 1,
+        updatedAt = 200,
+        headline = "Wrong owner",
+        health = "stuck",
+      )
+    val selectedOwner = wrongOwner.copy(agentId = "work", headline = "Selected owner")
+    val missingOwner = wrongOwner.copy(agentId = null, headline = "Missing owner")
+
+    val rejected = applySessionObserverDigest(listOf(running), wrongOwner, activeAgentId = "work")
+    val ownerless =
+      applySessionObserverDigest(
+        rejected,
+        missingOwner,
+        activeAgentId = "work",
+      )
+    val disconnected =
+      applySessionObserverDigest(
+        listOf(running.copy(observerDigest = wrongOwner.copy(headline = "Last verified owner"))),
+        missingOwner,
+        activeAgentId = null,
+      )
+    val accepted = applySessionObserverDigest(ownerless, selectedOwner, activeAgentId = "work")
+
+    assertNull(rejected.single().observerDigest)
+    assertNull(ownerless.single().observerDigest)
+    assertEquals("Last verified owner", disconnected.single().observerDigest?.headline)
+    assertEquals("Selected owner", accepted.single().observerDigest?.headline)
+  }
+
+  @Test
+  fun changingTheSelectedAgentClearsThePreviousGlobalDigest() {
+    val previous =
+      ChatSessionEntry(
+        key = "global",
+        updatedAtMs = 100,
+        hasActiveRun = true,
+        activeRunIds = listOf("run-main"),
+        status = "running",
+        observerDigest =
+          SessionObserverDigest(
+            sessionKey = "global",
+            agentId = "main",
+            runId = "run-main",
+            revision = 4,
+            updatedAt = 400,
+            headline = "Main owner",
+            health = "on-track",
+          ),
+      )
+
+    val switched = clearForeignGlobalObserverDigest(listOf(previous), activeAgentId = "work")
+    val ownerless =
+      clearForeignGlobalObserverDigest(
+        listOf(previous.copy(observerDigest = previous.observerDigest?.copy(agentId = null))),
+        activeAgentId = "work",
+      )
+    val disconnected = clearForeignGlobalObserverDigest(listOf(previous), activeAgentId = null)
+
+    assertNull(switched.single().observerDigest)
+    assertNull(ownerless.single().observerDigest)
+    assertEquals("Main owner", disconnected.single().observerDigest?.headline)
+  }
+
+  @Test
+  fun globalSessionProjectionRequiresMatchingOuterAndDigestOwners() {
+    val projected =
+      ChatSessionEntry(
+        key = "global",
+        updatedAtMs = 900,
+        ownerAgentId = "work",
+        status = "running",
+        observerDigest =
+          SessionObserverDigest(
+            sessionKey = "global",
+            agentId = "main",
+            runId = "run-main",
+            revision = 9,
+            updatedAt = 900,
+            headline = "Foreign owner",
+            health = "stuck",
+          ),
+      )
+
+    val mismatched = reconcileSessionObserverProjectionOwner(projected, ownerAgentId = "work")
+    val legacy =
+      reconcileSessionObserverProjectionOwner(
+        projected.copy(observerDigest = projected.observerDigest?.copy(agentId = null)),
+        ownerAgentId = "work",
+      )
+
+    assertNull(mismatched.observerDigest)
+    assertEquals("running", mismatched.status)
+    assertEquals("work", legacy.observerDigest?.agentId)
+
+    val scopedLegacy =
+      reconcileGlobalObserverDigestOwner(
+        listOf(projected.copy(observerDigest = projected.observerDigest?.copy(agentId = null))),
+        activeAgentId = "work",
+      )
+    assertEquals("work", scopedLegacy.single().observerDigest?.agentId)
   }
 
   @Test

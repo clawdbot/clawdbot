@@ -140,7 +140,7 @@ describe("OpenClawTerminalPanel", () => {
     customElements.define(tagName, LazyUpgradeTerminalPanel);
     const panel = element as unknown as OpenClawTerminalPanel;
     await panel.updateComplete;
-    await waitForFast(() => expect((panel as unknown as { open: boolean }).open).toBe(true));
+    await waitForFast(() => expect(panel.terminalPanelOpen).toBe(true));
   });
 
   it("opens new sessions for the selected agent", async () => {

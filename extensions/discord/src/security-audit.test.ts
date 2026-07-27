@@ -28,6 +28,64 @@ function createAccount(
   };
 }
 
+type BroadMemberCase = {
+  name: string;
+  config: DiscordAccountConfig;
+  expectedPath?: string;
+  expectFinding: boolean;
+};
+
+const broadMemberCases: BroadMemberCase[] = [
+  {
+    name: "warns for a whole-guild wildcard target",
+    config: { groupPolicy: "allowlist", guilds: { "*": {} } },
+    expectedPath: "channels.discord.guilds.*",
+    expectFinding: true,
+  },
+  {
+    name: "warns for slug and wildcard channel targets",
+    config: {
+      groupPolicy: "allowlist",
+      guilds: { "team-space": { channels: { "*": { enabled: true } } } },
+    },
+    expectedPath: "channels.discord.guilds.team-space.channels.*",
+    expectFinding: true,
+  },
+  {
+    name: "inherits a narrow guild member restriction",
+    config: {
+      groupPolicy: "allowlist",
+      guilds: {
+        "team-space": {
+          users: ["123456789012345678"],
+          channels: { general: { enabled: true } },
+        },
+      },
+    },
+    expectFinding: false,
+  },
+  {
+    name: "treats wildcard users as broad",
+    config: { groupPolicy: "allowlist", guilds: { "team-space": { users: ["*"] } } },
+    expectedPath: "channels.discord.guilds.team-space",
+    expectFinding: true,
+  },
+  {
+    name: "treats wildcard roles as broad",
+    config: { groupPolicy: "allowlist", guilds: { "team-space": { roles: ["*"] } } },
+    expectedPath: "channels.discord.guilds.team-space",
+    expectFinding: true,
+  },
+  {
+    name: "ignores disabled channel targets",
+    config: {
+      groupPolicy: "allowlist",
+      guilds: { "team-space": { channels: { general: { enabled: false } } } },
+    },
+    expectFinding: false,
+  },
+];
+
 async function collectFindings(params: {
   cfg: OpenClawConfig;
   config: DiscordAccountConfig;
@@ -47,6 +105,41 @@ async function collectFindings(params: {
 }
 
 describe("Discord security audit findings", () => {
+  it.each(broadMemberCases)("$name", async (testCase) => {
+    const config = testCase.config;
+    const findings = await collectFindings({
+      cfg: { channels: { discord: config } },
+      config,
+    });
+    const finding = findings.find(
+      (entry) => entry.checkId === "channels.discord.allowlisted_groups.broad_members",
+    );
+    expect(Boolean(finding)).toBe(testCase.expectFinding);
+    if ("expectedPath" in testCase) {
+      expect(finding?.detail).toContain(testCase.expectedPath);
+    }
+    expect(finding?.severity).toBe(testCase.expectFinding ? "warn" : undefined);
+  });
+
+  it("uses the account-specific path for broad member warnings", async () => {
+    const config = {
+      groupPolicy: "allowlist" as const,
+      guilds: { work: {} },
+    } satisfies DiscordAccountConfig;
+    const findings = await collectFindings({
+      cfg: { channels: { discord: { accounts: { work: config } } } },
+      config,
+      accountId: "work",
+      orderedAccountIds: ["default", "work"],
+      hasExplicitAccountPath: true,
+    });
+    const finding = findings.find(
+      (entry) => entry.checkId === "channels.discord.allowlisted_groups.broad_members",
+    );
+    expect(finding?.detail).toContain("channels.discord.accounts.work.guilds.work");
+    expect(finding?.severity).toBe("warn");
+  });
+
   it.each([
     {
       name: "flags missing guild user allowlists",

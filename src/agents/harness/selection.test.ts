@@ -44,6 +44,7 @@ const compactAuthMocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(),
   ensureAuthProfileStoreWithoutExternalProfiles: vi.fn(),
   getApiKeyForModel: vi.fn(),
+  prepareAgentRuntimeAuth: vi.fn(),
   resolveModelAsync: vi.fn(),
 }));
 const providerOwnerMocks = vi.hoisted(() => ({
@@ -81,6 +82,14 @@ vi.mock("../model-auth.js", async (importOriginal) => ({
 vi.mock("../embedded-agent-runner/model.js", () => ({
   resolveModelAsync: compactAuthMocks.resolveModelAsync,
 }));
+vi.mock("../runtime-plan/prepare-auth.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime-plan/prepare-auth.js")>();
+  compactAuthMocks.prepareAgentRuntimeAuth.mockImplementation(actual.prepareAgentRuntimeAuth);
+  return {
+    ...actual,
+    prepareAgentRuntimeAuth: compactAuthMocks.prepareAgentRuntimeAuth,
+  };
+});
 vi.mock("../../plugins/providers.js", () => ({
   resolveProviderRefOwnership: providerOwnerMocks.resolveProviderRefOwnership,
 }));
@@ -129,6 +138,7 @@ afterEach(() => {
   clearAgentHarnesses();
   cliBackendsTesting.resetDepsForTest();
   agentRunAttempt.mockClear();
+  compactAuthMocks.prepareAgentRuntimeAuth.mockClear();
   compactAuthMocks.resolveModelAsync.mockReset();
   compactAuthMocks.getApiKeyForModel.mockReset();
   compactAuthMocks.ensureAuthProfileStore.mockReset();
@@ -1493,6 +1503,35 @@ describe("selectAgentHarness", () => {
     },
   );
 
+  it("keeps native model run controls compatible with Codex", () => {
+    expect(
+      buildAgentHarnessSupportContext({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        modelProvider: {
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          requestTransportOverrides: "none",
+        },
+        requestedRuntime: "codex",
+        config: {
+          agents: {
+            defaults: {
+              models: {
+                "openai/gpt-5.6-sol": {
+                  params: { thinking: "xhigh", fastMode: true, fastAutoOnSeconds: 30 },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+      }).modelProvider,
+    ).toMatchObject({
+      requestTransportOverrides: "none",
+      runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+    });
+  });
+
   it("rejects explicit Codex when agent request params cannot be reproduced", () => {
     const supports = vi.fn((ctx: Parameters<AgentHarness["supports"]>[0]) =>
       ctx.modelProvider?.requestTransportOverrides === "present"
@@ -2500,6 +2539,45 @@ describe("selectAgentHarness", () => {
       ),
     ).rejects.toThrow("refusing harness-owned ambient auth");
     expect(compact).not.toHaveBeenCalled();
+  });
+
+  it("lets harness-owned compaction proceed without ambient auth when model lookup fails", async () => {
+    compactAuthMocks.resolveModelAsync.mockRejectedValue(new Error("model lookup unavailable"));
+    const result = { ok: true, compacted: false, reason: "harness result" } as const;
+    const compact = registerTestCompactor({ authBootstrap: "harness", result });
+
+    await expect(
+      maybeCompactAgentHarnessSession(createCompactionParams({ agentHarnessId: "codex" })),
+    ).resolves.toEqual(result);
+    expect(compact).toHaveBeenCalledTimes(1);
+    expect(compact.mock.calls[0]?.[0]).not.toHaveProperty("resolvedApiKey");
+    expect(compact.mock.calls[0]?.[0]).not.toHaveProperty("runtimeModel");
+  });
+
+  it("lets harness-owned compaction proceed without ambient auth when auth preparation fails", async () => {
+    // Model resolution must succeed so this test exercises the auth-preparation
+    // catch, not the model-resolution fallback covered above.
+    compactAuthMocks.resolveModelAsync.mockResolvedValue({
+      model: {
+        id: "proxy-model",
+        provider: "local-proxy",
+        api: "openai-responses",
+        baseUrl: "https://proxy.example/v1",
+      },
+    });
+    compactAuthMocks.prepareAgentRuntimeAuth.mockImplementationOnce(() => {
+      throw new Error("auth preparation unavailable");
+    });
+    const result = { ok: true, compacted: false, reason: "harness result" } as const;
+    const compact = registerTestCompactor({ authBootstrap: "harness", result });
+
+    await expect(
+      maybeCompactAgentHarnessSession(createCompactionParams({ agentHarnessId: "codex" })),
+    ).resolves.toEqual(result);
+    expect(compactAuthMocks.prepareAgentRuntimeAuth).toHaveBeenCalled();
+    expect(compact).toHaveBeenCalledTimes(1);
+    expect(compact.mock.calls[0]?.[0]).not.toHaveProperty("resolvedApiKey");
+    expect(compact.mock.calls[0]?.[0]).not.toHaveProperty("runtimeModel");
   });
 
   it("passes runtime model and default credentials to compaction when auth profile id is absent", async () => {

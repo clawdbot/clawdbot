@@ -1,5 +1,4 @@
 import { vi } from "vitest";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
@@ -108,7 +107,6 @@ export async function mount(
     activeTabId?: string;
     callbacks?: BoardViewCallbacks;
     widgetFrameUrl?: (name: string, revision: number) => string;
-    sessions?: readonly GatewaySessionRow[];
     context?: ApplicationContext<RouteId>;
     canMutate?: boolean;
     canGrant?: boolean;
@@ -119,7 +117,6 @@ export async function mount(
   view.activeTabId = options.activeTabId ?? "main";
   view.widgetFrameUrl = options.widgetFrameUrl ?? (() => "about:blank");
   view.callbacks = options.callbacks ?? callbacks();
-  view.sessions = options.sessions ?? [];
   view.canMutate = options.canMutate ?? true;
   view.canGrant = options.canGrant ?? true;
   if (options.context) {

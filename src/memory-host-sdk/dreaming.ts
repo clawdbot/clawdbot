@@ -12,7 +12,11 @@ import {
   normalizeOptionalLowercaseString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  listAgentEntries,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const DEFAULT_MEMORY_DREAMING_ENABLED = false;
@@ -581,7 +585,7 @@ export function resolveMemoryDreamingWorkspaces(
   cfg: OpenClawConfig,
   options: MemoryDreamingWorkspaceOptions = {},
 ): MemoryDreamingWorkspace[] {
-  const configured = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  const configured = listAgentEntries(cfg);
   const agentIds: string[] = [];
   const seenAgents = new Set<string>();
   for (const entry of configured) {

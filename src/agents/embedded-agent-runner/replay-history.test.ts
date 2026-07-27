@@ -1,6 +1,7 @@
 // Coverage for normalizing assistant replay content before provider requests.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
+import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../../shared/transcript-only-openclaw-assistant.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
@@ -11,10 +12,12 @@ import {
 import { normalizeAssistantReplayContent } from "./replay-history.js";
 
 const FALLBACK_TEXT = "[assistant turn failed before producing content]";
-const COPIED_INBOUND_METADATA_ONLY_TEXT = `Conversation info (untrusted metadata):
-\`\`\`json
-{"message_id":"msg-abc","sender":"+1555000"}
-\`\`\``;
+const COPIED_INBOUND_METADATA_ONLY_TEXT = [
+  markInboundContextLabel("Conversation info:"),
+  "```json",
+  '{"message_id":"msg-abc","sender":"+1555000"}',
+  "```",
+].join("\n");
 
 function bedrockAssistant(
   content: unknown,
@@ -72,25 +75,30 @@ describe("normalizeAssistantReplayContent", () => {
     const blankString = {
       role: "user",
       content: "",
-      MediaPath: "/tmp/late.png",
-      __openclaw: { lateMedia: true },
+      __openclaw: { lateMedia: true, media: [{ path: "/tmp/late.png" }] },
     } as unknown as AgentMessage;
     const blankArray = {
       role: "user",
       content: [{ type: "text", text: "  " }],
-      MediaPaths: ["/tmp/late-array.png"],
-      __openclaw: { lateMedia: true },
+      __openclaw: { lateMedia: true, media: [{}, { path: "/tmp/late-array.png" }] },
     } as unknown as AgentMessage;
     const whitespaceOnlyPath = {
       role: "user",
       content: "",
-      MediaPath: "   ",
-      __openclaw: { lateMedia: true },
+      __openclaw: { lateMedia: true, media: [{ path: "   " }] },
     } as unknown as AgentMessage;
     const urlOnly = {
       role: "user",
       content: "",
-      MediaUrl: "https://example.test/late.png",
+      __openclaw: {
+        lateMedia: true,
+        media: [{ url: "https://example.test/late.png", kind: "image" }],
+      },
+    } as unknown as AgentMessage;
+    const legacyOnly = {
+      role: "user",
+      content: "",
+      MediaPath: "/tmp/legacy-late.png",
       __openclaw: { lateMedia: true },
     } as unknown as AgentMessage;
 
@@ -99,6 +107,7 @@ describe("normalizeAssistantReplayContent", () => {
       blankArray,
       whitespaceOnlyPath,
       urlOnly,
+      legacyOnly,
     ]);
 
     expect(out).toEqual([blankString, { ...blankArray, content: "" }, urlOnly]);

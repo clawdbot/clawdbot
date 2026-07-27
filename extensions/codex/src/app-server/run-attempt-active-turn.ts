@@ -184,6 +184,7 @@ export async function activateCodexAttemptTurn(
       await activeSteeringQueue.queue(text, optionsLocal);
     },
     isStreaming: () => !state.completed && !runAbortController.signal.aborted,
+    isAborted: () => runAbortController.signal.aborted,
     isStopped: () => state.completed || state.timedOut || runAbortController.signal.aborted,
     isAbortable: () =>
       !terminalState.terminalOutcomeFrozen || terminalState.sharedAbortAllowedAfterTerminalOutcome,

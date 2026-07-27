@@ -619,6 +619,35 @@ export function isEmbeddedAgentRunActive(sessionId: string): boolean {
   return active;
 }
 
+/**
+ * Returns whether a registry-owned run is still doing user-visible work.
+ * Terminal reply operations and aborted handles retain their lane for cleanup,
+ * but must not keep session activity projections in the running state.
+ */
+export function isEmbeddedAgentRunInProgress(sessionId: string): boolean {
+  const replyPhase = resolveReplyRunPhaseForSessionId(sessionId);
+  const replyInProgress =
+    replyPhase !== undefined &&
+    replyPhase !== "completed" &&
+    replyPhase !== "failed" &&
+    replyPhase !== "aborted";
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  let handleInProgress = handle !== undefined;
+  if (handle?.isAborted) {
+    try {
+      if (handle.isAborted()) {
+        handleInProgress = false;
+      }
+    } catch {
+      // A failed optional status probe cannot prove that live work has ended.
+      handleInProgress = true;
+    }
+  }
+  // Reply operations and embedded handles are independent lifecycle owners.
+  // A retained terminal owner must not hide a newer live owner for the session.
+  return replyInProgress || handleInProgress;
+}
+
 export function resolveEmbeddedAgentReplyRunPhase(
   sessionId: string,
 ): ReplyOperationPhase | undefined {

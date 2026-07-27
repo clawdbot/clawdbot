@@ -5,6 +5,12 @@
 // attached to the PR head and reruns their PR-event workflows without disturbing
 // auto-merge. The workflow authenticates with a GitHub App token because
 // GITHUB_TOKEN-authored events do not trigger new workflow runs.
+//
+// Observability contract: the re-fire lane logs a decision for every scanned
+// PR, including ci-attached skips with the attached run ids. A PR absent from
+// the log was outside the scan (created before the lookback), never silently
+// classified — silent skips previously made a correctly-skipped PR look like a
+// missed dropped-CI PR (2026-07-24, #113355).
 
 const CI_WORKFLOW_FILE = "ci.yml";
 const LOOKBACK_MS = 24 * 60 * 60 * 1000;
@@ -95,6 +101,24 @@ export function classifyRunForRevive({ run, prCreatedAt, prHeadBranch, repoFullN
     return { action: "skip", reason: "fork-head-repository" };
   }
   return { action: "revive", reason: "cancelled-pr-event-run" };
+}
+
+async function listRecentOpenPrs({ github, owner, repo, now }) {
+  // Sort by creation time, which is immutable: updated-sort pagination shifts
+  // items between page fetches whenever bot activity bumps a PR mid-scan, and a
+  // boundary PR can silently drop out of the listing. Both lanes only act on
+  // PRs created within the lookback, so stop fetching once a page crosses that
+  // horizon instead of listing every open PR (~2900 at last count, hourly).
+  return await github.paginate(
+    github.rest.pulls.list,
+    { owner, repo, state: "open", sort: "created", direction: "desc", per_page: 100 },
+    (response, done) => {
+      if (response.data.some((item) => now - Date.parse(item.created_at) > LOOKBACK_MS)) {
+        done();
+      }
+      return response.data;
+    },
+  );
 }
 
 async function listPullRequestCiRuns({ github, owner, repo, headSha }) {
@@ -219,25 +243,13 @@ export async function runPrCiSweeper({
   const results = [];
   let refires = 0;
   let revives = 0;
-  const openPrs = await github.paginate(github.rest.pulls.list, {
-    owner,
-    repo,
-    state: "open",
-    sort: "updated",
-    direction: "desc",
-    per_page: 100,
-  });
+  const openPrs = await listRecentOpenPrs({ github, owner, repo, now });
   const seenRunIds = new Set();
   reviveLane: for (const listed of openPrs) {
-    if (now - Date.parse(listed.updated_at) > LOOKBACK_MS) {
+    if (now - Date.parse(listed.created_at) > LOOKBACK_MS) {
       break;
     }
-    if (
-      listed.draft ||
-      !listed.auto_merge ||
-      now - Date.parse(listed.created_at) > LOOKBACK_MS ||
-      now - Date.parse(listed.updated_at) < MIN_QUIET_MS
-    ) {
+    if (listed.draft || !listed.auto_merge || now - Date.parse(listed.updated_at) < MIN_QUIET_MS) {
       continue;
     }
     const checks = await listLatestChecksForHead({
@@ -377,24 +389,52 @@ export async function runPrCiSweeper({
     }
   }
   for (const listed of openPrs) {
-    if (now - Date.parse(listed.updated_at) > LOOKBACK_MS) {
-      break;
-    }
-    if (refires >= MAX_REFIRES_PER_SWEEP) {
-      core.info(`pr-ci-sweeper: per-sweep re-fire cap (${MAX_REFIRES_PER_SWEEP}) reached`);
+    if (now - Date.parse(listed.created_at) > LOOKBACK_MS) {
       break;
     }
     if (listed.draft) {
+      results.push({
+        number: listed.number,
+        sha: listed.head.sha.slice(0, 12),
+        action: "skip",
+        reason: "draft",
+      });
+      core.info(`pr-ci-sweeper: skip #${listed.number} (draft)`);
       continue;
     }
     const ciRuns = await listPullRequestCiRuns({ github, owner, repo, headSha: listed.head.sha });
-    if (ciRuns.some((run) => run.conclusion !== "startup_failure")) {
+    // Classify on cheap list data first so most PRs (usually ci-attached) skip
+    // without the authoritative pulls.get + close-history reads, but still log
+    // the decision with the attached run ids as evidence: the silent skip here
+    // previously made "sweeper judged CI attached" indistinguishable from
+    // "sweeper never saw the PR".
+    const preliminary = classifyPrForSweep({ pr: listed, ciRuns, botCloseCount: 0, now });
+    if (preliminary.action !== "refire") {
+      const attachedRuns = ciRuns
+        .filter((run) => run.conclusion !== "startup_failure")
+        .map((run) => `${run.id ?? "?"}:${run.status ?? "?"}/${run.conclusion ?? "pending"}`);
+      const detail = preliminary.reason === "ci-attached" ? `: ${attachedRuns.join(", ")}` : "";
+      results.push({ number: listed.number, sha: listed.head.sha.slice(0, 12), ...preliminary });
+      core.info(`pr-ci-sweeper: skip #${listed.number} (${preliminary.reason}${detail})`);
+      continue;
+    }
+    // Past the cap, keep classifying (so every scanned PR still gets a logged
+    // decision) but convert would-be re-fires into skips instead of mutating.
+    if (refires >= MAX_REFIRES_PER_SWEEP) {
+      results.push({
+        number: listed.number,
+        sha: listed.head.sha.slice(0, 12),
+        action: "skip",
+        reason: "refire-cap-reached",
+      });
+      core.info(`pr-ci-sweeper: skip #${listed.number} (refire-cap-reached)`);
       continue;
     }
     // Candidate: fetch authoritative state (mergeable, current head) and the
     // close history so a racing push or human action wins over the sweep.
     const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: listed.number });
     if (pr.state !== "open" || pr.head.sha !== listed.head.sha) {
+      core.info(`pr-ci-sweeper: #${listed.number} changed during sweep; leaving it alone`);
       continue;
     }
     const events = await github.paginate(github.rest.issues.listEvents, {
@@ -475,7 +515,7 @@ export async function runPrCiSweeper({
     await reopenWithRetry({ github, core, owner, repo, pullNumber: pr.number });
   }
   core.info(
-    `pr-ci-sweeper: checked ${openPrs.length} open PRs, ${results.length} candidates, ${refires} re-fire${refires === 1 ? "" : "s"}, ${revives} revive${revives === 1 ? "" : "s"}${dryRun ? " (dry-run)" : ""}`,
+    `pr-ci-sweeper: scanned ${openPrs.length} open PRs, ${results.length} classified, ${refires} re-fire${refires === 1 ? "" : "s"}, ${revives} revive${revives === 1 ? "" : "s"}${dryRun ? " (dry-run)" : ""}`,
   );
   return results;
 }

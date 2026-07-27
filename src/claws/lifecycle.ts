@@ -20,6 +20,7 @@ import {
   type ClawDiagnostic,
   type ClawManifest,
   type ClawLocalPrerequisite,
+  type ClawOpenClawProfile,
   type ClawPackage,
   type ClawSourceIdentity,
 } from "./types.js";
@@ -189,6 +190,7 @@ async function inspectWorkspaceFileAction(params: {
 
 export async function buildClawAddPlan(params: {
   manifest: ClawManifest;
+  openClawProfile?: ClawOpenClawProfile;
   source: ClawSourceIdentity;
   diagnostics?: ClawDiagnostic[];
   context?: ClawAddPlanContext;
@@ -219,6 +221,13 @@ export async function buildClawAddPlan(params: {
   }
   const existingAgentIds = new Set(context.existingAgentIds ?? []);
   const agentBlocked = existingAgentIds.has(finalId);
+  const openClawAgentSettings = params.openClawProfile?.agent ?? {};
+  const agentConfig: ClawAddPlan["agent"]["config"] = {
+    ...params.manifest.agent,
+    ...openClawAgentSettings,
+    id: finalId,
+    workspace,
+  };
   if (agentBlocked) {
     blockers.push(
       blocker(
@@ -233,13 +242,14 @@ export async function buildClawAddPlan(params: {
     id: finalId,
     action: "create",
     target: `agents.entries[${JSON.stringify(finalId)}]`,
-    details: { ...params.manifest.agent, id: finalId, workspace, expectedState: "absent" },
+    details: { ...agentConfig, expectedState: "absent" },
     blocked: agentBlocked || !AGENT_ID_PATTERN.test(finalId),
   });
   const agentCapabilityEffect = {
-    ...(params.manifest.agent.sandbox ? { sandbox: params.manifest.agent.sandbox } : {}),
-    ...(params.manifest.agent.tools ? { tools: params.manifest.agent.tools } : {}),
-    ...(params.manifest.agent.heartbeat ? { heartbeat: params.manifest.agent.heartbeat } : {}),
+    ...(openClawAgentSettings.sandbox ? { sandbox: openClawAgentSettings.sandbox } : {}),
+    ...(openClawAgentSettings.tools ? { tools: openClawAgentSettings.tools } : {}),
+    ...(openClawAgentSettings.memory ? { memory: openClawAgentSettings.memory } : {}),
+    ...(openClawAgentSettings.heartbeat ? { heartbeat: openClawAgentSettings.heartbeat } : {}),
   };
   if (Object.keys(agentCapabilityEffect).length > 0) {
     capabilityChanges.push(
@@ -248,7 +258,8 @@ export async function buildClawAddPlan(params: {
         id: finalId,
         path: "agent",
         action: "create",
-        reason: "The new agent declares sandbox, tool, or recurring heartbeat capabilities.",
+        reason:
+          "The new agent declares sandbox, tool, memory-search, or recurring heartbeat capabilities.",
         effect: agentCapabilityEffect,
       }),
     );
@@ -559,7 +570,7 @@ export async function buildClawAddPlan(params: {
       requestedId: params.manifest.agent.id,
       finalId,
       workspace,
-      config: { ...params.manifest.agent, id: finalId, workspace },
+      config: agentConfig,
     },
     summary: {
       totalActions: actions.length,

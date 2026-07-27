@@ -1,4 +1,6 @@
 // Shared types for grouped OpenClaw Claw manifests and read-only add plans.
+import type { ToolProfileId } from "../agents/tool-policy-shared.js";
+import type { AgentConfig } from "../config/types.agents.js";
 
 export const CLAW_SCHEMA_VERSION = 1 as const;
 export const CLAW_ADD_PLAN_SCHEMA_VERSION = "openclaw.clawAddPlan.v1" as const;
@@ -25,34 +27,51 @@ type ClawAgent = {
     emoji?: string;
     avatar?: string;
   };
-  groupChat?: {
-    mentionPatterns?: string[];
-  };
-  sandbox?: {
-    mode?: "off" | "non-main" | "all";
-    scope?: "session" | "agent" | "shared";
-    workspaceAccess?: "none" | "ro" | "rw";
-  };
-  tools?: {
-    allow?: string[];
-    deny?: string[];
-  };
-  heartbeat?: {
-    every?: string;
-    activeHours?: {
-      start?: string;
-      end?: string;
-      timezone?: string;
+};
+
+export type ClawOpenClawProfile = {
+  schemaVersion: 1;
+  agent: {
+    groupChat?: {
+      mentionPatterns?: string[];
     };
-    lightContext?: boolean;
-    isolatedSession?: boolean;
-    skipWhenBusy?: boolean;
-    timeoutSeconds?: number;
-  };
-  humanDelay?: {
-    mode?: "off" | "natural" | "custom";
-    minMs?: number;
-    maxMs?: number;
+    sandbox?: {
+      mode?: "off" | "non-main" | "all";
+      scope?: "session" | "agent" | "shared";
+      workspaceAccess?: "none" | "ro" | "rw";
+    };
+    tools?: {
+      profile?: ToolProfileId;
+      allow?: string[];
+      alsoAllow?: string[];
+      deny?: string[];
+      fs?: {
+        workspaceOnly?: true;
+      };
+    };
+    memory?: {
+      search?: {
+        enabled?: boolean;
+        rememberAcrossConversations?: boolean;
+        sources?: Array<"memory" | "sessions">;
+      };
+    };
+    heartbeat?: {
+      every?: string;
+      activeHours?: {
+        start?: string;
+        end?: string;
+        timezone?: string;
+      };
+      lightContext?: boolean;
+      isolatedSession?: boolean;
+      timeoutSeconds?: number;
+    };
+    humanDelay?: {
+      mode?: "off" | "natural" | "custom";
+      minMs?: number;
+      maxMs?: number;
+    };
   };
 };
 
@@ -127,6 +146,7 @@ export type ClawCronJob = {
 export type ClawManifest = {
   schemaVersion: typeof CLAW_SCHEMA_VERSION;
   agent: ClawAgent;
+  metadata?: Record<string, string>;
   workspace: ClawWorkspace;
   packages: ClawPackage[];
   mcpServers: Record<string, ClawMcpServer>;
@@ -159,6 +179,7 @@ export type ClawReadResult =
   | {
       ok: true;
       manifest: ClawManifest;
+      openClawProfile?: ClawOpenClawProfile;
       source: ClawSourceIdentity;
       snapshot: ClawSourceSnapshot;
       diagnostics: ClawDiagnostic[];
@@ -208,7 +229,7 @@ export type ClawAddPlan = {
     requestedId: string;
     finalId: string;
     workspace: string;
-    config: ClawAgent & { workspace: string };
+    config: AgentConfig & { workspace: string };
   };
   summary: {
     totalActions: number;

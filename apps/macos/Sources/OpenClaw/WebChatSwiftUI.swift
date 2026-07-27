@@ -217,6 +217,41 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         }
     }
 
+    func acquireSwarmRouteLease() async -> OpenClawChatSwarmRouteLease? {
+        guard let lease = await self.connection.captureServerLease() else { return nil }
+        let transport = self
+        return OpenClawChatSwarmRouteLease(
+            isEnabled: { sessionKey in
+                try await transport.isSwarmEnabled(sessionKey: sessionKey, serverLease: lease)
+            },
+            listChildSessions: { parentKey in
+                try await transport.listChildSessions(parentKey: parentKey, serverLease: lease)
+            })
+    }
+
+    func isSwarmEnabled(sessionKey: String) async throws -> Bool {
+        try await self.isSwarmEnabled(sessionKey: sessionKey, serverLease: nil)
+    }
+
+    private func isSwarmEnabled(
+        sessionKey: String,
+        serverLease: GatewayConnection.ServerLease?) async throws -> Bool
+    {
+        let request = OpenClawChatGatewayRequests.chatMetadata(
+            sessionKey: sessionKey,
+            fallbackAgentID: self.routingIdentity.currentAgentID())
+        let data: Data = if let serverLease {
+            try await self.connection.request(
+                method: request.method,
+                params: request.params,
+                timeoutMs: request.timeoutMs,
+                ifCurrentServerLease: serverLease)
+        } else {
+            try await self.connection.request(request)
+        }
+        return try JSONDecoder().decode(OpenClawChatMetadataCapabilities.self, from: data).swarmEnabled
+    }
+
     func abortRun(sessionKey: String, runId: String) async throws {
         let target = self.sessionTarget(for: sessionKey)
         let request = OpenClawChatGatewayRequests.abortRun(
@@ -255,8 +290,42 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             ts: decoded.ts,
             path: decoded.path,
             count: decoded.count,
+            totalCount: decoded.totalCount,
+            offset: decoded.offset,
+            nextOffset: decoded.nextOffset,
+            hasMore: decoded.hasMore,
             defaults: defaults,
             sessions: decoded.sessions)
+    }
+
+    func listChildSessions(parentKey: String) async throws -> [OpenClawChatSessionEntry] {
+        try await self.listChildSessions(parentKey: parentKey, serverLease: nil)
+    }
+
+    private func listChildSessions(
+        parentKey: String,
+        serverLease: GatewayConnection.ServerLease?) async throws -> [OpenClawChatSessionEntry]
+    {
+        try await OpenClawChatChildSessionPager.collect { offset in
+            let request = OpenClawChatGatewayRequests.sessionsList(
+                limit: 10000,
+                search: nil,
+                archived: false,
+                includeGlobal: false,
+                spawnedBy: parentKey,
+                offset: offset,
+                configuredAgentsOnly: true)
+            let data: Data = if let serverLease {
+                try await self.connection.request(
+                    method: request.method,
+                    params: request.params,
+                    timeoutMs: request.timeoutMs,
+                    ifCurrentServerLease: serverLease)
+            } else {
+                try await self.connection.request(request)
+            }
+            return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
+        }
     }
 
     func listAgents() async throws -> OpenClawChatAgentsListResponse? {
@@ -660,9 +729,16 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
                 }
 
                 let stream = await self.connection.subscribe()
+                var hasSeenSnapshot = false
                 for await push in stream {
                     if Task.isCancelled {
                         return
+                    }
+                    if case .snapshot = push {
+                        if hasSeenSnapshot {
+                            continuation.yield(.routeChanged)
+                        }
+                        hasSeenSnapshot = true
                     }
                     if let evt = Self.mapPushToTransportEvent(push) {
                         continuation.yield(evt)

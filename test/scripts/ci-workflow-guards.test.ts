@@ -48,6 +48,7 @@ const MATURITY_GENERATED_PR_PATHS = [
 
 type WorkflowStep = {
   env?: Record<string, unknown>;
+  id?: string;
   if?: string;
   name?: string;
   run?: string;
@@ -790,6 +791,75 @@ describe("ci workflow guards", () => {
     });
   });
 
+  it("routes stale bug issues through ClawSweeper instead of Barnacle closure", () => {
+    const staleWorkflow = readWorkflow(".github/workflows/stale.yml");
+    const staleSteps = staleWorkflow.jobs.stale.steps as WorkflowStep[];
+    const stepNamed = (name: string) =>
+      expectDefined(
+        staleSteps.find((step) => step.name === name),
+        name,
+      );
+
+    for (const name of [
+      "Mark stale unassigned issues and pull requests (primary)",
+      "Mark stale assigned issues (primary)",
+      "Mark stale unassigned issues and pull requests (fallback)",
+      "Mark stale assigned issues (fallback)",
+    ]) {
+      const exemptLabels = String(stepNamed(name).with?.["exempt-issue-labels"])
+        .split(",")
+        .map((label) => label.trim());
+      expect(exemptLabels, name).toContain("bug");
+    }
+
+    const bugJob = staleWorkflow.jobs["stale-bug-verification"];
+    expect(bugJob.permissions).toEqual({ issues: "write" });
+    expect(bugJob["runs-on"]).toBe("ubuntu-24.04");
+    const bugScript = String(
+      (bugJob.steps as WorkflowStep[]).find(
+        (step) => step.name === "Mark inactive bugs for ClawSweeper verification",
+      )?.with?.script,
+    );
+    expect(bugScript).toContain("const maxMarks = 25;");
+    expect(bugScript).toContain('labels: "bug"');
+    expect(bugScript).toContain("github.rest.issues.addLabels");
+    expect(bugScript).toContain("github.rest.issues.removeLabel");
+    expect(bugScript).toContain("Inactivity alone will not close a bug report.");
+    expect(bugScript).toContain("requires separate backfill approval");
+    expect(bugScript).toContain("slice(staleEventIndex + 1)");
+    expect(bugScript).toContain("updatedAtMs > lastAutomationAtMs");
+    expect(bugScript).toContain('item.state !== "open"');
+    expect(bugScript).not.toContain("15_000");
+    expect(bugScript).not.toContain("github.rest.issues.update");
+
+    const backfillScript = String(
+      (staleWorkflow.jobs["backfill-stale-closures"].steps as WorkflowStep[]).find(
+        (step) => step.name === "Backfill stale closures",
+      )?.with?.script,
+    );
+    expect(backfillScript).toMatch(/issueExemptLabels[\s\S]*"bug"/);
+
+    const dispatchWorkflow = readWorkflow(".github/workflows/clawsweeper-dispatch.yml");
+    const dispatchCondition = String(dispatchWorkflow.jobs.dispatch.if);
+    expect(dispatchCondition).toContain("github.event.label.name == 'stale'");
+    expect(dispatchCondition).toContain("contains(github.event.issue.labels.*.name, 'bug')");
+    expect(dispatchCondition).toContain("github.actor_id == '257215752'");
+    expect(dispatchCondition).toContain("github.actor_id == '264559031'");
+
+    const auditJob = staleWorkflow.jobs["audit-bug-closure-reasons"];
+    expect(auditJob.permissions).toEqual({ issues: "read" });
+    const auditScript = String((auditJob.steps as WorkflowStep[])[0]?.with?.script);
+    expect(auditScript).toContain('item.state_reason !== "not_planned"');
+    expect(auditScript).toContain("github.rest.issues.listEventsForTimeline");
+    expect(auditScript).toContain("github.paginate.iterator(");
+    expect(auditScript).toContain("new Set([257215752, 264559031])");
+    expect(auditScript).toContain("escapeSummaryCell(violation.title)");
+    expect(auditScript).toContain('.replaceAll("<", "&lt;")');
+    expect(auditScript).toContain("core.setFailed(");
+    expect(auditScript).not.toContain("github.rest.issues.update");
+    expect(auditScript).not.toContain("github.rest.issues.createComment");
+  });
+
   it("makes the hosted release-gate fallback explicit and exact-SHA only", () => {
     const workflow = readCiWorkflow();
     const releaseGate = workflow.on.workflow_dispatch.inputs.release_gate;
@@ -888,6 +958,13 @@ describe("ci workflow guards", () => {
   it("keeps Testbox pull request validation off leased runner capacity", () => {
     const workflow = readTestboxWorkflow();
 
+    expect(workflow.on.pull_request).toEqual({
+      types: ["opened", "reopened", "synchronize", "ready_for_review"],
+      paths: [".github/workflows/**"],
+    });
+    expect(workflow.jobs.check.if).toBe(
+      "${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}",
+    );
     expect(workflow.jobs.check["runs-on"]).toBe(
       "${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}",
     );
@@ -3585,22 +3662,22 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
     const preflightGuards = workflow.slice(
       workflow.indexOf("guards)"),
-      workflow.indexOf("shrinkwrap)"),
+      workflow.indexOf("npm-lock)"),
     );
-    const shrinkwrapGuards = workflow.slice(
-      workflow.indexOf("shrinkwrap)"),
+    const npmLockGuards = workflow.slice(
+      workflow.indexOf("npm-lock)"),
       workflow.indexOf("prod-types)"),
     );
 
     expect(workflow).toContain("check-guards");
-    expect(workflow).toContain("check-shrinkwrap");
+    expect(workflow).toContain("check-npm-lock");
     expect(preflightGuards).toContain('has_package_script "check:script-declarations"');
     expect(preflightGuards).toContain("pnpm check:script-declarations");
     expect(preflightGuards).toContain('[[ "$HISTORICAL_TARGET" != "true" ]]');
     expect(preflightGuards).toContain(
       "Current CI targets must provide the check:script-declarations package script.",
     );
-    expect(shrinkwrapGuards).toContain("pnpm deps:shrinkwrap:check");
+    expect(npmLockGuards).toContain("pnpm deps:npm-lock:check");
     expect(preflightGuards).toContain("pnpm deps:patches:check");
     expect(parsedWorkflow.jobs.preflight.outputs.diff_base_revision).toBe(
       "${{ steps.diff_base.outputs.sha }}",
@@ -4162,6 +4239,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(checkShard.run).toContain("pnpm tsgo:scripts");
     expect(checkShard.run).toContain('elif [[ "$HISTORICAL_TARGET" != "true" ]]');
+    expect(checkShard.run).toContain('has_package_script "deps:npm-lock:check"');
+    expect(checkShard.run).toContain(
+      "Current CI targets must provide the deps:npm-lock:check package script.",
+    );
+    expect(checkShard.run).toContain(
+      "[skip] historical target predates the transient npm lock contract",
+    );
     expect(checkShard.run).toContain('has_package_script "deadcode:dependencies"');
     expect(checkShard.run).toContain('has_package_script "deadcode:unused-files"');
     expect(checkShard.run).toContain('has_package_script "deadcode:exports"');
@@ -4430,70 +4514,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(runStep.run).toContain(expected);
     }
     expect(existsSync("scripts/ci-run-node-test-shard.mjs")).toBe(true);
-  });
-
-  it("keeps the CI timing summary parked for timing optimization work", () => {
-    expect(readFileSync(".github/workflows/ci.yml", "utf8")).toContain(
-      "Re-enable this job when we want to collect CI timing data for timing optimization.",
-    );
-
-    const workflow = readCiWorkflow();
-    const timingJob = workflow.jobs["ci-timings-summary"];
-
-    expect(timingJob.permissions).toMatchObject({ actions: "read", contents: "read" });
-    expect(timingJob.needs).toEqual([
-      "preflight",
-      "security-fast",
-      "pnpm-store-warmup",
-      "build-artifacts",
-      "checks-ui",
-      "control-ui-i18n",
-      "checks-fast-core",
-      "checks-fast-plugin-contracts-shard",
-      "checks-fast-channel-contracts-shard",
-      "checks-node-compat",
-      "checks-node-core-test-nondist-shard",
-      "check-shard",
-      "check-additional-shard",
-      "check-docs",
-      "skills-python",
-      "checks-windows",
-      "macos-node",
-      "macos-swift",
-      "ios-build",
-      "android",
-    ]);
-    expect(timingJob.if).toContain("false");
-    expect(timingJob.if).toContain("always()");
-    expect(timingJob.if).toContain("!cancelled()");
-
-    const checkoutStep = timingJob.steps.find(
-      (step: WorkflowStep) => step.name === "Checkout timing summary helper",
-    );
-    expect(checkoutStep.uses).toBe(CHECKOUT_V6);
-    expect(checkoutStep.with.ref).toBe(
-      "${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || needs.preflight.outputs.checkout_revision || github.sha }}",
-    );
-    expect(checkoutStep.with["persist-credentials"]).toBe(false);
-
-    const writeStep = timingJob.steps.find(
-      (step: WorkflowStep) => step.name === "Write CI timing summary",
-    );
-    expect(writeStep.env).toMatchObject({ GH_TOKEN: "${{ github.token }}" });
-    expect(writeStep.run).toContain(
-      'node scripts/ci-run-timings.mjs "$GITHUB_RUN_ID" --limit 25 > ci-timings-summary.txt',
-    );
-    expect(writeStep.run).toContain('cat ci-timings-summary.txt >> "$GITHUB_STEP_SUMMARY"');
-
-    const uploadStep = timingJob.steps.find(
-      (step: WorkflowStep) => step.name === "Upload CI timing summary",
-    );
-    expect(uploadStep.uses).toBe(UPLOAD_ARTIFACT_V7);
-    expect(uploadStep.with).toMatchObject({
-      name: "ci-timings-summary",
-      path: "ci-timings-summary.txt",
-      "retention-days": 14,
-    });
   });
 
   it("emits one final CI gate after every selected lane", () => {
@@ -5130,10 +5150,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(smokeBuildStep.run).toContain("node scripts/build-all.mjs qaRuntime");
     expect(smokeBuildStep.run).toContain("pnpm ui:build");
     expect(smokeBuildStep.env.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
-    expect(smokeBuildStep.run).toContain("--skip-build");
+    expect(smokeBuildStep.run).not.toContain("--skip-build");
     expect(smokeBuildStep.run).toContain("--allow-unreleased-changelog");
     expect(smokeBuildStep.run).toContain("grep -Fq");
     expect(smokeBuildStep.run).toContain('"${package_args[@]}"');
+    expect(smokeBuildStep.run.indexOf("node scripts/package-openclaw-for-docker.mjs")).toBeLessThan(
+      smokeBuildStep.run.indexOf("node scripts/build-all.mjs qaRuntime"),
+    );
     expect(workflow.jobs["qa-smoke-ci-artifacts"]).toBeUndefined();
     expect(workflow.jobs["qa-smoke-ci"]).toBeUndefined();
     expect(smokeProfileJob.needs).toEqual(["preflight"]);

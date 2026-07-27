@@ -133,6 +133,8 @@ USER.md
 .agents/skills/*
 !.agents/skills/agent-transcript/
 !.agents/skills/agent-transcript/**
+!.agents/skills/auto-qa/
+!.agents/skills/auto-qa/**
 !.agents/skills/autoreview/
 !.agents/skills/autoreview/**
 !.agents/skills/channel-message-flows/

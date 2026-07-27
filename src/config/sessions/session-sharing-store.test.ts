@@ -20,7 +20,7 @@ import {
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 
 describe("session sharing store", () => {
-  it("lazily ensures the additive membership table and keeps deterministic rows", async () => {
+  it("keeps deterministic membership rows", async () => {
     await withTempDir({ prefix: "openclaw-session-sharing-" }, async (dir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
       const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
@@ -30,13 +30,6 @@ describe("session sharing store", () => {
         visibility: "shared",
       });
       expect(loadSessionEntry(scope)?.visibility).toBe("shared");
-      const database = openOpenClawAgentDatabase({ agentId: "main", env });
-      database.db.exec("DROP TABLE session_members;");
-      expect(
-        database.db
-          .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'session_members'")
-          .get(),
-      ).toBeUndefined();
 
       expect(listSessionMembers(scope)).toEqual([]);
       expect(
@@ -64,6 +57,23 @@ describe("session sharing store", () => {
         addedAt: 3,
       });
       expect(removeSessionMember(scope, "alice")).toBeNull();
+    });
+  });
+
+  it("does not recreate a missing canonical membership table", async () => {
+    await withTempDir({ prefix: "openclaw-session-sharing-missing-" }, async (dir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+      const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
+      await upsertSessionEntry(scope, { sessionId: "session-main", updatedAt: 1 });
+      const database = openOpenClawAgentDatabase({ agentId: "main", env });
+      database.db.exec("DROP TABLE session_members;");
+
+      expect(() => listSessionMembers(scope)).toThrow(/no such table: session_members/);
+      expect(
+        database.db
+          .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'session_members'")
+          .get(),
+      ).toBeUndefined();
     });
   });
 

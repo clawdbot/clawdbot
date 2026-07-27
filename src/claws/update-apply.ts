@@ -31,6 +31,7 @@ import {
 import {
   CLAW_OUTPUT_STABILITY,
   type ClawManifest,
+  type ClawOpenClawProfile,
   type ClawPackage,
   type ClawSourceIdentity,
 } from "./types.js";
@@ -88,6 +89,7 @@ export async function applyClawUpdatePlan(
   plan: ClawUpdatePlan,
   params: {
     targetManifest: ClawManifest;
+    targetOpenClawProfile?: ClawOpenClawProfile;
     targetSource: ClawSourceIdentity;
   },
   options: OpenClawStateDatabaseOptions & {
@@ -124,6 +126,7 @@ export async function applyClawUpdatePlan(
   const fresh = await rebuildPlan({
     agentId: plan.agentId,
     targetManifest: params.targetManifest,
+    targetOpenClawProfile: params.targetOpenClawProfile,
     targetSource: params.targetSource,
     config: options.config,
     sourceMcpServers: options.sourceMcpServers,
@@ -175,6 +178,7 @@ export async function applyClawUpdatePlan(
   };
   const targetAddPlan = await buildAddPlan({
     manifest: params.targetManifest,
+    openClawProfile: params.targetOpenClawProfile,
     source: params.targetSource,
     context: {
       agentId: fresh.agentId,

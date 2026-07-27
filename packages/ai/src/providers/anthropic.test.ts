@@ -1504,6 +1504,8 @@ describe("Anthropic provider", () => {
     ["claude-fable-5", "Claude Fable 5", "anthropic", "sk-ant-provider"],
     ["claude-mythos-5", "Claude Mythos 5", "anthropic", "sk-ant-provider"],
     ["claude-mythos-5", "Claude Mythos 5", "anthropic-vertex", "vertex-token"],
+    ["claude-opus-5", "Claude Opus 5", "anthropic", "sk-ant-provider"],
+    ["claude-opus-5", "Claude Opus 5", "anthropic-vertex", "vertex-token"],
     ["claude-sonnet-5", "Claude Sonnet 5", "anthropic", "sk-ant-provider"],
     ["claude-sonnet-5", "Claude Sonnet 5", "anthropic-vertex", "vertex-token"],
   ])("surfaces structured %s streaming refusals for %s", async (id, name, provider, apiKey) => {
@@ -1581,30 +1583,36 @@ describe("Anthropic provider", () => {
     ]);
   });
 
-  it("sends server-side fallback params for direct Fable API-key requests", async () => {
-    let capturedPayload: unknown;
-    const stream = streamAnthropic(
-      makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
-      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-      {
-        apiKey: "sk-ant-provider",
-        onPayload: (payload) => {
-          capturedPayload = payload;
-          throw new Error("stop before network");
+  it.each([
+    { id: "claude-fable-5", name: "Claude Fable 5" },
+    { id: "claude-opus-5", name: "Claude Opus 5" },
+  ])(
+    "sends default server-side fallback params for direct $name API-key requests",
+    async (model) => {
+      let capturedPayload: unknown;
+      const stream = streamAnthropic(
+        makeAnthropicModel(model),
+        { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+        {
+          apiKey: "sk-ant-provider",
+          onPayload: (payload) => {
+            capturedPayload = payload;
+            throw new Error("stop before network");
+          },
         },
-      },
-    );
-    await stream.result();
+      );
+      await stream.result();
 
-    expect((capturedPayload as { fallbacks?: unknown }).fallbacks).toEqual([
-      { model: "claude-opus-4-8" },
-    ]);
-    await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
-    const config = anthropicMockState.configs[0] as {
-      defaultHeaders?: Record<string, string>;
-    };
-    expect(config.defaultHeaders?.["anthropic-beta"]).toContain("server-side-fallback-2026-06-01");
-  });
+      expect((capturedPayload as { fallbacks?: unknown }).fallbacks).toBe("default");
+      await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
+      const config = anthropicMockState.configs[0] as {
+        defaultHeaders?: Record<string, string>;
+      };
+      expect(config.defaultHeaders?.["anthropic-beta"]).toContain(
+        "server-side-fallback-2026-07-01",
+      );
+    },
+  );
 
   it.each([
     { label: "OAuth tokens", overrides: {}, apiKey: "sk-ant-oat01-token" },
@@ -1619,8 +1627,8 @@ describe("Anthropic provider", () => {
       apiKey: "vertex-token",
     },
     {
-      label: "non-Fable models",
-      overrides: { id: "claude-opus-4-8", name: "Claude Opus 4.8" },
+      label: "unsupported models",
+      overrides: { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
       apiKey: "sk-ant-provider",
     },
   ])("omits server-side fallback params for $label", async ({ overrides, apiKey }) => {
@@ -1771,8 +1779,7 @@ describe("Anthropic provider", () => {
                   type: "message_start",
                   message: {
                     id: "msg_fallback",
-                    // Pre-output declines: message_start names the fallback model.
-                    model: "claude-opus-4-8",
+                    model: "claude-fable-5",
                     usage: { input_tokens: 5, output_tokens: 0 },
                   },
                 },
@@ -1819,7 +1826,17 @@ describe("Anthropic provider", () => {
     expect(result.stopReason).toBe("stop");
     expect(result.content).toEqual([{ type: "text", text: "Hi!" }]);
     expect(result.responseModel).toBe("claude-opus-4-8");
-    expect(result.diagnostics).toEqual([expect.objectContaining({ type: "provider_fallback" })]);
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        type: "provider_fallback",
+        details: {
+          provider: "anthropic",
+          fromModel: "claude-fable-5",
+          toModel: "claude-opus-4-8",
+        },
+      }),
+    ]);
+    expect(result.usage.cost.total).toBeCloseTo(0.000075, 10);
   });
 
   it("routes interleaved active content blocks by their event indexes", async () => {
@@ -2033,6 +2050,52 @@ describe("Anthropic provider", () => {
       });
     },
   );
+
+  it("uses the Claude Opus 5 adaptive-thinking request contract", async () => {
+    let capturedPayload: unknown;
+    const stream = streamSimpleAnthropic(
+      makeAnthropicModel({
+        id: "prod-opus",
+        name: "Production Claude",
+        provider: "microsoft-foundry",
+        params: { canonicalModelId: "claude-opus-5" },
+        reasoning: false,
+        baseUrl: "https://example.services.ai.azure.com/anthropic",
+        maxTokens: 128_000,
+      }),
+      {
+        messages: [
+          { role: "user", content: "hello", timestamp: 0 },
+          { role: "assistant", content: [{ type: "text", text: "prefill" }], timestamp: 0 },
+        ],
+      } as unknown as Context,
+      {
+        apiKey: "sk-ant-provider",
+        temperature: 0.2,
+        onPayload: (payload) => {
+          capturedPayload = {
+            ...(payload as Record<string, unknown>),
+            service_tier: "auto",
+            top_p: 0.9,
+            top_k: 40,
+          };
+          return capturedPayload;
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect(capturedPayload).toMatchObject({
+      messages: [{ role: "user" }],
+      thinking: { type: "adaptive", display: "summarized" },
+      output_config: { effort: "high" },
+    });
+    expect(capturedPayload).not.toHaveProperty("temperature");
+    expect(capturedPayload).not.toHaveProperty("top_p");
+    expect(capturedPayload).not.toHaveProperty("top_k");
+    expect(capturedPayload).not.toHaveProperty("service_tier");
+  });
 
   it("uses always-on adaptive thinking for Claude Fable 5", async () => {
     let capturedPayload: unknown;
@@ -2321,7 +2384,7 @@ describe("Anthropic provider", () => {
     },
   );
 
-  it.each(["claude-opus-4-8", "claude-mythos-preview"])(
+  it.each(["claude-opus-5", "claude-opus-4-8", "claude-mythos-preview"])(
     "restores default sampling for %s after payload hooks",
     async (modelId) => {
       let capturedPayload: unknown;
@@ -2417,6 +2480,7 @@ describe("Anthropic provider", () => {
   });
 
   it.each([
+    { canonicalModelId: "claude-opus-5", expectedTemperature: undefined },
     { canonicalModelId: "claude-opus-4-8", expectedTemperature: undefined },
     { canonicalModelId: "claude-opus-4-6", expectedTemperature: 0.2 },
   ] as const)(

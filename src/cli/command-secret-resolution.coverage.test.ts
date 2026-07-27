@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { readCommandSource } from "./command-source.test-helpers.js";
 
 const SECRET_TARGET_CALLSITES = [
-  bundledPluginFile("memory-core", "src/cli.runtime.ts"),
+  bundledPluginFile("memory-core", "src/cli-runtime-common.ts"),
   "src/cli/qr-cli.ts",
   "src/agents/agent-runtime-config.ts",
   "src/agents/command/prepare.ts",

@@ -3,6 +3,7 @@
  * explicit per-model config, global defaults, catalog metadata, and model
  * family fallbacks.
  */
+import { resolveClaudeOpus5ModelIdentity } from "@openclaw/llm-core";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -76,6 +77,9 @@ export function resolveThinkingDefault(params: {
     normalizedProvider === "anthropic" ||
     normalizedProvider === "anthropic-vertex" ||
     normalizedProvider === "claude-cli";
+  if (isClaudeProvider && resolveClaudeOpus5ModelIdentity({ id: normalizedModel })) {
+    return "high";
+  }
   if (
     isClaudeProvider &&
     (normalizedModel.startsWith("claude-opus-4-8") || normalizedModel.startsWith("claude-opus-4.8"))

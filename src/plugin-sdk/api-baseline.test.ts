@@ -102,6 +102,9 @@ describe("Plugin SDK API baseline", () => {
       "constructor(providerId: string, status: number);",
     );
     expect(findDeclaration("LiveModelCatalogHttpError")).not.toContain("super(");
+    expect(findDeclaration("LiveModelRowProjection")).toContain(
+      "export type LiveModelRowProjection",
+    );
     expect(findDeclaration("ApprovalResolveResult")).not.toContain("see source");
     expect(findDeclaration("RealtimeVoiceAgentConsultRuntime")).not.toContain("see source");
     expect(findDeclaration("createWebSearchProviderContractFields")).toContain(

@@ -45,6 +45,8 @@ type RealtimeEvent = {
   type: string;
   delta?: string;
   transcript?: string;
+  item_id?: string;
+  previous_item_id?: string | null;
   error?: unknown;
 };
 
@@ -170,7 +172,98 @@ async function resolveOpenAIRealtimeTranscriptionAuthorization(
 function createOpenAIRealtimeTranscriptionSession(
   config: OpenAIRealtimeTranscriptionSessionConfig,
 ): RealtimeTranscriptionSession {
-  let pendingTranscript = "";
+  const pendingTranscripts = new Map<string, string>();
+  const committedItemIds: string[] = [];
+  const committedItems = new Set<string>();
+  const previousItemIds = new Map<string, string | null | undefined>();
+  const settledItemIds = new Set<string>();
+  const completedTranscripts = new Map<string, string | undefined>();
+  const unkeyedTranscript = "__openclaw_unkeyed_transcript__";
+
+  const resetTranscriptionState = () => {
+    pendingTranscripts.clear();
+    committedItemIds.length = 0;
+    committedItems.clear();
+    previousItemIds.clear();
+    settledItemIds.clear();
+    completedTranscripts.clear();
+  };
+
+  const commitItem = (itemId: string, previousItemId: string | null | undefined) => {
+    if (committedItems.has(itemId)) {
+      return;
+    }
+    committedItems.add(itemId);
+    previousItemIds.set(itemId, previousItemId);
+    committedItemIds.push(itemId);
+
+    const arrivalOrder = committedItemIds.splice(0);
+    const successors = new Map<string, string>();
+    for (const candidateId of arrivalOrder) {
+      const previousId = previousItemIds.get(candidateId);
+      if (previousId) {
+        successors.set(previousId, candidateId);
+      }
+    }
+    const seen = new Set<string>();
+    const appendChain = (startId: string) => {
+      let candidateId: string | undefined = startId;
+      while (candidateId && !seen.has(candidateId)) {
+        seen.add(candidateId);
+        committedItemIds.push(candidateId);
+        candidateId = successors.get(candidateId);
+      }
+    };
+    for (const candidateId of arrivalOrder) {
+      const previousId = previousItemIds.get(candidateId);
+      if (previousId == null || settledItemIds.has(previousId)) {
+        appendChain(candidateId);
+      }
+    }
+    for (const candidateId of arrivalOrder) {
+      appendChain(candidateId);
+    }
+  };
+
+  const flushCompletedTranscripts = () => {
+    while (committedItemIds.length > 0) {
+      const itemId = committedItemIds[0];
+      if (!itemId || !completedTranscripts.has(itemId)) {
+        return;
+      }
+      const previousItemId = previousItemIds.get(itemId);
+      if (
+        previousItemId &&
+        !settledItemIds.has(previousItemId) &&
+        !committedItems.has(previousItemId)
+      ) {
+        return;
+      }
+      committedItemIds.shift();
+      committedItems.delete(itemId);
+      previousItemIds.delete(itemId);
+      settledItemIds.add(itemId);
+      const transcript = completedTranscripts.get(itemId);
+      completedTranscripts.delete(itemId);
+      pendingTranscripts.delete(itemId);
+      if (transcript) {
+        config.onTranscript?.(transcript);
+      }
+    }
+  };
+
+  const completeItem = (itemId: string | undefined, transcript: string | undefined) => {
+    const key = itemId ?? unkeyedTranscript;
+    pendingTranscripts.delete(key);
+    if (!itemId || !committedItems.has(itemId)) {
+      if (transcript) {
+        config.onTranscript?.(transcript);
+      }
+      return;
+    }
+    completedTranscripts.set(itemId, transcript);
+    flushCompletedTranscripts();
+  };
 
   const handleEvent = (
     event: RealtimeEvent,
@@ -182,22 +275,32 @@ function createOpenAIRealtimeTranscriptionSession(
         transport.markReady();
         return;
 
+      case "input_audio_buffer.committed":
+        if (event.item_id) {
+          commitItem(event.item_id, event.previous_item_id);
+        }
+        return;
+
       case "conversation.item.input_audio_transcription.delta":
         if (event.delta) {
-          pendingTranscript += event.delta;
+          const key = event.item_id ?? unkeyedTranscript;
+          const pendingTranscript = `${pendingTranscripts.get(key) ?? ""}${event.delta}`;
+          pendingTranscripts.set(key, pendingTranscript);
           config.onPartial?.(pendingTranscript);
         }
         return;
 
       case "conversation.item.input_audio_transcription.completed":
-        if (event.transcript) {
-          config.onTranscript?.(event.transcript);
-        }
-        pendingTranscript = "";
+        completeItem(event.item_id, event.transcript);
+        return;
+
+      case "conversation.item.input_audio_transcription.failed":
+        completeItem(event.item_id, undefined);
+        config.onError?.(new Error(readRealtimeErrorDetail(event.error)));
         return;
 
       case "input_audio_buffer.speech_started":
-        pendingTranscript = "";
+        pendingTranscripts.delete(event.item_id ?? unkeyedTranscript);
         config.onSpeechStart?.();
         return;
 
@@ -248,6 +351,9 @@ function createOpenAIRealtimeTranscriptionSession(
       });
     },
     onOpen: (transport: RealtimeTranscriptionWebSocketTransport) => {
+      // A reconnect starts a new provider session. Retaining outstanding item
+      // state would splice pre-disconnect deltas into the first new turn.
+      resetTranscriptionState();
       transport.sendJson({
         type: "session.update",
         session: buildOpenAIRealtimeTranscriptionSessionPayload(config),

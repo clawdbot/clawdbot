@@ -4,6 +4,16 @@ import SwiftUI
 import UIKit
 
 struct RootTabs: View {
+    struct SessionObserverTaskIdentity: Equatable {
+        let sidebarRefreshID: String
+        let isSceneActive: Bool
+        let isSidebarVisible: Bool
+
+        var isObserverVisible: Bool {
+            self.isSceneActive && self.isSidebarVisible
+        }
+    }
+
     @Environment(NodeAppModel.self) private var appModel
     @Environment(VoiceWakeManager.self) private var voiceWake
     @Environment(GatewayConnectionController.self) private var gatewayController
@@ -190,7 +200,19 @@ struct RootTabs: View {
                 guard self.scenePhase == .active else { return }
                 await self.sidebarModel.observeSessionEvents(appModel: self.appModel)
             }
+            .task(id: self.sessionObserverTaskIdentity) {
+                await self.sidebarModel.setSessionObserverVisibility(
+                    appModel: self.appModel,
+                    visible: self.sessionObserverTaskIdentity.isObserverVisible)
+            }
         }
+    }
+
+    private var sessionObserverTaskIdentity: SessionObserverTaskIdentity {
+        SessionObserverTaskIdentity(
+            sidebarRefreshID: self.sidebarRefreshID,
+            isSceneActive: self.scenePhase == .active,
+            isSidebarVisible: self.isSidebarVisible)
     }
 
     private var sidebarRefreshID: String {

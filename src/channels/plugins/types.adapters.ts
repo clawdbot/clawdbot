@@ -21,7 +21,7 @@ import type { SecretTargetRegistryEntry } from "../../secrets/target-registry-ty
 import type { ChannelApprovalNativeAdapter } from "./approval-native.types.js";
 import type { ChannelRuntimeSurface } from "./channel-runtime-surface.types.js";
 import type { ConfigWriteTarget } from "./config-writes.js";
-import type { ChannelSetupInput } from "./setup-input.js";
+export type { ChannelSetupAdapter } from "./setup-adapter.types.js";
 export type {
   ChannelOutboundAdapter,
   ChannelOutboundContext,
@@ -72,48 +72,6 @@ export type ChannelCapabilitiesDiagnostics = {
 };
 
 type ChannelAdapterCallback<T extends (...args: never[]) => unknown> = T;
-
-export type ChannelSetupAdapter<Input extends { name?: string } = ChannelSetupInput> = {
-  resolveAccountId?: (params: { cfg: OpenClawConfig; accountId?: string; input?: Input }) => string;
-  prepareAccountConfigInput?: (params: {
-    cfg: OpenClawConfig;
-    accountId: string;
-    input: Input;
-    runtime: RuntimeEnv;
-  }) => Promise<Input> | Input;
-  resolveBindingAccountId?: (params: {
-    cfg: OpenClawConfig;
-    agentId: string;
-    accountId?: string;
-  }) => string | undefined;
-  applyAccountName?: (params: {
-    cfg: OpenClawConfig;
-    accountId: string;
-    name?: string;
-  }) => OpenClawConfig;
-  applyAccountConfig: (params: {
-    cfg: OpenClawConfig;
-    accountId: string;
-    input: Input;
-  }) => OpenClawConfig;
-  afterAccountConfigWritten?: (params: {
-    previousCfg: OpenClawConfig;
-    cfg: OpenClawConfig;
-    accountId: string;
-    input: Input;
-    runtime: RuntimeEnv;
-  }) => Promise<void> | void;
-  validateInput?: (params: {
-    cfg: OpenClawConfig;
-    accountId: string;
-    input: Input;
-  }) => string | null;
-  singleAccountKeysToMove?: readonly string[];
-  namedAccountPromotionKeys?: readonly string[];
-  resolveSingleAccountPromotionTarget?: (params: {
-    channel: Record<string, unknown>;
-  }) => string | undefined;
-};
 
 export type ChannelConfigAdapter<ResolvedAccount> = {
   listAccountIds: (cfg: OpenClawConfig) => string[];
@@ -172,8 +130,6 @@ export type ChannelSecretsAdapter = {
 
 export type ChannelGroupAdapter = {
   resolveRequireMention?: (params: ChannelGroupContext) => boolean | undefined;
-  /** @deprecated Core never consumed this; removed after the next release train. */
-  resolveGroupIntroHint?: (params: ChannelGroupContext) => string | undefined;
   resolveToolPolicy?: (params: ChannelGroupContext) => GroupToolPolicyConfig | undefined;
 };
 export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unknown> = {

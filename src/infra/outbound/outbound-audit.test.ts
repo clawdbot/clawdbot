@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "../../audit/message-audit-events.test-support.js";
+import type { OutboundPayloadDeliveryOutcome } from "./deliver-types.js";
 import {
   completedOutboundAuditTerminals,
   emitOutboundAuditTerminals,
+  failedOutboundAuditTerminals,
   uniformOutboundAuditTerminals,
 } from "./outbound-audit.js";
 
@@ -163,6 +165,56 @@ describe("outbound audit projection", () => {
     });
     expect(events[0]).not.toHaveProperty("reasonCode");
     expect(events[0]).not.toHaveProperty("deliveryKind");
+  });
+
+  it.each([
+    {
+      kind: "completed",
+      project: (payloadOutcomes: OutboundPayloadDeliveryOutcome[]) =>
+        completedOutboundAuditTerminals({
+          payloadCount: 1,
+          results: [],
+          payloadOutcomes,
+        }),
+    },
+    {
+      kind: "failed",
+      project: (payloadOutcomes: OutboundPayloadDeliveryOutcome[]) =>
+        failedOutboundAuditTerminals({
+          payloadCount: 1,
+          results: [],
+          payloadOutcomes,
+          failureStage: "platform_send",
+        }),
+    },
+  ])("projects recorded history consistently for $kind runs", ({ project }) => {
+    const result = { channel: "matrix" as const, messageId: "platform-1" };
+
+    expect(
+      project([
+        { index: 0, status: "suppressed", reason: "adapter_returned_no_identity" },
+        { index: 0, status: "sent", results: [result] },
+      ]),
+    ).toEqual([
+      {
+        payloadIndex: 0,
+        terminal: { outcome: "unknown", failureStage: "platform_send" },
+      },
+    ]);
+    expect(
+      project([{ index: 0, status: "sent", results: [result], deliveryKind: "media" }]),
+    ).toEqual([
+      {
+        payloadIndex: 0,
+        terminal: { outcome: "sent", results: [result], deliveryKind: "media" },
+      },
+    ]);
+    expect(project([{ index: 0, status: "suppressed", reason: "no_visible_payload" }])).toEqual([
+      {
+        payloadIndex: 0,
+        terminal: { outcome: "suppressed", reasonCode: "no_visible_payload" },
+      },
+    ]);
   });
 
   it("counts physical sends once across receipt representations and result fallbacks", () => {

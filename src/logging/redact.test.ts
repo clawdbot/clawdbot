@@ -1434,9 +1434,56 @@ describe("redactSensitiveText", () => {
     }
   });
 
+  it("masks additional GitLab token prefixes through the default fast path", () => {
+    const dashToken = (prefix: string, suffix: string): string => [prefix, suffix].join("-");
+    const repeatedDashToken = (prefix: string, length: number): string =>
+      dashToken(prefix, "A".repeat(length));
+    const legacyOauthToken = dashToken("gloas", "a".repeat(32));
+    const longHexOauthToken = dashToken("gloas", "a".repeat(80));
+    const mixedOauthToken = dashToken("gloas", `${"a".repeat(32)}Z${"b".repeat(31)}`);
+    const tokens = [
+      legacyOauthToken,
+      longHexOauthToken,
+      mixedOauthToken,
+      repeatedDashToken("gldt", 20),
+      dashToken("glcbt", `a1B2_${"A".repeat(20)}`),
+      repeatedDashToken("glptt", 40),
+      repeatedDashToken("glft", 20),
+      dashToken("glft", "a0b1-123_"),
+      repeatedDashToken("glimt", 25),
+      repeatedDashToken("glagent", 50),
+      repeatedDashToken("glwt", 20),
+      repeatedDashToken("glsoat", 20),
+      repeatedDashToken("glffct", 20),
+      dashToken("glrt", `t1_${"A".repeat(20)}`),
+      dashToken("glrt", "2CR8_eVxiioB1QmzPZwa"),
+      dashToken("glrt", "ABCdef1234567890xyzW"),
+      dashToken("glrt", `${"A".repeat(27)}.01.${"a".repeat(9)}`),
+      dashToken("glrtr", `${"A".repeat(27)}.01.${"a".repeat(9)}`),
+      `GR1348941${"A".repeat(20)}`,
+      `_gitlab_session=${"A".repeat(32)}`,
+    ];
+
+    for (const token of tokens) {
+      expect(redactSensitiveText(token, { mode: "tools" }), token).not.toContain(token);
+    }
+    expect(redactSensitiveText(mixedOauthToken, { mode: "tools" })).not.toContain(
+      mixedOauthToken.slice("gloas-".length + 32),
+    );
+    expect(redactSensitiveText(longHexOauthToken, { mode: "tools" })).not.toContain(
+      longHexOauthToken.slice("gloas-".length + 64),
+    );
+    expect(redactSensitiveText(`${legacyOauthToken}_suffix`, { mode: "tools" })).not.toContain(
+      legacyOauthToken,
+    );
+    expect(redactSensitiveText(`${longHexOauthToken}_suffix`, { mode: "tools" })).not.toContain(
+      `${longHexOauthToken.slice("gloas-".length + 64)}_suffix`,
+    );
+  });
+
   it("does not redact ordinary identifiers containing short token-prefix substrings", () => {
     const input = [
-      "npm_telegram_package_spec ask_openclaw_query_patterns team_management risk_assessment glpat-docs dapi-example sbp_short nfp_site CCIPAT_docs ATATT-example fw-tooshort fw_tooshort fpk_tooshort",
+      "npm_telegram_package_spec ask_openclaw_query_patterns team_management risk_assessment glpat-docs gloas-docs gldt-docs glcbt-docs glptt-docs glft-docs glimt-docs glagent-docs glwt-docs glsoat-docs glffct-docs glrt-docs glrtr-docs GR1348941-docs _gitlab_session=short dapi-example sbp_short nfp_site CCIPAT_docs ATATT-example fw-tooshort fw_tooshort fpk_tooshort",
       `fixturefw-${"C".repeat(40)}`,
       `fixture_fw_${"A".repeat(40)}`,
       `fixture_fpk_${"B".repeat(40)}`,

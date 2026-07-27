@@ -6,11 +6,13 @@ import { extensionForMime, mimeTypeFromFilePath } from "@openclaw/media-core/mim
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
+import type { SubsystemLogger } from "../logging/subsystem.js";
 import type { MediaFact } from "../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import { deleteMediaBuffer, saveMediaBuffer, type SavedMedia } from "../media/store.js";
+import { formatForLog } from "./ws-log.js";
 
 export type ChatAttachment = {
   type?: string;
@@ -36,7 +38,6 @@ export type OffloadedRef = {
 
 type ParsedMessageWithImages = {
   message: string;
-  messageWithoutOffloadedImageRefs: string;
   images: ChatImageContent[];
   imageOrder: PromptImageOrderEntry[];
   media: MediaFact[];
@@ -63,6 +64,30 @@ const OFFLOAD_THRESHOLD_BYTES = 2_000_000;
 const TEXT_ONLY_OFFLOAD_LIMIT = 10;
 
 const DEFAULT_CHAT_ATTACHMENT_MAX_MB = 20;
+
+export function logAttachmentFailure(
+  log: Pick<SubsystemLogger, "error">,
+  label: string,
+  err: unknown,
+): void {
+  const primary = formatUncaughtError(err);
+  const cause = err instanceof Error ? err.cause : undefined;
+  const causeText = cause === undefined ? "" : formatUncaughtError(cause);
+  log.error(label, {
+    error: !causeText || causeText === primary ? primary : `${primary}\nCaused by: ${causeText}`,
+    consoleMessage: `${label}: ${formatForLog(err)}`,
+  });
+}
+
+export function stripImageMediaMarkers(message: string, refs: readonly OffloadedRef[]): string {
+  return refs.reduce((projected, ref) => {
+    const marker = ref.mimeType.startsWith("image/") ? `\n[media attached: ${ref.mediaRef}]` : "";
+    const index = marker ? projected.lastIndexOf(marker) : -1;
+    return index < 0
+      ? projected
+      : projected.slice(0, index) + projected.slice(index + marker.length);
+  }, message);
+}
 
 export async function persistInboundImagesForTranscript(params: {
   images: ChatImageContent[];
@@ -325,7 +350,6 @@ export async function parseMessageWithAttachments(
   if (!attachments || attachments.length === 0) {
     return {
       message,
-      messageWithoutOffloadedImageRefs: message,
       images: [],
       imageOrder: [],
       media: [],
@@ -337,7 +361,6 @@ export async function parseMessageWithAttachments(
   const imageOrder: PromptImageOrderEntry[] = [];
   const offloadedRefs: OffloadedRef[] = [];
   let updatedMessage = message;
-  let messageWithoutOffloadedImageRefs = message;
   let textOnlyImageOffloadCount = 0;
   const savedMediaIds: string[] = [];
 
@@ -431,8 +454,6 @@ export async function parseMessageWithAttachments(
             `${TEXT_ONLY_OFFLOAD_LIMIT} was reached`,
         );
         updatedMessage += "\n[image attachment omitted: text-only attachment limit reached]";
-        messageWithoutOffloadedImageRefs +=
-          "\n[image attachment omitted: text-only attachment limit reached]";
         continue;
       }
 
@@ -469,11 +490,7 @@ export async function parseMessageWithAttachments(
       savedMediaIds.push(savedMedia.id);
 
       const mediaRef = `media://inbound/${savedMedia.id}`;
-      const mediaLine = `\n[media attached: ${mediaRef}]`;
-      updatedMessage += mediaLine;
-      if (!isImage) {
-        messageWithoutOffloadedImageRefs += mediaLine;
-      }
+      updatedMessage += `\n[media attached: ${mediaRef}]`;
       log?.info?.(
         shouldForceImageOffload && isImage
           ? `[Gateway] Offloaded image for text-only model. Saved: ${mediaRef}`
@@ -504,10 +521,6 @@ export async function parseMessageWithAttachments(
 
   return {
     message: updatedMessage !== message ? updatedMessage.trimEnd() : message,
-    messageWithoutOffloadedImageRefs:
-      messageWithoutOffloadedImageRefs !== message
-        ? messageWithoutOffloadedImageRefs.trimEnd()
-        : message,
     images,
     imageOrder,
     media: offloadedRefs.map((ref) => ({

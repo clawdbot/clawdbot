@@ -18,6 +18,7 @@ import {
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCopilotAttempt } from "./attempt.js";
 import type { CopilotClientPool } from "./runtime.js";
@@ -43,6 +44,7 @@ const gatewayQuestionMock = vi.hoisted(() => ({
   waiters: new Map<string, (value: unknown) => void>(),
   cancelError: undefined as Error | undefined,
   warn: vi.fn(),
+  setActiveEmbeddedRun: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
@@ -80,6 +82,12 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
         return result;
       }
       return await actual.callGatewayTool(...args);
+    },
+    setActiveEmbeddedRun: (
+      ...args: Parameters<typeof actual.setActiveEmbeddedRun>
+    ): ReturnType<typeof actual.setActiveEmbeddedRun> => {
+      gatewayQuestionMock.setActiveEmbeddedRun(...args);
+      return actual.setActiveEmbeddedRun(...args);
     },
   };
 });
@@ -909,12 +917,14 @@ describe("runCopilotAttempt", () => {
   });
 
   it("hydrates offloaded prompt images before creating SDK blob attachments", async () => {
-    const stateDir = await fsp.mkdtemp(path.join(tmpdir(), "copilot-offloaded-image-"));
-    const inboundDir = path.join(stateDir, "media", "inbound");
+    const openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "copilot-offloaded-image-",
+    });
+    const inboundDir = openClawState.statePath("media", "inbound");
     const mediaId = "telegram-photo.png";
     await fsp.mkdir(inboundDir, { recursive: true });
     await fsp.writeFile(path.join(inboundDir, mediaId), Buffer.from(TINY_PNG_BASE64, "base64"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const sdk = makeFakeSdk();
     const pool = makeFakePool(sdk);
 
@@ -953,8 +963,7 @@ describe("runCopilotAttempt", () => {
         },
       ]);
     } finally {
-      vi.unstubAllEnvs();
-      await fsp.rm(stateDir, { recursive: true, force: true });
+      await openClawState.cleanup();
     }
   });
 
@@ -1361,14 +1370,12 @@ describe("runCopilotAttempt", () => {
   });
 
   it("active-run abort path marks the attempt as externally aborted", async () => {
+    gatewayQuestionMock.setActiveEmbeddedRun.mockClear();
     const sendDeferred = createDeferred<SessionEventShape | undefined>();
     const sessionCreated = createDeferred<FakeSession>();
     const sdk = makeFakeSdk({
       onCreateSession: (session) => {
         session.sendAndWait.mockReturnValue(sendDeferred.promise);
-        session.abort.mockImplementationOnce(async () => {
-          sendDeferred.resolve(undefined);
-        });
         sessionCreated.resolve(session);
       },
     });
@@ -1381,12 +1388,21 @@ describe("runCopilotAttempt", () => {
     });
     const session = await sessionCreated.promise;
     await vi.waitFor(() => expect(session.sendAndWait).toHaveBeenCalledTimes(1));
+    const activeRunHandle = expectDefined(
+      gatewayQuestionMock.setActiveEmbeddedRun.mock.calls.findLast(
+        ([sessionId]) => sessionId === "session-1",
+      )?.[1] as { isAborted?: () => boolean } | undefined,
+      "active Copilot run handle",
+    );
+    expect(activeRunHandle.isAborted?.()).toBe(false);
 
     gatewayQuestionMock.cancelError = new Error("gateway unavailable");
     expect(abortAgentHarnessRun("session-1")).toBe(true);
+    expect(activeRunHandle.isAborted?.()).toBe(true);
+    expect(session.abort).toHaveBeenCalledTimes(1);
+    sendDeferred.resolve(undefined);
     const result = await runPromise;
 
-    expect(session.abort).toHaveBeenCalledTimes(1);
     expect(result.terminal).toMatchObject({ kind: "aborted", source: "external" });
     await vi.waitFor(() =>
       expect(gatewayQuestionMock.warn).toHaveBeenCalledWith(

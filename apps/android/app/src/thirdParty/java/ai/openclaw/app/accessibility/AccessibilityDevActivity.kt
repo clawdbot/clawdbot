@@ -151,7 +151,7 @@ private fun AccessibilityDevScreen(
     lastResult =
       ActionResult(
         ActionOutcomeCode.Completed,
-        nativeString("Observed \$count nodes", observed.nodes.size),
+        nativeString("Observed nodes: \$count", observed.nodes.size),
       )
     refreshForegroundPackage()
   }
@@ -377,8 +377,7 @@ private fun SelectedNodeControls(
       if (showTargetMismatchNote) {
         Text(
           nativeString(
-            "Node actions run only when the target app is foreground (validated via the remote path). " +
-              "Global actions and same-app actions work here.",
+            "Node actions run only when the target app is foreground (validated via the remote path). Global actions and same-app actions work here.",
           ),
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,

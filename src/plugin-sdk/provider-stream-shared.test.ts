@@ -93,8 +93,9 @@ function createByteOverCapZeroArgumentXmlCall(name: string): string {
   return `<function=${name}>${"\u00a0".repeat(128_001)}</function>`;
 }
 
-async function collectPlainTextToolCallCompatEvents(events: unknown[]): Promise<StreamEvent[]> {
-  const baseStreamFn: StreamFn = () => createEventStream(events);
+async function collectPlainTextToolCallCompatEventsFromStream(
+  baseStreamFn: StreamFn,
+): Promise<StreamEvent[]> {
   const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
   const stream = await resolveStream(
     wrapped({} as never, { tools: [{ name: "read" }] } as never, {}),
@@ -104,6 +105,10 @@ async function collectPlainTextToolCallCompatEvents(events: unknown[]): Promise<
     output.push(event as StreamEvent);
   }
   return output;
+}
+
+async function collectPlainTextToolCallCompatEvents(events: unknown[]): Promise<StreamEvent[]> {
+  return collectPlainTextToolCallCompatEventsFromStream(() => createEventStream(events));
 }
 
 async function resolveStream(stream: ReturnType<StreamFn>) {
@@ -383,16 +388,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
+    const events = await collectPlainTextToolCallCompatEventsFromStream(baseStreamFn);
 
     expect(events.map((event) => (event as { type?: string }).type)).toEqual([
       "start",
@@ -426,16 +422,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
+    const events = await collectPlainTextToolCallCompatEventsFromStream(baseStreamFn);
 
     expect(events.map((event) => (event as { type?: string }).type)).toEqual(["done"]);
     const done = events.at(-1) as {
@@ -459,16 +446,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
+    const events = await collectPlainTextToolCallCompatEventsFromStream(baseStreamFn);
 
     expect(events.map((event) => (event as { type?: string }).type)).toEqual([
       "text_delta",
@@ -778,57 +756,29 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     expect(requireRecord(events[2], "second text").delta).toBe(secondText);
   });
 
-  it("keeps CR-separated bracketed tool calls buffered for conversion", async () => {
+  it.each([
+    {
+      name: "CR-separated bracketed tool calls",
+      rawToolText: '[read]\r{"path":"src/index.ts"}\r[END_TOOL_REQUEST]',
+    },
+    {
+      name: "bracketed XML parameter tool calls",
+      rawToolText: [
+        "[tool:read]",
+        "<parameter=path>",
+        "src/index.ts",
+        "</parameter>",
+        "</function>",
+      ].join("\n"),
+    },
+  ])("keeps $name buffered for conversion", async ({ name, rawToolText }) => {
     const { source, stream } = createControlledPlainTextToolCallCompatStream();
     const iterator = (await resolveStream(stream))[Symbol.asyncIterator]();
 
     try {
       source.push({ type: "start", partial: { content: [] } } as never);
       expect((await nextEvent(iterator, "start")).type).toBe("start");
-
-      source.push({
-        type: "text_delta",
-        contentIndex: 0,
-        delta: '[read]\r{"path":"src/index.ts"}\r[END_TOOL_REQUEST]',
-      } as never);
-      source.push({
-        type: "done",
-        reason: "stop",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: '[read]\r{"path":"src/index.ts"}\r[END_TOOL_REQUEST]' }],
-          stopReason: "stop",
-        },
-      } as never);
-
-      const event = await nextEvent(iterator, "converted CR tool call");
-      expect(event.type).toBe("toolcall_start");
-    } finally {
-      source.end();
-      await iterator.return?.();
-    }
-  });
-
-  it("keeps bracketed XML parameter tool calls buffered for conversion", async () => {
-    const { source, stream } = createControlledPlainTextToolCallCompatStream();
-    const iterator = (await resolveStream(stream))[Symbol.asyncIterator]();
-    const rawToolText = [
-      "[tool:read]",
-      "<parameter=path>",
-      "src/index.ts",
-      "</parameter>",
-      "</function>",
-    ].join("\n");
-
-    try {
-      source.push({ type: "start", partial: { content: [] } } as never);
-      expect((await nextEvent(iterator, "start")).type).toBe("start");
-
-      source.push({
-        type: "text_delta",
-        contentIndex: 0,
-        delta: rawToolText,
-      } as never);
+      source.push({ type: "text_delta", contentIndex: 0, delta: rawToolText } as never);
       source.push({
         type: "done",
         reason: "stop",
@@ -839,8 +789,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
         },
       } as never);
 
-      const event = await nextEvent(iterator, "converted bracketed XML tool call");
-      expect(event.type).toBe("toolcall_start");
+      expect((await nextEvent(iterator, `converted ${name}`)).type).toBe("toolcall_start");
     } finally {
       source.end();
       await iterator.return?.();
@@ -919,16 +868,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
+    const events = await collectPlainTextToolCallCompatEventsFromStream(baseStreamFn);
 
     expect(events.map((event) => (event as { type?: string }).type)).toEqual([
       "start",
@@ -968,16 +908,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
+    const events = await collectPlainTextToolCallCompatEventsFromStream(baseStreamFn);
 
     expect(events.map((event) => requireRecord(event, "event").type)).toEqual([
       "text_delta",
@@ -993,60 +924,54 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     expect(JSON.stringify(events)).not.toContain(marker);
   });
 
-  it("keeps a byte-over-cap visible suffix at its streamed content index in done messages", async () => {
-    const marker = "<function=read>";
-    const visibleText = "Visible answer";
-    const firstChunk = `${marker}${"\u00a0".repeat(100_000)}`;
-    const secondChunk = `${"\u00a0".repeat(28_001)}</function>\n${visibleText}`;
-    const content = [
-      { type: "text", text: firstChunk },
-      { type: "thinking", thinking: "checking" },
-      { type: "text", text: secondChunk },
-    ];
-    const baseStreamFn: StreamFn = () =>
-      createEventStream([
-        { type: "text_delta", contentIndex: 0, delta: firstChunk },
-        {
-          type: "text_delta",
-          contentIndex: 2,
-          delta: secondChunk,
-          partial: { role: "assistant", content },
-        },
-        {
-          type: "done",
-          reason: "stop",
-          message: { role: "assistant", content, stopReason: "stop" },
-        },
+  it.each(["first pass", "repeated pass"])(
+    "keeps a byte-over-cap visible suffix at its streamed content index in done messages (%s)",
+    async () => {
+      const marker = "<function=read>";
+      const visibleText = "Visible answer";
+      const firstChunk = `${marker}${"\u00a0".repeat(100_000)}`;
+      const secondChunk = `${"\u00a0".repeat(28_001)}</function>\n${visibleText}`;
+      const content = [
+        { type: "text", text: firstChunk },
+        { type: "thinking", thinking: "checking" },
+        { type: "text", text: secondChunk },
+      ];
+      const baseStreamFn: StreamFn = () =>
+        createEventStream([
+          { type: "text_delta", contentIndex: 0, delta: firstChunk },
+          {
+            type: "text_delta",
+            contentIndex: 2,
+            delta: secondChunk,
+            partial: { role: "assistant", content },
+          },
+          {
+            type: "done",
+            reason: "stop",
+            message: { role: "assistant", content, stopReason: "stop" },
+          },
+        ]);
+      const events = await collectPlainTextToolCallCompatEventsFromStream(baseStreamFn);
+
+      expect(events.map((event) => requireRecord(event, "event").type)).toEqual([
+        "text_delta",
+        "done",
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
-
-    expect(events.map((event) => requireRecord(event, "event").type)).toEqual([
-      "text_delta",
-      "done",
-    ]);
-    const expectedContent = [
-      { type: "text", text: "" },
-      { type: "thinking", thinking: "checking" },
-      { type: "text", text: visibleText },
-    ];
-    expect(requireRecord(events[0], "text event")).toMatchObject({
-      delta: visibleText,
-      partial: { content: expectedContent },
-    });
-    expect(requireRecord(events[1], "done event").message).toMatchObject({
-      content: expectedContent,
-    });
-    expect(JSON.stringify(events)).not.toContain(marker);
-  });
+      const expectedContent = [
+        { type: "text", text: "" },
+        { type: "thinking", thinking: "checking" },
+        { type: "text", text: visibleText },
+      ];
+      expect(requireRecord(events[0], "text event")).toMatchObject({
+        delta: visibleText,
+        partial: { content: expectedContent },
+      });
+      expect(requireRecord(events[1], "done event").message).toMatchObject({
+        content: expectedContent,
+      });
+      expect(JSON.stringify(events)).not.toContain(marker);
+    },
+  );
 
   it("scrubs earlier partial blocks when a later block completes a byte-over-cap XML prefix", async () => {
     const marker = "<function=read>";
@@ -1069,16 +994,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
+    const events = await collectPlainTextToolCallCompatEventsFromStream(baseStreamFn);
 
     expect(events.map((event) => requireRecord(event, "event").type)).toEqual(["text_delta"]);
     expect(requireRecord(events[0], "text event")).toMatchObject({
@@ -1089,61 +1005,6 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           { type: "text", text: visibleText },
         ],
       },
-    });
-    expect(JSON.stringify(events)).not.toContain(marker);
-  });
-
-  it("keeps a byte-over-cap visible suffix at its streamed content index in done messages", async () => {
-    const marker = "<function=read>";
-    const visibleText = "Visible answer";
-    const firstChunk = `${marker}${"\u00a0".repeat(100_000)}`;
-    const secondChunk = `${"\u00a0".repeat(28_001)}</function>\n${visibleText}`;
-    const content = [
-      { type: "text", text: firstChunk },
-      { type: "thinking", thinking: "checking" },
-      { type: "text", text: secondChunk },
-    ];
-    const baseStreamFn: StreamFn = () =>
-      createEventStream([
-        { type: "text_delta", contentIndex: 0, delta: firstChunk },
-        {
-          type: "text_delta",
-          contentIndex: 2,
-          delta: secondChunk,
-          partial: { role: "assistant", content },
-        },
-        {
-          type: "done",
-          reason: "stop",
-          message: { role: "assistant", content, stopReason: "stop" },
-        },
-      ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
-
-    expect(events.map((event) => requireRecord(event, "event").type)).toEqual([
-      "text_delta",
-      "done",
-    ]);
-    const expectedContent = [
-      { type: "text", text: "" },
-      { type: "thinking", thinking: "checking" },
-      { type: "text", text: visibleText },
-    ];
-    expect(requireRecord(events[0], "text event")).toMatchObject({
-      delta: visibleText,
-      partial: { content: expectedContent },
-    });
-    expect(requireRecord(events[1], "done event").message).toMatchObject({
-      content: expectedContent,
     });
     expect(JSON.stringify(events)).not.toContain(marker);
   });
@@ -1166,16 +1027,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           error: { content, errorMessage: "stream failed" },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
+    const events = await collectPlainTextToolCallCompatEventsFromStream(baseStreamFn);
 
     expect(events.map((event) => requireRecord(event, "event").type)).toEqual(["error"]);
     const errorEvent = requireRecord(events[0], "error event");
@@ -1216,16 +1068,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
+    const events = await collectPlainTextToolCallCompatEventsFromStream(baseStreamFn);
 
     expect(events.map((event) => (event as { type?: string }).type)).toEqual(["error"]);
     const errorEvent = requireRecord(events[0], "error event");
@@ -1241,16 +1084,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     const rawToolText = createByteOverCapZeroArgumentXmlCall("read");
     const baseStreamFn: StreamFn = () =>
       createEventStream([{ type: "text_delta", contentIndex: 0, delta: rawToolText }]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
+    const events = await collectPlainTextToolCallCompatEventsFromStream(baseStreamFn);
 
     expect(events).toEqual([]);
   });
@@ -1445,16 +1279,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
+    const events = await collectPlainTextToolCallCompatEventsFromStream(baseStreamFn);
 
     expect(events.map((event) => (event as { type?: string }).type)).toEqual(["error"]);
     const errorEvent = requireRecord(events[0], "error event");
@@ -1485,16 +1310,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
+    const events = await collectPlainTextToolCallCompatEventsFromStream(baseStreamFn);
 
     expect(events.map((event) => (event as { type?: string }).type)).toEqual(["done"]);
     const doneEvent = requireRecord(events[0], "done event");
@@ -1549,480 +1365,126 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     expect(JSON.stringify(result)).not.toContain("[tool:read]");
   });
 
-  it("scrubs split over-cap bracketed XML parameter text from done messages", async () => {
-    const rawToolTextParts = [
-      "[tool:read]\n<parameter=path>",
-      ["x".repeat(256_001), "</parameter>", "</function>"].join("\n"),
-    ];
-    const baseStreamFn: StreamFn = () =>
-      createEventStream([
-        {
-          type: "done",
-          reason: "stop",
-          message: {
-            role: "assistant",
-            content: rawToolTextParts.map((text) => ({ type: "text", text })),
-            stopReason: "stop",
-          },
-        },
-      ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
+  const overCapPath = "x".repeat(256_001);
+  const overCapXml = ["[tool:read]", "<parameter=path>", overCapPath].join("\n");
+  const closingXml = ["</parameter>", "</function>"].join("\n");
+  const visibleAfterTool = "Visible text after the tool-looking blocks.";
+  const textBlock = (text: string) => ({ type: "text", text });
+  const thinkingBlock = { type: "thinking", thinking: "Checking path." };
+  const completeTool = '[tool:read] {"path":"src/index.ts"}';
+  const unallowedTool = '[tool:write] {"path":"keep-visible"}';
 
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
+  it.each([
+    {
+      name: "scrubs split over-cap bracketed XML parameter text from done messages",
+      content: [
+        textBlock("[tool:read]\n<parameter=path>"),
+        textBlock([overCapPath, closingXml].join("\n")),
+      ],
+      expected: [],
+      absent: ["[tool:read]", "</parameter>"],
+    },
+    {
+      name: "scrubs split over-cap bracketed XML tails before later visible text",
+      content: [
+        textBlock("[tool:read]\n<parameter=path>"),
+        textBlock(overCapPath),
+        textBlock(closingXml),
+        textBlock(visibleAfterTool),
+      ],
+      expected: [textBlock(visibleAfterTool)],
+      absent: ["[tool:read]", "</parameter>"],
+    },
+    {
+      name: "scrubs split over-cap bracketed XML around non-text blocks",
+      content: [
+        textBlock("[tool:read]\n<parameter=path>"),
+        thinkingBlock,
+        textBlock([overCapPath, closingXml].join("\n")),
+      ],
+      expected: [thinkingBlock],
+      absent: ["[tool:read]", "</parameter>"],
+    },
+    {
+      name: "scrubs closing tails after a single over-cap bracketed XML block",
+      content: [textBlock(overCapXml), textBlock(closingXml), textBlock(visibleAfterTool)],
+      expected: [textBlock(visibleAfterTool)],
+      absent: ["[tool:read]", "</parameter>"],
+    },
+    {
+      name: "scrubs closing tails after a single over-cap bracketed XML block without visible text",
+      content: [textBlock(overCapXml), textBlock(closingXml)],
+      expected: [],
+      absent: ["[tool:read]", "</parameter>"],
+    },
+    {
+      name: "scrubs over-cap buffers even when later text blocks contain complete tool calls",
+      content: [textBlock(overCapXml), textBlock(completeTool)],
+      expected: [],
+      absent: ["[tool:read]", "src/index.ts"],
+    },
+    {
+      name: "scrubs multiple incomplete over-cap tool blocks from done messages",
+      content: [
+        textBlock(overCapXml),
+        textBlock(["[tool:read]", "<parameter=path>", "y".repeat(256_001)].join("\n")),
+        textBlock(visibleAfterTool),
+      ],
+      expected: [],
+      absent: ["[tool:read]", overCapPath, "y".repeat(256_001)],
+    },
+    {
+      name: "scrubs done-message over-cap blocks after visible text",
+      content: [textBlock("Visible intro."), textBlock(overCapXml)],
+      expected: [textBlock("Visible intro.")],
+      absent: ["[tool:read]"],
+    },
+    {
+      name: "scrubs split done-message over-cap blocks after visible text",
+      content: [
+        textBlock("Visible intro."),
+        textBlock("[tool:read]\n<parameter=path>"),
+        textBlock(overCapPath),
+        textBlock(closingXml),
+      ],
+      expected: [textBlock("Visible intro.")],
+      absent: ["[tool:read]", "</parameter>"],
+    },
+    {
+      name: "scrubs small complete tool calls after over-cap visible text",
+      content: [textBlock(`Visible intro ${overCapPath}`), textBlock(completeTool)],
+      expected: [textBlock(`Visible intro ${overCapPath}`)],
+      absent: [completeTool],
+    },
+    {
+      name: "does not leak over-cap buffers when stripped later tool blocks are followed by text",
+      content: [textBlock(overCapXml), textBlock(completeTool), textBlock(visibleAfterTool)],
+      expected: [textBlock(visibleAfterTool)],
+      absent: ["[tool:read]", "src/index.ts"],
+    },
+    {
+      name: "preserves unallowed tool-looking text while scrubbing an over-cap allowed tool block",
+      content: [textBlock([overCapXml, closingXml].join("\n")), textBlock(unallowedTool)],
+      expected: [textBlock(unallowedTool)],
+      absent: ["[tool:read]"],
+    },
+  ])("$name", async ({ content, expected, absent }) => {
+    const events = await collectPlainTextToolCallCompatEvents([
+      {
+        type: "done",
+        reason: "stop",
+        message: { role: "assistant", content, stopReason: "stop" },
+      },
+    ]);
 
-    const doneEvent = requireRecord(events[0], "done event");
-    expect(doneEvent.reason).toBe("stop");
-    expect(doneEvent.message).toMatchObject({
-      role: "assistant",
-      content: [],
-      stopReason: "stop",
+    expect(events.map((event) => event.type)).toEqual(["done"]);
+    expect(requireRecord(events[0], "done event")).toMatchObject({
+      reason: "stop",
+      message: { role: "assistant", content: expected, stopReason: "stop" },
     });
-    expect(JSON.stringify(events)).not.toContain("[tool:read]");
-    expect(JSON.stringify(events)).not.toContain("</parameter>");
-  });
-
-  it("scrubs split over-cap bracketed XML tails before later visible text", async () => {
-    const rawToolTextParts = [
-      "[tool:read]\n<parameter=path>",
-      "x".repeat(256_001),
-      ["</parameter>", "</function>"].join("\n"),
-    ];
-    const visibleText = "Visible text after the tool-looking blocks.";
-    const baseStreamFn: StreamFn = () =>
-      createEventStream([
-        {
-          type: "done",
-          reason: "stop",
-          message: {
-            role: "assistant",
-            content: [
-              ...rawToolTextParts.map((text) => ({ type: "text", text })),
-              { type: "text", text: visibleText },
-            ],
-            stopReason: "stop",
-          },
-        },
-      ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
+    for (const marker of absent) {
+      expect(JSON.stringify(events)).not.toContain(marker);
     }
-
-    expect(requireRecord(events[0], "done event").message).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: visibleText }],
-      stopReason: "stop",
-    });
-    expect(JSON.stringify(events)).not.toContain("[tool:read]");
-    expect(JSON.stringify(events)).not.toContain("</parameter>");
-  });
-
-  it("scrubs split over-cap bracketed XML around non-text blocks", async () => {
-    const baseStreamFn: StreamFn = () =>
-      createEventStream([
-        {
-          type: "done",
-          reason: "stop",
-          message: {
-            role: "assistant",
-            content: [
-              { type: "text", text: "[tool:read]\n<parameter=path>" },
-              { type: "thinking", thinking: "Checking path." },
-              {
-                type: "text",
-                text: ["x".repeat(256_001), "</parameter>", "</function>"].join("\n"),
-              },
-            ],
-            stopReason: "stop",
-          },
-        },
-      ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
-
-    expect(requireRecord(events[0], "done event").message).toMatchObject({
-      role: "assistant",
-      content: [{ type: "thinking", thinking: "Checking path." }],
-      stopReason: "stop",
-    });
-    expect(JSON.stringify(events)).not.toContain("[tool:read]");
-    expect(JSON.stringify(events)).not.toContain("</parameter>");
-  });
-
-  it("scrubs closing tails after a single over-cap bracketed XML block", async () => {
-    const rawToolTextParts = [
-      ["[tool:read]", "<parameter=path>", "x".repeat(256_001)].join("\n"),
-      ["</parameter>", "</function>"].join("\n"),
-    ];
-    const visibleText = "Visible text after the tool-looking blocks.";
-    const baseStreamFn: StreamFn = () =>
-      createEventStream([
-        {
-          type: "done",
-          reason: "stop",
-          message: {
-            role: "assistant",
-            content: [
-              ...rawToolTextParts.map((text) => ({ type: "text", text })),
-              { type: "text", text: visibleText },
-            ],
-            stopReason: "stop",
-          },
-        },
-      ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
-
-    expect(requireRecord(events[0], "done event").message).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: visibleText }],
-      stopReason: "stop",
-    });
-    expect(JSON.stringify(events)).not.toContain("[tool:read]");
-    expect(JSON.stringify(events)).not.toContain("</parameter>");
-  });
-
-  it("scrubs closing tails after a single over-cap bracketed XML block without visible text", async () => {
-    const rawToolTextParts = [
-      ["[tool:read]", "<parameter=path>", "x".repeat(256_001)].join("\n"),
-      ["</parameter>", "</function>"].join("\n"),
-    ];
-    const baseStreamFn: StreamFn = () =>
-      createEventStream([
-        {
-          type: "done",
-          reason: "stop",
-          message: {
-            role: "assistant",
-            content: rawToolTextParts.map((text) => ({ type: "text", text })),
-            stopReason: "stop",
-          },
-        },
-      ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
-
-    expect(requireRecord(events[0], "done event").message).toMatchObject({
-      role: "assistant",
-      content: [],
-      stopReason: "stop",
-    });
-    expect(JSON.stringify(events)).not.toContain("[tool:read]");
-    expect(JSON.stringify(events)).not.toContain("</parameter>");
-  });
-
-  it("scrubs over-cap buffers even when later text blocks contain complete tool calls", async () => {
-    const incompleteOverCapTool = ["[tool:read]", "<parameter=path>", "x".repeat(256_001)].join(
-      "\n",
-    );
-    const completeTool = '[tool:read] {"path":"src/index.ts"}';
-    const baseStreamFn: StreamFn = () =>
-      createEventStream([
-        {
-          type: "done",
-          reason: "stop",
-          message: {
-            role: "assistant",
-            content: [
-              { type: "text", text: incompleteOverCapTool },
-              { type: "text", text: completeTool },
-            ],
-            stopReason: "stop",
-          },
-        },
-      ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
-
-    expect(requireRecord(events[0], "done event").message).toMatchObject({
-      role: "assistant",
-      content: [],
-      stopReason: "stop",
-    });
-    expect(JSON.stringify(events)).not.toContain("[tool:read]");
-    expect(JSON.stringify(events)).not.toContain("src/index.ts");
-  });
-
-  it("scrubs multiple incomplete over-cap tool blocks from done messages", async () => {
-    const firstOverCapTool = ["[tool:read]", "<parameter=path>", "x".repeat(256_001)].join("\n");
-    const secondOverCapTool = ["[tool:read]", "<parameter=path>", "y".repeat(256_001)].join("\n");
-    const visibleText = "Visible text after the tool-looking blocks.";
-    const baseStreamFn: StreamFn = () =>
-      createEventStream([
-        {
-          type: "done",
-          reason: "stop",
-          message: {
-            role: "assistant",
-            content: [
-              { type: "text", text: firstOverCapTool },
-              { type: "text", text: secondOverCapTool },
-              { type: "text", text: visibleText },
-            ],
-            stopReason: "stop",
-          },
-        },
-      ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
-
-    expect(requireRecord(events[0], "done event").message).toMatchObject({
-      role: "assistant",
-      content: [],
-      stopReason: "stop",
-    });
-    expect(JSON.stringify(events)).not.toContain("[tool:read]");
-    expect(JSON.stringify(events)).not.toContain("x".repeat(256_001));
-    expect(JSON.stringify(events)).not.toContain("y".repeat(256_001));
-  });
-
-  it("scrubs done-message over-cap blocks after visible text", async () => {
-    const intro = "Visible intro.";
-    const incompleteOverCapTool = ["[tool:read]", "<parameter=path>", "x".repeat(256_001)].join(
-      "\n",
-    );
-    const baseStreamFn: StreamFn = () =>
-      createEventStream([
-        {
-          type: "done",
-          reason: "stop",
-          message: {
-            role: "assistant",
-            content: [
-              { type: "text", text: intro },
-              { type: "text", text: incompleteOverCapTool },
-            ],
-            stopReason: "stop",
-          },
-        },
-      ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
-
-    expect(requireRecord(events[0], "done event").message).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: intro }],
-      stopReason: "stop",
-    });
-    expect(JSON.stringify(events)).not.toContain("[tool:read]");
-  });
-
-  it("scrubs split done-message over-cap blocks after visible text", async () => {
-    const intro = "Visible intro.";
-    const baseStreamFn: StreamFn = () =>
-      createEventStream([
-        {
-          type: "done",
-          reason: "stop",
-          message: {
-            role: "assistant",
-            content: [
-              { type: "text", text: intro },
-              { type: "text", text: "[tool:read]\n<parameter=path>" },
-              { type: "text", text: "x".repeat(256_001) },
-              { type: "text", text: ["</parameter>", "</function>"].join("\n") },
-            ],
-            stopReason: "stop",
-          },
-        },
-      ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
-
-    expect(requireRecord(events[0], "done event").message).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: intro }],
-      stopReason: "stop",
-    });
-    expect(JSON.stringify(events)).not.toContain("[tool:read]");
-    expect(JSON.stringify(events)).not.toContain("</parameter>");
-  });
-
-  it("scrubs small complete tool calls after over-cap visible text", async () => {
-    const visibleText = `Visible intro ${"x".repeat(256_001)}`;
-    const toolText = '[tool:read] {"path":"src/index.ts"}';
-    const baseStreamFn: StreamFn = () =>
-      createEventStream([
-        {
-          type: "done",
-          reason: "stop",
-          message: {
-            role: "assistant",
-            content: [
-              { type: "text", text: visibleText },
-              { type: "text", text: toolText },
-            ],
-            stopReason: "stop",
-          },
-        },
-      ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
-
-    expect(events.map((event) => (event as { type?: string }).type)).toEqual(["done"]);
-    expect(requireRecord(events[0], "done event").message).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: visibleText }],
-      stopReason: "stop",
-    });
-    expect(JSON.stringify(events)).not.toContain(toolText);
-  });
-
-  it("does not leak over-cap buffers when stripped later tool blocks are followed by text", async () => {
-    const incompleteOverCapTool = ["[tool:read]", "<parameter=path>", "x".repeat(256_001)].join(
-      "\n",
-    );
-    const completeTool = '[tool:read] {"path":"src/index.ts"}';
-    const baseStreamFn: StreamFn = () =>
-      createEventStream([
-        {
-          type: "done",
-          reason: "stop",
-          message: {
-            role: "assistant",
-            content: [
-              { type: "text", text: incompleteOverCapTool },
-              { type: "text", text: completeTool },
-              { type: "text", text: "Visible text after the tool-looking blocks." },
-            ],
-            stopReason: "stop",
-          },
-        },
-      ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
-
-    expect(JSON.stringify(events)).not.toContain("[tool:read]");
-    expect(JSON.stringify(events)).not.toContain("src/index.ts");
-    expect(requireRecord(events[0], "done event").message).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "Visible text after the tool-looking blocks." }],
-      stopReason: "stop",
-    });
-  });
-
-  it("preserves unallowed tool-looking text while scrubbing an over-cap allowed tool block", async () => {
-    const allowedOverCapTool = [
-      "[tool:read]",
-      "<parameter=path>",
-      "x".repeat(256_001),
-      "</parameter>",
-      "</function>",
-    ].join("\n");
-    const unallowedToolText = '[tool:write] {"path":"keep-visible"}';
-    const baseStreamFn: StreamFn = () =>
-      createEventStream([
-        {
-          type: "done",
-          reason: "stop",
-          message: {
-            role: "assistant",
-            content: [
-              { type: "text", text: allowedOverCapTool },
-              { type: "text", text: unallowedToolText },
-            ],
-            stopReason: "stop",
-          },
-        },
-      ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
-
-    expect(JSON.stringify(events)).toContain("[tool:write]");
-    expect(JSON.stringify(events)).not.toContain("[tool:read]");
   });
 
   it("flushes over-cap text for closed tool names that only prefix-match configured tools", async () => {
@@ -2079,16 +1541,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
+    const events = await collectPlainTextToolCallCompatEventsFromStream(baseStreamFn);
 
     expect(events.map((event) => (event as { type?: string }).type)).toEqual([
       "text_delta",
@@ -2162,16 +1615,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
+    const events = await collectPlainTextToolCallCompatEventsFromStream(baseStreamFn);
 
     expect(events.map((event) => requireRecord(event, "event").type)).toEqual([
       "text_delta",
@@ -2200,16 +1644,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
+    const events = await collectPlainTextToolCallCompatEventsFromStream(baseStreamFn);
 
     expect(events.map((event) => (event as { type?: string }).type)).toEqual([
       "text_delta",
@@ -2246,16 +1681,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
+    const events = await collectPlainTextToolCallCompatEventsFromStream(baseStreamFn);
 
     expect(events.map((event) => (event as { type?: string }).type)).toEqual([
       "text_delta",
@@ -2288,16 +1714,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
+    const events = await collectPlainTextToolCallCompatEventsFromStream(baseStreamFn);
 
     expect(String(requireRecord(events[0], "text event").delta)).toBe(visibleSuffix);
     expect(JSON.stringify(events)).not.toContain("</parameter>");
@@ -2325,16 +1742,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
+    const events = await collectPlainTextToolCallCompatEventsFromStream(baseStreamFn);
 
     expect(events.map((event) => (event as { type?: string }).type)).toEqual([
       "text_delta",
@@ -2372,16 +1780,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
+    const events = await collectPlainTextToolCallCompatEventsFromStream(baseStreamFn);
 
     expect(events.map((event) => (event as { type?: string }).type)).toEqual([
       "text_delta",
@@ -2410,16 +1809,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
+    const events = await collectPlainTextToolCallCompatEventsFromStream(baseStreamFn);
 
     expect(events.map((event) => requireRecord(event, "event").type)).toEqual([
       "text_delta",
@@ -2456,16 +1846,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
+    const events = await collectPlainTextToolCallCompatEventsFromStream(baseStreamFn);
 
     expect(events.map((event) => (event as { type?: string }).type)).toEqual([
       "text_delta",
@@ -2497,16 +1878,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
+    const events = await collectPlainTextToolCallCompatEventsFromStream(baseStreamFn);
 
     expect(events.map((event) => (event as { type?: string }).type)).toEqual([
       "text_delta",
@@ -2537,16 +1909,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
+    const events = await collectPlainTextToolCallCompatEventsFromStream(baseStreamFn);
 
     expect(events.map((event) => (event as { type?: string }).type)).toEqual([
       "text_delta",
@@ -2614,16 +1977,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
+    const events = await collectPlainTextToolCallCompatEventsFromStream(baseStreamFn);
 
     const secondEvent = requireRecord(events[1], "second text event");
     expect(events.map((event) => (event as { type?: string }).type)).toEqual([
@@ -2660,16 +2014,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
+    const events = await collectPlainTextToolCallCompatEventsFromStream(baseStreamFn);
 
     const doneMessage = requireRecord(
       requireRecord(events.at(-1), "done event").message,
@@ -2702,16 +2047,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
-    const events: unknown[] = [];
-
-    for await (const event of wrapped(
-      {} as never,
-      { tools: [{ name: "read" }] } as never,
-      {},
-    ) as AsyncIterable<unknown>) {
-      events.push(event);
-    }
+    const events = await collectPlainTextToolCallCompatEventsFromStream(baseStreamFn);
 
     const doneMessage = requireRecord(
       requireRecord(events.at(-1), "done event").message,
@@ -2724,7 +2060,10 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     expect(JSON.stringify(events)).not.toContain("[tool:read]");
   });
 
-  it("keeps legacy bracketed XML parameter tool calls buffered for conversion", async () => {
+  it.each([
+    { name: "legacy bracketed XML parameter tool calls", separator: "\n" },
+    { name: "CRLF legacy bracketed XML parameter tool calls", separator: "\r\n" },
+  ])("keeps $name buffered for conversion", async ({ name, separator }) => {
     const { source, stream } = createControlledPlainTextToolCallCompatStream();
     const iterator = (await resolveStream(stream))[Symbol.asyncIterator]();
     const rawToolText = [
@@ -2733,17 +2072,12 @@ describe("createPlainTextToolCallCompatWrapper", () => {
       "src/index.ts",
       "</parameter>",
       "</function>",
-    ].join("\n");
+    ].join(separator);
 
     try {
       source.push({ type: "start", partial: { content: [] } } as never);
       expect((await nextEvent(iterator, "start")).type).toBe("start");
-
-      source.push({
-        type: "text_delta",
-        contentIndex: 0,
-        delta: rawToolText,
-      } as never);
+      source.push({ type: "text_delta", contentIndex: 0, delta: rawToolText } as never);
       source.push({
         type: "done",
         reason: "stop",
@@ -2753,47 +2087,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           stopReason: "stop",
         },
       } as never);
-
-      const event = await nextEvent(iterator, "converted legacy bracketed XML tool call");
-      expect(event.type).toBe("toolcall_start");
-    } finally {
-      source.end();
-      await iterator.return?.();
-    }
-  });
-
-  it("keeps CRLF legacy bracketed XML parameter tool calls buffered for conversion", async () => {
-    const { source, stream } = createControlledPlainTextToolCallCompatStream();
-    const iterator = (await resolveStream(stream))[Symbol.asyncIterator]();
-    const rawToolText = [
-      "[read]",
-      "<parameter=path>",
-      "src/index.ts",
-      "</parameter>",
-      "</function>",
-    ].join("\r\n");
-
-    try {
-      source.push({ type: "start", partial: { content: [] } } as never);
-      expect((await nextEvent(iterator, "start")).type).toBe("start");
-
-      source.push({
-        type: "text_delta",
-        contentIndex: 0,
-        delta: rawToolText,
-      } as never);
-      source.push({
-        type: "done",
-        reason: "stop",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: rawToolText }],
-          stopReason: "stop",
-        },
-      } as never);
-
-      const event = await nextEvent(iterator, "converted CRLF legacy XML tool call");
-      expect(event.type).toBe("toolcall_start");
+      expect((await nextEvent(iterator, `converted ${name}`)).type).toBe("toolcall_start");
     } finally {
       source.end();
       await iterator.return?.();

@@ -262,6 +262,7 @@ export async function compactEmbeddedAgentSession(
     kind: "embedded",
     queueMessage: async () => {},
     isStreaming: () => true,
+    isAborted: () => abortSignal.aborted,
     isCompacting: () => true,
     abort: (reason) => controller.abort(reason ?? "user_abort"),
     cancel: (reason) => controller.abort(reason ?? "user_abort"),

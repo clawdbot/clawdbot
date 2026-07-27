@@ -66,7 +66,9 @@ type Options = {
   idleTimeout: string;
   keepBox: boolean;
   leaseId?: string;
+  linkPreview?: boolean;
   mcpAppFixture: boolean;
+  mockResponseChunkDelayMs?: number;
   mockResponseText: string;
   mockPort: number;
   outputDir: string;
@@ -92,6 +94,8 @@ type Options = {
   timeoutMs: number;
   ttl: string;
   userDriverScript: string;
+  nodeBin: string;
+  pnpmBin?: string;
 };
 
 type FunnelBridge = {
@@ -208,7 +212,9 @@ function usageText() {
     "  --desktop-chat-title <name>   Telegram Desktop chat to select before recording.",
     "  --id <cbx_id>                 Reuse an existing Crabbox desktop lease.",
     "  --keep-box                    Leave the Crabbox lease running for VNC debugging.",
+    "  --link-preview <true|false>   Set channels.telegram.linkPreview before Gateway startup.",
     "  --mock-response-file <path>    Text returned by the mock model.",
+    "  --mock-response-chunk-delay-ms <ms> Split the mock reply across two delayed deltas.",
     "  --mcp-app-fixture              Configure the pinned MCP App fixture through a Crabbox Funnel.",
     "  --output-dir <path>           Artifact directory under the repo.",
     "  --message-id <id>             Telegram message id for proof-view deep link.",
@@ -283,6 +289,16 @@ function parseTcpPort(value: string, label: string) {
   return parsed;
 }
 
+function parseBoolean(value: string, label: string) {
+  if (value === "true") {
+    return true;
+  }
+  if (value === "false") {
+    return false;
+  }
+  throw new Error(`${label} must be true or false.`);
+}
+
 function createTelegramProofRunId() {
   return `${new Date().toISOString().replace(/[:.]/gu, "-")}-${randomUUID().slice(0, 8)}`;
 }
@@ -332,6 +348,8 @@ export function parseArgs(argvInput: string[]): Options {
     ttl: "120m",
     userDriverScript:
       trimToValue(process.env.OPENCLAW_TELEGRAM_USER_DRIVER_SCRIPT) ?? DEFAULT_USER_DRIVER,
+    nodeBin: trimToValue(process.env.MANTIS_NODE_BIN) ?? process.execPath,
+    pnpmBin: trimToValue(process.env.MANTIS_PNPM_BIN),
   };
   const commandSeparator = argv.indexOf("--");
   if (command === "run" && commandSeparator >= 0) {
@@ -383,10 +401,17 @@ export function parseArgs(argvInput: string[]): Options {
       opts.idleTimeout = readValue();
     } else if (arg === "--keep-box") {
       opts.keepBox = true;
+    } else if (arg === "--link-preview") {
+      opts.linkPreview = parseBoolean(readValue(), "--link-preview");
     } else if (arg === "--mock-port") {
       opts.mockPort = parseTcpPort(readValue(), "--mock-port");
     } else if (arg === "--mock-response-file") {
       opts.mockResponseText = fs.readFileSync(resolveRepoPath(process.cwd(), readValue()), "utf8");
+    } else if (arg === "--mock-response-chunk-delay-ms") {
+      opts.mockResponseChunkDelayMs = parsePositiveTimerMs(
+        readValue(),
+        "--mock-response-chunk-delay-ms",
+      );
     } else if (arg === "--mcp-app-fixture") {
       opts.mcpAppFixture = true;
     } else if (arg === "--message-id") {
@@ -541,12 +566,20 @@ function childProcessBaseEnv() {
   return env;
 }
 
-function mockServerEnv(params: { mockPort: number; mockResponseText: string; requestLog: string }) {
+function mockServerEnv(params: {
+  mockPort: number;
+  mockResponseChunkDelayMs?: number;
+  mockResponseText: string;
+  requestLog: string;
+}) {
   return {
     ...childProcessBaseEnv(),
     MOCK_PORT: String(params.mockPort),
     MOCK_REQUEST_LOG: params.requestLog,
     SUCCESS_MARKER: params.mockResponseText,
+    ...(params.mockResponseChunkDelayMs === undefined
+      ? {}
+      : { MOCK_RESPONSE_CHUNK_DELAY_MS: String(params.mockResponseChunkDelayMs) }),
   };
 }
 
@@ -577,8 +610,16 @@ export function createOpenClawGatewaySpawnSpec(params: {
   comSpec?: string;
   nodeExecPath?: string;
   npmExecPath?: string;
+  pnpmExecPath?: string;
   platform?: NodeJS.Platform;
 }): GatewaySpawnSpec {
+  if (params.pnpmExecPath) {
+    return {
+      args: ["openclaw", "gateway", "--port", String(params.gatewayPort)],
+      command: params.pnpmExecPath,
+      options: { cwd: params.repoRoot, env: params.env, shell: false },
+    };
+  }
   const spec = createPnpmRunnerSpawnSpec({
     comSpec: params.comSpec,
     cwd: params.repoRoot,
@@ -1137,6 +1178,7 @@ function telegramResultObject(value: unknown, label: string): JsonObject {
 export function writeSutConfig(params: {
   gatewayPort: number;
   groupId: string;
+  linkPreview?: boolean;
   mcpAppFixture?: boolean;
   mockPort: number;
   outputDir: string;
@@ -1185,6 +1227,7 @@ export function writeSutConfig(params: {
             requireMention: false,
           },
         },
+        ...(params.linkPreview === undefined ? {} : { linkPreview: params.linkPreview }),
         replyToMode: "first",
       },
     },
@@ -1264,10 +1307,14 @@ export async function startLocalSut(
     groupId: string;
     mockResponseText: string;
     mockPort: number;
+    linkPreview?: boolean;
+    mockResponseChunkDelayMs?: number;
     outputDir: string;
     sutToken: string;
     testerId: string;
     repoRoot: string;
+    nodeBin?: string;
+    pnpmBin?: string;
   },
   deps: StartLocalSutDeps = {},
 ) {
@@ -1282,10 +1329,14 @@ export async function startLocalSut(
     const drained = await drainUpdates(params.sutToken);
     const config = writeConfig(params);
     const requestLog = path.join(params.outputDir, "mock-openai-requests.ndjson");
-    mock = spawnLoggedCommand("node", ["scripts/e2e/mock-openai-server.mjs"], {
-      cwd: params.repoRoot,
-      env: mockServerEnv({ ...params, requestLog }),
-    });
+    mock = spawnLoggedCommand(
+      params.nodeBin ?? process.execPath,
+      ["scripts/e2e/mock-openai-server.mjs"],
+      {
+        cwd: params.repoRoot,
+        env: mockServerEnv({ ...params, requestLog }),
+      },
+    );
     const runningMock = mock;
     await waitForOutputReady(
       runningMock.child,
@@ -1297,6 +1348,7 @@ export async function startLocalSut(
     const gatewaySpec = createGatewaySpawnSpec({
       env: gatewayEnv({ ...config, sutToken: params.sutToken }),
       gatewayPort: params.gatewayPort,
+      pnpmExecPath: params.pnpmBin,
       repoRoot: params.repoRoot,
     });
     gateway = spawnLoggedCommand(gatewaySpec.command, gatewaySpec.args, gatewaySpec.options);
@@ -1376,11 +1428,15 @@ async function startLocalSutDaemon(params: {
   groupId: string;
   mockResponseText: string;
   mockPort: number;
+  linkPreview?: boolean;
   mcpAppFixture?: boolean;
+  mockResponseChunkDelayMs?: number;
   outputDir: string;
   sutToken: string;
   testerId: string;
   repoRoot: string;
+  nodeBin?: string;
+  pnpmBin?: string;
 }) {
   const drained = await drainSutUpdates(params.sutToken);
   const config = writeSutConfig(params);
@@ -1392,7 +1448,7 @@ async function startLocalSutDaemon(params: {
   let gatewayPid: number | undefined;
   try {
     mockPid = spawnDaemon({
-      command: "node",
+      command: params.nodeBin ?? process.execPath,
       args: ["scripts/e2e/mock-openai-server.mjs"],
       cwd: params.repoRoot,
       env: mockServerEnv({ ...params, requestLog }),
@@ -1414,6 +1470,7 @@ async function startLocalSutDaemon(params: {
     const gatewaySpec = createOpenClawGatewaySpawnSpec({
       env: gatewayEnvVars,
       gatewayPort: params.gatewayPort,
+      pnpmExecPath: params.pnpmBin,
       repoRoot: params.repoRoot,
     });
     gatewayPid = spawnDaemon({
@@ -2414,10 +2471,14 @@ async function startSession(root: string, opts: Options, outputDir: string) {
       funnelBridge,
       gatewayPort: opts.gatewayPort,
       groupId: credential.groupId,
+      linkPreview: opts.linkPreview,
       mockResponseText: opts.mockResponseText,
+      mockResponseChunkDelayMs: opts.mockResponseChunkDelayMs,
       mockPort: opts.mockPort,
       mcpAppFixture: opts.mcpAppFixture,
       outputDir,
+      nodeBin: opts.nodeBin,
+      pnpmBin: opts.pnpmBin,
       repoRoot: root,
       sutToken: credential.sutToken,
       testerId: credential.testerUserId,
@@ -2978,9 +3039,13 @@ async function main() {
     const sutRuntime = await startLocalSut({
       gatewayPort: opts.gatewayPort,
       groupId: credential.groupId,
+      linkPreview: opts.linkPreview,
       mockResponseText: opts.mockResponseText,
+      mockResponseChunkDelayMs: opts.mockResponseChunkDelayMs,
       mockPort: opts.mockPort,
       outputDir,
+      nodeBin: opts.nodeBin,
+      pnpmBin: opts.pnpmBin,
       repoRoot: root,
       sutToken: credential.sutToken,
       testerId: credential.testerUserId,

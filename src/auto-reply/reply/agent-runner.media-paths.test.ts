@@ -784,9 +784,7 @@ describe("runReplyAgent media path normalization", () => {
       OriginatingTo: "chat-1",
       AccountId: "default",
       MessageSid: "msg-1",
-      MediaPaths: [imagePath],
-      MediaTypes: ["image/png"],
-      MediaWorkspaceDir: tmpDir,
+      media: [{ path: imagePath, contentType: "image/png", workspaceDir: tmpDir }],
     } as unknown as TemplateContext);
 
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();

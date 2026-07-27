@@ -53,6 +53,64 @@ it("renders trusted presence avatar routes directly", async () => {
   });
 });
 
+it("derives a missing presence avatar from the durable profile id, not the email", async () => {
+  const profileId = "c3e32452-0467-47e5-aafa-233cd5dae29f";
+  const avatar = document.createElement("openclaw-viewer-avatar") as ViewerAvatarElement;
+  avatar.user = {
+    id: profileId,
+    email: "ada@example.test",
+    name: "Ada Lovelace",
+    watchedSessions: [],
+  };
+  document.body.append(avatar);
+
+  await vi.waitFor(async () => {
+    await avatar.updateComplete;
+    expect(avatar.querySelector("img")?.getAttribute("src")).toBe(`/api/users/${profileId}/avatar`);
+  });
+});
+
+it("shares an authenticated avatar blob between the same user in the roster and profile", async () => {
+  setAvatarGatewayOrigin("https://gateway.example.test", "Bearer viewer-token");
+  const fetchAvatar = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    new Response(new Uint8Array([1, 2, 3]), {
+      headers: { "content-type": "image/png" },
+    }),
+  );
+  vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:shared-viewer-avatar");
+  const user: PresenceViewer = {
+    id: "profile-ada",
+    email: "ada@example.test",
+    name: "Ada Lovelace",
+    avatarUrl: "/api/users/profile-ada/avatar?v=7",
+    watchedSessions: [],
+  };
+  const avatars = Array.from({ length: 2 }, () => {
+    const avatar = document.createElement("openclaw-viewer-avatar") as ViewerAvatarElement;
+    avatar.user = user;
+    document.body.append(avatar);
+    return avatar;
+  });
+
+  await vi.waitFor(async () => {
+    await Promise.all(avatars.map((avatar) => avatar.updateComplete));
+    expect(avatars.map((avatar) => avatar.querySelector("img")?.getAttribute("src"))).toEqual([
+      "blob:shared-viewer-avatar",
+      "blob:shared-viewer-avatar",
+    ]);
+  });
+
+  expect(fetchAvatar).toHaveBeenCalledOnce();
+  expect(fetchAvatar).toHaveBeenCalledWith(
+    "https://gateway.example.test/api/users/profile-ada/avatar?v=7",
+    expect.objectContaining({ headers: { Authorization: "Bearer viewer-token" } }),
+  );
+  for (const avatar of avatars) {
+    avatar.querySelector("img")?.dispatchEvent(new Event("load"));
+    expect(avatar.querySelector(".viewer-avatar")?.classList.contains("is-fallback")).toBe(false);
+  }
+});
+
 type ViewerFacepileElement = HTMLElement & {
   presencePayload: unknown;
   selfInstanceId?: string;

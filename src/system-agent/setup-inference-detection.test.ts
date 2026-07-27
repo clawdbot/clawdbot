@@ -131,7 +131,7 @@ describe("isolated setup inference detection", () => {
       {
         kind: "anthropic-api-key",
         brandId: "anthropic",
-        modelRef: "anthropic/claude-opus-4-8",
+        modelRef: "anthropic/claude-opus-5",
         label: "Anthropic API key",
         detail: "ANTHROPIC_API_KEY set",
         credentials: true,

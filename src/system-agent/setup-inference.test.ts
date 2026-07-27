@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveAgentDir } from "../agents/agent-scope-config.js";
+import { listAgentEntries, resolveAgentDir } from "../agents/agent-scope-config.js";
 import {
   readAuthProfileStoreForTest,
   removeOAuthTestTempRoot,
@@ -83,6 +83,8 @@ vi.mock("../config/config.js", async (importOriginal) => {
       path: "/tmp/openclaw.json",
       issues: [],
       config: {},
+      sourceConfig: {},
+      runtimeConfig: { agents: { entries: { main: { default: true } } } },
     })),
   };
 });
@@ -94,7 +96,7 @@ vi.mock("../commands/onboard-inference.js", async (importActual) => {
     detectInferenceBackends: vi.fn(async () => [
       {
         kind: "claude-cli",
-        modelRef: "claude-cli/claude-opus-4-8",
+        modelRef: "claude-cli/claude-opus-5",
         label: "Claude Code",
         detail: "logged in",
         credentials: true,
@@ -111,6 +113,9 @@ vi.mock("../commands/onboard-inference.js", async (importActual) => {
 });
 
 const runtime = { log: () => {}, error: () => {}, exit: () => {} } as never;
+const materializedMainRuntimeConfig: OpenClawConfig = {
+  agents: { entries: { main: { default: true } } },
+};
 const testCliRuntimeArtifactFingerprint = "test-cli-runtime-artifact";
 const testCodexRuntimeArtifact = {
   id: "codex-app-server",
@@ -386,6 +391,10 @@ function createConfigTransformHarness(
   };
 }
 
+function createPreRosterConfigTransformHarness() {
+  return createConfigTransformHarness({}, materializedMainRuntimeConfig);
+}
+
 describe("applySystemAgentModelSelection", () => {
   it("pins a verified credential without putting the profile suffix in model metadata", async () => {
     const result = await applySystemAgentModelSelection({
@@ -396,6 +405,7 @@ describe("applySystemAgentModelSelection", () => {
 
     expect(result.agents?.defaults?.model).toBe("openai/gpt-5.5@openai:setup-123");
     expect(result.agents?.defaults?.models).toBeUndefined();
+    expect(result.agents?.entries).toBeUndefined();
   });
 
   it("overrides higher-priority runtime metadata on an inheriting default agent", async () => {
@@ -493,7 +503,7 @@ describe("detectSetupInference", () => {
       detectInferenceBackends: async () => [
         {
           kind: "claude-cli",
-          modelRef: "claude-cli/claude-opus-4-8",
+          modelRef: "claude-cli/claude-opus-5",
           label: "Claude Code",
           detail: "logged in",
           credentials: true,
@@ -784,7 +794,7 @@ describe("detectSetupInference", () => {
       },
       {
         kind: "claude-cli",
-        modelRef: "claude-cli/claude-opus-4-8",
+        modelRef: "claude-cli/claude-opus-5",
         label: "Claude Code",
         detail: "logged in",
         credentials: true,
@@ -1010,7 +1020,7 @@ describe("activateSetupInference", () => {
   it("reports an audit warning without turning a committed setup into a failure", async () => {
     mocks.appendAudit.mockRejectedValueOnce(new Error("audit directory is read-only"));
     const error = vi.fn();
-    const configHarness = createConfigTransformHarness();
+    const configHarness = createPreRosterConfigTransformHarness();
 
     const result = await activateSetupInference({
       kind: "claude-cli",
@@ -1024,9 +1034,9 @@ describe("activateSetupInference", () => {
           hash: "setup-config-hash",
           config: {},
           sourceConfig: {},
-          runtimeConfig: {},
+          runtimeConfig: materializedMainRuntimeConfig,
         })) as never,
-        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-4-8")) as never,
+        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-5")) as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
         createTempDir: makeTempDir,
       },
@@ -1035,7 +1045,7 @@ describe("activateSetupInference", () => {
     expect(result).toMatchObject({
       ok: true,
       lines: [
-        "Inference verified: claude-cli/claude-opus-4-8",
+        "Inference verified: claude-cli/claude-opus-5",
         "Inference setup completed, but OpenClaw could not record its audit entry: audit directory is read-only",
       ],
     });
@@ -1045,7 +1055,7 @@ describe("activateSetupInference", () => {
   });
 
   it("lets an enclosing persistent operation own the setup audit", async () => {
-    const configHarness = createConfigTransformHarness();
+    const configHarness = createPreRosterConfigTransformHarness();
 
     const result = await activateSetupInference({
       kind: "claude-cli",
@@ -1053,7 +1063,7 @@ describe("activateSetupInference", () => {
       recordSetupAudit: false,
       runtime,
       deps: {
-        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-4-8")) as never,
+        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-5")) as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
         createTempDir: makeTempDir,
       },
@@ -1061,7 +1071,7 @@ describe("activateSetupInference", () => {
 
     expect(result).toMatchObject({
       ok: true,
-      lines: ["Inference verified: claude-cli/claude-opus-4-8"],
+      lines: ["Inference verified: claude-cli/claude-opus-5"],
     });
     expect(mocks.appendAudit).not.toHaveBeenCalled();
   });
@@ -1086,7 +1096,7 @@ describe("activateSetupInference", () => {
       },
     } satisfies OpenClawConfig;
     const configHarness = createConfigTransformHarness(initialConfig);
-    const runCliAgent = vi.fn(successfulRunner("claude-cli", "claude-opus-4-8"));
+    const runCliAgent = vi.fn(successfulRunner("claude-cli", "claude-opus-5"));
     const result = await activateSetupInference({
       kind: "claude-cli",
       surface: "gateway",
@@ -1106,13 +1116,13 @@ describe("activateSetupInference", () => {
     });
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.modelRef).toBe("claude-cli/claude-opus-4-8");
-      expect(result.lines).toEqual(["Inference verified: claude-cli/claude-opus-4-8"]);
+      expect(result.modelRef).toBe("claude-cli/claude-opus-5");
+      expect(result.lines).toEqual(["Inference verified: claude-cli/claude-opus-5"]);
     }
     expect(runCliAgent).toHaveBeenCalledOnce();
     expect(runCliAgent).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentId: "openclaw",
+        agentId: "ops",
         agentDir: "/tmp/openclaw-ops-agent",
         executionMode: "side-question",
         disableTools: true,
@@ -1120,7 +1130,7 @@ describe("activateSetupInference", () => {
       }),
     );
     const probeConfig = runCliAgent.mock.calls[0]?.[0].config;
-    expect(probeConfig?.agents?.list?.find((agent) => agent.id === "openclaw")).toEqual({
+    expect(listAgentEntries(probeConfig ?? {}).find((agent) => agent.id === "openclaw")).toEqual({
       id: "openclaw",
       params: { temperature: 0.2 },
       tools: { allow: ["read"], deny: ["exec"] },
@@ -1133,13 +1143,13 @@ describe("activateSetupInference", () => {
   });
 
   it("rejects an unattested successful candidate before persisting its model", async () => {
-    const configHarness = createConfigTransformHarness();
+    const configHarness = createPreRosterConfigTransformHarness();
     const result = await activateSetupInference({
       kind: "claude-cli",
       surface: "gateway",
       runtime,
       deps: {
-        runCliAgent: vi.fn(async () => successfulRun("claude-cli", "claude-opus-4-8")) as never,
+        runCliAgent: vi.fn(async () => successfulRun("claude-cli", "claude-opus-5")) as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
         createTempDir: makeTempDir,
       },
@@ -1158,7 +1168,7 @@ describe("activateSetupInference", () => {
     const config = {
       agents: { defaults: { model: "openai/gpt-5.5" } },
     } satisfies OpenClawConfig;
-    const configHarness = createConfigTransformHarness();
+    const configHarness = createPreRosterConfigTransformHarness();
     const result = await activateSetupInference({
       kind: "existing-model",
       surface: "gateway",
@@ -1180,14 +1190,14 @@ describe("activateSetupInference", () => {
   });
 
   it("keeps a committed success when temporary cleanup fails", async () => {
-    const configHarness = createConfigTransformHarness();
+    const configHarness = createPreRosterConfigTransformHarness();
     const runtimeLog = vi.fn();
     const result = await activateSetupInference({
       kind: "claude-cli",
       surface: "gateway",
       runtime: { log: runtimeLog, error: () => {}, exit: () => {} } as never,
       deps: {
-        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-4-8")) as never,
+        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-5")) as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
         createTempDir: async () => "/tmp/openclaw-setup-cleanup-fixture",
         removeTempDir: async () => {
@@ -1196,7 +1206,7 @@ describe("activateSetupInference", () => {
       },
     });
 
-    expect(result).toMatchObject({ ok: true, modelRef: "claude-cli/claude-opus-4-8" });
+    expect(result).toMatchObject({ ok: true, modelRef: "claude-cli/claude-opus-5" });
     expect(runtimeLog).not.toHaveBeenCalled();
   });
 
@@ -1244,12 +1254,19 @@ describe("activateSetupInference", () => {
 
   it("reconciles a config write that committed before its writer threw", async () => {
     let committedConfig: OpenClawConfig | undefined;
-    const readConfigFileSnapshot = vi.fn(async () => ({
-      exists: true,
-      valid: true,
-      config: committedConfig ?? {},
-      runtimeConfig: committedConfig ?? {},
-    }));
+    const readConfigFileSnapshot = vi.fn(async () => {
+      const sourceConfig = committedConfig ?? {};
+      return {
+        exists: true,
+        valid: true,
+        config: sourceConfig,
+        sourceConfig,
+        runtimeConfig: {
+          ...sourceConfig,
+          agents: { ...sourceConfig.agents, entries: { main: { default: true } } },
+        },
+      };
+    });
     const transformConfig = vi.fn(
       async (params: {
         transform: (
@@ -1258,7 +1275,15 @@ describe("activateSetupInference", () => {
         ) => Promise<{ nextConfig: OpenClawConfig }>;
       }) => {
         committedConfig = (
-          await params.transform({}, { snapshot: { config: {}, runtimeConfig: {} } })
+          await params.transform(
+            {},
+            {
+              snapshot: {
+                config: materializedMainRuntimeConfig,
+                runtimeConfig: materializedMainRuntimeConfig,
+              },
+            },
+          )
         ).nextConfig;
         throw new Error("simulated post-write failure");
       },
@@ -1270,18 +1295,18 @@ describe("activateSetupInference", () => {
       runtime,
       deps: {
         readConfigFileSnapshot: readConfigFileSnapshot as never,
-        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-4-8")) as never,
+        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-5")) as never,
         transformConfigWithPendingPluginInstalls: transformConfig as never,
         createTempDir: makeTempDir,
       },
     });
 
-    expect(result).toMatchObject({ ok: true, modelRef: "claude-cli/claude-opus-4-8" });
-    expect(committedConfig?.agents?.defaults?.model).toBe("claude-cli/claude-opus-4-8");
+    expect(result).toMatchObject({ ok: true, modelRef: "claude-cli/claude-opus-5" });
+    expect(committedConfig?.agents?.defaults?.model).toBe("claude-cli/claude-opus-5");
   });
 
   it("persists only the verified model before OpenClaw configures the rest", async () => {
-    const configHarness = createConfigTransformHarness();
+    const configHarness = createPreRosterConfigTransformHarness();
 
     const result = await activateSetupInference({
       kind: "claude-cli",
@@ -1289,7 +1314,7 @@ describe("activateSetupInference", () => {
       surface: "cli",
       runtime,
       deps: {
-        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-4-8")) as never,
+        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-5")) as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
         createTempDir: makeTempDir,
       },
@@ -1297,13 +1322,47 @@ describe("activateSetupInference", () => {
 
     expect(result).toMatchObject({
       ok: true,
-      modelRef: "claude-cli/claude-opus-4-8",
-      lines: ["Inference verified: claude-cli/claude-opus-4-8"],
+      modelRef: "claude-cli/claude-opus-5",
+      lines: ["Inference verified: claude-cli/claude-opus-5"],
     });
     const persistedConfig = configHarness.current();
-    expect(persistedConfig.agents?.defaults?.model).toBe("claude-cli/claude-opus-4-8");
+    expect(persistedConfig.agents?.defaults?.model).toBe("claude-cli/claude-opus-5");
     expect(persistedConfig.agents?.defaults?.workspace).toBeUndefined();
     expect(persistedConfig.gateway).toBeUndefined();
+  });
+
+  it("uses the materialized runtime roster when activating from a missing config file", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: { entries: { main: { default: true } } },
+    };
+    const configHarness = createConfigTransformHarness(runtimeConfig, runtimeConfig);
+
+    const result = await activateSetupInference({
+      kind: "claude-cli",
+      surface: "cli",
+      runtime,
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => ({
+          exists: false,
+          valid: true,
+          path: "/tmp/openclaw.json",
+          config: runtimeConfig,
+          sourceConfig: runtimeConfig,
+          runtimeConfig,
+        })) as never,
+        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-5")) as never,
+        transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, modelRef: "claude-cli/claude-opus-5" });
+    expect(configHarness.current()).toMatchObject({
+      agents: {
+        defaults: { model: "claude-cli/claude-opus-5" },
+        entries: { main: { default: true } },
+      },
+    });
   });
 
   it.each([
@@ -1436,7 +1495,7 @@ describe("activateSetupInference", () => {
       agents: {
         list: [
           { id: "work", default: true, model: "openai/broken", name: "edited during probe" },
-          { id: "new-agent", model: "anthropic/claude-opus-4-8" },
+          { id: "new-agent", model: "anthropic/claude-opus-5" },
         ],
       },
     };
@@ -1452,7 +1511,7 @@ describe("activateSetupInference", () => {
           valid: true,
           config: probedConfig,
         })) as never,
-        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-4-8")) as never,
+        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-5")) as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
         createTempDir: makeTempDir,
       },
@@ -1463,11 +1522,11 @@ describe("activateSetupInference", () => {
     expect(persistedConfig.agents?.entries).toEqual({
       work: {
         default: true,
-        model: "claude-cli/claude-opus-4-8",
+        model: "claude-cli/claude-opus-5",
         name: "edited during probe",
-        models: { "claude-cli/claude-opus-4-8": {} },
+        models: { "claude-cli/claude-opus-5": {} },
       },
-      "new-agent": { model: "anthropic/claude-opus-4-8" },
+      "new-agent": { model: "anthropic/claude-opus-5" },
     });
   });
 
@@ -1481,7 +1540,7 @@ describe("activateSetupInference", () => {
               id: "ops",
               default: true,
               agentDir: "/tmp/ops",
-              model: "anthropic/claude-opus-4-8",
+              model: "anthropic/claude-opus-5",
             },
             { id: "other", agentDir: "/tmp/other", model: "openai/broken" },
           ],
@@ -1557,7 +1616,7 @@ describe("activateSetupInference", () => {
             config: probedConfig,
             runtimeConfig: probedConfig,
           })) as never,
-          runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-4-8")) as never,
+          runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-5")) as never,
           transformConfigWithPendingPluginInstalls: configHarness.transform as never,
           createTempDir: makeTempDir,
         },
@@ -1573,13 +1632,13 @@ describe("activateSetupInference", () => {
         defaults: {
           model: "openai/gpt-5.4",
           models: {
-            "anthropic/claude-opus-4-8": { agentRuntime: { id: "openclaw" } },
+            "anthropic/claude-opus-5": { agentRuntime: { id: "openclaw" } },
           },
         },
       },
     } satisfies OpenClawConfig;
     const concurrentConfig = structuredClone(initialConfig);
-    concurrentConfig.agents!.defaults!.models!["anthropic/claude-opus-4-8"] = {
+    concurrentConfig.agents!.defaults!.models!["anthropic/claude-opus-5"] = {
       agentRuntime: { id: "codex" },
     };
     const configHarness = createConfigTransformHarness(concurrentConfig);
@@ -1597,7 +1656,7 @@ describe("activateSetupInference", () => {
             sourceConfig: initialConfig,
             runtimeConfig: initialConfig,
           })) as never,
-          runEmbeddedAgent: vi.fn(successfulRunner("anthropic", "claude-opus-4-8")) as never,
+          runEmbeddedAgent: vi.fn(successfulRunner("anthropic", "claude-opus-5")) as never,
           transformConfigWithPendingPluginInstalls: configHarness.transform as never,
           createTempDir: makeTempDir,
         },
@@ -1680,7 +1739,7 @@ describe("activateSetupInference", () => {
       agents: { defaults: { model: "openai/gpt-5.5" } },
     } satisfies OpenClawConfig;
     const changedConfig = {
-      agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
+      agents: { defaults: { model: "anthropic/claude-opus-5" } },
     } satisfies OpenClawConfig;
     const readConfigFileSnapshot = vi
       .fn()
@@ -1706,7 +1765,7 @@ describe("activateSetupInference", () => {
   });
 
   it("returns an auth failure when the verified owner drifts during persistence", async () => {
-    const configHarness = createConfigTransformHarness();
+    const configHarness = createPreRosterConfigTransformHarness();
     const result = await activateSetupInference({
       kind: "openai-api-key",
       surface: "gateway",
@@ -1735,7 +1794,7 @@ describe("activateSetupInference", () => {
   });
 
   it("revalidates a stable CLI runtime owner at the config commit boundary", async () => {
-    const configHarness = createConfigTransformHarness();
+    const configHarness = createPreRosterConfigTransformHarness();
     const resolveCliRuntimeOwnerFingerprint = vi.fn(async () => "test-runtime-owner");
 
     const result = await activateSetupInference({
@@ -1743,7 +1802,7 @@ describe("activateSetupInference", () => {
       surface: "gateway",
       runtime,
       deps: {
-        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-4-8")) as never,
+        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-5")) as never,
         resolveCliRuntimeOwnerFingerprint: resolveCliRuntimeOwnerFingerprint as never,
         fingerprintPluginRuntimeArtifact: ({ pluginId }) => `${pluginId}-runtime-v1`,
         createSystemAgentVerifiedInferenceBinding,
@@ -1754,14 +1813,14 @@ describe("activateSetupInference", () => {
 
     expect(result).toMatchObject({ ok: true });
     expect(resolveCliRuntimeOwnerFingerprint).toHaveBeenCalledOnce();
-    expect(configHarness.current().agents?.defaults?.model).toBe("claude-cli/claude-opus-4-8");
+    expect(configHarness.current().agents?.defaults?.model).toBe("claude-cli/claude-opus-5");
   });
 
   it("rejects a CLI owner drift on an existing route before handoff", async () => {
     const config = {
       agents: {
         defaults: {
-          model: "claude-cli/claude-opus-4-8",
+          model: "claude-cli/claude-opus-5",
         },
       },
     } satisfies OpenClawConfig;
@@ -1776,7 +1835,7 @@ describe("activateSetupInference", () => {
           config,
           runtimeConfig: config,
         })) as never,
-        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-4-8")) as never,
+        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-5")) as never,
         resolveCliRuntimeOwnerFingerprint: vi.fn(async () => "changed-runtime-owner") as never,
         createSystemAgentVerifiedInferenceBinding,
         createTempDir: makeTempDir,
@@ -1799,15 +1858,15 @@ describe("activateSetupInference", () => {
     if (!initialAuthFingerprint) {
       throw new Error("expected auth fingerprint");
     }
-    const configHarness = createConfigTransformHarness();
+    const configHarness = createPreRosterConfigTransformHarness();
     const runEmbeddedAgent = vi.fn(async (params: SuccessfulRunParams) => {
       params.onSuccessfulAuthBinding?.({
         ...successfulAgentHarnessBinding(params),
         authFingerprint: initialAuthFingerprint,
-        modelId: "claude-opus-4-8",
+        modelId: "claude-opus-5",
         modelApi: "anthropic-messages",
       });
-      return successfulRun("anthropic", "claude-opus-4-8");
+      return successfulRun("anthropic", "claude-opus-5");
     });
 
     const result = await activateSetupInference({
@@ -1844,7 +1903,7 @@ describe("activateSetupInference", () => {
     const ensureCodexRuntimePlugin = vi.fn();
     const runCliAgent = vi.fn(async (params: SuccessfulRunParams) => {
       expect(configHarness.transform).not.toHaveBeenCalled();
-      return successfulRun("claude-cli", "claude-opus-4-8", params);
+      return successfulRun("claude-cli", "claude-opus-5", params);
     });
     const refreshPluginRegistry = vi.fn(async () => {});
 
@@ -1872,13 +1931,13 @@ describe("activateSetupInference", () => {
 
     expect(result.ok).toBe(true);
     expect(runCliAgent).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "claude-cli", model: "claude-opus-4-8" }),
+      expect.objectContaining({ provider: "claude-cli", model: "claude-opus-5" }),
     );
     expect(ensureCodexRuntimePlugin).not.toHaveBeenCalled();
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
     expect(configHarness.transform).toHaveBeenCalledOnce();
     expect(configHarness.current()).toMatchObject({
-      agents: { defaults: { model: "claude-cli/claude-opus-4-8" } },
+      agents: { defaults: { model: "claude-cli/claude-opus-5" } },
     });
     expect(configHarness.current().plugins?.entries?.codex).toBeUndefined();
   });
@@ -1917,7 +1976,7 @@ describe("activateSetupInference", () => {
         })) as never,
         ensureCodexRuntimePlugin: ensureCodexRuntimePlugin as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
-        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-4-8")) as never,
+        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-5")) as never,
         createTempDir: makeTempDir,
       },
     });
@@ -1927,7 +1986,7 @@ describe("activateSetupInference", () => {
     expect(configHarness.transform).toHaveBeenCalledOnce();
     expect(configHarness.current()).toMatchObject(config);
     expect(configHarness.current()).toMatchObject({
-      agents: { defaults: { model: "claude-cli/claude-opus-4-8" } },
+      agents: { defaults: { model: "claude-cli/claude-opus-5" } },
     });
   });
 
@@ -2040,7 +2099,7 @@ describe("activateSetupInference", () => {
     {
       name: "model-routing override",
       runResult: successfulRun("openai", "gpt-5.5"),
-      error: "instead of the requested anthropic/claude-opus-4-8",
+      error: "instead of the requested anthropic/claude-opus-5",
     },
   ])("does not persist inference after a $name", async ({ runResult, error }) => {
     const transformConfig = vi.fn();
@@ -2078,7 +2137,7 @@ describe("activateSetupInference", () => {
         baseUrl: "https://api.anthropic.com",
         models: [
           {
-            id: "claude-opus-4-8",
+            id: "claude-opus-5",
             name: "Claude Opus 4.8",
             reasoning: true,
             input: ["text" as const],
@@ -2104,7 +2163,7 @@ describe("activateSetupInference", () => {
         ],
       },
     } satisfies OpenClawConfig;
-    const runEmbeddedAgent = vi.fn(successfulRunner("anthropic", "claude-opus-4-8"));
+    const runEmbeddedAgent = vi.fn(successfulRunner("anthropic", "claude-opus-5"));
     const configHarness = createConfigTransformHarness(initialConfig);
 
     const result = await activateSetupInference({
@@ -2126,20 +2185,20 @@ describe("activateSetupInference", () => {
       },
     });
 
-    expect(result).toMatchObject({ ok: true, modelRef: "anthropic/claude-opus-4-8" });
+    expect(result).toMatchObject({ ok: true, modelRef: "anthropic/claude-opus-5" });
     expect(runEmbeddedAgent).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentId: "openclaw",
+        agentId: "ops",
         provider: "anthropic",
-        model: "claude-opus-4-8",
+        model: "claude-opus-5",
         agentHarnessRuntimeOverride: "openclaw",
         config: expect.objectContaining({
           agents: expect.objectContaining({
             entries: expect.objectContaining({
               ops: expect.objectContaining({
-                model: { primary: "anthropic/claude-opus-4-8" },
+                model: { primary: "anthropic/claude-opus-5" },
                 models: {
-                  "anthropic/claude-opus-4-8": {
+                  "anthropic/claude-opus-5": {
                     agentRuntime: { id: "openclaw" },
                   },
                 },
@@ -2433,7 +2492,7 @@ describe("activateSetupInference", () => {
         expect(activatedProfileId).toMatch(/^groq:setup-/);
         expect(runEmbeddedAgent).toHaveBeenCalledWith(
           expect.objectContaining({
-            agentId: "openclaw",
+            agentId: "main",
             provider: "groq",
             model: "llama-3.3-70b-versatile",
             authProfileId: activatedProfileId,
@@ -3566,7 +3625,7 @@ describe("activateSetupInference", () => {
       expect(activatedProfileId).toMatch(/^github-copilot:setup-/);
       expect(runEmbeddedAgent).toHaveBeenCalledWith(
         expect.objectContaining({
-          agentId: "openclaw",
+          agentId: "main",
           agentDir: expect.stringContaining("setup-inference-test-"),
           authProfileId: activatedProfileId,
           provider: "github-copilot",
@@ -3726,7 +3785,7 @@ describe("activateSetupInference", () => {
 
   it("prefers usable Codex OAuth without registering a discovered API key", async () => {
     const readCodexCliActiveApiKey = vi.fn(() => null);
-    const configHarness = createConfigTransformHarness();
+    const configHarness = createPreRosterConfigTransformHarness();
     const runEmbeddedAgent = vi.fn(successfulRunner("openai", "gpt-5.6-sol"));
 
     const result = await activateSetupInference({
@@ -3819,7 +3878,7 @@ describe("activateSetupInference", () => {
             id: "ops",
             default: true,
             model: {
-              primary: "anthropic/claude-opus-4-8",
+              primary: "anthropic/claude-opus-5",
               fallbacks: ["google/gemini-3.1-pro-preview"],
             },
             models: {
@@ -4038,7 +4097,7 @@ describe("activateSetupInference", () => {
     );
     // Harness selection: codex tests run embedded with the codex harness.
     expect(runEmbeddedAgent.mock.calls[0]?.[0]).toMatchObject({
-      agentId: "openclaw",
+      agentId: "ops",
       agentDir: resolveAgentDir(initialConfig, "ops"),
       provider: "openai",
       authProfileStateMode: "read-only",
@@ -4784,7 +4843,12 @@ describe("activateSetupInference", () => {
       }) => {
         const transformed = await params.transform(
           {},
-          { snapshot: { config: {}, runtimeConfig: {} } },
+          {
+            snapshot: {
+              config: materializedMainRuntimeConfig,
+              runtimeConfig: materializedMainRuntimeConfig,
+            },
+          },
         );
         const record = transformed.nextConfig.plugins?.installs?.codex;
         if (record) {
@@ -5891,7 +5955,7 @@ describe("verifySetupInference", () => {
       agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
     } satisfies OpenClawConfig;
     const changedConfig = {
-      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-8" } } },
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-5" } } },
     } satisfies OpenClawConfig;
     const readConfigFileSnapshot = vi
       .fn()
@@ -5943,7 +6007,7 @@ describe("verifySetupInference", () => {
     expect(result).toMatchObject({ ok: true, modelRef: "openai/gpt-5.5" });
     expect(runEmbeddedAgent).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentId: "openclaw",
+        agentId: "ops",
         provider: "openai",
         model: "gpt-5.5",
         agentHarnessRuntimeOverride: "codex",
@@ -5955,7 +6019,7 @@ describe("verifySetupInference", () => {
 
   it("probes the configured default agent CLI auth owner", async () => {
     const agentDir = "/configured/ops-agent";
-    const runCliAgent = vi.fn(async () => successfulRun("claude-cli", "claude-opus-4-8"));
+    const runCliAgent = vi.fn(async () => successfulRun("claude-cli", "claude-opus-5"));
 
     const result = await verifySetupInferenceConfig({
       config: {
@@ -5966,7 +6030,7 @@ describe("verifySetupInference", () => {
               id: "ops",
               default: true,
               agentDir,
-              model: { primary: "claude-cli/claude-opus-4-8@claude-cli:ops" },
+              model: { primary: "claude-cli/claude-opus-5@claude-cli:ops" },
             },
           ],
         },
@@ -5992,12 +6056,12 @@ describe("verifySetupInference", () => {
 
     expect(result).toMatchObject({
       ok: true,
-      modelRef: "claude-cli/claude-opus-4-8",
+      modelRef: "claude-cli/claude-opus-5",
     });
     expect(runCliAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "claude-cli",
-        model: "claude-opus-4-8",
+        model: "claude-opus-5",
         agentDir,
         authProfileId: "claude-cli:ops",
         executionMode: "side-question",
@@ -6054,7 +6118,7 @@ describe("verifySetupInference", () => {
       config: {
         agents: {
           defaults: {
-            model: "claude-cli/claude-opus-4-8@claude-cli:locked",
+            model: "claude-cli/claude-opus-5@claude-cli:locked",
           },
         },
       },

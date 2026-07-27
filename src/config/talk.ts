@@ -210,6 +210,10 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
 
   const source = value as Record<string, unknown>;
   const normalized: TalkConfig = {};
+  const agentId = normalizeOptionalString(source.agentId);
+  if (agentId) {
+    normalized.agentId = agentId;
+  }
   const speechLocale = normalizeOptionalString(source.speechLocale);
   if (speechLocale) {
     normalized.speechLocale = speechLocale;
@@ -302,6 +306,9 @@ export function buildTalkConfigResponse(value: unknown): TalkConfigResponse | un
   }
 
   const payload: TalkConfigResponse = {};
+  if (typeof normalized?.agentId === "string") {
+    payload.agentId = normalized.agentId;
+  }
   if (typeof normalized?.interruptOnSpeech === "boolean") {
     payload.interruptOnSpeech = normalized.interruptOnSpeech;
   }

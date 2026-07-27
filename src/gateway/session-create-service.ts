@@ -68,6 +68,7 @@ import {
 } from "../sessions/session-lifecycle-admission.js";
 import { recordSessionCreated } from "../sessions/session-state-events.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
 import { shouldPreserveSessionAuthProfileOverride } from "./session-model-patch-origin.js";
@@ -249,6 +250,7 @@ type TrustedInitialSessionEntry = {
   pluginOwnerId?: string;
   providerOverride?: string;
   modelOverride?: string;
+  modelOverrideRouteResolution?: "resolved";
   cliSessionBindings?: SessionEntry["cliSessionBindings"];
   initializationPending?: true;
   modelSelectionLocked?: true;
@@ -910,6 +912,11 @@ export async function createGatewaySession(params: {
           : undefined;
         const initializedEntry: SessionEntry = {
           ...patched.entry,
+          // New rows must expose the same canonical delivery shape to callbacks
+          // that the SQLite writer persists, or guarded finalization sees its own write as drift.
+          ...(existingEntry === undefined && patched.entry.delivery === undefined
+            ? { delivery: normalizeSessionDeliveryState() }
+            : {}),
           // Stamp provenance only for genuinely new rows: adopting an existing key
           // must not restamp write-once node facts (this direct store write bypasses
           // the merge-level write-once guard), and legacy rows stay "unknown".
@@ -920,6 +927,7 @@ export async function createGatewaySession(params: {
                 providerOverride: catalogResolvedModel.provider,
                 modelOverride: catalogResolvedModel.model,
                 modelOverrideSource: "user" as const,
+                modelOverrideRouteResolution: "resolved" as const,
                 agentRuntimeOverride: catalogAgentRuntime,
                 modelSelectionLocked: true,
                 pluginOwnerId: catalogPluginOwnerId,
@@ -939,6 +947,9 @@ export async function createGatewaySession(params: {
             : {}),
           ...(authorizedPluginCreation && params.initialEntry?.modelOverride
             ? { modelOverride: params.initialEntry.modelOverride }
+            : {}),
+          ...(authorizedPluginCreation && params.initialEntry?.modelOverrideRouteResolution
+            ? { modelOverrideRouteResolution: params.initialEntry.modelOverrideRouteResolution }
             : {}),
           // Seeded CLI bindings ride only the plugin-authorized creation path;
           // harness creations must never smuggle pre-bound CLI session ids.

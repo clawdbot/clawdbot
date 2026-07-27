@@ -94,7 +94,9 @@ async function withTempSessionStore<T>(
     return await run({ dir, storePath: path.join(dir, "sessions.json") });
   } finally {
     closeOpenClawAgentDatabasesForTest();
-    await fs.rm(dir, { recursive: true, force: true });
+    // SQLite teardown can race fixture removal on loaded CI hosts. Keep the
+    // retries bounded so persistent cleanup failures still surface.
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
   }
 }
 
@@ -2908,6 +2910,7 @@ describe("consumeCliSessionForkInStore", () => {
         cliSessionBindings: {
           "claude-cli": {
             sessionId: "claude-source-session",
+            resumeCheckpointId: "assistant-before-turn",
             forceReuse: true,
             forkNextResume: true,
           },
@@ -2928,12 +2931,17 @@ describe("consumeCliSessionForkInStore", () => {
       });
       expect(consumed?.cliSessionBindings?.["claude-cli"]).toEqual({
         sessionId: "claude-source-session",
+        resumeCheckpointId: "assistant-before-turn",
         forceReuse: true,
       });
       expect(consumed?.label).toBe("concurrent update");
       expect(
         loadPersistedSessionEntry(storePath, sessionKey)?.cliSessionBindings?.["claude-cli"],
-      ).toEqual({ sessionId: "claude-source-session", forceReuse: true });
+      ).toEqual({
+        sessionId: "claude-source-session",
+        resumeCheckpointId: "assistant-before-turn",
+        forceReuse: true,
+      });
       await expect(
         consumeCliSessionForkInStore({
           provider: "claude-cli",
@@ -2984,6 +2992,7 @@ describe("consumeCliSessionForkInStore", () => {
         cliSessionBindings: {
           "claude-cli": {
             sessionId: "claude-source-session",
+            resumeCheckpointId: "assistant-before-turn",
             forceReuse: true,
             authProfileId: "claude:work",
             authEpoch: "epoch-1",
@@ -3005,6 +3014,7 @@ describe("consumeCliSessionForkInStore", () => {
 
       expect(persisted?.cliSessionBindings?.["claude-cli"]).toEqual({
         sessionId: "claude-fork-session",
+        resumeCheckpointId: "assistant-before-turn",
         forceReuse: true,
         authProfileId: "claude:work",
         authEpoch: "epoch-1",
@@ -3014,6 +3024,7 @@ describe("consumeCliSessionForkInStore", () => {
         loadPersistedSessionEntry(storePath, sessionKey)?.cliSessionBindings?.["claude-cli"],
       ).toEqual({
         sessionId: "claude-fork-session",
+        resumeCheckpointId: "assistant-before-turn",
         forceReuse: true,
         authProfileId: "claude:work",
         authEpoch: "epoch-1",

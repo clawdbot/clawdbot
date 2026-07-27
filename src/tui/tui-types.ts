@@ -65,6 +65,13 @@ export type SessionChangedEvent = {
   updatedAt?: number | null;
 };
 
+export type SessionMessageEvent = {
+  sessionKey?: string;
+  agentId?: string;
+  sessionId?: string;
+  updatedAt?: number | null;
+};
+
 export type AgentEvent = {
   runId: string;
   stream: string;

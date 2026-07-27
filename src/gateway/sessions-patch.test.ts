@@ -1015,6 +1015,27 @@ describe("gateway sessions patch", () => {
     expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
   });
 
+  test("supports uncataloged configured primary and session override refs", async () => {
+    const primary = "openai/o3";
+    const override = "openai/o1";
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary },
+              modelPolicy: { allow: [] },
+            },
+          },
+        } as OpenClawConfig,
+        patch: { key: MAIN_SESSION_KEY, model: override },
+        loadGatewayModelCatalog: async () => [],
+      }),
+    );
+
+    expectModelSelection(entry, "openai", "o1");
+  });
+
   test("persists provider-qualified aliases without cross-provider collisions", async () => {
     const entry = expectPatchOk(
       await runPatch({

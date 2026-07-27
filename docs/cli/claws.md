@@ -10,8 +10,9 @@ title: "Claws"
 # `openclaw claws`
 
 A Claw is a versioned setup for one new OpenClaw agent. It can describe the
-agent configuration, workspace files, skills, plugins, MCP servers, and cron
-jobs that agent needs. A Claw does not replace or modify an existing agent.
+agent's portable identity, workspace files, skills, plugins, MCP servers, and
+cron jobs. Harness-specific agent settings may be carried in a referenced
+package profile. A Claw does not replace or modify an existing agent.
 
 Claws are experimental. Their schema, command output, and lifecycle may change.
 Enable the command surface explicitly:
@@ -26,8 +27,8 @@ separate registry track and are not part of this command surface yet.
 
 ## Create a Claw package
 
-A package contains `package.json`, a `CLAW.md` manifest, and any workspace
-sidecars referenced by the manifest:
+A package contains `package.json`, a `CLAW.md` manifest, and any profiles or
+workspace sidecars referenced by that manifest:
 
 ```json
 {
@@ -47,8 +48,8 @@ schemaVersion: 1
 agent:
   id: incident-triage
   name: Incident triage
-  tools:
-    deny: [exec]
+metadata:
+  openclaw.config: profiles/openclaw.yml
 workspace:
   bootstrapFiles: {}
 packages: []
@@ -61,9 +62,50 @@ cronJobs: []
 Creates one agent for reviewing and routing incidents.
 ```
 
+`metadata` is a string-to-string map for portable consumer hints. OpenClaw's
+`openclaw.config` key points to an optional, package-relative YAML profile. The
+exported default is `profiles/openclaw.yml`; the pointer is normative, so a
+package may choose another safe relative `.yml` or `.yaml` path.
+
+```yaml
+schemaVersion: 1
+agent:
+  tools:
+    profile: coding
+    alsoAllow: [cron]
+    deny: [exec]
+    fs:
+      workspaceOnly: true
+  memory:
+    search:
+      enabled: true
+      rememberAcrossConversations: true
+      sources: [memory, sessions]
+```
+
+This profile exists only inside the Claw package. OpenClaw validates and uses it
+while inspecting, adding, updating, and exporting that Claw; it is not copied
+to the user's normal OpenClaw configuration path. Other harnesses can ignore
+the namespaced metadata key and consume the portable manifest fields.
+
 The same strict version 1 schema continues to accept grouped JSON manifests.
-The remaining schema fragments on this page use JSON, with equivalent keys
-available in `CLAW.md` frontmatter.
+Grouped JSON uses the same `metadata.openclaw.config` pointer rather than
+embedding a second copy of the OpenClaw profile. The remaining schema fragments
+on this page use JSON, with equivalent keys available in `CLAW.md` frontmatter.
+
+The OpenClaw package profile may select any built-in tool profile registered by
+the running OpenClaw version, then refine it with `alsoAllow`, `deny`, and
+`tools.fs.workspaceOnly: true`. A Claw cannot set that field to `false` and
+weaken host filesystem confinement. `tools.allow` remains available as an
+explicit allowlist but cannot be combined with `alsoAllow`. A Claw may also set
+`memory.search.enabled`, choose the portable `memory` and `sessions` sources,
+and opt into cross-conversation memory with `rememberAcrossConversations`.
+Declaring the `sessions` source requires that opt-in.
+Host policy still constrains these settings, and Claws do not carry custom
+profile definitions, providers, credentials, bindings, or local memory paths.
+The referenced profile is limited to 256 KiB, must be JSON-compatible YAML, may
+not use aliases, anchors, tags, or merge keys, and must be a regular,
+non-symlinked, non-hardlinked file inside the package.
 
 Package and workspace paths must remain inside the package root. Manifests are
 limited to 1 MiB, package metadata to 256 KiB, and workspace sources enforce

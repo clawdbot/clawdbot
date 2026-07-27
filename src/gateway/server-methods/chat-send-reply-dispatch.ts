@@ -20,6 +20,7 @@ import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
   buildAssistantDisplayContentFromReplyPayloads,
+  combineNonStreamingReplyParts,
   extractAssistantDisplayTextFromContent,
   hasAssistantDisplayMediaContent,
   isMediaBearingPayload,
@@ -65,10 +66,8 @@ export function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
       } else if (payload.replyToCurrent || parsedText?.replyToCurrent) {
         lines.push("[[reply_to_current]]");
       }
-      const text = payload.text
-        ? stripInlineDirectiveTagsForDelivery(payload.text).text.trim()
-        : "";
-      if (text && !isSuppressedControlReplyText(text)) {
+      const text = payload.text ? stripInlineDirectiveTagsForDelivery(payload.text).text : "";
+      if (text.trim() && !isSuppressedControlReplyText(text)) {
         lines.push(text);
       }
       for (const mediaUrl of parts.mediaUrls) {
@@ -86,10 +85,10 @@ export function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
       ) {
         lines.push("[[audio_as_voice]]");
       }
-      return lines.join("\n").trim();
+      return lines.join("\n");
     })
     .filter(Boolean);
-  return chunks.join("\n\n").trim();
+  return combineNonStreamingReplyParts(chunks);
 }
 
 /** Build the live reply dispatcher and capture payloads for post-dispatch projection. */

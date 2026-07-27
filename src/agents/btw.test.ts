@@ -366,12 +366,14 @@ function supportsPreparedOpenAIAuth(ctx: Parameters<AgentHarness["supports"]>[0]
 
 function runSideQuestion(overrides: Partial<RunBtwSideQuestionParams> = {}) {
   return runBtwSideQuestion({
-    cfg: {} as never,
+    cfg: { agents: { entries: { main: { default: true } } } } as never,
     agentDir: DEFAULT_AGENT_DIR,
     provider: DEFAULT_PROVIDER,
     model: DEFAULT_MODEL,
     question: DEFAULT_QUESTION,
     sessionEntry: createSessionEntry(),
+    sessionKey: DEFAULT_SESSION_KEY,
+    storePath: DEFAULT_STORE_PATH,
     resolvedReasoningLevel: DEFAULT_REASONING_LEVEL,
     opts: {},
     isNewSession: false,
@@ -704,7 +706,7 @@ describe("runBtwSideQuestion", () => {
     );
 
     const result = await runBtwSideQuestion({
-      cfg: {} as never,
+      cfg: { agents: { entries: { main: { default: true } } } } as never,
       agentDir: DEFAULT_AGENT_DIR,
       provider: DEFAULT_PROVIDER,
       model: DEFAULT_MODEL,
@@ -979,12 +981,16 @@ describe("runBtwSideQuestion", () => {
     resolveModelWithRegistryMock.mockReturnValue(platformModel);
     resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
     ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
+    getApiKeyForModelMock.mockResolvedValue({
+      apiKey: undefined,
+      mode: "api-key",
+      source: "none",
+    });
 
     await expect(runSideQuestion({ provider: "openai", model: "gpt-5.5" })).resolves.toEqual({
       text: "Codex side answer.",
     });
 
-    expect(getApiKeyForModelMock).not.toHaveBeenCalled();
     expect(codexSideQuestionMock).toHaveBeenCalledOnce();
     const preparedRuntimeAuth = (
       mockArg(codexSideQuestionMock, 0, 0) as {
@@ -997,20 +1003,13 @@ describe("runBtwSideQuestion", () => {
     ).preparedRuntimeAuth;
     expect(preparedRuntimeAuth?.plan).toMatchObject({
       harnessAuthProvider: "openai",
-      deferredRouteSupport: {
-        requestTransportOverrides: "none",
-        runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
-      },
     });
-    expect(preparedRuntimeAuth?.plan?.modelRoute).toBeUndefined();
     expect(preparedRuntimeAuth?.plan?.forwardedAuthProfileId).toBeUndefined();
     expect(preparedRuntimeAuth?.resolvedApiKey).toBeUndefined();
     expect(Object.keys(preparedRuntimeAuth?.authProfileStore?.profiles ?? {})).toEqual([]);
     expect(supports).toHaveBeenCalledWith(
       expect.objectContaining({
         modelProvider: expect.objectContaining({
-          requestTransportOverrides: "none",
-          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
           preparedAuth: { source: "harness" },
         }),
       }),
@@ -2209,6 +2208,8 @@ describe("runBtwSideQuestion", () => {
       model: "us.anthropic.claude-sonnet-4-5-v1:0",
       question: DEFAULT_QUESTION,
       sessionEntry: createSessionEntry(),
+      sessionKey: DEFAULT_SESSION_KEY,
+      storePath: DEFAULT_STORE_PATH,
       resolvedReasoningLevel: DEFAULT_REASONING_LEVEL,
       opts: {},
       isNewSession: false,

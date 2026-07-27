@@ -116,6 +116,61 @@ internal fun shouldAcceptWearTalkSnapshot(
   attemptId: String?,
 ): Boolean = snapshot.attemptId != null && snapshot.attemptId == attemptId
 
+internal data class WearTerminalChatTransition(
+  val state: WearUiState,
+  val reloadHistory: Boolean,
+  val observedMessage: WearChatMessage? = null,
+)
+
+internal fun reduceWearTerminalChatEvent(
+  current: WearUiState,
+  event: WearChatEvent,
+): WearTerminalChatTransition {
+  if (event.sessionKey != current.selectedSession?.key) {
+    return WearTerminalChatTransition(state = current, reloadHistory = false)
+  }
+  val finalMessage = event.message?.takeIf { event.state == "final" }
+  val preservedState =
+    finalMessage?.let { message ->
+      current.copy(messages = mergeEventMessage(current.messages, message))
+    } ?: current
+  if (current.activeRunId != null && event.runId != null && current.activeRunId != event.runId) {
+    // Preserve older finals and notifications without canceling another
+    // identified run or replacing it with a stale history snapshot.
+    return WearTerminalChatTransition(state = preservedState, reloadHistory = false)
+  }
+  val hasLiveReply = current.activeRunId != null || !current.streamText.isNullOrBlank()
+  if (hasLiveReply && (current.activeRunId == null || event.runId == null)) {
+    // Missing run identity cannot distinguish a delayed terminal from the
+    // live run's first identified terminal. Preserve the live reply until
+    // authoritative history resolves which run actually remains active.
+    return WearTerminalChatTransition(
+      state = preservedState,
+      reloadHistory = true,
+      observedMessage = finalMessage,
+    )
+  }
+  return when (event.state) {
+    "final" ->
+      WearTerminalChatTransition(
+        state =
+          current.copy(
+            messages = event.message?.let { mergeEventMessage(current.messages, it) } ?: current.messages,
+            streamText = if (event.message == null) current.streamText else null,
+            activeRunId = null,
+          ),
+        reloadHistory = true,
+        observedMessage = event.message,
+      )
+    "aborted", "error" ->
+      WearTerminalChatTransition(
+        state = current.copy(streamText = null, activeRunId = null),
+        reloadHistory = true,
+      )
+    else -> WearTerminalChatTransition(state = current, reloadHistory = false)
+  }
+}
+
 internal class WearViewModel(
   application: Application,
 ) : AndroidViewModel(application) {
@@ -908,21 +963,13 @@ internal class WearViewModel(
           )
         }
       }
-      "final" -> {
-        cancelLoad()
-        mutableState.update { current ->
-          current.copy(
-            messages = event.message?.let { mergeEventMessage(current.messages, it) } ?: current.messages,
-            streamText = if (event.message == null) current.streamText else null,
-            activeRunId = null,
-          )
+      "final", "aborted", "error" -> {
+        val transition = reduceWearTerminalChatEvent(mutableState.value, event)
+        if (transition.reloadHistory) cancelLoad()
+        mutableState.value = transition.state
+        if (transition.reloadHistory) {
+          loadHistory(selected, observedMessage = transition.observedMessage)
         }
-        loadHistory(selected, observedMessage = event.message)
-      }
-      "aborted", "error" -> {
-        cancelLoad()
-        mutableState.update { it.copy(streamText = null, activeRunId = null) }
-        loadHistory(selected)
       }
       else ->
         event.message?.let { message ->

@@ -5,6 +5,7 @@
  * non-interactive method, and installs runtime plugins required by the model.
  */
 import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
+import { applyAutoLocalModelLean } from "../../../config/local-model-lean-auto.js";
 import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { enablePluginInConfig } from "../../../plugins/enable.js";
@@ -280,5 +281,43 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     runtime: params.runtime,
     workspaceDir,
   });
-  return copilotInstall.cfg;
+  const previousModel = enableResult.config.agents?.defaults?.model;
+  const previousAutoModel = enableResult.config.wizard?.localModelLeanAutoModel;
+  const restoreAutoModelOwnership =
+    previousAutoModel !== undefined &&
+    previousAutoModel === resolveAgentModelPrimaryValue(previousModel) &&
+    previousAutoModel === copilotInstall.cfg.wizard?.localModelLeanAutoModel;
+
+  // Provider setup already replaced the default model. Restore its old value
+  // only while checking whether onboarding still owns the lean setting.
+  const leanConfig = applyAutoLocalModelLean({
+    config: restoreAutoModelOwnership
+      ? {
+          ...copilotInstall.cfg,
+          agents: {
+            ...copilotInstall.cfg.agents,
+            defaults: {
+              ...copilotInstall.cfg.agents?.defaults,
+              model: previousModel,
+            },
+          },
+        }
+      : copilotInstall.cfg,
+    providerId: providerChoice.provider.id,
+    modelRef: selectedModel,
+  }).config;
+
+  if (!restoreAutoModelOwnership) {
+    return leanConfig;
+  }
+  return {
+    ...leanConfig,
+    agents: {
+      ...leanConfig.agents,
+      defaults: {
+        ...leanConfig.agents?.defaults,
+        model: copilotInstall.cfg.agents?.defaults?.model,
+      },
+    },
+  };
 }

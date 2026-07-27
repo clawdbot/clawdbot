@@ -5,6 +5,7 @@ import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path
 import { isScalar, parseDocument, visit } from "yaml";
 import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as fsSafeRoot, type OpenResult } from "../infra/fs-safe.js";
+import { readClawOpenClawProfile } from "./openclaw-profile.js";
 import { isCanonicalClawHubPackageName, isExactSemVer } from "./schema-portability.js";
 import { parseClawManifest } from "./schema.js";
 import { MAX_MANAGED_FILE_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
@@ -91,6 +92,7 @@ async function buildDevelopmentSnapshot(params: {
   source: ResolvedClawSource;
   manifest: ClawManifest;
   manifestRaw: Buffer;
+  openClawProfile?: { path: string; raw: Buffer };
 }): Promise<
   | {
       ok: true;
@@ -108,6 +110,9 @@ async function buildDevelopmentSnapshot(params: {
   };
   add("canonical-source", Buffer.from(params.source.manifestPath, "utf8"));
   add("manifest", params.manifestRaw);
+  if (params.openClawProfile) {
+    add(`profile:${params.openClawProfile.path.replaceAll("\\", "/")}`, params.openClawProfile.raw);
+  }
 
   if (params.source.kind === "package") {
     const packageJson = params.source.packageJsonRaw;
@@ -519,10 +524,20 @@ export async function readClawManifestFile(path: string): Promise<ClawReadResult
   if (!parsed.ok) {
     return parsed;
   }
+  const profile = await readClawOpenClawProfile({
+    packageRoot: sourceResult.source.packageRoot,
+    manifest: parsed.manifest,
+  });
+  if (!profile.ok) {
+    return profile;
+  }
   const snapshot = await buildDevelopmentSnapshot({
     source: sourceResult.source,
     manifest: parsed.manifest,
     manifestRaw: manifestResult.raw,
+    ...(profile.raw && profile.path
+      ? { openClawProfile: { path: profile.path, raw: profile.raw } }
+      : {}),
   });
   if (!snapshot.ok) {
     return snapshot;
@@ -541,6 +556,7 @@ export async function readClawManifestFile(path: string): Promise<ClawReadResult
   return {
     ok: true,
     manifest: parsed.manifest,
+    ...(profile.profile ? { openClawProfile: profile.profile } : {}),
     source,
     snapshot: { workspaceSources: snapshot.workspaceSources },
     diagnostics: parsed.diagnostics,

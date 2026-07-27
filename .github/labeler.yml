@@ -135,6 +135,11 @@
       - any-glob-to-any-file:
           - "extensions/nostr/**"
           - "docs/channels/nostr.md"
+"channel: buzz":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/buzz/**"
+          - "docs/channels/buzz.md"
 "channel: qqbot":
   - changed-files:
       - any-glob-to-any-file:

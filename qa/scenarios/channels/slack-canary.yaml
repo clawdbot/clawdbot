@@ -4,7 +4,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - slack.runtime-lifecycle
+      - slack.socket
   execution:
     profiles: { "slack:default": 0 }
     kind: flow

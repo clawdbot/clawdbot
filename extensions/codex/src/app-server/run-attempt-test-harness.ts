@@ -219,6 +219,10 @@ export function createParams(sessionFile: string, workspaceDir: string): Embedde
   } as EmbeddedRunAttemptParams;
 }
 
+export function createTestParams(): EmbeddedRunAttemptParams {
+  return createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace"));
+}
+
 export function setCodexTestModelSupportsTools(
   params: EmbeddedRunAttemptParams,
   supportsTools: boolean,

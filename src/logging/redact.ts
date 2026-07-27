@@ -243,7 +243,20 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   String.raw`(ghs_[A-Za-z0-9]{10,})`,
   String.raw`(ghr_[A-Za-z0-9]{10,})`,
   String.raw`(glpat-[A-Za-z0-9._=\-]{20,})`,
-  String.raw`(gloas-[A-Fa-f0-9]{32,})`,
+  String.raw`(gloas-(?:[A-Fa-f0-9]{65,}|[A-Za-z0-9_-]{64}|[A-Fa-f0-9]{32,}))`,
+  String.raw`(gldt-[A-Za-z0-9_-]{20,})`,
+  String.raw`(glcbt-[A-Za-z0-9]{1,5}_[A-Za-z0-9_-]{20,})`,
+  String.raw`(glptt-[A-Za-z0-9_-]{40,})`,
+  String.raw`(glft-(?:[A-Za-z0-9_-]{20,}|[a-h0-9]+-[0-9]+_))`,
+  String.raw`(glimt-[A-Za-z0-9_-]{25,})`,
+  String.raw`(glagent-[A-Za-z0-9_-]{50,})`,
+  String.raw`(glwt-[A-Za-z0-9_-]{20,})`,
+  String.raw`(glsoat-[A-Za-z0-9_-]{20,})`,
+  String.raw`(glffct-[A-Za-z0-9_-]{20,})`,
+  String.raw`(glrt-[A-Za-z0-9._-]{20,})`,
+  String.raw`(glrtr?-[A-Za-z0-9_-]{27,300}\.[0-9a-z]{2}\.[0-9a-z]{9})`,
+  String.raw`(GR1348941[A-Za-z0-9_-]{20,})`,
+  String.raw`(_gitlab_session=[A-Za-z0-9%._-]{20,})`,
   String.raw`(xox[baprs]-[A-Za-z0-9-]{10,})`,
   String.raw`(xapp-[A-Za-z0-9-]{10,})`,
   String.raw`(https:\/\/hooks\.slack\.com\/(?:services\/T[A-Z0-9]+\/B[A-Z0-9]+|workflows\/T[A-Z0-9]+\/A[A-Z0-9]+\/[0-9]{17,19})\/[A-Za-z0-9]{20,})`,
@@ -334,7 +347,7 @@ const DEFAULT_REDACT_PREFILTER_SOURCES: string[] = [
   // URL userinfo and connection-string password slots (`scheme://user:pass@host`).
   String.raw`:\/\/[^\/\s:@]*:[^\/\s@]+@`,
   // Vendor token prefixes and webhook hosts, ordered like DEFAULT_REDACT_PATTERNS.
-  String.raw`sk-|gh[opsur]_|github_pat_|glpat-|gloas-|xox[baprs]-|xapp-|hooks\.slack\.com|discord|gsk_|AIza|ya29\.|1\/\/0|eyJ|pplx-|fal_|fc-|bb_live_|gAAAA|[sr]k_(?:live|test)_|\bSG\.|npm_|pypi-|do[opr]_v1_|dp\.(?:ct|pt|sa|st|scim|audit)\.|dckr_|bkua_|CCIPAT_|sbp_|dapi[0-9a-f]|dd[pw]_|glsa_|nfp_|CFPAT-|ATCTT3|ATATT|ATBB|BBDC-|HRKU-|pat-(?:eu|na)1-|apify_api_|FlyV1|fio-u-|tvly-|exa_|syt_|retaindb_|mem0_|brv_|xai-|fw-|fw_|fpk_`,
+  String.raw`sk-|gh[opsur]_|github_pat_|glpat-|gloas-|gldt-|glcbt-|glptt-|glft-|glimt-|glagent-|glwt-|glsoat-|glffct-|glrt-|glrtr-|GR1348941|_gitlab_session=|xox[baprs]-|xapp-|hooks\.slack\.com|discord|gsk_|AIza|ya29\.|1\/\/0|eyJ|pplx-|fal_|fc-|bb_live_|gAAAA|[sr]k_(?:live|test)_|\bSG\.|npm_|pypi-|do[opr]_v1_|dp\.(?:ct|pt|sa|st|scim|audit)\.|dckr_|bkua_|CCIPAT_|sbp_|dapi[0-9a-f]|dd[pw]_|glsa_|nfp_|CFPAT-|ATCTT3|ATATT|ATBB|BBDC-|HRKU-|pat-(?:eu|na)1-|apify_api_|FlyV1|fio-u-|tvly-|exa_|syt_|retaindb_|mem0_|brv_|xai-|fw-|fw_|fpk_`,
   String.raw`(?:^|[^A-Za-z0-9_])(?:am_|sk_)`,
   String.raw`A[KS]IA[A-Z0-9]|AKID|LTAI|hf_|api_org_|r8_`,
   AWS_SECRET_ACCESS_KEY_VALUE_PATTERN,
@@ -1109,9 +1122,9 @@ function resolveToolPayloadRedaction(
   return { mode: "tools", patterns };
 }
 
-// Forces tools-mode regardless of `logging.redactSensitive` (which governs log
-// output, not UI surfaces), and merges user `logging.redactPatterns` with the
-// built-in defaults so both apply.
+// Forces tools-mode so UI/tool payloads never inherit a caller-supplied "off"
+// mode, and merges user `logging.redactPatterns` with the built-in defaults so
+// both apply.
 export function redactToolPayloadText(text: string): string {
   return redactToolPayloadTextWithConfig(text, readLoggingConfig());
 }

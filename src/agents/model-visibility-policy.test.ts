@@ -29,6 +29,56 @@ function createPolicy(cfg: OpenClawConfig, agentId?: string) {
 }
 
 describe("explicit model visibility policy", () => {
+  it("tracks every exact configured picker ref independently of the allow policy", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "demo/default-primary",
+            fallbacks: ["demo/default-fallback"],
+          },
+          models: { "demo/default-alias": { alias: "default" } },
+          utilityModel: "demo/default-utility",
+          imageModel: {
+            primary: "demo/image",
+            fallbacks: ["demo/image-fallback"],
+          },
+          pdfModel: { primary: "demo/pdf", fallbacks: ["demo/pdf-fallback"] },
+          modelPolicy: { allow: [] },
+        },
+        list: [
+          {
+            id: "research",
+            model: { primary: "demo/primary", fallbacks: ["demo/fallback"] },
+            models: { "demo/agent-alias": { alias: "agent" } },
+            utilityModel: "demo/agent-utility",
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const policy = createModelVisibilityPolicy({
+      cfg,
+      catalog: [],
+      defaultProvider: "openai",
+      agentId: "research",
+    });
+
+    const configuredRefs = [
+      "demo/default-alias",
+      "demo/default-primary",
+      "demo/default-fallback",
+      "demo/agent-alias",
+      "demo/agent-utility",
+      "demo/image",
+      "demo/image-fallback",
+      "demo/pdf",
+      "demo/pdf-fallback",
+      "demo/primary",
+      "demo/fallback",
+    ];
+    expect(configuredRefs.filter((key) => !policy.configuredKeys.has(key))).toEqual([]);
+  });
+
   it("keeps overrides open when model entries only configure aliases or params", () => {
     const policy = createPolicy({
       meta: { migrations: { modelPolicyAllowlist: true } },
@@ -271,7 +321,7 @@ describe("explicit model visibility policy", () => {
     };
 
     const research = createPolicy(cfg, "research");
-    expect(research.allowConfigPath).toBe("agents.list[].modelPolicy.allow");
+    expect(research.allowConfigPath).toBe("agents.entries.*.modelPolicy.allow");
     expect(research.allows({ provider: "anthropic", model: "claude-sonnet-4-6" })).toBe(true);
     expect(research.allows({ provider: "openai", model: "gpt-5.6-sol" })).toBe(false);
 

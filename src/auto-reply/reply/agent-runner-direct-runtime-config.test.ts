@@ -131,6 +131,8 @@ function createReplyOperation(): ReplyOperation {
     setPhase: vi.fn(),
     markWaitingForDeferredMaintenance: vi.fn(),
     markDeferredMaintenanceWaitEnded: vi.fn(),
+    markWaitingForGlobalLane: vi.fn(),
+    markGlobalLaneWaitEnded: vi.fn(),
     updateSessionId: vi.fn((nextSessionId: string) => {
       sessionId = nextSessionId;
     }),
