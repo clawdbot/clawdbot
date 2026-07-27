@@ -4,6 +4,7 @@ import {
   clearCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshot,
 } from "./current-plugin-metadata-snapshot.js";
+import type { PluginDiscoveryResult } from "./discovery.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
@@ -13,6 +14,7 @@ import {
 } from "./plugin-metadata-snapshot.js";
 
 const loadPluginRegistrySnapshotWithMetadata = vi.hoisted(() => vi.fn());
+const loadPluginManifestRegistry = vi.hoisted(() => vi.fn());
 const loadPluginManifestRegistryForInstalledIndex = vi.hoisted(() => vi.fn());
 
 vi.mock("./plugin-registry.js", async (importOriginal) => {
@@ -21,6 +23,14 @@ vi.mock("./plugin-registry.js", async (importOriginal) => {
     ...actual,
     loadPluginRegistrySnapshotWithMetadata: (params: unknown) =>
       loadPluginRegistrySnapshotWithMetadata(params),
+  };
+});
+
+vi.mock("./manifest-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./manifest-registry.js")>();
+  return {
+    ...actual,
+    loadPluginManifestRegistry: (params: unknown) => loadPluginManifestRegistry(params),
   };
 });
 
@@ -85,6 +95,8 @@ function makeManifestRegistry(pluginId = "demo"): PluginManifestRegistry {
 describe("plugin metadata snapshot", () => {
   beforeEach(() => {
     loadPluginRegistrySnapshotWithMetadata.mockReset();
+    loadPluginManifestRegistry.mockReset();
+    loadPluginManifestRegistry.mockReturnValue({ plugins: [], diagnostics: [] });
     loadPluginManifestRegistryForInstalledIndex.mockReset();
     loadPluginManifestRegistryForInstalledIndex.mockReturnValue(makeManifestRegistry());
   });
@@ -107,6 +119,24 @@ describe("plugin metadata snapshot", () => {
     expect(second).not.toBe(first);
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
     expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledTimes(2);
+  });
+
+  it("reuses discovery from a derived empty plugin index", () => {
+    const index = makeIndex();
+    index.plugins = [];
+    const discovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "derived",
+      snapshot: index,
+      diagnostics: [],
+      discovery,
+    });
+
+    const snapshot = loadPluginMetadataSnapshot({ config: {}, env: {} });
+
+    expect(loadPluginManifestRegistry).toHaveBeenCalledWith(expect.objectContaining({ discovery }));
+    expect(loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
+    expect(snapshot.discovery).toBe(discovery);
   });
 
   it("reuses the lifecycle-owned current snapshot", () => {

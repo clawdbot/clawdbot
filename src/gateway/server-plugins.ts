@@ -9,6 +9,7 @@ import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
 import { clearActivatedPluginRuntimeState, loadOpenClawPlugins } from "../plugins/loader.js";
 import { loadPluginLookUpTable, type PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
@@ -701,8 +702,13 @@ export function loadGatewayPlugins(params: {
     ...(params.startupTrace !== undefined && {
       startupTrace: params.startupTrace,
     }),
-    ...(params.pluginLookUpTable?.manifestRegistry
-      ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
+    ...(params.pluginLookUpTable
+      ? {
+          manifestRegistry: params.pluginLookUpTable.manifestRegistry,
+          installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(
+            params.pluginLookUpTable.index,
+          ),
+        }
       : {}),
   });
   const loadMs = performance.now() - beforeLoad;
