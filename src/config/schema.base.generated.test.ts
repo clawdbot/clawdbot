@@ -187,8 +187,6 @@ describe("base config schema", () => {
     expect(codexUserLocation?.properties?.region?.type).toBe("string");
     expect(codexUserLocation?.properties?.city?.type).toBe("string");
     expect(codexUserLocation?.properties?.timezone?.type).toBe("string");
-
-    expect(schemaAt(BASE_SCHEMA, ["ui", "prefs", "chatMessageMaxWidth"])?.type).toBe("string");
   });
 
   it("does not publish metadata-only composition branches", () => {

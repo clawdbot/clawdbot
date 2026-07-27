@@ -3,6 +3,10 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
+  deliveryContextFromSession,
+  normalizeSessionDeliveryState,
+} from "../../utils/delivery-context.shared.js";
+import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   forkSessionAtMessage,
@@ -40,10 +44,10 @@ async function createSession(options: { activeLeafTarget?: string } = {}) {
     createdVia: "operator",
     createdActor: { type: "human", id: "profile-1" },
     createdAt: 1_000,
-    deliveryContext: { channel: "telegram", to: "chat-123" },
+    delivery: normalizeSessionDeliveryState({
+      context: { channel: "telegram", to: "chat-123" },
+    }),
     forkSource: { sessionKey: "agent:main:root", sessionId: "root-session" },
-    lastChannel: "telegram",
-    lastTo: "chat-123",
     lifecycleRevision: "source-lifecycle-revision",
     modelOverride: "gpt-5",
     modelOverrideSource: "user",
@@ -72,7 +76,19 @@ async function createSession(options: { activeLeafTarget?: string } = {}) {
       id: "user-2",
       parentId: "assistant-1",
       timestamp: "2026-07-18T00:00:03.000Z",
-      message: { role: "user", content: [{ type: "text", text: "second prompt" }] },
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "second prompt" },
+          { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+        ],
+        __openclaw: {
+          media: [
+            { path: "/state/media/inbound/stored-image.png", contentType: "image/png" },
+            { path: "/state/media/inbound/notes.txt", contentType: "text/plain" },
+          ],
+        },
+      },
     },
     {
       type: "message",
@@ -199,6 +215,10 @@ describe("SQLite session message cuts", () => {
       status: "created",
       key: sessionKey,
       editorText: "second prompt",
+      editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
+      editorMediaRefs: [
+        { path: "/state/media/inbound/stored-image.png", contentType: "image/png" },
+      ],
     });
     if (result.status !== "created") {
       throw new Error("expected rewind result");
@@ -220,7 +240,26 @@ describe("SQLite session message cuts", () => {
       forkSource: { sessionKey: "agent:main:root", sessionId: "root-session" },
       previousSessionId: "message-cut-source",
     });
-    expect(result.entry.deliveryContext).toEqual({ channel: "telegram", to: "chat-123" });
+    expect(deliveryContextFromSession(result.entry)).toEqual({
+      channel: "telegram",
+      to: "chat-123",
+      accountId: undefined,
+    });
+  });
+
+  it("omits editor attachments for a text-only message", async () => {
+    const { env } = await createSession();
+
+    const result = await rewindSessionToMessage({
+      agentId,
+      env,
+      entryId: "user-1",
+      sessionKey,
+    });
+
+    expect(result).toMatchObject({ status: "created", editorText: "first prompt" });
+    expect(result).not.toHaveProperty("editorAttachments");
+    expect(result).not.toHaveProperty("editorMediaRefs");
   });
 
   it("rewinds the stored row when its canonical key differs", async () => {
@@ -261,6 +300,10 @@ describe("SQLite session message cuts", () => {
       status: "created",
       key: targetKey,
       editorText: "second prompt",
+      editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
+      editorMediaRefs: [
+        { path: "/state/media/inbound/stored-image.png", contentType: "image/png" },
+      ],
     });
     if (result.status !== "created") {
       throw new Error("expected fork result");
@@ -279,9 +322,7 @@ describe("SQLite session message cuts", () => {
     expect(loadSessionEntry(scope)?.sessionId).toBe(scope.sessionId);
     expect(result.entry.lifecycleRevision).not.toBe("source-lifecycle-revision");
     expect(result.entry.cliSessionBindings).toBeUndefined();
-    expect(result.entry.deliveryContext).toBeUndefined();
-    expect(result.entry.lastChannel).toBeUndefined();
-    expect(result.entry.lastTo).toBeUndefined();
+    expect(deliveryContextFromSession(result.entry)).toBeUndefined();
     expect(result.entry.parentSessionKey).toBe(canonicalSourceKey);
     expect(result.entry.previousSessionId).toBeUndefined();
     expect(result.entry.forkedFromParent).toBeUndefined();

@@ -56,6 +56,7 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps) {
   const identities =
     result?.identities.filter((identity) => identity.id !== result.owner?.id) ?? [];
   const allowed = result?.allowedVisibilities ?? [visibility];
+  const canPublish = visibility === "draft" && allowed.includes("shared");
   return html`
     <wa-dropdown
       class="chat-pane__sharing-menu"
@@ -84,17 +85,26 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps) {
       >
         ${sharingIcon(visibility)}
       </button>
+      ${canPublish
+        ? html`<wa-dropdown-item value="visibility:shared" class="chat-pane__publish-draft">
+              <span>${t("chat.sessionSharing.publishDraft")}</span>
+              <span slot="details" aria-hidden="true">${icons.users}</span>
+            </wa-dropdown-item>
+            <div class="session-menu__separator" role="separator"></div>`
+        : nothing}
       <div class="chat-pane__sharing-title">${t("chat.sessionSharing.visibility")}</div>
-      ${allowed.map(
-        (option) => html`
-          <wa-dropdown-item value=${`visibility:${option}`} ?disabled=${option === visibility}>
-            <span>${t(VISIBILITY_LABEL_KEYS[option])}</span>
-            ${option === visibility
-              ? html`<span slot="details" aria-hidden="true">${icons.check}</span>`
-              : nothing}
-          </wa-dropdown-item>
-        `,
-      )}
+      ${allowed
+        .filter((option) => !canPublish || option !== "shared")
+        .map(
+          (option) => html`
+            <wa-dropdown-item value=${`visibility:${option}`} ?disabled=${option === visibility}>
+              <span>${t(VISIBILITY_LABEL_KEYS[option])}</span>
+              ${option === visibility
+                ? html`<span slot="details" aria-hidden="true">${icons.check}</span>`
+                : nothing}
+            </wa-dropdown-item>
+          `,
+        )}
       <div class="session-menu__separator" role="separator"></div>
       <div class="chat-pane__sharing-title">${t("chat.sessionSharing.members")}</div>
       ${props.state?.loading

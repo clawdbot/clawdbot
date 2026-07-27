@@ -36,6 +36,17 @@ const defaultGatewayMock = async (
   if (method === "cron.status") {
     return { enabled: true };
   }
+  if (method === "cron.list") {
+    return {
+      jobs: [],
+      snapshotRevision: "test-empty-cron-inventory",
+      total: 0,
+      offset: 0,
+      limit: 200,
+      hasMore: false,
+      nextOffset: null,
+    };
+  }
   return { ok: true, params };
 };
 callGatewayFromCli.mockImplementation(defaultGatewayMock);
@@ -899,14 +910,19 @@ describe("cron cli", () => {
     await runCronCommand(["cron", "list"]);
 
     const listCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.list");
-    expect(listCall?.[2]).toEqual({ includeDisabled: false });
+    expect(listCall?.[2]).toEqual({ includeDisabled: false, limit: 200, offset: 0 });
   });
 
   it("sends normalized agent id on cron list --agent", async () => {
     await runCronCommand(["cron", "list", "--agent", " Ops "]);
 
     const listCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.list");
-    expect(listCall?.[2]).toEqual({ includeDisabled: false, agentId: "ops" });
+    expect(listCall?.[2]).toEqual({
+      includeDisabled: false,
+      agentId: "ops",
+      limit: 200,
+      offset: 0,
+    });
   });
 
   it("routes cron get to cron.get with the provided id", async () => {
@@ -938,7 +954,13 @@ describe("cron cli", () => {
           const offset = (params as { offset?: number }).offset ?? 0;
           if (offset === 0) {
             return {
-              jobs: [createCronJob("first-page", "First Page")],
+              jobs: Array.from({ length: 200 }, (_, index) =>
+                createCronJob(`first-page-${index}`, `First Page ${index}`),
+              ),
+              snapshotRevision: "test-stable-cron-show-inventory",
+              total: 201,
+              offset: 0,
+              limit: 200,
               hasMore: true,
               nextOffset: 200,
             };
@@ -947,6 +969,10 @@ describe("cron cli", () => {
           targetJob.state.lastDiagnosticSummary = "exec stderr tail";
           return {
             jobs: [targetJob],
+            snapshotRevision: "test-stable-cron-show-inventory",
+            total: 201,
+            offset: 200,
+            limit: 200,
             hasMore: false,
             nextOffset: null,
             deliveryPreviews: {

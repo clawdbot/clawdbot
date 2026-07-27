@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { toErrorObject } from "../infra/errors.js";
 import {
   CHROME_MCP_SESSION_TARGET_PREFIX,
   CHROME_MCP_SNAPSHOT_REF_PREFIX,
@@ -18,7 +19,6 @@ import {
   type ChromeMcpTargetOperation,
   type ChromeMcpToolResult,
   type NormalizedChromeMcpProfileOptions,
-  toChromeMcpError,
 } from "./chrome-mcp-contracts.js";
 import { redactChromeMcpProfileLabelForDiagnostic } from "./chrome-mcp-diagnostics.js";
 import {
@@ -90,7 +90,7 @@ async function withChromeMcpOperationLock<T>(
         return;
       }
       cancelled = true;
-      cancelReason = toChromeMcpError(reason, "Chrome MCP operation cancelled");
+      cancelReason = toErrorObject(reason, "Chrome MCP operation cancelled");
       reject(cancelReason);
     };
     if (signal) {
@@ -230,7 +230,7 @@ export async function callTool(
       }
     }
     if (signal?.aborted) {
-      throw toChromeMcpError(signal.reason ?? err, "Non-Error abort reason");
+      throw toErrorObject(signal.reason ?? err, "Non-Error abort reason");
     }
     if (timeoutMs && err instanceof McpError && err.code === MCP_REQUEST_TIMEOUT_CODE) {
       throw new Error(

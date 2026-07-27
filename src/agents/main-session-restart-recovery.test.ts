@@ -34,6 +34,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { createDeferred } from "../test-utils/deferred.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { setActiveEmbeddedRunLifecycleGeneration } from "./embedded-agent-runner/run-state.js";
 import {
   clearActiveEmbeddedRun,
@@ -64,6 +65,7 @@ import {
   createAssistantToolCallMessage,
   createSessionEntry,
   createSessionStore,
+  type SessionEntryFixture,
   expectRecord,
   mockCallArg,
   waitForFast,
@@ -182,20 +184,23 @@ async function makeSessionsDir(agentId = "main"): Promise<string> {
 
 async function writeStorePath(
   storePath: string,
-  store: Record<string, SessionEntry>,
+  store: Record<string, SessionEntryFixture>,
 ): Promise<void> {
   await Promise.all(
     Object.entries(store).map(([sessionKey, entry]) =>
-      replaceSessionEntry({ storePath, sessionKey }, entry),
+      replaceSessionEntry({ storePath, sessionKey }, createSessionEntry(entry)),
     ),
   );
 }
 
-async function writeStore(sessionsDir: string, store: Record<string, SessionEntry>): Promise<void> {
+async function writeStore(
+  sessionsDir: string,
+  store: Record<string, SessionEntryFixture>,
+): Promise<void> {
   await writeStorePath(path.join(sessionsDir, "sessions.json"), store);
 }
 
-function mainSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
+function mainSessionEntry(overrides: SessionEntryFixture = {}): SessionEntry {
   return createSessionEntry({
     sessionId: "main-session",
     updatedAt: Date.now() - 10_000,
@@ -205,10 +210,7 @@ function mainSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
   });
 }
 
-function runningSessionEntry(
-  sessionId: string,
-  overrides: Partial<SessionEntry> = {},
-): SessionEntry {
+function runningSessionEntry(sessionId: string, overrides: SessionEntryFixture = {}): SessionEntry {
   return createSessionEntry({
     sessionId,
     updatedAt: Date.now() - 10_000,
@@ -218,7 +220,7 @@ function runningSessionEntry(
 }
 
 function mainSessionStore(
-  overrides: Partial<SessionEntry> = {},
+  overrides: SessionEntryFixture = {},
   sessionKey = "agent:main:main",
 ): Record<string, SessionEntry> {
   return createSessionStore(mainSessionEntry(overrides), sessionKey);
@@ -242,7 +244,7 @@ async function writeMainSession({
   sessionsDir,
   sessionKey = "agent:main:main",
   ...entry
-}: Partial<SessionEntry> & { sessionsDir: string; sessionKey?: string }): Promise<void> {
+}: SessionEntryFixture & { sessionsDir: string; sessionKey?: string }): Promise<void> {
   await writeStore(sessionsDir, mainSessionStore(entry, sessionKey));
 }
 
@@ -326,6 +328,17 @@ function codeModeWaitCallMessage() {
       },
     ],
     stopReason: "toolUse",
+  };
+}
+
+// A provider failure is the remaining unresumable transcript tail: restart
+// aborts now resume, so notice-delivery tests need a shape that still fails.
+function unresumableAssistantMessage(text = "provider failed") {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    stopReason: "error",
+    errorMessage: "Provider finish_reason: content_filter",
   };
 }
 
@@ -2316,6 +2329,7 @@ describe("main-session-restart-recovery", () => {
     ]);
 
     const result = await retryRestartAbortedMainSessionRecoveryAfterOwnerRelease({
+      cfg: { agents: { entries: { main: { default: true } } } },
       expectedSessionId: "legacy-session",
       sessionKey: "main",
       storePath,
@@ -2325,7 +2339,7 @@ describe("main-session-restart-recovery", () => {
     expect(callGateway).toHaveBeenCalledOnce();
     expect(gatewayParams()).toMatchObject({
       expectedExistingSessionId: "legacy-session",
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
     });
     expect(
       sessionAccessor.loadExactSessionEntry({ sessionKey: "main", storePath })?.entry,
@@ -2560,7 +2574,7 @@ describe("main-session-restart-recovery", () => {
       .mockResolvedValueOnce({ runId: "run-resumed" });
 
     scheduleRestartAbortedMainSessionRecovery({
-      cfg: {},
+      cfg: { agents: { entries: { main: { default: true } } } },
       delayMs: 0,
       maxRetries: 1,
       stateDir: tmpDir,
@@ -3883,22 +3897,6 @@ describe("main-session-restart-recovery", () => {
         stopReason: "error",
       },
     ],
-    [
-      "aborted tool call",
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call-1", name: "write", arguments: {} }],
-        stopReason: "aborted",
-      },
-    ],
-    [
-      "aborted assistant output with text",
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "partial answer" }],
-        stopReason: "aborted",
-      },
-    ],
   ])("does not resume %s at the transcript tail", async (_label, assistantMessage) => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, mainSessionStore());
@@ -3910,6 +3908,56 @@ describe("main-session-restart-recovery", () => {
     await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
     expect(callGateway).not.toHaveBeenCalled();
   });
+
+  it.each([
+    [
+      "no abort string",
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "partial answer" }],
+        stopReason: "aborted",
+      },
+      false,
+    ],
+    [
+      "a worker abort string",
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "" }],
+        stopReason: "aborted",
+        errorMessage: "Worker inference aborted.",
+      },
+      false,
+    ],
+    [
+      "a dangling side-effecting call",
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call-1", name: "write", arguments: {} }],
+        stopReason: "aborted",
+        errorMessage: "Worker inference aborted.",
+      },
+      true,
+    ],
+  ])(
+    "resumes an aborted tail persisted with %s",
+    async (_label, assistantMessage, forceRestartSafeTools) => {
+      const sessionsDir = await makeSessionsDir();
+      await writeStore(sessionsDir, mainSessionStore());
+      await writeTranscript(sessionsDir, "main-session", [
+        { role: "user", content: "do the thing" },
+        assistantMessage,
+      ]);
+
+      await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      if (forceRestartSafeTools) {
+        expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+      } else {
+        expect(gatewayParams()).not.toMatchObject({ forceRestartSafeTools: true });
+      }
+    },
+  );
 
   it("keeps an unresumable Control UI notice in history despite a stale external route", async () => {
     const sessionsDir = await makeSessionsDir();
@@ -3923,11 +3971,7 @@ describe("main-session-restart-recovery", () => {
     });
     await writeTranscript(sessionsDir, "main-session", [
       { role: "user", content: "do the thing" },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "partial answer" }],
-        stopReason: "aborted",
-      },
+      unresumableAssistantMessage(),
     ]);
 
     await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
@@ -3982,11 +4026,7 @@ describe("main-session-restart-recovery", () => {
     );
     await writeTranscript(sessionsDir, "main-session", [
       { role: "user", content: "do another thing" },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "another partial answer" }],
-        stopReason: "aborted",
-      },
+      unresumableAssistantMessage("another provider failure"),
     ]);
 
     await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
@@ -4027,11 +4067,7 @@ describe("main-session-restart-recovery", () => {
     });
     await writeTranscript(sessionsDir, "main-session", [
       { role: "user", content: "do the thing" },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "partial answer" }],
-        stopReason: "aborted",
-      },
+      unresumableAssistantMessage(),
     ]);
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockResolvedValueOnce({
       ok: false,
@@ -4088,11 +4124,7 @@ describe("main-session-restart-recovery", () => {
     });
     await writeTranscript(sessionsDir, "interrupted-session", [
       { role: "user", content: "do the thing" },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "partial answer" }],
-        stopReason: "aborted",
-      },
+      unresumableAssistantMessage(),
     ]);
     let entryAtExternalSend: SessionEntry | undefined;
     vi.mocked(callGateway).mockImplementationOnce(async () => {
@@ -4128,16 +4160,20 @@ describe("main-session-restart-recovery", () => {
     });
   });
 
-  it("sends a visible notice through the legacy route when no resumable transcript survives", async () => {
+  it("sends a visible notice through the canonical route when no resumable transcript survives", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {
       "agent:main:demo-channel:room-1": {
         ...runningSessionEntry("main-session"),
         abortedLastRun: true,
-        lastChannel: "discord",
-        lastTo: "discord:channel:room-1",
-        lastAccountId: "default",
-        lastThreadId: "thread-1",
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "discord",
+            to: "discord:channel:room-1",
+            accountId: "default",
+            threadId: "thread-1",
+          },
+        }),
       },
     });
     await writeTranscript(sessionsDir, "main-session", [

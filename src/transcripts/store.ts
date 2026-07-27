@@ -36,6 +36,7 @@ import {
   hasAliasedCanonicalTranscriptExportPathOwner,
 } from "./store-export-ownership.js";
 import {
+  appendMeetingTranscriptUtterance,
   meetingTranscriptDb,
   type MeetingTranscriptSessionRow,
   sessionFromRow,
@@ -465,45 +466,8 @@ export class TranscriptsStore {
     const now = Date.now();
     ensureMeetingTranscriptsSchema(this.databaseOptions);
     runOpenClawStateWriteTransaction(
-      ({ db: database }) => {
-        const db = meetingTranscriptDb(database);
-        const stored = executeSqliteQueryTakeFirstSync(
-          database,
-          db
-            .selectFrom("meeting_transcript_sessions")
-            .select("next_utterance_seq")
-            .where("session_id", "=", session.sessionId)
-            .where("started_at", "=", session.startedAt),
-        );
-        if (!stored) {
-          throw new Error(`transcripts session not found: ${session.sessionId}`);
-        }
-        const sequence = stored.next_utterance_seq;
-        executeSqliteQuerySync(
-          database,
-          db.insertInto("meeting_transcript_utterances").values({
-            session_id: session.sessionId,
-            session_started_at: session.startedAt,
-            sequence,
-            utterance_id: utterance.id ?? null,
-            started_at: utterance.startedAt ?? null,
-            ended_at: utterance.endedAt ?? null,
-            speaker_id: utterance.speaker?.id ?? null,
-            speaker_label: utterance.speaker?.label ?? null,
-            text: utterance.text,
-            final: utterance.final === undefined ? null : utterance.final ? 1 : 0,
-            metadata_json: metadataJson,
-          }),
-        );
-        executeSqliteQuerySync(
-          database,
-          db
-            .updateTable("meeting_transcript_sessions")
-            .set({ next_utterance_seq: sequence + 1, updated_at_ms: now })
-            .where("session_id", "=", session.sessionId)
-            .where("started_at", "=", session.startedAt),
-        );
-      },
+      ({ db: database }) =>
+        appendMeetingTranscriptUtterance({ database, metadataJson, now, session, utterance }),
       this.databaseOptions,
       { operationLabel: "meeting-transcripts.utterance.append" },
     );

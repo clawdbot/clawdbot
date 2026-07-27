@@ -5,6 +5,7 @@ import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/p
 import { normalizeAgentId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
+import { createMeetingTranscriptSourceProvider } from "openclaw/plugin-sdk/transcripts";
 import { buildGoogleMeetCalendarDayWindow, listGoogleMeetCalendarEvents } from "./src/calendar.js";
 import {
   buildGoogleMeetPreflightReport,
@@ -55,6 +56,14 @@ export default definePluginEntry({
   register(api: OpenClawPluginApi) {
     const config = googleMeetConfigSchema.parse(api.pluginConfig);
     const ensureRuntime = createGoogleMeetRuntimeAccessor({ api, config });
+    api.registerTranscriptSourceProvider(
+      createMeetingTranscriptSourceProvider({
+        id: "google-meet",
+        aliases: ["googlemeet", "meet"],
+        name: "Google Meet",
+        runtime: async () => (await ensureRuntime()).transcriptSourceRuntime(),
+      }),
+    );
 
     api.registerGatewayMethod(
       "googlemeet.join",

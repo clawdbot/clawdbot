@@ -1424,7 +1424,11 @@ describe("state migrations", () => {
     >;
     for (const { legacyKey, canonicalKey, sessionId, runtimeSessionName } of cases) {
       expect(store[legacyKey]).toBeUndefined();
-      expect(store[canonicalKey]).toEqual({ sessionId, updatedAt: 10 });
+      expect(store[canonicalKey]).toEqual({
+        sessionId,
+        updatedAt: 10,
+        delivery: { kind: "none" },
+      });
       expect(
         readAcpSessionMetaForEntry({
           sessionKey: canonicalKey,
@@ -1972,6 +1976,16 @@ describe("state migrations", () => {
       });
       expect(db.prepare("PRAGMA user_version").get()).toEqual({
         user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
+      expect(
+        db
+          .prepare(
+            "SELECT role, schema_version FROM schema_meta WHERE meta_key = 'primary' LIMIT 1",
+          )
+          .get(),
+      ).toEqual({
+        role: "global",
+        schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
       });
     } finally {
       db.close();

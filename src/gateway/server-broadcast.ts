@@ -74,6 +74,8 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "session.observer": [READ_SCOPE],
   "session.operation": [READ_SCOPE],
   "session.sharing": [READ_SCOPE],
+  "session.suggestion": [READ_SCOPE],
+  "session.typing": [READ_SCOPE],
   "session.tool": [READ_SCOPE],
   // Operator terminal byte/exit streams. Admin-gated to match the terminal.*
   // methods; also targeted to the owning connection at broadcast time.
@@ -185,6 +187,8 @@ export function createGatewayBroadcaster(params: {
     client: GatewayWsClient,
     sessionKeys: readonly string[],
     agentId?: string,
+    event?: string,
+    payload?: unknown,
   ) => boolean;
 }) {
   const clientSeq = new WeakMap<GatewayWsClient, number>();
@@ -254,14 +258,17 @@ export function createGatewayBroadcaster(params: {
       if (
         sessionKeys.length > 0 &&
         params.canReceiveSessionEvent &&
-        !params.canReceiveSessionEvent(c, sessionKeys, agentId)
+        !params.canReceiveSessionEvent(c, sessionKeys, agentId, event, payload)
       ) {
         continue;
       }
-      if (
-        (isBrowserCopilotClient(c.connect.client) ||
+      const requiresSessionSubscription =
+        event === "session.typing" ||
+        ((isBrowserCopilotClient(c.connect.client) ||
           hasGatewayClientCap(c.connect.caps, GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS)) &&
-        SESSION_SUBSCRIPTION_EVENTS.has(event) &&
+          SESSION_SUBSCRIPTION_EVENTS.has(event));
+      if (
+        requiresSessionSubscription &&
         (!opts?.sessionKeys?.length ||
           !opts.sessionKeys.some((sessionKey) =>
             params.sessionMessageSubscribers?.get(sessionKey).has(c.connId),

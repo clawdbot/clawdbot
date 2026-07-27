@@ -36,7 +36,6 @@ export type OffloadedRef = {
 
 type ParsedMessageWithImages = {
   message: string;
-  messageWithoutOffloadedImageRefs: string;
   images: ChatImageContent[];
   imageOrder: PromptImageOrderEntry[];
   media: MediaFact[];
@@ -63,6 +62,16 @@ const OFFLOAD_THRESHOLD_BYTES = 2_000_000;
 const TEXT_ONLY_OFFLOAD_LIMIT = 10;
 
 const DEFAULT_CHAT_ATTACHMENT_MAX_MB = 20;
+
+export function stripImageMediaMarkers(message: string, refs: readonly OffloadedRef[]): string {
+  return refs.reduce((projected, ref) => {
+    const marker = ref.mimeType.startsWith("image/") ? `\n[media attached: ${ref.mediaRef}]` : "";
+    const index = marker ? projected.lastIndexOf(marker) : -1;
+    return index < 0
+      ? projected
+      : projected.slice(0, index) + projected.slice(index + marker.length);
+  }, message);
+}
 
 export async function persistInboundImagesForTranscript(params: {
   images: ChatImageContent[];
@@ -325,7 +334,6 @@ export async function parseMessageWithAttachments(
   if (!attachments || attachments.length === 0) {
     return {
       message,
-      messageWithoutOffloadedImageRefs: message,
       images: [],
       imageOrder: [],
       media: [],
@@ -337,7 +345,6 @@ export async function parseMessageWithAttachments(
   const imageOrder: PromptImageOrderEntry[] = [];
   const offloadedRefs: OffloadedRef[] = [];
   let updatedMessage = message;
-  let messageWithoutOffloadedImageRefs = message;
   let textOnlyImageOffloadCount = 0;
   const savedMediaIds: string[] = [];
 
@@ -413,7 +420,7 @@ export async function parseMessageWithAttachments(
       // would offload a file the runner later drops to null — a successful
       // response with a silently missing image. Reject here so the client
       // sees an explicit 4xx. Non-image attachments keep the full maxBytes
-      // ceiling because their host path (ctx.MediaPaths → Read/Bash) doesn't
+      // ceiling because their host path (media facts → Read/Bash) doesn't
       // load into the model.
       if (isImage && sizeBytes > MAX_IMAGE_BYTES) {
         throw new Error(
@@ -431,8 +438,6 @@ export async function parseMessageWithAttachments(
             `${TEXT_ONLY_OFFLOAD_LIMIT} was reached`,
         );
         updatedMessage += "\n[image attachment omitted: text-only attachment limit reached]";
-        messageWithoutOffloadedImageRefs +=
-          "\n[image attachment omitted: text-only attachment limit reached]";
         continue;
       }
 
@@ -469,11 +474,7 @@ export async function parseMessageWithAttachments(
       savedMediaIds.push(savedMedia.id);
 
       const mediaRef = `media://inbound/${savedMedia.id}`;
-      const mediaLine = `\n[media attached: ${mediaRef}]`;
-      updatedMessage += mediaLine;
-      if (!isImage) {
-        messageWithoutOffloadedImageRefs += mediaLine;
-      }
+      updatedMessage += `\n[media attached: ${mediaRef}]`;
       log?.info?.(
         shouldForceImageOffload && isImage
           ? `[Gateway] Offloaded image for text-only model. Saved: ${mediaRef}`
@@ -504,10 +505,6 @@ export async function parseMessageWithAttachments(
 
   return {
     message: updatedMessage !== message ? updatedMessage.trimEnd() : message,
-    messageWithoutOffloadedImageRefs:
-      messageWithoutOffloadedImageRefs !== message
-        ? messageWithoutOffloadedImageRefs.trimEnd()
-        : message,
     images,
     imageOrder,
     media: offloadedRefs.map((ref) => ({

@@ -17,6 +17,7 @@ import { buildAuthorizedShellCommandFromPlan } from "../infra/exec-authorization
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   normalizeExecutableToken,
+  POSIX_PARSEABLE_SHELL_WRAPPERS,
   POSIX_SHELL_WRAPPERS,
   resolveShellWrapperTransportArgv,
 } from "../infra/exec-wrapper-resolution.js";
@@ -32,6 +33,7 @@ import type { RunResult } from "./invoke-types.js";
  * This module keeps command approval analysis separate from process execution,
  * and only rewrites shell transports when the rebuilt command still satisfies policy.
  */
+const POSIX_PARSEABLE_SHELL_WRAPPER_NAMES: ReadonlySet<string> = POSIX_PARSEABLE_SHELL_WRAPPERS;
 const POSIX_SHELL_WRAPPER_NAMES: ReadonlySet<string> = POSIX_SHELL_WRAPPERS;
 
 type SystemRunAllowlistAnalysis = {
@@ -164,6 +166,19 @@ export async function resolveSystemRunExecArgv(params: {
   env: Record<string, string> | undefined;
 }): Promise<string[] | null> {
   let execArgv = params.plannedAllowlistArgv ?? params.argv;
+  const transportKind = params.shellCommand
+    ? resolvePosixShellInlineCommandTransportKind(params.argv)
+    : "none";
+  if (
+    params.security === "allowlist" &&
+    !params.policy.approvedByAsk &&
+    params.shellCommand &&
+    params.policy.analysisOk &&
+    params.policy.allowlistSatisfied &&
+    transportKind === "opaque"
+  ) {
+    return null;
+  }
   if (
     params.security === "allowlist" &&
     params.isWindows &&
@@ -189,10 +204,14 @@ export async function resolveSystemRunExecArgv(params: {
     !params.policy.approvedByAsk &&
     params.shellCommand &&
     params.policy.analysisOk &&
-    params.policy.allowlistSatisfied &&
-    params.segmentSatisfiedBy.some((entry) => entry === "safeBins" || entry === "inlineChain") &&
-    isPosixShellInlineCommandTransport(params.argv)
+    params.policy.allowlistSatisfied
   ) {
+    if (
+      transportKind !== "parseable" ||
+      !params.segmentSatisfiedBy.some((entry) => entry === "safeBins" || entry === "inlineChain")
+    ) {
+      return execArgv;
+    }
     if (!params.authorizationPlan) {
       return null;
     }
@@ -217,12 +236,18 @@ export async function resolveSystemRunExecArgv(params: {
   return execArgv;
 }
 
-function isPosixShellInlineCommandTransport(argv: string[]): boolean {
+function resolvePosixShellInlineCommandTransportKind(
+  argv: string[],
+): "none" | "opaque" | "parseable" {
   const transportArgv = resolveShellWrapperTransportArgv(argv);
-  return Boolean(
-    transportArgv &&
-    POSIX_SHELL_WRAPPER_NAMES.has(normalizeExecutableToken(transportArgv[0] ?? "")),
-  );
+  if (!transportArgv) {
+    return "none";
+  }
+  const executable = normalizeExecutableToken(transportArgv[0] ?? "");
+  if (!POSIX_SHELL_WRAPPER_NAMES.has(executable)) {
+    return "none";
+  }
+  return POSIX_PARSEABLE_SHELL_WRAPPER_NAMES.has(executable) ? "parseable" : "opaque";
 }
 
 function findSubsequence(haystack: readonly string[], needle: readonly string[]): number {
@@ -252,7 +277,7 @@ function replacePosixShellInlineCommand(params: {
   const transportArgv = resolveShellWrapperTransportArgv(params.argv);
   if (
     !transportArgv ||
-    !POSIX_SHELL_WRAPPER_NAMES.has(normalizeExecutableToken(transportArgv[0] ?? ""))
+    !POSIX_PARSEABLE_SHELL_WRAPPER_NAMES.has(normalizeExecutableToken(transportArgv[0] ?? ""))
   ) {
     return null;
   }

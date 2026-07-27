@@ -29,6 +29,7 @@ function createResetFixture(entry: Partial<SessionEntry> = {}) {
   const sessionEntry: SessionEntry = {
     sessionId: "s1",
     updatedAt: Date.now(),
+    delivery: { kind: "none" },
     ...entry,
   };
   return {
@@ -291,6 +292,7 @@ describe("applyResetModelOverride", () => {
     const rotatedEntry: SessionEntry = {
       sessionId: "s2",
       updatedAt: fixture.sessionEntry.updatedAt + 1,
+      delivery: { kind: "none" },
       providerOverride: "openai",
       modelOverride: "gpt-4o-mini",
       modelOverrideSource: "user",

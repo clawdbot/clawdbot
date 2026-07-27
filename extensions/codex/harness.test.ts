@@ -1,4 +1,8 @@
 // Codex tests cover harness plugin behavior.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import {
@@ -237,7 +241,7 @@ describe("Codex agent harness supports()", () => {
 });
 
 describe("Codex agent harness reset()", () => {
-  it("retires the physical session generation", async () => {
+  it("clears an in-place session generation without stranding its replacement", async () => {
     const bindingStore = createCodexTestBindingStore();
     const identity = sessionBindingIdentity({
       agentId: "worker",
@@ -261,6 +265,86 @@ describe("Codex agent harness reset()", () => {
     });
 
     await expect(bindingStore.read(identity)).resolves.toBeUndefined();
+    await expect(
+      bindingStore.mutate(identity, {
+        kind: "set",
+        binding: { threadId: "thread-2", cwd: "/repo" },
+      }),
+    ).resolves.toBe(true);
+    await expect(bindingStore.read(identity)).resolves.toMatchObject({ threadId: "thread-2" });
+  });
+
+  it("repairs a retirement fence left by an earlier in-place reset", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-harness-reset-"));
+    const storePath = path.join(root, "sessions.json");
+    const bindingStore = createCodexTestBindingStore();
+    const sessionKey = "agent:worker:main";
+    const identity = sessionBindingIdentity({
+      agentId: "worker",
+      sessionId: "session-1",
+      sessionKey,
+    });
+    try {
+      await upsertSessionEntry({
+        agentId: identity.agentId,
+        sessionKey,
+        storePath,
+        entry: { sessionId: identity.sessionId, updatedAt: 1 },
+      });
+      await bindingStore.mutate(identity, {
+        kind: "set",
+        binding: { threadId: "thread-1", cwd: "/repo" },
+      });
+      await bindingStore.retireSessionGeneration(identity);
+      const harness = createCodexAppServerAgentHarness({
+        bindingStore,
+        resolveConfig: () => ({ session: { store: storePath } }),
+      });
+
+      await harness.reset?.({
+        agentId: "worker",
+        sessionId: "session-1",
+        sessionKey,
+        reason: "reset",
+      });
+
+      await expect(
+        bindingStore.mutate(identity, {
+          kind: "set",
+          binding: { threadId: "thread-recovered", cwd: "/repo" },
+        }),
+      ).resolves.toBe(true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps deleted session generations retired", async () => {
+    const bindingStore = createCodexTestBindingStore();
+    const identity = sessionBindingIdentity({
+      agentId: "worker",
+      sessionId: "session-1",
+      sessionKey: "agent:worker:main",
+    });
+    await bindingStore.mutate(identity, {
+      kind: "set",
+      binding: { threadId: "thread-1", cwd: "/repo" },
+    });
+    const harness = createCodexAppServerAgentHarness({ bindingStore });
+
+    await harness.reset?.({
+      agentId: "worker",
+      sessionId: "session-1",
+      sessionKey: "agent:worker:main",
+      reason: "deleted",
+    });
+
+    await expect(
+      bindingStore.mutate(identity, {
+        kind: "set",
+        binding: { threadId: "thread-stale", cwd: "/repo" },
+      }),
+    ).resolves.toBe(false);
   });
 });
 

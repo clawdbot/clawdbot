@@ -104,7 +104,9 @@ function buildPreparedCliRunContext(params: {
 
   return {
     params: {
+      agentId: "main",
       sessionId: "session-1",
+      sessionKey: "agent:main:main",
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
       prompt: "hi",

@@ -1,18 +1,15 @@
-/**
- * Cerebras onboarding config helpers.
- */
+import { readManifestProviderDefaultModelRef } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   createModelCatalogPresetAppliers,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
-import {
-  buildCerebrasModelDefinition,
-  CEREBRAS_BASE_URL,
-  CEREBRAS_MODEL_CATALOG,
-} from "./models.js";
+import { buildCerebrasCatalogModels, CEREBRAS_BASE_URL } from "./models.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-/** Default Cerebras model reference used after onboarding. */
-export const CEREBRAS_DEFAULT_MODEL_REF = "cerebras/zai-glm-4.7";
+export const CEREBRAS_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(
+  manifest,
+  "cerebras",
+)!;
 
 const cerebrasPresetAppliers = createModelCatalogPresetAppliers({
   primaryModelRef: CEREBRAS_DEFAULT_MODEL_REF,
@@ -20,12 +17,11 @@ const cerebrasPresetAppliers = createModelCatalogPresetAppliers({
     providerId: "cerebras",
     api: "openai-completions",
     baseUrl: CEREBRAS_BASE_URL,
-    catalogModels: CEREBRAS_MODEL_CATALOG.map(buildCerebrasModelDefinition),
-    aliases: [{ modelRef: CEREBRAS_DEFAULT_MODEL_REF, alias: "Cerebras GLM 4.7" }],
+    catalogModels: buildCerebrasCatalogModels(),
+    aliases: [{ modelRef: CEREBRAS_DEFAULT_MODEL_REF, alias: "Cerebras Gemma 4 31B" }],
   }),
 });
 
-/** Applies Cerebras provider/catalog config and default model aliases. */
 export function applyCerebrasConfig(cfg: OpenClawConfig): OpenClawConfig {
   return cerebrasPresetAppliers.applyConfig(cfg);
 }

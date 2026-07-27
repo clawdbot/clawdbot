@@ -95,6 +95,11 @@ export default definePluginEntry(
     toolDescription:
       "Join and manage Microsoft Teams meeting browser guests. Guest admission, tenant sign-in, and media permissions may require manual action in the OpenClaw Chrome profile.",
     toolParameters: TeamsMeetingsToolSchema,
+    transcriptSource: {
+      id: "teams",
+      aliases: ["teams-meetings", "microsoft-teams", "msteams"],
+      name: "Microsoft Teams meetings",
+    },
     createRuntime: ({ api, config }) =>
       new TeamsMeetingsRuntime({
         config,

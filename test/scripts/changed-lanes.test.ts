@@ -31,13 +31,13 @@ import {
   shouldRunPromptSnapshotCheck,
   shouldRunPromptSnapshotOwnerTest,
   shouldRunRuntimeSidecarBaselineCheck,
-  shouldRunShrinkwrapGuard,
+  shouldRunNpmLockGuard,
   shouldRunPluginSdkApiBaselineCheck,
   shouldRunDeprecationHygieneChecks,
   shouldRunPluginSdkSurfaceChecks,
   shouldRunSqliteSessionSchemaBaselineCheck,
   shouldRunTestTempCreationReport,
-  createShrinkwrapGuardCommand,
+  createNpmLockGuardCommand,
 } from "../../scripts/check-changed.mjs";
 import { resolveOxfmtInvocation } from "../../scripts/format-docs.mjs";
 import { isDirectRunPath } from "../../scripts/lib/direct-run.mjs";
@@ -282,7 +282,7 @@ describe("scripts/changed-lanes", () => {
     commitAll(dir, "initial");
     const binDir = path.join(dir, "bin");
     mkdirSync(binDir, { recursive: true });
-    writeFileSync(path.join(binDir, "pnpm"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    writeFileSync(path.join(binDir, "node"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 
     const result = spawnSync(process.execPath, [path.join(repoRoot, "scripts/check-changed.mjs")], {
       cwd: dir,
@@ -312,7 +312,7 @@ describe("scripts/changed-lanes", () => {
     writeRepoFile(dir, "node_modules/typescript/package.json", '{"name":"typescript"}\n');
     const binDir = path.join(dir, "bin");
     mkdirSync(binDir, { recursive: true });
-    writeFileSync(path.join(binDir, "pnpm"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    writeFileSync(path.join(binDir, "node"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 
     const result = spawnSync(
       process.execPath,
@@ -939,8 +939,8 @@ describe("scripts/changed-lanes", () => {
     expect(changedCheckRequiresRemote(result)).toBe(true);
 
     expect(buildChangedCheckCrabboxArgs(["--base", "origin/main", "--head", "HEAD"])).toEqual([
-      "crabbox:run",
-      "--",
+      "scripts/crabbox-wrapper.mjs",
+      "run",
       "--provider",
       "blacksmith-testbox",
       "--blacksmith-org",
@@ -1092,7 +1092,7 @@ describe("scripts/changed-lanes", () => {
   it.each([
     {
       name: "routes core test-only changes to core test lanes only",
-      path: "packages/normalization-core/src/string-normalization.test.ts",
+      path: "packages/normalization-core/src/string-normalization.test-support.ts",
       expected: {
         lanes: { coreTests: true },
         includes: ["tsgo:core:test"],
@@ -1110,7 +1110,7 @@ describe("scripts/changed-lanes", () => {
     },
     {
       name: "routes extension test-only changes to extension test lanes only",
-      path: "extensions/discord/src/index.test.ts",
+      path: "extensions/discord/src/index.test-helpers.ts",
       expected: {
         lanes: { extensionTests: true },
         includes: ["tsgo:extensions:test"],
@@ -1417,7 +1417,7 @@ describe("scripts/changed-lanes", () => {
       "dup:check:coverage",
       "deps:pins:check",
       "format:check",
-      "scripts/generate-npm-shrinkwrap.mjs",
+      "scripts/generate-npm-package-lock.mjs",
       "check:deprecated-api-usage",
       "plugins:boundary-report:ci",
       "deps:patches:check",
@@ -1453,25 +1453,24 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).not.toContain("release-metadata:check");
   });
 
-  it("runs the npm shrinkwrap guard for dependency package surfaces", () => {
+  it("runs the npm package-lock guard for dependency package surfaces", () => {
     expect(
-      shouldRunShrinkwrapGuard([
-        "npm-shrinkwrap.json",
-        "extensions/slack/npm-shrinkwrap.json",
+      shouldRunNpmLockGuard([
         "extensions/slack/package.json",
-        "scripts/generate-npm-shrinkwrap.mjs",
+        "extensions/slack/deps/local-runtime/package.json",
+        "scripts/generate-npm-package-lock.mjs",
       ]),
     ).toBe(true);
 
     const result = detectChangedLanes(["extensions/slack/package.json"]);
     const plan = createChangedCheckPlan(result);
-    const shrinkwrapGuard = createShrinkwrapGuardCommand(["extensions/slack/package.json"]);
+    const npmLockGuard = createNpmLockGuardCommand(["extensions/slack/package.json"]);
 
     expect(
-      shrinkwrapGuard?.args.some((arg) => arg.replaceAll("\\", "/").endsWith("extensions/slack")),
+      npmLockGuard?.args.some((arg) => arg.replaceAll("\\", "/").endsWith("extensions/slack")),
     ).toBe(true);
-    expect(plan.commands.map((command) => command.name)).toContain("npm shrinkwrap guard");
-    expect(plan.commands.map((command) => command.args[0])).not.toContain("deps:shrinkwrap:check");
+    expect(plan.commands.map((command) => command.name)).toContain("npm package-lock guard");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("deps:npm-lock:check");
   });
 
   it.each([

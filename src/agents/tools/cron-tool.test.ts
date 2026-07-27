@@ -22,6 +22,7 @@ vi.mock("../../config/sessions/delivery-info.js", () => ({
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import { buildAgentPeerSessionKey } from "../../routing/session-key.js";
 import { createCronTool } from "./cron-tool.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
 describe("cron tool", () => {
   type SchemaLike = {
@@ -1549,6 +1550,33 @@ describe("cron tool", () => {
       agentSessionKey: callerSessionKey,
     });
     expect(sessionKey).toBe(callerSessionKey);
+  });
+
+  it("forwards authenticated source account separately from delivery account", async () => {
+    let identity: ReturnType<typeof getGatewayToolCallerIdentity> = undefined;
+    const tool = createCronTool(
+      {
+        agentSessionKey: "agent:main:discord:channel:ops",
+        agentAccountId: "source-account",
+        selfRemoveOnlyJobId: "job-current",
+        currentDeliveryContext: { accountId: "delivery-account" },
+      },
+      {
+        callGatewayTool: async <T>() => {
+          identity = getGatewayToolCallerIdentity();
+          return { enabled: true, jobs: 0 } as T;
+        },
+      },
+    );
+
+    await tool.execute("call-source-account", { action: "status" });
+
+    expect(identity).toMatchObject({
+      agentId: "main",
+      sessionKey: "agent:main:discord:channel:ops",
+      turnSourceAccountId: "source-account",
+      cronSelfManagementJobId: "job-current",
+    });
   });
 
   it("preserves explicit job.sessionKey on add", async () => {

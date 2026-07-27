@@ -546,6 +546,7 @@ export type GatewaySessionRow = {
   lastActivityAt?: number;
   archived?: boolean;
   archivedAt?: number;
+  archivedBy?: import("../../../packages/gateway-protocol/src/schema/sessions.js").SessionCreatedActor;
   pinned?: boolean;
   pinnedAt?: number;
   icon?: string;
@@ -573,6 +574,8 @@ export type GatewaySessionRow = {
   lastRunError?: string;
   hasActiveRun?: boolean;
   activeRunIds?: string[];
+  /** Active transcript-branch leaf returned with chat history. */
+  activeLeafEntryId?: string | null;
   /** An enabled cron job is bound to this session (runs in it or delivers to it). */
   hasAutomation?: boolean;
   subagentRunState?: SubagentRunState;
@@ -881,13 +884,14 @@ export type SkillStatusEntry = {
   userInvocable?: boolean;
   commandVisible?: boolean;
   requirements: {
-    anyBins?: string[];
+    anyBins: string[];
     bins: string[];
     env: string[];
     config: string[];
     os: string[];
   };
   missing: {
+    anyBins: string[];
     bins: string[];
     env: string[];
     config: string[];

@@ -90,6 +90,11 @@ export default definePluginEntry(
     toolDescription:
       "Join and manage Zoom meeting browser guests. Guest admission, tenant sign-in, and media permissions may require manual action in the OpenClaw Chrome profile.",
     toolParameters: ZoomMeetingsToolSchema,
+    transcriptSource: {
+      id: "zoom",
+      aliases: ["zoom-meetings"],
+      name: "Zoom meetings",
+    },
     createRuntime: ({ api, config }) =>
       new ZoomMeetingsRuntime({
         config,

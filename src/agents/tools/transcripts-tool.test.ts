@@ -29,13 +29,22 @@ function currentDateDir(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-async function createHarness(stateDir: string, pluginConfig: Record<string, unknown> = {}) {
+async function createHarness(
+  stateDir: string,
+  pluginConfig: Record<string, unknown> = {},
+  agentId?: string,
+) {
   const config = { transcripts: { enabled: true, ...pluginConfig } };
   const logger = { warn: vi.fn() };
   return {
     logger,
     service: createTranscriptsAutoStartService({ config, stateDir, logger }),
-    tool: createTranscriptsTool({ config, stateDir, logger }),
+    tool: createTranscriptsTool({
+      config,
+      stateDir,
+      logger,
+      ...(agentId ? { agentId } : {}),
+    }),
   };
 }
 
@@ -57,6 +66,79 @@ describe("transcripts tool", () => {
     const { tool } = await createHarness(stateDir);
 
     expect(tool.name).toBe("transcripts");
+  });
+
+  it("adds the trusted tool agent to live source ownership metadata", async () => {
+    const stateDir = await makeStateDir();
+    const start = vi.fn(async (request) => {
+      expect(request.session).toMatchObject({
+        source: {
+          agentId: "research",
+          meetingUrl: "https://zoom.us/j/1234567890?context=opaque-value#fragment",
+          providerId: "zoom",
+        },
+        metadata: { agentId: "research" },
+      });
+      return { ok: false as const, error: "ownership checked" };
+    });
+    getTranscriptSourceProviderMock.mockReturnValue({
+      id: "proof-live",
+      name: "Proof Live",
+      sourceKinds: ["live-caption"],
+      start,
+    });
+    const { tool } = await createHarness(stateDir, {}, "research");
+
+    await expect(
+      tool.execute(
+        "call-1",
+        {
+          action: "start",
+          meetingUrl: "https://zoom.us/j/1234567890?context=opaque-value#fragment",
+          providerId: "zoom",
+          sessionId: "owned-meeting",
+        },
+        undefined,
+        vi.fn(),
+      ),
+    ).rejects.toThrow("ownership checked");
+
+    expect(start).toHaveBeenCalledOnce();
+    await expect(storeFor(stateDir).readSession("owned-meeting")).resolves.toMatchObject({
+      source: { meetingUrl: "https://zoom.us/j/1234567890" },
+    });
+  });
+
+  it("keeps ownerless shipped sessions visible only to the main agent", async () => {
+    const stateDir = await makeStateDir();
+    const store = storeFor(stateDir);
+    const legacySession = {
+      sessionId: "legacy-ownerless",
+      source: { providerId: "manual-transcript" },
+      startedAt: "2026-07-01T12:00:00.000Z",
+      stoppedAt: "2026-07-01T12:05:00.000Z",
+    };
+    await store.writeSession(legacySession);
+    await store.appendUtteranceForSession(legacySession, { text: "legacy notes" });
+    const { tool: mainTool } = await createHarness(stateDir, {}, "main");
+    const { tool: researchTool } = await createHarness(stateDir, {}, "research");
+
+    await expect(
+      mainTool.execute(
+        "call-main",
+        { action: "summarize", sessionId: legacySession.sessionId },
+        undefined,
+        vi.fn(),
+      ),
+    ).resolves.toMatchObject({ details: { sessionId: legacySession.sessionId } });
+    await expect(
+      researchTool.execute(
+        "call-research",
+        { action: "summarize", sessionId: legacySession.sessionId },
+        undefined,
+        vi.fn(),
+      ),
+    ).rejects.toThrow(`transcripts session not found: ${legacySession.sessionId}`);
   });
 
   it("requires explicit enablement before execution", async () => {

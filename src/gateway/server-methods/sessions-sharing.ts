@@ -10,7 +10,6 @@ import {
   type SessionCreatedActor,
   type SessionVisibility,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
   addSessionMember,
   listSessionMembers,
@@ -18,7 +17,6 @@ import {
   removeSessionMember,
 } from "../../config/sessions.js";
 import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../../shared/store-writer-queue.js";
 import { listProfiles } from "../../state/user-profiles.js";
 import {
@@ -31,6 +29,7 @@ import {
   resolveSessionVisibility,
 } from "../session-sharing.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
+import { appendSessionAudit } from "./session-audit.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -150,29 +149,6 @@ function knownSessionIdentities(params: {
   );
 }
 
-async function appendSharingAudit(params: {
-  cfg: ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
-  target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>;
-  text: string;
-  now: number;
-}): Promise<void> {
-  const sessionFile = formatSqliteSessionFileMarker({
-    agentId: params.target.agentId,
-    sessionId: params.target.entry.sessionId,
-    storePath: params.target.storePath,
-  });
-  SessionManager.open(sessionFile).appendMessage(
-    {
-      role: "custom",
-      customType: "openclaw.system-note",
-      content: `System note: ${params.text}`,
-      display: true,
-      timestamp: params.now,
-    },
-    { config: params.cfg },
-  );
-}
-
 function publishSharingChange(params: {
   context: GatewayRequestContext;
   event: SessionSharingEvent;
@@ -256,7 +232,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       const now = Date.now();
       const actor = actorIdentity(client);
       try {
-        await appendSharingAudit({
+        await appendSessionAudit({
           cfg,
           target: current,
           text: `${actor.label ?? actor.id} changed session visibility from ${previous} to ${visibility}.`,
@@ -388,7 +364,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
         return;
       }
       try {
-        await appendSharingAudit({
+        await appendSessionAudit({
           cfg,
           target: current,
           text: `${actor.label ?? actor.id} added ${params.identityId} as a session member.`,
@@ -459,7 +435,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       const now = Date.now();
       const actor = actorIdentity(client);
       try {
-        await appendSharingAudit({
+        await appendSessionAudit({
           cfg,
           target: current,
           text: `${actor.label ?? actor.id} removed ${params.identityId} from session members.`,

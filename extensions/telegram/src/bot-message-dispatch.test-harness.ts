@@ -195,6 +195,8 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
       if (!("route" in resolved) || !("delivery" in resolved)) {
         throw new Error("expected assembled Telegram channel turn plan");
       }
+      const delivery =
+        resolved.delivery as unknown as import("openclaw/plugin-sdk/channel-inbound").ChannelInboundTurnPlan<"provider_message_sending">["delivery"];
       const testTurn = (params.raw as { turn: TestTurn }).turn;
       const result = await actual.runPreparedInboundReply({
         channel: resolved.channel,
@@ -214,8 +216,8 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
             cfg: resolved.cfg,
             dispatcherOptions: {
               ...resolved.dispatcherOptions,
-              deliver: resolved.delivery.deliver,
-              onError: resolved.delivery.onError,
+              deliver: delivery.deliverWithProviderMessageSending,
+              onError: delivery.onError,
             },
             toolsAllow: resolved.toolsAllow,
             replyOptions: resolved.replyOptions,

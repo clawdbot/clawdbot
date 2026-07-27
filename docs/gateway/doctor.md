@@ -312,7 +312,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     | `channels.whatsapp.messagePrefix` and legacy `messages.messagePrefix`                            | `channels.whatsapp.responsePrefix`                                            |
     | `channels.whatsapp.ackReaction`                                                                  | global `messages.ackReaction` and `ackReactionScope` where translatable        |
     | `cron.failureDestination`                                                                        | destination fields on `cron.failureAlert`                                     |
-    | `gateway.controlUi.chatMessageMaxWidth`                                                          | `ui.prefs.chatMessageMaxWidth`                                                |
+    | `gateway.controlUi.chatMessageMaxWidth`, presentation-only `ui.prefs` keys                       | removed (text scale, chat width, and live sidebar activity are browser-local) |
     | `agents.list`                                                                                    | keyed `agents.entries`                                                        |
     | top-level `defaultModel`                                                                         | `agents.defaults.model`                                                      |
     | `messages.messagePrefix`                                                                         | `channels.whatsapp.responsePrefix`                                            |

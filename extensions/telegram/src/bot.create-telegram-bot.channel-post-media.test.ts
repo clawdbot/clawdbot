@@ -235,11 +235,12 @@ function expectTypeOnlyMediaPayload(kind: string, rawBody = "") {
   const payload = replyPayload();
   expect(payload).toMatchObject({
     BodyForAgent: rawBody,
-    MediaType: kind,
-    MediaTypes: [kind],
+    media: [expect.objectContaining({ kind })],
     RawBody: rawBody,
   });
-  expect(payload.MediaPaths).toBeUndefined();
+  const media = payload.media as Array<{ path?: string }>;
+  expect(media).toHaveLength(1);
+  expect(media[0]?.path).toBeUndefined();
 }
 
 describe("createTelegramBot channel_post media", () => {
@@ -953,7 +954,10 @@ describe("createTelegramBot channel_post media", () => {
       expect(replySpy).toHaveBeenCalledTimes(1);
       expect(replyPayload()).toMatchObject({
         Body: expect.stringContaining("classic restart album"),
-        MediaPaths: ["/tmp/classic-restart-first.jpg", ""],
+        media: [
+          expect.objectContaining({ path: "/tmp/classic-restart-first.jpg" }),
+          expect.objectContaining({ path: undefined }),
+        ],
       });
     } finally {
       setTimeoutSpy.mockRestore();

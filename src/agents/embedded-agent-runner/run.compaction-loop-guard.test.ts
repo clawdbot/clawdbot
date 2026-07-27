@@ -143,7 +143,9 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
 
     // Attempt 1: overflow triggers compaction.
     mockedRunEmbeddedAttempt.mockImplementationOnce(async () =>
-      makeAttemptResult({ promptError: overflowError }),
+      makeAttemptResult({
+        terminal: { kind: "failed", source: "prompt", error: overflowError },
+      }),
     );
     // Attempt 2: live wrapped-tool outcomes repeat while the prompt is running.
     // The guard aborts the attempt signal, then the runner raises the loop error
@@ -165,7 +167,6 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       attemptSignalReason = abortSignal?.reason;
       attemptReturned = true;
       return makeAttemptResult({
-        promptError: null,
         toolMetas: [{ toolName: "gateway" }, { toolName: "gateway" }, { toolName: "gateway" }],
       });
     });
@@ -200,7 +201,9 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       const overflowError = makeOverflowError();
       let attemptAborted = false;
       mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-        makeAttemptResult({ promptError: overflowError }),
+        makeAttemptResult({
+          terminal: { kind: "failed", source: "prompt", error: overflowError },
+        }),
       );
       mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
         const { abortSignal, onToolOutcome } = attemptParams as {
@@ -393,7 +396,9 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
     const overflowError = makeOverflowError();
     // Attempt 1: overflow → triggers compaction.
     mockedRunEmbeddedAttempt.mockImplementationOnce(async () =>
-      makeAttemptResult({ promptError: overflowError }),
+      makeAttemptResult({
+        terminal: { kind: "failed", source: "prompt", error: overflowError },
+      }),
     );
     // Attempt 2 (post-compaction): identical args, but DIFFERENT result hash
     // each time. This fills the window without triggering the persisted-loop
@@ -410,7 +415,6 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
         );
       }
       return makeAttemptResult({
-        promptError: null,
         toolMetas: [{ toolName: "gateway" }, { toolName: "gateway" }, { toolName: "gateway" }],
       });
     });
@@ -434,7 +438,9 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
 
     // Attempt 1: overflow → triggers compaction.
     mockedRunEmbeddedAttempt.mockImplementationOnce(async () =>
-      makeAttemptResult({ promptError: overflowError }),
+      makeAttemptResult({
+        terminal: { kind: "failed", source: "prompt", error: overflowError },
+      }),
     );
     // Attempt 2 (post-compaction): three distinct records → window full,
     // guard disarms with no abort. We then append more identical records
@@ -446,7 +452,6 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       await executeWrappedToolOutcome("write", { path: "/b" }, "rb", onToolOutcome);
       await executeWrappedToolOutcome("read", { path: "/c" }, "rc", onToolOutcome);
       return makeAttemptResult({
-        promptError: null,
         toolMetas: [{ toolName: "read" }, { toolName: "write" }, { toolName: "read" }],
       });
     });
@@ -470,7 +475,9 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
     const overflowError = makeOverflowError();
 
     mockedRunEmbeddedAttempt.mockImplementationOnce(async () =>
-      makeAttemptResult({ promptError: overflowError }),
+      makeAttemptResult({
+        terminal: { kind: "failed", source: "prompt", error: overflowError },
+      }),
     );
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
       const onToolOutcome = (attemptParams as { onToolOutcome?: ToolOutcomeObserver })
@@ -484,7 +491,6 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
         );
       }
       return makeAttemptResult({
-        promptError: null,
         toolMetas: [{ toolName: "gateway" }, { toolName: "gateway" }, { toolName: "gateway" }],
       });
     });
@@ -533,7 +539,9 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
 
     // Attempt 1: overflow -> triggers compaction.
     mockedRunEmbeddedAttempt.mockImplementationOnce(async () =>
-      makeAttemptResult({ promptError: overflowError }),
+      makeAttemptResult({
+        terminal: { kind: "failed", source: "prompt", error: overflowError },
+      }),
     );
     // Attempt 2 (post-compaction): three identical live tool outcomes while
     // history is already at the cap. The guard aborts on the third result
@@ -552,7 +560,6 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       // History is still capped at HISTORY_TRIM_CAP after the trim.
       expect(sessionState.toolCallHistory?.length).toBe(HISTORY_TRIM_CAP);
       return makeAttemptResult({
-        promptError: null,
         toolMetas: [{ toolName: "gateway" }, { toolName: "gateway" }, { toolName: "gateway" }],
       });
     });

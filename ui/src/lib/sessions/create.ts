@@ -3,7 +3,10 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 
 export type SessionCreateOutcome = {
   key: string;
-  initialRun: { status: "idle" } | { status: "started" } | { status: "rejected"; error: string };
+  initialRun:
+    | { status: "idle" }
+    | { status: "started"; messageId?: string; messageSeq?: number }
+    | { status: "rejected"; error: string };
 };
 
 export type SessionCreateParams = {
@@ -58,7 +61,18 @@ export async function requestSessionCreate(
     throw new Error("sessions.create returned no key");
   }
   if (result.runStarted === true) {
-    return { key, initialRun: { status: "started" } };
+    const messageId = typeof result.runId === "string" ? result.runId.trim() : "";
+    const messageSeq = result.messageSeq;
+    return {
+      key,
+      initialRun: {
+        status: "started",
+        ...(messageId ? { messageId } : {}),
+        ...(typeof messageSeq === "number" && Number.isSafeInteger(messageSeq) && messageSeq > 0
+          ? { messageSeq }
+          : {}),
+      },
+    };
   }
   if (result.runError !== undefined) {
     const message =

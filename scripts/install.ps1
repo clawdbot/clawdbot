@@ -1538,7 +1538,8 @@ function Install-OpenClawFromGit {
             Write-Host "[!] pnpm install failed for the Git checkout" -ForegroundColor Red
             return $false
         }
-        if (-not (& $pnpmCommand ui:build)) {
+        & $pnpmCommand ui:build
+        if ($LASTEXITCODE -ne 0) {
             Write-Host "[!] UI build failed; continuing (CLI may still work)" -ForegroundColor Yellow
         }
         $env:NODE_OPTIONS = Resolve-NodeOptionsWithMinOldSpace -NodeOptions $prevNodeOptions -MinOldSpaceMb 8192

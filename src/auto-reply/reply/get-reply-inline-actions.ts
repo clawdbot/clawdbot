@@ -458,8 +458,10 @@ export async function handleInlineActions(params: {
           .filter((entry): entry is string => Boolean(entry))
           .join("\n\n");
     ctx.Body = rewrittenBody;
+    ctx.agentText = rewrittenBody;
     ctx.BodyForAgent = rewrittenBody;
     sessionCtx.Body = rewrittenBody;
+    sessionCtx.agentText = rewrittenBody;
     sessionCtx.BodyForAgent = rewrittenBody;
     sessionCtx.BodyStripped = rewrittenBody;
     cleanedBody = rewrittenBody;
@@ -482,6 +484,7 @@ export async function handleInlineActions(params: {
   if (inlineCommand) {
     cleanedBody = inlineCommand.cleaned;
     sessionCtx.Body = cleanedBody;
+    sessionCtx.agentText = cleanedBody;
     sessionCtx.BodyForAgent = cleanedBody;
     sessionCtx.BodyStripped = cleanedBody;
   }
@@ -626,7 +629,7 @@ export async function handleInlineActions(params: {
   }
 
   const commandBodyBeforeRun = command.commandBodyNormalized;
-  const bodyBeforeRun = sessionCtx.BodyStripped ?? sessionCtx.BodyForAgent;
+  const bodyBeforeRun = sessionCtx.agentText;
   const commandResult = await runCommands(command);
   notifyInlineCommandSessionMetadataChanges();
   if (!commandResult.shouldContinue) {
@@ -636,7 +639,7 @@ export async function handleInlineActions(params: {
   if (command.commandBodyNormalized !== commandBodyBeforeRun) {
     cleanedBody = command.commandBodyNormalized;
   } else {
-    const bodyAfterRun = sessionCtx.BodyStripped ?? sessionCtx.BodyForAgent;
+    const bodyAfterRun = sessionCtx.agentText;
     if (bodyAfterRun !== undefined && bodyAfterRun !== bodyBeforeRun) {
       cleanedBody = bodyAfterRun;
     }

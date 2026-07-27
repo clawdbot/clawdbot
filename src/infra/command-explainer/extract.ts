@@ -15,7 +15,7 @@ import {
   extractShellWrapperCommand,
   extractShellWrapperInlineCommand,
   isShellWrapperExecutable,
-  POSIX_SHELL_WRAPPERS,
+  POSIX_PARSEABLE_SHELL_WRAPPERS,
   resolveShellWrapperTransportArgv,
 } from "../shell-wrapper-resolution.js";
 import { parseBashForCommandExplanation } from "./tree-sitter-runtime.js";
@@ -68,7 +68,7 @@ type WalkState = {
 
 const MAX_WRAPPER_PAYLOAD_DEPTH = 2;
 
-const PARSEABLE_SHELL_WRAPPERS = new Set<string>(POSIX_SHELL_WRAPPERS);
+const PARSEABLE_SHELL_WRAPPERS = new Set<string>(POSIX_PARSEABLE_SHELL_WRAPPERS);
 
 // Span bases map nested wrapper payload offsets back to source command offsets.
 type SpanBase = {

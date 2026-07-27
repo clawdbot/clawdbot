@@ -1,6 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
-import { getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 import type { TranscriptsSummary } from "./summary.js";
@@ -22,6 +26,95 @@ type MeetingTranscriptUtteranceRow = Selectable<
 
 export function meetingTranscriptDb(db: DatabaseSync) {
   return getNodeSqliteKysely<MeetingTranscriptsDatabase>(db);
+}
+
+function hasExactMeetingTranscriptUtterance(params: {
+  database: DatabaseSync;
+  metadataJson: string | null;
+  sessionId: string;
+  sessionStartedAt: string;
+  utterance: TranscriptUtterance & { id: string };
+}): boolean {
+  const db = meetingTranscriptDb(params.database);
+  const rows = executeSqliteQuerySync(
+    params.database,
+    db
+      .selectFrom("meeting_transcript_utterances")
+      .selectAll()
+      .where("session_id", "=", params.sessionId)
+      .where("session_started_at", "=", params.sessionStartedAt)
+      .where("utterance_id", "=", params.utterance.id),
+  ).rows;
+  const utterance = params.utterance;
+  return rows.some(
+    (row) =>
+      row.started_at === (utterance.startedAt ?? null) &&
+      row.ended_at === (utterance.endedAt ?? null) &&
+      row.speaker_id === (utterance.speaker?.id ?? null) &&
+      row.speaker_label === (utterance.speaker?.label ?? null) &&
+      row.text === utterance.text &&
+      row.final === (utterance.final === undefined ? null : utterance.final ? 1 : 0) &&
+      row.metadata_json === params.metadataJson,
+  );
+}
+
+export function appendMeetingTranscriptUtterance(params: {
+  database: DatabaseSync;
+  metadataJson: string | null;
+  now: number;
+  session: TranscriptSessionDescriptor;
+  utterance: TranscriptUtterance;
+}): void {
+  const { database, session, utterance } = params;
+  const db = meetingTranscriptDb(database);
+  if (
+    utterance.id &&
+    hasExactMeetingTranscriptUtterance({
+      database,
+      metadataJson: params.metadataJson,
+      sessionId: session.sessionId,
+      sessionStartedAt: session.startedAt,
+      utterance: { ...utterance, id: utterance.id },
+    })
+  ) {
+    return;
+  }
+  const stored = executeSqliteQueryTakeFirstSync(
+    database,
+    db
+      .selectFrom("meeting_transcript_sessions")
+      .select("next_utterance_seq")
+      .where("session_id", "=", session.sessionId)
+      .where("started_at", "=", session.startedAt),
+  );
+  if (!stored) {
+    throw new Error(`transcripts session not found: ${session.sessionId}`);
+  }
+  const sequence = stored.next_utterance_seq;
+  executeSqliteQuerySync(
+    database,
+    db.insertInto("meeting_transcript_utterances").values({
+      session_id: session.sessionId,
+      session_started_at: session.startedAt,
+      sequence,
+      utterance_id: utterance.id ?? null,
+      started_at: utterance.startedAt ?? null,
+      ended_at: utterance.endedAt ?? null,
+      speaker_id: utterance.speaker?.id ?? null,
+      speaker_label: utterance.speaker?.label ?? null,
+      text: utterance.text,
+      final: utterance.final === undefined ? null : utterance.final ? 1 : 0,
+      metadata_json: params.metadataJson,
+    }),
+  );
+  executeSqliteQuerySync(
+    database,
+    db
+      .updateTable("meeting_transcript_sessions")
+      .set({ next_utterance_seq: sequence + 1, updated_at_ms: params.now })
+      .where("session_id", "=", session.sessionId)
+      .where("started_at", "=", session.startedAt),
+  );
 }
 
 function parseOptionalJsonRecord(value: string | null): Record<string, unknown> | undefined {

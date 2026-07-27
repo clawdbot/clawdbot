@@ -15,6 +15,7 @@ import {
 import { manualTranscriptSourceProvider } from "../../transcripts/manual-source.js";
 import { listTranscriptSourceProviders } from "../../transcripts/provider-registry.js";
 import type { TranscriptSessionDescriptor } from "../../transcripts/provider-types.js";
+import { sanitizeTranscriptSourceLocator } from "../../transcripts/source-locator.js";
 import { TranscriptsStore, type TranscriptsSessionEntry } from "../../transcripts/store.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
 import type { AnyAgentTool } from "./common.js";
@@ -40,6 +41,22 @@ function sameSessionIdentity(
   right: TranscriptSessionDescriptor,
 ): boolean {
   return left.sessionId === right.sessionId && left.startedAt === right.startedAt;
+}
+
+function ownsTranscriptSession(
+  ctx: TranscriptsRuntimeContext,
+  session: TranscriptSessionDescriptor,
+): boolean {
+  if (!ctx.agentId) {
+    return true;
+  }
+  const ownerAgentId = session.metadata?.agentId;
+  if (typeof ownerAgentId === "string") {
+    return ownerAgentId === ctx.agentId;
+  }
+  // Shipped rows predate agent attribution. Treat them as operator-owned legacy
+  // state: main can curate them, but isolated agents cannot claim them.
+  return ctx.agentId === "main";
 }
 
 function asParamsRecord(params: unknown): Record<string, unknown> {
@@ -136,7 +153,7 @@ async function stopTranscripts(params: {
     sameSessionIdentity(activeCandidate.session, resolvedSession);
   const selectedActive = directActive ?? (activeMatchesResolved ? activeCandidate : undefined);
   const session = selectedActive?.session ?? resolvedSession;
-  if (!session) {
+  if (!session || !ownsTranscriptSession(params.ctx, session)) {
     throw new Error(`transcripts session not found: ${sessionSelector}`);
   }
   const sessionId = session.sessionId;
@@ -210,17 +227,21 @@ async function importTranscripts(params: {
   store: TranscriptsStore;
   rawParams: Record<string, unknown>;
 }) {
-  const source = sourceFromParams(params.rawParams);
-  const provider = resolveSourceProvider(source.providerId, params.ctx);
+  const providerSource = {
+    ...sourceFromParams(params.rawParams),
+    ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
+  };
+  const provider = resolveSourceProvider(providerSource.providerId, params.ctx);
   if (!provider?.importTranscript) {
-    throw new Error(`transcripts provider ${source.providerId} cannot import transcripts`);
+    throw new Error(`transcripts provider ${providerSource.providerId} cannot import transcripts`);
   }
   const session: TranscriptSessionDescriptor = {
     sessionId: readStringParam(params.rawParams, "sessionId", { trim: true }) ?? createSessionId(),
     title: readStringParam(params.rawParams, "title", { trim: true }),
-    source,
+    source: sanitizeTranscriptSourceLocator(providerSource),
     startedAt: new Date().toISOString(),
     stoppedAt: new Date().toISOString(),
+    ...(params.ctx.agentId ? { metadata: { agentId: params.ctx.agentId } } : {}),
   };
   const transcript = readStringParam(params.rawParams, "transcript", {
     required: true,
@@ -229,7 +250,7 @@ async function importTranscripts(params: {
   await params.store.writeSession(session);
   const utterances = await provider.importTranscript({
     cfg: params.ctx.config,
-    session,
+    session: { ...session, source: providerSource },
     text: transcript,
     speakerLabel: readStringParam(params.rawParams, "speakerLabel", { trim: true }),
   });
@@ -257,6 +278,7 @@ async function importTranscripts(params: {
 
 async function summarizeExisting(params: {
   config: ReturnType<typeof resolveTranscriptsConfig>;
+  ctx: TranscriptsRuntimeContext;
   store: TranscriptsStore;
   rawParams: Record<string, unknown>;
 }) {
@@ -265,7 +287,7 @@ async function summarizeExisting(params: {
     trim: true,
   });
   const entry = await params.store.readSessionEntry(sessionId);
-  if (!entry) {
+  if (!entry || !ownsTranscriptSession(params.ctx, entry.session)) {
     throw new Error(`transcripts session not found: ${sessionId}`);
   }
   const { summaryPath, intendedSummaryPath, summary, summaryExportError } =
@@ -292,13 +314,15 @@ async function statusTranscripts(ctx: TranscriptsRuntimeContext) {
     ...listTranscriptSourceProviders(ctx.config).map((provider) => provider.id),
   ];
   const uniqueProviders = uniqueStrings(providers);
-  const active = [...activeSessions.values()].map((entry) => ({
-    sessionId: entry.session.sessionId,
-    providerId: entry.providerId,
-    title: entry.session.title,
-    source: entry.session.source,
-    cleanupPending: entry.cleanupPending === true,
-  }));
+  const active = [...activeSessions.values()]
+    .filter((entry) => ownsTranscriptSession(ctx, entry.session))
+    .map((entry) => ({
+      sessionId: entry.session.sessionId,
+      providerId: entry.providerId,
+      title: entry.session.title,
+      source: entry.session.source,
+      cleanupPending: entry.cleanupPending === true,
+    }));
   return toolText(
     [
       `Transcripts providers: ${uniqueProviders.length ? uniqueProviders.join(", ") : "none"}`,
@@ -310,6 +334,7 @@ async function statusTranscripts(ctx: TranscriptsRuntimeContext) {
 
 /** Create the agent-facing transcripts tool. */
 export function createTranscriptsTool(options?: {
+  agentId?: string;
   config?: OpenClawConfig;
   stateDir?: string;
   logger?: TranscriptsLogger;
@@ -318,6 +343,7 @@ export function createTranscriptsTool(options?: {
     config: options?.config,
     stateDir: options?.stateDir ?? resolveStateDir(),
     logger: options?.logger ?? console,
+    ...(options?.agentId ? { agentId: options.agentId } : {}),
   };
   return {
     name: "transcripts",
@@ -341,7 +367,7 @@ export function createTranscriptsTool(options?: {
         case "import":
           return await importTranscripts({ ctx, store, rawParams: params });
         case "summarize":
-          return await summarizeExisting({ config, store, rawParams: params });
+          return await summarizeExisting({ config, ctx, store, rawParams: params });
         case "status":
           return await statusTranscripts(ctx);
         default:

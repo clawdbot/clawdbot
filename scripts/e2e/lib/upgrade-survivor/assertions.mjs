@@ -19,6 +19,8 @@ const SCENARIOS = new Set([
   "tilde-log-path",
   "meeting-transcripts-sqlite",
   "versioned-runtime-deps",
+  "cron-scheduled-authority",
+  "auth-profile-v2026-7-2-beta-5",
 ]);
 
 const PERSONA_FILES = new Map([
@@ -184,6 +186,67 @@ function seedLegacyMeetingTranscripts(stateDir) {
   write(path.join(sessionDir, "summary.md"), "# Design review\n\nShipped transcript summary.\n");
 }
 
+function seedLegacyCronScheduledAuthority(stateDir) {
+  const createdAtMs = Date.parse("2026-07-01T10:00:00.000Z");
+  const base = {
+    enabled: true,
+    createdAtMs,
+    updatedAtMs: createdAtMs,
+    schedule: { kind: "every", everyMs: 3_600_000, anchorMs: createdAtMs },
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    delivery: { mode: "none" },
+    state: { nextRunAtMs: createdAtMs + 3_600_000 },
+  };
+  writeJson(path.join(stateDir, "cron", "jobs.json"), {
+    version: 1,
+    jobs: [
+      {
+        ...base,
+        id: "cron-pre-cap",
+        name: "Pre-cap agent job",
+        payload: { kind: "agentTurn", message: "pre-cap" },
+      },
+      {
+        ...base,
+        id: "cron-ownerless-cap",
+        name: "Ownerless capped job",
+        payload: { kind: "agentTurn", message: "ownerless", toolsAllow: ["write"] },
+      },
+      {
+        ...base,
+        id: "cron-owner-session",
+        name: "Persisted owner session",
+        owner: {
+          agentId: "main",
+          sessionKey: "agent:main:discord:group:ops",
+        },
+        payload: { kind: "agentTurn", message: "owned", toolsAllow: ["write"] },
+      },
+      {
+        ...base,
+        id: "cron-encoded-account",
+        name: "Encoded owner account",
+        owner: {
+          agentId: "main",
+          sessionKey: "agent:main:discord:personal:direct:user-1",
+        },
+        payload: { kind: "agentTurn", message: "encoded", toolsAllow: ["write"] },
+      },
+      {
+        ...base,
+        id: "cron-agent-mismatch",
+        name: "Mismatched owner agent",
+        owner: {
+          agentId: "other",
+          sessionKey: "agent:main:discord:work:direct:user-2",
+        },
+        payload: { kind: "agentTurn", message: "mismatch", toolsAllow: ["write"] },
+      },
+    ],
+  });
+}
+
 function getScenario() {
   const scenario = process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO || "base";
   assert(SCENARIOS.has(scenario), `unknown upgrade survivor scenario: ${scenario}`);
@@ -243,6 +306,25 @@ function seedState() {
   seedLegacySessionMetadata(stateDir);
   if (scenario === "meeting-transcripts-sqlite") {
     seedLegacyMeetingTranscripts(stateDir);
+  }
+  if (scenario === "cron-scheduled-authority") {
+    seedLegacyCronScheduledAuthority(stateDir);
+  }
+  if (scenario === "auth-profile-v2026-7-2-beta-5") {
+    const fixture = readJson(
+      path.join(
+        process.cwd(),
+        "scripts/e2e/lib/upgrade-survivor/fixtures/auth-profile-v2026.7.2-beta.5.json",
+      ),
+    );
+    assert(fixture.sourceTag === "v2026.7.2-beta.5", "auth profile fixture tag drifted");
+    assert(fixture.sourceCommit === "34aefcf2fefa", "auth profile fixture commit drifted");
+    assert(fixture.agentSchemaVersion === 15, "auth profile fixture schema drifted");
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    writeJson(path.join(agentDir, "auth-profiles.json"), fixture.authProfiles);
+    writeJson(path.join(agentDir, "auth-state.json"), fixture.authState);
+    writeJson(path.join(agentDir, "auth.json"), fixture.legacyAuth);
+    writeJson(path.join(stateDir, "credentials", "oauth.json"), fixture.legacyOAuth);
   }
 
   const runtimeRoot = path.join(stateDir, "plugin-runtime-deps");
@@ -483,6 +565,12 @@ function assertStateSurvived() {
   if (scenario === "meeting-transcripts-sqlite") {
     assertMeetingTranscriptsMigrated(stateDir, stage);
   }
+  if (scenario === "cron-scheduled-authority") {
+    assertCronScheduledAuthorityMigrated(stateDir, stage);
+  }
+  if (scenario === "auth-profile-v2026-7-2-beta-5") {
+    assertAuthProfileMigrationSurvived(stateDir, stage);
+  }
   const legacyRuntimeRoot = path.join(stateDir, "plugin-runtime-deps");
   if (stage === "baseline") {
     if (fs.existsSync(legacyRuntimeRoot)) {
@@ -523,6 +611,124 @@ function assertStateSurvived() {
       staleVersionedRoots.length === 0,
       `stale versioned runtime deps survived update/doctor: ${staleVersionedRoots.join(", ")}`,
     );
+  }
+}
+
+function assertAuthProfileMigrationSurvived(stateDir, stage) {
+  const agentDir = path.join(stateDir, "agents", "main", "agent");
+  const sources = [
+    path.join(agentDir, "auth-profiles.json"),
+    path.join(agentDir, "auth-state.json"),
+    path.join(agentDir, "auth.json"),
+    path.join(stateDir, "credentials", "oauth.json"),
+  ];
+  if (stage === "baseline") {
+    assert(
+      sources.every((source) => fs.existsSync(source)),
+      "auth profile fixture source missing",
+    );
+    return;
+  }
+  for (const source of sources) {
+    assert(!fs.existsSync(source), `legacy auth source remained active: ${source}`);
+    const prefix = `${path.basename(source)}.migrated-`;
+    const archives = fs
+      .readdirSync(path.dirname(source))
+      .filter((entry) => entry.startsWith(prefix));
+    assert(archives.length === 1, `expected one legacy auth archive for ${source}`);
+  }
+  const agentDatabase = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"), {
+    readOnly: true,
+  });
+  try {
+    const row = agentDatabase
+      .prepare("SELECT store_json FROM auth_profile_store WHERE store_key = 'primary'")
+      .get();
+    const store = JSON.parse(row?.store_json ?? "null");
+    assert(
+      store?.profiles?.["openai:default"]?.key === "fake-upgrade-openai-key",
+      "openai credential did not migrate",
+    );
+    assert(
+      store?.profiles?.["xai:default"]?.key === "fake-upgrade-xai-key",
+      "legacy xai credential did not migrate",
+    );
+    assert(
+      store?.profiles?.["anthropic:default"]?.refresh === "fake-upgrade-refresh-token",
+      "shared OAuth credential did not migrate",
+    );
+  } finally {
+    agentDatabase.close();
+  }
+  const stateDatabase = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
+    readOnly: true,
+  });
+  try {
+    const receipt = stateDatabase
+      .prepare(
+        "SELECT COUNT(*) AS count FROM migration_sources WHERE migration_kind = ? AND status = 'completed' AND removed_source = 1",
+      )
+      .get("auth-profile-json-to-sqlite-v2");
+    assert(
+      receipt?.count === 4,
+      `expected four completed auth migration receipts, got ${String(receipt?.count)}`,
+    );
+  } finally {
+    stateDatabase.close();
+  }
+}
+
+function assertCronScheduledAuthorityMigrated(stateDir, stage) {
+  const legacyStorePath = path.join(stateDir, "cron", "jobs.json");
+  const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+  if (stage === "baseline") {
+    if (fs.existsSync(legacyStorePath)) {
+      const jobs = readJson(legacyStorePath).jobs ?? [];
+      assert(jobs.length === 5, "legacy cron authority fixture row count changed before update");
+      return;
+    }
+    assert(fs.existsSync(databasePath), "legacy cron authority fixture missing before update");
+    const db = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      const rows = db.prepare("SELECT job_json FROM cron_jobs WHERE job_id LIKE 'cron-%'").all();
+      assert(rows.length === 5, "baseline cron authority fixture row count changed");
+      assert(
+        rows.every((row) => JSON.parse(row.job_json).scheduledToolPolicy === undefined),
+        "baseline unexpectedly authored current scheduled authority provenance",
+      );
+    } finally {
+      db.close();
+    }
+    return;
+  }
+  const db = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    const rows = db
+      .prepare("SELECT job_id, job_json FROM cron_jobs WHERE job_id LIKE 'cron-%'")
+      .all();
+    const jobs = new Map(rows.map((row) => [row.job_id, JSON.parse(row.job_json)]));
+    assert(jobs.size === 5, `cron authority fixture row count changed: ${jobs.size}`);
+    assert(
+      jobs.get("cron-encoded-account")?.scheduledToolPolicy?.ownerAccountId === "personal",
+      "session-encoded account authority was not recovered",
+    );
+    assert(
+      jobs.get("cron-encoded-account")?.owner?.accountId === "personal",
+      "session-encoded account was not projected onto the owner",
+    );
+    for (const id of [
+      "cron-pre-cap",
+      "cron-ownerless-cap",
+      "cron-owner-session",
+      "cron-agent-mismatch",
+    ]) {
+      assert(
+        jobs.get(id)?.scheduledToolPolicy === undefined,
+        `ambiguous legacy job unexpectedly gained scheduled authority: ${id}`,
+      );
+    }
+  } finally {
+    db.close();
   }
 }
 

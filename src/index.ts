@@ -4,6 +4,7 @@
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { formatCliFailureLines } from "./cli/failure-output.js";
+import { runCliWithExitFinalization } from "./cli/one-shot-exit.js";
 import { formatUncaughtError } from "./infra/errors.js";
 import { runFatalErrorHooks } from "./infra/fatal-error-hooks.js";
 import { isMainModule } from "./infra/is-main.js";
@@ -119,18 +120,21 @@ if (isMain) {
     process.exit(1);
   });
 
-  void runLegacyCliEntry(process.argv).catch((err: unknown) => {
-    for (const line of formatCliFailureLines({
-      title: "The CLI command failed.",
-      error: err,
-      argv: process.argv,
-    })) {
-      console.error(line);
-    }
-    for (const message of runFatalErrorHooks({ reason: "legacy_cli_failure", error: err })) {
-      console.error("[openclaw]", message);
-    }
-    restoreTerminalState("legacy cli failure", { resumeStdinIfPaused: false });
-    process.exit(1);
+  void runCliWithExitFinalization({
+    run: async () => await runLegacyCliEntry(process.argv),
+    onError: (err) => {
+      for (const line of formatCliFailureLines({
+        title: "The CLI command failed.",
+        error: err,
+        argv: process.argv,
+      })) {
+        console.error(line);
+      }
+      for (const message of runFatalErrorHooks({ reason: "legacy_cli_failure", error: err })) {
+        console.error("[openclaw]", message);
+      }
+      restoreTerminalState("legacy cli failure", { resumeStdinIfPaused: false });
+      process.exitCode = 1;
+    },
   });
 }

@@ -1143,6 +1143,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     const sessionKey = "agent:main:harness:codex:supervision:native-thread";
     const initialEntry = {
       agentHarnessId: "codex",
+      delivery: { kind: "none" } as const,
       modelSelectionLocked: true,
       sessionId,
       updatedAt: Date.now(),

@@ -25,6 +25,7 @@
     "@openclaw/libterminal": "0.3.2",
     "@openclaw/media-core": "workspace:*",
     "@openclaw/normalization-core": "workspace:*",
+    "@openclaw/session-url-contract": "workspace:*",
     "@openclaw/uirouter": "0.1.0",
     "@openclaw/workboard-contract": "workspace:*",
     "@tanstack/lit-virtual": "3.13.33",
@@ -46,7 +47,7 @@
     "jsdom": "29.1.1",
     "openclaw": "workspace:*",
     "playwright": "1.61.1",
-    "vite": "8.1.3",
+    "vite": "8.1.5",
     "vitest": "4.1.10"
   }
 }

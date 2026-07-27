@@ -9,6 +9,7 @@ import {
   type ErrorShape,
   errorShape,
   normalizeSessionIconInput,
+  type SessionCreatedActor,
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
@@ -136,6 +137,7 @@ export async function projectSessionsPatchEntry(params: {
   storeKey: string;
   agentId?: string;
   patch: SessionsPatchParams;
+  archivedBy?: SessionCreatedActor;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
   /** Exact harness owner authorized to project its new reserved session row. */
   authorizedAgentHarnessId?: string;
@@ -316,10 +318,18 @@ export async function projectSessionsPatchEntry(params: {
   if ("archived" in patch) {
     if (patch.archived === true) {
       // Archived sessions leave the active quick-access set in the same write.
-      next.archivedAt ??= now;
+      if (next.archivedAt === undefined) {
+        next.archivedAt = now;
+        if (params.archivedBy) {
+          next.archivedBy = params.archivedBy;
+        } else {
+          delete next.archivedBy;
+        }
+      }
       delete next.pinnedAt;
     } else {
       delete next.archivedAt;
+      delete next.archivedBy;
     }
   }
 
@@ -652,6 +662,7 @@ export async function applySessionsPatchToStore(params: {
   storeKey: string;
   agentId?: string;
   patch: SessionsPatchParams;
+  archivedBy?: SessionCreatedActor;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
   /** Exact harness owner authorized to project its new reserved session row. */
   authorizedAgentHarnessId?: string;
@@ -663,6 +674,7 @@ export async function applySessionsPatchToStore(params: {
     storeKey: params.storeKey,
     agentId: params.agentId,
     patch: params.patch,
+    archivedBy: params.archivedBy,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,
     authorizedAgentHarnessId: params.authorizedAgentHarnessId,
   });

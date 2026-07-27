@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   formatSqliteSessionFileMarker,
   listSessionEntries,
+  normalizeSessionDeliveryState,
   type SessionEntry,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -430,7 +431,9 @@ describe("Feishu doctor state repair", () => {
         sessionId: "sess-acp-bad",
         sessionFile: "sess-acp-bad.jsonl",
         updatedAt: Date.now(),
-        route: { channel: "feishu", target: { to: "ou_user", chatType: "direct" } },
+        delivery: normalizeSessionDeliveryState({
+          route: { channel: "feishu", target: { to: "ou_user", chatType: "direct" } },
+        }),
       },
       "agent:main:discord:direct:user": {
         sessionId: "sess-discord",
@@ -492,7 +495,9 @@ describe("Feishu doctor state repair", () => {
         sessionId: "sess-codex-locked",
         agentHarnessId: "codex",
         modelSelectionLocked: true,
-        route: { channel: "feishu", target: { to: "ou_user", chatType: "direct" } },
+        delivery: normalizeSessionDeliveryState({
+          route: { channel: "feishu", target: { to: "ou_user", chatType: "direct" } },
+        }),
         updatedAt: 1,
       },
     });

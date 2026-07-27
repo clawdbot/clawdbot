@@ -987,6 +987,8 @@ describe("ci workflow guards", () => {
     expect(workflow.on.push.paths).toContain("ui/src/i18n/.i18n/glossary.*.json");
     expect(workflow.on.push.paths).toContain("apps/.i18n/native/**");
     expect(workflow.on.push.paths).toContain("apps/.i18n/native-source.json");
+    expect(workflow.on.push.paths).toContain("apps/android/app/src/play/**");
+    expect(workflow.on.push.paths).toContain("apps/android/app/src/thirdParty/**");
     expect(workflow.on.push.paths).toContain("apps/android/wear/src/main/**");
     expect(workflow.on.push.paths).toContain("scripts/android-app-i18n.ts");
     expect(workflow.on.push.paths).toContain("scripts/apple-app-i18n.ts");
@@ -1016,6 +1018,7 @@ describe("ci workflow guards", () => {
       "apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt",
       "apps/android/app/src/main/res/values*/assistant.xml",
       "apps/android/app/src/main/res/values*/strings.xml",
+      "apps/android/app/src/thirdParty/res/values*/accessibility_strings.xml",
       "apps/android/wear/src/main/res/values*/strings.xml",
       "apps/ios/Resources/Localizable.xcstrings",
       "apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings",
@@ -1027,6 +1030,10 @@ describe("ci workflow guards", () => {
     expect(nativePublishStep.with["invalidation-paths"]).toContain("scripts/android-app-i18n.ts");
     expect(nativePublishStep.with["invalidation-paths"]).toContain("scripts/apple-app-i18n.ts");
     expect(nativePublishStep.with["invalidation-paths"]).toContain("apps/.i18n/native-source.json");
+    expect(nativePublishStep.with["invalidation-paths"]).toContain("apps/android/app/src/play");
+    expect(nativePublishStep.with["invalidation-paths"]).toContain(
+      "apps/android/app/src/thirdParty",
+    );
     expect(nativePublishStep.with["auto-merge"]).toBe("true");
     expect(controlUiRefreshStep.run).toContain("run_refresh anthropic");
     expect(controlUiRefreshStep.run).toContain("retrying with OpenAI");
@@ -2160,7 +2167,25 @@ describe("ci workflow guards", () => {
       "Sticky dependency snapshot matches the install fingerprint and importer contents; skipping pnpm install",
     );
     expect(installStep.run).toContain("timeout --signal=TERM --kill-after=15s 4m");
+    expect(installStep.run).toContain("timeout --signal=TERM --kill-after=15s 15m");
     expect(installStep.run).toContain('pnpm "${install_args[@]}" --config.fetch-retries=0');
+    const forceStickyWriterInstall =
+      'if [ "$STICKY_DISK" = "true" ] && [ "$STICKY_WRITER" = "true" ] &&\n' +
+      '  [ "$sticky_snapshot_matches" != "true" ]; then';
+    expect(installStep.run).toContain(forceStickyWriterInstall);
+    const clearStickyModules =
+      'find "$GITHUB_WORKSPACE/node_modules" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +';
+    expect(installStep.run).toContain(clearStickyModules);
+    expect(installStep.run).toContain("install_args+=(--force)");
+    expect(installStep.run).toContain('sticky_writer_rebuild="true"');
+    expect(installStep.run).toContain('if [ "$sticky_writer_rebuild" = "true" ]; then');
+    expect(installStep.run).toContain("install_attempts=1");
+    expect(installStep.run.indexOf(forceStickyWriterInstall)).toBeLessThan(
+      installStep.run.indexOf(clearStickyModules),
+    );
+    expect(installStep.run.indexOf(clearStickyModules)).toBeLessThan(
+      installStep.run.indexOf("run_pnpm_install()"),
+    );
     expect(installStep.run).toContain("install_attempts=2");
     expect(installStep.run).toContain("install_attempts=3");
     expect(installStep.run).toContain(
@@ -3560,22 +3585,22 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
     const preflightGuards = workflow.slice(
       workflow.indexOf("guards)"),
-      workflow.indexOf("shrinkwrap)"),
+      workflow.indexOf("npm-lock)"),
     );
-    const shrinkwrapGuards = workflow.slice(
-      workflow.indexOf("shrinkwrap)"),
+    const npmLockGuards = workflow.slice(
+      workflow.indexOf("npm-lock)"),
       workflow.indexOf("prod-types)"),
     );
 
     expect(workflow).toContain("check-guards");
-    expect(workflow).toContain("check-shrinkwrap");
+    expect(workflow).toContain("check-npm-lock");
     expect(preflightGuards).toContain('has_package_script "check:script-declarations"');
     expect(preflightGuards).toContain("pnpm check:script-declarations");
     expect(preflightGuards).toContain('[[ "$HISTORICAL_TARGET" != "true" ]]');
     expect(preflightGuards).toContain(
       "Current CI targets must provide the check:script-declarations package script.",
     );
-    expect(shrinkwrapGuards).toContain("pnpm deps:shrinkwrap:check");
+    expect(npmLockGuards).toContain("pnpm deps:npm-lock:check");
     expect(preflightGuards).toContain("pnpm deps:patches:check");
     expect(parsedWorkflow.jobs.preflight.outputs.diff_base_revision).toBe(
       "${{ steps.diff_base.outputs.sha }}",
@@ -4137,6 +4162,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(checkShard.run).toContain("pnpm tsgo:scripts");
     expect(checkShard.run).toContain('elif [[ "$HISTORICAL_TARGET" != "true" ]]');
+    expect(checkShard.run).toContain('has_package_script "deps:npm-lock:check"');
+    expect(checkShard.run).toContain(
+      "Current CI targets must provide the deps:npm-lock:check package script.",
+    );
+    expect(checkShard.run).toContain(
+      "[skip] historical target predates the transient npm lock contract",
+    );
     expect(checkShard.run).toContain('has_package_script "deadcode:dependencies"');
     expect(checkShard.run).toContain('has_package_script "deadcode:unused-files"');
     expect(checkShard.run).toContain('has_package_script "deadcode:exports"');
@@ -4405,70 +4437,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(runStep.run).toContain(expected);
     }
     expect(existsSync("scripts/ci-run-node-test-shard.mjs")).toBe(true);
-  });
-
-  it("keeps the CI timing summary parked for timing optimization work", () => {
-    expect(readFileSync(".github/workflows/ci.yml", "utf8")).toContain(
-      "Re-enable this job when we want to collect CI timing data for timing optimization.",
-    );
-
-    const workflow = readCiWorkflow();
-    const timingJob = workflow.jobs["ci-timings-summary"];
-
-    expect(timingJob.permissions).toMatchObject({ actions: "read", contents: "read" });
-    expect(timingJob.needs).toEqual([
-      "preflight",
-      "security-fast",
-      "pnpm-store-warmup",
-      "build-artifacts",
-      "checks-ui",
-      "control-ui-i18n",
-      "checks-fast-core",
-      "checks-fast-plugin-contracts-shard",
-      "checks-fast-channel-contracts-shard",
-      "checks-node-compat",
-      "checks-node-core-test-nondist-shard",
-      "check-shard",
-      "check-additional-shard",
-      "check-docs",
-      "skills-python",
-      "checks-windows",
-      "macos-node",
-      "macos-swift",
-      "ios-build",
-      "android",
-    ]);
-    expect(timingJob.if).toContain("false");
-    expect(timingJob.if).toContain("always()");
-    expect(timingJob.if).toContain("!cancelled()");
-
-    const checkoutStep = timingJob.steps.find(
-      (step: WorkflowStep) => step.name === "Checkout timing summary helper",
-    );
-    expect(checkoutStep.uses).toBe(CHECKOUT_V6);
-    expect(checkoutStep.with.ref).toBe(
-      "${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || needs.preflight.outputs.checkout_revision || github.sha }}",
-    );
-    expect(checkoutStep.with["persist-credentials"]).toBe(false);
-
-    const writeStep = timingJob.steps.find(
-      (step: WorkflowStep) => step.name === "Write CI timing summary",
-    );
-    expect(writeStep.env).toMatchObject({ GH_TOKEN: "${{ github.token }}" });
-    expect(writeStep.run).toContain(
-      'node scripts/ci-run-timings.mjs "$GITHUB_RUN_ID" --limit 25 > ci-timings-summary.txt',
-    );
-    expect(writeStep.run).toContain('cat ci-timings-summary.txt >> "$GITHUB_STEP_SUMMARY"');
-
-    const uploadStep = timingJob.steps.find(
-      (step: WorkflowStep) => step.name === "Upload CI timing summary",
-    );
-    expect(uploadStep.uses).toBe(UPLOAD_ARTIFACT_V7);
-    expect(uploadStep.with).toMatchObject({
-      name: "ci-timings-summary",
-      path: "ci-timings-summary.txt",
-      "retention-days": 14,
-    });
   });
 
   it("emits one final CI gate after every selected lane", () => {
@@ -5105,10 +5073,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(smokeBuildStep.run).toContain("node scripts/build-all.mjs qaRuntime");
     expect(smokeBuildStep.run).toContain("pnpm ui:build");
     expect(smokeBuildStep.env.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
-    expect(smokeBuildStep.run).toContain("--skip-build");
+    expect(smokeBuildStep.run).not.toContain("--skip-build");
     expect(smokeBuildStep.run).toContain("--allow-unreleased-changelog");
     expect(smokeBuildStep.run).toContain("grep -Fq");
     expect(smokeBuildStep.run).toContain('"${package_args[@]}"');
+    expect(smokeBuildStep.run.indexOf("node scripts/package-openclaw-for-docker.mjs")).toBeLessThan(
+      smokeBuildStep.run.indexOf("node scripts/build-all.mjs qaRuntime"),
+    );
     expect(workflow.jobs["qa-smoke-ci-artifacts"]).toBeUndefined();
     expect(workflow.jobs["qa-smoke-ci"]).toBeUndefined();
     expect(smokeProfileJob.needs).toEqual(["preflight"]);

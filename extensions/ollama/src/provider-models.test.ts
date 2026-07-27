@@ -379,6 +379,7 @@ describe("ollama provider models", () => {
     expect(visionModel.reasoning).toBe(true);
     expect(visionModel.compat?.supportsTools).toBe(true);
     expect(visionModel.compat?.supportsUsageInStreaming).toBe(true);
+    expect(visionModel.compat?.supportsJsonSchemaResponseFormat).toBe(false);
 
     const textModel = buildOllamaModelDefinition("glm-5.1:cloud", 202752, ["completion", "tools"]);
     expect(textModel.input).toEqual(["text"]);
@@ -403,6 +404,7 @@ describe("ollama provider models", () => {
     expect(noCapabilities.input).toEqual(["text"]);
     expect(noCapabilities.compat?.supportsTools).toBe(true);
     expect(noCapabilities.compat?.supportsUsageInStreaming).toBe(true);
+    expect(noCapabilities.compat?.supportsJsonSchemaResponseFormat).toBe(true);
   });
 
   it("disables tool support when Ollama capabilities omit tools", () => {

@@ -12,7 +12,7 @@ import {
 } from "./cloud-target.ts";
 
 type CloudDraftAdvanceResult =
-  | { status: "started"; messageId: string }
+  | { status: "started"; messageId: string; messageSeq?: number }
   | { status: "send-rejected"; error: string; messageId: string }
   | { status: "cleanup-rejected"; error: string; messageId?: string }
   | { status: "dispatch-rejected"; error: string }

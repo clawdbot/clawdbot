@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { extractToolCardsCached as extractToolCards } from "../../lib/chat/tool-cards.ts";
 import {
+  assistantGroupCanOwnActiveRunStatus,
   buildCachedChatItems,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
@@ -14,6 +15,29 @@ import {
   resetChatThreadState,
   syncToolCardExpansionState,
 } from "./chat-thread.ts";
+
+describe("assistantGroupCanOwnActiveRunStatus", () => {
+  const group = (message: Record<string, unknown>): MessageGroup => ({
+    kind: "group",
+    key: "assistant:1",
+    role: "assistant",
+    timestamp: 1,
+    isStreaming: false,
+    messages: [{ key: "message:1", message }],
+  });
+
+  it("accepts visible replies and rejects forwarded assistant input", () => {
+    expect(assistantGroupCanOwnActiveRunStatus(group({ content: "Reply" }))).toBe(true);
+    expect(
+      assistantGroupCanOwnActiveRunStatus(
+        group({
+          content: "Forwarded input",
+          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        }),
+      ),
+    ).toBe(false);
+  });
+});
 
 describe("persistedMessageEntryId", () => {
   it("rejects optimistic pending bubbles and accepts transcript identities", () => {
@@ -435,6 +459,42 @@ describe("collapseCompletedTurnWork", () => {
 });
 
 describe("buildCachedChatItems row identity", () => {
+  it("keeps an accepted initial send key across local-to-history replacement", () => {
+    resetChatThreadState();
+    const initial = groupAt(
+      messageGroups({
+        messages: [
+          {
+            __openclaw: { idempotencyKey: "initial-send:user", seq: 1 },
+            role: "user",
+            content: "Initial image prompt",
+            timestamp: 1,
+          },
+        ],
+      }),
+      0,
+    );
+    const reconciled = groupAt(
+      messageGroups({
+        messages: [
+          {
+            __openclaw: {
+              id: "persisted-user-message",
+              idempotencyKey: "initial-send:user",
+              seq: 1,
+            },
+            role: "user",
+            content: "Initial image prompt",
+            timestamp: 2,
+          },
+        ],
+      }),
+      0,
+    );
+
+    expect(messageAt(reconciled, 0).key).toBe(messageAt(initial, 0).key);
+  });
+
   it("keeps a persistent message key across live-to-authoritative replacement", () => {
     resetChatThreadState();
     const initial = groupAt(

@@ -64,10 +64,12 @@ export type ApplicationInitialUserMessage = {
   role: "user";
   content: unknown[];
   timestamp: number;
+  __openclaw?: { idempotencyKey?: string; seq?: number };
 };
 
 type InitialUserMessageHandoff = {
   message: ApplicationInitialUserMessage;
+  /** Logical Gateway client; per-transport hello objects rotate on reconnect. */
   owner: object;
   sessionKey: string;
 };

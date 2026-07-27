@@ -441,18 +441,24 @@ function renderClawHubResults(props: SkillsProps) {
     return renderSettingsEmpty(t("skillsPage.noClawHubResults"));
   }
   return html`
-    ${results.map(
-      (r) => html`
+    ${results.map((r) => {
+      const iconUrl = safeExternalHref(r.icon ?? undefined);
+      return html`
         <div class="settings-row plugins-item plugins-item--clickable">
           <button
             type="button"
-            class="settings-row__text plugins-item__detail-button"
+            class="settings-row__text plugins-item__detail-button clawhub-skill-result__button"
             aria-label=${t("skillsPage.openDetails", { name: r.displayName })}
             @click=${() => props.onClawHubDetailOpen(r.slug)}
           >
-            <span class="settings-row__title">${r.displayName}</span>
-            <span class="settings-row__desc">
-              ${r.summary ? clampText(r.summary, 120) : r.slug}
+            ${iconUrl
+              ? html`<img class="clawhub-skill-icon" src=${iconUrl} alt="" loading="lazy" />`
+              : nothing}
+            <span class="clawhub-skill-result__copy">
+              <span class="settings-row__title">${r.displayName}</span>
+              <span class="settings-row__desc">
+                ${r.summary ? clampText(r.summary, 120) : r.slug}
+              </span>
             </span>
           </button>
           <div class="settings-row__control">
@@ -468,13 +474,16 @@ function renderClawHubResults(props: SkillsProps) {
             </button>
           </div>
         </div>
-      `,
-    )}
+      `;
+    })}
   `;
 }
 
 function renderClawHubDetailDialog(props: SkillsProps) {
   const detail = props.clawhubDetail;
+  const skillIconUrl = safeExternalHref(detail?.skill?.icon ?? undefined);
+  const profileImageUrl = skillIconUrl ? null : safeExternalHref(detail?.owner?.image ?? undefined);
+  const detailImageUrl = skillIconUrl ?? profileImageUrl;
 
   return html`
     <openclaw-modal-dialog
@@ -484,8 +493,19 @@ function renderClawHubDetailDialog(props: SkillsProps) {
     >
       <div class="md-preview-dialog__panel">
         <div class="md-preview-dialog__header">
-          <div class="md-preview-dialog__title">
-            ${detail?.skill?.displayName ?? props.clawhubDetailSlug}
+          <div class="clawhub-skill-detail__identity">
+            ${detailImageUrl
+              ? html`<img
+                  class="clawhub-skill-icon clawhub-skill-icon--detail ${profileImageUrl
+                    ? "clawhub-skill-icon--profile"
+                    : ""}"
+                  src=${detailImageUrl}
+                  alt=""
+                />`
+              : nothing}
+            <div class="md-preview-dialog__title">
+              ${detail?.skill?.displayName ?? props.clawhubDetailSlug}
+            </div>
           </div>
           <button class="btn btn--sm" @click=${props.onClawHubDetailClose}>
             ${t("skillsPage.close")}
@@ -587,8 +607,11 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
   const active = activeSkillMutation(props, skill.skillKey);
   const editValue = props.edits[skill.skillKey] ?? "";
   const message = props.messages[skill.skillKey] ?? null;
-  const installOption = skill.install[0];
-  const canInstall = installOption !== undefined && skill.missing.bins.length > 0;
+  const missingBins = new Set([...skill.missing.bins, ...skill.missing.anyBins]);
+  // An installer must provide a currently missing binary, not an unrelated dependency.
+  const installOption = skill.install.find((option) =>
+    option.bins.some((bin) => missingBins.has(bin)),
+  );
   const showBundledBadge = Boolean(skill.bundled && skill.source !== "openclaw-bundled");
   const missing = computeSkillMissing(skill);
   const reasons = computeSkillReasons(skill);
@@ -678,7 +701,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
             <span style="font-size: 13px; font-weight: 500;">
               ${skill.disabled ? t("skillsPage.disabled") : t("skillsPage.enabled")}
             </span>
-            ${canInstall
+            ${installOption
               ? html`<button
                   class="btn"
                   ?disabled=${locked}
@@ -779,7 +802,7 @@ function renderInstalledClawHubOverview(
   return html`
     <div
       class="callout"
-      style="display: grid; gap: 8px; border-color: var(--border); background: var(--panel-2);"
+      style="display: grid; gap: 8px; border-color: var(--border); background: var(--panel-strong);"
     >
       <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
         <span class="chip ${verdictChipClass(verdict)}">${verdictLabel(verdict)}</span>

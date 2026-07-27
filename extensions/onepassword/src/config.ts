@@ -79,6 +79,11 @@ export function parseOnePasswordConfig(value: unknown): OnePasswordConfig | unde
   if (!isRecord(value) || Object.keys(value).length === 0) {
     return undefined;
   }
+  // Schema defaults can materialize the broker policy fields when the plugin is enabled
+  // solely for SecretRefs. A broker exists only once its vault/item registry is configured.
+  if (!Object.hasOwn(value, "vault") && !Object.hasOwn(value, "items")) {
+    return undefined;
+  }
   const vault = requiredString(value, "vault");
   if (vault.startsWith("-")) {
     throw new Error("1Password config vault must not start with a hyphen");

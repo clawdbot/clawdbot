@@ -231,9 +231,10 @@ describe("Zoom meeting platform adapter", () => {
     expect(script).toContain("BlackHole");
   });
 
-  it("enables caption snapshots only in transcribe mode", () => {
+  it("enables caption snapshots for durable notes in every mode", () => {
     expect(ZOOM_MEETINGS_PLATFORM_ADAPTER.browser.captions.enabled("transcribe")).toBe(true);
-    expect(ZOOM_MEETINGS_PLATFORM_ADAPTER.browser.captions.enabled("agent")).toBe(false);
+    expect(ZOOM_MEETINGS_PLATFORM_ADAPTER.browser.captions.enabled("agent")).toBe(true);
+    expect(ZOOM_MEETINGS_PLATFORM_ADAPTER.browser.captions.enabled("bidi")).toBe(true);
   });
 
   it("requires verified bidirectional audio before realtime startup", () => {

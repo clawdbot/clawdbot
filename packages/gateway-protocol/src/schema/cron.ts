@@ -130,7 +130,17 @@ const CronDisplayNameSchema = Type.String({ minLength: 1, maxLength: 200, patter
 const CronOwnerSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
+  accountId: Type.Optional(NonEmptyString),
 });
+const CronScheduledToolPolicySchema = Type.Union([
+  closedObject({ version: Type.Literal(1), mode: Type.Literal("trusted") }),
+  closedObject({
+    version: Type.Literal(1),
+    mode: Type.Literal("account"),
+    ownerSessionKey: NonEmptyString,
+    ownerAccountId: NonEmptyString,
+  }),
+]);
 const CronAnnounceChannelSchema = Type.Union([Type.Literal("last"), NonBlankString]);
 const CronFailoverReasonSchema = Type.Union([
   Type.Literal("auth"),
@@ -514,6 +524,7 @@ export const CronJobSchema = closedObject({
   declarationKey: Type.Optional(CronDeclarationKeySchema),
   displayName: Type.Optional(CronDisplayNameSchema),
   owner: Type.Optional(CronOwnerSchema),
+  scheduledToolPolicy: Type.Optional(CronScheduledToolPolicySchema),
   agentId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
   name: NonEmptyString,
@@ -565,6 +576,40 @@ export const CronStatusParamsSchema = closedObject({});
 
 /** Looks up a job by stable id or legacy jobId alias. */
 export const CronGetParamsSchema = cronIdOrJobIdParams({});
+
+export const CronScratchSchema = closedObject({
+  content: Type.String({ maxLength: 262144 }),
+  revision: Type.Integer({ minimum: 1 }),
+  updatedAtMs: Type.Integer({ minimum: 0 }),
+});
+
+/** Reads private per-job scratch without adding it to the public job schema. */
+export const CronScratchGetParamsSchema = cronIdOrJobIdParams({});
+export const CronScratchGetResultSchema = closedObject({
+  scratch: Type.Union([CronScratchSchema, Type.Null()]),
+  // Monotonic across unset/recreate; pass as expectedRevision for safe writes.
+  currentRevision: Type.Integer({ minimum: 0 }),
+  maxBytes: Type.Integer({ minimum: 1 }),
+});
+
+/** Compare-and-swaps or clears private per-job scratch. */
+export const CronScratchSetParamsSchema = cronIdOrJobIdParams({
+  content: Type.Union([Type.String({ maxLength: 262144 }), Type.Null()]),
+  expectedRevision: Type.Optional(Type.Integer({ minimum: 0 })),
+});
+export const CronScratchSetResultSchema = Type.Union([
+  closedObject({
+    ok: Type.Literal(true),
+    scratch: Type.Union([CronScratchSchema, Type.Null()]),
+    currentRevision: Type.Integer({ minimum: 0 }),
+    maxBytes: Type.Integer({ minimum: 1 }),
+  }),
+  closedObject({
+    ok: Type.Literal(false),
+    reason: Type.Literal("revision-conflict"),
+    currentRevision: Type.Integer({ minimum: 0 }),
+  }),
+]);
 
 /** Creates a scheduled job with schedule, target, payload, and delivery policy. */
 export const CronAddParamsSchema = closedObject({

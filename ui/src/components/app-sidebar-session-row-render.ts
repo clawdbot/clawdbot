@@ -26,7 +26,6 @@ import type { SessionDataController } from "./session-data-controller.ts";
 import { renderSessionLeadingState } from "./session-leading-indicator.ts";
 import type { SessionPullRequestIndicatorState } from "./session-menu-work.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
-import { renderSessionOwnerChip } from "./session-owner-chip.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 import {
   renderSidebarSessionSubtitle,
@@ -49,6 +48,8 @@ export interface SessionListHost {
     | "loadMoreSessionCatalog"
     | "presenceInstanceId"
     | "presencePayload"
+    | "refreshSessionCatalogs"
+    | "sessionCatalogRefreshStatus"
     | "sessionMutationError"
   >;
   readonly fullyShownChildSessionKeys: ReadonlySet<string>;
@@ -56,22 +57,26 @@ export interface SessionListHost {
   readonly collapsedSessionSections: ReadonlySet<string>;
   readonly sessionOrganizer: Pick<
     SessionOrganizerController,
-    | "draggingSessionGroup"
+    | "draggingSidebarSection"
     | "draggingSessionKey"
     | "sessionDropTarget"
-    | "sessionGroupDropTarget"
+    | "sidebarSectionDropTarget"
     | "sessionListRemovalDrop"
   >;
   readonly sidebarMenus: Pick<
     SidebarMenusController,
+    | "catalogViewMenuPosition"
+    | "catalogViewMenuTrigger"
     | "openSessionGroupMenu"
     | "openSessionMenu"
     | "sessionGroupMenu"
     | "sessionMenu"
     | "sessionSortMenuPosition"
+    | "toggleCatalogViewMenu"
     | "toggleSessionSortMenu"
   >;
   readonly sessionsStatusFilter: SidebarSessionStatusFilter;
+  readonly sessionCreatorFilterActive: boolean;
   readonly sessionOwnershipVisible: boolean;
   readonly onOpenNewSession?: (agentId: string, target?: NewSessionTarget) => void;
   readonly onNavigate?: (
@@ -98,17 +103,16 @@ export interface SessionListHost {
   sectionDragOver(event: DragEvent, sectionId: string, group?: string): void;
   sectionDragLeave(event: DragEvent, sectionId: string, group?: string): void;
   sectionDrop(event: DragEvent, sectionId: string, group?: string): void;
-  startSessionGroupDrag(group: string): void;
-  finishSessionGroupDrag(): void;
+  startSidebarSectionDrag(sectionId: string): void;
+  finishSidebarSectionDrag(): void;
   toggleSection(sectionId: string): void;
   openNewSession(): void;
-  setVisibleSessionLimit(limit: number): void;
+  setVisibleSessionLimit(sectionId: string, limit: number): void;
   clearSessionSelection(): void;
   handleSessionListDragOver(event: DragEvent): void;
   handleSessionListDragLeave(event: DragEvent): void;
   handleSessionListDrop(event: DragEvent): void;
   dismissSessionMutationError(): void;
-  toggleCatalogProjectGrouping(): void;
   openCatalogMenu(
     request: CatalogSessionMenuRequest,
     x: number,
@@ -149,9 +153,17 @@ export function renderRecentSession(params: {
   const pullRequestState = session.worktreeId
     ? host.sessionPullRequestIndicatorState(session.key, session.worktreeId)
     : "none";
-  const { running, pinnedState, leadingIndicator } = renderSessionLeadingState(
+  const ownerAttribution = host.sessionsStatusFilter === "archived" ? "archived" : "created";
+  const ownerActor = host.sessionOwnershipVisible
+    ? host.sessionsStatusFilter === "archived"
+      ? session.archivedBy
+      : session.createdActor
+    : undefined;
+  const { running, leadingIndicator } = renderSessionLeadingState(
     session,
     pullRequestState,
+    ownerActor,
+    ownerAttribution,
   );
   const meta = display?.meta ?? session.meta;
   const rowMeta = session.pinned ? "" : meta;
@@ -169,6 +181,11 @@ export function renderRecentSession(params: {
     session.pinned ? "session-row-host--pinned" : "",
     running ? "session-row-host--running" : "",
     session.visibility === "draft" ? "session-row-host--draft" : "",
+    session.visibility === "draft"
+      ? session.draftOwnedBySelf
+        ? "session-row-host--draft-owner"
+        : "session-row-host--draft-other"
+      : "",
     session.attention.kind === "error"
       ? "sidebar-recent-session--attention-danger"
       : session.attention.kind !== "none"
@@ -223,10 +240,7 @@ export function renderRecentSession(params: {
         aria-describedby=${metaId ?? nothing}
         @click=${(event: MouseEvent) => host.handleSessionRowClick(event, session)}
       >
-        <span class="sidebar-session-indicator">${leadingIndicator}</span>${renderSessionOwnerChip(
-          host.sessionOwnershipVisible ? session.createdActor : undefined,
-          "row",
-        )}
+        <span class="sidebar-session-indicator">${leadingIndicator}</span>
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__name hover-marquee"
             >${session.archived
@@ -264,7 +278,6 @@ export function renderRecentSession(params: {
             session.key,
           ),
         })}
-        ${pinnedState}
       </a>
       ${session.childSessionKeys.length > 0
         ? html`<button

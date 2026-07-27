@@ -76,6 +76,7 @@ func translateDocBodyChunked(ctx context.Context, translator docsTranslator, rel
 	translatedBody := out.String()
 	translatedBody = normalizeMaskedListMarkerPlaceholders(translatedBody, mapping)
 	translatedBody = normalizeMaskedListMarkerSpacing(maskedBody, translatedBody, listPlaceholders)
+	translatedBody = escapeUnexpectedListItemBodyMarkers(maskedBody, translatedBody, listPlaceholders)
 	translatedBody = escapeUnexpectedMarkdownListMarkers(translatedBody, listPlaceholders)
 	if err := validatePlaceholders(translatedBody, placeholders); err != nil {
 		return "", fmt.Errorf("%s: restore fenced literals: %w", relPath, err)
@@ -90,6 +91,9 @@ func translateDocBodyChunked(ctx context.Context, translator docsTranslator, rel
 			maskedListMarkers,
 			extractMarkdownListMarkerPrefixes(translatedBody),
 		)
+		if os.Getenv("OPENCLAW_DOCS_I18N_LOG_REJECTED_BODY") == "1" {
+			log.Printf("docs-i18n: rejected translated body %s %q", relPath, translatedBody)
+		}
 		return "", fmt.Errorf("%s: final document validation: %w", relPath, err)
 	}
 	return translatedBody, nil
@@ -158,7 +162,9 @@ func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chun
 		translated = reapplyCommonIndent(translated, commonIndent)
 		translated = normalizeMaskedListMarkerPlaceholders(translated, listPlaceholders)
 		translated = normalizeMaskedListMarkerSpacing(source, translated, listPlaceholders)
+		translated = escapeUnexpectedListItemBodyMarkers(source, translated, listPlaceholders)
 		translated = escapeUnexpectedMarkdownListMarkers(translated, listPlaceholders)
+		translated = unwrapUnexpectedInlineCodeSpans(source, translated)
 		if validationErr := validateDocChunkTranslation(source, translated); validationErr == nil {
 			log.Printf("docs-i18n: chunk done %s out_bytes=%d", chunkID, len(translated))
 			return translated, nil
@@ -210,7 +216,9 @@ func translateDocLeafBlock(ctx context.Context, translator docsTranslator, chunk
 	translated = reapplyCommonIndent(translated, commonIndent)
 	translated = normalizeMaskedListMarkerPlaceholders(translated, listPlaceholders)
 	translated = normalizeMaskedListMarkerSpacing(source, translated, listPlaceholders)
+	translated = escapeUnexpectedListItemBodyMarkers(source, translated, listPlaceholders)
 	translated = escapeUnexpectedMarkdownListMarkers(translated, listPlaceholders)
+	translated = unwrapUnexpectedInlineCodeSpans(source, translated)
 	if validationErr := validateDocChunkTranslation(source, translated); validationErr != nil {
 		return "", validationErr
 	}

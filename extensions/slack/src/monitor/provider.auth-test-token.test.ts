@@ -239,7 +239,7 @@ describe("auth.test boot call", () => {
     expect(createSlackStartupAuthClientMock).toHaveBeenCalledWith(
       "bot-token",
       expect.objectContaining({
-        agent: expect.anything(),
+        fetch: expect.any(Function),
         slackApiUrl: "https://slack.test/api/",
       }),
     );
@@ -279,7 +279,7 @@ describe("auth.test boot call", () => {
       expect(events).toContain("auth-settled");
       expect(events.indexOf("auth-settled")).toBeLessThan(events.indexOf("app-start"));
       expect(runtimeLog).toHaveBeenCalledWith(
-        expect.stringContaining("timeout of 10000ms exceeded"),
+        expect.stringMatching(/slack auth\.test failed at boot .*timeout/i),
       );
     } finally {
       monitor.controller.abort();

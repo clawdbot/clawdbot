@@ -551,6 +551,16 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it("returns a certificate-specific message for TLS validation failures", () => {
+    const msg = makeAssistantError(
+      "Hostname/IP does not match certificate's altnames: Host: api.example.com",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM request failed: TLS certificate validation rejected the provider endpoint. " +
+        "Check the endpoint hostname, proxy, and local certificate trust.",
+    );
+  });
+
   it("keeps non-transport config errors that mention proxy settings actionable", () => {
     const msg = makeAssistantError(
       'Model-provider request.proxy/request.tls is not yet supported for api "ollama"',

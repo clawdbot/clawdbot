@@ -9,6 +9,7 @@ import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { createAgentRunRestartAbortError } from "../run-termination.js";
 import { deliverAgentCommandResult } from "./delivery.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -497,11 +498,13 @@ describe("deliverAgentCommandResult payload normalization", () => {
     const resolveFreshSessionEntryForDelivery = vi.fn(async () => ({
       sessionId: "session-1",
       updatedAt: 2,
-      deliveryContext: {
-        channel: "slack",
-        to: "#fresh",
-        accountId: "workspace-1",
-      },
+      delivery: normalizeSessionDeliveryState({
+        context: {
+          channel: "slack",
+          to: "#fresh",
+          accountId: "workspace-1",
+        },
+      }),
     }));
 
     const delivered = await deliverAgentCommandResult({
@@ -554,11 +557,13 @@ describe("deliverAgentCommandResult payload normalization", () => {
     const resolveFreshSessionEntryForDelivery = vi.fn(async () => ({
       sessionId: "session-2",
       updatedAt: 2,
-      deliveryContext: {
-        channel: "slack",
-        to: "#fresh",
-        accountId: "workspace-1",
-      },
+      delivery: normalizeSessionDeliveryState({
+        context: {
+          channel: "slack",
+          to: "#fresh",
+          accountId: "workspace-1",
+        },
+      }),
     }));
 
     const delivered = await deliverAgentCommandResult({

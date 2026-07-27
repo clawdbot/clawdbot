@@ -478,7 +478,7 @@ async function saveOkMediaResponse(params: {
     fallbackContentType: params.fallbackContentType,
   });
   const detectionFilePathHint = isGenericResponseContentType(contentType)
-    ? params.filePathHint
+    ? (params.filePathHint ?? fileName)
     : undefined;
   try {
     const saved = params.res.body

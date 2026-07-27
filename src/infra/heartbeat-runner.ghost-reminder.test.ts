@@ -627,7 +627,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       expect(firstCtx.Provider).toBe("cron-event");
       expect(firstCtx.Body).toContain("Cron: QMD maintenance completed");
       expect(secondCtx.Provider).toBe("heartbeat");
-      expect(secondCtx.Body).toContain("Read HEARTBEAT.md");
+      expect(secondCtx.Body).toContain("Heartbeat monitor scratch:");
       expect(secondCtx.Body).not.toContain("Cron: QMD maintenance completed");
     });
   });

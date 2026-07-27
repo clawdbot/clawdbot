@@ -12,6 +12,7 @@ import {
   listRegistryWorktrees,
 } from "../agents/worktrees/registry.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { initSessionState } from "../auto-reply/reply/session.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
@@ -33,6 +34,7 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import {
@@ -331,7 +333,7 @@ test("incognito sessions survive non-default-agent webchat reply initialization"
         resolveDispatch(
           await initSessionState({
             cfg: input.cfg,
-            ctx: input.ctx,
+            ctx: finalizeInboundContext(input.ctx),
             commandAuthorized: true,
             expectedExistingSessionId: input.replyOptions?.expectedExistingSessionId,
             pinExpectedExistingSession: input.replyOptions?.pinExpectedExistingSession,
@@ -555,13 +557,116 @@ function requireNonEmptyString(value: string | undefined, label: string): string
   return value;
 }
 
-test("sessions.create provisions and reuses a session worktree for later runs", async () => {
-  const root = await fs.mkdtemp(
-    path.join(await fs.realpath(os.tmpdir()), "openclaw-session-worktree-"),
+test("sessions.create persists draft visibility in the initial session entry", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const created = await directSessionReq<{
+    key: string;
+    entry: { visibility?: string };
+  }>("sessions.create", { agentId: "main", visibility: "draft" });
+
+  expect(created.ok).toBe(true);
+  expect(created.payload?.entry.visibility).toBe("draft");
+  const key = requireNonEmptyString(created.payload?.key, "created session key");
+  expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.visibility).toBe(
+    "draft",
   );
+  const listed = await directSessionReq<{
+    sessions?: Array<{ key: string; visibility?: string }>;
+  }>("sessions.list", {});
+  expect(listed.payload?.sessions?.find((row) => row.key === key)?.visibility).toBe("draft");
+});
+
+test("sessions.create keeps omitted visibility on the prior shared default", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const created = await directSessionReq<{
+    key: string;
+    entry: { visibility?: string };
+  }>("sessions.create", { agentId: "main" });
+
+  expect(created.ok).toBe(true);
+  expect(created.payload?.entry.visibility).toBeUndefined();
+  const key = requireNonEmptyString(created.payload?.key, "created session key");
+  expect(
+    loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.visibility,
+  ).toBeUndefined();
+  const listed = await directSessionReq<{
+    sessions?: Array<{ key: string; visibility?: string }>;
+  }>("sessions.list", {});
+  expect(listed.payload?.sessions?.find((row) => row.key === key)?.visibility).toBe("shared");
+});
+
+test("sessions.create preserves keyed draft adoption idempotency", async () => {
+  await createSessionStoreDir();
+  const key = "agent:main:dashboard:idempotent-draft";
+  const first = await directSessionReq<{
+    sessionId: string;
+    entry: { visibility?: string };
+  }>("sessions.create", { agentId: "main", key, visibility: "draft" });
+
+  expect(first.ok).toBe(true);
+  const retried = await directSessionReq<{
+    sessionId: string;
+    entry: { visibility?: string };
+  }>("sessions.create", { agentId: "main", key, visibility: "draft" });
+  expect(retried).toMatchObject({
+    ok: true,
+    payload: {
+      sessionId: first.payload?.sessionId,
+      entry: { visibility: "draft" },
+    },
+  });
+
+  testState.sessionConfig = { sharing: { drafts: false } };
+  const retriedAfterPolicyChange = await directSessionReq<{
+    sessionId: string;
+    entry: { visibility?: string };
+  }>("sessions.create", { agentId: "main", key, visibility: "draft" });
+  expect(retriedAfterPolicyChange).toMatchObject({
+    ok: true,
+    payload: {
+      sessionId: first.payload?.sessionId,
+      entry: { visibility: "draft" },
+    },
+  });
+
+  const mismatch = await directSessionReq("sessions.create", {
+    agentId: "main",
+    key,
+    visibility: "shared",
+  });
+  expect(mismatch).toMatchObject({
+    ok: false,
+    error: {
+      code: "INVALID_REQUEST",
+      message: "sessions.create visibility requires a new session",
+    },
+  });
+});
+
+test("sessions.create rejects draft visibility when policy disables drafts", async () => {
+  testState.sessionConfig = { sharing: { drafts: false } };
+  const created = await directSessionReq("sessions.create", {
+    agentId: "main",
+    visibility: "draft",
+  });
+
+  expect(created).toMatchObject({
+    ok: false,
+    error: {
+      code: "INVALID_REQUEST",
+      message: "session visibility is disabled: draft",
+      details: { code: "SESSION_VISIBILITY_DISABLED", visibility: "draft" },
+    },
+  });
+});
+
+test("sessions.create provisions and reuses a session worktree for later runs", async () => {
+  const openClawState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-session-worktree-",
+  });
+  const root = openClawState.root;
   const workspace = await initializeGitWorkspace(root);
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  process.env.OPENCLAW_STATE_DIR = path.join(root, "state");
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
   await createSessionStoreDir();
@@ -629,20 +734,17 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
       await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
     }
     closeOpenClawStateDatabaseForTest();
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
     testState.agentConfig = undefined;
-    await fs.rm(root, { recursive: true, force: true });
+    await openClawState.cleanup();
   }
 });
 
 test("sessions.create honors worktree name/base ref and persists worktree info", async () => {
-  const root = await fs.mkdtemp(
-    path.join(await fs.realpath(os.tmpdir()), "openclaw-session-worktree-target-"),
-  );
+  const openClawState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-session-worktree-target-",
+  });
+  const root = openClawState.root;
   const workspace = await initializeGitWorkspace(root);
   await execFileAsync("git", ["-C", workspace, "checkout", "-b", "base-branch"]);
   await fs.writeFile(path.join(workspace, "base.txt"), "base\n");
@@ -665,8 +767,6 @@ test("sessions.create honors worktree name/base ref and persists worktree info",
     "HEAD",
   ]);
   await execFileAsync("git", ["-C", workspace, "checkout", "main"]);
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  process.env.OPENCLAW_STATE_DIR = path.join(root, "state");
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
   await createSessionStoreDir();
@@ -715,13 +815,8 @@ test("sessions.create honors worktree name/base ref and persists worktree info",
       await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
     }
     closeOpenClawStateDatabaseForTest();
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
     testState.agentConfig = undefined;
-    await fs.rm(root, { recursive: true, force: true });
+    await openClawState.cleanup();
   }
 });
 
@@ -816,6 +911,27 @@ test("sessions.create reset-in-place clears a prior node binding for Gateway exe
   expect(gatewaySession.payload?.entry.execCwd).toBeUndefined();
 });
 
+test("sessions.create does not apply create-time visibility to an in-place reset", async () => {
+  testState.sessionConfig = { dmScope: "main" };
+  await createSessionStoreDir();
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-existing-main") } });
+
+  const reset = await directSessionReq("sessions.create", {
+    agentId: "main",
+    parentSessionKey: "main",
+    emitCommandHooks: true,
+    visibility: "draft",
+  });
+
+  expect(reset).toMatchObject({
+    ok: false,
+    error: {
+      code: "INVALID_REQUEST",
+      message: "sessions.create visibility requires a new session",
+    },
+  });
+});
+
 test("sessions.create rejects a Gateway worktree targeting a node", async () => {
   await createSessionStoreDir();
   const created = await directSessionReq(
@@ -831,16 +947,16 @@ test("sessions.create rejects a Gateway worktree targeting a node", async () => 
 });
 
 test("sessions.create provisions a worktree from an admin-selected cwd", async () => {
-  const configuredRoot = await fs.mkdtemp(
-    path.join(await fs.realpath(os.tmpdir()), "openclaw-configured-workspace-"),
-  );
+  const openClawState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-configured-workspace-",
+  });
+  const configuredRoot = openClawState.root;
   const selectedRoot = await fs.mkdtemp(
     path.join(await fs.realpath(os.tmpdir()), "openclaw-selected-workspace-"),
   );
   const configuredWorkspace = await initializeGitWorkspace(configuredRoot);
   const selectedWorkspace = await initializeGitWorkspace(selectedRoot);
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  process.env.OPENCLAW_STATE_DIR = path.join(configuredRoot, "state");
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace: configuredWorkspace };
   await createSessionStoreDir();
@@ -886,13 +1002,8 @@ test("sessions.create provisions a worktree from an admin-selected cwd", async (
       await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
     }
     closeOpenClawStateDatabaseForTest();
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
     testState.agentConfig = undefined;
-    await fs.rm(configuredRoot, { recursive: true, force: true });
+    await openClawState.cleanup();
     await fs.rm(selectedRoot, { recursive: true, force: true });
   }
 });
@@ -960,16 +1071,16 @@ test("sessions.create allows cwd within a sandboxed agent workspace", async () =
 });
 
 test("sessions.create skips the worktree setup script for non-admin callers", async () => {
-  const root = await fs.mkdtemp(
-    path.join(await fs.realpath(os.tmpdir()), "openclaw-worktree-setup-scope-"),
-  );
+  const openClawState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-worktree-setup-scope-",
+  });
+  const root = openClawState.root;
   const workspace = await initializeGitWorkspace(root);
   await fs.mkdir(path.join(workspace, ".openclaw"), { recursive: true });
   const setupScript = path.join(workspace, ".openclaw", "worktree-setup.sh");
   await fs.writeFile(setupScript, "#!/bin/sh\ntouch setup-marker.txt\n");
   await fs.chmod(setupScript, 0o755);
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  process.env.OPENCLAW_STATE_DIR = path.join(root, "state");
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
   await createSessionStoreDir();
@@ -993,27 +1104,22 @@ test("sessions.create skips the worktree setup script for non-admin callers", as
       await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
     }
     closeOpenClawStateDatabaseForTest();
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
     testState.agentConfig = undefined;
-    await fs.rm(root, { recursive: true, force: true });
+    await openClawState.cleanup();
   }
 });
 
 test("sessions.create preserves a linked-worktree subdirectory", async () => {
-  const root = await fs.mkdtemp(
-    path.join(await fs.realpath(os.tmpdir()), "openclaw-subdir-session-worktree-"),
-  );
+  const openClawState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-subdir-session-worktree-",
+  });
+  const root = openClawState.root;
   const repoRoot = await initializeGitWorkspace(root);
   const linkedRoot = path.join(root, "linked");
   await execFileAsync("git", ["-C", repoRoot, "worktree", "add", "-b", "linked", linkedRoot]);
   const workspace = path.join(linkedRoot, "packages", "app");
   await fs.mkdir(workspace, { recursive: true });
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  process.env.OPENCLAW_STATE_DIR = path.join(root, "state");
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
   await createSessionStoreDir();
@@ -1042,20 +1148,17 @@ test("sessions.create preserves a linked-worktree subdirectory", async () => {
       await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
     }
     closeOpenClawStateDatabaseForTest();
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
     testState.agentConfig = undefined;
-    await fs.rm(root, { recursive: true, force: true });
+    await openClawState.cleanup();
   }
 });
 
 test("sessions.create reset-in-place persists the returned worktree cwd", async () => {
-  const root = await fs.mkdtemp(
-    path.join(await fs.realpath(os.tmpdir()), "openclaw-reset-session-worktree-"),
-  );
+  const openClawState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-reset-session-worktree-",
+  });
+  const root = openClawState.root;
   const workspace = await initializeGitWorkspace(root);
   // A remote makes the base commit reachable from `--remotes`, so leaving the worktree via a
   // plain New Chat is lossless and the reset can remove it (the real leave-worktree flow).
@@ -1063,8 +1166,6 @@ test("sessions.create reset-in-place persists the returned worktree cwd", async 
   await execFileAsync("git", ["init", "--bare", origin]);
   await execFileAsync("git", ["-C", workspace, "remote", "add", "origin", origin]);
   await execFileAsync("git", ["-C", workspace, "push", "-u", "origin", "main"]);
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  process.env.OPENCLAW_STATE_DIR = path.join(root, "state");
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace, model: { primary: "openai/current-model" } };
   testState.sessionConfig = { dmScope: "main" };
@@ -1132,14 +1233,9 @@ test("sessions.create reset-in-place persists the returned worktree cwd", async 
       await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
     }
     closeOpenClawStateDatabaseForTest();
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
     testState.agentConfig = undefined;
     testState.sessionConfig = undefined;
-    await fs.rm(root, { recursive: true, force: true });
+    await openClawState.cleanup();
   }
 });
 

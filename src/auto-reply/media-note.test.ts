@@ -1,16 +1,38 @@
 /** Tests prompt media-note rendering for inbound attachments. */
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveMediaFacts, type MediaFactLegacyProjection } from "../media/media-facts.js";
 import { getMediaDir } from "../media/store.js";
 import { buildInboundMediaNoteProjection } from "./media-note.js";
 import {
   createSuccessfulAudioMediaDecision,
   createSuccessfulImageMediaDecision,
 } from "./media-understanding.test-fixtures.js";
+import type { MsgContext } from "./templating.js";
 
-const buildInboundMediaNote = (
-  ctx: Parameters<typeof buildInboundMediaNoteProjection>[0],
-): string | undefined => buildInboundMediaNoteProjection(ctx).text;
+type MediaNoteFixture = MsgContext & MediaFactLegacyProjection;
+
+const buildProjection = (ctx: MediaNoteFixture) => {
+  const normalized = { ...ctx, media: ctx.media ?? resolveMediaFacts(ctx) } as Record<
+    string,
+    unknown
+  >;
+  for (const key of [
+    "MediaPath",
+    "MediaUrl",
+    "MediaType",
+    "MediaPaths",
+    "MediaUrls",
+    "MediaTypes",
+    "MediaTranscribedIndexes",
+  ]) {
+    delete normalized[key];
+  }
+  return buildInboundMediaNoteProjection(normalized as MsgContext);
+};
+
+const buildInboundMediaNote = (ctx: MediaNoteFixture): string | undefined =>
+  buildProjection(ctx).text;
 
 describe("buildInboundMediaNote", () => {
   it("formats single MediaPath as a media note (collapses redundant duplicate URL, #47587)", () => {
@@ -111,7 +133,7 @@ describe("buildInboundMediaNote", () => {
   });
 
   it("keeps image attachments after image descriptions are added", () => {
-    const projection = buildInboundMediaNoteProjection({
+    const projection = buildProjection({
       MediaPaths: ["/tmp/photo.png"],
       MediaUrls: ["https://example.com/photo.png"],
       MediaTypes: ["image/png"],
@@ -347,6 +369,21 @@ describe("buildInboundMediaNote", () => {
     expect(note).toBe("[media attached: /tmp/document.pdf]");
   });
 
+  it("strips a transcribed kind-only audio fact without relying on its filename", () => {
+    const projection = buildInboundMediaNoteProjection({
+      media: [
+        {
+          path: "/tmp/opaque-upload",
+          kind: "audio",
+          contentType: "application/octet-stream",
+          transcribed: true,
+        },
+      ],
+    });
+
+    expect(projection).toEqual({ media: [] });
+  });
+
   it("keeps audio attachments when no transcription is available", () => {
     const note = buildInboundMediaNote({
       MediaPaths: ["/tmp/voice.ogg"],
@@ -400,9 +437,6 @@ describe("buildInboundMediaNote", () => {
           kind: "image",
         },
       ],
-      MediaPath: "/tmp/a.png",
-      MediaUrl: "https://example.com/a.png",
-      MediaType: "image/png",
     });
     expect(single).toEqual({
       text: "[media attached: /tmp/a.png (image/png) | https://example.com/a.png]",
@@ -423,8 +457,6 @@ describe("buildInboundMediaNote", () => {
         { path: "/tmp/a.png", contentType: "image/png" },
         { path: "/tmp/b.pdf", contentType: "application/pdf" },
       ],
-      MediaPaths: ["/tmp/a.png", "/tmp/b.pdf"],
-      MediaTypes: ["image/png", "application/pdf"],
     });
     expect(multi.text).toBe(
       [

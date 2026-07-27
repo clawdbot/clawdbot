@@ -11,7 +11,8 @@
     "onCapabilities": ["tool"]
   },
   "contracts": {
-    "tools": ["teams_meetings"]
+    "tools": ["teams_meetings"],
+    "transcriptSourceProviders": ["teams"]
   },
   "uiHints": {
     "defaultMode": {

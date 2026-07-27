@@ -10,6 +10,7 @@ import {
 } from "../config/sessions/ambient-transcript-watermark.js";
 import { resolveStorePath as resolveSessionStorePath } from "../config/sessions/paths.js";
 import { resolveSessionFilePath as resolveLegacySessionFilePath } from "../config/sessions/paths.js";
+export { SessionStoreAgentIdRequiredError } from "../config/sessions/paths.js";
 import {
   applySessionStoreProjection as applyAccessorSessionStoreProjection,
   cleanupSessionLifecycleArtifacts as cleanupAccessorSessionLifecycleArtifacts,
@@ -50,6 +51,15 @@ import {
   toSessionAccessScope,
 } from "./session-store-runtime-internal.js";
 import type { SessionTranscriptEvent } from "./session-transcript-runtime.js";
+
+export {
+  deliveryContextFromSession,
+  normalizeSessionDeliveryState,
+  projectSessionDeliveryFields,
+  sessionDeliveryChannel,
+  sessionDeliveryOrigin,
+  sessionDeliveryRoute,
+} from "../utils/delivery-context.shared.js";
 
 const SQLITE_SESSION_STORE_BACKUP_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 const LEGACY_TRANSCRIPT_INSPECTION_MAX_BYTES = 16 * 1024 * 1024;

@@ -317,6 +317,10 @@ struct GatewayErrorsTests {
         #expect(problem?.retryable == true)
         #expect(problem?.pauseReconnect == false)
         #expect(problem?.actionLabel == "Retry")
+        #expect(problem?.titlePresentation == .localized("Gateway certificate unavailable"))
+        #expect(problem?.messagePresentation == .localizedFormat(
+            "OpenClaw could not securely save the TLS certificate pin for %@.",
+            ["gateway.example.com"]))
     }
 
     @Test func `TLS authority mismatch pauses reconnect`() {
@@ -337,6 +341,9 @@ struct GatewayErrorsTests {
         #expect(problem?.retryable == false)
         #expect(problem?.pauseReconnect == true)
         #expect(problem?.actionLabel == "Check certificate")
+        #expect(problem?.titlePresentation == .localized("Gateway certificate is not trusted"))
+        #expect(problem?.messagePresentation == .localized(
+            "The TLS challenge came from a different host or port than the requested Gateway."))
     }
 
     @Test func `untrusted TLS mismatch cannot be recovered in app`() {

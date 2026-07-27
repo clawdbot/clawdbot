@@ -43,6 +43,27 @@ describe("prepareCliPromptImagePayload prompt references", () => {
     expect(sanitizeImageBlocksSpy).not.toHaveBeenCalled();
   });
 
+  it("does not hydrate marker or bare paths from recalled memory context", async () => {
+    const detectAndLoadPromptImagesSpy = vi.spyOn(promptImageUtils, "detectAndLoadPromptImages");
+    const recalledMemory = [
+      "<relevant-memories>",
+      "1. [fact] stale [media attached: /tmp/some.png] and /tmp/other.png",
+      "</relevant-memories>",
+    ].join("\n");
+
+    const result = await prepareCliPromptImagePayload({
+      backend: { command: "gemini", imagePathScope: "workspace" },
+      prompt: `${recalledMemory}\n\ncurrent question`,
+      imagePrompt: "current question",
+      workspaceDir: "/workspace",
+    });
+
+    expect(result.imagePaths).toBeUndefined();
+    expect(detectAndLoadPromptImagesSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: "current question" }),
+    );
+  });
+
   it("does not reload OpenClaw CLI image cache paths from prior prompt text", async () => {
     const detectAndLoadPromptImagesSpy = vi.spyOn(promptImageUtils, "detectAndLoadPromptImages");
     const sanitizeImageBlocksSpy = vi.spyOn(toolImages, "sanitizeImageBlocks");
@@ -146,9 +167,7 @@ describe("prepareCliPromptImagePayload prompt references", () => {
 
   it("accepts an intentionally non-hydrating remote-only image fact", async () => {
     const media = buildInboundMediaNoteProjection({
-      MediaPaths: [""],
-      MediaUrls: ["https://example.com/described.png"],
-      MediaTypes: ["image/png"],
+      media: [{ url: "https://example.com/described.png", contentType: "image/png" }],
       MediaUnderstanding: [
         {
           kind: "image.description",

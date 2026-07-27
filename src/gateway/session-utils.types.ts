@@ -15,6 +15,7 @@ import type {
   SessionCompactionCheckpoint,
   SessionEntry,
   SessionGoal,
+  SessionOrigin,
 } from "../config/sessions/types.js";
 import type { PluginSessionExtensionProjection } from "../plugins/host-hooks.js";
 import type { FastModeSource } from "../shared/fast-mode.js";
@@ -90,10 +91,11 @@ export type GatewaySessionRow = {
   groupChannel?: string;
   space?: string;
   chatType?: ChatType;
-  origin?: SessionEntry["origin"];
+  origin?: SessionOrigin;
   updatedAt: number | null;
   archived?: boolean;
   archivedAt?: number;
+  archivedBy?: SessionEntry["archivedBy"];
   pinned?: boolean;
   pinnedAt?: number;
   icon?: string;
@@ -135,6 +137,8 @@ export type GatewaySessionRow = {
   lastRunError?: string;
   hasActiveRun?: boolean;
   activeRunIds?: string[];
+  /** Active transcript-branch leaf for history rendered from this row. */
+  activeLeafEntryId?: string | null;
   /** An enabled cron job is bound to this session (runs in it or delivers to it). */
   hasAutomation?: boolean;
   subagentRunState?: SubagentRunState;
@@ -158,10 +162,10 @@ export type GatewaySessionRow = {
   contextTokens?: number;
   contextBudgetStatus?: SessionEntry["contextBudgetStatus"];
   deliveryContext?: DeliveryContext;
-  lastChannel?: SessionEntry["lastChannel"];
+  lastChannel?: string;
   lastTo?: string;
   lastAccountId?: string;
-  lastThreadId?: SessionEntry["lastThreadId"];
+  lastThreadId?: string | number;
   compactionCheckpointCount?: number;
   latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
   pluginExtensions?: PluginSessionExtensionProjection[];

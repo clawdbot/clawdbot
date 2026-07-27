@@ -73,6 +73,7 @@ type MeetingPlatformAdapterOptions<
     "captions" | "classifyManualAction" | "parseLeaveResult" | "parseStatus" | "permissionNotes"
   > & {
     captions: Omit<MeetingBrowserAdapter<Mode, Health, Transcript>["captions"], "parseTranscript">;
+    permissionNotes?: MeetingBrowserAdapter<Mode, Health, Transcript>["permissionNotes"];
   };
   parsing: {
     classifyManualActionReason(reason: string): MeetingManualActionCategory;
@@ -328,32 +329,34 @@ function createMeetingPlatformAdapter<
         ...browser.captions,
         parseTranscript: (result) => parseMeetingTranscript(result, parsing),
       },
-      permissionNotes: ({ allowMicrophone, error, result }) => {
-        if (!allowMicrophone) {
-          return [`Observe-only mode does not request ${parsing.displayName} microphone access.`];
-        }
-        if (error) {
-          return [
-            `Could not grant ${parsing.displayName} media permissions automatically: ${formatErrorMessage(error)}`,
+      permissionNotes:
+        browser.permissionNotes ??
+        (({ allowMicrophone, error, result }) => {
+          if (!allowMicrophone) {
+            return [`Observe-only mode does not request ${parsing.displayName} microphone access.`];
+          }
+          if (error) {
+            return [
+              `Could not grant ${parsing.displayName} media permissions automatically: ${formatErrorMessage(error)}`,
+            ];
+          }
+          const record =
+            result && typeof result === "object" ? (result as Record<string, unknown>) : {};
+          const unsupportedPermissions = Array.isArray(record.unsupportedPermissions)
+            ? record.unsupportedPermissions.filter(
+                (value): value is string => typeof value === "string",
+              )
+            : [];
+          const notes = [
+            `Granted ${parsing.displayName} microphone permission through browser control.`,
           ];
-        }
-        const record =
-          result && typeof result === "object" ? (result as Record<string, unknown>) : {};
-        const unsupportedPermissions = Array.isArray(record.unsupportedPermissions)
-          ? record.unsupportedPermissions.filter(
-              (value): value is string => typeof value === "string",
-            )
-          : [];
-        const notes = [
-          `Granted ${parsing.displayName} microphone permission through browser control.`,
-        ];
-        if (unsupportedPermissions.includes("speakerSelection")) {
-          notes.push(
-            `Chrome did not accept the optional ${parsing.displayName} speaker-selection permission.`,
-          );
-        }
-        return notes;
-      },
+          if (unsupportedPermissions.includes("speakerSelection")) {
+            notes.push(
+              `Chrome did not accept the optional ${parsing.displayName} speaker-selection permission.`,
+            );
+          }
+          return notes;
+        }),
     },
   };
 }

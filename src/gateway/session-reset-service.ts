@@ -32,7 +32,6 @@ import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-clea
 import { getRuntimeConfig } from "../config/io.js";
 import {
   resolveSessionWorkStartError,
-  snapshotSessionOrigin,
   type SessionEntry,
   deleteSessionEntryLifecycle,
   resetSessionEntryLifecycle,
@@ -87,6 +86,7 @@ import {
   noteActiveSessionForShutdown,
 } from "./active-sessions-shutdown-tracker.js";
 import { findDirectChildSessionsForParent } from "./session-child-sessions.js";
+import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 import {
   archiveSessionTranscriptsDetailed,
   resolveStableSessionEndTranscript,
@@ -1234,6 +1234,7 @@ export async function performGatewaySessionReset(params: {
           };
         }
         handleSessionStateSessionDeleted(target.canonicalKey, agentId);
+        notifyGatewaySessionReset(target.canonicalKey);
         emitGatewaySessionEndPluginHook({
           cfg,
           sessionKey: target.canonicalKey,
@@ -1409,20 +1410,14 @@ export async function performGatewaySessionReset(params: {
             subagentControlScope: currentEntry?.subagentControlScope,
             label: currentEntry?.label,
             displayName: currentEntry?.displayName,
-            channel: currentEntry?.channel,
+            delivery: currentEntry?.delivery,
             groupId: currentEntry?.groupId,
             subject: currentEntry?.subject,
             groupChannel: currentEntry?.groupChannel,
             space: currentEntry?.space,
-            origin: snapshotSessionOrigin(currentEntry),
-            deliveryContext: currentEntry?.deliveryContext,
             cliSessionBindings: currentEntry?.cliSessionBindings,
             cliSessionIds: currentEntry?.cliSessionIds,
             claudeCliSessionId: currentEntry?.claudeCliSessionId,
-            lastChannel: currentEntry?.lastChannel,
-            lastTo: currentEntry?.lastTo,
-            lastAccountId: currentEntry?.lastAccountId,
-            lastThreadId: currentEntry?.lastThreadId,
             usageFamilyKey: currentEntry?.usageFamilyKey,
             usageFamilySessionIds: currentEntry?.usageFamilySessionIds,
             // Do not carry the cached skills catalog across /new. Long-lived channel
@@ -1518,7 +1513,9 @@ export async function performGatewaySessionReset(params: {
       const lifecycle: Awaited<ReturnType<typeof resetSessionEntryLifecycle>> =
         await lifecyclePromise;
       if (!resetSkipped) {
-        handleSessionStateSessionReset(target.canonicalKey ?? params.key);
+        const resetSessionKey = target.canonicalKey ?? params.key;
+        handleSessionStateSessionReset(resetSessionKey);
+        notifyGatewaySessionReset(resetSessionKey);
       }
       const next = lifecycle.nextEntry;
       const selectedModel = resolveSessionModelRef(cfg, next, target.agentId);

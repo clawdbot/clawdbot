@@ -5,6 +5,7 @@ export {
   extractNonEmptyAssistantText,
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
+  readLiveTestConfig,
 } from "../agents/live-test-config.js";
 export { isModelNotFoundErrorMessage } from "../agents/live-model-errors.js";
 export {

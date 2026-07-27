@@ -58,8 +58,10 @@ const LOGGED_POST_FORCE_KILL_WAIT_MS = 1_000;
 interface NpmUpdateOptions {
   betaValidation?: string;
   dependencyTarballs: string[];
+  registryPackageTarballs: string[];
   freshTargetSpec?: string;
   hostIp?: string;
+  macosSnapshotHint?: string;
   macosVm?: string;
   packageSpec: string;
   targetTarball?: string;
@@ -145,7 +147,7 @@ function resolveSecondsTimerMs(timeoutSeconds: number): number {
   return finiteSecondsToTimerSafeMilliseconds(timeoutSeconds) ?? 1;
 }
 
-const updateTimeoutSeconds = readPositiveIntEnv("OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S", 1200);
+const updateTimeoutSeconds = readPositiveIntEnv("OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S", 2700);
 const updateCleanupBackstopMs = 60_000;
 const updateTimeoutMs = resolveSecondsTimerMs(updateTimeoutSeconds);
 const updateWithCleanupTimeoutMs =
@@ -380,6 +382,8 @@ Options:
                              Default: host-served tgz packed from current checkout.
   --target-tarball <path>     Host-serve this prepared tgz for update and fresh install.
   --dependency-tarball <path> Companion package tgz required by the target. Repeatable.
+  --registry-package-tarball <path>
+                             Additional package tgz served by the candidate registry. Repeatable.
   --fresh-target <npm-spec>   Also run fresh install smoke for this package after update lanes.
   --beta-validation [target]  Resolve a beta tag/alias/version, then run latest->target update
                              plus fresh target install. Default target when flag is bare: beta.
@@ -387,6 +391,8 @@ Options:
   --platform <list>           Comma-separated platforms to run: all, macos, windows, linux.
                              Default: all
   --macos-vm <name>           Explicit Parallels macOS VM name.
+  --macos-snapshot-hint <hint>
+                             Snapshot name substring/fuzzy match passed to macOS fresh lanes.
   --provider <openai|anthropic|minimax>
   --model <provider/model>    Override the model used for agent-turn smoke checks.
   --host-ip <ip>             Override Parallels host IP.
@@ -403,8 +409,10 @@ export function parseArgs(argv: string[]): NpmUpdateOptions {
     apiKeyEnv: undefined,
     betaValidation: undefined,
     dependencyTarballs: [],
+    registryPackageTarballs: [],
     freshTargetSpec: undefined,
     json: false,
+    macosSnapshotHint: undefined,
     macosVm: undefined,
     modelId: undefined,
     packageSpec: "",
@@ -434,6 +442,10 @@ export function parseArgs(argv: string[]): NpmUpdateOptions {
         options.dependencyTarballs.push(ensureValue(args, i, arg));
         i++;
         break;
+      case "--registry-package-tarball":
+        options.registryPackageTarballs.push(ensureValue(args, i, arg));
+        i++;
+        break;
       case "--fresh-target":
         options.freshTargetSpec = ensureValue(args, i, arg);
         i++;
@@ -455,6 +467,10 @@ export function parseArgs(argv: string[]): NpmUpdateOptions {
         break;
       case "--macos-vm":
         options.macosVm = ensureValue(args, i, arg);
+        i++;
+        break;
+      case "--macos-snapshot-hint":
+        options.macosSnapshotHint = ensureValue(args, i, arg);
         i++;
         break;
       case "--provider":
@@ -495,6 +511,9 @@ export function parseArgs(argv: string[]): NpmUpdateOptions {
   }
   if (options.dependencyTarballs.length > 0 && !options.targetTarball) {
     throw new Error("--dependency-tarball requires --target-tarball");
+  }
+  if (options.registryPackageTarballs.length > 0 && !options.targetTarball) {
+    throw new Error("--registry-package-tarball requires --target-tarball");
   }
   return options;
 }
@@ -588,7 +607,9 @@ export class NpmUpdateSmoke {
   private targetTarballPath = "";
   private targetTarballBuildCommit = "";
   private targetDependencyPackages: NpmRegistryPackage[] = [];
+  private targetRegistryPackages: NpmRegistryPackage[] = [];
   private targetTarballVersion = "";
+  private targetRegistryHostUrl = "";
   private targetRegistryUrl = "";
   private macosVm = macosVmDefault;
   private linuxVm = linuxVmDefault;
@@ -678,7 +699,7 @@ export class NpmUpdateSmoke {
   private async runFreshBaselines(): Promise<void> {
     const jobs: Job[] = [];
     if (this.options.platforms.has("macos")) {
-      jobs.push(this.spawnFresh("macOS", "macos", ["--vm", this.macosVm]));
+      jobs.push(this.spawnFresh("macOS", "macos", this.macosFreshArgs()));
     }
     if (this.options.platforms.has("windows")) {
       jobs.push(this.spawnFresh("Windows", "windows", []));
@@ -700,7 +721,7 @@ export class NpmUpdateSmoke {
         this.spawnFresh(
           "macOS",
           "macos",
-          ["--vm", this.macosVm],
+          this.macosFreshArgs(),
           {},
           this.freshTargetSpec,
           "fresh-target",
@@ -727,6 +748,16 @@ export class NpmUpdateSmoke {
       );
     }
     await this.finishFreshJobs("fresh-target", "fresh target", jobs, this.freshTargetStatus);
+  }
+
+  private macosFreshArgs(): string[] {
+    return [
+      "--vm",
+      this.macosVm,
+      ...(this.options.macosSnapshotHint
+        ? ["--snapshot-hint", this.options.macosSnapshotHint]
+        : []),
+    ];
   }
 
   private async finishFreshJobs(
@@ -803,6 +834,15 @@ export class NpmUpdateSmoke {
       "--json",
       ...extraArgs,
     ];
+    const commandEnv = {
+      ...env,
+      ...(phase === "fresh-target" && this.targetRegistryUrl
+        ? {
+            NPM_CONFIG_REGISTRY: this.targetRegistryHostUrl,
+            npm_config_registry: this.targetRegistryHostUrl,
+          }
+        : {}),
+    };
     const startedAt = Date.now();
     const job: Job = {
       done: false,
@@ -817,14 +857,14 @@ export class NpmUpdateSmoke {
         attempt === 1
           ? () => this.spawnFresh(label, platform, extraArgs, env, packageSpec, phase, attempt + 1)
           : undefined,
-      rerunCommand: this.formatRerun("bash", args, env),
+      rerunCommand: this.formatRerun("bash", args, commandEnv),
       startedAt,
     };
     job.promise = this.spawnLogged(
       "bash",
       args,
       logPath,
-      env,
+      commandEnv,
       (text) => this.noteJobOutput(job, text),
       {
         timeoutLabel: `${label} ${phase}`,
@@ -847,7 +887,7 @@ export class NpmUpdateSmoke {
         path: hostedTarballPath,
         version: this.targetTarballVersion,
       };
-      if (this.targetDependencyPackages.length > 0) {
+      if (this.targetDependencyPackages.length > 0 || this.targetRegistryPackages.length > 0) {
         // Prepared sibling packages publish before core, so pre-publish VM installs need
         // a local registry that serves the exact package set without touching public npm.
         this.registryServer = await startNpmRegistryServer({
@@ -859,14 +899,16 @@ export class NpmUpdateSmoke {
               tarballPath: hostedTarballPath,
             },
             ...this.targetDependencyPackages,
+            ...this.targetRegistryPackages,
           ],
         });
+        this.targetRegistryHostUrl = this.registryServer.hostUrl;
         this.targetRegistryUrl = this.registryServer.url;
         this.updateTargetTarball = `${this.registryServer.url}/openclaw/-/${path.basename(
           hostedTarballPath,
         )}`;
         this.updateTargetEffective = this.targetTarballVersion;
-        this.freshTargetSpec = this.updateTargetTarball;
+        this.freshTargetSpec = `openclaw@${this.targetTarballVersion}`;
         this.updateExpectedNeedle = this.targetTarballVersion;
         this.updateTargetPackageVersion = this.targetTarballVersion;
         this.updateTargetBuildCommit = this.artifact.buildCommitShort ?? "";
@@ -1491,9 +1533,37 @@ export class NpmUpdateSmoke {
           return { name, version, tarballPath };
         }),
       );
-      const dependencyNames = new Set(this.targetDependencyPackages.map((pkg) => pkg.name));
-      if (dependencyNames.size !== this.targetDependencyPackages.length) {
-        throw new Error("dependency tarballs must have unique package names");
+      this.targetRegistryPackages = await Promise.all(
+        this.options.registryPackageTarballs.map(async (registryPackageTarball) => {
+          const tarballPath = path.resolve(registryPackageTarball);
+          if (!existsSync(tarballPath)) {
+            throw new Error(`registry package tarball does not exist: ${tarballPath}`);
+          }
+          const registryPackage = await extractPackageJsonFromTgz<{
+            name?: string;
+            version?: string;
+          }>(tarballPath, "package/package.json");
+          const name = registryPackage.name ?? "";
+          const version = registryPackage.version ?? "";
+          if (!name || !version || name === "openclaw") {
+            throw new Error(`registry package tarball has invalid metadata: ${tarballPath}`);
+          }
+          if (version !== this.targetTarballVersion) {
+            throw new Error(
+              `registry package ${name}@${version} does not match candidate ${this.targetTarballVersion}`,
+            );
+          }
+          return { name, version, tarballPath };
+        }),
+      );
+      const registryPackageNames = new Set(
+        [...this.targetDependencyPackages, ...this.targetRegistryPackages].map((pkg) => pkg.name),
+      );
+      if (
+        registryPackageNames.size !==
+        this.targetDependencyPackages.length + this.targetRegistryPackages.length
+      ) {
+        throw new Error("candidate registry tarballs must have unique package names");
       }
       if (!this.targetTarballVersion || !this.targetTarballBuildCommit) {
         throw new Error(

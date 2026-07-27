@@ -247,7 +247,9 @@ export async function openMeetingWithBrowser<
                 ...params.session,
                 allowSessionAdoption: adoptSession,
                 autoJoin: params.config.autoJoin,
-                captureCaptions: params.adapter.browser.captions.enabled(params.session.mode),
+                captureCaptions:
+                  params.session.captureCaptions ??
+                  params.adapter.browser.captions.enabled(params.session.mode),
                 guestName: params.config.guestName,
                 waitForInCallMs: params.config.waitForInCallMs,
               }),
@@ -361,6 +363,7 @@ async function inspectRecoverableTab<
   allowSessionAdoption?: boolean;
   autoJoin?: boolean;
   callBrowser: MeetingBrowserRequestCaller;
+  captureCaptions?: boolean;
   config: MeetingBrowserControllerConfig;
   meetingSessionId?: string;
   mode: Mode;
@@ -437,7 +440,8 @@ async function inspectRecoverableTab<
                 mode: params.mode,
                 url: params.requestedMeetingUrl ?? params.tab.url ?? "",
                 autoJoin: params.autoJoin ?? false,
-                captureCaptions: params.adapter.browser.captions.enabled(params.mode),
+                captureCaptions:
+                  params.captureCaptions ?? params.adapter.browser.captions.enabled(params.mode),
                 guestName: params.config.guestName,
                 readOnly: params.readOnly,
                 waitForInCallMs: params.config.waitForInCallMs,
@@ -504,6 +508,7 @@ export async function recoverMeetingBrowserTab<
   allowSessionAdoption?: boolean;
   autoJoin?: boolean;
   callBrowser: MeetingBrowserRequestCaller;
+  captureCaptions?: boolean;
   config: MeetingBrowserControllerConfig;
   locationLabel: string;
   meetingSessionId?: string;
@@ -580,6 +585,7 @@ export async function recoverMeetingBrowserTab<
     allowSessionAdoption: params.allowSessionAdoption,
     autoJoin: params.autoJoin,
     callBrowser: params.callBrowser,
+    captureCaptions: params.captureCaptions,
     config: params.config,
     ...(deadline === undefined ? {} : { deadline }),
     meetingSessionId: params.meetingSessionId,

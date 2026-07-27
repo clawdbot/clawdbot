@@ -35,37 +35,15 @@ export function listSessionCreators(
 export function renderSessionOwnerChip(
   createdActor: SessionCreatedActor | null | undefined,
   size: "row" | "header",
+  attribution: "created" | "archived" = "created",
 ) {
   return createdActor?.id
     ? html`<openclaw-session-owner-chip
         .createdActor=${createdActor}
         size=${size}
+        attribution=${attribution}
       ></openclaw-session-owner-chip>`
     : nothing;
-}
-
-export function renderSessionCreatorFilter(params: {
-  creators: readonly SessionCreatorOption[];
-  selectedId: string | null;
-  onChange: (creatorId: string | null) => void;
-}) {
-  if (params.creators.length < 2) {
-    return nothing;
-  }
-  return html`<label class="sidebar-session-creator-filter">
-    <span>${t("sessionsView.filterByCreator")}</span>
-    <select
-      aria-label=${t("sessionsView.filterByCreator")}
-      .value=${params.selectedId ?? ""}
-      @change=${(event: Event) =>
-        params.onChange((event.currentTarget as HTMLSelectElement).value || null)}
-    >
-      <option value="">${t("sessionsView.allCreators")}</option>
-      ${params.creators.map(
-        (creator) => html`<option value=${creator.id}>${creator.label ?? creator.id}</option>`,
-      )}
-    </select>
-  </label>`;
 }
 
 function ownerInitials(createdActor: SessionCreatedActor): string {
@@ -99,6 +77,7 @@ function ownerHue(id: string): number {
 class SessionOwnerChip extends OpenClawLightDomElement {
   @property({ attribute: false }) createdActor: SessionCreatedActor | null = null;
   @property({ type: String }) size: "row" | "header" = "row";
+  @property({ type: String }) attribution: "created" | "archived" = "created";
 
   override render() {
     const createdActor = this.createdActor;
@@ -110,7 +89,10 @@ class SessionOwnerChip extends OpenClawLightDomElement {
       return nothing;
     }
     const title = createdActor.label || createdActor.id;
-    const accessibleLabel = t("sessionsView.createdBy", { name: title });
+    const accessibleLabel = t(
+      this.attribution === "archived" ? "sessionsView.archivedBy" : "sessionsView.createdBy",
+      { name: title },
+    );
     return html`
       <span
         class="session-owner-chip session-owner-chip--${this.size}"

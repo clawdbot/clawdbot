@@ -2,9 +2,20 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
-import { projectMediaFacts, resolveMediaFacts } from "../../media/media-facts.js";
+import {
+  projectMediaFacts,
+  resolveMediaFacts,
+  resolveStagedMediaFacts,
+  stripLegacyMediaContextFields,
+  type LegacyMediaContextKey,
+} from "../../media/media-facts.js";
 import { resolveCommandTurnContext } from "../command-turn-context.js";
-import type { FinalizedMsgContext, MsgContext } from "../templating.js";
+import type {
+  CanonicalInboundText,
+  FinalizedMsgContext,
+  FinalizedRuntimeMsgContext,
+  MsgContext,
+} from "../templating.js";
 import { normalizeInboundTextNewlines, sanitizeInboundSystemTags } from "./inbound-text.js";
 
 export type FinalizeInboundContextOptions = {
@@ -13,6 +24,8 @@ export type FinalizeInboundContextOptions = {
   forceChatType?: boolean;
   forceConversationLabel?: boolean;
 };
+
+const FINALIZED_INBOUND_CONTEXT = Symbol("openclaw.finalizedInboundContext");
 
 function normalizeTextField(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -26,6 +39,41 @@ function normalizeTrustedTextField(value: unknown): string | undefined {
     return undefined;
   }
   return normalizeInboundTextNewlines(value);
+}
+
+export function isFinalizedInboundContext<T extends Record<string, unknown>>(
+  ctx: T,
+): ctx is T & CanonicalInboundText {
+  return (ctx as T & { [FINALIZED_INBOUND_CONTEXT]?: boolean })[FINALIZED_INBOUND_CONTEXT] === true;
+}
+
+function resolveCanonicalInboundText(
+  ctx: Record<string, unknown>,
+  opts: Pick<FinalizeInboundContextOptions, "forceBodyForAgent" | "forceBodyForCommands"> = {},
+): CanonicalInboundText {
+  const body = normalizeTextField(ctx.Body) ?? "";
+  const rawTextFromAliases =
+    normalizeTextField(ctx.RawBody) ??
+    normalizeTextField(ctx.Transcript) ??
+    normalizeTextField(ctx.BodyStripped) ??
+    body;
+  const forceTextProjection = opts.forceBodyForAgent || opts.forceBodyForCommands;
+  const rawText = forceTextProjection
+    ? rawTextFromAliases
+    : (normalizeTextField(ctx.rawText) ?? rawTextFromAliases);
+  const agentText = opts.forceBodyForAgent
+    ? body
+    : (normalizeTextField(ctx.agentText) ??
+      normalizeTextField(ctx.BodyForAgent) ??
+      normalizeTextField(ctx.CommandBody) ??
+      rawText);
+  const commandText = opts.forceBodyForCommands
+    ? (normalizeTextField(ctx.CommandBody) ?? rawText)
+    : (normalizeTextField(ctx.commandText) ??
+      normalizeTextField(ctx.BodyForCommands) ??
+      normalizeTextField(ctx.CommandBody) ??
+      rawText);
+  return { commandText, agentText, rawText };
 }
 
 function applySupplementalContext(ctx: MsgContext): void {
@@ -57,9 +105,10 @@ function applySupplementalContext(ctx: MsgContext): void {
   delete ctx.SupplementalContext;
 }
 
-export function finalizeInboundContext<T extends Record<string, unknown>>(
+function finalizeInboundContextImpl<T extends Record<string, unknown>>(
   ctx: T,
-  opts: FinalizeInboundContextOptions = {},
+  opts: FinalizeInboundContextOptions,
+  preserveLegacyMedia: boolean,
 ): T & FinalizedMsgContext {
   const normalized = ctx as T & MsgContext;
   applySupplementalContext(normalized);
@@ -85,26 +134,10 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
     normalized.ChatType = chatType;
   }
 
-  const bodyForAgentSource = opts.forceBodyForAgent
-    ? normalized.Body
-    : (normalized.BodyForAgent ??
-      // Prefer "clean" text over legacy envelope-shaped Body when upstream forgets to set BodyForAgent.
-      normalized.CommandBody ??
-      normalized.RawBody ??
-      normalized.Body);
-  normalized.BodyForAgent = sanitizeInboundSystemTags(
-    normalizeInboundTextNewlines(bodyForAgentSource),
-  );
-
-  const bodyForCommandsSource = opts.forceBodyForCommands
-    ? (normalized.CommandBody ?? normalized.RawBody ?? normalized.Body)
-    : (normalized.BodyForCommands ??
-      normalized.CommandBody ??
-      normalized.RawBody ??
-      normalized.Body);
-  normalized.BodyForCommands = sanitizeInboundSystemTags(
-    normalizeInboundTextNewlines(bodyForCommandsSource),
-  );
+  Object.assign(normalized, resolveCanonicalInboundText(normalized, opts));
+  // Keep the shipped aliases as projections at the public context boundary.
+  normalized.BodyForAgent = normalized.agentText;
+  normalized.BodyForCommands = normalized.commandText;
 
   const explicitLabel = normalizeOptionalString(normalized.ConversationLabel);
   if (opts.forceConversationLabel || !explicitLabel) {
@@ -126,15 +159,46 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
     normalized.CommandSource = undefined;
   }
 
-  const media = resolveMediaFacts(normalized).map((fact) =>
+  const mediaSource =
+    normalized.MediaStaged === true || normalizeOptionalString(normalized.MediaWorkspaceDir)
+      ? resolveStagedMediaFacts(normalized)
+      : resolveMediaFacts(normalized);
+  const media = mediaSource.map((fact) =>
     (fact.path || fact.url) && !fact.contentType && !fact.kind
       ? Object.assign(fact, { contentType: "application/octet-stream" })
       : fact,
   );
   if (media.length > 0) {
     normalized.media = media;
-    Object.assign(normalized, projectMediaFacts(media));
+    if (preserveLegacyMedia) {
+      Object.assign(normalized, projectMediaFacts(media));
+    }
   }
+  if (!preserveLegacyMedia) {
+    stripLegacyMediaContextFields(normalized);
+  }
+  Object.defineProperty(normalized, FINALIZED_INBOUND_CONTEXT, {
+    configurable: true,
+    value: true,
+  });
 
   return normalized as T & FinalizedMsgContext;
+}
+
+export function finalizeInboundContext<T extends Record<string, unknown>>(
+  ctx: T,
+  opts: FinalizeInboundContextOptions = {},
+): Omit<T, LegacyMediaContextKey> & FinalizedRuntimeMsgContext {
+  return finalizeInboundContextImpl(ctx, opts, false) as Omit<T, LegacyMediaContextKey> &
+    FinalizedRuntimeMsgContext;
+}
+
+/** Keeps the shipped Plugin SDK return type while internal callers use the stricter type above. */
+export function finalizeInboundContextForSdk<T extends Record<string, unknown>>(
+  ctx: T,
+  opts: FinalizeInboundContextOptions = {},
+): T & FinalizedMsgContext & CanonicalInboundText {
+  return finalizeInboundContextImpl(ctx, opts, true) as T &
+    FinalizedMsgContext &
+    CanonicalInboundText;
 }

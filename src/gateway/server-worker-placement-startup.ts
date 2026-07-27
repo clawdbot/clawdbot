@@ -468,6 +468,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
     environments: params.environments,
     placements: params.placements,
     admitNewPlacements: params.admitNewPlacements,
+    resolveWorkspacePath,
     redispatchReclaimed: createReclaimedPlacementRedispatch({
       environments: params.environments,
       dispatch: dispatchService.dispatch,

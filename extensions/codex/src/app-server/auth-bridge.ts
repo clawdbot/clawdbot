@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   ensureAuthProfileStore,
   findPersistedAuthProfileCredential,
@@ -24,6 +25,7 @@ import { hasUsableOAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { resolveCodexAppServerHomeDir, withEphemeralCodexAuthStore } from "./auth-start-options.js";
 import type { CodexAppServerClient } from "./client.js";
 import { ensureCodexComputerUseSharedPluginCache } from "./computer-use-cache.js";
+import { ensureCodexComputerUseServiceApp } from "./computer-use-service.js";
 import {
   resolveCodexAppServerUserHomeDir,
   resolveCodexComputerUseConfig,
@@ -437,10 +439,23 @@ async function withCodexHomeEnvironment(
     ? startOptions.env[HOME_ENV_VAR]
     : undefined;
   await fs.mkdir(codexHome, { recursive: true });
+  const computerUseConfig = resolveCodexComputerUseConfig({ pluginConfig });
   await ensureCodexComputerUseSharedPluginCache({
     codexHome,
-    config: resolveCodexComputerUseConfig({ pluginConfig }),
+    config: computerUseConfig,
   });
+  if (computerUseConfig.enabled && computerUseConfig.autoInstall) {
+    try {
+      await ensureCodexComputerUseServiceApp({
+        codexHome,
+        appServerCommand: startOptions.command,
+      });
+    } catch (error) {
+      throw new AgentHarnessPreflightError("Codex Computer Use client provisioning failed.", {
+        cause: error,
+      });
+    }
+  }
   if (nativeHome) {
     await fs.mkdir(nativeHome, { recursive: true });
   }

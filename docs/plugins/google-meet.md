@@ -121,7 +121,7 @@ If the browser fallback hits a Google login or Meet permission blocker, the tool
 
 ### Observe-only join
 
-Set `"mode": "transcribe"` to skip the duplex realtime bridge (no BlackHole/SoX requirement, no talk-back). Transcribe-mode Chrome joins also skip OpenClaw's microphone/camera permission grant and the Meet **Use microphone** path; if Meet shows the audio-choice interstitial, automation tries **Continue without microphone** first. Managed Chrome transports in this mode install a best-effort Meet caption observer. `googlemeet status --json` and `googlemeet doctor` report `captioning`, `captionsEnabledAttempted`, `transcriptLines`, `lastCaptionAt`, `lastCaptionSpeaker`, `lastCaptionText`, and a `recentTranscript` tail.
+Set `"mode": "transcribe"` to skip the duplex realtime bridge (no BlackHole/SoX requirement, no talk-back). Transcribe-mode Chrome joins also skip OpenClaw's microphone/camera permission grant and the Meet **Use microphone** path; if Meet shows the audio-choice interstitial, automation tries **Continue without microphone** first. Managed Chrome transports install a best-effort Meet caption observer in every mode so durable notes are available without changing the live agent-consult path. `googlemeet status --json` and `googlemeet doctor` report `captioning`, `captionsEnabledAttempted`, `transcriptLines`, `lastCaptionAt`, `lastCaptionSpeaker`, `lastCaptionText`, and a `recentTranscript` tail.
 
 For the bounded session transcript, read the exact tracked Meet tab:
 
@@ -130,7 +130,12 @@ openclaw googlemeet transcript <session-id>
 openclaw googlemeet transcript <session-id> --since <next-index> --json
 ```
 
-The observer keeps at most 2,000 completed caption lines in the Meet page. Visible progressive text stays in the status health tail until the caption row completes, so saving `nextIndex` cannot skip a later text expansion; leaving finalizes visible rows before the snapshot. `droppedLines` reports lines lost from the head when the cap is exceeded. The four most recently ended session transcripts remain readable until the gateway restarts. Older ended transcripts return `evicted: true`. This is intentionally runtime memory, not durable meeting-history storage: restarting the gateway, closing the tab before a snapshot, or exceeding the documented caps can lose captions.
+The observer keeps at most 2,000 completed caption lines in the Meet page. Visible progressive text stays in the status health tail until the caption row completes, so saving `nextIndex` cannot skip a later text expansion; leaving finalizes visible rows before the snapshot. `droppedLines` reports lines lost from the head when the cap is exceeded. The bounded `googlemeet transcript` tail still keeps only the four most recently ended sessions and resets with the Gateway. Separately, OpenClaw appends completed caption rows to the shared state database throughout the meeting and writes a derived summary on leave. Use [`openclaw transcripts`](/cli/transcripts) to inspect or export those durable notes.
+
+Automatic notes are enabled by default. Set `transcripts.enabled: false` to
+disable durable notes globally; explicit `transcribe` mode still exposes only
+its bounded live tail. Twilio joins do not have the browser caption stream and
+are not captured by this path.
 
 For a yes/no listen probe:
 

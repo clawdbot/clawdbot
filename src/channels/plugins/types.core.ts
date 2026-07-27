@@ -226,6 +226,8 @@ export type ChannelGroupContext = {
   groupChannel?: string | null;
   groupSpace?: string | null;
   accountId?: string | null;
+  /** Trusted host instruction to ignore toolsBySender for non-ingress work. */
+  senderPolicyMode?: "always" | "never";
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;

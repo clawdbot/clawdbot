@@ -139,11 +139,14 @@ function migrateSessionWindows(db: DatabaseSync): void {
   }
   const entryColumns = readSqliteTableColumns(db, "session_entries");
   const routeColumns = readSqliteTableColumns(db, "session_routes");
+  // Keep owner preference local to each scalar query: supported SQLite 3.51
+  // cannot resolve an outer column reference from a correlated ORDER BY.
   const entryOwner = entryColumns
     ? `(SELECT se.session_key
         FROM session_entries AS se
+        INNER JOIN session_windows AS owner_window ON owner_window.session_id = se.session_id
         WHERE se.session_id = session_windows.session_id
-        ORDER BY CASE WHEN se.session_key = session_windows.session_key THEN 0 ELSE 1 END,
+        ORDER BY CASE WHEN se.session_key = owner_window.session_key THEN 0 ELSE 1 END,
                  se.updated_at DESC,
                  se.session_key ASC
         LIMIT 1)`
@@ -151,8 +154,9 @@ function migrateSessionWindows(db: DatabaseSync): void {
   const routeOwner = routeColumns
     ? `(SELECT sr.session_key
         FROM session_routes AS sr
+        INNER JOIN session_windows AS owner_window ON owner_window.session_id = sr.session_id
         WHERE sr.session_id = session_windows.session_id
-        ORDER BY CASE WHEN sr.session_key = session_windows.session_key THEN 0 ELSE 1 END,
+        ORDER BY CASE WHEN sr.session_key = owner_window.session_key THEN 0 ELSE 1 END,
                  sr.updated_at DESC,
                  sr.session_key ASC
         LIMIT 1)`
@@ -160,8 +164,9 @@ function migrateSessionWindows(db: DatabaseSync): void {
   const currentEntryJson = entryColumns
     ? `(SELECT se.entry_json
         FROM session_entries AS se
+        INNER JOIN session_windows AS owner_window ON owner_window.session_id = se.session_id
         WHERE se.session_id = session_windows.session_id
-        ORDER BY CASE WHEN se.session_key = session_windows.session_key THEN 0 ELSE 1 END,
+        ORDER BY CASE WHEN se.session_key = owner_window.session_key THEN 0 ELSE 1 END,
                  se.updated_at DESC,
                  se.session_key ASC
         LIMIT 1)`

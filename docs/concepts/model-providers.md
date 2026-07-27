@@ -134,11 +134,11 @@ existing explicit primary model; `models auth login --set-default` and
 - Provider: `anthropic`
 - Auth: `ANTHROPIC_API_KEY`
 - Optional rotation: `ANTHROPIC_API_KEYS`, `ANTHROPIC_API_KEY_1`, `ANTHROPIC_API_KEY_2`, plus `OPENCLAW_LIVE_ANTHROPIC_KEY` (single override)
-- Example model: `anthropic/claude-opus-4-6`
+- Example model: `anthropic/claude-opus-5`
 - CLI: `openclaw onboard --auth-choice apiKey`
 - Direct public Anthropic requests support the shared `/fast` toggle and `params.fastMode`, including API-key and OAuth-authenticated traffic sent to `api.anthropic.com`; OpenClaw maps that to Anthropic `service_tier` (`auto` vs `standard_only`)
 - Preferred Claude CLI config keeps the model ref canonical and selects the CLI
-  backend separately: `anthropic/claude-opus-4-8` with
+  backend separately: `anthropic/claude-opus-5` with
   model-scoped `agentRuntime.id: "claude-cli"`. Legacy
   `claude-cli/claude-opus-4-7` refs still work for compatibility.
 
@@ -148,7 +148,7 @@ Claude CLI reuse (`claude -p`) is a sanctioned OpenClaw integration path. Anthro
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
+  agents: { defaults: { model: { primary: "anthropic/claude-opus-5" } } },
 }
 ```
 
@@ -411,7 +411,7 @@ Kimi Coding uses Moonshot AI's Anthropic-compatible endpoint:
 
 - Provider: `kimi`
 - Auth: `KIMI_API_KEY`
-- Kimi K3: `kimi/k3` (256K) or `kimi/k3[1m]` (1M plan)
+- Kimi K3: `kimi/k3` (up to 1M, tier-gated) or `kimi/k3-256k` (256K, lower quota use)
 - Kimi Code: `kimi/kimi-for-coding`
 - Kimi Code HighSpeed: `kimi/kimi-for-coding-highspeed`
 
@@ -424,7 +424,13 @@ Kimi Coding uses Moonshot AI's Anthropic-compatible endpoint:
 }
 ```
 
-Legacy `kimi/kimi-code` and `kimi/k2p5` remain accepted as compatibility model ids and normalize to Kimi's stable API model id.
+Kimi K3 uses adaptive thinking. `--thinking minimal|low` selects low effort,
+`--thinking medium|high|adaptive` selects high effort, and `--thinking xhigh|max`
+selects max effort. Catalog pricing is $3/MTok input, $15/MTok output, and
+$0.30/MTok cache reads. Legacy `kimi/kimi-code` and `kimi/k2p5` remain
+accepted as compatibility model ids and normalize to Kimi's stable API model
+id; the previously published `kimi/k3[1m]` ref normalizes to `kimi/k3` for
+existing configs.
 
 ### Volcano Engine (Doubao)
 

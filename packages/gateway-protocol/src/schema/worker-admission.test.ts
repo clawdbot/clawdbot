@@ -11,6 +11,7 @@ import {
   WorkerProtocolCloseReasonSchema,
   WorkerTranscriptCommitRequestFrameSchema,
   WorkerTranscriptCommitResponseFrameSchema,
+  WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
   WORKER_TRANSCRIPT_MAX_JSON_DEPTH,
@@ -296,6 +297,7 @@ describe("worker protocol schemas", () => {
   it("validates the additive live-event protocol", () => {
     expect(WORKER_RPC_SET_VERSION).toBe(1);
     expect(WORKER_PROTOCOL_FEATURES).toContain("worker-live-event-v1");
+    expect(WORKER_PROTOCOL_FEATURES).toContain(WORKER_LAUNCH_V2_PROTOCOL_FEATURE);
     for (const validEvent of [
       assistant,
       event("thinking", { text: "x", delta: "x" }),

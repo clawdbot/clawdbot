@@ -349,6 +349,8 @@ describe("native app i18n inventory", () => {
         .every(
           (entry) =>
             entry.path.startsWith("apps/android/app/src/main/") ||
+            entry.path.startsWith("apps/android/app/src/play/") ||
+            entry.path.startsWith("apps/android/app/src/thirdParty/") ||
             entry.path === "apps/android/wear/src/main/res/values/strings.xml",
         ),
     ).toBe(true);
@@ -359,6 +361,22 @@ describe("native app i18n inventory", () => {
           entry.source === "Current session",
       ),
     ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.path.endsWith(
+            "/thirdParty/java/ai/openclaw/app/ui/SensitivePhoneCapabilitiesSettings.kt",
+          ) && entry.source === "Control other apps",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.path.endsWith("/accessibility/AccessibilityDevActivity.kt") &&
+          entry.source === "Accessibility executor",
+      ),
+    ).toBe(true);
+    expect(entries.some((entry) => entry.source === "n${nodes.size}")).toBe(false);
     expect(entries.some((entry) => entry.source === "QR Scanner Unavailable")).toBe(true);
     expect(
       entries.some((entry) =>

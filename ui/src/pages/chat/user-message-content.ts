@@ -16,6 +16,10 @@ type UserChatMessageContentBlock = {
   };
 };
 
+type BuildUserChatMessageContentOptions = {
+  renderInlineImageDataUrls?: boolean;
+};
+
 function isInlineDataUrl(value: string): boolean {
   return /^\s*data:/iu.test(value);
 }
@@ -28,6 +32,7 @@ function formatInlineImageAttachmentPlaceholder(attachment: ChatAttachment): str
 export function buildUserChatMessageContentBlocks(
   message: string,
   attachments?: readonly ChatAttachment[],
+  options: BuildUserChatMessageContentOptions = {},
 ): UserChatMessageContentBlock[] {
   const blocks: UserChatMessageContentBlock[] = [];
   const text = message.trim();
@@ -40,7 +45,7 @@ export function buildUserChatMessageContentBlocks(
       continue;
     }
     if (attachment.mimeType.startsWith("image/")) {
-      if (isInlineDataUrl(previewUrl)) {
+      if (isInlineDataUrl(previewUrl) && !options.renderInlineImageDataUrls) {
         blocks.push({ type: "text", text: formatInlineImageAttachmentPlaceholder(attachment) });
         continue;
       }

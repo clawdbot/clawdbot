@@ -5,7 +5,7 @@ Official OpenClaw provider plugin for Amazon Bedrock. It adds Bedrock model disc
 Install from OpenClaw:
 
 ```bash
-openclaw plugin add @openclaw/amazon-bedrock-provider
+openclaw plugins install @openclaw/amazon-bedrock-provider
 ```
 
 Configure AWS credentials and region through your normal OpenClaw credential/profile setup, then select Bedrock models with the `amazon-bedrock/...` provider prefix.

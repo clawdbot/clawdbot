@@ -40,6 +40,10 @@ import {
   createOutboundTestPlugin,
   createTestRegistry,
 } from "../test-utils/channel-plugins.js";
+import {
+  deliveryContextFromSession,
+  normalizeSessionDeliveryState,
+} from "../utils/delivery-context.shared.js";
 import { getAgentHarnessPluginMocks } from "./agent-command-state.test-mocks.js";
 import { agentCommand, agentCommandFromIngress, testing as agentCommandTesting } from "./agent.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
@@ -1976,8 +1980,9 @@ describe("agentCommand", () => {
         [sessionKey]: {
           sessionId: "wechat-session",
           updatedAt: Date.now(),
-          lastChannel: "telegram",
-          lastTo: "+1555",
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "telegram", to: "+1555" },
+          }),
         },
       });
       mockConfig(home, store);
@@ -1998,10 +2003,10 @@ describe("agentCommand", () => {
       );
 
       const deliveryCall = vi.mocked(deliverAgentCommandResult).mock.calls.at(-1)?.[0] as
-        | { opts?: { to?: string }; sessionEntry?: { lastTo?: string } }
+        | { opts?: { to?: string }; sessionEntry?: Pick<SessionEntry, "delivery"> }
         | undefined;
       expect(deliveryCall?.opts?.to).toBeUndefined();
-      expect(deliveryCall?.sessionEntry?.lastTo).toBe("+1555");
+      expect(deliveryContextFromSession(deliveryCall?.sessionEntry)?.to).toBe("+1555");
     });
   });
 

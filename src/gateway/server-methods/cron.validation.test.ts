@@ -123,6 +123,7 @@ function createCronContext(currentJobs?: CronJob | CronJob[]) {
           id: string,
           patch: Partial<CronJob>,
           precondition: (job: CronJob, nowMs: number) => void | Promise<void>,
+          _opts?: unknown,
         ) => {
           const job = jobs.find((candidate) => candidate.id === id);
           if (!job) {
@@ -164,6 +165,7 @@ function createCronContext(currentJobs?: CronJob | CronJob[]) {
     logGateway: {
       info: vi.fn(),
     },
+    cronStorePath: "cron-validation-test.json",
     getRuntimeConfig: () => getRuntimeConfig(),
   };
 }
@@ -263,14 +265,29 @@ function createCronJob(overrides: Partial<CronJob> = {}): CronJob {
   };
 }
 
-function callerClient(agentId: string): GatewayClient {
+function callerClient(
+  agentId: string,
+  accountId?: string,
+  sessionKey?: string,
+  currentJobId?: string,
+  currentJobExpiresAtMs = Date.now() + 60_000,
+): GatewayClient {
   return {
     connect: {} as GatewayClient["connect"],
     internal: {
       agentRuntimeIdentity: {
         kind: "agentRuntime",
         agentId,
-        sessionKey: `agent:${agentId}:main`,
+        sessionKey: sessionKey ?? `agent:${agentId}:main`,
+        ...(accountId ? { turnSourceAccountId: accountId } : {}),
+        ...(currentJobId
+          ? {
+              cronSelfManagementContext: {
+                jobId: currentJobId,
+                expiresAtMs: currentJobExpiresAtMs,
+              },
+            }
+          : {}),
       },
     },
   };
@@ -1100,17 +1117,48 @@ describe("cron method validation", () => {
     );
 
     const payload = requireCronAddPayload(context);
-    expect(payload.owner).toEqual({ agentId: "ops", sessionKey: "agent:ops:main" });
+    expect(payload.owner).toEqual({
+      agentId: "ops",
+      sessionKey: "agent:ops:main",
+      accountId: "default",
+    });
     const options = requireRecord(context.cron.add.mock.calls[0]?.[1], "cron.add options");
+    expect(options.scheduledToolPolicy).toEqual({
+      version: 1,
+      mode: "account",
+      ownerSessionKey: "agent:ops:main",
+      ownerAccountId: "default",
+    });
     const matchesExisting = options.matchesExisting as ((job: CronJob) => boolean) | undefined;
     expect(matchesExisting?.(createCronJob({ agentId: "ops" }))).toBe(true);
     expect(matchesExisting?.(createCronJob({ agentId: "worker" }))).toBe(false);
     expect(matchesExisting?.(createCronJob({ agentId: "worker", owner: { agentId: "ops" } }))).toBe(
       true,
     );
+    expect(
+      matchesExisting?.(
+        createCronJob({
+          agentId: "worker",
+          owner: { agentId: "ops", accountId: "work" },
+        }),
+      ),
+    ).toBe(false);
     expect(matchesExisting?.(createCronJob({ agentId: "ops", owner: { agentId: "worker" } }))).toBe(
       false,
     );
+    expectCronSuccess(respond);
+  });
+
+  it("stamps declaration ownership from the authenticated source account", async () => {
+    const { context, respond } = await invokeCronAdd(agentTurnCronParams(), {
+      client: callerClient("ops", "work"),
+    });
+
+    expect(requireCronAddPayload(context).owner).toEqual({
+      agentId: "ops",
+      sessionKey: "agent:ops:main",
+      accountId: "work",
+    });
     expectCronSuccess(respond);
   });
 
@@ -1134,6 +1182,253 @@ describe("cron method validation", () => {
     );
   });
 
+  it("keeps new jobs scoped to their creator account while preserving accountless legacy jobs", async () => {
+    const workOwned = createCronJob({
+      owner: { agentId: "ops", sessionKey: "agent:ops:main", accountId: "work" },
+    });
+    const context = createCronContext(workOwned);
+
+    const wrongAccount = await invokeCron(
+      "cron.list",
+      { compact: true },
+      { context, client: callerClient("ops", "default") },
+    );
+    expect(wrongAccount.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ total: 0, jobs: [] }),
+      undefined,
+    );
+
+    const matchingAccount = await invokeCron(
+      "cron.list",
+      { compact: true },
+      { context, client: callerClient("ops", "work") },
+    );
+    expect(matchingAccount.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ total: 1 }),
+      undefined,
+    );
+
+    const legacyContext = createCronContext(
+      createCronJob({ owner: { agentId: "ops", sessionKey: "agent:ops:main" } }),
+    );
+    const legacy = await invokeCron(
+      "cron.list",
+      { compact: true },
+      { context: legacyContext, client: callerClient("ops", "other") },
+    );
+    expect(legacy.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ total: 1 }),
+      undefined,
+    );
+
+    const accountOnlyContext = createCronContext(
+      createCronJob({ agentId: "ops", owner: { accountId: "work" } }),
+    );
+    const accountOnlyWrong = await invokeCron(
+      "cron.list",
+      { compact: true },
+      { context: accountOnlyContext, client: callerClient("ops", "other") },
+    );
+    expect(accountOnlyWrong.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ total: 0, jobs: [] }),
+      undefined,
+    );
+    const accountOnlyMatch = await invokeCron(
+      "cron.list",
+      { compact: true },
+      { context: accountOnlyContext, client: callerClient("ops", "work") },
+    );
+    expect(accountOnlyMatch.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ total: 1 }),
+      undefined,
+    );
+  });
+
+  it("binds scheduled authority access to its exact creator session", async () => {
+    const ownerSessionKey = "agent:ops:discord:work:group:creator";
+    const accountJob = createCronJob({
+      owner: { agentId: "ops", sessionKey: ownerSessionKey, accountId: "work" },
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
+        ownerSessionKey,
+        ownerAccountId: "work",
+      },
+    });
+    const context = createCronContext(accountJob);
+
+    const siblingClient = callerClient("ops", "work", "agent:ops:discord:work:group:sibling");
+    const siblingList = await invokeCron(
+      "cron.list",
+      { compact: true },
+      { context, client: siblingClient },
+    );
+    expect(siblingList.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ total: 0, jobs: [] }),
+      undefined,
+    );
+
+    const siblingUpdate = await invokeCron(
+      "cron.update",
+      {
+        id: accountJob.id,
+        patch: {
+          payload: {
+            kind: "agentTurn",
+            message: "replace creator prompt",
+            toolsAllow: ["*"],
+          },
+        },
+      },
+      { context, client: siblingClient },
+    );
+    expect(siblingUpdate.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "invalid cron.update params: id not found" }),
+    );
+    expect(context.cron.updateWithPrecondition).not.toHaveBeenCalled();
+
+    const ownerList = await invokeCron(
+      "cron.list",
+      { compact: true },
+      { context, client: callerClient("ops", "work", ownerSessionKey) },
+    );
+    expect(ownerList.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ total: 1 }),
+      undefined,
+    );
+  });
+
+  it("preserves only current-job self-management for a capped scheduled run", async () => {
+    const ownerSessionKey = "agent:ops:discord:work:group:creator";
+    const accountJob = createCronJob({
+      agentId: "ops",
+      owner: { agentId: "ops", sessionKey: ownerSessionKey, accountId: "work" },
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
+        ownerSessionKey,
+        ownerAccountId: "work",
+      },
+    });
+    const siblingJob = createCronJob({
+      id: "cron-2",
+      agentId: "ops",
+      owner: { agentId: "ops", sessionKey: ownerSessionKey, accountId: "work" },
+      scheduledToolPolicy: accountJob.scheduledToolPolicy,
+    });
+    const context = createCronContext([accountJob, siblingJob]);
+    const runClient = callerClient(
+      "ops",
+      "work",
+      `agent:ops:cron:${accountJob.id}:run:run-1`,
+      accountJob.id,
+    );
+
+    const list = await invokeCron("cron.list", { compact: true }, { context, client: runClient });
+    expect(list.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ total: 1 }),
+      undefined,
+    );
+
+    const get = await invokeCron("cron.get", { id: accountJob.id }, { context, client: runClient });
+    expectCronSuccess(get.respond);
+
+    const siblingGet = await invokeCron(
+      "cron.get",
+      { id: siblingJob.id },
+      { context, client: runClient },
+    );
+    expectResponseError(siblingGet.respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: `cron job not found: ${siblingJob.id}`,
+    });
+
+    const expiredRunClient = callerClient(
+      "ops",
+      "work",
+      `agent:ops:cron:${accountJob.id}:run:expired`,
+      accountJob.id,
+      Date.now() - 1,
+    );
+    const expiredGet = await invokeCron(
+      "cron.get",
+      { id: accountJob.id },
+      { context, client: expiredRunClient },
+    );
+    expectResponseError(expiredGet.respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: `cron job not found: ${accountJob.id}`,
+    });
+
+    const runs = await invokeCron(
+      "cron.runs",
+      { id: accountJob.id },
+      { context, client: runClient },
+    );
+    expect(runs.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ entries: [], total: 0 }),
+      undefined,
+    );
+
+    const remove = await invokeCron(
+      "cron.remove",
+      { id: accountJob.id },
+      { context, client: runClient },
+    );
+    expect(remove.respond).toHaveBeenCalledWith(true, { ok: true, removed: true }, undefined);
+    expect(context.cron.remove).toHaveBeenCalledWith(accountJob.id);
+
+    const update = await invokeCron(
+      "cron.update",
+      { id: accountJob.id, patch: { enabled: false } },
+      { context, client: runClient },
+    );
+    expectResponseError(update.respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "invalid cron.update params: id not found",
+    });
+
+    const run = await invokeCron("cron.run", { id: accountJob.id }, { context, client: runClient });
+    expectResponseError(run.respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "invalid cron.run params: id not found",
+    });
+    expect(context.cron.enqueueRun).not.toHaveBeenCalled();
+  });
+
+  it("keeps trusted scheduled authority operator-only", async () => {
+    const trustedJob = createCronJob({
+      owner: { agentId: "ops", sessionKey: "agent:ops:main", accountId: "default" },
+      scheduledToolPolicy: { version: 1, mode: "trusted" },
+    });
+    const context = createCronContext(trustedJob);
+
+    const agentList = await invokeCron(
+      "cron.list",
+      { compact: true },
+      { context, client: callerClient("ops") },
+    );
+    expect(agentList.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ total: 0, jobs: [] }),
+      undefined,
+    );
+
+    const operatorGet = await invokeCron("cron.get", { id: trustedJob.id }, { context });
+    expectCronSuccess(operatorGet.respond);
+  });
+
   it("keeps explicit declaration ownership for operator callers", async () => {
     const owner = { agentId: "ops", sessionKey: "agent:ops:main" };
     const { context, respond } = await invokeCronAdd(
@@ -1142,6 +1437,7 @@ describe("cron method validation", () => {
 
     expect(requireCronAddPayload(context).owner).toEqual(owner);
     const options = requireRecord(context.cron.add.mock.calls[0]?.[1], "cron.add options");
+    expect(options.scheduledToolPolicy).toEqual({ version: 1, mode: "trusted" });
     const matchesExisting = options.matchesExisting as ((job: CronJob) => boolean) | undefined;
     expect(matchesExisting?.(createCronJob({ owner }))).toBe(true);
     expect(
@@ -1150,6 +1446,42 @@ describe("cron method validation", () => {
       ),
     ).toBe(true);
     expect(matchesExisting?.(createCronJob({ owner: { agentId: "worker" } }))).toBe(false);
+    expectCronSuccess(respond);
+  });
+
+  it("scopes operator declaration convergence by normalized owner account", async () => {
+    const owner = {
+      agentId: "ops",
+      sessionKey: "agent:ops:main",
+      accountId: "work",
+    };
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({ declarationKey: "daily-report", owner }),
+    );
+
+    const options = requireRecord(context.cron.add.mock.calls[0]?.[1], "cron.add options");
+    const matchesExisting = options.matchesExisting as ((job: CronJob) => boolean) | undefined;
+    expect(
+      matchesExisting?.(
+        createCronJob({ declarationKey: "daily-report", owner: { ...owner, accountId: "WORK" } }),
+      ),
+    ).toBe(true);
+    expect(
+      matchesExisting?.(
+        createCronJob({
+          declarationKey: "daily-report",
+          owner: { ...owner, accountId: "personal" },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      matchesExisting?.(
+        createCronJob({
+          declarationKey: "daily-report",
+          owner: { agentId: owner.agentId, sessionKey: owner.sessionKey },
+        }),
+      ),
+    ).toBe(false);
     expectCronSuccess(respond);
   });
 
@@ -1433,6 +1765,7 @@ describe("cron method validation", () => {
     );
 
     expect(context.cron.update).toHaveBeenCalledWith("cron-1", { enabled: false });
+    expect(context.cron.updateWithPrecondition.mock.calls[0]?.[3]).toBeUndefined();
     expectCronSuccess(respond);
   });
 
@@ -1470,6 +1803,37 @@ describe("cron method validation", () => {
     );
 
     expect(context.cron.update).toHaveBeenCalledWith("cron-1", { enabled: false });
+    expectCronSuccess(respond);
+  });
+
+  it("passes authenticated provenance for an explicit agent-runtime tool edit", async () => {
+    const { context, respond } = await invokeCronUpdate(
+      {
+        id: "cron-1",
+        patch: {
+          payload: { kind: "agentTurn", message: "updated", toolsAllow: ["write"] },
+        },
+      },
+      createCronJob({
+        agentId: "ops",
+        owner: {
+          agentId: "ops",
+          sessionKey: "agent:ops:main",
+          accountId: "default",
+        },
+        payload: { kind: "agentTurn", message: "legacy", toolsAllow: ["read"] },
+      }),
+      { client: callerClient("ops") },
+    );
+
+    expect(context.cron.updateWithPrecondition.mock.calls[0]?.[3]).toEqual({
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
+        ownerSessionKey: "agent:ops:main",
+        ownerAccountId: "default",
+      },
+    });
     expectCronSuccess(respond);
   });
 

@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { SessionScope } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -53,7 +53,7 @@ export function listGatewayAgentsBasic(cfg: OpenClawConfig): {
   const diskIds = new Set<string>();
   const agentIds = new Set<string>([defaultId]);
 
-  for (const entry of cfg.agents?.list ?? []) {
+  for (const entry of listAgentEntries(cfg)) {
     if (!entry?.id) {
       continue;
     }
@@ -71,7 +71,13 @@ export function listGatewayAgentsBasic(cfg: OpenClawConfig): {
   }
 
   const allowedIds = explicitIds.size > 0 ? new Set([...explicitIds, defaultId]) : null;
-  const visibleIds = [...agentIds].filter((id) => (allowedIds ? allowedIds.has(id) : true));
+  const visibleIds = [...agentIds].filter(
+    (id) =>
+      !allowedIds ||
+      allowedIds.has(id) ||
+      // System agents are a separate negotiated surface, not authored roster members.
+      (diskIds.has(id) && ownerEntries.has(id)),
+  );
   visibleIds.sort((a, b) => a.localeCompare(b));
   const orderedIds = visibleIds.includes(defaultId)
     ? [defaultId, ...visibleIds.filter((id) => id !== defaultId)]

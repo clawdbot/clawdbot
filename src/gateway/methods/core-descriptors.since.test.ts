@@ -12,6 +12,10 @@ const CURRENT_TRAIN_METHODS = [
   "session.members.add",
   "session.members.list",
   "session.members.remove",
+  "session.suggestions.add",
+  "session.suggestions.list",
+  "session.suggestions.resolve",
+  "session.typing",
   "session.visibility.set",
   "board.prompt.authorize",
   "board.data.read",
@@ -57,11 +61,15 @@ const CURRENT_TRAIN_METHODS = [
   "gateway.suspend.resume",
   "ui.command",
   "device.pair.rename",
-  "sessions.observer.ask",
   "sessions.observer.visibility",
+  "sessions.companion.ask",
+  "sessions.companion.state",
+  "sessions.companion.reset",
   "channels.pairing.list",
   "channels.pairing.approve",
   "channels.pairing.dismiss",
+  "cron.scratch.get",
+  "cron.scratch.set",
 ] as const;
 
 describe("core gateway method release trains", () => {

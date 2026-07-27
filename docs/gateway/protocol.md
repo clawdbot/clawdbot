@@ -152,6 +152,7 @@ above). `pluginSurfaceUrls` is optional and maps plugin surface names (e.g.
 `node.pluginSurface.refresh` with `{ "surface": "canvas" }` for a fresh entry.
 The deprecated `canvasHostUrl` / `canvasCapability` / `node.canvas.capability.refresh`
 path is not supported; use plugin surfaces.
+The `sessions.observer.ask` method was removed; use `sessions.companion.ask`.
 The snapshot's optional `appliedConfigHash` is the resolved source-config revision
 accepted by the active Gateway runtime. Clients can compare it with
 `config.get.configRevisionHash` to determine whether a newer saved config still
@@ -503,7 +504,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `terminal.data` and `terminal.exit` events stream only to the connection that owns the session.
     - Sessions whose connection drops are detached, not killed: they stay reattachable for `gateway.terminal.detachedSessionTimeoutSeconds` (default 300; `0` restores kill-on-disconnect) while recent output accumulates in a bounded server-side buffer.
     - `terminal.list` returns attachable sessions; `terminal.attach` rebinds a live-or-detached session to the calling connection and returns the replay buffer (tmux-style take-over — a previous live owner receives `terminal.exit` with reason `detached`); `terminal.text` reads the buffer as plain text without attaching.
-    - Every terminal method requires `operator.admin`; `gateway.terminal.enabled` must be explicitly true. Fully sandboxed agents are refused, and an agent policy change closes existing and in-flight PTYs, detached ones included.
+    - Every terminal method requires `operator.admin`; `gateway.terminal.enabled` is on by default and refuses every method when set to `false`. Fully sandboxed agents are refused, and an agent policy change closes existing and in-flight PTYs, detached ones included.
 
   </Accordion>
 
@@ -577,14 +578,14 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `sessions.groups.list`, `sessions.groups.put`, `sessions.groups.rename`, and `sessions.groups.delete` manage the gateway-owned custom session group catalog (names + display order). Membership stays on each session's `category` field; rename and delete update member sessions server-side.
     - `sessions.send` sends a message into an existing session.
     - `sessions.steer` is the interrupt-and-steer variant for an active session.
-    - `sessions.abort` aborts active work for a session. Pass `key` plus optional `runId`, or `runId` alone for active runs the gateway can resolve to a session.
+    - `sessions.abort` aborts active work for a session. Pass `key` plus optional `runId`, or `runId` alone for active runs the gateway can resolve to a session. Supplying `runId` keeps cancellation scoped to that run. Set `clearQueued: true` on a key-only non-global request to also discard followup and lane queues owned by that session. Existing callers that omit `clearQueued` preserve those queues. The literal `global` key keeps the existing agent-qualified `chat.abort` ownership rules and does not perform non-global followup or lane cleanup.
     - `sessions.patch` updates session metadata/overrides and reports the resolved canonical model plus effective `agentRuntime`. Spawn lineage (`spawnedBy`, `spawnedWorkspaceDir`, `spawnedCwd`, `spawnDepth`, `subagentRole`, `subagentControlScope`) is no longer publicly patchable; those facts are written once by trusted creation paths, and requests that still send them are rejected.
     - `sessions.reset`, `sessions.delete`, and `sessions.compact` perform session maintenance.
     - `sessions.get` returns the full stored session row.
     - Chat execution still uses `chat.history`, `chat.send`, `chat.abort`, and `chat.inject`. `chat.history` is display-normalized for UI clients: inline directive tags are stripped from visible text, plain-text tool-call XML payloads (`<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks) and leaked ASCII/full-width model control tokens are stripped, pure silent-token assistant rows (exact `NO_REPLY` / `no_reply`) are omitted, and oversized rows can be replaced with placeholders.
     - `chat.message.get` is the additive bounded full-message reader for a single visible transcript entry. Pass `sessionKey`, optional `agentId` when session selection is agent-scoped, and a transcript `messageId` previously surfaced through `chat.history`; the gateway returns the same display-normalized projection without the lightweight history truncation cap when the stored entry is still available and not oversized.
     - `chat.toolTitles` returns short purpose titles for tool calls rendered in the Control UI (batched, max 24 items with bounded inputs). The feature is opt-in via `gateway.controlUi.toolTitles` (default off); disabled gateways answer `{ titles: {}, disabled: true }` with no model call so clients stop asking. When enabled, titles use standard utility-model routing: an explicitly configured `utilityModel` (an operator decision that, like all utility tasks, may send bounded task content to the chosen provider), else the session provider's declared small-model default so no new egress destination appears implicitly; an empty `utilityModel` disables them entirely. Titles never fall back to the primary model. Results cache in the per-agent state database keyed by tool name + input, so repeated views never re-bill the same calls.
-    - `chat.send` accepts one-turn `fastMode: "auto"` to use fast mode for model calls started before the auto cutoff, then start later retry, fallback, tool-result, or continuation calls without fast mode. The cutoff defaults to 60 seconds (`DEFAULT_FAST_MODE_AUTO_ON_SECONDS`) and can be configured per model with `agents.defaults.models["<provider>/<model>"].params.fastAutoOnSeconds`. A `chat.send` caller can pass one-turn `fastAutoOnSeconds` to override the cutoff for that request. Pass `queueMode` (`steer`, `followup`, `collect`, or `interrupt`) to override the stored queue mode for this request only; explicit Control UI steer actions use `queueMode: "steer"`.
+    - `chat.send` accepts one-turn `fastMode: "auto"` to use fast mode for model calls started before the auto cutoff, then start later retry, fallback, tool-result, or continuation calls without fast mode. The cutoff defaults to 60 seconds (`DEFAULT_FAST_MODE_AUTO_ON_SECONDS`) and can be configured per model with `agents.defaults.models["<provider>/<model>"].params.fastAutoOnSeconds`. A `chat.send` caller can pass one-turn `fastAutoOnSeconds` to override the cutoff for that request. Pass `queueMode` (`steer`, `followup`, `collect`, or `interrupt`) to override the stored queue mode for this request only; explicit Control UI steer actions use `queueMode: "steer"`. Interactive clients can pass `expectedLeafEntryId` with the active transcript-branch leaf they display, or `null` for an authoritative empty transcript; the Gateway rejects the send with `details.reason: "active-leaf-changed"` if another client switched branches first.
 
   </Accordion>
 
@@ -653,6 +654,9 @@ methods. Treat this as feature discovery, not a full enumeration of
 - `session.approval`: sanitized pending and terminal approval truth for an
   explicitly opted-in exact-session subscriber. Child approvals use the
   persisted ancestor audience; events never mutate transcripts or wake agents.
+- `session.observer`: safe live session headline and status digest. A model-authored
+  preamble can update the headline immediately; utility-model assessments replace
+  it later when available. Web, iOS, and Android use the same run-scoped digest.
 - `sessions.changed`: session index or metadata changed.
 - `presence`: system presence snapshot updates.
 - `tick`: periodic keepalive/liveness event.
@@ -779,8 +783,9 @@ and may drop records on failure or saturation, so this surface is not a
 lossless compliance archive.
 
 Recording is on by default and controlled by
-[`audit.enabled`](/gateway/configuration-reference#audit). Message recording is
-separately controlled by `audit.messages` and defaults to `"off"`. When
+[`logging.audit.enabled`](/gateway/configuration-reference#audit). Message
+recording is separately controlled by `logging.audit.messages` and defaults to
+`"off"`. When
 recording is disabled, `audit.activity.list` keeps serving records written
 earlier until they expire.
 

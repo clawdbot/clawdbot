@@ -1,7 +1,6 @@
 // Exec approval gateway methods create, list, inspect, and resolve command
 // approval requests, including iOS push delivery and requester visibility.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -33,6 +32,7 @@ import {
 import { resolveSystemRunApprovalRequestContext } from "../../infra/system-run-approval-context.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { InvalidApprovalIdError, type ExecApprovalManager } from "../exec-approval-manager.js";
+import { runApprovalRequestDeliveries } from "./approval-request-delivery.js";
 import {
   handleApprovalWaitDecision,
   handlePendingApprovalRequest,
@@ -40,14 +40,13 @@ import {
   bindApprovalReviewerDeviceIds,
   buildRequestedApprovalEvent,
   handleApprovalResolve,
-  isApprovalRecordVisibleToClient,
   listVisiblePendingApprovalRequests,
   registerPendingApprovalRecord,
   resolveApprovalDecisionParams,
   respondPendingApprovalLookupError,
   resolvePendingApprovalRecord,
 } from "./approval-shared.js";
-import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlers } from "./types.js";
 
 const APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS = {
   reason: "APPROVAL_ALLOW_ALWAYS_UNAVAILABLE",
@@ -348,7 +347,7 @@ export function createExecApprovalHandlers(
       };
       // This check is adjacent to manager creation with no await between them.
       // The abort owner records the tombstone before sweeping pending approvals.
-      if (requestRunId && context.chatAbortedRuns?.has(requestRunId)) {
+      if (requestRunId && context.chatRunState.hasAbortMarker(requestRunId)) {
         respond(
           false,
           undefined,
@@ -396,6 +395,8 @@ export function createExecApprovalHandlers(
         return;
       }
       const requestEvent: ExecApprovalRequest = buildRequestedApprovalEvent(record);
+      const forwardRequest = opts?.forwarder?.handleRequested.bind(opts.forwarder);
+      const iosPushRequest = opts?.iosPushDelivery?.handleRequested?.bind(opts.iosPushDelivery);
       await handlePendingApprovalRequest({
         manager,
         record,
@@ -409,53 +410,20 @@ export function createExecApprovalHandlers(
         approvalKind: "exec",
         requireDeliveryRoute: p.requireDeliveryRoute,
         suppressDelivery: p.suppressDelivery,
-        deliverRequest: () => {
-          const deliveryTasks: Array<Promise<boolean>> = [];
-          if (opts?.forwarder) {
-            deliveryTasks.push(
-              opts.forwarder.handleRequested(requestEvent).catch((err: unknown) => {
-                context.logGateway?.error?.(
-                  `exec approvals: forward request failed: ${String(err)}`,
-                );
-                return false;
-              }),
-            );
-          }
-          if (opts?.iosPushDelivery?.handleRequested) {
-            deliveryTasks.push(
-              opts.iosPushDelivery
-                .handleRequested(requestEvent, {
-                  isTargetVisible: (target) =>
-                    isApprovalRecordVisibleToClient({
-                      record,
-                      client: {
-                        connect: {
-                          client: { id: GATEWAY_CLIENT_IDS.IOS_APP },
-                          device: { id: target.deviceId },
-                          scopes: [...target.scopes],
-                        },
-                      } as GatewayClient,
-                    }),
-                })
-                .catch((err: unknown) => {
-                  context.logGateway?.error?.(
-                    `exec approvals: iOS push request failed: ${String(err)}`,
-                  );
-                  return false;
-                }),
-            );
-          }
-          if (deliveryTasks.length === 0) {
-            return false;
-          }
-          return (async () => {
-            let delivered = false;
-            for (const task of deliveryTasks) {
-              delivered = (await task) || delivered;
-            }
-            return delivered;
-          })();
-        },
+        deliverRequest: () =>
+          runApprovalRequestDeliveries({
+            context,
+            record,
+            forward: forwardRequest
+              ? [() => forwardRequest(requestEvent), "exec approvals: forward request failed"]
+              : undefined,
+            iosPush: iosPushRequest
+              ? [
+                  (isTargetVisible) => iosPushRequest(requestEvent, { isTargetVisible }),
+                  "exec approvals: iOS push request failed",
+                ]
+              : undefined,
+          }),
         afterDecision: async (decision) => {
           if (decision === null) {
             await opts?.iosPushDelivery?.handleExpired?.(requestEvent);
@@ -472,7 +440,7 @@ export function createExecApprovalHandlers(
         respond,
         resolveTerminalReason: (snapshot) => {
           const runId = normalizeOptionalString(snapshot.request.runId);
-          return runId && context.chatAbortedRuns?.has(runId) ? "run-aborted" : undefined;
+          return runId && context.chatRunState.hasAbortMarker(runId) ? "run-aborted" : undefined;
         },
       });
     },

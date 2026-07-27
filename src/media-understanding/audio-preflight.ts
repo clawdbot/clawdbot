@@ -1,10 +1,10 @@
 import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 // Audio preflight transcribes voice notes before mention checks and optionally
 // echoes the transcript back to the source chat.
-import type { MsgContext } from "../auto-reply/templating.js";
+import type { RuntimeMsgContext as MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
-import { projectMediaFacts, resolveMediaFacts } from "../media/media-facts.js";
+import { normalizeMediaFacts } from "../media/media-facts.js";
 import { isAudioAttachment } from "./attachments.js";
 import { runAudioTranscription } from "./audio-transcription-runner.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
@@ -72,12 +72,11 @@ export async function transcribeFirstAudio(params: {
 
     // Persist transcription state on the matching fact so later normalization
     // cannot shift or lose it through a parallel index list.
-    const media = resolveMediaFacts(ctx);
+    const media = normalizeMediaFacts(ctx.media);
     const transcribedFact = media[firstAudio.index];
     if (transcribedFact) {
       media[firstAudio.index] = { ...transcribedFact, transcribed: true };
       ctx.media = media;
-      ctx.MediaTranscribedIndexes = projectMediaFacts(media).MediaTranscribedIndexes;
     }
 
     if (shouldLogVerbose()) {

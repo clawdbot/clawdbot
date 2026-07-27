@@ -24,6 +24,7 @@ export default defineSingleProviderPluginEntry({
         envVar: "CEREBRAS_API_KEY",
         promptMessage: "Enter Cerebras API key",
         defaultModel: CEREBRAS_DEFAULT_MODEL_REF,
+        preserveExistingPrimary: true,
         applyConfig: (cfg) => applyCerebrasConfig(cfg),
         noteMessage: [
           "Cerebras provides high-speed OpenAI-compatible inference for GPT OSS and GLM models.",

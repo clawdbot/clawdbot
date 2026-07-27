@@ -825,6 +825,123 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     expect(handleAction).toHaveBeenCalledOnce();
   });
 
+  it("accepts an exact-current WhatsApp chatJid delivery alias", async () => {
+    setReadPlugin({
+      channel: "whatsapp",
+      origin: "bundled",
+      normalizeTarget: (raw) => raw.replace(/^whatsapp:/i, "").trim() || undefined,
+      messageActionTargetAliases: {
+        react: {
+          aliases: ["chatJid", "messageId"],
+          deliveryTargetAliases: ["chatJid"],
+          resolveDeliveryTarget: ({ args }) =>
+            typeof args.chatJid === "string" ? args.chatJid : undefined,
+        },
+      },
+    });
+
+    await dispatchChannelMessageAction({
+      channel: "whatsapp",
+      action: "react",
+      cfg: {} as OpenClawConfig,
+      params: {
+        chatJid: "current@g.us",
+        messageId: "current-message",
+      },
+      accountId: "Work",
+      requesterAccountId: "work",
+      conversationReadOrigin: "delegated",
+      toolContext: {
+        currentChannelProvider: "whatsapp",
+        currentChannelId: "whatsapp:current@g.us",
+        currentMessageId: "current-message",
+      },
+    });
+
+    expect(handleAction).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a sibling WhatsApp chatJid delivery alias before plugin code", async () => {
+    setReadPlugin({
+      channel: "whatsapp",
+      origin: "bundled",
+      normalizeTarget: (raw) => raw.replace(/^whatsapp:/i, "").trim() || undefined,
+      messageActionTargetAliases: {
+        react: {
+          aliases: ["chatJid", "messageId"],
+          deliveryTargetAliases: ["chatJid"],
+          resolveDeliveryTarget: ({ args }) =>
+            typeof args.chatJid === "string" ? args.chatJid : undefined,
+        },
+      },
+    });
+
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "whatsapp",
+        action: "react",
+        cfg: {} as OpenClawConfig,
+        params: {
+          chatJid: "sibling@g.us",
+          messageId: "sibling-message",
+        },
+        accountId: "work",
+        requesterAccountId: "Work",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider: "whatsapp",
+          currentChannelId: "whatsapp:current@g.us",
+          currentMessageId: "current-message",
+        },
+      }),
+    ).rejects.toThrow("requires the exact current conversation and account");
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "mismatched", accountId: "other", requesterAccountId: "work" },
+    { name: "invalid", accountId: "!!!", requesterAccountId: "work" },
+    { name: "missing requester", accountId: "work", requesterAccountId: undefined },
+  ])(
+    "rejects a WhatsApp chatJid with $name account context before resolution",
+    async (testCase) => {
+      const resolveDeliveryTarget = vi.fn(({ args }: { args: Record<string, unknown> }) =>
+        typeof args.chatJid === "string" ? args.chatJid : undefined,
+      );
+      setReadPlugin({
+        channel: "whatsapp",
+        origin: "bundled",
+        normalizeTarget: (raw) => raw.replace(/^whatsapp:/i, "").trim() || undefined,
+        messageActionTargetAliases: {
+          react: {
+            aliases: ["chatJid", "messageId"],
+            deliveryTargetAliases: ["chatJid"],
+            resolveDeliveryTarget,
+          },
+        },
+      });
+
+      await expect(
+        dispatchChannelMessageAction({
+          channel: "whatsapp",
+          action: "react",
+          cfg: {} as OpenClawConfig,
+          params: { chatJid: "current@g.us", messageId: "current-message" },
+          accountId: testCase.accountId,
+          requesterAccountId: testCase.requesterAccountId,
+          conversationReadOrigin: "delegated",
+          toolContext: {
+            currentChannelProvider: "whatsapp",
+            currentChannelId: "whatsapp:current@g.us",
+            currentMessageId: "current-message",
+          },
+        }),
+      ).rejects.toThrow("requires the exact current conversation and account");
+      expect(resolveDeliveryTarget).not.toHaveBeenCalled();
+      expect(handleAction).not.toHaveBeenCalled();
+    },
+  );
+
   it("uses a bundled numeric chatId delivery alias for an exact-current provider target", async () => {
     const resolveDeliveryTarget = vi.fn(({ args }: { args: Record<string, unknown> }) =>
       typeof args.chatId === "number" && Number.isInteger(args.chatId) && args.chatId > 0
