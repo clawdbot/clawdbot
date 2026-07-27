@@ -2,6 +2,7 @@
 // outbound message execution context.
 import { Type } from "typebox";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
@@ -3615,12 +3616,12 @@ describe("message tool internal-runtime-context sanitization", () => {
         message: [
           "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
           "",
-          "Conversation info (untrusted metadata):",
+          markInboundContextLabel("Conversation info:"),
           "```json",
           '{"chat_id":"group:abc","sender_id":"+15551234567","is_group_chat":true}',
           "```",
           "",
-          "Sender (untrusted metadata):",
+          markInboundContextLabel("Sender:"),
           "```json",
           '{"label":"Bob (+15551234567)","id":"+15551234567"}',
           "```",
@@ -3652,7 +3653,7 @@ describe("message tool internal-runtime-context sanitization", () => {
     {
       name: "inbound metadata only",
       message: [
-        "Conversation info (untrusted metadata):",
+        markInboundContextLabel("Conversation info:"),
         "```json",
         '{"chat_id":"group:abc","sender_id":"+15551234567"}',
         "```",

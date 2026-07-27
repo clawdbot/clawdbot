@@ -12,11 +12,7 @@ import {
   outputMentionsBlackHole2ch,
 } from "./chrome-audio-device.js";
 import type { ZoomMeetingsChromeHealth, ZoomMeetingsTranscriptSnapshot } from "./types.js";
-import {
-  ZOOM_MEETINGS_PLATFORM_ADAPTER,
-  isZoomMeetingsRealtimeRouteReady,
-  isZoomMeetingsTalkBackMode,
-} from "./zoom-meetings-platform-adapter.js";
+import { ZOOM_MEETINGS_PLATFORM_ADAPTER } from "./zoom-meetings-platform-adapter.js";
 import {
   ZOOM_MEETINGS_BROWSER_NODE_ADAPTER,
   ZOOM_MEETINGS_NODE_COMMAND,
@@ -29,8 +25,8 @@ const chromeTransport = MeetingPlatformAdapter.createChromeTransport<
   ZoomMeetingsTranscriptSnapshot
 >({
   browserNodeAdapter: ZOOM_MEETINGS_BROWSER_NODE_ADAPTER,
-  isRealtimeRouteReady: isZoomMeetingsRealtimeRouteReady,
-  isTalkBackMode: isZoomMeetingsTalkBackMode,
+  isRealtimeRouteReady: MeetingPlatformAdapter.isRealtimeRouteReady,
+  isTalkBackMode: MeetingPlatformAdapter.isTalkBackMode,
   meetingLabel: "Zoom meeting",
   nodeCommandName: ZOOM_MEETINGS_NODE_COMMAND,
   outputMentionsAudioDevice: outputMentionsBlackHole2ch,

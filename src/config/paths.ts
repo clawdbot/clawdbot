@@ -303,15 +303,7 @@ export function resolveDeliveryQueueMediaDir(stateDir?: string): string {
   return path.join(stateDir ?? resolveStateDir(), "delivery-queue-media");
 }
 
-const OAUTH_FILENAME = "oauth.json";
-
-/**
- * OAuth credentials storage directory.
- *
- * Precedence:
- * - `OPENCLAW_OAUTH_DIR` (explicit override)
- * - `$*_STATE_DIR/credentials` (canonical server/default)
- */
+/** Resolves the legacy credentials directory retained for Doctor and backup ownership. */
 export function resolveOAuthDir(
   env: NodeJS.ProcessEnv = process.env,
   stateDir: string = resolveStateDir(env, envHomedir(env)),
@@ -321,13 +313,6 @@ export function resolveOAuthDir(
     return resolveUserPath(override, env, envHomedir(env));
   }
   return path.join(stateDir, "credentials");
-}
-
-export function resolveOAuthPath(
-  env: NodeJS.ProcessEnv = process.env,
-  stateDir: string = resolveStateDir(env, envHomedir(env)),
-): string {
-  return path.join(resolveOAuthDir(env, stateDir), OAUTH_FILENAME);
 }
 
 function parseGatewayPortEnvValue(raw: string | undefined): number | null {

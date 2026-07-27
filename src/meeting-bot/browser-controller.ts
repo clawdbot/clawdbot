@@ -54,9 +54,7 @@ function applyMeetingManualAction<Health extends MeetingBrowserHealth>(
   return browser && manual
     ? {
         ...browser,
-        manualActionRequired: true,
-        manualActionReason: manual.reason,
-        manualActionMessage: manual.message,
+        manualAction: { reason: manual.reason, message: manual.message },
       }
     : browser;
 }
@@ -273,12 +271,12 @@ export async function openMeetingWithBrowser<
       if (
         !shouldRetry &&
         browser?.inCall === true &&
-        browser.manualActionRequired !== true &&
+        browser.manualAction === undefined &&
         (!allowMicrophone || browser.micMuted !== true)
       ) {
         return { launched: true, browser, tab: tabIdentity };
       }
-      if (!shouldRetry && browser?.manualActionRequired === true) {
+      if (!shouldRetry && browser?.manualAction) {
         return { launched: true, browser, tab: tabIdentity };
       }
     } catch (error) {
@@ -291,9 +289,7 @@ export async function openMeetingWithBrowser<
         browser = {
           ...browser,
           inCall: false,
-          manualActionRequired: true,
-          manualActionReason: manual.reason,
-          manualActionMessage: manual.message,
+          manualAction: { reason: manual.reason, message: manual.message },
           notes: [
             ...permissionNotes,
             `Browser control could not inspect or auto-join ${params.adapter.browserLabel}: ${
@@ -396,9 +392,7 @@ async function inspectRecoverableTab<
         status: "browser-control",
         browserUrl: params.tab.url,
         browserTitle: params.tab.title,
-        manualActionRequired: true,
-        manualActionReason: localeAction.reason,
-        manualActionMessage: localeAction.message,
+        manualAction: { reason: localeAction.reason, message: localeAction.message },
       } as unknown as Health,
       message: localeAction.message,
     };

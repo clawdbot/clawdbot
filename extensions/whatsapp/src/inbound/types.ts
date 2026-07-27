@@ -99,6 +99,13 @@ export type WhatsAppInboundMedia = {
   kind?: ChannelInboundMediaInput["kind"];
 };
 
+type WhatsAppInboundStructuredContextEntry = {
+  label: string;
+  source?: string;
+  type?: string;
+  payload: unknown;
+};
+
 type WhatsAppInboundPayload = {
   body: string;
   commandBody?: string;
@@ -106,12 +113,9 @@ type WhatsAppInboundPayload = {
   /** Ordered media preserved when multiple inbound messages are debounced together. */
   mediaItems?: WhatsAppInboundMedia[];
   location?: NormalizedLocation;
-  untrustedStructuredContext?: Array<{
-    label: string;
-    source?: string;
-    type?: string;
-    payload: unknown;
-  }>;
+  channelStructuredContext?: WhatsAppInboundStructuredContextEntry[];
+  /** @deprecated Use `channelStructuredContext`. Removal: 2026-08-30. */
+  untrustedStructuredContext?: WhatsAppInboundStructuredContextEntry[];
 };
 
 type WhatsAppInboundPlatform = {
@@ -205,13 +209,10 @@ export type DeprecatedWebInboundMessageFlatAliases = {
   mediaFileName?: string;
   /** @deprecated Use `payload.media.url`. */
   mediaUrl?: string;
-  /** @deprecated Use `payload.untrustedStructuredContext`. */
-  untrustedStructuredContext?: Array<{
-    label: string;
-    source?: string;
-    type?: string;
-    payload: unknown;
-  }>;
+  /** @deprecated Use `payload.channelStructuredContext`. */
+  channelStructuredContext?: WhatsAppInboundStructuredContextEntry[];
+  /** @deprecated Use `payload.channelStructuredContext`. Removal: 2026-08-30. */
+  untrustedStructuredContext?: WhatsAppInboundStructuredContextEntry[];
   /** @deprecated Use `event.isBatched`. */
   isBatched?: boolean;
 };

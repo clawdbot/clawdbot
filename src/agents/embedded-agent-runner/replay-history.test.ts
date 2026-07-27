@@ -1,6 +1,7 @@
 // Coverage for normalizing assistant replay content before provider requests.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
+import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../../shared/transcript-only-openclaw-assistant.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
@@ -11,10 +12,12 @@ import {
 import { normalizeAssistantReplayContent } from "./replay-history.js";
 
 const FALLBACK_TEXT = "[assistant turn failed before producing content]";
-const COPIED_INBOUND_METADATA_ONLY_TEXT = `Conversation info (untrusted metadata):
-\`\`\`json
-{"message_id":"msg-abc","sender":"+1555000"}
-\`\`\``;
+const COPIED_INBOUND_METADATA_ONLY_TEXT = [
+  markInboundContextLabel("Conversation info:"),
+  "```json",
+  '{"message_id":"msg-abc","sender":"+1555000"}',
+  "```",
+].join("\n");
 
 function bedrockAssistant(
   content: unknown,

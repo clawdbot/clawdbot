@@ -80,6 +80,7 @@ export type { SessionArchivedFilter } from "./navigation.ts";
 export type SessionListOptions = {
   agentId?: string;
   spawnedBy?: string;
+  boardFace?: "chat" | "dashboard";
   activeMinutes?: number;
   search?: string;
   creatorId?: string;
@@ -212,6 +213,8 @@ export type SessionCapability = {
   create: (params?: SessionCreateParams) => Promise<string | null>;
   patch: SessionPatchRoute;
   setModelOverride: (key: string, value: string | null | undefined) => void;
+  /** True while a just-created work session is waiting for its canonical placement row. */
+  isPreparedWorkSession: (key: string) => boolean;
   pullRequestSummary: (key: string) => SessionCatalogPullRequestSummary | undefined;
   capturePullRequestEpoch: (key: string) => symbol;
   setPullRequestSummary: (
@@ -307,7 +310,6 @@ export {
   scopedAgentListParamsForRefreshTarget,
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
-  searchForSession,
   visibleSessionMatches,
 } from "./navigation.ts";
 export type {
@@ -385,6 +387,9 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
   const spawnedBy = options.spawnedBy?.trim();
   const search = options.search?.trim();
   const creatorId = options.creatorId?.trim();
+  if (options.boardFace) {
+    params.boardFace = options.boardFace;
+  }
   if (agentId) {
     params.agentId = agentId;
   }
@@ -840,6 +845,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     string,
     { token: symbol; previous: string | null | undefined }
   >();
+  const preparedWorkSessionKeys = new Set<string>();
   const swarmActivity = new SwarmActivityTracker();
   const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
   const pullRequestEpochs = new Map<string, symbol>();
@@ -900,6 +906,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     const normalizedKey = key.trim();
     pullRequestEpochs.delete(normalizedKey);
     pullRequestSummaries.delete(normalizedKey);
+  };
+
+  // A deleted key stays reusable for a later ordinary thread, so a leftover
+  // prepared entry would keep classifying that new session as Coding forever.
+  const retirePreparedWorkSession = (key: string) => {
+    preparedWorkSessionKeys.delete(key.trim());
   };
 
   const setPullRequestSummary = (
@@ -1016,6 +1028,11 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         }
       }
       nextResult = swarmActivity.decorate(nextResult);
+      for (const row of nextResult?.sessions ?? []) {
+        if (row.worktree || row.execNode) {
+          preparedWorkSessionKeys.delete(row.key);
+        }
+      }
       canonicalListRevision += 1;
       publish({
         result: nextResult,
@@ -1106,6 +1123,16 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       });
       if (!isCurrentConnection(scope)) {
         return null;
+      }
+      // The create response precedes list reconciliation. Carry submitted facts
+      // across that gap so a partial history row cannot briefly lose its zone/model.
+      if (requestParams.worktree === true || Boolean(requestParams.execNode?.trim())) {
+        preparedWorkSessionKeys.add(result.key.trim());
+      }
+      if (requestParams.model?.trim()) {
+        setModelOverride(result.key, requestParams.model);
+      } else if (preparedWorkSessionKeys.has(result.key)) {
+        publish({ ...state });
       }
       const reconcileCreatedSession = async () => {
         await refreshReplacement(params.agentId);
@@ -1498,6 +1525,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         return { deleted: false };
       }
       retirePullRequestSummary(key);
+      retirePreparedWorkSession(key);
       publish({ ...state, deletedSessions: [{ key, agentId: options.agentId }] });
       setModelOverride(key, undefined);
       await refreshReplacement(options.agentId);
@@ -1547,6 +1575,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (deleted.length > 0 && isCurrentConnection(scope)) {
       for (const key of deleted) {
         retirePullRequestSummary(key);
+        retirePreparedWorkSession(key);
       }
       publish({
         ...state,
@@ -1809,6 +1838,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       inFlight = null;
       queuedRefresh = null;
       rollbackPendingModelPatches();
+      preparedWorkSessionKeys.clear();
       pullRequestSummaries.clear();
       pullRequestEpochs.clear();
       // A connected client replacement needs its own invalidation publish;
@@ -1927,6 +1957,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     create,
     patch,
     setModelOverride,
+    isPreparedWorkSession(key) {
+      return preparedWorkSessionKeys.has(key.trim());
+    },
     pullRequestSummary,
     capturePullRequestEpoch,
     setPullRequestSummary,
@@ -1971,6 +2004,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       queuedRefresh = null;
       subscribedClient = null;
       pendingModelPatches.clear();
+      preparedWorkSessionKeys.clear();
       swarmActivity.clear();
       pullRequestSummaries.clear();
       pullRequestEpochs.clear();

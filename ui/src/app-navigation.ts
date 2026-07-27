@@ -18,6 +18,7 @@ type NavigationItem = {
 // Worktrees is a tab of the Sessions hub, so it is not listed either.
 export const SIDEBAR_NAV_ROUTES = [
   "workboard",
+  "dashboards",
   "usage",
   "cron",
   "tasks",
@@ -183,7 +184,7 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupAgents",
-    routes: ["agents", "ai-agents", "labs", "model-providers", "mcp", "automation"],
+    routes: ["agents", "ai-agents", "labs", "model-providers", "mcp", "memory", "automation"],
   },
   {
     labelKey: "nav.settingsGroupSecurity",
@@ -223,6 +224,8 @@ const NAVIGATION_ICONS: NavigationItem = {
   "skill-workshop": "wrench",
   nodes: "monitorSmartphone",
   chat: "messageSquare",
+  dashboard: "layoutDashboard",
+  dashboards: "layoutDashboard",
   custodian: "lobster",
   config: "settings",
   profile: "circleUser",
@@ -230,6 +233,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   appearance: "palette",
   automation: "terminal",
   mcp: "wrench",
+  memory: "book",
   infrastructure: "globe",
   labs: "flaskConical",
   about: "fileText",
@@ -323,6 +327,8 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   },
   nodes: { titleKey: "tabs.nodes", subtitleKey: "subtitles.nodes" },
   chat: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
+  dashboard: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
+  dashboards: { titleKey: "tabs.dashboards", subtitleKey: "subtitles.dashboards" },
   custodian: { titleKey: "tabs.custodian", subtitleKey: "subtitles.custodian" },
   config: { titleKey: "nav.settings", subtitleKey: "subtitles.config" },
   profile: { titleKey: "tabs.profile", subtitleKey: "subtitles.profile" },
@@ -333,6 +339,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   appearance: { titleKey: "tabs.appearance", subtitleKey: "subtitles.appearance" },
   automation: { titleKey: "tabs.automation", subtitleKey: "subtitles.automation" },
   mcp: { titleKey: "tabs.mcp", subtitleKey: "subtitles.mcp" },
+  memory: { titleKey: "tabs.memory", subtitleKey: "subtitles.memory" },
   infrastructure: { titleKey: "tabs.infrastructure", subtitleKey: "subtitles.infrastructure" },
   labs: { titleKey: "tabs.labs", subtitleKey: "subtitles.labs" },
   about: { titleKey: "tabs.about", subtitleKey: "subtitles.about" },

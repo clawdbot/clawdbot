@@ -5,11 +5,6 @@ import { listAgentIds, resolveAgentDir } from "../../../agents/agent-scope-confi
 import { listRuntimeExternalAuthProfiles } from "../../../agents/auth-profiles/external-auth.js";
 import { resolveAuthProfileOrder } from "../../../agents/auth-profiles/order.js";
 import {
-  resolveAuthStatePath,
-  resolveAuthStorePath,
-  resolveLegacyAuthStorePath,
-} from "../../../agents/auth-profiles/paths.js";
-import {
   coercePersistedAuthProfileStore,
   mergeAuthProfileStores,
 } from "../../../agents/auth-profiles/persisted.js";
@@ -35,6 +30,11 @@ import {
   listOpenClawRegisteredAgentDatabases,
 } from "../../../state/openclaw-agent-db.js";
 import { isRecord, resolveUserPath } from "../../../utils.js";
+import {
+  resolveLegacyAuthProfilesPath as resolveAuthStorePath,
+  resolveLegacyAuthStatePath as resolveAuthStatePath,
+  resolveLegacyFlatAuthPath as resolveLegacyAuthStorePath,
+} from "../../doctor-auth-legacy-paths.js";
 
 type StaleConfiguredAuthOrder = {
   provider: string;
