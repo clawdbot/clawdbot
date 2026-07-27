@@ -29,6 +29,7 @@ const inferenceProfileListResults: BedrockClientResult[] = [];
 const inferenceProfileGetResults: BedrockClientResult[] = [];
 const bedrockClientConfigs: Array<Record<string, unknown>> = [];
 const destroyBedrockClient = vi.fn();
+const createHttpProxyAgentsForTarget = vi.hoisted(() => vi.fn());
 const refreshSharedConfigCache = vi.fn(async () => {});
 const sendBedrockCommand = vi.fn(
   async (command: unknown, options?: { abortSignal?: AbortSignal }) => {
@@ -86,6 +87,11 @@ const sendBedrockCommand = vi.fn(
   },
 );
 
+vi.mock("openclaw/plugin-sdk/llm", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/llm")>()),
+  createHttpProxyAgentsForTarget,
+}));
+
 vi.mock("@aws-sdk/client-bedrock", () => {
   class GetInferenceProfileCommand {
     constructor(readonly input: { inferenceProfileIdentifier: string }) {}
@@ -100,8 +106,22 @@ vi.mock("@aws-sdk/client-bedrock", () => {
   }
 
   class BedrockClient {
+    readonly config: {
+      endpointProvider: () => { url: URL };
+      region: () => Promise<string>;
+      useDualstackEndpoint: () => Promise<boolean>;
+      useFipsEndpoint: () => Promise<boolean>;
+    };
+
     constructor(config: Record<string, unknown> = {}) {
       bedrockClientConfigs.push(config);
+      const region = typeof config.region === "string" ? config.region : "us-east-1";
+      this.config = {
+        endpointProvider: () => ({ url: new URL(`https://bedrock.${region}.amazonaws.com`) }),
+        region: async () => region,
+        useDualstackEndpoint: async () => false,
+        useFipsEndpoint: async () => false,
+      };
     }
 
     send = sendBedrockCommand;
@@ -292,6 +312,7 @@ describe("amazon-bedrock provider plugin", () => {
     inferenceProfileListResults.length = 0;
     inferenceProfileGetResults.length = 0;
     bedrockClientConfigs.length = 0;
+    createHttpProxyAgentsForTarget.mockReset();
     destroyBedrockClient.mockClear();
     refreshSharedConfigCache.mockClear();
     sendBedrockCommand.mockClear();

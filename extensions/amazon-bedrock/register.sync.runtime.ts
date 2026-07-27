@@ -273,7 +273,7 @@ async function resolveAppProfileTraits(
     const region = extractRegionFromArn(modelId) ?? fallbackRegion;
     const sdk = await loadBedrockControlPlaneSdk();
     signal?.throwIfAborted();
-    const controlPlaneClient = sdk.createClient(region);
+    const controlPlaneClient = await sdk.createClient(region);
     client = controlPlaneClient;
     const command = sdk.createGetInferenceProfileCommand({ inferenceProfileIdentifier: modelId });
     const resp = await runBedrockControlPlaneRequest({

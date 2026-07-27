@@ -525,6 +525,12 @@ describe("bedrock discovery", () => {
     }
   });
 
+  it("keeps asynchronous default client setup failures fail-soft", async () => {
+    await expect(
+      discoverBedrockModels({ region: "   ", config: { refreshInterval: 0 } }),
+    ).resolves.toEqual([]);
+  });
+
   it("resolves the Bedrock config apiKey from AWS auth env vars", () => {
     expect(
       resolveBedrockConfigApiKey({

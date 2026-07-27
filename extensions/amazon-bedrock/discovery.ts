@@ -556,10 +556,12 @@ export async function discoverBedrockModels(params: {
   if (!params.clientFactory) {
     await refreshAwsSharedConfigCacheForBedrock();
   }
-  const client = clientFactory(params.region);
 
   const discoveryPromise = (async () => {
+    let clientToDestroy: BedrockClient | undefined;
     try {
+      const client = await clientFactory(params.region);
+      clientToDestroy = client;
       // Discover foundation models and inference profiles in parallel.
       // Both API calls are independent, but we need the foundation model data
       // to resolve inference profile capabilities — so we fetch in parallel,
@@ -622,7 +624,7 @@ export async function discoverBedrockModels(params: {
       });
     } finally {
       // Discovery owns the short-lived control-plane client and its socket agents.
-      client.destroy();
+      clientToDestroy?.destroy();
     }
   })();
 
