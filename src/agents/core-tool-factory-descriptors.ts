@@ -77,3 +77,13 @@ export type OpenClawCodingToolConstructionPlan = {
 export function resolveCoreToolFactoryFamily(name: string): CoreToolFactoryFamily | undefined {
   return CORE_TOOL_FACTORY_FAMILY_BY_NAME.get(name);
 }
+
+/**
+ * Core coding primitives (file + shell families). Tool-search compaction keeps
+ * these directly visible: hiding them behind search adds a lookup round-trip to
+ * nearly every coding turn.
+ */
+export function isCoreCodingSurfaceToolName(name: string): boolean {
+  const family = CORE_TOOL_FACTORY_FAMILY_BY_NAME.get(name);
+  return family === "base-coding" || family === "shell";
+}

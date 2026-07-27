@@ -183,6 +183,7 @@
     "!dist/plugin-sdk/secure-random-runtime.d.ts",
     "!dist/plugin-sdk/session-binding-runtime.d.ts",
     "!dist/plugin-sdk/session-catalog.d.ts",
+    "!dist/plugin-sdk/session-catalog-runtime.d.ts",
     "!dist/plugin-sdk/session-key-runtime.d.ts",
     "!dist/plugin-sdk/session-transcript-hit.d.ts",
     "!dist/plugin-sdk/session-transcript-runtime.d.ts",
@@ -692,6 +693,10 @@
       "types": "./dist/plugin-sdk/gateway-runtime.d.ts",
       "default": "./dist/plugin-sdk/gateway-runtime.js"
     },
+    "./plugin-sdk/cli-argv": {
+      "types": "./dist/plugin-sdk/cli-argv.d.ts",
+      "default": "./dist/plugin-sdk/cli-argv.js"
+    },
     "./plugin-sdk/cli-runtime": {
       "default": "./dist/plugin-sdk/cli-runtime.js"
     },
@@ -1001,6 +1006,9 @@
     },
     "./plugin-sdk/session-catalog": {
       "default": "./dist/plugin-sdk/session-catalog.js"
+    },
+    "./plugin-sdk/session-catalog-runtime": {
+      "default": "./dist/plugin-sdk/session-catalog-runtime.js"
     },
     "./plugin-sdk/session-discussion": {
       "types": "./dist/plugin-sdk/session-discussion.d.ts",
@@ -1907,6 +1915,7 @@
     "@openclaw/fs-safe": "0.4.7",
     "@openclaw/proxyline": "0.3.4",
     "@silvia-odwyer/photon-node": "0.3.4",
+    "acorn": "8.17.0",
     "chalk": "5.6.2",
     "chokidar": "5.0.0",
     "clawpdf": "0.3.0",
@@ -1974,7 +1983,6 @@
     "@types/ws": "8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260707.2",
     "@vitest/coverage-v8": "4.1.10",
-    "acorn": "8.17.0",
     "esbuild": "0.28.1",
     "fast-glob": "3.3.3",
     "ipaddr.js": "2.4.0",

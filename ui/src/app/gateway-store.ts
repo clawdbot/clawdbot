@@ -18,6 +18,7 @@ import type {
   ApplicationGatewayConnection,
   ApplicationGatewaySnapshot,
 } from "./context.ts";
+import { resolveControlUiAuthHeader } from "./control-ui-auth.ts";
 import { loadSettings, patchSettings, persistSessionToken } from "./settings.ts";
 import { readPresenceEntries, resolveSelfPresenceUser } from "./user-profile.ts";
 
@@ -62,7 +63,7 @@ export function createApplicationGateway(
     offlineStable: false,
     hello: null,
     canvasPluginSurfaceUrl: null,
-    assistantAgentId: "main",
+    assistantAgentId: null,
     sessionKey: settings.sessionKey,
     lastError: null,
     lastErrorCode: null,
@@ -272,7 +273,13 @@ export function createApplicationGateway(
     connection = nextConnection;
     // Trust the connected gateway's origin for avatar route resolution so
     // split-origin Control UI deployments load uploaded/proxied avatars.
-    setAvatarGatewayOrigin(nextConnection.gatewayUrl);
+    setAvatarGatewayOrigin(
+      nextConnection.gatewayUrl,
+      resolveControlUiAuthHeader({
+        settings: { token: nextConnection.token },
+        password: nextConnection.password,
+      }),
+    );
     updateSettings(
       {
         gatewayUrl: nextConnection.gatewayUrl,
@@ -306,6 +313,14 @@ export function createApplicationGateway(
         if (client !== nextClient) {
           return;
         }
+        setAvatarGatewayOrigin(
+          nextConnection.gatewayUrl,
+          resolveControlUiAuthHeader({
+            hello,
+            settings: { token: nextConnection.token },
+            password: nextConnection.password,
+          }),
+        );
         connection = { ...connection, bootstrapToken: "" };
         if (persistConnectionSettings) {
           settings = loadSettings();
@@ -333,7 +348,8 @@ export function createApplicationGateway(
           phase: "connected",
           hello,
           canvasPluginSurfaceUrl,
-          assistantAgentId: sessionDefaults?.defaultAgentId ?? "main",
+          // Trim guards a whitespace-only defaultId from becoming a truthy selection.
+          assistantAgentId: sessionDefaults?.defaultAgentId?.trim() || null,
           sessionKey,
           lastError: null,
           lastErrorCode: null,
@@ -399,6 +415,7 @@ export function createApplicationGateway(
       phase: everConnected ? "reconnecting" : "connecting",
       hello: null,
       canvasPluginSurfaceUrl: null,
+      assistantAgentId: null,
       selfUser: null,
       sessionKey: nextSessionKey,
       lastError: null,
@@ -446,6 +463,7 @@ export function createApplicationGateway(
         offlineStable: false,
         hello: null,
         canvasPluginSurfaceUrl: null,
+        assistantAgentId: null,
         selfUser: null,
         lastError: null,
         lastErrorCode: null,

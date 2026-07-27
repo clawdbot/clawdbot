@@ -475,6 +475,56 @@ function expectContinuationDispatchFields(
   return params;
 }
 
+type GeneratedMediaDeliveryEntry = Extract<
+  Parameters<typeof deliverQueuedSessionDelivery>[0]["entry"],
+  { kind: "agentTurn" }
+>;
+
+function deliverGeneratedMedia(
+  overrides: Partial<GeneratedMediaDeliveryEntry> &
+    Pick<GeneratedMediaDeliveryEntry, "id" | "messageId">,
+  stateDir?: string,
+) {
+  return deliverQueuedSessionDelivery({
+    deps: {} as never,
+    ...(stateDir === undefined ? {} : { stateDir }),
+    entry: {
+      kind: "agentTurn",
+      sessionKey: "agent:main:main",
+      message: "generated image ready",
+      enqueuedAt: 1,
+      retryCount: 0,
+      route: { channel: "discord", to: "channel:123", chatType: "channel" },
+      inputProvenance: {
+        kind: "inter_session",
+        sourceChannel: "webchat",
+        sourceTool: "image_generate",
+      },
+      sourceReplyDeliveryMode: "automatic",
+      ...overrides,
+    },
+  });
+}
+
+function mockRestartContinuation(
+  continuation: NonNullable<RestartSentinelPayload["continuation"]>,
+  threadId?: string,
+) {
+  mocks.readRestartSentinel.mockResolvedValue({
+    payload: {
+      sessionKey: "agent:main:main",
+      deliveryContext: {
+        channel: "whatsapp",
+        to: "+15550002",
+        accountId: "acct-2",
+      },
+      ...(threadId === undefined ? {} : { threadId }),
+      ts: 123,
+      continuation,
+    },
+  } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+}
+
 describe("scheduleRestartSentinelWake", () => {
   afterEach(() => {
     resetGatewayWorkAdmission();
@@ -930,22 +980,13 @@ describe("scheduleRestartSentinelWake", () => {
   });
 
   it("runs agentTurn continuation internally after the restart notice without routed final delivery", async () => {
-    mocks.readRestartSentinel.mockResolvedValue({
-      payload: {
-        sessionKey: "agent:main:main",
-        deliveryContext: {
-          channel: "whatsapp",
-          to: "+15550002",
-          accountId: "acct-2",
-        },
-        threadId: "thread-42",
-        ts: 123,
-        continuation: {
-          kind: "agentTurn",
-          message: "Reply with exactly: Yay! I did it!",
-        },
+    mockRestartContinuation(
+      {
+        kind: "agentTurn",
+        message: "Reply with exactly: Yay! I did it!",
       },
-    } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+      "thread-42",
+    );
     mocks.recordInboundSessionAndDispatchReply.mockImplementationOnce(async (params) => {
       await params.turnAdoptionLifecycle?.onAdopted();
       await params.deliver({
@@ -1003,17 +1044,10 @@ describe("scheduleRestartSentinelWake", () => {
   });
 
   it("replays generated-media provenance through the owning session agent", async () => {
-    await deliverQueuedSessionDelivery({
-      deps: {} as never,
-      stateDir: "/tmp/custom-session-delivery-state",
-      entry: {
+    await deliverGeneratedMedia(
+      {
         id: "session-delivery-media",
-        kind: "agentTurn",
-        sessionKey: "agent:main:main",
-        message: "generated image ready",
         messageId: "image:task-1:agent-loop",
-        enqueuedAt: 1,
-        retryCount: 0,
         route: {
           channel: "discord",
           to: "channel:123",
@@ -1030,7 +1064,8 @@ describe("scheduleRestartSentinelWake", () => {
         expectedMediaUrls: ["/tmp/proof.png"],
         idempotencyKey: "image:task-1:agent-loop",
       },
-    });
+      "/tmp/custom-session-delivery-state",
+    );
 
     expect(mocks.dispatchGatewayMethodInProcess).toHaveBeenCalledWith(
       "agent",
@@ -1100,25 +1135,10 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.dispatchGatewayMethodInProcess.mockRejectedValueOnce(new Error("gateway unavailable"));
 
     await expect(
-      deliverQueuedSessionDelivery({
-        deps: {} as never,
-        entry: {
-          id: "session-delivery-media-pre-accept",
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-pre-accept:agent-loop",
-          enqueuedAt: 1,
-          retryCount: 0,
-          route: { channel: "discord", to: "channel:123", chatType: "channel" },
-          inputProvenance: {
-            kind: "inter_session",
-            sourceChannel: "webchat",
-            sourceTool: "image_generate",
-          },
-          sourceReplyDeliveryMode: "automatic",
-          expectedMediaUrls: ["/tmp/proof.png"],
-        },
+      deliverGeneratedMedia({
+        id: "session-delivery-media-pre-accept",
+        messageId: "image:task-pre-accept:agent-loop",
+        expectedMediaUrls: ["/tmp/proof.png"],
       }),
     ).rejects.toThrow("failed before gateway acceptance");
 
@@ -1147,26 +1167,12 @@ describe("scheduleRestartSentinelWake", () => {
       legacyKey: undefined,
     });
 
-    await deliverQueuedSessionDelivery({
-      deps: {} as never,
-      entry: {
-        id: "session-delivery-cron-media",
-        kind: "agentTurn",
-        sessionKey: "agent:main:cron:daily-media:run:run-123",
-        message: "generated image ready",
-        messageId: "image:cron-task:agent-loop",
-        enqueuedAt: 1,
-        retryCount: 0,
-        route: { channel: "discord", to: "channel:123", chatType: "channel" },
-        inputProvenance: {
-          kind: "inter_session",
-          sourceChannel: "webchat",
-          sourceTool: "image_generate",
-        },
-        sourceReplyDeliveryMode: "automatic",
-        expectedMediaUrls: ["/tmp/proof.png"],
-        suppressTextDelivery: true,
-      },
+    await deliverGeneratedMedia({
+      id: "session-delivery-cron-media",
+      sessionKey: "agent:main:cron:daily-media:run:run-123",
+      messageId: "image:cron-task:agent-loop",
+      expectedMediaUrls: ["/tmp/proof.png"],
+      suppressTextDelivery: true,
     });
 
     expect(mocks.dispatchGatewayMethodInProcess).toHaveBeenCalledWith(
@@ -1204,25 +1210,10 @@ describe("scheduleRestartSentinelWake", () => {
     });
 
     await expect(
-      deliverQueuedSessionDelivery({
-        deps: {} as never,
-        entry: {
-          id: "session-delivery-media-owned",
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-owned:agent-loop",
-          enqueuedAt: 1,
-          retryCount: 0,
-          route: { channel: "discord", to: "channel:123", chatType: "channel" },
-          inputProvenance: {
-            kind: "inter_session",
-            sourceChannel: "webchat",
-            sourceTool: "image_generate",
-          },
-          sourceReplyDeliveryMode: "automatic",
-          expectedMediaUrls: ["/tmp/proof.png"],
-        },
+      deliverGeneratedMedia({
+        id: "session-delivery-media-owned",
+        messageId: "image:task-owned:agent-loop",
+        expectedMediaUrls: ["/tmp/proof.png"],
       }),
     ).rejects.toThrow("still owned by agent recovery");
 
@@ -1233,25 +1224,10 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({ status: "in_flight" });
 
     await expect(
-      deliverQueuedSessionDelivery({
-        deps: {} as never,
-        entry: {
-          id: "session-delivery-media-in-flight",
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-in-flight:agent-loop",
-          enqueuedAt: 1,
-          retryCount: 0,
-          route: { channel: "discord", to: "channel:123", chatType: "channel" },
-          inputProvenance: {
-            kind: "inter_session",
-            sourceChannel: "webchat",
-            sourceTool: "image_generate",
-          },
-          sourceReplyDeliveryMode: "automatic",
-          expectedMediaUrls: ["/tmp/proof.png"],
-        },
+      deliverGeneratedMedia({
+        id: "session-delivery-media-in-flight",
+        messageId: "image:task-in-flight:agent-loop",
+        expectedMediaUrls: ["/tmp/proof.png"],
       }),
     ).rejects.toThrow("still owned by agent recovery");
 
@@ -1281,25 +1257,10 @@ describe("scheduleRestartSentinelWake", () => {
     });
 
     await expect(
-      deliverQueuedSessionDelivery({
-        deps: {} as never,
-        entry: {
-          id: "session-delivery-media-terminal",
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-terminal:agent-loop",
-          enqueuedAt: 1,
-          retryCount: 0,
-          route: { channel: "discord", to: "channel:123", chatType: "channel" },
-          inputProvenance: {
-            kind: "inter_session",
-            sourceChannel: "webchat",
-            sourceTool: "image_generate",
-          },
-          sourceReplyDeliveryMode: "automatic",
-          expectedMediaUrls: ["/tmp/proof.png"],
-        },
+      deliverGeneratedMedia({
+        id: "session-delivery-media-terminal",
+        messageId: "image:task-terminal:agent-loop",
+        expectedMediaUrls: ["/tmp/proof.png"],
       }),
     ).rejects.toThrow("dead-lettered without durable terminal evidence");
 
@@ -1326,26 +1287,14 @@ describe("scheduleRestartSentinelWake", () => {
     });
 
     await expect(
-      deliverQueuedSessionDelivery({
-        deps: {} as never,
-        entry: {
-          id: "session-delivery-media-terminal-empty",
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generation completed",
-          messageId: "image:task-terminal-empty:agent-loop",
-          enqueuedAt: 1,
-          retryCount: 1,
-          lastChargedAgentRunAttempt: 0,
-          route: { channel: "discord", to: "channel:123", chatType: "channel" },
-          inputProvenance: {
-            kind: "inter_session",
-            sourceChannel: "webchat",
-            sourceTool: "image_generate",
-          },
-          sourceReplyDeliveryMode: "message_tool_only",
-          expectedMediaUrls: [],
-        },
+      deliverGeneratedMedia({
+        id: "session-delivery-media-terminal-empty",
+        message: "generation completed",
+        messageId: "image:task-terminal-empty:agent-loop",
+        retryCount: 1,
+        lastChargedAgentRunAttempt: 0,
+        sourceReplyDeliveryMode: "message_tool_only",
+        expectedMediaUrls: [],
       }),
     ).rejects.toThrow("completed without a visible reply");
 
@@ -1384,25 +1333,10 @@ describe("scheduleRestartSentinelWake", () => {
     });
 
     await expect(
-      deliverQueuedSessionDelivery({
-        deps: {} as never,
-        entry: {
-          id: "session-delivery-media-terminal-missing",
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-terminal-missing:agent-loop",
-          enqueuedAt: 1,
-          retryCount: 0,
-          route: { channel: "discord", to: "channel:123", chatType: "channel" },
-          inputProvenance: {
-            kind: "inter_session",
-            sourceChannel: "webchat",
-            sourceTool: "image_generate",
-          },
-          sourceReplyDeliveryMode: "automatic",
-          expectedMediaUrls: ["/tmp/proof.png"],
-        },
+      deliverGeneratedMedia({
+        id: "session-delivery-media-terminal-missing",
+        messageId: "image:task-terminal-missing:agent-loop",
+        expectedMediaUrls: ["/tmp/proof.png"],
       }),
     ).rejects.toThrow("missed expected media");
 
@@ -1424,26 +1358,11 @@ describe("scheduleRestartSentinelWake", () => {
 
   it("dead-letters an interrupted attempt without durable agent evidence", async () => {
     await expect(
-      deliverQueuedSessionDelivery({
-        deps: {} as never,
-        entry: {
-          id: "session-delivery-media-interrupted-unproven",
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-interrupted-unproven:agent-loop",
-          enqueuedAt: 1,
-          retryCount: 0,
-          deliveryStartedAt: 2,
-          route: { channel: "discord", to: "channel:123", chatType: "channel" },
-          inputProvenance: {
-            kind: "inter_session",
-            sourceChannel: "webchat",
-            sourceTool: "image_generate",
-          },
-          sourceReplyDeliveryMode: "automatic",
-          expectedMediaUrls: ["/tmp/proof.png"],
-        },
+      deliverGeneratedMedia({
+        id: "session-delivery-media-interrupted-unproven",
+        messageId: "image:task-interrupted-unproven:agent-loop",
+        deliveryStartedAt: 2,
+        expectedMediaUrls: ["/tmp/proof.png"],
       }),
     ).rejects.toThrow("interrupted unproven attempt");
 
@@ -1473,25 +1392,11 @@ describe("scheduleRestartSentinelWake", () => {
     });
 
     await expect(
-      deliverQueuedSessionDelivery({
-        deps: {} as never,
-        entry: {
-          id: "session-delivery-media-terminal-private",
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-terminal-private:agent-loop",
-          enqueuedAt: 1,
-          retryCount: 0,
-          route: { channel: "webchat", to: "agent:main:main", chatType: "direct" },
-          inputProvenance: {
-            kind: "inter_session",
-            sourceChannel: "webchat",
-            sourceTool: "image_generate",
-          },
-          sourceReplyDeliveryMode: "automatic",
-          expectedMediaUrls: ["/tmp/proof.png"],
-        },
+      deliverGeneratedMedia({
+        id: "session-delivery-media-terminal-private",
+        messageId: "image:task-terminal-private:agent-loop",
+        route: { channel: "webchat", to: "agent:main:main", chatType: "direct" },
+        expectedMediaUrls: ["/tmp/proof.png"],
       }),
     ).rejects.toThrow("missed expected media");
 
@@ -1511,31 +1416,17 @@ describe("scheduleRestartSentinelWake", () => {
   });
 
   it("asks the normal agent loop to deliver automatic generated-media replies", async () => {
-    await deliverQueuedSessionDelivery({
-      deps: {} as never,
-      entry: {
-        id: "session-delivery-media-automatic",
-        kind: "agentTurn",
-        sessionKey: "agent:main:main",
-        message: "generated image ready",
-        messageId: "image:task-automatic:agent-loop",
-        enqueuedAt: 1,
-        retryCount: 0,
-        route: {
-          channel: "discord",
-          to: "channel:123",
-          accountId: "default",
-          chatType: "channel",
-        },
-        inputProvenance: {
-          kind: "inter_session",
-          sourceChannel: "webchat",
-          sourceTool: "image_generate",
-        },
-        sourceReplyDeliveryMode: "automatic",
-        expectedMediaUrls: ["/tmp/proof.png"],
-        suppressTextDelivery: true,
+    await deliverGeneratedMedia({
+      id: "session-delivery-media-automatic",
+      messageId: "image:task-automatic:agent-loop",
+      route: {
+        channel: "discord",
+        to: "channel:123",
+        accountId: "default",
+        chatType: "channel",
       },
+      expectedMediaUrls: ["/tmp/proof.png"],
+      suppressTextDelivery: true,
     });
 
     expect(mocks.dispatchGatewayMethodInProcess).toHaveBeenCalledWith(
@@ -1566,26 +1457,11 @@ describe("scheduleRestartSentinelWake", () => {
       },
     });
 
-    await deliverQueuedSessionDelivery({
-      deps: {} as never,
-      entry: {
-        id: "session-delivery-media-normalized",
-        kind: "agentTurn",
-        sessionKey: "agent:main:main",
-        message: "generated image ready",
-        messageId: "image:task-normalized:agent-loop",
-        idempotencyKey: "image:task-normalized:agent-loop",
-        enqueuedAt: 1,
-        retryCount: 0,
-        route: { channel: "discord", to: "channel:123", chatType: "channel" },
-        inputProvenance: {
-          kind: "inter_session",
-          sourceChannel: "webchat",
-          sourceTool: "image_generate",
-        },
-        sourceReplyDeliveryMode: "automatic",
-        expectedMediaUrls: ["file:///tmp/generated%20image.png"],
-      },
+    await deliverGeneratedMedia({
+      id: "session-delivery-media-normalized",
+      messageId: "image:task-normalized:agent-loop",
+      idempotencyKey: "image:task-normalized:agent-loop",
+      expectedMediaUrls: ["file:///tmp/generated%20image.png"],
     });
 
     expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
@@ -1601,25 +1477,11 @@ describe("scheduleRestartSentinelWake", () => {
       },
     });
 
-    await deliverQueuedSessionDelivery({
-      deps: {} as never,
-      entry: {
-        id: "session-delivery-media-internal",
-        kind: "agentTurn",
-        sessionKey: "agent:main:main",
-        message: "generated image ready",
-        messageId: "image:task-internal:agent-loop",
-        enqueuedAt: 1,
-        retryCount: 0,
-        route: { channel: "webchat", to: "agent:main:main", chatType: "direct" },
-        inputProvenance: {
-          kind: "inter_session",
-          sourceChannel: "webchat",
-          sourceTool: "image_generate",
-        },
-        sourceReplyDeliveryMode: "automatic",
-        expectedMediaUrls: ["/tmp/proof.png"],
-      },
+    await deliverGeneratedMedia({
+      id: "session-delivery-media-internal",
+      messageId: "image:task-internal:agent-loop",
+      route: { channel: "webchat", to: "agent:main:main", chatType: "direct" },
+      expectedMediaUrls: ["/tmp/proof.png"],
     });
 
     expect(mocks.dispatchGatewayMethodInProcess).toHaveBeenCalledWith(
@@ -1650,25 +1512,12 @@ describe("scheduleRestartSentinelWake", () => {
     });
 
     await expect(
-      deliverQueuedSessionDelivery({
-        deps: {} as never,
-        entry: {
-          id: "session-delivery-media-internal-partial",
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated images ready",
-          messageId: "image:task-internal-partial:agent-loop",
-          enqueuedAt: 1,
-          retryCount: 0,
-          route: { channel: "webchat", to: "agent:main:main", chatType: "direct" },
-          inputProvenance: {
-            kind: "inter_session",
-            sourceChannel: "webchat",
-            sourceTool: "image_generate",
-          },
-          sourceReplyDeliveryMode: "automatic",
-          expectedMediaUrls: ["/tmp/one.png", "/tmp/two.png"],
-        },
+      deliverGeneratedMedia({
+        id: "session-delivery-media-internal-partial",
+        message: "generated images ready",
+        messageId: "image:task-internal-partial:agent-loop",
+        route: { channel: "webchat", to: "agent:main:main", chatType: "direct" },
+        expectedMediaUrls: ["/tmp/one.png", "/tmp/two.png"],
       }),
     ).rejects.toThrow("partially missed expected media: /tmp/two.png");
 
@@ -1693,25 +1542,11 @@ describe("scheduleRestartSentinelWake", () => {
     });
 
     await expect(
-      deliverQueuedSessionDelivery({
-        deps: {} as never,
-        entry: {
-          id: "session-delivery-media-internal-reasoning",
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-internal-reasoning:agent-loop",
-          enqueuedAt: 1,
-          retryCount: 0,
-          route: { channel: "webchat", to: "agent:main:main", chatType: "direct" },
-          inputProvenance: {
-            kind: "inter_session",
-            sourceChannel: "webchat",
-            sourceTool: "image_generate",
-          },
-          sourceReplyDeliveryMode: "automatic",
-          expectedMediaUrls: ["/tmp/proof.png"],
-        },
+      deliverGeneratedMedia({
+        id: "session-delivery-media-internal-reasoning",
+        messageId: "image:task-internal-reasoning:agent-loop",
+        route: { channel: "webchat", to: "agent:main:main", chatType: "direct" },
+        expectedMediaUrls: ["/tmp/proof.png"],
       }),
     ).rejects.toThrow("missed expected media: /tmp/proof.png");
 
@@ -1732,26 +1567,12 @@ describe("scheduleRestartSentinelWake", () => {
     });
 
     await expect(
-      deliverQueuedSessionDelivery({
-        deps: {} as never,
-        entry: {
-          id: "session-delivery-media-missing",
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-missing:agent-loop",
-          idempotencyKey: "image:task-missing:agent-loop",
-          enqueuedAt: 1,
-          retryCount: 2,
-          route: { channel: "discord", to: "channel:123", chatType: "channel" },
-          inputProvenance: {
-            kind: "inter_session",
-            sourceChannel: "webchat",
-            sourceTool: "image_generate",
-          },
-          sourceReplyDeliveryMode: "automatic",
-          expectedMediaUrls: ["/tmp/proof.png"],
-        },
+      deliverGeneratedMedia({
+        id: "session-delivery-media-missing",
+        messageId: "image:task-missing:agent-loop",
+        idempotencyKey: "image:task-missing:agent-loop",
+        retryCount: 2,
+        expectedMediaUrls: ["/tmp/proof.png"],
       }),
     ).rejects.toThrow("queued generated-media agent turn missed expected media: /tmp/proof.png");
 
@@ -1783,25 +1604,10 @@ describe("scheduleRestartSentinelWake", () => {
     });
 
     await expect(
-      deliverQueuedSessionDelivery({
-        deps: {} as never,
-        entry: {
-          id: "session-delivery-media-hidden-aggregate",
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-hidden-aggregate:agent-loop",
-          enqueuedAt: 1,
-          retryCount: 0,
-          route: { channel: "discord", to: "channel:123", chatType: "channel" },
-          inputProvenance: {
-            kind: "inter_session",
-            sourceChannel: "webchat",
-            sourceTool: "image_generate",
-          },
-          sourceReplyDeliveryMode: "automatic",
-          expectedMediaUrls: ["/tmp/proof.png"],
-        },
+      deliverGeneratedMedia({
+        id: "session-delivery-media-hidden-aggregate",
+        messageId: "image:task-hidden-aggregate:agent-loop",
+        expectedMediaUrls: ["/tmp/proof.png"],
       }),
     ).rejects.toThrow("missed expected media: /tmp/proof.png");
 
@@ -1821,25 +1627,10 @@ describe("scheduleRestartSentinelWake", () => {
       },
     });
 
-    await deliverQueuedSessionDelivery({
-      deps: {} as never,
-      entry: {
-        id: "session-delivery-media-suppressed",
-        kind: "agentTurn",
-        sessionKey: "agent:main:main",
-        message: "generated image ready",
-        messageId: "image:task-suppressed:agent-loop",
-        enqueuedAt: 1,
-        retryCount: 0,
-        route: { channel: "discord", to: "channel:123", chatType: "channel" },
-        inputProvenance: {
-          kind: "inter_session",
-          sourceChannel: "webchat",
-          sourceTool: "image_generate",
-        },
-        sourceReplyDeliveryMode: "automatic",
-        expectedMediaUrls: ["/tmp/proof.png"],
-      },
+    await deliverGeneratedMedia({
+      id: "session-delivery-media-suppressed",
+      messageId: "image:task-suppressed:agent-loop",
+      expectedMediaUrls: ["/tmp/proof.png"],
     });
 
     expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
@@ -1855,25 +1646,11 @@ describe("scheduleRestartSentinelWake", () => {
       },
     });
 
-    await deliverQueuedSessionDelivery({
-      deps: {} as never,
-      entry: {
-        id: "session-delivery-notice-suppressed",
-        kind: "agentTurn",
-        sessionKey: "agent:main:main",
-        message: "generation failed",
-        messageId: "image:task-notice-suppressed:agent-loop",
-        enqueuedAt: 1,
-        retryCount: 0,
-        route: { channel: "discord", to: "channel:123", chatType: "channel" },
-        inputProvenance: {
-          kind: "inter_session",
-          sourceChannel: "webchat",
-          sourceTool: "image_generate",
-        },
-        sourceReplyDeliveryMode: "automatic",
-        expectedMediaUrls: [],
-      },
+    await deliverGeneratedMedia({
+      id: "session-delivery-notice-suppressed",
+      message: "generation failed",
+      messageId: "image:task-notice-suppressed:agent-loop",
+      expectedMediaUrls: [],
     });
 
     expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
@@ -1890,25 +1667,11 @@ describe("scheduleRestartSentinelWake", () => {
     });
 
     await expect(
-      deliverQueuedSessionDelivery({
-        deps: {} as never,
-        entry: {
-          id: "session-delivery-media-partial-safe",
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated images ready",
-          messageId: "image:task-partial-safe:agent-loop",
-          enqueuedAt: 1,
-          retryCount: 0,
-          route: { channel: "discord", to: "channel:123", chatType: "channel" },
-          inputProvenance: {
-            kind: "inter_session",
-            sourceChannel: "webchat",
-            sourceTool: "image_generate",
-          },
-          sourceReplyDeliveryMode: "automatic",
-          expectedMediaUrls: ["/tmp/one.png", "/tmp/two.png"],
-        },
+      deliverGeneratedMedia({
+        id: "session-delivery-media-partial-safe",
+        message: "generated images ready",
+        messageId: "image:task-partial-safe:agent-loop",
+        expectedMediaUrls: ["/tmp/one.png", "/tmp/two.png"],
       }),
     ).rejects.toThrow("partially missed expected media: /tmp/two.png");
 
@@ -1943,25 +1706,11 @@ describe("scheduleRestartSentinelWake", () => {
     });
 
     await expect(
-      deliverQueuedSessionDelivery({
-        deps: {} as never,
-        entry: {
-          id: "session-delivery-media-cross-path-partial",
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated images ready",
-          messageId: "image:task-cross-path-partial:agent-loop",
-          enqueuedAt: 1,
-          retryCount: 0,
-          route: { channel: "discord", to: "channel:123", chatType: "channel" },
-          inputProvenance: {
-            kind: "inter_session",
-            sourceChannel: "webchat",
-            sourceTool: "image_generate",
-          },
-          sourceReplyDeliveryMode: "automatic",
-          expectedMediaUrls: ["/tmp/one.png", "/tmp/two.png"],
-        },
+      deliverGeneratedMedia({
+        id: "session-delivery-media-cross-path-partial",
+        message: "generated images ready",
+        messageId: "image:task-cross-path-partial:agent-loop",
+        expectedMediaUrls: ["/tmp/one.png", "/tmp/two.png"],
       }),
     ).rejects.toThrow("missed expected media: /tmp/two.png");
 
@@ -1986,25 +1735,10 @@ describe("scheduleRestartSentinelWake", () => {
     });
 
     await expect(
-      deliverQueuedSessionDelivery({
-        deps: {} as never,
-        entry: {
-          id: "session-delivery-media-caption-ambiguous",
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-caption-ambiguous:agent-loop",
-          enqueuedAt: 1,
-          retryCount: 0,
-          route: { channel: "discord", to: "channel:123", chatType: "channel" },
-          inputProvenance: {
-            kind: "inter_session",
-            sourceChannel: "webchat",
-            sourceTool: "image_generate",
-          },
-          sourceReplyDeliveryMode: "automatic",
-          expectedMediaUrls: ["/tmp/proof.png"],
-        },
+      deliverGeneratedMedia({
+        id: "session-delivery-media-caption-ambiguous",
+        messageId: "image:task-caption-ambiguous:agent-loop",
+        expectedMediaUrls: ["/tmp/proof.png"],
       }),
     ).rejects.toThrow("missed expected media: /tmp/proof.png");
 
@@ -2027,24 +1761,10 @@ describe("scheduleRestartSentinelWake", () => {
     });
 
     await expect(
-      deliverQueuedSessionDelivery({
-        deps: {} as never,
-        entry: {
-          id: "session-delivery-hidden-automatic",
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated images ready",
-          messageId: "image:task-hidden-automatic:agent-loop",
-          enqueuedAt: 1,
-          retryCount: 0,
-          route: { channel: "discord", to: "channel:123", chatType: "channel" },
-          inputProvenance: {
-            kind: "inter_session",
-            sourceChannel: "webchat",
-            sourceTool: "image_generate",
-          },
-          sourceReplyDeliveryMode: "automatic",
-        },
+      deliverGeneratedMedia({
+        id: "session-delivery-hidden-automatic",
+        message: "generated images ready",
+        messageId: "image:task-hidden-automatic:agent-loop",
       }),
     ).rejects.toThrow("completed without a visible reply");
 
@@ -2071,25 +1791,10 @@ describe("scheduleRestartSentinelWake", () => {
     });
 
     await expect(
-      deliverQueuedSessionDelivery({
-        deps: {} as never,
-        entry: {
-          id: "session-delivery-media-text-only",
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-text-only:agent-loop",
-          enqueuedAt: 1,
-          retryCount: 0,
-          route: { channel: "discord", to: "channel:123", chatType: "channel" },
-          inputProvenance: {
-            kind: "inter_session",
-            sourceChannel: "webchat",
-            sourceTool: "image_generate",
-          },
-          sourceReplyDeliveryMode: "automatic",
-          expectedMediaUrls: ["/tmp/proof.png"],
-        },
+      deliverGeneratedMedia({
+        id: "session-delivery-media-text-only",
+        messageId: "image:task-text-only:agent-loop",
+        expectedMediaUrls: ["/tmp/proof.png"],
       }),
     ).rejects.toThrow("missed expected media: /tmp/proof.png");
 
@@ -2110,25 +1815,10 @@ describe("scheduleRestartSentinelWake", () => {
     });
 
     await expect(
-      deliverQueuedSessionDelivery({
-        deps: {} as never,
-        entry: {
-          id: "session-delivery-media-partial-unclassified",
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-partial-unclassified:agent-loop",
-          enqueuedAt: 1,
-          retryCount: 0,
-          route: { channel: "discord", to: "channel:123", chatType: "channel" },
-          inputProvenance: {
-            kind: "inter_session",
-            sourceChannel: "webchat",
-            sourceTool: "image_generate",
-          },
-          sourceReplyDeliveryMode: "automatic",
-          expectedMediaUrls: ["/tmp/proof.png"],
-        },
+      deliverGeneratedMedia({
+        id: "session-delivery-media-partial-unclassified",
+        messageId: "image:task-partial-unclassified:agent-loop",
+        expectedMediaUrls: ["/tmp/proof.png"],
       }),
     ).rejects.toThrow("dead-lettered after ambiguous side effects");
 
@@ -2147,25 +1837,10 @@ describe("scheduleRestartSentinelWake", () => {
     });
 
     await expect(
-      deliverQueuedSessionDelivery({
-        deps: {} as never,
-        entry: {
-          id: "session-delivery-media-truncated",
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-truncated:agent-loop",
-          enqueuedAt: 1,
-          retryCount: 0,
-          route: { channel: "discord", to: "channel:123", chatType: "channel" },
-          inputProvenance: {
-            kind: "inter_session",
-            sourceChannel: "webchat",
-            sourceTool: "image_generate",
-          },
-          sourceReplyDeliveryMode: "automatic",
-          expectedMediaUrls: ["/tmp/proof.png"],
-        },
+      deliverGeneratedMedia({
+        id: "session-delivery-media-truncated",
+        messageId: "image:task-truncated:agent-loop",
+        expectedMediaUrls: ["/tmp/proof.png"],
       }),
     ).rejects.toThrow("dead-lettered after truncated evidence");
 
@@ -2189,25 +1864,11 @@ describe("scheduleRestartSentinelWake", () => {
     });
 
     await expect(
-      deliverQueuedSessionDelivery({
-        deps: {} as never,
-        entry: {
-          id: "session-delivery-media-tool-targets-truncated",
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-tool-targets-truncated:agent-loop",
-          enqueuedAt: 1,
-          retryCount: 0,
-          route: { channel: "discord", to: "channel:123", chatType: "channel" },
-          inputProvenance: {
-            kind: "inter_session",
-            sourceChannel: "webchat",
-            sourceTool: "image_generate",
-          },
-          sourceReplyDeliveryMode: "message_tool_only",
-          expectedMediaUrls: ["/tmp/proof.png"],
-        },
+      deliverGeneratedMedia({
+        id: "session-delivery-media-tool-targets-truncated",
+        messageId: "image:task-tool-targets-truncated:agent-loop",
+        sourceReplyDeliveryMode: "message_tool_only",
+        expectedMediaUrls: ["/tmp/proof.png"],
       }),
     ).rejects.toThrow("dead-lettered after an unexpected committed side effect");
 
@@ -2225,25 +1886,11 @@ describe("scheduleRestartSentinelWake", () => {
     });
 
     await expect(
-      deliverQueuedSessionDelivery({
-        deps: {} as never,
-        entry: {
-          id: "session-delivery-media-tool-aggregate-only",
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-tool-aggregate-only:agent-loop",
-          enqueuedAt: 1,
-          retryCount: 0,
-          route: { channel: "discord", to: "channel:123", chatType: "channel" },
-          inputProvenance: {
-            kind: "inter_session",
-            sourceChannel: "webchat",
-            sourceTool: "image_generate",
-          },
-          sourceReplyDeliveryMode: "message_tool_only",
-          expectedMediaUrls: ["/tmp/proof.png"],
-        },
+      deliverGeneratedMedia({
+        id: "session-delivery-media-tool-aggregate-only",
+        messageId: "image:task-tool-aggregate-only:agent-loop",
+        sourceReplyDeliveryMode: "message_tool_only",
+        expectedMediaUrls: ["/tmp/proof.png"],
       }),
     ).rejects.toThrow("dead-lettered after an unexpected committed side effect");
 
@@ -2268,25 +1915,12 @@ describe("scheduleRestartSentinelWake", () => {
     });
 
     await expect(
-      deliverQueuedSessionDelivery({
-        deps: {} as never,
-        entry: {
-          id: "session-delivery-media-tool-mixed-aggregate",
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated images ready",
-          messageId: "image:task-tool-mixed-aggregate:agent-loop",
-          enqueuedAt: 1,
-          retryCount: 0,
-          route: { channel: "discord", to: "channel:123", chatType: "channel" },
-          inputProvenance: {
-            kind: "inter_session",
-            sourceChannel: "webchat",
-            sourceTool: "image_generate",
-          },
-          sourceReplyDeliveryMode: "message_tool_only",
-          expectedMediaUrls: ["/tmp/one.png", "/tmp/two.png"],
-        },
+      deliverGeneratedMedia({
+        id: "session-delivery-media-tool-mixed-aggregate",
+        message: "generated images ready",
+        messageId: "image:task-tool-mixed-aggregate:agent-loop",
+        sourceReplyDeliveryMode: "message_tool_only",
+        expectedMediaUrls: ["/tmp/one.png", "/tmp/two.png"],
       }),
     ).rejects.toThrow("dead-lettered after an unexpected committed side effect");
 
@@ -2310,25 +1944,11 @@ describe("scheduleRestartSentinelWake", () => {
     });
 
     await expect(
-      deliverQueuedSessionDelivery({
-        deps: {} as never,
-        entry: {
-          id: "session-delivery-media-wrong-target",
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-wrong-target:agent-loop",
-          enqueuedAt: 1,
-          retryCount: 0,
-          route: { channel: "discord", to: "channel:123", chatType: "channel" },
-          inputProvenance: {
-            kind: "inter_session",
-            sourceChannel: "webchat",
-            sourceTool: "image_generate",
-          },
-          sourceReplyDeliveryMode: "message_tool_only",
-          expectedMediaUrls: ["/tmp/proof.png"],
-        },
+      deliverGeneratedMedia({
+        id: "session-delivery-media-wrong-target",
+        messageId: "image:task-wrong-target:agent-loop",
+        sourceReplyDeliveryMode: "message_tool_only",
+        expectedMediaUrls: ["/tmp/proof.png"],
       }),
     ).rejects.toThrow("dead-lettered after an unexpected committed side effect");
 
@@ -2346,25 +1966,10 @@ describe("scheduleRestartSentinelWake", () => {
     });
 
     await expect(
-      deliverQueuedSessionDelivery({
-        deps: {} as never,
-        entry: {
-          id: "session-delivery-unsafe-side-effect",
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-unsafe-side-effect:agent-loop",
-          enqueuedAt: 1,
-          retryCount: 0,
-          route: { channel: "discord", to: "channel:123", chatType: "channel" },
-          inputProvenance: {
-            kind: "inter_session",
-            sourceChannel: "webchat",
-            sourceTool: "image_generate",
-          },
-          sourceReplyDeliveryMode: "automatic",
-          expectedMediaUrls: ["/tmp/proof.png"],
-        },
+      deliverGeneratedMedia({
+        id: "session-delivery-unsafe-side-effect",
+        messageId: "image:task-unsafe-side-effect:agent-loop",
+        expectedMediaUrls: ["/tmp/proof.png"],
       }),
     ).rejects.toThrow("dead-lettered after an unexpected committed side effect");
 
@@ -2386,25 +1991,11 @@ describe("scheduleRestartSentinelWake", () => {
     });
 
     await expect(
-      deliverQueuedSessionDelivery({
-        deps: {} as never,
-        entry: {
-          id: "session-delivery-media-partial",
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated images ready",
-          messageId: "image:task-partial:agent-loop",
-          enqueuedAt: 1,
-          retryCount: 0,
-          route: { channel: "discord", to: "channel:123", chatType: "channel" },
-          inputProvenance: {
-            kind: "inter_session",
-            sourceChannel: "webchat",
-            sourceTool: "image_generate",
-          },
-          sourceReplyDeliveryMode: "automatic",
-          expectedMediaUrls: ["/tmp/one.png", "/tmp/two.png"],
-        },
+      deliverGeneratedMedia({
+        id: "session-delivery-media-partial",
+        message: "generated images ready",
+        messageId: "image:task-partial:agent-loop",
+        expectedMediaUrls: ["/tmp/one.png", "/tmp/two.png"],
       }),
     ).rejects.toThrow("dead-lettered after ambiguous side effects");
 
@@ -2500,22 +2091,13 @@ describe("scheduleRestartSentinelWake", () => {
       storeKeys: ["agent:main:main"],
       legacyKey: undefined,
     };
-    mocks.readRestartSentinel.mockResolvedValue({
-      payload: {
-        sessionKey: "agent:main:main",
-        deliveryContext: {
-          channel: "whatsapp",
-          to: "+15550002",
-          accountId: "acct-2",
-        },
-        threadId: "thread-42",
-        ts: 123,
-        continuation: {
-          kind: "agentTurn",
-          message: "continue after restart",
-        },
+    mockRestartContinuation(
+      {
+        kind: "agentTurn",
+        message: "continue after restart",
       },
-    } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+      "thread-42",
+    );
     mocks.loadSessionEntry.mockReturnValueOnce(activeEntry).mockReturnValue(replacementEntry);
 
     await scheduleRestartSentinelWake({ deps: {} as never });
@@ -2546,22 +2128,13 @@ describe("scheduleRestartSentinelWake", () => {
   });
 
   it("still delivers systemEvent continuations for completed run entries", async () => {
-    mocks.readRestartSentinel.mockResolvedValue({
-      payload: {
-        sessionKey: "agent:main:main",
-        deliveryContext: {
-          channel: "whatsapp",
-          to: "+15550002",
-          accountId: "acct-2",
-        },
-        threadId: "thread-42",
-        ts: 123,
-        continuation: {
-          kind: "systemEvent",
-          text: "continue after restart",
-        },
+    mockRestartContinuation(
+      {
+        kind: "systemEvent",
+        text: "continue after restart",
       },
-    } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+      "thread-42",
+    );
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
       entry: {
@@ -2738,22 +2311,13 @@ describe("scheduleRestartSentinelWake", () => {
         }),
       },
     });
-    mocks.readRestartSentinel.mockResolvedValue({
-      payload: {
-        sessionKey: "agent:main:main",
-        deliveryContext: {
-          channel: "whatsapp",
-          to: "+15550002",
-          accountId: "acct-2",
-        },
-        threadId: "thread-42",
-        ts: 123,
-        continuation: {
-          kind: "agentTurn",
-          message: "continue",
-        },
+    mockRestartContinuation(
+      {
+        kind: "agentTurn",
+        message: "continue",
       },
-    } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+      "thread-42",
+    );
     mocks.recordInboundSessionAndDispatchReply.mockImplementationOnce(async (params) => {
       await params.deliver({
         text: "done",
@@ -2815,22 +2379,13 @@ describe("scheduleRestartSentinelWake", () => {
   });
 
   it("requests another wake after enqueueing a systemEvent continuation", async () => {
-    mocks.readRestartSentinel.mockResolvedValue({
-      payload: {
-        sessionKey: "agent:main:main",
-        deliveryContext: {
-          channel: "whatsapp",
-          to: "+15550002",
-          accountId: "acct-2",
-        },
-        threadId: "thread-42",
-        ts: 123,
-        continuation: {
-          kind: "systemEvent",
-          text: "continue after restart",
-        },
+    mockRestartContinuation(
+      {
+        kind: "systemEvent",
+        text: "continue after restart",
       },
-    } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+      "thread-42",
+    );
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
@@ -2858,22 +2413,13 @@ describe("scheduleRestartSentinelWake", () => {
   });
 
   it("enqueues systemEvent continuation without stale partial delivery context", async () => {
-    mocks.readRestartSentinel.mockResolvedValue({
-      payload: {
-        sessionKey: "agent:main:main",
-        deliveryContext: {
-          channel: "whatsapp",
-          to: "+15550002",
-          accountId: "acct-2",
-        },
-        threadId: "thread-42",
-        ts: 123,
-        continuation: {
-          kind: "systemEvent",
-          text: "continue after restart",
-        },
+    mockRestartContinuation(
+      {
+        kind: "systemEvent",
+        text: "continue after restart",
       },
-    } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+      "thread-42",
+    );
     mocks.resolveOutboundTarget.mockReturnValueOnce({
       ok: false,
       error: new Error("missing route"),
@@ -2893,21 +2439,10 @@ describe("scheduleRestartSentinelWake", () => {
   });
 
   it("logs and continues when continuation delivery fails", async () => {
-    mocks.readRestartSentinel.mockResolvedValue({
-      payload: {
-        sessionKey: "agent:main:main",
-        deliveryContext: {
-          channel: "whatsapp",
-          to: "+15550002",
-          accountId: "acct-2",
-        },
-        ts: 123,
-        continuation: {
-          kind: "agentTurn",
-          message: "continue",
-        },
-      },
-    } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+    mockRestartContinuation({
+      kind: "agentTurn",
+      message: "continue",
+    });
     mocks.recordInboundSessionAndDispatchReply.mockRejectedValueOnce(new Error("dispatch failed"));
 
     await scheduleRestartSentinelWake({ deps: {} as never });
@@ -2919,21 +2454,10 @@ describe("scheduleRestartSentinelWake", () => {
   });
 
   it("logs and continues when continuation dispatch reports a delivery error", async () => {
-    mocks.readRestartSentinel.mockResolvedValue({
-      payload: {
-        sessionKey: "agent:main:main",
-        deliveryContext: {
-          channel: "whatsapp",
-          to: "+15550002",
-          accountId: "acct-2",
-        },
-        ts: 123,
-        continuation: {
-          kind: "agentTurn",
-          message: "continue",
-        },
-      },
-    } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+    mockRestartContinuation({
+      kind: "agentTurn",
+      message: "continue",
+    });
     mocks.recordInboundSessionAndDispatchReply.mockImplementationOnce(
       async (params: { onDispatchError: (err: unknown, info: { kind: string }) => void }) => {
         params.onDispatchError(new Error("route failed"), { kind: "final" });
@@ -3025,21 +2549,10 @@ describe("scheduleRestartSentinelWake", () => {
   });
 
   it("falls back to a session wake when restart routing cannot resolve a destination", async () => {
-    mocks.readRestartSentinel.mockResolvedValue({
-      payload: {
-        sessionKey: "agent:main:main",
-        deliveryContext: {
-          channel: "whatsapp",
-          to: "+15550002",
-          accountId: "acct-2",
-        },
-        ts: 123,
-        continuation: {
-          kind: "agentTurn",
-          message: "continue",
-        },
-      },
-    } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+    mockRestartContinuation({
+      kind: "agentTurn",
+      message: "continue",
+    });
     mocks.resolveOutboundTarget.mockReturnValueOnce({
       ok: false,
       error: new Error("missing route"),
@@ -3057,21 +2570,10 @@ describe("scheduleRestartSentinelWake", () => {
   });
 
   it("keeps the sentinel file when durable continuation handoff fails", async () => {
-    mocks.readRestartSentinel.mockResolvedValue({
-      payload: {
-        sessionKey: "agent:main:main",
-        deliveryContext: {
-          channel: "whatsapp",
-          to: "+15550002",
-          accountId: "acct-2",
-        },
-        ts: 123,
-        continuation: {
-          kind: "agentTurn",
-          message: "continue",
-        },
-      },
-    } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+    mockRestartContinuation({
+      kind: "agentTurn",
+      message: "continue",
+    });
     mocks.enqueueSessionDelivery.mockRejectedValueOnce(new Error("queue write failed"));
 
     await scheduleRestartSentinelWake({ deps: {} as never });

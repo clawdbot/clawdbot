@@ -123,7 +123,9 @@ export {
   clearPluginOwnedSessionState,
   listSessionEntries,
   listSessionEntriesReadOnly,
+  listSessionEntryKeysReadOnly,
   loadExactSessionEntry,
+  loadExactSessionEntryReadOnly,
   loadSessionEntry,
   loadSessionEntryReadOnly,
   openSessionEntryReadView,
@@ -135,6 +137,7 @@ export {
   replaceSessionEntrySync,
   resolveSessionEntryAccessTarget,
   resolveSessionEntryCandidateTarget,
+  resolveSessionEntrySelection,
   updateResolvedSessionEntry,
   upsertSessionEntry,
 } from "./session-accessor.entry.js";
@@ -201,7 +204,10 @@ export {
   withTranscriptWriteLock,
   withTranscriptWriteTransaction,
 } from "./session-accessor.transcript.js";
-export { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn.js";
+export {
+  appendTranscriptMessages,
+  persistSessionTranscriptTurn,
+} from "./session-accessor.transcript-turn.js";
 export {
   isSessionTranscriptProjectionUnavailableError,
   readRecentSessionTranscriptMessageEvents,
@@ -213,6 +219,7 @@ export {
   readSessionTranscriptMessageEvents,
   readSessionTranscriptVisibleMessageDelta,
   SessionTranscriptProjectionUnavailableError,
+  waitForSessionTranscriptProjection,
 } from "./session-accessor.sqlite-active-events.js";
 export type {
   SessionTranscriptMessageAnchorPage,

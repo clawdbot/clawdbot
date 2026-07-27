@@ -11,10 +11,12 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
   saveAuthProfileStore,
 } from "../auth-profiles.js";
-import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "../plugin-model-catalog.js";
+import {
+  encodePluginModelCatalogRelativePath,
+  PLUGIN_MODEL_CATALOG_GENERATED_BY,
+  replacePersistedPluginModelCatalogs,
+} from "../plugin-model-catalog.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
-
-const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";
 
 const resolveBundledStaticCatalogModelMock = vi.hoisted(() => vi.fn());
 const resolveBundledProviderStaticCatalogModelMock = vi.hoisted(() => vi.fn());
@@ -536,15 +538,15 @@ describe("resolveModel", () => {
     const first = await resolveModelAsync("zai", "glm-5.1", agentDir, undefined, {
       runtimeHooks: createRuntimeHooks(),
     });
-    const catalogPath = path.join(agentDir, "plugins", "zai", PLUGIN_MODEL_CATALOG_FILE);
-    fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
-    fs.writeFileSync(
-      catalogPath,
-      JSON.stringify({
-        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-        providers: {},
-      }),
-    );
+    replacePersistedPluginModelCatalogs({
+      agentDir,
+      pluginCatalogWrites: {
+        [encodePluginModelCatalogRelativePath("zai")]: JSON.stringify({
+          generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+          providers: {},
+        }),
+      },
+    });
     const second = await resolveModelAsync("zai", "glm-5.1", agentDir, undefined, {
       runtimeHooks: createRuntimeHooks(),
     });
@@ -1499,7 +1501,7 @@ describe("resolveModel", () => {
     expect(model.baseUrl).toBe("https://aiplatform.googleapis.com");
   });
 
-  it("uses bundled static metadata for configured provider fallback token limits", () => {
+  it("clamps inherited fallback maxTokens to the configured context window", () => {
     resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
       provider: "xiaomi-token-plan",
       id: "mimo-v2.5-pro",
@@ -1518,6 +1520,7 @@ describe("resolveModel", () => {
           "xiaomi-token-plan": {
             baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
             api: "openai-completions",
+            contextWindow: 16_000,
             models: [],
           },
         },
@@ -1529,8 +1532,8 @@ describe("resolveModel", () => {
 
     expect(model.name).toBe("Xiaomi MiMo V2.5 Pro");
     expect(model.baseUrl).toBe("https://token-plan-sgp.xiaomimimo.com/v1");
-    expect(model.contextWindow).toBe(1_048_576);
-    expect(model.maxTokens).toBe(32_000);
+    expect(model.contextWindow).toBe(16_000);
+    expect(model.maxTokens).toBe(16_000);
     expectRecordFields(model, { maxTokensSource: "discovered" });
     expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
       provider: "xiaomi-token-plan",

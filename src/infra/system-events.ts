@@ -8,7 +8,6 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
-import { sanitizeInboundSystemTags } from "../security/system-tags.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import {
   mergeDeliveryContext,
@@ -111,9 +110,7 @@ export function enqueueSystemEventEntry(
   }
   const key = requireSessionKey(options.sessionKey);
   const entry = getOrCreateSessionQueue(key);
-  // These entries are rendered as `System:` lines, so strip nested system-marker
-  // spoofs at the queue boundary before any plugin/channel text reaches a prompt.
-  const cleaned = sanitizeInboundSystemTags(text).trim();
+  const cleaned = text.trim();
   if (!cleaned) {
     return null;
   }
@@ -168,7 +165,7 @@ function areDeliveryContextsEqual(left?: DeliveryContext, right?: DeliveryContex
 function replaceSystemEventEntry(text: string, options: SystemEventOptions): SystemEvent | null {
   const key = requireSessionKey(options.sessionKey);
   const entry = getOrCreateSessionQueue(key);
-  const cleaned = sanitizeInboundSystemTags(text).trim();
+  const cleaned = text.trim();
   if (!cleaned) {
     return null;
   }

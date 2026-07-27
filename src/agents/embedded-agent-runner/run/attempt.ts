@@ -209,6 +209,7 @@ export async function runEmbeddedAttempt(
       computerContextEpoch,
       localModelLeanEnabled,
       replaySafetyOptions,
+      toolSearchControlsEnabledForRun,
       toolSearchRuntimeConfig,
       toolsEnabled,
       toolsRaw,
@@ -286,7 +287,6 @@ export async function runEmbeddedAttempt(
       bootstrap: preparedBootstrap,
       capabilityToolNames: toolSearchRunPlan.capabilityToolNames,
       defaultAgentId,
-      deferredDirectoryToolsCallable,
       effectiveCwd,
       effectiveTools,
       effectiveWorkspace,
@@ -299,6 +299,8 @@ export async function runEmbeddedAttempt(
       sessionAgentId,
       skillsPrompt,
       toolSearchCatalogRef,
+      toolSearchDirectoryEnabled: toolSearchControlsEnabledForRun && toolSearch.catalogRegistered,
+      toolSearchRuntimeConfig,
     });
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     const {

@@ -20,9 +20,10 @@ import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtim
 import {
   DEFAULT_ACCOUNT_ID,
   getAccountConfig,
-  listAccountIds,
   resolveDefaultTwitchAccountId,
   resolveTwitchAccountContext,
+  twitchConfigAdapter,
+  type ResolvedTwitchAccount,
 } from "./config.js";
 import type { TwitchAccountConfig, TwitchRole } from "./types.js";
 import { isAccountConfigured } from "./utils/twitch.js";
@@ -493,38 +494,13 @@ export const twitchSetupWizard: ChannelSetupWizard = {
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };
 
-type ResolvedTwitchAccount = TwitchAccountConfig & { accountId?: string | null };
-
 export const twitchSetupPlugin: ChannelPlugin<ResolvedTwitchAccount> = {
   id: channel,
   meta: getChatChannelMeta(channel),
   capabilities: {
     chatTypes: ["group"],
   },
-  config: {
-    listAccountIds: (cfg) => listAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => {
-      const resolvedAccountId = normalizeAccountId(accountId ?? resolveDefaultTwitchAccountId(cfg));
-      const account = getAccountConfig(cfg, resolvedAccountId);
-      if (!account) {
-        return {
-          accountId: resolvedAccountId,
-          username: "",
-          accessToken: "",
-          clientId: "",
-          channel: "",
-          enabled: false,
-        };
-      }
-      return {
-        accountId: resolvedAccountId,
-        ...account,
-      };
-    },
-    defaultAccountId: (cfg) => resolveDefaultTwitchAccountId(cfg),
-    isConfigured: (account, cfg) => resolveTwitchAccountContext(cfg, account?.accountId).configured,
-    isEnabled: (account) => account.enabled !== false,
-  },
+  config: twitchConfigAdapter,
   setup: twitchSetupAdapter,
   setupContract: twitchSetupContract,
   setupWizard: twitchSetupWizard,

@@ -96,6 +96,7 @@ const writeDiagnosticStabilityBundleForFailureSync = vi.fn((_reason: string, _er
   path: "/tmp/openclaw-stability.json",
 }));
 const bootLifecycle = vi.hoisted(() => ({
+  manualChannelStartHint: `Start a channel manually with: openclaw gateway call channels.start --params '{"channel":"<id>"}'`,
   decisions: [] as Array<{
     tripped: boolean;
     uncleanBoots: number;
@@ -297,6 +298,7 @@ vi.mock("../../logging/diagnostic-stability-bundle.js", () => ({
 
 vi.mock("../../infra/gateway-boot-lifecycle.js", () => ({
   GATEWAY_CRASH_LOOP_BREAKER_REASON: "gateway.crash_loop_breaker",
+  formatGatewayCrashLoopManualChannelStartHint: () => bootLifecycle.manualChannelStartHint,
   GATEWAY_CRASH_LOOP_RECOVERED_REASON: "gateway.crash_loop_recovered",
   inspectGatewayCrashLoopBreaker: (env?: NodeJS.ProcessEnv, nowMs?: number) =>
     bootLifecycle.inspect(env, nowMs),
@@ -449,7 +451,7 @@ describe("gateway run option collisions", () => {
     return callArg(startGatewayServer, index, 1) as {
       auth?: { mode?: string; token?: string; password?: string };
       bind?: string;
-      channelAutostartSuppression?: { reason?: string };
+      channelAutostartSuppression?: { reason?: string; message?: string };
       ambientEnvTriggers?: "allow" | "suppress";
       startupConfigSnapshotRead?: { snapshot?: Record<string, unknown> };
       startupStartedAt?: number;
@@ -1570,6 +1572,9 @@ describe("gateway run option collisions", () => {
     expect(gatewayStartOptions(0).channelAutostartSuppression).toMatchObject({
       reason: "crash-loop-breaker",
     });
+    expect(gatewayStartOptions(0).channelAutostartSuppression?.message).toContain(
+      bootLifecycle.manualChannelStartHint,
+    );
     expect(gatewayStartOptions(1).channelAutostartSuppression).toBeUndefined();
     expect(gatewayLogMessages.some((message) => message.includes("breaker recovered"))).toBe(true);
   });

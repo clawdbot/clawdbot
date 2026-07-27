@@ -436,6 +436,105 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it.each(["add", "remove"] as const)(
+    "does not apply a stale on-exit watcher snapshot after a concurrent %s",
+    async (mutation) => {
+      const runDone = createDeferred<{
+        reason: "manual-cancel";
+        exitCode: null;
+        exitSignal: null;
+        durationMs: number;
+        stdout: string;
+        stderr: string;
+        timedOut: false;
+        noOutputTimedOut: false;
+      }>();
+      const cancel = vi.fn(() =>
+        runDone.resolve({
+          reason: "manual-cancel",
+          exitCode: null,
+          exitSignal: null,
+          durationMs: 1,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        }),
+      );
+      const cancelScope = vi.fn();
+      const spawn = vi.fn(async () => ({
+        runId: `run-on-exit-${mutation}-race`,
+        startedAtMs: Date.now(),
+        cancel,
+        wait: () => runDone.promise,
+      }));
+      getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope });
+      const cfg = createCronConfig(`server-cron-on-exit-${mutation}-race`);
+      loadConfigMock.mockReturnValue(cfg);
+      const state = buildGatewayCronService({
+        cfg,
+        deps: {} as CliDeps,
+        broadcast: () => {},
+      });
+      const captured = createDeferred();
+      const release = createDeferred();
+
+      try {
+        const addJob = async () =>
+          await state.cron.add({
+            name: "Watch concurrent mutation",
+            enabled: true,
+            schedule: { kind: "on-exit", command: "sleep 60" },
+            payload: { kind: "systemEvent", text: "done" },
+            sessionTarget: "main",
+            wakeMode: "next-heartbeat",
+          });
+        const existing = mutation === "remove" ? await addJob() : undefined;
+        if (existing) {
+          await state.reconcileExitWatchers?.();
+          await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+        }
+
+        const originalList = state.cron.list.bind(state.cron);
+        let gateNextList = true;
+        state.cron.list = async (options?: Parameters<typeof originalList>[0]) => {
+          if (!gateNextList) {
+            return await originalList(options);
+          }
+          gateNextList = false;
+          const snapshot = await originalList(options);
+          captured.resolve();
+          await release.promise;
+          return snapshot;
+        };
+
+        const staleReconciliation = state.reconcileExitWatchers?.();
+        await captured.promise;
+        if (mutation === "remove") {
+          if (!existing) {
+            throw new Error("expected an existing exit-watcher job");
+          }
+          await state.cron.remove(existing.id);
+          await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+        } else {
+          await addJob();
+          await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+        }
+        release.resolve();
+        await staleReconciliation;
+
+        expect(spawn).toHaveBeenCalledOnce();
+        if (mutation === "add") {
+          expect(cancel).not.toHaveBeenCalled();
+          expect(cancelScope).not.toHaveBeenCalled();
+        }
+      } finally {
+        release.resolve();
+        state.cron.stop();
+      }
+    },
+  );
+
   it("fires an on-exit payload after persisting its terminal disable", async () => {
     let resolveWait!: (result: {
       reason: "exit";
@@ -1582,7 +1681,11 @@ describe("buildGatewayCronService", () => {
       notify: "queue changed",
       stateChanged: false,
     });
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({ release: vi.fn() });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(null, { status: 204 }),
+      finalUrl: "https://example.invalid/cron",
+      release: vi.fn(async () => {}),
+    });
 
     const state = buildGatewayCronService({
       cfg,

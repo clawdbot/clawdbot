@@ -9,10 +9,7 @@ import {
   CODE_MODE_WAIT_TOOL_NAME,
   createCodeModeTools,
 } from "../../code-mode.js";
-import {
-  filterLocalModelLeanTools,
-  shouldCatalogToolForLocalModelLean,
-} from "../../local-model-lean.js";
+import { filterLocalModelLeanTools } from "../../local-model-lean.js";
 import { logAgentRuntimeToolDiagnostics } from "../../runtime-plan/tools.js";
 import { buildEmptyExplicitToolAllowlistError } from "../../tool-allowlist-guard.js";
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
@@ -20,7 +17,6 @@ import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js"
 import {
   applyToolSchemaDirectoryCatalog,
   applyToolSearchCatalog,
-  estimateToolSchemaDirectoryToolNames,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
@@ -55,7 +51,6 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
   const { attempt, preparedToolBase } = input;
   const {
     codeModeControlsEnabledForRun,
-    localModelLeanEnabled,
     localModelLeanPreserveToolNames,
     runtimeCapabilityProfile,
     toolSearchConfig,
@@ -96,28 +91,9 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
         executeTool: input.executeCodeModeTool,
       })
     : [];
-  const directoryRequiredToolNames =
-    attempt.forceMessageTool === true || attempt.sourceReplyDeliveryMode === "message_tool_only"
-      ? ["message"]
-      : [];
-  const directoryHydratedToolNames =
-    toolSearchControlsEnabledForRun && toolSearchConfig.mode === "directory"
-      ? (() => {
-          try {
-            return estimateToolSchemaDirectoryToolNames({
-              tools: effectiveTools,
-              query: attempt.prompt,
-              maxTools: 4,
-              requiredToolNames: directoryRequiredToolNames,
-            });
-          } catch (err) {
-            log.warn(
-              `tool-search: directory schema estimation failed; continuing with deferred schemas only (${String(err)})`,
-            );
-            return directoryRequiredToolNames;
-          }
-        })()
-      : [];
+  // When the message tool is the only reply path it must stay directly visible
+  // in every search mode; a hidden delivery tool can leave the run mute.
+  const requiredDirectToolNames = preparedToolBase.forceDirectMessageTool ? ["message"] : [];
   const toolSearch = codeModeControlsEnabledForRun
     ? applyCodeModeCatalog({
         tools: [...codeModeTools, ...effectiveTools],
@@ -139,7 +115,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
           runId: attempt.runId,
           catalogRef: preparedToolBase.toolSearchCatalogRef,
           toolHookContext: catalogToolHookContext,
-          hydrateToolNames: directoryHydratedToolNames,
+          directToolNames: requiredDirectToolNames,
         })
       : applyToolSearchCatalog({
           tools: effectiveTools,
@@ -150,10 +126,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
           runId: attempt.runId,
           catalogRef: preparedToolBase.toolSearchCatalogRef,
           toolHookContext: catalogToolHookContext,
-          shouldCatalogTool:
-            localModelLeanEnabled && toolSearchConfig.mode === "tools"
-              ? shouldCatalogToolForLocalModelLean
-              : undefined,
+          directToolNames: requiredDirectToolNames,
         });
   const projectedToolSearchTools = filterLocalModelLeanTools({
     tools: toolSearch.tools,

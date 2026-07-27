@@ -107,6 +107,8 @@ describeControlUiE2e("Control UI attributed chat identity", () => {
     const userGroups = page.locator(".chat-group.user");
     await expect(userGroups).toHaveCount(2);
     await expect(page.locator(".chat-avatar.user")).toHaveCount(2);
+    await expect(page.locator(".chat-avatar.user")).toHaveText(["R", "C"]);
+    await expect(page.locator(".sidebar-identity-card openclaw-viewer-avatar")).toContainText("R");
 
     await expect(
       page.locator(".chat-group-footer--persistent-identity .chat-sender-name"),

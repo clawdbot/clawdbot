@@ -241,6 +241,22 @@ describe("openrouter music generation provider", () => {
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects streamed audio with non-canonical base64 pad bits", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: sseResponse(sseResponseLines({ audio: "ZE==", done: true })),
+      release: vi.fn(async () => {}),
+    });
+
+    await expect(
+      buildOpenRouterMusicGenerationProvider().generateMusic({
+        provider: "openrouter",
+        model: "",
+        prompt: "short track",
+        cfg: {},
+      }),
+    ).rejects.toThrow("OpenRouter music generation returned malformed base64 audio data");
+  });
+
   it("decodes independently padded OpenRouter audio chunks", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: sseResponse([

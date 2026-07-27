@@ -201,6 +201,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         authProfileId: resolvedStartupAuthProfileId,
         authProfileStore: params.authProfileStore,
         agentDir,
+        ...(pluginConfig.appServer?.homeScope
+          ? { homeScope: pluginConfig.appServer.homeScope }
+          : {}),
         config: params.config,
         subscriptionProfileRequiredError:
           "Prepared Codex subscription route requires a forwarded OpenAI OAuth or token profile.",

@@ -1,4 +1,5 @@
 import { nothing, type ReactiveController, type ReactiveControllerHost } from "lit";
+import type { AgentIdentityResult } from "../api/types.ts";
 import {
   cancelRoutePreload,
   scheduleRoutePreload,
@@ -102,7 +103,10 @@ export interface SidebarMenusControllerHost
     activeId: string;
     agent: SidebarMenuAgent | undefined;
     agents: readonly SidebarMenuAgent[];
+    identity: AgentIdentityResult | null;
+    identities: ReadonlyMap<string, AgentIdentityResult>;
   };
+  ensureAgentIdentities(agentIds: readonly string[]): void;
   agentUnreadCount(agentId: string): number;
   askAgentCapabilities(agentId: string): void;
   getRouteSessionKey(): string;

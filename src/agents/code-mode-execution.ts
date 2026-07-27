@@ -56,7 +56,9 @@ export async function runExec(params: {
     params.ctx.runtimeConfig ?? params.ctx.config,
     params.ctx.agentId,
   );
-  if (!config.enabled) {
+  // The exec/wait tools only exist when the run gate engaged code mode, so
+  // "auto" counts as enabled here; only a hard `false` rejects execution.
+  if (config.enabled === false) {
     throw new ToolInputError("code mode is disabled.");
   }
   const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config));

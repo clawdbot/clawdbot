@@ -7,6 +7,7 @@ export const INTERNAL_SESSION_PATH_PARAM = "__openclawSessionPath";
 const APP_ROUTE_DEFINITIONS = {
   chat: { path: "/chat" },
   dashboard: { path: "/dashboard" },
+  dashboards: { path: "/dashboards" },
   custodian: { path: "/custodian" },
   "new-session": { path: "/new" },
   activity: { path: "/activity" },
@@ -24,6 +25,7 @@ const APP_ROUTE_DEFINITIONS = {
   approvals: { path: "/settings/approvals" },
   automation: { path: "/settings/automation", aliases: ["/automation"] },
   mcp: { path: "/settings/mcp", aliases: ["/mcp"] },
+  memory: { path: "/settings/memory" },
   infrastructure: { path: "/settings/infrastructure", aliases: ["/infrastructure"] },
   labs: { path: "/settings/labs" },
   about: { path: "/settings/about" },

@@ -208,7 +208,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["sessions"],
     exact: true,
-    policy: { ensureCliPath: false, networkProxy: "bypass" },
+    policy: { ensureCliPath: false, ownsProtocolStdout: true, networkProxy: "bypass" },
     route: { id: "sessions" },
   },
   {
@@ -225,6 +225,17 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     // metadata, so the route should not preload bundled plugin runtimes.
     policy: { loadPlugins: "never", networkProxy: "bypass" },
     route: { id: "agents-list" },
+  },
+  {
+    commandPath: ["config", "file"],
+    exact: true,
+    // A path query must work before config validation and must not initialize state.
+    policy: {
+      bypassConfigGuard: true,
+      ensureCliPath: false,
+      loadPlugins: "never",
+      networkProxy: "bypass",
+    },
   },
   {
     commandPath: ["config", "get"],

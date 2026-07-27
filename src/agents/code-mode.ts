@@ -22,6 +22,7 @@ import { createHeadlessAbortScope, runCodeModeScriptHeadless } from "./code-mode
 import { describeCodeModeNamespacesForPrompt } from "./code-mode-namespaces.js";
 import {
   codeModeRuntimeTesting,
+  isCodeModeEngagedForModel,
   readCode,
   readRunId,
   resolveCodeModeConfig,
@@ -58,6 +59,7 @@ export { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME };
 export {
   CodeModeHeadlessAbortError,
   CodeModeHeadlessTimeoutError,
+  isCodeModeEngagedForModel,
   runCodeModeScriptHeadless,
   resolveCodeModeConfig,
 };
@@ -148,6 +150,8 @@ function createCodeModeExecDescription(
     mcpGuidance +
     swarmGuidance +
     ' The `language` field accepts only "javascript" or "typescript"; do not pass "bash", "shell", or other values.' +
+    " Both `code` and `command` contain JavaScript or TypeScript, never a shell command. " +
+    "For shell or file operations, call the exact catalog tool from guest JavaScript; do not retry failed shell source." +
     (namespacePrompt ? `\n\n${namespacePrompt}` : "") +
     (catalogIndex ? `\n\n${catalogIndex}` : "")
   );
@@ -167,7 +171,8 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       ),
       command: Type.Optional(
         Type.String({
-          description: "Alias for code, provided for exec-compatible hook policies.",
+          description:
+            "Alias for JavaScript or TypeScript code, provided for exec-compatible hook policies. Not a shell command.",
         }),
       ),
       language: optionalStringEnum(["javascript", "typescript"] as const, {
@@ -248,7 +253,9 @@ export function applyCodeModeCatalog(params: {
   toolHookContext?: HookContext;
 }) {
   const config = resolveCodeModeConfig(params.config, params.agentId);
-  if (!config.enabled) {
+  // Engagement (including "auto" per-model resolution) is decided by the run
+  // gates before this is called; only a hard `false` may disable compaction.
+  if (config.enabled === false) {
     return applyToolCatalogCompaction({
       ...params,
       enabled: false,
@@ -306,7 +313,8 @@ export function addClientToolsToCodeModeCatalog(params: {
 }) {
   return addClientToolsToToolCatalog({
     ...params,
-    enabled: resolveCodeModeConfig(params.config, params.agentId).enabled,
+    // Callers gate on run engagement; "auto" counts as enabled here.
+    enabled: resolveCodeModeConfig(params.config, params.agentId).enabled !== false,
   });
 }
 

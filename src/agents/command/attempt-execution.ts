@@ -156,6 +156,7 @@ type PersistTextTurnTranscriptParams = {
   sessionCwd: string;
   config: OpenClawConfig;
   embeddedAssistantGapFill?: boolean;
+  skipAssistantTurn?: boolean;
   assistant: {
     api: string;
     provider: string;
@@ -274,7 +275,7 @@ async function persistTextTurnTranscript(
   params: PersistTextTurnTranscriptParams,
 ): Promise<PersistTextTurnTranscriptResult> {
   const promptText = params.transcriptBody ?? params.body;
-  const replyText = params.finalText;
+  const replyText = params.skipAssistantTurn === true ? "" : params.finalText;
   const userMessage =
     params.userMessage ??
     (promptText
@@ -416,6 +417,7 @@ export async function persistCliTurnTranscript(params: {
   config: OpenClawConfig;
   embeddedAssistantGapFill?: boolean;
   skipUserTurn?: boolean;
+  skipAssistantTurn?: boolean;
 }): Promise<PersistTextTurnTranscriptResult> {
   const replyText = resolveCliTranscriptReplyText(params.result);
   const provider = params.result.meta.agentMeta?.provider?.trim() ?? "cli";
@@ -445,6 +447,7 @@ export async function persistCliTurnTranscript(params: {
       model,
       usage: params.result.meta.agentMeta?.usage,
     },
+    skipAssistantTurn: params.skipAssistantTurn,
   });
 }
 
@@ -714,16 +717,15 @@ export function runAgentAttempt(params: {
       activeCliSessionBinding = cliSessionBinding,
     ) => {
       const forkCliSessionOnResume = activeCliSessionBinding?.forkNextResume === true;
-      if (
-        forkCliSessionOnResume &&
-        !resolveCliBackendConfig(cliExecutionProvider, params.cfg, {
-          agentId: params.sessionAgentId,
-        })?.config.forkArg
-      ) {
+      const resolvedCliBackend = resolveCliBackendConfig(cliExecutionProvider, params.cfg, {
+        agentId: params.sessionAgentId,
+      });
+      const supportsCliSessionFork = Boolean(resolvedCliBackend?.config.forkArg);
+      if (forkCliSessionOnResume && !supportsCliSessionFork) {
         throw new Error(`CLI backend "${cliExecutionProvider}" does not support session forks`);
       }
       const forkStoreParams =
-        forkCliSessionOnResume && nextCliSessionId && mutableCliSessionStore
+        supportsCliSessionFork && nextCliSessionId && mutableCliSessionStore
           ? {
               provider: cliExecutionProvider,
               expectedCliSessionId: nextCliSessionId,
@@ -839,9 +841,9 @@ export function runAgentAttempt(params: {
             suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
             disableTools,
             allowEmptyAssistantReplyAsSilent: isSubagentAnnounceHandoff,
-            ...(mutableCliSessionStore && !forkCliSessionOnResume
+            ...(forkStoreParams && !forkCliSessionOnResume
               ? {
-                  onBeforeFreshCliSessionRetry: async (retry) => {
+                  onBeforeForkedCliSessionRetry: async (retry) => {
                     if (
                       hasNewGeneratedMediaTaskForSessionKey(
                         params.sessionKey,
@@ -853,14 +855,39 @@ export function runAgentAttempt(params: {
                     }
 
                     log.warn(
+                      `CLI session stalled, arming forked recovery: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${forkStoreParams.sessionKey}`,
+                    );
+
+                    const armed = await restoreCliSessionForkInStore(forkStoreParams);
+                    if (armed) {
+                      params.sessionEntry = armed;
+                    }
+                    return Boolean(armed);
+                  },
+                }
+              : {}),
+            ...(mutableCliSessionStore
+              ? {
+                  onBeforeFreshCliSessionRetry: async (retry) => {
+                    if (
+                      hasNewGeneratedMediaTaskForSessionKey(params.sessionKey, mediaTaskIdsBefore)
+                    ) {
+                      return false;
+                    }
+
+                    log.warn(
                       `CLI session failed, clearing before fresh retry: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${mutableCliSessionStore.sessionKey} reason=${sanitizeForLog(retry.reason)}`,
                     );
 
-                    params.sessionEntry =
-                      (await clearCliSessionInStore({
-                        provider: cliExecutionProvider,
-                        ...mutableCliSessionStore,
-                      })) ?? params.sessionEntry;
+                    const cleared = await clearCliSessionInStore({
+                      provider: cliExecutionProvider,
+                      expectedCliSessionId: retry.sessionId,
+                      ...mutableCliSessionStore,
+                    });
+                    if (!cleared) {
+                      return false;
+                    }
+                    params.sessionEntry = cleared;
                     return true;
                   },
                 }
@@ -872,12 +899,17 @@ export function runAgentAttempt(params: {
       try {
         return await runCliWithSession(activeCliSessionBinding?.sessionId, activeCliSessionBinding);
       } catch (err) {
+        const failedCliSessionBinding = getCliSessionBinding(
+          params.sessionEntry,
+          cliExecutionProvider,
+        );
+        const failedCliSessionId = failedCliSessionBinding?.sessionId;
         if (
           isClaudeCliProvider(cliExecutionProvider) &&
-          !activeCliSessionBinding?.forkNextResume &&
+          failedCliSessionBinding?.forkNextResume !== true &&
           shouldClearReusedCliSessionAfterError(err) &&
           !hasNewGeneratedMediaTaskForSessionKey(params.sessionKey, mediaTaskIdsBefore) &&
-          activeCliSessionBinding?.sessionId &&
+          failedCliSessionId &&
           mutableCliSessionStore
         ) {
           log.warn(
@@ -887,6 +919,7 @@ export function runAgentAttempt(params: {
           params.sessionEntry =
             (await clearCliSessionInStore({
               provider: cliExecutionProvider,
+              expectedCliSessionId: failedCliSessionId,
               ...mutableCliSessionStore,
             })) ?? params.sessionEntry;
         }

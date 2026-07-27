@@ -54,6 +54,21 @@ Provider and channel execution paths must use the active runtime config snapshot
 
 ## Reusable runtime utilities
 
+Model-picker integrations use two focused runtime subpaths. Import the typed
+`ModelPickerAction` and `ModelPickerCapabilityProfile` contracts from
+`openclaw/plugin-sdk/interactive-runtime`. Import
+`applySessionModelSelection(...)` and its result types from
+`openclaw/plugin-sdk/model-session-runtime`; this is the live-session mutation
+seam, including its authoritative conflict check and post-commit effects. The
+lower-level session-entry model helpers are not a picker persistence API.
+
+Model-picker actions carry only bounded snapshot and catalog tokens. Channel
+actor identity, source-message binding, and serialized callback data stay in
+the channel's private authenticated envelope. Channel codecs opt into resolving
+these actions with `{ modelPicker: true }`; channels without a picker
+capability continue to fail closed instead of treating the action as an opaque
+callback.
+
 Use inbound `botLoopProtection` facts for bot-authored inbound messages. Core applies the shared in-memory sliding-window guard before session record and dispatch, without tying the policy to one channel. The guard tracks `(scopeId, conversationId, participant pair)` keys, counts both directions of a pair together, applies a cooldown once the window budget is exceeded, and prunes inactive entries opportunistically.
 
 Channel plugins that expose this behavior to operators should prefer the shared `channels.defaults.botLoopProtection` shape for baseline budgets, then layer channel/provider-specific overrides on top. The shared config uses seconds because it is user-facing:

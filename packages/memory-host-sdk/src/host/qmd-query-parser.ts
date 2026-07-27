@@ -58,7 +58,7 @@ function warnQmdQueryParseError(message: string): void {
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return;
   }
-  process.stderr.write(`qmd query returned invalid JSON: ${message}\n`);
+  console.warn(`qmd query returned invalid JSON: ${message}`);
 }
 
 /** Detect qmd no-result marker output on stdout or stderr. */

@@ -331,6 +331,114 @@ describe("loadControlUiSessionPullRequests", () => {
     expect(fetchImpl.mock.calls).toHaveLength(0);
   });
 
+  it("caches git context through repeated GitHub failures, then expires it", async () => {
+    const fetchImpl = routedFetch([
+      {
+        match: "/pulls?head=",
+        response: () => githubJson({ message: "unavailable" }, 503),
+      },
+    ]);
+    const gitOutputImpl = vi.fn(async (_root: string, args: string[]) => {
+      if (args[0] === "rev-parse") {
+        return "feature";
+      }
+      if (args[0] === "remote") {
+        return "git@github.com:openclaw/openclaw.git";
+      }
+      return "origin/main";
+    });
+    const load = (root = "/repo/context-cache") =>
+      loadControlUiSessionPullRequests(
+        { sessionKey: "agent:main:main" },
+        {
+          fetchImpl,
+          resolveGitRoot: async () => root,
+          gitOutput: gitOutputImpl,
+        },
+      );
+
+    await expect(load()).rejects.toBeInstanceOf(Error);
+    await expect(load()).rejects.toBeInstanceOf(Error);
+    expect(gitOutputImpl).toHaveBeenCalledTimes(3);
+    expect(fetchImpl.mock.calls).toHaveLength(1);
+
+    await expect(load("/repo/other-context")).rejects.toBeInstanceOf(Error);
+    expect(gitOutputImpl).toHaveBeenCalledTimes(6);
+
+    vi.advanceTimersByTime(10_001);
+    await expect(load()).rejects.toBeInstanceOf(Error);
+    expect(gitOutputImpl).toHaveBeenCalledTimes(9);
+    // The longer GitHub failure cache remains independent of local Git expiry.
+    expect(fetchImpl.mock.calls).toHaveLength(1);
+  });
+
+  it("caches branch facts by root while refresh only bypasses the GitHub cache", async () => {
+    let pulls: Record<string, unknown>[] = [];
+    const fetchImpl = routedFetch([
+      { match: "/pulls?head=", response: () => githubJson(pulls) },
+      { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
+    ]);
+    const resolveBranchLanding = vi.fn(async () => ({
+      pushedSha: "a".repeat(40),
+      statsBase: "base",
+      hasLandedPullRequest: false,
+      provenNewPushedWork: false,
+    }));
+    const gitOutputImpl = vi.fn(async (_root: string, args: string[]) =>
+      args[0] === "rev-list" ? "1" : null,
+    );
+    const runGitImpl = vi.fn(async (root: string) => ({
+      stdout:
+        root === "/repo/b" ? " 1 file changed, 2 insertions(+)" : " 1 file changed, 1 insertion(+)",
+      stderr: "",
+      code: 0,
+    }));
+    const load = (sessionKey: string, refresh = false) =>
+      loadControlUiSessionPullRequests(
+        { sessionKey, ...(refresh ? { refresh: true } : {}) },
+        {
+          fetchImpl,
+          resolveGitContext: async () => ({
+            ...context,
+            branch: "cache/test",
+            root: sessionKey.endsWith(":b") ? "/repo/b" : "/repo/a",
+            defaultBranch: "main",
+          }),
+          gitOutput: gitOutputImpl,
+          runGit: runGitImpl,
+          resolveBranchLanding,
+        },
+      );
+
+    expect((await load("agent:main:a")).branch?.additions).toBe(1);
+    expect((await load("agent:main:a", true)).branch?.additions).toBe(1);
+    expect(resolveBranchLanding).toHaveBeenCalledTimes(1);
+    expect(runGitImpl).toHaveBeenCalledTimes(1);
+    expect(gitOutputImpl).toHaveBeenCalledTimes(2);
+    expect(
+      fetchImpl.mock.calls.filter((call) =>
+        requestUrl(call[0] as RequestInfo | URL).includes("/pulls?head="),
+      ),
+    ).toHaveLength(2);
+
+    pulls = [pullListItem({ merged_at: "2026-07-09T10:00:00Z" })];
+    expect((await load("agent:main:a", true)).branch?.additions).toBe(1);
+    expect(resolveBranchLanding).toHaveBeenCalledTimes(2);
+    expect(runGitImpl).toHaveBeenCalledTimes(2);
+    expect(gitOutputImpl).toHaveBeenCalledTimes(4);
+
+    vi.advanceTimersByTime(10_001);
+    expect((await load("agent:main:a")).branch?.additions).toBe(1);
+    expect(resolveBranchLanding).toHaveBeenCalledTimes(3);
+    expect(runGitImpl).toHaveBeenCalledTimes(3);
+    expect(gitOutputImpl).toHaveBeenCalledTimes(6);
+
+    expect((await load("agent:main:b")).branch?.additions).toBe(2);
+    expect(resolveBranchLanding).toHaveBeenCalledTimes(4);
+    expect(runGitImpl).toHaveBeenCalledTimes(4);
+    expect(gitOutputImpl).toHaveBeenCalledTimes(8);
+  });
+
   it("refreshes a cached empty result after the assistant creates a PR", async () => {
     let pulls: Record<string, unknown>[] = [];
     const fetchImpl = routedFetch([

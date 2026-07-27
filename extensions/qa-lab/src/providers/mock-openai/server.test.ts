@@ -147,7 +147,7 @@ function makeWhatsAppStructuredUserInput(text: string, mediaKind?: "sticker") {
     return makeUserInput(text);
   }
   const mediaContext = [
-    "WhatsApp media (untrusted metadata):",
+    "WhatsApp media: ⟦openclaw:ctx⟧",
     "```json",
     JSON.stringify({ source: "whatsapp", type: "media", payload: { kind: mediaKind } }),
     "```",
@@ -1723,39 +1723,6 @@ describe("qa mock openai server", () => {
     expect(await response.text()).toContain(
       '"arguments":"{\\"path\\":\\"FOLLOWTHROUGH_INPUT.md\\"}"',
     );
-  });
-
-  it("keeps the dreaming shadow trial ahead of system exact-reply fallbacks", async () => {
-    const server = await startMockServer();
-    const response = await postResponses(server, {
-      stream: true,
-      model: "gpt-5.6-luna",
-      input: [
-        {
-          role: "system",
-          content: [
-            {
-              type: "input_text",
-              text: "Nothing to say: entire reply exactly NO_REPLY",
-            },
-          ],
-        },
-        makeUserInput(
-          "Dreaming shadow trial report check. Read DREAMING_SHADOW_TRIAL_BRIEF.md and DREAMING_CANDIDATE_EVIDENCE.md first. Reply with the report path and exact marker DREAMING-SHADOW-TRIAL-OK.",
-        ),
-      ],
-    });
-
-    expect(response.status).toBe(200);
-    const body = await response.text();
-    expect(body).toContain('"name":"read"');
-    expect(body).toContain('"arguments":"{\\"path\\":\\"DREAMING_SHADOW_TRIAL_BRIEF.md\\"}"');
-    expect(body).not.toContain('"text":"NO_REPLY"');
-
-    const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
-    expect(debugResponse.status).toBe(200);
-    const debugPayload = requireRecord(await debugResponse.json(), "debug request");
-    expect(debugPayload.plannedToolName).toBe("read");
   });
 
   it("advances personal task followthrough when transcript text is newer than extracted tool output", async () => {
@@ -3519,7 +3486,7 @@ describe("qa mock openai server", () => {
         previousExactMarkerInput,
         makeUserInput(
           [
-            "Conversation info (untrusted metadata):",
+            "Conversation info: ⟦openclaw:ctx⟧",
             "```json",
             '{"inbound_event_kind":"user_request"}',
             "```",
@@ -3535,9 +3502,7 @@ describe("qa mock openai server", () => {
         setupInput,
         previousExactMarkerInput,
         makeUserInput(
-          ["Sender (untrusted metadata):", "```json", '{"name":"QA"}', "```", "", "<contact>"].join(
-            "\n",
-          ),
+          ["Sender: ⟦openclaw:ctx⟧", "```json", '{"name":"QA"}', "```", "", "<contact>"].join("\n"),
         ),
       ],
     });
@@ -3548,7 +3513,7 @@ describe("qa mock openai server", () => {
         previousExactMarkerInput,
         makeWhatsAppStructuredUserInput(
           [
-            "Conversation info (untrusted metadata):",
+            "Conversation info: ⟦openclaw:ctx⟧",
             "```json",
             '{"inbound_event_kind":"user_request"}',
             "```",
@@ -3700,7 +3665,7 @@ describe("qa mock openai server", () => {
         "Sticker note: <media:sticker>",
       ].join("\n"),
       [
-        "WhatsApp media (untrusted metadata):",
+        "WhatsApp media: ⟦openclaw:ctx⟧",
         "```json",
         '{"source":"whatsapp","type":"media","payload":{"kind":"image"}}',
         "```",
@@ -4411,7 +4376,7 @@ describe("qa mock openai server", () => {
           content: [
             {
               type: "input_text",
-              text: 'Conversation info (untrusted metadata): {"is_group_chat": true}\n\nhello team, no bot ping here',
+              text: 'Conversation info: ⟦openclaw:ctx⟧\n{"is_group_chat": true}\n\nhello team, no bot ping here',
             },
           ],
         },

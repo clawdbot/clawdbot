@@ -24,7 +24,7 @@ export async function runCodeMode(params: {
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
 }) {
-  const runtime = new ToolSearchRuntime(params.ctx, params.config);
+  const runtime = new ToolSearchRuntime(params.ctx, params.config, { validateInput: true });
   const logs: string[] = [];
   const value = await runCodeModeChild({
     code: params.code,

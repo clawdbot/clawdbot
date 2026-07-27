@@ -1,6 +1,6 @@
 import { getRuntimeConfig } from "../../config/config.js";
 import { refreshRemoteModelCatalog } from "../../model-catalog/remote-refresh.js";
-import type { RuntimeEnv } from "../../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 
 export async function modelsRefreshCommand(
   options: { json?: boolean },
@@ -8,7 +8,7 @@ export async function modelsRefreshCommand(
 ): Promise<void> {
   const result = await refreshRemoteModelCatalog({ config: getRuntimeConfig(), force: true });
   if (options.json) {
-    runtime.log(JSON.stringify(result));
+    writeRuntimeJson(runtime, result, 0);
     if (result.status === "error") {
       runtime.exit(1);
     }

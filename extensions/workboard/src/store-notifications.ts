@@ -51,7 +51,9 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
   }
 
   async deleteNotificationSubscription(id: string): Promise<{ deleted: boolean }> {
-    return { deleted: await this.subscriptionStore.delete(id.trim()) };
+    return await this.enqueueMutation(async () => ({
+      deleted: await this.subscriptionStore.delete(id.trim()),
+    }));
   }
 
   private async collectNotificationEvents(input: WorkboardNotificationEventsInput = {}): Promise<{
@@ -83,7 +85,7 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
     const effectiveRunId = subscription?.runId;
     const events: WorkboardNotification[] = [];
     for (const card of await this.list({ boardId: effectiveBoardId })) {
-      if (effectiveCardId && card.id !== effectiveCardId) {
+      if (card.metadata?.archivedAt || (effectiveCardId && card.id !== effectiveCardId)) {
         continue;
       }
       const stale = card.metadata?.stale;

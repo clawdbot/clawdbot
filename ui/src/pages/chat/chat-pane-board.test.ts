@@ -12,9 +12,10 @@ import {
 import type { ObserverDigestHistory } from "../../lib/observer-digest.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import type { SessionObserverDigest } from "./chat-pane-deps.ts";
 import "./chat-pane.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
-import type { ChatPageHost } from "./chat-state.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   detachPanelToColumn,
   mergePanelIntoColumn,
@@ -51,7 +52,9 @@ type TestChatPane = HTMLElement & {
   ) => void;
   syncChatSidebarForDock: (dock: "bottom" | "hidden" | "left" | "right") => boolean;
   persistBoardSessionView: (patch: { face?: "chat" | "dashboard"; activeTabId?: string }) => void;
+  recordObserverDigest: (digest: SessionObserverDigest) => void;
   resolveBoardProvider: () => BoardProvider;
+  resolveObserverDigestHistoryKey: (sessionKey?: string, agentId?: string) => string;
   refreshBuiltinBoardSnapshot: () => void;
   resolveBoardView: () => ResolvedBoardView;
 };
@@ -150,6 +153,68 @@ describe("chat pane board shell", () => {
     pane.persistBoardSessionView({ face: "dashboard" });
     expect(onFaceChange).toHaveBeenCalledWith("dashboard");
     expect(pane.resolveBoardView().face).toBe("dashboard");
+  });
+
+  it("shares observer history between a global session and its explicit agent alias", async () => {
+    const pane = createTestPane();
+    pane.context = {
+      ...pane.context,
+      agents: {
+        state: {
+          agentsList: {
+            defaultId: "main",
+            mainKey: "main",
+            scope: "global",
+            agents: [{ id: "main" }, { id: "work" }],
+          },
+        },
+      },
+      agentSelection: { state: { selectedId: "work", scopeId: "work" } },
+      gateway: {
+        ...pane.context.gateway,
+        snapshot: {
+          ...pane.context.gateway.snapshot,
+          hello: {
+            snapshot: {
+              sessionDefaults: {
+                defaultAgentId: "main",
+                mainKey: "main",
+                mainSessionKey: "global",
+                scope: "global",
+              },
+            },
+          } as never,
+        },
+      },
+    } as unknown as ApplicationContext;
+    pane.state.sessionKey = "agent:work:main";
+    pane.boardProvider = nullBoardProvider("agent:work:main");
+    pane.observerDigestHistory.record({
+      sessionKey: "agent:work:global",
+      agentId: "work",
+      runId: "run-work",
+      revision: 1,
+      updatedAt: 1_000,
+      headline: "Reviewing the work agent",
+      health: "on-track",
+    });
+
+    expect(pane.resolveObserverDigestHistoryKey("global", "work")).toBe("agent:work:global");
+    expect(pane.resolveObserverDigestHistoryKey("agent:work:main")).toBe("agent:work:global");
+    pane.recordObserverDigest({
+      sessionKey: "global",
+      runId: "run-ownerless",
+      revision: 2,
+      updatedAt: 2_000,
+      headline: "Ownerless global status",
+      health: "stuck",
+    });
+    expect(pane.observerDigestHistory.get("agent:work:global").at(-1)?.headline).toBe(
+      "Reviewing the work agent",
+    );
+    pane.refreshBuiltinBoardSnapshot();
+
+    await vi.waitFor(() => expect(pane.resolveBoardView().hasBoard).toBe(true));
   });
 
   it("gates New Chat when the current session has a board", async () => {
@@ -390,7 +455,7 @@ describe("chat pane board shell", () => {
     pane.state.settings = {
       ...loadSettings(),
       boardSessionViews: {
-        "agent:main:current": { face: "dashboard", activeTabId: "research" },
+        "agent:main:current": { activeTabId: "research" },
       },
     };
     localStorage.clear();
@@ -410,7 +475,7 @@ describe("chat pane board shell", () => {
   it("preserves preferences saved by another split pane", () => {
     const initialSettings = patchSettings({
       boardSessionViews: {
-        "agent:main:first": { face: "chat", activeTabId: "main" },
+        "agent:main:first": { activeTabId: "main" },
       },
     });
     const firstPane = createTestPane();
@@ -438,8 +503,8 @@ describe("chat pane board shell", () => {
     secondPane.persistBoardSessionView({ activeTabId: "main" });
 
     expect(loadSettings().boardSessionViews).toMatchObject({
-      "agent:main:first": { face: "chat", activeTabId: "research" },
-      "agent:main:second": { face: "chat", activeTabId: "main" },
+      "agent:main:first": { activeTabId: "research" },
+      "agent:main:second": { activeTabId: "main" },
     });
   });
 

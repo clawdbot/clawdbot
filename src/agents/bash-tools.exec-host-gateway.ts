@@ -40,6 +40,7 @@ import {
   type ExecAutoReviewInput,
 } from "../infra/exec-auto-review.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
+import { isBlockedShellWrapperCommand } from "../infra/exec-wrapper-resolution.js";
 import {
   GatewayDrainingError,
   runWithGatewayIndependentRootWorkAdmission,
@@ -78,6 +79,7 @@ import type {
   ExecApprovalFollowupOutcome,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
+import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
 /** Full input bundle for gateway-host allowlist and approval processing. */
@@ -764,9 +766,13 @@ export async function processGatewayAllowlist(
     const [autoReviewSegment] = allowlistEval.segments;
     const autoReviewArgv =
       allowlistEval.segments.length === 1 &&
-      (autoReviewSegment?.raw === undefined ||
+      autoReviewSegment !== undefined &&
+      autoReviewSegment.resolution?.policyBlocked !== true &&
+      // Shell startup can execute unreviewed profile code before its bound payload.
+      !isBlockedShellWrapperCommand(autoReviewSegment.argv) &&
+      (autoReviewSegment.raw === undefined ||
         autoReviewSegment.raw.trim() === params.command.trim())
-        ? autoReviewSegment?.argv
+        ? autoReviewSegment.argv
         : undefined;
     const autoReviewHasBoundCommand = analysisOk && autoReviewArgv !== undefined;
     // A model approval is valid only for the executable resolved during review;
@@ -792,34 +798,40 @@ export async function processGatewayAllowlist(
       requiresSecurityAuditSuppressionApproval;
     if (canAutoReviewApprovalMiss) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;
-      const decision = await reviewer({
-        command: params.command,
-        argv: autoReviewArgv,
-        resolvedPath: autoReviewResolvedPath,
-        cwd: params.workdir,
-        envKeys: Object.keys(params.requestedEnv ?? {}).toSorted(),
-        host: "gateway",
-        reason: resolveGatewayAutoReviewReason({
-          requiresInlineEvalApproval,
-          requiresHeredocApproval,
-          requiresAllowlistPlanApproval,
-          hostSecurity,
-          analysisOk,
-          allowlistSatisfied,
-          durableApprovalSatisfied,
+      const pendingDecision = Promise.resolve(
+        reviewer({
+          command: params.command,
+          argv: autoReviewArgv,
+          resolvedPath: autoReviewResolvedPath,
+          cwd: params.workdir,
+          envKeys: Object.keys(params.requestedEnv ?? {}).toSorted(),
+          host: "gateway",
+          reason: resolveGatewayAutoReviewReason({
+            requiresInlineEvalApproval,
+            requiresHeredocApproval,
+            requiresAllowlistPlanApproval,
+            hostSecurity,
+            analysisOk,
+            allowlistSatisfied,
+            durableApprovalSatisfied,
+          }),
+          analysis: {
+            parsed: analysisOk,
+            allowlistMatched: allowlistSatisfied,
+            durableApprovalMatched: durableApprovalSatisfied,
+            inlineEval: requiresInlineEvalApproval,
+            heredoc: requiresHeredocApproval,
+          },
+          agent: {
+            id: params.agentId,
+            sessionKey: params.sessionKey,
+          },
         }),
-        analysis: {
-          parsed: analysisOk,
-          allowlistMatched: allowlistSatisfied,
-          durableApprovalMatched: durableApprovalSatisfied,
-          inlineEval: requiresInlineEvalApproval,
-          heredoc: requiresHeredocApproval,
-        },
-        agent: {
-          id: params.agentId,
-          sessionKey: params.sessionKey,
-        },
-      });
+      );
+      // Custom reviewers may never settle; cancellation must not retain approval authority.
+      const decision = params.signal
+        ? await abortable(params.signal, pendingDecision)
+        : await pendingDecision;
       params.signal?.throwIfAborted();
       if (
         decision.decision === "allow-once" &&

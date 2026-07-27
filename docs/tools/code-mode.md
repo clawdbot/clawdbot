@@ -24,13 +24,19 @@ separate implementations:
   prefixed by a `// @exec: {...}` pragma line for execution options), executed
   in Codex's in-process V8 Code Mode runtime.
 - OpenClaw code mode runs in the generic OpenClaw agent runtime and is
-  disabled unless `tools.codeMode.enabled: true` is configured. Its `exec`
+  disabled unless `tools.codeMode.enabled` is `true` or `"auto"`. Its `exec`
   tool takes a JSON `{ code, language }` payload, executed in a QuickJS-WASI
   worker.
 
 Both are JavaScript execution surfaces, not shell-command surfaces. Treat them
 as independent, differently-implemented features that happen to expose
 identically-named `exec`/`wait` tools.
+
+In OpenClaw code mode, `command` is a JavaScript or TypeScript alias for
+`code`, not a shell command. For shell or file operations, call the appropriate
+catalog tool from guest JavaScript with `tools.callValue`. Recognizable shell
+commands are rejected before the QuickJS worker starts with actionable
+`invalid_input` guidance.
 
 ## What it does
 
@@ -106,7 +112,21 @@ Shorthand:
 ```
 
 Code mode stays off when `tools.codeMode` is omitted, `false`, or an object
-without `enabled: true`.
+without `enabled: true` or `enabled: "auto"`.
+
+To engage code mode only for models whose catalog marks them as strong code-mode
+performers, use the `"auto"` tier instead of `true`:
+
+```json5
+{
+  tools: {
+    codeMode: "auto",
+  },
+}
+```
+
+See [Automatic per-model activation](#automatic-per-model-activation) for the
+exact semantics and the shipped model list.
 
 If you use sandboxed agents with configured MCP servers, also allow the
 bundled MCP plugin in the sandbox tool policy, for example
@@ -232,7 +252,7 @@ enable the feature on its own.
 
 | Field                 | Default                        | Clamp                                           |
 | --------------------- | ------------------------------ | ----------------------------------------------- |
-| `enabled`             | `false`                        | boolean; only `true` enables code mode          |
+| `enabled`             | `false`                        | `false`, `true`, or `"auto"` (per-model)        |
 | `runtime`             | `"quickjs-wasi"`               | only supported value                            |
 | `mode`                | `"only"`                       | exposes control/direct tools, catalogs the rest |
 | `languages`           | `["javascript", "typescript"]` | any subset of the two                           |
@@ -246,7 +266,75 @@ enable the feature on its own.
 | `maxSearchLimit`      | `50`                           | `1`-`50`                                        |
 
 If code mode is enabled but QuickJS-WASI cannot load, OpenClaw fails closed
-for that run; it does not silently expose normal tools as a fallback.
+for that run; it does not silently expose normal tools as a fallback. This
+holds for `true` and for `"auto"` runs where the model resolves as preferred:
+an engaged run never silently falls back to broad direct tool exposure.
+
+## Automatic per-model activation
+
+`tools.codeMode.enabled` accepts three values:
+
+- `false` (default): code mode is off for every run.
+- `true`: code mode engages for every tool-capable run, regardless of model.
+- `"auto"`: code mode engages only when the run's model is flagged as a
+  preferred code-mode performer in its provider catalog.
+
+`false` and `true` behave exactly as before the `"auto"` tier existed; `"auto"`
+is purely additive.
+
+### The `compat.codeMode` catalog flag
+
+Provider catalogs can tier a model with `compat.codeMode` on its model entry,
+next to flags like `compat.supportsTools`:
+
+- `"preferred"`: the model reliably writes short orchestration programs and
+  benefits from the compact code-mode surface; `"auto"` engages code mode.
+- `"capable"` (or absent): the model can run code mode when forced with
+  `enabled: true`, but `"auto"` keeps normal tool exposure.
+
+Models without tool support cannot use code mode at all; there is no separate
+"unsupported" tier. The flag is capability metadata owned by the provider
+plugin's catalog; core only reads the generic compat field.
+
+### Shipped preferred models
+
+Bundled provider catalogs currently flag these models as `"preferred"`:
+
+| Provider  | Models                                                                                                                                       |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| anthropic | `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-mythos-5`, `claude-opus-4-8`, `claude-haiku-4-5`                               |
+| deepseek  | `deepseek-v4-pro`, `deepseek-v4-flash`                                                                                                       |
+| google    | `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.6-flash` |
+| minimax   | `MiniMax-M3`                                                                                                                                 |
+| moonshot  | `kimi-k3`                                                                                                                                    |
+| openai    | `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.5-pro`                                                          |
+| xiaomi    | `mimo-v2.5`                                                                                                                                  |
+| zai       | `glm-5.2`, `glm-5.1`                                                                                                                         |
+
+Everything else, including all Ollama-served local models, stays unflagged and
+keeps normal tool exposure under `"auto"`.
+
+For OpenAI models, the flag matters only when the run resolves to the OpenClaw
+embedded agent runtime. Default OpenAI routing uses the Codex-style harness
+surface, where OpenClaw code mode does not apply; the catalog flag never
+changes that routing decision.
+
+### Choosing when to enable
+
+In A/B evaluations on the preferred models above, code mode reduced total
+token usage by roughly 30-50% at equal-or-better task pass rates, mostly by
+replacing many full tool schemas and per-tool round trips with one compact
+program surface. Models below the preferred tier showed no consistent win and
+sometimes regressed, which is why `"auto"` leaves them on direct tools.
+
+Use `"auto"` when agents switch between models: strong models get the compact
+surface, weaker or local ones keep the exposure they handle best. Use `true`
+when you have verified a specific unflagged model performs well with code
+mode; global force-on is most predictable for single-model deployments. For
+open-weight or uncached serving where every prompt token is billed or
+recomputed, prefer enabling per model (via `"auto"` or a per-agent override)
+rather than globally, since the token savings depend on the model actually
+using the program surface well.
 
 ## Activation
 
@@ -258,7 +346,8 @@ final model request is assembled:
 2. Build the effective OpenClaw tool list, adding eligible plugin, MCP, and
    client tools.
 3. Apply allow/deny policy.
-4. If `tools.codeMode.enabled` is false, continue with normal tool exposure.
+4. If `tools.codeMode.enabled` is `false`, or is `"auto"` and the run's model
+   is not catalog-preferred, continue with normal tool exposure.
 5. If enabled and tools are active for the run, retain required direct-only
    tools and register every catalog-eligible effective tool in the code-mode
    catalog.
