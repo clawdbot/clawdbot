@@ -610,7 +610,7 @@ export class WorkboardCoreStore {
     if (existing.status !== next.status) {
       next.metadata = trimMetadataToBudget(
         {
-          ...(next.metadata ?? {}),
+          ...next.metadata,
           statusTransitions: appendStatusTransition(existing, next, now),
         },
         options,
