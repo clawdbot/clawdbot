@@ -117,7 +117,7 @@ export function supportsClaudeAdaptiveThinking(ref: ClaudeModelRef): boolean {
   const modelId = resolveClaudeModelIdentity(ref);
   return (
     resolveClaudeOpus5ModelIdentity(ref) !== undefined ||
-    /(?:^|-)claude-(?:fable-5|mythos-(?:5|preview)|opus-4-(?:6|7|8)|sonnet-(?:5|4-6))(?=$|[^a-z0-9])/.test(
+    /(?:^|-)claude-(?:fable-5|mythos-(?:5|preview)|opus-5|opus-4-(?:6|7|8)|sonnet-(?:5|4-6))(?=$|[^a-z0-9])/.test(
       modelId,
     )
   );
@@ -128,7 +128,7 @@ export function supportsClaude1MContext(ref: ClaudeModelRef): boolean {
   const modelId = resolveClaudeModelIdentity(ref);
   return (
     resolveClaudeOpus5ModelIdentity(ref) !== undefined ||
-    /(?:^|-)claude-(?:fable-5|mythos-(?:5|preview)|opus-4-(?:6|7|8)|sonnet-(?:5|4-6))(?=$|[^a-z0-9])/.test(
+    /(?:^|-)claude-(?:fable-5|mythos-(?:5|preview)|opus-5|opus-4-(?:6|7|8)|sonnet-(?:5|4-6))(?=$|[^a-z0-9])/.test(
       modelId,
     )
   );
@@ -148,7 +148,7 @@ export function supportsClaudeNativeMaxEffort(ref: ClaudeModelRef): boolean {
   const modelId = resolveClaudeModelIdentity(ref);
   return (
     resolveClaudeOpus5ModelIdentity(ref) !== undefined ||
-    /(?:^|-)claude-(?:fable-5|mythos-5|opus-4-(?:6|7|8)|sonnet-(?:5|4-6))(?=$|[^a-z0-9])/.test(
+    /(?:^|-)claude-(?:fable-5|mythos-5|opus-5|opus-4-(?:6|7|8)|sonnet-(?:5|4-6))(?=$|[^a-z0-9])/.test(
       modelId,
     )
   );
@@ -159,7 +159,7 @@ export function supportsClaudeNativeXhighEffort(ref: ClaudeModelRef): boolean {
   const modelId = resolveClaudeModelIdentity(ref);
   return (
     resolveClaudeOpus5ModelIdentity(ref) !== undefined ||
-    /(?:^|-)claude-(?:fable-5|mythos-5|opus-4-(?:7|8)|sonnet-5)(?=$|[^a-z0-9])/.test(modelId)
+    /(?:^|-)claude-(?:fable-5|mythos-5|opus-5|opus-4-(?:7|8)|sonnet-5)(?=$|[^a-z0-9])/.test(modelId)
   );
 }
 
