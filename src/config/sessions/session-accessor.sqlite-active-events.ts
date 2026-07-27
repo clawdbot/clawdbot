@@ -1,5 +1,3 @@
-// Bounded reads over the materialized active transcript path. Dirty paths
-// schedule maintenance and fail fast; clean reads deserialize selected rows.
 import { sql } from "kysely";
 import {
   executeSqliteQuerySync,
@@ -27,11 +25,26 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import {
+  DEFAULT_VISIBLE_MESSAGE_MAX_BYTES,
+  DEFAULT_VISIBLE_MESSAGE_MAX_MESSAGES,
+  createVisibleMessageCursor,
+  encodeVisibleMessageCursor,
+  MAX_VISIBLE_MESSAGE_MAX_BYTES,
+  MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
+  normalizeVisibleMessageLimit,
+  parseVisibleMessageCursor,
+} from "./session-accessor.sqlite-visible-cursor.js";
 import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
+import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import {
   startSessionTranscriptIndexReconcile,
   waitForSessionTranscriptIndexReconcile,
 } from "./session-transcript-reconcile.js";
+export {
+  isSessionTranscriptProjectionUnavailableError,
+  SessionTranscriptProjectionUnavailableError,
+} from "./session-transcript-projection-error.js";
 
 type ActiveTranscriptDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -41,21 +54,6 @@ type ActiveTranscriptDatabase = Pick<
   | "transcript_event_identities"
   | "transcript_events"
 >;
-
-const VISIBLE_MESSAGE_CURSOR_VERSION = 1;
-const DEFAULT_VISIBLE_MESSAGE_MAX_MESSAGES = 1_000;
-const DEFAULT_VISIBLE_MESSAGE_MAX_BYTES = 1_000_000;
-const MAX_VISIBLE_MESSAGE_MAX_MESSAGES = 10_000;
-const MAX_VISIBLE_MESSAGE_MAX_BYTES = 64 * 1024 * 1024;
-
-type VisibleMessageCursor = {
-  agentId: string;
-  generation: string;
-  lastEventSeq: number;
-  lastMessagePosition: number;
-  sessionId: string;
-  version: typeof VISIBLE_MESSAGE_CURSOR_VERSION;
-};
 
 export type SessionTranscriptMessageEvent = {
   event: TranscriptEvent;
@@ -79,19 +77,6 @@ export type SessionTranscriptBoundedMessageTailPage = SessionTranscriptMessageEv
   serializedBytes: number;
 };
 
-export class SessionTranscriptProjectionUnavailableError extends Error {
-  constructor(readonly sessionId: string) {
-    super(`Session transcript projection is rebuilding: ${sessionId}`);
-    this.name = "SessionTranscriptProjectionUnavailableError";
-  }
-}
-
-export function isSessionTranscriptProjectionUnavailableError(
-  error: unknown,
-): error is SessionTranscriptProjectionUnavailableError {
-  return error instanceof SessionTranscriptProjectionUnavailableError;
-}
-
 /** Waits for a projection rebuild already scheduled by a failed transcript read. */
 export async function waitForSessionTranscriptProjection(
   scope: SessionTranscriptReadScope,
@@ -99,7 +84,6 @@ export async function waitForSessionTranscriptProjection(
   const resolved = resolveSqliteTranscriptReadScope(scope);
   await waitForSessionTranscriptIndexReconcile(toDatabaseOptions(resolved));
 }
-
 type CurrentProjection = {
   database: OpenClawAgentDatabase;
   resolved: ReturnType<typeof resolveSqliteTranscriptReadScope>;
@@ -116,66 +100,6 @@ const EMPTY_PROJECTION_STATE: SessionTranscriptProjectionState = {
 
 function getActiveTranscriptKysely(database: OpenClawAgentDatabase) {
   return getNodeSqliteKysely<ActiveTranscriptDatabase>(database.db);
-}
-
-function normalizeVisibleMessageLimit(
-  value: number | undefined,
-  fallback: number,
-  maximum: number,
-  name: string,
-): number {
-  const resolved = value ?? fallback;
-  if (!Number.isInteger(resolved) || resolved < 1 || resolved > maximum) {
-    throw new RangeError(`${name} must be an integer between 1 and ${String(maximum)}`);
-  }
-  return resolved;
-}
-
-function encodeVisibleMessageCursor(cursor: VisibleMessageCursor): string {
-  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
-}
-
-function parseVisibleMessageCursor(value: string): VisibleMessageCursor | undefined {
-  // The cursor is a continuation hint, not an authorization token. Every field
-  // is revalidated against the current scope, generation, and projection.
-  if (value.length > 4_096) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(
-      Buffer.from(value, "base64url").toString("utf8"),
-    ) as Partial<VisibleMessageCursor>;
-    if (
-      parsed.version !== VISIBLE_MESSAGE_CURSOR_VERSION ||
-      typeof parsed.agentId !== "string" ||
-      typeof parsed.sessionId !== "string" ||
-      typeof parsed.generation !== "string" ||
-      !Number.isSafeInteger(parsed.lastEventSeq) ||
-      (parsed.lastEventSeq ?? -2) < -1 ||
-      !Number.isSafeInteger(parsed.lastMessagePosition) ||
-      (parsed.lastMessagePosition ?? -2) < -1 ||
-      (parsed.lastEventSeq === -1) !== (parsed.lastMessagePosition === -1)
-    ) {
-      return undefined;
-    }
-    return parsed as VisibleMessageCursor;
-  } catch {
-    return undefined;
-  }
-}
-
-function bootstrapVisibleMessageCursor(
-  projection: CurrentProjection,
-  generation: string,
-): VisibleMessageCursor {
-  return {
-    agentId: projection.resolved.agentId,
-    generation,
-    lastEventSeq: -1,
-    lastMessagePosition: -1,
-    sessionId: projection.resolved.sessionId,
-    version: VISIBLE_MESSAGE_CURSOR_VERSION,
-  };
 }
 
 function readProjectionSnapshot(
@@ -411,7 +335,11 @@ export function readSessionTranscriptVisibleMessageDelta(
       return { kind: "missing" };
     }
 
-    const initialCursor = bootstrapVisibleMessageCursor(projection, generation);
+    const initialCursor = createVisibleMessageCursor({
+      agentId: projection.resolved.agentId,
+      generation,
+      sessionId: projection.resolved.sessionId,
+    });
     const reset = (
       reason: Extract<SessionTranscriptVisibleMessageDeltaResult, { kind: "reset" }>["reason"],
     ) => ({
@@ -711,7 +639,6 @@ export function readSessionTranscriptBoundedMessageTailPage(
   });
 }
 
-/** Counts active-path messages from the transactionally maintained watermark. */
 export function readSessionTranscriptMessageEventCount(scope: SessionTranscriptReadScope): number {
   return withCurrentProjectionSnapshot(
     scope,
