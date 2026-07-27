@@ -133,11 +133,6 @@
       "class": "core-runtime",
       "risk": ["file-sniffing", "untrusted-files"]
     },
-    "glob": {
-      "owner": "core:package-manager",
-      "class": "core-runtime",
-      "risk": ["filesystem-glob"]
-    },
     "grammy": {
       "owner": "plugin:telegram",
       "class": "plugin-runtime",
@@ -194,11 +189,6 @@
       "activation": ["tools.web.fetch.readability", "plugins.entries.web-readability.enabled"],
       "risk": ["parser", "untrusted-html"]
     },
-    "markdown-it": {
-      "owner": "core:markdown-rendering",
-      "class": "core-runtime",
-      "risk": ["parser", "markdown"]
-    },
     "minimatch": {
       "owner": "core:pattern-matching",
       "class": "core-runtime",
@@ -228,11 +218,6 @@
       "owner": "core:concurrency",
       "class": "core-runtime",
       "risk": ["concurrency"]
-    },
-    "partial-json": {
-      "owner": "core:llm-json-parsing",
-      "class": "core-runtime",
-      "risk": ["streaming-json-parser"]
     },
     "playwright-core": {
       "owner": "core:browser",

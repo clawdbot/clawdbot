@@ -174,9 +174,6 @@ importers:
       p-map:
         specifier: 7.0.5
         version: 7.0.5
-      partial-json:
-        specifier: 0.1.7
-        version: 0.1.7
       playwright-core:
         specifier: 1.61.1
         version: 1.61.1
@@ -2261,13 +2258,13 @@ importers:
 
   packages/retry: {}
 
-  packages/session-url-contract: {}
-
   packages/sdk:
     dependencies:
       '@openclaw/gateway-client':
         specifier: workspace:*
         version: link:../gateway-client
+
+  packages/session-url-contract: {}
 
   packages/speech-core:
     dependencies:
