@@ -37,6 +37,7 @@ function requestedPayload(overrides: Record<string, unknown> = {}) {
     ],
     agentId: "main",
     sessionKey: "agent:main:main",
+    runId: "run-question",
     createdAtMs: 1_000,
     expiresAtMs: Date.now() + 60_000,
     status: "pending",
@@ -62,17 +63,10 @@ describe("question event parsing", () => {
   it("round-trips requested and resolved event payloads", () => {
     const state = createState();
     expect(
-      handleQuestionPromptEvent(
-        state,
-        {
-          event: "question.requested",
-          payload: requestedPayload(),
-        },
-        {
-          sessionKey: "agent:main:main",
-          chatRunId: "run-question",
-        },
-      ),
+      handleQuestionPromptEvent(state, {
+        event: "question.requested",
+        payload: requestedPayload(),
+      }),
     ).toBe(true);
     expect(state.prompts.get("question-1")).toMatchObject({
       id: "question-1",
@@ -98,26 +92,22 @@ describe("question event parsing", () => {
     });
   });
 
-  it("does not attach the selected session run to a background-session question", () => {
+  it("uses the protocol run id for a background-session question", () => {
     const state = createState();
     expect(
-      handleQuestionPromptEvent(
-        state,
-        {
-          event: "question.requested",
-          payload: requestedPayload({ sessionKey: "agent:main:background" }),
-        },
-        {
-          sessionKey: "agent:main:main",
-          chatRunId: "run-current",
-        },
-      ),
+      handleQuestionPromptEvent(state, {
+        event: "question.requested",
+        payload: requestedPayload({
+          sessionKey: "agent:main:background",
+          runId: "run-background",
+        }),
+      }),
     ).toBe(true);
     expect(state.prompts.get("question-1")).toMatchObject({
       sessionKey: "agent:main:background",
+      runId: "run-background",
       status: "pending",
     });
-    expect(state.prompts.get("question-1")).not.toHaveProperty("runId");
   });
 
   it("rejects malformed records and answer maps", () => {

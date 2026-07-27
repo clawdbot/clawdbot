@@ -593,7 +593,7 @@ export function rawMessageTimestamp(message: unknown): number | null {
   return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : null;
 }
 
-export function chatItemTimestamp(item: ChatItem): number | null {
+function chatItemTimestamp(item: ChatItem): number | null {
   switch (item.kind) {
     case "message":
       return rawMessageTimestamp(item.message);

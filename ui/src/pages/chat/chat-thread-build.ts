@@ -465,7 +465,9 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       startedAt: prompt.createdAtMs,
     };
     timestampedProjectionItems.push(questionItem);
-    applyRunBounds(questionItem.key, prompt.runId);
+    if (prompt.runId) {
+      applyRunBounds(questionItem.key, prompt.runId);
+    }
   }
 
   // Merge timestamped transient projections into the stable transcript order.
