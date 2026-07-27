@@ -240,6 +240,71 @@ describe("lmstudio-models", () => {
     });
   });
 
+  it("preserves every schema-approved configured compatibility field", () => {
+    const compat = {
+      supportsStore: false,
+      supportsPromptCacheKey: false,
+      supportsDeveloperRole: false,
+      supportsReasoningEffort: true,
+      supportsTemperature: false,
+      supportsUsageInStreaming: false,
+      supportsTools: false,
+      supportsStrictMode: false,
+      supportsJsonSchemaResponseFormat: false,
+      requiresStringContent: true,
+      strictMessageKeys: true,
+      visibleReasoningDetailTypes: ["reasoning.summary"],
+      supportedReasoningEfforts: ["low", "high"],
+      reasoningEffortMap: { off: "none", high: "high" },
+      maxTokensField: "max_tokens",
+      thinkingFormat: "qwen",
+      requiresToolResultName: true,
+      requiresAssistantAfterToolResult: true,
+      requiresThinkingAsText: true,
+      requiresReasoningContentOnAssistantMessages: true,
+      toolSchemaProfile: "lmstudio",
+      unsupportedToolSchemaKeywords: ["additionalProperties"],
+      toolCallArgumentsEncoding: "string",
+      requiresOpenAiAnthropicToolPayload: true,
+    };
+
+    expect(
+      normalizeLmstudioConfiguredCatalogEntry({ id: "qwen/qwen3-1.7b", compat })?.compat,
+    ).toEqual(compat);
+  });
+
+  it.each(["openai", "openrouter", "deepseek", "together", "qwen", "qwen-chat-template", "zai"])(
+    "preserves the schema-approved %s thinking format",
+    (thinkingFormat) => {
+      expect(
+        normalizeLmstudioConfiguredCatalogEntry({
+          id: "qwen/qwen3-1.7b",
+          compat: { thinkingFormat },
+        })?.compat,
+      ).toEqual({ thinkingFormat });
+    },
+  );
+
+  it("rejects malformed and unapproved configured compatibility fields", () => {
+    expect(
+      normalizeLmstudioConfiguredCatalogEntry({
+        id: "qwen/qwen3-1.7b",
+        compat: {
+          supportsStore: "false",
+          supportsPromptCacheKey: 1,
+          visibleReasoningDetailTypes: ["reasoning.summary", 1],
+          maxTokensField: "max_output_tokens",
+          thinkingFormat: "unsupported",
+          toolSchemaProfile: 1,
+          unsupportedToolSchemaKeywords: ["additionalProperties", ""],
+          toolCallArgumentsEncoding: false,
+          requiresOpenAiAnthropicToolPayload: "true",
+          unapprovedCompatField: true,
+        },
+      })?.compat,
+    ).toBeUndefined();
+  });
+
   it.each([
     { label: "enabled", supportsTools: true },
     { label: "disabled", supportsTools: false },
