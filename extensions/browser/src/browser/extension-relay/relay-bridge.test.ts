@@ -384,6 +384,41 @@ describe("ExtensionRelayBridge", () => {
     expect(bridge.extensionConnected).toBe(false);
   });
 
+  it("reattaches retained tabs to auto-attach clients after the extension reconnects", async () => {
+    const bridge = new ExtensionRelayBridge();
+    const firstExtension = wireExtension(bridge);
+    sendHello(firstExtension.handlers);
+
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+    cdp.onMessage(
+      JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } }),
+    );
+    await flush();
+
+    expect(
+      client.frames().filter((frame) => frame.method === "Target.attachedToTarget"),
+    ).toHaveLength(1);
+
+    firstExtension.handlers.onClose();
+    await flush();
+
+    const secondExtension = wireExtension(bridge);
+    sendHello(secondExtension.handlers);
+    await flush();
+
+    const attachments = client
+      .frames()
+      .filter((frame) => frame.method === "Target.attachedToTarget");
+    expect(attachments).toHaveLength(2);
+    expect(attachments[1]?.params).toMatchObject({
+      targetInfo: { targetId: "target-1" },
+    });
+    expect(
+      secondExtension.socket.frames().find((frame) => frame.type === "attach"),
+    ).toMatchObject({ tabId: 1 });
+  });
+
   it("reports malformed CDP client JSON instead of leaving the client waiting", () => {
     const bridge = new ExtensionRelayBridge();
     const client = new FakeSocket();

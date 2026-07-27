@@ -355,6 +355,7 @@ export class ExtensionRelayBridge {
 
   private syncTabs(tabs: RelayTabInfo[]): void {
     const nextIds = new Set(tabs.map((tab) => tab.tabId));
+    const hasAutoAttachClient = [...this.clients].some((client) => client.autoAttach);
     for (const [tabId, tab] of this.tabs) {
       if (!nextIds.has(tabId)) {
         if (tab.attached) {
@@ -367,11 +368,25 @@ export class ExtensionRelayBridge {
       const existing = this.tabs.get(info.tabId);
       if (existing) {
         existing.info = info;
+        // Extension reconnects preserve the shared-tab inventory but clear the
+        // old CDP attachments. Reattach those retained tabs for persistent
+        // auto-attach clients just as we do for newly shared tabs.
+        if (!existing.attached && hasAutoAttachClient) {
+          void this.ensureTabAttached(info.tabId)
+            .then(({ targetId, sessionId }) => {
+              this.announceAttachedTab(info.tabId, targetId, sessionId, {
+                onlyAutoAttach: true,
+              });
+            })
+            .catch((err: unknown) => {
+              log.warn(`auto-attach of retained tab ${info.tabId} failed: ${String(err)}`);
+            });
+        }
       } else {
         this.tabs.set(info.tabId, { info });
         // Newly shared tab: expose it to auto-attach clients right away so an
         // agent mid-session sees tabs the user shares via the toolbar action.
-        if ([...this.clients].some((client) => client.autoAttach)) {
+        if (hasAutoAttachClient) {
           void this.ensureTabAttached(info.tabId)
             .then(({ targetId, sessionId }) => {
               this.announceAttachedTab(info.tabId, targetId, sessionId, { onlyAutoAttach: true });
