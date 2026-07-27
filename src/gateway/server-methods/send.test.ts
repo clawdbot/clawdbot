@@ -1034,8 +1034,9 @@ describe("gateway send mirroring", () => {
       isWebchatConnect: () => false,
     });
 
-    await Promise.resolve();
-    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => {
+      expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(2);
+    });
     expect(mocks.dispatchChannelMessageAction.mock.calls[0]?.[0]).toMatchObject({
       conversationReadOrigin: "direct-operator",
     });
@@ -1440,6 +1441,85 @@ describe("gateway send mirroring", () => {
     expect(firstRespondCall(retryRespond)?.[0]).toBe(true);
     expect(firstRespondCall(retryRespond)?.[3]?.cached).toBe(true);
   });
+
+  it.each([
+    {
+      name: "send",
+      method: "send" as const,
+      request: {
+        to: "channel:C1",
+        message: "hi",
+        idempotencyKey: "idem-send-deferred-route-race",
+      },
+      providerCall: mocks.deliverOutboundPayloads,
+    },
+    {
+      name: "poll",
+      method: "poll" as const,
+      request: {
+        to: "channel:C1",
+        question: "Q?",
+        options: ["A", "B"],
+        idempotencyKey: "idem-poll-deferred-route-race",
+      },
+      providerCall: mocks.sendPoll,
+    },
+  ])(
+    "keeps the first deferred $name route when a concurrent retry sees newer defaults",
+    async (testCase) => {
+      const firstSelection = createDeferred<{ channel: string; configured: string[] }>();
+      mocks.resolveMessageChannelSelection
+        .mockImplementationOnce(async () => await firstSelection.promise)
+        .mockResolvedValue({ channel: "discord", configured: ["discord"] });
+      mockMutableMessageRouteAccounts(() => "primary");
+
+      const providerDeferred = createDeferred<unknown>();
+      if (testCase.method === "send") {
+        mocks.deliverOutboundPayloads.mockReturnValueOnce(providerDeferred.promise as never);
+      } else {
+        mocks.sendPoll.mockReturnValueOnce(providerDeferred.promise as never);
+      }
+
+      const context = makeContext();
+      const firstRespond = vi.fn();
+      const retryRespond = vi.fn();
+      const firstRequest = invokeGatewayMessageMethod({
+        method: testCase.method,
+        request: testCase.request,
+        respond: firstRespond,
+        context,
+      });
+      await vi.waitFor(() => {
+        expect(mocks.resolveMessageChannelSelection).toHaveBeenCalledTimes(1);
+      });
+
+      const retryRequest = invokeGatewayMessageMethod({
+        method: testCase.method,
+        request: testCase.request,
+        respond: retryRespond,
+        context,
+      });
+      await Promise.resolve();
+      expect(mocks.resolveMessageChannelSelection).toHaveBeenCalledTimes(1);
+
+      firstSelection.resolve({ channel: "slack", configured: ["slack"] });
+      await vi.waitFor(() => {
+        expect(testCase.providerCall).toHaveBeenCalledTimes(1);
+      });
+      if (testCase.method === "send") {
+        providerDeferred.resolve([{ messageId: "m-race", channel: "slack" }]);
+      } else {
+        providerDeferred.resolve({ messageId: "poll-race", pollId: "poll-race" });
+      }
+      await Promise.all([firstRequest, retryRequest]);
+
+      expect(mocks.resolveMessageChannelSelection).toHaveBeenCalledTimes(1);
+      expect(testCase.providerCall).toHaveBeenCalledTimes(1);
+      expect(firstRespondCall(firstRespond)?.[0]).toBe(true);
+      expect(firstRespondCall(retryRespond)?.[0]).toBe(true);
+      expect(firstRespondCall(retryRespond)?.[3]?.cached).toBe(true);
+    },
+  );
 
   it("dedupes omitted and explicit default poll routes", async () => {
     const context = makeContext();

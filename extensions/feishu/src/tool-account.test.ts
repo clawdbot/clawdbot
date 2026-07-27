@@ -57,6 +57,26 @@ describe("resolveFeishuToolAccount", () => {
     expect(resolved.accountId).toBe("work");
   });
 
+  it("allows the explicit unlisted default backed by top-level credentials", () => {
+    const resolved = resolveFeishuToolAccount({
+      api: {
+        config: {
+          channels: {
+            feishu: {
+              defaultAccount: "ops",
+              appId: "base-app-id",
+              appSecret: "base-app-secret", // pragma: allowlist secret
+            },
+          },
+        },
+      },
+      executeParams: { accountId: "OPS" },
+    });
+
+    expect(resolved.accountId).toBe("ops");
+    expect(resolved.configured).toBe(true);
+  });
+
   it.each([
     { name: "malformed", accountId: "!!!", error: "Invalid Feishu account ID" },
     { name: "unknown", accountId: "missing", error: "Unknown Feishu account" },

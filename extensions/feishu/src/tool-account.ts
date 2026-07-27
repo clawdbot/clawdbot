@@ -5,6 +5,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import {
   listFeishuAccountIds,
+  resolveDefaultFeishuAccountId,
   resolveFeishuAccount,
   resolveFeishuRuntimeAccount,
 } from "./accounts.js";
@@ -31,9 +32,16 @@ function resolveImplicitToolAccountId(params: {
     if (!normalizedAccountId) {
       throw new Error(`Invalid Feishu account ID "${explicitAccountId}"`);
     }
-    const listedAccountId = listFeishuAccountIds(params.api.config).find(
-      (accountId) => normalizeOptionalAccountId(accountId) === normalizedAccountId,
-    );
+    const listedAccountId =
+      listFeishuAccountIds(params.api.config).find(
+        (accountId) => normalizeOptionalAccountId(accountId) === normalizedAccountId,
+      ) ??
+      (() => {
+        const defaultAccountId = resolveDefaultFeishuAccountId(params.api.config);
+        return normalizeOptionalAccountId(defaultAccountId) === normalizedAccountId
+          ? defaultAccountId
+          : undefined;
+      })();
     if (!listedAccountId) {
       throw new Error(`Unknown Feishu account "${explicitAccountId}"`);
     }

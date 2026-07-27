@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveChannelAccountEnabled } from "../../channels/account-summary.js";
+import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { getChannelPlugin, listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
@@ -21,9 +22,19 @@ function resolveListedAccountId(params: {
   cfg: OpenClawConfig;
   accountId: string;
 }): string | undefined {
-  return params.plugin.config
+  const listedAccountId = params.plugin.config
     .listAccountIds(params.cfg)
     .find((candidate) => normalizeOptionalAccountId(candidate) === params.accountId);
+  if (listedAccountId) {
+    return listedAccountId;
+  }
+  const defaultAccountId = resolveChannelDefaultAccountId({
+    plugin: params.plugin,
+    cfg: params.cfg,
+  });
+  return normalizeOptionalAccountId(defaultAccountId) === params.accountId
+    ? defaultAccountId
+    : undefined;
 }
 
 function isExplicitAccountDisabled(params: {
