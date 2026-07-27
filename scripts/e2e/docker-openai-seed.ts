@@ -1,5 +1,9 @@
 // Shared Docker E2E OpenAI provider config seed helper.
 // Uses packaged plugin-sdk runtime modules so seeded configs match the npm tarball.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   applyProviderConfigWithDefaultModelPreset,
   type ModelDefinitionConfig,
@@ -46,4 +50,29 @@ export function applyDockerOpenAiProviderConfig(
   }
   openAiProvider.apiKey = apiKey;
   return seededConfig;
+}
+
+export async function writeDockerOpenAiProviderConfigFile(): Promise<string> {
+  const stateDir = process.env.OPENCLAW_STATE_DIR?.trim() || path.join(os.homedir(), ".openclaw");
+  const configPath =
+    process.env.OPENCLAW_CONFIG_PATH?.trim() || path.join(stateDir, "openclaw.json");
+  const apiKey = process.env.OPENAI_API_KEY?.trim() || "sk-docker-smoke-test";
+  let config: OpenClawConfig = {};
+  try {
+    config = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  const seededConfig = applyDockerOpenAiProviderConfig(config, apiKey);
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(configPath, `${JSON.stringify(seededConfig, null, 2)}\n`, "utf8");
+  return configPath;
+}
+
+if (import.meta.url === pathToFileURL(path.resolve(process.argv[1] ?? "")).href) {
+  const configPath = await writeDockerOpenAiProviderConfigFile();
+  process.stdout.write(`${JSON.stringify({ ok: true, configPath })}\n`);
 }

@@ -137,6 +137,9 @@ docker_e2e_build_or_reuse() {
     # The Dockerfile never sees repo sources as app input; functional installs
     # exactly this tarball through a named BuildKit context.
     build_args+=(--build-context "openclaw_package=$package_context")
+    local package_sha256
+    package_sha256="$(node -e 'const { createHash } = require("node:crypto"); const { readFileSync } = require("node:fs"); process.stdout.write(createHash("sha256").update(readFileSync(process.argv[1])).digest("hex"));' "$package_tgz")"
+    build_args+=(--build-arg "OPENCLAW_PACKAGE_SHA256=$package_sha256")
   fi
   build_args+=(-t "$image_name" -f "$dockerfile" "$context")
   local build_status=0

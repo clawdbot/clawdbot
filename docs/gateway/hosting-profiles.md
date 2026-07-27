@@ -74,6 +74,29 @@ loopback-only listener; both states produce a nonzero exit for host and CI use.
 The JSON result embeds the canonical readiness result as its evidence. Validation does not load
 local configuration, invoke plugins, reproduce profile predicates, or run a second evaluator.
 
+## Release conformance
+
+OpenClaw's package acceptance path runs every Standard Hosting Profile against the packaged
+candidate, including expected non-ready states and recovery transitions:
+
+```bash
+pnpm test:docker:hosting-profiles
+```
+
+The lane invokes `openclaw hosting profiles validate --json` against each running Gateway and
+writes `hosting-profile-conformance.json`. Under the Docker release scheduler, the artifact is
+stored with the lane's `.artifacts/docker-tests/` evidence and uploaded by the existing release
+workflow. For a direct run, set `OPENCLAW_HOSTING_PROFILES_E2E_ARTIFACT_DIR` to choose its output
+directory.
+
+The versioned artifact identifies the installed OpenClaw package, immutable Docker image ID, and
+candidate tarball SHA-256 when available. It retains the expected and observed command exit,
+conformance state, readiness state, findings, and canonical readiness result
+for every scenario. Expected `503` states pass only when the profile remains structurally
+conformant and reports `ready: false`; missing, duplicate, malformed, or mismatched evidence fails
+the lane closed. This makes the artifact usable as release evidence without introducing another
+profile evaluator.
+
 ## Select a profile
 
 Use one of these equivalent inputs:

@@ -82,6 +82,9 @@ RUN --mount=type=cache,target=/home/appuser/.npm,uid=1001,gid=1001,sharing=locke
 
 FROM bare AS functional
 
+ARG OPENCLAW_PACKAGE_SHA256
+LABEL org.opencontainers.image.openclaw.package.sha256=$OPENCLAW_PACKAGE_SHA256
+
 # The app under test enters through the named BuildKit context, not by copying
 # checkout sources into the image.
 COPY --from=openclaw_package --chown=appuser:appuser openclaw-current.tgz /tmp/openclaw-current.tgz
