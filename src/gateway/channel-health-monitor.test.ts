@@ -238,6 +238,21 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
+  it("does not start a replacement when channel teardown fails", async () => {
+    const manager = createSlackSnapshotManager(disconnectedAccount(Date.now() - 300_000), {
+      stopChannel: vi.fn(async () => {
+        throw new Error("stop failed");
+      }),
+    });
+
+    const monitor = await startAndRunCheck(manager, { cooldownCycles: 0 });
+
+    expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default", { manual: false });
+    expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
+    expect(manager.startChannel).not.toHaveBeenCalled();
+    monitor.stop();
+  });
+
   it("accepts timing.monitorStartupGraceMs", async () => {
     const manager = createMockChannelManager();
     const monitor = startDefaultMonitor(manager, { timing: { monitorStartupGraceMs: 60_000 } });

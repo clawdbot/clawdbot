@@ -63,6 +63,10 @@ export type TestChatPane = HTMLElement & {
   onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
   sessionKey: string;
   switchPaneSession: (nextSessionKey: string) => void;
+  deferSessionHydrationUntilTranscript: (
+    sessionKey: string,
+    transcriptLoad: Promise<unknown>,
+  ) => void;
   paneTitle: string;
   catalogSession: SessionCatalogSession | null;
   catalogItemMessage: (item: SessionCatalogTranscriptItem) => Record<string, unknown> | null;

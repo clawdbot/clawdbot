@@ -2660,74 +2660,42 @@ describe("runCli exit behavior", () => {
     }
   });
 
-  it("starts onboarding for bare root invocations before config exists", async () => {
-    readConfigFileSnapshotMock.mockResolvedValueOnce({
-      exists: false,
-      valid: true,
-      sourceConfig: {},
-    });
-
-    await withInteractiveTty(async () => {
-      await runCli(["node", "openclaw"]);
-    });
-
-    expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
-    expect(setupWizardCommandMock).toHaveBeenCalledWith({});
-    expect(tryRouteCliMock).not.toHaveBeenCalled();
-    expect(buildProgramMock).not.toHaveBeenCalled();
-  });
-
-  it("starts onboarding for bare root invocations when config is empty", async () => {
-    readConfigFileSnapshotMock.mockResolvedValueOnce({
-      exists: true,
-      valid: true,
-      sourceConfig: {},
-    });
-
-    await withInteractiveTty(async () => {
-      await runCli(["node", "openclaw"]);
-    });
-
-    expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
-    expect(setupWizardCommandMock).toHaveBeenCalledWith({});
-    expect(tryRouteCliMock).not.toHaveBeenCalled();
-    expect(buildProgramMock).not.toHaveBeenCalled();
-  });
-
-  it("starts onboarding for bare root invocations when config only has metadata", async () => {
-    readConfigFileSnapshotMock.mockResolvedValueOnce({
-      exists: true,
-      valid: true,
-      sourceConfig: {
-        $schema: "https://openclaw.ai/config.json",
-        meta: { updatedBy: "fixture" },
+  it.each([
+    {
+      name: "starts onboarding for bare root invocations before config exists",
+      snapshot: { exists: false, valid: true, sourceConfig: {} },
+    },
+    {
+      name: "starts onboarding for bare root invocations when config is empty",
+      snapshot: { exists: true, valid: true, sourceConfig: {} },
+    },
+    {
+      name: "starts onboarding for bare root invocations when config only has metadata",
+      snapshot: {
+        exists: true,
+        valid: true,
+        sourceConfig: {
+          $schema: "https://openclaw.ai/config.json",
+          meta: { updatedBy: "fixture" },
+        },
       },
-    });
-
-    await withInteractiveTty(async () => {
-      await runCli(["node", "openclaw"]);
-    });
-
-    expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
-    expect(setupWizardCommandMock).toHaveBeenCalledWith({});
-    expect(tryRouteCliMock).not.toHaveBeenCalled();
-    expect(buildProgramMock).not.toHaveBeenCalled();
-  });
-
-  it("resumes onboarding when an interrupted first run only persisted risk acknowledgement", async () => {
-    readConfigFileSnapshotMock.mockResolvedValueOnce({
-      exists: true,
-      valid: true,
-      sourceConfig: {
-        meta: { updatedBy: "fixture" },
-        wizard: { securityAcknowledgedAt: "2026-07-13T00:00:00.000Z" },
+    },
+    {
+      name: "resumes onboarding when an interrupted first run only persisted risk acknowledgement",
+      snapshot: {
+        exists: true,
+        valid: true,
+        sourceConfig: {
+          meta: { updatedBy: "fixture" },
+          wizard: { securityAcknowledgedAt: "2026-07-13T00:00:00.000Z" },
+        },
       },
-    });
+    },
+  ])("$name", async ({ snapshot }) => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce(snapshot);
+    await withInteractiveTty(async () => runCli(["node", "openclaw"]));
 
-    await withInteractiveTty(async () => {
-      await runCli(["node", "openclaw"]);
-    });
-
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledOnce();
     expect(setupWizardCommandMock).toHaveBeenCalledWith({});
     expect(tryRouteCliMock).not.toHaveBeenCalled();
     expect(buildProgramMock).not.toHaveBeenCalled();

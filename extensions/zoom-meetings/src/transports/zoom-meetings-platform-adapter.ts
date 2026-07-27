@@ -102,10 +102,10 @@ export const ZOOM_MEETINGS_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
       }),
     shouldRetryJoinStatus: (health) =>
       health.inCall === true &&
-      ((health.manualActionReason === "zoom-audio-choice-required" &&
+      ((health.manualAction?.reason === "zoom-audio-choice-required" &&
         health.audioInputRouted === true &&
         health.audioOutputRouteRetryable === true) ||
-        (health.manualActionRequired !== true &&
+        (health.manualAction === undefined &&
           health.captionCaptureRequested === true &&
           health.captioning !== true)),
     browserControlUnavailable: () => ({

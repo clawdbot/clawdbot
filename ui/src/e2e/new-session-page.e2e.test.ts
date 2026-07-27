@@ -109,6 +109,71 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     await server?.close();
   });
 
+  it("grows the first prompt through ten lines before using a narrow scrollbar", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      const message = page.locator(".new-session-page__message");
+      await message.waitFor();
+
+      const initial = await message.evaluate((element) => ({
+        height: element.clientHeight,
+        overflowY: getComputedStyle(element).overflowY,
+      }));
+      await message.fill(Array.from({ length: 10 }, (_, index) => `line ${index + 1}`).join("\n"));
+      const tenLines = await message.evaluate((element) => {
+        const style = getComputedStyle(element);
+        return {
+          height: element.clientHeight,
+          lineHeight: Number.parseFloat(style.lineHeight),
+          overflowY: style.overflowY,
+          padding: Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom),
+          scrollbarWidth: style.scrollbarWidth,
+          webkitScrollbarWidth: getComputedStyle(element, "::-webkit-scrollbar").width,
+        };
+      });
+
+      expect(tenLines.height).toBeGreaterThan(initial.height);
+      expect(tenLines.height).toBeGreaterThanOrEqual(
+        Math.floor(tenLines.lineHeight * 10 + tenLines.padding) - 1,
+      );
+      expect(tenLines.overflowY).toBe("hidden");
+      expect(tenLines.scrollbarWidth).toBe("thin");
+      expect(Number.parseFloat(tenLines.webkitScrollbarWidth)).toBeLessThanOrEqual(6);
+      await captureUiProof(page, "new-session-composer-ten-lines.png");
+
+      const longPrompt = Array.from({ length: 14 }, (_, index) => `line ${index + 1}`).join("\n");
+      await message.fill(longPrompt);
+      const capped = await message.evaluate((element) => ({
+        clientHeight: element.clientHeight,
+        overflowY: getComputedStyle(element).overflowY,
+        scrollHeight: element.scrollHeight,
+      }));
+      expect(capped.clientHeight).toBeLessThan(capped.scrollHeight);
+      expect(capped.overflowY).toBe("auto");
+      await captureUiProof(page, "new-session-composer-capped-scrollbar.png");
+      const start = page.getByRole("button", { name: "Start thread" });
+      await expect(start.isVisible()).resolves.toBe(true);
+      await expect(start.isEnabled()).resolves.toBe(true);
+      await start.focus();
+      await expect(start.evaluate((element) => document.activeElement === element)).resolves.toBe(
+        true,
+      );
+      await start.press("Enter");
+      await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
+        params: { message: longPrompt },
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("pastes an image into the draft and forwards it with the initial turn", async () => {
     const context = await browser.newContext({
       locale: "en-US",

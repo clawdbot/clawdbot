@@ -18,6 +18,10 @@ import {
   calculateCost,
   clampThinkingLevel,
 } from "../model-utils.js";
+import {
+  resolveOpenAICompletionsCompat,
+  type ResolvedOpenAICompletionsCompat,
+} from "../transports/openai-completions-compat.js";
 import { resolveOpenAIReasoningEffortMap } from "../transports/openai-reasoning-compat.js";
 import { transportAbortError } from "../transports/transport-stream-shared.js";
 import type {
@@ -59,10 +63,6 @@ import {
 import { resolveCacheRetention } from "./cache-retention.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
-import {
-  resolveOpenAICompletionsCompat,
-  type ResolvedOpenAICompletionsCompat,
-} from "./openai-completions-compat.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import {
   resolveOpenAICompletionsResponseFormat,

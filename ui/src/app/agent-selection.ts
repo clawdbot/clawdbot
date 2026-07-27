@@ -35,15 +35,14 @@ export function createAgentSelectionCapability(
   const reconcileSelectedId = (value: string | null): string | null => {
     const selectedId = value?.trim() ? normalizeAgentId(value) : null;
     const agentsList = roster.state.agentsList;
-    if (
-      !selectedId ||
-      !agentsList ||
-      agentsList.agents.length === 0 ||
-      agentsList.agents.some((agent) => normalizeAgentId(agent.id) === selectedId)
-    ) {
+    if (!agentsList || agentsList.agents.length === 0) {
       return selectedId;
     }
-    return normalizeAgentId(agentsList.defaultId);
+    const defaultId = normalizeAgentId(agentsList.defaultId);
+    return !selectedId ||
+      !agentsList.agents.some((agent) => normalizeAgentId(agent.id) === selectedId)
+      ? defaultId
+      : selectedId;
   };
   const resolveScopeId = (value: string | null): string | null => {
     const scopeId = value?.trim() ? normalizeAgentId(value) : null;
@@ -56,11 +55,13 @@ export function createAgentSelectionCapability(
   const initialId = gateway.snapshot.assistantAgentId
     ? normalizeAgentId(gateway.snapshot.assistantAgentId)
     : null;
+  const initialSelectedId = reconcileSelectedId(initialId);
   let state: AgentSelectionState = {
-    selectedId: initialId,
-    scopeId: resolveScopeId(initialId),
+    selectedId: initialSelectedId,
+    scopeId: resolveScopeId(initialSelectedId),
   };
   let client = gateway.snapshot.client;
+  let assistantAgentId = initialId;
   const listeners = new Set<(next: AgentSelectionState) => void>();
 
   const publish = (next: AgentSelectionState) => {
@@ -79,10 +80,16 @@ export function createAgentSelectionCapability(
   };
 
   gateway.subscribe((next) => {
-    if (next.client !== client) {
-      client = next.client;
-      const selectedId = next.assistantAgentId ? normalizeAgentId(next.assistantAgentId) : null;
-      publish({ selectedId, scopeId: selectedId });
+    const nextAssistantAgentId = next.assistantAgentId
+      ? normalizeAgentId(next.assistantAgentId)
+      : null;
+    const clientChanged = next.client !== client;
+    const assistantChanged = nextAssistantAgentId !== assistantAgentId;
+    const followedPreviousDefault = state.selectedId === assistantAgentId;
+    client = next.client;
+    assistantAgentId = nextAssistantAgentId;
+    if (clientChanged || (assistantChanged && (!state.selectedId || followedPreviousDefault))) {
+      publish({ selectedId: nextAssistantAgentId, scopeId: nextAssistantAgentId });
     }
   });
   roster.subscribe(() => publish(state));

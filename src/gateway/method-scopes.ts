@@ -89,6 +89,7 @@ const SESSIONS_PATCH_WRITE_SCOPE_FIELDS: ReadonlySet<string> = new Set([
   "agentId",
   "label",
   "category",
+  "boardFace",
   "icon",
   "pinned",
   "archived",

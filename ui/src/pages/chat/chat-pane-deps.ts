@@ -161,6 +161,7 @@ export type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 export {
   applyChatAgentsList,
   clearChatHistory,
+  loadChatBranches,
   loadChatHistory,
   loadOlderChatHistoryPage,
   rewindChatHistory,
@@ -292,6 +293,7 @@ export {
 export {
   reconcileWaitingApprovalsFromSnapshot,
   resolveActiveRunOutputTokens,
+  resolveChatProjectionRunId,
 } from "./tool-stream.ts";
 export { configureToolTitleFetcher } from "./tool-titles.ts";
 export { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";

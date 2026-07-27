@@ -10,6 +10,7 @@ import type { FastModeSource } from "../../../src/shared/fast-mode.js";
 import type {
   GatewayAgentRuntime,
   GatewayAgentRow as SharedGatewayAgentRow,
+  SessionBoardFace,
   SessionsListResultBase,
   SessionsPatchResultBase,
 } from "../../../src/shared/session-types.js";
@@ -528,6 +529,8 @@ export type GatewaySessionRow = {
   label?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
   category?: string;
+  /** Preferred Control UI face for generic session navigation. */
+  boardFace?: SessionBoardFace;
   displayName?: string;
   derivedTitle?: string;
   channel?: string;

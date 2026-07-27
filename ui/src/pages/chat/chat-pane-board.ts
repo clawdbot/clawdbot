@@ -371,7 +371,9 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     };
   }
 
-  protected persistBoardSessionView(patch: Partial<BoardSessionView>): void {
+  protected persistBoardSessionView(
+    patch: Partial<BoardSessionView> & { face?: "chat" | "dashboard" },
+  ): void {
     if (patch.face) {
       this.onFaceChange?.(patch.face);
     }

@@ -33,6 +33,7 @@ type RuntimeDetails = {
   version: string | null;
   execPath: string | null;
   pathEnv: string;
+  hasNodeSqlite: boolean;
 };
 
 const SEMVER_RE = /(\d+)\.(\d+)\.(\d+)/;
@@ -79,13 +80,27 @@ function detectRuntime(): RuntimeDetails {
     version,
     execPath: process.execPath ?? null,
     pathEnv: process.env.PATH ?? "(not set)",
+    hasNodeSqlite: currentRuntimeProvidesNodeSqlite(),
   };
+}
+
+// Bun >=1.4 (Rust rewrite) ships node:sqlite; older Buns do not. Feature-probe
+// instead of version-gating so the guard tracks the actual runtime capability.
+function currentRuntimeProvidesNodeSqlite(): boolean {
+  try {
+    return Boolean(process.getBuiltinModule?.("node:sqlite"));
+  } catch {
+    return false;
+  }
 }
 
 /** Returns whether a detected runtime meets OpenClaw's minimum runtime contract. */
 function runtimeSatisfies(details: RuntimeDetails): boolean {
   if (details.kind === "node") {
     return isSupportedNodeVersion(details.version);
+  }
+  if (details.kind === "bun") {
+    return details.hasNodeSqlite;
   }
   return false;
 }

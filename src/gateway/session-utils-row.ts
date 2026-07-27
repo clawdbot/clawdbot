@@ -416,6 +416,7 @@ export function buildGatewaySessionRow(params: {
     kind: classifySessionKey(key, entry),
     label: entry?.label,
     category: entry?.category,
+    boardFace: entry?.boardFace,
     displayName,
     derivedTitle,
     lastMessagePreview,

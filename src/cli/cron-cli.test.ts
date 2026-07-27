@@ -207,6 +207,14 @@ async function runCronCommand(args: string[]): Promise<void> {
   await program.parseAsync(args, { from: "user" });
 }
 
+function namedCronAddArgs(name: string, ...args: string[]): string[] {
+  return ["--name", name, "--cron", "* * * * *", ...args];
+}
+
+async function runNamedCronAdd(name: string, ...args: string[]): Promise<void> {
+  await runCronCommand(["cron", "add", ...namedCronAddArgs(name, ...args)]);
+}
+
 async function expectCronCommandExit(args: string[]): Promise<void> {
   await expect(runCronCommand(args)).rejects.toThrow("__exit__:1");
 }
@@ -443,13 +451,8 @@ describe("cron cli", () => {
   });
 
   it("trims model and thinking on cron add", { timeout: CRON_CLI_TEST_TIMEOUT_MS }, async () => {
-    await runCronCommand([
-      "cron",
-      "add",
-      "--name",
+    await runNamedCronAdd(
       "Daily",
-      "--cron",
-      "* * * * *",
       "--session",
       "isolated",
       "--message",
@@ -458,7 +461,7 @@ describe("cron cli", () => {
       "  opus  ",
       "--thinking",
       "  low  ",
-    ]);
+    );
 
     const addCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.add");
     const params = addCall?.[2] as {
@@ -470,18 +473,7 @@ describe("cron cli", () => {
   });
 
   it("defaults isolated cron add to announce delivery", async () => {
-    await runCronCommand([
-      "cron",
-      "add",
-      "--name",
-      "Daily",
-      "--cron",
-      "* * * * *",
-      "--session",
-      "isolated",
-      "--message",
-      "hello",
-    ]);
+    await runNamedCronAdd("Daily", "--session", "isolated", "--message", "hello");
 
     const addCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.add");
     const params = addCall?.[2] as { delivery?: { mode?: string } };
@@ -595,32 +587,14 @@ describe("cron cli", () => {
   });
 
   it("infers sessionTarget from payload when --session is omitted", async () => {
-    await runCronCommand([
-      "cron",
-      "add",
-      "--name",
-      "Main reminder",
-      "--cron",
-      "* * * * *",
-      "--system-event",
-      "hi",
-    ]);
+    await runNamedCronAdd("Main reminder", "--system-event", "hi");
 
     let addCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.add");
     let params = addCall?.[2] as { sessionTarget?: string; payload?: { kind?: string } };
     expect(params?.sessionTarget).toBe("main");
     expect(params?.payload?.kind).toBe("systemEvent");
 
-    await runCronCommand([
-      "cron",
-      "add",
-      "--name",
-      "Isolated task",
-      "--cron",
-      "* * * * *",
-      "--message",
-      "hello",
-    ]);
+    await runNamedCronAdd("Isolated task", "--message", "hello");
 
     addCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.add");
     params = addCall?.[2] as { sessionTarget?: string; payload?: { kind?: string } };
@@ -797,40 +771,38 @@ describe("cron cli", () => {
   });
 
   it("includes --account on isolated cron add delivery", async () => {
-    const params = await runCronAddAndGetParams([
-      "--name",
-      "accounted add",
-      "--cron",
-      "* * * * *",
-      "--session",
-      "isolated",
-      "--message",
-      "hello",
-      "--account",
-      "  coordinator  ",
-    ]);
+    const params = await runCronAddAndGetParams(
+      namedCronAddArgs(
+        "accounted add",
+        "--session",
+        "isolated",
+        "--message",
+        "hello",
+        "--account",
+        "  coordinator  ",
+      ),
+    );
     expect(params?.delivery?.mode).toBe("announce");
     expect(params?.delivery?.accountId).toBe("coordinator");
   });
 
   it("includes --thread-id on Telegram cron add delivery", async () => {
-    const params = await runCronAddAndGetParams([
-      "--name",
-      "telegram topic add",
-      "--cron",
-      "* * * * *",
-      "--session",
-      "SESSION:agent:ops:telegram:group:-100123:topic:42",
-      "--message",
-      "hello",
-      "--deliver",
-      "--channel",
-      "telegram",
-      "--to",
-      "-100123",
-      "--thread-id",
-      " 42 ",
-    ]);
+    const params = await runCronAddAndGetParams(
+      namedCronAddArgs(
+        "telegram topic add",
+        "--session",
+        "SESSION:agent:ops:telegram:group:-100123:topic:42",
+        "--message",
+        "hello",
+        "--deliver",
+        "--channel",
+        "telegram",
+        "--to",
+        "-100123",
+        "--thread-id",
+        " 42 ",
+      ),
+    );
 
     expect(params?.sessionTarget).toBe("session:agent:ops:telegram:group:-100123:topic:42");
     expect(params?.delivery?.mode).toBe("announce");
@@ -864,37 +836,22 @@ describe("cron cli", () => {
     );
   });
 
-  it("rejects invalid --thread-id on cron add", async () => {
+  it.each([
+    {
+      name: "rejects invalid --thread-id on cron add",
+      job: "invalid topic add",
+      value: "topic-42",
+    },
+    {
+      name: "rejects negative --thread-id on cron add",
+      job: "invalid negative topic add",
+      value: "-5",
+    },
+  ])("$name", async ({ job, value }) => {
     await expectCronCommandExit([
       "cron",
       "add",
-      "--name",
-      "invalid topic add",
-      "--cron",
-      "* * * * *",
-      "--session",
-      "isolated",
-      "--message",
-      "hello",
-      "--thread-id",
-      "topic-42",
-    ]);
-  });
-
-  it("rejects negative --thread-id on cron add", async () => {
-    await expectCronCommandExit([
-      "cron",
-      "add",
-      "--name",
-      "invalid negative topic add",
-      "--cron",
-      "* * * * *",
-      "--session",
-      "isolated",
-      "--message",
-      "hello",
-      "--thread-id",
-      "-5",
+      ...namedCronAddArgs(job, "--session", "isolated", "--message", "hello", "--thread-id", value),
     ]);
   });
 
@@ -1005,20 +962,15 @@ describe("cron cli", () => {
   });
 
   it("sends agent id on cron add", async () => {
-    await runCronCommand([
-      "cron",
-      "add",
-      "--name",
+    await runNamedCronAdd(
       "Agent pinned",
-      "--cron",
-      "* * * * *",
       "--session",
       "isolated",
       "--message",
       "hi",
       "--agent",
       "ops",
-    ]);
+    );
 
     const addCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.add");
     const params = addCall?.[2] as { agentId?: string };
@@ -1027,33 +979,14 @@ describe("cron cli", () => {
   });
 
   it("warns when --agent is not specified on cron add with --message", async () => {
-    await runCronCommand([
-      "cron",
-      "add",
-      "--name",
-      "No agent",
-      "--cron",
-      "* * * * *",
-      "--message",
-      "hello",
-    ]);
+    await runNamedCronAdd("No agent", "--message", "hello");
 
     expectRuntimeErrorContaining("No --agent specified");
     expectRuntimeErrorContaining("configured default agent");
   });
 
   it("keeps the missing --agent warning off cron add JSON stdout", async () => {
-    await runCronCommand([
-      "cron",
-      "add",
-      "--name",
-      "No agent JSON",
-      "--cron",
-      "* * * * *",
-      "--message",
-      "hello",
-      "--json",
-    ]);
+    await runNamedCronAdd("No agent JSON", "--message", "hello", "--json");
 
     expectRuntimeErrorContaining("No --agent specified");
     const stdout = stdoutText();
@@ -1072,114 +1005,81 @@ describe("cron cli", () => {
   });
 
   it("warns when --agent is blank on cron add with --message", async () => {
-    const params = await runCronAddAndGetParams([
-      "--name",
-      "Blank agent",
-      "--cron",
-      "* * * * *",
-      "--message",
-      "hello",
-      "--agent",
-      "   ",
-    ]);
+    const params = await runCronAddAndGetParams(
+      namedCronAddArgs("Blank agent", "--message", "hello", "--agent", "   "),
+    );
 
     expect(params?.agentId).toBeUndefined();
     expectRuntimeErrorContaining("No --agent specified");
   });
 
   it("does not warn when --system-event is used (no agent needed)", async () => {
-    await runCronCommand([
-      "cron",
-      "add",
-      "--name",
-      "System event",
-      "--cron",
-      "* * * * *",
-      "--system-event",
-      "tick",
-    ]);
+    await runNamedCronAdd("System event", "--system-event", "tick");
 
     expectNoRuntimeErrorContaining("No --agent specified");
   });
 
   it("does not warn when --command is used (no agent needed)", async () => {
-    await runCronCommand([
-      "cron",
-      "add",
-      "--name",
-      "Command",
-      "--cron",
-      "* * * * *",
-      "--command",
-      "printf ok",
-    ]);
+    await runNamedCronAdd("Command", "--command", "printf ok");
 
     expectNoRuntimeErrorContaining("No --agent specified");
   });
 
   it("warns even when --session-key is provided (user should still specify agent explicitly)", async () => {
-    await runCronCommand([
-      "cron",
-      "add",
-      "--name",
+    await runNamedCronAdd(
       "With session key",
-      "--cron",
-      "* * * * *",
       "--message",
       "hello",
       "--session-key",
       "agent:my-agent:my-session",
-    ]);
+    );
 
     expectRuntimeErrorContaining("No --agent specified");
   });
 
   it("sets lightContext on cron add when --light-context is passed", async () => {
-    const params = await runCronAddAndGetParams([
-      "--name",
-      "Light context",
-      "--cron",
-      "* * * * *",
-      "--session",
-      "isolated",
-      "--message",
-      "hello",
-      "--light-context",
-    ]);
+    const params = await runCronAddAndGetParams(
+      namedCronAddArgs(
+        "Light context",
+        "--session",
+        "isolated",
+        "--message",
+        "hello",
+        "--light-context",
+      ),
+    );
 
     expect(params?.payload?.lightContext).toBe(true);
   });
 
   it("splits PowerShell-style space-separated --tools on cron add", async () => {
-    const params = await runCronAddAndGetParams([
-      "--name",
-      "Tools",
-      "--cron",
-      "* * * * *",
-      "--session",
-      "isolated",
-      "--message",
-      "hello",
-      "--tools",
-      "exec read write",
-    ]);
+    const params = await runCronAddAndGetParams(
+      namedCronAddArgs(
+        "Tools",
+        "--session",
+        "isolated",
+        "--message",
+        "hello",
+        "--tools",
+        "exec read write",
+      ),
+    );
 
     expect(params?.payload?.toolsAllow).toEqual(["exec", "read", "write"]);
   });
 
   it("sets fallback models on cron add", async () => {
-    const params = await runCronAddAndGetParams([
-      "--name",
-      "Fallbacks",
-      "--cron",
-      "* * * * *",
-      "--session",
-      "isolated",
-      "--message",
-      "hello",
-      "--fallbacks",
-      "openrouter/gpt-4.1-mini openai/gpt-5",
-    ]);
+    const params = await runCronAddAndGetParams(
+      namedCronAddArgs(
+        "Fallbacks",
+        "--session",
+        "isolated",
+        "--message",
+        "hello",
+        "--fallbacks",
+        "openrouter/gpt-4.1-mini openai/gpt-5",
+      ),
+    );
 
     expect(params?.payload?.fallbacks).toEqual(["openrouter/gpt-4.1-mini", "openai/gpt-5"]);
   });
@@ -1378,12 +1278,11 @@ describe("cron cli", () => {
     expect(patch?.patch?.sessionTarget).toBe("session:Project-Alpha");
   });
 
-  it("rejects invalid --thread-id on cron edit", async () => {
-    await expectCronCommandExit(["cron", "edit", "job-1", "--thread-id", "topic-42"]);
-  });
-
-  it("rejects negative --thread-id on cron edit", async () => {
-    await expectCronCommandExit(["cron", "edit", "job-1", "--thread-id", "-5"]);
+  it.each([
+    { name: "rejects invalid --thread-id on cron edit", value: "topic-42" },
+    { name: "rejects negative --thread-id on cron edit", value: "-5" },
+  ])("$name", async ({ value }) => {
+    await expectCronCommandExit(["cron", "edit", "job-1", "--thread-id", value]);
   });
 
   it("supports --no-deliver on cron edit", async () => {

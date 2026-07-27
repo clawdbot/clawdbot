@@ -722,8 +722,10 @@ async function captureMeetStatusScript(params: {
       script = requireRecord(request.body, "Meet status request body").fn as string;
       return {
         result: JSON.stringify({
-          manualActionRequired: true,
-          manualActionReason: "meet-admission-required",
+          manualAction: {
+            reason: "meet-admission-required",
+            message: "Waiting for admission",
+          },
         }),
       };
     }
@@ -3764,9 +3766,10 @@ describe("google-meet plugin", () => {
               result: JSON.stringify({
                 inCall: false,
                 lobbyWaiting: true,
-                manualActionRequired: true,
-                manualActionReason: "meet-admission-required",
-                manualActionMessage: "Admit the OpenClaw browser participant in Google Meet.",
+                manualAction: {
+                  reason: "meet-admission-required",
+                  message: "Admit the OpenClaw browser participant in Google Meet.",
+                },
                 title: "Meet",
                 url: MEET_URL,
               }),
@@ -3970,9 +3973,10 @@ describe("google-meet plugin", () => {
           }),
           inspect: () => ({
             inCall: false,
-            manualActionRequired: true,
-            manualActionReason: "meet-audio-choice-required",
-            manualActionMessage: "Choose the Meet microphone path manually.",
+            manualAction: {
+              reason: "meet-audio-choice-required",
+              message: "Choose the Meet microphone path manually.",
+            },
             title: "Meet",
             url: MEET_URL,
           }),
@@ -3989,9 +3993,12 @@ describe("google-meet plugin", () => {
 
     const status = (await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.status", {
       sessionId: join.session.id,
-    })) as { session?: { chrome?: { health?: { manualActionRequired?: boolean } } } };
+    })) as { session?: { chrome?: { health?: { manualAction?: unknown } } } };
 
-    expect(status.session?.chrome?.health?.manualActionRequired).toBe(true);
+    expect(status.session?.chrome?.health?.manualAction).toEqual({
+      reason: "meet-audio-choice-required",
+      message: "Choose the Meet microphone path manually.",
+    });
     const actCall = nodesInvoke.mock.calls.find(([rawCall]) => {
       const call = requireRecord(rawCall, "node invoke");
       const params = requireRecord(call.params, "node invoke params");
@@ -4288,15 +4295,12 @@ describe("google-meet plugin", () => {
 
     const result = JSON.parse(await inspect()) as {
       inCall?: boolean;
-      manualActionRequired?: boolean;
-      manualActionReason?: string;
-      manualActionMessage?: string;
+      manualAction?: { reason: string; message: string };
     };
 
     expect(result.inCall).toBe(true);
-    expect(result.manualActionRequired).toBe(true);
-    expect(result.manualActionReason).toBe("meet-permission-required");
-    expect(result.manualActionMessage).toContain("Allow microphone/camera/speaker permissions");
+    expect(result.manualAction?.reason).toBe("meet-permission-required");
+    expect(result.manualAction?.message).toContain("Allow microphone/camera/speaker permissions");
   });
 
   it("does not auto-join when Meet is already active elsewhere", async () => {
@@ -4336,11 +4340,11 @@ describe("google-meet plugin", () => {
 
     const result = JSON.parse(await inspect()) as {
       clickedJoin?: boolean;
-      manualActionReason?: string;
+      manualAction?: { reason: string; message: string };
     };
 
     expect(result.clickedJoin).toBe(false);
-    expect(result.manualActionReason).toBe("meet-session-conflict");
+    expect(result.manualAction?.reason).toBe("meet-session-conflict");
     expect(joinElsewhere.click).not.toHaveBeenCalled();
   });
 
@@ -4847,9 +4851,10 @@ describe("google-meet plugin", () => {
     expect(result.details.found).toBe(true);
     expect(result.details.targetId).toBe("existing-meet-tab");
     const browser = requireRecord(result.details.browser, "recovered browser state");
-    expect(browser.manualActionRequired).toBe(true);
-    expect(browser.manualActionReason).toBe("meet-locale-required");
-    expect(browser.manualActionMessage).toContain("not pinned to English");
+    expect(browser.manualAction).toMatchObject({
+      reason: "meet-locale-required",
+      message: expect.stringContaining("not pinned to English"),
+    });
     const focusCall = nodesInvoke.mock.calls.find(([rawCall]) => {
       const call = requireRecord(rawCall, "node invoke");
       const params = requireRecord(call.params, "node invoke params");
@@ -4941,9 +4946,10 @@ describe("google-meet plugin", () => {
           focus: true,
           inspect: () => ({
             inCall: false,
-            manualActionRequired: true,
-            manualActionReason: "google-login-required",
-            manualActionMessage: "Sign in to Google, then retry.",
+            manualAction: {
+              reason: "google-login-required",
+              message: "Sign in to Google, then retry.",
+            },
             url: "https://accounts.google.com/signin",
           }),
         }),
@@ -4954,7 +4960,10 @@ describe("google-meet plugin", () => {
     const result = await tool.execute("id", { action: "recover_current_tab" });
     const browser = requireRecord(result.details.browser, "recovered browser state");
     expect(result.details.targetId).toBe("google-sign-in-tab");
-    expect(browser.manualActionReason).toBe("google-login-required");
+    expect(browser.manualAction).toEqual({
+      reason: "google-login-required",
+      message: "Sign in to Google, then retry.",
+    });
   });
 
   it("reports an ambiguous local Chrome Meet tab without reloading it", async () => {
@@ -4990,9 +4999,10 @@ describe("google-meet plugin", () => {
           return {
             result: JSON.stringify({
               inCall: false,
-              manualActionRequired: true,
-              manualActionReason: "meet-admission-required",
-              manualActionMessage: "Admit the OpenClaw browser participant in Google Meet.",
+              manualAction: {
+                reason: "meet-admission-required",
+                message: "Admit the OpenClaw browser participant in Google Meet.",
+              },
               title: "Meet",
               url: "https://meet.google.com/abc-defg-hij?authuser=me%40example.com&hl=en",
             }),
@@ -5020,9 +5030,10 @@ describe("google-meet plugin", () => {
     expect(result.details.found).toBe(true);
     expect(result.details.targetId).toBe("local-meet-tab");
     const browser = requireRecord(result.details.browser, "recovered browser state");
-    expect(browser.manualActionRequired).toBe(true);
-    expect(browser.manualActionReason).toBe("meet-locale-required");
-    expect(browser.manualActionMessage).toContain("not pinned to English");
+    expect(browser.manualAction).toMatchObject({
+      reason: "meet-locale-required",
+      message: expect.stringContaining("not pinned to English"),
+    });
     const focusCall = callGatewayFromCli.mock.calls.find(
       (call) => requireRecord(call[2], "browser request").path === "/tabs/focus",
     );
@@ -6155,10 +6166,10 @@ describe("google-meet plugin", () => {
       {
         browserActResult: {
           inCall: false,
-          manualActionRequired: true,
-          manualActionReason: "google-login-required",
-          manualActionMessage:
-            "Sign in to Google in the OpenClaw browser profile, then retry the Meet join.",
+          manualAction: {
+            reason: "google-login-required",
+            message: "Sign in to Google in the OpenClaw browser profile, then retry the Meet join.",
+          },
           title: "Sign in - Google Accounts",
           url: "https://accounts.google.com/signin",
         },
@@ -6177,16 +6188,20 @@ describe("google-meet plugin", () => {
       message: "Say exactly: hello.",
     });
 
-    expect(result.details.manualActionRequired).toBe(true);
-    expect(result.details.manualActionReason).toBe("google-login-required");
+    expect(result.details.manualAction).toEqual({
+      reason: "google-login-required",
+      message: "Sign in to Google in the OpenClaw browser profile, then retry the Meet join.",
+    });
     expect(result.details.spoken).toBe(false);
     expect(result.details.speechReady).toBe(false);
     expect(result.details.speechBlockedReason).toBe("google-login-required");
     const session = requireRecord(result.details.session, "manual action session");
     const chrome = requireRecord(session.chrome, "manual action session chrome");
     const health = requireRecord(chrome.health, "manual action chrome health");
-    expect(health.manualActionRequired).toBe(true);
-    expect(health.manualActionReason).toBe("google-login-required");
+    expect(health.manualAction).toEqual({
+      reason: "google-login-required",
+      message: "Sign in to Google in the OpenClaw browser profile, then retry the Meet join.",
+    });
     expect(health.speechReady).toBe(false);
     expect(health.speechBlockedReason).toBe("google-login-required");
   });
@@ -6223,7 +6238,6 @@ describe("google-meet plugin", () => {
               ? {
                   inCall: true,
                   micMuted: false,
-                  manualActionRequired: false,
                   title: "Meet call",
                   url: MEET_URL,
                 }
@@ -6254,7 +6268,7 @@ describe("google-meet plugin", () => {
         chrome?: {
           health?: {
             inCall?: boolean;
-            manualActionRequired?: boolean;
+            manualAction?: unknown;
             speechBlockedReason?: string;
           };
         };
@@ -6267,7 +6281,7 @@ describe("google-meet plugin", () => {
     const retryChrome = requireRecord(retrySession.chrome, "retry session chrome");
     const retryHealth = requireRecord(retryChrome.health, "retry chrome health");
     expect(retryHealth.inCall).toBe(true);
-    expect(retryHealth.manualActionRequired).toBe(false);
+    expect(retryHealth.manualAction).toBeUndefined();
     expect(retryHealth.speechBlockedReason).toBe("audio-bridge-unavailable");
     const nodeStartCalls = nodesInvoke.mock.calls.filter(([rawCall]) => {
       const call = requireRecord(rawCall, "node invoke");

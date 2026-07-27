@@ -339,6 +339,29 @@ function getSingleTopLevelIncludeTarget(params: {
   snapshot: ConfigFileSnapshot;
   key: string;
 }): string | null {
+  const targetPath = [params.key];
+  // Include callbacks are depth-first, so the last event at a path is the
+  // outer directive that decides whether writing through is unambiguous.
+  // Ancestor ownership also wins: a root include can override a nested target.
+  const ownership = params.snapshot.includeProvenance?.findLast(
+    (entry) =>
+      entry.path.length <= targetPath.length &&
+      entry.path.every((segment, index) => segment === targetPath[index]),
+  );
+  if (
+    ownership?.path.length === targetPath.length &&
+    ownership.kind === "single" &&
+    !ownership.hasSiblingOverrides &&
+    ownership.targetPath
+  ) {
+    return path.normalize(ownership.targetPath);
+  }
+  if (params.snapshot.includeProvenance !== undefined) {
+    return null;
+  }
+
+  // Synthetic/legacy snapshots and invalid include repair have no completed
+  // provenance event, so retain the parsed-directive fallback at this boundary.
   if (!isRecord(params.snapshot.parsed)) {
     return null;
   }
