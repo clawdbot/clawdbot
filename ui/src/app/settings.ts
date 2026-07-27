@@ -187,7 +187,7 @@ export type UiSettings = {
   talkCameraAutoEnable?: boolean;
   chatSplitLayout?: ChatSplitLayout;
   chatWorkspaceDock?: ChatWorkspaceDock; // Session workspace rail dock edge (default "right")
-  boardSessionViews?: BoardSessionViews; // Last face and active dashboard tab per session
+  boardSessionViews?: BoardSessionViews; // Per-device active dashboard tab and dock state
   sidebarSessionLayouts?: SidebarSessionLayouts; // Sidebar columns and widths per session
   sidebarSessionActivePanels?: SidebarSessionActivePanels; // Collapsed active panel per session
   navCollapsed: boolean; // Collapsible sidebar state

@@ -20,6 +20,7 @@ import {
   validateSessionsCompanionResetParams,
   validateSessionsCompanionStateParams,
   validateSessionsObserverVisibilityParams,
+  validateSessionsPatchParams,
   validateSessionsSearchParams,
   validateSessionsUsageParams,
   validateTasksCancelParams,
@@ -87,6 +88,13 @@ describe("lazy protocol validators", () => {
     expect(validateSessionsListParams({ archived: true })).toBe(true);
     expect(validateSessionsListParams({ archived: "all" })).toBe(true);
     expect(validateSessionsListParams({ archived: "archived" })).toBe(false);
+  });
+
+  it("validates session face list and patch values", () => {
+    expect(validateSessionsListParams({ face: "dashboard" })).toBe(true);
+    expect(validateSessionsListParams({ face: "grid" })).toBe(false);
+    expect(validateSessionsPatchParams({ key: "agent:main:main", face: "chat" })).toBe(true);
+    expect(validateSessionsPatchParams({ key: "agent:main:main", face: "grid" })).toBe(false);
   });
 
   it("keeps validation errors readable on the exported validator", () => {
