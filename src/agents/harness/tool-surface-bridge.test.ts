@@ -101,8 +101,80 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
       TOOL_DESCRIBE_RAW_TOOL_NAME,
       TOOL_CALL_RAW_TOOL_NAME,
       "exec",
+      "read",
     ]);
     runtime.cleanup();
+  });
+
+  it("keeps directory tool schemas stable across unrelated user prompts", () => {
+    const config: OpenClawConfig = {
+      tools: { toolSearch: { enabled: true, mode: "directory" } },
+    };
+    const availableTools = tools([
+      TOOL_SEARCH_RAW_TOOL_NAME,
+      TOOL_DESCRIBE_RAW_TOOL_NAME,
+      TOOL_CALL_RAW_TOOL_NAME,
+      "read",
+      "web_search",
+      "memory_search",
+      "message",
+    ]);
+    const createPromptRuntime = (prompt: string) =>
+      createAgentHarnessToolSurfaceRuntime({
+        config,
+        executeTool: async () => ({ content: [], details: {} }),
+        modelToolsEnabled: true,
+        prompt,
+      });
+    const first = createPromptRuntime("search today's latest news");
+    const second = createPromptRuntime("remember what we decided yesterday");
+
+    try {
+      const expected = [
+        TOOL_SEARCH_RAW_TOOL_NAME,
+        TOOL_DESCRIBE_RAW_TOOL_NAME,
+        TOOL_CALL_RAW_TOOL_NAME,
+        "read",
+      ];
+      expect(first.compactTools(availableTools).tools.map((tool) => tool.name)).toEqual(expected);
+      expect(second.compactTools(availableTools).tools.map((tool) => tool.name)).toEqual(expected);
+    } finally {
+      first.cleanup();
+      second.cleanup();
+    }
+  });
+
+  it("keeps policy-required message delivery directly visible in directory mode", () => {
+    const runtime = createAgentHarnessToolSurfaceRuntime({
+      config: { tools: { toolSearch: { enabled: true, mode: "directory" } } },
+      executeTool: async () => ({ content: [], details: {} }),
+      forceMessageTool: true,
+      modelToolsEnabled: true,
+      prompt: "search today's latest news",
+    });
+
+    try {
+      expect(
+        runtime
+          .compactTools(
+            tools([
+              TOOL_SEARCH_RAW_TOOL_NAME,
+              TOOL_DESCRIBE_RAW_TOOL_NAME,
+              TOOL_CALL_RAW_TOOL_NAME,
+              "web_search",
+              "message",
+            ]),
+          )
+          .tools.map((tool) => tool.name),
+      ).toEqual([
+        TOOL_SEARCH_RAW_TOOL_NAME,
+        TOOL_DESCRIBE_RAW_TOOL_NAME,
+        TOOL_CALL_RAW_TOOL_NAME,
+        "message",
+      ]);
+    } finally {
+      runtime.cleanup();
+    }
   });
 
   it("preserves explicit code-mode compaction for lean runs", () => {
@@ -114,11 +186,12 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
       };
       const runtime = createRuntime(config);
 
+      // Compaction still applies to non-core tools; core coding tools stay visible.
       expect(
         runtime
           .compactTools(tools([TOOL_SEARCH_CODE_MODE_TOOL_NAME, "exec", "read"]))
           .tools.map((tool) => tool.name),
-      ).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME]);
+      ).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME, "exec", "read"]);
       runtime.cleanup();
     } finally {
       testing.setToolSearchCodeModeSupportedForTest(undefined);

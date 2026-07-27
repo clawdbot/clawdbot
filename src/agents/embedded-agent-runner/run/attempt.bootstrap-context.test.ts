@@ -14,8 +14,8 @@ describe("remapInjectedContextFilesToWorkspace", () => {
             content: "agents",
           },
           {
-            path: "/real/workspace/nested/TOOLS.md",
-            content: "tools",
+            path: "/real/workspace/nested/SOUL.md",
+            content: "soul",
           },
           {
             path: "/real/workspace/..context/USER.md",
@@ -35,8 +35,8 @@ describe("remapInjectedContextFilesToWorkspace", () => {
         content: "agents",
       },
       {
-        path: "/sandbox/workspace/nested/TOOLS.md",
-        content: "tools",
+        path: "/sandbox/workspace/nested/SOUL.md",
+        content: "soul",
       },
       {
         path: "/sandbox/workspace/..context/USER.md",

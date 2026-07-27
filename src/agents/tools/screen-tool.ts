@@ -101,7 +101,7 @@ export function createScreenTool(opts: ScreenToolOptions = {}): AnyAgentTool {
     label: "Screen",
     name: "screen",
     description:
-      "Drive operator web UI. Split panes, focus, panels, sidebar, navigate. Needs connected web client.",
+      "Drive operator web UI: split_right/split_down, close_pane, focus, navigate, panel toggles terminal_show/terminal_hide, browser_show/browser_hide, sidebar_show/sidebar_hide. Optional sessionKey targets another session. Needs connected web client.",
     parameters: ScreenToolSchema,
     outputSchema: UiCommandResultSchema,
     requiredClientCaps: [GATEWAY_CLIENT_CAPS.UI_COMMANDS],

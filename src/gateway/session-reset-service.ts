@@ -86,6 +86,7 @@ import {
   noteActiveSessionForShutdown,
 } from "./active-sessions-shutdown-tracker.js";
 import { findDirectChildSessionsForParent } from "./session-child-sessions.js";
+import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 import {
   archiveSessionTranscriptsDetailed,
@@ -929,6 +930,8 @@ export async function performGatewaySessionReset(params: {
   commandSource: string;
   /** Trusted provenance for a reset that materializes a previously missing row. */
   creation?: { via: SessionCreatedVia; actor?: SessionCreatedActor };
+  /** Exact plugin namespace authorized by the scoped plugin runtime. */
+  authorizedPluginId?: string;
   assertCurrent?: () => void;
   assertAuthorizedInstance?: () => void;
   onCommitted?: (commit: { key: string; sessionId: string }) => void;
@@ -991,6 +994,15 @@ export async function performGatewaySessionReset(params: {
     params.key,
     resetTarget.requestedAgentId ? { agentId: resetTarget.requestedAgentId } : undefined,
   ).entry;
+  const initialOwnershipError = resolvePluginSessionOwnershipError({
+    action: "reset",
+    entry: initialResetEntry,
+    key: resetTarget.target.canonicalKey,
+    pluginOwnerId: params.authorizedPluginId,
+  });
+  if (initialOwnershipError) {
+    return { ok: false, error: initialOwnershipError };
+  }
   const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
     resetTarget.target.canonicalKey,
     initialResetEntry,
@@ -1045,6 +1057,7 @@ export async function performGatewaySessionReset(params: {
     };
   }
   let admittedWorkReleased = true;
+  let resetOwnershipError: ReturnType<typeof errorShape> | undefined;
   return await runExclusiveSessionLifecycleMutation({
     scope: resetTarget.storePath,
     identities: resetLifecycleIdentities,
@@ -1053,6 +1066,21 @@ export async function performGatewaySessionReset(params: {
     prepare: async () => {
       params.assertCurrent?.();
       params.assertAuthorizedInstance?.();
+      const currentEntry = loadSessionEntry(
+        params.key,
+        resetTarget.requestedAgentId ? { agentId: resetTarget.requestedAgentId } : undefined,
+      ).entry;
+      // Check the locked generation before interrupting any work; a replaced
+      // foreign row must not be reset or have its admitted run cancelled.
+      resetOwnershipError = resolvePluginSessionOwnershipError({
+        action: "reset",
+        entry: currentEntry,
+        key: resetTarget.target.canonicalKey,
+        pluginOwnerId: params.authorizedPluginId,
+      });
+      if (resetOwnershipError) {
+        return;
+      }
       admittedWorkReleased = await interruptSessionWorkAdmissions({
         scope: resetTarget.storePath,
         identities: resetLifecycleIdentities,
@@ -1061,6 +1089,9 @@ export async function performGatewaySessionReset(params: {
     },
     run: async () => {
       const { cfg, target, storePath, requestedAgentId } = resetTarget;
+      if (resetOwnershipError) {
+        return { ok: false, error: resetOwnershipError };
+      }
       if (!admittedWorkReleased) {
         return {
           ok: false,
@@ -1074,6 +1105,15 @@ export async function performGatewaySessionReset(params: {
         params.key,
         requestedAgentId ? { agentId: requestedAgentId } : undefined,
       );
+      const currentOwnershipError = resolvePluginSessionOwnershipError({
+        action: "reset",
+        entry,
+        key: canonicalKey,
+        pluginOwnerId: params.authorizedPluginId,
+      });
+      if (currentOwnershipError) {
+        return { ok: false, error: currentOwnershipError };
+      }
       const placementBlock = entry?.sessionId
         ? resolveSessionPlacementResetBlock(entry.sessionId)
         : undefined;
@@ -1415,6 +1455,7 @@ export async function performGatewaySessionReset(params: {
             subject: currentEntry?.subject,
             groupChannel: currentEntry?.groupChannel,
             space: currentEntry?.space,
+            pluginOwnerId: currentEntry?.pluginOwnerId ?? params.authorizedPluginId,
             cliSessionBindings: currentEntry?.cliSessionBindings,
             cliSessionIds: currentEntry?.cliSessionIds,
             claudeCliSessionId: currentEntry?.claudeCliSessionId,

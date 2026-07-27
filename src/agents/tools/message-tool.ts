@@ -1362,7 +1362,7 @@ function buildMessageToolDescription(options?: {
   }
 
   return appendMessageToolVisibleReplyHint(
-    `${baseDescription} Supports actions: send, delete, react, poll, pin, threads, and more.`,
+    `${baseDescription} Action families (availability depends on the channel): sending/editing/unsend, reactions, polls, pins, threads, file upload/download, moderation (timeout/kick/ban), roles, channel + category management, profile/presence.`,
     resolvedOptions.sourceReplyDeliveryMode,
     resolvedOptions.requireExplicitTarget,
   );

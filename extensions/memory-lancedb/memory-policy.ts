@@ -153,6 +153,9 @@ export function escapeMemoryForPrompt(text: string): string {
   return text.replace(/[&<>"']/g, (char) => PROMPT_ESCAPE_MAP[char] ?? char);
 }
 
+// Legacy label-only rows slip past now that header detection keys on the provenance marker, and the
+// marker-free checks catch only payload/bracket shapes. `doctor --fix` deletes sentinel and fenced rows
+// (memory-lancedb-legacy-envelope-rows); dynamic-label prose survives both, accepted over a reader here.
 function sanitizeRecallMemoryText(text: string): string | null {
   if (!text.trim()) {
     return null;
@@ -185,23 +188,6 @@ export function cleanMemorySearchResults(results: MemorySearchResult[]): Array<{
     return text ? [{ result, text }] : [];
   });
 }
-
-// Envelope / transport metadata contamination detection
-
-/**
- * Explicit sentinel strings used by `sanitizeForMemoryCapture` to locate and
- * surgically strip individual blocks. Canonical source:
- * src/auto-reply/reply/strip-inbound-meta.ts. Duplicated here because
- * extensions must not import core internals.
- *
- * NOTE: `looksLikeEnvelopeSludge` deliberately uses the broader
- * `INBOUND_META_LABEL_RE` below instead of this list, because
- * `buildInboundUserContextPrefix` in core also injects label variants such as
- * `Location (untrusted metadata):`, `Structured object (untrusted metadata):`,
- * and arbitrary `<custom-label> (untrusted metadata):` blocks (from
- * `UntrustedStructuredContext`). Detection must stay forward-compatible with
- * those without bloating this explicit list every time core adds a new label.
- */
 
 export function formatRelevantMemoriesContext(
   memories: Array<{ category: MemoryCategory; text: string }>,

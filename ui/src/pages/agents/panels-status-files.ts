@@ -5,6 +5,7 @@ import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { marked } from "marked";
 import type {
+  AgentFileEntry,
   AgentsFilesListResult,
   ChannelAccountSnapshot,
   ChannelsStatusSnapshot,
@@ -390,6 +391,12 @@ export function renderAgentFiles(params: {
   const list = params.agentFilesList?.agentId === params.agentId ? params.agentFilesList : null;
   const files = list?.files ?? [];
   const active = params.agentFileActive ?? null;
+  // Files whose absence is a normal workspace state stay out of the tab strip until
+  // the operator picks them; only a genuinely faulty absence is badged as missing.
+  const isCreatable = (file: AgentFileEntry) =>
+    file.missing && file.expectedAbsent === true && file.name !== active;
+  const tabFiles = files.filter((file) => !isCreatable(file));
+  const creatableFiles = files.filter(isCreatable);
   const activeEntry = active ? (files.find((file) => file.name === active) ?? null) : null;
   const baseContent = active ? (params.agentFileContents[active] ?? "") : "";
   const draft = active ? (params.agentFileDrafts[active] ?? baseContent) : "";
@@ -450,20 +457,21 @@ export function renderAgentFiles(params: {
           : html`
               <div class="agents-panel-body">
                 <div class="agent-tabs">
-                  ${files.map((file) => {
+                  ${tabFiles.map((file) => {
                     const isActive = active === file.name;
                     const label = file.name.replace(/\.md$/i, "");
+                    const isFault = file.missing && file.expectedAbsent !== true;
                     // File reads are serialized; changing the active tab mid-read would
                     // expose an editor whose content request was never accepted.
                     return html`
                       <button
-                        class="agent-tab ${isActive ? "active" : ""} ${file.missing
+                        class="agent-tab ${isActive ? "active" : ""} ${isFault
                           ? "agent-tab--missing"
                           : ""}"
                         ?disabled=${params.agentFilesLoading}
                         @click=${() => params.onSelectFile(file.name)}
                       >
-                        ${label}${file.missing
+                        ${label}${isFault
                           ? html`
                               <span class="agent-tab-badge">${t("agents.files.missing")}</span>
                             `
@@ -471,6 +479,32 @@ export function renderAgentFiles(params: {
                       </button>
                     `;
                   })}
+                  ${creatableFiles.length === 0
+                    ? nothing
+                    : html`
+                        <select
+                          class="agent-tab-add"
+                          aria-label=${t("agents.files.addFile")}
+                          .value=${""}
+                          ?disabled=${params.agentFilesLoading}
+                          @change=${(e: Event) => {
+                            const select = e.target as HTMLSelectElement;
+                            const name = select.value;
+                            select.value = "";
+                            if (name) {
+                              params.onSelectFile(name);
+                            }
+                          }}
+                        >
+                          <option value="">${t("agents.files.addFile")}</option>
+                          ${creatableFiles.map(
+                            (file) =>
+                              html`<option value=${file.name}>
+                                ${file.name.replace(/\.md$/i, "")}
+                              </option>`,
+                          )}
+                        </select>
+                      `}
                 </div>
                 ${!activeEntry
                   ? html`<div class="muted">${t("agents.files.selectFile")}</div>`
@@ -509,7 +543,11 @@ export function renderAgentFiles(params: {
                         </div>
                       </div>
                       ${activeEntry.missing
-                        ? html`<div class="callout info">${t("agents.files.missingHint")}</div>`
+                        ? html`<div class="callout info">
+                            ${activeEntry.expectedAbsent === true
+                              ? t("agents.files.createHint")
+                              : t("agents.files.missingHint")}
+                          </div>`
                         : nothing}
                       <label class="field agent-file-field">
                         <span>${t("agents.files.content")}</span>

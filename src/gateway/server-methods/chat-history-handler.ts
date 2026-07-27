@@ -6,7 +6,6 @@ import {
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateChatHistoryParams,
   validateChatMetadataParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -70,6 +69,7 @@ import type {
   GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
 } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 type ChatHistoryMethod = "chat.history" | "chat.startup";
 
@@ -95,15 +95,7 @@ async function handleChatMetadataRequest({
   respond,
   context,
 }: GatewayRequestHandlerOptions): Promise<void> {
-  if (!validateChatMetadataParams(params)) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `invalid chat.metadata params: ${formatValidationErrors(validateChatMetadataParams.errors)}`,
-      ),
-    );
+  if (!assertValidParams(params, validateChatMetadataParams, "chat.metadata", respond)) {
     return;
   }
   const metadataParams = params;
@@ -333,15 +325,7 @@ async function handleChatHistoryRequest({
   includeAgentsList?: boolean;
   includeMetadata?: boolean;
 }) {
-  if (!validateChatHistoryParams(params)) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `invalid ${method} params: ${formatValidationErrors(validateChatHistoryParams.errors)}`,
-      ),
-    );
+  if (!assertValidParams(params, validateChatHistoryParams, method, respond)) {
     return;
   }
   const {

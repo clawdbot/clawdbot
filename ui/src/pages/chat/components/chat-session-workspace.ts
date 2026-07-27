@@ -111,9 +111,8 @@ export type SessionWorkspaceHost = {
 };
 
 /** Agent owning the pane's current session: explicit key scope first, then the
- * assistant/default agent. Shared by the workspace and background-tasks rails
- * so both scope their gateway queries the same way. */
-export function paneSessionAgentId(state: SessionScopeHostWithKey): string {
+ * assistant/default agent. */
+function paneSessionAgentId(state: SessionScopeHostWithKey): string {
   const normalizedKey = normalizeOptionalString(state.sessionKey)?.toLowerCase();
   const activeAgentId =
     normalizedKey === "global" ? null : resolveAgentIdFromSessionKey(state.sessionKey);

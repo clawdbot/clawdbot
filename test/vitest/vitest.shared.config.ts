@@ -161,6 +161,21 @@ export const sharedVitestConfig = {
   resolve: {
     alias: [
       {
+        // Route bare `zod` through a runtime shim (same pattern as the
+        // discord-api-types shims below): zod's own entry re-exports `z` as a
+        // namespace binding, which Bun's linker drops under Vitest's loader
+        // hooks. The shim exposes the identical surface on Node and Bun.
+        find: /^zod$/u,
+        replacement: path.join(repoRoot, "test", "vitest", "zod-runtime.ts"),
+      },
+      {
+        // Bun substitutes its built-in fetch shim for bare `undici`, whose
+        // MockAgent is a non-functional stub; pin the real package so
+        // mock-http interception works. Node resolves to this file anyway.
+        find: /^undici$/u,
+        replacement: path.join(repoRoot, "node_modules", "undici", "index.js"),
+      },
+      {
         find: "discord-api-types/v10",
         replacement: path.join(repoRoot, "test", "vitest", "discord-api-types-v10-runtime.ts"),
       },
@@ -420,6 +435,10 @@ export const sharedVitestConfig = {
         ),
       },
       {
+        find: "@openclaw/normalization-core/cjk-chars",
+        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "cjk-chars.ts"),
+      },
+      {
         find: "@openclaw/normalization-core/error-coercion",
         replacement: path.join(
           repoRoot,
@@ -504,6 +523,8 @@ export const sharedVitestConfig = {
       sourcePackageAlias("media-core", "read-byte-stream-with-limit"),
       sourcePackageAlias("media-core"),
       sourcePackageAlias("retry"),
+      sourcePackageAlias("session-url-contract", "parse"),
+      sourcePackageAlias("session-url-contract"),
       sourcePackageAlias("workboard-contract"),
       ...sourcePackageAliasesFromExports("acp-core", acpCorePackageJson.exports),
       ...sourcePluginSdkSubpaths.map((subpath) => ({

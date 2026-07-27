@@ -5,6 +5,8 @@ import {
   PluginStateLeaseError,
   type PluginStateLeaseContext,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { asQmdAbortError, isSqliteBusyError } from "./qmd-command-errors.js";
 import { QmdManagerBase, qmdManagerLog } from "./qmd-manager-base.js";
@@ -155,22 +157,37 @@ export abstract class QmdManagerSync extends QmdManagerBase {
   ): Promise<void> {
     const { signal } = lease;
     const isBootRun = reason === "boot" || reason.startsWith("boot:");
-    const maxAttempts = isBootRun ? 3 : 1;
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      try {
-        await this.runQmdUpdateOnce(reason, lease);
-        return;
-      } catch (err) {
-        if (attempt >= maxAttempts || !this.isRetryableUpdateError(err)) {
-          throw err;
+    await retryAsync(() => this.runQmdUpdateOnce(reason, lease), {
+      attempts: isBootRun ? 3 : 1,
+      minDelayMs: 500,
+      maxDelayMs: 1_000,
+      shouldRetry: (err) => {
+        if (!this.isRetryableUpdateError(err)) {
+          return false;
         }
-        const delayMs = 500 * 2 ** (attempt - 1);
+        // A lease can be revoked while its update fails. Preserve the owning
+        // lease's abort reason instead of leaking the stale update failure.
+        this.throwIfAborted(signal);
+        return true;
+      },
+      onRetry: ({ attempt, maxAttempts, err }) => {
         qmdManagerLog.warn(
           `qmd update retry ${attempt}/${maxAttempts - 1} after failure (${reason}): ${String(err)}`,
         );
-        await this.waitForRetryDelay(delayMs, signal);
-      }
-    }
+      },
+      sleep: async (delayMs) => {
+        try {
+          await sleepWithAbort(delayMs, signal);
+        } catch (err) {
+          // Lease owners need their original abort reason, not the retry
+          // scheduler's generic abort wrapper.
+          if (signal.aborted) {
+            throw asQmdAbortError(signal);
+          }
+          throw err;
+        }
+      },
+    });
   }
 
   protected async runQmdUpdateOnce(reason: string, lease: PluginStateLeaseContext): Promise<void> {
@@ -211,21 +228,6 @@ export abstract class QmdManagerSync extends QmdManagerBase {
     if (signal.aborted) {
       throw asQmdAbortError(signal);
     }
-  }
-
-  protected async waitForRetryDelay(delayMs: number, signal: AbortSignal): Promise<void> {
-    this.throwIfAborted(signal);
-    await new Promise<void>((resolve, reject) => {
-      const onAbort = () => {
-        clearTimeout(timeout);
-        reject(asQmdAbortError(signal));
-      };
-      const timeout = setTimeout(() => {
-        signal.removeEventListener("abort", onAbort);
-        resolve();
-      }, delayMs);
-      signal.addEventListener("abort", onAbort, { once: true });
-    });
   }
 
   protected shouldRunEmbed(force?: boolean): boolean {

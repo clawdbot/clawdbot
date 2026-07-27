@@ -39,6 +39,7 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   canonicalizeCodexResponsesBaseUrl,
   isOpenAICodexBaseUrl,
+  normalizeOpenAICodexLoopbackBaseUrl,
   OPENAI_CODEX_RESPONSES_BASE_URL,
 } from "./base-url.js";
 import { OPENAI_DEFAULT_IMAGE_MODEL as DEFAULT_OPENAI_IMAGE_MODEL } from "./default-models.js";
@@ -403,6 +404,12 @@ function hasExplicitDirectOpenAIImageConfig(cfg: OpenClawConfig | undefined): bo
     providerConfig.authHeader !== undefined ||
     providerConfig.request !== undefined ||
     (providerConfig.api !== undefined && providerConfig.api !== "openai-chatgpt-responses")
+  );
+}
+
+function hasOpenAICodexCredentialProxy(cfg: OpenClawConfig | undefined): boolean {
+  return Boolean(
+    normalizeOpenAICodexLoopbackBaseUrl(cfg?.models?.providers?.openai?.params?.codexProxyBaseUrl),
   );
 }
 
@@ -850,6 +857,9 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
     id: "openai",
     label: "OpenAI",
     isConfigured: ({ cfg, agentDir }) => {
+      if (hasOpenAICodexCredentialProxy(cfg)) {
+        return hasDirectOpenAIImageApiKeyAuth({ cfg, agentDir });
+      }
       // generateImage already authenticates from a config apiKey; count a
       // usable one (non-blank literal or secret ref) as configured here too,
       // so image gen works from config alone, like chat.
@@ -885,9 +895,11 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
       const codexResponsesConfigured =
         req.cfg?.models?.providers?.openai?.api === "openai-chatgpt-responses";
       const explicitOpenAIApiKeyConfig = hasExplicitOpenAIImageApiKeyConfig(req.cfg);
+      const codexCredentialProxyConfigured = hasOpenAICodexCredentialProxy(req.cfg);
       const explicitDirectOpenAIConfig =
         !chatGPTBaseUrl && !codexResponsesConfigured && hasExplicitDirectOpenAIImageConfig(req.cfg);
       const useCodexResponseTransportRoute =
+        !codexCredentialProxyConfigured &&
         (publicOpenAIBaseUrl || chatGPTBaseUrl || codexResponsesConfigured) &&
         !explicitDirectOpenAIConfig &&
         hasCodexResponseTransportProfileConfigured(req);
@@ -934,6 +946,15 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
               agentDir: req.agentDir,
               store: req.authStore,
             });
+      if (
+        codexCredentialProxyConfigured &&
+        imageAuth?.apiKey &&
+        isCodexSubscriptionAuthMode(imageAuth.mode)
+      ) {
+        throw new Error(
+          "OpenAI image generation requires an API-key profile when a Codex credential proxy is configured",
+        );
+      }
       if (
         !explicitDirectOpenAIConfig &&
         imageAuth?.apiKey &&

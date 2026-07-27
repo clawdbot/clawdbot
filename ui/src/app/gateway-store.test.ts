@@ -121,6 +121,24 @@ describe("createApplicationGateway connection phase", () => {
     expect(gateway.snapshot.phase).toBe("offline");
   });
 
+  it("does not invent an assistant agent id before the gateway advertises one", () => {
+    const { gateway, current } = createStore();
+
+    expect(gateway.snapshot.assistantAgentId).toBeNull();
+    gateway.start();
+    current().opts.onHello?.(HELLO);
+    expect(gateway.snapshot.assistantAgentId).toBeNull();
+
+    gateway.connect();
+    current().opts.onHello?.({
+      ...HELLO,
+      snapshot: { sessionDefaults: { defaultAgentId: "roboclaw" } },
+    });
+    expect(gateway.snapshot.assistantAgentId).toBe("roboclaw");
+    gateway.stop();
+    expect(gateway.snapshot.assistantAgentId).toBeNull();
+  });
+
   it("publishes the hello canvas URL synchronously and clears it on disconnect", () => {
     const { gateway, current } = createStore();
     gateway.start();

@@ -684,6 +684,11 @@ public final class OpenClawChatViewModel {
         let contractRoutingChanged = contractChanged &&
             (usesMutableContractRouting(for: sessionRoutingContract) ||
                 self.usesMutableContractRouting(for: nextContract))
+        if agentChanged {
+            self.sessions = ChatSessionSidebarModel.clearingForeignGlobalObserverDigest(
+                in: self.sessions,
+                activeAgentId: nextAgentId)
+        }
         self.activeAgentId = nextAgentId
         self.sessionRoutingContract = nextContract
         let bootstrapIdentityChanged =

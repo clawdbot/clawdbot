@@ -2910,6 +2910,7 @@ describe("consumeCliSessionForkInStore", () => {
         cliSessionBindings: {
           "claude-cli": {
             sessionId: "claude-source-session",
+            resumeCheckpointId: "assistant-before-turn",
             forceReuse: true,
             forkNextResume: true,
           },
@@ -2930,12 +2931,17 @@ describe("consumeCliSessionForkInStore", () => {
       });
       expect(consumed?.cliSessionBindings?.["claude-cli"]).toEqual({
         sessionId: "claude-source-session",
+        resumeCheckpointId: "assistant-before-turn",
         forceReuse: true,
       });
       expect(consumed?.label).toBe("concurrent update");
       expect(
         loadPersistedSessionEntry(storePath, sessionKey)?.cliSessionBindings?.["claude-cli"],
-      ).toEqual({ sessionId: "claude-source-session", forceReuse: true });
+      ).toEqual({
+        sessionId: "claude-source-session",
+        resumeCheckpointId: "assistant-before-turn",
+        forceReuse: true,
+      });
       await expect(
         consumeCliSessionForkInStore({
           provider: "claude-cli",
@@ -2986,6 +2992,7 @@ describe("consumeCliSessionForkInStore", () => {
         cliSessionBindings: {
           "claude-cli": {
             sessionId: "claude-source-session",
+            resumeCheckpointId: "assistant-before-turn",
             forceReuse: true,
             authProfileId: "claude:work",
             authEpoch: "epoch-1",
@@ -3007,6 +3014,7 @@ describe("consumeCliSessionForkInStore", () => {
 
       expect(persisted?.cliSessionBindings?.["claude-cli"]).toEqual({
         sessionId: "claude-fork-session",
+        resumeCheckpointId: "assistant-before-turn",
         forceReuse: true,
         authProfileId: "claude:work",
         authEpoch: "epoch-1",
@@ -3016,6 +3024,7 @@ describe("consumeCliSessionForkInStore", () => {
         loadPersistedSessionEntry(storePath, sessionKey)?.cliSessionBindings?.["claude-cli"],
       ).toEqual({
         sessionId: "claude-fork-session",
+        resumeCheckpointId: "assistant-before-turn",
         forceReuse: true,
         authProfileId: "claude:work",
         authEpoch: "epoch-1",

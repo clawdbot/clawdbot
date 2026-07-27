@@ -757,7 +757,7 @@ function buildEffectivePolicyReport(params: {
       scopes: [],
       note: params.nativePolicy
         ? "This node enforces a host-native exec policy; OpenClaw approvals-file policy math does not apply."
-        : "Approvals file unavailable.",
+        : "Host approvals policy unavailable.",
     };
   }
   if (params.source === "node") {
@@ -784,7 +784,7 @@ function buildEffectivePolicyReport(params: {
         hostDefaultSource: "node-reported resolved defaults",
       }),
       note:
-        "Effective exec policy is the node host approvals file intersected with gateway tools.exec policy. " +
+        "Effective exec policy is the node host approvals policy intersected with gateway tools.exec policy. " +
         SESSION_EXEC_OVERRIDES_NOTE,
     };
   }
@@ -801,7 +801,7 @@ function buildEffectivePolicyReport(params: {
       hostPath: params.hostPath,
     }),
     note:
-      "Effective exec policy is the host approvals file intersected with requested tools.exec policy. " +
+      "Effective exec policy is the host approvals policy intersected with requested tools.exec policy. " +
       SESSION_EXEC_OVERRIDES_NOTE,
   };
 }
@@ -887,7 +887,10 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
   const summaryRows = [
     { Field: "Target", Value: targetLabel },
     { Field: "Path", Value: snapshot.path },
-    { Field: "Exists", Value: snapshot.exists ? "yes" : "no" },
+    {
+      Field: "State",
+      Value: snapshot.exists ? "stored" : "defaults (no stored overrides)",
+    },
     { Field: "Hash", Value: snapshot.hash },
     { Field: "Version", Value: String(file.version ?? 1) },
     { Field: "Socket", Value: file.socket?.path ?? "default" },

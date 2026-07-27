@@ -84,7 +84,7 @@ export type UsageCostStoredRollup = {
   valueJson: string;
 };
 
-export type UsageCostRefreshResult = "refreshed" | "busy";
+type UsageCostRefreshResult = "refreshed" | "busy";
 
 export function resolveUsageCostCacheDatabasePath(agentId: string): string {
   return resolveOpenClawAgentSqlitePath({ agentId: normalizeAgentId(agentId) });

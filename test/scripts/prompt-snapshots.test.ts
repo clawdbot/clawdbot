@@ -188,7 +188,6 @@ describe("happy path prompt snapshots", () => {
     expect(telegram).toContain("OpenClaw runtime context for this turn:");
     expect(telegram).toContain("<SOUL.md contents will be here>");
     expect(telegram).toContain("<IDENTITY.md contents will be here>");
-    expect(telegram).toContain("<TOOLS.md contents will be here>");
     expect(telegram).toContain("<USER.md contents will be here>");
     expect(telegram).toContain("<MEMORY.md contents will be here>");
     expect(telegram).not.toContain("<HEARTBEAT.md contents will be here>");

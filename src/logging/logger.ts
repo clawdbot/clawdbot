@@ -26,6 +26,7 @@ import {
 } from "../infra/tmp-openclaw-dir.js";
 import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
+import { formatConsoleDiagnosticLine } from "./json-console-line.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
 import { isLegacyRollingLogFilePath, resolveRollingLogFilePathForDate } from "./log-file-path.js";
 import { resolveDefaultRollingLogFile } from "./log-file-path.js";
@@ -582,15 +583,19 @@ export function isFileLogLevelEnabled(level: LogLevel): boolean {
 }
 
 function buildLogger(settings: ResolvedRuntimeSettings): TsLogger<LogObj> {
+  const silent = settings.level === "silent";
   const logger = new TsLogger<LogObj>({
     name: "openclaw",
     maskValuesOfKeys: [],
-    minLevel: levelToMinLevel(settings.level),
+    // tslog reports Infinity as an out-of-range setting even though its runtime filter supports it.
+    minLevel: levelToMinLevel(silent ? "fatal" : settings.level),
     type: "hidden", // no ansi formatting
   });
 
-  // Silent logging does not write files; skip all filesystem setup in this path.
-  if (settings.level === "silent") {
+  // Restore the silent threshold after constructor validation. Keep the diagnostic transport
+  // attached exactly as before; tslog filters every level before transport dispatch.
+  if (silent) {
+    logger.settings.minLevel = levelToMinLevel("silent");
     attachDiagnosticEventTransport(logger);
     return logger;
   }
@@ -639,9 +644,8 @@ function buildLogger(settings: ResolvedRuntimeSettings): TsLogger<LogObj> {
           warnedAboutRotationFailure = false;
         } else if (!warnedAboutRotationFailure) {
           warnedAboutRotationFailure = true;
-          process.stderr.write(
-            `[openclaw] log file rotation failed; continuing writes file=${activeFile} maxFileBytes=${settings.maxFileBytes}\n`,
-          );
+          const message = `[openclaw] log file rotation failed; continuing writes file=${activeFile} maxFileBytes=${settings.maxFileBytes}`;
+          process.stderr.write(`${formatConsoleDiagnosticLine({ level: "warn", message })}\n`);
         }
       }
       if (appendLogLine(activeFile, payload)) {
@@ -691,6 +695,24 @@ export function getLogger(): TsLogger<LogObj> {
   return loggingState.cachedLogger as TsLogger<LogObj>;
 }
 
+type SubLoggerSettings = NonNullable<Parameters<TsLogger<LogObj>["getSubLogger"]>[0]>;
+
+function getSubLoggerWithResolvedMinLevel(
+  logger: TsLogger<LogObj>,
+  settings: SubLoggerSettings,
+  minLevel: number,
+): TsLogger<LogObj> {
+  const silent = minLevel === levelToMinLevel("silent");
+  const child = logger.getSubLogger({
+    ...settings,
+    minLevel: silent ? levelToMinLevel("fatal") : minLevel,
+  });
+  if (silent) {
+    child.settings.minLevel = minLevel;
+  }
+  return child;
+}
+
 export function getChildLogger(
   bindings?: Record<string, unknown>,
   opts?: { level?: LogLevel },
@@ -698,21 +720,25 @@ export function getChildLogger(
   const base = getLogger();
   const minLevel = opts?.level ? levelToMinLevel(opts.level) : base.settings.minLevel;
   const name = bindings ? JSON.stringify(bindings) : undefined;
-  return base.getSubLogger({
-    name,
+  return getSubLoggerWithResolvedMinLevel(
+    base,
+    {
+      name,
+      prefix: bindings ? [name ?? ""] : [],
+    },
     minLevel,
-    prefix: bindings ? [name ?? ""] : [],
-  });
+  );
 }
 
 // Baileys expects a pino-like logger shape. Provide a lightweight adapter.
 export function toPinoLikeLogger(logger: TsLogger<LogObj>, level: LogLevel): PinoLikeLogger {
   const buildChild = (bindings?: Record<string, unknown>) =>
     toPinoLikeLogger(
-      logger.getSubLogger({
-        name: bindings ? JSON.stringify(bindings) : undefined,
-        minLevel: logger.settings.minLevel,
-      }),
+      getSubLoggerWithResolvedMinLevel(
+        logger,
+        { name: bindings ? JSON.stringify(bindings) : undefined },
+        logger.settings.minLevel,
+      ),
       level,
     );
 

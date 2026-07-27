@@ -5,8 +5,8 @@ import { resolveStorePath } from "./paths.js";
 import { updateSessionEntry } from "./session-accessor.entry-mutation.js";
 import {
   loadSessionEntry,
-  listSessionEntries,
   resolveSessionEntryFromStore,
+  resolveSessionEntrySelection,
 } from "./session-accessor.entry.js";
 import { appendSqliteExpectedSessionTranscriptTurn } from "./session-accessor.sqlite.js";
 import { shouldUseExplicitTranscriptFile } from "./session-accessor.transcript-target.js";
@@ -151,15 +151,14 @@ async function persistExpectedSessionTranscriptTurn(
   if (!agentId) {
     throw new Error(`Cannot resolve transcript turn without an agent id: ${sessionKey}`);
   }
-  const store =
-    scope.sessionStore ??
-    Object.fromEntries(
-      listSessionEntries({ agentId, storePath }).map(({ sessionKey: entryKey, entry }) => [
-        entryKey,
-        entry,
-      ]),
-    );
-  const resolved = resolveSessionEntryFromStore({ store, sessionKey });
+  const resolved = scope.sessionStore
+    ? resolveSessionEntryFromStore({ store: scope.sessionStore, sessionKey })
+    : resolveSessionEntrySelection({
+        agentId,
+        ...(scope.env ? { env: scope.env } : {}),
+        sessionKey,
+        storePath,
+      });
   const sessionFile = formatSqliteSessionFileMarker({
     agentId,
     sessionId: expectedSessionId,
@@ -270,15 +269,14 @@ async function resolveTranscriptTurnTarget(
       agentId,
       env: scope.env,
     });
-  const store =
-    scope.sessionStore ??
-    Object.fromEntries(
-      listSessionEntries({
+  const resolved = scope.sessionStore
+    ? resolveSessionEntryFromStore({ store: scope.sessionStore, sessionKey })
+    : resolveSessionEntrySelection({
         agentId,
+        ...(scope.env ? { env: scope.env } : {}),
+        sessionKey,
         storePath,
-      }).map(({ sessionKey: entryKey, entry }) => [entryKey, entry]),
-    );
-  const resolved = store ? resolveSessionEntryFromStore({ store, sessionKey }) : undefined;
+      });
   const sessionEntry =
     resolved?.existing ??
     scope.sessionEntry ??

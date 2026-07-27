@@ -1929,7 +1929,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         transcriptPrompt: "what does this mean?",
         currentInboundContext: {
           text: [
-            "Reply target of current user message (untrusted, for context):",
+            "Reply target of current user message:",
             "```json",
             JSON.stringify(
               {
@@ -1956,9 +1956,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     // The user prompt is kept BARE; current-turn inbound metadata is routed into
     // the runtime-context carrier instead of being prepended to the user text.
     expect(seenPrompt).toBe("what does this mean?");
-    expect(seenPrompt).not.toContain(
-      "Reply target of current user message (untrusted, for context):",
-    );
+    expect(seenPrompt).not.toContain("Reply target of current user message:");
     expect(seenPrompt).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
     expect(seenPrompt).not.toContain("secret runtime context");
     expect(result.finalPromptText).toBe(seenPrompt);
@@ -1967,9 +1965,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       (message) => message.customType === "openclaw.runtime-context",
       "runtime context message",
     );
-    expect(runtimeContext.content).toContain(
-      "Reply target of current user message (untrusted, for context):",
-    );
+    expect(runtimeContext.content).toContain("Reply target of current user message:");
     expect(runtimeContext.content).toContain('"sender_label": "Mike"');
     expect(runtimeContext.content).toContain("WT daily plan - Sat May 2");
     expect(runtimeContext.content).toContain("./quoted-secret.png");
@@ -2192,7 +2188,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         transcriptPrompt: "",
         currentInboundContext: {
           text: [
-            "Reply target of current user message (untrusted, for context):",
+            "Reply target of current user message:",
             "```json",
             JSON.stringify(
               { sender_label: "Alice", body: "Hello from the replied message" },
@@ -2212,7 +2208,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
     });
 
-    expect(seenPrompt).toContain("Reply target of current user message (untrusted, for context):");
+    expect(seenPrompt).toContain("Reply target of current user message:");
     expect(seenPrompt).toContain("Hello from the replied message");
     expect(seenPrompt).toContain("Continue the OpenClaw runtime event.");
     expect(result.finalPromptText).toBe(seenPrompt);

@@ -6,6 +6,25 @@ import {
 } from "./chat-send-reply-dispatch.js";
 
 describe("buildTranscriptReplyText", () => {
+  it("preserves authored indentation across split fenced-code reply payloads", () => {
+    expect(
+      buildTranscriptReplyText([
+        { text: "Here is the YAML:\n\n```yaml\nroot:\n" },
+        { text: "  nested:\n    value: true\n```" },
+      ]),
+    ).toBe("Here is the YAML:\n\n```yaml\nroot:\n  nested:\n    value: true\n```");
+  });
+
+  it("preserves authored CRLF boundaries and skips whitespace-only reply payloads", () => {
+    expect(
+      buildTranscriptReplyText([
+        { text: "```yaml\r\nroot:\r\n" },
+        { text: "  \t\n" },
+        { text: "  nested: true\r\n```" },
+      ]),
+    ).toBe("```yaml\r\nroot:\r\n  nested: true\r\n```");
+  });
+
   it("keeps reply directives and safe media while suppressing reasoning", () => {
     expect(
       buildTranscriptReplyText([
