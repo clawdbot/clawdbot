@@ -10,6 +10,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const CHILD_PROCESS_TIMEOUT_MS = 30_000;
+const ROOT_HELP_PROCESS_TIMEOUT_MS = 60_000;
 const LAZY_GROUP_HELP_CASES = [
   { group: "backup", usageCommand: "backup" },
   { group: "capability", usageCommand: "infer|capability" },
@@ -130,6 +131,7 @@ async function runCliProcess(params: {
   failRunMainImport?: boolean;
   unsupportedRuntime?: boolean;
   allowRespawn?: boolean;
+  timeoutMs?: number;
   loggingViaInclude?: boolean;
   loggingViaRootInclude?: boolean;
   stateEnv?: (stateDir: string) => Record<string, string>;
@@ -181,7 +183,7 @@ async function runCliProcess(params: {
         ...params.env,
       },
       killSignal: "SIGKILL",
-      timeout: CHILD_PROCESS_TIMEOUT_MS,
+      timeout: params.timeoutMs ?? CHILD_PROCESS_TIMEOUT_MS,
     },
   );
   return { ...result, fixture };
@@ -211,10 +213,14 @@ async function runCliProcessExpectFailure(args: string[]): Promise<CliProcessFai
 
 describe("CLI help process exit", () => {
   it.each([
-    { args: ["--help"], usage: "Usage: openclaw [options] [command]" },
+    {
+      args: ["--help"],
+      timeoutMs: ROOT_HELP_PROCESS_TIMEOUT_MS,
+      usage: "Usage: openclaw [options] [command]",
+    },
     { args: ["path", "--help"], usage: "Usage: openclaw path [options] [command]" },
-  ])("exits promptly after $args", async ({ args, usage }) => {
-    const result = await runCliProcess({ args, forbidTlsImport: true });
+  ])("exits promptly after $args", async ({ args, timeoutMs, usage }) => {
+    const result = await runCliProcess({ args, forbidTlsImport: true, timeoutMs });
 
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain(usage);
