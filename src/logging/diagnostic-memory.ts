@@ -1,4 +1,5 @@
 // Diagnostic memory helpers capture process memory facts for support diagnostics.
+import { getHeapStatistics } from "node:v8";
 import {
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
   type DiagnosticMemoryPressureEvent,
@@ -61,11 +62,22 @@ function normalizeMemoryUsage(memory: NodeJS.MemoryUsage): DiagnosticMemoryUsage
 function resolveThresholds(
   thresholds?: DiagnosticMemoryThresholds,
 ): Required<DiagnosticMemoryThresholds> {
+  const heapSizeLimitBytes = getHeapStatistics().heap_size_limit;
+  // Keep the established 1/2 GiB defaults near a 4 GiB heap, but bound them to
+  // 25-50% and 50-75% of V8's real limit so constrained and enlarged heaps scale safely.
+  const heapUsedWarningBytes = Math.max(
+    Math.min(DEFAULT_HEAP_WARNING_BYTES, Math.floor(heapSizeLimitBytes * 0.5)),
+    Math.floor(heapSizeLimitBytes * 0.25),
+  );
+  const heapUsedCriticalBytes = Math.max(
+    Math.min(DEFAULT_HEAP_CRITICAL_BYTES, Math.floor(heapSizeLimitBytes * 0.75)),
+    Math.floor(heapSizeLimitBytes * 0.5),
+  );
   return {
     rssWarningBytes: thresholds?.rssWarningBytes ?? DEFAULT_RSS_WARNING_BYTES,
     rssCriticalBytes: thresholds?.rssCriticalBytes ?? DEFAULT_RSS_CRITICAL_BYTES,
-    heapUsedWarningBytes: thresholds?.heapUsedWarningBytes ?? DEFAULT_HEAP_WARNING_BYTES,
-    heapUsedCriticalBytes: thresholds?.heapUsedCriticalBytes ?? DEFAULT_HEAP_CRITICAL_BYTES,
+    heapUsedWarningBytes: thresholds?.heapUsedWarningBytes ?? heapUsedWarningBytes,
+    heapUsedCriticalBytes: thresholds?.heapUsedCriticalBytes ?? heapUsedCriticalBytes,
     rssGrowthWarningBytes: thresholds?.rssGrowthWarningBytes ?? DEFAULT_RSS_GROWTH_WARNING_BYTES,
     rssGrowthCriticalBytes: thresholds?.rssGrowthCriticalBytes ?? DEFAULT_RSS_GROWTH_CRITICAL_BYTES,
     growthWindowMs: thresholds?.growthWindowMs ?? DEFAULT_GROWTH_WINDOW_MS,

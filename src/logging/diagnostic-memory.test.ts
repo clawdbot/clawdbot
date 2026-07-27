@@ -21,6 +21,23 @@ import {
 } from "./diagnostic-stability.js";
 import { resetLogger, setLoggerOverride } from "./logger.js";
 
+const mocks = vi.hoisted(() => ({
+  heapSizeLimitBytes: undefined as number | undefined,
+}));
+
+vi.mock("node:v8", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:v8")>();
+  return {
+    ...actual,
+    getHeapStatistics: () => ({
+      ...actual.getHeapStatistics(),
+      ...(mocks.heapSizeLimitBytes === undefined
+        ? {}
+        : { heap_size_limit: mocks.heapSizeLimitBytes }),
+    }),
+  };
+});
+
 function flushDiagnosticEvents() {
   return vi.runAllTimersAsync();
 }
@@ -45,6 +62,7 @@ describe("diagnostic memory", () => {
     resetDiagnosticStabilityBundleForTest();
     resetDiagnosticStabilityRecorderForTest();
     resetLogger();
+    mocks.heapSizeLimitBytes = undefined;
   });
 
   afterEach(() => {
@@ -136,6 +154,50 @@ describe("diagnostic memory", () => {
       },
     ]);
   });
+
+  it.each([
+    {
+      name: "constrained",
+      heapSizeLimitBytes: 512 * 1024 * 1024,
+      heapUsedBytes: 300 * 1024 * 1024,
+      level: "warning",
+      thresholdBytes: 256 * 1024 * 1024,
+    },
+    {
+      name: "default-sized",
+      heapSizeLimitBytes: 4 * 1024 * 1024 * 1024,
+      heapUsedBytes: 1536 * 1024 * 1024,
+      level: "warning",
+      thresholdBytes: 1024 * 1024 * 1024,
+    },
+    {
+      name: "enlarged",
+      heapSizeLimitBytes: 8 * 1024 * 1024 * 1024,
+      heapUsedBytes: 2 * 1024 * 1024 * 1024,
+      level: "warning",
+      thresholdBytes: 2 * 1024 * 1024 * 1024,
+    },
+  ])(
+    "scales default heap thresholds for $name V8 heaps",
+    ({ heapSizeLimitBytes, heapUsedBytes, level, thresholdBytes }) => {
+      mocks.heapSizeLimitBytes = heapSizeLimitBytes;
+      const events: DiagnosticEventPayload[] = [];
+      const stop = onDiagnosticEvent((event) => events.push(event));
+
+      emitDiagnosticMemorySample({
+        now: 1000,
+        memoryUsage: memoryUsage({ heapTotal: heapUsedBytes, heapUsed: heapUsedBytes }),
+      });
+      stop();
+
+      expect(events.at(-1)).toMatchObject({
+        type: "diagnostic.memory.pressure",
+        level,
+        reason: "heap_threshold",
+        thresholdBytes,
+      });
+    },
+  );
 
   it("can check pressure without recording an idle memory sample", () => {
     const events: DiagnosticEventPayload[] = [];
