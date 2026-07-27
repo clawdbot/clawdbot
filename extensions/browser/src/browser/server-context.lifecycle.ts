@@ -171,7 +171,7 @@ function combineSignals(lifecycleSignal: AbortSignal, callerSignal?: AbortSignal
   return AbortSignal.any([lifecycleSignal, callerSignal]);
 }
 
-function waitForStart(promise: Promise<void>, signal?: AbortSignal): Promise<void> {
+function waitForLifecycleBarrier(promise: Promise<void>, signal?: AbortSignal): Promise<void> {
   if (!signal) {
     return promise;
   }
@@ -299,7 +299,7 @@ export async function withProfileOperationLease<T>(params: {
   // skipped between observing an old settled tail and lease admission.
   for (;;) {
     const ready = actor.tail;
-    await ready;
+    await waitForLifecycleBarrier(ready, params.signal);
     if (actor.tail === ready) {
       break;
     }
@@ -340,7 +340,7 @@ export function enqueueProfileStart(params: {
   const actor = getProfileLifecycle(params.runtime);
   const existing = actor.starts.get(params.key);
   if (existing) {
-    return waitForStart(existing, params.signal);
+    return waitForLifecycleBarrier(existing, params.signal);
   }
 
   const generation = actor.generation;
@@ -361,7 +361,7 @@ export function enqueueProfileStart(params: {
     }
   };
   actor.tail = promise.then(settleStart, settleStart);
-  return waitForStart(promise, params.signal);
+  return waitForLifecycleBarrier(promise, params.signal);
 }
 
 function capturePlaywrightRetirement(
