@@ -33,6 +33,7 @@ type QaRuntimeToolFixtureConfig = Record<string, unknown> & {
 };
 
 type QaRuntimeToolFixtureRequest = {
+  body?: unknown;
   allInputText?: string;
   plannedToolCallId?: string;
   plannedToolName?: string;
@@ -229,6 +230,50 @@ function matchesRuntimePatchArguments(params: {
     operation === params.operation &&
     path.resolve(params.workspaceDir, change.path) === expectedPath
   );
+}
+
+async function formatRuntimePatchMutationDiagnostics(params: {
+  env: QaSuiteRuntimeEnv;
+  deps: QaRuntimeToolFixtureDeps;
+  requestCursor: number;
+}) {
+  const workspaceEntries = await fs
+    .readdir(params.env.gateway.workspaceDir)
+    .then((entries) => entries.toSorted().slice(0, 16))
+    .catch(() => [] as string[]);
+  const tempRootEntries = await fs
+    .readdir(params.env.gateway.tempRoot)
+    .then((entries) => entries.toSorted().slice(0, 16))
+    .catch(() => [] as string[]);
+  const mockRequests = params.env.mock
+    ? await params.deps
+        .fetchJson(qaMockRequestsAfterUrl(params.env.mock.baseUrl, params.requestCursor))
+        .then(readQaRuntimeToolFixtureRequests)
+        .then((requests) =>
+          requests.slice(-4).map((request) => {
+            const body = isRecord(request.body) ? request.body : undefined;
+            const tools = Array.isArray(body?.tools) ? body.tools : [];
+            return {
+              plannedToolName: request.plannedToolName,
+              plannedToolCallId: request.plannedToolCallId,
+              toolOutputCallId: request.toolOutputCallId,
+              toolOutput: request.toolOutput?.slice(0, 256),
+              patchToolTypes: tools.flatMap((tool) =>
+                isRecord(tool) && tool.name === "apply_patch" && typeof tool.type === "string"
+                  ? [tool.type]
+                  : [],
+              ),
+            };
+          }),
+        )
+        .catch(() => [])
+    : [];
+  return [
+    `workspace=${params.env.gateway.workspaceDir}`,
+    `workspaceEntries=${JSON.stringify(workspaceEntries)}`,
+    `tempRootEntries=${JSON.stringify(tempRootEntries)}`,
+    ...(params.env.mock ? [`mockPatchRequests=${JSON.stringify(mockRequests)}`] : []),
+  ].join("; ");
 }
 
 function readNonEmptyString(value: unknown) {
@@ -749,6 +794,8 @@ export async function runRuntimeToolFixture(
     env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME === "codex" &&
     metadata.expectedLayer === "codex-native-workspace" &&
     !tools.has(toolName);
+  const requireCodexNativePatchCoverage =
+    dynamicExposureIntentionallyExcluded && metadata.required && toolName === "apply_patch";
   const expectedAvailable = readBoolean(config.expectedAvailable, true);
   if (!tools.has(toolName) && !dynamicExposureIntentionallyExcluded) {
     if (!expectedAvailable) {
@@ -783,8 +830,7 @@ export async function runRuntimeToolFixture(
   const happyPathOutputRequired = readBoolean(config.happyPathOutputRequired, true);
   // Private QA can expose an actual dynamic patch tool. Real Codex instead
   // mirrors native file changes into linked apply_patch transcript evidence.
-  const requireNativePatchTranscriptEvidence =
-    !env.mock && dynamicExposureIntentionallyExcluded && toolName === "apply_patch";
+  const requireNativePatchTranscriptEvidence = !env.mock && requireCodexNativePatchCoverage;
   const requireTranscriptEvidence =
     metadata.required &&
     (!env.mock || toolName !== "apply_patch") &&
@@ -826,8 +872,13 @@ export async function runRuntimeToolFixture(
     try {
       const result = await runHappyPrompt();
       if ((await readHappyPatchContents()) !== RUNTIME_PATCH_HAPPY_CONTENTS) {
+        const diagnostics = await formatRuntimePatchMutationDiagnostics({
+          env,
+          deps,
+          requestCursor: requestCursorBefore,
+        });
         throw new Error(
-          `expected apply_patch to create ${RUNTIME_PATCH_HAPPY_FILENAME} with exact contents`,
+          `expected apply_patch to create ${RUNTIME_PATCH_HAPPY_FILENAME} with exact contents; ${diagnostics}`,
         );
       }
       return result;
@@ -1038,7 +1089,7 @@ export async function runRuntimeToolFixture(
     );
   }
   if (!happyRequest && !happyPlannedOnly) {
-    if (dynamicExposureIntentionallyExcluded) {
+    if (dynamicExposureIntentionallyExcluded && !requireCodexNativePatchCoverage) {
       skipFixture(
         formatCodexNativeWorkspaceDetails({
           toolName,
@@ -1082,7 +1133,7 @@ export async function runRuntimeToolFixture(
     );
   }
   if (!failureRequest) {
-    if (dynamicExposureIntentionallyExcluded) {
+    if (dynamicExposureIntentionallyExcluded && !requireCodexNativePatchCoverage) {
       skipFixture(
         formatCodexNativeWorkspaceDetails({
           toolName,
@@ -1132,7 +1183,7 @@ export async function runRuntimeToolFixture(
     );
   }
 
-  if (dynamicExposureIntentionallyExcluded) {
+  if (dynamicExposureIntentionallyExcluded && !requireCodexNativePatchCoverage) {
     skipFixture(
       formatCodexNativeWorkspaceDetails({
         toolName,

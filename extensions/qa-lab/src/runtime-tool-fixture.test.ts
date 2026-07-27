@@ -992,7 +992,10 @@ describe("runtime tool fixture", () => {
     ).rejects.toThrow("expected live happy-path tool call for apply_patch");
   });
 
-  it("verifies dynamically exposed private-QA Codex patch calls instead of skipping them", async () => {
+  it.each([
+    { label: "dynamically exposed", dynamicPatchExposed: true },
+    { label: "native-only", dynamicPatchExposed: false },
+  ])("verifies $label private-QA Codex patch calls without skipping them", async (testCase) => {
     const env = await makeEnv({
       mock: { baseUrl: "http://127.0.0.1:9999" },
     });
@@ -1051,7 +1054,9 @@ describe("runtime tool fixture", () => {
       },
       {
         createSession: vi.fn(async (_env, _label, key) => key!),
-        readEffectiveTools: vi.fn(async () => new Set(["apply_patch"])),
+        readEffectiveTools: vi.fn(
+          async () => new Set(testCase.dynamicPatchExposed ? ["apply_patch"] : []),
+        ),
         runAgentPrompt: vi.fn(async (_env, params) => {
           promptEvidence.push({
             transcriptToolName: params.transcriptToolName,

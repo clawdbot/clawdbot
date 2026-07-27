@@ -142,7 +142,11 @@ function filterCodexDynamicToolsWithOptions<T extends { name: string }>(
   for (const name of CODEX_NATIVE_GOAL_TOOL_EXCLUDES) {
     excludes.add(name);
   }
-  if (!isForcedPrivateQaCodexRuntime(env)) {
+  if (isForcedPrivateQaCodexRuntime(env)) {
+    // Native apply_patch is registered first; advertising a second handler
+    // makes Codex reject the duplicate before either QA patch can execute.
+    excludes.add("apply_patch");
+  } else {
     for (const name of CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES) {
       if (options.preserveOpenClawShell && CODEX_APP_SERVER_OWNED_SHELL_TOOL_EXCLUDES.has(name)) {
         continue;
