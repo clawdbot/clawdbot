@@ -558,10 +558,7 @@ export async function failPendingDelivery(
   stateDir?: string,
 ): Promise<FailPendingDeliveryResult> {
   let result: FailPendingDeliveryResult = { status: "not_pending" };
-  const attemptId =
-    typeof params.entry.completionRetention === "object"
-      ? (params.entry.platformSendAttemptId ?? params.entry.producerClaimId ?? null)
-      : undefined;
+  const attemptId = typeof params.entry.completionRetention === "object" ? null : undefined;
   if (attemptId !== undefined) {
     transitionOwnedDeliveryQueueEntry(
       {

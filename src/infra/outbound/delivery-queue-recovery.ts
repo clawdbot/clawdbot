@@ -134,9 +134,9 @@ function needsUnknownSendReconciliation(entry: QueuedDelivery): boolean {
   );
 }
 
-function hasActiveBoundedDeliveryOwner(entry: QueuedDelivery, now: number): boolean {
+function hasActiveStableDeliveryOwner(entry: QueuedDelivery, now: number): boolean {
   return (
-    typeof entry.completionRetention === "object" &&
+    (typeof entry.completionRetention === "object" || entry.completionRetention === "permanent") &&
     entry.recoveryState === "producer_claimed" &&
     typeof entry.availableAt === "number" &&
     entry.availableAt > now
@@ -783,7 +783,10 @@ async function drainQueuedEntry(opts: {
   // Stable producer rows can be observed between enqueue and live ownership.
   // Fence recovery at the same SQLite claim before consuming an attempt or
   // crossing provider I/O; an active live producer keeps its original lease.
-  const requiresProducerClaim = typeof entry.completionRetention === "object";
+  const requiresProducerClaim =
+    typeof entry.completionRetention === "object" ||
+    typeof entry.producerClaimId === "string" ||
+    typeof entry.platformSendAttemptId === "string";
   const producerClaimId = requiresProducerClaim
     ? await claimDeliveryPlatformSendAttempt(
         entry.id,
@@ -1093,22 +1096,16 @@ export async function drainPendingDeliveries(opts: {
       // Poll-driven reconnect drains can repeat while a live send owns its
       // claim. Leave conflicts silent so reconnect polling cannot starve it.
       onEntry: async (currentEntry) => {
-        if (hasActiveBoundedDeliveryOwner(currentEntry, Date.now())) {
+        if (hasActiveStableDeliveryOwner(currentEntry, Date.now())) {
           return;
         }
-        // An observed platform UUID is evidence to reconcile, not ownership
-        // authorizing admission failure or recipient-state mutation.
-        const admission =
-          typeof currentEntry.completionRetention === "object" &&
-          needsUnknownSendReconciliation(currentEntry)
-            ? "allowed"
-            : await applyRecoveryDeliveryAdmission({
-                entry: currentEntry,
-                cfg: opts.cfg,
-                log: opts.log,
-                stateDir: opts.stateDir,
-                logLabel: opts.logLabel,
-              });
+        const admission = await applyRecoveryDeliveryAdmission({
+          entry: currentEntry,
+          cfg: opts.cfg,
+          log: opts.log,
+          stateDir: opts.stateDir,
+          logLabel: opts.logLabel,
+        });
         if (admission !== "allowed") {
           return;
         }
@@ -1224,21 +1221,17 @@ export async function recoverPendingDeliveries(opts: {
       opts.log.info(`Recovery skipped for delivery ${entry.id}: already gone`);
     },
     onEntry: async (currentEntry) => {
-      if (hasActiveBoundedDeliveryOwner(currentEntry, Date.now())) {
+      if (hasActiveStableDeliveryOwner(currentEntry, Date.now())) {
         opts.log.info(`Recovery skipped for delivery ${currentEntry.id}: active platform owner`);
         return "continue";
       }
-      const admission =
-        typeof currentEntry.completionRetention === "object" &&
-        needsUnknownSendReconciliation(currentEntry)
-          ? "allowed"
-          : await applyRecoveryDeliveryAdmission({
-              entry: currentEntry,
-              cfg: opts.cfg,
-              log: opts.log,
-              stateDir: opts.stateDir,
-              logLabel: "Recovery",
-            });
+      const admission = await applyRecoveryDeliveryAdmission({
+        entry: currentEntry,
+        cfg: opts.cfg,
+        log: opts.log,
+        stateDir: opts.stateDir,
+        logLabel: "Recovery",
+      });
       if (admission !== "allowed") {
         if (admission === "failed") {
           summary.failed += 1;

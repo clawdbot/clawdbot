@@ -420,6 +420,61 @@ describe("delivery-queue recovery", () => {
     expect(deliver).not.toHaveBeenCalled();
   });
 
+  it("checks bounded provider admission before replaying a reconciliable platform attempt", async () => {
+    const id = "cron-direct-delivery:v1:blocked-reconciled-admission";
+    await enqueueDeliveryOnce(
+      {
+        channel: "slack",
+        to: "C123",
+        accountId: "enterprise",
+        payloads: [{ text: "disabled account must never be replayed" }],
+        queuePolicy: "required",
+        completionRetention: {
+          idPrefix: "cron-direct-delivery:v1:",
+          maxAgeMs: 24 * 60 * 60_000,
+          maxEntries: 2_000,
+        },
+      },
+      id,
+      tmpDir(),
+    );
+    const producerClaimId = await claimDeliveryPlatformSendAttempt(id, tmpDir());
+    if (!producerClaimId) {
+      throw new Error("test invariant: bounded platform attempt must be owned");
+    }
+    await markDeliveryPlatformSendAttemptStarted(id, tmpDir(), undefined, producerClaimId);
+    const admitDeferredDelivery = vi.fn(() => ({
+      status: "permanent_rejection" as const,
+      reason: "unsupported_enterprise_slack_delivery",
+    }));
+    const reconcileUnknownSend = vi.fn().mockResolvedValue({ status: "not_sent" });
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: {
+        capabilities: { reconcileUnknownSend: true },
+        admitDeferredDelivery,
+        reconcileUnknownSend,
+      },
+    });
+    const deliver = vi.fn();
+
+    await runRecovery({ deliver });
+
+    expect(admitDeferredDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "enterprise",
+        channel: "slack",
+        phase: "recovery",
+      }),
+    );
+    expect(reconcileUnknownSend).not.toHaveBeenCalled();
+    expect(deliver).not.toHaveBeenCalled();
+    expect((await loadPendingDeliveries(tmpDir()))[0]).toMatchObject({
+      id,
+      recoveryState: "send_attempt_started",
+      platformSendAttemptId: producerClaimId,
+    });
+  });
+
   it("paces startup replay instead of draining eligible entries back-to-back", async () => {
     vi.useFakeTimers();
     const startedAt = new Date("2026-04-23T00:00:00.000Z");

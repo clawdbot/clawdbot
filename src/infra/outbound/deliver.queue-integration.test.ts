@@ -177,6 +177,44 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     });
   });
 
+  it("never lets startup or reconnect impersonate a permanent live producer", async () => {
+    const deliveryIntentId = "permanent-matrix-active-producer";
+    await enqueueDeliveryOnce(
+      {
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "the original permanent producer owns this send" }],
+        queuePolicy: "required",
+        completionRetention: "permanent",
+        maxRetries: 1,
+      },
+      deliveryIntentId,
+      tmpDir,
+    );
+    const producerClaimId = await claimDeliveryPlatformSendAttempt(deliveryIntentId, tmpDir);
+    if (!producerClaimId) {
+      throw new Error("test invariant: permanent live producer must claim the stable row");
+    }
+    await reserveDeliveryAttempt(deliveryIntentId, 1, tmpDir, producerClaimId);
+    const deliver = vi.fn<DeliverFn>(async () => []);
+
+    await drainMatrixReconnect({ deliver, stateDir: tmpDir });
+    await recoverPendingDeliveries({
+      cfg: {} as OpenClawConfig,
+      deliver,
+      log: createRecoveryLog(),
+      stateDir: tmpDir,
+    });
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
+      id: deliveryIntentId,
+      recoveryState: "producer_claimed",
+      producerClaimId,
+      attemptCount: 1,
+    });
+  });
+
   it("retains permanent receipts when stable delivery is intentionally suppressed", async () => {
     process.env.OPENCLAW_STATE_DIR = tmpDir;
     const sendMatrix = vi.fn();
