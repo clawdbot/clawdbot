@@ -82,11 +82,11 @@ function detailsBlockRule(
   _endLine: number,
   silent: boolean,
 ): boolean {
-  if (state.sCount[startLine] - state.blkIndent >= 4) {
+  if ((state.sCount[startLine] ?? 0) - state.blkIndent >= 4) {
     return false;
   }
-  const start = state.bMarks[startLine] + state.tShift[startLine];
-  const end = state.eMarks[startLine];
+  const start = (state.bMarks[startLine] ?? 0) + (state.tShift[startLine] ?? 0);
+  const end = state.eMarks[startLine] ?? state.src.length;
   const line = state.src.slice(start, end);
   const tags = scanMarkdownDisclosureLine(line);
   if (!tags) {
