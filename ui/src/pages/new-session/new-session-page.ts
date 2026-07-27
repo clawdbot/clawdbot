@@ -549,21 +549,20 @@ class NewSessionPage extends OpenClawLightDomElement {
     // shows its staged repo; neither may be replaced by a workspace refresh.
     if (!this.execNode && !keepSelectedFolder && !this.pendingCloud.sessionKey) {
       const workspace = this.workspacePath();
-      const storedWorkspaceMoved =
-        preference !== null &&
-        Boolean(preference.folder) &&
-        preference.folder === preference.workspace &&
-        preference.workspace !== workspace;
+      const storedFolder = preference?.folder ?? "";
       // An old agent workspace path is not a custom folder. If the configured
       // workspace moved, use the current value instead of reviving the stale path.
-      this.folder =
-        preference?.folder &&
-        (preference.folder === workspace || this.isAdmin()) &&
-        (!preference.workspace ||
-          preference.folder !== preference.workspace ||
-          preference.workspace === workspace)
-          ? preference.folder
-          : workspace;
+      const storedWorkspaceMoved =
+        Boolean(storedFolder) &&
+        storedFolder === preference?.workspace &&
+        preference.workspace !== workspace;
+      // Only an admin can browse outside the workspace, so any other stored
+      // folder is unreachable for this viewer.
+      const storedFolderUsable =
+        Boolean(storedFolder) &&
+        !storedWorkspaceMoved &&
+        (storedFolder === workspace || this.isAdmin());
+      this.folder = storedFolderUsable ? storedFolder : workspace;
       this.folderSelectedByUser = false;
       this.preferredWorktreeRestore = preference?.worktree === true;
       this.worktreeSelectedByUser = false;
@@ -773,15 +772,17 @@ class NewSessionPage extends OpenClawLightDomElement {
             if (!this.cloudProfileId) {
               this.worktree = false;
             }
-            this.preferredWorktreeRestore = false;
             if (rejectedWorktree) {
               this.persistPreference({ worktree: false });
             }
-          } else if (restoreWorktree && !this.worktreeSelectedByUser) {
-            // An inconclusive lookup cannot disprove a stored worktree choice.
-            // Keep it visible and pending until retry or explicit user override.
+          } else if (restoreWorktree && !this.worktreeSelectedByUser && this.worktreeAvailable()) {
+            // An inconclusive lookup cannot disprove a stored worktree choice, but
+            // it may only be restored while the toggle stays usable: an unavailable
+            // repository disables that control, and a box the user cannot clear
+            // would strand the draft behind a permanently disabled submit.
             this.worktree = true;
           }
+          this.preferredWorktreeRestore = false;
           return;
         }
         this.repository = {
@@ -806,9 +807,10 @@ class NewSessionPage extends OpenClawLightDomElement {
           return;
         }
         this.repository = { kind: "unavailable", repoRoot };
-        if (restoreWorktree && !this.worktreeSelectedByUser) {
+        if (restoreWorktree && !this.worktreeSelectedByUser && this.worktreeAvailable()) {
           this.worktree = true;
         }
+        this.preferredWorktreeRestore = false;
       });
   }
 

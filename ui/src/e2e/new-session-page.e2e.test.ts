@@ -986,8 +986,11 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         code: "UNAVAILABLE",
         message: "branch lookup unavailable",
       });
-      await expect.poll(() => start.isDisabled()).toBe(true);
-      await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("true");
+      // A failed lookup disables the worktree toggle, so restoring the stored
+      // choice would strand the draft behind a control the user cannot clear.
+      // The draft drops it and stays submittable; storage keeps the preference.
+      await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("false");
+      await expect.poll(() => start.isDisabled()).toBe(false);
 
       await page.reload();
       await page.locator(".new-session-page__message").fill("keep both remembered choices");
