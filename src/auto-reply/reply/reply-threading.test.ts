@@ -184,6 +184,17 @@ describe("createReplyToModeFilterForChannel", () => {
     expect(createReplyToModeFilterForChannel("off")(explicitReply).replyToId).toBeUndefined();
   });
 
+  it("allows explicit tags for named channels without a loaded plugin", () => {
+    // The filter also runs where plugins are not loaded; stripping for unrecognized
+    // ids would break real channels there. Accepted tradeoff pinned on purpose.
+    setActivePluginRegistry(createTestRegistry([]));
+    const explicitReply = { text: "hello", replyToId: "message-1", replyToTag: true };
+
+    expect(
+      createReplyToModeFilterForChannel("off", "unloaded-channel")(explicitReply).replyToId,
+    ).toBe("message-1");
+  });
+
   it("honors the deprecated allowTagsWhenOff adapter alias", () => {
     setActivePluginRegistry(
       createTestRegistry([

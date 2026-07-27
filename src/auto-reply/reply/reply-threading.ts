@@ -221,8 +221,10 @@ export function createReplyToModeFilterForChannel(
 ) {
   const normalized = normalizeOptionalLowercaseString(channel);
   const adapter = getLoadedChannelThreadingAdapter(normalized);
-  // Channels may opt out via their threading adapter. Known channels default to
-  // allowing explicit tags; unknown or absent channels fail closed.
+  // Channels may opt out via their threading adapter. Any named channel defaults to
+  // allowing explicit tags — including ids with no loaded plugin, because this filter
+  // also runs where plugins are not loaded and stripping there would break real
+  // channels. Only an absent channel fails closed. Accepted tradeoff, not an oversight.
   const allowExplicitReplyTagsWhenOff =
     adapter?.allowExplicitReplyTagsWhenOff ?? adapter?.allowTagsWhenOff ?? Boolean(normalized);
   return createReplyToModeFilter(mode, {
