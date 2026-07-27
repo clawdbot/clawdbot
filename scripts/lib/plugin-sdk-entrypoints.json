@@ -94,6 +94,7 @@
   "security-runtime",
   "gateway-method-runtime",
   "gateway-runtime",
+  "cli-argv",
   "cli-runtime",
   "cli-backend",
   "codex-mcp-projection",

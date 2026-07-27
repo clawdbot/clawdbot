@@ -5,6 +5,8 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
 import { formatHelpExamples } from "../help-format.js";
 import { withConsoleLogsRoutedToStderrForJson } from "../json-output-mode.js";
+import { setCommandJsonMode } from "../program/json-mode.js";
+import { isNodesMachineOutput } from "./output-mode.js";
 import { registerNodesCameraCommands } from "./register.camera.js";
 import { registerNodesInvokeCommands } from "./register.invoke.js";
 import { registerNodesLocationCommands } from "./register.location.js";
@@ -42,6 +44,7 @@ export async function registerNodesCli(program: Command, argv: readonly string[]
   registerNodesCameraCommands(nodes);
   registerNodesScreenCommands(nodes);
   registerNodesLocationCommands(nodes);
+  setCommandJsonMode(nodes, "output", ({ argv: commandArgv }) => isNodesMachineOutput(commandArgv));
 
   // Built-in `nodes` subcommands (status/list/pairing/invoke/...) must stay on the lightweight
   // path: loading plugin CLI/runtime to resolve them only adds startup cost. Plugin-provided node
