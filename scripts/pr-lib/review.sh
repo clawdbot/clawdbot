@@ -182,16 +182,7 @@ EOF_MD
   echo "files=.local/review.md .local/review.json"
 }
 
-review_validate_artifacts() {
-  local pr="$1"
-  enter_worktree "$pr" false
-  require_artifact .local/review.md
-  require_artifact .local/review.json
-  require_artifact .local/pr-meta.env
-  require_artifact .local/pr-meta.json
-
-  review_guard "$pr"
-
+validate_review_artifact_data() {
   if ! node "$(review_artifacts_helper_path)" validate \
     .local/review.json \
     .local/review.md \
@@ -199,6 +190,32 @@ review_validate_artifacts() {
   then
     return 1
   fi
+}
+
+require_ready_review_recommendation() {
+  if ! jq -e '.recommendation == "READY FOR /prepare-pr"' .local/review.json >/dev/null; then
+    echo "PR preparation requires a validated READY FOR /prepare-pr review recommendation."
+    return 1
+  fi
+}
+
+review_validate_artifacts() {
+  local pr="$1"
+  # Callers use an OR-list to keep pre-mutation failures reversible; Bash disables
+  # errexit within that context, so every artifact and exact-head guard must propagate.
+  enter_worktree "$pr" false || return 1
+  require_artifact .local/review.md || return 1
+  require_artifact .local/review.json || return 1
+  require_artifact .local/pr-meta.env || return 1
+  require_artifact .local/pr-meta.json || return 1
+
+  review_guard "$pr" || return 1
+  if [ "${REVIEW_MODE:-}" != "pr" ]; then
+    echo "Review artifact validation requires the reviewed PR head, not main-baseline mode."
+    return 1
+  fi
+
+  validate_review_artifact_data || return 1
 
   echo "review artifacts validated"
   print_review_stdout_summary

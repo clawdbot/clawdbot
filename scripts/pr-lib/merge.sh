@@ -138,10 +138,26 @@ merge_verify() {
   local checks_json
   local checks_err_file
   checks_err_file=$(mktemp)
-  checks_json=$(gh pr checks "$pr" --required --json name,bucket,state 2>"$checks_err_file" || true)
+  if ! checks_json=$(gh pr checks "$pr" --required --json name,bucket,state 2>"$checks_err_file"); then
+    local checks_error
+    checks_error=$(cat "$checks_err_file")
+    case "$checks_error" in
+      "no required checks reported on the '"*"' branch")
+        # gh reports the valid empty-required set as an error, not a JSON array.
+        checks_json='[]'
+        ;;
+      *)
+        echo "Merge verify failed: unable to verify the required GitHub checks." >&2
+        printf '%s\n' "$checks_error" >&2
+        rm -f "$checks_err_file"
+        return 1
+        ;;
+    esac
+  fi
   rm -f "$checks_err_file"
-  if [ -z "$checks_json" ]; then
-    checks_json='[]'
+  if ! printf '%s\n' "$checks_json" | jq -e 'type == "array"' >/dev/null; then
+    echo "Merge verify failed: GitHub returned invalid required-check evidence." >&2
+    return 1
   fi
   local required_count
   required_count=$(printf '%s\n' "$checks_json" | jq 'length')
@@ -197,10 +213,19 @@ merge_run() {
   enter_worktree "$pr" false
 
   local required
-  for required in .local/review.md .local/review.json .local/prep.md .local/prep.env; do
+  for required in \
+    .local/review.md \
+    .local/review.json \
+    .local/pr-meta.env \
+    .local/pr-meta.json \
+    .local/prep.md \
+    .local/prep.env
+  do
     require_artifact "$required"
   done
 
+  validate_review_artifact_data || return 1
+  require_ready_review_recommendation || return 1
   merge_verify "$pr"
   # shellcheck disable=SC1091
   source .local/prep.env

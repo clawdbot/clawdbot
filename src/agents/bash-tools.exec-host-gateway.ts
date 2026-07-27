@@ -79,6 +79,7 @@ import type {
   ExecApprovalFollowupOutcome,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
+import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
 /** Full input bundle for gateway-host allowlist and approval processing. */
@@ -797,34 +798,40 @@ export async function processGatewayAllowlist(
       requiresSecurityAuditSuppressionApproval;
     if (canAutoReviewApprovalMiss) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;
-      const decision = await reviewer({
-        command: params.command,
-        argv: autoReviewArgv,
-        resolvedPath: autoReviewResolvedPath,
-        cwd: params.workdir,
-        envKeys: Object.keys(params.requestedEnv ?? {}).toSorted(),
-        host: "gateway",
-        reason: resolveGatewayAutoReviewReason({
-          requiresInlineEvalApproval,
-          requiresHeredocApproval,
-          requiresAllowlistPlanApproval,
-          hostSecurity,
-          analysisOk,
-          allowlistSatisfied,
-          durableApprovalSatisfied,
+      const pendingDecision = Promise.resolve(
+        reviewer({
+          command: params.command,
+          argv: autoReviewArgv,
+          resolvedPath: autoReviewResolvedPath,
+          cwd: params.workdir,
+          envKeys: Object.keys(params.requestedEnv ?? {}).toSorted(),
+          host: "gateway",
+          reason: resolveGatewayAutoReviewReason({
+            requiresInlineEvalApproval,
+            requiresHeredocApproval,
+            requiresAllowlistPlanApproval,
+            hostSecurity,
+            analysisOk,
+            allowlistSatisfied,
+            durableApprovalSatisfied,
+          }),
+          analysis: {
+            parsed: analysisOk,
+            allowlistMatched: allowlistSatisfied,
+            durableApprovalMatched: durableApprovalSatisfied,
+            inlineEval: requiresInlineEvalApproval,
+            heredoc: requiresHeredocApproval,
+          },
+          agent: {
+            id: params.agentId,
+            sessionKey: params.sessionKey,
+          },
         }),
-        analysis: {
-          parsed: analysisOk,
-          allowlistMatched: allowlistSatisfied,
-          durableApprovalMatched: durableApprovalSatisfied,
-          inlineEval: requiresInlineEvalApproval,
-          heredoc: requiresHeredocApproval,
-        },
-        agent: {
-          id: params.agentId,
-          sessionKey: params.sessionKey,
-        },
-      });
+      );
+      // Custom reviewers may never settle; cancellation must not retain approval authority.
+      const decision = params.signal
+        ? await abortable(params.signal, pendingDecision)
+        : await pendingDecision;
       params.signal?.throwIfAborted();
       if (
         decision.decision === "allow-once" &&
