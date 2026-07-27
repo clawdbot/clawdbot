@@ -114,7 +114,7 @@ export async function auditShortTermPromotionArtifacts(params: {
       workspaceDir,
       entries: Object.values(store.entries),
     });
-    danglingEntryCount = entryCount - liveEntries.length;
+    danglingEntryCount = normalizedEntryCount - liveEntries.length;
     if (danglingEntryCount > 0) {
       issues.push({
         severity: "warn",
@@ -305,21 +305,23 @@ export async function repairShortTermPromotionArtifacts(params: {
         removedOverflowEntries > 0 ||
         JSON.stringify(normalized.entries) !== JSON.stringify(comparableStore.entries);
       if (needsRewrite) {
-        const writes: Promise<void>[] = [
-          writeStore(workspaceDir, {
-            ...comparableStore,
-            updatedAt: nowIso,
-          }),
-        ];
+        let phaseSignals: Awaited<ReturnType<typeof readPhaseSignalStore>> | undefined;
         if (removedDanglingEntries > 0) {
-          const phaseSignals = await readPhaseSignalStore(workspaceDir, nowIso);
+          phaseSignals = await readPhaseSignalStore(workspaceDir, nowIso);
           for (const key of danglingEntryKeys) {
             delete phaseSignals.entries[key];
           }
           phaseSignals.updatedAt = nowIso;
-          writes.push(writePhaseSignalStore(workspaceDir, phaseSignals));
         }
-        await Promise.all(writes);
+        // Phase signals are derived from recall rows. Remove signals for recalls
+        // already proven dangling first so a later failure stays retryable.
+        if (phaseSignals) {
+          await writePhaseSignalStore(workspaceDir, phaseSignals);
+        }
+        await writeStore(workspaceDir, {
+          ...comparableStore,
+          updatedAt: nowIso,
+        });
         rewroteStore = true;
       }
     }

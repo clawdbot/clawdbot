@@ -15,6 +15,7 @@ vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
 import {
   configureMemoryCoreDreamingState,
   SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
+  SHORT_TERM_RECALL_NAMESPACE,
 } from "./dreaming-state.js";
 import {
   applyShortTermPromotions,
@@ -3029,6 +3030,131 @@ describe("short-term promotion", () => {
       const auditAfter = await auditShortTermPromotionArtifacts({ workspaceDir });
       expect(auditAfter.danglingEntryCount).toBe(0);
       expect(auditAfter.issues.map((issue) => issue.code)).not.toContain("recall-store-dangling");
+    });
+  });
+
+  it("fails closed before recall writes when phase-signal state cannot be read", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await testing.writeRawRecallStore(workspaceDir, {
+        version: 1,
+        updatedAt: "2026-04-04T00:00:00.000Z",
+        entries: {
+          missing: {
+            key: "missing",
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            source: "memory",
+            snippet: "Missing source recall",
+            recallCount: 2,
+            dailyCount: 0,
+            groundedCount: 0,
+            totalScore: 1.8,
+            maxScore: 0.95,
+            firstRecalledAt: "2026-04-01T00:00:00.000Z",
+            lastRecalledAt: "2026-04-04T00:00:00.000Z",
+            queryHashes: ["a", "b"],
+            recallDays: ["2026-04-04"],
+            conceptTags: [],
+          },
+        },
+      });
+      const nowIso = "2026-04-05T00:00:00.000Z";
+      const recallBefore = await testing.readRecallStore(workspaceDir, nowIso);
+      const env = { ...process.env };
+      configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) => {
+        if (options.namespace === SHORT_TERM_PHASE_SIGNAL_NAMESPACE) {
+          throw new Error("phase state unavailable");
+        }
+        return createPluginStateKeyedStoreForTests<T>("memory-core", { ...options, env });
+      });
+      try {
+        await expect(repairShortTermPromotionArtifacts({ workspaceDir })).rejects.toThrow(
+          "phase state unavailable",
+        );
+      } finally {
+        await configureMemoryCoreDreamingStateForTests();
+      }
+      expect(await testing.readRecallStore(workspaceDir, nowIso)).toEqual(recallBefore);
+    });
+  });
+
+  it("converges on retry when the recall write fails after phase cleanup", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", ["Live source note."]);
+      const buildEntry = (key: string, entryPath: string) => ({
+        key,
+        path: entryPath,
+        startLine: 1,
+        endLine: 1,
+        source: "memory" as const,
+        snippet: `${key} recall`,
+        recallCount: 2,
+        dailyCount: 0,
+        groundedCount: 0,
+        totalScore: 1.8,
+        maxScore: 0.95,
+        firstRecalledAt: "2026-04-01T00:00:00.000Z",
+        lastRecalledAt: "2026-04-04T00:00:00.000Z",
+        queryHashes: ["a", "b"],
+        recallDays: ["2026-04-04"],
+        conceptTags: [],
+      });
+      await testing.writeRawRecallStore(workspaceDir, {
+        version: 1,
+        updatedAt: "2026-04-04T00:00:00.000Z",
+        entries: {
+          live: buildEntry("live", "memory/2026-04-01.md"),
+          missing: buildEntry("missing", "memory/2026-04-03.md"),
+        },
+      });
+      await testing.writeRawPhaseSignalStore(workspaceDir, {
+        version: 1,
+        updatedAt: "2026-04-04T00:00:00.000Z",
+        entries: {
+          live: { key: "live", lightHits: 1, remHits: 0 },
+          missing: { key: "missing", lightHits: 0, remHits: 1 },
+        },
+      });
+
+      const env = { ...process.env };
+      configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) => {
+        const store = createPluginStateKeyedStoreForTests<T>("memory-core", { ...options, env });
+        if (options.namespace !== SHORT_TERM_RECALL_NAMESPACE) {
+          return store;
+        }
+        return {
+          ...store,
+          register: async () => {
+            throw new Error("recall write unavailable");
+          },
+        };
+      });
+      try {
+        await expect(repairShortTermPromotionArtifacts({ workspaceDir })).rejects.toThrow(
+          "recall write unavailable",
+        );
+      } finally {
+        await configureMemoryCoreDreamingStateForTests();
+      }
+
+      expect(Object.keys(await readRecallStoreEntries(workspaceDir))).toEqual(["live", "missing"]);
+      expect(
+        Object.keys(
+          (await testing.readPhaseSignalStore(workspaceDir, new Date().toISOString())).entries,
+        ),
+      ).toEqual(["live"]);
+
+      await expect(repairShortTermPromotionArtifacts({ workspaceDir })).resolves.toMatchObject({
+        changed: true,
+        removedDanglingEntries: 1,
+      });
+      expect(Object.keys(await readRecallStoreEntries(workspaceDir))).toEqual(["live"]);
+      expect(
+        Object.keys(
+          (await testing.readPhaseSignalStore(workspaceDir, new Date().toISOString())).entries,
+        ),
+      ).toEqual(["live"]);
     });
   });
 
