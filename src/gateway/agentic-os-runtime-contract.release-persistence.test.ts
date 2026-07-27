@@ -34,6 +34,22 @@ const releaseOwnerParams = {
   requester_agent_id: acquireParams.requester_agent_id,
 };
 
+function persistedFingerprints(snapshot: {
+  leases: Array<Record<string, unknown>>;
+  releaseReplays: Array<Record<string, unknown>>;
+  sessions: Array<Record<string, unknown>>;
+}): string[] {
+  return [
+    ...snapshot.leases.flatMap((lease) => [
+      lease.fingerprint,
+      lease.spawn_reservation_fingerprint,
+      (lease.spawn_reservation as Record<string, unknown> | undefined)?.fingerprint,
+    ]),
+    ...snapshot.releaseReplays.map((replay) => replay.fingerprint),
+    ...snapshot.sessions.map((session) => session.fingerprint),
+  ].filter((value): value is string => typeof value === "string");
+}
+
 describe("Agentic OS allow lease release persistence", () => {
   let runtimeStateDir: string | undefined;
 
@@ -196,6 +212,28 @@ describe("Agentic OS allow lease release persistence", () => {
       childSessionKey: reservedSession.sessionKey,
       runId: reservedSession.runId,
     });
+    const migratedSnapshot = store.loadAgenticOsRuntimeSnapshot() as {
+      leases: Array<Record<string, unknown>>;
+      releaseReplays: Array<Record<string, unknown>>;
+      sessions: Array<Record<string, unknown>>;
+    };
+    const fingerprints = persistedFingerprints(migratedSnapshot);
+    expect(fingerprints).toContain(shared.stableJsonTextDigest(fingerprint));
+    expect(fingerprints).not.toContain(fingerprint);
+    expect(fingerprints).toEqual(
+      fingerprints.map(() => expect.stringMatching(/^sha256:[a-f0-9]{64}$/u)),
+    );
+    const conflictingTask = `${task}!`;
+    await expect(
+      restarted.spawnAgenticOsSession({
+        ...spawnParams,
+        task: conflictingTask,
+        metadata: {
+          ...metadata,
+          task_digest: createHash("sha256").update(conflictingTask).digest("hex"),
+        },
+      }),
+    ).rejects.toThrow("conflicting sessions_spawn idempotency_key");
     expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
@@ -289,6 +327,28 @@ describe("Agentic OS allow lease release persistence", () => {
       childSessionKey: reservedSession.sessionKey,
       runId: reservedSession.runId,
     });
+    const migratedSnapshot = store.loadAgenticOsRuntimeSnapshot() as {
+      leases: Array<Record<string, unknown>>;
+      releaseReplays: Array<Record<string, unknown>>;
+      sessions: Array<Record<string, unknown>>;
+    };
+    const fingerprints = persistedFingerprints(migratedSnapshot);
+    expect(fingerprints).toContain(shared.stableJsonTextDigest(fingerprint));
+    expect(fingerprints).not.toContain(fingerprint);
+    expect(fingerprints).toEqual(
+      fingerprints.map(() => expect.stringMatching(/^sha256:[a-f0-9]{64}$/u)),
+    );
+    const conflictingTask = `${task}!`;
+    await expect(
+      restarted.spawnAgenticOsSession({
+        ...spawnParams,
+        task: conflictingTask,
+        metadata: {
+          ...metadata,
+          task_digest: createHash("sha256").update(conflictingTask).digest("hex"),
+        },
+      }),
+    ).rejects.toThrow("conflicting sessions_spawn idempotency_key");
     expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 });

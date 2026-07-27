@@ -26,6 +26,9 @@ import {
   FORBIDDEN_SESSION_STATUS_CAMEL_ALIASES,
   assertNoForbiddenAliases,
   canonicalAgentIdentity,
+  migrateLeaseRecordFingerprints,
+  migrateReleaseReplayFingerprint,
+  migrateSessionRecordFingerprint,
   pickCanonicalIdentityStrings,
   readPositiveInteger,
   readString,
@@ -103,10 +106,14 @@ function hydrateRuntimeSnapshot(snapshot: RuntimeSnapshot): boolean {
   let changed = false;
   const hydrationNow = Date.now();
   const reconciledSessions = [...snapshot.sessions];
+  for (const session of reconciledSessions) {
+    changed = migrateSessionRecordFingerprint(session) || changed;
+  }
   const acceptedSessionByLease = new Map(
     snapshot.sessions.map((session) => [session.gatewayLeaseId, session]),
   );
   for (const lease of snapshot.leases) {
+    changed = migrateLeaseRecordFingerprints(lease) || changed;
     if (lease.spawn_reservation_fingerprint && !lease.consumed_at_ms) {
       // A pending promise cannot survive process restart. Promote a durable
       // reservation only when an accepted snapshot or canonical child-run
@@ -155,6 +162,7 @@ function hydrateRuntimeSnapshot(snapshot: RuntimeSnapshot): boolean {
     }
   }
   for (const replay of snapshot.releaseReplays) {
+    changed = migrateReleaseReplayFingerprint(replay) || changed;
     if (replay.releaseIdempotencyKey) {
       releaseByReleaseIdempotencyKey.set(
         principalScopedKey(replay.authenticatedPrincipalId, replay.releaseIdempotencyKey),

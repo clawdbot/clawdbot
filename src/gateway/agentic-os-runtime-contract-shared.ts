@@ -117,6 +117,8 @@ export type SpawnPending = {
 
 export class ContractInputError extends Error {}
 
+const FINGERPRINT_DIGEST_RE = /^sha256:[a-f0-9]{64}$/u;
+
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -136,6 +138,56 @@ export function stableJson(value: unknown): string {
 
 export function stableJsonDigest(value: unknown): string {
   return `sha256:${createHash("sha256").update(stableJson(value)).digest("hex")}`;
+}
+
+export function stableJsonTextDigest(value: string): string {
+  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
+}
+
+function migrateLegacyFingerprint(value: string | undefined): {
+  fingerprint: string | undefined;
+  changed: boolean;
+} {
+  if (!value || FINGERPRINT_DIGEST_RE.test(value)) {
+    return { fingerprint: value, changed: false };
+  }
+  return { fingerprint: stableJsonTextDigest(value), changed: true };
+}
+
+export function migrateSessionRecordFingerprint(session: SessionRecord): boolean {
+  const migrated = migrateLegacyFingerprint(session.fingerprint);
+  if (!migrated.changed || !migrated.fingerprint) {
+    return false;
+  }
+  session.fingerprint = migrated.fingerprint;
+  return true;
+}
+
+export function migrateLeaseRecordFingerprints(lease: LeaseRecord): boolean {
+  let changed = false;
+  const fingerprint = migrateLegacyFingerprint(lease.fingerprint);
+  if (fingerprint.changed && fingerprint.fingerprint) {
+    lease.fingerprint = fingerprint.fingerprint;
+    changed = true;
+  }
+  const reservationFingerprint = migrateLegacyFingerprint(lease.spawn_reservation_fingerprint);
+  if (reservationFingerprint.changed && reservationFingerprint.fingerprint) {
+    lease.spawn_reservation_fingerprint = reservationFingerprint.fingerprint;
+    changed = true;
+  }
+  if (lease.spawn_reservation) {
+    changed = migrateSessionRecordFingerprint(lease.spawn_reservation) || changed;
+  }
+  return changed;
+}
+
+export function migrateReleaseReplayFingerprint(replay: ReleaseReplay): boolean {
+  const migrated = migrateLegacyFingerprint(replay.fingerprint);
+  if (!migrated.changed || !migrated.fingerprint) {
+    return false;
+  }
+  replay.fingerprint = migrated.fingerprint;
+  return true;
 }
 
 export function assertNoForbiddenAliases(
