@@ -341,6 +341,39 @@ describe("current plugin metadata snapshot", () => {
     expect(getCurrentPluginMetadataSnapshot({ config: secondConfig })).toBeUndefined();
   });
 
+  it("restores exact config identity across a temporary metadata snapshot", () => {
+    const config = { plugins: { load: { paths: ["~/plugins"] } } };
+    const snapshot = createSnapshot({ config });
+    const originalEnv = {
+      HOME: "/home/original-snapshot",
+      OPENCLAW_HOME: undefined,
+    } as NodeJS.ProcessEnv;
+    const changedEnv = {
+      HOME: "/home/changed-snapshot",
+      OPENCLAW_HOME: undefined,
+    } as NodeJS.ProcessEnv;
+    setCurrentPluginMetadataSnapshot(snapshot, { config, env: originalEnv });
+    const captured = captureCurrentPluginMetadataSnapshotState();
+
+    setCurrentPluginMetadataSnapshot(createSnapshot());
+    restoreCurrentPluginMetadataSnapshotState(captured);
+
+    expect(getCurrentPluginMetadataSnapshot({ config, env: changedEnv })).toBe(snapshot);
+  });
+
+  it("restores exact config identity after in-place changes", () => {
+    const config = { plugins: { allow: ["first"] } };
+    const snapshot = createSnapshot({ config });
+    setCurrentPluginMetadataSnapshot(snapshot, { config });
+    const captured = captureCurrentPluginMetadataSnapshotState();
+
+    setCurrentPluginMetadataSnapshot(createSnapshot());
+    restoreCurrentPluginMetadataSnapshotState(captured);
+    config.plugins.allow = ["changed"];
+
+    expect(getCurrentPluginMetadataSnapshot({ config })).toBe(snapshot);
+  });
+
   it("clears the current snapshot when the persisted installed index changes", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-metadata-"));
     try {

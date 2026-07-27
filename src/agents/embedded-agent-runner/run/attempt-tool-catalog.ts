@@ -104,6 +104,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
         runId: attempt.runId,
         catalogRef: preparedToolBase.toolSearchCatalogRef,
         toolHookContext: catalogToolHookContext,
+        directToolNames: requiredDirectToolNames,
       })
     : toolSearchConfig.mode === "directory"
       ? applyToolSchemaDirectoryCatalog({
