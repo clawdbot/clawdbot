@@ -249,8 +249,8 @@ describe("setInputFilesViaPlaywright", () => {
     ]);
   });
 
-  it("checks the Playwright payload size cap before reading guarded remote upload files", async () => {
-    stat.mockResolvedValueOnce({ size: 50 * 1024 * 1024 });
+  it("checks the Playwright per-file payload size cap before reading guarded remote upload files", async () => {
+    stat.mockResolvedValueOnce({ size: 50 * 1024 * 1024 + 1 });
     const { setInputFiles } = seedSingleLocatorPage();
 
     await expect(
@@ -265,6 +265,54 @@ describe("setInputFilesViaPlaywright", () => {
 
     expect(readFile).not.toHaveBeenCalled();
     expect(setInputFiles).not.toHaveBeenCalled();
+  });
+
+  it("allows an exactly capped guarded remote upload payload", async () => {
+    stat.mockResolvedValueOnce({ size: 50 * 1024 * 1024, mtimeMs: 1700000000000 });
+    const { setInputFiles } = seedSingleLocatorPage();
+
+    await setInputFilesViaPlaywright({
+      cdpUrl: "https://browser.example/cdp",
+      targetId: "T1",
+      inputRef: "e7",
+      paths: ["/tmp/openclaw/uploads/limit.bin"],
+      ssrfPolicy: {},
+    });
+
+    expect(readFile).toHaveBeenCalledWith("/private/tmp/openclaw/uploads/ok.txt");
+    expect(setInputFiles).toHaveBeenCalledWith([
+      {
+        name: "ok.txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from("upload contents"),
+        lastModifiedMs: 1700000000000,
+      },
+    ]);
+  });
+
+  it("allows multiple guarded remote upload payloads below the per-file cap", async () => {
+    stat
+      .mockResolvedValueOnce({ size: 30 * 1024 * 1024, mtimeMs: 1700000000000 })
+      .mockResolvedValueOnce({ size: 30 * 1024 * 1024, mtimeMs: 1700000001000 });
+    resolveStrictExistingUploadPaths.mockResolvedValueOnce({
+      ok: true,
+      paths: ["/private/tmp/openclaw/uploads/one.txt", "/private/tmp/openclaw/uploads/two.txt"],
+    });
+    const { setInputFiles } = seedSingleLocatorPage();
+
+    await setInputFilesViaPlaywright({
+      cdpUrl: "https://browser.example/cdp",
+      targetId: "T1",
+      inputRef: "e7",
+      paths: ["/tmp/openclaw/uploads/one.txt", "/tmp/openclaw/uploads/two.txt"],
+      ssrfPolicy: {},
+    });
+
+    expect(readFile).toHaveBeenCalledTimes(2);
+    expect(setInputFiles).toHaveBeenCalledWith([
+      expect.objectContaining({ name: "one.txt", lastModifiedMs: 1700000000000 }),
+      expect.objectContaining({ name: "two.txt", lastModifiedMs: 1700000001000 }),
+    ]);
   });
 
   it("keeps guarded loopback uploads as path handoffs inside the browser policy guard", async () => {
