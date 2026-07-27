@@ -56,6 +56,7 @@ describe("Anthropic plugin manifest", () => {
       contextWindow: 1_000_000,
       maxTokens: 128_000,
       thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      compat: { codeMode: "preferred" },
     });
   });
 
@@ -73,6 +74,7 @@ describe("Anthropic plugin manifest", () => {
       contextWindow: 1_000_000,
       maxTokens: 128_000,
       thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      compat: { codeMode: "preferred" },
     });
   });
 
@@ -90,6 +92,7 @@ describe("Anthropic plugin manifest", () => {
       contextWindow: 1_000_000,
       maxTokens: 128_000,
       thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      compat: { codeMode: "preferred" },
     });
     // Opus 5's 1M window is the model default, so the CLI row is not clamped to 200k.
     const cliModels = manifest.modelCatalog?.providers?.["claude-cli"]?.models ?? [];
@@ -134,6 +137,7 @@ describe("Anthropic plugin manifest", () => {
       },
       contextWindow: 200000,
       maxTokens: 64000,
+      compat: { codeMode: "preferred" },
     });
     expect(models.find((model) => model.id === "claude-haiku-4-5-20251001")).toBeUndefined();
   });

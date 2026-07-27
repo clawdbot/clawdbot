@@ -1,7 +1,65 @@
 import { describe, expect, it } from "vitest";
-import { prepareSource, resolveCodeModeConfig } from "./code-mode-runtime.js";
+import {
+  isCodeModeEngagedForModel,
+  prepareSource,
+  resolveCodeModeConfig,
+} from "./code-mode-runtime.js";
 
 const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+
+describe("Code Mode master switch resolution", () => {
+  it.each([
+    { name: "boolean shorthand true", codeMode: true, enabled: true },
+    { name: "boolean shorthand false", codeMode: false, enabled: false },
+    { name: "auto shorthand", codeMode: "auto", enabled: "auto" },
+    { name: "object enabled auto", codeMode: { enabled: "auto" }, enabled: "auto" },
+    { name: "object without enabled", codeMode: { timeoutMs: 5000 }, enabled: false },
+    { name: "omitted", codeMode: undefined, enabled: false },
+  ])("resolves enabled for $name", ({ codeMode, enabled }) => {
+    expect(resolveCodeModeConfig({ tools: { codeMode } } as never).enabled).toBe(enabled);
+  });
+
+  const preferredModel = { compat: { codeMode: "preferred" } };
+  const capableModel = { compat: { codeMode: "capable" } };
+  const unflaggedModel = { compat: { supportsTools: true } };
+
+  it.each([
+    {
+      name: "true engages an unflagged model",
+      enabled: true,
+      model: unflaggedModel,
+      engaged: true,
+    },
+    {
+      name: "false stays off for a preferred model",
+      enabled: false,
+      model: preferredModel,
+      engaged: false,
+    },
+    {
+      name: "auto engages a preferred model",
+      enabled: "auto",
+      model: preferredModel,
+      engaged: true,
+    },
+    {
+      name: "auto skips an explicit capable model",
+      enabled: "auto",
+      model: capableModel,
+      engaged: false,
+    },
+    {
+      name: "auto skips an unflagged model",
+      enabled: "auto",
+      model: unflaggedModel,
+      engaged: false,
+    },
+    { name: "auto skips a compat-free model", enabled: "auto", model: {}, engaged: false },
+    { name: "auto skips a missing model", enabled: "auto", model: undefined, engaged: false },
+  ] as const)("$name", ({ enabled, model, engaged }) => {
+    expect(isCodeModeEngagedForModel({ enabled }, model)).toBe(engaged);
+  });
+});
 
 describe("Code Mode guest source validation", () => {
   it.each([

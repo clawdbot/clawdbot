@@ -6,6 +6,7 @@ import {
   CODE_MODE_WAIT_TOOL_NAME,
   applyCodeModeCatalog,
   createCodeModeTools,
+  isCodeModeEngagedForModel,
   resolveCodeModeConfig,
 } from "../code-mode.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
@@ -64,6 +65,8 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
   executeTool: ToolSearchCatalogToolExecutor;
   forceMessageTool?: boolean;
   isRawModelRun?: boolean;
+  /** Prepared model row carrying catalog compat; required for `"auto"` code-mode resolution. */
+  model?: { compat?: unknown };
   modelId?: string;
   modelProvider?: string;
   modelToolsEnabled: boolean;
@@ -92,7 +95,8 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
     params.isRawModelRun !== true &&
     params.toolsAllow?.length !== 0;
   const ringZeroToolRun = getActiveAgentRingZeroTools().length > 0;
-  const codeModeControlsEnabled = toolsAvailable && !ringZeroToolRun && codeModeConfig.enabled;
+  const codeModeControlsEnabled =
+    toolsAvailable && !ringZeroToolRun && isCodeModeEngagedForModel(codeModeConfig, params.model);
   const toolSearchControlsEnabled =
     toolsAvailable && !ringZeroToolRun && !codeModeControlsEnabled && toolSearchConfig.enabled;
   const toolSearchCatalogRef =

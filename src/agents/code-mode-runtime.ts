@@ -35,7 +35,8 @@ export type CodeModeLanguage = "javascript" | "typescript";
 
 /** Resolved Code Mode runtime limits and visible language options. */
 export type CodeModeConfig = {
-  enabled: boolean;
+  /** Master switch tier: true/false, or "auto" (engage per model catalog flag). */
+  enabled: boolean | "auto";
   runtime: "quickjs-wasi";
   mode: "only";
   languages: CodeModeLanguage[];
@@ -124,6 +125,9 @@ function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | u
   if (codeMode === false) {
     return { enabled: false };
   }
+  if (codeMode === "auto") {
+    return { enabled: "auto" };
+  }
   return isRecord(codeMode) ? codeMode : undefined;
 }
 
@@ -137,8 +141,8 @@ function readCodeModeRawConfig(config?: OpenClawConfig, agentId?: string): Recor
   return agentRaw ? { ...globalRaw, ...agentRaw } : globalRaw;
 }
 
-function readBoolean(value: unknown, fallback: boolean): boolean {
-  return typeof value === "boolean" ? value : fallback;
+function readEnabled(value: unknown): boolean | "auto" {
+  return typeof value === "boolean" || value === "auto" ? value : false;
 }
 
 export function readPositiveInteger(value: unknown, fallback: number): number {
@@ -164,7 +168,7 @@ export function resolveCodeModeConfig(config?: OpenClawConfig, agentId?: string)
     DEFAULT_MAX_SEARCH_LIMIT,
   );
   return {
-    enabled: readBoolean(raw.enabled, false),
+    enabled: readEnabled(raw.enabled),
     runtime: "quickjs-wasi",
     mode: "only",
     languages: readLanguages(raw.languages),
@@ -201,6 +205,27 @@ export function resolveCodeModeConfig(config?: OpenClawConfig, agentId?: string)
     ),
     maxSearchLimit,
   };
+}
+
+/**
+ * Resolves the master switch against one model's catalog capability flag.
+ * `true`/`false` are absolute; `"auto"` engages only for models whose catalog
+ * compat declares `codeMode: "preferred"`. This gates the model-facing tool
+ * surface only; runs that route to a provider-native harness (for example the
+ * default OpenAI Codex surface) never reach this embedded-runtime gate.
+ */
+export function isCodeModeEngagedForModel(
+  config: Pick<CodeModeConfig, "enabled">,
+  model: { compat?: unknown } | undefined,
+): boolean {
+  if (config.enabled !== "auto") {
+    return config.enabled;
+  }
+  const compat =
+    model?.compat && typeof model.compat === "object"
+      ? (model.compat as { codeMode?: unknown })
+      : undefined;
+  return compat?.codeMode === "preferred";
 }
 
 export function toToolSearchConfig(config: CodeModeConfig): ToolSearchConfig {
