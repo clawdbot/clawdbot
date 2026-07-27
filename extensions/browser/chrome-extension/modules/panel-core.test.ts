@@ -34,6 +34,7 @@ describe("browser copilot panel contracts", () => {
     expect(gatewayUrlFromPairing("ws://127.0.0.1:18792/extension", "ws://127.0.0.1:18789")).toBe(
       "ws://127.0.0.1:18789/",
     );
+    expect(normalizeGatewayUrl("ws://127.0.0.2:18789")).toBe("ws://127.0.0.2:18789/");
     expect(normalizeGatewayUrl("ws://gateway.example")).toBeNull();
     const credentialed = new URL("wss://gateway.example");
     credentialed.username = "fixture-user";

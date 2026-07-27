@@ -2,6 +2,7 @@
 // it can load unbundled in Chrome). Kept in sync with relay-core.js.
 
 export const OPENCLAW_TAB_GROUP_TITLE: string;
+export function isLoopbackUrlHost(host: unknown): boolean;
 export function parsePairingString(raw: unknown): {
   relayUrl: string;
   token: string;

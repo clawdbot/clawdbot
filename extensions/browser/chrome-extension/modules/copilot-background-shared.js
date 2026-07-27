@@ -1,3 +1,5 @@
+import { isLoopbackUrlHost } from "./relay-core.js";
+
 const PANEL_PATH = "sidepanel.html";
 
 function parsePanelBindingUrl(chromeApi, raw) {
@@ -90,8 +92,7 @@ export function sessionKeyFromEvent(event) {
 
 function isLoopbackUrl(raw) {
   try {
-    const host = new URL(raw).hostname.toLowerCase();
-    return host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+    return isLoopbackUrlHost(new URL(raw).hostname);
   } catch {
     return false;
   }

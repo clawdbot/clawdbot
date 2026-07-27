@@ -1,5 +1,6 @@
 // Chrome-free browser-copilot helpers. Kept small so the session/binding and
 // rendering invariants run in the normal extension Vitest lane.
+import { isLoopbackUrlHost } from "./relay-core.js";
 
 /** Mint an isolated child thread without exposing the tab id in Gateway state. */
 export function deriveTabSessionKey(mainSessionKey, sessionId) {
@@ -45,8 +46,7 @@ export function normalizeGatewayUrl(raw) {
   if (parsed.username || parsed.password || parsed.search || parsed.hash) {
     return null;
   }
-  const host = parsed.hostname.toLowerCase();
-  const loopback = host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+  const loopback = isLoopbackUrlHost(parsed.hostname);
   if (parsed.protocol !== "wss:" && !(parsed.protocol === "ws:" && loopback)) {
     return null;
   }

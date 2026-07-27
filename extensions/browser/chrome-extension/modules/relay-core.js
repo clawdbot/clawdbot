@@ -7,6 +7,24 @@ export const OPENCLAW_TAB_GROUP_TITLE = "OpenClaw";
 const EXTENSION_RELAY_PROTOCOL = "openclaw-extension-relay";
 const EXTENSION_RELAY_TOKEN_PROTOCOL_PREFIX = "openclaw-extension-token.";
 
+/** Match the loopback host forms accepted by the pairing CLI. */
+export function isLoopbackUrlHost(host) {
+  let normalized = String(host ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\.+$/, "");
+  if (normalized.startsWith("[") && normalized.endsWith("]")) {
+    normalized = normalized.slice(1, -1);
+  }
+  return (
+    normalized === "localhost" ||
+    normalized === "::1" ||
+    normalized.startsWith("127.") ||
+    normalized.startsWith("::ffff:127.") ||
+    /^::ffff:7f[0-9a-f]{2}:/u.test(normalized)
+  );
+}
+
 const CHROME_GROUP_COLORS = {
   grey: [128, 128, 128],
   blue: [66, 133, 244],
