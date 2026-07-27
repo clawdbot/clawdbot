@@ -1,14 +1,11 @@
 // Covers config write preparation diffs and metadata preservation.
 import { describe, expect, it, vi } from "vitest";
-import {
-  collectChangedPaths,
-  applyUnsetPathsForWrite,
-  createMergePatch,
-  formatConfigValidationFailure,
-  restoreEnvRefsFromMap,
-  resolvePersistCandidateForWrite,
-  resolveWriteEnvSnapshotForPath,
-} from "./io.write-prepare.js";
+import { collectChangedPaths } from "./config-change-paths.js";
+import { applyUnsetPathsForWrite } from "./config-path-mutation.js";
+import { restoreEnvRefsFromMap, resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
+import { formatConfigValidationFailure } from "./io.write-errors.js";
+import { resolvePersistCandidateForWrite } from "./io.write-prepare.js";
+import { createMergePatch } from "./merge-patch.js";
 import type { OpenClawConfig } from "./types.js";
 
 vi.unmock("../agents/agent-scope-config.js");

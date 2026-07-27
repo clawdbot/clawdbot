@@ -2261,6 +2261,8 @@ importers:
 
   packages/retry: {}
 
+  packages/session-url-contract: {}
+
   packages/sdk:
     dependencies:
       '@openclaw/gateway-client':
@@ -2345,6 +2347,9 @@ importers:
       '@openclaw/normalization-core':
         specifier: workspace:*
         version: link:../packages/normalization-core
+      '@openclaw/session-url-contract':
+        specifier: workspace:*
+        version: link:../packages/session-url-contract
       '@openclaw/uirouter':
         specifier: 0.1.0
         version: 0.1.0

@@ -236,7 +236,13 @@ function resolvePersistedLoadOptions(
   };
 }
 
-function isInheritedMainOAuthCredential(params: {
+/**
+ * A non-main agent store deliberately does not persist an OAuth credential the
+ * main store already owns at the same or newer expiry. Callers that verify a
+ * write must treat such a profile as intentionally deduped rather than lost,
+ * otherwise the credential looks like it vanished during the write.
+ */
+export function isInheritedMainOAuthCredential(params: {
   agentDir?: string;
   profileId: string;
   credential: AuthProfileStore["profiles"][string];

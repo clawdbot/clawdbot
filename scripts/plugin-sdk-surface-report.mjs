@@ -131,6 +131,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-pairing": 0,
   "channel-policy": 7,
   "channel-send-result": 1,
+  "reply-runtime": 1,
+  "security-runtime": 1,
   "session-store-runtime": 4,
   // +2: shipped Slack and Discord setup helpers retained through their package migration window.
   "setup-runtime": 2,
@@ -179,7 +181,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: native approval messaging target resolver.
       // +1: shared plugin SecretRef setup plan helper.
       // +1: shared multi-claim ingress lifecycle fan-in.
-      4724,
+      // +3: channel prompt-context entry/compat types and channel metadata builder.
+      4727,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -204,7 +207,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: channel DM policy factory and its account/patch callbacks.
       // +1: native approval messaging target resolver.
       // +1: shared multi-claim ingress lifecycle fan-in.
-      2862,
+      // +1: channel metadata builder.
+      2863,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -212,7 +216,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: canonical incognito classifier projected through deprecated compatibility barrels.
       // +2: shipped Slack and Discord setup compatibility helpers.
       // +10: named media legacy projection deprecations across public compatibility barrels.
-      1698,
+      // +2: channel prompt-context type and metadata builder compatibility aliases.
+      1700,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

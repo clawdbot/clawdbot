@@ -11,8 +11,14 @@ import {
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { t } from "../../i18n/index.ts";
-import { searchForSession } from "../../lib/sessions/index.ts";
-import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import {
+  resolveSessionNavigationAgentId,
+  sessionNavigationTarget,
+} from "../../lib/sessions/route-navigation.ts";
+import {
+  parseAgentSessionKey,
+  resolveUiConfiguredMainKey,
+} from "../../lib/sessions/session-key.ts";
 import {
   applyTaskEvent,
   mergeTaskLists,
@@ -341,6 +347,7 @@ class TasksPage extends OpenClawLightDomElement {
   }
 
   override render() {
+    const fallbackAgentId = resolveSessionNavigationAgentId(this.context);
     return html`
       <section class="content-header content-header--page">
         <div>
@@ -363,6 +370,11 @@ class TasksPage extends OpenClawLightDomElement {
       </section>
       ${renderTasks({
         basePath: this.context.basePath,
+        agentId: fallbackAgentId,
+        mainKey: resolveUiConfiguredMainKey({
+          agentsList: this.context.agents.state.agentsList,
+          hello: this.context.gateway.snapshot.hello,
+        }),
         connected: this.connected,
         // tasks.cancel needs operator.write; read-only operators get no button.
         canCancel: hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null),
@@ -372,7 +384,14 @@ class TasksPage extends OpenClawLightDomElement {
         cancellingTaskIds: this.cancellingTaskIds,
         onCancel: (taskId) => void this.cancelTask(taskId),
         onNavigateToChat: (sessionKey) =>
-          this.context.navigate("chat", { search: searchForSession(sessionKey) }),
+          this.context.navigate(
+            "chat",
+            sessionNavigationTarget({
+              context: this.context,
+              face: "chat",
+              sessionKey,
+            }).options,
+          ),
       })}
     `;
   }

@@ -12,7 +12,7 @@ import {
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { renderWorkboardBoardGlyph } from "../../components/workboard-board-glyph.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
-import { searchForSession } from "../../lib/sessions/index.ts";
+import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { workboardBoardName } from "../../lib/workboard/board-presentation.ts";
 import { resetDraftState } from "../../lib/workboard/card-state.ts";
 import {
@@ -378,7 +378,10 @@ class WorkboardPage extends OpenClawLightDomElement {
         scopeAgentId: context.agentSelection.state.scopeId,
         showAgentFilter: context.agentSelection.state.scopeId === null,
         onOpenSession: (sessionKey) => {
-          context.navigate("chat", { search: searchForSession(sessionKey), hash: "" });
+          context.navigate("chat", {
+            ...sessionNavigationTarget({ context, face: "chat", sessionKey }).options,
+            hash: "",
+          });
         },
         onReloadConfig: () => this.reloadConfig(),
         onBoardFilterChange: (boardFilter) => this.setWorkboardBoardFilter(boardFilter),

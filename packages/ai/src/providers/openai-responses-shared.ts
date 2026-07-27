@@ -14,6 +14,7 @@ import type {
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
+import { transportAbortError } from "../transports/transport-stream-shared.js";
 import type {
   Api,
   AssistantMessage,
@@ -661,7 +662,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     await processResponsesStream(openaiStream, output, stream, model, processStreamOptions);
 
     if (options?.signal?.aborted) {
-      throw new Error("Request was aborted");
+      throw transportAbortError(options.signal);
     }
 
     if (output.stopReason === "aborted" || output.stopReason === "error") {

@@ -4,6 +4,7 @@ import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../../agents/internal-runtime-context.js";
+import { markInboundContextLabel } from "./inbound-context-marker.js";
 import {
   buildRecoverablePendingFinalDeliveryText,
   buildPendingFinalDeliveryText,
@@ -20,7 +21,7 @@ describe("sanitizePendingFinalDeliveryText", () => {
       "internal detail",
       INTERNAL_RUNTIME_CONTEXT_END,
       "",
-      "Conversation info (untrusted metadata):",
+      markInboundContextLabel("Conversation info:"),
       "```json",
       '{"message_id":"msg-1"}',
       "```",

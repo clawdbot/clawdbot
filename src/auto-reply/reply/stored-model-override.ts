@@ -12,6 +12,7 @@ import { RUNTIME_MODEL_VISIBILITY_NORMALIZATION } from "../../agents/model-visib
 import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { RuntimeModelNormalization } from "./model-runtime-normalization.js";
 
 /** Model override loaded from the current session or its parent session. */
 export type StoredModelOverride = {
@@ -26,8 +27,9 @@ export function normalizeStoredRuntimeModelRef(
   model: string,
   cfg?: OpenClawConfig,
   sessionEntry?: SessionEntry,
+  normalization: RuntimeModelNormalization = RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
 ) {
-  const normalized = normalizeModelRef(provider, model, RUNTIME_MODEL_VISIBILITY_NORMALIZATION);
+  const normalized = normalizeModelRef(provider, model, normalization);
   const hasCliSessionBinding =
     sessionEntry?.cliSessionBindings?.[normalized.provider] !== undefined;
   const canonicalProvider =

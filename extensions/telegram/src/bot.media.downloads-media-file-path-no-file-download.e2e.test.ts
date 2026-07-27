@@ -17,7 +17,7 @@ import {
 type ReplyPayload = {
   Body: string;
   MediaPaths?: string[];
-  UntrustedStructuredContext?: unknown[];
+  ChannelStructuredContext?: unknown[];
 } & Record<string, unknown>;
 type MockWithCalls = { mock: { calls: unknown[][] } };
 
@@ -54,7 +54,7 @@ function requireArray(value: unknown, label: string): unknown[] {
 
 function conversationMessages(payload: ReplyPayload): Map<unknown, Record<string, unknown>> {
   const [conversationContext] = requireArray(
-    payload.UntrustedStructuredContext,
+    payload.ChannelStructuredContext,
     "structured context",
   );
   const contextRecord = requireRecord(conversationContext, "conversation context");
@@ -739,7 +739,7 @@ describe("telegram media groups", () => {
         expect(messagesById.get("501")).toBeUndefined();
         expect(messagesById.get("503")?.media_path).toBe("media://inbound/album-partial-3.png");
         expect(messagesById.get("503")?.media_ref).toBeUndefined();
-        expect(JSON.stringify(payload.UntrustedStructuredContext)).not.toContain(
+        expect(JSON.stringify(payload.ChannelStructuredContext)).not.toContain(
           "telegram:file/album-partial-photo-1",
         );
       } finally {

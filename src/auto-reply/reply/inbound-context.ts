@@ -16,7 +16,7 @@ import type {
   FinalizedRuntimeMsgContext,
   MsgContext,
 } from "../templating.js";
-import { normalizeInboundTextNewlines, sanitizeInboundSystemTags } from "./inbound-text.js";
+import { normalizeInboundTextNewlines } from "./inbound-text.js";
 
 export type FinalizeInboundContextOptions = {
   forceBodyForAgent?: boolean;
@@ -28,13 +28,6 @@ export type FinalizeInboundContextOptions = {
 const FINALIZED_INBOUND_CONTEXT = Symbol("openclaw.finalizedInboundContext");
 
 function normalizeTextField(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  return sanitizeInboundSystemTags(normalizeInboundTextNewlines(value));
-}
-
-function normalizeTrustedTextField(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
@@ -76,11 +69,32 @@ function resolveCanonicalInboundText(
   return { commandText, agentText, rawText };
 }
 
+function foldDeprecatedPromptContextFields(ctx: MsgContext): void {
+  // Deprecated SDK field names fold here so third-party channel plugins keep working.
+  // Runtime reads only the channel-named fields; remove this with the deprecated fields.
+  if (ctx.ChannelPromptContext === undefined && ctx.UntrustedContext !== undefined) {
+    ctx.ChannelPromptContext = ctx.UntrustedContext;
+  }
+  delete ctx.UntrustedContext;
+  if (ctx.ChannelStructuredContext === undefined && ctx.UntrustedStructuredContext !== undefined) {
+    ctx.ChannelStructuredContext = ctx.UntrustedStructuredContext;
+  }
+  delete ctx.UntrustedStructuredContext;
+}
+
 function applySupplementalContext(ctx: MsgContext): void {
   const supplemental = ctx.SupplementalContext;
   if (!supplemental) {
     return;
   }
+  if (
+    supplemental.channelStructuredContext === undefined &&
+    supplemental.untrustedContext !== undefined
+  ) {
+    // Fold the deprecated supplemental SDK key before projecting the canonical context shape.
+    supplemental.channelStructuredContext = supplemental.untrustedContext;
+  }
+  delete supplemental.untrustedContext;
   const fields = {
     ReplyToId: supplemental.quote?.id,
     ReplyToIdFull: supplemental.quote?.fullId,
@@ -95,7 +109,7 @@ function applySupplementalContext(ctx: MsgContext): void {
     ThreadHistoryBody: supplemental.thread?.historyBody,
     ThreadLabel: supplemental.thread?.label,
     GroupSystemPrompt: supplemental.groupSystemPrompt,
-    UntrustedStructuredContext: supplemental.untrustedContext,
+    ChannelStructuredContext: supplemental.channelStructuredContext,
   };
   for (const [key, value] of Object.entries(fields)) {
     if (value !== undefined && ctx[key as keyof MsgContext] === undefined) {
@@ -111,22 +125,21 @@ function finalizeInboundContextImpl<T extends Record<string, unknown>>(
   preserveLegacyMedia: boolean,
 ): T & FinalizedMsgContext {
   const normalized = ctx as T & MsgContext;
+  foldDeprecatedPromptContextFields(normalized);
   applySupplementalContext(normalized);
 
-  normalized.Body = sanitizeInboundSystemTags(
-    normalizeInboundTextNewlines(typeof normalized.Body === "string" ? normalized.Body : ""),
-  );
+  normalized.Body = normalizeTextField(normalized.Body) ?? "";
   normalized.RawBody = normalizeTextField(normalized.RawBody);
   normalized.CommandBody = normalizeTextField(normalized.CommandBody);
   normalized.Transcript = normalizeTextField(normalized.Transcript);
   normalized.ThreadStarterBody = normalizeTextField(normalized.ThreadStarterBody);
   normalized.ThreadHistoryBody = normalizeTextField(normalized.ThreadHistoryBody);
-  normalized.GroupSystemPrompt = normalizeTrustedTextField(normalized.GroupSystemPrompt);
-  if (Array.isArray(normalized.UntrustedContext)) {
-    const normalizedUntrusted = normalized.UntrustedContext.map((entry) =>
-      sanitizeInboundSystemTags(normalizeInboundTextNewlines(entry)),
-    ).filter((entry) => Boolean(entry));
-    normalized.UntrustedContext = normalizedUntrusted;
+  normalized.GroupSystemPrompt = normalizeTextField(normalized.GroupSystemPrompt);
+  if (Array.isArray(normalized.ChannelPromptContext)) {
+    const normalizedChannelPromptContext = normalized.ChannelPromptContext.map((entry) =>
+      normalizeTextField(entry),
+    ).filter((entry): entry is string => Boolean(entry));
+    normalized.ChannelPromptContext = normalizedChannelPromptContext;
   }
 
   const chatType = normalizeChatType(normalized.ChatType);

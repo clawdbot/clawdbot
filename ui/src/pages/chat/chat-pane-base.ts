@@ -49,6 +49,7 @@ import {
   type SwarmRosterHydrator,
   type TaskSuggestion,
   type BoardChatDockSize,
+  type BoardFace,
 } from "./chat-pane-deps.ts";
 import {
   boardChatDockLayout,
@@ -74,6 +75,8 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) active = false;
   @property({ attribute: false }) draft?: string;
+  @property({ attribute: false }) routeFace: BoardFace = "chat";
+  @property({ attribute: false }) onFaceChange?: (face: BoardFace) => void;
   @property({ attribute: false }) onFocusPane?: (paneId: string) => void;
   @property({ attribute: false }) onPaneSessionChange?: (
     paneId: string,

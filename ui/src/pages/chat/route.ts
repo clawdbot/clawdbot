@@ -1,43 +1,59 @@
 import type { RouteLocation } from "@openclaw/uirouter";
-import { definePage, notFound } from "@openclaw/uirouter";
-import { html } from "lit";
+import { definePage } from "@openclaw/uirouter";
+import { html, nothing } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
+import { t } from "../../i18n/index.ts";
+import type { BoardFace } from "../../lib/board/settings.ts";
+import type { ChatRouteData } from "./route-loader.ts";
 
-function sessionKeyFromLocation(location: RouteLocation): string | undefined {
-  const sessionKey = new URLSearchParams(location.search).get("session")?.trim();
-  return sessionKey || undefined;
+function renderAmbiguous(data: Extract<ChatRouteData, { kind: "ambiguous" }>) {
+  return html`
+    <section class="card">
+      <h2>${t("chat.sessionRoute.chooseTitle")}</h2>
+      <p>
+        ${data.candidates.length > 1
+          ? t("chat.sessionRoute.multipleMatches", { shortId: data.shortId })
+          : t("chat.sessionRoute.additionalMatches")}
+      </p>
+      ${data.candidates.map(
+        (candidate) => html`
+          <p>
+            <a href=${candidate.href}>${candidate.displayName}</a><br />
+            <small>${candidate.agentId} · ${candidate.idPrefix}</small>
+          </p>
+        `,
+      )}
+      ${data.truncated && data.candidates.length > 1
+        ? html`<p><small>${t("chat.sessionRoute.additionalMatches")}</small></p>`
+        : null}
+    </section>
+  `;
 }
 
-function draftFromLocation(location: RouteLocation): string | undefined {
-  const draft = new URLSearchParams(location.search).get("draft");
-  return draft || undefined;
+function sessionPage(face: BoardFace) {
+  return definePage({
+    id: face,
+    path: `/${face}`,
+    loaderDeps: (_context: ApplicationContext, location: RouteLocation) =>
+      `${location.pathname}\u0000${location.search}`,
+    loader: async (context: ApplicationContext, { location, signal }) => {
+      const { loadChatRoute } = await import("./route-loader.ts");
+      return await loadChatRoute(context, location, face, signal);
+    },
+    component: () =>
+      import("./chat-page.ts").then(() => ({
+        header: true,
+        render: (data: unknown) => {
+          const routeData = data as ChatRouteData | undefined;
+          if (!routeData) {
+            return nothing;
+          }
+          return routeData.kind === "ambiguous"
+            ? renderAmbiguous(routeData)
+            : html`<openclaw-chat-page .data=${routeData}></openclaw-chat-page>`;
+        },
+      })),
+  });
 }
 
-// Only "dashboard" is meaningful: chat is the default face, so a chat value
-// would be a no-op that still dirties history replaces.
-function faceFromLocation(location: RouteLocation): "dashboard" | undefined {
-  return new URLSearchParams(location.search).get("face") === "dashboard" ? "dashboard" : undefined;
-}
-
-export const page = definePage({
-  id: "chat",
-  path: "/chat",
-  loaderDeps: (_context: ApplicationContext, location: RouteLocation) =>
-    `${sessionKeyFromLocation(location) ?? ""}\u0000${draftFromLocation(location) ?? ""}\u0000${faceFromLocation(location) ?? ""}`,
-  loader: async (_context: ApplicationContext, { location }) => {
-    const sessionKey = sessionKeyFromLocation(location);
-    if (!sessionKey) {
-      return notFound({ routeId: "chat" });
-    }
-    return {
-      sessionKey,
-      draft: draftFromLocation(location),
-      face: faceFromLocation(location),
-    };
-  },
-  component: () =>
-    import("./chat-page.ts").then(() => ({
-      header: true,
-      render: (data: unknown) => html`<openclaw-chat-page .data=${data}></openclaw-chat-page>`,
-    })),
-});
+export const pages = [sessionPage("chat"), sessionPage("dashboard")] as const;
