@@ -27,6 +27,7 @@ import {
   QA_BLOCK_STREAMING_PROMPT_RE,
   QA_TOOL_PROGRESS_ERROR_PROMPT_RE,
   QA_TOOL_PROGRESS_PROMPT_RE,
+  QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE,
   QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE,
   QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE,
   QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE,
@@ -224,6 +225,19 @@ async function buildResponsesPayload(
     const command = execCommandFromToolProgressPrompt(toolProgressPrompt || prompt || allInputText);
     return command ? buildToolCallEventsWithArgs("exec", { command }) : null;
   };
+  if (QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE.test(allInputText)) {
+    if (!toolOutput) {
+      scenarioState.toolLoopReadAttempts = 0;
+    }
+    if (/global circuit breaker/i.test(toolOutput)) {
+      return buildAssistantEvents(exactReplyDirective ?? "GLOBAL-LOOP-BREAKER-OK");
+    }
+    scenarioState.toolLoopReadAttempts += 1;
+    if (scenarioState.toolLoopReadAttempts > 31) {
+      return buildAssistantEvents("GLOBAL-LOOP-BREAKER-NOT-REACHED");
+    }
+    return buildToolCallEventsWithArgs("read", { path: "LOOP_STEADY.txt" });
+  }
   if (
     (QA_TOOL_SEARCH_PROMPT_RE.test(allInputText) ||
       QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText)) &&
@@ -1309,6 +1323,7 @@ export async function startQaMockOpenAiServer(params?: {
     anthropicThinkingErrorPhase: 0,
     subagentFanoutPhase: 0,
     subagentHandoffSpawned: false,
+    toolLoopReadAttempts: 0,
   };
   let lastRequest: MockOpenAiRequestSnapshot | null = null;
   const requests: MockOpenAiRequestSnapshot[] = [];
