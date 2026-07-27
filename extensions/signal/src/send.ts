@@ -71,11 +71,15 @@ type SignalSendRpcResult = {
   results?: unknown;
 };
 
-function assertSignalRecipientDelivery(result: SignalSendRpcResult | undefined): void {
+function assertSignalRecipientDelivery(
+  result: SignalSendRpcResult | undefined,
+  target: SignalTarget,
+): void {
   if (!Array.isArray(result?.results)) {
     return;
   }
   const failures: string[] = [];
+  let hasSuccessfulRecipient = false;
   for (const entry of result.results) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
       continue;
@@ -89,13 +93,20 @@ function assertSignalRecipientDelivery(result: SignalSendRpcResult | undefined):
           normalizeOptionalString(record.message) ??
           "recipient delivery failed",
       );
+      continue;
+    }
+    if (normalizeLowercaseStringOrEmpty(type) === "success" || record.success === true) {
+      hasSuccessfulRecipient = true;
     }
   }
-  if (failures.length > 0) {
-    throw new Error(
-      `Signal send failed for ${failures.length} recipient${failures.length === 1 ? "" : "s"}: ${[...new Set(failures)].join(", ")}`,
-    );
+  // Group sends fan out per member; retrying an already delivered partial
+  // success would duplicate the post for every successful recipient.
+  if (failures.length === 0 || (target.type === "group" && hasSuccessfulRecipient)) {
+    return;
   }
+  throw new Error(
+    `Signal send failed for ${failures.length} recipient${failures.length === 1 ? "" : "s"}: ${[...new Set(failures)].join(", ")}`,
+  );
 }
 
 async function resolveSignalRpcAccountInfo(opts: SignalRpcOpts) {
@@ -384,7 +395,7 @@ export async function sendMessageSignal(
   } else {
     result = await signalRpcRequest<SignalSendRpcResult>("send", params, sendOpts);
   }
-  assertSignalRecipientDelivery(result);
+  assertSignalRecipientDelivery(result, target);
   const timestamp = result?.timestamp;
   const messageId = timestamp ? String(timestamp) : "unknown";
   const replyAuthor = targetAuthor ?? targetAuthorUuid;

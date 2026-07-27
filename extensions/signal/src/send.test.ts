@@ -146,6 +146,34 @@ describe("sendMessageSignal receipts", () => {
     ).rejects.toThrow("Signal send failed for 1 recipient: recipient is not registered");
   });
 
+  it("preserves a group delivery when at least one member receives the message", async () => {
+    signalRpcRequestMock.mockResolvedValueOnce({
+      timestamp: 1234567891,
+      results: [{ type: "SUCCESS" }, { type: "UNREGISTERED_FAILURE" }],
+    });
+
+    await expect(
+      sendMessageSignal("group:group-1", "hello", { cfg: SIGNAL_TEST_CFG }),
+    ).resolves.toMatchObject({
+      messageId: "1234567891",
+      timestamp: 1234567891,
+      receipt: { primaryPlatformMessageId: "1234567891" },
+    });
+    expect(signalRpcRequestMock).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a group delivery when every member fails", async () => {
+    signalRpcRequestMock.mockResolvedValueOnce({
+      timestamp: 1234567891,
+      results: [{ type: "NETWORK_FAILURE" }, { type: "UNREGISTERED_FAILURE" }],
+    });
+
+    await expect(
+      sendMessageSignal("group:group-1", "hello", { cfg: SIGNAL_TEST_CFG }),
+    ).rejects.toThrow("Signal send failed for 2 recipients: NETWORK_FAILURE, UNREGISTERED_FAILURE");
+    expect(signalRpcRequestMock).toHaveBeenCalledOnce();
+  });
+
   it.each(["username:alice.42", "u:alice.42", "signal:u:ALICE.42"])(
     "sends %s through the canonical username parameter",
     async (target) => {
@@ -787,8 +815,16 @@ describe("Signal native JSON-RPC recipient delivery", () => {
         timestamp: 1234567890,
         results: [{ success: false, message: "recipient is not registered" }],
       },
-      { timestamp: 1234567891, results: [{ type: "SUCCESS" }] },
-      { timestamp: 1234567892 },
+      {
+        timestamp: 1234567891,
+        results: [{ type: "SUCCESS" }, { type: "UNREGISTERED_FAILURE" }],
+      },
+      {
+        timestamp: 1234567892,
+        results: [{ type: "NETWORK_FAILURE" }, { type: "UNREGISTERED_FAILURE" }],
+      },
+      { timestamp: 1234567893, results: [{ type: "SUCCESS" }] },
+      { timestamp: 1234567894 },
     ];
     const requests: Array<{
       method: string | undefined;
@@ -798,6 +834,7 @@ describe("Signal native JSON-RPC recipient delivery", () => {
       rpcMethod: unknown;
       account: unknown;
       recipient: unknown;
+      groupId: unknown;
       message: unknown;
     }> = [];
     const server = http.createServer((request, response) => {
@@ -811,7 +848,12 @@ describe("Signal native JSON-RPC recipient delivery", () => {
           id?: string;
           jsonrpc?: string;
           method?: string;
-          params?: { account?: string; recipient?: string[]; message?: string };
+          params?: {
+            account?: string;
+            recipient?: string[];
+            groupId?: string;
+            message?: string;
+          };
         };
         requests.push({
           method: request.method,
@@ -821,6 +863,7 @@ describe("Signal native JSON-RPC recipient delivery", () => {
           rpcMethod: envelope.method,
           account: envelope.params?.account,
           recipient: envelope.params?.recipient,
+          groupId: envelope.params?.groupId,
           message: envelope.params?.message,
         });
         response.writeHead(200, { "content-type": "application/json" });
@@ -869,33 +912,60 @@ describe("Signal native JSON-RPC recipient delivery", () => {
       ).rejects.toThrow("Signal send failed for 1 recipient: recipient is not registered");
 
       await expect(
-        sendMessageSignalWithRealRpc("+15551234567", "hello over real rpc", { cfg }),
+        sendMessageSignalWithRealRpc("group:group-1", "hello over real rpc", { cfg }),
       ).resolves.toMatchObject({
         messageId: "1234567891",
         timestamp: 1234567891,
         receipt: { primaryPlatformMessageId: "1234567891" },
       });
       await expect(
+        sendMessageSignalWithRealRpc("group:group-1", "hello over real rpc", { cfg }),
+      ).rejects.toThrow(
+        "Signal send failed for 2 recipients: NETWORK_FAILURE, UNREGISTERED_FAILURE",
+      );
+
+      await expect(
         sendMessageSignalWithRealRpc("+15551234567", "hello over real rpc", { cfg }),
       ).resolves.toMatchObject({
-        messageId: "1234567892",
-        timestamp: 1234567892,
-        receipt: { primaryPlatformMessageId: "1234567892" },
+        messageId: "1234567893",
+        timestamp: 1234567893,
+        receipt: { primaryPlatformMessageId: "1234567893" },
+      });
+      await expect(
+        sendMessageSignalWithRealRpc("+15551234567", "hello over real rpc", { cfg }),
+      ).resolves.toMatchObject({
+        messageId: "1234567894",
+        timestamp: 1234567894,
+        receipt: { primaryPlatformMessageId: "1234567894" },
       });
 
       expect(signalRpcRequestMock).not.toHaveBeenCalled();
-      expect(requests).toEqual(
-        Array.from({ length: 8 }, () => ({
-          method: "POST",
-          path: "/api/v1/rpc",
-          contentType: "application/json",
-          jsonrpc: "2.0",
-          rpcMethod: "send",
-          account: "+15550001111",
-          recipient: ["+15551234567"],
-          message: "hello over real rpc",
-        })),
-      );
+      const expectedBaseRequest = {
+        method: "POST",
+        path: "/api/v1/rpc",
+        contentType: "application/json",
+        jsonrpc: "2.0",
+        rpcMethod: "send",
+        account: "+15550001111",
+        message: "hello over real rpc",
+      };
+      const expectedDirectRequest = {
+        ...expectedBaseRequest,
+        recipient: ["+15551234567"],
+        groupId: undefined,
+      };
+      const expectedGroupRequest = {
+        ...expectedBaseRequest,
+        recipient: undefined,
+        groupId: "group-1",
+      };
+      expect(requests).toEqual([
+        ...Array.from({ length: 6 }, () => expectedDirectRequest),
+        expectedGroupRequest,
+        expectedGroupRequest,
+        expectedDirectRequest,
+        expectedDirectRequest,
+      ]);
       expect(responses).toHaveLength(0);
     } finally {
       await new Promise<void>((resolve) => {
