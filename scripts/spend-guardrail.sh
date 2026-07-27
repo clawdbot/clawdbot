@@ -28,9 +28,14 @@
 #   GATEWAY_LAUNCHD_DOMAIN - launchd domain (default: system; use gui/$(id -u) for a
 #                            user LaunchAgent instead of a system LaunchDaemon).
 #   NOTIFY_NTFY             - ntfy.sh topic for push notifications.
-#   NOTIFY_SLACK_WEBHOOK    - Slack incoming webhook URL for #agents-dev-style alerts.
+#   NOTIFY_SLACK_WEBHOOK    - Slack incoming webhook URL, if configured.
+#   NOTIFY_SLACK_TOKEN      - Slack bot token (xoxb-...) for chat.postMessage,
+#                            matching the pattern already used by monitor.sh.
+#   NOTIFY_SLACK_CHANNEL    - Slack channel id to post to (default: #agents-dev's
+#                            C0B5KNAV0TV, matching monitor.sh/auth-watchdog.sh).
 #
-# Reset after a trip (once the runaway cause is fixed):
+# Reset after a trip (once the runaway cause is fixed) — the script's own
+# alert message includes the exact command for this host, but as reference:
 #   rm ~/.openclaw/SPEND-PAUSED
 #   sudo launchctl bootstrap system /Library/LaunchDaemons/ai.openclaw.gateway.plist
 #   # or, for a user LaunchAgent: launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.openclaw.gateway.plist
@@ -40,8 +45,34 @@ set -euo pipefail
 SPEND_CAP_USD="${SPEND_CAP_USD:-100}"
 GATEWAY_LAUNCHD_LABEL="${GATEWAY_LAUNCHD_LABEL:-ai.openclaw.gateway}"
 GATEWAY_LAUNCHD_DOMAIN="${GATEWAY_LAUNCHD_DOMAIN:-system}"
+# System LaunchDaemons live in /Library/LaunchDaemons and need sudo; user
+# LaunchAgents (domain gui/$UID) live in ~/Library/LaunchAgents and don't.
+if [ "$GATEWAY_LAUNCHD_DOMAIN" = "system" ]; then
+  GATEWAY_PLIST_PATH="${GATEWAY_PLIST_PATH:-/Library/LaunchDaemons/${GATEWAY_LAUNCHD_LABEL}.plist}"
+  SUDO="sudo"
+else
+  GATEWAY_PLIST_PATH="${GATEWAY_PLIST_PATH:-$HOME/Library/LaunchAgents/${GATEWAY_LAUNCHD_LABEL}.plist}"
+  SUDO=""
+fi
 NOTIFY_NTFY="${NOTIFY_NTFY:-}"
 NOTIFY_SLACK_WEBHOOK="${NOTIFY_SLACK_WEBHOOK:-}"
+NOTIFY_SLACK_TOKEN="${NOTIFY_SLACK_TOKEN:-}"
+NOTIFY_SLACK_CHANNEL="${NOTIFY_SLACK_CHANNEL:-C0B5KNAV0TV}"
+OPENCLAW_CONFIG="${OPENCLAW_CONFIG:-$HOME/.openclaw/openclaw.json}"
+
+# Reuse the gateway's own already-authorized Slack bot token (same pattern as
+# auth-watchdog.sh) if no explicit token was passed via env — avoids needing
+# to duplicate the secret into crontab just for this script. Some machines
+# store `channels.slack.botToken` as a secrets-manager reference object
+# (`{"source":"file",...}`) rather than a literal `xoxb-...` string — only
+# use the derived value if it actually looks like a bot token.
+if [ -z "$NOTIFY_SLACK_TOKEN" ] && [ -f "$OPENCLAW_CONFIG" ]; then
+  DERIVED_TOKEN=$(python3 -c 'import json;print(json.load(open("'"$OPENCLAW_CONFIG"'"))["channels"]["slack"]["botToken"])' 2>/dev/null || echo "")
+  case "$DERIVED_TOKEN" in
+    xoxb-*) NOTIFY_SLACK_TOKEN="$DERIVED_TOKEN" ;;
+    *) : ;; # not a literal token (e.g. secrets-manager reference) — leave unset, pass NOTIFY_SLACK_TOKEN explicitly via cron instead
+  esac
+fi
 KILL_SWITCH_FILE="$HOME/.openclaw/SPEND-PAUSED"
 STATE_FILE="$HOME/.openclaw/tools/.spend-guardrail-state.json"
 
@@ -67,11 +98,18 @@ send_alert() {
       -d "$(jq -n --arg text "$message" '{text: $text}')" \
       "$NOTIFY_SLACK_WEBHOOK" || true
   fi
+
+  if [ -n "$NOTIFY_SLACK_TOKEN" ]; then
+    curl -s -o /dev/null -m 10 -X POST "https://slack.com/api/chat.postMessage" \
+      -H "Authorization: Bearer $NOTIFY_SLACK_TOKEN" \
+      -H "Content-Type: application/json; charset=utf-8" \
+      -d "$(jq -n --arg channel "$NOTIFY_SLACK_CHANNEL" --arg text ":rotating_light: $message" '{channel: $channel, text: $text}')" || true
+  fi
 }
 
 if [ -f "$KILL_SWITCH_FILE" ]; then
   log "Kill switch already tripped ($KILL_SWITCH_FILE exists) — gateway stays stopped. Not re-checking spend."
-  log "To resume: rm $KILL_SWITCH_FILE && sudo launchctl bootstrap $GATEWAY_LAUNCHD_DOMAIN /Library/LaunchDaemons/$GATEWAY_LAUNCHD_LABEL.plist"
+  log "To resume: rm $KILL_SWITCH_FILE && $SUDO launchctl bootstrap $GATEWAY_LAUNCHD_DOMAIN $GATEWAY_PLIST_PATH"
   exit 0
 fi
 
@@ -120,14 +158,14 @@ log "Spend since $STARTING_AT: \$$(printf '%.2f' "$TOTAL_COST_USD") (cap: \$${SP
 echo "{\"ts\":\"$(date -u +%FT%TZ)\",\"cost_usd\":$TOTAL_COST_USD,\"cap_usd\":$SPEND_CAP_USD}" > "$STATE_FILE"
 
 if (( $(echo "$TOTAL_COST_USD >= $SPEND_CAP_USD" | bc -l) )); then
-  MESSAGE="OpenClaw spend guardrail TRIPPED on $(hostname): \$$(printf '%.2f' "$TOTAL_COST_USD") spent today, cap is \$${SPEND_CAP_USD}. Stopping ${GATEWAY_LAUNCHD_LABEL} now. Resume with: rm $KILL_SWITCH_FILE && sudo launchctl bootstrap $GATEWAY_LAUNCHD_DOMAIN /Library/LaunchDaemons/${GATEWAY_LAUNCHD_LABEL}.plist"
+  MESSAGE="OpenClaw spend guardrail TRIPPED on $(hostname): \$$(printf '%.2f' "$TOTAL_COST_USD") spent today, cap is \$${SPEND_CAP_USD}. Stopping ${GATEWAY_LAUNCHD_LABEL} now. Resume with: rm $KILL_SWITCH_FILE && $SUDO launchctl bootstrap $GATEWAY_LAUNCHD_DOMAIN $GATEWAY_PLIST_PATH"
 
   mkdir -p "$(dirname "$KILL_SWITCH_FILE")"
   echo "$MESSAGE" > "$KILL_SWITCH_FILE"
 
   # The actual kill switch — bootout stops it AND prevents RunAtLoad from
   # restarting it on the next boot until an operator explicitly re-bootstraps.
-  sudo launchctl bootout "$GATEWAY_LAUNCHD_DOMAIN/$GATEWAY_LAUNCHD_LABEL" 2>&1 || \
+  $SUDO launchctl bootout "$GATEWAY_LAUNCHD_DOMAIN/$GATEWAY_LAUNCHD_LABEL" 2>&1 || \
     log "launchctl bootout failed or already stopped — check manually."
 
   send_alert "$MESSAGE" "urgent"
