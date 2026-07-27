@@ -722,10 +722,13 @@ describe("runtime tool fixture", () => {
     expect(transcriptToolNames).toEqual([undefined, undefined]);
   });
 
-  it("verifies projected native Codex patch success and workspace-escape failure", async () => {
+  it.each([
+    "apply_patch failed: path escapes sandbox root",
+    "Operation not permitted (os error 1)",
+  ])("verifies native Codex patch success and workspace denial: %s", async (failureOutput) => {
     const env = await makeEnv();
     env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME = "codex";
-    await writeCodexNativePatchEvidence(env);
+    await writeCodexNativePatchEvidence(env, failureOutput);
     const promptEvidence: Array<{
       requireSuccessfulTranscriptToolResult?: boolean;
       transcriptToolName?: string;
