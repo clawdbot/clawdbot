@@ -306,7 +306,7 @@ function readSqliteTitleProbeRange(
 function findFirstTitleUserMessage(
   entries: readonly SessionTranscriptMessageEvent[],
   includeInterSession: boolean,
-): unknown | undefined {
+): unknown {
   return entries.map(sqliteMessageEventWithSeq).find((message) => {
     if (extractMessageRole(message) !== "user") {
       return false;
