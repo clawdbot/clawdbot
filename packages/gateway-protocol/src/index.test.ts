@@ -1,5 +1,5 @@
 // Gateway Protocol tests cover index behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import { TALK_TEST_PROVIDER_ID } from "../../../src/test-utils/talk-test-provider.js";
 import * as protocol from "./index.js";
 import {
@@ -39,7 +39,14 @@ import {
   validateWakeParams,
   type ValidationError,
 } from "./index.js";
+import type {
+  ConfigSchemaLookupParams,
+  ModelsListParams,
+  SessionsCatalogListParams,
+  TalkEvent,
+} from "./index.js";
 import * as schemaExportRegistry from "./schema-export-registry.js";
+import type * as Schema from "./schema.js";
 import * as validatorRegistry from "./validator-registry.js";
 
 /**
@@ -70,6 +77,13 @@ describe("protocol export registries", () => {
         expect(protocol[name as keyof typeof protocol], name).toBe(value);
       }
     }
+  });
+
+  it("re-exports schema-backed protocol types from the package root", () => {
+    expectTypeOf<ConfigSchemaLookupParams>().toEqualTypeOf<Schema.ConfigSchemaLookupParams>();
+    expectTypeOf<ModelsListParams>().toEqualTypeOf<Schema.ModelsListParams>();
+    expectTypeOf<SessionsCatalogListParams>().toEqualTypeOf<Schema.SessionsCatalogListParams>();
+    expectTypeOf<TalkEvent>().toEqualTypeOf<Schema.TalkEvent>();
   });
 });
 
