@@ -12,6 +12,7 @@ import {
   resolveQaControlUiRoot,
   startQaGatewayChild,
 } from "./gateway-child.js";
+import { readQaAuthProfiles } from "./providers/shared/auth-store.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -83,8 +84,8 @@ type SsrFetchCall = {
   auditContext?: string;
 };
 
-function parseAuthProfileStore(raw: string): AuthProfileStore {
-  return JSON.parse(raw) as AuthProfileStore;
+function readAuthProfileStore(stateDir: string, agentId: string): AuthProfileStore {
+  return readQaAuthProfiles(path.join(stateDir, "agents", agentId, "agent"));
 }
 
 function requireAuthProfile(
@@ -724,12 +725,8 @@ describe("buildQaRuntimeEnv", () => {
     const configProfile = requireAuthProfile(cfg.auth?.profiles, "anthropic:qa-setup-token");
     expect(configProfile.provider).toBe("anthropic");
     expect(configProfile.mode).toBe("token");
-    const storeRaw = await readFile(
-      path.join(stateDir, "agents", "main", "agent", "auth-profiles.json"),
-      "utf8",
-    );
     const storeProfile = requireAuthProfile(
-      parseAuthProfileStore(storeRaw).profiles,
+      readAuthProfileStore(stateDir, "main").profiles,
       "anthropic:qa-setup-token",
     );
     expect(storeProfile.type).toBe("token");
@@ -758,12 +755,8 @@ describe("buildQaRuntimeEnv", () => {
     expect(configProfile.displayName).toBe("QA live openai env credential");
 
     for (const agentId of ["main", "qa"]) {
-      const storeRaw = await readFile(
-        path.join(stateDir, "agents", agentId, "agent", "auth-profiles.json"),
-        "utf8",
-      );
       const storeProfile = requireAuthProfile(
-        parseAuthProfileStore(storeRaw).profiles,
+        readAuthProfileStore(stateDir, agentId).profiles,
         "qa-live-openai-env",
       );
       expect(storeProfile.type).toBe("api_key");
@@ -797,11 +790,7 @@ describe("buildQaRuntimeEnv", () => {
     }
 
     for (const agentId of ["main", "qa"]) {
-      const storeRaw = await readFile(
-        path.join(stateDir, "agents", agentId, "agent", "auth-profiles.json"),
-        "utf8",
-      );
-      const storeProfiles = parseAuthProfileStore(storeRaw).profiles;
+      const storeProfiles = readAuthProfileStore(stateDir, agentId).profiles;
       for (const [profileId, provider] of [
         ["qa-live-openai-env", "openai"],
         ["qa-live-openai-env", "openai"],
@@ -829,12 +818,8 @@ describe("buildQaRuntimeEnv", () => {
       },
     });
 
-    const storeRaw = await readFile(
-      path.join(stateDir, "agents", "qa", "agent", "auth-profiles.json"),
-      "utf8",
-    );
     const storeProfile = requireAuthProfile(
-      parseAuthProfileStore(storeRaw).profiles,
+      readAuthProfileStore(stateDir, "qa").profiles,
       "qa-live-openai-env",
     );
     expect(storeProfile.type).toBe("api_key");
@@ -955,12 +940,8 @@ describe("buildQaRuntimeEnv", () => {
     expect(configProfile.provider).toBe("openai");
     expect(configProfile.mode).toBe("api_key");
     for (const agentId of ["main", "qa"]) {
-      const storeRaw = await readFile(
-        path.join(stateDir, "agents", agentId, "agent", "auth-profiles.json"),
-        "utf8",
-      );
       const storeProfile = requireAuthProfile(
-        parseAuthProfileStore(storeRaw).profiles,
+        readAuthProfileStore(stateDir, agentId).profiles,
         "qa-live-openai-env",
       );
       expect(storeProfile.type).toBe("api_key");
@@ -1007,12 +988,8 @@ describe("buildQaRuntimeEnv", () => {
       env,
     });
 
-    const storeRaw = await readFile(
-      path.join(stateDir, "agents", "qa", "agent", "auth-profiles.json"),
-      "utf8",
-    );
     const storeProfile = requireAuthProfile(
-      parseAuthProfileStore(storeRaw).profiles,
+      readAuthProfileStore(stateDir, "qa").profiles,
       "qa-live-openai-env",
     );
     expect(storeProfile.type).toBe("api_key");
@@ -1053,12 +1030,8 @@ describe("buildQaRuntimeEnv", () => {
       },
     });
 
-    const storeRaw = await readFile(
-      path.join(stateDir, "agents", "main", "agent", "auth-profiles.json"),
-      "utf8",
-    );
     const storeProfile = requireAuthProfile(
-      parseAuthProfileStore(storeRaw).profiles,
+      readAuthProfileStore(stateDir, "main").profiles,
       "qa-live-openai-env",
     );
     expect(storeProfile.type).toBe("api_key");
@@ -1124,16 +1097,9 @@ describe("buildQaRuntimeEnv", () => {
     expect(anthropicConfigProfile.mode).toBe("api_key");
     expect(anthropicConfigProfile.displayName).toBe("QA mock anthropic credential");
 
-    // Store side: each agent dir should have its own auth-profiles.json
-    // containing the placeholder credential for each staged provider. This
-    // is what the scenario runner actually reads when it resolves auth
-    // before calling the mock.
+    // Store side: each agent dir has its own canonical SQLite credential rows.
     for (const agentId of ["main", "qa"]) {
-      const storeRaw = await readFile(
-        path.join(stateDir, "agents", agentId, "agent", "auth-profiles.json"),
-        "utf8",
-      );
-      const parsed = parseAuthProfileStore(storeRaw);
+      const parsed = readAuthProfileStore(stateDir, agentId);
       const openaiStoreProfile = requireAuthProfile(parsed.profiles, "qa-mock-openai");
       expect(openaiStoreProfile.type).toBe("api_key");
       expect(openaiStoreProfile.provider).toBe("openai");
@@ -1164,17 +1130,15 @@ describe("buildQaRuntimeEnv", () => {
     // Anthropic should NOT be staged when the caller restricts providers.
     expect(cfg.auth?.profiles?.["qa-mock-anthropic"]).toBeUndefined();
 
-    const qaStore = JSON.parse(
-      await readFile(path.join(stateDir, "agents", "qa", "agent", "auth-profiles.json"), "utf8"),
-    ) as AuthProfileStore;
+    const qaStore = readAuthProfileStore(stateDir, "qa");
     const openaiStoreProfile = requireAuthProfile(qaStore.profiles, "qa-mock-openai");
     expect(openaiStoreProfile.provider).toBe("openai");
     expect(openaiStoreProfile.type).toBe("api_key");
     expect(qaStore.profiles["qa-mock-anthropic"]).toBeUndefined();
 
-    // main/agent should not exist because it wasn't in the agentIds list.
+    // The main agent's canonical database should not exist because it was not requested.
     await expect(
-      readFile(path.join(stateDir, "agents", "main", "agent", "auth-profiles.json"), "utf8"),
+      lstat(path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite")),
     ).rejects.toThrow(/ENOENT/);
   });
 

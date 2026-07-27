@@ -120,6 +120,8 @@ export type ChatProps = {
   streamSegments: ChatStreamSegment[];
   stream: string | null;
   streamStartedAt: number | null;
+  /** Browser-local active run identity, retained across transient disconnects. */
+  runId?: string | null;
   runOutputTokens?: number | null;
   assistantAvatarUrl?: string | null;
   draft: string;
@@ -177,6 +179,10 @@ export type ChatProps = {
   autoExpandToolCalls?: boolean;
   attachments?: ChatAttachment[];
   getAttachments?: () => ChatAttachment[];
+  pendingAttachmentReads?: number;
+  getPendingAttachmentReads?: () => number;
+  readSignal?: AbortSignal;
+  onPendingReadsChange?: (delta: 1 | -1) => void;
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   onAssistantAttachmentLoaded?: () => void;
   onRequestOpenImage?: () => number;
@@ -299,6 +305,7 @@ export function renderChat(props: ChatProps) {
       streamSegments: props.streamSegments,
       stream: props.stream,
       streamStartedAt: props.streamStartedAt,
+      runId: props.runId,
       runOutputTokens: props.runOutputTokens,
       queue: props.queue,
       showThinking: props.showThinking,
@@ -389,6 +396,10 @@ export function renderChat(props: ChatProps) {
     followUpMode: props.followUpMode,
     attachments: props.attachments,
     getAttachments: props.getAttachments,
+    pendingAttachmentReads: props.pendingAttachmentReads,
+    getPendingAttachmentReads: props.getPendingAttachmentReads,
+    readSignal: props.readSignal,
+    onPendingReadsChange: props.onPendingReadsChange,
     replyTarget: props.replyTarget,
     realtimeTalkActive: props.realtimeTalkActive,
     realtimeTalkStatus: props.realtimeTalkStatus,

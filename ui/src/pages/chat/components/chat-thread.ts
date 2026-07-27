@@ -46,9 +46,10 @@ import {
   resolveUiGlobalAliasAgentId,
   type UiSessionDefaultsHost,
 } from "../../../lib/sessions/session-key.ts";
-import { resolveTurnRecap } from "../chat-progress.ts";
+import { resolveTurnRecap, type TurnRecap } from "../chat-progress.ts";
 import type { ChatRunStartupStatus } from "../chat-run-startup.ts";
 import {
+  assistantGroupCanOwnActiveRunStatus,
   buildCachedChatItems,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
@@ -78,6 +79,8 @@ import {
   renderStreamGroup,
   renderWorkGroupSummary,
   type MessageReplyTarget,
+  type StreamGroupOptions,
+  type StreamGroupPart,
 } from "./chat-message.ts";
 import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import { handleChatSelectionPointerUp, removeChatSelectionPopup } from "./chat-selection-popup.ts";
@@ -110,6 +113,7 @@ type ChatThreadProps = {
   streamSegments: ChatStreamSegment[];
   stream: string | null;
   streamStartedAt: number | null;
+  runId?: string | null;
   runOutputTokens?: number | null;
   queue: ChatQueueItem[];
   showThinking: boolean;
@@ -1125,10 +1129,19 @@ function trackTranscriptRenderDependencies(
   return dependencies;
 }
 
-function guardChatRenderItems(state: ChatThreadState, render: (item: ChatRenderItem) => unknown) {
+function guardChatRenderItems(
+  state: ChatThreadState,
+  // Live run status is not derivable from a row's own item identity: ownership
+  // is decided by sibling rows, and the usage counter ticks on run patches that
+  // touch nothing else. Rows showing status must re-render on both, or the
+  // memoized copy stacks a second claw row or freezes the token count.
+  liveStatus: (item: ChatRenderItem) => string,
+  render: (item: ChatRenderItem) => unknown,
+) {
   return (item: ChatRenderItem) =>
-    guard([...chatRenderItemGuardDependencies(item), state.transcriptRenderContext], () =>
-      render(item),
+    guard(
+      [...chatRenderItemGuardDependencies(item), state.transcriptRenderContext, liveStatus(item)],
+      () => render(item),
     );
 }
 
@@ -1172,9 +1185,7 @@ function renderChatThreadContents(
   const chatItems = buildCachedChatItems({
     paneId: props.paneId,
     sessionKey: props.sessionKey,
-    runId:
-      props.sessions?.sessions.find((row) => areUiSessionKeysEquivalent(row.key, props.sessionKey))
-        ?.activeRunIds?.[0] ?? null,
+    runId: props.runId === undefined ? (activeSession?.activeRunIds?.[0] ?? null) : props.runId,
     locale,
     messages: props.messages,
     toolMessages: props.toolMessages,
@@ -1229,6 +1240,11 @@ function renderChatThreadContents(
   const showLoadingSkeleton = props.loading && chatItems.length === 0;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
+  const activeContinuationByGroupKey = new Map<
+    string,
+    { parts: StreamGroupPart[]; options: StreamGroupOptions }
+  >();
+  const turnRecapByGroupKey = new Map<string, TurnRecap>();
   const renderGroupItem = (item: MessageGroup) => {
     if (deleted.has(item.key)) {
       return nothing;
@@ -1293,9 +1309,32 @@ function renderChatThreadContents(
             }
           : undefined,
       rewindDisabled: Boolean(props.runActive || props.runWorking),
+      activeContinuation: activeContinuationByGroupKey.get(item.key),
+      turnRecap: turnRecapByGroupKey.get(item.key),
     });
   };
-  const renderItem = guardChatRenderItems(state, (item) => {
+  // Only the working indicator shows live usage, so rows without one keep
+  // memoizing across usage patches.
+  const workingUsageKey = `usage:${props.runOutputTokens ?? ""}`;
+  const liveStatusSignature = (item: ChatRenderItem): string => {
+    if (item.kind === "stream-run") {
+      return item.parts.some((part) => part.kind === "reading-indicator") ? workingUsageKey : "";
+    }
+    if (item.kind !== "group") {
+      return "";
+    }
+    const continuation = activeContinuationByGroupKey.get(item.key);
+    const recap = turnRecapByGroupKey.get(item.key);
+    // Part keys stand in for the rest of the continuation: its remaining
+    // options mirror props that already invalidate every row through the
+    // shared render context.
+    const continuationKey = continuation
+      ? `${continuation.parts.map((part) => part.key).join(" ")}${workingUsageKey}`
+      : "";
+    const recapKey = recap ? `${recap.runtimeMs}:${recap.outputTokens ?? ""}` : "";
+    return `${continuationKey}|${recapKey}`;
+  };
+  const renderItem = guardChatRenderItems(state, liveStatusSignature, (item) => {
     if (item.kind === "divider") {
       return renderChatDivider(item, props.onOpenSessionCheckpoints);
     }
@@ -1344,7 +1383,54 @@ function renderChatThreadContents(
     runWorking: Boolean(props.runWorking),
     searchActive: state.searchOpen && Boolean(state.searchQuery.trim()),
   });
-  const transcriptRows: ChatTranscriptRow[] = collapsedItems.map((item) => ({
+  // Watch/settle on actual indicator visibility (not runWorking): queued
+  // sends show the claw before the run starts, and the recap must never
+  // stack under a visible working row.
+  const workingIndicatorVisible = chatItems.some((item) => item.kind === "reading-indicator");
+  const turnRecap = resolveTurnRecap(props.sessionKey, workingIndicatorVisible, activeSession);
+  const transcriptItems = collapsedItems.filter((item, index) => {
+    if (item.kind !== "stream-run") {
+      return true;
+    }
+    const previous = collapsedItems[index - 1];
+    const isActiveStatusRun =
+      item.parts.some((part) => part.kind === "reading-indicator") &&
+      item.parts.every((part) => part.kind === "reading-indicator" || part.kind === "plan");
+    if (
+      previous?.kind !== "group" ||
+      !isActiveStatusRun ||
+      deleted.has(previous.key) ||
+      !assistantGroupCanOwnActiveRunStatus(previous)
+    ) {
+      return true;
+    }
+    // A reply and its still-running state are one turn-level presentation.
+    // Keeping the status in the reply avoids a second claw/assistant row.
+    activeContinuationByGroupKey.set(previous.key, {
+      parts: item.parts,
+      options: {
+        planStatus: props.planStatus,
+        planActive: Boolean(props.runActive),
+        startupPhase: props.startupStatus?.phase,
+        waitingApproval: props.waitingApproval,
+        runOutputTokens: props.runOutputTokens,
+      },
+    });
+    return false;
+  });
+  let turnRecapOwnerKey: string | null = null;
+  if (turnRecap !== null) {
+    const lastItem = transcriptItems.at(-1);
+    if (
+      lastItem?.kind === "group" &&
+      !deleted.has(lastItem.key) &&
+      assistantGroupCanOwnActiveRunStatus(lastItem)
+    ) {
+      turnRecapByGroupKey.set(lastItem.key, turnRecap);
+      turnRecapOwnerKey = lastItem.key;
+    }
+  }
+  const transcriptRows: ChatTranscriptRow[] = transcriptItems.map((item) => ({
     kind: "item",
     key: item.key,
     item,
@@ -1357,12 +1443,7 @@ function renderChatThreadContents(
       content: realtimeConversation,
     });
   }
-  // Watch/settle on actual indicator visibility (not runWorking): queued
-  // sends show the claw before the run starts, and the recap must never
-  // stack under a visible working row.
-  const workingIndicatorVisible = chatItems.some((item) => item.kind === "reading-indicator");
-  const turnRecap = resolveTurnRecap(props.sessionKey, workingIndicatorVisible, activeSession);
-  if (turnRecap !== null && !isEmpty && !showLoadingSkeleton) {
+  if (turnRecap !== null && turnRecapOwnerKey === null && !isEmpty && !showLoadingSkeleton) {
     transcriptRows.push({
       kind: "content",
       key: "turn-recap",

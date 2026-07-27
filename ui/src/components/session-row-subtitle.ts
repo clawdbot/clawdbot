@@ -19,7 +19,7 @@ export function resolveSidebarSessionSubtitle(params: {
   narrationLine: string | undefined;
   observerDigest?: Pick<
     SessionObserverDigest,
-    "runId" | "headline" | "health" | "updatedAt" | "revision"
+    "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
   > | null;
 }): SidebarSessionSubtitle {
   const { session } = params;

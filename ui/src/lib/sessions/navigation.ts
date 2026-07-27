@@ -337,7 +337,3 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
     activeRowKey: activeRow?.key ?? null,
   };
 }
-
-export function searchForSession(sessionKey: string): string {
-  return `?session=${encodeURIComponent(sessionKey)}`;
-}

@@ -5,6 +5,7 @@ import { chromium, expect, type Browser, type Page } from "playwright/test";
 import { afterAll, beforeAll, describe, it } from "vitest";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -114,7 +115,7 @@ describeControlUiE2e("Control UI session suggestions", () => {
       },
     });
 
-    await page.goto(`${server.baseUrl}chat?session=${encodeURIComponent(sessionKey)}`);
+    await page.goto(controlUiSessionUrl(server.baseUrl, sessionKey));
     const composer = page.locator(".agent-chat__composer-combobox textarea");
     await gateway.waitForRequest("session.suggestions.list");
     await expect(composer).toBeEnabled();
@@ -163,7 +164,7 @@ describeControlUiE2e("Control UI session suggestions", () => {
       },
     });
 
-    await page.goto(`${server.baseUrl}chat?session=${encodeURIComponent(sessionKey)}`);
+    await page.goto(controlUiSessionUrl(server.baseUrl, sessionKey));
     const row = page.locator(".session-suggestion");
     await expect(row).toBeVisible();
     await expect(row.locator("button")).toHaveCount(4);
@@ -205,7 +206,7 @@ describeControlUiE2e("Control UI session suggestions", () => {
       methodResponses: { "sessions.list": sessionRow("viewer") },
     });
 
-    await page.goto(`${server.baseUrl}chat?session=${encodeURIComponent(sessionKey)}`);
+    await page.goto(controlUiSessionUrl(server.baseUrl, sessionKey));
     await expect(page.locator(".agent-chat__composer-combobox textarea")).toBeDisabled();
     await expect(page.getByRole("button", { name: "Suggest message" })).toHaveCount(0);
     await expect(page.locator(".agent-chat__typing-indicator")).toHaveCount(0);
@@ -224,7 +225,7 @@ describeControlUiE2e("Control UI session suggestions", () => {
       methodResponses: { "sessions.list": sessionRow("viewer") },
     });
 
-    await page.goto(`${server.baseUrl}chat?session=${encodeURIComponent(sessionKey)}`);
+    await page.goto(controlUiSessionUrl(server.baseUrl, sessionKey));
     await expect(page.locator(".agent-chat__composer-combobox textarea")).toBeDisabled();
     await expect(page.getByRole("button", { name: "Suggest message" })).toHaveCount(0);
     await context.close();

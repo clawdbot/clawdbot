@@ -295,7 +295,10 @@ extension OpenClawChatViewModel {
     func observeSwarmEvent(_ event: OpenClawChatSessionsChangedEvent) -> Bool {
         guard swarmEnabled,
               SelfContainedSwarmHelpers.eventBelongsToParent(event, matchesParent: { candidate in
-                  self.matchesCurrentSessionKey(incoming: candidate, current: self.sessionKey)
+                  self.matchesCurrentSessionKey(
+                      incoming: candidate,
+                      agentId: event.agentId,
+                      current: self.sessionKey)
               })
         else { return false }
         var nextActivity = swarmActivityState

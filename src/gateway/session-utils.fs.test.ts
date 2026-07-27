@@ -1152,7 +1152,7 @@ describe("readSessionMessages", () => {
         timestamp: "2026-04-27T00:00:01.000Z",
         message: {
           role: "user",
-          content: "Sender (untrusted metadata): webchat\n\noriginal wrapped prompt",
+          content: "Sender: webchat\n\noriginal wrapped prompt",
           timestamp: 1,
         },
       },
@@ -1279,7 +1279,7 @@ describe("readSessionMessages", () => {
   test("reads only the active SessionManager branch after a transcript rewrite", () => {
     const sessionId = "branched-session";
     const sessionManager = SessionManager.create(tmpDir, tmpDir);
-    const decoratedPrompt = 'Sender (untrusted metadata):\n```json\n{"label":"ui"}\n```\n\nhello';
+    const decoratedPrompt = 'Sender:\n```json\n{"label":"ui"}\n```\n\nhello';
     const visiblePrompt = "hello";
     sessionManager.appendMessage({
       role: "user",

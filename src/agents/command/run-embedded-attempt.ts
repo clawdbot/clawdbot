@@ -236,6 +236,7 @@ export async function runEmbeddedAgentAttempt(params: {
           cfg,
           provider,
           model,
+          requestedRouteResolution: params.modelSelection.requestedRouteResolution,
           agentDir,
           fallbacksOverride: effectiveFallbacksOverride,
           ...modelManifestContext,

@@ -4,7 +4,7 @@ export function describeBrowserTool(opts: {
   hostHint: string;
 }): string {
   return [
-    "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/download/actions).",
+    "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/pdf print-to-PDF/download/console logs/dialog accept-dismiss/actions incl. act:evaluate to run JS in the page).",
     "Browser choice: omit profile to use the configured default (normally the isolated OpenClaw-managed `openclaw` browser).",
     "When existing logins/cookies matter, use action=profiles to inspect available profiles, then select the appropriate profile by name. Do not assume a profile name. Use only when the task requires an existing session and the user has authorized it.",
     "Use action=importprofile on macOS to copy cookies from an authorized Chrome-family system profile into a fresh managed profile; this may show a Keychain consent prompt.",

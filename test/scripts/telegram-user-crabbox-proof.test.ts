@@ -113,6 +113,20 @@ describe("telegram user Crabbox proof log polling", () => {
     expect(spec.options.shell).toBe(false);
   });
 
+  it("uses an explicitly pinned pnpm executable for a worktree gateway", () => {
+    const spec = createOpenClawGatewaySpawnSpec({
+      env: { PATH: "/definitely-missing" },
+      gatewayPort: 19042,
+      pnpmExecPath: "/opt/mantis-toolchain/pnpm",
+      repoRoot: "/repo",
+    });
+
+    expect(spec.command).toBe("/opt/mantis-toolchain/pnpm");
+    expect(spec.args).toEqual(["openclaw", "gateway", "--port", "19042"]);
+    expect(spec.options.cwd).toBe("/repo");
+    expect(spec.options.shell).toBe(false);
+  });
+
   it("allows cold remote setup to outlive ordinary command timeouts", () => {
     expect(REMOTE_SETUP_COMMAND_TIMEOUT_MS).toBeGreaterThan(COMMAND_TIMEOUT_MS);
     expect(REMOTE_SETUP_COMMAND_TIMEOUT_MS).toBeGreaterThanOrEqual(90 * 60 * 1000);
@@ -164,6 +178,24 @@ describe("telegram user Crabbox proof log polling", () => {
 
   it("keeps hyphen-prefixed free-text proof values", () => {
     expect(parseArgs(["--text", "-ping"]).text).toBe("-ping");
+  });
+
+  it("accepts an explicit Telegram link-preview setting", () => {
+    expect(parseArgs(["start", "--link-preview", "false"]).linkPreview).toBe(false);
+    expect(parseArgs(["start", "--link-preview", "true"]).linkPreview).toBe(true);
+    expect(parseArgs(["start"]).linkPreview).toBeUndefined();
+    expect(() => parseArgs(["start", "--link-preview", "disabled"])).toThrow(
+      "--link-preview must be true or false.",
+    );
+  });
+
+  it("accepts a positive mock response chunk delay", () => {
+    expect(
+      parseArgs(["start", "--mock-response-chunk-delay-ms", "1200"]).mockResponseChunkDelayMs,
+    ).toBe(1200);
+    expect(() => parseArgs(["start", "--mock-response-chunk-delay-ms", "0"])).toThrow(
+      "--mock-response-chunk-delay-ms must be a positive integer.",
+    );
   });
 
   it("rejects duplicate single-value proof controls while keeping repeated expectations", () => {
@@ -239,6 +271,31 @@ describe("telegram user Crabbox proof log polling", () => {
     });
     expect(JSON.stringify(config)).not.toContain("companion-called");
     expect(JSON.stringify(config)).not.toContain("resource-ok");
+  });
+
+  it("injects the requested Telegram link-preview setting before startup", () => {
+    const disabledConfigRoot = writeSutConfig({
+      gatewayPort: 19042,
+      groupId: "group",
+      linkPreview: false,
+      mockPort: 19043,
+      outputDir: makeTempDir(),
+      testerId: "tester",
+    });
+    const defaultConfigRoot = writeSutConfig({
+      gatewayPort: 19044,
+      groupId: "group",
+      mockPort: 19045,
+      outputDir: makeTempDir(),
+      testerId: "tester",
+    });
+    tempDirs.push(disabledConfigRoot.tempRoot, defaultConfigRoot.tempRoot);
+
+    const disabledConfig = JSON.parse(fs.readFileSync(disabledConfigRoot.configPath, "utf8"));
+    const defaultConfig = JSON.parse(fs.readFileSync(defaultConfigRoot.configPath, "utf8"));
+
+    expect(disabledConfig.channels.telegram.linkPreview).toBe(false);
+    expect(defaultConfig.channels.telegram).not.toHaveProperty("linkPreview");
   });
 
   it("pins the browser fixture SDK and exposes only the required app capabilities", () => {

@@ -1660,7 +1660,8 @@ mod tests {
             false,
         )
         .expect("pinned connect params");
-        assert_eq!(pinned_params["caps"], json!([]));
+        // Pinning only withdraws inline widgets; agent-kind is unconditional.
+        assert_eq!(pinned_params["caps"], json!([AGENT_KIND_CLIENT_CAPABILITY]));
         std::fs::remove_dir_all(directory).expect("remove connect fixture");
     }
 

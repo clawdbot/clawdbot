@@ -47,7 +47,6 @@ export const GOOGLE_MEET_SESSION_MESSAGES = {
   speech: {
     audioBridgeUnavailable: "Realtime speech requires an active Chrome audio bridge.",
     browserUnverified: "Google Meet browser state has not been verified yet.",
-    manualActionFallback: "Resolve the Google Meet browser prompt before asking OpenClaw to speak.",
     microphoneMuted: "Turn on the OpenClaw Google Meet microphone before asking OpenClaw to speak.",
     microphoneMutedReason: "meet-microphone-muted",
     notInCall: "Google Meet has not reported that the browser participant is in the call.",
@@ -57,7 +56,7 @@ export const GOOGLE_MEET_SESSION_MESSAGES = {
   },
 } as const;
 
-export type GoogleMeetTrackedRecoveryScope = {
+type GoogleMeetTrackedRecoveryScope = {
   mode?: GoogleMeetMode;
   trackedMeetingUrl?: string;
   trackedTargetId?: string;

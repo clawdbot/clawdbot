@@ -191,7 +191,7 @@ class WorkboardSessionCardLookup {
 
   private async loadMatches(): Promise<WorkboardLookupSnapshot> {
     const payload = await this.client.request("workboard.cards.list", {});
-    const cards = normalizeCardsPayload(payload).cards;
+    const cards = normalizeCardsPayload(payload).cards.filter((card) => !card.metadata?.archivedAt);
     const matches = indexCards(cards);
     const runCandidates = cards
       .toSorted((left, right) => right.updatedAt - left.updatedAt)

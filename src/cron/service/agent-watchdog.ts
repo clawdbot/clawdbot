@@ -69,6 +69,7 @@ export function createCronAgentWatchdog(params: {
   let preExecutionTimeoutId: NodeJS.Timeout | undefined;
   let activeExecution: CronAgentExecutionStarted | undefined;
   let observedLaneWait = false;
+  let waitingForLane = false;
 
   const setTimedOut = (reason: string) => {
     if (state === "timed_out" || state === "disposed") {
@@ -91,6 +92,17 @@ export function createCronAgentWatchdog(params: {
     }
     clearTimeout(setupTimeoutId);
     setupTimeoutId = undefined;
+  };
+  // Queue contention is not runner setup; admission must begin a fresh setup budget.
+  const startSetupTimeout = () => {
+    if (setupTimeoutId || state !== "waiting_for_runner" || waitingForLane) {
+      return;
+    }
+    setupTimeoutId = setTimeout(() => {
+      if (state === "waiting_for_runner" && !waitingForLane) {
+        setTimedOut(setupTimeoutErrorMessage(activeExecution));
+      }
+    }, CRON_AGENT_SETUP_WATCHDOG_MS);
   };
   const clearPreExecutionTimeout = () => {
     if (!preExecutionTimeoutId) {
@@ -138,11 +150,7 @@ export function createCronAgentWatchdog(params: {
   return {
     start: () => {
       if (params.deferUntilRunner) {
-        setupTimeoutId = setTimeout(() => {
-          if (state === "waiting_for_runner") {
-            setTimedOut(setupTimeoutErrorMessage(activeExecution));
-          }
-        }, CRON_AGENT_SETUP_WATCHDOG_MS);
+        startSetupTimeout();
         return;
       }
       startTimeout();
@@ -150,11 +158,15 @@ export function createCronAgentWatchdog(params: {
     noteLaneWait: () => {
       if (state === "waiting_for_runner") {
         observedLaneWait = true;
+        waitingForLane = true;
+        clearSetupTimeout();
       }
     },
     noteLaneAdmitted: () => {
       if (state === "waiting_for_runner") {
         observedLaneWait = false;
+        waitingForLane = false;
+        startSetupTimeout();
       }
     },
     noteRunnerStarted: (info?: CronAgentExecutionStarted) => {

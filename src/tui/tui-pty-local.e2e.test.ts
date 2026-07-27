@@ -11,6 +11,7 @@ import {
 } from "../../test/helpers/openclaw-test-instance.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { connectGatewayClient } from "../gateway/test-helpers.e2e.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import { GatewayChatClient } from "./gateway-chat.js";
 import { sleep, startPty, waitFor, type PtyRun } from "./tui-pty-test-support.js";
@@ -54,6 +55,14 @@ const GATEWAY_SCENARIOS = {
   newSession: {
     agentId: "tui-pty-new-session",
     modelId: "tui-pty-new-session",
+    toolsProfile: "minimal",
+    replyText: "FIRST_RUN_ACTIVE",
+    holdFirstResponse: false,
+    followupReplyText: "FOLLOWUP_RUN_COMPLETE",
+  },
+  crossClient: {
+    agentId: "tui-pty-cross-client",
+    modelId: "tui-pty-cross-client",
     toolsProfile: "minimal",
     replyText: "FIRST_RUN_ACTIVE",
     holdFirstResponse: false,
@@ -122,6 +131,30 @@ const LOCAL_TEST_TIMEOUT_MS = 150_000;
 const SUBMISSION_SETTLE_MS = 150;
 const SESSION_ROLLOVER_BUSY_MESSAGE = "abort the current run before /new";
 
+function isRetryableGatewayUnavailable(error: unknown): error is Error & {
+  retryAfterMs?: number;
+} {
+  return (
+    error instanceof Error &&
+    (error as { gatewayCode?: unknown }).gatewayCode === "UNAVAILABLE" &&
+    (error as { retryable?: unknown }).retryable === true
+  );
+}
+
+async function requestWithUnavailableRetry<T>(request: () => Promise<T>): Promise<T> {
+  const deadline = Date.now() + LOCAL_STARTUP_TIMEOUT_MS;
+  while (true) {
+    try {
+      return await request();
+    } catch (error) {
+      if (!isRetryableGatewayUnavailable(error) || Date.now() >= deadline) {
+        throw error;
+      }
+      await sleep(Math.max(25, Math.min(error.retryAfterMs ?? 25, 1_000)));
+    }
+  }
+}
+
 function createIdempotentCleanup(cleanup: () => Promise<void>) {
   let cleanupPromise: Promise<void> | undefined;
   return () => (cleanupPromise ??= cleanup());
@@ -141,37 +174,18 @@ async function waitForOutputAfter(run: PtyRun, needle: string, offset: number) {
 }
 
 async function createFreshSession(run: PtyRun, newSessionPrefix: string) {
-  const deadline = Date.now() + LOCAL_STARTUP_TIMEOUT_MS;
-  let attempts = 0;
-  let outputOffset = run.output().length;
-  while (Date.now() < deadline) {
-    attempts += 1;
-    await run.write("/new\r", { delay: false });
-    const outcome = await waitFor({
-      timeoutMs: Math.max(1, deadline - Date.now()),
-      read: () => {
-        const output = run.output();
-        if (output.includes(newSessionPrefix, outputOffset)) {
-          return "created";
-        }
-        return output.includes(SESSION_ROLLOVER_BUSY_MESSAGE, outputOffset) ? "busy" : null;
-      },
-      onTimeout: () =>
-        new Error(`timed out creating a fresh session after ${attempts} attempts\n${run.output()}`),
-    });
-    if (outcome === "created") {
-      return;
-    }
-
-    // Redraws can repeat an old rejection after this attempt's offset. Keep
-    // watching that attempt through settle so an accepted /new is not retried.
-    await sleep(SUBMISSION_SETTLE_MS);
-    if (run.output().includes(newSessionPrefix, outputOffset)) {
-      return;
-    }
-    outputOffset = run.output().length;
-  }
-  throw new Error(`timed out creating a fresh session after ${attempts} attempts\n${run.output()}`);
+  const outputOffset = run.output().length;
+  await run.write("/new\r", { delay: false });
+  await waitFor({
+    timeoutMs: LOCAL_STARTUP_TIMEOUT_MS,
+    read: () => (run.output().includes(newSessionPrefix, outputOffset) ? true : null),
+    onTimeout: () =>
+      new Error(`timed out creating a fresh session after one submission\n${run.output()}`),
+  });
+  const newSessionOffset = run.output().lastIndexOf(newSessionPrefix);
+  // Wait for the accepted session's own idle redraw; older PTY frames can
+  // replay busy messages and must never cause a second session creation.
+  await waitForOutputAfter(run, "| idle", newSessionOffset);
 }
 
 async function readRequestBody(req: IncomingMessage): Promise<string> {
@@ -835,6 +849,42 @@ describe("TUI PTY real backends", () => {
     await expect(cleanupSharedGatewayFixture(Promise.resolve(fixture))).rejects.toBe(cleanupError);
   });
 
+  it("does not replay a session rollover when an old busy notice is redrawn", async () => {
+    const newSessionPrefix = "new session: agent:main:tui-";
+    const acceptedSession = createDeferred();
+    const writes: string[] = [];
+    let output = "";
+    let acceptanceTimer: ReturnType<typeof setTimeout> | undefined;
+    const run = {
+      output: () => output,
+      write: async (data: string) => {
+        writes.push(data);
+        if (writes.length === 1) {
+          output += `${SESSION_ROLLOVER_BUSY_MESSAGE}\n`;
+          acceptanceTimer = setTimeout(() => {
+            output += `${newSessionPrefix}accepted\nlocal ready | idle\n`;
+            acceptedSession.resolve();
+          }, SUBMISSION_SETTLE_MS + 50);
+          return;
+        }
+        output += `${newSessionPrefix}duplicate\nlocal ready | idle\n`;
+      },
+      waitForOutput: async () => output,
+      waitForExit: async () => ({ exitCode: 0, signal: 0 }),
+      dispose: async () => {},
+    } satisfies PtyRun;
+
+    try {
+      await createFreshSession(run, newSessionPrefix);
+      await acceptedSession.promise;
+      expect(writes).toEqual(["/new\r"]);
+    } finally {
+      if (acceptanceTimer) {
+        clearTimeout(acceptanceTimer);
+      }
+    }
+  });
+
   it(
     "drives the real local backend with a mocked model endpoint",
     async ({ onTestFinished }) => {
@@ -869,6 +919,8 @@ describe("TUI PTY real backends", () => {
         expect(request?.body.model).toBe("gpt-5.5");
         await fixture.run.waitForOutput("LOCAL_PTY_RESPONSE");
 
+        const responseOffset = fixture.run.output().lastIndexOf("LOCAL_PTY_RESPONSE");
+        await waitForOutputAfter(fixture.run, "| idle", responseOffset);
         await createFreshSession(fixture.run, "new session: agent:main:tui-");
         await fixture.run.write("send after local new\r");
         await waitFor({
@@ -1151,6 +1203,64 @@ describe("TUI PTY real backends", () => {
   );
 
   registerGatewayTest(
+    "renders messages sent by another real Gateway client without restarting",
+    async ({ onTestFinished }) => {
+      const fixture = await startGatewayModeTui("crossClient", onTestFinished);
+      let externalClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+      try {
+        await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
+        await fixture.run.write("seed cross-client session\r");
+        await fixture.run.waitForOutput("FIRST_RUN_ACTIVE", LOCAL_OUTPUT_TIMEOUT_MS);
+        const firstReplyOffset = fixture.run.output().lastIndexOf("FIRST_RUN_ACTIVE");
+        await waitForOutputAfter(fixture.run, "| idle", firstReplyOffset);
+        const connectedExternalClient = await connectGatewayClient({
+          url: fixture.gateway.url,
+          token: fixture.gateway.gatewayToken,
+          scopes: ["operator.read", "operator.write"],
+          clientDisplayName: "tui-external-session-writer",
+        });
+        externalClient = connectedExternalClient;
+
+        const marker = "EXTERNAL_GATEWAY_SESSION_MESSAGE";
+        await requestWithUnavailableRetry(
+          async () =>
+            await connectedExternalClient.request("sessions.send", {
+              key: fixture.sessionKey,
+              message: marker,
+              idempotencyKey: `${fixture.sessionKey}:external-message`,
+              timeoutMs: 30_000,
+            }),
+        );
+
+        await fixture.run.waitForOutput(marker, LOCAL_OUTPUT_TIMEOUT_MS);
+        await fixture.run.waitForOutput("FOLLOWUP_RUN_COMPLETE", LOCAL_OUTPUT_TIMEOUT_MS);
+        const followupOffset = fixture.run.output().lastIndexOf("FOLLOWUP_RUN_COMPLETE");
+        await waitForOutputAfter(fixture.run, "| idle", followupOffset);
+        console.info(
+          "[behavior-evidence] tui-real-gateway-cross-client",
+          JSON.stringify({
+            transport: "real Gateway WebSocket",
+            terminal: "real PTY",
+            externalMessage: marker,
+            externalMessageRendered: fixture.run.output().includes(marker),
+            followupRendered: fixture.run.output().includes("FOLLOWUP_RUN_COMPLETE"),
+            returnedToIdle: fixture.run.output().slice(followupOffset).includes("| idle"),
+          }),
+        );
+        await fixture.run.write("/exit\r", { delay: false });
+        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+      } finally {
+        try {
+          await externalClient?.stopAndWait({ timeoutMs: 1_000 });
+        } finally {
+          await fixture.cleanup();
+        }
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
+  registerGatewayTest(
     "creates and adopts a fresh session through the real Gateway backend",
     async ({ onTestFinished }) => {
       const fixture = await startGatewayModeTui("newSession", onTestFinished);
@@ -1159,6 +1269,8 @@ describe("TUI PTY real backends", () => {
         await fixture.run.write("seed gateway session\r");
         await fixture.run.waitForOutput("FIRST_RUN_ACTIVE");
 
+        const responseOffset = fixture.run.output().lastIndexOf("FIRST_RUN_ACTIVE");
+        await waitForOutputAfter(fixture.run, "| idle", responseOffset);
         const newSessionPrefix = `new session: agent:${fixture.agentId}:tui-`;
         await createFreshSession(fixture.run, newSessionPrefix);
         const newSessionKey = fixture.run

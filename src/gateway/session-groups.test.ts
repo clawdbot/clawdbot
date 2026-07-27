@@ -58,16 +58,19 @@ describe("session groups catalog", () => {
     ]);
   });
 
-  it("roundtrips normalized sidebar order and prunes unknown category ids", () => {
+  it("roundtrips normalized sidebar order, including catalog section ids", () => {
     putSessionGroups(
       ["Alpha", " Beta ", "Alpha"],
       [
         " work ",
+        " catalog: codex ",
         "category:Beta",
         "category:Missing",
         "category: Alpha ",
         "groups",
         "groups",
+        "catalog:",
+        "catalog:codex",
         "pinned",
         "",
       ],
@@ -76,6 +79,7 @@ describe("session groups catalog", () => {
     expect(listSessionGroups(env).map((group) => group.name)).toEqual(["Alpha", "Beta"]);
     expect(listSidebarSectionOrder(env)).toEqual([
       "work",
+      "catalog:codex",
       "category:Beta",
       "category:Alpha",
       "groups",
@@ -84,6 +88,7 @@ describe("session groups catalog", () => {
     putSessionGroups(["Beta", "Alpha"], undefined, env);
     expect(listSidebarSectionOrder(env)).toEqual([
       "work",
+      "catalog:codex",
       "category:Beta",
       "category:Alpha",
       "groups",

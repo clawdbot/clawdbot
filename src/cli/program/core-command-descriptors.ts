@@ -1,5 +1,7 @@
 // Core root-command descriptor catalog used for help placeholders and lazy registration.
 import { isExperimentalClawsEnabled } from "../../claws/experimental.js";
+import { isConfigMachineOutput } from "../config-output-mode.js";
+import { isDoctorMachineOutput } from "../doctor-output-mode.js";
 import { defineCommandDescriptorCatalog } from "./command-descriptor-utils.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 
@@ -33,6 +35,7 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     description:
       "Non-interactive config helpers (get/set/patch/unset/file/schema/validate). Run without subcommand for guided setup.",
     hasSubcommands: true,
+    machineOutput: ({ argv }) => isConfigMachineOutput(argv),
   },
   {
     name: "claws",
@@ -54,6 +57,7 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     name: "doctor",
     description: "Health checks + quick fixes for the gateway and channels",
     hasSubcommands: false,
+    machineOutput: isDoctorMachineOutput,
   },
   {
     name: "dashboard",

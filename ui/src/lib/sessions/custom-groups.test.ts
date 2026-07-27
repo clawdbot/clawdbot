@@ -15,9 +15,17 @@ describe("session group catalog readers", () => {
   it("reads normalized section order", () => {
     expect(
       readSidebarSectionOrder({
-        sectionOrder: [" work ", "", 42, "work", "category: Alpha "],
+        sectionOrder: [
+          " work ",
+          "",
+          42,
+          "work",
+          "category: Alpha ",
+          " catalog: codex ",
+          "catalog:",
+        ],
       }),
-    ).toEqual(["work", "category:Alpha"]);
+    ).toEqual(["work", "category:Alpha", "catalog:codex"]);
     expect(readSidebarSectionOrder({})).toEqual([]);
   });
 });

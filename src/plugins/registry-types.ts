@@ -51,7 +51,8 @@ type ImageGenerationProviderPlugin = import("./types.js").ImageGenerationProvide
 type MediaUnderstandingProviderPlugin = import("./types.js").MediaUnderstandingProviderPlugin;
 type TranscriptSourceProvider = import("./types.js").TranscriptSourceProvider;
 type MusicGenerationProviderPlugin = import("./types.js").MusicGenerationProviderPlugin;
-type OpenClawPluginCliCommandDescriptor = import("./types.js").OpenClawPluginCliCommandDescriptor;
+type OpenClawPluginCliRootCommandDescriptor =
+  import("./types.js").OpenClawPluginCliRootCommandDescriptor;
 type OpenClawPluginCliRegistrar = import("./types.js").OpenClawPluginCliRegistrar;
 type OpenClawPluginCommandDefinition = import("./types.js").OpenClawPluginCommandDefinition;
 type PluginInteractiveHandlerRegistration =
@@ -103,7 +104,7 @@ type PluginCliRegistration = {
   register: OpenClawPluginCliRegistrar;
   parentPath: string[];
   commands: string[];
-  descriptors: OpenClawPluginCliCommandDescriptor[];
+  descriptors: OpenClawPluginCliRootCommandDescriptor[];
   source: string;
   rootDir?: string;
 };

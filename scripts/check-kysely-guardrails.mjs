@@ -105,6 +105,9 @@ const rawSqliteAllowPathGroups = {
     "src/infra/state-migrations.media-persistence.ts",
   ],
   "shared database stores with direct DatabaseSync access": ["src/proxy-capture/store.sqlite.ts"],
+  "session entry cache connection-local validity counters": [
+    "src/config/sessions/session-accessor.sqlite-entry-cache.ts",
+  ],
   "Kysely-backed stores that own a DatabaseSync boundary": [
     "src/acp/event-ledger.ts",
     "src/state/user-profiles.ts",

@@ -71,7 +71,7 @@ export function hasRestrictiveAllowPolicy(policy?: { allow?: string[] }): boolea
 /** Replaces an allowlist with the normalized names of an effective tool array. */
 export function replaceWithEffectiveToolAllowlist(
   target: string[],
-  tools: Array<{ name: string }>,
+  tools: ReadonlyArray<{ name: string }>,
 ): void {
   target.length = 0;
   const seen = new Set<string>();

@@ -1880,6 +1880,45 @@ describe("installPluginFromNpmSpec", () => {
     expect(managedInstallAttempts).toBe(2);
   });
 
+  it("reports the npm exit code when a managed install fails without output", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(stateDir, "npm");
+    const packageName = "empty-output-plugin";
+    const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
+
+    mockNpmViewAndInstall({
+      spec: `${packageName}@1.0.0`,
+      packageName,
+      version: "1.0.0",
+      pluginId: packageName,
+      npmRoot,
+      expectedDependencySpec: "1.0.0",
+    });
+    const delegate = runCommandWithTimeoutMock.getMockImplementation();
+    if (!delegate) {
+      throw new Error("expected npm mock implementation");
+    }
+    runCommandWithTimeoutMock.mockImplementation(
+      async (argv: string[], options?: { cwd?: string }) => {
+        if (isManagedNpmInstallCommand(argv) && options?.cwd === npmProjectRoot) {
+          return failedSpawn("");
+        }
+        return await delegate(argv, options);
+      },
+    );
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${packageName}@1.0.0`,
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("npm install failed: exit code 1 (no output from npm)");
+    }
+  });
+
   it("keeps corrupt managed npm project artifacts quarantined when the rebuild retry fails", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const npmRoot = path.join(stateDir, "npm");

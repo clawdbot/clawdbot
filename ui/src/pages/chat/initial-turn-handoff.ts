@@ -203,6 +203,21 @@ export function admitInitialUserMessageHandoff(
   return true;
 }
 
+/**
+ * The projected prompt is a head row owned by reconcileInitialUserMessageHandoff.
+ * A history merge that re-places it as a late optimistic tail would render the
+ * first turn below the replies it started.
+ */
+export function isPendingInitialUserMessage(
+  handoff: ApplicationInitialUserMessageHandoff | undefined,
+  host: { client?: object | null },
+  sessionKey: string,
+  candidate: unknown,
+): boolean {
+  const message = handoff?.read(sessionKey, host.client ?? null);
+  return Boolean(message && isSameInitialUserMessage(candidate, message));
+}
+
 /** Keeps the accepted prompt projected until authoritative history owns it. */
 export function reconcileInitialUserMessageHandoff(
   handoff: ApplicationInitialUserMessageHandoff,

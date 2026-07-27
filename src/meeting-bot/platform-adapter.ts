@@ -94,6 +94,17 @@ function browserResultString(result: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
+function parseMeetingManualAction(value: unknown): MeetingBrowserHealth["manualAction"] {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const action = value as Record<string, unknown>;
+  if (typeof action.reason !== "string" || typeof action.message !== "string") {
+    return undefined;
+  }
+  return { reason: action.reason, message: action.message };
+}
+
 function parseMeetingBrowserStatus<Health extends MeetingBrowserHealth>(
   result: unknown,
   options: MeetingPlatformAdapterOptions<
@@ -168,12 +179,7 @@ function parseMeetingBrowserStatus<Health extends MeetingBrowserHealth>(
       typeof parsed.audioOutputRouteRetryable === "boolean"
         ? parsed.audioOutputRouteRetryable
         : undefined,
-    manualActionRequired:
-      typeof parsed.manualActionRequired === "boolean" ? parsed.manualActionRequired : undefined,
-    manualActionReason:
-      typeof parsed.manualActionReason === "string" ? parsed.manualActionReason : undefined,
-    manualActionMessage:
-      typeof parsed.manualActionMessage === "string" ? parsed.manualActionMessage : undefined,
+    manualAction: parseMeetingManualAction(parsed.manualAction),
     browserUrl: typeof parsed.url === "string" ? parsed.url : undefined,
     browserTitle: typeof parsed.title === "string" ? parsed.title : undefined,
     status: "browser-control",
@@ -311,17 +317,13 @@ function createMeetingPlatformAdapter<
       ...browser,
       parseStatus: (result) => parseMeetingBrowserStatus(result, parsing),
       classifyManualAction: (health) => {
-        if (
-          !health.manualActionRequired ||
-          !health.manualActionReason ||
-          !health.manualActionMessage
-        ) {
+        if (!health.manualAction) {
           return undefined;
         }
         return {
-          category: parsing.classifyManualActionReason(health.manualActionReason),
-          reason: health.manualActionReason,
-          message: health.manualActionMessage,
+          category: parsing.classifyManualActionReason(health.manualAction.reason),
+          reason: health.manualAction.reason,
+          message: health.manualAction.message,
         };
       },
       parseLeaveResult: parseMeetingLeaveResult,
@@ -361,6 +363,29 @@ function createMeetingPlatformAdapter<
   };
 }
 
+function isMeetingTalkBackMode(mode: string): boolean {
+  return mode === "agent" || mode === "bidi";
+}
+
+function isMeetingRealtimeRouteReady(
+  mode: string,
+  health:
+    | (MeetingBrowserHealth & {
+        audioInputRouted?: boolean;
+        audioOutputRouted?: boolean;
+      })
+    | undefined,
+): boolean {
+  return (
+    isMeetingTalkBackMode(mode) &&
+    health?.inCall === true &&
+    health.micMuted === false &&
+    health.audioInputRouted === true &&
+    health.audioOutputRouted === true &&
+    health.manualAction === undefined
+  );
+}
+
 export const MeetingPlatformAdapter = {
   create: createMeetingPlatformAdapter,
   createChromeTransport: createMeetingChromeTransport,
@@ -369,4 +394,6 @@ export const MeetingPlatformAdapter = {
   createPluginEntry: createMeetingPluginEntryOptions,
   createStatusCallSource: createMeetingStatusCallSource,
   createStatusPreludeSource: createMeetingStatusPreludeSource,
+  isRealtimeRouteReady: isMeetingRealtimeRouteReady,
+  isTalkBackMode: isMeetingTalkBackMode,
 };

@@ -2,6 +2,7 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setAvatarGatewayOrigin } from "../../lib/identity-avatar.ts";
 import { refreshChatAvatar, renderChatAvatar } from "./chat-avatar.ts";
 
 function renderAvatar(params: Parameters<typeof renderChatAvatar>) {
@@ -37,7 +38,9 @@ function pendingUntilAbort<T>(signal: AbortSignal | null | undefined): Promise<T
 }
 
 afterEach(() => {
+  setAvatarGatewayOrigin(null);
   vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -147,6 +150,57 @@ describe("refreshChatAvatar", () => {
 });
 
 describe("attributed sender avatars", () => {
+  it("restores pending initials when the authenticated sender avatar changes", async () => {
+    setAvatarGatewayOrigin("https://gateway.example.test", "Bearer profile-token");
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(new Uint8Array([1, 2, 3]), {
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    vi.spyOn(URL, "createObjectURL")
+      .mockReturnValueOnce("blob:first-sender")
+      .mockReturnValueOnce("blob:second-sender");
+    const container = document.createElement("div");
+    const firstSender = {
+      id: "c3e32452-0467-47e5-aafa-233cd5dae29f",
+      name: "Ada Lovelace",
+      profileAvatarUrl: "/api/users/c3e32452-0467-47e5-aafa-233cd5dae29f/avatar?v=1",
+    };
+
+    render(renderChatAvatar("user", undefined, undefined, "", null, firstSender), container);
+    const firstImage = await vi.waitFor(() => {
+      const image = container.querySelector<HTMLImageElement>(".chat-avatar-slot img");
+      expect(image?.getAttribute("src")).toBe("blob:first-sender");
+      return image!;
+    });
+    firstImage.dispatchEvent(new Event("load"));
+    expect(container.querySelector(".chat-avatar-slot")?.classList.contains("is-fallback")).toBe(
+      false,
+    );
+
+    render(
+      renderChatAvatar("user", undefined, undefined, "", null, {
+        ...firstSender,
+        profileAvatarUrl: "/api/users/c3e32452-0467-47e5-aafa-233cd5dae29f/avatar?v=2",
+      }),
+      container,
+    );
+    expect(container.querySelector(".chat-avatar-slot")?.classList.contains("is-fallback")).toBe(
+      true,
+    );
+    const secondImage = await vi.waitFor(() => {
+      const image = container.querySelector<HTMLImageElement>(".chat-avatar-slot img");
+      expect(image?.getAttribute("src")).toBe("blob:second-sender");
+      return image!;
+    });
+    expect(secondImage).toBe(firstImage);
+    secondImage.dispatchEvent(new Event("load"));
+    expect(container.querySelector(".chat-avatar-slot")?.classList.contains("is-fallback")).toBe(
+      false,
+    );
+  });
+
   it("renders the sender's profile avatar route for user messages", () => {
     const avatar = renderAvatar([
       "user",

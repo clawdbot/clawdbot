@@ -63,6 +63,10 @@ import {
   migrateLegacyDeviceIdentity,
 } from "./state-migrations.device-identity.js";
 import {
+  detectLegacyExecApprovals,
+  migrateLegacyExecApprovals,
+} from "./state-migrations.exec-approvals.js";
+import {
   existsDir,
   fileExists,
   readSessionStoreJson5,
@@ -476,6 +480,10 @@ export async function detectLegacyStateMigrations(params: {
     env,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
   });
+  const execApprovals = detectLegacyExecApprovals({
+    stateDir,
+    doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+  });
   const mcpOauth = detectLegacyMcpOAuthStores({
     stateDir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
@@ -678,6 +686,9 @@ export async function detectLegacyStateMigrations(params: {
   if (deviceIdentity.hasInvalidCanonical && !deviceIdentity.hasLegacy) {
     preview.push("- Primary device identity: invalid SQLite row → new device identity");
   }
+  if (execApprovals.hasLegacy) {
+    preview.push("- Exec approvals: legacy JSON → shared SQLite state");
+  }
   if (mcpOauth.hasLegacy) {
     preview.push("- MCP OAuth credentials: legacy JSON → shared SQLite state");
   }
@@ -793,6 +804,7 @@ export async function detectLegacyStateMigrations(params: {
     apns,
     deviceAuth,
     deviceIdentity,
+    execApprovals,
     mcpOauth,
     meetingTranscripts,
     restartSentinel,
@@ -1069,6 +1081,11 @@ export async function runLegacyStateMigrations(params: {
     stateDir: detected.stateDir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
   });
+  const execApprovals = await migrateLegacyExecApprovals({
+    detected: detected.execApprovals,
+    env,
+    stateDir: detected.stateDir,
+  });
   const mcpOauth = await migrateLegacyMcpOAuthStores({
     detected: detected.mcpOauth,
     env,
@@ -1146,6 +1163,7 @@ export async function runLegacyStateMigrations(params: {
     apns,
     deviceAuth,
     deviceIdentity,
+    execApprovals,
     mcpOauth,
     meetingTranscripts,
     restartSentinel,
@@ -1176,6 +1194,7 @@ export async function runLegacyStateMigrations(params: {
       ...apns.changes,
       ...deviceAuth.changes,
       ...deviceIdentity.changes,
+      ...execApprovals.changes,
       ...mcpOauth.changes,
       ...meetingTranscripts.changes,
       ...restartSentinel.changes,
@@ -1213,6 +1232,7 @@ export async function runLegacyStateMigrations(params: {
       ...apns.warnings,
       ...deviceAuth.warnings,
       ...deviceIdentity.warnings,
+      ...execApprovals.warnings,
       ...mcpOauth.warnings,
       ...meetingTranscripts.warnings,
       ...restartSentinel.warnings,

@@ -65,13 +65,13 @@ describe("live QA gateway config", () => {
       .mockResolvedValueOnce({ hash: "next" })
       .mockResolvedValueOnce({
         hash: "next",
-        configRevisionHash: "current",
-        appliedConfigHash: "current",
+        configRevisionHash: "runtime-next",
+        appliedConfigHash: "runtime-current",
       })
       .mockResolvedValueOnce({
         hash: "next",
-        configRevisionHash: "next",
-        appliedConfigHash: "next",
+        configRevisionHash: "runtime-next",
+        appliedConfigHash: "runtime-next",
       });
 
     const patching = patchLiveQaGatewayConfig({

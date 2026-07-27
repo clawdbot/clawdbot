@@ -17,6 +17,7 @@ import { listOpenIncognitoAgentDatabases } from "../../state/openclaw-agent-db.j
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveStorePath } from "./paths.js";
 import { listSessionEntries, listSessionEntriesReadOnly } from "./session-accessor.js";
+import type { SessionEntryListScope } from "./session-accessor.types.js";
 import {
   dedupeSessionStoreTargetsBySqliteTarget,
   listConfiguredSessionStoreAgentIds,
@@ -26,6 +27,8 @@ import {
   resolveSessionStoreTargets,
 } from "./targets.js";
 import type { SessionEntry } from "./types.js";
+
+type GatewaySessionEntryProjection = NonNullable<SessionEntryListScope["projection"]>;
 
 // Template-backed stores need per-agent scans before they can be merged for Gateway views.
 function isStorePathTemplate(store?: string): boolean {
@@ -42,12 +45,14 @@ function resolveCombinedStorePath(paths: string[], storeConfig?: string): string
 
 function loadGatewayStoreEntries(params: {
   agentId: string;
+  projection: GatewaySessionEntryProjection;
   storePath: string;
 }): Record<string, SessionEntry> {
   return Object.fromEntries(
     listSessionEntriesReadOnly({
       agentId: params.agentId,
       clone: false,
+      projection: params.projection,
       storePath: params.storePath,
     }).map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
@@ -55,12 +60,14 @@ function loadGatewayStoreEntries(params: {
 
 function loadIncognitoGatewayStoreEntries(params: {
   agentId: string;
+  projection: GatewaySessionEntryProjection;
   storePath: string;
 }): Record<string, SessionEntry> {
   return Object.fromEntries(
     listSessionEntries({
       agentId: params.agentId,
       clone: false,
+      projection: params.projection,
       storePath: params.storePath,
     }).map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
@@ -112,6 +119,7 @@ function mergeOpenIncognitoStores(params: {
   cfg: OpenClawConfig;
   combined: Record<string, SessionEntry>;
   agentId?: string;
+  projection: GatewaySessionEntryProjection;
 }): string[] {
   const storePaths: string[] = [];
   for (const target of listOpenIncognitoAgentDatabases()) {
@@ -123,6 +131,7 @@ function mergeOpenIncognitoStores(params: {
     }
     const store = loadIncognitoGatewayStoreEntries({
       agentId: target.agentId,
+      projection: params.projection,
       storePath: target.storePath,
     });
     let merged = false;
@@ -149,7 +158,12 @@ function mergeOpenIncognitoStores(params: {
 /** Loads and canonicalizes session entries for gateway views across one or more agent stores. */
 export function loadCombinedSessionStoreForGateway(
   cfg: OpenClawConfig,
-  opts: { agentId?: string; configuredAgentsOnly?: boolean; includeIncognito?: boolean } = {},
+  opts: {
+    agentId?: string;
+    configuredAgentsOnly?: boolean;
+    includeIncognito?: boolean;
+    projection?: SessionEntryListScope["projection"];
+  } = {},
 ): {
   diagnostics?: string[];
   durableStorePath?: string;
@@ -157,6 +171,7 @@ export function loadCombinedSessionStoreForGateway(
   store: Record<string, SessionEntry>;
 } {
   const storeConfig = cfg.session?.store;
+  const projection = opts.projection ?? "full";
   const diagnostics: string[] = [];
   // Exclusion happens before path aggregation; filtering rows afterward would
   // still leak a live incognito handle by changing the projected store path.
@@ -197,7 +212,7 @@ export function loadCombinedSessionStoreForGateway(
       },
     );
     for (const { agentId, storePath } of ownerTargets) {
-      const store = loadGatewayStoreEntries({ agentId, storePath });
+      const store = loadGatewayStoreEntries({ agentId, projection, storePath });
       for (const [key, entry] of Object.entries(store)) {
         const canonicalKey = resolveStoredSessionKeyForAgentStore({
           cfg,
@@ -229,6 +244,7 @@ export function loadCombinedSessionStoreForGateway(
           cfg,
           combined,
           ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
+          projection,
         })
       : [];
     return {
@@ -247,7 +263,7 @@ export function loadCombinedSessionStoreForGateway(
   for (const target of targets) {
     const agentId = target.agentId;
     const storePath = target.storePath;
-    const store = loadGatewayStoreEntries({ agentId, storePath });
+    const store = loadGatewayStoreEntries({ agentId, projection, storePath });
     for (const [key, entry] of Object.entries(store)) {
       const canonicalKey = resolveStoredSessionKeyForAgentStore({
         cfg,
@@ -279,6 +295,7 @@ export function loadCombinedSessionStoreForGateway(
         cfg,
         combined,
         ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
+        projection,
       })
     : [];
 

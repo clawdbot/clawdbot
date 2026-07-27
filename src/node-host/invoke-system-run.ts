@@ -39,6 +39,7 @@ import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   extractEnvAssignmentKeysFromDispatchWrappers,
+  isBlockedShellWrapperCommand,
   isShellWrapperInvocation,
   resolveShellWrapperTransportArgv,
 } from "../infra/exec-wrapper-resolution.js";
@@ -693,11 +694,15 @@ async function evaluateSystemRunPolicyPhase(
       parsed.shellPayload !== null || argvArraysMatch(autoReviewSegment?.argv, parsed.argv);
     const autoReviewArgv =
       segments.length === 1 &&
+      autoReviewSegment !== undefined &&
+      autoReviewSegment.resolution?.policyBlocked !== true &&
+      // Check the reviewed inner command so safe node transport remains usable.
+      !isBlockedShellWrapperCommand(autoReviewSegment.argv) &&
       directAutoReviewArgvMatchesRequest &&
       (parsed.shellPayload === null ||
-        (autoReviewSegment?.raw !== undefined &&
+        (autoReviewSegment.raw !== undefined &&
           autoReviewSegment.raw.trim() === parsed.shellPayload.trim()))
-        ? autoReviewSegment?.argv
+        ? autoReviewSegment.argv
         : undefined;
     const canAutoReviewApprovalMiss =
       !fallbackRequest &&
