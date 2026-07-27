@@ -15,10 +15,14 @@ import { isGatewayArgv } from "../infra/gateway-process-argv.js";
 import { readGatewayProcessArgsSync as readProcessArgsSync } from "../infra/gateway-processes.js";
 import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import {
-  type SessionWriteLockOwner,
   SessionWriteLockStaleError,
   SessionWriteLockTimeoutError,
 } from "./session-write-lock-error.js";
+import {
+  attachSessionWriteLockOwner,
+  getCurrentSessionWriteLockOwner,
+  type SessionWriteLockOwnerIdentity,
+} from "./session-write-lock-owner.js";
 
 type LockFilePayload = {
   pid?: number;
@@ -26,7 +30,7 @@ type LockFilePayload = {
   /** Process start time in clock ticks (from /proc/pid/stat field 22). */
   starttime?: number;
   maxHoldMs?: number;
-  ownerKind?: SessionWriteLockOwner["kind"];
+  ownerKind?: SessionWriteLockOwnerIdentity["kind"];
   ownerRunId?: string;
 };
 
@@ -765,7 +769,7 @@ function describeLockOwnerForError(params: {
 function resolveStructuredLockOwner(params: {
   payload: LockFilePayload | null;
   inspected: LockInspectionDetails;
-}): SessionWriteLockOwner | undefined {
+}): (SessionWriteLockOwnerIdentity & { pidAlive: boolean }) | undefined {
   if (params.payload?.ownerKind !== "agent-reply" || !params.payload.ownerRunId) {
     return undefined;
   }
@@ -920,7 +924,6 @@ export async function acquireSessionWriteLock(params: {
   maxHoldMs?: number;
   allowReentrant?: boolean;
   signal?: AbortSignal;
-  owner?: Pick<SessionWriteLockOwner, "kind" | "runId">;
 }): Promise<{
   release: () => Promise<void>;
 }> {
@@ -938,6 +941,7 @@ export async function acquireSessionWriteLock(params: {
   throwIfAborted();
   registerCleanupHandlers();
   const allowReentrant = params.allowReentrant ?? false;
+  const structuredOwner = getCurrentSessionWriteLockOwner();
   const defaultOptions = resolveSessionWriteLockOptions();
   const timeoutMs = resolvePositiveMs(params.timeoutMs, defaultOptions.timeoutMs, {
     allowInfinity: true,
@@ -970,7 +974,10 @@ export async function acquireSessionWriteLock(params: {
       });
       const owner = describeLockOwnerForError({ payload, inspected });
       const lockOwner = resolveStructuredLockOwner({ payload, inspected });
-      throw new SessionWriteLockTimeoutError({ timeoutMs, owner, lockPath, lockOwner });
+      throw attachSessionWriteLockOwner(
+        new SessionWriteLockTimeoutError({ timeoutMs, owner, lockPath }),
+        lockOwner,
+      );
     }
     try {
       const acquireAttemptTimeoutMs = params.signal
@@ -990,9 +997,9 @@ export async function acquireSessionWriteLock(params: {
           if (starttime !== null) {
             lockPayload.starttime = starttime;
           }
-          if (params.owner) {
-            lockPayload.ownerKind = params.owner.kind;
-            lockPayload.ownerRunId = params.owner.runId;
+          if (structuredOwner) {
+            lockPayload.ownerKind = structuredOwner.kind;
+            lockPayload.ownerRunId = structuredOwner.runId;
           }
           return lockPayload as Record<string, unknown>;
         },
@@ -1094,12 +1101,10 @@ export async function acquireSessionWriteLock(params: {
           staleReasons: inspected.staleReasons,
         });
       }
-      throw new SessionWriteLockTimeoutError({
-        timeoutMs,
-        owner,
-        lockPath: errorLockPath,
+      throw attachSessionWriteLockOwner(
+        new SessionWriteLockTimeoutError({ timeoutMs, owner, lockPath: errorLockPath }),
         lockOwner,
-      });
+      );
     }
   }
 }

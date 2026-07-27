@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../../agents/failover-error.js";
 import { AgentHarnessSessionSupersededError } from "../../agents/harness/errors.js";
 import { SessionWriteLockTimeoutError } from "../../agents/session-write-lock-error.js";
+import { withSessionWriteLockOwner } from "../../agents/session-write-lock-owner.js";
 import {
   acquireSessionWriteLock,
   drainSessionWriteLockStateForTest,

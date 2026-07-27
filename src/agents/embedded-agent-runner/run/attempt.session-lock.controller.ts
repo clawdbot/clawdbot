@@ -6,6 +6,7 @@ import type {
   OwnedSessionTranscriptCacheSnapshot,
 } from "../../../config/sessions/transcript-write-context.js";
 import { isSessionWriteLockAcquireError } from "../../session-write-lock-error.js";
+import { withSessionWriteLockOwner } from "../../session-write-lock-owner.js";
 import type { acquireSessionWriteLock } from "../../session-write-lock.js";
 import type { PromptReleasedSessionEntry } from "./attempt.session-lock.entries.js";
 import {
@@ -79,15 +80,19 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   ) => Promise<PromptReleasedSessionMergeResult | void> | PromptReleasedSessionMergeResult | void;
   reloadPromptReleasedSessionFile?: () => Promise<void> | void;
 }): Promise<EmbeddedAttemptSessionLockController> {
-  const acquireLock = async (signal?: AbortSignal): Promise<SessionLock> =>
-    await params.acquireSessionWriteLock({
-      sessionFile: params.lockOptions.sessionFile,
-      timeoutMs: params.lockOptions.timeoutMs,
-      staleMs: params.lockOptions.staleMs,
-      maxHoldMs: params.lockOptions.maxHoldMs,
-      ...(params.lockOptions.owner ? { owner: params.lockOptions.owner } : {}),
-      ...(signal ? { signal } : {}),
-    });
+  const acquireLock = async (signal?: AbortSignal): Promise<SessionLock> => {
+    const acquire = () =>
+      params.acquireSessionWriteLock({
+        sessionFile: params.lockOptions.sessionFile,
+        timeoutMs: params.lockOptions.timeoutMs,
+        staleMs: params.lockOptions.staleMs,
+        maxHoldMs: params.lockOptions.maxHoldMs,
+        ...(signal ? { signal } : {}),
+      });
+    return params.lockOptions.owner
+      ? await withSessionWriteLockOwner(params.lockOptions.owner, acquire)
+      : await acquire();
+  };
 
   let heldLock: SessionLock | undefined = await acquireLock(params.initialAcquireSignal);
   const activeWriteLock = new AsyncLocalStorage<ActiveWriteLockState>();
