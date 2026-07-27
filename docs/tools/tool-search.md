@@ -166,9 +166,19 @@ const calendarCreate = await openclaw.tools.describe("mcp:calendar:create_event"
 
 Calls a selected tool through OpenClaw and returns the raw `{ tool, result }`
 envelope. JSON-returning tools normally place their value in
-`result.details`. If a trusted tool declares `outputSchema`, OpenClaw compiles
-the schema before execution and validates final `details` after normal tool
-hooks before returning the catalog call.
+`result.details`. OpenClaw validates a trusted core or plugin tool's declared
+input schema before execution. Missing required arguments, incorrect types,
+and forbidden properties return actionable tool errors instead of executing
+the tool; misspelled properties include a suggested parameter when available.
+If a trusted tool also declares `outputSchema`, OpenClaw compiles that schema
+before execution and validates final `details` after normal tool hooks before
+returning the catalog call. MCP and client-owned schemas remain deferred to
+their owning execution boundary.
+
+In structured mode, `tool_call` also repairs flattened target arguments from
+local models. It preserves target fields such as `id` and `name`, and rejects
+ambiguous tool selectors instead of calling the wrong tool. Nest target
+arguments under `args` when a target field matches another cataloged tool.
 
 ```js
 await openclaw.tools.call(calendarCreate.id, {

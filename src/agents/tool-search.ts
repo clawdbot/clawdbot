@@ -8,6 +8,7 @@ import {
   addClientToolsToToolCatalog,
   applyToolCatalogCompaction,
   reusableCatalogSnapshots,
+  resolveCatalog,
   sessionCatalogs,
 } from "./tool-search-catalog.js";
 import {
@@ -132,7 +133,7 @@ export function addClientToolsToToolSearchCatalog(params: {
 /** Create Tool Search control tools for the current run/session context. */
 export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[] {
   const config = resolveToolSearchConfig(ctx.runtimeConfig ?? ctx.config);
-  const runtime = new ToolSearchRuntime(ctx, config);
+  const runtime = new ToolSearchRuntime(ctx, config, { validateInput: true });
   return [
     {
       name: TOOL_SEARCH_CODE_MODE_TOOL_NAME,
@@ -207,7 +208,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
         signal?: AbortSignal,
         onUpdate?: AgentToolUpdateCallback,
       ): Promise<AgentToolResult<unknown>> => {
-        const call = readToolSearchCallArgs(args);
+        const call = readToolSearchCallArgs(args, resolveCatalog(ctx));
         return jsonResult(
           await runtime.call(call.id, call.input, {
             parentToolCallId: toolCallId,
