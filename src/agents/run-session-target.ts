@@ -40,15 +40,24 @@ export async function resolveAgentRunSessionTarget(params: {
   const sessionId = normalizeOptionalString(sessionTarget?.sessionId) ?? params.sessionId;
   const sessionKey = normalizeOptionalString(sessionTarget?.sessionKey) ?? params.sessionKey;
   const effectiveAgentId = agentId ?? resolveAgentIdFromSessionKey(sessionKey);
+  const fallbackAgentId = normalizeOptionalString(fallbackSessionTarget?.agentId);
+  const fallbackStorePath = normalizeOptionalString(fallbackSessionTarget?.storePath);
+  const fallbackThreadId = fallbackSessionTarget?.threadId;
+  const canInheritFallbackTarget = Boolean(
+    fallbackAgentId &&
+    effectiveAgentId &&
+    fallbackAgentId.toLowerCase() === effectiveAgentId.toLowerCase(),
+  );
   if (sessionTarget && !sessionKey) {
     throw new Error(`Cannot resolve run session target without a session key: ${sessionId}`);
   }
   if (sessionTarget && sessionKey) {
     const storePath =
       normalizeOptionalString(sessionTarget.storePath) ??
-      normalizeOptionalString(fallbackSessionTarget?.storePath) ??
+      (canInheritFallbackTarget ? fallbackStorePath : undefined) ??
       resolveStorePath(params.config?.session?.store, { agentId: effectiveAgentId });
-    const threadId = sessionTarget.threadId ?? fallbackSessionTarget?.threadId;
+    const threadId =
+      sessionTarget.threadId ?? (canInheritFallbackTarget ? fallbackThreadId : undefined);
     const resolved = await resolveSessionTranscriptRuntimeTarget({
       ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),
       sessionId,
@@ -74,10 +83,13 @@ export async function resolveAgentRunSessionTarget(params: {
       sessionKey: sessionKey ?? "",
       storePath:
         sqliteMarker?.storePath ??
-        normalizeOptionalString(fallbackSessionTarget?.storePath) ??
+        (fallbackAgentId?.toLowerCase() === targetAgentId.toLowerCase()
+          ? fallbackStorePath
+          : undefined) ??
         resolveStorePath(params.config?.session?.store, { agentId: targetAgentId }),
-      ...(fallbackSessionTarget?.threadId !== undefined
-        ? { threadId: fallbackSessionTarget.threadId }
+      ...(fallbackAgentId?.toLowerCase() === targetAgentId.toLowerCase() &&
+      fallbackThreadId !== undefined
+        ? { threadId: fallbackThreadId }
         : {}),
     };
   }
@@ -85,7 +97,7 @@ export async function resolveAgentRunSessionTarget(params: {
     throw new Error(`Cannot resolve run session target without a session key: ${sessionId}`);
   }
   const storePath =
-    normalizeOptionalString(fallbackSessionTarget?.storePath) ??
+    (canInheritFallbackTarget ? fallbackStorePath : undefined) ??
     resolveStorePath(params.config?.session?.store, { agentId: effectiveAgentId });
   const resolved = await resolveSessionTranscriptRuntimeTarget({
     ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),
@@ -96,8 +108,8 @@ export async function resolveAgentRunSessionTarget(params: {
   return {
     ...resolved,
     storePath,
-    ...(fallbackSessionTarget?.threadId !== undefined
-      ? { threadId: fallbackSessionTarget.threadId }
+    ...(canInheritFallbackTarget && fallbackThreadId !== undefined
+      ? { threadId: fallbackThreadId }
       : {}),
   };
 }
