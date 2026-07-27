@@ -8,7 +8,11 @@ import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
 
-const deliveryState = vi.hoisted(() => ({ routeReply: vi.fn(), runtimeError: vi.fn() }));
+const deliveryState = vi.hoisted(() => ({
+  followupRoute: undefined as { route: "dispatcher" | "origin" | "drop" } | undefined,
+  routeReply: vi.fn(),
+  runtimeError: vi.fn(),
+}));
 
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: () => undefined,
@@ -18,7 +22,7 @@ vi.mock("../../channels/plugins/index.js", () => ({
 vi.mock("../../agents/runtime-plan/build.js", () => ({
   buildAgentRuntimeDeliveryPlan: () => ({
     isSilentPayload: () => false,
-    resolveFollowupRoute: () => undefined,
+    resolveFollowupRoute: () => deliveryState.followupRoute,
   }),
 }));
 
@@ -666,6 +670,27 @@ describe("deliverFollowupDecision", () => {
       cleanup: vi.fn(),
     },
     opts: { onBlockReply },
+  });
+
+  it("keeps dispatcher-only delivery out of a routable origin", async () => {
+    const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
+    deliveryState.followupRoute = { route: "dispatcher" };
+    deliveryState.routeReply.mockReset();
+
+    try {
+      await deliverFollowupDecision({
+        decision: { kind: "deliver", payloads: [{ text: "dispatcher only" }] },
+        turn: createTurn(),
+        defaults: createDefaults(onBlockReply),
+        runId: "run-1",
+        runFollowup: vi.fn(async () => {}),
+      });
+
+      expect(onBlockReply).toHaveBeenCalledOnce();
+      expect(deliveryState.routeReply).not.toHaveBeenCalled();
+    } finally {
+      deliveryState.followupRoute = undefined;
+    }
   });
 
   it("never forwards cross-channel reply content to the live dispatcher on route failure", async () => {
