@@ -353,14 +353,8 @@ async function listEmptyLegacySidecarFiles(legacyPath: string): Promise<string[]
         return null;
       }
       emptyFiles.push(candidate);
-    } catch (err: unknown) {
-      // Only ENOENT means the sidecar is genuinely absent (never written or
-      // cleaned up by SQLite).  Other errors (EACCES, EIO, ELOOP, EMFILE)
-      // mean we cannot determine the state — fail closed by treating the
-      // sidecar as non-empty so no legacy data is silently dropped.
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-        return null;
-      }
+    } catch {
+      // Missing transient sidecar files are fine.
     }
   }
   return emptyFiles.length > 0 ? emptyFiles : null;

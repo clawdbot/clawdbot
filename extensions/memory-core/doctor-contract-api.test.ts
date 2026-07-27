@@ -1437,6 +1437,41 @@ describe("memory-core doctor dreaming migration", () => {
     await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
   });
 
+  it("removes an empty legacy memory sidecar placeholder without warning", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.writeFile(legacyPath, "");
+
+    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      `Removed empty Memory Core legacy memory index sidecar placeholder: ${legacyPath}`,
+    ]);
+    await expect(fs.access(legacyPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("keeps the schema warning for a non-empty sidecar that is not a legacy index", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    const db = new DatabaseSync(legacyPath);
+    try {
+      db.exec("CREATE TABLE unrelated (value TEXT)");
+    } finally {
+      db.close();
+    }
+
+    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      "Skipped Memory Core legacy memory index import for agent main because the sidecar schema is not a legacy memory index",
+    ]);
+    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
+  });
+
   it("creates migrated FTS tables with the configured legacy tokenizer", async () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
