@@ -192,10 +192,7 @@ export function createFindToolDefinition(
 
         void (async () => {
           try {
-            // Reject finite non-integer limits (e.g. 5.5) that bypass schema
-            // validation via direct execute calls. Non-finite values keep the
-            // established fallback-to-default behavior.
-            if (limit !== undefined && Number.isFinite(limit) && !Number.isInteger(limit)) {
+            if (Number.isFinite(limit) && !Number.isInteger(limit)) {
               settle(() => reject(new Error("Limit must be an integer")));
               return;
             }
