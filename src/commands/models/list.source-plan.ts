@@ -138,6 +138,11 @@ export async function planAllModelListSources(params: {
   if (hasProviderRuntimeCatalog) {
     return createSourcePlan({
       kind: "provider-runtime-scoped",
+      manifestCatalogRows: loadSupplementalManifestCatalogRowsForList({
+        cfg: params.cfg,
+        providerFilter: params.providerFilter,
+        metadataSnapshot: params.metadataSnapshot,
+      }),
       fallbackToRegistryWhenEmpty: true,
     });
   }
