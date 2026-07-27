@@ -13,29 +13,21 @@ import { SettingsManager } from "./sessions/settings-manager.js";
 describe("applyAgentCompactionSettingsFromConfig", () => {
   it.each([false, true])(
     "applies and reapplies compaction.enabled=%s after a settings reload",
-    (configuredEnabled) => {
-      let enabled = !configuredEnabled;
-      const settingsManager = {
-        getCompactionEnabled: () => enabled,
-        getCompactionReserveTokens: () => 20_000,
-        getCompactionKeepRecentTokens: () => 20_000,
-        setCompactionEnabled: vi.fn((value: boolean) => {
-          enabled = value;
-        }),
-        applyOverrides: vi.fn(),
-      };
+    async (configuredEnabled) => {
+      const settingsManager = SettingsManager.inMemory({
+        compaction: { enabled: !configuredEnabled, reserveTokens: 20_000 },
+      });
       const cfg = {
         agents: { defaults: { compaction: { enabled: configuredEnabled } } },
       };
 
       const first = applyAgentCompactionSettingsFromConfig({ settingsManager, cfg });
-      enabled = !configuredEnabled;
+      await settingsManager.reload();
       const afterReload = applyAgentCompactionSettingsFromConfig({ settingsManager, cfg });
 
       expect(first.didOverride).toBe(true);
       expect(afterReload.didOverride).toBe(true);
-      expect(enabled).toBe(configuredEnabled);
-      expect(settingsManager.setCompactionEnabled).toHaveBeenCalledTimes(2);
+      expect(settingsManager.getCompactionEnabled()).toBe(configuredEnabled);
     },
   );
 

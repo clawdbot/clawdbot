@@ -9,11 +9,11 @@ import { resolveProviderEndpoint } from "./provider-attribution.js";
 export const DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR = 20_000;
 
 type AgentSettingsManagerLike = {
-  getCompactionEnabled?: () => boolean;
   getCompactionReserveTokens: () => number;
   getCompactionKeepRecentTokens: () => number;
   applyOverrides: (overrides: {
     compaction: {
+      enabled?: boolean;
       reserveTokens?: number;
       keepRecentTokens?: number;
     };
@@ -72,7 +72,14 @@ export function applyAgentCompactionSettingsFromConfig(params: {
   }
   const targetKeepRecentTokens = configuredKeepRecentTokens ?? currentKeepRecentTokens;
 
-  const overrides: { reserveTokens?: number; keepRecentTokens?: number } = {};
+  const overrides: {
+    enabled?: boolean;
+    reserveTokens?: number;
+    keepRecentTokens?: number;
+  } = {};
+  if (configuredEnabled !== undefined) {
+    overrides.enabled = configuredEnabled;
+  }
   if (targetReserveTokens !== currentReserveTokens) {
     overrides.reserveTokens = targetReserveTokens;
   }
@@ -80,18 +87,10 @@ export function applyAgentCompactionSettingsFromConfig(params: {
     overrides.keepRecentTokens = targetKeepRecentTokens;
   }
 
-  const shouldApplyEnabled =
-    configuredEnabled !== undefined &&
-    typeof params.settingsManager.setCompactionEnabled === "function" &&
-    (typeof params.settingsManager.getCompactionEnabled !== "function" ||
-      params.settingsManager.getCompactionEnabled() !== configuredEnabled);
-  if (shouldApplyEnabled) {
-    params.settingsManager.setCompactionEnabled!(configuredEnabled);
-  }
-  if (Object.keys(overrides).length > 0) {
+  const didOverride = Object.keys(overrides).length > 0;
+  if (didOverride) {
     params.settingsManager.applyOverrides({ compaction: overrides });
   }
-  const didOverride = shouldApplyEnabled || Object.keys(overrides).length > 0;
 
   return {
     didOverride,
