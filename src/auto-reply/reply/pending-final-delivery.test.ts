@@ -58,14 +58,15 @@ describe("sanitizePendingFinalDeliveryText", () => {
     expect(sanitizePendingFinalDeliveryText(text)).toBe(expected);
   });
 
-  it.each(["!", "?", ",", ";", ":"])(
-    "strips a sentence-attached recovery token while preserving %j",
-    (punctuation) => {
-      expect(sanitizePendingFinalDeliveryText(`Done as requested${punctuation}NO_REPLY`)).toBe(
-        `Done as requested${punctuation}`,
-      );
-    },
-  );
+  it.each([
+    "Done as requested!NO_REPLY",
+    "question?NO_REPLY",
+    "note,NO_REPLY",
+    "item;NO_REPLY",
+    "label:NO_REPLY",
+  ])("preserves punctuation-attached silent-token literals in recovery: %j", (text) => {
+    expect(sanitizePendingFinalDeliveryText(text)).toBe(text);
+  });
 
   it("strips repeated trailing silent tokens from recovery text", () => {
     expect(sanitizePendingFinalDeliveryText("Done. NO_REPLY NO_REPLY")).toBe("Done.");

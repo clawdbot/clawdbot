@@ -37,10 +37,9 @@ function getSilentTrailingRegex(token: string): RegExp {
     return cached;
   }
   const escaped = escapeRegExp(token);
-  // A full stop can also be part of a substantive dotted identifier, so it
-  // cannot safely delimit an unannotated sentinel. Preserve other sentence
-  // punctuation and consume repeated, whitespace-delimited sentinel tokens.
-  const regex = new RegExp(`(?:^|\\s+|\\*+|(?<=[!?,;:]))${escaped}(?:\\s+${escaped})*\\s*$`, "i");
+  // Keep main's whitespace/Markdown boundaries: punctuation-attached tokens
+  // can be visible text. Consume repeated tokens only after a real delimiter.
+  const regex = new RegExp(`(?:^|\\s+|\\*+)${escaped}(?:\\s+${escaped})*\\s*$`, "i");
   silentTrailingRegexByToken.set(token, regex);
   return regex;
 }

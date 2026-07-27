@@ -229,15 +229,15 @@ describe("normalizeReplyPayload", () => {
     expect(expectNormalizedReply(normalizeReplyPayload({ text })).text).toBe(expected);
   });
 
-  it.each(["!", "?", ",", ";", ":"])(
-    "strips a sentence-attached trailing silent token while preserving %j",
-    (punctuation) => {
-      const text = `Done as requested${punctuation}NO_REPLY`;
-      expect(expectNormalizedReply(normalizeReplyPayload({ text })).text).toBe(
-        `Done as requested${punctuation}`,
-      );
-    },
-  );
+  it.each([
+    "Done as requested!NO_REPLY",
+    "question?NO_REPLY",
+    "note,NO_REPLY",
+    "item;NO_REPLY",
+    "label:NO_REPLY",
+  ])("preserves punctuation-attached silent-token literals in delivery: %j", (text) => {
+    expect(expectNormalizedReply(normalizeReplyPayload({ text })).text).toBe(text);
+  });
 
   it("strips repeated trailing silent tokens from visible replies", () => {
     expect(

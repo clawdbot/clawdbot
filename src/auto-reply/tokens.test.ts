@@ -215,14 +215,15 @@ describe("stripSilentToken", () => {
     expect(stripSilentToken("😄 NO_REPLY")).toBe("😄");
   });
 
-  it.each(["!", "?", ",", ";", ":"])(
-    "strips a trailing silent token without consuming sentence punctuation %j",
-    (punctuation) => {
-      expect(stripSilentToken(`Done as requested${punctuation}NO_REPLY`)).toBe(
-        `Done as requested${punctuation}`,
-      );
-    },
-  );
+  it.each([
+    "Done as requested!NO_REPLY",
+    "question?NO_REPLY",
+    "note,NO_REPLY",
+    "item;NO_REPLY",
+    "label:NO_REPLY",
+  ])("preserves punctuation-attached silent-token literals: %j", (text) => {
+    expect(stripSilentToken(text)).toBe(text);
+  });
 
   it("does not strip embedded token suffix without whitespace delimiter", () => {
     expect(stripSilentToken("interject.NO_REPLY")).toBe("interject.NO_REPLY");
