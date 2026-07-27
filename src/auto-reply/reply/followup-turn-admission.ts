@@ -324,11 +324,9 @@ export async function admitFollowupTurn(params: {
           : admissionEntry
         : (reloadedEntry ?? admissionEntry);
     let activeEntry =
-      (admittedEntry === undefined || reloadedEntry ? freshestMatchingEntry : undefined) ??
-      (admittedEntry === undefined && freshestMatchingEntry === undefined
-        ? initialEntry?.sessionId === operation.sessionId
-          ? initialEntry
-          : undefined
+      freshestMatchingEntry ??
+      (admittedEntry === undefined && initialEntry?.sessionId === operation.sessionId
+        ? initialEntry
         : undefined);
     const lifecycleRevisionChanged =
       operation.sessionId === params.queued.run.sessionId &&

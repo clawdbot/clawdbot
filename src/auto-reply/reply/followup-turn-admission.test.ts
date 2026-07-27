@@ -193,6 +193,34 @@ describe("admitFollowupTurn", () => {
     );
   });
 
+  it("prefers the admitted snapshot over unchanged stale in-memory state", async () => {
+    const operation = createOperation("admitted-session");
+    const queuedEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
+    const admittedEntry: SessionEntry = {
+      sessionId: "admitted-session",
+      modelSelectionLocked: true,
+      updatedAt: 2,
+    };
+    const sessionStore = { main: queuedEntry };
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: admittedEntry });
+    state.preflight.mockImplementation(async ({ sessionEntry }) => sessionEntry);
+
+    const result = await admitFollowupTurn({
+      queued: createRun(),
+      defaults: createDefaults({ sessionEntry: queuedEntry, sessionStore }),
+    });
+
+    expect(result).toMatchObject({
+      kind: "admitted",
+      turn: {
+        queued: { run: { sessionId: "admitted-session", modelSelectionLocked: true } },
+      },
+    });
+    if (result.kind === "admitted") {
+      expect(result.turn.session.current()).toBe(admittedEntry);
+    }
+  });
+
   it("clears queued generation facts when only the lifecycle revision advances", async () => {
     const operation = createOperation();
     const queuedEntry: SessionEntry = {
