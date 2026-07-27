@@ -293,7 +293,10 @@ export async function executeFollowupTurn(params: {
             messageThreadId:
               sessionCtx.MessageThreadId != null ? String(sessionCtx.MessageThreadId) : undefined,
             followupRun: turn.queued,
-            onActiveSessionEntry: (entry) => session.adopt(entry),
+            onActiveSessionEntry: (entry) => {
+              session.adopt(entry);
+              turn.operation.updateSessionId(entry.sessionId);
+            },
             onNewSession: () => undefined,
           });
         },
