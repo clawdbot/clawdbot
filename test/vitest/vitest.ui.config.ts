@@ -8,9 +8,8 @@ export function createUiVitestConfig(
   options?: { includePatterns?: string[]; name?: string },
 ) {
   const includePatterns = options?.includePatterns ?? ["ui/src/**/*.test.ts"];
-  const exclude = options?.includePatterns
-    ? []
-    : ["ui/src/**/*.e2e.test.ts", ...uiIsolatedTestFiles];
+  // Isolated files must never enter the shared module graph, including scoped runs.
+  const exclude = ["ui/src/**/*.e2e.test.ts", ...uiIsolatedTestFiles];
   return createScopedVitestConfig(includePatterns, {
     deps: jsdomOptimizedDeps,
     environment: "jsdom",

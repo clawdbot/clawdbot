@@ -4411,13 +4411,11 @@ export function buildVitestRunPlans(
     groupedTargets.set("toolingIsolated", current);
   }
   const uiTargets = groupedTargets.get("ui") ?? [];
-  const impliedUiIsolatedTargets = !watchMode
-    ? uiIsolatedTestFiles.filter((file) =>
-        uiTargets.some((targetArg) =>
-          includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [file]),
-        ),
-      )
-    : [];
+  const impliedUiIsolatedTargets = uiIsolatedTestFiles.filter((file) =>
+    uiTargets.some((targetArg) =>
+      includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [file]),
+    ),
+  );
   if (impliedUiIsolatedTargets.length > 0) {
     const current = groupedTargets.get("uiIsolated") ?? [];
     for (const target of impliedUiIsolatedTargets) {

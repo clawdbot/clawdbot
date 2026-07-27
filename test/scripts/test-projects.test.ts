@@ -3656,6 +3656,12 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(plans[1]?.includePatterns).toContain("ui/src/pages/workboard/view.test.ts");
   });
 
+  it("rejects broad ui watch targets that cross shared and isolated projects", () => {
+    expect(() => buildVitestRunPlans(["--watch", "ui/src"])).toThrow(
+      "watch mode with mixed test suites is not supported",
+    );
+  });
+
   it("keeps explicit non-renderer ui test targets scoped", () => {
     expect(
       buildVitestRunPlans([
