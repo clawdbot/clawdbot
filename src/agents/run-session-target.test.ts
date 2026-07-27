@@ -32,6 +32,7 @@ describe("agent run session target", () => {
       agentId: "helper",
       sessionId: "test-run",
       sessionKey,
+      storePath,
     });
     expect(parseSqliteSessionFileMarker(target.sessionFile)).toEqual({
       agentId: "helper",
@@ -76,6 +77,7 @@ describe("agent run session target", () => {
         sessionId: "runtime-session",
         sessionKey: "agent:worker:runtime-session",
         storePath,
+        threadId: "thread-1",
       },
     });
 
@@ -83,6 +85,8 @@ describe("agent run session target", () => {
       agentId: "worker",
       sessionId: "runtime-session",
       sessionKey: "agent:worker:runtime-session",
+      storePath,
+      threadId: "thread-1",
     });
     expect(target.sessionFile).not.toBe(legacySessionFile);
     expect(parseSqliteSessionFileMarker(target.sessionFile)).toEqual({

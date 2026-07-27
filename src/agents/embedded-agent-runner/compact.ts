@@ -135,6 +135,7 @@ export async function compactEmbeddedAgentSessionDirect(
     sessionId: runSessionTarget.sessionId,
     sessionKey: paramsBase.sessionKey ?? runSessionTarget.sessionKey,
     sessionFile: runSessionTarget.sessionFile,
+    sessionTarget: runSessionTarget,
   };
   const requestedAgentIds = resolveSessionAgentIds({
     sessionKey: requestedParams.sessionKey,

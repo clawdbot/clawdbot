@@ -14,7 +14,6 @@ import { log } from "../logger.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import { createCompactionDiagId } from "./helpers.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
-import { buildContextEngineCompactionSessionTarget } from "./session-bootstrap.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 const MAX_TIMEOUT_COMPACTION_ATTEMPTS = 2;
@@ -170,14 +169,7 @@ export async function recoverEmbeddedRunTimeout(input: {
         sessionId: activeSession.id,
         sessionKey: input.resolvedSessionKey,
         agentId: input.sessionAgentId,
-        sessionTarget: buildContextEngineCompactionSessionTarget({
-          agentId: input.sessionAgentId,
-          config: runParams.config,
-          sessionFile: activeSession.file,
-          sessionId: activeSession.id,
-          sessionKey: input.resolvedSessionKey,
-          sessionTarget: activeSession.target,
-        }),
+        sessionTarget: activeSession.target,
         tokenBudget: input.contextTokenBudget,
         force: true,
         compactionTarget: "budget",

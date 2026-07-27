@@ -4,7 +4,6 @@ import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveAgentRunSessionTarget } from "../../run-session-target.js";
 import { log } from "../logger.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
-import { buildContextEngineCompactionSessionTarget } from "./session-bootstrap.js";
 
 const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
   "Continue from the current transcript after the latest tool result. Do not repeat the original user request, and do not rerun completed tools unless the transcript shows they are still needed.";
@@ -24,15 +23,7 @@ export function createEmbeddedRunSessionPromptState(input: {
   const { runParams: params, sessionAgentId, resolvedSessionKey, lifecycleGeneration } = input;
   let activeSessionId = params.sessionId;
   let activeSessionFile = params.sessionFile;
-  let activeSessionTarget: ContextEngineSessionTarget | undefined =
-    buildContextEngineCompactionSessionTarget({
-      agentId: params.agentId ?? sessionAgentId,
-      config: params.config,
-      sessionFile: activeSessionFile,
-      sessionId: activeSessionId,
-      sessionKey: resolvedSessionKey,
-      sessionTarget: params.sessionTarget,
-    });
+  let activeSessionTarget: ContextEngineSessionTarget | undefined = params.sessionTarget;
   let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
   let activePrompt: ActivePrompt = {
     persisted: suppressNextUserMessagePersistence,
@@ -64,7 +55,7 @@ export function createEmbeddedRunSessionPromptState(input: {
       sessionKey: nextSessionTarget.sessionKey ?? resolvedSessionKey,
       sessionTarget: nextSessionTarget,
     });
-    activeSessionTarget = nextSessionTarget;
+    activeSessionTarget = resolvedTarget;
     activeSessionFile = resolvedTarget.sessionFile;
     adoptSessionId(resolvedTarget.sessionId);
   };

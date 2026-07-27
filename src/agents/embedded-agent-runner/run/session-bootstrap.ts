@@ -2,8 +2,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { resolveStorePath } from "../../../config/sessions.js";
 import { loadSessionEntry, updateSessionEntry } from "../../../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../../../config/sessions/sqlite-marker.js";
-import type { ContextEngineSessionTarget } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import {
@@ -16,32 +14,6 @@ import type { RunEmbeddedAgentParams } from "./params.js";
 import { resolveAgentHarnessRunAdmissionError } from "./setup.js";
 
 const NO_REAL_CONVERSATION_MESSAGES_REASON = "no real conversation messages";
-
-export function buildContextEngineCompactionSessionTarget(params: {
-  agentId: string;
-  config?: RunEmbeddedAgentParams["config"];
-  sessionFile: string;
-  sessionId: string;
-  sessionKey?: string;
-  sessionTarget?: RunEmbeddedAgentParams["sessionTarget"];
-}): ContextEngineSessionTarget {
-  const sqliteMarker = parseSqliteSessionFileMarker(params.sessionFile);
-  const agentId = params.sessionTarget?.agentId ?? sqliteMarker?.agentId ?? params.agentId;
-  const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey ?? params.sessionId;
-  const storePath =
-    params.sessionTarget?.storePath ??
-    sqliteMarker?.storePath ??
-    resolveStorePath(params.config?.session?.store, { agentId });
-  return {
-    agentId,
-    sessionId: params.sessionTarget?.sessionId ?? sqliteMarker?.sessionId ?? params.sessionId,
-    ...(sessionKey ? { sessionKey } : {}),
-    ...(storePath ? { storePath } : {}),
-    ...(params.sessionTarget?.threadId !== undefined
-      ? { threadId: params.sessionTarget.threadId }
-      : {}),
-  };
-}
 
 export function isNoRealConversationCompactionNoop(params: {
   ok?: boolean;

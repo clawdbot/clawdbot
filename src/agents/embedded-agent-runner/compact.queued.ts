@@ -14,7 +14,6 @@ import {
   type ContextEngine,
   type ContextEngineRuntimeContext,
   type ContextEngineRuntimeSettings,
-  type ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
 import type { CapturedCompactionCheckpointSnapshot } from "../../gateway/session-compaction-checkpoints.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -125,24 +124,6 @@ function shouldDeferOwningContextEngineBudgetCompaction(params: {
   );
 }
 
-function buildContextEngineCompactionSessionTarget(
-  params: CompactEmbeddedAgentSessionParams,
-): ContextEngineSessionTarget {
-  const sqliteMarker = parseSqliteSessionFileMarker(params.sessionFile);
-  const agentId = params.sessionTarget?.agentId ?? params.agentId ?? sqliteMarker?.agentId;
-  const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey ?? params.sessionId;
-  const storePath = params.sessionTarget?.storePath ?? sqliteMarker?.storePath;
-  return {
-    ...(agentId ? { agentId } : {}),
-    sessionId: params.sessionTarget?.sessionId ?? sqliteMarker?.sessionId ?? params.sessionId,
-    ...(sessionKey ? { sessionKey } : {}),
-    ...(storePath ? { storePath } : {}),
-    ...(params.sessionTarget?.threadId !== undefined
-      ? { threadId: params.sessionTarget.threadId }
-      : {}),
-  };
-}
-
 async function disposeContextEngine(contextEngine: ContextEngine): Promise<void> {
   try {
     await contextEngine.dispose?.();
@@ -166,7 +147,7 @@ async function deferOwningContextEngineBudgetCompaction(params: {
       contextEngine: params.contextEngine,
       sessionId: params.compactParams.sessionId,
       sessionKey: params.compactParams.sessionKey,
-      sessionTarget: buildContextEngineCompactionSessionTarget(params.compactParams),
+      sessionTarget: params.compactParams.sessionTarget,
       sessionFile: params.compactParams.sessionFile,
       reason: "turn",
       runtimeContext: params.contextEngineRuntimeContext,
@@ -597,13 +578,13 @@ async function compactResolvedContextEngine(
         // of throwing a raw rejection at callers that only inspect result.ok.
         let result: Awaited<ReturnType<typeof contextEngine.compact>>;
         try {
-          const compactionSessionTarget = buildContextEngineCompactionSessionTarget(params);
+          const compactionSessionTarget = params.sessionTarget;
           result = await compactContextEngineWithSafetyTimeout(
             contextEngine,
             {
               sessionId: params.sessionId,
               sessionKey: hookSessionKey,
-              ...(compactionSessionTarget.agentId
+              ...(compactionSessionTarget?.agentId
                 ? { agentId: compactionSessionTarget.agentId }
                 : {}),
               sessionTarget: compactionSessionTarget,
@@ -652,16 +633,37 @@ async function compactResolvedContextEngine(
         // Shipped pre-sessionTarget engines report rotation via the deprecated
         // sessionFile field; honor it when no typed target is present.
         let postCompactionSessionFile = delegatedSessionFile ?? params.sessionFile;
+        let postCompactionSessionTarget = params.sessionTarget;
         if (delegatedSessionTarget) {
           const resolvedDelegatedTarget = await resolveAgentRunSessionTarget({
-            agentId: delegatedSessionTarget.agentId ?? sessionAgentId,
+            agentId:
+              delegatedSessionTarget.agentId ??
+              postCompactionSessionTarget?.agentId ??
+              sessionAgentId,
             config: params.config,
+            fallbackSessionTarget: postCompactionSessionTarget,
             sessionId: delegatedSessionTarget.sessionId ?? postCompactionSessionId,
-            sessionKey: delegatedSessionTarget.sessionKey ?? params.sessionKey,
+            sessionKey:
+              delegatedSessionTarget.sessionKey ??
+              postCompactionSessionTarget?.sessionKey ??
+              params.sessionKey,
             sessionTarget: delegatedSessionTarget,
           });
           postCompactionSessionId = resolvedDelegatedTarget.sessionId;
           postCompactionSessionFile = resolvedDelegatedTarget.sessionFile;
+          postCompactionSessionTarget = resolvedDelegatedTarget;
+        } else if (delegatedSessionId || delegatedSessionFile) {
+          const resolvedDelegatedTarget = await resolveAgentRunSessionTarget({
+            agentId: postCompactionSessionTarget?.agentId ?? sessionAgentId,
+            config: params.config,
+            fallbackSessionTarget: postCompactionSessionTarget,
+            sessionFile: delegatedSessionFile,
+            sessionId: postCompactionSessionId,
+            sessionKey: postCompactionSessionTarget?.sessionKey ?? params.sessionKey,
+          });
+          postCompactionSessionId = resolvedDelegatedTarget.sessionId;
+          postCompactionSessionFile = resolvedDelegatedTarget.sessionFile;
+          postCompactionSessionTarget = resolvedDelegatedTarget;
         }
         let postCompactionLeafId: string | undefined;
         if (result.ok && result.compacted) {
@@ -677,6 +679,17 @@ async function compactResolvedContextEngine(
               if (rotation.rotated) {
                 postCompactionSessionId = rotation.sessionId ?? postCompactionSessionId;
                 postCompactionSessionFile = rotation.sessionFile ?? postCompactionSessionFile;
+                const resolvedRotationTarget = await resolveAgentRunSessionTarget({
+                  agentId: postCompactionSessionTarget?.agentId ?? sessionAgentId,
+                  config: params.config,
+                  fallbackSessionTarget: postCompactionSessionTarget,
+                  sessionFile: rotation.sessionFile,
+                  sessionId: postCompactionSessionId,
+                  sessionKey: postCompactionSessionTarget?.sessionKey ?? params.sessionKey,
+                });
+                postCompactionSessionId = resolvedRotationTarget.sessionId;
+                postCompactionSessionFile = resolvedRotationTarget.sessionFile;
+                postCompactionSessionTarget = resolvedRotationTarget;
                 postCompactionLeafId = rotation.leafId;
                 log.info(
                   `[compaction] rotated active transcript after context-engine compaction ` +
@@ -706,12 +719,7 @@ async function compactResolvedContextEngine(
             contextEngine,
             sessionId: postCompactionSessionId,
             sessionKey: params.sessionKey,
-            sessionTarget: buildContextEngineCompactionSessionTarget({
-              ...params,
-              sessionFile: postCompactionSessionFile,
-              sessionId: postCompactionSessionId,
-              sessionTarget: delegatedSessionTarget ?? params.sessionTarget,
-            }),
+            sessionTarget: postCompactionSessionTarget,
             sessionFile: postCompactionSessionFile,
             reason: "compaction",
             runtimeContext,
@@ -863,7 +871,7 @@ function buildCompactionContextEngineRuntimeContext(params: {
   const { sessionFile: _sessionFile, ...runtimeParams } = params.params;
   return {
     ...runtimeParams,
-    sessionTarget: buildContextEngineCompactionSessionTarget(params.params),
+    sessionTarget: params.params.sessionTarget,
     ...buildEmbeddedCompactionRuntimeContext({
       ...params.params,
       agentDir: params.agentDir,
