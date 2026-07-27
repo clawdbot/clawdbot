@@ -1,10 +1,12 @@
 import {
+  isSessionTranscriptProjectionUnavailableError,
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptMessageEventById,
   readSessionTranscriptMessageEventCount,
   readSessionTranscriptMessageEventPage,
   readSessionTranscriptMessageEvents,
   resolveSessionTranscriptReadTarget,
+  waitForSessionTranscriptProjection,
   type SessionTranscriptMessageEvent,
   type SessionTranscriptReadScope,
   type TranscriptEvent,
@@ -459,7 +461,18 @@ export async function readSessionMessageCountAsync(
 ): Promise<number> {
   const target = resolveTranscriptReadTarget(scope);
   if (isSqliteReadTarget(target)) {
-    return readSessionTranscriptMessageEventCount(toTranscriptReadScope(target));
+    const transcriptScope = toTranscriptReadScope(target);
+    try {
+      return readSessionTranscriptMessageEventCount(transcriptScope);
+    } catch (error) {
+      if (!isSessionTranscriptProjectionUnavailableError(error)) {
+        throw error;
+      }
+      // The failed read already scheduled the rebuild; wait before assigning
+      // a sequence so a concurrent send cannot fail or reuse a stale count.
+      await waitForSessionTranscriptProjection(transcriptScope);
+      return readSessionTranscriptMessageEventCount(transcriptScope);
+    }
   }
   return await readSessionMessageCountAsyncFile(
     target.sessionId,

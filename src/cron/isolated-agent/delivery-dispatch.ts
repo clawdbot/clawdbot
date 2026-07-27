@@ -1,10 +1,7 @@
 /** Dispatches isolated cron output to direct delivery, mirrors, and follow-up queues. */
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import { resolveStorePath } from "../../config/sessions/inbound.runtime.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { TtsAutoMode } from "../../config/types.tts.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   NormalizedOutboundPayload,
@@ -14,12 +11,10 @@ import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForMirror,
 } from "../../infra/outbound/payloads.js";
-import type { SourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { isCronSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import type { CronJob, CronRunTelemetry } from "../types.js";
 import {
   appendAdmittedDirectCronDeliveryTranscriptMirror,
   buildDirectCronTranscriptMirrorPayloads,
@@ -41,7 +36,8 @@ import {
 import {
   buildDirectCronDeliveryIdempotencyKey,
   cleanupDirectCronSession,
-  getCompletedDirectCronDelivery,
+  DIRECT_CRON_DELIVERY_COMPLETION_RETENTION,
+  isCompletedDirectCronDelivery,
   isStaleCronDelivery,
   loadDeliverySubagentRegistryRuntime,
   logCronDeliveryError,
@@ -49,13 +45,17 @@ import {
   logCronDeliveryWarn,
   maybeApplyTtsToCronPayloads,
   normalizeSilentReplyText,
-  rememberCompletedDirectCronDelivery,
   resolveCronDeliveryBestEffort,
   resolveCronDeliveryScheduledAtMs,
   resolveCronDeliveryStartDelayMs,
   retryTransientDirectCronDelivery,
+  waitForCompletedDirectCronDelivery,
 } from "./delivery-dispatch-policy.js";
-import type { DeliveryTargetResolution } from "./delivery-target.js";
+import type {
+  DispatchCronDeliveryParams,
+  DispatchCronDeliveryState,
+  SuccessfulCronDeliveryTarget,
+} from "./delivery-dispatch-types.js";
 import { pickSummaryFromOutput } from "./helpers.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import {
@@ -63,56 +63,6 @@ import {
   type CronRunSessionCleanupOutcome,
 } from "./session-cleanup.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
-
-type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
-
-type DispatchCronDeliveryParams = {
-  cfg: OpenClawConfig;
-  cfgWithAgentDefaults: OpenClawConfig;
-  deps: CliDeps;
-  job: CronJob;
-  agentId: string;
-  agentSessionKey: string;
-  runSessionKey: string;
-  sessionId: string;
-  lifecycleRevision: string;
-  sessionUpdatedAt: number;
-  beforeSessionDelete?: () => void;
-  runStartedAt: number;
-  runEndedAt: number;
-  timeoutMs: number;
-  resolvedDelivery: DeliveryTargetResolution;
-  deliveryRequested: boolean;
-  skipHeartbeatDelivery: boolean;
-  sourceDeliveryOutcome: SourceDeliveryOutcome;
-  deliveryBestEffort: boolean;
-  deliveryPayloadHasStructuredContent: boolean;
-  deliveryPayloads: ReplyPayload[];
-  synthesizedText?: string;
-  ttsAuto?: TtsAutoMode;
-  summary?: string;
-  outputText?: string;
-  telemetry?: CronRunTelemetry;
-  abortSignal?: AbortSignal;
-  isAborted: () => boolean;
-  abortReason: () => string;
-  withRunSession: (
-    result: Omit<RunCronAgentTurnResult, "sessionId" | "sessionKey">,
-  ) => RunCronAgentTurnResult;
-};
-
-/** Mutable delivery-dispatch accumulator returned to the isolated cron runner. */
-type DispatchCronDeliveryState = {
-  result?: RunCronAgentTurnResult;
-  delivered: boolean;
-  deliveryAttempted: boolean;
-  deliveryError?: string;
-  cronRunSessionCleanupAttempted: boolean;
-  summary?: string;
-  outputText?: string;
-  synthesizedText?: string;
-  deliveryPayloads: ReplyPayload[];
-};
 
 const deliveryOutboundRuntimeLoader = createLazyImportLoader(
   () => import("./delivery-outbound.runtime.js"),
@@ -219,9 +169,33 @@ export async function dispatchCronDelivery(
   };
 
   const deliverViaDirect = async (
-    delivery: SuccessfulDeliveryTarget,
+    delivery: SuccessfulCronDeliveryTarget,
     options?: { retryTransient?: boolean },
   ): Promise<RunCronAgentTurnResult | null> => {
+    const deliveryIdempotencyKey = buildDirectCronDeliveryIdempotencyKey({
+      jobId: params.job.id,
+      runStartedAt: params.runStartedAt,
+      delivery,
+    });
+    let completedDelivery = false;
+    try {
+      // Recipient custody is a bounded SQLite receipt, not process-local state.
+      completedDelivery = isCompletedDirectCronDelivery(deliveryIdempotencyKey);
+    } catch (err) {
+      if (!params.deliveryBestEffort) {
+        throw err;
+      }
+      await logCronDeliveryWarn(
+        `[cron:${params.job.id}] durable delivery receipt unavailable; continuing best-effort delivery: ${formatErrorMessage(err)}`,
+      );
+    }
+    if (completedDelivery) {
+      // Transcript and awareness remain best-effort recipient projections;
+      // they must not fabricate a second durable conversation-state owner.
+      delivered = true;
+      deliveryAttempted = true;
+      return null;
+    }
     const {
       buildOutboundSessionContext,
       createOutboundSendDeps,
@@ -229,11 +203,6 @@ export async function dispatchCronDelivery(
       sendDurableMessageBatch,
     } = await loadDeliveryOutboundRuntime();
     const identity = resolveAgentOutboundIdentity(params.cfgWithAgentDefaults, params.agentId);
-    const deliveryIdempotencyKey = buildDirectCronDeliveryIdempotencyKey({
-      jobId: params.job.id,
-      runStartedAt: params.runStartedAt,
-      delivery,
-    });
     try {
       const summaryFallbackText = resolveDirectCronSummaryFallbackText({
         outputText,
@@ -343,12 +312,6 @@ export async function dispatchCronDelivery(
         return await finishSilentReplyDelivery();
       }
       deliveryAttempted = true;
-      const cachedResults = getCompletedDirectCronDelivery(deliveryIdempotencyKey);
-      if (cachedResults) {
-        // Cached entries are only recorded after a successful non-empty delivery.
-        delivered = true;
-        return null;
-      }
       const deliverySessionKey = await resolveDirectCronDeliverySessionKey({
         cfg: params.cfgWithAgentDefaults,
         job: params.job,
@@ -377,6 +340,7 @@ export async function dispatchCronDelivery(
       // Track bestEffort partial failures so we can log them and avoid
       // marking the job as delivered when payloads were silently dropped.
       let hadPartialFailure = false;
+      let completedByConcurrentDelivery = false;
       let payloadMayHaveReachedRecipientBeforeFailure = false;
       // `onPayload` fires after send hooks render the outbound payload, but before
       // platform send. The mirror only consumes this array after full delivery succeeds.
@@ -403,18 +367,15 @@ export async function dispatchCronDelivery(
           identity,
           bestEffort: params.deliveryBestEffort,
           durability: params.deliveryBestEffort ? "best_effort" : "required",
+          deliveryIntentId: deliveryIdempotencyKey,
+          reusePendingDeliveryIntent: true,
+          completionRetention: DIRECT_CRON_DELIVERY_COMPLETION_RETENTION,
           deps: createOutboundSendDeps(params.deps),
           signal: params.abortSignal,
           onError,
           onPayload: (payload) => {
             attemptedPayloadsForMirror.push(payload);
           },
-          // Isolated cron direct delivery uses its own transient retry loop.
-          // Keep all attempts out of the write-ahead delivery queue so a
-          // late-successful first send cannot leave behind a failed queue
-          // entry that replays on the next restart.
-          // See: https://github.com/openclaw/openclaw/issues/40545
-          skipQueue: true,
         });
         // No durable id is still ambiguous: the adapter was already invoked.
         payloadMayHaveReachedRecipientBeforeFailure ||=
@@ -425,6 +386,17 @@ export async function dispatchCronDelivery(
               (outcome.status === "suppressed" &&
                 outcome.reason === "adapter_returned_no_identity"),
           ) ?? false;
+        if (
+          send.status === "failed" &&
+          (await waitForCompletedDirectCronDelivery({
+            id: deliveryIdempotencyKey,
+            signal: params.abortSignal,
+          }))
+        ) {
+          // Another process committed the same fenced recipient intent.
+          completedByConcurrentDelivery = true;
+          return [];
+        }
         if (send.status === "failed") {
           throw send.error;
         }
@@ -469,11 +441,13 @@ export async function dispatchCronDelivery(
         });
         throw err;
       }
+      if (completedByConcurrentDelivery) {
+        delivered = true;
+        return null;
+      }
       // Only mark delivered when ALL payloads succeeded (no partial failure).
       delivered = deliveryResults.length > 0 && !hadPartialFailure;
-      // Intentionally leave partial success uncached: replay may duplicate the
-      // successful subset, but caching it here would permanently drop the
-      // failed payloads by converting the replay into delivered=true.
+      // Partial platform evidence remains unknown; never mint a full receipt.
       const deliveryAwarenessText = resolveCronAwarenessText({
         outputText,
         synthesizedText,
@@ -565,9 +539,6 @@ export async function dispatchCronDelivery(
           targetSessionKey: deliverySessionKey,
         });
       }
-      if (delivered) {
-        rememberCompletedDirectCronDelivery(deliveryIdempotencyKey, deliveryResults);
-      }
       return null;
     } catch (err) {
       if (!params.deliveryBestEffort) {
@@ -589,7 +560,7 @@ export async function dispatchCronDelivery(
   };
 
   const deliverViaDirectAndCleanup = async (
-    delivery: SuccessfulDeliveryTarget,
+    delivery: SuccessfulCronDeliveryTarget,
     options?: { retryTransient?: boolean },
   ): Promise<RunCronAgentTurnResult | null> => {
     try {
@@ -600,7 +571,7 @@ export async function dispatchCronDelivery(
   };
 
   const finalizeTextDelivery = async (
-    delivery: SuccessfulDeliveryTarget,
+    delivery: SuccessfulCronDeliveryTarget,
   ): Promise<RunCronAgentTurnResult | null> => {
     if (!synthesizedText) {
       return null;

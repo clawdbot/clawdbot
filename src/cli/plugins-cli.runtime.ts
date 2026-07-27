@@ -232,6 +232,11 @@ async function runPluginsEnableCommandUnlocked(idInput: string): Promise<void> {
   await replaceConfigFile({
     nextConfig: next,
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+    // Source/runtime projection must retain the explicitly merged canonical
+    // entry; otherwise compatibility-only nested settings are silently lost.
+    writeOptions: {
+      explicitSetPaths: [["plugins", "entries", enableResult.pluginId]],
+    },
   });
   await refreshPluginRegistryAfterConfigMutation({
     config: next,
@@ -276,6 +281,11 @@ async function runPluginsDisableCommandUnlocked(idInput: string): Promise<void> 
   await replaceConfigFile({
     nextConfig: next,
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+    // `id` was normalized before discovery; persist that same canonical entry
+    // so alias invocations cannot lose settings during source projection.
+    writeOptions: {
+      explicitSetPaths: [["plugins", "entries", id]],
+    },
   });
   await refreshPluginRegistryAfterConfigMutation({
     config: next,

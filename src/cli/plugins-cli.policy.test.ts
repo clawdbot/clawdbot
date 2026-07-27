@@ -5,6 +5,7 @@ import {
   buildPluginRegistrySnapshotReport,
   enablePluginInConfig,
   loadConfig,
+  replaceConfigFile,
   refreshPluginRegistry,
   resetPluginsCliTestState,
   runtimeErrors,
@@ -85,6 +86,13 @@ describe("plugins cli policy mutations", () => {
     expect(enablePluginInConfig).toHaveBeenCalledWith(sourceConfig, "alpha", {
       updateChannelConfig: false,
     });
+    expect(replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: enabledConfig,
+      baseHash: "mock",
+      writeOptions: {
+        explicitSetPaths: [["plugins", "entries", "alpha"]],
+      },
+    });
     expect(writeConfigFile).toHaveBeenCalledWith(enabledConfig);
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
       config: enabledConfig,
@@ -162,6 +170,13 @@ describe("plugins cli policy mutations", () => {
     const nextConfig = requireFirstWrittenConfig();
     const entries = requirePluginEntries(nextConfig);
     expect(entries.alpha).toEqual({ enabled: false });
+    expect(replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig,
+      baseHash: "mock",
+      writeOptions: {
+        explicitSetPaths: [["plugins", "entries", "alpha"]],
+      },
+    });
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
       config: nextConfig,
       installRecords: {},
@@ -185,6 +200,7 @@ describe("plugins cli policy mutations", () => {
       enablePluginInConfig.mockReturnValue({
         config: enabledConfig,
         enabled: true,
+        pluginId,
       });
       mockPluginRegistry([pluginId]);
 
@@ -192,6 +208,13 @@ describe("plugins cli policy mutations", () => {
 
       expect(enablePluginInConfig).toHaveBeenCalledWith(sourceConfig, pluginId, {
         updateChannelConfig: false,
+      });
+      expect(replaceConfigFile).toHaveBeenCalledWith({
+        nextConfig: enabledConfig,
+        baseHash: "mock",
+        writeOptions: {
+          explicitSetPaths: [["plugins", "entries", pluginId]],
+        },
       });
       expect(writeConfigFile).toHaveBeenCalledWith(enabledConfig);
     },
@@ -215,6 +238,13 @@ describe("plugins cli policy mutations", () => {
       const entries = requirePluginEntries(nextConfig);
       expect(entries[pluginId]).toEqual({ enabled: false });
       expect(entries[alias]).toBeUndefined();
+      expect(replaceConfigFile).toHaveBeenCalledWith({
+        nextConfig,
+        baseHash: "mock",
+        writeOptions: {
+          explicitSetPaths: [["plugins", "entries", pluginId]],
+        },
+      });
     },
   );
 

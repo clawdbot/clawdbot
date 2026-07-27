@@ -52,6 +52,7 @@ type PreparedManualRun =
       terminalTracker?: ManualRunTerminalTracker;
       owningCronLaneTaskMarker?: CommandLaneTaskMarker;
       reservationAt: number;
+      scheduleOwnershipAtMs: number;
       reservationIdentity: object;
       wasEnabled: boolean;
       payload?: CronPayload;
@@ -72,6 +73,7 @@ export type ActivatedManualRun = Extract<PreparedManualRun, { ran: true }> & {
 
 export type ManualRunOptions = {
   runId?: string;
+  scheduleOwnershipAtMs?: number;
   payload?: CronPayload;
   terminalTracker?: ManualRunTerminalTracker;
   owningCronLaneTaskMarker?: CommandLaneTaskMarker;
@@ -379,6 +381,7 @@ export async function prepareManualRun(
       terminalTracker: opts?.terminalTracker,
       owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
       reservationAt,
+      scheduleOwnershipAtMs: opts?.scheduleOwnershipAtMs ?? reservationAt,
       reservationIdentity,
       wasEnabled: isJobEnabled(job),
       ...(opts?.payload ? { payload: structuredClone(opts.payload) } : {}),

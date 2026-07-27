@@ -60,6 +60,13 @@ const DEFAULT_USAGE_COST_TIMEOUT_MS = 5 * 60_000;
 const USAGE_COST_SETTLE_INITIAL_POLL_MS = 250;
 const USAGE_COST_SETTLE_MAX_POLL_MS = 5_000;
 
+type GatewayCliDependencies = {
+  usageCostSettle?: {
+    now: () => number;
+    sleep: (ms: number) => Promise<void>;
+  };
+};
+
 function loadConfigModule() {
   return configModuleLoader.load();
 }
@@ -126,15 +133,19 @@ function parseGatewayCallParams(value = "{}"): unknown {
 async function loadSettledCostUsageSummary(
   rpcOpts: GatewayRpcOpts,
   params: { days: number; agentId?: string; agentScope?: "all" },
+  deps: NonNullable<GatewayCliDependencies["usageCostSettle"]> = {
+    now: Date.now,
+    sleep,
+  },
 ): Promise<CostUsageSummary> {
   const timeoutMs = parseTimeoutMsWithFallback(rpcOpts.timeout, DEFAULT_USAGE_COST_TIMEOUT_MS, {
     invalidType: "error",
   });
-  const deadline = Date.now() + timeoutMs;
+  const deadline = deps.now() + timeoutMs;
   let lastSummary: CostUsageSummary | undefined;
   let pollMs = USAGE_COST_SETTLE_INITIAL_POLL_MS;
   for (;;) {
-    const remainingBeforeCallMs = deadline - Date.now();
+    const remainingBeforeCallMs = deadline - deps.now();
     if (remainingBeforeCallMs <= 0) {
       throw createUsageCostSettleTimeoutError(lastSummary);
     }
@@ -149,13 +160,13 @@ async function loadSettledCostUsageSummary(
       return summary;
     }
 
-    const remainingMs = deadline - Date.now();
+    const remainingMs = deadline - deps.now();
     if (remainingMs <= 0) {
       throw createUsageCostSettleTimeoutError(summary);
     }
     // The usage-cost timeout is the whole command budget. Each transport call
     // remains capped separately so one unresponsive RPC cannot consume it all.
-    await sleep(Math.min(pollMs, remainingMs));
+    await deps.sleep(Math.min(pollMs, remainingMs));
     pollMs = Math.min(pollMs * 2, USAGE_COST_SETTLE_MAX_POLL_MS);
   }
 }
@@ -559,7 +570,7 @@ async function writeSupportExportFromCli(opts: {
   }
 }
 
-export function registerGatewayCli(program: Command) {
+export function registerGatewayCli(program: Command, deps: GatewayCliDependencies = {}) {
   const gateway = addGatewayRunCommand(
     program
       .command("gateway")
@@ -633,11 +644,15 @@ export function registerGatewayCli(program: Command) {
             if (agentId && opts.allAgents) {
               throw new Error("Use --agent or --all-agents, not both");
             }
-            const summary = await loadSettledCostUsageSummary(rpcOpts, {
-              days,
-              ...(agentId ? { agentId } : {}),
-              ...(opts.allAgents ? { agentScope: "all" } : {}),
-            });
+            const summary = await loadSettledCostUsageSummary(
+              rpcOpts,
+              {
+                days,
+                ...(agentId ? { agentId } : {}),
+                ...(opts.allAgents ? { agentScope: "all" } : {}),
+              },
+              deps.usageCostSettle,
+            );
             if (rpcOpts.json) {
               defaultRuntime.writeJson(summary);
               return;

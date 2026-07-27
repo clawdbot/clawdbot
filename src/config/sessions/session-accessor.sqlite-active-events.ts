@@ -27,7 +27,10 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
-import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
+import {
+  startSessionTranscriptIndexReconcile,
+  waitForSessionTranscriptIndexReconcile,
+} from "./session-transcript-reconcile.js";
 
 type ActiveTranscriptDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -81,6 +84,14 @@ export function isSessionTranscriptProjectionUnavailableError(
   error: unknown,
 ): error is SessionTranscriptProjectionUnavailableError {
   return error instanceof SessionTranscriptProjectionUnavailableError;
+}
+
+/** Waits for a projection rebuild already scheduled by a failed transcript read. */
+export async function waitForSessionTranscriptProjection(
+  scope: SessionTranscriptReadScope,
+): Promise<void> {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  await waitForSessionTranscriptIndexReconcile(toDatabaseOptions(resolved));
 }
 
 type CurrentProjection = {

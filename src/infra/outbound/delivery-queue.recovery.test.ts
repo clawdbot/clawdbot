@@ -28,9 +28,11 @@ import { pruneOrphanedDeliveryQueueMedia } from "./delivery-queue-media-spool.js
 import { loadPendingDeliveries, reserveDeliveryAttempt } from "./delivery-queue-storage.js";
 import {
   ackDelivery,
+  claimDeliveryPlatformSendAttempt,
   enqueueDelivery,
   enqueueDeliveryOnce,
   markDeliveryPlatformOutcomeUnknown,
+  markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted,
   recoverPendingDeliveries,
   type DeliverFn,
@@ -417,6 +419,61 @@ describe("delivery-queue recovery", () => {
     });
     await runRecovery({ deliver });
     expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("checks bounded provider admission before replaying a reconciliable platform attempt", async () => {
+    const id = "cron-direct-delivery:v1:blocked-reconciled-admission";
+    await enqueueDeliveryOnce(
+      {
+        channel: "slack",
+        to: "C123",
+        accountId: "enterprise",
+        payloads: [{ text: "disabled account must never be replayed" }],
+        queuePolicy: "required",
+        completionRetention: {
+          idPrefix: "cron-direct-delivery:v1:",
+          maxAgeMs: 24 * 60 * 60_000,
+          maxEntries: 2_000,
+        },
+      },
+      id,
+      tmpDir(),
+    );
+    const producerClaimId = await claimDeliveryPlatformSendAttempt(id, tmpDir());
+    if (!producerClaimId) {
+      throw new Error("test invariant: bounded platform attempt must be owned");
+    }
+    await markDeliveryPlatformSendAttemptStarted(id, tmpDir(), undefined, producerClaimId);
+    const admitDeferredDelivery = vi.fn(() => ({
+      status: "permanent_rejection" as const,
+      reason: "unsupported_enterprise_slack_delivery",
+    }));
+    const reconcileUnknownSend = vi.fn().mockResolvedValue({ status: "not_sent" });
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: {
+        capabilities: { reconcileUnknownSend: true },
+        admitDeferredDelivery,
+        reconcileUnknownSend,
+      },
+    });
+    const deliver = vi.fn();
+
+    await runRecovery({ deliver });
+
+    expect(admitDeferredDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "enterprise",
+        channel: "slack",
+        phase: "recovery",
+      }),
+    );
+    expect(reconcileUnknownSend).not.toHaveBeenCalled();
+    expect(deliver).not.toHaveBeenCalled();
+    expect((await loadPendingDeliveries(tmpDir()))[0]).toMatchObject({
+      id,
+      recoveryState: "send_attempt_started",
+      platformSendAttemptId: producerClaimId,
+    });
   });
 
   it("paces startup replay instead of draining eligible entries back-to-back", async () => {
@@ -1063,6 +1120,156 @@ describe("delivery-queue recovery", () => {
       skippedMaxRetries: 0,
       deferredBackoff: 0,
     });
+    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+  });
+
+  it("keeps an in-flight stable platform send fenced across recovery", async () => {
+    const id = "cron-direct-delivery:v1:in-flight-producer-lease";
+    await enqueueDeliveryOnce(
+      {
+        channel: "demo-channel-a",
+        to: "+1",
+        payloads: [{ text: "the original platform send is still in flight" }],
+        queuePolicy: "required",
+        completionRetention: {
+          idPrefix: "cron-direct-delivery:v1:",
+          maxAgeMs: 24 * 60 * 60_000,
+          maxEntries: 2_000,
+        },
+        requiresProducerClaim: true,
+      },
+      id,
+      tmpDir(),
+    );
+    const producerClaimId = await claimDeliveryPlatformSendAttempt(id, tmpDir());
+    if (!producerClaimId) {
+      throw new Error("test invariant: the live platform sender must own its producer lease");
+    }
+    await markDeliveryPlatformSendAttemptStarted(id, tmpDir(), undefined, producerClaimId);
+    await markDeliveryPlatformSendDispatched(id, tmpDir(), undefined, producerClaimId);
+    const reconcileUnknownSend = vi.fn().mockResolvedValue({ status: "not_sent" });
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: {
+        capabilities: { reconcileUnknownSend: true },
+        reconcileUnknownSend,
+      },
+    });
+    const deliver = vi.fn();
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(result).toMatchObject({ recovered: 0, failed: 0 });
+    expect(reconcileUnknownSend).not.toHaveBeenCalled();
+    expect(deliver).not.toHaveBeenCalled();
+    expect((await loadPendingDeliveries(tmpDir()))[0]).toMatchObject({
+      id,
+      recoveryState: "send_attempt_started",
+      platformSendAttemptId: producerClaimId,
+      availableAt: expect.any(Number),
+    });
+  });
+
+  it("atomically fences stable recovery after an adapter proves an ambiguous send was not sent", async () => {
+    const id = "cron-direct-delivery:v1:reconciled-stable-recovery";
+    await enqueueDeliveryOnce(
+      {
+        channel: "demo-channel-a",
+        to: "+1",
+        payloads: [{ text: "recover exactly once after reconciliation" }],
+        queuePolicy: "required",
+        completionRetention: {
+          idPrefix: "cron-direct-delivery:v1:",
+          maxAgeMs: 24 * 60 * 60_000,
+          maxEntries: 2_000,
+        },
+      },
+      id,
+      tmpDir(),
+    );
+    const originalAttemptId = await claimDeliveryPlatformSendAttempt(id, tmpDir());
+    if (!originalAttemptId) {
+      throw new Error("test invariant: the original stable send must own a producer claim");
+    }
+    await markDeliveryPlatformSendAttemptStarted(
+      id,
+      tmpDir(),
+      { replyToId: null },
+      originalAttemptId,
+    );
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: {
+        capabilities: { reconcileUnknownSend: true },
+        reconcileUnknownSend: vi.fn().mockResolvedValue({ status: "not_sent" }),
+      },
+    });
+    const deliver = vi.fn(async (params: Parameters<DeliverFn>[0]) => {
+      if (!params.deliveryProducerClaimId) {
+        throw new Error("recovered provider send must own a fenced producer lease");
+      }
+      await markDeliveryPlatformSendAttemptStarted(
+        id,
+        tmpDir(),
+        { replyToId: null },
+        params.deliveryProducerClaimId,
+      );
+      return [{ channel: "demo-channel-a", messageId: "fenced-reconciled-message" }];
+    });
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(result).toMatchObject({ recovered: 1, failed: 0 });
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(mockCallArg(deliver)).toMatchObject({
+      deliveryQueueId: id,
+      deliveryProducerClaimId: expect.any(String),
+    });
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("completed");
+  });
+
+  it("acknowledges a permanently fenced send reconciled as already sent", async () => {
+    const id = "permanent-reconciled-platform-delivery";
+    await enqueueDeliveryOnce(
+      {
+        channel: "demo-channel-a",
+        to: "+1",
+        payloads: [{ text: "the platform already delivered this permanent intent" }],
+        queuePolicy: "required",
+        completionRetention: "permanent",
+        requiresProducerClaim: true,
+      },
+      id,
+      tmpDir(),
+    );
+    const platformSendAttemptId = await claimDeliveryPlatformSendAttempt(id, tmpDir());
+    if (!platformSendAttemptId) {
+      throw new Error("test invariant: the permanent platform send must own its attempt");
+    }
+    await markDeliveryPlatformSendAttemptStarted(id, tmpDir(), undefined, platformSendAttemptId);
+    await markDeliveryPlatformOutcomeUnknown(id, tmpDir(), platformSendAttemptId);
+    const reconcileUnknownSend = vi.fn().mockResolvedValue({
+      status: "sent",
+      messageId: "reconciled-permanent-message",
+      receipt: {
+        primaryPlatformMessageId: "reconciled-permanent-message",
+        platformMessageIds: ["reconciled-permanent-message"],
+        parts: [{ platformMessageId: "reconciled-permanent-message", kind: "text", index: 0 }],
+        sentAt: Date.now(),
+      },
+    });
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: {
+        capabilities: { reconcileUnknownSend: true },
+        reconcileUnknownSend,
+      },
+    });
+    const deliver = vi.fn();
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(result).toMatchObject({ recovered: 1, failed: 0 });
+    expect(reconcileUnknownSend).toHaveBeenCalledOnce();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("completed");
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
   });
 

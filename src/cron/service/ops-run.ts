@@ -171,7 +171,10 @@ async function finishPreparedManualRun(
             startedAt,
             endedAt,
           },
-          { scheduleMode: mode === "force" ? "preserve" : "advance" },
+          {
+            scheduleMode: mode === "force" ? "preserve" : "advance",
+            scheduleOwnershipAtMs: prepared.scheduleOwnershipAtMs,
+          },
         );
         applyTriggerRunResult(job, {
           status: coreResult.status,
@@ -339,7 +342,8 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
     return disposition;
   }
 
-  const runId = `manual:${id}:${state.deps.nowMs()}:${nextManualRunId++}`;
+  const scheduleOwnershipAtMs = state.deps.nowMs();
+  const runId = `manual:${id}:${scheduleOwnershipAtMs}:${nextManualRunId++}`;
   const terminalTracker: ManualRunTerminalTracker = { emitted: false };
   void runWithGatewayIndependentRootWorkContinuation(() =>
     enqueueCommandInLane(
@@ -347,6 +351,7 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
       async (owningCronLaneTaskMarker) => {
         const result = await run(state, id, mode, {
           runId,
+          scheduleOwnershipAtMs,
           terminalTracker,
           owningCronLaneTaskMarker,
         });

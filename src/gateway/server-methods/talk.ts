@@ -481,6 +481,8 @@ async function resolveTalkResponseFromConfig(params: {
   sourceConfig: OpenClawConfig;
   runtimeConfig: OpenClawConfig;
 }): Promise<TalkConfigResponse | undefined> {
+  // Normalize once at the Gateway boundary. Legacy flat provider fields belong to doctor
+  // migration and must not leak into steady-state response construction.
   const normalizedTalk = normalizeTalkSection(params.sourceConfig.talk);
   const configuredPayload = normalizedTalk ? buildTalkConfigResponse(normalizedTalk) : undefined;
   // Resolve provider selection from materialized config, but project provider-owned fields from

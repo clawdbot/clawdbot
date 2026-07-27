@@ -23,7 +23,15 @@ import {
 import { resolveSessionToolContext } from "./sessions-helpers.js";
 import { resolveSessionReference } from "./sessions-resolution.js";
 
-const ACTIONS = ["patch", "group_list", "group_set", "group_rename", "group_delete"] as const;
+const ACTIONS = [
+  "patch",
+  "reset",
+  "delete",
+  "group_list",
+  "group_set",
+  "group_rename",
+  "group_delete",
+] as const;
 const GROUP_NAME_MAX_LENGTH = 512;
 const GROUP_NAMES_MAX_ITEMS = 200;
 
@@ -31,6 +39,9 @@ const SessionsToolSchema = Type.Object(
   {
     action: stringEnum(ACTIONS, { description: "Action" }),
     sessionKey: Type.Optional(Type.String({ description: "Target session. Default: current" })),
+    deleteTranscript: Type.Optional(
+      Type.Boolean({ description: "Archive the deleted session transcript. Default: true." }),
+    ),
     label: Type.Optional(
       Type.String({ description: "Sidebar title override. Empty string clears it." }),
     ),
@@ -185,11 +196,49 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
     label: "Sessions",
     name: "sessions",
     description:
-      "Session settings and groups: patch label/icon/status, pin, archive/restore, model/thinking override; group_list/group_set/group_rename/group_delete.",
+      "Session settings, reset, delete, and groups: patch label/icon/status, pin, archive/restore, model/thinking override; reset/delete visible sessions; group_list/group_set/group_rename/group_delete.",
     parameters: SessionsToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
+      if (action === "reset" || action === "delete") {
+        const rawKey = readStringParam(params, "sessionKey", { required: true });
+        const { key } = await resolvePatchTarget(
+          { ...opts, config: opts.config ?? getRuntimeConfig() },
+          rawKey,
+        );
+        const context = resolveSessionToolContext({
+          ...opts,
+          config: opts.config ?? getRuntimeConfig(),
+        });
+        if (key === context.effectiveRequesterKey) {
+          throw new ToolInputError(`Cannot ${action} the session running this tool`);
+        }
+        if (action === "reset") {
+          return jsonResult(await gatewayCall("sessions.reset", { key, reason: "reset" }));
+        }
+        // Archive returns the exact row generation. Carry it into the locked
+        // delete so a concurrent reset cannot delete a replacement session.
+        const archived = await gatewayCall<{
+          entry?: { sessionId?: string; lifecycleRevision?: string };
+        }>("sessions.patch", { key, archived: true });
+        const expectedSessionId = normalizeOptionalString(archived.entry?.sessionId);
+        if (!expectedSessionId) {
+          throw new ToolInputError("Session archive did not return its session identity");
+        }
+        const expectedLifecycleRevision = normalizeOptionalString(
+          archived.entry?.lifecycleRevision,
+        );
+        return jsonResult(
+          await gatewayCall("sessions.delete", {
+            key,
+            archivedOnly: true,
+            expectedSessionId,
+            ...(expectedLifecycleRevision ? { expectedLifecycleRevision } : {}),
+            deleteTranscript: readBoolean(params, "deleteTranscript") ?? true,
+          }),
+        );
+      }
       if (action === "group_list") {
         return jsonResult(await gatewayCall("sessions.groups.list", {}));
       }

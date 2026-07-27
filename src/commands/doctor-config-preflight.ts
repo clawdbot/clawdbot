@@ -311,18 +311,13 @@ async function refreshStartupPluginQuarantine(params: {
       env: params.env,
     }),
   );
-  const quarantinedPlugins = buildStartupPluginQuarantine({
+  const result = mapStartupPluginQuarantineRefresh({
     cfg: params.cfg,
     failures: smoke.failures,
   });
-  const blockingFailures = smoke.failures.filter(
-    (failure) =>
-      !failure.installPath &&
-      isStartupPluginVerificationFailureActive({ cfg: params.cfg, failure }),
-  );
-  if (quarantinedPlugins.length > 0) {
+  if (result.quarantinedPlugins.length > 0) {
     note(
-      quarantinedPlugins
+      result.quarantinedPlugins
         .map(
           (plugin) =>
             `- ${formatStartupPluginSmokeFailure({
@@ -338,6 +333,20 @@ async function refreshStartupPluginQuarantine(params: {
       "Doctor warnings",
     );
   }
+  return result;
+}
+
+/** Map payload verification failures into startup quarantine and blocking diagnostics. */
+export function mapStartupPluginQuarantineRefresh(params: {
+  cfg: OpenClawConfig;
+  failures: readonly PluginPayloadSmokeFailure[];
+}): StartupPluginConvergenceResult {
+  const quarantinedPlugins = buildStartupPluginQuarantine(params);
+  const blockingFailures = params.failures.filter(
+    (failure) =>
+      !failure.installPath &&
+      isStartupPluginVerificationFailureActive({ cfg: params.cfg, failure }),
+  );
   return {
     blockingDiagnostic:
       blockingFailures.length > 0

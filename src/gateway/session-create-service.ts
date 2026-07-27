@@ -72,6 +72,7 @@ import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
 import { shouldPreserveSessionAuthProfileOverride } from "./session-model-patch-origin.js";
+import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { isSessionVisibilityAllowed, resolveSessionVisibility } from "./session-sharing.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
 import { loadSessionEntryReadOnly, resolveGatewaySessionStoreTarget } from "./session-utils.js";
@@ -524,6 +525,15 @@ export async function createGatewaySession(params: {
         ),
       };
     }
+    const parentOwnershipError = resolvePluginSessionOwnershipError({
+      action: params.fork === true ? "fork" : "link",
+      entry: parent.entry,
+      key: parent.canonicalKey,
+      pluginOwnerId: params.authorizedPluginId,
+    });
+    if (parentOwnershipError) {
+      return { ok: false, error: parentOwnershipError };
+    }
     if (isModelSelectionLocked(parent.entry)) {
       return {
         ok: false,
@@ -588,11 +598,17 @@ export async function createGatewaySession(params: {
   }
 
   const targetSessionKey = explicitTargetKey ?? buildDashboardSessionKey(agentId, { incognito });
+  const creationTarget = resolveGatewaySessionStoreTarget({
+    cfg: params.cfg,
+    key: targetSessionKey,
+    agentId,
+  });
   const agentMainSessionKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId });
   // Durable dashboard sessions parent to main for flow-up notices and sidebar threads.
   // Incognito roots omit durable lineage so notices cannot cross the storage boundary.
   const dashboardParentSessionKey =
     !parentSessionKey &&
+    !params.authorizedPluginId &&
     !incognito &&
     params.fork !== true &&
     (params.cfg.session?.dmScope ?? "main") === "main" &&
@@ -674,7 +690,9 @@ export async function createGatewaySession(params: {
     if (
       canonicalParentSessionKey &&
       parentSessionTarget &&
-      (params.emitCommandHooks === true || params.fork === true)
+      (params.emitCommandHooks === true ||
+        params.fork === true ||
+        params.authorizedPluginId !== undefined)
     ) {
       const currentParent = loadSessionEntryReadOnly(
         canonicalParentSessionKey,
@@ -694,18 +712,31 @@ export async function createGatewaySession(params: {
         };
       }
       currentParentSessionEntry = currentParentEntry;
-      if (isModelSelectionLocked(currentParentEntry)) {
+      const parentOwnershipError = resolvePluginSessionOwnershipError({
+        action: params.fork === true ? "fork" : "link",
+        entry: currentParentEntry,
+        key: canonicalParentSessionKey,
+        pluginOwnerId: params.authorizedPluginId,
+      });
+      if (parentOwnershipError) {
+        return { ok: false, error: parentOwnershipError };
+      }
+      if (
+        (params.emitCommandHooks === true || params.fork === true) &&
+        isModelSelectionLocked(currentParentEntry)
+      ) {
         return {
           ok: false,
           error: errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE),
         };
       }
       const parentHasActiveWork =
-        isEmbeddedAgentRunActive(currentParentEntry.sessionId) ||
-        isSessionWorkAdmissionActive(parentSessionTarget.storePath, [
-          canonicalParentSessionKey,
-          currentParentEntry.sessionId,
-        ]);
+        (params.emitCommandHooks === true || params.fork === true) &&
+        (isEmbeddedAgentRunActive(currentParentEntry.sessionId) ||
+          isSessionWorkAdmissionActive(parentSessionTarget.storePath, [
+            canonicalParentSessionKey,
+            currentParentEntry.sessionId,
+          ]));
       if (parentHasActiveWork) {
         return {
           ok: false,
@@ -747,8 +778,7 @@ export async function createGatewaySession(params: {
       });
     }
 
-    const key = targetSessionKey;
-    const target = resolveGatewaySessionStoreTarget({ cfg: params.cfg, key, agentId });
+    const target = creationTarget;
     const created = await createSessionEntryWithTranscript<ErrorShape>(
       {
         agentId: target.agentId,
@@ -758,6 +788,15 @@ export async function createGatewaySession(params: {
       async ({ existingEntry, sessionEntries }) => {
         // This callback owns generated and explicit keys alike; no existing row
         // is the canonical signal that this request will actually create one.
+        const existingOwnershipError = resolvePluginSessionOwnershipError({
+          action: "adopt",
+          entry: existingEntry,
+          key: target.canonicalKey,
+          pluginOwnerId: params.authorizedPluginId,
+        });
+        if (existingOwnershipError) {
+          return { ok: false, error: existingOwnershipError };
+        }
         if (
           isAgentHarnessSessionKey(target.canonicalKey) &&
           !authorizedHarnessCreation &&
@@ -939,8 +978,8 @@ export async function createGatewaySession(params: {
           ...(params.worktree ? { worktree: params.worktree } : {}),
           ...(execNode ? { execHost: "node", execNode, ...(execCwd ? { execCwd } : {}) } : {}),
           ...(initialAgentHarnessId ? { agentHarnessId: initialAgentHarnessId } : {}),
-          ...(authorizedPluginCreation
-            ? { pluginOwnerId: params.initialEntry?.pluginOwnerId }
+          ...(createdNewEntry && params.authorizedPluginId && !params.catalogTarget
+            ? { pluginOwnerId: params.authorizedPluginId }
             : {}),
           ...(authorizedPluginCreation && params.initialEntry?.providerOverride
             ? { providerOverride: params.initialEntry.providerOverride }
@@ -1115,32 +1154,55 @@ export async function createGatewaySession(params: {
     };
   };
 
+  const runWithCreationTargetLock = async () =>
+    await runExclusiveSessionLifecycleMutation({
+      scope: creationTarget.storePath,
+      identities: [creationTarget.canonicalKey],
+      run: createChildSession,
+    });
+
+  let result: CreateGatewaySessionResult;
   if (
     canonicalParentSessionKey &&
     parentSessionEntry?.sessionId &&
     parentSessionTarget &&
-    (params.emitCommandHooks === true || params.fork === true)
+    (params.emitCommandHooks === true ||
+      params.fork === true ||
+      params.authorizedPluginId !== undefined)
   ) {
-    const result = await runExclusiveSessionLifecycleMutation({
-      scope: parentSessionTarget.storePath,
-      identities: [canonicalParentSessionKey, parentSessionEntry.sessionId],
-      run: createChildSession,
-    });
-    if (result.ok && !result.resetExisting && createdContext) {
-      // Adoption still runs post-create work (initial chat.send, plugin hooks);
-      // only the created journal event is reserved for genuinely new rows.
-      if (createdNewEntry) {
-        recordSessionCreated({
-          sessionKey: createdContext.key,
-          agentId: createdContext.agentId,
-          entry: createdContext.entry,
+    if (parentSessionTarget.storePath === creationTarget.storePath) {
+      result = await runExclusiveSessionLifecycleMutation({
+        scope: creationTarget.storePath,
+        identities: [
+          canonicalParentSessionKey,
+          parentSessionEntry.sessionId,
+          creationTarget.canonicalKey,
+        ],
+        run: createChildSession,
+      });
+    } else {
+      const runWithParentLock = async (run: () => Promise<CreateGatewaySessionResult>) =>
+        await runExclusiveSessionLifecycleMutation({
+          scope: parentSessionTarget.storePath,
+          identities: [canonicalParentSessionKey, parentSessionEntry.sessionId],
+          run,
         });
-      }
-      await params.afterCreate?.(createdContext);
+      // Cross-agent forks touch two stores. Acquire their locks in canonical
+      // store order so simultaneous opposite-direction forks cannot deadlock.
+      result =
+        parentSessionTarget.storePath < creationTarget.storePath
+          ? await runWithParentLock(runWithCreationTargetLock)
+          : await runExclusiveSessionLifecycleMutation({
+              scope: creationTarget.storePath,
+              identities: [creationTarget.canonicalKey],
+              run: async () => await runWithParentLock(createChildSession),
+            });
     }
-    return result;
+  } else {
+    // Keyed creates must observe and adopt the winning row under the same
+    // lifecycle fence; otherwise concurrent callers mint divergent session IDs.
+    result = await runWithCreationTargetLock();
   }
-  const result = await createChildSession();
   if (result.ok && !result.resetExisting && createdContext) {
     if (createdNewEntry) {
       recordSessionCreated({

@@ -257,13 +257,31 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
       };
     }, gatewayUrl);
     const avatarRequests: Array<{ authorization?: string; url: string }> = [];
+    let releaseRevisedAvatar: (() => void) | undefined;
+    const revisedAvatarReady = new Promise<void>((resolve) => {
+      releaseRevisedAvatar = resolve;
+    });
     // Profile images require the same bearer auth as gateway RPCs. One cached
     // blob keeps the sidebar and preview inside the Control UI's image CSP.
     await page.route(`**/api/users/${testProfile.id}/avatar*`, async (route) => {
+      const revision = new URL(route.request().url()).searchParams.get("v");
       avatarRequests.push({
         authorization: route.request().headers().authorization,
         url: route.request().url(),
       });
+      if (revision === "3") {
+        // Hold the real response so Chromium can prove pending fallback and
+        // stable image-node identity before the replacement finishes loading.
+        await revisedAvatarReady;
+      }
+      if (revision === "4") {
+        await route.fulfill({
+          body: JSON.stringify({ ok: false, error: { type: "not_found" } }),
+          contentType: "application/json",
+          status: 404,
+        });
+        return;
+      }
       await route.fulfill({
         body: Buffer.from(
           "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a6kAAAAASUVORK5CYII=",
@@ -273,7 +291,7 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
         status: 200,
       });
     });
-    await installMockGateway(page, {
+    const gateway = await installMockGateway(page, {
       presenceUsers: testPresenceUsers,
       methodResponses: {
         "usage.cost": usageCostResponse,
@@ -326,6 +344,101 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
         await page.screenshot({
           animations: "disabled",
           path: path.join(proofDir, "03-authenticated-user-avatar-cache.png"),
+        });
+      }
+
+      const originalSidebarImage = await sidebarAvatar.elementHandle();
+      expect(originalSidebarImage).not.toBeNull();
+      const connect = await gateway.waitForRequest("connect");
+      const selfInstanceId = (connect.params as { client?: { instanceId?: string } } | undefined)
+        ?.client?.instanceId;
+      expect(selfInstanceId).toBeTruthy();
+      const publishAvatarRevision = async (revision: number) => {
+        await gateway.emitGatewayEvent("presence", {
+          presence: [
+            {
+              instanceId: selfInstanceId,
+              mode: "webchat",
+              reason: "connect",
+              user: {
+                id: testProfile.id,
+                name: testProfile.displayName,
+                email: testProfile.emails[0],
+                avatarUrl: `/api/users/${testProfile.id}/avatar?v=${revision}`,
+              },
+              watchedSessions: [],
+            },
+          ],
+        });
+      };
+
+      await publishAvatarRevision(3);
+      await expect.poll(() => avatarRequests.length).toBe(2);
+      expect(
+        await originalSidebarImage?.evaluate((image) =>
+          image.closest(".viewer-avatar")?.classList.contains("is-fallback"),
+        ),
+      ).toBe(true);
+      expect(await originalSidebarImage?.evaluate((image) => image.isConnected)).toBe(true);
+
+      releaseRevisedAvatar?.();
+      await expect
+        .poll(() => sidebarAvatar.evaluate((image) => (image as HTMLImageElement).naturalWidth))
+        .toBe(1);
+      const revisedImageUrl = await sidebarAvatar.getAttribute("src");
+      expect(revisedImageUrl).toMatch(/^blob:/u);
+      expect(revisedImageUrl).not.toBe(imageUrl);
+      expect(await originalSidebarImage?.evaluate((image) => image.getAttribute("src"))).toBe(
+        revisedImageUrl,
+      );
+      expect(
+        await sidebarAvatar.evaluate((image) =>
+          image.closest(".viewer-avatar")?.classList.contains("is-fallback"),
+        ),
+      ).toBe(false);
+      expect(avatarRequests[1]).toEqual({
+        authorization: "Bearer e2e-device-token",
+        url: expect.stringContaining(`/api/users/${testProfile.id}/avatar?v=3`),
+      });
+      if (captureUiProof) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(proofDir, "04-authenticated-user-avatar-revision.png"),
+        });
+      }
+
+      const missingAvatarResponse = page.waitForResponse(
+        (candidateResponse) =>
+          candidateResponse.url().includes(`/api/users/${testProfile.id}/avatar?v=4`) &&
+          candidateResponse.status() === 404,
+      );
+      await publishAvatarRevision(4);
+      await missingAvatarResponse;
+      await expect.poll(() => avatarRequests.length).toBe(3);
+      await expect.poll(() => sidebarAvatar.getAttribute("src")).toBeNull();
+      await expect
+        .poll(() =>
+          sidebarAvatar.evaluate((image) =>
+            image.closest(".viewer-avatar")?.classList.contains("is-fallback"),
+          ),
+        )
+        .toBe(true);
+      await expect
+        .poll(async () =>
+          (
+            await page.locator(".sidebar-identity-card .viewer-avatar__fallback").textContent()
+          )?.trim(),
+        )
+        .toBe("TP");
+      expect(await originalSidebarImage?.evaluate((image) => image.isConnected)).toBe(true);
+      expect(avatarRequests[2]).toEqual({
+        authorization: "Bearer e2e-device-token",
+        url: expect.stringContaining(`/api/users/${testProfile.id}/avatar?v=4`),
+      });
+      if (captureUiProof) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(proofDir, "05-authenticated-user-avatar-missing.png"),
         });
       }
     } finally {

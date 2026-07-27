@@ -3039,7 +3039,7 @@ describe("cron service timer regressions", () => {
     }
   });
 
-  it("does not notify setup timeout for cron-nested lane contention", async () => {
+  it("does not spend setup timeout while waiting for cron-nested admission", async () => {
     vi.useFakeTimers();
     try {
       const store = timerRegressionFixtures.makeStorePath();
@@ -3075,25 +3075,32 @@ describe("cron service timer regressions", () => {
         cleanupTimedOutAgentRun: vi.fn(async () => {}),
         onIsolatedAgentSetupTimeout,
         runIsolatedAgentJob: vi.fn(async ({ onLaneWait }) => {
-          onLaneWait?.();
+          onLaneWait?.({ waiting: true });
           return await enqueueCommandInLane(CommandLane.CronNested, async () => {
+            onLaneWait?.({ waiting: false });
             return { status: "ok" as const, summary: "lane released" };
           });
         }),
       });
 
       const timerPromise = onTimer(state);
+      let timerSettled = false;
+      void timerPromise.then(() => {
+        timerSettled = true;
+      });
       await vi.advanceTimersByTimeAsync(60_100);
       now += 60_100;
-      await timerPromise;
 
+      expect(timerSettled).toBe(false);
       expect(onIsolatedAgentSetupTimeout).not.toHaveBeenCalled();
-      const job = requireJob(state, cronJob.id);
-      expect(job.state.lastStatus).toBe("error");
-      expect(job.state.lastError).toContain("setup timed out before runner start");
 
       releaseLane.resolve();
       await laneBlocker;
+      await timerPromise;
+
+      const job = requireJob(state, cronJob.id);
+      expect(job.state.lastStatus).toBe("ok");
+      expect(job.state.lastError).toBeUndefined();
     } finally {
       vi.useRealTimers();
     }
