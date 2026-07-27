@@ -4,11 +4,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  createGatewayAvatarDataUrlCache,
-  openGatewayAssistantAvatar,
-  resolveGatewayAssistantAvatar,
-} from "./assistant-avatar.js";
+import { createGatewayAvatarDataUrlCache } from "./assistant-avatar-cache.js";
+import { openGatewayAssistantAvatar, resolveGatewayAssistantAvatar } from "./assistant-avatar.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
 
 const REAL_PNG = Buffer.from(

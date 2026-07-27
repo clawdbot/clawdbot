@@ -1795,7 +1795,7 @@ describe("startGatewayPostAttachRuntime", () => {
       name: "sidecars.ready",
       metrics: [
         ["loadedPluginCount", 2],
-        ["postReadySidecarCount", 2],
+        ["postReadySidecarCount", 3],
       ],
     });
   });

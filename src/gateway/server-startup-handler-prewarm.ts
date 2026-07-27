@@ -4,7 +4,7 @@ type StartupTrace = {
   measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
 };
 
-export type GatewayHandlerPrewarmFamily = {
+type GatewayHandlerPrewarmFamily = {
   name: string;
   load: () => Promise<unknown>;
 };
@@ -25,10 +25,6 @@ const DASHBOARD_HANDLER_FAMILIES: readonly GatewayHandlerPrewarmFamily[] = [
   { name: "board", load: () => import("./server-methods/board.js") },
   { name: "channels", load: () => import("./server-methods/channels.js") },
 ];
-
-export const GATEWAY_HANDLER_PREWARM_FAMILY_NAMES = DASHBOARD_HANDLER_FAMILIES.map(
-  (family) => family.name,
-);
 
 export function scheduleGatewayHandlerPrewarm(params: {
   startupTrace?: StartupTrace;
