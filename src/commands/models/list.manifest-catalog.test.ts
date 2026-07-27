@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   resolvePluginContributionOwners: vi.fn(),
   getPluginRecord: vi.fn(),
   isPluginEnabled: vi.fn(),
+  getRemoteModelCatalogOverlay: vi.fn(),
 }));
 
 vi.mock("../../plugins/plugin-registry.js", () => ({
@@ -17,6 +18,10 @@ vi.mock("../../plugins/plugin-registry.js", () => ({
 vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
+}));
+
+vi.mock("../../model-catalog/remote-overlay.js", () => ({
+  getRemoteModelCatalogOverlay: mocks.getRemoteModelCatalogOverlay,
 }));
 
 const moonshotPlugin = {
@@ -49,9 +54,25 @@ const openrouterPlugin = {
   },
 };
 
+const openaiRuntimePlugin = {
+  id: "openai",
+  providers: ["openai"],
+  modelCatalog: {
+    providers: {
+      openai: {
+        models: [{ id: "gpt-known", name: "Known GPT" }],
+      },
+    },
+    discovery: {
+      openai: "runtime",
+    },
+  },
+};
+
 describe("loadStaticManifestCatalogRowsForList", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.getRemoteModelCatalogOverlay.mockReturnValue(undefined);
   });
 
   it("loads only static manifest catalog rows without a provider filter", async () => {
@@ -97,6 +118,45 @@ describe("loadStaticManifestCatalogRowsForList", () => {
         cfg: {},
       }).map((row) => row.ref),
     ).toEqual(["moonshot/kimi-k2.6", "openrouter/auto"]);
+  });
+
+  it("supplements runtime-owned providers with refreshed rows only", async () => {
+    const { loadStaticManifestCatalogRowsForList, loadSupplementalManifestCatalogRowsForList } =
+      await import("./list.manifest-catalog.js");
+    const manifestRegistry = {
+      plugins: [openaiRuntimePlugin],
+      diagnostics: [],
+    };
+    const metadataSnapshot = {
+      index: { plugins: [], diagnostics: [] },
+      manifestRegistry,
+      plugins: manifestRegistry.plugins,
+    };
+    mocks.getRemoteModelCatalogOverlay.mockReturnValue({
+      openai: {
+        models: [{ id: "gpt-refreshed", name: "Refreshed GPT" }],
+      },
+    });
+    mocks.getPluginRecord.mockReturnValue({ pluginId: "openai" });
+    mocks.isPluginEnabled.mockReturnValue(true);
+
+    const params = {
+      cfg: {},
+      providerFilter: "openai",
+      metadataSnapshot: metadataSnapshot as unknown as Parameters<
+        typeof loadSupplementalManifestCatalogRowsForList
+      >[0]["metadataSnapshot"],
+    };
+
+    expect(loadStaticManifestCatalogRowsForList(params)).toEqual([]);
+    expect(loadSupplementalManifestCatalogRowsForList(params)).toMatchObject([
+      {
+        provider: "openai",
+        id: "gpt-refreshed",
+        ref: "openai/gpt-refreshed",
+        source: "runtime-refresh",
+      },
+    ]);
   });
 
   it("uses an injected metadata snapshot instead of loading metadata again", async () => {

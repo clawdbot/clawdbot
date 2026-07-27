@@ -898,6 +898,102 @@ describe("modelsListCommand forward-compat", () => {
   });
 
   describe("--all catalog supplementation", () => {
+    it("includes refreshed manifest models for runtime-backed provider lists", async () => {
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
+      mocks.hasProviderRuntimeCatalogForFilter.mockResolvedValueOnce(true);
+      mocks.loadProviderCatalogModelsForList.mockResolvedValueOnce([
+        {
+          provider: "anthropic",
+          id: "claude-live",
+          name: "Claude Live",
+          api: "anthropic-messages",
+          baseUrl: "https://api.anthropic.com",
+          input: ["text"],
+          contextWindow: 200_000,
+          maxTokens: 4096,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      ]);
+      mocks.loadSupplementalManifestCatalogRowsForList.mockReturnValueOnce([
+        {
+          provider: "anthropic",
+          id: "claude-refreshed",
+          ref: "anthropic/claude-refreshed",
+          mergeKey: "anthropic::claude-refreshed",
+          name: "Claude Refreshed",
+          source: "runtime-refresh",
+          input: ["text"],
+          reasoning: false,
+          status: "available",
+          baseUrl: "https://api.anthropic.com",
+          contextWindow: 200_000,
+        },
+      ]);
+      const runtime = createRuntime();
+
+      await modelsListCommand({ all: true, provider: "anthropic", json: true }, runtime as never);
+
+      expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
+      expectRowKeys(lastPrintedRows<{ key: string }>(), [
+        "anthropic/claude-live",
+        "anthropic/claude-refreshed",
+      ]);
+    });
+
+    it("keeps OpenAI runtime rows authoritative while adding refreshed models once", async () => {
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
+      mocks.hasProviderRuntimeCatalogForFilter.mockResolvedValueOnce(true);
+      mocks.loadProviderCatalogModelsForList.mockResolvedValueOnce([
+        {
+          provider: "openai",
+          id: "gpt-live",
+          name: "Live GPT",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          input: ["text"],
+          contextWindow: 200_000,
+          maxTokens: 4096,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      ]);
+      mocks.loadSupplementalManifestCatalogRowsForList.mockReturnValueOnce([
+        {
+          provider: "openai",
+          id: "gpt-live",
+          ref: "openai/gpt-live",
+          mergeKey: "openai::gpt-live",
+          name: "Refreshed Duplicate GPT",
+          source: "runtime-refresh",
+          input: ["text"],
+          reasoning: false,
+          status: "available",
+          baseUrl: "https://api.openai.com/v1",
+          contextWindow: 200_000,
+        },
+        {
+          provider: "openai",
+          id: "gpt-refreshed",
+          ref: "openai/gpt-refreshed",
+          mergeKey: "openai::gpt-refreshed",
+          name: "Refreshed GPT",
+          source: "runtime-refresh",
+          input: ["text"],
+          reasoning: false,
+          status: "available",
+          baseUrl: "https://api.openai.com/v1",
+          contextWindow: 200_000,
+        },
+      ]);
+      const runtime = createRuntime();
+
+      await modelsListCommand({ all: true, provider: "openai", json: true }, runtime as never);
+
+      expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
+      const rows = lastPrintedRows<{ key: string; name: string }>();
+      expectRowKeys(rows, ["openai/gpt-live", "openai/gpt-refreshed"]);
+      expect(requireRow(rows, "openai/gpt-live").name).toBe("Live GPT");
+    });
+
     it("keeps provider-catalog Codex availability indeterminate without model auth", async () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
       mocks.hasProviderStaticCatalogForFilter.mockResolvedValueOnce(true);
