@@ -45,7 +45,9 @@ describe("audit-seams cron seam classification", () => {
       }
     `;
 
-    expect(describeSeamKinds("src/cron/service/ops.ts", source)).toContain("cron-scheduler-state");
+    expect(describeSeamKinds("src/cron/service/ops-lifecycle.ts", source)).toContain(
+      "cron-scheduler-state",
+    );
   });
 });
 
