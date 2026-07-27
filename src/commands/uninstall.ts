@@ -13,6 +13,7 @@ import {
   removeLegacyWorkspaceStateForReset,
 } from "../agents/workspace-legacy-state.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { COMPLETION_SHELLS, removeCompletionInstall } from "../cli/completion-runtime.js";
 import { isNixMode } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -20,12 +21,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveHomeDir, shortenHomeInString } from "../utils.js";
 import { resolveCleanupPlanFromDisk } from "./cleanup-plan.js";
 import { removePath, removeStateAndLinkedPaths, removeWorkspaceDirs } from "./cleanup-utils.js";
-import {
-  COMPLETION_SHELLS,
-  isCompletionInstalled,
-  removeCompletionInstall,
-  resolveCompletionProfilePath,
-} from "../cli/completion-runtime.js";
 
 type UninstallScope = "service" | "state" | "workspace" | "app";
 
@@ -124,17 +119,16 @@ function logBackupRecommendation(runtime: RuntimeEnv) {
 async function removeShellCompletion(runtime: RuntimeEnv, dryRun?: boolean) {
   for (const shell of COMPLETION_SHELLS) {
     try {
-      if (dryRun) {
-        if (await isCompletionInstalled(shell)) {
-          runtime.log(
-            `[dry-run] remove shell completion from ${shortenHomeInString(resolveCompletionProfilePath(shell))}`,
-          );
-        }
-        continue;
-      }
-      const { profilePath, changed } = await removeCompletionInstall(shell);
-      if (changed) {
-        runtime.log(`Removed shell completion from ${shortenHomeInString(profilePath)}`);
+      // Base the dry-run preview on the SAME entries the real removal would touch, so it
+      // lists exactly the profiles that carry a removable OpenClaw block (both bash profiles
+      // included) and never a profile with nothing to remove.
+      const { changedPaths } = await removeCompletionInstall(shell, "openclaw", { dryRun });
+      for (const profilePath of changedPaths) {
+        runtime.log(
+          dryRun
+            ? `[dry-run] remove shell completion from ${shortenHomeInString(profilePath)}`
+            : `Removed shell completion from ${shortenHomeInString(profilePath)}`,
+        );
       }
     } catch {
       // Best-effort: never fail an uninstall because one profile could not be rewritten.

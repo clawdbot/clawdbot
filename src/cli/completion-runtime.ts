@@ -229,12 +229,12 @@ export function completionProfileCandidates(
 export async function removeCompletionInstall(
   shell: CompletionShell,
   binName = "openclaw",
-): Promise<{ profilePath: string; changed: boolean }> {
+  options: { dryRun?: boolean } = {},
+): Promise<{ profilePath: string; changed: boolean; changedPaths: string[] }> {
   const cachePathCandidate = resolveCompletionCachePath(shell, binName);
   const cachedPath = (await pathExists(cachePathCandidate)) ? cachePathCandidate : null;
   const candidates = completionProfileCandidates(shell);
-  let changedPath = candidates[0] ?? resolveCompletionProfilePath(shell);
-  let changed = false;
+  const changedPaths: string[] = [];
   for (const profilePath of candidates) {
     if (!(await pathExists(profilePath))) {
       continue;
@@ -242,12 +242,20 @@ export async function removeCompletionInstall(
     const content = await fs.readFile(profilePath, "utf-8");
     const result = removeCompletionBlockFromProfile(content, binName, cachedPath);
     if (result.changed) {
-      await fs.writeFile(profilePath, result.next, "utf-8");
-      changed = true;
-      changedPath = profilePath;
+      // Dry-run computes exactly what WOULD change without touching the file, so the
+      // uninstall preview lists the same removable entries the real removal reports.
+      if (!options.dryRun) {
+        await fs.writeFile(profilePath, result.next, "utf-8");
+      }
+      changedPaths.push(profilePath);
     }
   }
-  return { profilePath: changedPath, changed };
+  return {
+    profilePath:
+      changedPaths[changedPaths.length - 1] ?? candidates[0] ?? resolveCompletionProfilePath(shell),
+    changed: changedPaths.length > 0,
+    changedPaths,
+  };
 }
 
 /** Resolves the shell startup profile path that should contain the OpenClaw completion block. */
