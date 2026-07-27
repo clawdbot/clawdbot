@@ -525,8 +525,13 @@ export async function runCopilotExecution(context: {
         input.sessionFile,
       );
     }
+    const journalSnapshot = transcriptJournal?.snapshot();
+    const initialUserValidated =
+      !sentTurnStarted ||
+      settledToolFinalization ||
+      journalSnapshot?.initialSdkUserValidated === true;
     const retainSessionForDeferredCleanup =
-      transcriptJournal?.snapshot().replayInvalid !== true &&
+      journalSnapshot?.replayInvalid !== true &&
       (bridge?.hasObservedCompaction() || (timedOut && bridge?.hasObservedSessionIdle() === false));
     if (retainSessionForDeferredCleanup && bridge && session && handle) {
       const cleanupAbort = new AbortController();
@@ -542,7 +547,7 @@ export async function runCopilotExecution(context: {
         bridge,
         cleanupToolBridge,
         cleanupByokProxy,
-        deleteSessionOnIncompleteCleanup: nativeSessionCreatedFresh,
+        deleteSessionOnIncompleteCleanup: nativeSessionCreatedFresh && initialUserValidated,
         finalizeNativeSubagents: () => nativeSubagentTaskMirror?.finalizeActiveRuns(),
         handle,
         pool: deps.pool,

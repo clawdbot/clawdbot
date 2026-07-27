@@ -675,6 +675,7 @@ describe("runCopilotAttempt", () => {
       onCreateSession: (session) => {
         activeSession = session;
         session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("user.message", { content: "hello" });
           session.emit("session.compaction_start", {});
           return makeAssistantMessageEvent("done");
         });
@@ -760,6 +761,7 @@ describe("runCopilotAttempt", () => {
     const sdk = makeFakeSdk({
       onCreateSession: (session) => {
         session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("user.message", { content: "hello" });
           session.emit("session.compaction_start", {});
           return makeAssistantMessageEvent("done");
         });
@@ -780,6 +782,30 @@ describe("runCopilotAttempt", () => {
     expect(sdk.sessions[0]?.disconnect).toHaveBeenCalledTimes(1);
     expect(sdk.client.deleteSession).toHaveBeenCalledWith("sess-1");
     expect(pool.release.mock.calls).toHaveLength(1);
+  });
+
+  it("does not delete a fresh session when its SDK user was never validated", async () => {
+    vi.useFakeTimers();
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("session.compaction_start", {});
+          return makeAssistantMessageEvent("done");
+        });
+      },
+    });
+    const pool = makeFakePool(sdk);
+
+    const result = await runCopilotAttempt(makeParams(), { pool });
+    expect(
+      (result as AgentHarnessAttemptResult & { journalValidated?: boolean }).journalValidated,
+    ).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(180_000);
+
+    expect(sdk.sessions[0]?.disconnect).toHaveBeenCalledTimes(1);
+    expect(sdk.client.deleteSession).not.toHaveBeenCalled();
+    expect(pool.release).toHaveBeenCalledTimes(1);
   });
 
   it("does not delete a resumed session when deferred compaction cannot complete", async () => {
@@ -819,6 +845,7 @@ describe("runCopilotAttempt", () => {
       onCreateSession: (session) => {
         activeSession = session;
         session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("user.message", { content: "hello" });
           session.emit("session.compaction_start", {});
           setTimeout(() => controller.abort(), 0);
           return makeAssistantMessageEvent("done");
@@ -2202,6 +2229,7 @@ describe("runCopilotAttempt", () => {
     const sdk = makeFakeSdk({
       onCreateSession: (session) => {
         session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("user.message", { content: "hello" });
           session.emit("session.compaction_start", {});
           return undefined;
         });
@@ -2297,6 +2325,7 @@ describe("runCopilotAttempt", () => {
     const sdk = makeFakeSdk({
       onCreateSession: (session) => {
         session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("user.message", { content: "hello" });
           session.emit("session.compaction_start", {});
           return undefined;
         });
@@ -2322,6 +2351,7 @@ describe("runCopilotAttempt", () => {
     const sdk = makeFakeSdk({
       onCreateSession: (session) => {
         session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("user.message", { content: "hello" });
           session.emit("session.compaction_start", {});
           return undefined;
         });
