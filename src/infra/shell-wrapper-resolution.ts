@@ -9,8 +9,10 @@ import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 import {
   hasFishAttachedCommandOption,
   hasFishInitCommandOption,
+  hasPowerShellProfileStartupBeforeInlineCommand,
   hasPosixInteractiveStartupBeforeInlineCommand,
   hasPosixLoginStartupBeforeInlineCommand,
+  isPowerShellInlineEncodedCommandFlag,
   NUSHELL_INLINE_COMMAND_FLAGS,
   POSIX_INLINE_COMMAND_FLAGS,
   resolveInlineCommandMatch,
@@ -574,12 +576,29 @@ export function isBlockedShellWrapperCommand(argv: string[], rawCommand?: string
   if (!wrapper) {
     return false;
   }
-  if (
-    wrapper.kind === "posix" &&
-    baseExecutable === "nu" &&
-    hasNushellStartupOptionBeforeInlineCommand(candidate.argv)
-  ) {
-    return true;
+  if (wrapper.kind === "powershell") {
+    const { command, valueTokenIndex } = resolvePowerShellInlineCommandMatch(candidate.argv);
+    // Profiles and login scripts run before the payload; encoded flags hide
+    // that payload entirely. Require a human unless startup is explicitly off.
+    if (
+      hasPowerShellProfileStartupBeforeInlineCommand(candidate.argv, valueTokenIndex) ||
+      (valueTokenIndex !== null &&
+        (command === "-" ||
+          isPowerShellInlineEncodedCommandFlag(candidate.argv[valueTokenIndex - 1] ?? "")))
+    ) {
+      return true;
+    }
+  }
+  if (wrapper.kind === "posix") {
+    // Startup options can consume their own payload before -c is reachable.
+    // Classify them first so profile/init execution never disappears as an
+    // unrecognized shell invocation.
+    if (
+      (baseExecutable === "fish" && hasFishInitCommandOption(candidate.argv)) ||
+      (baseExecutable === "nu" && hasNushellStartupOptionBeforeInlineCommand(candidate.argv))
+    ) {
+      return true;
+    }
   }
   if (wrapper.kind === "posix" && OPAQUE_STARTUP_FILE_SHELL_WRAPPERS.has(baseExecutable)) {
     return true;
