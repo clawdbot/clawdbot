@@ -65,7 +65,6 @@ export {
   readPresenceEntries,
   resolveActorIdentityUsers,
   resolveCurrentSelfUser,
-  type ActorIdentityUser,
   type PresencePayload,
 } from "../../app/user-profile.ts";
 export {
