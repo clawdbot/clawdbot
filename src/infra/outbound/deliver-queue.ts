@@ -334,7 +334,7 @@ export async function runOutboundDeliveryInternal(
       throw new Error(`Stable delivery intent is already queued: ${queueId}`);
     }
     let deliveryParams = params;
-    if (!queued.created) {
+    if (queued?.created !== true) {
       const queuedEntry = await loadPendingDelivery(queueId);
       if (!queuedEntry || queuedEntry.producerClaimId !== producerClaimId) {
         throw new Error(`Stable delivery platform claim was lost: ${queueId}`);
