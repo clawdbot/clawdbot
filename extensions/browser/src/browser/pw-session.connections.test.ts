@@ -19,6 +19,7 @@ const {
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
 const getChromeWebSocketEndpointSpy = vi.spyOn(chromeModule, "getChromeWebSocketEndpoint");
 const getChromeWebSocketUrlSpy = getChromeWebSocketEndpointSpy;
+const TEST_CDP_WS_MAX_PAYLOAD_BYTES = 1024 * 1024;
 
 type BrowserMockBundle = {
   browser: import("playwright-core").Browser;
@@ -365,7 +366,10 @@ describe("pw-session connection scoping", () => {
 
   it("follows same-authority redirects in the pinned Playwright CDP transport", async () => {
     const server = createServer();
-    const wss = new WebSocketServer({ noServer: true });
+    const wss = new WebSocketServer({
+      noServer: true,
+      maxPayload: TEST_CDP_WS_MAX_PAYLOAD_BYTES,
+    });
     const redirectedUpgradePaths: string[] = [];
     wss.on("connection", (socket) => {
       socket.addEventListener("message", (event) => {
