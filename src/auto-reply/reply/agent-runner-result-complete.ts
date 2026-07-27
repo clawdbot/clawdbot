@@ -18,7 +18,7 @@ import {
   resolveSourceReplyPolicy,
 } from "./agent-runner-core.js";
 import { normalizeAssistantFinalDeliveryText } from "./agent-runner-core.js";
-import type { accountReplyAgentRun } from "./agent-runner-result-accounting.js";
+import type { accountAgentTurn } from "./agent-runner-result-accounting.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import {
   accumulateSessionUsageFromTranscript,
@@ -36,17 +36,14 @@ import {
 import { appendUsageLine } from "./agent-runner-usage-line.js";
 import { buildPendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
-import {
-  shouldWarnAboutPrivateMessageToolFinal,
-  warnPrivateMessageToolFinal,
-} from "./private-message-tool-final.js";
+import { warnPrivateMessageToolFinal } from "./private-message-tool-final.js";
 import { enqueueFollowupRun, refreshQueuedFollowupSession } from "./queue.js";
 import { incrementRunCompactionCount } from "./session-run-accounting.js";
 import {
   buildStrandedReplyDeliveryFailurePayload,
-  buildStrandedReplyRetryFollowupRun,
+  resolveStrandedReplyRecovery,
 } from "./stranded-reply-recovery.js";
-type ReplyAgentAccounting = Awaited<ReturnType<typeof accountReplyAgentRun>>;
+type ReplyAgentAccounting = Awaited<ReturnType<typeof accountAgentTurn>>;
 type PreparedReplyAgentPayloads = {
   kind: "continue";
   activeSessionEntry: SessionEntry | undefined;
@@ -315,26 +312,18 @@ export async function completeReplyAgentRun(input: {
         ? runResult.meta.finalAssistantVisibleText
         : (rawAssistantText ?? ""),
     );
-    const isRoomEvent = sessionCtx.InboundEventKind === "room_event";
     // Heartbeats already deliver fallback finals via sendDurableMessageBatch;
     // recovering here would duplicate that message.
-    const isStrandedReply =
-      !isHeartbeat &&
-      !isRoomEvent &&
-      shouldWarnAboutPrivateMessageToolFinal({
-        sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
-        sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
-        successfulSourceReplyDelivery: completedSourceReplyDelivery,
-        finalText: assistantFinalText,
-      });
-    const retryMissingSourceDelivery =
-      isStrandedReplyRetryRun &&
-      !isHeartbeat &&
-      !isRoomEvent &&
-      sourceReplyPolicy.sourceReplyDeliveryMode === "message_tool_only" &&
-      !sourceReplyPolicy.sendPolicyDenied &&
-      !completedSourceReplyDelivery;
-    if (isStrandedReply) {
+    const recovery = resolveStrandedReplyRecovery({
+      base: followupRun,
+      finalText: assistantFinalText,
+      sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
+      sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
+      successfulSourceReplyDelivery: completedSourceReplyDelivery,
+      isHeartbeat,
+      isRoomEvent: sessionCtx.InboundEventKind === "room_event",
+    });
+    if (recovery.kind === "retry" || (recovery.kind === "diagnostic" && recovery.warn)) {
       warnPrivateMessageToolFinal({
         sessionKey,
         channel:
@@ -345,25 +334,20 @@ export async function completeReplyAgentRun(input: {
         finalTextLength: assistantFinalText.trim().length,
       });
     }
-    if (isStrandedReply || retryMissingSourceDelivery) {
-      if (isStrandedReplyRetryRun) {
+    if (recovery.kind === "diagnostic") {
+      finalPayloads = [...finalPayloads, recovery.payload];
+    } else if (recovery.kind === "retry") {
+      const retryEnqueued = enqueueFollowupRun(
+        queueKey,
+        recovery.run,
+        resolvedQueue,
+        "none",
+        runFollowupTurn,
+        false,
+        { position: "front" },
+      );
+      if (!retryEnqueued) {
         finalPayloads = [...finalPayloads, buildStrandedReplyDeliveryFailurePayload()];
-      } else {
-        const retryEnqueued = enqueueFollowupRun(
-          queueKey,
-          buildStrandedReplyRetryFollowupRun(followupRun, {
-            finalText: assistantFinalText,
-            sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
-          }),
-          resolvedQueue,
-          "none",
-          runFollowupTurn,
-          false,
-          { position: "front" },
-        );
-        if (!retryEnqueued) {
-          finalPayloads = [...finalPayloads, buildStrandedReplyDeliveryFailurePayload()];
-        }
       }
     }
     const pendingText = sourceReplyPolicy.suppressDelivery ? "" : finalDeliveryText;
