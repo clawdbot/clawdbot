@@ -98,6 +98,30 @@ describe("agent selection", () => {
     expect(selection.state).toEqual({ selectedId: "ops", scopeId: "ops" });
   });
 
+  it("adopts the hello default published by the same gateway client", () => {
+    const gateway = createGateway(null);
+    const selection = createAgentSelectionCapability(gateway.gateway, createRoster().roster);
+    const client = { request() {} } as unknown as GatewayBrowserClient;
+
+    gateway.publish({ client, assistantAgentId: null });
+    expect(selection.state).toEqual({ selectedId: null, scopeId: null });
+
+    gateway.publish({ client, assistantAgentId: "Roboclaw" });
+    expect(selection.state).toEqual({ selectedId: "roboclaw", scopeId: "roboclaw" });
+  });
+
+  it("does not replace an explicit pre-hello selection", () => {
+    const gateway = createGateway(null);
+    const selection = createAgentSelectionCapability(gateway.gateway, createRoster().roster);
+    const client = { request() {} } as unknown as GatewayBrowserClient;
+
+    gateway.publish({ client, assistantAgentId: null });
+    selection.set("Research");
+    gateway.publish({ client, assistantAgentId: "Roboclaw" });
+
+    expect(selection.state).toEqual({ selectedId: "research", scopeId: "research" });
+  });
+
   it("self-heals an unknown cold-load selection to the roster default", () => {
     const gateway = createGateway("Main");
     const roster = createRoster();
