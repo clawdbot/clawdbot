@@ -184,7 +184,8 @@ describe("config model reference validation", () => {
               allow: [
                 " openai / gpt-5.5 ",
                 "clawrouter/ anthropic/claude-haiku-4-5",
-                "openai/ns /*",
+                " openai / * ",
+                " clawrouter / anthropic / * ",
               ],
             },
           },
@@ -198,7 +199,9 @@ describe("config model reference validation", () => {
           list: [
             {
               id: "worker",
-              modelPolicy: { allow: [" openai / gpt-5.5 ", "openai/ns /*"] },
+              modelPolicy: {
+                allow: [" openai / gpt-5.5 ", " openai / * ", " openai / ns / * "],
+              },
             },
           ],
         },

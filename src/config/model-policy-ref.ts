@@ -39,9 +39,6 @@ type ModelPolicyWildcardRef = {
 /** Parse and canonicalize a segment-boundary model-policy prefix wildcard. */
 export function parseModelPolicyWildcardRef(raw: string): ModelPolicyWildcardRef | null {
   const trimmed = raw.trim();
-  if (!trimmed.endsWith("/*")) {
-    return null;
-  }
   // Wildcard keys match on segment boundaries, so normalize boundary padding
   // before building the canonical key used by policy matching.
   const segments = trimmed.split("/").map((segment) => segment.trim());

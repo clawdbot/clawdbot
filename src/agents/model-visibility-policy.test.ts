@@ -217,7 +217,7 @@ describe("explicit model visibility policy", () => {
     const policy = createPolicy({
       agents: {
         defaults: {
-          modelPolicy: { allow: ["clawrouter/anthropic /*", " openai / gpt-5.5 "] },
+          modelPolicy: { allow: [" clawrouter / anthropic / * ", " openai / gpt-5.5 "] },
         },
       },
     });
