@@ -63,6 +63,52 @@ it("carries submitted work placement and model through background list reconcili
   sessions.dispose();
 });
 
+it("retires prepared work placement when the session is deleted", async () => {
+  const key = "agent:main:deleted-worktree";
+  const emptyList: SessionsListResult = {
+    ts: 2,
+    path: "(multiple)",
+    count: 0,
+    defaults: { modelProvider: null, model: null, contextTokens: null },
+    sessions: [],
+  };
+  const client = {
+    request: vi.fn(async (method: string) => {
+      if (method === "sessions.create") {
+        return { key };
+      }
+      if (method === "sessions.delete") {
+        return { deleted: true };
+      }
+      if (method === "sessions.list") {
+        return emptyList;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    }),
+  } as unknown as GatewayBrowserClient;
+  const sessions = createSessionCapability({
+    snapshot: {
+      client,
+      phase: "connected" as const,
+      hello: null,
+      assistantAgentId: "main",
+      sessionKey: "agent:main:main",
+    },
+    subscribe: () => () => undefined,
+    subscribeEvents: () => () => undefined,
+  });
+
+  await expect(
+    sessions.createResult({ agentId: "main", worktree: true }, { reconciliation: "background" }),
+  ).resolves.toMatchObject({ key });
+  expect(sessions.isPreparedWorkSession(key)).toBe(true);
+
+  await expect(sessions.delete(key)).resolves.toMatchObject({ deleted: true });
+  // The key can be reused by a later ordinary thread, so it must not stay Coding.
+  expect(sessions.isPreparedWorkSession(key)).toBe(false);
+  sessions.dispose();
+});
+
 it("does not prepare rejected worktree or model selections", async () => {
   const key = "agent:main:rejected-worktree";
   const client = {

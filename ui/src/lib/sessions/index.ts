@@ -904,6 +904,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     pullRequestSummaries.delete(normalizedKey);
   };
 
+  // A deleted key stays reusable for a later ordinary thread, so a leftover
+  // prepared entry would keep classifying that new session as Coding forever.
+  const retirePreparedWorkSession = (key: string) => {
+    preparedWorkSessionKeys.delete(key.trim());
+  };
+
   const setPullRequestSummary = (
     key: string,
     summary: SessionCatalogPullRequestSummary | undefined,
@@ -1117,7 +1123,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       // The create response precedes list reconciliation. Carry submitted facts
       // across that gap so a partial history row cannot briefly lose its zone/model.
       if (requestParams.worktree === true || Boolean(requestParams.execNode?.trim())) {
-        preparedWorkSessionKeys.add(result.key);
+        preparedWorkSessionKeys.add(result.key.trim());
       }
       if (requestParams.model?.trim()) {
         setModelOverride(result.key, requestParams.model);
@@ -1515,6 +1521,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         return { deleted: false };
       }
       retirePullRequestSummary(key);
+      retirePreparedWorkSession(key);
       publish({ ...state, deletedSessions: [{ key, agentId: options.agentId }] });
       setModelOverride(key, undefined);
       await refreshReplacement(options.agentId);
@@ -1564,6 +1571,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (deleted.length > 0 && isCurrentConnection(scope)) {
       for (const key of deleted) {
         retirePullRequestSummary(key);
+        retirePreparedWorkSession(key);
       }
       publish({
         ...state,
