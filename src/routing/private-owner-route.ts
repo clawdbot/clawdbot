@@ -30,15 +30,25 @@ export function isPrivateOwnerRouteTarget(params: {
 
 function buildPrivateOwnerRouteKeys(target: { channel: string; to: string }): Set<string> {
   const channel = normalizeLowercaseStringOrEmpty(target.channel);
-  const to = normalizeLowercaseStringOrEmpty(target.to);
+  const plugin = getLoadedChannelPluginById(channel);
+  const targetIds = new Set([
+    normalizeLowercaseStringOrEmpty(target.to),
+    normalizeLowercaseStringOrEmpty(plugin?.messaging?.normalizeTarget?.(target.to)),
+  ]);
   const keys = new Set<string>();
-  if (to) {
+  for (const to of targetIds) {
+    if (!to) {
+      continue;
+    }
     keys.add(to);
     keys.add(`user:${to}`);
-  }
-  if (channel && to) {
+    if (!channel) {
+      continue;
+    }
+    // Channels can type private targets (for example, `user:<id>`). Include
+    // the plugin-normalized ID so the same native owner identity still matches.
     keys.add(`${channel}:${to}`);
-    for (const prefix of getLoadedChannelPluginById(channel)?.messaging?.targetPrefixes ?? []) {
+    for (const prefix of plugin?.messaging?.targetPrefixes ?? []) {
       const normalizedPrefix = normalizeLowercaseStringOrEmpty(prefix);
       if (normalizedPrefix) {
         keys.add(`${normalizedPrefix}:${to}`);

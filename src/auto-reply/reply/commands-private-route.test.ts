@@ -17,15 +17,19 @@ import {
 import type { HandleCommandsParams } from "./commands-types.js";
 
 function createApprovalChannelPlugin(params: {
-  id: "discord" | "telegram" | "whatsapp";
+  id: "discord" | "feishu" | "telegram" | "whatsapp";
   targets: Array<{ to: string; threadId?: string | number | null }>;
   enabled?: boolean;
+  normalizeTarget?: (raw: string) => string | undefined;
 }): ChannelPlugin {
   return {
     ...createChannelTestPluginBase({
       id: params.id,
       label: params.id,
     }),
+    ...(params.normalizeTarget
+      ? { messaging: { normalizeTarget: params.normalizeTarget } }
+      : {}),
     approvalCapability: {
       native: {
         describeDeliveryCapabilities: vi.fn(() => ({
@@ -262,6 +266,32 @@ describe("resolvePrivateCommandRouteTargets", () => {
       {
         channel: "telegram",
         to: "849985193",
+        accountId: undefined,
+        threadId: undefined,
+      },
+    ]);
+  });
+
+  it("matches typed private targets through the channel target normalizer", async () => {
+    registerApprovalChannelPlugins([
+      createApprovalChannelPlugin({
+        id: "feishu",
+        targets: [{ to: "user:ou_owner" }],
+        normalizeTarget: (raw) => raw.replace(/^user:/, ""),
+      }),
+    ]);
+
+    const targets = await resolvePrivateCommandRouteTargets({
+      commandParams: buildCommandParams({
+        commands: { ownerAllowFrom: ["feishu:ou_owner"] },
+      } as OpenClawConfig),
+      request: buildApprovalRequest(),
+    });
+
+    expect(targets).toEqual([
+      {
+        channel: "feishu",
+        to: "user:ou_owner",
         accountId: undefined,
         threadId: undefined,
       },
