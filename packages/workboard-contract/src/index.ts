@@ -23,6 +23,8 @@ export const WORKBOARD_EXECUTION_STATUSES = [
   "done",
 ] as const;
 export const WORKBOARD_DECOMPOSITION_MODES = ["orchestration", "hard"] as const;
+/** Safe legacy-compatible default; only explicit `hard` adds blocking dependency edges. */
+export const DEFAULT_WORKBOARD_DECOMPOSITION_MODE = "orchestration" as const;
 export const WORKBOARD_EVENT_KINDS = [
   "created",
   "edited",

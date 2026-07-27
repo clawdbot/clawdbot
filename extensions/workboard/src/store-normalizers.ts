@@ -4,6 +4,7 @@ import {
   WORKBOARD_ATTEMPT_STATUSES,
   WORKBOARD_DIAGNOSTIC_KINDS,
   WORKBOARD_DIAGNOSTIC_SEVERITIES,
+  DEFAULT_WORKBOARD_DECOMPOSITION_MODE,
   WORKBOARD_DECOMPOSITION_MODES,
   WORKBOARD_EVENT_KINDS,
   WORKBOARD_EXECUTION_MODES,
@@ -285,7 +286,7 @@ export function normalizeStatus(value: unknown, fallback: WorkboardStatus): Work
 
 export function normalizeDecompositionMode(
   value: unknown,
-  fallback: WorkboardDecompositionMode = "orchestration",
+  fallback: WorkboardDecompositionMode = DEFAULT_WORKBOARD_DECOMPOSITION_MODE,
 ): WorkboardDecompositionMode {
   return WORKBOARD_DECOMPOSITION_MODES.includes(value as WorkboardDecompositionMode)
     ? (value as WorkboardDecompositionMode)
