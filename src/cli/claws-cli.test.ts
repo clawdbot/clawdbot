@@ -105,8 +105,8 @@ vi.mock("../claws/update-apply.js", async () => ({
 }));
 
 const { registerClawsCli } = await import("./claws-cli.js");
-const { runClawsAddCommand, waitUntilGatewayConfigApplied } =
-  await import("./claws-cli.runtime.js");
+const { waitUntilGatewayConfigApplied } = await import("./claws-cli.gateway-readiness.js");
+const { runClawsAddCommand } = await import("./claws-cli.runtime.js");
 const { ClawUpdateMutationError } = await import("../claws/update-apply.js");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
