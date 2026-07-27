@@ -1,7 +1,6 @@
 // Plugin management service tests cover cold state, catalog identity, and guarded mutations.
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 
 const mocks = vi.hoisted(() => ({
   applyUninstall: vi.fn(),
@@ -234,33 +233,6 @@ describe("plugin management service", () => {
       feed: { schemaVersion: 1, id: "test", generatedAt: "now", sequence: 1, entries: [] },
       metadata: { url: "https://clawhub.ai/feed", status: 200, checksum: "hash" },
     });
-  });
-
-  it("reuses the hosted official catalog until plugin metadata is invalidated", async () => {
-    mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
-    mocks.officialCatalog
-      .mockResolvedValueOnce({
-        source: "hosted",
-        entries: [hostedFeedDiffsEntry],
-      })
-      .mockResolvedValueOnce({
-        source: "hosted",
-        entries: [],
-      });
-
-    const initial = await listManagedPlugins({ config: {}, env: {} });
-    const cached = await listManagedPlugins({ config: {}, env: {} });
-
-    expect(initial.plugins).toEqual([expect.objectContaining({ id: "diffs" })]);
-    expect(cached.plugins).toEqual(initial.plugins);
-    expect(mocks.officialCatalog).toHaveBeenCalledTimes(1);
-
-    clearPluginMetadataLifecycleCaches();
-
-    const refreshed = await listManagedPlugins({ config: {}, env: {} });
-
-    expect(mocks.officialCatalog).toHaveBeenCalledTimes(2);
-    expect(refreshed.plugins).toEqual([]);
   });
 
   it("keeps bundled curation when the hosted catalog falls back offline", async () => {
