@@ -50,7 +50,7 @@ vi.mock("./room-info.js", async () => {
 
 function installRuntime(params?: {
   buildMentionRegexes?: () => RegExp[];
-  hasControlCommand?: (body: string) => boolean;
+  hasControlCommand?: (body?: string) => boolean;
   matchesMentionPatterns?: (body: string, regexes: RegExp[]) => boolean;
   shouldHandleTextCommands?: () => boolean;
 }) {
@@ -356,7 +356,7 @@ describe("nextcloud-talk inbound behavior", () => {
   });
 
   it("does not interpret rich-object display names as control commands", async () => {
-    const hasControlCommand = vi.fn((body: string) => body.startsWith("/"));
+    const hasControlCommand = vi.fn((body = "") => body.startsWith("/"));
     const coreRuntime = installRuntime({ hasControlCommand });
     createChannelPairingControllerMock.mockReturnValue({
       readStoreForDmPolicy: vi.fn(async () => []),
