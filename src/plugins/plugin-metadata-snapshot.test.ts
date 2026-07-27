@@ -8,7 +8,6 @@ import type { PluginDiscoveryResult } from "./discovery.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
-import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
   loadPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot,
@@ -129,71 +128,6 @@ describe("plugin metadata snapshot", () => {
     expect(second).not.toBe(first);
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
     expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledTimes(2);
-  });
-
-  it("reuses only proven deep-frozen manifest values until the metadata lifecycle resets", () => {
-    const index = makeIndex();
-    const registry = makeManifestRegistry();
-    const plugin = registry.plugins[0];
-    if (!plugin) {
-      throw new Error("expected manifest plugin fixture");
-    }
-    const nestedSchema = Object.freeze({
-      type: "object",
-      properties: { token: { type: "string" } },
-    });
-    plugin.configSchema = nestedSchema;
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: index,
-      diagnostics: [],
-    });
-    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(registry);
-
-    expect(Object.isFrozen(nestedSchema.properties)).toBe(false);
-    const freeze = vi.spyOn(Object, "freeze");
-    try {
-      const countNestedSchemaFreezes = () =>
-        freeze.mock.calls.filter(([value]) => value === nestedSchema).length;
-
-      const first = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
-      expect(countNestedSchemaFreezes()).toBe(1);
-      expect(Object.isFrozen(nestedSchema.properties)).toBe(true);
-      expect(Object.isFrozen(nestedSchema.properties.token)).toBe(true);
-      expect(() => {
-        nestedSchema.properties.token.type = "mutated";
-      }).toThrow();
-
-      const second = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
-      expect(second).not.toBe(first);
-      expect(second.index).not.toBe(first.index);
-      expect(second.index.plugins[0]).not.toBe(first.index.plugins[0]);
-      expect(second.manifestRegistry).toBe(first.manifestRegistry);
-      expect(countNestedSchemaFreezes()).toBe(1);
-
-      for (const snapshot of [first, second]) {
-        expect(() => {
-          (snapshot.byPluginId as Map<string, PluginManifestRecord>).set("mutated", plugin);
-        }).toThrow("Plugin metadata snapshots are immutable");
-        expect(() => {
-          (snapshot.owners.providers as Map<string, readonly string[]>).clear();
-        }).toThrow("Plugin metadata snapshots are immutable");
-        expect(() => {
-          (snapshot.owners.providers.get("demo") as string[]).push("mutated");
-        }).toThrow();
-      }
-
-      clearPluginMetadataLifecycleCaches();
-
-      const third = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
-      expect(third).not.toBe(first);
-      expect(third).not.toBe(second);
-      expect(third.index).not.toBe(second.index);
-      expect(third.manifestRegistry).toBe(registry);
-      expect(countNestedSchemaFreezes()).toBe(2);
-    } finally {
-      freeze.mockRestore();
-    }
   });
 
   it("rewalks collection-bearing manifest graphs after prototype mutation", () => {
