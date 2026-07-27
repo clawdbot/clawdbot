@@ -117,23 +117,16 @@ function canDeliverToRequesterOrigin(origin: TaskDeliveryState["requesterOrigin"
   return Boolean(channel && to && isDeliverableMessageChannel(channel));
 }
 
-function canDeliverParentReviewTaskToBoundDiscordThread(task: TaskRecord): boolean {
+function canDeliverParentReviewTaskToThreadOrigin(task: TaskRecord): boolean {
   if (!shouldUseParentReviewTaskTerminalMessage(task)) {
     return false;
   }
   const owner = resolveTaskDeliveryOwner(task);
   const origin = owner.requesterOrigin;
-  const channel = origin?.channel?.trim().toLowerCase();
-  const to = origin?.to?.trim().toLowerCase();
   const threadId = String(origin?.threadId ?? "").trim();
-  // This is a narrow transport exception for explicitly bound Discord threads,
-  // not a general parent-review direct-delivery relaxation.
-  return Boolean(
-    channel === "discord" &&
-    to?.startsWith("channel:") &&
-    threadId &&
-    canDeliverToRequesterOrigin(origin),
-  );
+  // Parent-review terminal messages may deliver directly only when the requester origin
+  // already names a concrete thread; root-level origins keep routing through the parent session.
+  return Boolean(threadId && canDeliverToRequesterOrigin(origin));
 }
 
 function resolveMissingOwnerDeliveryStatus(task: TaskRecord): TaskDeliveryStatus {
@@ -267,7 +260,7 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
       });
     }
     const shouldRouteParentReview = shouldUseParentReviewTaskTerminalMessage(latest);
-    const shouldDeliverParentReviewDirect = canDeliverParentReviewTaskToBoundDiscordThread(latest);
+    const shouldDeliverParentReviewDirect = canDeliverParentReviewTaskToThreadOrigin(latest);
     const canDeliverDirect =
       canDeliverTaskToRequesterOrigin(latest) || shouldDeliverParentReviewDirect;
     const directEventText = formatTaskTerminalMessage(latest);
