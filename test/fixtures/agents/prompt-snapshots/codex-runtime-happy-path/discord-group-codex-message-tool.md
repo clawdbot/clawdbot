@@ -64,6 +64,7 @@
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "config": {
+    "code_mode.direct_only_tool_namespaces": ["openclaw_direct"],
     "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
     "features.code_mode_only": false,
@@ -77,7 +78,6 @@
     "message",
     "agents_list",
     "sessions_spawn",
-    "sessions_yield",
     "nodes",
     "cron",
     "tts",
@@ -89,7 +89,8 @@
     "subagents",
     "session_status",
     "web_search",
-    "web_fetch"
+    "web_fetch",
+    "sessions_yield"
   ],
   "experimentalRawEvents": true,
   "model": "gpt-5.5",
@@ -220,8 +221,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 61223,
-    "roughTokens": 15306
+    "chars": 61383,
+    "roughTokens": 15346
   },
   "openClawDeveloperInstructions": {
     "chars": 3471,
@@ -232,8 +233,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6964
   },
   "totalWithDynamicToolsJson": {
-    "chars": 89079,
-    "roughTokens": 22270
+    "chars": 89239,
+    "roughTokens": 22310
   },
   "userInputText": {
     "chars": 1300,
@@ -523,7 +524,6 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
   "message",
   "agents_list",
   "sessions_spawn",
-  "sessions_yield",
   "nodes",
   "cron",
   "tts",
@@ -535,7 +535,8 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
   "subagents",
   "session_status",
   "web_search",
-  "web_fetch"
+  "web_fetch",
+  "sessions_yield"
 ]
 ```
 

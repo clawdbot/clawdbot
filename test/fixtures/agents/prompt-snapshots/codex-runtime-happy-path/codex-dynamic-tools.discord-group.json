@@ -260,19 +260,6 @@
     "type": "function"
   },
   {
-    "description": "End turn after subagent spawn; results arrive next message.",
-    "inputSchema": {
-      "properties": {
-        "message": {
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
-    "name": "sessions_yield",
-    "type": "function"
-  },
-  {
     "description": "",
     "name": "openclaw",
     "tools": [
@@ -1613,6 +1600,26 @@
           "type": "object"
         },
         "name": "web_fetch",
+        "type": "function"
+      }
+    ],
+    "type": "namespace"
+  },
+  {
+    "description": "",
+    "name": "openclaw_direct",
+    "tools": [
+      {
+        "description": "End turn after subagent spawn; results arrive next message.",
+        "inputSchema": {
+          "properties": {
+            "message": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "sessions_yield",
         "type": "function"
       }
     ],

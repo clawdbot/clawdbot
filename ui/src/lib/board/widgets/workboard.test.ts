@@ -145,6 +145,104 @@ describe("Workboard plugin widgets", () => {
     );
   });
 
+  it("does not offer or issue status changes for a read-only card widget", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "workboard.cards.list") {
+        return { cards, statuses: ["ready", "running", "done"] };
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const element = document.createElement("openclaw-workboard-card-widget");
+    element.widget = pluginWidget("workboard:card", { cardId: "card-ready" });
+    element.sessionKey = "agent:main:test";
+    Reflect.set(element, "canMutate", false);
+
+    await mount(element, createContext(request), request);
+
+    const select = element.querySelector("select");
+    expect(select).not.toBeNull();
+    expect(select?.disabled).toBe(true);
+    if (select) {
+      select.value = "running";
+      select.dispatchEvent(new Event("change"));
+    }
+    expect(request).not.toHaveBeenCalledWith("workboard.cards.move", expect.anything());
+  });
+
+  it("ignores a stale card move after the gateway connection changes", async () => {
+    const staleMove = deferred<unknown>();
+    const staleRequest = vi.fn(async (method: string) => {
+      if (method === "workboard.cards.list") {
+        return { cards, statuses: ["ready", "running", "done"] };
+      }
+      if (method === "workboard.cards.move") {
+        return await staleMove.promise;
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const currentCard = { ...cards[0], title: "Current connection card" };
+    const currentRequest = vi.fn(async (method: string) => {
+      if (method === "workboard.cards.list") {
+        return { cards: [currentCard], statuses: ["ready", "running", "done"] };
+      }
+      if (method === "workboard.cards.move") {
+        return { card: { ...currentCard, status: "running", position: 0 } };
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const element = document.createElement("openclaw-workboard-card-widget");
+    element.widget = pluginWidget("workboard:card", { cardId: "card-ready" });
+    element.sessionKey = "agent:main:test";
+    const provider = createApplicationContextProvider(createContext(staleRequest));
+    provider.append(element);
+    document.body.append(provider);
+    await vi.waitFor(() => expect(element.textContent).toContain("Ready card"));
+
+    const select = element.querySelector("select");
+    expect(select).not.toBeNull();
+    if (select) {
+      select.value = "running";
+      select.dispatchEvent(new Event("change"));
+    }
+    await vi.waitFor(() =>
+      expect(staleRequest).toHaveBeenCalledWith("workboard.cards.move", {
+        id: "card-ready",
+        status: "running",
+        position: 2,
+      }),
+    );
+    const moveCallIndex = staleRequest.mock.calls.findIndex(
+      ([method]) => method === "workboard.cards.move",
+    );
+    const pendingMove = staleRequest.mock.results[moveCallIndex]?.value as Promise<unknown>;
+
+    provider.setContext(createContext(currentRequest));
+    await vi.waitFor(() => expect(element.textContent).toContain("Current connection card"));
+    const currentSelect = element.querySelector("select");
+    expect(currentSelect).not.toBeNull();
+    if (currentSelect) {
+      currentSelect.value = "running";
+      currentSelect.dispatchEvent(new Event("change"));
+    }
+    await vi.waitFor(() =>
+      expect(currentRequest).toHaveBeenCalledWith("workboard.cards.move", {
+        id: "card-ready",
+        status: "running",
+        position: 0,
+      }),
+    );
+    staleMove.resolve({
+      card: { ...cards[0], title: "Stale connection card", status: "running", position: 2 },
+    });
+    await pendingMove;
+    await Promise.resolve();
+    await element.updateComplete;
+
+    expect(element.textContent).toContain("Current connection card");
+    expect(element.textContent).not.toContain("Stale connection card");
+    expect(element.querySelector("select")?.value).toBe("running");
+  });
+
   it("does not render or move an archived card", async () => {
     const archivedCard = {
       ...cards[0],

@@ -64,6 +64,7 @@
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "config": {
+    "code_mode.direct_only_tool_namespaces": ["openclaw_direct"],
     "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
     "features.code_mode_only": false,
@@ -77,10 +78,8 @@
     "message",
     "agents_list",
     "sessions_spawn",
-    "sessions_yield",
     "nodes",
     "cron",
-    "heartbeat_respond",
     "tts",
     "gateway",
     "sessions_list",
@@ -90,7 +89,9 @@
     "subagents",
     "session_status",
     "web_search",
-    "web_fetch"
+    "web_fetch",
+    "heartbeat_respond",
+    "sessions_yield"
   ],
   "experimentalRawEvents": true,
   "model": "gpt-5.5",
@@ -221,20 +222,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 62477,
-    "roughTokens": 15620
+    "chars": 62607,
+    "roughTokens": 15652
   },
   "openClawDeveloperInstructions": {
-    "chars": 2381,
-    "roughTokens": 596
+    "chars": 2362,
+    "roughTokens": 591
   },
   "totalTextOnly": {
-    "chars": 26822,
-    "roughTokens": 6706
+    "chars": 26803,
+    "roughTokens": 6701
   },
   "totalWithDynamicToolsJson": {
-    "chars": 89301,
-    "roughTokens": 22326
+    "chars": 89412,
+    "roughTokens": 22353
   },
   "userInputText": {
     "chars": 1284,
@@ -421,7 +422,7 @@ Approval policy is currently never. Do not provide the `sandbox_permissions` for
 ````text
 You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.
 
-Deferred searchable OpenClaw dynamic tools available: cron, gateway, heartbeat_respond, nodes, session_status, sessions_history, sessions_list, sessions_search, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
+Deferred searchable OpenClaw dynamic tools available: cron, gateway, nodes, session_status, sessions_history, sessions_list, sessions_search, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
 
 Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred: when `spawn_agent` is not directly listed, load it with `tool_search` before spawning. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.
 
@@ -518,10 +519,8 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
   "message",
   "agents_list",
   "sessions_spawn",
-  "sessions_yield",
   "nodes",
   "cron",
-  "heartbeat_respond",
   "tts",
   "gateway",
   "sessions_list",
@@ -531,7 +530,9 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
   "subagents",
   "session_status",
   "web_search",
-  "web_fetch"
+  "web_fetch",
+  "heartbeat_respond",
+  "sessions_yield"
 ]
 ```
 
@@ -667,7 +668,6 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
     "type": "function"
   },
   {
-    "deferLoading": true,
     "description": "Record heartbeat result. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only; manage recurring tasks with cron.",
     "inputSchema": {
       "additionalProperties": false,

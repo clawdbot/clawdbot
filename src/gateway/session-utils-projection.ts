@@ -42,6 +42,7 @@ function buildSessionListRowContextFromParts(params: {
     displayModelIdentityByKey: new Map(),
     modelCostConfigByModelRef: new Map(),
     userProfileLabelById: new Map(),
+    acpSessionMetaByEntry: new Map(),
   };
 }
 
