@@ -240,6 +240,25 @@ describe("hydrateDiscordMessageIfNeeded", () => {
     expect(rest.calls.map((call) => call.path)).toEqual(["/channels/c1/messages/m0"]);
     expect(hydrated.referencedMessage?.id).toBe("m0");
     expect(hydrated.referencedMessage?.content).toBe("the canonical reply target");
+
+    const ctx = await createBaseDiscordMessageContext({
+      message: hydrated,
+      author: hydrated.author,
+      baseText: hydrated.content,
+      messageText: hydrated.content,
+    });
+    const result = await buildDiscordMessageProcessContext({
+      ctx,
+      text: hydrated.content,
+      mediaList: [],
+    });
+    if (!result) {
+      throw new Error("expected a built Discord message context");
+    }
+
+    expect(result.ctxPayload.ReplyToId).toBe("m0");
+    expect(result.ctxPayload.ReplyToBody).toBe("the canonical reply target");
+    expect(result.ctxPayload.ReplyToBody).not.toContain("unrelated older context");
   });
 
   it("discards a mismatched nested reply when canonical hydration fails", async () => {
@@ -265,6 +284,24 @@ describe("hydrateDiscordMessageIfNeeded", () => {
     });
 
     expect(hydrated.referencedMessage).toBeNull();
+
+    const ctx = await createBaseDiscordMessageContext({
+      message: hydrated,
+      author: hydrated.author,
+      baseText: hydrated.content,
+      messageText: hydrated.content,
+    });
+    const result = await buildDiscordMessageProcessContext({
+      ctx,
+      text: hydrated.content,
+      mediaList: [],
+    });
+    if (!result) {
+      throw new Error("expected a built Discord message context");
+    }
+
+    expect(result.ctxPayload.ReplyToId).toBeUndefined();
+    expect(result.ctxPayload.ReplyToBody).toBeUndefined();
   });
 
   it("uses the referenced channel when directly hydrating a cross-channel reply", async () => {
