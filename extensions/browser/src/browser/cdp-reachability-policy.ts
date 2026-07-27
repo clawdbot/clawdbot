@@ -11,6 +11,11 @@ import { BrowserProfileUnavailableError } from "./errors.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { withExactHostnamePolicy } from "./ssrf-policy-helpers.js";
 
+// Synthetic exact-host CDP policies must retain the operator's original intent;
+// otherwise Chrome MCP cannot distinguish default control-plane scoping from a
+// user-authored restriction that genuinely requires pinned transport.
+const cdpControlSourcePolicyByScopedPolicy = new WeakMap<SsrFPolicy, SsrFPolicy>();
+
 function withCdpControlHostname(
   profile: ResolvedBrowserProfile,
   ssrfPolicy?: SsrFPolicy,
@@ -30,7 +35,9 @@ function withCdpControlHostname(
   ) {
     return ssrfPolicy;
   }
-  return withExactHostnamePolicy(ssrfPolicy, cdpHost);
+  const scopedPolicy = withExactHostnamePolicy(ssrfPolicy, cdpHost);
+  cdpControlSourcePolicyByScopedPolicy.set(scopedPolicy, ssrfPolicy);
+  return scopedPolicy;
 }
 
 function hasPolicyEntries(values?: string[]): boolean {
@@ -41,22 +48,24 @@ function requiresPinnedChromeMcpCdpTransport(cdpPolicy?: SsrFPolicy): boolean {
   if (!cdpPolicy) {
     return false;
   }
+  const policyIntent = cdpControlSourcePolicyByScopedPolicy.get(cdpPolicy) ?? cdpPolicy;
   const hasScopedPolicy =
-    cdpPolicy.allowRfc2544BenchmarkRange === true ||
-    cdpPolicy.allowIpv6UniqueLocalRange === true ||
-    hasPolicyEntries(cdpPolicy.allowedHostnames) ||
-    hasPolicyEntries(cdpPolicy.hostnameAllowlist) ||
-    hasPolicyEntries(cdpPolicy.allowedOrigins);
+    policyIntent.allowRfc2544BenchmarkRange === true ||
+    policyIntent.allowIpv6UniqueLocalRange === true ||
+    hasPolicyEntries(policyIntent.allowedHostnames) ||
+    hasPolicyEntries(policyIntent.hostnameAllowlist) ||
+    hasPolicyEntries(policyIntent.allowedOrigins);
   if (
     !hasScopedPolicy &&
-    (cdpPolicy.dangerouslyAllowPrivateNetwork === true || cdpPolicy.allowPrivateNetwork === true)
+    (policyIntent.dangerouslyAllowPrivateNetwork === true ||
+      policyIntent.allowPrivateNetwork === true)
   ) {
     return false;
   }
   return (
     hasScopedPolicy ||
-    cdpPolicy.dangerouslyAllowPrivateNetwork === false ||
-    cdpPolicy.allowPrivateNetwork === false
+    policyIntent.dangerouslyAllowPrivateNetwork === false ||
+    policyIntent.allowPrivateNetwork === false
   );
 }
 
