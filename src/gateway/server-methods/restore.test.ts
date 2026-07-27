@@ -7,7 +7,7 @@ const restoreStatus = restoreHandlers["gateway.restore.status"] as GatewayReques
 
 function invoke(params: Record<string, unknown>, result: GatewayRestoreStatusResult) {
   const respond = vi.fn();
-  restoreStatus({
+  void restoreStatus({
     req: { type: "req", id: "request-1", method: "gateway.restore.status" },
     params,
     client: null,
