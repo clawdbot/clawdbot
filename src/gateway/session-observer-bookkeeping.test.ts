@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createHarness, persistedLiveDigest } from "./session-observer.test-utils.js";
 
 describe("session observer run bookkeeping", () => {
   it("bounds dormant runs and preserves revision continuity for evicted entries", async () => {
@@ -37,5 +39,29 @@ describe("session observer run bookkeeping", () => {
     expect(runs.size).toBe(512);
     expect(runs.has("run-0")).toBe(false);
     expect(runs.has("run-599")).toBe(true);
+  });
+
+  it("reads a persisted global companion through its canonical agent store key", () => {
+    const config = {
+      gateway: { controlUi: { sessionObserver: true } },
+      session: { scope: "global" as const },
+      agents: {
+        defaults: { utilityModel: "openai/gpt-test" },
+        list: [{ id: "main", default: true }, { id: "work" }],
+      },
+    } satisfies OpenClawConfig;
+    const digest = persistedLiveDigest({ agentId: "work", sessionKey: "global" });
+    const readSession = vi.fn(() => ({
+      sessionId: "global-session-id",
+      updatedAt: 1_000,
+      observerDigest: digest,
+    }));
+    const harness = createHarness({ subscribe: false, config, readSession });
+
+    const snapshot = harness.observer.getCompanionSnapshot("agent:work:main");
+
+    expect(readSession).toHaveBeenCalledWith("global", "work");
+    expect(snapshot).toMatchObject({ agentId: "work", digest, runId: digest.runId });
+    harness.observer.dispose();
   });
 });
