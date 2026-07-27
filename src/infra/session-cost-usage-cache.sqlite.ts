@@ -1,3 +1,5 @@
+import os from "node:os";
+import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
@@ -11,6 +13,8 @@ const LEGACY_CACHE_SCOPE = "session-cost-usage";
 const LEGACY_CACHE_KEY = "cache";
 const REFRESH_LOCK_KEY = "refresh-lock";
 const ROLLUP_SCOPE = "session-cost-usage-rollup-v1";
+// Absorbs wall-clock adjustments between writing `startedAt` and comparing it.
+const REFRESH_LOCK_CLOCK_TOLERANCE_MS = 2_000;
 
 type AgentCacheDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
 
@@ -242,10 +246,43 @@ function isProcessRunning(pid: number): boolean {
   }
 }
 
+function systemBootTimeMs(): number | undefined {
+  try {
+    const uptimeSeconds = os.uptime();
+    if (!Number.isFinite(uptimeSeconds) || uptimeSeconds < 0) {
+      return undefined;
+    }
+    return Date.now() - uptimeSeconds * 1000;
+  } catch {
+    return undefined;
+  }
+}
+
+// A live PID is not proof of ownership. Supervised gateways restart into the same
+// low PID (PID 1/9 under a container init), so a lock leaked by a previous
+// incarnation keeps matching `process.kill(pid, 0)` and would pin refreshes off
+// forever. `startedAt` is what separates incarnations, so compare against the
+// clocks we can trust and fail toward "held" whenever a check is inconclusive.
+function isRefreshLockOwnerAlive(lock: SessionCostUsageRefreshLock): boolean {
+  if (!isProcessRunning(lock.pid)) {
+    return false;
+  }
+  if (lock.pid === process.pid) {
+    // Our own PID: the lock is ours only if it was written after we started.
+    return lock.startedAt >= performance.timeOrigin - REFRESH_LOCK_CLOCK_TOLERANCE_MS;
+  }
+  // Another PID: an owner that predates the last boot cannot still hold the lock.
+  const bootTimeMs = systemBootTimeMs();
+  if (bootTimeMs === undefined) {
+    return true;
+  }
+  return lock.startedAt >= bootTimeMs - REFRESH_LOCK_CLOCK_TOLERANCE_MS;
+}
+
 export function isSessionCostUsageRefreshRunning(agentId?: string, databasePath?: string): boolean {
   const raw = readCacheValue(agentId, LEGACY_CACHE_SCOPE, REFRESH_LOCK_KEY, databasePath);
   const lock = parseRefreshLock(raw);
-  if (lock && isProcessRunning(lock.pid)) {
+  if (lock && isRefreshLockOwnerAlive(lock)) {
     return true;
   }
   if (raw !== null) {
@@ -268,7 +305,7 @@ export function acquireSessionCostUsageRefreshLock(
   const previousLock = parseRefreshLock(previousRaw);
   // Process liveness is resolved before BEGIN. The transaction only compares
   // the authoritative row and commits the prepared replacement synchronously.
-  const previousOwnerIsRunning = previousLock ? isProcessRunning(previousLock.pid) : false;
+  const previousOwnerIsRunning = previousLock ? isRefreshLockOwnerAlive(previousLock) : false;
   const lock: SessionCostUsageRefreshLock = {
     pid: process.pid,
     startedAt: Date.now(),
