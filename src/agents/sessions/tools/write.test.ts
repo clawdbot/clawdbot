@@ -24,16 +24,6 @@ describe("write tool", () => {
     return path.join(tmpDir, name);
   }
 
-  /** Pre-existing differing files refuse the first write; the resend confirms replacement. */
-  async function executeConfirmedWrite(
-    tool: ReturnType<typeof createWriteTool>,
-    callId: string,
-    args: { path: string; content: string },
-  ) {
-    await expect(tool.execute(callId, args, undefined)).rejects.toThrow(/already exists/);
-    return tool.execute(callId, args, undefined);
-  }
-
   function createRecoverableOperations(writeFile: WriteOperations["writeFile"]): WriteOperations {
     return {
       mkdir: (dir) => fs.mkdir(dir, { recursive: true }).then(() => {}),
@@ -188,7 +178,7 @@ describe("write tool", () => {
     await fs.writeFile(filePath, oldContent, "utf-8");
     const tool = createWriteTool(tmpDir);
 
-    const result = await executeConfirmedWrite(tool, "call-1", { path: "different.txt", content });
+    const result = await tool.execute("call-1", { path: "different.txt", content }, undefined);
     const diffResult = generateDiffString(oldContent, content);
 
     expect(result.content[0]).toEqual({
@@ -210,10 +200,11 @@ describe("write tool", () => {
     await fs.writeFile(filePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe]));
     const tool = createWriteTool(tmpDir);
 
-    const result = await executeConfirmedWrite(tool, "call-1", {
-      path: "binary.bin",
-      content: "text now\n",
-    });
+    const result = await tool.execute(
+      "call-1",
+      { path: "binary.bin", content: "text now\n" },
+      undefined,
+    );
 
     expect(result.details).toEqual({ changed: true, created: false });
   });
@@ -224,10 +215,14 @@ describe("write tool", () => {
     await fs.writeFile(filePath, oldContent, "utf-8");
     const tool = createWriteTool(tmpDir);
 
-    const result = await executeConfirmedWrite(tool, "call-1", {
-      path: "distinct-lines.txt",
-      content: Array.from({ length: 10_000 }, (_, i) => `new-${i}`).join("\n"),
-    });
+    const result = await tool.execute(
+      "call-1",
+      {
+        path: "distinct-lines.txt",
+        content: Array.from({ length: 10_000 }, (_, i) => `new-${i}`).join("\n"),
+      },
+      undefined,
+    );
 
     expect(result.details).toEqual({ changed: true, created: false });
   });
@@ -250,10 +245,11 @@ describe("write tool", () => {
     await fs.writeFile(filePath, "a\n".repeat(15_000), "utf-8");
     const tool = createWriteTool(tmpDir);
 
-    const result = await executeConfirmedWrite(tool, "call-1", {
-      path: "many-lines.txt",
-      content: "b\n".repeat(15_000),
-    });
+    const result = await tool.execute(
+      "call-1",
+      { path: "many-lines.txt", content: "b\n".repeat(15_000) },
+      undefined,
+    );
 
     expect(result.details).toEqual({ changed: true, created: false });
   });
@@ -263,10 +259,11 @@ describe("write tool", () => {
     await fs.writeFile(filePath, "a".repeat(600 * 1024), "utf-8");
     const tool = createWriteTool(tmpDir);
 
-    const result = await executeConfirmedWrite(tool, "call-1", {
-      path: "combined.txt",
-      content: "b".repeat(600 * 1024),
-    });
+    const result = await tool.execute(
+      "call-1",
+      { path: "combined.txt", content: "b".repeat(600 * 1024) },
+      undefined,
+    );
 
     expect(result.details).toEqual({ changed: true, created: false });
   });
@@ -284,10 +281,11 @@ describe("write tool", () => {
     };
     const tool = createWriteTool(tmpDir, { operations });
 
-    const result = await executeConfirmedWrite(tool, "call-1", {
-      path: "large.txt",
-      content: "replacement\n",
-    });
+    const result = await tool.execute(
+      "call-1",
+      { path: "large.txt", content: "replacement\n" },
+      undefined,
+    );
 
     expect(readCalled).toBe(false);
     expect(result.details).toEqual({ changed: true, created: false });
@@ -299,130 +297,13 @@ describe("write tool", () => {
     const content = "x".repeat(1024 * 1024 + 1);
     const tool = createWriteTool(tmpDir);
 
-    const result = await executeConfirmedWrite(tool, "call-1", {
-      path: "large-replacement.txt",
-      content,
-    });
-
-    expect(result.details).toEqual({ changed: true, created: false });
-  });
-
-  it("refuses the first write to a pre-existing differing file and shows its content", async () => {
-    // Guards benchmark-observed data loss: models blind-writing to a path that
-    // already holds unrelated user content get that content back and must
-    // resend the write to confirm the replacement.
-    const filePath = await createTempPath("precious.md");
-    await fs.writeFile(filePath, "original notes\n", "utf-8");
-    const tool = createWriteTool(tmpDir);
-
-    await expect(
-      tool.execute("call-1", { path: "precious.md", content: "brand new\n" }, undefined),
-    ).rejects.toThrow(/already exists[\s\S]*original notes/);
-    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("original notes\n");
-
-    await tool.execute("call-2", { path: "precious.md", content: "brand new\n" }, undefined);
-    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("brand new\n");
-  });
-
-  it("skips the content preview for binary pre-existing files", async () => {
-    const filePath = await createTempPath("data.bin");
-    await fs.writeFile(filePath, Buffer.from([0x89, 0x50, 0x00, 0xff, 0xfe]));
-    const tool = createWriteTool(tmpDir);
-
-    await expect(
-      tool.execute("call-1", { path: "data.bin", content: "text\n" }, undefined),
-    ).rejects.toThrow(/already exists(?![\s\S]*Current content)/);
-  });
-
-  it("re-warns when the resend carries different content", async () => {
-    // The pending confirmation is keyed to the refused content; a tweaked
-    // resend is a new proposal, not a confirmation.
-    const filePath = await createTempPath("notes.md");
-    await fs.writeFile(filePath, "original\n", "utf-8");
-    const tool = createWriteTool(tmpDir);
-
-    await expect(
-      tool.execute("call-1", { path: "notes.md", content: "first proposal\n" }, undefined),
-    ).rejects.toThrow(/already exists/);
-    await expect(
-      tool.execute("call-2", { path: "notes.md", content: "second proposal\n" }, undefined),
-    ).rejects.toThrow(/already exists/);
-    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("original\n");
-
-    await tool.execute("call-3", { path: "notes.md", content: "second proposal\n" }, undefined);
-    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("second proposal\n");
-  });
-
-  it("re-warns when the file changed externally between refusal and resend", async () => {
-    const filePath = await createTempPath("shared.md");
-    await fs.writeFile(filePath, "original\n", "utf-8");
-    const tool = createWriteTool(tmpDir);
-
-    await expect(
-      tool.execute("call-1", { path: "shared.md", content: "replacement\n" }, undefined),
-    ).rejects.toThrow(/already exists/);
-
-    // External edit invalidates the pending confirmation (size differs).
-    await fs.writeFile(filePath, "changed elsewhere meanwhile\n", "utf-8");
-
-    await expect(
-      tool.execute("call-2", { path: "shared.md", content: "replacement\n" }, undefined),
-    ).rejects.toThrow(/changed elsewhere/);
-    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("changed elsewhere meanwhile\n");
-  });
-
-  it("re-warns when the file changed externally to same-size content", async () => {
-    // Size and mtime are not trusted alone: the confirmation re-checks a
-    // fingerprint of the existing bytes.
-    const filePath = await createTempPath("same-size.md");
-    await fs.writeFile(filePath, "aaaa\n", "utf-8");
-    const tool = createWriteTool(tmpDir);
-
-    await expect(
-      tool.execute("call-1", { path: "same-size.md", content: "replacement\n" }, undefined),
-    ).rejects.toThrow(/already exists/);
-
-    await fs.writeFile(filePath, "bbbb\n", "utf-8");
-
-    await expect(
-      tool.execute("call-2", { path: "same-size.md", content: "replacement\n" }, undefined),
-    ).rejects.toThrow(/bbbb/);
-    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("bbbb\n");
-  });
-
-  it("refuses parallel duplicate writes issued before the warning was delivered", async () => {
-    // Two identical writes in one batch serialize on the mutation queue; the
-    // second must not consume the first's pending confirmation because it was
-    // issued before the warning existed.
-    const filePath = await createTempPath("parallel.md");
-    await fs.writeFile(filePath, "original\n", "utf-8");
-    const tool = createWriteTool(tmpDir);
-
-    const results = await Promise.allSettled([
-      tool.execute("call-1", { path: "parallel.md", content: "dup\n" }, undefined),
-      tool.execute("call-2", { path: "parallel.md", content: "dup\n" }, undefined),
-    ]);
-
-    expect(results.map((r) => r.status)).toEqual(["rejected", "rejected"]);
-    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("original\n");
-
-    await tool.execute("call-3", { path: "parallel.md", content: "dup\n" }, undefined);
-    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("dup\n");
-  });
-
-  it("rewrites files it created in the same session without confirmation", async () => {
-    await createTempPath("iterate.txt");
-    const tool = createWriteTool(tmpDir);
-
-    await tool.execute("call-1", { path: "iterate.txt", content: "v1\n" }, undefined);
     const result = await tool.execute(
-      "call-2",
-      { path: "iterate.txt", content: "v2\n" },
+      "call-1",
+      { path: "large-replacement.txt", content },
       undefined,
     );
 
-    expect(result.content[0]?.type).toBe("text");
-    await expect(fs.readFile(path.join(tmpDir, "iterate.txt"), "utf-8")).resolves.toBe("v2\n");
+    expect(result.details).toEqual({ changed: true, created: false });
   });
 
   it("does not guess creation status when the pre-write stat is unavailable", async () => {

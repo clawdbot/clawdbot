@@ -3,7 +3,6 @@
  *
  * Writes files through queued local or injected operations with readback/idempotency metadata.
  */
-import { createHash } from "node:crypto";
 import {
   mkdir as fsMkdir,
   readFile as fsReadFile,
@@ -330,45 +329,6 @@ function isMissingFileError(error: unknown): boolean {
   return error instanceof Error && error.message.includes("No such file or directory");
 }
 
-const OVERWRITE_PREVIEW_MAX_CHARS = 500;
-const OVERWRITE_PREVIEW_MAX_LINES = 12;
-
-function sha256Utf8(text: string): string {
-  return createHash("sha256").update(text, "utf8").digest("hex");
-}
-
-/** Existing file bytes for the overwrite gate, or null when unreadable or above the precheck read limit. Byte-exact so the fingerprint survives invalid UTF-8. */
-async function readExistingBytes(
-  absolutePath: string,
-  precheck: WriteToolPrecheck,
-  ops: WriteOperations,
-): Promise<Buffer | null> {
-  const size = precheck.beforeStat?.size ?? 0;
-  if (!ops.readFile || size > WRITE_PRECHECK_READ_LIMIT_BYTES) {
-    return null;
-  }
-  try {
-    const raw = await ops.readFile(absolutePath);
-    return Buffer.isBuffer(raw) ? raw : Buffer.from(raw, "utf8");
-  } catch {
-    return null;
-  }
-}
-
-/** Head-clipped current content for the overwrite refusal, so the replace decision is informed without an extra read round-trip. */
-function buildExistingContentPreview(text: string | null): string {
-  if (!text || text.includes("\u0000") || text.includes("\ufffd")) {
-    return "";
-  }
-  let preview = text
-    .split("\n", OVERWRITE_PREVIEW_MAX_LINES + 1)
-    .slice(0, OVERWRITE_PREVIEW_MAX_LINES)
-    .join("\n");
-  preview = preview.slice(0, OVERWRITE_PREVIEW_MAX_CHARS);
-  const truncated = preview.length < text.length;
-  return `\nCurrent content${truncated ? " (start)" : ""}:\n${preview}`;
-}
-
 async function readOriginalWriteState(
   absolutePath: string,
   content: string,
@@ -571,27 +531,10 @@ export function createWriteToolDefinition(
   options?: WriteToolOptions,
 ): ToolDefinition<typeof writeSchema, WriteToolDetails> {
   const ops = options?.operations ?? defaultWriteOperations;
-  // Paths this tool instance successfully wrote: rewriting your own output
-  // stays friction-free.
-  const sessionWrittenPaths = new Set<string>();
-  // Refused overwrites awaiting the confirming resend. Keyed to the exact
-  // proposed content and the observed file state so only the matching retry
-  // passes; a tweaked resend or an externally changed file re-warns.
-  const pendingReplacements = new Map<
-    string,
-    {
-      contentHash: string;
-      existingHash: string | null;
-      size: number;
-      mtimeMs?: number;
-      warnedAt: bigint;
-    }
-  >();
   return {
     name: "write",
     label: "write",
-    description:
-      "Write file; creates parent directories. Overwriting a pre-existing file needs a second confirming write.",
+    description: "Write/overwrite file; creates parent directories.",
     promptSnippet: "Create/overwrite files",
     promptGuidelines: ["Use only new files/complete rewrites."],
     parameters: writeSchema,
@@ -606,70 +549,12 @@ export function createWriteToolDefinition(
       void toolCallId;
       void onUpdate;
       void ctx;
-      // Captured before the mutation queue: a confirming resend must have been
-      // issued after its warning was delivered, so parallel duplicate writes in
-      // one batch cannot consume each other's pending confirmation.
-      const requestedAt = process.hrtime.bigint();
       const absolutePath = resolveToCwd(path, cwd);
       const dir = dirname(absolutePath);
       return withFileMutationQueue(absolutePath, async () => {
         const precheck = await readOriginalWriteState(absolutePath, content, ops);
         if (signal?.aborted) {
           throw new Error("Operation aborted");
-        }
-        // Guard silent data loss: the first write to a differing file that
-        // predates this tool instance is refused and shows the current content,
-        // so replacing it is always an informed decision. Only an identical
-        // resend, issued after the warning, against an unchanged file consumes
-        // the pending confirmation.
-        if (
-          precheck.state !== "same" &&
-          precheck.beforeStat?.type === "file" &&
-          !sessionWrittenPaths.has(absolutePath)
-        ) {
-          const contentHash = sha256Utf8(content);
-          const existingBytes = await readExistingBytes(absolutePath, precheck, ops);
-          const existingHash =
-            existingBytes === null
-              ? null
-              : createHash("sha256").update(existingBytes).digest("hex");
-          const pending = pendingReplacements.get(absolutePath);
-          // Oversized/unreadable files fall back to size+mtime equality; a
-          // same-size same-mtime external rewrite of a >1MB file between warn
-          // and resend is an accepted tradeoff over rehashing huge content.
-          // Without both mtimes the state is unverifiable: fail closed and
-          // re-warn instead of degrading to a size-only check.
-          const existingUnchanged =
-            pending !== undefined &&
-            (pending.existingHash !== null || existingHash !== null
-              ? pending.existingHash === existingHash
-              : pending.size === precheck.beforeStat.size &&
-                pending.mtimeMs !== undefined &&
-                pending.mtimeMs === precheck.beforeStat.mtimeMs);
-          const confirmed =
-            pending !== undefined &&
-            pending.contentHash === contentHash &&
-            requestedAt > pending.warnedAt &&
-            existingUnchanged;
-          if (confirmed) {
-            pendingReplacements.delete(absolutePath);
-          } else {
-            pendingReplacements.set(absolutePath, {
-              contentHash,
-              existingHash,
-              size: precheck.beforeStat.size,
-              mtimeMs: precheck.beforeStat.mtimeMs,
-              warnedAt: process.hrtime.bigint(),
-            });
-            const preview = buildExistingContentPreview(
-              existingBytes === null ? null : existingBytes.toString("utf8"),
-            );
-            throw new Error(
-              `${path} already exists (${precheck.beforeStat.size} bytes) with different content. ` +
-                `If it should be kept, write to a different path instead. ` +
-                `To replace it, send the same write again.${preview}`,
-            );
-          }
         }
         // Terminal no-op: file already has identical content.
         if (precheck.state === "same") {
@@ -690,7 +575,6 @@ export function createWriteToolDefinition(
           if (signal?.aborted) {
             throw new Error("Operation aborted");
           }
-          sessionWrittenPaths.add(absolutePath);
           return successfulWriteResult(path, content, details);
         } catch (error: unknown) {
           const recovered = await recoverSuccessfulWrite({
@@ -704,7 +588,6 @@ export function createWriteToolDefinition(
             signal,
           });
           if (recovered) {
-            sessionWrittenPaths.add(absolutePath);
             return recovered;
           }
           throw error;
