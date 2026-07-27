@@ -143,6 +143,99 @@ describe("OpenClawTerminalPanel", () => {
     await waitForFast(() => expect(panel.terminalPanelOpen).toBe(true));
   });
 
+  it("suppresses an open dock without overwriting its persisted preference", async () => {
+    localStorage.setItem(
+      "openclaw.terminal.panel.v1",
+      JSON.stringify({ open: true, dock: "bottom", height: 320, width: 520 }),
+    );
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.available = true;
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    expect(panel.renderRoot.querySelector(".tp")).not.toBeNull();
+    panel.suppressed = true;
+    await waitForFast(() => expect(panel.renderRoot.querySelector(".tp")).toBeNull());
+
+    expect(document.documentElement.style.getPropertyValue("--oc-terminal-reserve-bottom")).toBe(
+      "0px",
+    );
+    expect(JSON.parse(localStorage.getItem("openclaw.terminal.panel.v1") ?? "{}")).toMatchObject({
+      open: true,
+    });
+
+    panel.suppressed = false;
+    await waitForFast(() => expect(panel.renderRoot.querySelector(".tp")).not.toBeNull());
+
+    expect(panel.renderRoot.querySelector(".tp")).not.toBeNull();
+  });
+
+  it("defers availability restore until suppression ends", async () => {
+    localStorage.setItem(
+      "openclaw.terminal.panel.v1",
+      JSON.stringify({ open: true, dock: "bottom", height: 320, width: 520 }),
+    );
+    createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
+    const requests: string[] = [];
+    const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
+      request: async <T>(method: string) => {
+        requests.push(method);
+        return (method === "terminal.open" ? terminalOpenResult("session-1") : {}) as T;
+      },
+      addEventListener: () => () => {},
+    };
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.client = client;
+    panel.suppressed = true;
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    panel.available = true;
+    await panel.updateComplete;
+    await Promise.resolve();
+
+    expect(panel.terminalPanelOpen).toBe(false);
+    expect(requests).not.toContain("terminal.open");
+
+    panel.suppressed = false;
+    await panel.updateComplete;
+    await waitForFast(() => expect(requests).toContain("terminal.open"));
+
+    expect(panel.terminalPanelOpen).toBe(true);
+  });
+
+  it("mounts closed inside a takeover instead of booting a hidden session", async () => {
+    localStorage.setItem(
+      "openclaw.terminal.panel.v1",
+      JSON.stringify({ open: true, dock: "bottom", height: 320, width: 520 }),
+    );
+    createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
+    const requests: string[] = [];
+    const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
+      request: async <T>(method: string) => {
+        requests.push(method);
+        return (method === "terminal.open" ? terminalOpenResult("session-1") : {}) as T;
+      },
+      addEventListener: () => () => {},
+    };
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.client = client;
+    panel.available = true;
+    panel.suppressed = true;
+    document.body.append(panel);
+    await panel.updateComplete;
+    await Promise.resolve();
+
+    expect(panel.terminalPanelOpen).toBe(false);
+    expect(requests).not.toContain("terminal.open");
+
+    panel.suppressed = false;
+    await panel.updateComplete;
+    await waitForFast(() => expect(requests).toContain("terminal.open"));
+  });
+
   it("opens new sessions for the selected agent", async () => {
     let createOptions: CreateOptions | undefined;
     createGhosttyTerminalMock.mockImplementation(async (options: CreateOptions) => {
