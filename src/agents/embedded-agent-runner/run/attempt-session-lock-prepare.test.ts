@@ -84,6 +84,7 @@ function createFixture(options?: { rejectPostArmFence?: Error }) {
       config: {},
       sessionFile: "/tmp/session.jsonl",
       sessionKey: "agent:main:session-1",
+      runId: "run-1",
     },
     externalAbortController,
     getSessionManager: () => sessionManager,
@@ -145,6 +146,7 @@ describe("prepareEmbeddedAttemptSessionLock", () => {
           timeoutMs: 100,
           staleMs: 200,
           maxHoldMs: 300,
+          owner: { kind: "agent-reply", runId: "run-1" },
         },
       }),
     );

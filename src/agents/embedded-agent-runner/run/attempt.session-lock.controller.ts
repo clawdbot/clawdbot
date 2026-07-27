@@ -33,6 +33,10 @@ type LockOptions = {
   timeoutMs: number;
   staleMs: number;
   maxHoldMs: number;
+  owner?: {
+    kind: "agent-reply";
+    runId: string;
+  };
 };
 
 type PromptReleasedSessionMergeResult = {
@@ -81,6 +85,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       timeoutMs: params.lockOptions.timeoutMs,
       staleMs: params.lockOptions.staleMs,
       maxHoldMs: params.lockOptions.maxHoldMs,
+      ...(params.lockOptions.owner ? { owner: params.lockOptions.owner } : {}),
       ...(signal ? { signal } : {}),
     });
 
