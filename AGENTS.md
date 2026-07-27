@@ -199,6 +199,7 @@ Skills own workflows; root owns hard policy and routing.
 - zsh: quote command globs; unmatched patterns abort before the tool runs.
 - Nested remote shell: avoid local `$()` expansion; use remote-safe validation.
 - zsh: don't use `path` as a variable; it rewrites `$PATH`.
+- File lists into tools: `--name-only -z | xargs -0`; zsh scalars don't word-split, and a zero-file run exits 0 looking clean.
 - `scripts/pr` artifacts: preserve template enum values; validate before prepare.
 - `scripts/pr` subcommands require a PR number; no subcommand `--help` placeholder.
 - `scripts/pr` review: checkout main baseline, then PR, before artifact validation.

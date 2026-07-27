@@ -14,6 +14,7 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
   UI_COMMAND_EVENT,
 } from "../components/panel-toggle-contract.ts";
+import { i18n } from "../i18n/index.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
 import { resetAppHostTestGlobals, type ShellKeyboardState } from "./app-host.test-support.ts";
@@ -26,6 +27,16 @@ import type {
 import { shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { resetServerUiPrefsSync } from "./server-prefs.ts";
+import { scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
+
+vi.mock("./stale-chunk-reload.ts", async () => {
+  const actual =
+    await vi.importActual<typeof import("./stale-chunk-reload.ts")>("./stale-chunk-reload.ts");
+  return {
+    ...actual,
+    scheduleStaleChunkReload: vi.fn(async () => true),
+  };
+});
 
 type AppLifecycleState = {
   loginToken: string;
@@ -46,6 +57,18 @@ type ShellInitializationState = {
     snapshot: ApplicationGatewaySnapshot,
     runtimeConfig: ApplicationContext["runtimeConfig"],
   ) => void;
+};
+
+type ShellGatewaySynchronizationState = {
+  outboxStoreImport: { load: () => Promise<unknown> };
+  synchronizeGateway: (snapshot: ApplicationGatewaySnapshot) => void;
+};
+
+type I18nRecoveryWiring = {
+  localeLoadRecovery?: {
+    isUnrecoverableError: (error: unknown) => boolean;
+    onUnrecoverableLocaleLoad?: (locale: string) => void;
+  };
 };
 
 type ShellServerPreferencesState = {
@@ -264,6 +287,47 @@ describe("OpenClaw app lifecycle", () => {
 });
 
 describe("OpenClaw shell source initialization", () => {
+  it("delegates repeated locale import failures to guarded stale-chunk recovery", () => {
+    const scheduleReload = vi.mocked(scheduleStaleChunkReload);
+    scheduleReload.mockClear();
+    const recovery = (i18n as unknown as I18nRecoveryWiring).localeLoadRecovery;
+
+    expect(
+      recovery?.isUnrecoverableError(
+        new Error("Failed to fetch dynamically imported module: /assets/fr-abc123.js"),
+      ),
+    ).toBe(true);
+    recovery?.onUnrecoverableLocaleLoad?.("fr");
+
+    expect(scheduleReload).toHaveBeenCalledOnce();
+  });
+
+  it("retries a pending locale once when the Gateway becomes connected", () => {
+    const retryPendingLocale = vi.spyOn(i18n, "retryPendingLocale").mockImplementation(() => {});
+    const shell = document.createElement(
+      "openclaw-app-shell",
+    ) as unknown as ShellGatewaySynchronizationState;
+    shell.outboxStoreImport = { load: vi.fn(async () => undefined) };
+    const reconnecting = {
+      client: null,
+      phase: "reconnecting",
+      sessionKey: "",
+    } as ApplicationGatewaySnapshot;
+    const connected = {
+      client: {} as GatewayBrowserClient,
+      phase: "connected",
+      sessionKey: "",
+    } as ApplicationGatewaySnapshot;
+
+    shell.synchronizeGateway(reconnecting);
+    shell.synchronizeGateway(connected);
+    shell.synchronizeGateway({ ...connected });
+    shell.synchronizeGateway({ ...connected });
+
+    expect(retryPendingLocale).toHaveBeenCalledOnce();
+    retryPendingLocale.mockRestore();
+  });
+
   it("clears retained presentation and source ownership when its context epoch ends", () => {
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellEpochState;
     const client = {} as GatewayBrowserClient;

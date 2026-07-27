@@ -20,6 +20,7 @@ async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
+// regression: #35195
 describe("cron backup timing for edit", () => {
   it("updates SQLite cron jobs without creating a legacy migration archive", async () => {
     const store = await makeStorePath();

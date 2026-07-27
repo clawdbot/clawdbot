@@ -197,15 +197,15 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     abortSignal?: AbortSignal,
     mirror?: boolean,
     kind: ReplyDispatchKind = "tool",
-  ): Promise<void> => {
+  ) => {
     // Keep the runtime guard explicit because this helper is called from nested
     // reply callbacks where TypeScript cannot narrow shouldRouteToOriginating.
     if (!routeReplyRuntime || !routeReplyChannel || !routeReplyTo) {
-      return;
+      return null;
     }
     const effectiveAbortSignal = abortSignal ?? getDispatchAbortSignal();
     if (effectiveAbortSignal?.aborted) {
-      return;
+      return null;
     }
     const result = await routeReplyToOriginating(payload, {
       abortSignal: effectiveAbortSignal,
@@ -215,6 +215,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     if (result && !result.ok) {
       logVerbose(`dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`);
     }
+    return result;
   };
 
   type PluginBindingTranscriptOwner = {

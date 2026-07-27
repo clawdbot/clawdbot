@@ -1,11 +1,13 @@
-/** Windows Task Scheduler launcher paths and byte-stable script serialization. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
-import { decodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
+import {
+  decodeWindowsLauncherScript,
+  encodeWindowsLauncherScript,
+} from "../infra/windows-launcher-encoding.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
 import { resolveGatewayWindowsTaskName } from "./constants.js";
@@ -25,8 +27,7 @@ export function resolveTaskName(env: GatewayServiceEnv): string {
 }
 
 export function shouldFallbackToStartupEntry(params: { code: number; detail: string }): boolean {
-  // Permission failures and hung schtasks calls can still be served by the
-  // per-user Startup folder fallback.
+  // Permission failures and hung schtasks calls can use the per-user Startup fallback.
   return (
     params.code === 1 ||
     /(?:access is denied|acceso denegado)/i.test(params.detail) ||
@@ -78,13 +79,11 @@ export function resolveStartupEntryPaths(env: GatewayServiceEnv): string[] {
   const primaryPath = resolveStartupEntryPath(env);
   const legacyCmdPath = resolveStartupEntryPath(env, "cmd");
   const hiddenLauncherPath = resolveStartupEntryPath(env, "vbs");
-  // Hidden VBS launchers supersede cmd launchers, but lifecycle operations must
-  // discover both variants even when the caller env lacks the persisted marker.
+  // Lifecycle operations must find both launcher variants even without the persisted marker.
   return uniqueStrings([primaryPath, legacyCmdPath, hiddenLauncherPath]);
 }
 
-// `/TR` is parsed by schtasks itself, while the generated `gateway.cmd` line is parsed by cmd.exe.
-// Keep their quoting strategies separate so each parser gets the encoding it expects.
+// schtasks `/TR` and cmd.exe parse different surfaces, so keep their quoting separate.
 export function quoteSchtasksArg(value: string): string {
   if (!/[ \t"]/g.test(value)) {
     return value;
@@ -92,10 +91,7 @@ export function quoteSchtasksArg(value: string): string {
   return `"${value.replace(/"/g, '\\"')}"`;
 }
 
-// XML 1.0 text-node escape for Task Scheduler payloads. `<Command>`, `<Arguments>`,
-// `<Description>`, and `<UserId>` accept any literal user/script path, so the
-// only characters that need encoding are XML structural ones. CR/LF are already
-// rejected upstream in `assertNoCmdLineBreak`.
+// Escape XML structure; launcher inputs already reject CR/LF in `assertNoCmdLineBreak`.
 function escapeXmlText(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -105,14 +101,8 @@ function escapeXmlText(value: string): string {
     .replace(/'/g, "&apos;");
 }
 
-// Task Scheduler XML payload for `schtasks /Create /XML`. We switched off the
-// CLI flag form to set `<DisallowStartIfOnBatteries>` and `<StopIfGoingOnBatteries>`
-// to `false`, which the `schtasks /Create` and `/Change` CLI surfaces do not
-// expose. The CLI default leaves both at `true`, which kills the Gateway task
-// when a laptop unplugs from AC power (#59299). The rest of the XML mirrors
-// the prior CLI flags: ONLOGON trigger, LeastPrivilege run level, single-instance
-// policy, no idle restrictions, and the same `<Exec>` action wired to the
-// existing `gateway.cmd` / `gateway.vbs` launcher.
+// XML is required to disable both battery-stop defaults (#59299); the remaining
+// fields mirror the former ONLOGON, least-privilege, single-instance CLI task.
 export function buildScheduledTaskXml(params: {
   taskDescription: string;
   taskUser: string | null;
@@ -171,8 +161,7 @@ export function buildScheduledTaskXml(params: {
 export async function writeTaskXmlTempFile(xml: string): Promise<string> {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-task-xml-"));
   const xmlPath = path.join(tmpDir, "task.xml");
-  // schtasks /XML expects UTF-16 LE with BOM; Node's "utf16le" Buffer plus a
-  // manual FFFE BOM matches what Task Scheduler import accepts on all locales.
+  // Task Scheduler `/XML` expects UTF-16 LE with a BOM on every locale.
   const bom = Buffer.from([0xff, 0xfe]);
   const body = Buffer.from(xml, "utf16le");
   await fs.writeFile(xmlPath, Buffer.concat([bom, body]));
@@ -201,9 +190,7 @@ export function resolveSchtasksCreateUser(
   env: GatewayServiceEnv,
   taskUser: string | null,
 ): string | null {
-  // Workgroup hosts can report USERDOMAIN=WORKGROUP even though schtasks wants
-  // the current local account. Keep the XML user-scoped, but omit /RU so
-  // Task Scheduler binds the task to the caller instead of prompting.
+  // Workgroup tasks stay XML user-scoped, but omit /RU so schtasks binds the caller.
   if (normalizeLowercaseStringOrEmpty(env.USERDOMAIN) === "workgroup") {
     return null;
   }
@@ -238,10 +225,7 @@ export async function readScheduledTaskCommand(
         continue;
       }
       const lower = normalizeLowercaseStringOrEmpty(line);
-      if (line.startsWith("@echo")) {
-        continue;
-      }
-      if (lower.startsWith("rem ")) {
+      if (line.startsWith("@echo") || lower.startsWith("rem ")) {
         continue;
       }
       if (lower.startsWith("set ")) {
@@ -262,11 +246,12 @@ export async function readScheduledTaskCommand(
     if (!commandLine) {
       return null;
     }
+    const hasEnvironment = Object.keys(environment).length > 0;
     return {
       programArguments: parseCmdScriptCommandLine(commandLine),
       ...(workingDirectory ? { workingDirectory } : {}),
-      ...(Object.keys(environment).length > 0 ? { environment } : {}),
-      ...(Object.keys(environment).length > 0
+      ...(hasEnvironment ? { environment } : {}),
+      ...(hasEnvironment
         ? {
             environmentValueSources: Object.fromEntries(
               Object.keys(environment).map((key) => [key, "inline"]),
@@ -297,17 +282,13 @@ export function buildTaskScript({
   }
   if (environment) {
     for (const [key, value] of Object.entries(environment)) {
-      if (!value) {
-        continue;
-      }
-      if (key.toUpperCase() === "PATH") {
+      if (!value || key.toUpperCase() === "PATH") {
         continue;
       }
       lines.push(renderCmdSetAssignment(key, value));
     }
   }
-  const command = programArguments.map(quoteCmdScriptArg).join(" ");
-  lines.push(command);
+  lines.push(programArguments.map(quoteCmdScriptArg).join(" "));
   return `${lines.join("\r\n")}\r\n`;
 }
 
@@ -353,3 +334,5 @@ export function buildHiddenLauncherScript(params: {
   );
   return `${lines.join("\r\n")}\r\n`;
 }
+
+export { encodeWindowsLauncherScript };

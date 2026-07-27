@@ -21,6 +21,7 @@ function createCronSystemEventJob(now: number, overrides: Partial<CronJob> = {})
   };
 }
 
+// regression: #13992
 describe("issue #13992 regression - cron jobs skip execution", () => {
   it("should NOT recompute nextRunAtMs for past-due jobs by default", () => {
     const now = Date.now();

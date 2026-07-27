@@ -6,6 +6,7 @@ export {
 export type {
   CodexAppServerApprovalPolicy,
   CodexAppServerConnectionClass,
+  CodexAppServerHomeScope,
   CodexAppServerRuntimeOptions,
   CodexAppServerSandboxMode,
   CodexAppServerStartOptions,

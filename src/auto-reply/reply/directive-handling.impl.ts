@@ -623,6 +623,7 @@ export async function handleDirectiveOnly(
         key: sessionKey,
         nextProvider: modelSelection.provider,
         nextModel: modelSelection.model,
+        nextRouteResolution: "resolved",
         nextModelOverrideSource: "user",
         nextAuthProfileId: appliedSessionEntry.authProfileOverride,
         nextAuthProfileIdSource: appliedSessionEntry.authProfileOverrideSource,

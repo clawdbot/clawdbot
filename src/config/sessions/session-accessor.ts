@@ -137,6 +137,7 @@ export {
   replaceSessionEntrySync,
   resolveSessionEntryAccessTarget,
   resolveSessionEntryCandidateTarget,
+  resolveSessionEntrySelection,
   updateResolvedSessionEntry,
   upsertSessionEntry,
 } from "./session-accessor.entry.js";

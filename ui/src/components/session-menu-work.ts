@@ -3,13 +3,12 @@ import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequests,
 } from "../../../src/gateway/control-ui-contract.js";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 
 // Shared by the app sidebar and the Sessions page: both hosts resolve the
 // same worktree-session extras (PR link, checkout path) when opening the
 // session context menu, after the menu is already visible.
-type SessionMenuWorkClient = {
-  request: <T>(method: string, params?: unknown) => Promise<T>;
-};
+type SessionMenuWorkClient = Pick<GatewayBrowserClient, "request" | "requestSessionPullRequests">;
 
 type SessionMenuWorkParams = {
   client: SessionMenuWorkClient;
@@ -63,8 +62,8 @@ function resolveSessionPullRequestIndicatorState(
 
 async function loadSessionPullRequests(
   params: Omit<SessionMenuWorkParams, "worktreeId">,
-): Promise<ControlUiSessionPullRequests> {
-  return params.client.request<ControlUiSessionPullRequests>("controlUi.sessionPullRequests", {
+): Promise<ControlUiSessionPullRequests | null> {
+  return params.client.requestSessionPullRequests({
     sessionKey: params.sessionKey,
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
@@ -77,7 +76,9 @@ export async function fetchSessionPullRequestIndicatorState(
     return "none";
   }
   const result = await loadSessionPullRequests(params);
-  return result.rateLimited ? null : resolveSessionPullRequestIndicatorState(result.pullRequests);
+  return !result || result.rateLimited
+    ? null
+    : resolveSessionPullRequestIndicatorState(result.pullRequests);
 }
 
 async function loadPullRequestUrl(params: SessionMenuWorkParams): Promise<string | null> {
@@ -86,7 +87,7 @@ async function loadPullRequestUrl(params: SessionMenuWorkParams): Promise<string
   }
   try {
     const result = await loadSessionPullRequests(params);
-    return pickSessionMenuPullRequestUrl(result.pullRequests);
+    return result ? pickSessionMenuPullRequestUrl(result.pullRequests) : null;
   } catch {
     // Optional affordance: a GitHub or gateway hiccup just leaves Open PR disabled.
     return null;

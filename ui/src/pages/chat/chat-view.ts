@@ -120,6 +120,8 @@ export type ChatProps = {
   streamSegments: ChatStreamSegment[];
   stream: string | null;
   streamStartedAt: number | null;
+  /** Browser-local active run identity, retained across transient disconnects. */
+  runId?: string | null;
   runOutputTokens?: number | null;
   assistantAvatarUrl?: string | null;
   draft: string;
@@ -299,6 +301,7 @@ export function renderChat(props: ChatProps) {
       streamSegments: props.streamSegments,
       stream: props.stream,
       streamStartedAt: props.streamStartedAt,
+      runId: props.runId,
       runOutputTokens: props.runOutputTokens,
       queue: props.queue,
       showThinking: props.showThinking,

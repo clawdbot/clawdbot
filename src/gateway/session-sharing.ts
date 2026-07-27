@@ -101,12 +101,14 @@ export function resolveSessionSharingTarget(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
+  projection?: "full" | "list";
   storeCache?: GatewaySessionStoreCache;
 }): SessionSharingTarget | null {
   const target = resolveGatewaySessionStoreTargetWithStore({
     cfg: params.cfg,
     key: params.sessionKey,
     agentId: params.agentId,
+    ...(params.projection ? { projection: params.projection } : {}),
     ...(params.storeCache ? { storeCache: params.storeCache } : {}),
   });
   const match = resolveFreshestSessionStoreMatchFromStoreKeys(target.store, target.storeKeys);
