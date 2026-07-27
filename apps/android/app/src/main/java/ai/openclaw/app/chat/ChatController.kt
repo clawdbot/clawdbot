@@ -5255,11 +5255,12 @@ class ChatController internal constructor(
 
   private fun handleSessionObserverEvent(payloadJson: String) {
     val digest = runCatching { json.decodeFromString<SessionObserverDigest>(payloadJson) }.getOrNull() ?: return
+    val selectedAgentId = _sessionOwnerAgentId.value ?: resolveAgentIdForSessionKey(_sessionKey.value)
     _sessions.value =
       applySessionObserverDigest(
         _sessions.value,
         digest,
-        activeAgentId = resolveAgentIdForSessionKey(_sessionKey.value),
+        activeAgentId = selectedAgentId,
       )
   }
 
