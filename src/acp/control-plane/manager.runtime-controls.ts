@@ -25,19 +25,9 @@ import {
 
 const OPTIONAL_TIMEOUT_CONFIG_KEYS = new Set(["timeout", "timeout_seconds"]);
 const THINKING_CONFIG_KEYS = new Set(["thinking", "effort", "reasoning_effort", "thought_level"]);
-const UNSUPPORTED_CONFIG_CONTROL_SIGNALS = [
-  "-32602",
-  "invalid params",
-  "unsupported",
-  "not supported",
-  "not implement",
-];
-const REJECTED_CONFIG_VALUE_SIGNALS = [
-  "invalid value",
-  "unknown value",
-  "not a valid value",
-  "must be one of",
-];
+const ACP_CONFIG_REJECTION_CODE_RE = /-3260[23]/;
+const CONFIG_OPTION_REJECTION_RE =
+  /invalid params|unsupported|not supported|not implement|invalid value|unknown config option|unknown value|not a valid value|must be one of/;
 
 function extractConfigOptionKeys(value: unknown): string[] {
   if (!Array.isArray(value)) {
@@ -84,10 +74,6 @@ function describeConfigOptionRejection(error: unknown): string {
   return normalizeLowercaseStringOrEmpty(`${formatAcpErrorChain(error)} ${described.message}`);
 }
 
-function hasRejectionSignal(description: string, signals: readonly string[]): boolean {
-  return signals.some((signal) => description.includes(signal));
-}
-
 function isUnsupportedOptionalTimeoutConfigRejection(key: string, error: unknown): boolean {
   if (!isOptionalTimeoutConfigKey(key)) {
     return false;
@@ -95,10 +81,16 @@ function isUnsupportedOptionalTimeoutConfigRejection(key: string, error: unknown
   if (isUnsupportedControlRejection(error)) {
     return true;
   }
-  const description = describeConfigOptionRejection(error);
+  const message =
+    error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
+  const normalized = normalizeLowercaseStringOrEmpty(message);
   return (
-    description.includes("session/set_config_option") &&
-    hasRejectionSignal(description, UNSUPPORTED_CONFIG_CONTROL_SIGNALS)
+    normalized.includes("session/set_config_option") &&
+    (normalized.includes("-32602") ||
+      normalized.includes("invalid params") ||
+      normalized.includes("unsupported") ||
+      normalized.includes("not supported") ||
+      normalized.includes("not implement"))
   );
 }
 
@@ -109,10 +101,16 @@ function isRejectedThinkingConfigOption(key: string, error: unknown): boolean {
   if (isUnsupportedControlRejection(error)) {
     return true;
   }
-  return hasRejectionSignal(describeConfigOptionRejection(error), [
-    ...UNSUPPORTED_CONFIG_CONTROL_SIGNALS,
-    ...REJECTED_CONFIG_VALUE_SIGNALS,
-  ]);
+  const description = describeConfigOptionRejection(error);
+  const describesConfigOption =
+    description.includes("session/set_config_option") ||
+    (description.includes("config option") &&
+      description.includes(normalizeLowercaseStringOrEmpty(key)));
+  return (
+    describesConfigOption &&
+    ACP_CONFIG_REJECTION_CODE_RE.test(description) &&
+    CONFIG_OPTION_REJECTION_RE.test(description)
+  );
 }
 
 /** Resolves backend-advertised controls plus locally inferred runtime control support. */
