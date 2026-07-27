@@ -35,9 +35,15 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
+    try {
+      closeOpenClawAgentDatabasesForTest();
+    } finally {
+      try {
+        closeOpenClawStateDatabaseForTest();
+      } finally {
+        cleanup();
+      }
+    }
   });
 });
 
