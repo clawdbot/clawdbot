@@ -272,16 +272,23 @@ async function executeMainSessionCronJob(
         removeQueuedSystemEventHandle(state, job, queuedSystemEvent);
         return { status: "error", error: timeoutErrorMessage() };
       }
-      heartbeatResult = await state.deps.runHeartbeatOnce({
-        source: "cron",
-        intent: "immediate",
-        reason,
-        agentId: job.agentId,
-        sessionKey: cronRunSessionKey,
-        owningCronJobMarker: activeJobMarker,
-        owningCronLaneTaskMarker,
-        heartbeat: { target: "last" },
-      });
+      try {
+        heartbeatResult = await state.deps.runHeartbeatOnce({
+          source: "cron",
+          intent: "immediate",
+          reason,
+          agentId: job.agentId,
+          sessionKey: cronRunSessionKey,
+          owningCronJobMarker: activeJobMarker,
+          owningCronLaneTaskMarker,
+          heartbeat: { target: "last" },
+        });
+      } catch (error) {
+        // A failed immediate heartbeat must not leave its failed run's
+        // reminder queued for an unrelated future heartbeat.
+        removeQueuedSystemEventHandle(state, job, queuedSystemEvent);
+        throw error;
+      }
       if (abortSignal?.aborted) {
         removeQueuedSystemEventHandle(state, job, queuedSystemEvent);
         return { status: "error", error: timeoutErrorMessage() };
