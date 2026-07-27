@@ -34,9 +34,6 @@ type Workflow = {
   env?: Record<string, string>;
   jobs?: Record<string, WorkflowJob>;
   on?: {
-    pull_request_target?: {
-      types?: string[];
-    };
     workflow_dispatch?: {
       inputs?: Record<
         string,
@@ -186,31 +183,17 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(proofScript).toContain("throw error;");
   });
 
-  it("uses the OpenClaw Mantis mention as the comment trigger", () => {
-    const workflow = readFileSync(WORKFLOW, "utf8");
-    const liveWorkflow = readFileSync(LIVE_WORKFLOW, "utf8");
-    expect(workflow).toContain("@openclaw-mantis");
-    expect(workflow).toContain("/openclaw-mantis");
-    expect(workflow).toContain("mantis: telegram-visible-proof");
-    expect(workflow).toContain('setOutput("should_run", "false")');
-    expect(workflow).toContain('normalized.includes("telegram desktop")');
-    expect(liveWorkflow).toContain('normalized.includes("telegram desktop")');
-    expect(liveWorkflow).toContain("!requestedDesktopProof");
-    expect(workflow).not.toContain("@Mantis");
-    expect(workflow).not.toContain("@mantis");
-    expect(workflow).not.toContain('"/mantis"');
-  });
-
-  it("runs when ClawSweeper applies the Telegram proof label", () => {
+  it("requires explicit maintainer dispatch before executing a PR worktree", () => {
     const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
     const workflowText = readFileSync(WORKFLOW, "utf8");
 
-    expect(workflow.on?.pull_request_target?.types).toContain("labeled");
-    expect(workflowText).toContain("github.event.label.name == 'mantis: telegram-visible-proof'");
-    expect(workflowText).toContain('eventName === "pull_request_target"');
-    expect(workflowText).toContain("context.payload.pull_request?.number");
-    expect(workflowText).toContain("Accepted Mantis label trigger");
-    expect(workflowText).toContain("allow-bot-users: clawsweeper[bot]");
+    expect(workflow.on?.workflow_dispatch).toBeDefined();
+    expect(workflowText).not.toContain("issue_comment:");
+    expect(workflowText).not.toContain("pull_request_target:");
+    expect(workflowText).not.toContain("clear_issue_comment_reaction:");
+    expect(workflowText).toContain("allow-bot-users: github-actions[bot]");
+    expect(workflowText).not.toContain("allow-bot-users: clawsweeper[bot]");
+    expect(workflowText).toContain('setOutput("request_source", "workflow_dispatch")');
   });
 
   it("can publish an existing proof artifact without recapturing", () => {

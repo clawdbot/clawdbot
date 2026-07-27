@@ -1,10 +1,6 @@
 name: Mantis Telegram Desktop Proof
 
 on:
-  issue_comment:
-    types: [created]
-  pull_request_target: # zizmor: ignore[dangerous-triggers] maintainer-owned Mantis label trigger; trusted base workflow validates refs before checkout/use
-    types: [labeled]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -53,63 +49,8 @@ env:
   MANTIS_OUTPUT_DIR: .artifacts/qa-e2e/mantis/telegram-desktop-proof
 
 jobs:
-  authorize_actor:
-    name: Authorize workflow actor
-    if: >-
-      ${{
-        github.event_name == 'workflow_dispatch' ||
-        (
-          github.event_name == 'pull_request_target' &&
-          github.event.action == 'labeled' &&
-          github.event.label.name == 'mantis: telegram-visible-proof'
-        ) ||
-        (
-          github.event_name == 'issue_comment' &&
-          github.event.issue.pull_request &&
-          contains(github.event.issue.labels.*.name, 'mantis: telegram-visible-proof') &&
-          (
-            contains(github.event.comment.body, '@openclaw-mantis') ||
-            contains(github.event.comment.body, '/openclaw-mantis')
-          )
-        )
-      }}
-    runs-on: ubuntu-24.04
-    outputs:
-      authorized: ${{ steps.permission.outputs.authorized }}
-    steps:
-      - name: Require maintainer-level repository access
-        id: permission
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        with:
-          script: |
-            if (context.eventName === "pull_request_target") {
-              core.info(`Accepted Mantis label trigger from ${context.actor}.`);
-              core.setOutput("authorized", "true");
-              return;
-            }
-
-            const allowed = new Set(["admin", "maintain", "write"]);
-            const { owner, repo } = context.repo;
-            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
-              owner,
-              repo,
-              username: context.actor,
-            });
-            const permission = data.permission;
-            core.info(`Actor ${context.actor} permission: ${permission}`);
-            if (!allowed.has(permission)) {
-              core.notice(
-                `Workflow requires write/maintain/admin access. Actor "${context.actor}" has "${permission}".`,
-              );
-              core.setOutput("authorized", "false");
-              return;
-            }
-            core.setOutput("authorized", "true");
-
   resolve_request:
     name: Resolve Mantis request
-    needs: authorize_actor
-    if: needs.authorize_actor.outputs.authorized == 'true'
     runs-on: ubuntu-24.04
     outputs:
       baseline_ref: ${{ steps.resolve.outputs.baseline_ref }}
@@ -128,57 +69,19 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
-            const eventName = context.eventName;
-
             function setOutput(name, value) {
               core.setOutput(name, value ?? "");
               core.info(`${name}=${value ?? ""}`);
             }
 
             const inputs = context.payload.inputs ?? {};
-            const prNumber =
-              eventName === "workflow_dispatch"
-                ? inputs.pr_number
-                : eventName === "pull_request_target"
-                  ? String(context.payload.pull_request?.number ?? "")
-                  : String(context.payload.issue?.number ?? "");
+            const prNumber = inputs.pr_number;
             if (!prNumber) {
               core.setFailed("Mantis Telegram desktop proof requires a pull request.");
               return;
             }
 
-            const body =
-              eventName === "workflow_dispatch"
-                ? inputs.instructions || ""
-                : eventName === "issue_comment"
-                  ? context.payload.comment?.body || ""
-                  : "";
-            if (eventName === "issue_comment") {
-              const normalized = body.toLowerCase();
-              const requestedDesktopProof =
-                (normalized.includes("@openclaw-mantis") || normalized.includes("/openclaw-mantis")) &&
-                (normalized.includes("desktop proof") ||
-                  normalized.includes("desktop-proof") ||
-                  normalized.includes("telegram desktop") ||
-                  normalized.includes("native telegram") ||
-                  normalized.includes("visible proof") ||
-                  normalized.includes("visible-proof") ||
-                  normalized.includes("telegram-visible-proof"));
-              if (!requestedDesktopProof) {
-                core.notice("Comment mentioned Mantis but did not request Telegram desktop proof.");
-                setOutput("should_run", "false");
-                setOutput("baseline_ref", "");
-                setOutput("candidate_ref", "");
-                setOutput("pr_number", "");
-                setOutput("instructions", "");
-                setOutput("crabbox_provider", "");
-                setOutput("lease_id", "");
-                setOutput("publish_artifact_name", "");
-                setOutput("publish_run_id", "");
-                setOutput("request_source", "unsupported_issue_comment");
-                return;
-              }
-            }
+            const body = inputs.instructions || "";
 
             const { owner, repo } = context.repo;
             const { data: pr } = await github.rest.pulls.get({
@@ -201,16 +104,7 @@ jobs:
             setOutput("lease_id", inputs.crabbox_lease_id || "");
             setOutput("publish_artifact_name", inputs.publish_artifact_name || "");
             setOutput("publish_run_id", inputs.publish_run_id || "");
-            setOutput("request_source", eventName);
-
-            if (eventName === "issue_comment") {
-              await github.rest.reactions.createForIssueComment({
-                owner,
-                repo,
-                comment_id: context.payload.comment.id,
-                content: "eyes",
-              }).catch((error) => core.warning(`Could not add eyes reaction: ${error.message}`));
-            }
+            setOutput("request_source", "workflow_dispatch");
 
   validate_refs:
     name: Validate selected refs
@@ -575,7 +469,7 @@ jobs:
           codex-home: /tmp/mantis-codex-home-${{ github.run_id }}
           safety-strategy: unprivileged-user
           codex-user: codex
-          allow-bot-users: clawsweeper[bot]
+          allow-bot-users: github-actions[bot]
 
       - name: Release leaked Telegram proof leases
         if: ${{ always() }}
@@ -792,44 +686,3 @@ jobs:
             --artifact-url "$PUBLISH_ARTIFACT_URL" \
             --run-url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${PUBLISH_RUN_ID}" \
             --request-source "$REQUEST_SOURCE"
-
-  clear_issue_comment_reaction:
-    name: Clear Mantis command reaction
-    needs: [resolve_request, validate_refs, run_telegram_desktop_proof]
-    if: ${{ always() && github.event_name == 'issue_comment' && needs.resolve_request.outputs.request_source == 'issue_comment' }}
-    runs-on: ubuntu-24.04
-    permissions:
-      issues: write
-    steps:
-      - name: Remove workflow eyes reaction
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        with:
-          script: |
-            const { owner, repo } = context.repo;
-            const commentId = context.payload.comment?.id;
-            if (!commentId) {
-              core.info("No issue comment id found; skipping reaction cleanup.");
-              return;
-            }
-
-            const reactions = await github.paginate(github.rest.reactions.listForIssueComment, {
-              owner,
-              repo,
-              comment_id: commentId,
-              per_page: 100,
-            });
-            const eyes = reactions.filter(
-              (reaction) => reaction.content === "eyes" && reaction.user?.login === "github-actions[bot]",
-            );
-            for (const reaction of eyes) {
-              await github.rest.reactions.deleteForIssueComment({
-                owner,
-                repo,
-                comment_id: commentId,
-                reaction_id: reaction.id,
-              });
-              core.info(`Removed eyes reaction ${reaction.id} from comment ${commentId}.`);
-            }
-            if (eyes.length === 0) {
-              core.info(`No workflow eyes reaction found on comment ${commentId}.`);
-            }
