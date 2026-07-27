@@ -60,7 +60,7 @@ const DEFAULT_USAGE_COST_TIMEOUT_MS = 5 * 60_000;
 const USAGE_COST_SETTLE_INITIAL_POLL_MS = 250;
 const USAGE_COST_SETTLE_MAX_POLL_MS = 5_000;
 
-export type GatewayCliDependencies = {
+type GatewayCliDependencies = {
   usageCostSettle?: {
     now: () => number;
     sleep: (ms: number) => Promise<void>;
