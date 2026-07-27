@@ -266,9 +266,7 @@ Unknown frame types are preserved as raw payloads for forward compatibility.
 
 ## Live schema JSON
 
-Generated JSON Schema is a build artifact, not committed to the repo. The published raw file is typically available at:
-
-- [https://raw.githubusercontent.com/openclaw/openclaw/main/dist/protocol.schema.json](https://raw.githubusercontent.com/openclaw/openclaw/main/dist/protocol.schema.json)
+Generated JSON Schema is a build artifact, not committed to the repo, so there is no `raw.githubusercontent.com/openclaw/openclaw/main/dist/protocol.schema.json` URL for it (that path is [gitignored](https://github.com/openclaw/openclaw/blob/main/.gitignore)). Generate it locally with `pnpm protocol:gen` (see [Current pipeline](#current-pipeline)); the same file also ships at the root of the published `@openclaw/gateway-protocol` npm package via its `prepack` step.
 
 ## When you change schemas
 
