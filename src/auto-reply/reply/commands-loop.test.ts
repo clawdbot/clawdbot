@@ -96,7 +96,7 @@ describe("loop command", () => {
     const params = buildLoopParams("/loop status");
 
     expect(await handleLoopCommand(params, true)).toEqual({ shouldContinue: true });
-    expect(rewrittenBody(params)).toContain('action:"list"');
+    expect(rewrittenBody(params)).toContain('action:"list", includeDisabled:true');
     expect(rewrittenBody(params)).toContain(`name starts with "${LOOP_PREFIX}"`);
   });
 
@@ -104,6 +104,7 @@ describe("loop command", () => {
     const params = buildLoopParams("/loop stop");
 
     expect(await handleLoopCommand(params, true)).toEqual({ shouldContinue: true });
+    expect(rewrittenBody(params)).toContain('action:"list", includeDisabled:true');
     expect(rewrittenBody(params)).toContain(`name starts with "${LOOP_PREFIX}"`);
     expect(rewrittenBody(params)).toContain('action:"remove"');
     expect(rewrittenBody(params)).toContain(

@@ -106,7 +106,7 @@ function buildSelfPacedLoopWorkOrder(prompt: string, sessionKey: string): string
 
 function buildLoopStatusWorkOrder(sessionKey: string): string {
   const prefix = loopNamePrefix(sessionKey);
-  return `Use the cron tool (action:"list") and report this conversation's loop jobs — exactly those whose name starts with ${JSON.stringify(prefix)}: name, schedule/pacing, last run, next run. If none, say so. ${LOOP_FINAL_REPLY_ONLY}`;
+  return `Use the cron tool (action:"list", includeDisabled:true) and report this conversation's loop jobs — exactly those whose name starts with ${JSON.stringify(prefix)}: name, schedule/pacing, enabled, last run, next run. If none, say so. ${LOOP_FINAL_REPLY_ONLY}`;
 }
 
 function buildLoopStopWorkOrder(name: string, sessionKey: string): string {
@@ -114,7 +114,7 @@ function buildLoopStopWorkOrder(name: string, sessionKey: string): string {
   const matchInstruction = name
     ? ` Among those, match ${JSON.stringify(name)} against the job name.`
     : "";
-  return `List cron jobs and find this conversation's loops — exactly those whose name starts with ${JSON.stringify(prefix)}.${matchInstruction} Remove the matching jobs with action:"remove" and confirm the removed names. If none matched, say so and list this conversation's active loop names. Never remove a job whose name does not start with ${JSON.stringify(prefix)}. ${LOOP_FINAL_REPLY_ONLY}`;
+  return `List cron jobs (action:"list", includeDisabled:true) and find this conversation's loops — exactly those whose name starts with ${JSON.stringify(prefix)}.${matchInstruction} Remove the matching jobs with action:"remove" and confirm the removed names. If none matched, say so and list this conversation's active loop names. Never remove a job whose name does not start with ${JSON.stringify(prefix)}. ${LOOP_FINAL_REPLY_ONLY}`;
 }
 
 /** Command handler for conversation-bound recurring loops. */
