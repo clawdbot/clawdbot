@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import { findCapabilityProviderById } from "../../../packages/media-generation-core/src/capability-model-ref.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MediaUnderstandingModelConfig } from "../../config/types.tools.js";
+import { logWarn } from "../../logger.js";
 import {
   DEFAULT_TIMEOUT_SECONDS,
   resolveAutoMediaKeyProviders,
@@ -48,7 +49,6 @@ import {
 } from "../model-fallback-candidates.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { optionalFiniteNumberSchema, optionalPositiveIntegerSchema } from "../schema/typebox.js";
-import { logWarn } from "../../logger.js";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "./common.js";
 import {
   coerceImageAssistantText,

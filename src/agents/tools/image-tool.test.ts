@@ -2794,7 +2794,10 @@ describe("image tool MiniMax VLM routing", () => {
 
     // The gate fires because 101 > 100 (clamped), not 101 > 1_000_000_000.
     expect(result.content).toEqual([
-      { type: "text", text: "Too many images: 101 provided, maximum is 100. Please reduce the number of images." },
+      {
+        type: "text",
+        text: "Too many images: 101 provided, maximum is 100. Please reduce the number of images.",
+      },
     ]);
     expect(result.details).toMatchObject({
       error: "too_many_images",
