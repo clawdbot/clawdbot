@@ -1,9 +1,14 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
 import {
   hasActiveRestartRecoverySourceClaim,
   hasRestartRecoveryTerminalRun,
 } from "./restart-recovery-state.js";
-import { loadSessionEntry, updateSessionEntry } from "./session-accessor.js";
+import {
+  listSessionEntriesReadOnly,
+  loadSessionEntry,
+  updateSessionEntry,
+} from "./session-accessor.js";
 import type { SessionEntry } from "./types.js";
 
 export type RestartRecoveryTerminalDeliveryScope = {
@@ -43,6 +48,39 @@ function hasClaimlessLiveDeliveryState(
   );
 }
 
+/**
+ * Re-anchors a scope on the session entry that actually holds its sessionId.
+ *
+ * Every predicate in this module compares `entry.sessionId` with
+ * `scope.sessionId`, so a scope naming a session key whose entry holds a
+ * different sessionId can only ever produce a false negative: neither the active
+ * claim nor the claimless-live escape hatch can match. Callers legitimately hold
+ * a key that is not the durable run session. A runtime that sandboxes tool calls
+ * keeps a separate policy session key, and the gateway-owned receipt path scopes
+ * with the request's identity session key, which is that policy key. The
+ * sessionId is the one identifier that is already correct on every path.
+ *
+ * Falls back to the scope untouched when the sessionId is ambiguous or absent
+ * from the store, so this can only ever turn a false refusal into a decision the
+ * other predicates were meant to make.
+ */
+function resolveClaimOwningScope(
+  scope: RestartRecoveryTerminalDeliveryScope,
+): RestartRecoveryTerminalDeliveryScope {
+  const requested = loadSessionEntry({
+    sessionKey: scope.sessionKey,
+    storePath: scope.storePath,
+  });
+  if (requested?.sessionId === scope.sessionId) {
+    return scope;
+  }
+  const matches = listSessionEntriesReadOnly({ storePath: scope.storePath, clone: false })
+    .filter(({ entry }) => entry.sessionId === scope.sessionId)
+    .map(({ sessionKey, entry }): [string, SessionEntry] => [sessionKey, entry]);
+  const owningSessionKey = resolvePreferredSessionKeyForSessionIdMatches(matches, scope.sessionId);
+  return owningSessionKey ? { ...scope, sessionKey: owningSessionKey } : scope;
+}
+
 function loadCurrent(scope: RestartRecoveryTerminalDeliveryScope): SessionEntry | undefined {
   return loadSessionEntry({
     sessionKey: scope.sessionKey,
@@ -53,8 +91,9 @@ function loadCurrent(scope: RestartRecoveryTerminalDeliveryScope): SessionEntry 
 
 /** Persists ambiguity before a terminal external send is allowed to start. */
 export async function beginRestartRecoveryTerminalDelivery(
-  scope: RestartRecoveryTerminalDeliveryScope,
+  requestedScope: RestartRecoveryTerminalDeliveryScope,
 ): Promise<"started" | "blocked" | "stale" | "not-applicable"> {
+  const scope = resolveClaimOwningScope(requestedScope);
   let started = false;
   const updated = await updateSessionEntry(
     { sessionKey: scope.sessionKey, storePath: scope.storePath },
@@ -108,8 +147,11 @@ export async function beginRestartRecoveryTerminalDelivery(
 
 /** Resolves a pre-send ambiguity only after the provider confirms delivery. */
 export async function completeRestartRecoveryTerminalDelivery(
-  scope: RestartRecoveryTerminalDeliveryScope,
+  requestedScope: RestartRecoveryTerminalDeliveryScope,
 ): Promise<"recorded" | "stale"> {
+  // Same re-anchoring as begin, or a receipt armed on the owning session could
+  // never be completed and would leave the entry pending forever.
+  const scope = resolveClaimOwningScope(requestedScope);
   const updated = await updateSessionEntry(
     { sessionKey: scope.sessionKey, storePath: scope.storePath },
     (entry) => {
@@ -148,8 +190,9 @@ export async function completeRestartRecoveryTerminalDelivery(
 
 /** Clears the pre-send intent only when the provider proves no delivery occurred. */
 export async function cancelRestartRecoveryTerminalDelivery(
-  scope: RestartRecoveryTerminalDeliveryScope,
+  requestedScope: RestartRecoveryTerminalDeliveryScope,
 ): Promise<"cleared" | "stale"> {
+  const scope = resolveClaimOwningScope(requestedScope);
   const updated = await updateSessionEntry(
     { sessionKey: scope.sessionKey, storePath: scope.storePath },
     (entry) => {
