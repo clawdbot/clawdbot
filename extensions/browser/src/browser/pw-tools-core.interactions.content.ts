@@ -48,7 +48,8 @@ type PlaywrightFilePayload = {
 
 async function toPlaywrightFilePayloads(paths: string[]): Promise<PlaywrightFilePayload[]> {
   const stats = await Promise.all(paths.map(async (filePath) => await fs.stat(filePath)));
-  if (stats.some((stat) => stat.size > PLAYWRIGHT_FILE_PAYLOAD_SIZE_LIMIT_BYTES)) {
+  const totalSize = stats.reduce((size, stat) => size + stat.size, 0);
+  if (totalSize >= PLAYWRIGHT_FILE_PAYLOAD_SIZE_LIMIT_BYTES) {
     throw new Error(
       "Cannot set buffer larger than 50Mb, please write it to a file and pass its path instead.",
     );
