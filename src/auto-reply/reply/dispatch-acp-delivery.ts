@@ -510,7 +510,12 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     const policyResult = isOperationalReply
       ? await applyAcpOperationalReplyPolicy(visiblePayload)
       : ({ shouldDeliver: true } as const);
-    if (params.abortSignal?.aborted && policyResult.shouldDeliver) {
+    const hasRoutedTarget = Boolean(
+      params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo,
+    );
+    // Routed delivery owns cancellation and must observe the caller signal.
+    // Returning here would bypass its outcome and leave policy state unproven.
+    if (params.abortSignal?.aborted && policyResult.shouldDeliver && !hasRoutedTarget) {
       await markOperationalReplyPolicyDelivered(policyResult, false);
       return false;
     }
