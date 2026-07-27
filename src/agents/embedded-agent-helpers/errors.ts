@@ -1560,9 +1560,9 @@ export function formatAssistantErrorText(
     );
   }
 
-  const invalidRequest = raw.match(/"type":"invalid_request_error".*?"message":"([^"]+)"/);
-  if (invalidRequest?.[1]) {
-    return `LLM request rejected: ${invalidRequest[1]}`;
+  const apiError = parseApiErrorInfo(raw);
+  if (apiError?.type?.toLowerCase().includes("invalid_request") && apiError.message?.trim()) {
+    return `LLM request rejected: ${apiError.message.trim()}`;
   }
 
   if (
