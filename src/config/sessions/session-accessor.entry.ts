@@ -350,18 +350,16 @@ export function listSessionEntries(scope: SessionEntryListScope = {}): SessionEn
 /**
  * Borrowed keyed view over one resolved store for synchronous read-only hot paths.
  * Unlike loadSessionEntry, `get` is a raw exact persisted-key probe with no alias
- * or canonical-key resolution and no row scans, so large stores stay cheap until
- * `entries` is called. Rows are borrowed, not cloned: callers must not mutate them
- * and must drop the view before any await.
+ * or canonical-key resolution. The first probe materializes one validated store
+ * snapshot; later probes and `entries` reuse its parsed rows. Rows are borrowed,
+ * not cloned: callers must not mutate them and must drop the view before any await.
  */
 export function openSessionEntryReadView(
   scope: Omit<SessionEntryListScope, "clone" | "readConsistency"> = {},
 ): SessionEntryReadView {
-  // Exact-key probes read single SQLite rows; entries() materializes the full
-  // list only when raw probes cannot settle the caller's lookup.
   return {
-    get: (sessionKey) => loadExactSessionEntry({ ...scope, sessionKey })?.entry,
-    entries: () => listSqliteSessionEntries(scope),
+    get: (sessionKey) => loadExactSessionEntry({ ...scope, clone: false, sessionKey })?.entry,
+    entries: () => listSqliteSessionEntries({ ...scope, clone: false }),
   };
 }
 

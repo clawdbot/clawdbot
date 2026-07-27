@@ -12,6 +12,10 @@ import {
   upsertConversationIdentity,
 } from "./session-accessor.sqlite-conversation.js";
 import {
+  publishSqliteSessionEntryCacheDelete,
+  publishSqliteSessionEntryCacheWrite,
+} from "./session-accessor.sqlite-entry-cache.js";
+import {
   clearSessionCollaborationForKey,
   deleteSessionNodeArtifacts,
   rehomeLegacySessionNodeArtifacts,
@@ -352,12 +356,14 @@ export function deleteSqliteSessionEntryRows(
       sessionKey,
       updatedAt: remainingWindow.updated_at,
     });
+    publishSqliteSessionEntryCacheDelete(database, sessionKey);
     return;
   }
   executeSqliteQuerySync(
     database.db,
     db.deleteFrom("session_nodes").where("session_key", "=", sessionKey),
   );
+  publishSqliteSessionEntryCacheDelete(database, sessionKey);
 }
 
 /** Remove the logical entry while retaining its node-owned transcript windows. */
@@ -479,6 +485,7 @@ export function deleteLegacySessionEntryRows(
       database.db,
       db.deleteFrom("session_nodes").where("session_key", "=", legacyKey),
     );
+    publishSqliteSessionEntryCacheDelete(database, legacyKey);
   }
 }
 
@@ -634,6 +641,7 @@ export function writeSessionEntry(
       updatedAt,
     });
   }
+  publishSqliteSessionEntryCacheWrite(database, sessionKey, normalizedEntry);
 }
 
 /** Resolves the parent fork decision using SQLite transcript rows when totals are stale. */
