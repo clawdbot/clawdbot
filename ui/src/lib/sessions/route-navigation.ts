@@ -148,9 +148,14 @@ export function sessionNavigationTarget<TRouteId extends string>(
   const search = catalogKey ? catalogSessionSearch(catalogKey) : undefined;
   // A cached row carries the authoritative boardFace, so the caller's face is already
   // correct. Only an uncached key made it a guess: mark the in-app navigation so the
-  // chat loader re-derives the face from the gateway and replaces the URL. The marker
-  // stays out of `href` because that string gets copied and shared, and a shared link
-  // should keep the clean best-guess path.
+  // chat loader re-derives the face from the gateway and replaces the URL.
+  //
+  // The marker stays out of `href` on purpose. That string is what users hover, copy,
+  // and share, and it must not carry an internal parameter. The accepted cost is that
+  // alternate activation (middle-click, open-in-new-tab, modified click) follows the
+  // clean guessed path and can land on the other face for an uncached session, exactly
+  // as every open did before gateway resolution existed. The face is one click to
+  // change and the change persists, so this is a smaller win, not a regression.
   const navigationParams = new URLSearchParams(search ?? "");
   if (params.preferenceDerivedFace && !row) {
     navigationParams.set(SESSION_FACE_PREFERENCE_PARAM, "1");
