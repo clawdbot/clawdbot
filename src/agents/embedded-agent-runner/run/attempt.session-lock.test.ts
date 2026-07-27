@@ -302,6 +302,9 @@ describe("createEmbeddedAttemptSessionLockController", () => {
       expect(release).not.toHaveBeenCalled();
     });
     const cleanupLock = await controller.acquireForCleanup();
+    await expect(controller.withSessionWriteLock(async () => undefined)).rejects.toThrow(
+      "attempt cleanup started before transcript write",
+    );
     await cleanupLock.release();
     expect(release).toHaveBeenCalledOnce();
   });

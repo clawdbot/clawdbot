@@ -61,10 +61,10 @@ export class SessionManagerCore {
     const header = entries.find(
       (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
     );
+    this.setLoadedSessionTarget(target, entries);
     if (header?.cwd) {
       this.cwd = header.cwd;
     }
-    this.setLoadedSessionTarget(target, entries);
   }
 
   protected setLoadedSessionTarget(

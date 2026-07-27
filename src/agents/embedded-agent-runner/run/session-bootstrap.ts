@@ -15,6 +15,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../../sessions/session-id-resolution.js";
+import { resolveDefaultAgentId } from "../../agent-scope.js";
 import {
   resolveSessionKeyForRequest,
   resolveStoredSessionKeyForSessionId,
@@ -91,7 +92,10 @@ export function buildContextEngineCompactionSessionTarget(params: {
       ? markerSessionKey
       : (targetSessionKey ?? suppliedSessionKey ?? params.sessionId);
   const agentId =
-    targetAgentId ?? marker?.agentId ?? params.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
+    targetAgentId ??
+    marker?.agentId ??
+    params.agentId ??
+    resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(params.config ?? {}));
   const storePath =
     targetStorePath ??
     marker?.storePath ??

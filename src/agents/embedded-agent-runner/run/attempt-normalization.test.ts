@@ -28,6 +28,24 @@ describe("buildContextEngineCompactionSessionTarget", () => {
       storePath: "/tmp/sessions.json",
     });
   });
+
+  it("uses the configured default agent for an unscoped compatibility key", () => {
+    expect(
+      buildContextEngineCompactionSessionTarget({
+        config: {
+          agents: { list: [{ id: "main" }, { id: "worker", default: true }] },
+          session: { store: "/tmp/{agentId}/sessions.json" },
+        },
+        sessionFile: "compat-session",
+        sessionId: "compat-session",
+      }),
+    ).toMatchObject({
+      agentId: "worker",
+      sessionId: "compat-session",
+      sessionKey: "compat-session",
+      storePath: "/tmp/worker/sessions.json",
+    });
+  });
 });
 
 function promptState(storePath = "/tmp/sessions.json") {

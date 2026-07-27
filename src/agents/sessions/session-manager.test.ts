@@ -188,6 +188,11 @@ describe("SessionManager.open", () => {
     expect(() => SessionManager.open(scope, dir)).toThrow(
       "require doctor/import migration before runtime use",
     );
+    const existingManager = SessionManager.inMemory("/original-workspace");
+    expect(() => existingManager.setSessionTarget(scope)).toThrow(
+      "require doctor/import migration before runtime use",
+    );
+    expect(existingManager.getCwd()).toBe("/original-workspace");
   });
 
   it("skips malformed null rows while opening a persisted transcript", async () => {

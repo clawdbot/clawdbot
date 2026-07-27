@@ -96,6 +96,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   let reloadFailed = false;
   let reloadFailure: unknown;
   let disposePromise: Promise<void> | undefined;
+  let cleanupReleasePromise: Promise<void> | undefined;
   type ActiveWriteOperation = {
     settlement?: Promise<void>;
     started: boolean;
@@ -231,10 +232,16 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       if (disposed) {
         throw new Error("attempt disposed before transcript write");
       }
+      if (cleanupStarted) {
+        throw new Error("attempt cleanup started before transcript write");
+      }
       const writeOperation: ActiveWriteOperation = { started: false };
       const operation = serializeLifecycle(async () => {
         if (disposed) {
           throw new Error("attempt disposed before transcript write");
+        }
+        if (cleanupStarted) {
+          throw new Error("attempt cleanup started before transcript write");
         }
         if (reloadFailed) {
           throw reloadFailure;
@@ -255,7 +262,13 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       if (activeWriteOperation.getStore()) {
         throw new Error("cannot start attempt cleanup inside a transcript write callback");
       }
+      if (disposed) {
+        throw new Error("attempt disposed before cleanup");
+      }
       await serializeLifecycle(async () => {
+        if (disposed) {
+          throw new Error("attempt disposed before cleanup");
+        }
         cleanupStarted = true;
         if (promptReleased) {
           try {
@@ -268,7 +281,22 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         }
       });
       await serializeLifecycle(() => {});
-      return { release: releaseInitialLock } as SessionLock;
+      return {
+        release: () => {
+          cleanupReleasePromise ??= (async () => {
+            await serializeLifecycle(() => {});
+            while (activeWriteOperations.size > 0) {
+              await Promise.all(
+                [...activeWriteOperations].flatMap((operation) =>
+                  operation.settlement ? [operation.settlement] : [],
+                ),
+              );
+            }
+            await releaseInitialLock();
+          })();
+          return cleanupReleasePromise;
+        },
+      } as SessionLock;
     },
     hasSessionTakeover: () => takeoverDetected,
     dispose: async () => {
