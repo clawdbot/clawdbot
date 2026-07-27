@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import {
   createMinimalRunAgentTurnParams,
@@ -63,8 +63,10 @@ describe("executeAgentTurn contract", () => {
 
   it("releases an unsettled operation when a restart error aborts execution", async () => {
     const { replyOperation } = createMockReplyOperation();
+    const complete = vi.fn();
     const unsettledOperation = {
       ...replyOperation,
+      complete,
       freezeAbort: () => {
         throw createAgentRunRestartAbortError();
       },
@@ -75,6 +77,6 @@ describe("executeAgentTurn contract", () => {
     );
 
     expect(result.outcome).toEqual({ kind: "aborted", reason: "restart" });
-    expect(replyOperation.complete).toHaveBeenCalledOnce();
+    expect(complete).toHaveBeenCalledOnce();
   });
 });
