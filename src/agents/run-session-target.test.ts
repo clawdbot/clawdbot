@@ -61,16 +61,14 @@ describe("agent run session target", () => {
   });
 
   it("prefers typed runtime target identity over deprecated sessionFile", async () => {
-    const fallbackStorePath = path.join(tempDir, "target-store", "sessions.json");
-    const configuredStorePath = path.join(tempDir, "fallback", "sessions.json");
+    const storePath = path.join(tempDir, "target-store", "sessions.json");
     const legacySessionFile = path.join(tempDir, "legacy-session.jsonl");
 
     const target = await resolveAgentRunSessionTarget({
       agentId: "main",
       config: {
-        session: { store: configuredStorePath },
+        session: { store: path.join(tempDir, "fallback", "sessions.json") },
       } as OpenClawConfig,
-      fallbackSessionTarget: { agentId: "main", storePath: fallbackStorePath },
       sessionFile: legacySessionFile,
       sessionId: "legacy-session",
       sessionKey: "agent:main:legacy-session",
@@ -78,6 +76,7 @@ describe("agent run session target", () => {
         agentId: "worker",
         sessionId: "runtime-session",
         sessionKey: "agent:worker:runtime-session",
+        storePath,
         threadId: "thread-1",
       },
     });
@@ -86,14 +85,14 @@ describe("agent run session target", () => {
       agentId: "worker",
       sessionId: "runtime-session",
       sessionKey: "agent:worker:runtime-session",
-      storePath: configuredStorePath,
+      storePath,
       threadId: "thread-1",
     });
     expect(target.sessionFile).not.toBe(legacySessionFile);
     expect(parseSqliteSessionFileMarker(target.sessionFile)).toEqual({
       agentId: "worker",
       sessionId: "runtime-session",
-      storePath: configuredStorePath,
+      storePath,
     });
   });
 });
