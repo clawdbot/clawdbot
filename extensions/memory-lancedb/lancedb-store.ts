@@ -10,7 +10,6 @@ import {
   quoteLanceSqlString,
 } from "./lancedb-schema.js";
 
-const SCHEMA_SENTINEL_ID = "__schema__";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type MemoryEntry = {
@@ -102,26 +101,35 @@ export class MemoryDB {
     const db = await lancedb.connect(this.dbPath, connectionOptions);
     let table: LanceDB.Table | null = null;
     try {
-      const tables = await db.tableNames();
-
-      if (tables.includes(MEMORY_TABLE_NAME)) {
+      try {
         table = await db.openTable(MEMORY_TABLE_NAME);
-        if (!hasAgentScopeColumn(await table.schema())) {
-          throw legacyMemorySchemaError();
+      } catch (openError) {
+        // Confirm absence only after open fails, then let LanceDB resolve a
+        // concurrent creator atomically instead of racing tableNames() and create.
+        if ((await db.tableNames()).includes(MEMORY_TABLE_NAME)) {
+          throw openError;
         }
-      } else {
-        table = await db.createTable(MEMORY_TABLE_NAME, [
-          {
-            id: SCHEMA_SENTINEL_ID,
-            text: "",
-            vector: Array.from({ length: this.vectorDim }).fill(0),
-            importance: 0,
-            category: "other",
-            createdAt: 0,
-            agentId: SCHEMA_SENTINEL_ID,
-          },
-        ]);
-        await table.delete(`id = ${quoteLanceSqlString(SCHEMA_SENTINEL_ID)}`);
+        const schema = lancedb.makeArrowTable(
+          [
+            {
+              id: "",
+              text: "",
+              vector: Array.from({ length: this.vectorDim }).fill(0),
+              importance: 0,
+              category: "other",
+              createdAt: 0,
+              agentId: "",
+            },
+          ],
+          { vectorColumns: { vector: { type: "float32" } } },
+        ).schema;
+        table = await db.createEmptyTable(MEMORY_TABLE_NAME, schema, {
+          mode: "create",
+          existOk: true,
+        });
+      }
+      if (!hasAgentScopeColumn(await table.schema())) {
+        throw legacyMemorySchemaError();
       }
 
       this.db = db;

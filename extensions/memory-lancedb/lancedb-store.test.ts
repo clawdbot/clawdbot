@@ -71,4 +71,23 @@ describe("MemoryDB agent isolation", () => {
     );
     db.close();
   });
+
+  test("initializes one shared table across concurrent connections", async () => {
+    const databases = Array.from({ length: 2 }, () => new MemoryDB(getDbPath(), 2));
+    try {
+      await expect(Promise.all(databases.map((db) => db.count("main")))).resolves.toEqual(
+        Array.from({ length: databases.length }).fill(0),
+      );
+
+      const first = databases[0];
+      if (!first) {
+        throw new Error("expected a concurrent memory database");
+      }
+      await expect(first.count("main")).resolves.toBe(0);
+    } finally {
+      for (const db of databases) {
+        db.close();
+      }
+    }
+  });
 });
