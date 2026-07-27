@@ -17,8 +17,23 @@ vi.mock("./src/models.fetch.js", async (importOriginal) => ({
 function registerProvider() {
   const captured = capturePluginRegistration(plugin);
   const provider = captured.providers[0];
-  expect(provider?.id).toBe("lmstudio");
+  if (!provider) {
+    throw new Error("expected the LM Studio plugin to register a provider");
+  }
+  expect(provider.id).toBe("lmstudio");
   return provider;
+}
+
+function requireLmstudioResetValidator(): NonNullable<
+  ProviderAuthMethod["validateNonInteractive"]
+> {
+  const validator = registerProvider().auth[0]?.validateNonInteractive;
+  if (!validator) {
+    throw new Error(
+      "expected the LM Studio provider to register a non-interactive reset validator",
+    );
+  }
+  return validator;
 }
 
 function createLmstudioResetValidationContext(
@@ -74,9 +89,9 @@ describe("lmstudio plugin", () => {
       customModelId: "qwen/qwen3.5-9b",
     });
 
-    const provider = registerProvider();
-    expect(provider.auth[0].validateNonInteractive).toBeTypeOf("function");
-    await expect(provider.auth[0].validateNonInteractive(ctx)).resolves.toBe(true);
+    const validateNonInteractive = requireLmstudioResetValidator();
+    expect(validateNonInteractive).toBeTypeOf("function");
+    await expect(validateNonInteractive(ctx)).resolves.toBe(true);
 
     expect(fetchLmstudioModelsMock).toHaveBeenCalledWith({
       baseUrl: "http://lmstudio.internal:1234/v1",
@@ -102,7 +117,7 @@ describe("lmstudio plugin", () => {
       { key: "lmstudio-test-key", source: "flag" },
     );
 
-    await expect(registerProvider().auth[0].validateNonInteractive(ctx)).resolves.toBe(true);
+    await expect(requireLmstudioResetValidator()(ctx)).resolves.toBe(true);
 
     expect(ctx.resolveApiKey).toHaveBeenCalledWith({
       provider: "lmstudio",
@@ -125,7 +140,7 @@ describe("lmstudio plugin", () => {
       customBaseUrl: "http://lmstudio.internal:1234/v1",
     });
 
-    await expect(registerProvider().auth[0].validateNonInteractive(ctx)).resolves.toBe(false);
+    await expect(requireLmstudioResetValidator()(ctx)).resolves.toBe(false);
 
     expect(ctx.runtime.error).toHaveBeenCalledWith(
       "LM Studio could not be reached at http://lmstudio.internal:1234/v1.\nStart LM Studio (or run lms server start) and re-run setup.",
@@ -139,7 +154,7 @@ describe("lmstudio plugin", () => {
       customBaseUrl: "http://lmstudio.internal:1234/v1",
     });
 
-    await expect(registerProvider().auth[0].validateNonInteractive(ctx)).resolves.toBe(false);
+    await expect(requireLmstudioResetValidator()(ctx)).resolves.toBe(false);
 
     expect(ctx.runtime.error).toHaveBeenCalledWith(
       "LM Studio returned HTTP 401 while listing models at http://lmstudio.internal:1234/v1.\nCheck the base URL and API key, then re-run setup.",
@@ -158,7 +173,7 @@ describe("lmstudio plugin", () => {
       customModelId: "qwen/qwen3.5-9b",
     });
 
-    await expect(registerProvider().auth[0].validateNonInteractive(ctx)).resolves.toBe(false);
+    await expect(requireLmstudioResetValidator()(ctx)).resolves.toBe(false);
 
     expect(ctx.runtime.error).toHaveBeenCalledWith(
       "LM Studio model qwen/qwen3.5-9b was not found at http://lmstudio.internal:1234/v1.\nAvailable models: phi-4",
@@ -177,7 +192,7 @@ describe("lmstudio plugin", () => {
       customModelId: "lmstudio/qwen/qwen3.5-9b",
     });
 
-    await expect(registerProvider().auth[0].validateNonInteractive(ctx)).resolves.toBe(false);
+    await expect(requireLmstudioResetValidator()(ctx)).resolves.toBe(false);
 
     expect(ctx.runtime.error).toHaveBeenCalledWith(
       "LM Studio model lmstudio/qwen/qwen3.5-9b was not found at http://lmstudio.internal:1234/v1.\nAvailable models: qwen/qwen3.5-9b",
@@ -195,7 +210,7 @@ describe("lmstudio plugin", () => {
       customBaseUrl: "http://lmstudio.internal:1234/v1",
     });
 
-    await expect(registerProvider().auth[0].validateNonInteractive(ctx)).resolves.toBe(false);
+    await expect(requireLmstudioResetValidator()(ctx)).resolves.toBe(false);
 
     expect(ctx.runtime.error).toHaveBeenCalledWith(
       "No LM Studio LLM models were found at http://lmstudio.internal:1234/v1.\nLoad at least one model in LM Studio (or run lms load), then re-run setup.",
