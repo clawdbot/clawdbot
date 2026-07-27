@@ -57,6 +57,7 @@ const spawnByClientRequestId = new Map<string, SessionRecord>();
 const spawnPendingByIdempotencyKey = new Map<string, SpawnPending>();
 const spawnPendingByClientRequestId = new Map<string, SpawnPending>();
 const ACCEPTED_SPAWN_PERSIST_ATTEMPTS = 3;
+const REJECTED_SPAWN_ROLLBACK_PERSIST_ATTEMPTS = 3;
 
 type RuntimeSnapshot = {
   leases: LeaseRecord[];
@@ -182,6 +183,26 @@ function persistAcceptedSpawn(): void {
       lastError = error;
     }
   }
+  throw lastError;
+}
+
+function persistRejectedSpawnRollback(lease: LeaseRecord): void {
+  const reservation = lease.spawn_reservation;
+  const reservationFingerprint = lease.spawn_reservation_fingerprint;
+  const reservedAtMs = lease.spawn_reserved_at_ms;
+  clearSpawnReservation(lease);
+  let lastError: unknown;
+  for (let attempt = 0; attempt < REJECTED_SPAWN_ROLLBACK_PERSIST_ATTEMPTS; attempt += 1) {
+    try {
+      persistRuntimeState();
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  lease.spawn_reservation = reservation;
+  lease.spawn_reservation_fingerprint = reservationFingerprint;
+  lease.spawn_reserved_at_ms = reservedAtMs;
   throw lastError;
 }
 
@@ -568,11 +589,10 @@ export async function spawnAgenticOsSession(
         return record;
       } catch (error) {
         if (lease.spawn_reservation_fingerprint === fingerprint) {
-          clearSpawnReservation(lease);
           if (!lease.released_at_ms && !lease.consumed_at_ms) {
             leasesByGatewayId.set(gatewayLeaseId, lease);
           }
-          persistRuntimeState();
+          persistRejectedSpawnRollback(lease);
         }
         throw error;
       }

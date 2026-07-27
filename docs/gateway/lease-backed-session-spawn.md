@@ -125,8 +125,9 @@ Supported launch values are:
 - `context`: `isolated` or `fork`
 - `lightContext`: boolean
 
-`taskName`, `cleanup`, `context`, and `lightContext` are optional. `agentId`
-defaults to `metadata.agent_id` and must equal it when supplied.
+`taskName`, `cleanup`, `context`, and `lightContext` are optional. `taskName`
+is trimmed and validated before it becomes part of the replay identity.
+`agentId` defaults to `metadata.agent_id` and must equal it when supplied.
 
 An accepted response has `status: "accepted"` and includes the canonical
 `session_key`, `childSessionKey`, `runId`, `gateway_lease_id`, request
@@ -191,9 +192,10 @@ replay state in its canonical SQLite state database:
   identity without invoking the child runner again.
 
 Invalid fields, owner mismatches, expired or released leases, and conflicting
-replay identities fail closed. Do not switch to a different lease or
-idempotency identity until the prior request outcome and the recovery window
-have been evaluated.
+replay identities return `INVALID_REQUEST` and fail closed. Unexpected
+operational failures return `UNAVAILABLE` so callers can retry the same
+identity. Do not switch to a different lease or idempotency identity until the
+prior request outcome and the recovery window have been evaluated.
 
 ## Related
 

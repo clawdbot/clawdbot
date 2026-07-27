@@ -1,3 +1,4 @@
+import { normalizeSubagentTaskName } from "../agents/subagent-task-name.js";
 import {
   ALLOW_LEASE_OWNER_FIELDS,
   ContractInputError,
@@ -57,8 +58,11 @@ export function parseAgenticOsSpawnInput(params: Record<string, unknown>) {
   if (agentId !== metadata.agent_id) {
     return rejectConflict("spawn agentId does not match session metadata agent_id");
   }
-  const taskName =
-    typeof params.taskName === "string" && params.taskName ? params.taskName : undefined;
+  const taskNameResult = normalizeSubagentTaskName(params.taskName);
+  if (taskNameResult.error) {
+    return rejectConflict(taskNameResult.error);
+  }
+  const taskName = taskNameResult.taskName;
   if (Object.hasOwn(params, "mode") && params.mode !== "run") {
     return rejectConflict("invalid enum: mode");
   }

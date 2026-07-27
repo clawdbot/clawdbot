@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ContractInputError } from "../agentic-os-runtime-contract-shared.js";
 import type { GatewayClient } from "./shared-types.js";
 
 const contractMocks = vi.hoisted(() => ({
@@ -69,7 +70,7 @@ vi.mock("../../tasks/task-status-access.js", () => ({
 
 import { agenticOsRuntimeContractHandlers } from "./agentic-os-runtime-contract.js";
 
-type RespondCall = [boolean, unknown?, { message: string }?];
+type RespondCall = [boolean, unknown?, { code?: string; message: string }?];
 
 async function invoke(
   method: string,
@@ -135,6 +136,26 @@ describe("Agentic OS runtime handler regressions", () => {
     expect(response[0]).toBe(false);
     expect(response[2]?.message).toContain("stable authenticated client identity");
     expect(contractMocks.acquire).not.toHaveBeenCalled();
+  });
+
+  it("distinguishes invalid input from transient runtime failures", async () => {
+    contractMocks.acquire.mockImplementationOnce(() => {
+      throw new ContractInputError("synthetic invalid request");
+    });
+    const invalid = await invoke("subagents.allowLease.acquire", null);
+    contractMocks.acquire.mockImplementationOnce(() => {
+      throw new Error("synthetic database outage");
+    });
+    const unavailable = await invoke("subagents.allowLease.acquire", null);
+
+    expect(invalid[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "synthetic invalid request",
+    });
+    expect(unavailable[2]).toMatchObject({
+      code: "UNAVAILABLE",
+      message: "Agentic OS runtime contract failure",
+    });
   });
 
   it("keeps signed device ids isolated from connection and shared client ids", async () => {

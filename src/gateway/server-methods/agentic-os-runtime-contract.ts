@@ -31,9 +31,13 @@ async function respondWithContract(
   try {
     respond(true, await implementation(params), undefined);
   } catch (error) {
-    const message =
-      error instanceof ContractInputError ? error.message : "Agentic OS runtime contract failure";
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
+    const isInputError = error instanceof ContractInputError;
+    const message = isInputError ? error.message : "Agentic OS runtime contract failure";
+    respond(
+      false,
+      undefined,
+      errorShape(isInputError ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE, message),
+    );
   }
 }
 

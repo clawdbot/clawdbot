@@ -191,6 +191,62 @@ describe("Agentic OS runtime contract spawn safeguards", () => {
     }
   });
 
+  it("normalizes taskName before fingerprinting and persistence", async () => {
+    const gatewayLeaseId = await acquireLease();
+    const spawnParams = {
+      ...spawnParamsFor(gatewayLeaseId),
+      taskName: " verify-contract ",
+    };
+
+    const accepted = payload(await invoke("sessions_spawn", spawnParams));
+    const replayed = payload(
+      await invoke("sessions_spawn", {
+        ...spawnParams,
+        taskName: "verify-contract",
+      }),
+    );
+
+    expect(accepted.taskName).toBe("verify-contract");
+    expect(replayed).toEqual(accepted);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({ taskName: "verify-contract" }),
+      expect.any(Object),
+    );
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries rejected-spawn rollback persistence before returning", async () => {
+    const gatewayLeaseId = await acquireLease();
+    const store = await import("../agentic-os-runtime-contract-store.js");
+    const originalSave = store.saveAgenticOsRuntimeSnapshot;
+    let saveCalls = 0;
+    vi.spyOn(store, "saveAgenticOsRuntimeSnapshot").mockImplementation((snapshot) => {
+      saveCalls += 1;
+      if (saveCalls === 2) {
+        throw new Error("synthetic rollback snapshot failure");
+      }
+      originalSave(snapshot);
+    });
+    spawnSubagentDirectMock.mockResolvedValueOnce({
+      status: "rejected",
+      error: "synthetic definitive rejection",
+    } as never);
+
+    expectInvalid(await invoke("sessions_spawn", spawnParamsFor(gatewayLeaseId)), "synthetic");
+    expect(saveCalls).toBe(3);
+
+    vi.resetModules();
+    const restarted = await import("../agentic-os-runtime-contract.js");
+    expect(restarted.listAgenticOsAllowLeases()).toMatchObject({
+      leases: [
+        expect.objectContaining({
+          status: "active",
+          gateway_lease_id: gatewayLeaseId,
+        }),
+      ],
+    });
+  });
+
   it("caps distinct slow pending spawns atomically and fails the overflow request closed", async () => {
     vi.resetModules();
     const now = Date.now();
