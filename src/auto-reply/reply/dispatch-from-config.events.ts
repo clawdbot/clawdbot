@@ -1,11 +1,4 @@
 import type { PluginHookReplyDispatchEvent } from "../../plugins/hook-types.js";
-import type { CommandSessionMetadataChange } from "./command-session-metadata.js";
-import type { ReplySessionBinding } from "./get-reply.types.js";
-
-export type InternalReplyResolverOptions = {
-  onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
-  onSessionPrepared?: (binding: ReplySessionBinding) => void;
-};
 
 export type PluginBindingTranscriptOwner = {
   agentId: string;
