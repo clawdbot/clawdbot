@@ -500,11 +500,16 @@ for the full example.
     loopback literal and end in `/codex`; OpenClaw rejects other URLs before
     sending the profile token.
 
-    OpenClaw sends the selected token or OAuth credential to the local proxy.
-    To keep upstream OAuth material outside OpenClaw, configure the profile with
-    an opaque proxy capability instead of the upstream OAuth token. The local
-    proxy then owns upstream authentication, account headers, refresh, and
-    revocation.
+    OpenClaw sends the selected token or OAuth credential only to the local
+    model-discovery and Responses proxy routes. To keep upstream OAuth material
+    outside OpenClaw, configure the profile with an opaque proxy capability
+    instead of the upstream OAuth token. The local proxy then owns upstream
+    authentication, account headers, refresh, and revocation.
+
+    Proxy capabilities are not used for OpenAI usage reporting or image
+    generation because this contract exposes no usage or image route. Select an
+    API-key profile for image generation; API-key profiles keep using the
+    Platform API.
 
     ### Context window defaults and long-context opt-in
 

@@ -1813,6 +1813,31 @@ describe("buildOpenAIProvider", () => {
     ).toMatchObject({ effort: "xhigh", transport: "sse" });
   });
 
+  it("keeps loopback proxy capabilities out of remote usage endpoints", () => {
+    const resolveOAuthToken = vi.fn(async () => ({ token: "opaque-loopback-capability" }));
+    const provider = buildOpenAIProvider();
+    expect(
+      provider.resolveUsageAuth?.({
+        provider: "openai",
+        config: {
+          models: {
+            providers: {
+              openai: {
+                params: {
+                  codexProxyBaseUrl: "http://127.0.0.1:7862/backend-api/codex",
+                },
+              },
+            },
+          },
+        },
+        env: {},
+        resolveApiKeyFromConfigAndStore: () => undefined,
+        resolveOAuthToken,
+      } as never),
+    ).toEqual({ handled: true });
+    expect(resolveOAuthToken).not.toHaveBeenCalled();
+  });
+
   it("keeps HTTP Platform routes out of Codex transport gates", () => {
     const provider = buildOpenAIProvider();
     const baseUrl = "http://api.openai.com/v1";

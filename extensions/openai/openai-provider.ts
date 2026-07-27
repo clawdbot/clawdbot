@@ -1126,7 +1126,10 @@ export function buildOpenAIProvider(): ProviderPlugin {
         ? { ...prepared, transport: "sse" }
         : prepared;
     },
-    resolveUsageAuth: codexHooks.resolveUsageAuth,
+    resolveUsageAuth: (ctx) =>
+      resolveOpenAICodexProxyBaseUrl(ctx.config)
+        ? { handled: true }
+        : codexHooks.resolveUsageAuth?.(ctx),
     fetchUsageSnapshot: codexHooks.fetchUsageSnapshot,
     refreshOAuth: codexHooks.refreshOAuth,
     buildUnknownModelHint: ({ modelId }) => buildOpenAIUnknownModelHint(modelId),
