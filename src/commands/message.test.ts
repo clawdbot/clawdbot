@@ -172,6 +172,27 @@ function createAccountPlugin(id: "slack" | "telegram", accountIds: string[]): Ch
   };
 }
 
+function createLegacySingleAccountPlugin(params: {
+  id: "buzz";
+  resolveAccount: ChannelPlugin["config"]["resolveAccount"];
+}): ChannelPlugin {
+  return {
+    id: params.id,
+    meta: {
+      id: params.id,
+      label: params.id,
+      selectionLabel: params.id,
+      docsPath: `/channels/${params.id}`,
+      blurb: "test",
+    },
+    capabilities: { chatTypes: ["group"] },
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: params.resolveAccount,
+    },
+  };
+}
+
 const makeDeps = (overrides: Partial<CliDeps> = {}): CliDeps => ({
   sendMessageWhatsApp: vi.fn(),
   sendMessageTelegram: vi.fn(),
@@ -274,6 +295,84 @@ describe("messageCommand", () => {
       accountId: "shared",
       candidateChannels: ["slack", "telegram"],
       secretChannels: ["slack"],
+    });
+  });
+
+  it("keeps unresolved SecretRefs for a legacy single-account broadcast plugin", async () => {
+    const resolveAccount = vi.fn(() => ({
+      accountId: "default",
+      enabled: true,
+      configured: false,
+    }));
+    const buzzPlugin = createLegacySingleAccountPlugin({ id: "buzz", resolveAccount });
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "buzz", source: "test", plugin: buzzPlugin }]),
+    );
+    testConfig = {
+      channels: {
+        buzz: {
+          relayUrl: "wss://buzz.example.test",
+          privateKey: { source: "file", provider: "vault", id: "/buzz/private-key" },
+        },
+      },
+    };
+
+    await runMessageCommand({
+      action: "broadcast",
+      channel: "all",
+      target: undefined,
+      targets: ["00000000-0000-4000-8000-000000000001"],
+      accountId: "default",
+    });
+
+    expect(resolveAccount).toHaveBeenCalledOnce();
+    expect(getScopedChannelsCommandSecretTargets).toHaveBeenCalledWith({
+      config: testConfig,
+      channel: undefined,
+      channels: ["buzz"],
+      accountId: "default",
+    });
+    expect(readOnlyMessageActionCall().broadcastAccountPlan).toEqual({
+      accountId: "default",
+      candidateChannels: ["buzz"],
+      secretChannels: ["buzz"],
+    });
+  });
+
+  it("excludes unknown legacy-plugin accounts before account or secret resolution", async () => {
+    const resolveAccount = vi.fn(() => ({ accountId: "default", enabled: true }));
+    const buzzPlugin = createLegacySingleAccountPlugin({ id: "buzz", resolveAccount });
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "buzz", source: "test", plugin: buzzPlugin }]),
+    );
+    testConfig = {
+      channels: {
+        buzz: {
+          relayUrl: "wss://buzz.example.test",
+          privateKey: { source: "file", provider: "vault", id: "/buzz/private-key" },
+        },
+      },
+    };
+
+    await runMessageCommand({
+      action: "broadcast",
+      channel: "all",
+      target: undefined,
+      targets: ["00000000-0000-4000-8000-000000000001"],
+      accountId: "ops",
+    });
+
+    expect(resolveAccount).not.toHaveBeenCalled();
+    expect(getScopedChannelsCommandSecretTargets).toHaveBeenCalledWith({
+      config: testConfig,
+      channel: undefined,
+      channels: [],
+      accountId: "ops",
+    });
+    expect(readOnlyMessageActionCall().broadcastAccountPlan).toEqual({
+      accountId: "ops",
+      candidateChannels: ["buzz"],
+      secretChannels: [],
     });
   });
 
