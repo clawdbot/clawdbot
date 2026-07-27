@@ -646,11 +646,7 @@ describe("admitFollowupTurn", () => {
 
   it("forwards owned preflight deletion to the backing session store", async () => {
     const operation = createOperation();
-    const initialEntry: SessionEntry = {
-      sessionId: "queued-session",
-      lifecycleRevision: "initial",
-      updatedAt: 1,
-    };
+    const initialEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
     const sessionStore: Record<string, SessionEntry> = { main: initialEntry };
     state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
     state.preflight.mockImplementation(
