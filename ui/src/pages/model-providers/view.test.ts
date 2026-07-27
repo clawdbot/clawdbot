@@ -148,6 +148,30 @@ describe("renderModelProviders", () => {
     expect(text(provider)).toContain("Global session spend · 30d");
   });
 
+  it("preserves complete graphemes in custom provider fallback icons", () => {
+    const cases = [
+      { id: "🧭-proxy", expected: "🧭" },
+      { id: "🇺🇸-proxy", expected: "🇺🇸" },
+      { id: "👩‍💻-proxy", expected: "👩‍💻" },
+      { id: "e\u0301-proxy", expected: "E\u0301" },
+      { id: "ß-provider", expected: "S" },
+    ];
+    const container = mount(
+      props({
+        cards: cases.map(({ id }) => card({ id, displayName: id, credentialProviderIds: [id] })),
+      }),
+    );
+
+    for (const { id, expected } of cases) {
+      const row = [...container.querySelectorAll<HTMLElement>("[data-provider-id]")].find(
+        (candidate) => candidate.dataset.providerId === id,
+      );
+      expect(row?.querySelector(".provider-brand-icon--fallback")?.textContent?.trim()).toBe(
+        expected,
+      );
+    }
+  });
+
   it("shows config key provenance when auth status is unavailable", () => {
     const container = mount(
       props({

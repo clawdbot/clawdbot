@@ -1,5 +1,6 @@
 // Drives a gateway channel-setup wizard session (wizard.start flow "channels")
 // as a step/answer state machine for the Control UI wizard modal.
+import { isWizardNotFoundError } from "../../lib/gateway-errors.ts";
 
 type WizardGatewayClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
@@ -113,7 +114,8 @@ export class ChannelWizardController {
     // Known channel ids from the status snapshot. Presentation only: lets a
     // browse-all session title/link the wizard for the picked channel; the
     // completion behavior keys off the gateway-reported accounts instead.
-    private readonly isKnownChannel: (value: string) => boolean = () => false,
+    private readonly isKnownChannel: (value: string) => boolean,
+    private readonly sessionExpiredMessage: () => string,
   ) {}
 
   get state(): ChannelWizardState {
@@ -178,6 +180,15 @@ export class ChannelWizardController {
       this.applyResult(result);
     } catch (err) {
       if (this.generation !== generation) {
+        return;
+      }
+      if (isWizardNotFoundError(err)) {
+        this.sessionId = null;
+        this.setState({
+          phase: "error",
+          channel: this.channel,
+          message: this.sessionExpiredMessage(),
+        });
         return;
       }
       this.setState({ phase: "error", channel: this.channel, message: String(err) });

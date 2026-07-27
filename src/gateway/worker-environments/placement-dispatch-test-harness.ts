@@ -15,8 +15,12 @@ import {
   seedStartingPlacement,
 } from "./placement-dispatch-test-fixtures.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
+import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
 import type { WorkerTunnelHandle } from "./tunnel.js";
-import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
+import {
+  createWorkerWorkspaceOperationCoordinator,
+  type WorkerWorkspaceOperationCoordinator,
+} from "./workspace-operation-coordinator.js";
 
 export function createHarness(
   placementStore: PlacementStore,
@@ -30,16 +34,24 @@ export function createHarness(
     reconcileCommitsManifest?: boolean;
     reconcileCommitsManifestOnApply?: boolean;
     verifyFails?: boolean;
+    verifyFailureCall?: number;
     leaseFails?: boolean;
+    leaseFailureCount?: number;
     localVerifyFails?: boolean;
     resumeFails?: boolean;
     workspacePath?: string;
     priorWorkspaceResultConflict?: { paths: string[]; stagedResultRef: string };
     reconcileConflictPaths?: string[];
+    workspaceOperations?: WorkerWorkspaceOperationCoordinator;
+    destroyFailureState?: "draining" | "destroying";
+    terminalizeReclaimOnTunnelDrop?: boolean;
+    terminalizedReclaimError?: Error;
   } = {},
 ) {
   const reconciledManifestRef = MANIFEST_REF.replaceAll("b", "c");
   let remainingReconcileFailures = options.reconcileFailureCount ?? 0;
+  let remainingLeaseFailures = options.leaseFailureCount ?? 0;
+  let verifyCalls = 0;
   const log: string[] = [];
   const reportWorkspaceResultConflict = vi.fn(async () => {});
   const fail = (stage: DispatchStage) => {
@@ -50,10 +62,12 @@ export function createHarness(
   };
   const placements: WorkerDispatchPlacementStore = {
     get: (sessionId) => placementStore.get(sessionId),
-    loadWorkspaceReconciliation: (owner) => placementStore.loadWorkspaceReconciliation(owner),
+    loadWorkspaceReconciliation: (owner, loadOptions) =>
+      placementStore.loadWorkspaceReconciliation(owner, loadOptions),
     beginWorkspaceReconciliation: (owner, journal) =>
       placementStore.beginWorkspaceReconciliation(owner, journal),
-    abortWorkspaceReconciliation: (owner) => placementStore.abortWorkspaceReconciliation(owner),
+    abortWorkspaceReconciliation: (owner, abortOptions) =>
+      placementStore.abortWorkspaceReconciliation(owner, abortOptions),
     listWorkspaceReconciliationOwners: () => placementStore.listWorkspaceReconciliationOwners(),
     listPendingWorkspaceResults: () => placementStore.listPendingWorkspaceResults(),
     workspaceResultInstanceId: () => placementStore.workspaceResultInstanceId(),
@@ -153,7 +167,8 @@ export function createHarness(
       return {
         assertActive: vi.fn(async () => {
           log.push("workspace:lease");
-          if (options.leaseFails) {
+          if (options.leaseFails || remainingLeaseFailures > 0) {
+            remainingLeaseFailures -= 1;
             throw new Error("workspace quiescence expired");
           }
         }),
@@ -174,6 +189,29 @@ export function createHarness(
       if (options.reconcileCommitsManifest !== false) {
         request.journal.commit(reconciledManifestRef);
       }
+      if (options.terminalizeReclaimOnTunnelDrop) {
+        const owned = placementStore.get(REQUEST.sessionId);
+        const persistedClaim = owned?.turnClaim;
+        if (owned?.state !== "active" || persistedClaim?.owner !== "worker") {
+          throw new Error("tunnel-drop fixture lost its active worker claim");
+        }
+        const claim = {
+          sessionId: owned.sessionId,
+          claimId: persistedClaim.claimId,
+          runId: persistedClaim.runId,
+          placementGeneration: persistedClaim.generation,
+          owner: {
+            kind: "worker" as const,
+            environmentId: owned.environmentId,
+            ownerEpoch: persistedClaim.ownerEpoch,
+          },
+        };
+        placementStore.acceptWorkspaceResult(claim);
+        currentEnvironment = destroyedEnvironment(currentEnvironment?.ownerEpoch ?? 1);
+        log.push("teardown:destroy");
+        placementStore.completeWorkspaceResultAndReleaseTurn(claim, { reclaim: true });
+        throw options.terminalizedReclaimError ?? new WorkerTunnelOwnerDisconnectedError();
+      }
       if (options.reconcileConflictPaths?.length && request.stagedResult) {
         request.stagedResult.record(request.stagedResult.ref);
       }
@@ -182,7 +220,8 @@ export function createHarness(
         changed: options.reconcileChanged ?? true,
         verifyStable: async () => {
           log.push("workspace:verify");
-          if (options.verifyFails) {
+          verifyCalls += 1;
+          if (options.verifyFails || verifyCalls === options.verifyFailureCall) {
             throw new Error("workspace changed after reconciliation");
           }
         },
@@ -260,6 +299,13 @@ export function createHarness(
     destroy: vi.fn(async () => {
       log.push("teardown:destroy");
       if (options.destroyFails) {
+        if (options.destroyFailureState) {
+          currentEnvironment = {
+            ...attached,
+            state: options.destroyFailureState,
+            tunnelStatus: "stopped",
+          };
+        }
         throw new Error("destroy pending");
       }
       const destroyed = destroyedEnvironment((currentEnvironment?.ownerEpoch ?? 1) + 1);
@@ -273,7 +319,7 @@ export function createHarness(
   const service = createWorkerPlacementDispatchService({
     placements,
     environments,
-    workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
+    workspaceOperations: options.workspaceOperations ?? createWorkerWorkspaceOperationCoordinator(),
     runLocalBarrier: async ({ startDispatch }) => {
       log.push("barrier");
       const placement = startDispatch();
@@ -326,6 +372,15 @@ export function createHarness(
     },
     markEnvironmentAttachments: (attachedSessionIds: string[]) => {
       currentEnvironment = { ...attached, attachedSessionIds };
+    },
+    markEnvironmentProtocolFeatures: (protocolFeatures: string[]) => {
+      if (!currentEnvironment?.bootstrapReceipt) {
+        throw new Error("worker environment fixture has no bootstrap receipt");
+      }
+      currentEnvironment = {
+        ...currentEnvironment,
+        bootstrapReceipt: { ...currentEnvironment.bootstrapReceipt, protocolFeatures },
+      };
     },
     service,
     ready,

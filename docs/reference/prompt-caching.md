@@ -42,7 +42,7 @@ Merge order (later wins):
 
 1. `agents.defaults.params` - global default for all models
 2. `agents.defaults.models["provider/model"].params` - per-model override
-3. `agents.list[].params` - per-agent override, matched by agent id
+3. `agents.entries.*.params` - per-agent override, matched by agent id
 
 Source: `src/agents/embedded-agent-runner/extra-params.ts` (`resolveExtraParams`).
 
@@ -62,7 +62,7 @@ See [Session pruning](/concepts/session-pruning) for full behavior.
 
 ### Heartbeat keep-warm
 
-Heartbeat can keep cache windows warm and reduce repeated cache writes after idle gaps. Configurable globally (`agents.defaults.heartbeat`) or per agent (`agents.list[].heartbeat`).
+Heartbeat can keep cache windows warm and reduce repeated cache writes after idle gaps. Configurable globally (`agents.defaults.heartbeat`) or per agent (`agents.entries.*.heartbeat`).
 
 ```yaml
 agents:
@@ -129,11 +129,11 @@ If a provider does not support any of the above cache modes, `cacheRetention` ha
 
 ## System-prompt cache boundary
 
-OpenClaw splits the system prompt into a **stable prefix** and a **volatile suffix** at an internal cache-prefix boundary. Content above the boundary (tool definitions, skills metadata, workspace files) is ordered to stay byte-identical across turns. Content below the boundary (for example `HEARTBEAT.md`, runtime timestamps, other per-turn metadata) can change without invalidating the cached prefix.
+OpenClaw splits the system prompt into a **stable prefix** and a **volatile suffix** at an internal cache-prefix boundary. Content above the boundary (tool definitions, skills metadata, workspace files) is ordered to stay byte-identical across turns. Content below the boundary (for example runtime timestamps and other per-turn metadata) can change without invalidating the cached prefix.
 
 Key design choices:
 
-- Stable workspace project-context files are ordered before `HEARTBEAT.md` so heartbeat churn does not bust the stable prefix.
+- Stable workspace project-context files are ordered before volatile per-turn metadata so routine churn does not bust the stable prefix.
 - The boundary applies across Anthropic-family, OpenAI-family, Google, and CLI transport shaping, so all supported providers benefit from the same prefix stability.
 - Codex Responses and Anthropic Vertex requests are routed through boundary-aware cache shaping so cache reuse stays aligned with what providers actually receive.
 - System-prompt fingerprints are normalized (whitespace, line endings, hook-added context, runtime capability ordering) so semantically unchanged prompts share cache across turns.

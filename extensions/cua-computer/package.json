@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/cua-computer",
+  "version": "2026.7.2",
+  "description": "Experimental cua-driver computer control for Windows and Linux node hosts",
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "rastermill": "0.3.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

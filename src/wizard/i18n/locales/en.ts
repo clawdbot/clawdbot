@@ -162,8 +162,12 @@ export const en = {
       option: "{name} — {reason} (detected: {app})",
       optionThirdParty:
         "{name} — {reason} (detected: {app}) — third-party ClawHub skill; installs its publisher's code",
-      scanning:
-        "Scanning installed apps — names are matched with your configured model and ClawHub search (disable via wizard.appRecommendations)…",
+      scanDisclosure:
+        "App names are matched with your configured model and ClawHub search (disable via wizard.appRecommendations).",
+      scanning: "Scanning installed apps…",
+      scanningCandidate: "Found 1 app — searching plugins and skills for {sample}…",
+      scanningCandidates: "Found {count} apps — searching plugins and skills for {sample}…",
+      scanningMatch: "Asking your model to pick the best matches…",
       select: "Install recommended plugins and skills",
       skillTrust: "Trust and install the ClawHub skill {name}?",
       skipped: "App recommendations skipped: {reason}",
@@ -308,6 +312,8 @@ export const en = {
       completeWithoutAi: "OpenClaw setup is saved. Connect AI before opening chat.",
       detected: "AI detection complete.",
       detectedCandidate: "{label} — {detail}{recommended}",
+      detectedGroupLabel: "Detected on this machine",
+      detectedGroupPrompt: "Use which detected AI?",
       detectedTitle: "AI found",
       detecting: "Looking for AI you already use…",
       enterApiKey: "Enter API key — {label}",
@@ -425,6 +431,8 @@ export const en = {
     security: {
       askForHelp:
         "Ask someone experienced to help before enabling tools or exposing it to the internet.",
+      attribution:
+        "OpenClaw is an open-source assistant that learns and grows with you, by the OpenClaw Foundation (a non-profit).",
       baselineDmSessions:
         "Shared inboxes: isolate DM sessions (session.dmScope: per-channel-peer) and keep tool access minimal.",
       baselinePairing: "Pairing/allowlists + mention gating.",
@@ -434,7 +442,6 @@ export const en = {
         "Multi-user/shared inbox: split trust boundaries (separate gateway/credentials, ideally separate OS users/hosts).",
       baselineStrongModel:
         "Use the strongest available model for any bot with tools or untrusted inboxes.",
-      beta: "OpenClaw is a hobby project and still in beta. Expect sharp edges.",
       confirm:
         "I understand this is personal-by-default and shared/multi-user use requires lock-down. Continue?",
       hardeningRequired:
@@ -512,6 +519,8 @@ export const en = {
         "{channel} plugin not available (continuing with setup). If the channel still doesn't work after setup, run `{listCommand}` and `{enableCommand}`, then restart the gateway.",
       pluginNotAvailable: "{channel} plugin not available.",
       removeTitle: "Remove channel",
+      resumeDisabledPluginSetup: "{channel} plugin is disabled. Enable it and continue setup now?",
+      resumeDisabledSetup: "{channel} is disabled. Enable it and continue setup now?",
       select: "Select a channel",
       selectQuickstart: "Select channel (QuickStart)",
       selectedTitle: "Selected channels",

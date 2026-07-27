@@ -118,11 +118,10 @@ describe("runAgentTurnWithFallback: conversation failures", () => {
     }
   });
 
-  it("keeps raw generic errors on internal control surfaces", async () => {
+  it("keeps actionable provider errors on internal control surfaces", async () => {
     state.isInternalMessageChannelMock.mockReturnValue(true);
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      new Error("INVALID_ARGUMENT: some other failure"),
-    );
+    const providerError = "provider failed with actionable details";
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error(providerError));
 
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
     const result = await runAgentTurnWithFallback({
@@ -151,9 +150,9 @@ describe("runAgentTurnWithFallback: conversation failures", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toContain("Agent failed before reply");
-      expect(result.payload.text).toContain("INVALID_ARGUMENT: some other failure");
-      expect(result.payload.text).toContain("Logs: openclaw logs --follow");
+      expect(result.payload.text).toContain(providerError);
+      expect(result.payload.text).toContain("openclaw logs --follow");
+      expect(result.payload.text).toMatch(/terminal/i);
     }
   });
 });

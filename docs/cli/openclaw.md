@@ -180,7 +180,7 @@ setup workspace ~/Projects/work
 `setup` preserves the verified effective model. It does not configure or
 replace inference.
 
-If inference is missing or its live check fails, leave OpenClaw and run `openclaw onboard`. Guided onboarding detects configured models, API keys, and authenticated local CLIs, asks each candidate for a real reply, and persists only a passing route. OpenClaw starts immediately after that boundary and can then configure the workspace, Gateway, channels, agents, plugins, and other optional features.
+If inference is missing or its live check fails, leave OpenClaw and run `openclaw onboard`. Guided onboarding tries the configured model first, then authenticated subscription CLIs, API keys, and remaining supported CLIs; it asks each candidate for a real reply and persists only a passing route. OpenClaw starts immediately after that boundary and can then configure the workspace, Gateway, channels, agents, plugins, and other optional features.
 
 The macOS app skips this ladder entirely when it reaches a configured Gateway
 whose default agent already has a configured model; it opens the normal agent
@@ -303,7 +303,7 @@ Security contract for remote rescue:
 - Disabled when sandboxing is active for the agent/session; OpenClaw refuses remote rescue and points to local CLI repair.
 - Default effective state is `auto`: allow remote rescue only in trusted YOLO operation, where the runtime already has unsandboxed local authority (`tools.exec.security` resolves to `full` and `tools.exec.ask` resolves to `off`, with sandbox mode `off`).
 - Requires an explicit owner identity; no wildcard sender rules, open group policy, unauthenticated webhooks, or anonymous channels.
-- Owner DMs only by default; group/channel rescue needs explicit opt-in.
+- Rescue is limited to owner DMs.
 - Plugin search and list are read-only. Plugin install is always local-only (blocked in rescue, even when otherwise enabled) because it downloads executable code. Plugin uninstall is refused in both local OpenClaw and rescue; run `openclaw plugins uninstall <id>` from a terminal.
 - Remote rescue cannot open the local TUI or switch into an interactive agent session; use local `openclaw` for agent handoff.
 - Persistent writes still require approval, even in rescue mode.
@@ -312,26 +312,10 @@ Security contract for remote rescue:
 - Secrets are never echoed. SecretRef inspection reports availability, not values.
 - If the Gateway is alive, rescue prefers Gateway typed operations; if it is dead, rescue uses only the minimal local repair surface that does not depend on the normal agent loop.
 
-Config shape:
-
-```jsonc
-{
-  "systemAgent": {
-    "rescue": {
-      "enabled": "auto",
-      "ownerDmOnly": true,
-      "pendingTtlMinutes": 15,
-    },
-  },
-}
-```
-
-- `enabled`: `"auto"` (default) allows rescue only when the effective runtime is YOLO and sandboxing is off; `false` never allows message-channel rescue; `true` explicitly allows rescue when owner/channel checks pass (still subject to the sandboxing denial).
-- `ownerDmOnly`: restrict rescue to owner direct messages. Default `true`.
-- `pendingTtlMinutes`: how long a pending rescue write stays open for `/openclaw yes` approval before expiring. Default `15`.
-
-`openclaw doctor --fix` migrates the legacy `crestodian` config block to
-`systemAgent`. Runtime reads only the canonical block.
+Rescue policy is built in: it is available only when the effective runtime is
+YOLO, sandboxing is off, and the request is an owner DM. Pending write approvals
+expire after 15 minutes. `openclaw doctor --fix` removes the retired
+`systemAgent` and `crestodian` config blocks.
 
 Remote rescue is covered by the Docker lane:
 

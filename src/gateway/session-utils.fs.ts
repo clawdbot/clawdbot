@@ -15,10 +15,8 @@ import {
   type ContextUsage,
 } from "../agents/usage.js";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
-import {
-  scanSessionTranscriptTree,
-  selectSessionTranscriptTreePathNodes,
-} from "../config/sessions/transcript-tree.js";
+import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
+import { selectSessionTranscriptActiveEntries } from "../config/sessions/transcript-tree.js";
 import { readFileWindowFully, readFileWindowFullySync } from "../infra/file-read.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
@@ -220,7 +218,10 @@ export type ReadSessionMessagesAsyncOptions =
 export type ReadRecentSessionMessagesResult = {
   messages: unknown[];
   totalMessages: number;
+  /** Raw selected transcript rows parsed from the same read as `messages`. */
+  transcriptEvents?: TranscriptEvent[];
   transcriptPath?: string;
+  transcriptSource?: "active" | "reset-archive";
 };
 
 type ReadSessionMessagesResult = {
@@ -376,29 +377,11 @@ function selectBoundedActiveTailRecords(
   entries: TailTranscriptRecord[],
   opts?: { failClosedOnInvalidLeafControl?: boolean },
 ): TailTranscriptRecord[] {
-  const tree = scanSessionTranscriptTree(entries.map((entry) => entry.record));
-  if (opts?.failClosedOnInvalidLeafControl === true && tree.hasInvalidLeafControl) {
-    return [];
-  }
-  if (!tree.hasExplicitLeafUpdate) {
-    return entries;
-  }
-  const recordsByValue = new Map(entries.map((entry) => [entry.record, entry]));
-  const activeBranch = selectSessionTranscriptTreePathNodes(tree, tree.leafId).flatMap((node) => {
-    const entry = recordsByValue.get(node.entry);
-    return entry ? [entry] : [];
+  return selectSessionTranscriptActiveEntries({
+    entries,
+    recordOf: (entry) => entry.record,
+    failClosedOnInvalidLeafControl: opts?.failClosedOnInvalidLeafControl,
   });
-  const firstActiveRecord = activeBranch[0];
-  const firstActiveIndex = firstActiveRecord ? entries.indexOf(firstActiveRecord) : -1;
-  if (firstActiveIndex > 0) {
-    for (let index = firstActiveIndex - 1; index >= 0; index -= 1) {
-      const entry = entries[index];
-      if (entry?.record.type === "compaction") {
-        return [entry, ...activeBranch];
-      }
-    }
-  }
-  return activeBranch;
 }
 
 function readTranscriptRecords(filePath: string): TailTranscriptRecord[] {
@@ -440,7 +423,10 @@ function transcriptRecordsToMessages(records: TailTranscriptRecord[]): unknown[]
   return messages;
 }
 
-function parseRecentTranscriptTailMessages(lines: string[], maxMessages: number): unknown[] {
+function parseRecentTranscriptTailSnapshot(
+  lines: string[],
+  maxMessages: number,
+): { messages: unknown[]; transcriptEvents: TranscriptEvent[] } {
   const entries = lines.flatMap((line) => {
     const entry = parseTailTranscriptRecord(line);
     return entry ? [entry] : [];
@@ -448,7 +434,10 @@ function parseRecentTranscriptTailMessages(lines: string[], maxMessages: number)
   const selected = selectBoundedActiveTailRecords(entries, {
     failClosedOnInvalidLeafControl: true,
   });
-  return transcriptRecordsToMessages(selected).slice(-maxMessages);
+  return {
+    messages: transcriptRecordsToMessages(selected).slice(-maxMessages),
+    transcriptEvents: selected.map((entry) => entry.record),
+  };
 }
 
 function visitTranscriptLines(filePath: string, visit: (line: string) => void): void {
@@ -682,21 +671,28 @@ async function readRecentSessionMessagesFromPathAsync(
   filePath: string,
   opts: ReturnType<typeof normalizeRecentSessionReadOptions>,
 ): Promise<unknown[]> {
+  return (await readRecentSessionSnapshotFromPathAsync(filePath, opts)).messages;
+}
+
+async function readRecentSessionSnapshotFromPathAsync(
+  filePath: string,
+  opts: ReturnType<typeof normalizeRecentSessionReadOptions>,
+): Promise<{ messages: unknown[]; transcriptEvents: TranscriptEvent[] }> {
   const { maxMessages } = opts;
 
   let stat: fs.Stats;
   try {
     stat = await fs.promises.stat(filePath);
   } catch {
-    return [];
+    return { messages: [], transcriptEvents: [] };
   }
   if (stat.size === 0) {
-    return [];
+    return { messages: [], transcriptEvents: [] };
   }
   const lines = await readRecentTranscriptTailLinesAsync(filePath, stat, {
     ...opts,
   });
-  return parseRecentTranscriptTailMessages(lines, maxMessages);
+  return parseRecentTranscriptTailSnapshot(lines, maxMessages);
 }
 
 export async function readRecentSessionMessagesWithStatsAsync(
@@ -715,16 +711,27 @@ export async function readRecentSessionMessagesWithStatsAsync(
   if (!filePath) {
     return { messages: [], totalMessages: 0 };
   }
+  const transcriptSource =
+    opts.allowResetArchiveFallback === true &&
+    findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId) !== filePath
+      ? "reset-archive"
+      : "active";
   const totalMessages = await readSessionMessageCountFromPathAsync(filePath);
-  const messages = await readRecentSessionMessagesFromPathAsync(
+  const snapshot = await readRecentSessionSnapshotFromPathAsync(
     filePath,
     normalizeRecentSessionReadOptions(opts),
   );
-  const firstSeq = Math.max(1, totalMessages - messages.length + 1);
-  const messagesWithSeq = messages.map((message, index) =>
+  const firstSeq = Math.max(1, totalMessages - snapshot.messages.length + 1);
+  const messagesWithSeq = snapshot.messages.map((message, index) =>
     attachOpenClawTranscriptMeta(message, { seq: firstSeq + index }),
   );
-  return { messages: messagesWithSeq, totalMessages, transcriptPath: filePath };
+  return {
+    messages: messagesWithSeq,
+    transcriptEvents: snapshot.transcriptEvents,
+    totalMessages,
+    transcriptPath: filePath,
+    transcriptSource,
+  };
 }
 
 export async function readSessionMessagesPageWithStatsAsync(
@@ -741,6 +748,11 @@ export async function readSessionMessagesPageWithStatsAsync(
   if (!filePath) {
     return { messages: [], totalMessages: 0 };
   }
+  const transcriptSource =
+    opts.allowResetArchiveFallback === true &&
+    findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId) !== filePath
+      ? "reset-archive"
+      : "active";
   const index = await readSessionTranscriptIndex(filePath);
   if (!index) {
     return { messages: [], totalMessages: 0, transcriptPath: filePath };
@@ -754,8 +766,10 @@ export async function readSessionMessagesPageWithStatsAsync(
     messages: index.entries
       .slice(start, endExclusive)
       .flatMap((entry) => indexedTranscriptEntryToMessages(entry)),
+    transcriptEvents: index.entries.slice(start, endExclusive).map((entry) => entry.record),
     totalMessages,
     transcriptPath: filePath,
+    transcriptSource,
   };
 }
 

@@ -214,6 +214,39 @@ describe("push-apns.relay", () => {
   });
 
   describe("sendApnsRelayPush", () => {
+    it("revalidates ownership before relay fetch and combines the lifecycle signal", async () => {
+      const controller = new AbortController();
+      const isCurrent = vi.fn().mockResolvedValue(true);
+      const fetchMock = vi.fn().mockResolvedValue(new Response("", { status: 202 }));
+      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+      await sendApnsRelayPush({
+        ...createRelayPushParams(),
+        signal: controller.signal,
+        isCurrent,
+      });
+
+      expect(isCurrent).toHaveBeenCalledTimes(2);
+      const fetchOptions = firstMockCall(fetchMock)?.[1] as { signal?: AbortSignal } | undefined;
+      expect(fetchOptions?.signal?.aborted).toBe(false);
+      controller.abort(new Error("pairing removed"));
+      expect(fetchOptions?.signal?.aborted).toBe(true);
+    });
+
+    it("does not start relay transport when persistent ownership changed", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+      await expect(
+        sendApnsRelayPush({
+          ...createRelayPushParams(),
+          isCurrent: vi.fn().mockResolvedValue(false),
+        }),
+      ).rejects.toThrow("APNs send invalidated");
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
     it("signs relay payloads and forwards the request through the injected sender", async () => {
       vi.spyOn(Date, "now").mockReturnValue(123_456_789);
       const sender = vi.fn().mockResolvedValue({

@@ -34,6 +34,7 @@ import {
   beginAgentDeletion,
   claimCompletedAgentDeletion,
 } from "../../agents/agent-lifecycle-registry.js";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -57,11 +58,9 @@ import {
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
-  DEFAULT_HEARTBEAT_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_SOUL_FILENAME,
-  DEFAULT_TOOLS_FILENAME,
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
   isWorkspaceSetupCompleted,
@@ -80,7 +79,7 @@ import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
 import { movePathToTrash } from "../../plugin-sdk/browser-maintenance.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import {
   readAgentDeletionJournal,
   type AgentDeletionJournalCleanupPath,
@@ -106,10 +105,8 @@ import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 const BOOTSTRAP_FILE_NAMES = [
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_SOUL_FILENAME,
-  DEFAULT_TOOLS_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_USER_FILENAME,
-  DEFAULT_HEARTBEAT_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
 ] as const;
 const BOOTSTRAP_FILE_NAMES_POST_ONBOARDING = BOOTSTRAP_FILE_NAMES.filter(
@@ -1033,11 +1030,13 @@ export const agentsHandlers: GatewayRequestHandlers = {
 
     const cfg = context.getRuntimeConfig();
     const agentId = normalizeAgentId(params.agentId);
-    if (agentId === DEFAULT_AGENT_ID) {
+    // agents/main/agent also owns the shipped shared legacy auth store.
+    // Keep main undeletable until named agents make auth-store ownership explicit.
+    if (agentId === LEGACY_IMPLICIT_AGENT_ID) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `"${DEFAULT_AGENT_ID}" cannot be deleted`),
+        errorShape(ErrorCodes.INVALID_REQUEST, `"${LEGACY_IMPLICIT_AGENT_ID}" cannot be deleted`),
       );
       return;
     }
@@ -1049,6 +1048,17 @@ export const agentsHandlers: GatewayRequestHandlers = {
       respondAgentNotFound(respond, agentId);
       return;
     }
+    if (agentId === resolveDefaultAgentId(cfg)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Agent "${agentId}" is the default and cannot be deleted. Reassign default first.`,
+        ),
+      );
+      return;
+    }
 
     const requestedDeleteFiles =
       typeof params.deleteFiles === "boolean" ? params.deleteFiles : true;
@@ -1058,6 +1068,11 @@ export const agentsHandlers: GatewayRequestHandlers = {
         const configured = isConfiguredAgent(lockedConfig, agentId);
         if (!configured && (!lockedJournal || lockedJournal.cleanupCompleted)) {
           throw new AgentConfigPreconditionError(`agent "${agentId}" not found`);
+        }
+        if (agentId === resolveDefaultAgentId(lockedConfig)) {
+          throw new AgentConfigPreconditionError(
+            `agent "${agentId}" is the default; reassign default first`,
+          );
         }
         if (configured && lockedJournal?.cleanupCompleted) {
           const claimed = claimCompletedAgentDeletion(agentId, lockedJournal.operationId);

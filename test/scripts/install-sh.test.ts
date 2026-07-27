@@ -82,6 +82,97 @@ describe("install.sh", () => {
     }
   });
 
+  it("rejects malformed managed scripts without rendering their content", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-script-validation-"));
+    writeFileSync(join(tmp, "empty.sh"), "");
+    writeFileSync(join(tmp, "html.sh"), "<html><body>unexpected response</body></html>\n");
+    writeFileSync(join(tmp, "nul-prefix.sh"), Buffer.from("\0#!/bin/bash\necho unexpected\n"));
+    writeFileSync(join(tmp, "valid.sh"), "#!/bin/bash\necho valid\n");
+
+    try {
+      const result = runInstallShell(
+        [
+          "set -euo pipefail",
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "for fixture in empty.sh html.sh nul-prefix.sh; do",
+          '  if validate_downloaded_script "$FIXTURE_DIR/$fixture" "https://example.invalid/$fixture"; then',
+          '    printf "unexpectedly accepted: %s\\n" "$fixture"',
+          "    exit 91",
+          "  fi",
+          "done",
+          'validate_downloaded_script "$FIXTURE_DIR/valid.sh" "https://example.invalid/valid.sh"',
+        ].join("\n"),
+        { FIXTURE_DIR: tmp },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout + result.stderr).not.toContain("unexpected response");
+      expect(result.stdout + result.stderr).not.toContain("echo unexpected");
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
+  it("does not execute a shebang-prefixed partial file after download failure", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-partial-download-"));
+    const marker = join(tmp, "executed");
+
+    try {
+      const result = runInstallShell(
+        [
+          "set -euo pipefail",
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          'download_file() { printf \'#!/bin/bash\\n: > "$EXECUTION_MARKER"\\n\' > "$2"; return 23; }',
+          "set +e",
+          'run_remote_bash "https://example.invalid/partial.sh"',
+          "status=$?",
+          "set -e",
+          'printf "status=%s\\n" "$status"',
+          '[[ "$status" -ne 0 ]]',
+        ].join("\n"),
+        { EXECUTION_MARKER: marker },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("status=1");
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
+  it("denies redirects for managed script downloads", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-managed-download-"));
+
+    try {
+      const result = runInstallShell(
+        `
+          set -euo pipefail
+          source "${SCRIPT_PATH}"
+          curl() { printf 'curl=%s\n' "$*"; }
+          wget() { printf 'wget=%s\n' "$*"; }
+          DOWNLOADER=curl
+          download_file "https://example.invalid/setup.sh" "$DOWNLOAD_DIR/curl-setup.sh" deny
+          DOWNLOADER=wget
+          download_file "https://example.invalid/setup.sh" "$DOWNLOAD_DIR/wget-setup.sh" deny
+          download_file() {
+            printf 'managed-mode=%s\n' "\${3:-}"
+            printf '#!/bin/bash\n' > "$2"
+          }
+          download_validated_script "https://example.invalid/setup.sh" "$DOWNLOAD_DIR/managed-setup.sh"
+        `,
+        { DOWNLOAD_DIR: tmp },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("curl=-fsSL --max-redirs 0");
+      expect(result.stdout).toContain("wget=-q --max-redirect=0");
+      expect(result.stdout).toContain("managed-mode=deny");
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
   it("bounds stalled curl downloads and propagates timeout failures", () => {
     const result = runInstallShell(`
       set -euo pipefail
@@ -99,9 +190,67 @@ describe("install.sh", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("--speed-limit 1 --speed-time 30");
     expect(result.stdout).not.toContain("--connect-timeout");
+    expect(result.stdout).not.toContain("--max-redirs");
     expect(result.stdout).toContain("--retry 3 --retry-delay 1 --retry-connrefused");
     expect(result.stdout).toContain("status=28");
   });
+
+  it.each(["apt-get", "dnf", "yum"])(
+    "rejects an invalid NodeSource response before %s repository setup",
+    (packageManager) => {
+      const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-nodesource-validation-"));
+      const marker = join(tmp, "configured");
+
+      try {
+        const result = runInstallShell(
+          `
+            set -euo pipefail
+            source "${SCRIPT_PATH}"
+            OS=linux
+            PACKAGE_MANAGER="$PACKAGE_MANAGER_UNDER_TEST"
+            require_sudo() { :; }
+            install_build_tools_linux() { return 0; }
+            is_root() { return 0; }
+            command() {
+              if [[ "\${1:-}" == "-v" ]]; then
+                case "\${2:-}" in
+                  pacman|apk) return 1 ;;
+                  apt-get|dnf|yum) [[ "$PACKAGE_MANAGER" == "$2" ]]; return ;;
+                esac
+              fi
+              builtin command "$@"
+            }
+            download_file() {
+              printf '<html>unexpected response</html>\n' > "$2"
+            }
+            ui_info() { printf 'info:%s\n' "$*"; }
+            ui_success() { :; }
+            ui_error() { printf 'error:%s\n' "$*"; }
+            run_quiet_step() {
+              local title="$1"
+              shift
+              printf 'step:%s|%s\n' "$title" "$*"
+              if [[ "$title" == "Downloading NodeSource setup script" ]]; then
+                "$@"
+                return
+              fi
+              : > "$EXECUTION_MARKER"
+              return 0
+            }
+            install_node
+          `,
+          { EXECUTION_MARKER: marker, PACKAGE_MANAGER_UNDER_TEST: packageManager },
+        );
+
+        expect(result.status).toBe(1);
+        expect(result.stdout).toContain("step:Downloading NodeSource setup script");
+        expect(result.stdout).not.toContain("unexpected response");
+        expect(existsSync(marker)).toBe(false);
+      } finally {
+        rmSync(tmp, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("runs apt-get through noninteractive wrappers", () => {
     expect(script).toContain("apt_get()");
@@ -259,6 +408,7 @@ NODE
       is_alpine_linux() { return 1; }
       pacman() { printf 'pacman:%s\\n' "$*"; }
       apt-get() { :; }
+      download_validated_script() { :; }
       ui_info() { printf 'info:%s\\n' "$*"; }
       ui_success() { :; }
       run_required_step() { printf 'step:%s|%s\\n' "$1" "\${*:2}"; }
@@ -397,7 +547,7 @@ NODE
       is_root() { return 0; }
       is_alpine_linux() { return 1; }
       apt-get() { :; }
-      download_file() { :; }
+      download_validated_script() { return 0; }
       ui_info() { printf 'info:%s\\n' "$*"; }
       ui_success() { printf 'success:%s\\n' "$*"; }
       ui_error() { printf 'error:%s\\n' "$*"; }
@@ -436,7 +586,7 @@ NODE
       is_root() { return 0; }
       is_alpine_linux() { return 1; }
       apt-get() { :; }
-      download_file() { :; }
+      download_validated_script() { return 0; }
       ui_info() { printf 'info:%s\\n' "$*"; }
       ui_success() { printf 'success:%s\\n' "$*"; }
       ui_error() { printf 'error:%s\\n' "$*"; }

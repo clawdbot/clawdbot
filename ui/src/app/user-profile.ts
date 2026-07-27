@@ -1,6 +1,7 @@
 import type { PresenceEntry } from "../api/types.ts";
 
 export type AuthenticatedUser = NonNullable<PresenceEntry["user"]>;
+export type PresencePayload = { presence: readonly PresenceEntry[] };
 
 export function readPresenceEntries(value: unknown): PresenceEntry[] | undefined {
   if (!value || typeof value !== "object") {

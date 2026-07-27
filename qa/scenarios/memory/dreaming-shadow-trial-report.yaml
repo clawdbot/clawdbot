@@ -2,13 +2,13 @@ title: Dreaming shadow trial report
 
 scenario:
   id: dreaming-shadow-trial-report
-  surface: memory
+  surface: session-memory
   coverage:
     primary:
-      - memory.dreaming
+      - session-memory.memory-files-dreaming
     secondary:
-      - memory.promotion
-      - qa.artifact-safety
+      - session-memory.memory-files-promotion
+      - session-memory.memory-files-artifact-safety
   risk: medium
   capabilities:
     - tools.read

@@ -3,11 +3,13 @@ title: Issue 109025 sender-scoped subagent tool inheritance live probe
 scenario:
   id: issue-109025-sender-policy-live
   surface: subagents
-  runtimeParityTier: live-only
+  runtimePairLane: core
   coverage:
+    primary:
+      - agent-runtime.delegated-tool-access
     secondary:
-      - agents.subagents
-      - tools.fs.read
+      - agent-runtime.subagent-turns-subagents
+      - agent-runtime.tool-fs-read
   gatewayConfigPatch:
     tools:
       toolsBySender:
@@ -37,6 +39,7 @@ scenario:
     retryCount: 0
     summary: Exercise exact sender policy through a real inbound channel turn and native subagent spawn.
     config:
+      requiredProviderMode: live-frontier
       childLabel: issue-109025-child
       parentProofFile: issue-109025-parent-proof.txt
       secretFile: issue-109025-secret.txt

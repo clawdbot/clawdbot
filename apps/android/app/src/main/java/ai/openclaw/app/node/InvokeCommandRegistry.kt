@@ -9,6 +9,7 @@ import ai.openclaw.app.protocol.OpenClawCapability
 import ai.openclaw.app.protocol.OpenClawContactsCommand
 import ai.openclaw.app.protocol.OpenClawDeviceCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
+import ai.openclaw.app.protocol.OpenClawMobileUiCommand
 import ai.openclaw.app.protocol.OpenClawMotionCommand
 import ai.openclaw.app.protocol.OpenClawNotificationsCommand
 import ai.openclaw.app.protocol.OpenClawPhotosCommand
@@ -30,6 +31,7 @@ data class NodeRuntimeFlags(
   val installedAppsSharingEnabled: Boolean,
   val debugBuild: Boolean,
   val voiceWakeEnabled: Boolean = false,
+  val mobileUiAvailable: Boolean = false,
 )
 
 /** Per-command availability gates checked before advertising invoke methods. */
@@ -46,6 +48,7 @@ enum class InvokeCommandAvailability {
   MotionPedometerAvailable,
   InstalledAppsSharingEnabled,
   DebugBuild,
+  MobileUiAvailable,
 }
 
 /** Per-capability availability gates for the node capabilities manifest. */
@@ -58,6 +61,7 @@ enum class NodeCapabilityAvailability {
   PhotosAvailable,
   MotionAvailable,
   VoiceWakeEnabled,
+  MobileUiAvailable,
 }
 
 /** Capability entry reported to the gateway when its availability gate passes. */
@@ -111,6 +115,10 @@ object InvokeCommandRegistry {
       NodeCapabilitySpec(
         name = OpenClawCapability.VoiceWake.rawValue,
         availability = NodeCapabilityAvailability.VoiceWakeEnabled,
+      ),
+      NodeCapabilitySpec(
+        name = OpenClawCapability.MobileUI.rawValue,
+        availability = NodeCapabilityAvailability.MobileUiAvailable,
       ),
     )
 
@@ -243,6 +251,14 @@ object InvokeCommandRegistry {
         availability = InvokeCommandAvailability.CallLogAvailable,
       ),
       InvokeCommandSpec(
+        name = OpenClawMobileUiCommand.Observe.rawValue,
+        availability = InvokeCommandAvailability.MobileUiAvailable,
+      ),
+      InvokeCommandSpec(
+        name = OpenClawMobileUiCommand.Act.rawValue,
+        availability = InvokeCommandAvailability.MobileUiAvailable,
+      ),
+      InvokeCommandSpec(
         name = "debug.logs",
         availability = InvokeCommandAvailability.DebugBuild,
       ),
@@ -270,6 +286,7 @@ object InvokeCommandRegistry {
           NodeCapabilityAvailability.PhotosAvailable -> flags.photosAvailable
           NodeCapabilityAvailability.MotionAvailable -> flags.motionActivityAvailable || flags.motionPedometerAvailable
           NodeCapabilityAvailability.VoiceWakeEnabled -> flags.voiceWakeEnabled
+          NodeCapabilityAvailability.MobileUiAvailable -> flags.mobileUiAvailable
         }
       }.map { it.name }
 
@@ -290,6 +307,7 @@ object InvokeCommandRegistry {
           InvokeCommandAvailability.MotionPedometerAvailable -> flags.motionPedometerAvailable
           InvokeCommandAvailability.InstalledAppsSharingEnabled -> flags.installedAppsSharingEnabled
           InvokeCommandAvailability.DebugBuild -> flags.debugBuild
+          InvokeCommandAvailability.MobileUiAvailable -> flags.mobileUiAvailable
         }
       }.map { it.name }
 }

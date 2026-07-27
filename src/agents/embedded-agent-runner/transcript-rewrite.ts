@@ -178,6 +178,14 @@ function appendBranchEntry(params: {
       entry.fromHook,
     );
   }
+  if (entry.type === "reset") {
+    return sessionManager.appendResetBoundary(
+      entry.reason,
+      entry.firstKeptEntryId
+        ? (remapEntryId(entry.firstKeptEntryId, rewrittenEntryIds) ?? entry.firstKeptEntryId)
+        : undefined,
+    );
+  }
   if (entry.type === "thinking_level_change") {
     return sessionManager.appendThinkingLevelChange(entry.thinkingLevel);
   }
@@ -231,6 +239,14 @@ function appendTranscriptStateBranchEntry(params: {
       entry.tokensBefore,
       entry.details,
       entry.fromHook,
+    );
+  }
+  if (entry.type === "reset") {
+    return state.appendResetBoundary(
+      entry.reason,
+      entry.firstKeptEntryId
+        ? (remapEntryId(entry.firstKeptEntryId, rewrittenEntryIds) ?? entry.firstKeptEntryId)
+        : undefined,
     );
   }
   if (entry.type === "thinking_level_change") {

@@ -31,7 +31,7 @@ type QuickChatHelpers = {
   resolveInlineWidgetUrl: (surface: unknown, target: unknown) => string | null;
 };
 
-const context: { helpers?: QuickChatHelpers } & Record<string, unknown> = { URL };
+const context: { helpers?: QuickChatHelpers } & Record<string, unknown> = { URL, TextEncoder };
 vm.runInNewContext(
   `${quickchatSource.slice(0, browserBindingsStart)}\nthis.helpers = { assembleChatDelta, chatMessageText, chatMessageWidgets, resolveInlineWidgetUrl };`,
   context,
@@ -124,10 +124,13 @@ function createQuickChatHarness(): Record<string, any> {
   let syncedGeneration = 0;
   let widgetSyncCount = 0;
   let widgetSurfaceRefreshCount = 0;
+  let widgetSurfaceRefreshFails = false;
   let widgetSurfaceRefreshResult = "https://gateway.example/__openclaw__/cap/refreshed-capability";
+  let fakeNow = 1_000_000;
   const sendResult = new Promise((resolve) => {
     resolveSend = resolve;
   });
+  const Date = { now: () => fakeNow };
   const window = {
     __TAURI__: {
       core: {
@@ -137,6 +140,8 @@ function createQuickChatHarness(): Record<string, any> {
             widgets?: unknown[];
             hasWidgets?: boolean;
             expanded?: boolean;
+            sessionId?: string;
+            rendererEpoch?: number;
             generation?: number;
           },
         ) {
@@ -145,7 +150,9 @@ function createQuickChatHarness(): Record<string, any> {
           }
           if (method === "quickchat_refresh_widget_surface") {
             widgetSurfaceRefreshCount += 1;
-            return Promise.resolve(widgetSurfaceRefreshResult);
+            return widgetSurfaceRefreshFails
+              ? Promise.reject(new Error("refresh failed"))
+              : Promise.resolve(widgetSurfaceRefreshResult);
           }
           if (method === "quickchat_sync_widgets") {
             syncedWidgets = args?.widgets ?? [];
@@ -178,25 +185,42 @@ function createQuickChatHarness(): Record<string, any> {
       return elements.get(selector);
     },
   };
-  const browserContext: Record<string, any> = { document, window, URL };
+  const advanceTime = (ms: number) => {
+    fakeNow += ms;
+  };
+  const browserContext: Record<string, any> = {
+    advanceTime,
+    document,
+    window,
+    Date,
+    URL,
+    TextEncoder,
+  };
   vm.runInNewContext(
     `${quickchatSource.slice(0, browserBindingsEnd)}
 this.harness = {
   send,
   handleChatEvent,
+  nextVisibilityOperation,
   requestHide,
   clearReply,
   setGatewayUp(surface = "https://gateway.example/__openclaw__/cap/fixture-capability") {
     gatewayState = "up";
+    canvasSurfaceObservedUrl = surface;
     canvasSurfaceUrl = surface;
     canvasSurfaceRefreshedAt = Date.now();
+    canvasSurfaceRetryAt = 0;
     if (visibilitySequence === 0) visibilitySequence = 1;
   },
+  advanceTime(ms) { advanceTime(ms); },
+  emitGatewayState(payload) { setGatewayState(payload); },
   setMessage(value) { elements.input.value = value; },
   pendingCount() { return pendingChatEvents.length; },
   activeRunId() { return activeReply?.runId ?? null; },
   replyText() { return elements.replyText.textContent; },
-  expireCanvasSurface() { canvasSurfaceRefreshedAt = 0; },
+  reveal,
+  expireCanvasSurface() { canvasSurfaceRefreshedAt = 0; canvasSurfaceRetryAt = 0; },
+  allowCanvasSurfaceRetry() { canvasSurfaceRetryAt = 0; },
   flushSurfaceRefresh() { return canvasSurfaceRefreshPromise ?? Promise.resolve(); },
   flushWidgets() { return widgetSyncPromise; },
 };`,
@@ -211,11 +235,21 @@ this.harness = {
     syncedGeneration: () => syncedGeneration,
     widgetSyncCount: () => widgetSyncCount,
     widgetSurfaceRefreshCount: () => widgetSurfaceRefreshCount,
+    setWidgetSurfaceRefreshFails: (value: boolean) => {
+      widgetSurfaceRefreshFails = value;
+    },
     setWidgetSurfaceRefreshResult: (value: string) => {
       widgetSurfaceRefreshResult = value;
     },
   };
 }
+
+test("visibility operations share one monotonic sequence", () => {
+  const harness = createQuickChatHarness();
+  assert.equal(harness.nextVisibilityOperation(), 1);
+  assert.equal(harness.nextVisibilityOperation(), 2);
+  assert.equal(harness.nextVisibilityOperation(), 3);
+});
 
 test("widget child webviews inherit no Quick Chat Tauri capability", () => {
   const capability = tauriConfig.app?.security?.capabilities?.find(
@@ -384,6 +418,44 @@ test("canvas previews are accepted only for safe assistant widgets", () => {
     new Set(duplicateWidgets.map((candidate) => candidate.key)).size,
     duplicateWidgets.length,
   );
+  const emojiViewId = "🦞".repeat(65);
+  const [emojiWidget] = chatMessageWidgets({
+    role: "assistant",
+    content: [
+      {
+        type: "canvas",
+        preview: {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          sandbox: "scripts",
+          viewId: emojiViewId,
+          url: "/__openclaw__/canvas/documents/emoji/index.html",
+        },
+      },
+    ],
+  });
+  assert.notEqual(emojiWidget?.key, emojiViewId);
+  assert.ok(Buffer.byteLength(emojiWidget?.key ?? "", "utf8") <= 256);
+  const cjkViewId = "界".repeat(201);
+  const [cjkWidget] = chatMessageWidgets({
+    role: "assistant",
+    content: [
+      {
+        type: "canvas",
+        preview: {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          sandbox: "scripts",
+          viewId: cjkViewId,
+          url: "/__openclaw__/canvas/documents/cjk/index.html",
+        },
+      },
+    ],
+  });
+  assert.notEqual(cjkWidget?.key, cjkViewId);
+  assert.ok(Buffer.byteLength(cjkWidget?.key ?? "", "utf8") <= 256);
   assert.equal(
     chatMessageWidgets({
       role: "tool",
@@ -631,6 +703,115 @@ test("expired Canvas capability refreshes before a new widget loads", async () =
     harness.syncedWidgets()[0]?.url,
     "https://gateway.example/__openclaw__/cap/refreshed-capability/__openclaw__/canvas/documents/status/index.html",
   );
+});
+
+test("transient Canvas refresh failures remain retryable", async () => {
+  const harness = createQuickChatHarness();
+  harness.setGatewayUp();
+  harness.expireCanvasSurface();
+  harness.setWidgetSurfaceRefreshFails(true);
+  harness.setMessage("show status");
+  const sending = harness.send(false);
+  harness.resolveSend({ sessionKey: "global", agentId: "work", runId: "retry-run" });
+  await sending;
+  const widgetBlock = (id: string) => ({
+    type: "canvas",
+    preview: {
+      kind: "canvas",
+      surface: "assistant_message",
+      render: "url",
+      sandbox: "scripts",
+      url: `/__openclaw__/canvas/documents/${id}/index.html`,
+    },
+  });
+
+  harness.handleChatEvent({
+    sessionKey: "global",
+    agentId: "work",
+    runId: "retry-run",
+    state: "delta",
+    message: { role: "assistant", content: [widgetBlock("first")] },
+  });
+  await harness.flushSurfaceRefresh();
+  await harness.flushWidgets();
+  assert.equal(harness.widgetSurfaceRefreshCount(), 1);
+  assert.deepEqual([...harness.syncedWidgets()], []);
+
+  harness.setWidgetSurfaceRefreshFails(false);
+  harness.allowCanvasSurfaceRetry();
+  harness.handleChatEvent({
+    sessionKey: "global",
+    agentId: "work",
+    runId: "retry-run",
+    state: "delta",
+    message: { role: "assistant", content: [widgetBlock("second")] },
+  });
+  await harness.flushSurfaceRefresh();
+  await harness.flushWidgets();
+  assert.equal(harness.widgetSurfaceRefreshCount(), 2);
+  assert.match(harness.syncedWidgets()[0]?.url ?? "", /refreshed-capability/u);
+});
+
+test("unchanged gateway state does not renew a failed Canvas capability", async () => {
+  const harness = createQuickChatHarness();
+  const surface = "https://gateway.example/__openclaw__/cap/fixture-capability";
+  harness.setGatewayUp(surface);
+  harness.expireCanvasSurface();
+  harness.setWidgetSurfaceRefreshFails(true);
+  harness.setMessage("show status");
+  const sending = harness.send(false);
+  harness.resolveSend({ sessionKey: "global", agentId: "work", runId: "state-run" });
+  await sending;
+  harness.handleChatEvent({
+    sessionKey: "global",
+    agentId: "work",
+    runId: "state-run",
+    state: "delta",
+    message: {
+      role: "assistant",
+      content: [
+        {
+          type: "canvas",
+          preview: {
+            kind: "canvas",
+            surface: "assistant_message",
+            render: "url",
+            sandbox: "scripts",
+            url: "/__openclaw__/canvas/documents/status/index.html",
+          },
+        },
+      ],
+    },
+  });
+  await harness.flushSurfaceRefresh();
+  assert.equal(harness.widgetSurfaceRefreshCount(), 1);
+  harness.emitGatewayState({ state: "up", canvasSurfaceUrl: surface, notice: "unchanged" });
+  harness.advanceTime(5_000);
+  harness.setWidgetSurfaceRefreshFails(false);
+  harness.allowCanvasSurfaceRetry();
+  harness.handleChatEvent({
+    sessionKey: "global",
+    agentId: "work",
+    runId: "state-run",
+    state: "delta",
+    message: {
+      role: "assistant",
+      content: [
+        {
+          type: "canvas",
+          preview: {
+            kind: "canvas",
+            surface: "assistant_message",
+            render: "url",
+            sandbox: "scripts",
+            url: "/__openclaw__/canvas/documents/retry/index.html",
+          },
+        },
+      ],
+    },
+  });
+  await harness.flushSurfaceRefresh();
+  assert.equal(harness.widgetSurfaceRefreshCount(), 2);
 });
 
 test("clearing the widget reply restores semantic text-only layout", async () => {

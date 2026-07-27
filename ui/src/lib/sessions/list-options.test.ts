@@ -25,7 +25,7 @@ function createSessions(client: GatewayBrowserClient, key: string) {
   return createSessionCapability({
     snapshot: {
       client,
-      connected: true,
+      phase: "connected" as const,
       sessionKey: key,
       assistantAgentId: "main",
       hello: null,
@@ -106,7 +106,7 @@ describe("session list replacement options", () => {
     await sessions.refresh({
       agentId: "main",
       search: "filtered",
-      showArchived: true,
+      archivedFilter: "archived",
       limit: 25,
       includeDerivedTitles: true,
       force: true,
@@ -225,6 +225,41 @@ describe("session list replacement options", () => {
     });
     expect(listCalls[2]?.[1]).not.toHaveProperty("append");
     expect(listCalls[2]?.[1]).not.toHaveProperty("offset");
+    sessions.dispose();
+  });
+
+  it("defers the canonical refresh for batch patches until the caller asks for it", async () => {
+    const keys = ["agent:main:one", "agent:main:two", "agent:main:three"];
+    const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "sessions.list") {
+        return sessionsResult(
+          keys.map((key) => ({ key, kind: "direct" as const, updatedAt: 1 })),
+          1,
+        );
+      }
+      if (method === "sessions.patch") {
+        return { ok: true };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const sessions = createSessions(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:one",
+    );
+
+    await sessions.refresh({ agentId: "main", limit: 60, includeDerivedTitles: true, force: true });
+    for (const key of keys) {
+      await sessions.patch(key, { archived: true }, { agentId: "main", deferListRefresh: true });
+    }
+    const listCallsBeforeTail = request.mock.calls.filter(
+      ([method]) => method === "sessions.list",
+    ).length;
+    await sessions.refreshReplacement("main");
+
+    // One seeding list, none from the patches, one authoritative tail refresh.
+    expect(listCallsBeforeTail).toBe(1);
+    expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(2);
+    expect(request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(3);
     sessions.dispose();
   });
 });

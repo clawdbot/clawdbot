@@ -2,8 +2,10 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getBundledChannelSetupPlugin } from "../../channels/plugins/bundled.js";
+import { resolveChannelSetupCliOptionMetadata } from "../../channels/plugins/cli-add-options.js";
 import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { resolveChannelSetupExecutionAdapter } from "../../channels/plugins/setup-contract.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/plugins/setup-helpers.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId, ChannelSetupInput } from "../../channels/plugins/types.public.js";
@@ -49,7 +51,6 @@ export type ChannelsAddOptions = {
 } & Record<string, unknown>;
 
 const CHANNEL_ADD_CONTROL_OPTION_KEYS = new Set(["channel", "account"]);
-const NEXTCLOUD_TALK_CLI_ALIASES = new Set(["nextcloud-talk", "nc-talk", "nc"]);
 
 async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
   const trimmed = normalizeOptionalLowercaseString(raw);
@@ -78,48 +79,45 @@ async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | nul
   });
 }
 
-function parseOptionalInt(value: unknown, flag: string): number | undefined {
-  if (value === undefined || value === null || value === "") {
-    return undefined;
-  }
-  const parsed = parseStrictNonNegativeInteger(value);
-  if (parsed === undefined) {
-    throw new Error(`${flag} must be a non-negative integer.`);
-  }
-  return parsed;
-}
-
-function parseOptionalDelimitedInput(value: unknown): string[] | undefined {
-  if (Array.isArray(value)) {
-    return value.filter((entry): entry is string => typeof entry === "string");
-  }
-  return parseOptionalDelimitedEntries(typeof value === "string" ? value : undefined);
-}
-
-function readOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
 function buildChannelSetupInput(opts: ChannelsAddOptions): ChannelSetupInput {
   const input: Record<string, unknown> = {};
+  const { valueMetadataByAttributeName } = resolveChannelSetupCliOptionMetadata(opts.channel);
   for (const [key, value] of Object.entries(opts)) {
     if (CHANNEL_ADD_CONTROL_OPTION_KEYS.has(key) || value === undefined) {
       continue;
     }
-    input[key] = value;
+    const metadata = valueMetadataByAttributeName.get(key);
+    if (metadata?.valueType !== "int") {
+      input[key] =
+        metadata?.valueType === "list"
+          ? Array.isArray(value)
+            ? value.filter((entry): entry is string => typeof entry === "string")
+            : parseOptionalDelimitedEntries(typeof value === "string" ? value : undefined)
+          : value;
+      continue;
+    }
+    if (value === null || value === "") {
+      input[key] = undefined;
+      continue;
+    }
+    const parsed = parseStrictNonNegativeInteger(value);
+    if (parsed === undefined) {
+      throw new Error(`${metadata.longFlag} must be a non-negative integer.`);
+    }
+    input[key] = parsed;
   }
-
-  const rawChannel = readOptionalString(opts.channel)?.trim().toLowerCase();
-  if (rawChannel && NEXTCLOUD_TALK_CLI_ALIASES.has(rawChannel)) {
-    input.baseUrl ??= readOptionalString(input.url);
-    input.secret ??= readOptionalString(input.token) ?? readOptionalString(input.password);
-    input.secretFile ??= readOptionalString(input.tokenFile);
-  }
-
-  input.initialSyncLimit = parseOptionalInt(opts.initialSyncLimit, "--initial-sync-limit");
-  input.groupChannels = parseOptionalDelimitedInput(opts.groupChannels);
-  input.dmAllowlist = parseOptionalDelimitedInput(opts.dmAllowlist);
   return input as ChannelSetupInput;
+}
+
+// Safe to forward every defined key: CLI registration is selection-scoped and
+// resolveChannelsAddOptions drops non-user-authored values (Commander defaults),
+// so no other channel's options or defaults can reach the selected contract.
+function buildChannelOwnedSetupInput(opts: ChannelsAddOptions): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(opts).filter(
+      ([key, value]) => !CHANNEL_ADD_CONTROL_OPTION_KEYS.has(key) && value !== undefined,
+    ),
+  );
 }
 
 /** Add or configure a channel account, using the wizard when no concrete flags are supplied. */
@@ -182,7 +180,7 @@ async function channelsAddCommandImpl(
     pluginId?: string,
   ): Promise<ChannelPlugin | undefined> => {
     const existing = getLoadedChannelPlugin(channelId);
-    if (existing?.setup?.applyAccountConfig) {
+    if (existing?.setupContract?.applyAccountConfig || existing?.setup?.applyAccountConfig) {
       return existing;
     }
     const { loadChannelSetupPluginRegistrySnapshotForChannel } =
@@ -253,7 +251,8 @@ async function channelsAddCommandImpl(
   }
 
   const plugin = await loadScopedPlugin(channel, catalogEntry?.pluginId);
-  if (!plugin?.setup?.applyAccountConfig) {
+  const setup = plugin ? resolveChannelSetupExecutionAdapter(plugin) : undefined;
+  if (!plugin || !setup?.applyAccountConfig) {
     runtime.error(
       `${formatUnsupportedChannelActionMessage({
         channel,
@@ -263,16 +262,27 @@ async function channelsAddCommandImpl(
     runtime.exit(1);
     return;
   }
-  let input = buildChannelSetupInput(opts);
+  let input: unknown;
+  if (plugin.setupContract) {
+    const parsed = plugin.setupContract.parseInput(buildChannelOwnedSetupInput(opts));
+    if (!parsed.ok) {
+      runtime.error(parsed.error);
+      runtime.exit(1);
+      return;
+    }
+    input = parsed.value;
+  } else {
+    input = buildChannelSetupInput(opts);
+  }
   const accountId =
-    plugin.setup.resolveAccountId?.({
+    setup.resolveAccountId?.({
       cfg: nextConfig,
       accountId: opts.account,
       input,
     }) ?? normalizeAccountId(opts.account);
-  if (plugin.setup.prepareAccountConfigInput) {
+  if (setup.prepareAccountConfigInput) {
     await params?.beforePersistentEffect?.();
-    input = await plugin.setup.prepareAccountConfigInput({
+    input = await setup.prepareAccountConfigInput({
       cfg: nextConfig,
       accountId,
       input,
@@ -280,7 +290,7 @@ async function channelsAddCommandImpl(
     });
   }
 
-  const validationError = plugin.setup.validateInput?.({
+  const validationError = setup.validateInput?.({
     cfg: nextConfig,
     accountId,
     input,
@@ -297,6 +307,7 @@ async function channelsAddCommandImpl(
     nextConfig = moveSingleAccountChannelSectionToDefaultAccount({
       cfg: nextConfig,
       channelKey: channel,
+      setupSurface: plugin.setup,
     });
   }
 
@@ -332,7 +343,7 @@ async function channelsAddCommandImpl(
     });
   }
   runtime.log(`Added ${plugin.meta.label ?? channelLabel(channel)} account "${accountId}".`);
-  const afterAccountConfigWritten = plugin.setup?.afterAccountConfigWritten;
+  const afterAccountConfigWritten = setup.afterAccountConfigWritten;
   if (afterAccountConfigWritten) {
     const { runCollectedChannelOnboardingPostWriteHooks } = await loadOnboardChannels();
     await runCollectedChannelOnboardingPostWriteHooks({

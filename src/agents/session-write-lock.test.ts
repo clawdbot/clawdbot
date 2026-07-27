@@ -1075,6 +1075,47 @@ describe("acquireSessionWriteLock", () => {
     }
   });
 
+  it("recognizes the exact openclaw-gateway process title as an OpenClaw owner", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const nowMs = Date.now();
+    const gatewayLock = path.join(sessionsDir, "gateway.jsonl.lock");
+
+    try {
+      await fs.writeFile(
+        gatewayLock,
+        JSON.stringify({
+          pid: process.pid,
+          createdAt: new Date(nowMs).toISOString(),
+        }),
+        "utf8",
+      );
+
+      const result = await cleanStaleLockFiles({
+        sessionsDir,
+        staleMs: 30_000,
+        nowMs,
+        removeStale: true,
+        readOwnerProcessArgs: () => ["openclaw-gateway"],
+      });
+
+      expect(lockCleanupRecords(result.locks)).toEqual([
+        {
+          name: "gateway.jsonl.lock",
+          removed: false,
+          stale: false,
+          staleReasons: [],
+        },
+      ]);
+      expect(result.cleaned).toEqual([]);
+      await expect(fs.access(gatewayLock)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("memoizes readOwnerProcessArgs across locks with the same pid in one sweep (#86509)", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
     const sessionsDir = path.join(root, "sessions");

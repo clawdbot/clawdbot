@@ -19,10 +19,11 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveToCwd as resolveSessionToolPathToCwd } from "../../agents/sessions/tools/path-utils.js";
+import { runGit } from "../../agents/worktrees/git.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { visitSessionMessagesAsync } from "../session-transcript-readers.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadSessionEntryReadOnly } from "../session-utils.js";
 import {
   execOpenPath,
   formatOpenPathError,
@@ -59,6 +60,7 @@ type TouchedFile = {
 type LoadedSessionFiles = {
   root?: string;
   fileRoot?: string;
+  diffCwd?: string;
   files: TouchedFile[];
 };
 
@@ -348,7 +350,7 @@ async function toSessionFileEntry(
 }
 
 function loadSessionFileRoot(params: { sessionKey: string; agentId?: string }) {
-  const loaded = loadSessionEntry(params.sessionKey, { agentId: params.agentId });
+  const loaded = loadSessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
   if (!loaded.entry?.sessionId) {
     return { ...loaded, agentId: undefined, root: undefined, fileRoot: undefined };
   }
@@ -359,15 +361,21 @@ function loadSessionFileRoot(params: { sessionKey: string; agentId?: string }) {
       resolveDefaultAgentId(loaded.cfg),
   );
   const spawnedCwd = normalizePathValue(loaded.entry.spawnedCwd);
-  const root =
-    normalizePathValue(loaded.entry.spawnedWorkspaceDir) ??
-    spawnedCwd ??
-    normalizePathValue(resolveAgentWorkspaceDir(loaded.cfg, agentId));
+  const spawnedWorkspaceDir = normalizePathValue(loaded.entry.spawnedWorkspaceDir);
+  const configuredWorkspaceDir =
+    spawnedCwd || spawnedWorkspaceDir
+      ? undefined
+      : normalizePathValue(resolveAgentWorkspaceDir(loaded.cfg, agentId));
+  // Keep this cwd precedence aligned with sessions.diff so the advertised
+  // checkout state cannot disagree with the panel's fallback result.
+  const diffCwd = spawnedCwd ?? spawnedWorkspaceDir ?? configuredWorkspaceDir;
+  const root = spawnedWorkspaceDir ?? spawnedCwd ?? configuredWorkspaceDir;
   return {
     ...loaded,
     agentId,
     root,
     fileRoot: resolveFileRoot({ root, spawnedCwd }),
+    diffCwd,
   };
 }
 
@@ -542,6 +550,7 @@ async function loadSessionFiles(params: {
   return {
     root: loaded.root,
     fileRoot: loaded.fileRoot,
+    diffCwd: loaded.diffCwd,
     files: [...files.values()].toSorted((a, b) => {
       if (a.kind !== b.kind) {
         return a.kind === "modified" ? -1 : 1;
@@ -556,9 +565,23 @@ async function buildListResult(params: {
   agentId?: string;
   path?: string;
   search?: string;
-}): Promise<{ root?: string; files: SessionFileEntry[]; browser?: SessionFileBrowserResult }> {
+}): Promise<{
+  root?: string;
+  gitCheckout?: boolean;
+  files: SessionFileEntry[];
+  browser?: SessionFileBrowserResult;
+}> {
   const loaded = await loadSessionFiles(params);
   const root = loaded.root;
+  let gitCheckout: boolean | undefined;
+  if (loaded.diffCwd) {
+    try {
+      const result = await runGit(loaded.diffCwd, ["rev-parse", "--show-toplevel"]);
+      gitCheckout = result.code === 0 && Boolean(result.stdout.trim());
+    } catch {
+      gitCheckout = false;
+    }
+  }
   const workspaceFiles = root
     ? loaded.files.filter((file) =>
         Boolean(resolveTouchedFilePath({ root, fileRoot: loaded.fileRoot, filePath: file.path })),
@@ -576,6 +599,7 @@ async function buildListResult(params: {
   });
   return {
     ...(root ? { root } : {}),
+    ...(gitCheckout === undefined ? {} : { gitCheckout }),
     files,
     ...(browser ? { browser } : {}),
   };
@@ -687,7 +711,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       ...result,
     });
   },
-  "sessions.files.set": async ({ params, respond }) => {
+  "sessions.files.set": async ({ params, respond, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateSessionsFilesSetParams, "sessions.files.set", respond)) {
       return;
     }
@@ -742,6 +766,9 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       return;
     }
     let update: WorkspaceFileUpdateResult;
+    // The resolved root belongs to the authorized instance. Recheck after all async path
+    // discovery so a replacement cannot redirect this write to its workspace.
+    sessionMutationAuthorization?.assertCurrent();
     try {
       update = await updateWorkspaceFile(
         loaded.root,

@@ -397,7 +397,9 @@ function visibleApprovalBindingMatches(
   if (!text) {
     return false;
   }
-  const lines = text.split(/\r?\n/).map((line) => line.trim());
+  // Approval prompts carry bold markers (**Header**, **ID:** …). Strip them
+  // before matching so reaction binding still correlates the delivered prompt.
+  const lines = text.split(/\r?\n/).map((line) => line.replace(/\*\*/g, "").trim());
   const normalizedHeaders = lines.map((line) => line.replace(/^[^A-Za-z0-9]*/, ""));
   const hasKindHeader =
     binding.approvalKind === "exec"
@@ -523,7 +525,9 @@ export function extractIMessageApprovalPromptBinding(text: string): {
   approvalKind: "exec" | "plugin";
   allowedDecisions: ExecApprovalReplyDecision[];
 } | null {
-  const lines = text.split(/\r?\n/);
+  // Strip bold markers the prompt builder emits (**Exec approval required**,
+  // **ID:** …) so the canonical-format checks below still recognize the prompt.
+  const lines = text.split(/\r?\n/).map((line) => line.replace(/\*\*/g, ""));
   const hasExecHeader = lines.some((line) =>
     /^\s*[^A-Za-z0-9]*Exec approval required\s*$/i.test(line),
   );

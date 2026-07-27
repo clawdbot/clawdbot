@@ -7,6 +7,7 @@ import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
 import type { PromptMode } from "../../agents/system-prompt.types.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
+import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
@@ -19,6 +20,7 @@ import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { CliSessionBindingFacts } from "../cli-runner/types.js";
 import type { MainSessionRecoveryOwnerLease } from "../main-session-recovery-store.js";
+import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
 
 /** Image content block for Claude API multimodal messages. */
@@ -61,6 +63,8 @@ export type AgentCommandOpts = {
   images?: ImageContent[];
   /** Original inline/offloaded attachment order for inbound images. */
   imageOrder?: PromptImageOrderEntry[];
+  /** Ordered facts represented by attachment text in this prompt. */
+  media?: MediaFact[];
   /** Optional client-provided tools (OpenResponses hosted tools). */
   clientTools?: ClientToolDefinition[];
   /** Agent id override (must exist in config). */
@@ -69,6 +73,8 @@ export type AgentCommandOpts = {
   provider?: string;
   /** Per-run model override. */
   model?: string;
+  /** Explicit ordered fallback chain for this run. Undefined uses normal selection policy. */
+  modelFallbacksOverride?: string[];
   to?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -110,8 +116,10 @@ export type AgentCommandOpts = {
   runtimePluginToolGrant?: RuntimePluginToolGrant;
   /** Trusted in-process subagent-completion handoff; never accepted from public RPC params. */
   trustedInternalHandoff?: boolean;
-  /** Internal marker for an auto-applied cap that CLI runtimes must omit. */
+  /** Internal marker identifying a server-managed default cap. */
   toolsAllowIsDefault?: boolean;
+  /** Trusted server-stamped authority for an explicitly capped scheduled run. */
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
   /** Preserve the originating run's message-tool policy across internal continuation turns. */
   requireExplicitMessageTarget?: boolean;
   cliSessionBindingFacts?: CliSessionBindingFacts;
@@ -177,6 +185,10 @@ export type AgentCommandOpts = {
   mainRestartRecoveryAdmitted?: boolean;
   /** Called when the actual run model is selected, including fallback retries. */
   onActiveModelSelected?: (ctx: { provider: string; model: string }) => void | Promise<void>;
+  /** Called when every candidate in the run's model fallback chain failed. */
+  onModelFallbackExhausted?: () => void;
+  /** Called before delivery projection when the raw run contains an error payload. */
+  onResultErrorPayload?: (message?: string) => void;
   /** Called when compaction rotates the active run onto a successor session. */
   onSessionIdChanged?: (sessionId: string) => void;
   /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */

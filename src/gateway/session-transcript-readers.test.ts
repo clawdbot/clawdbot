@@ -282,6 +282,45 @@ describe("session transcript reader facade", () => {
     await expect(readSessionMessageCountAsync(scope)).resolves.toBe(3);
   });
 
+  test("promotes SQLite message idempotency into transcript metadata", async () => {
+    const sessionId = "reader-sqlite-idempotency";
+    const scope = {
+      agentId: "main",
+      sessionId,
+      sessionKey: `agent:main:${sessionId}`,
+      storePath,
+    };
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "sqlite-user-message",
+          message: {
+            role: "user",
+            content: "stable bubble",
+            idempotencyKey: "initial-send:user",
+          },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+
+    await expect(
+      readSessionMessagesAsync(scope, {
+        mode: "full",
+        reason: "sqlite idempotency metadata parity test",
+      }),
+    ).resolves.toMatchObject([
+      {
+        idempotencyKey: "initial-send:user",
+        __openclaw: {
+          id: "sqlite-user-message",
+          idempotencyKey: "initial-send:user",
+          seq: 1,
+        },
+      },
+    ]);
+  });
+
   test("uses SQLite marker identity when only sessionFile is provided", async () => {
     const sessionId = "reader-marker-only";
     const markerStorePath = path.join(

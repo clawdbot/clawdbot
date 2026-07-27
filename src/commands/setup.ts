@@ -5,8 +5,19 @@
  * running the full onboarding wizard.
  */
 import fs from "node:fs/promises";
+import {
+  listAgentEntries,
+  resolveAgentEntry,
+  resolveDefaultAgentId,
+  toAgentEntriesRecord,
+} from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import {
+  configIncludeOwnsAgentRoster,
+  hasResolvedRosterBeforeMigrations,
+} from "../config/agent-roster-provenance.js";
 import type { ConfigWriteOptions, ReadConfigFileSnapshotForWriteResult } from "../config/io.js";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -42,7 +53,7 @@ type SetupCommandDeps = {
     opts: { path?: string; suffix?: string },
   ) => void | Promise<void>;
   mkdir?: (dir: string, options: { recursive: true }) => Promise<unknown>;
-  resolveSessionTranscriptsDir?: () => string | Promise<string>;
+  resolveSessionTranscriptsDir?: (agentId: string) => string | Promise<string>;
   replaceConfigFile?: ReplaceConfigFile;
 };
 
@@ -116,9 +127,9 @@ async function logDefaultConfigUpdated(
   logConfigUpdated(runtime, opts);
 }
 
-async function resolveDefaultSessionTranscriptsDir(): Promise<string> {
-  const { resolveSessionTranscriptsDir } = await import("../config/sessions.js");
-  return resolveSessionTranscriptsDir();
+async function resolveDefaultSessionTranscriptsDir(agentId: string): Promise<string> {
+  const { resolveSessionTranscriptsDirForAgent } = await import("../config/sessions.js");
+  return resolveSessionTranscriptsDirForAgent(agentId);
 }
 
 /** Prepares config, workspace, and session directories for a usable installation. */
@@ -145,32 +156,76 @@ export async function setupCommand(
     return;
   }
 
-  const cfg = snapshot.sourceConfig;
-  const defaults = cfg.agents?.defaults ?? {};
+  const resolvedConfig = snapshot.config;
+  const shouldPersistRoster =
+    !snapshot.exists ||
+    (!hasResolvedRosterBeforeMigrations(snapshot) && !configIncludeOwnsAgentRoster(snapshot));
+  const cfg = shouldPersistRoster
+    ? (migratePersistedImplicitMainRoster(snapshot.sourceConfig).config as OpenClawConfig)
+    : snapshot.sourceConfig;
+  const authoredDefaults = cfg.agents?.defaults ?? {};
+  const resolvedDefaults = resolvedConfig.agents?.defaults ?? authoredDefaults;
+  const defaultEntry = resolveAgentEntry(resolvedConfig, resolveDefaultAgentId(resolvedConfig));
+  const defaultEntryWorkspace = defaultEntry?.workspace?.trim();
+  const configuredWorkspace = defaultEntryWorkspace || resolvedDefaults.workspace;
 
   const workspace =
-    desiredWorkspace ?? defaults.workspace ?? (await resolveDefaultAgentWorkspaceDir(deps));
+    desiredWorkspace ?? configuredWorkspace ?? (await resolveDefaultAgentWorkspaceDir(deps));
+  // Bare setup is observational for an established roster. Only a caller
+  // override or fresh bootstrap owns a persisted workspace change.
+  const shouldWriteWorkspace =
+    !snapshot.exists || (desiredWorkspace !== undefined && configuredWorkspace !== workspace);
+  const shouldWriteGatewayMode = resolvedConfig.gateway?.mode === undefined;
+  const writeInheritedWorkspaceOverride =
+    snapshot.exists &&
+    shouldWriteWorkspace &&
+    !defaultEntryWorkspace &&
+    configIncludeOwnsAgentRoster(snapshot);
 
-  const next: OpenClawConfig = {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...defaults,
-        workspace,
-      },
-    },
-    gateway: {
-      ...cfg.gateway,
-      mode: cfg.gateway?.mode ?? "local",
-    },
-  };
+  // Keep the candidate runtime-shaped. replaceConfigFile persists only its
+  // diff against snapshot.parsed, never resolved include/env values wholesale.
+  let next: OpenClawConfig = snapshot.exists ? resolvedConfig : cfg;
+  if (shouldPersistRoster) {
+    const { list: _legacyList, ...agents } = next.agents ?? {};
+    next = {
+      ...next,
+      agents: { ...agents, entries: toAgentEntriesRecord(listAgentEntries(cfg)) },
+    };
+  }
+  if (shouldWriteWorkspace) {
+    if (!writeInheritedWorkspaceOverride) {
+      const roster = structuredClone(listAgentEntries(next));
+      if (!snapshot.exists || Boolean(defaultEntryWorkspace)) {
+        for (const entry of roster) {
+          if (entry.default === true) {
+            // Fresh bootstrap and explicitly entry-owned workspaces stay aligned.
+            // Inherited defaults must not turn an include-owned roster into a roster write.
+            entry.workspace = workspace;
+          }
+        }
+      }
+      const entries = roster.length > 0 ? toAgentEntriesRecord(roster) : undefined;
+      const { list: _legacyList, ...agents } = next.agents ?? {};
+      next = {
+        ...next,
+        agents: {
+          ...agents,
+          defaults: { ...agents.defaults, workspace },
+          ...(entries ? { entries } : {}),
+        },
+      };
+    }
+  }
+  if (shouldWriteGatewayMode) {
+    next = { ...next, gateway: { ...next.gateway, mode: "local" } };
+  }
 
-  if (
-    !snapshot.exists ||
-    defaults.workspace !== workspace ||
-    cfg.gateway?.mode !== next.gateway?.mode
-  ) {
+  if (!snapshot.exists) {
+    const { ensureOnboardingAgent } = await import("./onboard-agent.js");
+    next = (await ensureOnboardingAgent({ config: next, workspace, baseConfig: cfg })).config;
+  }
+
+  if (!snapshot.exists || shouldPersistRoster || shouldWriteWorkspace || shouldWriteGatewayMode) {
     // Preserve all existing config fields and touch only workspace/gateway mode
     // defaults that this command owns.
     const replaceConfig = deps.replaceConfigFile ?? writeDefaultConfigFile;
@@ -178,17 +233,32 @@ export async function setupCommand(
       nextConfig: next,
       snapshot,
       afterWrite: { mode: "auto" },
-      writeOptions: prepared.writeOptions,
+      writeOptions: {
+        ...prepared.writeOptions,
+        ...(snapshot.exists && shouldPersistRoster
+          ? {
+              explicitSetPaths: [["agents", "entries"]],
+              explicitSetValueSource: cfg,
+            }
+          : {}),
+        ...(writeInheritedWorkspaceOverride
+          ? {
+              allowIncludeAncestorExplicitSetPaths: true,
+              explicitSetPaths: [["agents", "defaults", "workspace"]],
+              explicitSetValueSource: { agents: { defaults: { workspace } } },
+            }
+          : {}),
+      },
     });
     if (!snapshot.exists) {
       const formatConfigPath = deps.formatConfigPath ?? formatDefaultConfigPath;
       runtime.log(`Wrote ${await formatConfigPath(configPath)}`);
     } else {
       const updates: string[] = [];
-      if (defaults.workspace !== workspace) {
+      if (shouldWriteWorkspace) {
         updates.push("set agents.defaults.workspace");
       }
-      if (cfg.gateway?.mode !== next.gateway?.mode) {
+      if (shouldWriteGatewayMode) {
         updates.push("set gateway.mode");
       }
       const suffix = updates.length > 0 ? `(${updates.join(", ")})` : undefined;
@@ -204,14 +274,15 @@ export async function setupCommand(
 
   const ws = await (deps.ensureAgentWorkspace ?? ensureDefaultAgentWorkspace)({
     dir: workspace,
-    ensureBootstrapFiles: !next.agents?.defaults?.skipBootstrap,
-    skipOptionalBootstrapFiles: next.agents?.defaults?.skipOptionalBootstrapFiles,
+    ensureBootstrapFiles: !resolvedDefaults.skipBootstrap,
+    skipOptionalBootstrapFiles: resolvedDefaults.skipOptionalBootstrapFiles,
   });
   runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
 
+  const defaultAgentId = resolveDefaultAgentId(next);
   const sessionsDir = await (
     deps.resolveSessionTranscriptsDir ?? resolveDefaultSessionTranscriptsDir
-  )();
+  )(defaultAgentId);
   await (deps.mkdir ?? fs.mkdir)(sessionsDir, { recursive: true });
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
   runtime.log("");

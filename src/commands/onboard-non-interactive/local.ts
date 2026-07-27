@@ -13,6 +13,10 @@ import { resolveConfiguredSecretInputWithFallback } from "../../gateway/resolve-
 import type { RuntimeEnv } from "../../runtime.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../daemon-runtime.js";
 import {
+  ensureOnboardingAgentWorkspace,
+  resolveOnboardingAgentTarget,
+} from "../onboard-agent-target.js";
+import {
   applyLocalSetupWorkspaceConfig,
   applySkipBootstrapConfig,
   resolveOnboardingWorkspaceConflict,
@@ -20,7 +24,6 @@ import {
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
-  ensureWorkspaceAndSessions,
   resolveLocalControlUiProbeLinks,
   waitForGatewayReachable,
 } from "../onboard-helpers.js";
@@ -196,12 +199,27 @@ export async function runNonInteractiveLocalSetup(params: {
   if (opts.skipBootstrap) {
     nextConfig = applySkipBootstrapConfig(nextConfig);
   }
+  const { ensureOnboardingAgent } = await import("../onboard-agent.js");
+  const created = await ensureOnboardingAgent({
+    config: nextConfig,
+    workspace: workspaceDir,
+    baseConfig,
+  });
+  nextConfig = applyLocalSetupWorkspaceConfig(created.config, requestedWorkspaceDir);
+  // Creating the first roster agent writes the config file, so the hash captured
+  // before this step no longer matches. Adopt the post-create hash; foreign
+  // writes are still rejected because we only trust the write we just made.
+  const effectiveBaseHash = created.configHash ?? baseHash;
+  if (opts.skipBootstrap) {
+    nextConfig = applySkipBootstrapConfig(nextConfig);
+  }
+  const authTarget = resolveOnboardingAgentTarget(nextConfig);
 
   const inferredAuthChoice = opts.authChoice
     ? undefined
     : (await import("./local/auth-choice-inference.js")).inferAuthChoiceFromFlags(opts, {
         config: nextConfig,
-        workspaceDir,
+        workspaceDir: authTarget.workspaceDir,
         env: process.env,
       });
   if (!opts.authChoice && inferredAuthChoice && inferredAuthChoice.matches.length > 1) {
@@ -228,7 +246,7 @@ export async function runNonInteractiveLocalSetup(params: {
       opts,
       runtime,
       baseConfig,
-      workspaceDir,
+      target: authTarget,
     });
     if (!nextConfigAfterAuth) {
       return;
@@ -257,12 +275,13 @@ export async function runNonInteractiveLocalSetup(params: {
   nextConfig = await commitNonInteractiveOnboardConfig({
     nextConfig,
     baseConfig,
-    baseHash,
+    baseHash: effectiveBaseHash,
     reset: opts.reset,
   });
   logConfigUpdated(runtime);
 
-  await ensureWorkspaceAndSessions(workspaceDir, runtime, {
+  const finalTarget = resolveOnboardingAgentTarget(nextConfig);
+  await ensureOnboardingAgentWorkspace(finalTarget, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
     skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
   });
@@ -403,7 +422,7 @@ export async function runNonInteractiveLocalSetup(params: {
     opts,
     runtime,
     mode,
-    workspaceDir,
+    workspaceDir: finalTarget.workspaceDir,
     authChoice,
     gateway: {
       port: gatewayResult.port,

@@ -163,6 +163,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
             claimHeartbeatOutcomeForRun({
               agentId: input.context.sessionAgentId,
               sessionKey: attempt.sessionKey,
+              storePath: attempt.sessionTarget?.storePath,
               runId: attempt.runId,
             }),
           )
@@ -180,17 +181,20 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     const { hookMessagesForCurrentPrompt, promptForModel, systemPromptForHook } = promptContext;
     input.lifecycle.setPrePromptMessageCount(promptContext.prePromptMessageCount);
     input.lifecycle.setCurrentUserTimestampOverride(promptContext.currentUserTimestampOverride);
-    const beforeAgentRunOutcome = await runEmbeddedAttemptBeforeAgentRun({
-      attempt,
-      activeSession,
-      hookContext: hookCtx,
-      hookMessages: hookMessagesForCurrentPrompt,
-      hookRunner: input.assembly.hookRunner,
-      modelPrompt: promptForModel,
-      sessionManager,
-      systemPrompt: systemPromptForHook,
-      withOwnedSessionWriteLock: input.withOwnedSessionWriteLock,
-    });
+    const beforeAgentRunOutcome =
+      attempt.operation === "settled-tool-finalization"
+        ? undefined
+        : await runEmbeddedAttemptBeforeAgentRun({
+            attempt,
+            activeSession,
+            hookContext: hookCtx,
+            hookMessages: hookMessagesForCurrentPrompt,
+            hookRunner: input.assembly.hookRunner,
+            modelPrompt: promptForModel,
+            sessionManager,
+            systemPrompt: systemPromptForHook,
+            withOwnedSessionWriteLock: input.withOwnedSessionWriteLock,
+          });
     if (beforeAgentRunOutcome) {
       input.lifecycle.markBeforeAgentRunBlocked(beforeAgentRunOutcome);
       patchState({

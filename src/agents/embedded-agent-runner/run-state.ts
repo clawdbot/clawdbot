@@ -30,6 +30,8 @@ export type EmbeddedAgentQueueHandle = {
   queueMessage: (text: string, options?: EmbeddedAgentQueueMessageOptions) => Promise<void>;
   isStreaming: () => boolean;
   isStopped?: () => boolean;
+  /** True after this handle has accepted an abort, even while cleanup retains it. */
+  isAborted?: () => boolean;
   isAbortable?: () => boolean;
   isCompacting: () => boolean;
   supportsTranscriptCommitWait?: boolean;

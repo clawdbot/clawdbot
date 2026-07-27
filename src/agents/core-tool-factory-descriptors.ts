@@ -33,6 +33,7 @@ const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "image", family: "openclaw" },
   { name: "image_generate", family: "openclaw" },
   { name: "message", family: "openclaw" },
+  { name: "mobile_ui", family: "openclaw" },
   { name: "music_generate", family: "openclaw" },
   { name: "nodes", family: "openclaw" },
   { name: "pdf", family: "openclaw" },

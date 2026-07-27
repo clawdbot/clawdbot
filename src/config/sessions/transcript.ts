@@ -1,10 +1,15 @@
 // Session transcript facade resolves transcript files, appends mirror messages, and reads tails.
-import path from "node:path";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+  scopeLegacySessionKeyToAgent,
+} from "../../routing/session-key.js";
 import {
   extractAssistantVisibleText,
   extractFirstTextBlock,
@@ -16,24 +21,21 @@ import {
   isTranscriptOnlyOpenClawAssistantModel,
 } from "../../shared/transcript-only-openclaw-assistant.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import { resolveDefaultSessionStorePath, resolveStorePath } from "./paths.js";
 import {
-  resolveDefaultSessionStorePath,
-  resolveSessionFilePath,
-  resolveStorePath,
-} from "./paths.js";
-import {
-  listSessionEntries,
-  loadSessionEntry,
+  loadSessionEntryReadOnly,
   loadTranscriptEvents,
+  isSessionTranscriptProjectionUnavailableError,
   persistSessionTranscriptTurn,
   readLatestTranscriptAssistantText,
+  readSessionTranscriptMessageEventPage,
+  resolveSessionEntrySelection,
   updateSessionEntry,
   type SessionTranscriptTurnWriteContext,
   type SessionTranscriptTurnExpectedState,
 } from "./session-accessor.js";
 import type { SessionTranscriptTurnLifecyclePatch } from "./session-transcript-turn-lifecycle.types.js";
 import { parseSqliteSessionFileMarker, type SqliteSessionFileMarker } from "./sqlite-marker.js";
-import { resolveSessionStoreEntry } from "./store.js";
 import {
   applyBeforeMessageWriteToAssistant,
   type AssistantBeforeMessageWrite,
@@ -108,10 +110,24 @@ type ReadRecentSessionConversationTextOptions = {
 };
 
 type ReadRecentSessionConversationTextParams = ReadRecentSessionConversationTextOptions & {
-  agentId?: string;
+  agentId: string;
   sessionKey: string;
   storePath?: string;
 };
+
+class SessionTranscriptAgentScopeMismatchError extends Error {
+  readonly code = "SESSION_TRANSCRIPT_AGENT_SCOPE_MISMATCH";
+
+  constructor(
+    readonly agentId: string,
+    readonly sessionKeyAgentId: string,
+  ) {
+    super(
+      `Session transcript agent scope mismatch: explicit agent "${agentId}" does not match session key agent "${sessionKeyAgentId}".`,
+    );
+    this.name = "SessionTranscriptAgentScopeMismatchError";
+  }
+}
 
 export type LatestAssistantTranscriptText = AssistantTranscriptText;
 type TailAssistantTranscriptText = AssistantTranscriptText;
@@ -159,7 +175,6 @@ function isTranscriptOnlyOpenClawAssistantMessage(message: {
 }
 
 type SessionConversationTranscriptTarget = {
-  sessionFile?: string;
   sqliteScope?: SqliteSessionFileMarker;
 };
 
@@ -226,34 +241,40 @@ async function readRecentUserAssistantTextFromSqliteTranscript(
   scope: SqliteSessionFileMarker,
   options: ReadRecentSessionConversationTextOptions = {},
 ): Promise<SessionRecentConversationText[]> {
-  return (await readRecentUserAssistantTextFromSqliteTranscriptWithPresence(scope, options)).recent;
-}
-
-async function readRecentUserAssistantTextFromSqliteTranscriptWithPresence(
-  scope: SqliteSessionFileMarker,
-  options: ReadRecentSessionConversationTextOptions = {},
-): Promise<{ recent: SessionRecentConversationText[]; hasEvents: boolean }> {
-  const events = await loadTranscriptEvents({
-    agentId: scope.agentId,
-    sessionId: scope.sessionId,
-    storePath: scope.storePath,
-  });
   const limit = normalizeRecentTranscriptLimit(options.limit);
-  const recent: SessionRecentConversationText[] = [];
-  for (const event of events.toReversed()) {
-    const entry = parseRecentConversationText(JSON.stringify(event), options);
-    if (!entry) {
-      continue;
+  const pageSize = 250;
+  try {
+    const readScope = {
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+      storePath: scope.storePath,
+    };
+    const recent: SessionRecentConversationText[] = [];
+    for (let offset = 0; recent.length < limit; offset += pageSize) {
+      const page = readSessionTranscriptMessageEventPage(readScope, {
+        maxMessages: pageSize,
+        offset,
+      });
+      if (page.events.length === 0) {
+        break;
+      }
+      for (const event of page.events.toReversed()) {
+        const entry = parseRecentConversationText(JSON.stringify(event.event), options);
+        if (entry && isWithinTranscriptWindow(entry.timestamp, options)) {
+          recent.push(entry);
+          if (recent.length >= limit) {
+            break;
+          }
+        }
+      }
     }
-    if (!isWithinTranscriptWindow(entry.timestamp, options)) {
-      continue;
+    return recent.toReversed();
+  } catch (error) {
+    if (isSessionTranscriptProjectionUnavailableError(error)) {
+      return [];
     }
-    recent.push(entry);
-    if (recent.length >= limit) {
-      break;
-    }
+    throw error;
   }
-  return { recent: recent.toReversed(), hasEvents: events.length > 0 };
 }
 
 function resolveSessionConversationTranscriptTarget(params: {
@@ -265,17 +286,23 @@ function resolveSessionConversationTranscriptTarget(params: {
   if (!sessionKey) {
     return {};
   }
-  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(sessionKey) ?? "main";
+  const explicitAgentId = params.agentId?.trim() ? normalizeAgentId(params.agentId) : undefined;
+  const sessionKeyAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+  if (
+    explicitAgentId &&
+    sessionKeyAgentId &&
+    explicitAgentId !== normalizeAgentId(sessionKeyAgentId)
+  ) {
+    throw new SessionTranscriptAgentScopeMismatchError(explicitAgentId, sessionKeyAgentId);
+  }
+  const agentId = explicitAgentId ?? resolveAgentIdFromSessionKey(sessionKey);
+  const scopedSessionKey = scopeLegacySessionKeyToAgent({ agentId, sessionKey }) ?? sessionKey;
   const storePath = params.storePath ?? resolveDefaultSessionStorePath(agentId);
-  const entry = loadSessionEntry({ agentId, sessionKey, storePath });
+  const entry = loadSessionEntryReadOnly({ agentId, sessionKey: scopedSessionKey, storePath });
   if (!entry?.sessionId) {
     return {};
   }
   return {
-    sessionFile: resolveSessionFilePath(entry.sessionId, entry, {
-      sessionsDir: path.dirname(storePath),
-      agentId,
-    }),
     sqliteScope: {
       agentId,
       sessionId: entry.sessionId,
@@ -284,51 +311,14 @@ function resolveSessionConversationTranscriptTarget(params: {
   };
 }
 
-async function readRecentUserAssistantTextFromSessionTranscript(
-  sessionFile: string | undefined,
-  options: ReadRecentSessionConversationTextOptions = {},
-): Promise<SessionRecentConversationText[]> {
-  const sqliteMarker = parseSqliteSessionFileMarker(sessionFile);
-  if (sqliteMarker) {
-    return await readRecentUserAssistantTextFromSqliteTranscript(sqliteMarker, options);
-  }
-  if (!sessionFile?.trim()) {
-    return [];
-  }
-  const limit = normalizeRecentTranscriptLimit(options.limit);
-  const recent: SessionRecentConversationText[] = [];
-  for await (const line of streamSessionTranscriptLinesReverse(sessionFile)) {
-    try {
-      const entry = parseRecentConversationText(line, options);
-      if (!entry) {
-        continue;
-      }
-      if (!isWithinTranscriptWindow(entry.timestamp, options)) {
-        continue;
-      }
-      recent.push(entry);
-      if (recent.length >= limit) {
-        break;
-      }
-    } catch {
-      continue;
-    }
-  }
-  return recent.toReversed();
-}
-
 export async function readRecentUserAssistantTextForSession(
   params: ReadRecentSessionConversationTextParams,
 ): Promise<SessionRecentConversationText[]> {
   const target = resolveSessionConversationTranscriptTarget(params);
   if (target.sqliteScope) {
-    const sqliteRecent = await readRecentUserAssistantTextFromSqliteTranscriptWithPresence(
-      target.sqliteScope,
-      params,
-    );
-    return sqliteRecent.recent;
+    return await readRecentUserAssistantTextFromSqliteTranscript(target.sqliteScope, params);
   }
-  return await readRecentUserAssistantTextFromSessionTranscript(target.sessionFile, params);
+  return [];
 }
 
 export async function readLatestAssistantTextFromSessionTranscript(
@@ -528,15 +518,17 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   const explicitAgentId = params.agentId?.trim() || undefined;
   const sessionAgentId = parseAgentSessionKey(sessionKey)?.agentId;
   const transcriptAgentId = explicitAgentId ?? sessionAgentId;
-  const storeAgentId = transcriptAgentId ?? resolveAgentIdFromSessionKey(sessionKey);
+  const configuredDefaultAgentId =
+    !transcriptAgentId && params.config ? resolveDefaultAgentId(params.config) : undefined;
+  const storeAgentId =
+    transcriptAgentId ?? resolveAgentIdFromSessionKey(sessionKey, configuredDefaultAgentId);
   const storePath =
     params.storePath ?? resolveStorePath(params.config?.session?.store, { agentId: storeAgentId });
-  const store = Object.fromEntries(
-    listSessionEntries({ agentId: transcriptAgentId, storePath }).map(
-      ({ sessionKey: entryKey, entry }) => [entryKey, entry],
-    ),
-  );
-  const resolved = resolveSessionStoreEntry({ store, sessionKey });
+  const resolved = resolveSessionEntrySelection({
+    ...(transcriptAgentId ? { agentId: transcriptAgentId } : {}),
+    sessionKey,
+    storePath,
+  });
   const entry = resolved.existing;
   if (params.expectedSessionId && entry?.sessionId !== params.expectedSessionId) {
     return {

@@ -10,7 +10,7 @@ import {
   hasSessionAutoModelFallbackProvenance,
 } from "../config/sessions/model-override-provenance.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { listSessionEntries } from "../config/sessions/session-accessor.js";
+import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import { resolveSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
@@ -213,7 +213,7 @@ function selectRecentSessionCandidates(
 
 function listSessionCandidates(storePath: string, agentId?: string) {
   return (
-    listSessionEntries({
+    listSessionEntriesReadOnly({
       ...(agentId ? { agentId } : {}),
       storePath,
     })

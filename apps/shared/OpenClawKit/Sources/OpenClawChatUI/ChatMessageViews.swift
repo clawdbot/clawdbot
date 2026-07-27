@@ -501,14 +501,7 @@ private struct ChatMessageBody: View {
     }
 
     private var inlineAttachments: [OpenClawChatMessageContent] {
-        self.message.content.filter { content in
-            switch content.type ?? "text" {
-            case "file", "attachment":
-                true
-            default:
-                false
-            }
-        }
+        self.message.content.filter(\.isInlineAttachment)
     }
 
     private var inlineWidgets: [OpenClawChatCanvasPreview] {
@@ -664,6 +657,7 @@ struct ChatTypingIndicatorBubble: View {
     let assistantAvatarTint: Color?
     let showsAssistantAvatar: Bool
     let isClean: Bool
+    let runIdentity: String
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
@@ -676,10 +670,8 @@ struct ChatTypingIndicatorBubble: View {
             }
 
             HStack(spacing: 9) {
-                TypingDots()
-                Text("Writing")
-                    .font(OpenClawChatTypography.captionSemiBold)
-                    .foregroundStyle(.secondary)
+                ChatWorkingIndicatorContent(runIdentity: self.runIdentity)
+                    .id(self.runIdentity)
             }
             .padding(.vertical, self.isClean ? 5 : (self.style == .standard ? 10 : 9))
             .padding(.horizontal, self.isClean ? 4 : (self.style == .standard ? 12 : 14))
@@ -688,6 +680,27 @@ struct ChatTypingIndicatorBubble: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .focusable(false)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            Text("Writing")
+                .font(OpenClawChatTypography.caption))
+    }
+}
+
+private struct ChatWorkingIndicatorContent: View {
+    @State private var startedAt: Date
+    let seed: String
+
+    init(runIdentity: String) {
+        _startedAt = State(initialValue: Date())
+        self.seed = runIdentity
+    }
+
+    var body: some View {
+        HStack(spacing: 9) {
+            ChatWorkingClawView(seed: self.seed)
+            ChatWorkingStatusText(startedAt: self.startedAt, seed: self.seed)
+        }
     }
 }
 
@@ -790,7 +803,8 @@ extension ChatTypingIndicatorBubble: @MainActor Equatable {
             lhs.assistantName == rhs.assistantName &&
             lhs.assistantAvatarText == rhs.assistantAvatarText &&
             lhs.showsAssistantAvatar == rhs.showsAssistantAvatar &&
-            lhs.isClean == rhs.isClean
+            lhs.isClean == rhs.isClean &&
+            lhs.runIdentity == rhs.runIdentity
     }
 }
 
@@ -903,46 +917,6 @@ struct ChatPendingToolsBubble: View {
 extension ChatPendingToolsBubble: @MainActor Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.toolCalls == rhs.toolCalls
-    }
-}
-
-@MainActor
-private struct TypingDots: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.scenePhase) private var scenePhase
-    @State private var animate = false
-
-    var body: some View {
-        HStack(spacing: 5) {
-            ForEach(0..<3, id: \.self) { idx in
-                Circle()
-                    .fill(Color.secondary.opacity(0.55))
-                    .frame(width: 7, height: 7)
-                    .scaleEffect(self.reduceMotion ? 0.85 : (self.animate ? 1.05 : 0.70))
-                    .opacity(self.reduceMotion ? 0.55 : (self.animate ? 0.95 : 0.30))
-                    .animation(
-                        self.reduceMotion ? nil : .easeInOut(duration: 0.55)
-                            .repeatForever(autoreverses: true)
-                            .delay(Double(idx) * 0.16),
-                        value: self.animate)
-            }
-        }
-        .onAppear { self.updateAnimationState() }
-        .onDisappear { self.animate = false }
-        .onChange(of: self.scenePhase) { _, _ in
-            self.updateAnimationState()
-        }
-        .onChange(of: self.reduceMotion) { _, _ in
-            self.updateAnimationState()
-        }
-    }
-
-    private func updateAnimationState() {
-        guard !self.reduceMotion, self.scenePhase == .active else {
-            self.animate = false
-            return
-        }
-        self.animate = true
     }
 }
 

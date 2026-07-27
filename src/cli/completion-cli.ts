@@ -395,7 +395,7 @@ function generateBashCompletion(program: Command): string {
   const rootCmd = program.name();
   const rootCompletions = [
     ...program.commands.flatMap((command) => commandNameVariants(command)),
-    ...program.options.map((option) => preferredCompletionFlag(option)),
+    ...program.options.flatMap((option) => completionFlags(option)),
   ];
   const rootValueOptions = completionOptionFlags(program.options, true);
   const contexts = collectBashCompletionContexts(program, rootValueOptions);
@@ -450,7 +450,7 @@ function collectBashCompletionContexts(
   const visit = (cmd: Command, pathVariants: string[][], inheritedValueOptions: string[]) => {
     const completions = [
       ...cmd.commands.flatMap((command) => commandNameVariants(command)),
-      ...cmd.options.map((option) => preferredCompletionFlag(option)),
+      ...cmd.options.flatMap((option) => completionFlags(option)),
     ];
     const valueOptions = [
       ...new Set([...inheritedValueOptions, ...completionOptionFlags(cmd.options, true)]),

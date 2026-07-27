@@ -80,6 +80,9 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     } as unknown as Parameters<typeof prepareEmbeddedAttemptBundleTools>[0];
 
     await expect(prepareEmbeddedAttemptBundleTools(input)).rejects.toThrow("bundle policy failed");
+    expect(mocks.applyFinalEffectiveToolPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: "/tmp/workspace" }),
+    );
     expect(disposeMcp).toHaveBeenCalledOnce();
     expect(disposeLsp).toHaveBeenCalledOnce();
   });

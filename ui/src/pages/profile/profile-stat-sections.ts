@@ -101,46 +101,42 @@ function renderHeatmapSvg(heatmap: ProfileHeatmap) {
     timeZone: "UTC",
   });
   return html`
-    <div class="profile-heatmap__scroll">
-      <svg
-        class="profile-heatmap__svg"
-        width=${width}
-        height=${height}
-        viewBox="0 0 ${width} ${height}"
-        role="img"
-        aria-label=${t("profilePage.heatmapTitle")}
-      >
-        ${heatmap.monthLabels.map((label, index) =>
-          label
-            ? svg`<text class="profile-heatmap__month" x=${HEATMAP_LEFT + index * HEATMAP_PITCH} y="10">${label}</text>`
-            : nothing,
-        )}
-        ${WEEKDAY_LABEL_ROWS.map(
-          ({ row, utcDay }) =>
-            svg`<text class="profile-heatmap__weekday" x=${HEATMAP_LEFT - 6} y=${HEATMAP_TOP + row * HEATMAP_PITCH + HEATMAP_CELL - 2}>${weekdayFormat.format(new Date(utcDay))}</text>`,
-        )}
-        ${heatmap.weeks.map((week, weekIndex) =>
-          week.days.map((day, dayIndex) => {
-            if (!day) {
-              return nothing;
-            }
-            const tooltip = `${formatFullDate(day.date)} · ${t("profilePage.heatmapCellTokens", {
-              tokens: numberFormat.format(day.tokens),
-            })}`;
-            return svg`
-              <rect
-                class="profile-heatmap__cell profile-heatmap__cell--l${day.level}"
-                x=${HEATMAP_LEFT + weekIndex * HEATMAP_PITCH}
-                y=${HEATMAP_TOP + dayIndex * HEATMAP_PITCH}
-                width=${HEATMAP_CELL}
-                height=${HEATMAP_CELL}
-                rx="2.5"
-              ><title>${tooltip}</title></rect>
-            `;
-          }),
-        )}
-      </svg>
-    </div>
+    <svg
+      class="profile-heatmap__svg"
+      viewBox="0 0 ${width} ${height}"
+      role="img"
+      aria-label=${t("profilePage.heatmapTitle")}
+    >
+      ${heatmap.monthLabels.map((label, index) =>
+        label
+          ? svg`<text class="profile-heatmap__month" x=${HEATMAP_LEFT + index * HEATMAP_PITCH} y="10">${label}</text>`
+          : nothing,
+      )}
+      ${WEEKDAY_LABEL_ROWS.map(
+        ({ row, utcDay }) =>
+          svg`<text class="profile-heatmap__weekday" x=${HEATMAP_LEFT - 6} y=${HEATMAP_TOP + row * HEATMAP_PITCH + HEATMAP_CELL - 2}>${weekdayFormat.format(new Date(utcDay))}</text>`,
+      )}
+      ${heatmap.weeks.map((week, weekIndex) =>
+        week.days.map((day, dayIndex) => {
+          if (!day) {
+            return nothing;
+          }
+          const tooltip = `${formatFullDate(day.date)} · ${t("profilePage.heatmapCellTokens", {
+            tokens: numberFormat.format(day.tokens),
+          })}`;
+          return svg`
+            <rect
+              class="profile-heatmap__cell profile-heatmap__cell--l${day.level}"
+              x=${HEATMAP_LEFT + weekIndex * HEATMAP_PITCH}
+              y=${HEATMAP_TOP + dayIndex * HEATMAP_PITCH}
+              width=${HEATMAP_CELL}
+              height=${HEATMAP_CELL}
+              rx="2.5"
+            ><title>${tooltip}</title></rect>
+          `;
+        }),
+      )}
+    </svg>
   `;
 }
 

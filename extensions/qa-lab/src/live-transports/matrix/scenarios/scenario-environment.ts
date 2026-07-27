@@ -51,6 +51,19 @@ function readMatrixConfigOverrides(
     : undefined;
 }
 
+function resolveMatrixQaReplacePaths(overrides: MatrixQaConfigOverrides | undefined) {
+  const replacePaths = ["channels.matrix", "messages"];
+  // Replacing an untouched root drops config.get-omitted runtime policy and can
+  // invalidate lifecycle-owned state while the Matrix account is restarting.
+  if (overrides?.agentDefaults) {
+    replacePaths.push("agents.defaults");
+  }
+  if (overrides?.toolProfile || overrides?.audio) {
+    replacePaths.push("tools");
+  }
+  return replacePaths;
+}
+
 function isStaleConfigPatchError(error: unknown) {
   return formatErrorMessage(error).toLowerCase().includes("config changed since last load");
 }
@@ -206,7 +219,7 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
     const patchResult = await patchGatewayConfig({
       gateway: input.gateway,
       patch: gatewayConfig as Record<string, unknown>,
-      replacePaths: ["channels.matrix", "messages", "agents.defaults", "tools"],
+      replacePaths: resolveMatrixQaReplacePaths(configOverrides),
     });
     if (patchResult.noop !== true) {
       await input.waitForConfigRestartSettle({

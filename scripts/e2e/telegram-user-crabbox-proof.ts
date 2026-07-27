@@ -1157,19 +1157,18 @@ export function writeSutConfig(params: {
           "openai/gpt-5.6-luna": { params: { openaiWsWarmup: false, transport: "sse" } },
         },
       },
-      list: [
-        {
+      entries: {
+        main: {
           default: true,
-          id: "main",
           model: { primary: "openai/gpt-5.6-luna" },
           name: "Main",
           workspace,
         },
-      ],
+      },
     },
     // Exercise the opt-in message audit surface: the DM probe should produce
     // inbound/outbound rows under the privacy-sensitive "direct" mode.
-    audit: { enabled: true, messages: "direct" },
+    logging: { audit: { enabled: true, messages: "direct" } },
     channels: {
       telegram: {
         allowFrom: [params.testerId],

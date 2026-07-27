@@ -7,7 +7,7 @@ import { resolveDefaultAgentId, resolveAgentConfig } from "../agents/agent-scope
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { formatFastModeValue, resolveFastModeState } from "../agents/fast-mode.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
-import { legacyModelKey, modelKey } from "../agents/model-selection-normalize.js";
+import { legacyModelKey, modelKey } from "../agents/model-ref-shared.js";
 import {
   buildConfiguredModelCatalog,
   resolveConfiguredModelRef,

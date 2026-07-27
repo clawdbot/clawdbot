@@ -35,6 +35,13 @@ const turnClaimReleaseWaiters = new Map<string, Map<string, Set<TurnClaimRelease
 const workspaceJournalQuery = (db: DatabaseSync) =>
   getNodeSqliteKysely<Pick<StateDatabase, "worker_workspace_reconciliations">>(db);
 
+export class ActiveTurnClaimError extends Error {
+  constructor(sessionId: string) {
+    super(`Session ${sessionId} already has an active turn claim`);
+    this.name = "ActiveTurnClaimError";
+  }
+}
+
 function waitersFor(path: string, sessionId: string): Set<TurnClaimReleaseWaiter> {
   let bySession = turnClaimReleaseWaiters.get(path);
   if (!bySession) {
@@ -84,7 +91,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
           };
     const current = ensureLocal(db, identity, updatedAtMs);
     if (current.turnClaim) {
-      throw new Error(`Session ${identity.sessionId} already has an active turn claim`);
+      throw new ActiveTurnClaimError(identity.sessionId);
     }
     if (owner.kind === "local") {
       if (current.state !== "local") {

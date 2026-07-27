@@ -1,9 +1,11 @@
 import type {
   AssistantMessageDiagnostic,
   Context,
+  ImageContent,
   Model,
   SimpleStreamOptions,
   StreamFn,
+  TextContent,
   ThinkingLevel,
   Usage,
 } from "@openclaw/llm-core";
@@ -16,27 +18,34 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getAiTransportHost } from "../host.js";
 import {
+  createAnthropicInlineImageBudget,
+  normalizeAnthropicInlineContent,
+  resolveAnthropicImageMediaType,
+  type AnthropicInlineImageBudget,
+} from "../internal/anthropic-inline-images.js";
+import {
   ANTHROPIC_OMITTED_REASONING_TEXT,
   ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
-  CLAUDE_FABLE_5_FALLBACK_MODEL_COST,
+  ANTHROPIC_SERVER_SIDE_FALLBACKS,
   applyClaudeRequestContract,
   applyAnthropicFallbackBoundary,
-  buildAnthropicServerSideFallbacks,
   defaultsClaudeAdaptiveThinking,
   applyAnthropicRefusal,
   findActiveAnthropicToolTurnAssistantIndex,
   omitFoundryBearerCredentialHeaders,
-  prepareClaudeSonnet5RequestContext,
+  prepareClaudeNoPrefillRequestContext,
   projectAnthropicTools,
   reconcileAnthropicToolChoice,
   requiresClaudeAdaptiveThinking,
   resolveClaudeNativeThinkingLevelMap,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   resolveOriginalAnthropicToolName,
   readAnthropicFallbackBoundary,
   readAnthropicPromptUsageSnapshot,
   readAnthropicUsageTokenCount,
   readLastAnthropicIterationUsage,
+  resolveAnthropicFallbackServingModelCost,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
@@ -63,6 +72,7 @@ import {
   extractToolResultText,
   isImageWithMediaPayload,
 } from "../internal/shared.js";
+import { tagPendingCommentaryText } from "../utils/assistant-text-phase.js";
 import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
@@ -77,12 +87,12 @@ import {
   coerceTransportToolCallArguments,
   createEmptyTransportUsage,
   createWritableTransportEventStream,
-  encodeAssistantTextSignatureV1,
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
+  transportAbortError,
 } from "./transport-stream-shared.js";
 import {
   createAbortError as createNamedAbortError,
@@ -336,7 +346,11 @@ function isKimiAnthropicProvider(provider: string | undefined): boolean {
  * identity) requests are excluded until the beta is verified there.
  */
 function useAnthropicServerSideFallback(model: AnthropicTransportModel): boolean {
-  return usesClaudeFable5MessagesContract(model) && isDirectAnthropicModel(model);
+  return (
+    (usesClaudeFable5MessagesContract(model) ||
+      resolveClaudeOpus5ModelIdentity(model) !== undefined) &&
+    isDirectAnthropicModel(model)
+  );
 }
 
 function supportsReasoningContentReplay(
@@ -362,7 +376,13 @@ function toClaudeCodeName(name: string): string {
   return CLAUDE_CODE_TOOL_LOOKUP.get(normalizeLowercaseStringOrEmpty(name)) ?? name;
 }
 
-function convertContentBlocks(content: readonly unknown[], model: { input: readonly string[] }) {
+const NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)";
+
+async function convertContentBlocks(
+  content: readonly unknown[],
+  model: { input: readonly string[] },
+  imageBudget: AnthropicInlineImageBudget,
+) {
   const text = extractToolResultText(content);
   const mediaPlaceholder = describeToolResultMediaPlaceholder(content);
   const hasImages = model.input.includes("image") && content.some(isImageWithMediaPayload);
@@ -390,12 +410,25 @@ function convertContentBlocks(content: readonly unknown[], model: { input: reado
     if (!isImageWithMediaPayload(record)) {
       continue;
     }
+    const [normalizedImage] = await normalizeAnthropicInlineContent(
+      [
+        {
+          type: "image" as const,
+          data: typeof record.data === "string" ? record.data : "",
+          mimeType: typeof record.mimeType === "string" ? record.mimeType : "image/png",
+        },
+      ],
+      imageBudget,
+    );
+    if (normalizedImage?.type !== "image") {
+      continue;
+    }
     blocks.push({
       type: "image" as const,
       source: {
         type: "base64",
-        media_type: typeof record.mimeType === "string" ? record.mimeType : "image/png",
-        data: record.data,
+        media_type: resolveAnthropicImageMediaType(normalizedImage.mimeType),
+        data: normalizedImage.data,
       },
     });
   }
@@ -409,7 +442,7 @@ function normalizeToolCallId(id: string): string {
   return id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
 }
 
-function convertAnthropicMessages(
+async function convertAnthropicMessages(
   messages: Context["messages"],
   model: AnthropicTransportModel,
   isOAuthToken: boolean,
@@ -418,8 +451,9 @@ function convertAnthropicMessages(
     cacheBreakpointOptOutMessageIndexes: Set<number>;
     replayThinkingEnabled?: boolean;
   },
-): Array<Record<string, unknown>> {
+): Promise<Array<Record<string, unknown>>> {
   const params: Array<Record<string, unknown>> = [];
+  const imageBudget = createAnthropicInlineImageBudget();
   const allowReasoningContentReplay = options.allowReasoningContentReplay === true;
   const replayThinkingEnabled = options.replayThinkingEnabled !== false;
   const transformedMessages = transformTransportMessages(messages, model, normalizeToolCallId);
@@ -446,13 +480,23 @@ function convertAnthropicMessages(
         }
         continue;
       }
+      const normalizedContent = model.input.includes("image")
+        ? await normalizeAnthropicInlineContent(
+            msg.content as readonly (TextContent | ImageContent)[],
+            imageBudget,
+          )
+        : msg.content.map((item) =>
+            item.type === "image"
+              ? { type: "text" as const, text: NON_VISION_USER_IMAGE_PLACEHOLDER }
+              : item,
+          );
       const blocks: Array<
         | { type: "text"; text: string }
         | {
             type: "image";
             source: { type: "base64"; media_type: string; data: string };
           }
-      > = msg.content.map((item) =>
+      > = normalizedContent.map((item) =>
         item.type === "text"
           ? {
               type: "text",
@@ -462,7 +506,7 @@ function convertAnthropicMessages(
               type: "image",
               source: {
                 type: "base64",
-                media_type: item.mimeType,
+                media_type: resolveAnthropicImageMediaType(item.mimeType),
                 data: item.data,
               },
             },
@@ -580,7 +624,7 @@ function convertAnthropicMessages(
         {
           type: "tool_result",
           tool_use_id: toolResult.toolCallId,
-          content: convertContentBlocks(toolResult.content, model),
+          content: await convertContentBlocks(toolResult.content, model, imageBudget),
           is_error: toolResult.isError,
         },
       ];
@@ -593,7 +637,7 @@ function convertAnthropicMessages(
         toolResults.push({
           type: "tool_result",
           tool_use_id: nextMsg.toolCallId,
-          content: convertContentBlocks(nextMsg.content, model),
+          content: await convertContentBlocks(nextMsg.content, model, imageBudget),
           is_error: nextMsg.isError,
         });
         j += 1;
@@ -658,25 +702,6 @@ function mapStopReason(reason: string | undefined): string {
       return "stop";
     default:
       throw new Error(`Unhandled stop reason: ${String(reason)}`);
-  }
-}
-
-function tagPendingCommentaryText(content: TransportContentBlock[]): void {
-  let commentaryTextIndex = content.filter(
-    (block) => block.type === "text" && block.textSignature !== undefined,
-  ).length;
-  for (const block of content) {
-    if (
-      block.type === "text" &&
-      block.text.trim().length > 0 &&
-      block.textSignature === undefined
-    ) {
-      block.textSignature = encodeAssistantTextSignatureV1(
-        `commentary-${commentaryTextIndex}`,
-        "commentary",
-      );
-      commentaryTextIndex += 1;
-    }
   }
 }
 
@@ -1011,15 +1036,15 @@ function createAnthropicTransportClient(params: {
   };
 }
 
-function buildAnthropicParams(
+async function buildAnthropicParams(
   model: AnthropicTransportModel,
   context: Context,
   isOAuthToken: boolean,
   options: AnthropicTransportOptions | undefined,
-): {
+): Promise<{
   params: Record<string, unknown>;
   toolProjection?: AnthropicToolProjection;
-} {
+}> {
   const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
   const replayThinkingEnabled = mandatoryAdaptiveThinking || options?.thinkingEnabled === true;
   const maxTokens = resolveAnthropicMessagesMaxTokens({
@@ -1042,7 +1067,7 @@ function buildAnthropicParams(
   // Transient runtime-context carrier indexes skip cache anchoring so the breakpoint
   // stays on the last stable user turn; conversion-to-policy must not splice messages.
   const cacheBreakpointOptOutMessageIndexes = new Set<number>();
-  const messages = convertAnthropicMessages(context.messages, model, isOAuthToken, {
+  const messages = await convertAnthropicMessages(context.messages, model, isOAuthToken, {
     allowReasoningContentReplay: supportsReasoningContentReplay(model),
     cacheBreakpointOptOutMessageIndexes,
     replayThinkingEnabled,
@@ -1053,11 +1078,11 @@ function buildAnthropicParams(
     max_tokens: maxTokens,
     stream: true,
   };
-  // Fable safety classifiers can decline benign-adjacent work; server-side
-  // fallback re-serves the same call on claude-opus-4-8 instead of failing
-  // the turn. Requires the matching beta header from the transport client.
+  // Fable 5 and Opus 5 safety classifiers can decline benign-adjacent work.
+  // Anthropic owns the per-category fallback recommendation so routing can
+  // evolve without a client release.
   if (!isOAuthToken && useAnthropicServerSideFallback(model)) {
-    params.fallbacks = buildAnthropicServerSideFallbacks();
+    params.fallbacks = ANTHROPIC_SERVER_SIDE_FALLBACKS;
   }
   if (isOAuthToken) {
     params.system = [
@@ -1157,7 +1182,11 @@ function resolveAnthropicTransportOptions(
     modelContextWindow: model.contextWindow,
     modelMaxTokens: model.maxTokens,
     requestedMaxTokens: options?.maxTokens,
-    useModelDefault: resolveClaudeSonnet5ModelIdentity(model) !== undefined,
+    // Claude 5 defaults thinking on; the clamped 32k baseline starves thinking
+    // plus response output, so these models keep their full catalog cap.
+    useModelDefault:
+      resolveClaudeSonnet5ModelIdentity(model) !== undefined ||
+      resolveClaudeOpus5ModelIdentity(model) !== undefined,
   });
   if (baseMaxTokens === undefined) {
     throw new Error(
@@ -1254,14 +1283,14 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           throw new Error(`No API key for provider: ${model.provider}`);
         }
         const transportOptions = resolveAnthropicTransportOptions(model, options, apiKey);
-        const requestContext = prepareClaudeSonnet5RequestContext(model, context);
+        const requestContext = prepareClaudeNoPrefillRequestContext(model, context);
         const { client, isOAuthToken } = createAnthropicTransportClient({
           model,
           context: requestContext,
           apiKey,
           options: transportOptions,
         });
-        const builtParams = buildAnthropicParams(
+        const builtParams = await buildAnthropicParams(
           model,
           requestContext,
           isOAuthToken,
@@ -1488,7 +1517,14 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               // Cost intentionally mirrors top-level usage (serving attempt at
               // serving-model rates). A mid-stream decline's billed partial is
               // only in usage.iterations and is not folded in here.
-              costModel = { ...model, cost: CLAUDE_FABLE_5_FALLBACK_MODEL_COST };
+              costModel = {
+                ...model,
+                cost: resolveAnthropicFallbackServingModelCost({
+                  requestedModelId: model.id,
+                  servingModelId: fallbackBoundary.toModel,
+                  requestedCost: model.cost,
+                }),
+              };
               calculateCost(costModel, output.usage);
               eventSink.push({ type: "start", partial: output as never });
               for (const [i, block] of output.content.entries()) {
@@ -1861,7 +1897,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           throw new Error("Anthropic stream ended before message_stop");
         }
         if (transportOptions.signal?.aborted) {
-          throw new Error("Request was aborted");
+          throw transportAbortError(transportOptions.signal);
         }
         if (output.stopReason === "aborted" || output.stopReason === "error") {
           throw new Error(output.errorMessage ?? "An unknown error occurred");

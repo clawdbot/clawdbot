@@ -107,7 +107,9 @@ internal fun OpenClawWearScreens(
   autoSpeak: Boolean,
   notificationsGranted: Boolean,
   initialPage: WearHomePage = WearHomePage.Chat,
+  navigationRequest: WearNavigationRequest? = null,
   voiceSwipeHintEnabled: Boolean = true,
+  onNavigationRequestHandled: (Int) -> Unit = {},
   onTalk: () -> Unit,
   onType: () -> Unit,
   onRealtimeTalk: () -> Unit,
@@ -145,6 +147,12 @@ internal fun OpenClawWearScreens(
   var showVoiceSwipeHint by remember { mutableStateOf(voiceSwipeHintEnabled) }
   var realtimeStartedAtMillis by remember { mutableLongStateOf(0L) }
   var realtimeElapsedSeconds by remember { mutableLongStateOf(0L) }
+  LaunchedEffect(navigationRequest?.id) {
+    val request = navigationRequest ?: return@LaunchedEffect
+    val destination = wearLaunchPage(request.target, realtimeActive)
+    pagerState.scrollToPage(destination.ordinal)
+    onNavigationRequestHandled(request.id)
+  }
   LaunchedEffect(pagerState.currentPage, showVoiceSwipeHint) {
     if (pagerState.currentPage == WearHomePage.Voice.ordinal && showVoiceSwipeHint) {
       delay(1_800L)
@@ -244,6 +252,11 @@ internal fun OpenClawWearScreens(
     }
   }
 }
+
+internal fun wearLaunchPage(
+  target: WearLaunchTarget,
+  realtimeActive: Boolean,
+): WearHomePage = if (realtimeActive) WearHomePage.Voice else target.initialPage
 
 @Composable
 private fun ChatPage(
@@ -345,13 +358,11 @@ private fun ChatPage(
         )
       }
     }
-    snapshot.errorText
-      ?.takeIf(String::isNotBlank)
-      ?.let { error ->
-        item {
-          InlineError(text = error)
-        }
+    snapshot.failure?.let { failure ->
+      item {
+        InlineError(text = failureDetail(failure))
       }
+    }
   }
 }
 
@@ -792,7 +803,7 @@ private fun ThreadVoiceMode(
         contentAlignment = Alignment.Center,
       ) {
         Text(
-          text = "${stringResource(R.string.new_messages)} ↓",
+          text = stringResource(R.string.new_messages) + " ↓",
           color = colors.voiceAccent,
           fontSize = 9.sp,
           fontWeight = FontWeight.Bold,
@@ -873,7 +884,7 @@ private fun WearThreadThinking() {
         .padding(horizontal = 12.dp, vertical = 8.dp),
   ) {
     Text(
-      text = "${stringResource(R.string.thinking)}…",
+      text = stringResource(R.string.thinking) + "…",
       color = colors.textMuted,
       fontSize = 10.sp,
       fontWeight = FontWeight.SemiBold,
@@ -1120,8 +1131,8 @@ private fun ControlsPage(
     item {
       ConnectionPanel(snapshot = snapshot)
     }
-    snapshot.errorText?.takeIf(String::isNotBlank)?.let { error ->
-      item { InlineError(text = error) }
+    snapshot.failure?.let { failure ->
+      item { InlineError(text = failureDetail(failure)) }
     }
     item {
       SelectionButton(

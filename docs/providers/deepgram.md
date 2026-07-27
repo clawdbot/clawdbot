@@ -54,10 +54,10 @@ returns them.
 
 ## Configuration options
 
-| Option     | Path                                  | Description                           |
-| ---------- | ------------------------------------- | ------------------------------------- |
-| `model`    | `tools.media.audio.models[].model`    | Deepgram model id (default: `nova-3`) |
-| `language` | `tools.media.audio.models[].language` | Language hint (optional)              |
+| Option     | Path                            | Description                           |
+| ---------- | ------------------------------- | ------------------------------------- |
+| `model`    | `tools.media.models[].model`    | Deepgram model id (default: `nova-3`) |
+| `language` | `tools.media.models[].language` | Language hint (optional)              |
 
 `providerOptions.deepgram` merges extra query params directly into the
 Deepgram `/listen` request, so any Deepgram-supported param name works
@@ -162,8 +162,7 @@ Twilio media frames can be forwarded directly.
     the simplest path.
   </Accordion>
   <Accordion title="Proxy and custom endpoints">
-    Override endpoints or headers with `tools.media.audio.baseUrl` and
-    `tools.media.audio.headers` when using a proxy.
+    Override endpoints or headers on the Deepgram `tools.media.models[]` entry when using a proxy.
   </Accordion>
   <Accordion title="Output behavior">
     Output follows the same audio rules as other providers (size caps, timeouts,

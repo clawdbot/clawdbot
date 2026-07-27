@@ -5,7 +5,7 @@ import path from "node:path";
  */
 import { isDeepStrictEqual } from "node:util";
 import { cloneAuthProfileStore } from "./clone.js";
-import { resolveAuthStorePath } from "./path-resolve.js";
+import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
 const runtimeAuthStoreSnapshots = new Map<string, RuntimeAuthProfileStore>();
@@ -191,10 +191,10 @@ function recordChangedSnapshotRevisions(
   return changed;
 }
 
-// Runtime snapshots are keyed by the resolved auth store path so default-agent
+// Runtime snapshots are keyed by the canonical database path so default-agent
 // and per-agent stores do not overwrite each other.
 function resolveRuntimeStoreKey(agentDir?: string): string {
-  return resolveAuthStorePath(agentDir);
+  return resolveAuthProfileDatabasePath(agentDir);
 }
 
 function notifyRuntimeAuthStoreMutation(agentDir?: string): void {

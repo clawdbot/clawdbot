@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveLegacyOAuthPath } from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   CONFIG_PATH,
@@ -15,7 +16,6 @@ import {
   resolveGatewayPort,
   resolveIncludeRoots,
   resolveOAuthDir,
-  resolveOAuthPath,
   resolveStateDir,
   STATE_DIR,
 } from "./paths.js";
@@ -32,7 +32,7 @@ describe("oauth paths", () => {
     } as NodeJS.ProcessEnv;
 
     expect(resolveOAuthDir(env, "/custom/state")).toBe(path.resolve("/custom/oauth"));
-    expect(resolveOAuthPath(env, "/custom/state")).toBe(
+    expect(resolveLegacyOAuthPath(env)).toBe(
       path.join(path.resolve("/custom/oauth"), "oauth.json"),
     );
   });
@@ -43,7 +43,7 @@ describe("oauth paths", () => {
     } as NodeJS.ProcessEnv;
 
     expect(resolveOAuthDir(env, "/custom/state")).toBe(path.join("/custom/state", "credentials"));
-    expect(resolveOAuthPath(env, "/custom/state")).toBe(
+    expect(resolveLegacyOAuthPath(env)).toBe(
       path.join("/custom/state", "credentials", "oauth.json"),
     );
   });

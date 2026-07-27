@@ -13,7 +13,6 @@ import {
   formatContextEngineHealthLine,
   formatDeliveryQueueHealthLine,
   formatHealthChannelLines,
-  formatModelPricingHealthLine,
   healthCommand,
 } from "./health.js";
 
@@ -424,31 +423,6 @@ describe("healthCommand", () => {
       [GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE],
     ]);
     expect(runtime.error).not.toHaveBeenCalled();
-  });
-
-  it("formats degraded model-pricing health as a warning", () => {
-    const snapshot = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
-    snapshot.modelPricing = {
-      state: "degraded",
-      sources: [
-        {
-          source: "openrouter",
-          state: "degraded",
-          lastFailureAt: Date.now(),
-          detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
-        },
-      ],
-      detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
-      lastFailureAt: Date.now(),
-    };
-
-    expect(formatModelPricingHealthLine(snapshot)).toBe(
-      "Model pricing: warning (optional pricing refresh degraded) (OpenRouter pricing fetch failed: TypeError: fetch failed)",
-    );
   });
 
   it("formats per-account probe timings", () => {

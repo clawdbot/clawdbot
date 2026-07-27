@@ -20,6 +20,7 @@ import {
 } from "../../scripts/run-oxlint-shards.mjs";
 import {
   filterSparseMissingOxlintTargets,
+  runOxlintCliEntry,
   shouldPrepareExtensionPackageBoundaryArtifacts,
 } from "../../scripts/run-oxlint.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
@@ -49,6 +50,60 @@ function isProcessAlive(pid: number): boolean {
 }
 
 describe("run-oxlint", () => {
+  it("ends a failing run with a stable final status line", async () => {
+    const priorExitCode = process.exitCode;
+    const lines: unknown[] = [];
+    try {
+      process.exitCode = 0;
+      await runOxlintCliEntry(
+        async () => {
+          process.exitCode = 2;
+        },
+        (line: unknown) => lines.push(line),
+      );
+      expect(lines).toEqual(["[oxlint] FAILED (exit 2)"]);
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  });
+
+  it("converts a wrapper crash into a nonzero exit with the status line last", async () => {
+    // The original incident: a crashed wrapper printed only a stack trace, and
+    // truncated output read as success. The marker must be the final line.
+    const priorExitCode = process.exitCode;
+    const lines: unknown[] = [];
+    try {
+      process.exitCode = 0;
+      await runOxlintCliEntry(
+        async () => {
+          throw new Error("artifact prep failed");
+        },
+        (line: unknown) => lines.push(line),
+      );
+      expect(process.exitCode).toBe(1);
+      expect(lines).toHaveLength(2);
+      expect(lines[0]).toBeInstanceOf(Error);
+      expect(lines[1]).toBe("[oxlint] FAILED (exit 1)");
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  });
+
+  it("stays silent on a clean run", async () => {
+    const priorExitCode = process.exitCode;
+    const lines: unknown[] = [];
+    try {
+      process.exitCode = 0;
+      await runOxlintCliEntry(
+        async () => {},
+        (line: unknown) => lines.push(line),
+      );
+      expect(lines).toEqual([]);
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  });
+
   it("prepares extension package boundary artifacts for normal lint runs", () => {
     expect(shouldPrepareExtensionPackageBoundaryArtifacts([])).toBe(true);
     expect(shouldPrepareExtensionPackageBoundaryArtifacts(["src/index.ts"])).toBe(true);

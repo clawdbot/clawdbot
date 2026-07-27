@@ -100,6 +100,12 @@ function createRuntime() {
   };
 }
 
+const target = {
+  agentId: "main",
+  agentDir: "/tmp/main-agent",
+  workspaceDir: "/tmp/workspace",
+};
+
 type MockCalls = { mock: { calls: Array<Array<unknown>> } };
 
 function mockCall(mock: MockCalls, callIndex = 0): Array<unknown> {
@@ -150,6 +156,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       opts: {} as never,
       runtime: runtime as never,
       baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      target,
       resolveApiKey: vi.fn(),
       toApiKeyCredential: vi.fn(),
     });
@@ -162,7 +169,12 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(providersInput.onlyPluginIds).toEqual(["vllm"]);
     expect(providersInput.includeUntrustedWorkspacePlugins).toBe(false);
     expect(resolveProviderPluginChoice).toHaveBeenCalledOnce();
-    expect(runNonInteractive).toHaveBeenCalledOnce();
+    expect(runNonInteractive).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: target.agentDir,
+        workspaceDir: target.workspaceDir,
+      }),
+    );
     expect(result).toEqual({ plugins: { allow: ["vllm"] } });
   });
 
@@ -210,6 +222,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       opts: { groqApiKey: "groq-key" } as never,
       runtime: runtime as never,
       baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      target,
       resolveApiKey: vi.fn(),
       toApiKeyCredential: vi.fn(),
     });
@@ -263,6 +276,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       opts: {} as never,
       runtime: runtime as never,
       baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      target,
       resolveApiKey: vi.fn(),
       toApiKeyCredential: vi.fn(),
     });
@@ -286,6 +300,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       opts: {} as never,
       runtime: runtime as never,
       baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      target,
       resolveApiKey: vi.fn(),
       toApiKeyCredential: vi.fn(),
     });
@@ -313,6 +328,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       opts: {} as never,
       runtime: runtime as never,
       baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      target,
       resolveApiKey: vi.fn(),
       toApiKeyCredential: vi.fn(),
     });
@@ -354,6 +370,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       opts: {} as never,
       runtime: runtime as never,
       baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      target,
       resolveApiKey: vi.fn(),
       toApiKeyCredential: vi.fn(),
     });
@@ -376,6 +393,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       opts: {} as never,
       runtime: runtime as never,
       baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      target,
       resolveApiKey: vi.fn(),
       toApiKeyCredential: vi.fn(),
     });
@@ -413,6 +431,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       opts: {} as never,
       runtime: runtime as never,
       baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      target,
       resolveApiKey: vi.fn(),
       toApiKeyCredential: vi.fn(),
     });
@@ -465,6 +484,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       opts: {} as never,
       runtime: runtime as never,
       baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      target,
       resolveApiKey: vi.fn(),
       toApiKeyCredential: vi.fn(),
     });
@@ -500,6 +520,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       opts: {} as never,
       runtime: runtime as never,
       baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      target,
       resolveApiKey: vi.fn(),
       toApiKeyCredential: vi.fn(),
     });

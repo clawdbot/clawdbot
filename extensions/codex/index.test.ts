@@ -526,6 +526,30 @@ describe("codex plugin", () => {
     );
     await expect(bindingStore.read(parent)).resolves.toMatchObject({ threadId: "thread-parent" });
 
+    // In-place reset cleanup is awaited before the replacement starts. Its
+    // delayed session_end event must not retire that same-id replacement.
+    const inPlace = sessionBindingIdentity({
+      agentId: "worker",
+      sessionId: "in-place-1",
+      sessionKey: "agent:worker:in-place",
+    });
+    await bindingStore.mutate(inPlace, {
+      kind: "set",
+      binding: { threadId: "thread-in-place-replacement", cwd: "/repo" },
+    });
+    await sessionEnd(
+      {
+        sessionId: "in-place-1",
+        sessionKey: "agent:worker:in-place",
+        reason: "reset",
+        nextSessionId: "in-place-1",
+      },
+      { agentId: "worker", sessionId: "in-place-1" },
+    );
+    await expect(bindingStore.read(inPlace)).resolves.toMatchObject({
+      threadId: "thread-in-place-replacement",
+    });
+
     // A same-key replacement that still names the successor id (physical rollover)
     // has no distinct nextSessionKey, so it retires as before.
     await sessionEnd(

@@ -304,7 +304,8 @@ async function runCompactionHooks(params: { sessionKey?: string; messageProvider
 
 beforeAll(async () => {
   const loaded = await loadCompactHooksHarness();
-  compactEmbeddedAgentSessionDirect = loaded.compactEmbeddedAgentSessionDirect;
+  compactEmbeddedAgentSessionDirect = (params) =>
+    loaded.compactEmbeddedAgentSessionDirect({ agentId: "main", ...params });
   compactEmbeddedAgentSession = loaded.compactEmbeddedAgentSession;
   compactTesting = loaded.testing;
   onSessionTranscriptUpdate = loaded.onSessionTranscriptUpdate;
@@ -2168,6 +2169,38 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       archiveFiles: [TEST_SESSION_FILE],
       reason: "post-compaction",
     });
+  });
+
+  it("compacts an overflow transcript anchored by a compaction summary", async () => {
+    sessionMessages.splice(
+      0,
+      sessionMessages.length,
+      {
+        role: "compactionSummary",
+        summary: "The user asked for a long-running repository audit.",
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call-1", name: "exec", arguments: {} }],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "exec",
+        content: [{ type: "text", text: "audit output" }],
+        isError: false,
+        timestamp: 3,
+      },
+    );
+
+    const result = await compactEmbeddedAgentSessionDirect(
+      wrappedCompactionArgs({ trigger: "overflow" }),
+    );
+
+    expect(result).toMatchObject({ ok: true, compacted: true });
+    expect(sessionCompactImpl).toHaveBeenCalledOnce();
   });
 
   it("skips compaction when the transcript only contains boilerplate replies and tool output", () => {

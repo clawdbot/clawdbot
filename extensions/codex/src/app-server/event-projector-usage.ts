@@ -7,10 +7,39 @@ function readTokenCount(record: JsonObject, key: string): number | undefined {
   return value !== undefined && Number.isSafeInteger(value) ? value : undefined;
 }
 
-export function readCodexThreadTokenUsage(params: JsonObject): ReturnType<typeof normalizeUsage> {
+function readCodexThreadTokenUsage(params: JsonObject): ReturnType<typeof normalizeUsage> {
   const tokenUsage = isJsonObject(params.tokenUsage) ? params.tokenUsage : undefined;
   const last = tokenUsage && isJsonObject(tokenUsage.last) ? tokenUsage.last : undefined;
   return last ? normalizeCodexThreadTokenUsage(last) : undefined;
+}
+
+function readCodexThreadContextSnapshot(params: JsonObject): {
+  modelContextWindow?: number;
+  promptTokens?: number;
+} {
+  const tokenUsage = isJsonObject(params.tokenUsage) ? params.tokenUsage : undefined;
+  const last = tokenUsage && isJsonObject(tokenUsage.last) ? tokenUsage.last : undefined;
+  const modelContextWindow = tokenUsage
+    ? readTokenCount(tokenUsage, "modelContextWindow")
+    : undefined;
+  const promptTokens = last ? readTokenCount(last, "inputTokens") : undefined;
+  return {
+    ...(modelContextWindow && modelContextWindow > 0 ? { modelContextWindow } : {}),
+    ...(promptTokens !== undefined ? { promptTokens } : {}),
+  };
+}
+
+export function projectCodexThreadUsageUpdate(
+  params: JsonObject,
+  currentUsage: ReturnType<typeof normalizeUsage>,
+  applyUsage: (usage: ReturnType<typeof normalizeUsage>) => void,
+  emitContext: (context: ReturnType<typeof readCodexThreadContextSnapshot>) => void,
+): void {
+  applyUsage(readCodexThreadTokenUsage(params) ?? currentUsage);
+  const context = readCodexThreadContextSnapshot(params);
+  if (context.modelContextWindow !== undefined || context.promptTokens !== undefined) {
+    emitContext(context);
+  }
 }
 
 export function normalizeCodexThreadTokenUsage(

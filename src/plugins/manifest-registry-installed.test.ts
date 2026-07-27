@@ -493,7 +493,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(registry.plugins[0]?.skills).toEqual(["commands"]);
   });
 
-  it("hydrates package channel command metadata while reconstructing from an older index", () => {
+  it("hydrates package metadata while dropping setup fields with mismatched CLI names", () => {
     const rootDir = makeTempDir();
     writePlugin(rootDir, "installed", "installed-");
     fs.writeFileSync(
@@ -506,6 +506,46 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
             commands: {
               nativeCommandsAutoEnabled: true,
               nativeSkillsAutoEnabled: false,
+            },
+            setup: {
+              fields: [
+                {
+                  key: "tenant",
+                  kind: "choice",
+                  choices: ["alpha", "beta"],
+                  cli: {
+                    flags: "--tenant <tenant>",
+                    negatedFlags: "--no-tenant",
+                    description: "Installed tenant",
+                  },
+                },
+                {
+                  key: "credential",
+                  kind: "string",
+                  cli: {
+                    flags: "--token <value>",
+                    description: "Installed credential",
+                  },
+                },
+                {
+                  key: "tenant",
+                  kind: "boolean",
+                  cli: {
+                    flags: "--tenant",
+                    negatedFlags: "--no-other",
+                    description: "Mismatched tenant toggle",
+                  },
+                },
+                {
+                  key: "useEnv",
+                  kind: "boolean",
+                  cli: {
+                    flags: "--use-env",
+                    negatedFlags: "--no-use-env",
+                    description: "Use environment credentials",
+                  },
+                },
+              ],
             },
           },
         },
@@ -541,6 +581,29 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(registry.plugins[0]?.channelCatalogMeta?.commands).toEqual({
       nativeCommandsAutoEnabled: true,
       nativeSkillsAutoEnabled: false,
+    });
+    expect(registry.plugins[0]?.packageManifest?.channel?.setup).toEqual({
+      fields: [
+        {
+          key: "tenant",
+          kind: "choice",
+          choices: ["alpha", "beta"],
+          cli: {
+            flags: "--tenant <tenant>",
+            negatedFlags: "--no-tenant",
+            description: "Installed tenant",
+          },
+        },
+        {
+          key: "useEnv",
+          kind: "boolean",
+          cli: {
+            flags: "--use-env",
+            negatedFlags: "--no-use-env",
+            description: "Use environment credentials",
+          },
+        },
+      ],
     });
   });
 
@@ -675,6 +738,47 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
 
     expect(registry.plugins[0]?.packageManifest).toBeUndefined();
     expect(registry.plugins[0]?.channelCatalogMeta).toBeUndefined();
+  });
+
+  it("normalizes persisted channel CLI option value types", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = createIndex(rootDir);
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: {
+        ...index,
+        plugins: [
+          {
+            ...index.plugins[0],
+            packageChannel: {
+              id: "installed",
+              cliAddOptions: [
+                {
+                  flags: "--limit <n>",
+                  description: "Limit",
+                  valueType: "int",
+                },
+                {
+                  flags: "--ignored <value>",
+                  description: "Ignored",
+                  valueType: "string",
+                },
+              ],
+            },
+          },
+        ],
+      } as unknown as InstalledPluginIndex,
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    expect(registry.plugins[0]?.packageChannel?.cliAddOptions).toEqual([
+      { flags: "--limit <n>", description: "Limit", valueType: "int" },
+      { flags: "--ignored <value>", description: "Ignored" },
+    ]);
   });
 
   it("round-trips bundle metadata through the persisted index before reconstruction", async () => {

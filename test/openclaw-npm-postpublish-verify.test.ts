@@ -98,10 +98,10 @@ describe("npm registry provenance verification", () => {
   const packageName = "openclaw";
   const version = "2026.3.23";
   const integrity = `sha512-${Buffer.from("registry integrity", "utf8").toString("base64")}`;
-  const provenancePayload = {
+  const buildProvenancePayload = (releaseVersion: string, workflowRef: string) => ({
     subject: [
       {
-        name: `pkg:npm/${packageName}@${version}`,
+        name: `pkg:npm/${packageName}@${releaseVersion}`,
         digest: {
           sha512: Buffer.from(integrity.slice("sha512-".length), "base64").toString("hex"),
         },
@@ -113,7 +113,7 @@ describe("npm registry provenance verification", () => {
           workflow: {
             repository: "https://github.com/openclaw/openclaw",
             path: ".github/workflows/openclaw-npm-release.yml",
-            ref: "refs/heads/release/2026.3.23",
+            ref: workflowRef,
           },
         },
       },
@@ -123,7 +123,8 @@ describe("npm registry provenance verification", () => {
         },
       },
     },
-  };
+  });
+  const provenancePayload = buildProvenancePayload(version, "refs/heads/release/2026.3.23");
 
   it("fetches npm registry JSON with bounded response handling", async () => {
     const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
@@ -361,6 +362,87 @@ describe("npm registry provenance verification", () => {
       }),
     ).rejects.toThrow("does not match");
   });
+
+  it.each([
+    ["2026.6.33", "refs/heads/extended-stable/2026.6.33"],
+    ["2026.6.34", "refs/heads/extended-stable/2026.6.33"],
+  ])(
+    "trusts canonical extended-stable provenance for %s",
+    async (extendedStableVersion, workflowRef) => {
+      let verificationPolicy:
+        | {
+            certificateIdentityURI: string;
+            certificateIssuer: string;
+          }
+        | undefined;
+
+      await expect(
+        verifyNpmProvenanceAttestation({
+          packageName,
+          version: extendedStableVersion,
+          integrity,
+          attestations: [
+            {
+              predicateType: "https://slsa.dev/provenance/v1",
+              bundle: {
+                dsseEnvelope: {
+                  payload: Buffer.from(
+                    JSON.stringify(buildProvenancePayload(extendedStableVersion, workflowRef)),
+                    "utf8",
+                  ).toString("base64"),
+                },
+              },
+            },
+          ],
+          verifyBundle: async (_bundle, policy) => {
+            verificationPolicy = policy;
+          },
+        }),
+      ).resolves.toBeUndefined();
+      expect(verificationPolicy).toEqual({
+        certificateIssuer: "https://token.actions.githubusercontent.com",
+        certificateIdentityURI: `https://github.com/openclaw/openclaw/.github/workflows/openclaw-npm-release.yml@${workflowRef}`,
+      });
+    },
+  );
+
+  it.each([
+    ["later patch on a noncanonical branch", "2026.6.34", "refs/heads/extended-stable/2026.6.34"],
+    ["patch below 33", "2026.6.32", "refs/heads/extended-stable/2026.6.33"],
+    ["correction suffix", "2026.6.33-1", "refs/heads/extended-stable/2026.6.33"],
+  ])(
+    "rejects extended-stable provenance for %s",
+    async (_label, extendedStableVersion, workflowRef) => {
+      let verificationCalls = 0;
+
+      await expect(
+        verifyNpmProvenanceAttestation({
+          packageName,
+          version: extendedStableVersion,
+          integrity,
+          attestations: [
+            {
+              predicateType: "https://slsa.dev/provenance/v1",
+              bundle: {
+                dsseEnvelope: {
+                  payload: Buffer.from(
+                    JSON.stringify(buildProvenancePayload(extendedStableVersion, workflowRef)),
+                    "utf8",
+                  ).toString("base64"),
+                },
+              },
+            },
+          ],
+          verifyBundle: async () => {
+            verificationCalls += 1;
+          },
+        }),
+      ).rejects.toThrow(
+        `does not bind ${extendedStableVersion} to the trusted OpenClaw GitHub release workflow`,
+      );
+      expect(verificationCalls).toBe(0);
+    },
+  );
 
   it("rejects matching provenance from an untrusted source before Sigstore verification", async () => {
     let verificationCalls = 0;

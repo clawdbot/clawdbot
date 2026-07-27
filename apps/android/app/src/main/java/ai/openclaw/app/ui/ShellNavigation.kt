@@ -15,10 +15,13 @@ internal class ShellNavigation(
   settingsRoute: SettingsRoute = SettingsRoute.Home,
   returnTab: Tab? = null,
   settingsRouteFromHome: Boolean = false,
+  dashboardSessionKey: String = "main",
 ) {
   var activeTab by mutableStateOf(activeTab.unifiedChatTab())
     private set
   var settingsRoute by mutableStateOf(settingsRoute)
+    private set
+  var dashboardSessionKey by mutableStateOf(dashboardSessionKey)
     private set
 
   // Single-slot origin: Back from a cross-tab detail (settings route, Sessions,
@@ -59,6 +62,12 @@ internal class ShellNavigation(
     activeTab = destination
   }
 
+  /** Opens the web dashboard for the chat session that initiated navigation. */
+  fun openSessionDashboard(sessionKey: String) {
+    dashboardSessionKey = sessionKey
+    openDetailTab(Tab.Dashboard)
+  }
+
   /** Unwinds one Back step: settings detail to Home or origin, otherwise tab to origin or Overview. */
   fun back() {
     if (activeTab == Tab.Settings && settingsRoute != SettingsRoute.Home) {
@@ -68,6 +77,7 @@ internal class ShellNavigation(
         return
       }
     }
+    if (activeTab == Tab.Dashboard) dashboardSessionKey = "main"
     activeTab = returnTab ?: Tab.Overview
     returnTab = null
   }
@@ -77,7 +87,13 @@ internal class ShellNavigation(
     val Saver =
       listSaver<ShellNavigation, String>(
         save = { nav ->
-          listOf(nav.activeTab.name, nav.settingsRoute.name, nav.returnTab?.name.orEmpty(), nav.settingsRouteFromHome.toString())
+          listOf(
+            nav.activeTab.name,
+            nav.settingsRoute.name,
+            nav.returnTab?.name.orEmpty(),
+            nav.settingsRouteFromHome.toString(),
+            nav.dashboardSessionKey,
+          )
         },
         restore = { saved ->
           ShellNavigation(
@@ -85,6 +101,7 @@ internal class ShellNavigation(
             settingsRoute = SettingsRoute.valueOf(saved[1]),
             returnTab = saved[2].takeIf { it.isNotEmpty() }?.let(Tab::valueOf),
             settingsRouteFromHome = saved[3].toBoolean(),
+            dashboardSessionKey = saved.getOrNull(4) ?: "main",
           )
         },
       )

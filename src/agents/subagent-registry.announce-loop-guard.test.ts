@@ -41,13 +41,19 @@ vi.mock("../config/sessions.js", () => ({
   updateSessionStore: mocks.updateSessionStore,
 }));
 
-vi.mock("../config/sessions/session-accessor.js", () => ({
-  listSessionEntries: () =>
-    Object.entries(sessionStore).map(([sessionKey, entry]) => ({ sessionKey, entry })),
-  loadSessionEntry: (scope: { sessionKey: keyof typeof sessionStore }) =>
-    sessionStore[scope.sessionKey],
-  patchSessionEntry: async () => null,
-}));
+vi.mock("../config/sessions/session-accessor.js", () => {
+  const listSessionEntries = () =>
+    Object.entries(sessionStore).map(([sessionKey, entry]) => ({ sessionKey, entry }));
+  const loadSessionEntry = (scope: { sessionKey: keyof typeof sessionStore }) =>
+    sessionStore[scope.sessionKey];
+  return {
+    listSessionEntries,
+    listSessionEntriesReadOnly: listSessionEntries,
+    loadSessionEntry,
+    loadSessionEntryReadOnly: loadSessionEntry,
+    patchSessionEntry: async () => null,
+  };
+});
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,

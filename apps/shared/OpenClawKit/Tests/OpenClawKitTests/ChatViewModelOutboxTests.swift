@@ -4,6 +4,50 @@ import OpenClawKit
 import Testing
 @testable import OpenClawChatUI
 
+extension OpenClawChatSQLiteTranscriptCache {
+    fileprivate func markCommandAwaitingConfirmation(id: String) async -> OpenClawChatOutboxUpdateResult {
+        guard let command = await self.loadCommands().first(where: { $0.id == id }) else { return .missing }
+        return await self.markCommandAwaitingConfirmation(id: id, attemptVersion: command.attemptVersion)
+    }
+
+    fileprivate func markCommandFailedIfPresent(
+        id: String,
+        retryCount: Int,
+        lastError: String?) async -> OpenClawChatOutboxUpdateResult
+    {
+        guard let command = await self.loadCommands().first(where: { $0.id == id }) else { return .missing }
+        return await self.markCommandFailedIfPresent(
+            id: id,
+            attemptVersion: command.attemptVersion,
+            retryCount: retryCount,
+            lastError: lastError)
+    }
+
+    private func markCommandRetriedIfPresent(
+        id: String,
+        agentID: String?,
+        deliverySessionKey: String,
+        routingContract: String) async -> OpenClawChatOutboxUpdateResult
+    {
+        guard let command = await self.loadCommands().first(where: { $0.id == id }) else { return .missing }
+        return await self.markCommandRetriedIfPresent(
+            id: id,
+            expectation: OpenClawChatOutboxRetryExpectation(
+                attemptVersion: command.attemptVersion,
+                retryCount: command.retryCount,
+                lastError: command.lastError),
+            agentID: agentID,
+            deliverySessionKey: deliverySessionKey,
+            routingContract: routingContract,
+            replacementID: nil)
+    }
+
+    fileprivate func confirmCommand(id: String) async -> OpenClawChatOutboxUpdateResult {
+        guard let command = await self.loadCommands().first(where: { $0.id == id }) else { return .missing }
+        return await self.confirmCommand(id: id, attemptVersion: command.attemptVersion)
+    }
+}
+
 private func makeOutboxDatabaseDirectory() throws -> URL {
     let dir = FileManager.default.temporaryDirectory
         .appendingPathComponent("chat-outbox-tests-\(UUID().uuidString)", isDirectory: true)
@@ -587,42 +631,85 @@ private actor DelayingOutbox: OpenClawChatCommandOutbox {
         await self.base.claimNextCommand()
     }
 
-    func markCommandQueued(id: String, retryCount: Int, lastError: String?) async {
-        await self.base.markCommandQueued(id: id, retryCount: retryCount, lastError: lastError)
+    func markCommandQueued(
+        id: String,
+        attemptVersion: Int,
+        retryCount: Int,
+        lastError: String?) async -> OpenClawChatOutboxUpdateResult
+    {
+        await self.base.markCommandQueued(
+            id: id,
+            attemptVersion: attemptVersion,
+            retryCount: retryCount,
+            lastError: lastError)
     }
 
-    func markCommandAwaitingConfirmation(id: String) async -> OpenClawChatOutboxUpdateResult {
-        await self.base.markCommandAwaitingConfirmation(id: id)
+    func markCommandAwaitingConfirmation(id: String, attemptVersion: Int) async -> OpenClawChatOutboxUpdateResult {
+        await self.base.markCommandAwaitingConfirmation(id: id, attemptVersion: attemptVersion)
     }
 
     func markCommandFailedIfPresent(
-        id: String,
+        id: String, attemptVersion: Int,
         retryCount: Int,
         lastError: String?) async -> OpenClawChatOutboxUpdateResult
     {
         guard self.terminalWritesAvailable else { return .unavailable }
-        return await self.base.markCommandFailedIfPresent(id: id, retryCount: retryCount, lastError: lastError)
-    }
-
-    func markCommandRetriedIfPresent(
-        id: String,
-        agentID: String?,
-        deliverySessionKey: String,
-        routingContract: String) async -> OpenClawChatOutboxUpdateResult
-    {
-        await self.base.markCommandRetriedIfPresent(
+        return await self.base.markCommandFailedIfPresent(
             id: id,
-            agentID: agentID,
-            deliverySessionKey: deliverySessionKey,
-            routingContract: routingContract)
+            attemptVersion: attemptVersion,
+            retryCount: retryCount,
+            lastError: lastError)
     }
 
     func cancelCommand(id: String) async -> OpenClawChatOutboxUpdateResult {
         await self.base.cancelCommand(id: id)
     }
 
-    func confirmCommand(id: String) async -> OpenClawChatOutboxUpdateResult {
-        await self.base.confirmCommand(id: id)
+    func confirmCommand(id: String, attemptVersion: Int) async -> OpenClawChatOutboxUpdateResult {
+        await self.base.confirmCommand(id: id, attemptVersion: attemptVersion)
+    }
+
+    func branchState(for scope: OpenClawChatOutboxScope) async -> OpenClawChatOutboxBranchState? {
+        await self.base.branchState(for: scope)
+    }
+
+    func beginBranchSwitch(_ scope: OpenClawChatOutboxScope) async -> Bool {
+        await self.base.beginBranchSwitch(scope)
+    }
+
+    func cancelBranchSwitch(_ scope: OpenClawChatOutboxScope) async -> Bool {
+        await self.base.cancelBranchSwitch(scope)
+    }
+
+    func reconcileBranchScope(
+        _ scope: OpenClawChatOutboxScope,
+        previousState: OpenClawChatOutboxBranchState,
+        activeLeafEntryID: String?,
+        branchLeafEntryIDs: Set<String>,
+        activeTranscriptEntryIDs: Set<String>,
+        lastError: String) async -> [OpenClawChatOutboxCommand]?
+    {
+        await self.base.reconcileBranchScope(
+            scope, previousState: previousState, activeLeafEntryID: activeLeafEntryID,
+            branchLeafEntryIDs: branchLeafEntryIDs,
+            activeTranscriptEntryIDs: activeTranscriptEntryIDs,
+            lastError: lastError)
+    }
+
+    func confirmBranchChange(
+        _ scope: OpenClawChatOutboxScope,
+        activeLeafEntryID: String,
+        lastError: String) async -> [OpenClawChatOutboxCommand]?
+    {
+        await self.base.confirmBranchChange(scope, activeLeafEntryID: activeLeafEntryID, lastError: lastError)
+    }
+
+    func updateLastActiveLeafEntryID(
+        _ leafEntryID: String,
+        expectedEpoch: Int,
+        for scope: OpenClawChatOutboxScope) async -> Bool
+    {
+        await self.base.updateLastActiveLeafEntryID(leafEntryID, expectedEpoch: expectedEpoch, for: scope)
     }
 }
 
@@ -689,41 +776,41 @@ private actor SnapshotHoldingOutbox: OpenClawChatCommandOutbox {
         await self.base.claimNextCommand()
     }
 
-    func markCommandQueued(id: String, retryCount: Int, lastError: String?) async {
-        await self.base.markCommandQueued(id: id, retryCount: retryCount, lastError: lastError)
-    }
-
-    func markCommandAwaitingConfirmation(id: String) async -> OpenClawChatOutboxUpdateResult {
-        await self.base.markCommandAwaitingConfirmation(id: id)
-    }
-
-    func markCommandFailedIfPresent(
+    func markCommandQueued(
         id: String,
+        attemptVersion: Int,
         retryCount: Int,
         lastError: String?) async -> OpenClawChatOutboxUpdateResult
     {
-        await self.base.markCommandFailedIfPresent(id: id, retryCount: retryCount, lastError: lastError)
+        await self.base.markCommandQueued(
+            id: id,
+            attemptVersion: attemptVersion,
+            retryCount: retryCount,
+            lastError: lastError)
     }
 
-    func markCommandRetriedIfPresent(
-        id: String,
-        agentID: String?,
-        deliverySessionKey: String,
-        routingContract: String) async -> OpenClawChatOutboxUpdateResult
+    func markCommandAwaitingConfirmation(id: String, attemptVersion: Int) async -> OpenClawChatOutboxUpdateResult {
+        await self.base.markCommandAwaitingConfirmation(id: id, attemptVersion: attemptVersion)
+    }
+
+    func markCommandFailedIfPresent(
+        id: String, attemptVersion: Int,
+        retryCount: Int,
+        lastError: String?) async -> OpenClawChatOutboxUpdateResult
     {
-        await self.base.markCommandRetriedIfPresent(
+        await self.base.markCommandFailedIfPresent(
             id: id,
-            agentID: agentID,
-            deliverySessionKey: deliverySessionKey,
-            routingContract: routingContract)
+            attemptVersion: attemptVersion,
+            retryCount: retryCount,
+            lastError: lastError)
     }
 
     func cancelCommand(id: String) async -> OpenClawChatOutboxUpdateResult {
         await self.base.cancelCommand(id: id)
     }
 
-    func confirmCommand(id: String) async -> OpenClawChatOutboxUpdateResult {
-        await self.base.confirmCommand(id: id)
+    func confirmCommand(id: String, attemptVersion: Int) async -> OpenClawChatOutboxUpdateResult {
+        await self.base.confirmCommand(id: id, attemptVersion: attemptVersion)
     }
 }
 
@@ -771,33 +858,33 @@ private actor CancellationHoldingOutbox: OpenClawChatCommandOutbox {
         await self.base.claimNextCommand()
     }
 
-    func markCommandQueued(id: String, retryCount: Int, lastError: String?) async {
-        await self.base.markCommandQueued(id: id, retryCount: retryCount, lastError: lastError)
-    }
-
-    func markCommandAwaitingConfirmation(id: String) async -> OpenClawChatOutboxUpdateResult {
-        await self.base.markCommandAwaitingConfirmation(id: id)
-    }
-
-    func markCommandFailedIfPresent(
+    func markCommandQueued(
         id: String,
+        attemptVersion: Int,
         retryCount: Int,
         lastError: String?) async -> OpenClawChatOutboxUpdateResult
     {
-        await self.base.markCommandFailedIfPresent(id: id, retryCount: retryCount, lastError: lastError)
+        await self.base.markCommandQueued(
+            id: id,
+            attemptVersion: attemptVersion,
+            retryCount: retryCount,
+            lastError: lastError)
     }
 
-    func markCommandRetriedIfPresent(
-        id: String,
-        agentID: String?,
-        deliverySessionKey: String,
-        routingContract: String) async -> OpenClawChatOutboxUpdateResult
+    func markCommandAwaitingConfirmation(id: String, attemptVersion: Int) async -> OpenClawChatOutboxUpdateResult {
+        await self.base.markCommandAwaitingConfirmation(id: id, attemptVersion: attemptVersion)
+    }
+
+    func markCommandFailedIfPresent(
+        id: String, attemptVersion: Int,
+        retryCount: Int,
+        lastError: String?) async -> OpenClawChatOutboxUpdateResult
     {
-        await self.base.markCommandRetriedIfPresent(
+        await self.base.markCommandFailedIfPresent(
             id: id,
-            agentID: agentID,
-            deliverySessionKey: deliverySessionKey,
-            routingContract: routingContract)
+            attemptVersion: attemptVersion,
+            retryCount: retryCount,
+            lastError: lastError)
     }
 
     func cancelCommand(id: String) async -> OpenClawChatOutboxUpdateResult {
@@ -807,8 +894,8 @@ private actor CancellationHoldingOutbox: OpenClawChatCommandOutbox {
         return result
     }
 
-    func confirmCommand(id: String) async -> OpenClawChatOutboxUpdateResult {
-        await self.base.confirmCommand(id: id)
+    func confirmCommand(id: String, attemptVersion: Int) async -> OpenClawChatOutboxUpdateResult {
+        await self.base.confirmCommand(id: id, attemptVersion: attemptVersion)
     }
 }
 
@@ -1078,6 +1165,14 @@ struct ChatViewModelOutboxTests {
         let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
+        #expect(await store.updateLastActiveLeafEntryID(
+            "leaf-new",
+            expectedEpoch: 0,
+            for: OpenClawChatOutboxScope(sessionKey: "main", agentID: "main")))
+        #expect(await store.updateLastActiveLeafEntryID(
+            "leaf-new",
+            expectedEpoch: 0,
+            for: OpenClawChatOutboxScope(sessionKey: "main", agentID: nil)))
         #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
             id: "alpha-ultra",
             sessionKey: "main",
@@ -1646,6 +1741,9 @@ struct ChatViewModelOutboxTests {
                 vm.messages.contains { vm.outboxState(for: $0.id)?.isFailed == true }
             }
         }
+        try await waitUntil("terminal failure flush settled") {
+            await MainActor.run { !vm.isFlushingOutbox }
+        }
 
         // Tap-to-retry resets attempts; with the gateway accepting again the
         // command now flushes and the row disappears.
@@ -1654,7 +1752,7 @@ struct ChatViewModelOutboxTests {
             vm.messages.first { vm.outboxState(for: $0.id)?.isFailed == true }?.id
         })
         await MainActor.run { vm.retryOutboxMessage(failedMessageID) }
-        try await waitUntil("retried command drained") {
+        try await waitUntil("retried command drained", timeoutSeconds: 30) {
             await store.loadCommands().isEmpty
         }
         #expect(await transport.state.sentIdempotencyKeys.count == 1)
@@ -1666,6 +1764,14 @@ struct ChatViewModelOutboxTests {
         let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
+        #expect(await store.updateLastActiveLeafEntryID(
+            "leaf-new",
+            expectedEpoch: 0,
+            for: OpenClawChatOutboxScope(sessionKey: "main", agentID: "main")))
+        #expect(await store.updateLastActiveLeafEntryID(
+            "leaf-new",
+            expectedEpoch: 0,
+            for: OpenClawChatOutboxScope(sessionKey: "main", agentID: nil)))
         #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
             id: "c-terminal-write",
             sessionKey: "main",
@@ -2412,6 +2518,14 @@ extension ChatViewModelOutboxTests {
         let store = try makeOutboxStore(
             databaseDirectoryURL: databaseDirectory,
             gatewayID: "gw-test")
+        #expect(await store.updateLastActiveLeafEntryID(
+            "leaf-new",
+            expectedEpoch: 0,
+            for: OpenClawChatOutboxScope(sessionKey: "second", agentID: nil)))
+        #expect(await store.updateLastActiveLeafEntryID(
+            "leaf-new",
+            expectedEpoch: 0,
+            for: OpenClawChatOutboxScope(sessionKey: "second", agentID: "main")))
         // Backlog persisted for a session that is not initially visible.
         #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
             id: UUID().uuidString,
@@ -2573,21 +2687,24 @@ extension ChatViewModelOutboxTests {
             await MainActor.run { queuedStateCount(observer) == 1 }
         }
 
-        let sendGate = DeleteGate()
-        await transport.state.setHeldSendGate(sendGate)
-        await transport.goOnline()
-        try await waitUntil("first view model claims row") {
-            await store.loadCommands().map(\.status) == [.sending]
-        }
         let messageID = try #require(await MainActor.run {
             observer.messages.first { observer.outboxState(for: $0.id) == .queued }?.id
         })
+        let sendGate = DeleteGate()
+        await transport.state.setHeldSendGate(sendGate)
+        // This fake exposes one shared event stream, unlike native transports that
+        // broadcast reconnects. Select the intended owner instead of racing the observer.
+        await MainActor.run { sender.applyTransportHealth(true) }
+        try await waitUntil("first view model claims row") {
+            await store.loadCommands().map(\.status) == [.sending]
+        }
         await MainActor.run { observer.deleteOutboxMessage(messageID) }
         try await waitUntil("observer adopts sending status") {
             await MainActor.run { observer.outboxState(for: messageID) == .sending }
         }
         #expect(await store.loadCommands().map(\.status) == [.sending])
 
+        await transport.state.setHealthy(true)
         await sendGate.open()
         try await waitUntil("claimed send confirms") {
             await store.loadCommands().isEmpty

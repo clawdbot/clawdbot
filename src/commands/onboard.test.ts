@@ -458,6 +458,53 @@ describe("setupWizardCommand", () => {
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
   });
 
+  it("validates gateway token env refs before reset", async () => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand(
+      {
+        reset: true,
+        gatewayTokenRefEnv: "MISSING_GATEWAY_TOKEN_ENV",
+      },
+      runtime,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining('Environment variable "MISSING_GATEWAY_TOKEN_ENV" is missing'),
+    );
+    expect(mocks.handleReset).not.toHaveBeenCalled();
+    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
+  });
+
+  it("rejects conflicting gateway token inputs before reset", async () => {
+    const previous = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
+    const runtime = makeRuntime();
+
+    try {
+      await setupWizardCommand(
+        {
+          reset: true,
+          gatewayToken: "plaintext-token",
+          gatewayTokenRefEnv: "OPENCLAW_GATEWAY_TOKEN",
+        },
+        runtime,
+      );
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = previous;
+      }
+    }
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Use either --gateway-token or --gateway-token-ref-env"),
+    );
+    expect(mocks.handleReset).not.toHaveBeenCalled();
+    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
+  });
+
   it("validates dependent auth-choice options before reset", async () => {
     const runtime = makeRuntime();
 

@@ -17,6 +17,10 @@
           - "docs/nodes/camera.md"
           - "docs/nodes/location-command.md"
           - "docs/platforms/linux.md"
+"plugin: cua-computer":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/cua-computer/**"
 "plugin: pixverse":
   - changed-files:
       - any-glob-to-any-file:
@@ -131,6 +135,11 @@
       - any-glob-to-any-file:
           - "extensions/nostr/**"
           - "docs/channels/nostr.md"
+"channel: buzz":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/buzz/**"
+          - "docs/channels/buzz.md"
 "channel: qqbot":
   - changed-files:
       - any-glob-to-any-file:

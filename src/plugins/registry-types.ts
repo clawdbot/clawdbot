@@ -33,6 +33,7 @@ import type {
   PluginManifestDashboard,
   PluginManifestDashboardActionVerb,
   PluginManifestDashboardDataBinding,
+  PluginManifestMcpServer,
 } from "./manifest.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 import type { PluginKind } from "./plugin-kind.types.js";
@@ -192,6 +193,7 @@ export type PluginDashboardActionVerbRegistration = PluginManifestDashboardActio
 type PluginCliBackendRegistration = {
   pluginId: string;
   pluginName?: string;
+  builtWithOpenClawVersion?: string;
   backend: CliBackendPlugin;
   source: string;
   rootDir?: string;
@@ -413,6 +415,7 @@ export type PluginRecord = {
   id: string;
   name: string;
   version?: string;
+  builtWithOpenClawVersion?: string;
   packageName?: string;
   description?: string;
   format?: PluginFormat;
@@ -467,6 +470,7 @@ export type PluginRecord = {
   configJsonSchema?: JsonSchemaObject;
   contracts?: PluginManifestContracts;
   dashboard?: PluginManifestDashboard;
+  mcpServers?: Record<string, PluginManifestMcpServer>;
   memorySlotSelected?: boolean;
   dependencyStatus?: PluginDependencyStatus;
 };

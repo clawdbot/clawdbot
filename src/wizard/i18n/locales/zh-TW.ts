@@ -161,8 +161,12 @@ export const zh_TW = {
       option: "{name} — {reason}（偵測到：{app}）",
       optionThirdParty:
         "{name} — {reason}（偵測到：{app}）— 第三方 ClawHub 技能；將安裝其發佈者的程式碼",
-      scanning:
-        "正在掃描已安裝的應用程式 — 應用程式名稱會透過你設定的模型與 ClawHub 搜尋進行比對（可透過 wizard.appRecommendations 停用）…",
+      scanDisclosure:
+        "應用程式名稱會使用你設定的模型和 ClawHub 搜尋進行比對（可透過 wizard.appRecommendations 停用）。",
+      scanning: "正在掃描已安裝的應用程式…",
+      scanningCandidate: "找到 1 個應用程式 — 正在為 {sample} 搜尋插件和技能…",
+      scanningCandidates: "找到 {count} 個應用程式 — 正在為 {sample} 搜尋插件和技能…",
+      scanningMatch: "正在請你的模型挑選最佳配對…",
       select: "安裝推薦的插件和技能",
       skillTrust: "信任並安裝 ClawHub 技能 {name}？",
       skipped: "已略過應用程式推薦：{reason}",
@@ -301,6 +305,8 @@ export const zh_TW = {
       completeWithoutAi: "OpenClaw 設定已儲存。連接 AI 後再開啟聊天。",
       detected: "AI 偵測完成。",
       detectedCandidate: "{label} — {detail}{recommended}",
+      detectedGroupLabel: "在這台機器上偵測到的 AI",
+      detectedGroupPrompt: "要使用哪個偵測到的 AI？",
       detectedTitle: "找到的 AI",
       detecting: "正在尋找你已使用的 AI…",
       enterApiKey: "輸入 API key — {label}",
@@ -417,6 +423,8 @@ export const zh_TW = {
     },
     security: {
       askForHelp: "啟用工具或暴露到網際網路之前，請找有經驗的人協助。",
+      attribution:
+        "OpenClaw 是由 OpenClaw 基金會（非營利組織）開發的開源助手，會與你一同學習成長。",
       baselineDmSessions:
         "共享收件箱：隔離 DM 工作階段（session.dmScope: per-channel-peer），並盡量減少工具存取權限。",
       baselinePairing: "配對/允許清單 + @ 提及門控。",
@@ -425,7 +433,6 @@ export const zh_TW = {
       baselineSharedInbox:
         "多使用者/共享收件箱：拆分信任邊界（分離 gateway/憑證，最好使用獨立 OS 使用者/主機）。",
       baselineStrongModel: "對啟用工具或面對不可信收件箱的 bot，使用可用的最強模型。",
-      beta: "OpenClaw 是一個興趣專案，仍處於 beta 階段。請預期會有邊緣問題。",
       confirm: "我理解 OpenClaw 預設面向個人使用；共享/多使用者使用需要加固。繼續？",
       hardeningRequired: "如果你不熟悉安全加固和存取控制，請不要執行 OpenClaw。",
       learnMore: "了解更多",
@@ -496,6 +503,8 @@ export const zh_TW = {
         "{channel} 插件不可用（繼續設定）。如果設定後頻道仍無法運作，請執行 `{listCommand}` 和 `{enableCommand}`，然後重新啟動 Gateway。",
       pluginNotAvailable: "{channel} 插件不可用。",
       removeTitle: "移除頻道",
+      resumeDisabledPluginSetup: "{channel} 插件已停用。現在啟用並繼續設定嗎？",
+      resumeDisabledSetup: "{channel} 已停用。現在啟用並繼續設定嗎？",
       select: "選擇頻道",
       selectQuickstart: "選擇頻道（QuickStart）",
       selectedTitle: "已選擇頻道",

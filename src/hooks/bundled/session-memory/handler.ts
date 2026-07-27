@@ -20,6 +20,7 @@ import {
 } from "../../../config/sessions/sqlite-marker.js";
 import { selectVisibleTranscriptEvents } from "../../../config/sessions/transcript-visible-events.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { isVitestRuntimeEnv } from "../../../infra/env.js";
 import { root } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
@@ -258,11 +259,7 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
       });
 
       // Avoid calling the model provider in unit tests; keep hooks fast and deterministic.
-      const isTestEnv =
-        process.env.OPENCLAW_TEST_FAST === "1" ||
-        process.env.VITEST === "true" ||
-        process.env.VITEST === "1" ||
-        process.env.NODE_ENV === "test";
+      const isTestEnv = isVitestRuntimeEnv();
       const allowLlmSlug = !isTestEnv && hookConfig?.llmSlug === true;
 
       if (sessionContent && cfg && allowLlmSlug) {

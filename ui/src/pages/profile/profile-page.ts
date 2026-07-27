@@ -138,13 +138,14 @@ export class ProfilePage extends OpenClawLightDomElement {
 
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
     const clientChanged = snapshot.client !== this.client;
-    const becameConnected = snapshot.connected && !this.connected;
-    const nextSelfUser = snapshot.connected
-      ? resolveCurrentSelfUser({ snapshotUser: snapshot.selfUser })
-      : null;
+    const becameConnected = snapshot.phase === "connected" && !this.connected;
+    const nextSelfUser =
+      snapshot.phase === "connected"
+        ? resolveCurrentSelfUser({ snapshotUser: snapshot.selfUser })
+        : null;
     const selfProfileChanged = nextSelfUser?.id !== this.selfUser?.id;
     this.client = snapshot.client;
-    this.connected = snapshot.connected;
+    this.connected = snapshot.phase === "connected";
     this.selfUser = nextSelfUser;
     if (clientChanged) {
       // Never keep one gateway's stats on screen while another gateway loads
@@ -167,7 +168,7 @@ export class ProfilePage extends OpenClawLightDomElement {
       this.identityBusy = null;
       this.identityError = null;
     }
-    if (!snapshot.connected || !snapshot.client) {
+    if (snapshot.phase !== "connected" || !snapshot.client) {
       this.profileReloadPending ||= this.loading;
       this.requestId += 1;
       this.clearRefreshTimer();

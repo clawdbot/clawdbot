@@ -22,6 +22,95 @@ const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-ops-seam",
 });
 
+describe("scheduled tool policy provenance", () => {
+  it("stamps trusted and authenticated-account creates", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-07-23T12:00:00.000Z");
+    const state = createOkIsolatedCronState({ storePath, now });
+    const base = {
+      enabled: true,
+      schedule: { kind: "every" as const, everyMs: 60_000 },
+      sessionTarget: "isolated" as const,
+      wakeMode: "now" as const,
+      payload: { kind: "agentTurn" as const, message: "run", toolsAllow: ["write"] },
+    };
+
+    const trusted = await add(state, { ...base, name: "trusted" });
+    expect(trusted.scheduledToolPolicy).toEqual({ version: 1, mode: "trusted" });
+
+    const account = await add(
+      state,
+      {
+        ...base,
+        name: "account",
+        owner: {
+          agentId: "main",
+          sessionKey: "agent:main:discord:group:ops",
+          accountId: "work",
+        },
+      },
+      {
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey: "agent:main:discord:group:ops",
+          ownerAccountId: "work",
+        },
+      },
+    );
+    expect(account.scheduledToolPolicy).toEqual({
+      version: 1,
+      mode: "account",
+      ownerSessionKey: "agent:main:discord:group:ops",
+      ownerAccountId: "work",
+    });
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+  });
+
+  it("keeps routine legacy edits restrictive and adopts authority on an explicit tool edit", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-07-23T12:00:00.000Z");
+    const state = createOkIsolatedCronState({ storePath, now });
+    const created = await add(state, {
+      name: "legacy",
+      enabled: true,
+      owner: {
+        agentId: "main",
+        sessionKey: "agent:main:discord:group:ops",
+        accountId: "work",
+      },
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "run", toolsAllow: ["write"] },
+    });
+    delete created.scheduledToolPolicy;
+
+    const routine = await update(state, created.id, { description: "routine" });
+    expect(routine.scheduledToolPolicy).toBeUndefined();
+
+    const reauthorized = await update(
+      state,
+      created.id,
+      { payload: { kind: "agentTurn", toolsAllow: ["write"] } },
+      {
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey: "agent:main:discord:group:ops",
+          ownerAccountId: "work",
+        },
+      },
+    );
+    expect(reauthorized.scheduledToolPolicy?.mode).toBe("account");
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+  });
+});
+
 async function withStateDirForStorePath<T>(
   storePath: string,
   runWithStateDir: () => Promise<T>,

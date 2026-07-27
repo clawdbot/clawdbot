@@ -3,6 +3,11 @@ import { Type } from "typebox";
 import { lazyCompile } from "../protocol-validator.js";
 import { closedObject } from "./closed-object.js";
 
+/** Backward-compatible system-presence marker for removing retained input recency. */
+export const SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG = "system-presence-clear-last-input";
+/** Non-sensitive overwrite for Gateways that accept tags but do not interpret the clear marker. */
+export const SYSTEM_PRESENCE_LEGACY_CLEAR_LAST_INPUT_SECONDS = 2_592_000;
+
 /** Operator event plus optional presence metadata and exact-session wake routing. */
 const SystemEventParamsSchema = closedObject({
   text: Type.String(),

@@ -220,6 +220,11 @@ struct OpenClawTypographyTests {
                 .deletingLastPathComponent()
                 .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift"),
             encoding: .utf8)
+        let chatWorkingClawView = try String(
+            contentsOf: Self.iosRootURL()
+                .deletingLastPathComponent()
+                .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingClawView.swift"),
+            encoding: .utf8)
         let chatMarkdownRenderer = try String(
             contentsOf: Self.iosRootURL()
                 .deletingLastPathComponent()
@@ -378,6 +383,9 @@ struct OpenClawTypographyTests {
         #expect(!chatMessageViews.contains("font: .body"))
         #expect(!chatMessageViews.contains("Font.body"))
         #expect(!chatMessageViews.contains("Font.callout"))
+        #expect(chatWorkingClawView.contains(".font(OpenClawChatTypography.caption)"))
+        #expect(chatWorkingClawView.contains(".font(OpenClawChatTypography.captionSemiBold)"))
+        #expect(!chatWorkingClawView.contains(".font(."))
         #expect(chatMarkdownRenderer.contains(".font(self.font)"))
         #expect(chatTypography
             .contains("Font.custom(self.macSystemFontName(size: size), size: size, relativeTo: textStyle)"))

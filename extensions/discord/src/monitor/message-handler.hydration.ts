@@ -201,14 +201,11 @@ async function hydrateDiscordReplyReference(params: {
   }
   const referencedChannelId = reference.channel_id ?? params.messageChannelId;
   try {
-    const referenced = (await getChannelMessage(
+    const referenced = await getChannelMessage(
       params.client.rest,
       referencedChannelId,
       referencedMessageId,
-    )) as APIMessage | null | undefined;
-    if (!referenced) {
-      return params.message;
-    }
+    );
     // Discord may omit referenced_message from both Gateway and REST reply payloads.
     // Attach the canonical referenced fetch so downstream reply context stays bounded.
     return mergeFetchedDiscordMessage(params.message, {
@@ -223,33 +220,38 @@ async function hydrateDiscordReplyReference(params: {
   }
 }
 
+type DiscordMessageHydrationOutcome =
+  | { kind: "authoritative"; message: Message }
+  | { kind: "unavailable"; message: Message };
+
 export async function hydrateDiscordMessageIfNeeded(params: {
   client: { rest: Parameters<typeof getChannelMessage>[0] };
   message: Message;
   messageChannelId: string;
   channelInfo?: DiscordChannelInfo | null;
-}): Promise<Message> {
+}): Promise<DiscordMessageHydrationOutcome> {
   void params.channelInfo;
   let hydrated = params.message;
   if (shouldHydrateDiscordMessagePayload({ message: params.message })) {
     try {
-      const fetched = (await getChannelMessage(
+      const fetched = await getChannelMessage(
         params.client.rest,
         params.messageChannelId,
         params.message.id,
-      )) as APIMessage | null | undefined;
-      if (fetched) {
-        logVerbose(`discord: hydrated inbound payload via REST for ${params.message.id}`);
-        hydrated = mergeFetchedDiscordMessage(params.message, fetched);
-      }
+      );
+      logVerbose(`discord: hydrated inbound payload via REST for ${params.message.id}`);
+      hydrated = mergeFetchedDiscordMessage(params.message, fetched);
     } catch (err) {
       logVerbose(`discord: failed to hydrate message ${params.message.id}: ${String(err)}`);
-      return params.message;
+      return { kind: "unavailable", message: params.message };
     }
   }
-  return hydrateDiscordReplyReference({
-    client: params.client,
-    message: hydrated,
-    messageChannelId: params.messageChannelId,
-  });
+  return {
+    kind: "authoritative",
+    message: await hydrateDiscordReplyReference({
+      client: params.client,
+      message: hydrated,
+      messageChannelId: params.messageChannelId,
+    }),
+  };
 }

@@ -217,7 +217,7 @@ async function verifyDoctorRepair(root: string) {
   let migratedSessionId: string | undefined;
   try {
     const row = database
-      .prepare("SELECT session_id FROM session_routes WHERE session_key = ?")
+      .prepare("SELECT current_session_id AS session_id FROM session_nodes WHERE session_key = ?")
       .get("agent:main:qa:docker-runtime-context");
     if (typeof row?.session_id === "string") {
       migratedSessionId = row.session_id;

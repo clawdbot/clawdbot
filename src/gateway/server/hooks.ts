@@ -7,7 +7,6 @@ import {
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { sanitizeInboundSystemTags } from "../../auto-reply/reply/inbound-text.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import { getRuntimeConfig } from "../../config/io.js";
 import {
@@ -29,8 +28,7 @@ import { createHooksRequestHandler, type HookClientIpConfig } from "./hooks-requ
 /**
  * Gateway hook HTTP handler factory.
  *
- * Hooks can either enqueue wake events or spawn isolated agent turns; both paths
- * sanitize external input before it reaches logs or system-event text.
+ * Hooks can either enqueue wake events or spawn isolated agent turns.
  */
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -146,7 +144,10 @@ export function createGatewayHooksRequestHandler(params: {
 
   const dispatchAgentHook = (value: HookAgentDispatchPayload) => {
     const sessionKey = value.sessionKey;
-    const safeName = sanitizeInboundSystemTags(value.name);
+    // A hook name is a single-line label: it lands in logs, in cron job `name` fields,
+    // and inside prompt-bound system-event text. Reuse the console sanitizer so control
+    // characters and line breaks cannot reshape any of those surfaces.
+    const safeName = sanitizeHookConsoleValue(value.name) ?? "Hook";
     const jobId = randomUUID();
     const runId = randomUUID();
     const nowMs = resolveDateTimestampMs(Date.now());

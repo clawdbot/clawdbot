@@ -5,10 +5,10 @@ scenario:
   surface: runtime
   coverage:
     primary:
-      - runtime.hosted-tool-use
+      - agent-runtime.hosted-tool-use
     secondary:
       - plugins.plugin-tools
-      - tools.invocation
+      - plugins.tool-plugin-invocation
   objective: Verify the Tool Search gateway QA Lab flow keeps a large plugin-owned tool catalog behind the compact bridge while still invoking the selected plugin tool.
   successCriteria:
     - Direct mode exposes the fake plugin tool schemas and calls the selected plugin tool.

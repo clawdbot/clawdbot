@@ -8,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
+import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import { resolveConfiguredProviderFallback } from "../agents/configured-provider-fallback.js";
 import { resolveContextTokensForModelFromCache as resolveContextTokensForModel } from "../agents/context-resolution.js";
 import { waitForContextWindowCacheLoad } from "../agents/context.js";
@@ -62,9 +63,7 @@ function resolveConfiguredStatusModelRef(params: {
   agentId?: string;
 }): { provider: string; model: string } {
   const agentRawModel = params.agentId
-    ? resolveAgentModelPrimaryValue(
-        params.cfg.agents?.list?.find((entry) => entry?.id === params.agentId)?.model,
-      )
+    ? resolveAgentModelPrimaryValue(resolveAgentConfig(params.cfg, params.agentId)?.model)
     : undefined;
   if (agentRawModel) {
     // Agent-specific primary model wins over global defaults for session status rows.

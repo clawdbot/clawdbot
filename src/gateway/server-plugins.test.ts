@@ -1064,7 +1064,7 @@ describe("loadGatewayPlugins", () => {
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
     loadGatewayStartupPluginsForTest();
     serverPluginsModule.setFallbackGatewayContext({
-      getRuntimeConfig: () => ({ gateway: { nodes: { denyCommands: [command] } } }),
+      getRuntimeConfig: () => ({ gateway: { nodes: { commands: { deny: [command] } } } }),
       nodeRegistry: {
         get: () => ({
           nodeId: "node-policy",

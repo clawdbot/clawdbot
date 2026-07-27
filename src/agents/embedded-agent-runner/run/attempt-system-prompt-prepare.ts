@@ -69,6 +69,17 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   toolSearchCatalogRef?: ToolSearchCatalogRef;
 }) {
   const { attempt } = params;
+  if (attempt.operation === "settled-tool-finalization") {
+    // Finalization resumes the settled transcript with only the host prompt.
+    // Do not invoke provider/plugin contributors or assemble ambient context.
+    params.markStage("system-prompt");
+    return {
+      runtimeChannel: undefined,
+      runtimeInfo: { model: `${attempt.provider}/${attempt.modelId}` },
+      systemPromptReport: undefined,
+      systemPromptText: "",
+    };
+  }
   const machineName = await getMachineDisplayName();
   const runtimeChannel = normalizeMessageChannel(attempt.messageChannel ?? attempt.messageProvider);
   const runtimeCapabilities = collectRuntimeChannelCapabilities({
@@ -156,6 +167,9 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     agentId: params.sessionAgentId,
     workspaceDir: params.effectiveWorkspace,
     cwd: params.effectiveCwd,
+    ...(attempt.preparedModelRuntime && Object.hasOwn(attempt.preparedModelRuntime, "repoRoot")
+      ? { preparedRepoRoot: attempt.preparedModelRuntime.repoRoot }
+      : {}),
     runtime: {
       sessionKey: attempt.sessionKey,
       sessionId: attempt.sessionId,

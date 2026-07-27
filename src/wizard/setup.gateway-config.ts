@@ -355,23 +355,6 @@ export async function configureGatewayForSetup(
     },
   };
 
-  if (
-    flow === "quickstart" &&
-    bind === "loopback" &&
-    nextConfig.gateway?.controlUi?.allowInsecureAuth === undefined
-  ) {
-    nextConfig = {
-      ...nextConfig,
-      gateway: {
-        ...nextConfig.gateway,
-        controlUi: {
-          ...nextConfig.gateway?.controlUi,
-          allowInsecureAuth: true,
-        },
-      },
-    };
-  }
-
   nextConfig = ensureControlUiAllowedOriginsForNonLoopbackBind(nextConfig, {
     requireControlUiEnabled: true,
   }).config;
@@ -386,8 +369,8 @@ export async function configureGatewayForSetup(
   // /phone arm ... (phone-control plugin).
   if (
     !quickstartGateway.hasExisting &&
-    nextConfig.gateway?.nodes?.denyCommands === undefined &&
-    nextConfig.gateway?.nodes?.allowCommands === undefined &&
+    nextConfig.gateway?.nodes?.commands?.deny === undefined &&
+    nextConfig.gateway?.nodes?.commands?.allow === undefined &&
     nextConfig.gateway?.nodes?.browser === undefined
   ) {
     nextConfig = {
@@ -396,7 +379,10 @@ export async function configureGatewayForSetup(
         ...nextConfig.gateway,
         nodes: {
           ...nextConfig.gateway?.nodes,
-          denyCommands: [...DEFAULT_DANGEROUS_NODE_COMMANDS],
+          commands: {
+            ...nextConfig.gateway?.nodes?.commands,
+            deny: [...DEFAULT_DANGEROUS_NODE_COMMANDS],
+          },
         },
       },
     };

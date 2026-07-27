@@ -187,7 +187,8 @@ describe("production lint suppressions", () => {
   it("keeps the intentional production suppression tail on an explicit allowlist", () => {
     expect(summarizeSuppressions(collectProductionLintSuppressions())).toEqual(
       filterExpectedSuppressionsForPresentFiles([
-        "extensions/browser/src/browser/pw-tools-core.interactions.ts|@typescript-eslint/no-implied-eval|3",
+        "extensions/browser/src/browser/pw-tools-core.interactions.actions.ts|@typescript-eslint/no-implied-eval|2",
+        "extensions/browser/src/browser/pw-tools-core.interactions.content.ts|@typescript-eslint/no-implied-eval|1",
         "extensions/browser/src/cli/browser-cli-actions-input/register.files-downloads.ts|typescript/no-unnecessary-type-parameters|1",
         "extensions/browser/src/node-host/invoke-browser.ts|typescript/no-unnecessary-type-parameters|1",
         "extensions/diffs/src/viewer-client.ts|eslint/no-underscore-dangle|1",
@@ -231,8 +232,9 @@ describe("production lint suppressions", () => {
         "src/plugins/runtime/runtime-plugin-boundary.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/runtime/types-channel.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/trusted-tool-policy.ts|typescript/no-unnecessary-type-parameters|1",
-        "src/system-agent/setup-inference.ts|no-unsafe-finally|1",
-        "src/system-agent/setup-inference.ts|preserve-caught-error|1",
+        "src/state/config-machine-state.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/system-agent/setup-inference-activate.ts|no-unsafe-finally|1",
+        "src/system-agent/setup-inference-activate.ts|preserve-caught-error|1",
         "src/tasks/task-registry.sqlite.shared.ts|typescript/no-unnecessary-type-parameters|1",
         "src/test-utils/vitest-mock-fn.ts|typescript/no-explicit-any|1",
         "src/utils.ts|typescript/no-unnecessary-type-parameters|1",

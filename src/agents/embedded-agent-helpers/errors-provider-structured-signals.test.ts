@@ -116,6 +116,24 @@ describe("provider failover hook structured signals", () => {
     ).toBe("billing");
   });
 
+  it("lets structured billing details override an ambiguous quota message", () => {
+    providerRuntimeMocks.classifyProviderPluginError.mockReturnValue(undefined);
+    const message = makeAssistantMessageFixture({
+      provider: "openai",
+      errorMessage: "You exceeded your current quota, please check your plan and billing details.",
+      errorCode: "insufficient_quota",
+      errorType: "insufficient_quota",
+      errorBody: JSON.stringify({
+        error: {
+          code: "insufficient_quota",
+          type: "insufficient_quota",
+        },
+      }),
+    });
+
+    expect(classifyAssistantFailoverReason(message)).toBe("billing");
+  });
+
   it.each([
     { errorType: "rate_limit_error", reason: "rate_limit", runtimeKind: "rate_limit" },
     { errorType: "api_error", reason: "server_error", runtimeKind: "unclassified" },

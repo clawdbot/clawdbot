@@ -13,9 +13,9 @@ import {
   Text,
   TUI,
 } from "@earendil-works/pi-tui";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
@@ -34,6 +34,7 @@ import {
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
+  toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { getSlashCommands, shouldSubmitExactArgumentCompletion } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
@@ -96,10 +97,8 @@ const OPENCLAW_CLI_WRAPPER_PATH = fileURLToPath(new URL("../../openclaw.mjs", im
 const OPENCLAW_RUN_NODE_SCRIPT_PATH = fileURLToPath(
   new URL("../../scripts/run-node.mjs", import.meta.url),
 );
-const OPENCLAW_DIST_ENTRY_JS_PATH = fileURLToPath(new URL("../../dist/entry.js", import.meta.url));
-const OPENCLAW_DIST_ENTRY_MJS_PATH = fileURLToPath(
-  new URL("../../dist/entry.mjs", import.meta.url),
-);
+const DIST_ENTRY_JS_PATH = fileURLToPath(new URL("../../dist/entry.js", import.meta.url));
+const DIST_ENTRY_MJS_PATH = fileURLToPath(new URL("../../dist/entry.mjs", import.meta.url));
 
 const OPENAI_CODEX_PROVIDER = "openai";
 const CODEX_CLI_LOOKUP_TIMEOUT_MS = 5_000;
@@ -145,8 +144,7 @@ export function resolveLocalAuthCliInvocation(params?: {
   hasRunNodeScript?: boolean;
 }): { command: string; args: string[] } {
   const hasDistEntry =
-    params?.hasDistEntry ??
-    (existsSync(OPENCLAW_DIST_ENTRY_JS_PATH) || existsSync(OPENCLAW_DIST_ENTRY_MJS_PATH));
+    params?.hasDistEntry ?? (existsSync(DIST_ENTRY_JS_PATH) || existsSync(DIST_ENTRY_MJS_PATH));
   const hasRunNodeScript = params?.hasRunNodeScript ?? existsSync(OPENCLAW_RUN_NODE_SCRIPT_PATH);
   const command = params?.execPath ?? process.execPath;
   const wrapperPath = params?.wrapperPath ?? OPENCLAW_CLI_WRAPPER_PATH;
@@ -215,10 +213,11 @@ export function resolveTuiSessionKey(params: {
   if (trimmed === "global" || trimmed === "unknown") {
     return trimmed;
   }
-  if (trimmed.startsWith("agent:")) {
-    return normalizeLowercaseStringOrEmpty(trimmed);
-  }
-  return `agent:${params.currentAgentId}:${normalizeLowercaseStringOrEmpty(trimmed)}`;
+  return toAgentStoreSessionKey({
+    agentId: params.currentAgentId,
+    requestKey: trimmed,
+    mainKey: params.sessionMainKey,
+  });
 }
 
 export function resolveInitialTuiAgentId(params: {
@@ -615,6 +614,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
 
   const deliverDefault = opts.deliver ?? false;
   const autoMessage = opts.message?.trim();
+  const thinkingLevelOverride = normalizeThinkLevel(opts.thinking);
   let autoMessageSent = false;
   let sessionInfo: SessionInfo = { ...emptySessionInfoDefaults };
   let dynamicSlashCommands: CommandEntry[] = [];
@@ -1281,7 +1281,10 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       ? `${sessionKeyLabel} (${sessionInfo.displayName})`
       : sessionKeyLabel;
     const agentLabel = formatAgentLabel(currentAgentId);
-    const modelLabel = formatModelFooter(sessionInfo);
+    const modelLabel = formatModelFooter({
+      model: sessionInfo.model,
+      thinkingLevel: thinkingLevelOverride ?? sessionInfo.thinkingLevel,
+    });
     const tokens = formatTokens(sessionInfo.totalTokens ?? null, sessionInfo.contextTokens ?? null);
     const fastLabel =
       sessionInfo.fastMode === "auto" ? "fast:auto" : sessionInfo.fastMode === true ? "fast" : null;

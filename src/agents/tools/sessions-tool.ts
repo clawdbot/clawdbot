@@ -5,7 +5,8 @@ import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../../../packages/gateway-prot
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withAgentSessionModelPatchOrigin } from "../../gateway/session-model-patch-origin.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { resolveDefaultAgentId } from "../agent-scope-config.js";
 import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam, ToolAuthorizationError, ToolInputError } from "./common.js";
@@ -150,13 +151,20 @@ async function resolvePatchTarget(
   if (!resolved.ok) {
     throw new ToolInputError(resolved.error);
   }
+  if (isIncognitoSessionKey(resolved.key)) {
+    throw new ToolAuthorizationError(`Session not visible from session tools: ${rawKey}`);
+  }
   if (resolved.key !== context.effectiveRequesterKey) {
     // Session visibility is the configured read/write scope for session tools;
     // the action only selects error copy. Owner gating remains separate.
     const guard = await createSessionVisibilityGuard({
       action: "status",
+      defaultAgentId: resolveDefaultAgentId(context.cfg),
       requesterSessionKey: context.effectiveRequesterKey,
-      requesterAgentId: resolveAgentIdFromSessionKey(context.effectiveRequesterKey),
+      requesterAgentId: resolveAgentIdFromSessionKey(
+        context.effectiveRequesterKey,
+        resolveDefaultAgentId(context.cfg),
+      ),
       visibility: resolveEffectiveSessionToolsVisibility({
         cfg: context.cfg,
         sandboxed: opts.sandboxed === true,

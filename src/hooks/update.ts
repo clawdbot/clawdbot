@@ -10,7 +10,7 @@ import {
   type HookNpmIntegrityDriftParams,
   resolveHookInstallDir,
 } from "./install.js";
-import { recordHookInstall } from "./installs.js";
+import { readHookInstalls, recordHookInstall } from "./installs.js";
 
 /** Logger contract for hook pack update operations. */
 type HookPackUpdateLogger = {
@@ -82,7 +82,7 @@ export async function updateNpmInstalledHookPacks(params: {
   onIntegrityDrift?: (params: HookPackUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
 }): Promise<HookPackUpdateSummary> {
   const logger = params.logger ?? {};
-  const installs = params.config.hooks?.internal?.installs ?? {};
+  const installs = readHookInstalls();
   const targets = params.hookIds?.length ? params.hookIds : Object.keys(installs);
   const outcomes: HookPackUpdateOutcome[] = [];
   let next = params.config;

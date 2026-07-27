@@ -30,13 +30,18 @@ describe("subscribeEmbeddedAgentSession", () => {
     await Promise.resolve();
   }
 
-  function createAgentEventHarness(options?: { runId?: string; sessionKey?: string }) {
+  function createAgentEventHarness(options?: {
+    runId?: string;
+    sessionKey?: string;
+    lifecycleGeneration?: string;
+  }) {
     const { session, emit } = createStubSessionHarness();
     const onAgentEvent = vi.fn();
 
     subscribeEmbeddedAgentSession({
       session,
       runId: options?.runId ?? "run",
+      lifecycleGeneration: options?.lifecycleGeneration,
       onAgentEvent,
       sessionKey: options?.sessionKey,
     });
@@ -260,6 +265,34 @@ describe("subscribeEmbeddedAgentSession", () => {
       cacheWrite: undefined,
       total: 30_868,
     });
+  });
+
+  it("emits cumulative run output usage once per completed assistant message", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness({
+      runId: "usage-event-run",
+      lifecycleGeneration: agentEvents.getAgentEventLifecycleGeneration(),
+    });
+    const emitAssistantUsage = (output: number) => {
+      const usage = { input: 100, output, totalTokens: 100 + output };
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emit({
+        type: "message_update",
+        message: { role: "assistant" },
+        assistantMessageEvent: { type: "done", usage },
+      });
+      emit({ type: "message_end", message: { role: "assistant", usage } });
+    };
+
+    emitAssistantUsage(12);
+    emitAssistantUsage(8);
+
+    const usageEvents = onAgentEvent.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.stream === "usage");
+    expect(usageEvents).toEqual([
+      { stream: "usage", data: { outputTokens: 12 } },
+      { stream: "usage", data: { outputTokens: 20 } },
+    ]);
   });
 
   it.each([
