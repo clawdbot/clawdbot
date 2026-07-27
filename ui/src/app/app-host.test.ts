@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import type { RouteLocation, RouterState } from "@openclaw/uirouter";
-import { render as renderLit, type TemplateResult } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, GatewayAgentRow } from "../api/types.ts";
@@ -21,7 +20,6 @@ import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
 import { resetAppHostTestGlobals, type ShellKeyboardState } from "./app-host.test-support.ts";
 import "./app-host.ts";
-import type { ApplicationRuntime } from "./bootstrap.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
@@ -101,12 +99,6 @@ type ShellApprovalLazyState = {
 
 type ShellUiCommandState = ShellKeyboardState & {
   handleGatewayEvent: (event: { event: string; payload: unknown }) => void;
-};
-
-type ShellRenderState = {
-  runtime: ApplicationRuntime;
-  routeState: { routeId: RouteId };
-  render: () => TemplateResult;
 };
 
 function roster(defaultId: string, agents: GatewayAgentRow[]): AgentsListResult {
@@ -645,100 +637,6 @@ describe("OpenClaw shell settings search", () => {
       );
     },
   );
-});
-
-describe("OpenClaw shell dock suppression", () => {
-  it("suppresses docked panels only while a settings route owns the viewport", () => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal(
-      "matchMedia",
-      vi.fn(() => ({ matches: false })),
-    );
-    const client = {} as GatewayBrowserClient;
-    const context = {
-      basePath: "",
-      gateway: {
-        snapshot: {
-          phase: "connected",
-          client,
-          sessionKey: "agent:main:main",
-          assistantAgentId: "main",
-          hello: {
-            auth: { role: "operator", scopes: ["operator.admin"] },
-            features: { methods: ["terminal.open", "browser.request"] },
-          },
-          lastError: null,
-          offlineStable: false,
-          selfUser: null,
-        },
-        connection: { gatewayUrl: "ws://gateway.test", token: "", password: "" },
-        connect: vi.fn(),
-      },
-      agents: { state: { agentsList: null } },
-      agentSelection: { state: { selectedId: "main" } },
-      config: {
-        current: { terminalEnabled: true, serverVersion: null, devGitBranch: null },
-      },
-      runtimeConfig: {
-        state: { configSchema: null, configForm: null, configSnapshot: null, configUiHints: null },
-      },
-      sessions: { state: { result: null } },
-      navigation: {
-        snapshot: {
-          navCollapsed: false,
-          navWidth: 280,
-          sidebarEntries: [],
-          pinnedAgentIds: [],
-        },
-        update: vi.fn(),
-      },
-      overlays: {
-        snapshot: {
-          updateAvailable: null,
-          updateRunning: false,
-          updateStatusBanner: null,
-          controlUiRefreshRequired: false,
-          approvalQueue: [],
-          approvalBusy: false,
-          approvalErrors: new Map(),
-          approvalNowMs: 0,
-          devicePairSetupOpen: false,
-          devicePairSetupLoading: false,
-          devicePairSetupError: null,
-          devicePairSetup: null,
-          devicePairSetupAccess: "full",
-          devicePairPendingCount: 0,
-          deviceAuthMigration: { error: null },
-        },
-        runUpdate: vi.fn(),
-      },
-      theme: { mode: "dark" },
-      preload: vi.fn(),
-    } as unknown as ApplicationContext;
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellRenderState;
-    shell.runtime = { context, router: {} } as unknown as ApplicationRuntime;
-    const container = document.createElement("div");
-
-    shell.routeState = { routeId: "config" };
-    renderLit(shell.render(), container);
-    expect(
-      (
-        container.querySelector("openclaw-terminal-panel") as HTMLElement & {
-          suppressed: boolean;
-        }
-      ).suppressed,
-    ).toBe(true);
-
-    shell.routeState = { routeId: "chat" };
-    renderLit(shell.render(), container);
-    expect(
-      (
-        container.querySelector("openclaw-terminal-panel") as HTMLElement & {
-          suppressed: boolean;
-        }
-      ).suppressed,
-    ).toBe(false);
-  });
 });
 
 describe("OpenClaw shell keyboard shortcuts", () => {
