@@ -1218,6 +1218,59 @@ describe("runtime web tools resolution", () => {
     });
   });
 
+  it("marks disabled standalone-tool provider credentials inactive when not selected", async () => {
+    // Regression guard: a plugin that declares standalone tools but is disabled must
+    // not bypass the inactive-surface secret boundary.
+    const { context } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "brave",
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            brave: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "BRAVE_API_KEY_REF" },
+                },
+              },
+            },
+            perplexity: {
+              enabled: false,
+              config: {
+                webSearch: {
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "PERPLEXITY_API_KEY_REF",
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        BRAVE_API_KEY_REF: "brave-key",
+      },
+      manifestRegistry: {
+        plugins: [{ id: "perplexity", contracts: { tools: ["perplexity_search"] } }],
+      } as Parameters<typeof runRuntimeWebTools>[0]["manifestRegistry"],
+    });
+
+    // Perplexity is disabled, so its standalone-tool credential must remain inactive.
+    expectDiagnostic(context.warnings, {
+      code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+      path: "plugins.entries.perplexity.config.webSearch.apiKey",
+    });
+  });
+
   it("auto-detects the next provider when a higher-priority ref is unresolved", async () => {
     const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
       config: asConfig({
