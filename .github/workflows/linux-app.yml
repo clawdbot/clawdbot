@@ -96,8 +96,12 @@ jobs:
     # compiles them (linux-app-release.yml build_macos) runs behind a manual
     # dispatch input. Without a per-PR check, a macOS-gated Tauri API can break
     # the macOS target for weeks unnoticed - `WebviewWindowBuilder::transparent`
-    # did exactly that. Match that job's runner so this proves the same target.
-    runs-on: macos-14
+    # did exactly that.
+    #
+    # macos-15, not macos-14: tauri-plugin-notifications' Swift sources use
+    # typed throws (`throws(FFIResult)`), which needs Swift 6. The macos-14
+    # image still ships Swift 5.x and fails to parse them.
+    runs-on: macos-15
     timeout-minutes: 30
     steps:
       - name: Checkout
