@@ -141,6 +141,46 @@ describe.runIf(process.platform !== "win32")("exec auto-review shell stress", ()
       ["pwsh", "-NoProfile", "-ConfigurationName", "Unreviewed", "-Command", "Get-Date"],
       true,
     ],
+    [
+      "PowerShell remoting server despite disabled profiles",
+      ["pwsh", "-NoProfile", "-ServerMode", "-Command", "Get-Date"],
+      true,
+    ],
+    [
+      "PowerShell abbreviated remoting server",
+      ["pwsh", "-NoProfile", "-s", "-Command", "Get-Date"],
+      true,
+    ],
+    [
+      "PowerShell socket remoting server",
+      ["pwsh", "-NoProfile", "-SocketServerMode", "-Command", "Get-Date"],
+      true,
+    ],
+    [
+      "PowerShell abbreviated socket remoting server",
+      ["pwsh", "-NoProfile", "-so", "-Command", "Get-Date"],
+      true,
+    ],
+    [
+      "PowerShell named-pipe remoting server",
+      ["pwsh", "-NoProfile", "-NamedPipeServerMode", "-Command", "Get-Date"],
+      true,
+    ],
+    [
+      "PowerShell abbreviated named-pipe remoting server",
+      ["pwsh", "-NoProfile", "-nam", "-Command", "Get-Date"],
+      true,
+    ],
+    [
+      "Windows PowerShell V2 socket remoting server",
+      ["powershell", "-NoProfile", "-V2SocketServerMode", "-Command", "Get-Date"],
+      true,
+    ],
+    [
+      "Windows PowerShell abbreviated V2 socket remoting server",
+      ["powershell", "-NoProfile", "-v2so", "-Command", "Get-Date"],
+      true,
+    ],
     ["PowerShell stdin command", ["pwsh", "-NoProfile", "-Command", "-"], true],
     ["PowerShell stdin script", ["pwsh", "-NoProfile", "-File", "-"], true],
     [
@@ -273,6 +313,43 @@ describe.runIf(process.platform !== "win32")("exec auto-review shell stress", ()
     [
       "PowerShell opaque encoded arguments",
       "pwsh -NoProfile -EncodedArguments ZQBjAGgAbwA= -Command 'Write-Output safe'",
+    ],
+    [
+      "PowerShell remoting server despite disabled profiles",
+      "pwsh -NoProfile -ServerMode -Command 'Write-Output safe'",
+    ],
+    ["PowerShell abbreviated remoting server", "pwsh -NoProfile -s -Command 'Write-Output safe'"],
+    [
+      "PowerShell socket remoting server",
+      "pwsh -NoProfile -SocketServerMode -Command 'Write-Output safe'",
+    ],
+    [
+      "PowerShell abbreviated socket remoting server",
+      "pwsh -NoProfile -so -Command 'Write-Output safe'",
+    ],
+    [
+      "PowerShell named-pipe remoting server",
+      "pwsh -NoProfile -NamedPipeServerMode -Command 'Write-Output safe'",
+    ],
+    [
+      "PowerShell abbreviated named-pipe remoting server",
+      "pwsh -NoProfile -nam -Command 'Write-Output safe'",
+    ],
+    [
+      "Windows PowerShell V2 socket remoting server",
+      "powershell -NoProfile -V2SocketServerMode -Command 'Write-Output safe'",
+    ],
+    [
+      "Windows PowerShell abbreviated V2 socket remoting server",
+      "powershell -NoProfile -v2so -Command 'Write-Output safe'",
+    ],
+    [
+      "PowerShell slash-prefixed socket remoting server",
+      "pwsh /NoProfile /so /Command 'Write-Output safe'",
+    ],
+    [
+      "PowerShell remoting server inside transparent carrier",
+      "env -- pwsh -NoProfile -ServerMode -Command 'Write-Output safe'",
     ],
     ["PowerShell stdin command", "pwsh -NoProfile -Command -"],
     ["PowerShell stdin script", "pwsh -NoProfile -File -"],

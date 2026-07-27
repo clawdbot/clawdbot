@@ -47,11 +47,15 @@ const POWERSHELL_UNREVIEWED_STARTUP_FLAGS = new Set([
   ...expandPowerShellSwitchPrefixForms("encodedarguments", "encodeda"),
   ...expandPowerShellSwitchPrefixForms("interactive", "i"),
   ...expandPowerShellSwitchPrefixForms("login", "l"),
+  ...expandPowerShellSwitchPrefixForms("namedpipeservermode", "nam"),
   ...expandPowerShellSwitchPrefixForms("noexit", "noe"),
   ...expandPowerShellSwitchPrefixForms("psconsolefile", "pscf"),
   ...expandPowerShellSwitchForms(["pscf"]),
+  ...expandPowerShellSwitchPrefixForms("servermode", "s"),
   ...expandPowerShellSwitchPrefixForms("settingsfile", "settings"),
+  ...expandPowerShellSwitchPrefixForms("socketservermode", "so"),
   ...expandPowerShellSwitchPrefixForms("sshservermode", "ssh"),
+  ...expandPowerShellSwitchPrefixForms("v2socketservermode", "v2so"),
 ]);
 const POWERSHELL_INLINE_ENCODED_COMMAND_FLAGS = new Set([
   ...expandPowerShellSwitchPrefixForms("encodedcommand", "e"),
