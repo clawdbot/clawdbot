@@ -4,8 +4,8 @@ export const BEAM_HOST_ID = "gateway";
 export const BEAM_MAX_BODY_BYTES = 56 * 1024;
 export const BEAM_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const BEAM_MAX_SESSIONS = 500;
-const BEAM_MAX_ITEMS = 200;
-const BEAM_MAX_ITEM_CHARS = 6_000;
+export const BEAM_MAX_ITEMS = 200;
+export const BEAM_MAX_ITEM_CHARS = 6_000;
 
 type BeamTranscriptItem = {
   type: "userMessage" | "agentMessage" | "other";
