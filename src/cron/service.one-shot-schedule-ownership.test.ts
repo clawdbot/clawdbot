@@ -41,9 +41,11 @@ async function addOneShot(params: {
   cron: CronService;
   name: string;
   atMs: number;
+  id?: string;
   deleteAfterRun?: boolean;
 }) {
   return await params.cron.add({
+    ...(params.id === undefined ? {} : { id: params.id }),
     name: params.name,
     enabled: true,
     ...(params.deleteAfterRun === undefined ? {} : { deleteAfterRun: params.deleteAfterRun }),
@@ -83,6 +85,105 @@ async function expectFutureOneShot(params: {
 }
 
 describe("cron one-shot schedule ownership", () => {
+  it.each([
+    { mode: "direct", deleteAfterRun: false },
+    { mode: "direct", deleteAfterRun: true },
+    { mode: "queued", deleteAfterRun: false },
+    { mode: "queued", deleteAfterRun: true },
+  ] as const)(
+    "does not finalize an active $mode run into a removed and recreated one-shot (deleteAfterRun=$deleteAfterRun)",
+    async ({ mode, deleteAfterRun }) => {
+      const store = await makeStorePath();
+      const started = createDeferred<void>();
+      const release = createDeferred<{ status: "ok"; summary: string }>();
+      const finished = createDeferred<void>();
+      const events: CronEvent[] = [];
+      const cron = createCron({
+        storePath: store.storePath,
+        runIsolatedAgentJob: vi.fn(async () => {
+          started.resolve();
+          return await release.promise;
+        }),
+        onEvent: (event) => {
+          events.push(event);
+          if (event.action === "finished") {
+            finished.resolve();
+          }
+        },
+      });
+
+      try {
+        await cron.start();
+        const atMs = Date.now() + 60 * 60_000;
+        const original = await addOneShot({
+          cron,
+          id: `removed-active-${mode}-${deleteAfterRun}`,
+          name: "removed original one-shot",
+          atMs,
+          deleteAfterRun,
+        });
+        const directRun = mode === "direct" ? cron.run(original.id, "force") : undefined;
+        if (mode === "queued") {
+          await expect(cron.enqueueRun(original.id, "force")).resolves.toMatchObject({
+            ok: true,
+            enqueued: true,
+          });
+        }
+        await started.promise;
+
+        await expect(cron.remove(original.id)).resolves.toEqual({ ok: true, removed: true });
+        await addOneShot({
+          cron,
+          id: original.id,
+          name: "independent replacement one-shot",
+          atMs,
+          deleteAfterRun,
+        });
+
+        release.resolve({ status: "ok", summary: "original run finished" });
+        if (directRun) {
+          await expect(directRun).resolves.toEqual({ ok: true, ran: true });
+        } else {
+          await finished.promise;
+        }
+        await cron.status();
+
+        for (const jobs of [
+          await cron.list({ includeDisabled: true }),
+          (await loadCronStore(store.storePath)).jobs,
+        ]) {
+          const replacement = jobs.find((job) => job.id === original.id);
+          expect(replacement).toMatchObject({
+            id: original.id,
+            name: "independent replacement one-shot",
+            enabled: true,
+            deleteAfterRun,
+            state: { nextRunAtMs: atMs },
+          });
+          expect(replacement?.state.lastRunAtMs).toBeUndefined();
+          expect(replacement?.state.lastRunStatus).toBeUndefined();
+          expect(replacement?.state.lastStatus).toBeUndefined();
+          expect(replacement?.state.runningAtMs).toBeUndefined();
+        }
+
+        if (mode === "queued") {
+          expect(
+            events.filter((event) => event.action === "finished" && event.jobId === original.id),
+          ).toEqual([
+            expect.objectContaining({
+              status: "ok",
+              summary: "original run finished",
+              job: expect.objectContaining({ name: "removed original one-shot" }),
+            }),
+          ]);
+        }
+      } finally {
+        release.resolve({ status: "ok", summary: "original run finished" });
+        cron.stop();
+      }
+    },
+  );
+
   it.each([
     { label: "successful", outcome: { status: "ok", summary: "done" } },
     { label: "failed", outcome: { status: "error", error: "temporary provider failure" } },

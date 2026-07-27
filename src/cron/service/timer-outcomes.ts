@@ -541,7 +541,7 @@ export function applyOutcomeToStoredJob(
   }
   const jobs = store.jobs;
   const job = jobs.find((entry) => entry.id === result.jobId);
-  if (!job) {
+  if (!job || result.activeJobMarker?.jobRemoved === true) {
     if (result.status === "ok" && result.triggerEval?.fired === false) {
       tryFinishCronTaskRunWithoutHistory(state, result);
       return undefined;
