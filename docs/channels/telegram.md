@@ -930,6 +930,7 @@ Primary reference: [Configuration reference - Telegram](/gateway/config-channels
 - formatting/delivery: `textChunkLimit`, `streaming.chunkMode`, `richMessages`, `markdown.tables` (`off | bullets | code | block`), `linkPreview`, `responsePrefix`
 - media/network: `mediaMaxMb`, `network.autoSelectFamily`, `network.dangerouslyAllowPrivateNetwork`, `proxy`
 - custom API root: `apiRoot` (Bot API root only; do not include `/bot<TOKEN>`), `trustedLocalFileRoots` (self-hosted Bot API absolute `file_path` roots)
+- spooled update timeout: `spooledUpdateHandlerTimeoutMs` (positive integer ms; how long a buffered inbound update waits behind an active run before failing; default 5 min; env fallback `OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS`)
 - webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`, `webhookPort`, `webhookCertPath`
 - actions/capabilities: `capabilities.inlineButtons`, `actions.sendMessage|editMessage|deleteMessage|reactions|sticker|createForumTopic|editForumTopic`
 - reactions: `reactionNotifications`, `reactionLevel`
