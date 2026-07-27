@@ -1,31 +1,23 @@
 /** Formats stable cron timeout and execution error messages. */
 import { formatEmbeddedAgentExecutionPhase } from "../../agents/embedded-agent-runner/execution-phase.js";
-import { CRON_JOB_EXECUTION_TIMEOUT_ERROR } from "../execution-error-constants.js";
+import {
+  CRON_JOB_EXECUTION_TIMEOUT_ERROR,
+  CRON_PRE_EXECUTION_TIMEOUT_ERROR,
+  CRON_SETUP_TIMEOUT_ERROR,
+  isCronTimeoutErrorText,
+} from "../execution-error-constants.js";
 import type { CronAgentExecutionStarted } from "../types.js";
 
 function formatCronAgentExecutionPhase(execution?: CronAgentExecutionStarted): string | undefined {
   return formatEmbeddedAgentExecutionPhase(execution?.phase);
 }
 
-const CRON_SETUP_TIMEOUT_ERROR = "cron: isolated agent setup timed out before runner start";
-const CRON_PRE_EXECUTION_TIMEOUT_ERROR = "cron: isolated agent run stalled before execution start";
-const CRON_TIMEOUT_ERROR_PREFIXES: readonly string[] = [
-  CRON_JOB_EXECUTION_TIMEOUT_ERROR,
-  CRON_SETUP_TIMEOUT_ERROR,
-  CRON_PRE_EXECUTION_TIMEOUT_ERROR,
-];
-
 function hasCronTimeoutPrefix(error: string, prefix: string): boolean {
   return error === prefix || error.startsWith(prefix + " ");
 }
 
 export function isCronTerminalAbortReasonText(error: string): boolean {
-  for (const prefix of CRON_TIMEOUT_ERROR_PREFIXES) {
-    if (hasCronTimeoutPrefix(error, prefix)) {
-      return true;
-    }
-  }
-  return false;
+  return isCronTimeoutErrorText(error);
 }
 
 /** Formats the generic cron execution timeout message with last-known phase context when available. */

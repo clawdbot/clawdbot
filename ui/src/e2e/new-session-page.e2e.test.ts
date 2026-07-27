@@ -1373,7 +1373,11 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       const trigger = page.locator("#new-session-place-trigger");
       await trigger.click();
       await page.getByRole("button", { name: "Browse folders" }).click();
-      await page.locator("input.new-session-page__browser-path").fill(TARGET_REPO);
+      const browserPath = page.locator("input.new-session-page__browser-path");
+      // Resolve the browser listing without resolving the deferred agent roster;
+      // otherwise its initial path update can race Playwright's folder input.
+      await expect.poll(() => browserPath.inputValue()).toBe(TARGET_REPO);
+      await browserPath.fill(TARGET_REPO);
       await page.getByRole("button", { name: "Use this folder" }).click();
       await gateway.resolveDeferred("agents.list", {
         agents: [

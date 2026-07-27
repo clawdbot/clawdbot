@@ -2389,7 +2389,10 @@ describe("Tool Search", () => {
 
     const config = {
       tools: {
-        toolSearch: { enabled: true, mode: "code", codeTimeoutMs: 100 },
+        // Generous timeout: the child process must have started the bridged call
+        // before the deadline fires, or the abort assertion races process spawn
+        // latency under machine load.
+        toolSearch: { enabled: true, mode: "code", codeTimeoutMs: 1500 },
       },
     } as never;
     applyToolSearchCatalog({

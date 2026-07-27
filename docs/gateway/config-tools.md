@@ -108,6 +108,10 @@ The shorthand is also accepted:
 }
 ```
 
+`enabled` also accepts `"auto"`, which engages code mode only for models whose
+catalog entry flags `compat.codeMode: "preferred"`. See
+[Code Mode - automatic per-model activation](/tools/code-mode#automatic-per-model-activation).
+
 MCP declarations are exposed through the read-only virtual API file surface in
 code mode. Guest code can call `API.list("mcp")` and
 `API.read("mcp/<server>.d.ts")` to inspect TypeScript-style signatures before

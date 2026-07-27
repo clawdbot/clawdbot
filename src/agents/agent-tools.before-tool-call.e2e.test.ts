@@ -916,6 +916,25 @@ describe("before_tool_call loop detection behavior", () => {
     });
   });
 
+  it("escalates repeated critical vetoes to the global circuit breaker", async () => {
+    await withToolLoopEvents(async (emitted) => {
+      const { tool, params } = createGenericReadRepeatFixture();
+
+      for (let i = 0; i <= 30; i += 1) {
+        await tool.execute(`read-global-${i}`, params, undefined, undefined);
+      }
+
+      expect(emitted.at(-1)).toMatchObject({
+        type: "tool.loop",
+        level: "critical",
+        action: "block",
+        detector: "global_circuit_breaker",
+        count: 30,
+        toolName: "read",
+      });
+    });
+  });
+
   it("emits structured warning diagnostic events for ping-pong loops", async () => {
     await withToolLoopEvents(async (emitted) => {
       const { readTool, listTool } = createPingPongTools();

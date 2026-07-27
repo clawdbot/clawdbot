@@ -21,6 +21,7 @@ afterEach(() => {
   vi.useRealTimers();
   document.body.replaceChildren();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -234,6 +235,32 @@ describe("openclaw-board-view", () => {
     expect(frameLoadFailed).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(1);
     expect(frameLoadFailed).toHaveBeenCalledTimes(3);
+  });
+
+  it("pauses ticket refresh while hidden and re-arms when the document becomes visible", async () => {
+    vi.useFakeTimers();
+    let visibilityState: DocumentVisibilityState = "hidden";
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibilityState);
+    const frameLoadFailed = vi.fn(async () => undefined);
+    const ticketedWidget = boardWidget({
+      viewTicket: "ticket",
+      viewTicketTtlMs: 30_000,
+    });
+    recordBoardWidgetTicketReceipt(ticketedWidget);
+    await mount({
+      callbacks: callbacks({ frameLoadFailed }),
+      snapshot: snapshot({ widgets: [ticketedWidget] }),
+    });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(frameLoadFailed).not.toHaveBeenCalled();
+
+    visibilityState = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(999);
+    expect(frameLoadFailed).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(frameLoadFailed).toHaveBeenCalledOnce();
   });
 
   it("schedules proactive refresh from the relative ticket TTL", async () => {
