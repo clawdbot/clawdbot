@@ -28,7 +28,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../runtime.js", () => ({ defaultRuntime: mocks.defaultRuntime }));
-vi.mock("../gateway/call.js", () => ({ callGateway: mocks.callGateway }));
+vi.mock("../gateway/call.js", () => ({
+  callGateway: mocks.callGateway,
+  isGatewayTransportError: () => false,
+}));
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => mocks.config,
   resetConfigRuntimeState: () => undefined,
@@ -48,7 +51,12 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     mocks.workspaceDir = await tempDirs.make("openclaw-skills-cli-workshop-cache-");
     delete mocks.config.gateway;
     mocks.gatewayApply = undefined;
+    mocks.defaultRuntime.error.mockClear();
+    mocks.defaultRuntime.exit.mockClear();
     mocks.callGateway.mockReset().mockImplementation(async (request) => {
+      if (request.method === "health") {
+        return {};
+      }
       if (!mocks.gatewayApply) {
         throw new Error("gateway unavailable");
       }
@@ -121,5 +129,35 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
       watch: false,
     }).snapshot;
     expect(newSession.skills.map((skill) => skill.name)).toContain("gateway-visible");
+  });
+
+  it("does not replay a dispatched gateway apply failure in the CLI process", async () => {
+    const workshop = await import("../skills/workshop/service.js");
+    const proposal = await workshop.proposeCreateSkill({
+      workspaceDir: mocks.workspaceDir,
+      name: "Single Dispatch",
+      description: "Apply only in the process that owns snapshot state",
+      content: "# Single Dispatch\n\nDo not replay this mutation.\n",
+    });
+    mocks.gatewayApply = async () => {
+      throw new Error("gateway apply failed");
+    };
+
+    vi.resetModules();
+    const { registerSkillsCli } = await import("./skills-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerSkillsCli(program);
+    await expect(
+      program.parseAsync(["skills", "workshop", "apply", proposal.record.id], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(mocks.callGateway.mock.calls.map(([request]) => request.method)).toEqual([
+      "health",
+      "skills.proposals.apply",
+    ]);
+    await expect(workshop.inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
+      record: { status: "pending" },
+    });
   });
 });

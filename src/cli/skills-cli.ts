@@ -121,6 +121,7 @@ type ResolveSkillsWorkspaceOptions = {
 type ResolvedSkillsWorkspace = ReturnType<typeof resolveSkillsWorkspace>;
 
 const GATEWAY_SKILLS_STATUS_TIMEOUT_MS = 1_500;
+const GATEWAY_SKILLS_MUTATION_TIMEOUT_MS = 10_000;
 
 function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   config: ReturnType<typeof getRuntimeConfig>;
@@ -400,25 +401,42 @@ async function runSkillProposalApply(
   resolved: ResolvedSkillsWorkspace,
   proposalId: string,
 ): Promise<SkillProposalApplyResult> {
+  const { callGateway, isGatewayTransportError } = await import("../gateway/call.js");
   try {
-    const { callGateway } = await import("../gateway/call.js");
-    return await callGateway<SkillProposalApplyResult>({
+    // Decide offline fallback before dispatching the non-idempotent mutation.
+    // Once a Gateway answers, apply failures must never be replayed locally.
+    await callGateway({
       config: resolved.config,
-      method: "skills.proposals.apply",
-      params: { agentId: resolved.agentId, proposalId },
+      method: "health",
+      params: {},
       timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       mode: GATEWAY_CLIENT_MODES.CLI,
+      requiredMethods: ["skills.proposals.apply"],
     });
   } catch (err) {
-    if (resolved.config.gateway?.mode === "remote") {
+    if (
+      resolved.config.gateway?.mode === "remote" ||
+      !isGatewayTransportError(err) ||
+      err.kind !== "closed" ||
+      err.code !== 1006
+    ) {
       throw err;
     }
+    return await applySkillProposal({
+      workspaceDir: resolved.workspaceDir,
+      config: resolved.config,
+      proposalId,
+    });
   }
-  return await applySkillProposal({
-    workspaceDir: resolved.workspaceDir,
+
+  return await callGateway<SkillProposalApplyResult>({
     config: resolved.config,
-    proposalId,
+    method: "skills.proposals.apply",
+    params: { agentId: resolved.agentId, proposalId },
+    timeoutMs: GATEWAY_SKILLS_MUTATION_TIMEOUT_MS,
+    clientName: GATEWAY_CLIENT_NAMES.CLI,
+    mode: GATEWAY_CLIENT_MODES.CLI,
   });
 }
 
