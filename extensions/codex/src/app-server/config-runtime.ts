@@ -296,6 +296,7 @@ export function resolveCodexAppServerRuntimeOptions(
       (policyMode === "guardian" ? "auto_review" : "user"),
     ...(serviceTier ? { serviceTier } : {}),
     ...resolveCodexAppServerNetworkProxy(config.networkProxy, resolvedSandbox),
+    workspaceWriteNetworkAccess: config.workspaceWriteNetworkAccess === true,
   };
 }
 
@@ -490,6 +491,7 @@ export function codexAppServerStartOptionsKey(
 export function codexSandboxPolicyForTurn(
   mode: CodexAppServerSandboxMode,
   cwd: string,
+  workspaceWriteNetworkAccess = false,
 ): CodexSandboxPolicy {
   if (mode === "danger-full-access") {
     return { type: "dangerFullAccess" };
@@ -500,7 +502,7 @@ export function codexSandboxPolicyForTurn(
   return {
     type: "workspaceWrite",
     writableRoots: [cwd],
-    networkAccess: false,
+    networkAccess: workspaceWriteNetworkAccess,
     excludeTmpdirEnvVar: false,
     excludeSlashTmp: false,
   };

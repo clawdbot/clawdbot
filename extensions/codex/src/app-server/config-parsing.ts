@@ -190,6 +190,7 @@ const codexPluginConfigSchema = z
         networkProxy: codexAppServerNetworkProxySchema.optional(),
         defaultWorkspaceDir: z.string().optional(),
         experimental: codexAppServerExperimentalSchema.optional(),
+        workspaceWriteNetworkAccess: z.boolean().optional(),
       })
       .strict()
       .optional(),

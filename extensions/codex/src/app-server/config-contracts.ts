@@ -212,6 +212,7 @@ export type CodexAppServerRuntimeOptions = {
   approvalsReviewer: CodexAppServerApprovalsReviewer;
   serviceTier?: CodexServiceTier | null;
   networkProxy?: ResolvedCodexAppServerNetworkProxyConfig;
+  workspaceWriteNetworkAccess: boolean;
 };
 
 export type CodexModelBackedReviewerContext = {
@@ -256,5 +257,6 @@ export type CodexPluginConfig = {
     networkProxy?: CodexAppServerNetworkProxyConfig;
     defaultWorkspaceDir?: string;
     experimental?: CodexAppServerExperimentalConfig;
+    workspaceWriteNetworkAccess?: boolean;
   };
 };
