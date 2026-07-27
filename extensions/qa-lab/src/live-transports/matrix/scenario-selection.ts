@@ -7,7 +7,7 @@ import { selectQaFlowSuiteScenarios } from "../../suite-planning.js";
 const MATRIX_QA_SHARD_INDEX_ENV = "OPENCLAW_QA_MATRIX_SHARD_INDEX";
 const MATRIX_QA_SHARD_COUNT_ENV = "OPENCLAW_QA_MATRIX_SHARD_COUNT";
 
-export type MatrixQaScenarioShard = {
+type MatrixQaScenarioShard = {
   count: number;
   index: number;
 };
@@ -51,7 +51,7 @@ export function readMatrixQaScenarioShard(
   return { count, index };
 }
 
-export function shardMatrixQaScenarioIds(
+function shardMatrixQaScenarioIds(
   scenarioIds: readonly string[],
   shard: MatrixQaScenarioShard,
 ): string[] {
