@@ -215,12 +215,29 @@ describe("stripSilentToken", () => {
     expect(stripSilentToken("😄 NO_REPLY")).toBe("😄");
   });
 
+  it.each(["!", "?", ",", ";", ":"])(
+    "strips a trailing silent token without consuming sentence punctuation %j",
+    (punctuation) => {
+      expect(stripSilentToken(`Done as requested${punctuation}NO_REPLY`)).toBe(
+        `Done as requested${punctuation}`,
+      );
+    },
+  );
+
   it("does not strip embedded token suffix without whitespace delimiter", () => {
     expect(stripSilentToken("interject.NO_REPLY")).toBe("interject.NO_REPLY");
+    expect(stripSilentToken("The example is interject.NO_REPLY")).toBe(
+      "The example is interject.NO_REPLY",
+    );
+    expect(stripSilentToken("Done as requested.NO_REPLY")).toBe("Done as requested.NO_REPLY");
   });
 
   it("strips only trailing occurrence", () => {
     expect(stripSilentToken("NO_REPLY ok NO_REPLY")).toBe("NO_REPLY ok");
+  });
+
+  it("strips every adjacent trailing silent token", () => {
+    expect(stripSilentToken("Done. NO_REPLY NO_REPLY")).toBe("Done.");
   });
 
   it("returns empty string when only token remains", () => {
@@ -281,6 +298,33 @@ describe("startsWithSilentToken", () => {
     expect(startsWithSilentToken("NO_REPLY—note")).toBe(false);
     expect(startsWithSilentToken("NO_REPLY")).toBe(false);
     expect(startsWithSilentToken("  NO_REPLY  ")).toBe(false);
+  });
+
+  it.each([
+    "NO_REPLY\n\nThe user is saying hello",
+    "NO_REPLY\r\nThe user is saying hello",
+    "NO_REPLY NO_REPLY\nThe user is saying hello",
+    "NO_REPLY\n✅ Done",
+    "NO_REPLY\n- Done",
+    "NO_REPLY\n—note",
+    "NO_REPLY\n: explanation",
+    "NO_REPLY\n**Done**",
+    'NO_REPLY\n"Hello"',
+    "NO_REPLY\n```ts\nconst done = true;\n```",
+  ])("matches newline-separated leading silent tokens: %j", (text) => {
+    expect(startsWithSilentToken(text)).toBe(true);
+  });
+
+  it.each([
+    "NO_REPLY NO_REPLY: explanation",
+    "NO_REPLY\nNO_REPLY: explanation",
+    "NO_REPLY\nNO_REPLY—note",
+    "NO_REPLY\nNO_REPLY-note",
+    "NO_REPLY\nNO_REPLY -- nope",
+    "\nNO_REPLY explanation",
+    "NO_REPLY\nNO_REPLY explanation",
+  ])("preserves repeated tokens before substantive punctuation: %j", (text) => {
+    expect(startsWithSilentToken(text)).toBe(false);
   });
 });
 

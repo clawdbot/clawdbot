@@ -214,6 +214,50 @@ describe("normalizeReplyPayload", () => {
     expect(expectNormalizedReply(result).text).toBe("The user is saying hello");
   });
 
+  it.each([
+    ["NO_REPLY\n\nThe user is saying hello", "The user is saying hello"],
+    ["NO_REPLY\r\nThe user is saying hello", "The user is saying hello"],
+    ["NO_REPLY NO_REPLY\nThe user is saying hello", "The user is saying hello"],
+    ["NO_REPLY\n✅ Done", "✅ Done"],
+    ["NO_REPLY\n- Done", "- Done"],
+    ["NO_REPLY\n—note", "—note"],
+    ["NO_REPLY\n: explanation", ": explanation"],
+    ["NO_REPLY\n**Done**", "**Done**"],
+    ['NO_REPLY\n"Hello"', '"Hello"'],
+    ["NO_REPLY\n```ts\nconst done = true;\n```", "```ts\nconst done = true;\n```"],
+  ])("strips newline-separated leading silent tokens: %j", (text, expected) => {
+    expect(expectNormalizedReply(normalizeReplyPayload({ text })).text).toBe(expected);
+  });
+
+  it.each(["!", "?", ",", ";", ":"])(
+    "strips a sentence-attached trailing silent token while preserving %j",
+    (punctuation) => {
+      const text = `Done as requested${punctuation}NO_REPLY`;
+      expect(expectNormalizedReply(normalizeReplyPayload({ text })).text).toBe(
+        `Done as requested${punctuation}`,
+      );
+    },
+  );
+
+  it("strips repeated trailing silent tokens from visible replies", () => {
+    expect(
+      expectNormalizedReply(normalizeReplyPayload({ text: "Done. NO_REPLY NO_REPLY" })).text,
+    ).toBe("Done.");
+  });
+
+  it.each([
+    "interject.NO_REPLY",
+    "The example is interject.NO_REPLY",
+    "Done as requested.NO_REPLY",
+    "NO_REPLY NO_REPLY: explanation",
+    "NO_REPLY\nNO_REPLY: explanation",
+    "NO_REPLY\nNO_REPLY—note",
+    "NO_REPLY\nNO_REPLY-note",
+    "NO_REPLY\nNO_REPLY -- nope",
+  ])("preserves substantive dotted and punctuation-start silent-token literals: %j", (text) => {
+    expect(expectNormalizedReply(normalizeReplyPayload({ text })).text).toBe(text);
+  });
+
   it("keeps NO_REPLY when used as leading substantive text", () => {
     const result = normalizeReplyPayload({ text: "NO_REPLY -- nope" });
     expect(expectNormalizedReply(result).text).toBe("NO_REPLY -- nope");

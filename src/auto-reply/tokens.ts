@@ -37,7 +37,10 @@ function getSilentTrailingRegex(token: string): RegExp {
     return cached;
   }
   const escaped = escapeRegExp(token);
-  const regex = new RegExp(`(?:^|\\s+|\\*+)${escaped}\\s*$`, "i");
+  // A full stop can also be part of a substantive dotted identifier, so it
+  // cannot safely delimit an unannotated sentinel. Preserve other sentence
+  // punctuation and consume repeated, whitespace-delimited sentinel tokens.
+  const regex = new RegExp(`(?:^|\\s+|\\*+|(?<=[!?,;:]))${escaped}(?:\\s+${escaped})*\\s*$`, "i");
   silentTrailingRegexByToken.set(token, regex);
   return regex;
 }
@@ -258,8 +261,9 @@ function getSilentLeadingRegex(token: string): RegExp {
     return cached;
   }
   const escaped = escapeRegExp(token);
-  // Match one or more leading occurrences of the token, each optionally followed by whitespace
-  const regex = new RegExp(`^(?:\\s*${escaped})+\\s*`, "i");
+  // Keep the final separator distinct: earlier blank lines or spacing between
+  // repeated sentinels do not establish a boundary for the visible remainder.
+  const regex = new RegExp(`^\\s*${escaped}((?:\\s*${escaped})*)(\\s*)`, "i");
   silentLeadingRegexByToken.set(token, regex);
   return regex;
 }
@@ -284,7 +288,16 @@ export function startsWithSilentToken(
   if (!text) {
     return false;
   }
-  return getSilentLeadingAttachedRegex(token).test(text);
+  if (getSilentLeadingAttachedRegex(token).test(text)) {
+    return true;
+  }
+  const leading = getSilentLeadingRegex(token).exec(text);
+  // Only the separator after the final sentinel establishes a boundary; a
+  // leading blank line must not turn same-line token mentions into controls.
+  if (!leading || !/[\r\n]/.test(leading[2] ?? "")) {
+    return false;
+  }
+  return text.slice(leading[0].length).trimStart().length > 0;
 }
 
 export function isSilentReplyPrefixText(
