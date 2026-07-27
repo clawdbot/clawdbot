@@ -102,6 +102,11 @@ export function packageJsonForNpmLock(
   [key: string]: unknown;
 };
 export function pnpmLockOverrideVersionForVersions(versions: unknown): unknown;
+export function resolvePnpmLockOverridePlan(lockfile: unknown): {
+  conflictingPackageNames: string[];
+  scopedVersionOverrides: Record<string, unknown>;
+  versionOverrides: Record<string, string>;
+};
 export function parsePnpmPackageKey(packageKey: unknown): {
   name: string;
   version: string;

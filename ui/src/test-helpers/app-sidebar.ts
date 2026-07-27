@@ -236,6 +236,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       return () => listeners.delete(listener);
     },
     subscribeCreated: () => () => undefined,
+    isPreparedWorkSession: () => false,
     pullRequestSummary: (key: string) => pullRequestSummaries.get(key),
     setPullRequestSummary(key: string, summary: SessionCatalogPullRequestSummary | undefined) {
       if (summary) {
@@ -312,7 +313,13 @@ export function createContext(
     gateway,
     sessions,
     agents: {
-      state: { agentsList },
+      state: {
+        client: gateway.snapshot.client,
+        connected: gateway.snapshot.phase === "connected",
+        agentsLoading: false,
+        agentsError: null,
+        agentsList,
+      },
       subscribe: () => () => undefined,
     },
     agentSelection: {

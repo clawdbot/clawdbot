@@ -18,6 +18,7 @@ import {
   type AnthropicInlineImageBudget,
 } from "../internal/anthropic-inline-images.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
+import { transportAbortError } from "../transports/transport-stream-shared.js";
 import type {
   AnthropicMessagesCompat,
   Api,
@@ -804,7 +805,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
       }
 
       if (requestOptions?.signal?.aborted) {
-        throw new Error("Request was aborted");
+        throw transportAbortError(requestOptions.signal);
       }
 
       if (output.stopReason === "aborted" || output.stopReason === "error") {

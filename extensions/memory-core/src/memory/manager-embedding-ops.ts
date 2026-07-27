@@ -24,6 +24,7 @@ import {
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-runtime";
 import type { EmbeddingProvider } from "./embeddings.js";
 import {
@@ -632,16 +633,18 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
   }
 
-  private async waitForEmbeddingRetry(delayMs: number, action: string): Promise<void> {
+  private async waitForEmbeddingRetry(
+    delayMs: number,
+    action: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
     const waitMs = resolveMemoryEmbeddingRetryDelay(
       delayMs,
       Math.random(),
       EMBEDDING_RETRY_MAX_DELAY_MS,
     );
     log.warn(`memory embeddings retryable error; ${action} in ${waitMs}ms`);
-    await new Promise((resolve) => {
-      setTimeout(resolve, waitMs);
-    });
+    await sleepWithAbort(waitMs, signal);
   }
 
   private resolveEmbeddingTimeout(
@@ -688,7 +691,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             signal,
             isRetryable: isRetryableMemoryEmbeddingError,
             waitForRetry: async (delayMs) => {
-              await this.waitForEmbeddingRetry(delayMs, "retrying query");
+              await this.waitForEmbeddingRetry(delayMs, "retrying query", signal);
             },
             maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
             baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,

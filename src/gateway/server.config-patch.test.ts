@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
-import { AUTH_PROFILE_FILENAME } from "../agents/auth-profiles/path-constants.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   activateSecretsRuntimeSnapshot,
@@ -152,7 +151,7 @@ async function expectSchemaLookupInvalid(pathValue: unknown) {
 
 async function writeUnresolvedAuthProfileTokenRef(missingEnvVar: string) {
   deleteTestEnvValue(missingEnvVar);
-  const authStorePath = path.join(resolveDefaultAgentDir({}), AUTH_PROFILE_FILENAME);
+  const authStorePath = path.join(resolveDefaultAgentDir({}), "auth-profiles.json");
   await fs.mkdir(path.dirname(authStorePath), { recursive: true });
   await fs.writeFile(
     authStorePath,

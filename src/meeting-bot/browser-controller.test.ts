@@ -52,7 +52,7 @@ describe("meeting browser join readiness", () => {
             parseTranscript: () => ({ droppedLines: 0, lines: [] }),
           },
           classifyManualAction: (health) =>
-            health.manualActionRequired
+            health.manualAction
               ? { category: "audio-choice-required", reason: "audio-choice", message: "Wait." }
               : undefined,
           parseLeaveResult: () => ({ departed: false }),
@@ -60,14 +60,13 @@ describe("meeting browser join readiness", () => {
             evaluationAttempts === 1
               ? {
                   inCall: true,
-                  manualActionRequired: true,
-                  manualActionReason: "audio-choice",
+                  manualAction: { reason: "audio-choice", message: "Wait." },
                   micMuted: false,
                 }
-              : { inCall: true, manualActionRequired: false, micMuted: false },
+              : { inCall: true, micMuted: false },
           permissions: () => undefined,
           permissionNotes: () => [],
-          shouldRetryJoinStatus: (health) => health.manualActionReason === "audio-choice",
+          shouldRetryJoinStatus: (health) => health.manualAction?.reason === "audio-choice",
         },
       },
       callBrowser: async (request) => {
@@ -100,7 +99,6 @@ describe("meeting browser join readiness", () => {
     expect(captionCaptureAttempts).toEqual([false, false]);
     expect(result.browser).toMatchObject({
       inCall: true,
-      manualActionRequired: false,
       micMuted: false,
     });
   });

@@ -16,6 +16,17 @@ There is nothing to set up and no separate app to configure: dashboards are a
 core feature, owned by the thread, stored with the agent, and they survive
 `/new` and `/reset` (the conversation context clears; the board stays).
 
+## Find your dashboards
+
+Open `/dashboards` to see every thread whose preferred face is Dashboard, with
+the most recently updated thread first. Open any row to go directly to that
+thread's `/dashboard/<agent>/<sessionRef>` URL.
+
+The Chat or Dashboard face preference is stored server-side per thread. It
+therefore follows you when you connect to the same gateway from another device.
+The active dashboard tab and remembered chat-dock position remain per-device UI
+state, so each browser can keep its own working layout.
+
 ## Build a dashboard by asking
 
 Ask your agent for what you want to see:
@@ -95,6 +106,8 @@ one-tap, revision-bound approval as everything else.
 - Deleting a thread deletes its board.
 - Boards live on your gateway (in the owning agent's database) and appear on
   every device you connect from.
+- Switching a thread to the Dashboard face adds it to `/dashboards`. Switching
+  it back to Chat removes it.
 - The security model, storage details, and design rationale live in
   [Dashboard Architecture](/web/dashboard-architecture), including the
   documented sandbox tradeoffs.

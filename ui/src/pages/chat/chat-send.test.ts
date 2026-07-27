@@ -369,6 +369,7 @@ function makeHost(overrides?: MakeHostOverrides): TestChatHost | TestChatHostWit
     sessionsError: null,
     sessionsArchivedFilter: "active" as const,
     chatModelsLoading: false,
+    chatMetadataRequestVersion: 0,
     chatModelCatalog: [],
     refreshSessionsAfterChat: new Map(),
     toolStreamById: new Map(),
@@ -530,6 +531,88 @@ describe("refreshChat", () => {
     expect(host.request).toHaveBeenCalledWith("chat.history", { sessionKey: "main", limit: 100 });
     expect(host.request).not.toHaveBeenCalledWith("sessions.list", expect.anything());
     expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("starts startup metadata without waiting for the transcript response", async () => {
+    const startup = createDeferred<unknown>();
+    const metadata = createDeferred<unknown>();
+    const host = makeHost({
+      hello: {
+        features: { methods: ["chat.metadata", "chat.startup"] },
+      } as TestChatHost["hello"],
+      requestHandlers: {
+        "chat.metadata": () => metadata.promise,
+        "chat.startup": () => startup.promise,
+      },
+    });
+
+    const refresh = refreshPageChat(asChatPageHost(host), {
+      awaitHistory: true,
+      deferBranches: true,
+      startup: true,
+    });
+
+    expect(host.request.mock.calls.map(([method]) => method)).toEqual([
+      "chat.startup",
+      "chat.metadata",
+    ]);
+    expect(await raceWithMacrotask(refresh)).toBe("pending");
+
+    metadata.resolve({ commands: [], models: [] });
+    startup.resolve({ messages: [] });
+    await expect(refresh).resolves.toBeUndefined();
+  });
+
+  it("preserves startup metadata when parallel metadata needs fallbacks", async () => {
+    const startup = createDeferred<unknown>();
+    const metadata = createDeferred<unknown>();
+    const host = makeHost({
+      hello: {
+        features: { methods: ["chat.metadata", "chat.startup"] },
+      } as TestChatHost["hello"],
+      requestHandlers: {
+        "chat.metadata": () => metadata.promise,
+        "chat.startup": () => startup.promise,
+      },
+    });
+    const refresh = refreshPageChat(asChatPageHost(host), {
+      awaitHistory: true,
+      deferBranches: true,
+      startup: true,
+    });
+
+    metadata.resolve({});
+    await Promise.resolve();
+    expect(host.request).not.toHaveBeenCalledWith("models.list", expect.anything());
+    expect(host.request).not.toHaveBeenCalledWith("commands.list", expect.anything());
+
+    startup.resolve({
+      messages: [],
+      metadata: {
+        commands: [],
+        models: [
+          {
+            available: true,
+            id: "startup-model",
+            name: "Startup Model",
+            provider: "openai",
+          },
+        ],
+      },
+    });
+    await expect(refresh).resolves.toBeUndefined();
+    await vi.waitFor(() =>
+      expect(host.chatModelCatalog).toEqual([
+        {
+          available: true,
+          id: "startup-model",
+          name: "Startup Model",
+          provider: "openai",
+        },
+      ]),
+    );
+    expect(host.request).not.toHaveBeenCalledWith("models.list", expect.anything());
+    expect(host.request).not.toHaveBeenCalledWith("commands.list", expect.anything());
   });
 
   it.each([

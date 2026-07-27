@@ -5,7 +5,7 @@ import {
   type NavigationRouteId,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
-import { pathForRoute } from "../app-route-paths.ts";
+import { isSessionRouteId } from "../app-route-paths.ts";
 import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
 import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
@@ -13,8 +13,15 @@ import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
-import { searchForSession } from "../lib/sessions/index.ts";
-import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
+import {
+  resolveSessionPreferredFace,
+  sessionNavigationTarget,
+} from "../lib/sessions/route-navigation.ts";
+import {
+  areUiSessionKeysEquivalent,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../lib/sessions/session-key.ts";
 import { pluginTabKey } from "../pages/plugin/route.ts";
 import { renderSidebarPluginTab, shouldHandleNavigationClick } from "./app-sidebar-nav-menus.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
@@ -118,7 +125,8 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
   );
   const outboxCount = host.outboxCountForSessionKey(mainKey);
   const active =
-    host.activeRouteId === "chat" && areUiSessionKeysEquivalent(host.getRouteSessionKey(), mainKey);
+    isSessionRouteId(host.activeRouteId) &&
+    areUiSessionKeysEquivalent(host.getRouteSessionKey(), mainKey);
   const running = mainRow?.hasActiveRun === true;
   const unread = mainRow?.unread === true && !active;
   // Home shares the sidebar's leading-slot contract: run state rings its icon
@@ -130,7 +138,14 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
   });
   return html`
     <a
-      href=${`${pathForRoute("chat", host.basePath)}${searchForSession(mainKey)}`}
+      href=${sessionNavigationTarget({
+        face: resolveSessionPreferredFace(mainRow),
+        sessionKey: mainKey,
+        fallbackAgentId: agentId,
+        basePath: host.basePath,
+        row: mainRow ?? undefined,
+        mainKey: parseAgentSessionKey(mainKey)?.rest,
+      }).href}
       class="nav-item nav-item--home ${active ? "nav-item--active" : ""}"
       aria-current=${active ? "page" : nothing}
       @click=${(event: MouseEvent) => {
