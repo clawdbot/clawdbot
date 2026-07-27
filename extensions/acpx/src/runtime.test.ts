@@ -4165,8 +4165,8 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
 
     expect(leaseStore.store.save).toHaveBeenCalledTimes(2);
-    expect(launchCommands[0]).toContain("OPENCLAW_ACPX_LEASE_ID=");
-    expect(launchCommands[0]).toContain("OPENCLAW_GATEWAY_INSTANCE_ID=gateway-test");
+    expect(launchCommands[0]).toContain(OPENCLAW_ACPX_LEASE_ID_ARG);
+    expect(launchCommands[0]).toContain(OPENCLAW_GATEWAY_INSTANCE_ID_ARG);
     expect(saveSession).toHaveBeenCalledWith(
       expect.objectContaining({
         agentCommand: CODEX_ACP_WRAPPER_COMMAND,

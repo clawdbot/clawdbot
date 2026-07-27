@@ -3564,11 +3564,9 @@ describe("task-registry", () => {
       const now = Date.now();
       const parentSessionKey = "agent:main:telegram:direct:owner";
       const childSessionKey = "agent:codex:acp:unmaterialized-oneshot";
-      const task = createTaskRecord({
-        runtime: "acp",
+      const task = createTaskFixture("acp", {
         ownerKey: parentSessionKey,
         requesterSessionKey: parentSessionKey,
-        scopeKind: "session",
         childSessionKey,
         runId: "run-terminal-acp-unmaterialized-oneshot",
         task: "Cancelled before the first prompt",

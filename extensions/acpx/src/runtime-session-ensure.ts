@@ -81,8 +81,9 @@ export function withAcpxSessionOptions(input: RuntimeEnsureInput): DelegateEnsur
   const existingOptions = (input as { sessionOptions?: SessionAgentOptions }).sessionOptions;
   const model = input.model?.trim() || existingOptions?.model;
   const sessionOptions = model ? { ...existingOptions, model } : existingOptions;
+  const { modelExplicit: _modelExplicit, ...rest } = input;
   return {
-    ...input,
+    ...rest,
     ...(sessionOptions ? { sessionOptions } : {}),
   } as DelegateEnsureInput;
 }
