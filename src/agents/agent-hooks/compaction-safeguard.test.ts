@@ -1695,7 +1695,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const summaryCall = latestMockCallArg(mockSummarizeInStages) as {
       headers?: Record<string, string>;
     };
-    expect(summaryCall.headers?.["Copilot-Integration-Id"]).toBe("vscode-chat");
+    expect(summaryCall.headers?.["Copilot-Integration-Id"]).toBe("copilot-developer-cli");
     expect(summaryCall.headers?.["Editor-Plugin-Version"]).toBe("copilot-chat/0.35.0");
     expect(summaryCall.headers?.["Openai-Organization"]).toBe("github-copilot");
     expect(summaryCall.headers?.["User-Agent"]).toBe("GitHubCopilotChat/0.35.0");

@@ -13,6 +13,9 @@ export const COPILOT_EDITOR_PLUGIN_VERSION = "copilot-chat/0.35.0";
 export const COPILOT_GITHUB_API_VERSION = "2025-04-01";
 /** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export const COPILOT_INTEGRATION_ID = "vscode-chat";
+// Current GitHub fine-grained PATs are accepted by CAPI under the Copilot CLI
+// identity. Keep this private from the plugin SDK's legacy VS Code contract.
+export const COPILOT_RUNTIME_INTEGRATION_ID = "copilot-developer-cli";
 
 /** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export function buildCopilotIdeHeaders(
@@ -71,7 +74,7 @@ export function buildCopilotDynamicHeaders(params: {
 }): Record<string, string> {
   return {
     ...buildCopilotIdeHeaders(),
-    "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
+    "Copilot-Integration-Id": COPILOT_RUNTIME_INTEGRATION_ID,
     "Openai-Organization": "github-copilot",
     "x-initiator": inferCopilotInitiator(params.messages),
     ...(params.hasImages ? { "Copilot-Vision-Request": "true" } : {}),

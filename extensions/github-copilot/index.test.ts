@@ -28,8 +28,7 @@ const mocks = vi.hoisted(() => ({
     finalUrl: params.url,
     release: vi.fn(async () => {}),
   })),
-  resolveCopilotApiToken: vi.fn(),
-  configureCopilotTokenCacheStore: vi.fn<(openStore: () => unknown) => void>(),
+  resolveCopilotRuntimeAuth: vi.fn(),
 }));
 
 function requireAuthMethod<T>(methods: readonly T[], index: number): T {
@@ -48,13 +47,9 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
 
 vi.mock("./register.runtime.js", () => ({
   DEFAULT_COPILOT_API_BASE_URL: "https://api.githubcopilot.test",
-  resolveCopilotApiToken: mocks.resolveCopilotApiToken,
+  resolveCopilotRuntimeAuth: mocks.resolveCopilotRuntimeAuth,
   githubCopilotLoginCommand: mocks.githubCopilotLoginCommand,
   fetchCopilotUsage: vi.fn(),
-}));
-
-vi.mock("./token.js", () => ({
-  configureCopilotTokenCacheStore: mocks.configureCopilotTokenCacheStore,
 }));
 
 import plugin from "./index.js";
@@ -75,6 +70,7 @@ type GithubCopilotTestProvider = RegisteredProvider & {
   prepareDynamicModel: NonNullable<RegisteredProvider["prepareDynamicModel"]>;
   resolveDynamicModel: NonNullable<RegisteredProvider["resolveDynamicModel"]>;
   preferRuntimeResolvedModel: NonNullable<RegisteredProvider["preferRuntimeResolvedModel"]>;
+  prepareRuntimeAuth: NonNullable<RegisteredProvider["prepareRuntimeAuth"]>;
   resolveThinkingProfile: NonNullable<RegisteredProvider["resolveThinkingProfile"]>;
 };
 type GithubCopilotTestModelCatalogProvider = {
@@ -178,31 +174,31 @@ function registerProviderWithPluginConfig(pluginConfig: Record<string, unknown>)
 }
 
 describe("github-copilot plugin", () => {
-  it("binds a lazy provider-scoped token store", () => {
-    const store = {};
-    const openSyncKeyedStore = vi.fn(() => store);
-    plugin.register(
-      createTestPluginApi({
-        id: "github-copilot",
-        name: "GitHub Copilot",
-        source: "test",
-        config: {},
-        runtime: { state: { openSyncKeyedStore } } as never,
-      }),
-    );
+  it("preserves the source token supplied by the auth layer for runtime auth", async () => {
+    mocks.resolveCopilotRuntimeAuth.mockResolvedValueOnce({
+      apiKey: "github-source-token",
+      baseUrl: "https://api.individual.githubcopilot.com",
+    });
+    const provider = registerProviderWithPluginConfig({});
 
-    const openStore = requireFirstMockArg<() => unknown>(
-      mocks.configureCopilotTokenCacheStore,
-      "token cache store binding",
-    );
-    expect(openSyncKeyedStore).not.toHaveBeenCalled();
-    expect(openStore()).toBe(store);
-    expect(openStore()).toBe(store);
-    expect(openSyncKeyedStore).toHaveBeenCalledOnce();
-    expect(openSyncKeyedStore).toHaveBeenCalledWith({
-      namespace: "token",
-      maxEntries: 8,
-      overflowPolicy: "evict-oldest",
+    const prepared = await provider.prepareRuntimeAuth({
+      config: {},
+      env: {},
+      provider: "github-copilot",
+      modelId: "gpt-5-mini",
+      model: { id: "gpt-5-mini", provider: "github-copilot" },
+      apiKey: "github-source-token",
+      authMode: "oauth",
+    } as never);
+
+    expect(mocks.resolveCopilotRuntimeAuth).toHaveBeenCalledWith({
+      githubToken: "github-source-token",
+      env: {},
+      githubDomain: "github.com",
+    });
+    expect(prepared).toEqual({
+      apiKey: "github-source-token",
+      baseUrl: "https://api.individual.githubcopilot.com",
     });
   });
 
@@ -287,7 +283,7 @@ describe("github-copilot plugin", () => {
     } as never);
 
     expect(result).toBeNull();
-    expect(mocks.resolveCopilotApiToken).not.toHaveBeenCalled();
+    expect(mocks.resolveCopilotRuntimeAuth).not.toHaveBeenCalled();
   });
 
   it("exposes xhigh thinking for catalog-supported Copilot reasoning efforts", () => {
@@ -358,8 +354,8 @@ describe("github-copilot plugin", () => {
   });
 
   it("uses live plugin config to re-enable discovery after startup disable", async () => {
-    mocks.resolveCopilotApiToken.mockResolvedValueOnce({
-      token: "copilot_api_token",
+    mocks.resolveCopilotRuntimeAuth.mockResolvedValueOnce({
+      apiKey: "gh_test_token",
       baseUrl: "https://api.githubcopilot.live",
     });
     const provider = registerProviderWithPluginConfig({ discovery: { enabled: false } });
@@ -381,7 +377,7 @@ describe("github-copilot plugin", () => {
       resolveProviderApiKey: () => ({ apiKey: "gh_test_token" }),
     } as never);
 
-    expect(mocks.resolveCopilotApiToken).toHaveBeenCalledWith({
+    expect(mocks.resolveCopilotRuntimeAuth).toHaveBeenCalledWith({
       githubToken: "gh_test_token",
       env: { GH_TOKEN: "gh_test_token" },
       githubDomain: "github.com",
@@ -395,8 +391,8 @@ describe("github-copilot plugin", () => {
   });
 
   it("dual-publishes unified live catalog rows with existing discovery semantics", async () => {
-    mocks.resolveCopilotApiToken.mockResolvedValueOnce({
-      token: "copilot_api_token",
+    mocks.resolveCopilotRuntimeAuth.mockResolvedValueOnce({
+      apiKey: "gh_test_token",
       baseUrl: "https://api.githubcopilot.live",
     });
     const { modelCatalogProvider } = registerProviderAndCatalogWithPluginConfig({
@@ -425,7 +421,7 @@ describe("github-copilot plugin", () => {
       }),
     } as never);
 
-    expect(mocks.resolveCopilotApiToken).toHaveBeenCalledWith({
+    expect(mocks.resolveCopilotRuntimeAuth).toHaveBeenCalledWith({
       githubToken: "gh_test_token",
       env: { GH_TOKEN: "gh_test_token" },
       githubDomain: "github.com",
@@ -500,13 +496,13 @@ describe("github-copilot plugin", () => {
         agentDir,
         { filterExternalAuthProfiles: false, syncExternalCli: false },
       );
-      mocks.resolveCopilotApiToken
+      mocks.resolveCopilotRuntimeAuth
         .mockResolvedValueOnce({
-          token: "alpha",
+          apiKey: "chosen",
           baseUrl: "https://api.githubcopilot.live",
         })
         .mockResolvedValueOnce({
-          token: "beta",
+          apiKey: "first",
           baseUrl: "https://api.githubcopilot.first",
         });
       const catalogResponse = (contextWindow: number, promptTokens: number) =>
@@ -560,12 +556,12 @@ describe("github-copilot plugin", () => {
       await provider.prepareDynamicModel(selectedContext);
       await provider.prepareDynamicModel(firstContext);
 
-      expect(mocks.resolveCopilotApiToken).toHaveBeenNthCalledWith(1, {
+      expect(mocks.resolveCopilotRuntimeAuth).toHaveBeenNthCalledWith(1, {
         githubToken: "chosen",
         env: process.env,
         githubDomain: "github.com",
       });
-      expect(mocks.resolveCopilotApiToken).toHaveBeenNthCalledWith(2, {
+      expect(mocks.resolveCopilotRuntimeAuth).toHaveBeenNthCalledWith(2, {
         githubToken: "first",
         env: process.env,
         githubDomain: "github.com",
@@ -605,13 +601,13 @@ describe("github-copilot plugin", () => {
         agentDir,
         { filterExternalAuthProfiles: false, syncExternalCli: false },
       );
-      mocks.resolveCopilotApiToken
+      mocks.resolveCopilotRuntimeAuth
         .mockResolvedValueOnce({
-          token: "test-auth-token",
+          apiKey: "test-auth-token",
           baseUrl: "https://api.githubcopilot.profile",
         })
         .mockResolvedValueOnce({
-          token: "test-token-placeholder",
+          apiKey: "test-token-placeholder",
           baseUrl: "https://api.githubcopilot.direct",
         });
       const catalogResponse = (contextWindow: number, promptTokens: number) =>
@@ -675,12 +671,12 @@ describe("github-copilot plugin", () => {
       await provider.prepareDynamicModel(profileContext);
       await provider.prepareDynamicModel(directContext);
 
-      expect(mocks.resolveCopilotApiToken).toHaveBeenNthCalledWith(1, {
+      expect(mocks.resolveCopilotRuntimeAuth).toHaveBeenNthCalledWith(1, {
         githubToken: "test-auth-token",
         env: process.env,
         githubDomain: "github.com",
       });
-      expect(mocks.resolveCopilotApiToken).toHaveBeenNthCalledWith(2, {
+      expect(mocks.resolveCopilotRuntimeAuth).toHaveBeenNthCalledWith(2, {
         githubToken: "test-token-placeholder",
         env: process.env,
         githubDomain: "github.com",

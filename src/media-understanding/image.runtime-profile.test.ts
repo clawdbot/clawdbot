@@ -170,7 +170,7 @@ vi.mock("../plugin-sdk/provider-auth.js", () => ({
     "Editor-Version": "vscode/1.107.0",
     "User-Agent": "GitHubCopilotChat/0.35.0",
   }),
-  COPILOT_INTEGRATION_ID: "vscode-chat",
+  COPILOT_INTEGRATION_ID: "copilot-developer-cli",
 }));
 
 const imageTestFetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -502,7 +502,7 @@ describe("describeImageWithModel", () => {
     expect(completionModel.baseUrl).toBe("https://api.githubcopilot.com");
     expect(options.apiKey).toBe(storedValue);
     expect(options.headers).toMatchObject({
-      "Copilot-Integration-Id": "vscode-chat",
+      "Copilot-Integration-Id": "copilot-developer-cli",
       "Copilot-Vision-Request": "true",
       "Editor-Version": "vscode/1.107.0",
       "User-Agent": "GitHubCopilotChat/0.35.0",

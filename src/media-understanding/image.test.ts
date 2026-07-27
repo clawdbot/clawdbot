@@ -173,7 +173,7 @@ vi.mock("../plugin-sdk/provider-auth.js", () => ({
     "Editor-Version": "vscode/1.107.0",
     "User-Agent": "GitHubCopilotChat/0.35.0",
   }),
-  COPILOT_INTEGRATION_ID: "vscode-chat",
+  COPILOT_INTEGRATION_ID: "copilot-developer-cli",
 }));
 
 const imageTestFetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());

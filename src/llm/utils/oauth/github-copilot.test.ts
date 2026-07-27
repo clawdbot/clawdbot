@@ -295,6 +295,10 @@ describe("GitHub Copilot OAuth model routing", () => {
     } as OAuthCredentials;
   }
 
+  it("exposes the durable GitHub token to provider runtime auth", () => {
+    expect(githubCopilotOAuthProvider.getApiKey(credential({}))).toBe("refresh-token");
+  });
+
   it("drops github-copilot models for an unsupported persisted enterprise domain", () => {
     const result = githubCopilotOAuthProvider.modifyModels?.(
       models,

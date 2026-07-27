@@ -2,6 +2,7 @@
 // provider hook.
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { COPILOT_RUNTIME_INTEGRATION_ID } from "../agents/copilot-dynamic-headers.js";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../agents/minimax-vlm.js";
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
@@ -18,7 +19,7 @@ import {
 import { isSecretRef } from "../config/types.secrets.js";
 import { complete } from "../llm/stream.js";
 import type { AssistantMessage, Context, Model, ProviderStreamOptions } from "../llm/types.js";
-import { buildCopilotIdeHeaders, COPILOT_INTEGRATION_ID } from "../plugin-sdk/provider-auth.js";
+import { buildCopilotIdeHeaders } from "../plugin-sdk/provider-auth.js";
 import { getResolvedImageRuntimeContext, resolveImageRuntime } from "./image-model-runtime.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
 import type {
@@ -177,7 +178,7 @@ function buildImageRequestHeaders(model: Model): Record<string, string> | undefi
   }
   return {
     ...buildCopilotIdeHeaders(),
-    "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
+    "Copilot-Integration-Id": COPILOT_RUNTIME_INTEGRATION_ID,
     "Openai-Organization": "github-copilot",
     "x-initiator": "user",
     "Copilot-Vision-Request": "true",

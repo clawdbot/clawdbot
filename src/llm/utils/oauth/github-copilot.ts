@@ -573,7 +573,9 @@ export const githubCopilotOAuthProvider: OAuthProviderInterface = {
   },
 
   getApiKey(credentials: OAuthCredentials): string {
-    return credentials.access;
+    // The provider runtime now authenticates directly with the durable GitHub
+    // credential; the short-lived Copilot access token is legacy profile state.
+    return credentials.refresh;
   },
 
   modifyModels(models: Model[], credentials: OAuthCredentials): Model[] {
