@@ -283,6 +283,8 @@ export function buildTalkConfigResponse(value: unknown): TalkConfigResponse | un
   if (!isRecord(value)) {
     return undefined;
   }
+  // The gateway passes canonical output from normalizeTalkSection; doctor owns migration of
+  // legacy flat provider fields before runtime, so response construction does not revive them.
   const normalized = normalizeTalkSection(value as TalkConfig);
   if (!normalized) {
     return undefined;
