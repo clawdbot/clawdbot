@@ -345,6 +345,12 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
   }
 
   protected recordObserverDigest(digest: SessionObserverDigest): void {
+    if (
+      normalizeSessionKeyForUiComparison(digest.sessionKey) === "global" &&
+      !digest.agentId?.trim()
+    ) {
+      return;
+    }
     const sessionKey = this.resolveObserverDigestHistoryKey(digest.sessionKey, digest.agentId);
     if (this.observerDigestHistory.record({ ...digest, sessionKey })) {
       this.refreshBuiltinBoardSnapshot();

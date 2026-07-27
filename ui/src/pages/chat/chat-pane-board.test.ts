@@ -12,6 +12,7 @@ import {
 import type { ObserverDigestHistory } from "../../lib/observer-digest.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import type { SessionObserverDigest } from "./chat-pane-deps.ts";
 import "./chat-pane.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state.ts";
@@ -51,6 +52,7 @@ type TestChatPane = HTMLElement & {
   ) => void;
   syncChatSidebarForDock: (dock: "bottom" | "hidden" | "left" | "right") => boolean;
   persistBoardSessionView: (patch: { face?: "chat" | "dashboard"; activeTabId?: string }) => void;
+  recordObserverDigest: (digest: SessionObserverDigest) => void;
   resolveBoardProvider: () => BoardProvider;
   resolveObserverDigestHistoryKey: (sessionKey?: string, agentId?: string) => string;
   refreshBuiltinBoardSnapshot: () => void;
@@ -199,6 +201,17 @@ describe("chat pane board shell", () => {
 
     expect(pane.resolveObserverDigestHistoryKey("global", "work")).toBe("agent:work:global");
     expect(pane.resolveObserverDigestHistoryKey("agent:work:main")).toBe("agent:work:global");
+    pane.recordObserverDigest({
+      sessionKey: "global",
+      runId: "run-ownerless",
+      revision: 2,
+      updatedAt: 2_000,
+      headline: "Ownerless global status",
+      health: "stuck",
+    });
+    expect(pane.observerDigestHistory.get("agent:work:global").at(-1)?.headline).toBe(
+      "Reviewing the work agent",
+    );
     pane.refreshBuiltinBoardSnapshot();
 
     await vi.waitFor(() => expect(pane.resolveBoardView().hasBoard).toBe(true));
