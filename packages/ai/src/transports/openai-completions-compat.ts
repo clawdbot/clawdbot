@@ -77,11 +77,9 @@ function resolveOpenAICompletionsCompatDefaults(
   const isDefaultRoute = endpointClass === "default";
   const usesConfiguredNonOpenAIEndpoint =
     endpointClass !== "default" && endpointClass !== "openai-public";
+  const isMoonshot = knownProviderFamily === "moonshot" || endpointClass === "moonshot-native";
   const isMoonshotLike =
-    knownProviderFamily === "moonshot" ||
-    knownProviderFamily === "modelstudio" ||
-    endpointClass === "moonshot-native" ||
-    endpointClass === "modelstudio-native";
+    isMoonshot || knownProviderFamily === "modelstudio" || endpointClass === "modelstudio-native";
   const isModelStudioLike =
     knownProviderFamily === "modelstudio" ||
     endpointClass === "modelstudio-native" ||
@@ -120,7 +118,7 @@ function resolveOpenAICompletionsCompatDefaults(
     endpointClass === "chutes-native" ||
     endpointClass === "mistral-public" ||
     knownProviderFamily === "mistral" ||
-    isMoonshotLike ||
+    isMoonshot ||
     isCloudflareAiGateway ||
     isZai ||
     isTogether ||
