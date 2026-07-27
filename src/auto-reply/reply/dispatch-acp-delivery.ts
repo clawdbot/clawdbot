@@ -510,6 +510,10 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     const policyResult = isOperationalReply
       ? await applyAcpOperationalReplyPolicy(visiblePayload)
       : ({ shouldDeliver: true } as const);
+    if (params.abortSignal?.aborted && policyResult.shouldDeliver) {
+      await markOperationalReplyPolicyDelivered(policyResult, false);
+      return false;
+    }
     let policySettled = false;
     const settleOperationalPolicy = (delivered: boolean): Promise<void> | undefined => {
       policySettled = true;

@@ -5198,6 +5198,34 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expectNoBlockReplyText(onBlockReply, "second payload");
   });
 
+  it("applies redirect policy to cross-channel route failures without a dispatcher", async () => {
+    routeReplyMock.mockResolvedValue({
+      ok: false,
+      error: "forced route failure",
+    });
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-6",
+    });
+    const queued = baseQueuedRun("webchat");
+    queued.originatingChannel = "discord";
+    queued.originatingTo = "channel:C1";
+    queued.run.config = {
+      ...queued.run.config,
+      messages: { operationalReplies: { policy: "redirect" } },
+    };
+
+    await expect(runner(queued)).rejects.toThrow(
+      "messages.operationalReplies.redirectSessionKey is required",
+    );
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+  });
+
   it("suppresses once-policy cross-channel route-failure notices for room events", async () => {
     routeReplyMock.mockResolvedValue({
       ok: false,
@@ -5974,8 +6002,11 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       } as FollowupRun,
     });
 
-    expect(onBlockReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "visible marked reply" }),
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({ text: "visible marked reply" }),
+      }),
     );
     expect(FOLLOWUP_TEST_QUEUES.get("main")?.items).toBeUndefined();
   });

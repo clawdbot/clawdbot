@@ -12,7 +12,7 @@ import {
 import { buildRecoverablePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import { sendDurableMessageBatch } from "../channels/message/runtime.js";
 import { markCommitmentsStatus } from "../commitments/store.js";
-import { patchSessionEntry } from "../config/sessions/session-accessor.js";
+import { loadSessionEntry, patchSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { formatErrorMessage } from "./errors.js";
 import {
@@ -63,6 +63,20 @@ function heartbeatRunOwnsPendingFinalDelivery(
 ): boolean {
   const createdAt = entry?.pendingFinalDeliveryCreatedAt;
   return typeof createdAt === "number" && createdAt >= runStartedAt;
+}
+
+function resolveHeartbeatOperationalReplySourceEventKey(
+  entry: SessionEntry | undefined,
+  startedAt: number,
+): string {
+  const intentId = normalizeOptionalString(entry?.pendingFinalDeliveryIntentId);
+  if (intentId) {
+    return `pending-final:${intentId}`;
+  }
+  const createdAt = entry?.pendingFinalDeliveryCreatedAt;
+  return typeof createdAt === "number" && Number.isFinite(createdAt)
+    ? `pending-final-created:${createdAt}`
+    : `heartbeat:${startedAt}`;
 }
 
 export function classifyHeartbeatAgentOutcome(params: {
@@ -357,6 +371,13 @@ export async function finalizeHeartbeatOutcome(params: {
         ...(outcome.replyPayload.isCompactionNotice === true ? { isCompactionNotice: true } : {}),
       })
     : { text: normalized.text, mediaUrls };
+  // The agent run may have created recovery state after heartbeat preparation.
+  // Re-read it so redirect retries reuse one event id instead of the attempt time.
+  const operationalReplySourceEntry = loadSessionEntry({
+    storePath,
+    sessionKey,
+    readConsistency: "latest",
+  });
   let policyResult: Awaited<ReturnType<typeof applyOperationalReplyPolicy>>;
   try {
     policyResult = await applyOperationalReplyPolicy({
@@ -366,7 +387,10 @@ export async function finalizeHeartbeatOutcome(params: {
       sendPolicyDenied: false,
       sourceSessionKey: sessionKey,
       sourceStorePath: storePath,
-      sourceEventKey: `heartbeat:${startedAt}`,
+      sourceEventKey: resolveHeartbeatOperationalReplySourceEventKey(
+        operationalReplySourceEntry,
+        startedAt,
+      ),
       sourceChannel: delivery.channel,
       sourceConversationKey: JSON.stringify({
         accountId: delivery.accountId,
@@ -391,6 +415,21 @@ export async function finalizeHeartbeatOutcome(params: {
     throw error;
   }
   if (!policyResult.shouldDeliver) {
+    if (policyResult.pendingDelivery) {
+      // Another delivery owns the once lease but has not succeeded yet. Keep
+      // recovery state and wake events so lease release or expiry can retry.
+      await restoreHeartbeatUpdatedAt({ storePath, sessionKey, updatedAt: previousUpdatedAt });
+      emitHeartbeatEvent({
+        status: "skipped",
+        reason: "operational-replies-pending",
+        preview: truncateHeartbeatPreview(previewText),
+        durationMs: Date.now() - startedAt,
+        hasMedia: mediaUrls.length > 0,
+        channel: delivery.channel,
+        accountId: delivery.accountId,
+      });
+      return { status: "ran", durationMs: Date.now() - startedAt };
+    }
     await clearHeartbeatPendingFinalDeliveryIfOwned({
       storePath,
       sessionKey,

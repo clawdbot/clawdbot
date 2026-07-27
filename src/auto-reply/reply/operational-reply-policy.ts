@@ -29,7 +29,18 @@ type OperationalReplyPolicy = "always" | "once" | "redirect" | "silent";
 
 type OperationalReplyPolicyResult =
   | { markDelivered?: (delivered: boolean) => Promise<void> | void; shouldDeliver: true }
-  | { intentionalSilence: true; redirected?: boolean; shouldDeliver: false };
+  | {
+      intentionalSilence: true;
+      pendingDelivery?: false;
+      redirected?: boolean;
+      shouldDeliver: false;
+    }
+  | {
+      intentionalSilence?: false;
+      pendingDelivery: true;
+      redirected?: false;
+      shouldDeliver: false;
+    };
 
 export async function markOperationalReplyPolicyDelivered(
   result: OperationalReplyPolicyResult,
@@ -149,12 +160,15 @@ function createOperationalReplyRedirectKey(params: {
     .digest("hex");
 }
 
-function reserveOperationalReplyOnceKeyInMemory(key: string): boolean {
-  if (hasOperationalReplyOnceKey(key)) {
-    return false;
+function reserveOperationalReplyOnceKeyInMemory(key: string): "delivered" | "pending" | "reserved" {
+  if (deliveredOperationalReplyOnceKeys.has(key)) {
+    return "delivered";
+  }
+  if (pendingOperationalReplyOnceKeys.has(key)) {
+    return "pending";
   }
   pendingOperationalReplyOnceKeys.add(key);
-  return true;
+  return "reserved";
 }
 
 function releaseOperationalReplyOnceKeyInMemory(key: string): void {
@@ -172,10 +186,6 @@ function markOperationalReplyOnceKeyDeliveredInMemory(key: string): void {
     }
     deliveredOperationalReplyOnceKeys.delete(oldestKey);
   }
-}
-
-function hasOperationalReplyOnceKey(key: string): boolean {
-  return deliveredOperationalReplyOnceKeys.has(key) || pendingOperationalReplyOnceKeys.has(key);
 }
 
 function normalizeOperationalReplyOnceKeys(
@@ -253,30 +263,43 @@ type OperationalReplyOnceReservation = {
   scope?: { sessionKey: string; storePath: string };
 };
 
+type OperationalReplyOnceReservationResult =
+  | { status: "delivered" }
+  | { status: "pending" }
+  | { reservation: OperationalReplyOnceReservation; status: "reserved" };
+
 async function reserveOperationalReplyOnceKey(params: {
   cfg: OpenClawConfig;
   key: string;
   sourceSessionKey?: string;
   sourceStorePath?: string;
-}): Promise<OperationalReplyOnceReservation | null> {
+}): Promise<OperationalReplyOnceReservationResult> {
   // Claim the key before the first await. Concurrent callers in this process
   // must not both pass the durable-store check and reserve the same notice.
-  if (!reserveOperationalReplyOnceKeyInMemory(params.key)) {
-    return null;
+  const inMemoryStatus = reserveOperationalReplyOnceKeyInMemory(params.key);
+  if (inMemoryStatus !== "reserved") {
+    return { status: inMemoryStatus };
   }
   const scope = resolveOperationalReplySourceScope(params);
   if (!scope) {
-    return { durableReserved: false, key: params.key, owner: operationalReplyOnceLeaseOwner };
+    return {
+      status: "reserved",
+      reservation: {
+        durableReserved: false,
+        key: params.key,
+        owner: operationalReplyOnceLeaseOwner,
+      },
+    };
   }
   try {
     let reserved = false;
-    let alreadySeen = false;
+    let observedStatus: "delivered" | "pending" | undefined;
     await patchSessionEntry(
       scope,
       (entry) => {
         const deliveredKeys = normalizeOperationalReplyOnceKeys(entry.operationalReplyOnceKeys);
         if (deliveredKeys.includes(params.key)) {
-          alreadySeen = true;
+          observedStatus = "delivered";
           return null;
         }
         const now = Date.now();
@@ -284,7 +307,7 @@ async function reserveOperationalReplyOnceKey(params: {
           entry.operationalReplyPendingOnceKeys,
         ).filter((reservation) => reservation.expiresAt > now);
         if (activeReservations.some((reservation) => reservation.key === params.key)) {
-          alreadySeen = true;
+          observedStatus = "pending";
           return activeReservations.length === entry.operationalReplyPendingOnceKeys?.length
             ? null
             : { operationalReplyPendingOnceKeys: activeReservations };
@@ -292,7 +315,7 @@ async function reserveOperationalReplyOnceKey(params: {
         // Owner leases coordinate overlapping gateway processes. Expiry recovers
         // crashed owners; a full lease set fails closed instead of evicting a live claim.
         if (activeReservations.length >= MAX_OPERATIONAL_REPLY_ONCE_KEYS) {
-          alreadySeen = true;
+          observedStatus = "pending";
           return activeReservations.length === entry.operationalReplyPendingOnceKeys?.length
             ? null
             : { operationalReplyPendingOnceKeys: activeReservations };
@@ -308,22 +331,39 @@ async function reserveOperationalReplyOnceKey(params: {
       },
       { preserveActivity: true },
     );
-    if (alreadySeen) {
+    if (observedStatus) {
       releaseOperationalReplyOnceKeyInMemory(params.key);
-      return null;
+      return { status: observedStatus };
     }
     if (reserved) {
       return {
-        durableReserved: true,
-        key: params.key,
-        owner: operationalReplyOnceLeaseOwner,
-        scope,
+        status: "reserved",
+        reservation: {
+          durableReserved: true,
+          key: params.key,
+          owner: operationalReplyOnceLeaseOwner,
+          scope,
+        },
       };
     }
-    return { durableReserved: false, key: params.key, owner: operationalReplyOnceLeaseOwner };
+    return {
+      status: "reserved",
+      reservation: {
+        durableReserved: false,
+        key: params.key,
+        owner: operationalReplyOnceLeaseOwner,
+      },
+    };
   } catch (error) {
     logVerbose(`operational-reply-policy: once persistence skipped: ${formatErrorMessage(error)}`);
-    return { durableReserved: false, key: params.key, owner: operationalReplyOnceLeaseOwner };
+    return {
+      status: "reserved",
+      reservation: {
+        durableReserved: false,
+        key: params.key,
+        owner: operationalReplyOnceLeaseOwner,
+      },
+    };
   }
 }
 
@@ -571,19 +611,27 @@ export async function applyOperationalReplyPolicy(params: {
       payload: params.payload,
       sessionKey: params.sourceSessionKey,
     });
-    const reservation = await reserveOperationalReplyOnceKey({
+    const reservationResult = await reserveOperationalReplyOnceKey({
       cfg: params.cfg,
       key: onceKey,
       sourceSessionKey: params.sourceSessionKey,
       sourceStorePath: params.sourceStorePath,
     });
-    if (!reservation) {
+    if (reservationResult.status === "pending") {
+      logOperationalReplyPolicySuppression({
+        ...params,
+        reason: "deferred by an active messages.operationalReplies once reservation",
+      });
+      return { pendingDelivery: true, shouldDeliver: false };
+    }
+    if (reservationResult.status === "delivered") {
       logOperationalReplyPolicySuppression({
         ...params,
         reason: "suppressed by messages.operationalReplies once policy",
       });
       return { intentionalSilence: true, shouldDeliver: false };
     }
+    const { reservation } = reservationResult;
     return {
       shouldDeliver: true,
       markDelivered: async (delivered) => {

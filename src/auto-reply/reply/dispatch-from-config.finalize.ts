@@ -9,7 +9,7 @@ import {
   type ReplyPayload,
 } from "../reply-payload.js";
 import { isDispatchReplyOperationAbortedError } from "./dispatch-from-config.abort.js";
-import type { ExecuteDispatchReadyState } from "./dispatch-from-config.execute.js";
+import { executeDispatch } from "./dispatch-from-config.execute.js";
 import {
   createFinalDispatchPayloadDedupeKey,
   formatSuppressedReplyPayloadForLog,
@@ -24,6 +24,11 @@ import {
   markOperationalReplyPolicyDelivered,
 } from "./operational-reply-policy.js";
 import type { ReplyDispatchDeliveryOutcome } from "./reply-dispatcher.js";
+
+type ExecuteDispatchReadyState = Extract<
+  Awaited<ReturnType<typeof executeDispatch>>,
+  { status: "ready" }
+>["state"];
 
 export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState) {
   const {
@@ -106,6 +111,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   let allQueuedFinalsObserved = true;
   let eligibleFinalCount = 0;
   let operationalPolicySuppressedFinalCount = 0;
+  let operationalPolicyPendingFinalCount = 0;
   const finalPolicySettlements: Promise<void>[] = [];
   // Explicit command turns (native or authorized text-slash like /compact) are
   // user-initiated, so a marked terminal reply for the command bypasses
@@ -173,8 +179,18 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     }
     const policyResult = await applyDispatchOperationalReplyPolicy(reply);
     if (!policyResult.shouldDeliver) {
-      operationalPolicySuppressedFinalCount += 1;
+      if (policyResult.pendingDelivery) {
+        operationalPolicyPendingFinalCount += 1;
+      } else {
+        operationalPolicySuppressedFinalCount += 1;
+      }
       continue;
+    }
+    try {
+      throwIfDispatchOperationAborted();
+    } catch (error) {
+      await markOperationalReplyPolicyDelivered(policyResult, false);
+      throw error;
     }
     if (suppressedBySourcePolicy) {
       await markOperationalReplyPolicyDelivered(policyResult, false);
@@ -371,6 +387,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       ...(!queuedFinal &&
       !getObservedReplyDelivery() &&
       !emptyFinalAllowedAsSilent &&
+      operationalPolicyPendingFinalCount === 0 &&
       !allFinalsSuppressedByOperationalPolicy
         ? { noVisibleReplyFallbackEligible: true }
         : {}),

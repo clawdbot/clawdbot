@@ -554,6 +554,10 @@ export function createFollowupRunner(params: {
       if (!policyResult.shouldDeliver) {
         continue;
       }
+      if (isFollowupRunAborted(queued)) {
+        await markOperationalReplyPolicyDelivered(policyResult, false);
+        continue;
+      }
       let policySettled = false;
       const settleOperationalPolicy = (delivered: boolean): Promise<void> | undefined => {
         policySettled = true;
@@ -593,20 +597,19 @@ export function createFollowupRunner(params: {
             const origin = resolveOriginMessageProvider({
               originatingChannel,
             });
-            if (opts?.onBlockReply) {
-              if (origin && origin === provider) {
-                const policySettle = settleOperationalPolicy(false);
-                if (policySettle) {
-                  await policySettle;
-                }
-                // The dispatcher applies and settles its own policy after the
-                // origin reservation is released.
-                const delivered = await sendDispatcherPayload(payload);
-                deliveredAnyPayload = delivered || deliveredAnyPayload;
-              } else {
+            if (origin && origin === provider && opts?.onBlockReply) {
+              const policySettle = settleOperationalPolicy(false);
+              if (policySettle) {
+                await policySettle;
+              }
+              // The dispatcher applies and settles its own policy after the
+              // origin reservation is released.
+              const delivered = await sendDispatcherPayload(payload);
+              deliveredAnyPayload = delivered || deliveredAnyPayload;
+            } else {
+              if (origin && provider && origin !== provider) {
                 crossChannelRouteFailureNeedsNotice = true;
               }
-            } else {
               defaultRuntime.error?.(`followup queue: route-reply failed: ${errorMsg}`);
             }
           } else if (!result.suppressed) {
@@ -635,11 +638,7 @@ export function createFollowupRunner(params: {
         }
       }
     }
-    if (
-      crossChannelRouteFailureNeedsNotice &&
-      !routedAnyCrossChannelPayloadToOrigin &&
-      opts?.onBlockReply
-    ) {
+    if (crossChannelRouteFailureNeedsNotice && !routedAnyCrossChannelPayloadToOrigin) {
       const routeFailureNotice: ReplyPayload = markReplyPayloadForSourceSuppressionDelivery({
         text:
           "Follow-up completed, but OpenClaw could not deliver it to the originating " +
@@ -654,6 +653,20 @@ export function createFollowupRunner(params: {
         operationalPolicy !== "silent"
       ) {
         logVerbose("followup queue: cross-channel failure notice suppressed for room_event");
+        return deliveredAnyPayload;
+      }
+      if (operationalPolicy === "redirect" || operationalPolicy === "silent") {
+        const policyResult = await applyFollowupPayloadPolicy(routeFailureNotice);
+        if (policyResult.shouldDeliver) {
+          await markOperationalReplyPolicyDelivered(policyResult, false);
+        } else if (!policyResult.pendingDelivery) {
+          deliveredAnyPayload = true;
+        }
+        return deliveredAnyPayload;
+      }
+      if (!opts?.onBlockReply) {
+        const policyResult = await applyFollowupPayloadPolicy(routeFailureNotice);
+        await markOperationalReplyPolicyDelivered(policyResult, false);
         return deliveredAnyPayload;
       }
       // The dispatcher owns operational policy for this fallback too.
@@ -850,7 +863,7 @@ export function createFollowupRunner(params: {
         payloads,
         targetRun,
         resolvedRun,
-        options = {},
+        options,
       ) =>
         sendFollowupPayloads(payloads, targetRun, resolvedRun, {
           ...options,

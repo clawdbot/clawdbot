@@ -14,10 +14,7 @@ import {
 } from "../reply-payload.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
 import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
-import {
-  type InternalReplyResolverOptions,
-  createReplyDispatchEvent,
-} from "./dispatch-from-config.events.js";
+import { createReplyDispatchEvent } from "./dispatch-from-config.events.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchExecutionReadyState } from "./dispatch-from-config.prepare-execution.js";
 import {
@@ -131,10 +128,8 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 ...getReplyOptions(),
                 sourceReplyDeliveryMode,
                 sessionPromptSourceReplyDeliveryMode: sessionStableSourceReplyDeliveryMode,
-                ...({
-                  onSessionMetadataChanges: notifySessionMetadataChanges,
-                  onSessionPrepared: notePreparedSession,
-                } satisfies InternalReplyResolverOptions),
+                onSessionMetadataChanges: notifySessionMetadataChanges,
+                onSessionPrepared: notePreparedSession,
                 onObservedReplyDelivery: markObservedReplyDelivery,
                 suppressToolErrorWarnings,
                 shouldSuppressToolErrorWarnings,
@@ -344,6 +339,9 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       : ({ shouldDeliver: true } as const);
                     if (!policyResult.shouldDeliver) {
                       return;
+                    }
+                    if (isDispatchOperationAborted()) {
+                      return markOperationalReplyPolicyDelivered(policyResult, false);
                     }
                     if (shouldRouteToOriginating) {
                       await settleRoutedOperationalPolicyAfterDispatch(
@@ -723,9 +721,3 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
   const nextState = extendPreparedDispatchState(state, { replyResult }, {});
   return { status: "ready" as const, state: nextState };
 }
-
-type ExecuteDispatchResult = Awaited<ReturnType<typeof executeDispatch>>;
-export type ExecuteDispatchReadyState = Extract<
-  ExecuteDispatchResult,
-  { status: "ready" }
->["state"];

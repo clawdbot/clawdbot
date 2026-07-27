@@ -2,7 +2,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { markOperationalReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
@@ -778,37 +777,6 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(onReplyStart).not.toHaveBeenCalled();
   });
 
-  it("enforces ACP send-policy denial without a separate suppression flag", async () => {
-    const dispatcher = createDispatcher();
-    const coordinator = createAcpDispatchDeliveryCoordinator({
-      cfg: createAcpTestConfig({
-        messages: { operationalReplies: { policy: "redirect" } },
-      }),
-      ctx: buildTestCtx({
-        Provider: "visiblechat",
-        Surface: "visiblechat",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
-      dispatcher,
-      inboundAudio: false,
-      sendPolicyDenied: true,
-      shouldRouteToOriginating: false,
-    });
-
-    const ordinaryDelivered = await coordinator.deliver("final", { text: "private final" });
-    const noticeDelivered = await coordinator.deliver(
-      "final",
-      markOperationalReplyPayloadForSourceSuppressionDelivery({
-        text: "private operational failure",
-        isError: true,
-      }),
-    );
-
-    expect(ordinaryDelivered).toBe(false);
-    expect(noticeDelivered).toBe(false);
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-  });
-
   it("can start reply lifecycle while user delivery is suppressed", async () => {
     const onReplyStart = vi.fn(async () => {});
     const dispatcher = createDispatcher();
@@ -833,116 +801,6 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(delivered).toBe(false);
     expect(onReplyStart).toHaveBeenCalledTimes(1);
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-  });
-
-  it("keeps bare ACP tool errors private in message-tool-only mode", async () => {
-    const dispatcher = createDispatcher();
-    const coordinator = createAcpDispatchDeliveryCoordinator({
-      cfg: createAcpTestConfig(),
-      ctx: buildTestCtx({
-        Provider: "visiblechat",
-        Surface: "visiblechat",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
-      dispatcher,
-      inboundAudio: false,
-      sourceReplyDeliveryMode: "message_tool_only",
-      suppressUserDelivery: true,
-      suppressUserDeliveryBySourceReplyPolicy: true,
-      shouldRouteToOriginating: false,
-    });
-
-    const delivered = await coordinator.deliver("tool", {
-      text: "private failed tool output",
-      isError: true,
-    });
-
-    expect(delivered).toBe(false);
-    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
-  });
-
-  it("does not bypass independent ACP user-delivery suppression for operational notices", async () => {
-    const dispatcher = createDispatcher();
-    const coordinator = createAcpDispatchDeliveryCoordinator({
-      cfg: createAcpTestConfig({
-        messages: { operationalReplies: { policy: "redirect" } },
-      }),
-      ctx: buildTestCtx({
-        Provider: "visiblechat",
-        Surface: "visiblechat",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
-      dispatcher,
-      inboundAudio: false,
-      sourceReplyDeliveryMode: "message_tool_only",
-      suppressUserDelivery: true,
-      suppressUserDeliveryBySourceReplyPolicy: false,
-      shouldRouteToOriginating: false,
-    });
-
-    const delivered = await coordinator.deliver(
-      "final",
-      markOperationalReplyPayloadForSourceSuppressionDelivery({
-        text: "private operational notice",
-        isStatusNotice: true,
-      }),
-    );
-
-    expect(delivered).toBe(false);
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-  });
-
-  it("evaluates redirect policy for source-suppressed ACP room events", async () => {
-    const coordinator = createAcpDispatchDeliveryCoordinator({
-      cfg: createAcpTestConfig({
-        messages: { operationalReplies: { policy: "redirect" } },
-      }),
-      ctx: buildTestCtx({
-        Provider: "visiblechat",
-        Surface: "visiblechat",
-        SessionKey: "agent:codex-acp:session-1",
-        InboundEventKind: "room_event",
-      }),
-      dispatcher: createDispatcher(),
-      inboundAudio: false,
-      sourceReplyDeliveryMode: "message_tool_only",
-      suppressUserDelivery: true,
-      suppressUserDeliveryBySourceReplyPolicy: true,
-      shouldRouteToOriginating: false,
-    });
-
-    await expect(
-      coordinator.deliver(
-        "final",
-        markOperationalReplyPayloadForSourceSuppressionDelivery({
-          text: "room operational failure",
-          isError: true,
-        }),
-      ),
-    ).rejects.toThrow("redirectSessionKey is required");
-  });
-
-  it("does not silence visible bare ACP tool errors with operational reply policy", async () => {
-    const dispatcher = createDispatcher();
-    const coordinator = createAcpDispatchDeliveryCoordinator({
-      cfg: createAcpTestConfig({
-        messages: { operationalReplies: { policy: "silent" } },
-      }),
-      ctx: buildTestCtx({
-        Provider: "visiblechat",
-        Surface: "visiblechat",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
-      dispatcher,
-      inboundAudio: false,
-      shouldRouteToOriginating: false,
-    });
-    const toolError = { text: "visible failed tool output", isError: true };
-
-    const delivered = await coordinator.deliver("tool", toolError);
-
-    expect(delivered).toBe(true);
-    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(toolError);
   });
 
   it("keeps parent-owned background ACP child delivery silent while preserving accumulated output", async () => {

@@ -211,7 +211,10 @@ describe("operational reply policy", () => {
     });
 
     expect(first.shouldDeliver).toBe(true);
-    expect(duplicateWhilePending.shouldDeliver).toBe(false);
+    expect(duplicateWhilePending).toMatchObject({
+      pendingDelivery: true,
+      shouldDeliver: false,
+    });
 
     await markOperationalReplyPolicyDelivered(first, false);
 
@@ -234,6 +237,7 @@ describe("operational reply policy", () => {
     });
 
     expect(duplicateAfterSuccess.shouldDeliver).toBe(false);
+    expect(duplicateAfterSuccess).toMatchObject({ intentionalSilence: true });
   });
 
   it("allows only one concurrent once reservation", async () => {
@@ -246,6 +250,9 @@ describe("operational reply policy", () => {
     ]);
 
     expect(results.filter((result) => result.shouldDeliver)).toHaveLength(1);
+    expect(results).toContainEqual(
+      expect.objectContaining({ pendingDelivery: true, shouldDeliver: false }),
+    );
     const reserved = results.find((result) => result.shouldDeliver);
     if (!reserved) {
       throw new Error("expected one concurrent reservation");
@@ -282,7 +289,11 @@ describe("operational reply policy", () => {
       {
         ...pendingEntry,
         operationalReplyPendingOnceKeys: pendingEntry.operationalReplyPendingOnceKeys?.map(
-          (reservation) => ({ ...reservation, expiresAt: Date.now() - 1 }),
+          (reservation) => ({
+            key: reservation.key,
+            owner: reservation.owner,
+            expiresAt: Date.now() - 1,
+          }),
         ),
       },
     );
@@ -332,7 +343,11 @@ describe("operational reply policy", () => {
       {
         ...pendingEntry,
         operationalReplyPendingOnceKeys: pendingEntry.operationalReplyPendingOnceKeys?.map(
-          (reservation) => ({ ...reservation, owner: "another-process" }),
+          (reservation) => ({
+            key: reservation.key,
+            owner: "another-process",
+            expiresAt: reservation.expiresAt,
+          }),
         ),
       },
     );
@@ -346,6 +361,7 @@ describe("operational reply policy", () => {
     });
 
     expect(duplicateFromAnotherProcess.shouldDeliver).toBe(false);
+    expect(duplicateFromAnotherProcess).toMatchObject({ pendingDelivery: true });
 
     await markOperationalReplyPolicyDelivered(first, true);
     const retainedEntry = await readSessionStoreEntry(storePath, sessionKey);
@@ -382,6 +398,7 @@ describe("operational reply policy", () => {
       text: "overflow notice",
     });
     expect(overflow.shouldDeliver).toBe(false);
+    expect(overflow).toMatchObject({ pendingDelivery: true });
 
     const boundedEntry = await readSessionStoreEntry(storePath, sessionKey);
     expect(boundedEntry.operationalReplyPendingOnceKeys).toHaveLength(1024);

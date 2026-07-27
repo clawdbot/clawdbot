@@ -167,6 +167,10 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     if (!policyResult.shouldDeliver) {
       return;
     }
+    if (isDispatchOperationAborted()) {
+      await markOperationalReplyPolicyDelivered(policyResult, false);
+      return;
+    }
     if (shouldRouteToOriginating) {
       await settleRoutedOperationalPolicyAfterDispatch(payload, policyResult);
       return;
@@ -194,6 +198,10 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     });
     const policyResult = await applyDispatchOperationalReplyPolicy(replyPayload);
     if (!policyResult.shouldDeliver) {
+      return;
+    }
+    if (isDispatchOperationAborted()) {
+      await markOperationalReplyPolicyDelivered(policyResult, false);
       return;
     }
     if (shouldRouteToOriginating) {

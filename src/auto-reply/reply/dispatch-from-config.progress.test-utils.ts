@@ -513,6 +513,52 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
+  it("releases once reservations when cancellation lands during tool policy", async () => {
+    clearOperationalReplyPolicyStateForTest();
+    setNoAbort();
+    const cfg = {
+      ...emptyConfig,
+      agents: { defaults: { verboseDefault: "on" } },
+      messages: { operationalReplies: { policy: "once" } },
+    } satisfies OpenClawConfig;
+    const ctx = buildTestCtx({ Provider: "telegram", ChatType: "direct" });
+    const payload = setReplyPayloadMetadata(
+      { text: "host tool status", isStatusNotice: true },
+      { operationalNotice: true },
+    );
+    const abortController = new AbortController();
+    const abortedDispatcher = createDispatcher();
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher: abortedDispatcher,
+      replyOptions: { abortSignal: abortController.signal },
+      replyResolver: async (_ctx, opts) => {
+        const delivery = opts?.onToolResult?.(payload);
+        abortController.abort();
+        await delivery;
+        return undefined;
+      },
+    });
+
+    expect(abortedDispatcher.sendToolResult).not.toHaveBeenCalled();
+
+    const retryDispatcher = createDispatcher();
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher: retryDispatcher,
+      replyResolver: async (_ctx, opts) => {
+        await opts?.onToolResult?.(payload);
+        return undefined;
+      },
+    });
+
+    expect(retryDispatcher.sendToolResult).toHaveBeenCalledWith(payload);
+    clearOperationalReplyPolicyStateForTest();
+  });
+
   it("delivers deterministic exec approval tool payloads in groups", async () => {
     setNoAbort();
     const cfg = automaticGroupReplyConfig;
