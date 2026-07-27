@@ -84,7 +84,7 @@ describe("detectPluginVersionDrift", () => {
     expect(result.drifts).toEqual([]);
   });
 
-  it("includes ClawHub-installed plugins in the drift check", () => {
+  it("includes legacy ClawHub installs with a catalog-backed spec", () => {
     const result = detectPluginVersionDrift({
       gatewayVersion: "2026.5.4",
       installRecords: {
@@ -133,6 +133,7 @@ describe("detectPluginVersionDrift", () => {
         community: clawhubRecord("1.2.3", {
           spec: "clawhub:community-plugin@1.2.3",
           clawhubPackage: "community-plugin",
+          clawhubChannel: "community",
         }),
       },
     });

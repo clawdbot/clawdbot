@@ -23,6 +23,10 @@ import {
 } from "./discovery.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
+import {
+  isTrustedOfficialPluginInstall,
+  matchesInstalledPluginRecord,
+} from "./installed-plugin-record-match.js";
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
 import type {
   PluginBundleFormat,
@@ -61,12 +65,9 @@ import {
   normalizeManifestChannelCommandDefaults,
 } from "./manifest.js";
 import { checkMinHostVersion } from "./min-host-version.js";
-import { resolveTrustedSourceLinkedOfficialClawHubInstall } from "./official-external-install-records.js";
 import {
   getOfficialExternalPluginCatalogEntryForPackage,
   getOfficialExternalPluginCatalogManifest,
-  resolveOfficialExternalPluginId,
-  resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
 import { resolvePackagePluginApiRange } from "./package-compat.js";
 import { isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
@@ -764,126 +765,6 @@ function dedupePluginDiagnostics(diagnostics: PluginDiagnostic[]): PluginDiagnos
   return deduped;
 }
 
-function matchesInstalledPluginRecord(params: {
-  pluginId: string;
-  candidate: PluginCandidate;
-  config?: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  installRecords: Record<string, PluginInstallRecord>;
-  installPathOnly?: boolean;
-}): boolean {
-  if (params.candidate.origin !== "global" && params.candidate.origin !== "config") {
-    return false;
-  }
-  const record = params.installRecords[params.pluginId];
-  if (!record) {
-    return false;
-  }
-  const candidatePaths = [
-    params.candidate.rootDir,
-    params.candidate.packageDir,
-    params.candidate.source,
-    params.candidate.setupSource,
-  ]
-    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-    .map((entry) => {
-      const resolved = resolveUserPath(entry, params.env);
-      return safeRealpathSync(resolved) ?? resolved;
-    });
-  // Security decisions must bind to the current install output. sourcePath can
-  // legitimately identify path installs, but it can also survive a source switch.
-  const trackedPaths = (
-    params.installPathOnly ? [record.installPath] : [record.installPath, record.sourcePath]
-  )
-    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-    .map((entry) => {
-      const resolved = resolveUserPath(entry, params.env);
-      return safeRealpathSync(resolved) ?? resolved;
-    });
-  if (candidatePaths.length === 0 || trackedPaths.length === 0) {
-    return false;
-  }
-  return trackedPaths.some((trackedPath) =>
-    candidatePaths.some(
-      (candidatePath) =>
-        candidatePath === trackedPath ||
-        isPathInside(trackedPath, candidatePath) ||
-        isPathInside(candidatePath, trackedPath),
-    ),
-  );
-}
-
-function npmSpecMatchesPackage(value: string | undefined, packageName: string): boolean {
-  const normalized = value?.trim();
-  if (!normalized) {
-    return false;
-  }
-  if (normalized === packageName) {
-    return true;
-  }
-  return normalized.startsWith(`${packageName}@`);
-}
-
-function isTrustedOfficialPluginInstall(params: {
-  pluginId: string;
-  candidate: PluginCandidate;
-  env: NodeJS.ProcessEnv;
-  installRecords: Record<string, PluginInstallRecord>;
-}): boolean {
-  if (
-    (params.candidate.origin !== "global" && params.candidate.origin !== "config") ||
-    !matchesInstalledPluginRecord({
-      pluginId: params.pluginId,
-      candidate: params.candidate,
-      env: params.env,
-      installRecords: params.installRecords,
-      installPathOnly: true,
-    })
-  ) {
-    return false;
-  }
-  const packageName = params.candidate.packageName?.trim();
-  if (!packageName) {
-    return false;
-  }
-  const catalogEntry = getOfficialExternalPluginCatalogEntryForPackage(packageName);
-  if (!catalogEntry || resolveOfficialExternalPluginId(catalogEntry) !== params.pluginId) {
-    return false;
-  }
-  const officialInstall = resolveOfficialExternalPluginInstall(catalogEntry);
-  const installRecord = params.installRecords[params.pluginId];
-  if (!installRecord) {
-    return false;
-  }
-  const officialClawHubInstall =
-    installRecord.source === "clawhub"
-      ? resolveTrustedSourceLinkedOfficialClawHubInstall({
-          pluginId: params.pluginId,
-          record: installRecord,
-        })
-      : undefined;
-  // Local npm-pack archives also persist source="npm". Only registry installs
-  // may inherit catalog trust; local artifacts and source links stay untrusted.
-  if (
-    installRecord.source === "npm" &&
-    installRecord.artifactKind === undefined &&
-    installRecord.sourcePath === undefined &&
-    officialInstall?.npmSpec === packageName &&
-    [
-      installRecord.resolvedName,
-      installRecord.spec,
-      installRecord.resolvedSpec,
-      params.candidate.packageName,
-    ].some((value) => npmSpecMatchesPackage(value, packageName))
-  ) {
-    return true;
-  }
-  if (installRecord.source === "clawhub" && officialClawHubInstall) {
-    return true;
-  }
-  return false;
-}
-
 function resolveDuplicatePrecedenceRank(params: {
   pluginId: string;
   candidate: PluginCandidate;
@@ -908,7 +789,6 @@ function resolveDuplicatePrecedenceRank(params: {
     matchesInstalledPluginRecord({
       pluginId: params.pluginId,
       candidate: params.candidate,
-      config: params.config,
       env: params.env,
       installRecords: params.installRecords,
     })
@@ -936,14 +816,12 @@ function isIntentionalInstalledBundledDuplicate(params: {
   const leftIsInstalled = matchesInstalledPluginRecord({
     pluginId: params.pluginId,
     candidate: params.left,
-    config: params.config,
     env: params.env,
     installRecords: params.installRecords,
   });
   const rightIsInstalled = matchesInstalledPluginRecord({
     pluginId: params.pluginId,
     candidate: params.right,
-    config: params.config,
     env: params.env,
     installRecords: params.installRecords,
   });
@@ -1089,7 +967,6 @@ export function loadPluginManifestRegistry(
         matchesInstalledPluginRecord({
           pluginId: manifest.id,
           candidate,
-          config,
           env,
           installRecords: getInstallRecords(),
         });

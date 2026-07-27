@@ -260,6 +260,64 @@ function loadOfficialCatalogEntries(options: CatalogOptions): ChannelPluginCatal
     .filter((entry): entry is ChannelPluginCatalogEntry => Boolean(entry));
 }
 
+function listDiscoveredCatalogEntryPackageNames(entry: ChannelPluginCatalogEntry): string[] {
+  const expectedNpmPackageName = entry.installSource?.npm?.expectedPackageName;
+  if (expectedNpmPackageName) {
+    // Prefer the discovered package identity over install metadata so a plugin
+    // cannot claim an official package name through its own manifest.
+    return [expectedNpmPackageName];
+  }
+  return uniqueStrings(
+    normalizeStringEntries([
+      entry.installSource?.npm?.packageName,
+      entry.installSource?.clawhub?.packageName,
+    ]),
+  );
+}
+
+function listOfficialCatalogEntryPackageNames(entry: ChannelPluginCatalogEntry): string[] {
+  return uniqueStrings(
+    normalizeStringEntries([
+      entry.installSource?.npm?.expectedPackageName,
+      entry.installSource?.npm?.packageName,
+      entry.installSource?.clawhub?.packageName,
+    ]),
+  );
+}
+
+export function resolveOfficialChannelPluginCatalogEntry(
+  entry: ChannelPluginCatalogEntry,
+  options: { officialCatalogPaths?: string[] } = {},
+): ChannelPluginCatalogEntry | undefined {
+  if (
+    entry.origin === "bundled" ||
+    (entry.origin === undefined && entry.trustedSourceLinkedOfficialInstall === true)
+  ) {
+    return entry;
+  }
+  if (
+    (entry.origin !== "global" && entry.origin !== "config") ||
+    !entry.pluginId ||
+    entry.trustedSourceLinkedOfficialInstall !== true
+  ) {
+    return undefined;
+  }
+  const candidatePackageNames = new Set(listDiscoveredCatalogEntryPackageNames(entry));
+  if (candidatePackageNames.size === 0) {
+    return undefined;
+  }
+  // Installed official plugins shadow fallback catalog rows. Re-link only when
+  // both plugin and package identity match, or third-party docs become trusted.
+  return loadOfficialCatalogEntries(options).find(
+    (officialEntry) =>
+      officialEntry.id === entry.id &&
+      (officialEntry.pluginId ?? officialEntry.id) === entry.pluginId &&
+      listOfficialCatalogEntryPackageNames(officialEntry).some((name) =>
+        candidatePackageNames.has(name),
+      ),
+  );
+}
+
 function toChannelMeta(params: {
   channel: NonNullable<OpenClawPackageManifest["channel"]>;
   id: string;
@@ -486,6 +544,7 @@ export function listRawChannelPluginCatalogEntries(
       packageName: candidate.packageName,
       packageDir: candidate.rootDir,
       origin: candidate.origin,
+      trustedSourceLinkedOfficialInstall: candidate.trustedSourceLinkedOfficialInstall,
       workspaceDir: candidate.workspaceDir ?? options.workspaceDir,
       channel: candidate.channel,
       install: candidate.install,

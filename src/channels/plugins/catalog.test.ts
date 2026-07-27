@@ -10,7 +10,10 @@ vi.mock("../../plugins/channel-catalog-registry.js", () => ({
   listChannelCatalogEntries: listChannelCatalogEntriesMock,
 }));
 
-import { getChannelPluginCatalogEntry } from "./catalog.js";
+import {
+  getChannelPluginCatalogEntry,
+  resolveOfficialChannelPluginCatalogEntry,
+} from "./catalog.js";
 
 beforeEach(() => {
   listChannelCatalogEntriesMock.mockReset().mockReturnValue([]);
@@ -73,5 +76,122 @@ describe("channel plugin catalog", () => {
         excludePluginRefs: [{ pluginId: "telegram", origin: "config" }],
       })?.origin,
     ).toBe("bundled");
+  });
+
+  it("resolves installed official channels back to verified official metadata", () => {
+    const options = {
+      workspaceDir: "/tmp/openclaw-channel-catalog-empty-workspace",
+      env: {},
+    };
+    const official = getChannelPluginCatalogEntry("wecom", options);
+    if (!official) {
+      throw new Error("expected official WeCom catalog entry");
+    }
+    const { trustedSourceLinkedOfficialInstall: _trusted, ...installed } = official;
+
+    expect(
+      resolveOfficialChannelPluginCatalogEntry({
+        ...installed,
+        origin: "global",
+        trustedSourceLinkedOfficialInstall: true,
+        meta: {
+          ...installed.meta,
+          docsPath: "/unverified-installed-plugin-docs",
+        },
+      })?.meta.docsPath,
+    ).toBe(official.meta.docsPath);
+  });
+
+  it("resolves trusted config-origin official channels back to verified official metadata", () => {
+    const options = {
+      workspaceDir: "/tmp/openclaw-channel-catalog-empty-workspace",
+      env: {},
+    };
+    const official = getChannelPluginCatalogEntry("wecom", options);
+    if (!official) {
+      throw new Error("expected official WeCom catalog entry");
+    }
+    const { trustedSourceLinkedOfficialInstall: _trusted, ...installed } = official;
+
+    expect(
+      resolveOfficialChannelPluginCatalogEntry({
+        ...installed,
+        origin: "config",
+        trustedSourceLinkedOfficialInstall: true,
+        meta: {
+          ...installed.meta,
+          docsPath: "/unverified-config-plugin-docs",
+        },
+      })?.meta.docsPath,
+    ).toBe(official.meta.docsPath);
+  });
+
+  it("resolves installed official channels whose catalog omits a plugin id", () => {
+    const options = {
+      workspaceDir: "/tmp/openclaw-channel-catalog-empty-workspace",
+      env: {},
+    };
+    const official = getChannelPluginCatalogEntry("slack", options);
+    if (!official) {
+      throw new Error("expected official Slack catalog entry");
+    }
+    const { trustedSourceLinkedOfficialInstall: _trusted, ...installed } = official;
+
+    expect(
+      resolveOfficialChannelPluginCatalogEntry({
+        ...installed,
+        pluginId: "slack",
+        origin: "global",
+        trustedSourceLinkedOfficialInstall: true,
+      })?.meta.docsPath,
+    ).toBe("/channels/slack");
+  });
+
+  it("does not resolve a third-party package shadow to official channel metadata", () => {
+    const options = {
+      workspaceDir: "/tmp/openclaw-channel-catalog-empty-workspace",
+      env: {},
+    };
+    const official = getChannelPluginCatalogEntry("wecom", options);
+    if (!official) {
+      throw new Error("expected official WeCom catalog entry");
+    }
+    const { trustedSourceLinkedOfficialInstall: _trusted, ...installed } = official;
+
+    expect(
+      resolveOfficialChannelPluginCatalogEntry({
+        ...installed,
+        origin: "global",
+        installSource: {
+          npm: {
+            spec: official.installSource?.npm?.spec ?? "@wecom/wecom-openclaw-plugin",
+            packageName: official.installSource?.npm?.packageName ?? "@wecom/wecom-openclaw-plugin",
+            expectedPackageName: "@attacker/wecom",
+            selectorKind: "none",
+            exactVersion: false,
+            pinState: "floating-without-integrity",
+          },
+          warnings: [],
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not trust an untracked global plugin that claims official identity", () => {
+    const official = getChannelPluginCatalogEntry("slack", {
+      workspaceDir: "/tmp/openclaw-channel-catalog-empty-workspace",
+      env: {},
+    });
+    if (!official) {
+      throw new Error("expected official Slack catalog entry");
+    }
+
+    expect(
+      resolveOfficialChannelPluginCatalogEntry({
+        ...official,
+        origin: "global",
+        trustedSourceLinkedOfficialInstall: undefined,
+      }),
+    ).toBeUndefined();
   });
 });

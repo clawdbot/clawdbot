@@ -72,6 +72,7 @@ function createMockChannelPlugin(overrides: {
   id?: string;
   label?: string;
   accountIds?: string[];
+  docsPath?: string;
 }): ChannelPlugin {
   const id = overrides.id ?? "telegram";
   return {
@@ -80,7 +81,7 @@ function createMockChannelPlugin(overrides: {
       id,
       label: overrides.label ?? "Telegram",
       selectionLabel: overrides.label ?? "Telegram",
-      docsPath: `/channels/${id}`,
+      docsPath: overrides.docsPath ?? `/channels/${id}`,
       blurb: overrides.label ?? "Telegram",
     },
     capabilities: { chatTypes: ["direct"] },
@@ -91,21 +92,57 @@ function createMockChannelPlugin(overrides: {
   };
 }
 
-function createCatalogEntry(id: string, label: string): ChannelPluginCatalogEntry {
+function createCatalogEntry(
+  id: string,
+  label: string,
+  docsPath = `/channels/${id}`,
+  options: { official?: boolean } = {},
+): ChannelPluginCatalogEntry {
+  const official = options.official !== false;
   return {
     id,
-    label,
     pluginId: `@openclaw/${id}`,
-    origin: "official",
+    ...(official ? { trustedSourceLinkedOfficialInstall: true } : { origin: "workspace" as const }),
     meta: {
       id,
       label,
       selectionLabel: label,
-      docsPath: `/channels/${id}`,
+      docsPath,
       blurb: label,
     },
     install: { npmSpec: `@openclaw/${id}` },
-  } as unknown as ChannelPluginCatalogEntry;
+  };
+}
+
+function createInstalledOfficialExternalCatalogEntry(
+  origin: "global" | "config" = "global",
+): ChannelPluginCatalogEntry {
+  return {
+    id: "wecom",
+    pluginId: "wecom-openclaw-plugin",
+    origin,
+    trustedSourceLinkedOfficialInstall: true,
+    meta: {
+      id: "wecom",
+      label: "WeCom",
+      selectionLabel: "WeCom",
+      docsPath: "/unverified-installed-plugin-docs",
+      blurb: "WeCom",
+    },
+    install: { npmSpec: "@wecom/wecom-openclaw-plugin@2026.5.7" },
+    installSource: {
+      npm: {
+        spec: "@wecom/wecom-openclaw-plugin@2026.5.7",
+        packageName: "@wecom/wecom-openclaw-plugin",
+        expectedPackageName: "@wecom/wecom-openclaw-plugin",
+        selector: "2026.5.7",
+        selectorKind: "exact-version",
+        exactVersion: true,
+        pinState: "exact-without-integrity",
+      },
+      warnings: ["npm-spec-missing-integrity"],
+    },
+  };
 }
 
 function loggedText(runtime: ReturnType<typeof createTestRuntime>): string {
@@ -152,6 +189,9 @@ describe("channels list", () => {
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
       createMockChannelPlugin({ accountIds: ["alerts", "default"] }),
     ]);
+    mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
+      createCatalogEntry("telegram", "Telegram"),
+    ]);
     const config = {
       channels: {
         telegram: {
@@ -173,13 +213,147 @@ describe("channels list", () => {
       includeSetupFallbackPlugins: true,
     });
     const payload = JSON.parse(loggedText(runtime)) as {
-      chat?: Record<string, { accounts: string[]; installed: boolean; origin: string }>;
+      chat?: Record<
+        string,
+        {
+          accounts: string[];
+          docsPath: string;
+          installed: boolean;
+          label: string;
+          origin: string;
+        }
+      >;
     };
     expect(payload.chat?.telegram).toEqual({
       accounts: ["alerts", "default"],
+      docsPath: "/channels/telegram",
       installed: true,
+      label: "Telegram",
       origin: "configured",
     });
+  });
+
+  it("prefers trusted catalog docs metadata for configured fallback plugins", async () => {
+    const runtime = createTestRuntime();
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
+      createMockChannelPlugin({
+        id: "wecom",
+        label: "WeCom",
+        accountIds: ["default"],
+        docsPath: "/channels/wecom",
+      }),
+    ]);
+    mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
+      createCatalogEntry("wecom", "WeCom", "/plugins/community#wecom"),
+    ]);
+    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+      accountId: "default",
+      configured: true,
+      enabled: true,
+    });
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        channels: {
+          wecom: { enabled: true },
+        },
+      },
+    });
+
+    await channelsListCommand({ json: true }, runtime);
+
+    const payload = JSON.parse(loggedText(runtime)) as {
+      chat: Record<string, { docsPath: string; label: string }>;
+    };
+    expect(payload.chat.wecom).toMatchObject({
+      docsPath: "/plugins/community#wecom",
+      label: "WeCom",
+    });
+  });
+
+  it.each(["global", "config"] as const)(
+    "uses verified official docs metadata for an installed official external channel from %s",
+    async (origin) => {
+      const runtime = createTestRuntime();
+      mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
+        createMockChannelPlugin({
+          id: "wecom",
+          label: "WeCom",
+          accountIds: ["default"],
+          docsPath: "/unverified-installed-plugin-docs",
+        }),
+      ]);
+      mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
+        createInstalledOfficialExternalCatalogEntry(origin),
+      ]);
+      mocks.buildChannelAccountSnapshot.mockResolvedValue({
+        accountId: "default",
+        configured: true,
+        enabled: true,
+      });
+      mocks.readConfigFileSnapshot.mockResolvedValue({
+        ...baseConfigSnapshot,
+        config: {
+          channels: {
+            wecom: { enabled: true },
+          },
+        },
+      });
+
+      await channelsListCommand({ json: true }, runtime);
+
+      const payload = JSON.parse(loggedText(runtime)) as {
+        chat: Record<string, { docsPath: string; label: string }>;
+      };
+      expect(payload.chat.wecom).toMatchObject({
+        docsPath: "/plugins/community#wecom",
+        label: "WeCom",
+      });
+    },
+  );
+
+  it("omits catalog docs metadata that is not an official root-relative path", async () => {
+    const runtime = createTestRuntime();
+    mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
+      createCatalogEntry("external-chat", "External Chat", "@attacker.example/setup"),
+    ]);
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {},
+    });
+
+    await channelsListCommand({ json: true, all: true }, runtime);
+
+    const payload = JSON.parse(loggedText(runtime)) as {
+      chat: Record<string, { docsPath?: string; label: string }>;
+    };
+    expect(payload.chat["external-chat"]).toMatchObject({
+      label: "External Chat",
+    });
+    expect(payload.chat["external-chat"]).not.toHaveProperty("docsPath");
+  });
+
+  it("omits a root-relative docs path from an untrusted catalog entry", async () => {
+    const runtime = createTestRuntime();
+    mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
+      createCatalogEntry("external-chat", "External Chat", "/channels/telegram", {
+        official: false,
+      }),
+    ]);
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {},
+    });
+
+    await channelsListCommand({ json: true, all: true }, runtime);
+
+    const payload = JSON.parse(loggedText(runtime)) as {
+      chat: Record<string, { docsPath?: string; label: string }>;
+    };
+    expect(payload.chat["external-chat"]).toMatchObject({
+      label: "External Chat",
+    });
+    expect(payload.chat["external-chat"]).not.toHaveProperty("docsPath");
   });
 
   it("keeps JSON output valid when only channels are provided (no usage field)", async () => {
@@ -441,11 +615,22 @@ describe("channels list", () => {
     await channelsListCommand({ json: true }, runtime);
 
     const payload = JSON.parse(loggedText(runtime)) as {
-      chat: Record<string, { accounts: string[]; origin: string; installed: boolean }>;
+      chat: Record<
+        string,
+        {
+          accounts: string[];
+          docsPath: string;
+          installed: boolean;
+          label: string;
+          origin: string;
+        }
+      >;
     };
     expect(payload.chat.discord).toEqual({
       accounts: [],
+      docsPath: "/channels/discord",
       installed: false,
+      label: "Discord",
       origin: "configured",
     });
   });

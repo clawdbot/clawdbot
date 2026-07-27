@@ -3,6 +3,7 @@ import { normalizeOptionalString as resolveOptionalString } from "@openclaw/norm
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
+import { isTrustedOfficialPluginInstall } from "./installed-plugin-record-match.js";
 import type { PluginPackageChannel, PluginPackageInstall } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
@@ -14,6 +15,7 @@ export type PluginChannelCatalogEntry = {
   rootDir: string;
   channel: PluginPackageChannel;
   install?: PluginPackageInstall;
+  trustedSourceLinkedOfficialInstall?: boolean;
 };
 
 export function listChannelCatalogEntries(
@@ -33,11 +35,12 @@ export function listChannelCatalogEntries(
   } = {},
 ): PluginChannelCatalogEntry[] {
   const installRecords = resolveInstallRecords(params);
+  const env = params.env ?? process.env;
   const discovery =
     params.discovery ??
     discoverOpenClawPlugins({
       workspaceDir: params.workspaceDir,
-      env: params.env,
+      env,
       extraPaths: params.extraPaths,
       ...(installRecords && Object.keys(installRecords).length > 0 ? { installRecords } : {}),
     });
@@ -53,6 +56,14 @@ export function listChannelCatalogEntries(
     if (!pluginId) {
       return [];
     }
+    const trustedSourceLinkedOfficialInstall =
+      installRecords &&
+      isTrustedOfficialPluginInstall({
+        pluginId,
+        candidate,
+        env,
+        installRecords,
+      });
     return [
       {
         pluginId,
@@ -64,6 +75,7 @@ export function listChannelCatalogEntries(
         ...(candidate.packageManifest?.install
           ? { install: candidate.packageManifest.install }
           : {}),
+        ...(trustedSourceLinkedOfficialInstall ? { trustedSourceLinkedOfficialInstall: true } : {}),
       },
     ];
   });

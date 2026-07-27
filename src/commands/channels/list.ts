@@ -2,7 +2,10 @@
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
+import {
+  resolveOfficialChannelPluginCatalogEntry,
+  type ChannelPluginCatalogEntry,
+} from "../../channels/plugins/catalog.js";
 import { isChannelVisibleInConfiguredLists } from "../../channels/plugins/exposure.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
@@ -143,6 +146,26 @@ function formatCatalogOnlyLine(params: {
 }
 
 /** Print or serialize configured, available, and installable chat channel accounts. */
+function resolveOfficialDocsPath(entry: ChannelPluginCatalogEntry | undefined): string | undefined {
+  if (!entry) {
+    return undefined;
+  }
+  const officialEntry = resolveOfficialChannelPluginCatalogEntry(entry);
+  if (!officialEntry) {
+    return undefined;
+  }
+  const docsOrigin = "https://docs.openclaw.ai";
+  const value = officialEntry.meta.docsPath.trim();
+  if (!value.startsWith("/") || value.startsWith("//") || value.includes("\\")) {
+    return undefined;
+  }
+  const resolved = new URL(value, docsOrigin);
+  if (resolved.origin !== docsOrigin) {
+    return undefined;
+  }
+  return `${resolved.pathname}${resolved.search}${resolved.hash}`;
+}
+
 export async function channelsListCommand(
   opts: ChannelsListOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -271,31 +294,44 @@ export async function channelsListCommand(
   if (opts.json) {
     type JsonChannelEntry = {
       accounts: string[];
+      docsPath?: string;
       installed: boolean;
+      label: string;
       origin: "configured" | "available" | "installable";
     };
     const chat: Record<string, JsonChannelEntry> = {};
+    const catalogEntryById = new Map(catalogEntries.map((entry) => [entry.id, entry]));
     for (const plugin of plugins) {
       const accountIds = plugin.config.listAccountIds(cfg);
       const installed = isInstalled(plugin.id);
+      const catalogEntry = catalogEntryById.get(plugin.id);
+      const meta = catalogEntry?.meta ?? plugin.meta;
+      const docsPath = resolveOfficialDocsPath(catalogEntry);
       if (accountIds && accountIds.length > 0) {
         chat[plugin.id] = {
           accounts: accountIds,
+          ...(docsPath ? { docsPath } : {}),
           installed,
+          label: meta.label,
           origin: "configured",
         };
       } else if (showAll && shouldShowConfigured(plugin)) {
         chat[plugin.id] = {
           accounts: [],
+          ...(docsPath ? { docsPath } : {}),
           installed,
+          label: meta.label,
           origin: "available",
         };
       }
     }
     for (const line of catalogOnlyLines) {
+      const docsPath = resolveOfficialDocsPath(line.entry);
       chat[line.entry.id] = {
         accounts: [],
+        ...(docsPath ? { docsPath } : {}),
         installed: line.installed,
+        label: line.entry.meta.label,
         origin: line.configured ? "configured" : line.installed ? "available" : "installable",
       };
     }
