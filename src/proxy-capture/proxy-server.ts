@@ -247,6 +247,8 @@ export async function startDebugProxyServer(params: {
         },
         (upstreamRes) => {
           const responseCapture = createBodyPreviewCapture();
+          let upstreamFinished = false;
+          let upstreamFailed = false;
           let responseFinished = false;
           let downstreamFailed = false;
           let pausedForDownstream = false;
@@ -257,28 +259,40 @@ export async function startDebugProxyServer(params: {
             }
           };
           const handleDownstreamFailure = (error?: Error) => {
-            if (downstreamFailed || responseFinished) {
+            if (downstreamFailed || responseFinished || upstreamFailed) {
               return;
             }
             downstreamFailed = true;
             res.off("drain", resumeUpstreamResponse);
-            if (error) {
-              recordTargetEvent({
-                direction: "local",
-                kind: "error",
-                errorText: error.message,
-              });
-            }
-            upstream.destroy(error);
-            upstreamRes.destroy(error);
+            recordTargetEvent({
+              direction: "local",
+              kind: "error",
+              errorText: error?.message ?? "Downstream response closed before completion",
+            });
+            upstream.destroy();
+            upstreamRes.destroy();
           };
+          res.on("finish", () => {
+            if (!upstreamFinished || downstreamFailed || upstreamFailed) {
+              return;
+            }
+            responseFinished = true;
+            res.off("drain", resumeUpstreamResponse);
+            recordTargetEvent({
+              direction: "inbound",
+              kind: "response",
+              status: upstreamRes.statusCode ?? undefined,
+              headersJson: JSON.stringify(upstreamRes.headers),
+              ...finishBodyPreviewCapture(responseCapture),
+            });
+          });
           res.on("error", handleDownstreamFailure);
           res.on("close", () => handleDownstreamFailure());
           upstreamRes.on("data", (chunk) => {
             const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
             appendBodyPreviewCapture(responseCapture, buffer);
             if (res.destroyed || res.writableEnded) {
-              upstreamRes.destroy();
+              handleDownstreamFailure();
               return;
             }
             try {
@@ -292,21 +306,19 @@ export async function startDebugProxyServer(params: {
             }
           });
           upstreamRes.on("end", () => {
-            responseFinished = true;
+            upstreamFinished = true;
             res.off("drain", resumeUpstreamResponse);
-            recordTargetEvent({
-              direction: "inbound",
-              kind: "response",
-              status: upstreamRes.statusCode ?? undefined,
-              headersJson: JSON.stringify(upstreamRes.headers),
-              ...finishBodyPreviewCapture(responseCapture),
-            });
             if (!res.destroyed && !res.writableEnded) {
               res.end();
+            } else if (!res.writableFinished) {
+              handleDownstreamFailure();
             }
           });
           upstreamRes.on("error", (error) => {
-            responseFinished = true;
+            if (downstreamFailed || responseFinished || upstreamFailed) {
+              return;
+            }
+            upstreamFailed = true;
             res.off("drain", resumeUpstreamResponse);
             recordTargetEvent({
               direction: "inbound",
