@@ -1313,7 +1313,7 @@ describe("openai image generation provider", () => {
           },
         },
       },
-    };
+    } as never;
 
     const provider = buildOpenAIImageGenerationProvider();
     expect(provider.isConfigured?.({ cfg, agentDir: "/tmp/agent" })).toBe(false);
