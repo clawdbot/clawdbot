@@ -122,6 +122,12 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: false,
   },
   {
+    name: "hosting",
+    description: "Inspect OpenClaw hosting contracts",
+    hasSubcommands: true,
+    parentDefaultHelp: true,
+  },
+  {
     name: "audit",
     description: "Inspect activity records and exact-run identity context",
     hasSubcommands: false,
