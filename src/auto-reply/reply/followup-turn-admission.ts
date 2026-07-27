@@ -136,7 +136,13 @@ function createFollowupSessionOwner(params: {
       storedEntry.sessionId === entry.sessionId &&
       storedEntry.lifecycleRevision === entry.lifecycleRevision,
     );
-    if (storedEntry && !storedMatchesOwnedGeneration && !storedMatchesAdoptedGeneration) {
+    const storedEntryWasDeleted = Boolean(
+      params.key && params.store && !storedEntry && params.expectedStoreEntry,
+    );
+    if (
+      storedEntryWasDeleted ||
+      (storedEntry && !storedMatchesOwnedGeneration && !storedMatchesAdoptedGeneration)
+    ) {
       throw new FollowupSessionGenerationInvalidatedError(
         "Follow-up session generation was replaced during admission",
       );

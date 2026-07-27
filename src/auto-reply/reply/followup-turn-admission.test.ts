@@ -624,6 +624,29 @@ describe("admitFollowupTurn", () => {
     expect(operation.complete).toHaveBeenCalledOnce();
   });
 
+  it("restores the item when a successful preflight observes in-memory deletion", async () => {
+    const operation = createOperation();
+    const initialEntry: SessionEntry = {
+      sessionId: "queued-session",
+      lifecycleRevision: "initial",
+      updatedAt: 1,
+    };
+    const sessionStore: Record<string, SessionEntry> = { main: initialEntry };
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
+    state.preflight.mockImplementation(async () => {
+      delete sessionStore.main;
+      return initialEntry;
+    });
+
+    await expect(
+      admitFollowupTurn({
+        queued: createRun(),
+        defaults: createDefaults({ sessionStore, sessionEntry: initialEntry }),
+      }),
+    ).rejects.toThrow("Follow-up session generation changed");
+    expect(operation.complete).toHaveBeenCalledOnce();
+  });
+
   it("refreshes send policy and goal context after preflight rotates the generation", async () => {
     const operation = createOperation();
     const initialEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
