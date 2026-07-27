@@ -30,7 +30,6 @@ import {
   appendCanvasBlockToAssistantMessage,
   buildMessageKeys,
   canvasPreviewBaseIdentity,
-  chatItemTimestamp,
   collapseSequentialDuplicateMessages,
   createCanvasAssistantMessage,
   extractChatMessagePreview,
