@@ -54,7 +54,7 @@ const outboundSessionRuntimeLoader = createLazyImportLoader(
 const transcriptRuntimeLoader = createLazyImportLoader(
   () => import("../../config/sessions/transcript.runtime.js"),
 );
-export async function loadDeliveryOutboundRuntime(): Promise<
+async function loadDeliveryOutboundRuntime(): Promise<
   typeof import("./delivery-outbound.runtime.js")
 > {
   return await deliveryOutboundRuntimeLoader.load();
