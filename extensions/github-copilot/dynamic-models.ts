@@ -9,6 +9,7 @@ import type {
 import { getCachedLiveCatalogValue } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { resolveFirstGithubToken } from "./auth.js";
 import { resolveGithubCopilotDomain } from "./domain.js";
+import { COPILOT_MODEL_DISCOVERY_ENDPOINT_SOURCE } from "./model-discovery-http.js";
 import {
   PROVIDER_ID,
   fetchCopilotModelCatalog,
@@ -85,7 +86,12 @@ export function createGithubCopilotDynamicModelHooks(params: {
       try {
         discoveredModels = await getCachedLiveCatalogValue({
           keyParts: [PROVIDER_ID, "models", baseUrl, copilotApiToken],
-          load: async () => await fetchCopilotModelCatalog({ copilotApiToken, baseUrl }),
+          load: async () =>
+            await fetchCopilotModelCatalog({
+              copilotApiToken,
+              baseUrl,
+              endpointSource: COPILOT_MODEL_DISCOVERY_ENDPOINT_SOURCE.TOKEN_EXCHANGE,
+            }),
         });
       } catch {
         discoveredModels = [];

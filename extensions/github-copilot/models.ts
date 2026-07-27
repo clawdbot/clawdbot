@@ -15,6 +15,11 @@ import {
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  COPILOT_MODEL_DISCOVERY_ENDPOINT_SOURCE,
+  fetchCopilotModelDiscovery,
+  type CopilotModelDiscoveryEndpointSource,
+} from "./model-discovery-http.js";
+import {
   resolveCopilotModelCompat,
   resolveCopilotTransportApi,
   resolveStaticCopilotModelOverride,
@@ -237,6 +242,8 @@ type FetchCopilotModelCatalogParams = {
   baseUrl: string;
   /** Optional fetch override for testing. */
   fetchImpl?: typeof fetch;
+  /** Whether the endpoint came from validated token exchange or operator config. */
+  endpointSource?: CopilotModelDiscoveryEndpointSource;
   /** Optional AbortSignal; defaults to a 10s timeout. */
   signal?: AbortSignal;
 };
@@ -254,7 +261,6 @@ type FetchCopilotModelCatalogParams = {
 export async function fetchCopilotModelCatalog(
   params: FetchCopilotModelCatalogParams,
 ): Promise<CopilotCatalogModel[]> {
-  const fetchImpl = params.fetchImpl ?? fetch;
   const trimmedBase = params.baseUrl.replace(/\/+$/, "");
   if (!trimmedBase) {
     throw new Error("fetchCopilotModelCatalog: baseUrl required");
@@ -263,12 +269,9 @@ export async function fetchCopilotModelCatalog(
     throw new Error("fetchCopilotModelCatalog: copilotApiToken required");
   }
   const url = `${trimmedBase}/models`;
-  const controller = params.signal ? undefined : new AbortController();
-  const timeoutId = controller
-    ? setTimeout(() => controller.abort(), COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS)
-    : undefined;
-  try {
-    const res = await fetchImpl(url, {
+  const { response, release } = await fetchCopilotModelDiscovery({
+    url,
+    init: {
       method: "GET",
       headers: {
         Accept: "application/json",
@@ -276,14 +279,22 @@ export async function fetchCopilotModelCatalog(
         ...buildCopilotIdeHeaders(),
         "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
       },
-      signal: params.signal ?? controller?.signal,
-    });
-    if (!res.ok) {
+    },
+    endpointSource:
+      params.endpointSource ?? COPILOT_MODEL_DISCOVERY_ENDPOINT_SOURCE.OPERATOR_OVERRIDE,
+    ...(params.fetchImpl ? { fetchImpl: params.fetchImpl } : {}),
+    ...(params.signal
+      ? { signal: params.signal }
+      : { timeoutMs: COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS }),
+    auditContext: "github-copilot.model-discovery",
+  });
+  try {
+    if (!response.ok) {
       // Static catalog fallback never consumes this body, so release the transport before cleanup.
-      await res.body?.cancel().catch(() => undefined);
-      throw new Error(`Copilot /models fetch failed: HTTP ${res.status}`);
+      await response.body?.cancel().catch(() => undefined);
+      throw new Error(`Copilot /models fetch failed: HTTP ${response.status}`);
     }
-    const data = await readProviderJsonArrayFieldResponse(res, "Copilot /models", "data");
+    const data = await readProviderJsonArrayFieldResponse(response, "Copilot /models", "data");
     const seen = new Set<string>();
     const out: CopilotCatalogModel[] = [];
     for (const rawEntry of data) {
@@ -300,8 +311,6 @@ export async function fetchCopilotModelCatalog(
     }
     return out;
   } finally {
-    if (timeoutId !== undefined) {
-      clearTimeout(timeoutId);
-    }
+    await release();
   }
 }

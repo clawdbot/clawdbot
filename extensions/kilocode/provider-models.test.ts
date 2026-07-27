@@ -129,6 +129,7 @@ async function withFetchPathTest(mockFetch: MockKilocodeFetch, runAssertions: ()
   fetchWithSsrFGuardMock.mockImplementation(
     async (params: { url: string; init?: RequestInit }) => ({
       response: await callMockFetch(params.url, params.init),
+      finalUrl: params.url,
       release,
     }),
   );
@@ -188,16 +189,22 @@ describe("discoverKilocodeModels (fetch path)", () => {
       const guardedFetch = requireRecord(guardedFetchParams, "guarded fetch params");
       expect(guardedFetch.url).toBe(KILOCODE_MODELS_URL);
       const guardedInit = requireRecord(guardedFetch.init, "guarded fetch init");
-      expect(guardedInit.headers).toEqual({ Accept: "application/json" });
+      expect(guardedInit.headers).toBeInstanceOf(Headers);
+      expect(new Headers(guardedInit.headers as HeadersInit).get("accept")).toBe(
+        "application/json",
+      );
       expect(guardedFetch.policy).toEqual({ allowedHostnames: ["api.kilo.ai"] });
       expect(guardedFetch.timeoutMs).toBe(5000);
       expect(guardedFetch.auditContext).toBe("kilocode.model_discovery");
+      expect(guardedFetch.mode).toBe("trusted_env_proxy");
+      expect(guardedFetch.requireHttps).toBe(true);
 
       expect(mockFetch).toHaveBeenCalledOnce();
       const [fetchUrl, fetchOptions] = requireFirstMockCall(mockFetch, "mock fetch call");
       expect(fetchUrl).toBe(KILOCODE_MODELS_URL);
       const fetchInit = requireRecord(fetchOptions, "mock fetch init");
-      expect(fetchInit.headers).toEqual({ Accept: "application/json" });
+      expect(fetchInit.headers).toBeInstanceOf(Headers);
+      expect(new Headers(fetchInit.headers as HeadersInit).get("accept")).toBe("application/json");
 
       expect(models.length).toBe(2);
 

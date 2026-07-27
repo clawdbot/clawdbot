@@ -1,4 +1,5 @@
 // ClawRouter provider catalog maps credential-scoped routes to OpenClaw transports.
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   getCachedLiveProviderModelRows,
@@ -8,6 +9,7 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 const CLAWROUTER_DEFAULT_BASE_URL = "https://clawrouter.openclaw.ai";
 
@@ -307,12 +309,20 @@ export async function buildClawRouterProviderConfig(params: {
   fetchGuard?: LiveModelCatalogFetchGuard;
 }): Promise<ModelProviderConfig> {
   const rootUrl = normalizeClawRouterRootUrl(params.baseUrl);
+  const usesCanonicalCatalogRoot = rootUrl === CLAWROUTER_DEFAULT_BASE_URL;
   const rows = await getCachedLiveProviderModelRows({
     providerId: PROVIDER_ID,
     endpoint: `${rootUrl}/v1/catalog`,
     apiKey: params.apiKey,
     discoveryApiKey: params.discoveryApiKey,
-    fetchGuard: params.fetchGuard,
+    fetchGuard:
+      params.fetchGuard ??
+      (usesCanonicalCatalogRoot
+        ? (guardParams) =>
+            fetchWithSsrFGuard(
+              withTrustedEnvProxyGuardedFetchMode({ ...guardParams, requireHttps: true }),
+            )
+        : undefined),
     readRows: readCatalogRows,
     ttlMs: CATALOG_CACHE_TTL_MS,
     shouldCacheRows: (providers) => providers.length > 0,

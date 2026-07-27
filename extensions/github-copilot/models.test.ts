@@ -692,6 +692,38 @@ describe("fetchCopilotModelCatalog", () => {
     expect(fetchImpl.mock.calls[0]?.[0]).toBe("https://api.githubcopilot.com/models");
   });
 
+  it("does not impose the default timeout when the caller supplies a signal", async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const reason = new Error("caller cancelled model discovery");
+      let requestSignal: AbortSignal | undefined;
+      const fetchImpl = vi.fn(
+        async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> =>
+          await new Promise<Response>((_resolve, reject) => {
+            requestSignal = init?.signal ?? undefined;
+            requestSignal?.addEventListener("abort", () => reject(reason), {
+              once: true,
+            });
+          }),
+      );
+
+      const request = fetchCopilotModelCatalog({
+        copilotApiToken: "tid=test",
+        baseUrl: "https://api.githubcopilot.com",
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        signal: controller.signal,
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(requestSignal?.aborted).toBe(false);
+      controller.abort(reason);
+      await expect(request).rejects.toBe(reason);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("dedupes by id when API returns duplicates", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       makeResponse(200, {

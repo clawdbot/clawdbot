@@ -20,7 +20,8 @@ vi.mock("./token.js", () => ({
   resolveCopilotApiToken: resolveCopilotApiTokenMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
@@ -121,6 +122,9 @@ function firstDiscoveryRequest() {
   }
   return request as {
     init: { headers: Record<string, string> };
+    mode?: string;
+    policy?: Record<string, unknown>;
+    requireHttps?: boolean;
     url: string;
   };
 }
@@ -170,6 +174,14 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
 
     expect(result.provider?.model).toBe("text-embedding-3-small");
     expect(firstCopilotApiTokenRequest().githubToken).toBe("test-token-placeholder");
+    expect(firstDiscoveryRequest()).toMatchObject({
+      mode: "trusted_env_proxy",
+      requireHttps: true,
+      policy: {
+        allowedHostnames: ["example.test"],
+        allowedOrigins: ["https://example.test"],
+      },
+    });
   });
 
   it("matches embedding-capable models when supported_endpoints is missing or malformed", async () => {
@@ -327,6 +339,8 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     expect(discoveryCall.url).toBe("https://proxy.example/v1/models");
     expect(discoveryCall.init.headers["Accept-Encoding"]).toBe("identity");
     expect(discoveryCall.init.headers["X-Proxy-Token"]).toBe("test-token-placeholder");
+    expect(discoveryCall).not.toHaveProperty("mode");
+    expect(discoveryCall).not.toHaveProperty("requireHttps");
   });
 
   it("rejects an unresolved remote ref without falling back to another profile", async () => {

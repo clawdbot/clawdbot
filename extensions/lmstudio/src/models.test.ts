@@ -4,7 +4,7 @@ import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
 import {
   discoverLmstudioModels,
@@ -136,6 +136,16 @@ describe("lmstudio-models", () => {
     const loadBody = parseJsonRequestBody(loadInit) as { model: string };
     expect(loadBody.model).toBe(modelKey);
   };
+
+  beforeEach(() => {
+    fetchWithSsrFGuardMock.mockImplementation(async (params) => ({
+      response: await (params.fetchImpl ?? fetch)(params.url, {
+        ...params.init,
+        signal: AbortSignal.timeout(params.timeoutMs),
+      }),
+      release: vi.fn(async () => undefined),
+    }));
+  });
 
   afterEach(() => {
     fetchWithSsrFGuardMock.mockReset();

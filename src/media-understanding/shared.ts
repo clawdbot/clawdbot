@@ -504,6 +504,7 @@ export async function fetchWithTimeoutGuarded(
     dispatcherPolicy?: PinnedDispatcherPolicy;
     auditContext?: string;
     mode?: GuardedFetchMode;
+    requireHttps?: boolean;
   },
 ): Promise<GuardedFetchResult> {
   // Provider HTTP helpers (image/music/video generation, transcription, etc.)
@@ -546,6 +547,7 @@ export async function fetchWithTimeoutGuarded(
     pinDns: options?.pinDns,
     dispatcherPolicy: options?.dispatcherPolicy,
     auditContext: sanitizeAuditContext(options?.auditContext),
+    requireHttps: options?.requireHttps,
     ...(resolvedMode ? { mode: resolvedMode } : {}),
   });
 }

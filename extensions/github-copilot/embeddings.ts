@@ -13,9 +13,14 @@ import {
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveFirstGithubToken } from "./auth.js";
 import { resolveGithubCopilotDomain } from "./domain.js";
+import {
+  COPILOT_MODEL_DISCOVERY_ENDPOINT_SOURCE,
+  fetchCopilotModelDiscovery,
+  type CopilotModelDiscoveryEndpointSource,
+} from "./model-discovery-http.js";
 import { CopilotTokenExchangeError } from "./token-exchange-error.js";
 import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } from "./token.js";
 
@@ -91,9 +96,10 @@ async function discoverEmbeddingModels(params: {
   copilotToken: string;
   headers?: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
+  endpointSource: CopilotModelDiscoveryEndpointSource;
 }): Promise<string[]> {
   const url = `${params.baseUrl.replace(/\/$/, "")}/models`;
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchCopilotModelDiscovery({
     url,
     init: {
       method: "GET",
@@ -103,7 +109,9 @@ async function discoverEmbeddingModels(params: {
         Authorization: `Bearer ${params.copilotToken}`,
       },
     },
+    endpointSource: params.endpointSource,
     policy: params.ssrfPolicy,
+    timeoutMs: 30_000,
     auditContext: "memory-remote",
   });
   try {
@@ -319,8 +327,8 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
       env: process.env,
       githubDomain,
     });
-    const baseUrl =
-      options.remote?.baseUrl?.trim() || resolvedBaseUrl || DEFAULT_COPILOT_API_BASE_URL;
+    const operatorBaseUrl = options.remote?.baseUrl?.trim();
+    const baseUrl = operatorBaseUrl || resolvedBaseUrl || DEFAULT_COPILOT_API_BASE_URL;
     const ssrfPolicy = buildSsrfPolicy(baseUrl);
 
     // Always discover models even when the user pins one: this validates
@@ -331,6 +339,9 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
       copilotToken,
       headers: options.remote?.headers,
       ssrfPolicy,
+      endpointSource: operatorBaseUrl
+        ? COPILOT_MODEL_DISCOVERY_ENDPOINT_SOURCE.OPERATOR_OVERRIDE
+        : COPILOT_MODEL_DISCOVERY_ENDPOINT_SOURCE.TOKEN_EXCHANGE,
     });
 
     const userModel = options.model?.trim() || undefined;

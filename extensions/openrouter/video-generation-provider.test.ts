@@ -15,6 +15,7 @@ const SUPPORTED_DURATIONS_HINT = Symbol.for("openclaw.videoGeneration.supportedD
 const {
   assertOkOrThrowHttpErrorMock,
   fetchWithTimeoutGuardedMock,
+  getCachedLiveProviderModelRowsMock,
   postJsonRequestMock,
   resolveApiKeyForProviderMock,
   resolveProviderHttpRequestConfigMock,
@@ -22,6 +23,7 @@ const {
 } = vi.hoisted(() => ({
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
   fetchWithTimeoutGuardedMock: vi.fn(),
+  getCachedLiveProviderModelRowsMock: vi.fn(),
   postJsonRequestMock: vi.fn(),
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "openrouter-key" })),
   resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => {
@@ -78,6 +80,11 @@ vi.mock("openclaw/plugin-sdk/provider-http", async () => {
     waitProviderOperationPollInterval: waitProviderOperationPollIntervalMock,
   };
 });
+
+vi.mock("openclaw/plugin-sdk/provider-catalog-live-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-catalog-live-runtime")>()),
+  getCachedLiveProviderModelRows: getCachedLiveProviderModelRowsMock,
+}));
 
 function releasedJson(value: unknown) {
   return {
@@ -224,6 +231,7 @@ describe("openrouter video generation provider", () => {
   afterEach(() => {
     assertOkOrThrowHttpErrorMock.mockClear();
     fetchWithTimeoutGuardedMock.mockReset();
+    getCachedLiveProviderModelRowsMock.mockReset();
     postJsonRequestMock.mockReset();
     resolveApiKeyForProviderMock.mockClear();
     resolveProviderHttpRequestConfigMock.mockClear();
@@ -317,6 +325,7 @@ describe("openrouter video generation provider", () => {
     expect(requireFetchCallHeaders(0).get("authorization")).toBe("Bearer resolved-openrouter-key");
     expect(requireFetchCallHeaders(0).get("x-openrouter-catalog")).toBe("enabled");
     expect(requireFetchGuardOptions(0).ssrfPolicy).toEqual({ allowPrivateNetwork: true });
+    expect(requireFetchGuardOptions(0).mode).toBe("strict");
     expectUnifiedModelCatalogEntries(rows, {
       provider: "openrouter",
       kind: "video_generation",
@@ -356,7 +365,7 @@ describe("openrouter video generation provider", () => {
   });
 
   it("lets configured auth replace the OpenRouter catalog default", async () => {
-    fetchWithTimeoutGuardedMock.mockResolvedValueOnce(releasedJson({ data: [] }));
+    getCachedLiveProviderModelRowsMock.mockResolvedValueOnce([]);
 
     await listOpenRouterVideoModelCatalog({
       config: {
@@ -390,7 +399,17 @@ describe("openrouter video generation provider", () => {
     expect(requireRecord(requestConfig.defaultHeaders, "default headers").Authorization).toBe(
       "Bearer test-key",
     );
-    expect(requireFetchCallHeaders(0).get("authorization")).toBe("Bearer test-auth");
+    const liveCatalogRequest = requireRecord(
+      getCachedLiveProviderModelRowsMock.mock.calls[0]?.[0],
+      "live catalog request",
+    );
+    const buildRequestHeaders = liveCatalogRequest.buildRequestHeaders as () => HeadersInit;
+    expect(new Headers(buildRequestHeaders()).get("authorization")).toBe("Bearer test-auth");
+    expect(liveCatalogRequest.policy).toEqual({
+      allowedOrigins: ["https://openrouter.ai/api/v1"],
+    });
+    expect(liveCatalogRequest.requireHttps).toBe(true);
+    expect(fetchWithTimeoutGuardedMock).not.toHaveBeenCalled();
   });
 
   it("keys live OpenRouter video catalog cache by request policy", async () => {
@@ -563,6 +582,7 @@ describe("openrouter video generation provider", () => {
     );
     expect(requireFetchCallHeaders(0).get("x-openrouter-capabilities")).toBe("enabled");
     expect(requireFetchGuardOptions(0).ssrfPolicy).toEqual({ allowPrivateNetwork: true });
+    expect(requireFetchGuardOptions(0).mode).toBe("strict");
     expect(requireMockCallArg(fetchWithTimeoutGuardedMock.mock.calls, 0, 2, "fetch")).toBe(12_345);
     expect(requireMockCallArg(fetchWithTimeoutGuardedMock.mock.calls, 0, 3, "fetch")).toBeTypeOf(
       "function",

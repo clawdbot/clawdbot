@@ -1,9 +1,14 @@
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 // Openrouter plugin module implements video model catalog behavior.
 import type {
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import {
+  getCachedLiveProviderModelRows,
+  type LiveModelCatalogFetchGuard,
+} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { getCachedLiveCatalogValue } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   assertOkOrThrowHttpError,
@@ -11,6 +16,7 @@ import {
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeOptionalString,
   normalizeTrimmedStringList,
@@ -20,8 +26,12 @@ import type {
   VideoGenerationProviderCapabilities,
   VideoGenerationResolution,
 } from "openclaw/plugin-sdk/video-generation";
-import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
-import { fetchOpenRouterVideoGet, type OpenRouterVideoDispatcherPolicy } from "./video-http.js";
+import { normalizeOpenRouterBaseUrl, OPENROUTER_BASE_URL } from "./provider-catalog.js";
+import {
+  fetchOpenRouterVideoGet,
+  type OpenRouterVideoDispatcherPolicy,
+  resolveOpenRouterVideoUrl,
+} from "./video-http.js";
 
 const DEFAULT_HTTP_TIMEOUT_MS = 60_000;
 
@@ -266,7 +276,43 @@ async function fetchOpenRouterVideoModels(params: {
   timeoutMs: number;
   allowPrivateNetwork: boolean;
   dispatcherPolicy: OpenRouterVideoDispatcherPolicy;
+  fetchGuard?: LiveModelCatalogFetchGuard;
 }): Promise<OpenRouterVideoModelsResponse> {
+  const usesCanonicalCatalogOrigin =
+    normalizeOpenRouterBaseUrl(params.baseUrl) === OPENROUTER_BASE_URL;
+  if (usesCanonicalCatalogOrigin && !params.dispatcherPolicy) {
+    const rows = await getCachedLiveProviderModelRows({
+      providerId: "openrouter-video",
+      endpoint: resolveOpenRouterVideoUrl("videos/models", params.baseUrl),
+      discoveryApiKey: params.apiKey,
+      fetchGuard:
+        params.fetchGuard ??
+        ((guardParams) =>
+          fetchWithSsrFGuard(
+            withTrustedEnvProxyGuardedFetchMode({ ...guardParams, requireHttps: true }),
+          )),
+      timeoutMs: params.timeoutMs,
+      policy: {
+        ...(params.allowPrivateNetwork ? { allowPrivateNetwork: true } : {}),
+        allowedOrigins: [OPENROUTER_BASE_URL],
+      },
+      requireHttps: true,
+      auditContext: "openrouter-video-models",
+      buildRequestHeaders: () => params.headers,
+      cacheKeyParts: [
+        "openrouter",
+        "video-models",
+        params.baseUrl,
+        params.apiKey,
+        params.requestPolicyCacheKey,
+      ],
+    });
+    return {
+      data: rows.filter(
+        (row): row is OpenRouterVideoModel => Boolean(row) && typeof row === "object",
+      ),
+    };
+  }
   return await getCachedLiveCatalogValue({
     keyParts: [
       "openrouter",
@@ -283,6 +329,8 @@ async function fetchOpenRouterVideoModels(params: {
         timeoutMs: params.timeoutMs,
         allowPrivateNetwork: params.allowPrivateNetwork,
         dispatcherPolicy: params.dispatcherPolicy,
+        mode: "strict",
+        requireHttps: usesCanonicalCatalogOrigin,
         auditContext: "openrouter-video-models",
       });
       try {

@@ -4,6 +4,8 @@ import { fetchWithTimeoutGuarded } from "openclaw/plugin-sdk/provider-http";
 type GuardedFetchResult = Awaited<ReturnType<typeof fetchWithTimeoutGuarded>>;
 type FetchGuardOptions = NonNullable<Parameters<typeof fetchWithTimeoutGuarded>[4]>;
 export type OpenRouterVideoDispatcherPolicy = FetchGuardOptions["dispatcherPolicy"];
+type OpenRouterVideoGuardMode = FetchGuardOptions["mode"];
+type OpenRouterVideoLookupFn = FetchGuardOptions["lookupFn"];
 
 function headersForOpenRouterGet(url: string, baseUrl: string, requestHeaders: Headers): Headers {
   try {
@@ -29,9 +31,14 @@ export async function fetchOpenRouterVideoGet(params: {
   timeoutMs: number;
   allowPrivateNetwork: boolean;
   dispatcherPolicy: OpenRouterVideoDispatcherPolicy;
+  fetchFn?: typeof fetch;
+  lookupFn?: OpenRouterVideoLookupFn;
+  mode?: OpenRouterVideoGuardMode;
+  requireHttps?: boolean;
   auditContext: string;
 }): Promise<GuardedFetchResult> {
   const url = resolveOpenRouterVideoUrl(params.url, params.baseUrl);
+  const fetchFn = params.fetchFn ?? fetch;
   return await fetchWithTimeoutGuarded(
     url,
     {
@@ -39,10 +46,19 @@ export async function fetchOpenRouterVideoGet(params: {
       headers: headersForOpenRouterGet(url, params.baseUrl, params.headers),
     },
     params.timeoutMs,
-    fetch,
+    fetchFn,
     {
-      ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+      ...(params.allowPrivateNetwork
+        ? {
+            ssrfPolicy: {
+              allowPrivateNetwork: true,
+            },
+          }
+        : {}),
       ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
+      ...(params.lookupFn ? { lookupFn: params.lookupFn } : {}),
+      ...(params.mode ? { mode: params.mode } : {}),
+      ...(params.requireHttps ? { requireHttps: true } : {}),
       auditContext: params.auditContext,
     },
   );

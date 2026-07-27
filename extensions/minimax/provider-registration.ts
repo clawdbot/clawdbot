@@ -1,5 +1,6 @@
 // Minimax provider module implements model/runtime integration.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import type {
   OpenClawPluginApi,
   OpenClawConfig,
@@ -20,6 +21,7 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   isMiniMaxModernModelId,
@@ -44,6 +46,7 @@ const PROVIDER_LABEL = "MiniMax";
 const DEFAULT_MODEL = MINIMAX_DEFAULT_MODEL_ID;
 const DEFAULT_BASE_URL_CN = "https://api.minimaxi.com/anthropic";
 const DEFAULT_BASE_URL_GLOBAL = "https://api.minimax.io/anthropic";
+const CANONICAL_MINIMAX_CATALOG_BASE_URLS = new Set([DEFAULT_BASE_URL_CN, DEFAULT_BASE_URL_GLOBAL]);
 const MINIMAX_USAGE_ENV_VAR_KEYS = [
   "MINIMAX_OAUTH_TOKEN",
   "MINIMAX_CODE_PLAN_KEY",
@@ -69,6 +72,10 @@ const MINIMAX_PROVIDER_HOOKS = {
 
 function getDefaultBaseUrl(region: MiniMaxRegion): string {
   return region === "cn" ? DEFAULT_BASE_URL_CN : DEFAULT_BASE_URL_GLOBAL;
+}
+
+function usesCanonicalMinimaxCatalogBaseUrl(baseUrl: string): boolean {
+  return CANONICAL_MINIMAX_CATALOG_BASE_URLS.has(baseUrl.trim().replace(/\/+$/, ""));
 }
 
 function resolveMinimaxRegionLabel(region: MiniMaxRegion): string {
@@ -137,13 +144,26 @@ async function resolveApiCatalog(ctx: ProviderCatalogContext) {
   if (!auth.apiKey) {
     return null;
   }
+  const configuredBaseUrl = getProviderBaseUrl(ctx.config, API_PROVIDER_ID);
+  const providerConfig = {
+    ...buildMinimaxProvider(ctx.env),
+    ...(configuredBaseUrl ? { baseUrl: configuredBaseUrl } : {}),
+  };
   return {
     provider: await buildOpenAICompatibleLiveModelProviderConfig({
       providerId: API_PROVIDER_ID,
-      providerConfig: buildMinimaxProvider(ctx.env),
+      providerConfig,
       apiKey: auth.apiKey,
       discoveryApiKey: auth.discoveryApiKey,
       modelDiscovery: buildMinimaxModelDiscovery(),
+      ...(usesCanonicalMinimaxCatalogBaseUrl(providerConfig.baseUrl)
+        ? {
+            fetchGuard: (params) =>
+              fetchWithSsrFGuard(
+                withTrustedEnvProxyGuardedFetchMode({ ...params, requireHttps: true }),
+              ),
+          }
+        : {}),
     }),
   };
 }
@@ -179,6 +199,14 @@ async function resolvePortalCatalog(ctx: ProviderCatalogContext) {
         apiKeyAuth.discoveryApiKey ??
         (usesPortalBearerAuth ? profileAuth.discoveryApiKey : undefined),
       modelDiscovery: buildMinimaxModelDiscovery(usesPortalBearerAuth ? "oauth" : "api_key"),
+      ...(usesCanonicalMinimaxCatalogBaseUrl(providerConfig.baseUrl)
+        ? {
+            fetchGuard: (params) =>
+              fetchWithSsrFGuard(
+                withTrustedEnvProxyGuardedFetchMode({ ...params, requireHttps: true }),
+              ),
+          }
+        : {}),
     }),
   };
 }

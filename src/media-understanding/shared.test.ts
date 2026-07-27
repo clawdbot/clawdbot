@@ -716,6 +716,18 @@ describe("fetchWithTimeoutGuarded", () => {
     expect(call.timeoutMs).toBe(5000);
   });
 
+  it("forwards HTTPS enforcement without wrapping the caller fetch", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({});
+
+    await fetchWithTimeoutGuarded("https://example.com", {}, 5000, fetch, {
+      requireHttps: true,
+    });
+
+    const call = getFirstGuardedFetchCall();
+    expect(call.requireHttps).toBe(true);
+    expect(call.fetchImpl).toBe(fetch);
+  });
+
   it("truncates auditContext without leaving a lone surrogate at the max boundary", async () => {
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(null, { status: 200 }),

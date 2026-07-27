@@ -8,7 +8,11 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { SELF_HOSTED_DEFAULT_COST } from "openclaw/plugin-sdk/provider-setup";
-import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
+  type SsrFPolicy,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
 import {
@@ -63,27 +67,15 @@ async function fetchLmstudioEndpoint(params: {
   auditContext: string;
 }): Promise<{ response: Response; release: () => Promise<void> }> {
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
-  let response: Response;
-  let release: () => Promise<void>;
-  if (params.ssrfPolicy) {
-    const guarded = await fetchWithSsrFGuard({
-      url: params.url,
-      init: params.init,
-      timeoutMs,
-      fetchImpl: params.fetchImpl,
-      policy: params.ssrfPolicy,
-      auditContext: params.auditContext,
-    });
-    response = guarded.response;
-    release = guarded.release;
-  } else {
-    const fetchFn = params.fetchImpl ?? fetch;
-    response = await fetchFn(params.url, {
-      ...params.init,
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    release = async () => undefined;
-  }
+  const guarded = await fetchWithSsrFGuard({
+    url: params.url,
+    init: params.init,
+    timeoutMs,
+    ...(params.fetchImpl ? { fetchImpl: params.fetchImpl } : {}),
+    policy: params.ssrfPolicy ?? ssrfPolicyFromHttpBaseUrlAllowedOrigin(params.url),
+    auditContext: params.auditContext,
+  });
+  const { response, release } = guarded;
   return {
     response,
     release: async () => {

@@ -56,6 +56,50 @@ describe("minimax provider hooks", () => {
     expect(headers.get("x-api-key")).toBeNull();
   });
 
+  it("discovers configured CN catalogs through the trusted proxy route", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.example:8080");
+    vi.stubEnv("https_proxy", "http://proxy.example:8080");
+    vi.stubEnv("NO_PROXY", "");
+    vi.stubEnv("no_proxy", "");
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      Response.json({ data: [] }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { providers } = await registerProviderPlugin({
+      plugin: minimaxProviderPlugin,
+      id: "minimax",
+      name: "MiniMax Provider",
+    });
+    const apiProvider = requireRegisteredProvider(providers, "minimax");
+
+    const catalog = await apiProvider.catalog?.run({
+      env: {},
+      config: {
+        models: {
+          providers: {
+            minimax: {
+              baseUrl: "https://api.minimaxi.com/anthropic",
+              models: [],
+            },
+          },
+        },
+      },
+      resolveProviderApiKey: () => ({ apiKey: "test-key" }),
+      resolveProviderAuth: () => ({ apiKey: "test-key", mode: "api_key", source: "env" }),
+    } as never);
+
+    expect(catalog && "provider" in catalog ? catalog.provider.baseUrl : undefined).toBe(
+      "https://api.minimaxi.com/anthropic",
+    );
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.minimaxi.com/anthropic/v1/models");
+    const dispatcher = (
+      fetchMock.mock.calls[0]?.[1] as
+        | { dispatcher?: { constructor?: { name?: string } } }
+        | undefined
+    )?.dispatcher;
+    expect(dispatcher?.constructor?.name).toBe("EnvHttpProxyAgent");
+  });
+
   it("keeps explicit portal API keys ahead of stored OAuth profiles", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: minimaxProviderPlugin,

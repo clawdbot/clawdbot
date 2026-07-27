@@ -1,11 +1,9 @@
 // Kilocode provider module implements model/runtime integration.
-import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider-http";
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
+import { fetchLiveProviderModelRows } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
-} from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asPositiveSafeInteger,
   normalizeLowercaseStringOrEmpty,
@@ -166,64 +164,48 @@ export async function discoverKilocodeModels(): Promise<ModelDefinitionConfig[]>
   }
 
   try {
-    const { response, release } = await fetchWithSsrFGuard({
-      url: KILOCODE_MODELS_URL,
-      init: {
-        headers: { Accept: "application/json" },
-      },
+    const data = await fetchLiveProviderModelRows({
+      providerId: "kilocode",
+      endpoint: KILOCODE_MODELS_URL,
       timeoutMs: DISCOVERY_TIMEOUT_MS,
-      policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(KILOCODE_BASE_URL),
       auditContext: "kilocode.model_discovery",
+      fetchGuard: (params) =>
+        fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode({ ...params, requireHttps: true })),
     });
-    try {
-      if (!response.ok) {
-        await response.body?.cancel().catch(() => undefined);
-        log.warn(`Failed to discover models: HTTP ${response.status}, using static catalog`);
-        return buildStaticCatalog();
-      }
-
-      const data = await readProviderJsonArrayFieldResponse(
-        response,
-        "Kilocode model list",
-        "data",
-      );
-      if (data.length === 0) {
-        log.warn("No models found from gateway API, using static catalog");
-        return buildStaticCatalog();
-      }
-
-      const models: ModelDefinitionConfig[] = [];
-      const discoveredIds = new Set<string>();
-
-      for (const rawEntry of data) {
-        const id = readGatewayModelId(rawEntry);
-        try {
-          const entry = asGatewayModelEntry(rawEntry);
-          if (
-            !id ||
-            discoveredIds.has(id) ||
-            entry.architecture?.output_modalities?.includes("image")
-          ) {
-            continue;
-          }
-          models.push(toModelDefinition(entry));
-          discoveredIds.add(id);
-        } catch (e) {
-          log.warn(`Skipping malformed model entry "${id}": ${String(e)}`);
-        }
-      }
-
-      const staticModels = buildStaticCatalog();
-      for (const staticModel of staticModels) {
-        if (!discoveredIds.has(staticModel.id)) {
-          models.unshift(staticModel);
-        }
-      }
-
-      return models.length > 0 ? models : buildStaticCatalog();
-    } finally {
-      await release();
+    if (data.length === 0) {
+      log.warn("No models found from gateway API, using static catalog");
+      return buildStaticCatalog();
     }
+
+    const models: ModelDefinitionConfig[] = [];
+    const discoveredIds = new Set<string>();
+
+    for (const rawEntry of data) {
+      const id = readGatewayModelId(rawEntry);
+      try {
+        const entry = asGatewayModelEntry(rawEntry);
+        if (
+          !id ||
+          discoveredIds.has(id) ||
+          entry.architecture?.output_modalities?.includes("image")
+        ) {
+          continue;
+        }
+        models.push(toModelDefinition(entry));
+        discoveredIds.add(id);
+      } catch (e) {
+        log.warn(`Skipping malformed model entry "${id}": ${String(e)}`);
+      }
+    }
+
+    const staticModels = buildStaticCatalog();
+    for (const staticModel of staticModels) {
+      if (!discoveredIds.has(staticModel.id)) {
+        models.unshift(staticModel);
+      }
+    }
+
+    return models.length > 0 ? models : buildStaticCatalog();
   } catch (error) {
     log.warn(`Discovery failed: ${String(error)}, using static catalog`);
     return buildStaticCatalog();

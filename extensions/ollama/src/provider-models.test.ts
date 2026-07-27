@@ -483,4 +483,16 @@ describe("ollama provider models", () => {
     expect(canceled).toBe(true);
     expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
   });
+
+  it("drops discovered rows with empty model names", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ models: [{ name: "" }, { name: "qwen3.5:4b" }] })),
+    );
+
+    await expect(fetchOllamaModels("http://127.0.0.1:11434")).resolves.toEqual({
+      reachable: true,
+      models: [{ name: "qwen3.5:4b" }],
+    });
+  });
 });

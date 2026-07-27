@@ -53,13 +53,6 @@ function stringArgAt(mock: MockWithCalls, callIndex: number, argIndex: number): 
   return value;
 }
 
-function recordField(value: unknown, field: string): Record<string, unknown> {
-  if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${field} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
 function modelDiscoveryResponse(body: unknown, init?: ResponseInit): Response {
   const headers = new Headers(init?.headers);
   if (!headers.has("content-type")) {
@@ -299,9 +292,9 @@ describe("bedrock mantle discovery", () => {
 
     // Verify correct endpoint and auth header
     expect(stringArgAt(mockFetch, 0, 0)).toBe("https://bedrock-mantle.us-east-1.api.aws/v1/models");
-    expect(recordField(objectArgAt(mockFetch, 0, 1).headers, "headers").Authorization).toBe(
-      "Bearer test-token",
-    );
+    expect(
+      new Headers(objectArgAt(mockFetch, 0, 1).headers as HeadersInit).get("authorization"),
+    ).toBe("Bearer test-token");
   });
 
   it("infers reasoning support from model IDs", async () => {
@@ -397,7 +390,62 @@ describe("bedrock mantle discovery", () => {
     });
 
     expect(timeoutSpy).toHaveBeenCalledWith(30_000);
-    expect(objectArgAt(mockFetch, 0, 1).signal).toBe(controller.signal);
+    expect(objectArgAt(mockFetch, 0, 1).signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("does not carry catalog proxy trust across origins", async () => {
+    process.env.HTTPS_PROXY = "http://proxy.example:8080";
+    delete process.env.NO_PROXY;
+    delete process.env.no_proxy;
+    const calls: Array<{ dispatcher?: string; url: string }> = [];
+    const mockFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const dispatcher = (
+        init as RequestInit & { dispatcher?: { constructor?: { name?: string } } }
+      )?.dispatcher;
+      calls.push({ dispatcher: dispatcher?.constructor?.name, url });
+      return calls.length === 1
+        ? new Response(null, {
+            status: 302,
+            headers: { location: "https://redirected.example/v1/models" },
+          })
+        : modelDiscoveryResponse({ data: [] });
+    });
+
+    await discoverMantleModels({
+      region: "us-east-1",
+      bearerToken: "test-token",
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(calls).toEqual([
+      {
+        dispatcher: "EnvHttpProxyAgent",
+        url: "https://bedrock-mantle.us-east-1.api.aws/v1/models",
+      },
+      { dispatcher: undefined, url: "https://redirected.example/v1/models" },
+    ]);
+  });
+
+  it("keeps NO_PROXY catalog requests off the environment dispatcher", async () => {
+    process.env.HTTPS_PROXY = "http://proxy.example:8080";
+    process.env.NO_PROXY = "bedrock-mantle.us-east-1.api.aws";
+    const dispatchers: Array<string | undefined> = [];
+    const mockFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const dispatcher = (
+        init as RequestInit & { dispatcher?: { constructor?: { name?: string } } }
+      )?.dispatcher;
+      dispatchers.push(dispatcher?.constructor?.name);
+      return modelDiscoveryResponse({ data: [] });
+    });
+
+    await discoverMantleModels({
+      region: "us-east-1",
+      bearerToken: "test-token",
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(dispatchers).toEqual([undefined]);
   });
 
   it("bounds successful Mantle model discovery JSON responses", async () => {
@@ -628,9 +676,9 @@ describe("bedrock mantle discovery", () => {
     expect(provider?.apiKey).toBe(MANTLE_IAM_TOKEN_MARKER);
     expect(tokenProvider).toHaveBeenCalledTimes(1);
     expect(stringArgAt(mockFetch, 0, 0)).toBe("https://bedrock-mantle.us-east-1.api.aws/v1/models");
-    expect(recordField(objectArgAt(mockFetch, 0, 1).headers, "headers").Authorization).toBe(
-      "Bearer bedrock-api-key-iam",
-    );
+    expect(
+      new Headers(objectArgAt(mockFetch, 0, 1).headers as HeadersInit).get("authorization"),
+    ).toBe("Bearer bedrock-api-key-iam");
   });
 
   it("resolves Mantle runtime auth from the cached IAM token marker", async () => {

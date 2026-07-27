@@ -1,10 +1,16 @@
 // Ollama provider module implements model/runtime integration.
 import { createHash } from "node:crypto";
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
+import {
+  fetchLiveProviderModelRows,
+  LiveModelCatalogHttpError,
+} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
+  OLLAMA_CLOUD_BASE_URL,
   OLLAMA_CLOUD_DEFAULT_MODELS,
   OLLAMA_DEFAULT_BASE_URL,
   OLLAMA_DEFAULT_CONTEXT_WINDOW,
@@ -69,6 +75,26 @@ export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
   }
   const trimmed = configuredBaseUrl.replace(/\/+$/, "");
   return trimmed.replace(/\/v1$/i, "");
+}
+
+function withOllamaShowDiscoveryFetchMode(
+  apiBase: string,
+  params: Parameters<typeof fetchWithSsrFGuard>[0],
+) {
+  return resolveOllamaApiBase(apiBase) === OLLAMA_CLOUD_BASE_URL
+    ? withTrustedEnvProxyGuardedFetchMode({
+        ...params,
+        requireHttps: true,
+        policy: {
+          ...params.policy,
+          allowedOrigins: [OLLAMA_CLOUD_BASE_URL],
+        },
+        // The shared catalog seam owns safe cross-origin redirects. This POST
+        // enrichment path is optional, so reject redirects instead of carrying
+        // authenticated proxy trust to another origin.
+        maxRedirects: 0,
+      })
+    : params;
 }
 
 export type OllamaModelShowInfo = {
@@ -137,18 +163,20 @@ export async function queryOllamaModelShowInfo(
     if (opts?.apiKey) {
       headers.Authorization = `Bearer ${opts.apiKey}`;
     }
-    const { response, release } = await fetchWithSsrFGuard({
-      url: `${normalizedApiBase}/api/show`,
-      init: {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ name: modelName }),
-      },
-      // Guard-owned timeoutMs also bounds DNS/proxy preflight; init.signal does not.
-      timeoutMs: 3000,
-      policy: buildOllamaBaseUrlSsrFPolicy(normalizedApiBase),
-      auditContext: "ollama-provider-models.show",
-    });
+    const { response, release } = await fetchWithSsrFGuard(
+      withOllamaShowDiscoveryFetchMode(normalizedApiBase, {
+        url: `${normalizedApiBase}/api/show`,
+        init: {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ name: modelName }),
+        },
+        // Guard-owned timeoutMs also bounds DNS/proxy preflight; init.signal does not.
+        timeoutMs: 3000,
+        policy: buildOllamaBaseUrlSsrFPolicy(normalizedApiBase),
+        auditContext: "ollama-provider-models.show",
+      }),
+    );
     try {
       if (!response.ok) {
         return {};
@@ -386,32 +414,49 @@ export async function fetchOllamaModels(
 ): Promise<{ reachable: boolean; models: OllamaTagModel[] }> {
   try {
     const apiBase = resolveOllamaApiBase(baseUrl);
-    const { response, release } = await fetchWithSsrFGuard({
-      url: `${apiBase}/api/tags`,
-      init: {
-        headers: opts?.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : undefined,
-      },
-      // Guard-owned timeoutMs also bounds DNS/proxy preflight; init.signal does not.
+    const usesHostedCatalog = apiBase === OLLAMA_CLOUD_BASE_URL;
+    const rows = await fetchLiveProviderModelRows({
+      providerId: "ollama",
+      endpoint: `${apiBase}/api/tags`,
+      discoveryApiKey: opts?.apiKey,
+      fetchGuard: (guardParams) =>
+        fetchWithSsrFGuard(
+          usesHostedCatalog
+            ? withTrustedEnvProxyGuardedFetchMode({
+                ...guardParams,
+                requireHttps: true,
+                ...(deps?.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+              })
+            : {
+                ...guardParams,
+                ...(deps?.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+              },
+        ),
       timeoutMs: 5000,
       policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
-      auditContext: "ollama-provider-models.tags",
-      ...(deps?.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
       ...(deps?.lookupFn ? { lookupFn: deps.lookupFn } : {}),
+      auditContext: "ollama-provider-models.tags",
+      buildRequestHeaders: () =>
+        new Headers(opts?.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : undefined),
+      readRows: (body) => {
+        const models = (body as OllamaTagsResponse | null)?.models;
+        return Array.isArray(models) ? models : [];
+      },
     });
-    try {
-      if (!response.ok) {
-        return { reachable: true, models: [] };
-      }
-      const data = await readProviderJsonResponse<OllamaTagsResponse>(
-        response,
-        "ollama-provider-models.tags",
-      );
-      const models = (data.models ?? []).filter((m) => m.name);
-      return { reachable: true, models };
-    } finally {
-      await release();
+    return {
+      reachable: true,
+      models: rows.filter(
+        (row): row is OllamaTagModel =>
+          Boolean(row) &&
+          typeof row === "object" &&
+          typeof (row as OllamaTagModel).name === "string" &&
+          Boolean((row as OllamaTagModel).name),
+      ),
+    };
+  } catch (error) {
+    if (error instanceof LiveModelCatalogHttpError) {
+      return { reachable: true, models: [] };
     }
-  } catch {
     return { reachable: false, models: [] };
   }
 }

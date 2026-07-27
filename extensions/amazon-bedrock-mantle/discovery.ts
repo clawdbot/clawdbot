@@ -4,15 +4,17 @@
  */
 import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { fetchLiveProviderModelRows } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -31,7 +33,6 @@ const DEFAULT_CONTEXT_WINDOW = 32000;
 const DEFAULT_MAX_TOKENS = 4096;
 const DEFAULT_REFRESH_INTERVAL_SECONDS = 3600; // 1 hour
 const MANTLE_DISCOVERY_TIMEOUT_MS = 30_000;
-const MANTLE_DISCOVERY_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
 // Bedrock's introductory Sonnet 5 rate expires at the documented UTC month boundary.
 const SONNET_5_STANDARD_PRICING_START_MS = Date.UTC(2026, 8, 1);
 const SONNET_5_PROMOTIONAL_COST = {
@@ -238,11 +239,6 @@ interface OpenAIModelEntry {
   created?: number;
 }
 
-interface OpenAIModelsResponse {
-  data?: OpenAIModelEntry[];
-  object?: string;
-}
-
 // ---------------------------------------------------------------------------
 // Reasoning heuristic
 // ---------------------------------------------------------------------------
@@ -260,25 +256,6 @@ const REASONING_PATTERNS = [
 function inferReasoningSupport(modelId: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(modelId);
   return REASONING_PATTERNS.some((p) => lower.includes(p));
-}
-
-async function readMantleModelDiscoveryJson(response: Response): Promise<OpenAIModelsResponse> {
-  const bytes = await readResponseWithLimit(response, MANTLE_DISCOVERY_RESPONSE_MAX_BYTES, {
-    chunkTimeoutMs: MANTLE_DISCOVERY_TIMEOUT_MS,
-    onOverflow: ({ size, maxBytes }) =>
-      new Error(
-        `Mantle model discovery response exceeded ${maxBytes} bytes (${size} bytes received)`,
-      ),
-    onIdleTimeout: ({ chunkTimeoutMs }) =>
-      new Error(
-        `Mantle model discovery response stalled: no data received for ${chunkTimeoutMs}ms`,
-      ),
-  });
-  const body = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
-    return {};
-  }
-  return body as OpenAIModelsResponse;
 }
 
 // ---------------------------------------------------------------------------
@@ -335,29 +312,36 @@ export async function discoverMantleModels(params: {
   const endpoint = `${mantleEndpoint(region)}/v1/models`;
 
   try {
-    const response = await fetchFn(endpoint, {
-      method: "GET",
+    const rawModels = await fetchLiveProviderModelRows({
+      providerId: "amazon-bedrock-mantle",
+      endpoint,
+      discoveryApiKey: bearerToken,
+      fetchGuard: (guardParams) =>
+        fetchWithSsrFGuard(
+          withTrustedEnvProxyGuardedFetchMode({
+            ...guardParams,
+            fetchImpl: fetchFn,
+            requireHttps: true,
+          }),
+        ),
       signal: AbortSignal.timeout(MANTLE_DISCOVERY_TIMEOUT_MS),
-      headers: {
+      timeoutMs: MANTLE_DISCOVERY_TIMEOUT_MS,
+      requireHttps: true,
+      auditContext: "bedrock-mantle-model-discovery",
+      buildRequestHeaders: () => ({
         Authorization: `Bearer ${bearerToken}`,
         Accept: "application/json",
-      },
+      }),
     });
 
-    if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
-      log.debug?.("Mantle model discovery failed", {
-        status: response.status,
-        statusText: response.statusText,
-      });
-      return cached?.models ?? [];
-    }
-
-    const body = await readMantleModelDiscoveryJson(response);
-    const rawModels = body.data ?? [];
-
     const models = rawModels
-      .filter((m) => m.id?.trim())
+      .filter(
+        (row): row is OpenAIModelEntry =>
+          Boolean(row) &&
+          typeof row === "object" &&
+          typeof (row as OpenAIModelEntry).id === "string" &&
+          Boolean((row as OpenAIModelEntry).id.trim()),
+      )
       .map((m) => ({
         id: m.id,
         name: m.id, // Mantle doesn't return display names
