@@ -361,10 +361,8 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
     expect(persistedStyle).toMatch(/^height: \d+(?:\.\d+)?px$/u);
 
     await page.reload();
-    await page.locator(".board-session-surface__chat").waitFor();
-    expect(await page.locator(".board-session-surface__chat").getAttribute("style")).toBe(
-      persistedStyle,
-    );
+    await dock.waitFor();
+    expect(await dock.getAttribute("style")).toBe(persistedStyle);
     await expect
       .poll(() =>
         page.locator('.chat-tool-card__preview[data-kind="canvas"] [data-pin-widget]').isDisabled(),
