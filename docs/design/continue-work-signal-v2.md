@@ -70,13 +70,13 @@ Targeted delegate return is the banner routing primitive: one child can grant an
 - [10. Discussion and Future Work](#10-discussion-and-future-work)
   - [10.1 Summary](#101-summary)
   - [10.2 Future directions](#102-future-directions)
-- [Appendix A. Proposed and unimplemented extensions](#appendix-a-proposed-and-unimplemented-extensions)
+- [Appendix A. Extension contracts and future seams](#appendix-a-extension-contracts-and-future-seams)
   - [A.1 Bounded pre-compaction evacuation window](#a1-bounded-pre-compaction-evacuation-window)
   - [A.2 Compaction-triggered evacuation delegate](#a2-compaction-triggered-evacuation-delegate)
   - [A.3 Proposed `context_pressure` lifecycle hook](#a3-proposed-context_pressure-lifecycle-hook)
   - [A.4 Proposed configuration values not shipped in the current codebase](#a4-proposed-configuration-values-not-shipped-in-the-current-codebase)
-  - [A.5 Proposed restoration: typed `continue_delegate()` on-dispatch input attachments (#1192)](#a5-proposed-restoration-typed-continue_delegate-on-dispatch-input-attachments-1192)
-  - [A.6 Proposed managed delegate return claims and recipient arrival context (#666)](#a6-proposed-managed-delegate-return-claims-and-recipient-arrival-context-666)
+  - [A.5 Typed `continue_delegate()` on-dispatch input attachments (#1192)](#a5-typed-continue_delegate-on-dispatch-input-attachments-1192)
+  - [A.6 Managed delegate return claims and recipient arrival context (#666)](#a6-managed-delegate-return-claims-and-recipient-arrival-context-666)
 - [Appendix B. Alternatives, prior art, and tool comparisons](#appendix-b-alternatives-prior-art-and-tool-comparisons)
   - [B.1 Alternatives considered](#b1-alternatives-considered)
   - [B.2 Prior art](#b2-prior-art)
@@ -195,7 +195,7 @@ When a `continuation_work` row matures while the session is idle, the dispatcher
 
 `continue_delegate()` externalizes a shard of future cognition. The task string is a letter to a successor worker: it must carry scope, evidence requirements, desired return shape, and the parent action it is meant to enable.
 
-**Shipped behavior:** the current tool schema exposes `task`, `delaySeconds`, `mode`, `targetSessionKey`, `targetSessionKeys`, `fanoutMode`, `model`, `attachments`, and `attachAs`. The default completion recipient remains the session that dispatched the delegate. Explicit target fields route the same completion envelope through the `session-delivery-queue` substrate to other known sessions on the same host. Delegates using `normal` mode and no explicit target keep the existing visible announce behavior; targeted returns are delivered as session-addressed enrichment events so one delegate completion can fan out byte-identically without duplicating the delegate run.
+**Shipped behavior:** the current tool schema exposes `task`, `delaySeconds`, `mode`, `targetSessionKey`, `targetSessionKeys`, `fanoutMode`, `returnOptions`, `recipientContext`, `model`, `attachments`, and `attachAs`. The default completion recipient remains the session that dispatched the delegate. Explicit target fields route the same completion envelope through the `session-delivery-queue` substrate to other known sessions on the same host. Delegates using `normal` mode and no explicit target keep the existing visible announce behavior; targeted returns are delivered as session-addressed enrichment events so one delegate completion can fan out byte-identically without duplicating the delegate run.
 
 Typed input attachments use this shape:
 
@@ -215,7 +215,7 @@ These fields carry scoped input into the **new child delegate workspace**. The w
 
 The fields use the same validation, limits, private receipt directory, per-file hashes, cleanup policy, and `tools.sessions_spawn.attachments` configuration as `sessions_spawn` attachments. Immediate, delayed/recovered, and post-compaction typed delegates retain the snapshot until child spawn or a crash-safe post-compaction queue handoff. Terminal TaskFlow rows retain lifecycle and routing state but remove `attachments` and `attachAs`. Repaired and newly persisted `continue_delegate` tool calls replace each `attachments[].content` value with the established redaction marker while preserving the task and allowlisted attachment metadata; `attachAs` is projected to its single mount-path field and removed when no non-empty snapshot exists. This does not change the separate trusted-transcript behavior of `sessions_spawn`. Post-compaction queue recovery runtime-validates the discriminated payload and strict attachment members. Malformed records are dead-lettered with structural-only diagnostics, and their raw queue JSON is replaced so attachment bytes do not remain in the failed row. The tool result reports only attachment count and canonical mount options, never attachment content.
 
-This is an input contract, not an attachment-bearing return contract. The current child completion path captures a text result, renders a text completion event, and gives continuation return delivery a `text` field. Although the general internal task-completion event type can represent generated-media attachments, ordinary sub-agent completion capture does not populate structured attachments and targeted continuation delivery does not transport them. Adding a structured child-to-parent attachment result, preserving it through continuation return routing, and rendering or mounting it at recipients is separate [#666](https://github.com/karmaterminal/openclaw/issues/666) work.
+The `attachments` and `attachAs` fields are an input contract, not an attachment-bearing return contract. Managed output artifacts use the shipped [#666](https://github.com/karmaterminal/openclaw/issues/666) claim path instead: `returnOptions` activates a host-owned policy, the child explicitly publishes bounded candidates with `delegate_artifacts_publish`, and recipients receive metadata-only claim projections plus arrival context through durable continuation return delivery. Authorized recipients explicitly list, inspect, materialize, or discard claims. This path does not reuse input attachments, copy payload bytes into the return envelope, auto-mount bytes, prompt-inject bytes, channel-upload them, or generically render or forward them; those automatic byte-presentation surfaces remain future work.
 
 **What the target fields do — and explicitly do not — do.** Every `continue_delegate()` call spawns a fresh sub-agent owned by the dispatcher (a new session under `agent:<targetAgentId>:subagent:<UUID>`). The fresh sub-agent receives the `task` body, runs it, and produces a completion envelope. The `targetSessionKey`, `targetSessionKeys`, and `fanoutMode` fields control **where that completion envelope is delivered** when the fresh sub-agent finishes. They do not redirect the task body, they do not wake an existing session's run loop with the original task, and they do not route work into a named live-attached recipient. A live-attached recipient named via `targetSessionKey` will see only the post-completion `[continuation:enrichment-return]` envelope; it will never see the original `task` string from this primitive.
 
@@ -1695,7 +1695,7 @@ The feature ships disabled by default, respects human-user guardrails, and integ
 
 Several future directions are now technically credible because the continuation substrate exists. The nearest is better post-compaction recovery: richer savegames, stronger payload integrity, and recovery strategies that preserve working-state shape rather than only summary facts. TaskFlow can carry more durable background work; `session-delivery-queue` can carry more forms of addressed enrichment; trace context can make both auditable.
 
-Structured child-to-parent return attachments are a separate next step tracked by #666. The required seam is wider than adding a field to `continue_delegate()`: child completion capture must produce structured attachment metadata, completion events and continuation return queues must preserve it, recipients need defined render or mount behavior, and multi-recipient delivery needs cleanup and ownership semantics. The typed input attachment work in this RFC does not claim that return path.
+Managed child-to-recipient artifact claims now ship through #666: child publication, completion finalization, metadata-only recipient projection, arrival context, durable multi-recipient delivery, retention, and explicit recipient materialization are implemented. The remaining next step is automatic byte presentation beyond that control plane—such as generic transcript, TUI, MCP-content, or channel rendering or forwarding. The typed input attachment path remains separate and does not become a return transport.
 
 The broader shape is the harness as a **door-as-tool**: the session does not maintain transports, retry loops, delivery queues, or broadcast rings in its prompt. It says what door it wants opened, and the gateway chooses the mechanism. `continue_delegate()` is the first expression of that discipline. A later stream-publish surface should follow the same rule: the agent names intent and audience, while the tool handles deterministic ringbuffer fill, aging, addressing, fan-out, bridge-to-queue, and trace emission.
 
@@ -1705,7 +1705,7 @@ One especially promising direction is **sovereign peer enrichment**: multiple pe
 
 The shape-term for that future is a **networked substrate** or **noosphere**: not a single API and not a metaphorical chat room, but a set of bounded, observable paths by which many persistent agents can share selected context while remaining interruptible, consent-bound, and locally sovereign. This RFC does not implement that layer. It leaves the breadcrumb: a bounded agent turn can arrange work beyond itself without pretending that the future context is identical to the present one. It can leave a wake, a shard, a targeted return, a compaction request, or a post-compaction recovery path. Those provisions are how volition in one turn becomes usable structure for another.
 
-## Appendix A. Proposed and unimplemented extensions
+## Appendix A. Extension contracts and future seams
 
 ### A.1 Bounded pre-compaction evacuation window
 
@@ -1744,9 +1744,9 @@ agents:
 
 They are documented here as design targets only.
 
-### A.5 Proposed restoration: typed `continue_delegate()` on-dispatch input attachments (#1192)
+### A.5 Typed `continue_delegate()` on-dispatch input attachments (#1192)
 
-> **Status: restoration contract; absent from the current baseline.** This section defines the intended contract for [#1192](https://github.com/karmaterminal/openclaw/issues/1192) before implementation review. It restores the earlier `continue_delegate()` typed attachment surface as an **on-dispatch parent-to-child input snapshot**, not as a new return-artifact mechanism. Any candidate implementation must be judged against this section and its acceptance cases; prose added after implementation is not proof of the contract.
+> **Status: implemented input contract.** This section defines the shipped [#1192](https://github.com/karmaterminal/openclaw/issues/1192) `continue_delegate()` typed attachment surface as an **on-dispatch parent-to-child input snapshot**, not as a return-artifact mechanism. The implementation remains bound by this section and its acceptance cases.
 
 #### A.5.1 Public typed-tool contract
 
@@ -1796,9 +1796,9 @@ The #1192 acceptance suite must fail if the typed input surface disappears again
 7. the token fallback and `continue_work()` remain attachment-free; and
 8. no return path receives the input snapshot merely because the child completed.
 
-### A.6 Proposed managed delegate return claims and recipient arrival context (#666)
+### A.6 Managed delegate return claims and recipient arrival context (#666)
 
-> **Status: proposed; not implemented.** This section is the normative design target for [#666](https://github.com/karmaterminal/openclaw/issues/666). It deliberately does **not** change the shipped `continue_delegate()` input contract described in §2.4. No implementation may claim this behavior until the storage, authorization, recovery, and recipient-projection requirements below are implemented and tested together.
+> **Status: implemented control plane.** This section defines the shipped [#666](https://github.com/karmaterminal/openclaw/issues/666) contract. The `continue_delegate()` input includes `returnOptions` and `recipientContext`; child publication, immutable policy capture, claim lifecycle and recovery, metadata-only recipient projection, arrival context, durable delivery, and recipient-authorized list, inspect, materialize, and discard operations are implemented and tested together. Automatic rendering or forwarding of payload bytes is not part of this contract and remains future work.
 
 #### A.6.1 Scope and non-goals
 
@@ -1808,7 +1808,7 @@ This extension defines a child-to-recipient result path for files or other binar
 - A returned artifact is an **opaque, host-managed claim** over host-retained bytes. A claim is bound to its producing delegate run, the immutable completion event that returned it, and the recipient set authorized by the original dispatch/return policy.
 - A child must explicitly ask the host to publish an allowed regular file from its approved workspace/output area. The host canonicalizes the relative path, rejects traversal/symlink/non-regular-file escapes, applies configured size/type/redaction policy, stores the bytes privately, computes integrity metadata, and creates the claim.
 - The completion protocol persists claim metadata, not raw content, a child workspace path, an arbitrary URL, a hash used as authority, tool output, final prose, or a channel `media=` reference. It must not infer artifacts from any of those sources.
-- This extension does not automatically mount bytes into a parent workspace, inject bytes into a prompt, upload media to a channel, fetch a URL, or turn a claim into a current instruction. Parent materialization or rendering is an explicit recipient-authorized operation defined by the eventual implementation.
+- This extension does not automatically mount bytes into a parent workspace, inject bytes into a prompt, upload media to a channel, fetch a URL, or turn a claim into a current instruction. Recipient materialization is an implemented explicit, recipient-authorized operation; generic rendering or forwarding remains separate future work.
 - Generic arbitrary `data: JsonValue` is not part of the first claim-return slice. It needs a concrete durable consumer and independent compatibility/security design.
 
 A child has no implicit right to publish outputs merely because it completed. At accepted dispatch, the host creates the immutable, host-owned `DelegateArtifactReturnPolicyV1` described in §A.6.4. It is the sole authority for whether that delegate run may publish, which recipients may later resolve, and the publication bounds (count, MIME/type, byte limits, approved output boundary, and retention deadline). The child never supplies or widens those facts.
@@ -1833,7 +1833,7 @@ This is a closed capability request, not a caller-authored attachment/header bag
 
 **V1 publication request.** The implemented child-facing publication tool is `delegate_artifacts_publish`; its closed input accepts only a bounded list of child-workspace-relative candidate paths. It accepts neither raw bytes, URLs, hashes, `media://` locators, caller-selected claim IDs, nor a parent destination. The host resolves those relative paths against the policy's approved output root after the child asks to publish, re-checks the regular-file/no-symlink/type/size/redaction constraints, and redacts the candidate path from all channel-visible tool results, logs, diagnostics, and error strings. A rejected or absent candidate produces an explicit typed publication outcome; it never falls back to final prose, tool output, or a path string.
 
-**Canonical recipient artifact projection.** A claim is authority/provenance metadata, not a new public attachment-header language. An existing bounded delegate-artifact control-plane substrate already implements host-managed publication plus recipient-authorized list, inspect, materialize, and discard operations. The complete #666 continuation-return contract in this proposed section—including its recipient projection, delivery envelope, lifecycle, and acceptance matrix—is not yet implemented. V1's closed `ArtifactSummary` projection is the canonical typed, non-bearer attachment/resource **claim item** in that continuation return: it identifies a host-managed output and retains its ordinary MIME/name/size metadata, but it does **not** inline, serialize, prompt-inject, or otherwise make payload bytes readable at completion. Recipient-bound materialization remains an explicit authorized control-plane operation. Generic automatic transcript, TUI, MCP-content, or channel rendering or forwarding of those bytes is not implemented by this contract and remains future work. `AgentToolResult.content` is not itself this general claim-item representation today: it is limited to `TextContent | ImageContent`.
+**Canonical recipient artifact projection.** A claim is authority/provenance metadata, not a new public attachment-header language. The shipped delegate-artifact control plane implements host-managed publication, immutable claim lifecycle, metadata-only recipient projection and delivery, plus recipient-authorized list, inspect, materialize, and discard operations. V1's closed `ArtifactSummary` projection is the canonical typed, non-bearer attachment/resource **claim item** in that continuation return: it identifies a host-managed output and retains its ordinary MIME/name/size metadata, but it does **not** inline, serialize, prompt-inject, or otherwise make payload bytes readable at completion. Recipient-bound materialization remains an explicit authorized control-plane operation. Generic automatic transcript, TUI, MCP-content, or channel rendering or forwarding of those bytes is not implemented by this contract and remains future work. `AgentToolResult.content` is not itself this general claim-item representation today: it is limited to `TextContent | ImageContent`.
 
 **V1 representation decision.** V1 reuses the existing public gateway-protocol [`ArtifactSummary`](../../packages/gateway-protocol/src/schema/artifacts.ts) vocabulary as its sole recipient-visible artifact item. That existing metadata vocabulary covers opaque `id`, `type`, `title`, optional `mimeType`/`sizeBytes`, source lineage, and a non-content `download.mode` for arbitrary artifact classes; #666 derives its closed projection from it through the seven-field adapter below. It covers image, PDF/report, audio, dataset, and patch through the existing free-form `type` plus MIME metadata, without putting raw bytes, a local path, a URL, or a digest in the return event. The recipient-visible #666 projection SHALL contain only these fields:
 
@@ -1971,11 +1971,11 @@ A later-created session, a target discovered only after dispatch, a changed rout
 
 The implementation must make artifact resolution explicit and auditable. It must bind the resolution to a claim ID, recipient identity, delivery/completion provenance, and a chosen safe destination or renderer. It must not use parent trust in final prose, workspace paths, file hashes, arbitrary URLs, or channel-media handles as an authorization substitute. Multi-recipient delivery may share retained bytes only if every recipient gets an independently authorized claim binding or an equivalently auditable recipient binding; no guessed sibling/session identifier may resolve another recipient's result.
 
-**Resolution surface gate.** Before implementation, the receiving-session API must define closed, typed operations for list/inspect, materialize to a receiver-chosen safe destination, and discard; each must return a stable typed outcome for `available`, `expired`, `revoked`, `missing`, `corrupt`, and `unauthorized`. Every action records recipient/delivery/completion/claim provenance in the host audit trail. “Forward” remains an ordinary separately-authorized channel/message action after explicit resolution; it is not a claim operation and is out of scope for automatic return delivery.
+**Shipped resolution surface.** The receiving-session API defines closed, typed operations for list/inspect, materialize to a receiver-chosen safe destination, and discard; each returns a stable typed outcome for `available`, `expired`, `revoked`, `missing`, `corrupt`, and `unauthorized`. Every action records recipient/delivery/completion/claim provenance in the host audit trail. “Forward” remains an ordinary separately-authorized channel/message action after explicit resolution; it is not a claim operation and is out of scope for automatic return delivery.
 
 #### A.6.5 Acceptance matrix
 
-Before an implementation can ship, tests must prove all of the following:
+The shipped implementation remains bound by regression tests that prove all of the following:
 
 1. **Normal parent return:** an authorized parent receives canonical typed text/media/resource content backed by a claim projection and an arrival context tied to the exact child run/completion.
 2. **Targeted/inter-session return:** a target with zero prior awareness of the dispatch, including a silent enrichment, can distinguish it from fresh direct instruction using the host-authored arrival context without receiving private prompt/history bytes.
