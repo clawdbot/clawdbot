@@ -83,7 +83,9 @@ export function createDelegateArtifactPolicy(
           max_artifact_bytes: DELEGATE_ARTIFACT_MAX_BYTES,
           max_total_bytes: DELEGATE_ARTIFACT_MAX_TOTAL_BYTES,
           allowed_mimes_json: JSON.stringify(ALLOWED_MIME_PATTERNS),
-          retention_deadline: dispatchAcceptedAt + DELEGATE_ARTIFACT_RETENTION_MS,
+          retention_deadline:
+            Math.max(dispatchAcceptedAt, policy.notBefore ?? dispatchAcceptedAt) +
+            DELEGATE_ARTIFACT_RETENTION_MS,
           status: "active",
           completion_id: null,
           completion_finalization_key: null,
@@ -123,6 +125,13 @@ export class MissingDelegateArtifactPolicyError extends Error {
   }
 }
 
+export class UnavailableDelegateArtifactPolicyError extends Error {
+  constructor() {
+    super("artifact-capable continuation dispatch policy is inactive or expired");
+    this.name = "UnavailableDelegateArtifactPolicyError";
+  }
+}
+
 export function assertDelegateArtifactPolicyPrepared(
   flowId: string,
   options: OpenClawStateDatabaseOptions = {},
@@ -133,11 +142,14 @@ export function assertDelegateArtifactPolicyPrepared(
     db,
     artifactDb(db)
       .selectFrom("delegate_artifact_policies")
-      .select("flow_id")
+      .select(["flow_id", "status", "retention_deadline"])
       .where("flow_id", "=", flowId),
   );
   if (!policy) {
     throw new MissingDelegateArtifactPolicyError();
+  }
+  if (policy.status !== "active" || policy.retention_deadline <= Date.now()) {
+    throw new UnavailableDelegateArtifactPolicyError();
   }
 }
 
@@ -168,7 +180,7 @@ export function removeUnacceptedDelegateArtifactPolicy(
           .limit(1),
       );
       if (policy.status !== "active" || policy.producer_session_id !== null || claim) {
-        throw new Error("cannot remove an accepted delegate artifact policy");
+        return;
       }
       executeSqliteQuerySync(
         db,

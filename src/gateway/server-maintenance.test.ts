@@ -43,7 +43,7 @@ function createMaintenanceTimerDeps() {
     ...createGatewayMaintenanceStateForTest(),
     runWorktreeGc: vi.fn(async () => undefined),
     runDeliveryQueueMediaGc: vi.fn(async () => undefined),
-    runDelegateArtifactGc: vi.fn(async () => undefined),
+    runDelegateArtifactGc: vi.fn(async () => 0),
   };
 }
 
@@ -200,6 +200,69 @@ describe("startGatewayMaintenanceTimers", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(deps.runDelegateArtifactGc).toHaveBeenCalledTimes(3);
     stopMaintenanceTimers(restarted);
+  });
+
+  it("drains expired delegate artifacts in bounded batches", async () => {
+    vi.useFakeTimers();
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    deps.runDelegateArtifactGc
+      .mockResolvedValueOnce(100)
+      .mockResolvedValueOnce(100)
+      .mockResolvedValueOnce(12);
+
+    const timers = startGatewayMaintenanceTimers(deps);
+    clearInterval(timers.delegateArtifactCleanup);
+    for (let index = 0; index < 10; index += 1) {
+      await Promise.resolve();
+    }
+
+    expect(deps.runDelegateArtifactGc).toHaveBeenCalledTimes(3);
+    stopMaintenanceTimers(timers);
+  });
+
+  it("yields during long delegate artifact cleanup drains", async () => {
+    vi.useFakeTimers();
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    for (let index = 0; index < 12; index += 1) {
+      deps.runDelegateArtifactGc.mockResolvedValueOnce(index < 11 ? 100 : 1);
+    }
+
+    const timers = startGatewayMaintenanceTimers(deps);
+    clearInterval(timers.delegateArtifactCleanup);
+    for (let index = 0; index < 20; index += 1) {
+      await Promise.resolve();
+    }
+    expect(deps.runDelegateArtifactGc).toHaveBeenCalledTimes(10);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(deps.runDelegateArtifactGc).toHaveBeenCalledTimes(12);
+    stopMaintenanceTimers(timers);
+  });
+
+  it("stops delegate artifact cleanup draining during maintenance teardown", async () => {
+    vi.useFakeTimers();
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    let releaseBatch: ((purged: number) => void) | undefined;
+    deps.runDelegateArtifactGc.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseBatch = resolve;
+        }),
+    );
+
+    const timers = startGatewayMaintenanceTimers(deps);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(deps.runDelegateArtifactGc).toHaveBeenCalledTimes(1);
+    timers.skillCuratorCleanup();
+    releaseBatch?.(100);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(deps.runDelegateArtifactGc).toHaveBeenCalledTimes(1);
+    stopMaintenanceTimers(timers);
   });
 
   it("delays curator startup, skips overlap, and unregisters on cleanup", async () => {

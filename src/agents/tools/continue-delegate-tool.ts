@@ -256,6 +256,9 @@ function readArtifactReturnFields(params: Record<string, unknown>): {
   returnOptions?: { artifacts?: "forbidden" | "optional" | "required" };
   recipientContext?: { purpose: string };
 } {
+  if (Object.hasOwn(params, "returnOptions") && Object.hasOwn(params, "return_options")) {
+    throw new ToolInputError("returnOptions and return_options cannot both be provided.");
+  }
   const rawReturnOptions = readSnakeCaseParamRaw(params, "returnOptions");
   let artifacts: "forbidden" | "optional" | "required" | undefined;
   if (rawReturnOptions !== undefined) {
@@ -285,6 +288,9 @@ function readArtifactReturnFields(params: Record<string, unknown>): {
     artifacts = rawArtifacts;
   }
 
+  if (Object.hasOwn(params, "recipientContext") && Object.hasOwn(params, "recipient_context")) {
+    throw new ToolInputError("recipientContext and recipient_context cannot both be provided.");
+  }
   const rawRecipientContext = readSnakeCaseParamRaw(params, "recipientContext");
   let purpose: string | undefined;
   if (rawRecipientContext !== undefined) {

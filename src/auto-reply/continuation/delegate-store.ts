@@ -194,17 +194,27 @@ export function markPendingDelegateFailed(
 export function requeuePendingDelegate(
   delegate: Pick<PendingContinuationDelegate, "flowId" | "expectedRevision" | "task">,
   currentStep = "Deferred until continuation is re-enabled",
+  inheritedPolicy?: Pick<PendingContinuationDelegate, "inheritedSilent" | "inheritedWake">,
 ): boolean {
   if (!delegate.flowId || delegate.expectedRevision === undefined) {
     return false;
   }
   const current = delegateFlowRecords.get(delegate.flowId);
   const currentDelegate = (current && decodeDelegateFlow(current)) ?? { task: delegate.task };
+  const canInheritPolicy = currentDelegate.mode === undefined || currentDelegate.mode === "normal";
   const requeued = delegateFlowRecords.update({
     flowId: delegate.flowId,
     expectedRevision: delegate.expectedRevision,
     fallbackDelegate: currentDelegate,
-    changes: { releasedAt: null },
+    changes: {
+      releasedAt: null,
+      ...(canInheritPolicy && inheritedPolicy?.inheritedSilent === true
+        ? { inheritedSilent: true }
+        : {}),
+      ...(canInheritPolicy && inheritedPolicy?.inheritedWake === true
+        ? { inheritedWake: true }
+        : {}),
+    },
     patch: {
       status: "queued",
       currentStep,

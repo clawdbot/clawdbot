@@ -4,6 +4,7 @@ import { formatDelegateArtifactTaskInstruction } from "../../agents/delegate-art
 import {
   assertDelegateArtifactPolicyPrepared,
   MissingDelegateArtifactPolicyError,
+  UnavailableDelegateArtifactPolicyError,
 } from "../../agents/delegate-artifacts.js";
 import { deriveContinuationDelegateChildSessionKeyFromParent } from "../../agents/subagent-continuation-ids.js";
 import {
@@ -329,10 +330,15 @@ export async function dispatchStagedPostCompactionDelegates(
         noteTransientFailure(delegate);
       }
     } catch (err) {
-      if (err instanceof MissingDelegateArtifactPolicyError) {
-        const summary = "Post-compaction delegate rejected: accepted artifact policy is missing.";
+      if (
+        err instanceof MissingDelegateArtifactPolicyError ||
+        err instanceof UnavailableDelegateArtifactPolicyError
+      ) {
+        const unavailable = err instanceof UnavailableDelegateArtifactPolicyError;
+        const reason = unavailable ? "inactive or expired" : "missing";
+        const summary = `Post-compaction delegate rejected: accepted artifact policy is ${reason}.`;
         postCompactionLog.warn(
-          `[continuation:post-compaction-policy-missing] session=${sessionKey} task=${delegate.task.slice(0, 80)}`,
+          `[continuation:post-compaction-policy-${unavailable ? "unavailable" : "missing"}] session=${sessionKey} task=${delegate.task.slice(0, 80)}`,
         );
         enqueueSystemEvent(
           `[continuation] ${summary} Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,

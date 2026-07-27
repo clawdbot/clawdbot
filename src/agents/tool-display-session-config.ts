@@ -106,7 +106,7 @@ export const SESSION_TOOL_DISPLAY_CONFIG = {
   delegate_artifacts_publish: {
     emoji: "📦",
     title: "Publish Delegate Artifacts",
-    detailKeys: ["paths"],
+    detailKeys: [],
   },
   delegate_artifacts: {
     emoji: "📦",

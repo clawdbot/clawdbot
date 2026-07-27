@@ -63,8 +63,8 @@ describe("managed delegate artifact claims", () => {
         9_000,
       );
 
-    expect(purgeExpiredDelegateArtifacts(1_000 + DELEGATE_ARTIFACT_RETENTION_MS, options)).toBe(0);
-    expect(purgeExpiredDelegateArtifacts(1_000 + DELEGATE_ARTIFACT_RETENTION_MS, options)).toBe(0);
+    expect(purgeExpiredDelegateArtifacts(31_100 + DELEGATE_ARTIFACT_RETENTION_MS, options)).toBe(0);
+    expect(purgeExpiredDelegateArtifacts(31_100 + DELEGATE_ARTIFACT_RETENTION_MS, options)).toBe(0);
     expect(
       openOpenClawStateDatabase(options)
         .db.prepare("SELECT flow_id, status FROM delegate_artifact_policies ORDER BY flow_id")
@@ -143,7 +143,7 @@ describe("managed delegate artifact claims", () => {
         runtimeEnabled: true,
         crossSessionEnabled: true,
         currentRecipientSessionId: "parent-session-1",
-        now: 1_000 + DELEGATE_ARTIFACT_RETENTION_MS,
+        now: 31_100 + DELEGATE_ARTIFACT_RETENTION_MS,
         options,
       }),
     ).toEqual({ status: "unavailable" });
@@ -176,7 +176,7 @@ describe("managed delegate artifact claims", () => {
     ).toEqual({
       dispatch_accepted_at: 5_000,
       scheduled_at: 1_000,
-      retention_deadline: 5_000 + DELEGATE_ARTIFACT_RETENTION_MS,
+      retention_deadline: 31_100 + DELEGATE_ARTIFACT_RETENTION_MS,
     });
   });
 
@@ -336,8 +336,8 @@ describe("managed delegate artifact claims", () => {
         options,
       }),
     ).toEqual({ outcome: "unauthorized" });
-    expect(purgeExpiredDelegateArtifacts(1_000 + DELEGATE_ARTIFACT_RETENTION_MS, options)).toBe(1);
-    expect(purgeExpiredDelegateArtifacts(1_000 + DELEGATE_ARTIFACT_RETENTION_MS, options)).toBe(0);
+    expect(purgeExpiredDelegateArtifacts(31_100 + DELEGATE_ARTIFACT_RETENTION_MS, options)).toBe(1);
+    expect(purgeExpiredDelegateArtifacts(31_100 + DELEGATE_ARTIFACT_RETENTION_MS, options)).toBe(0);
     expect(
       openOpenClawStateDatabase(options)
         .db.prepare(

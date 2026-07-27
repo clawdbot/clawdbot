@@ -112,6 +112,7 @@ function fixture() {
     sessionId,
     runId,
     publish: tools.find((tool) => tool.name === "delegate_artifacts_publish")!,
+    operations: tools.find((tool) => tool.name === "delegate_artifacts")!,
   };
 }
 
@@ -120,6 +121,20 @@ afterEach(() => {
 });
 
 describe("delegate artifact tools", () => {
+  it("uses a flat provider-safe action enum", () => {
+    const actionSchema = (
+      fixture().operations.parameters as {
+        properties?: { action?: Record<string, unknown> };
+      }
+    ).properties?.action;
+
+    expect(actionSchema).toMatchObject({
+      type: "string",
+      enum: ["list", "inspect", "materialize", "discard"],
+    });
+    expect(actionSchema).not.toHaveProperty("anyOf");
+  });
+
   it("publishes only validated regular files under the approved output root", async () => {
     const test = fixture();
     writeFileSync(join(test.output, "report.pdf"), "%PDF-1.7 managed report");

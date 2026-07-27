@@ -5,6 +5,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import {
   DELEGATE_ARTIFACT_RETENTION_MS,
+  assertDelegateArtifactPolicyPrepared,
   createDelegateArtifactPolicy,
   discardDelegateArtifactForRecipient,
   inspectDelegateArtifactForRecipient,
@@ -21,6 +22,28 @@ afterEach(() => {
 });
 
 describe("managed delegate artifact claims", () => {
+  it("starts retention when a delayed delegate becomes runnable", () => {
+    const options = stateOptions();
+    const dispatchAcceptedAt = 1_000;
+    const notBefore = 61_000;
+    createDelegateArtifactPolicy(policy({ dispatchAcceptedAt, notBefore }), options);
+
+    const row = openOpenClawStateDatabase(options)
+      .db.prepare("SELECT retention_deadline FROM delegate_artifact_policies WHERE flow_id = ?")
+      .get("flow-1") as { retention_deadline: number };
+    expect(row.retention_deadline).toBe(notBefore + DELEGATE_ARTIFACT_RETENTION_MS);
+  });
+
+  it("rejects an accepted policy that expires while managed work is deferred", () => {
+    const options = stateOptions();
+    createDelegateArtifactPolicy(policy(), options);
+    vi.spyOn(Date, "now").mockReturnValue(31_100 + DELEGATE_ARTIFACT_RETENTION_MS);
+
+    expect(() => assertDelegateArtifactPolicyPrepared("flow-1", options)).toThrow(
+      "artifact-capable continuation dispatch policy is inactive or expired",
+    );
+  });
+
   it("fails corrupt, expired, and revoked claims closed without content fallback", () => {
     const options = stateOptions();
     createDelegateArtifactPolicy(policy(), options);
@@ -131,7 +154,7 @@ describe("managed delegate artifact claims", () => {
     ).toEqual({ outcome: "revoked" });
 
     expect(
-      purgeExpiredDelegateArtifacts(1_000 + DELEGATE_ARTIFACT_RETENTION_MS, revokeOptions),
+      purgeExpiredDelegateArtifacts(31_100 + DELEGATE_ARTIFACT_RETENTION_MS, revokeOptions),
     ).toBe(1);
     expect(
       inspectDelegateArtifactForRecipient({
@@ -140,7 +163,7 @@ describe("managed delegate artifact claims", () => {
         recipientSessionId: "parent-session-1",
         runtimeEnabled: true,
         crossSessionEnabled: true,
-        now: 1_000 + DELEGATE_ARTIFACT_RETENTION_MS,
+        now: 31_100 + DELEGATE_ARTIFACT_RETENTION_MS,
         options: revokeOptions,
       }),
     ).toEqual({ outcome: "expired" });
@@ -168,14 +191,14 @@ describe("managed delegate artifact claims", () => {
       now: 9_950,
       options: expiryOptions,
     });
-    purgeExpiredDelegateArtifacts(1_000 + DELEGATE_ARTIFACT_RETENTION_MS, expiryOptions);
+    purgeExpiredDelegateArtifacts(31_100 + DELEGATE_ARTIFACT_RETENTION_MS, expiryOptions);
     expect(
       listDelegateArtifactsForRecipient({
         recipientSessionKey: "agent:main:parent",
         recipientSessionId: "parent-session-1",
         runtimeEnabled: true,
         crossSessionEnabled: true,
-        now: 1_000 + DELEGATE_ARTIFACT_RETENTION_MS,
+        now: 31_100 + DELEGATE_ARTIFACT_RETENTION_MS,
         options: expiryOptions,
       }),
     ).toEqual({ outcome: "expired" });
@@ -251,7 +274,7 @@ describe("managed delegate artifact claims", () => {
       now: 10_050,
       options,
     });
-    const expiredAt = 1_000 + DELEGATE_ARTIFACT_RETENTION_MS;
+    const expiredAt = 31_100 + DELEGATE_ARTIFACT_RETENTION_MS;
 
     expect(
       listDelegateArtifactsForRecipient({
@@ -301,7 +324,7 @@ describe("managed delegate artifact claims", () => {
         recipientSessionId: "parent-session-1",
         runtimeEnabled: true,
         crossSessionEnabled: true,
-        now: 2_000 + DELEGATE_ARTIFACT_RETENTION_MS,
+        now: 32_100 + DELEGATE_ARTIFACT_RETENTION_MS,
         options,
       }),
     ).toEqual({ outcome: "expired" });
@@ -373,7 +396,7 @@ describe("managed delegate artifact claims", () => {
       .all();
     closeOpenClawStateDatabaseForTest();
 
-    const expiredAt = 1_000 + DELEGATE_ARTIFACT_RETENTION_MS;
+    const expiredAt = 31_100 + DELEGATE_ARTIFACT_RETENTION_MS;
     expect(purgeExpiredDelegateArtifacts(expiredAt, options)).toBe(1);
     expect(purgeExpiredDelegateArtifacts(expiredAt, options)).toBe(0);
     closeOpenClawStateDatabaseForTest();

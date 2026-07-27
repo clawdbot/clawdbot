@@ -81,6 +81,32 @@ describe("tool display details", () => {
     expect(detail).toBe("double-message-bug-gpt");
   });
 
+  it("does not disclose delegate artifact publication paths", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "delegate_artifacts_publish",
+        args: { paths: ["private/report.pdf"] },
+      }),
+    );
+
+    expect(detail).toBeUndefined();
+  });
+
+  it.each([
+    { path: "private/report.pdf" },
+    { paths: "private/report.pdf" },
+    { length: "private/report.pdf" },
+  ])("does not disclose delegate artifact publication fallback keys", (args) => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "delegate_artifacts_publish",
+        args,
+      }),
+    );
+
+    expect(detail).toBeUndefined();
+  });
+
   it("includes only truthy boolean details", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({

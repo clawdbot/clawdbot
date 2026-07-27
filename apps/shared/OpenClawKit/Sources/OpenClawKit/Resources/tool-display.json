@@ -700,9 +700,7 @@
     "delegate_artifacts_publish": {
       "emoji": "📦",
       "title": "Publish Delegate Artifacts",
-      "detailKeys": [
-        "paths"
-      ]
+      "detailKeys": []
     },
     "delegate_artifacts": {
       "emoji": "📦",

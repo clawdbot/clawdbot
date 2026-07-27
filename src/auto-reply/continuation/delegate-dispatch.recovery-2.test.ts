@@ -12,6 +12,11 @@ const loggerRecords: Array<{ level: string; message: string }> = [];
 // Observable persisted session entries for recovery persist assertions.
 const recoveryStoreByPath = new Map<string, Record<string, unknown>>();
 const spawnSubagentDirectMock = vi.fn();
+const { assertDelegateArtifactPolicyPreparedMock, removeUnacceptedDelegateArtifactPolicyMock } =
+  vi.hoisted(() => ({
+    assertDelegateArtifactPolicyPreparedMock: vi.fn(),
+    removeUnacceptedDelegateArtifactPolicyMock: vi.fn(),
+  }));
 let flowIdCounter = 0;
 let listTaskFlowsShouldThrow = false;
 const activeRegistryChildSessionKeys = new Set<string>();
@@ -32,6 +37,12 @@ let updateSessionStoreForRecoveryThrowOnRequiredWriteCall: number | undefined;
 
 vi.mock("../../agents/subagent-spawn.js", () => ({
   spawnSubagentDirect: (...args: unknown[]) => spawnSubagentDirectMock(...args),
+}));
+
+vi.mock("../../agents/delegate-artifacts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/delegate-artifacts.js")>()),
+  assertDelegateArtifactPolicyPrepared: assertDelegateArtifactPolicyPreparedMock,
+  removeUnacceptedDelegateArtifactPolicy: removeUnacceptedDelegateArtifactPolicyMock,
 }));
 
 vi.mock("../../agents/subagent-registry-read.js", () => ({
@@ -197,6 +208,7 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
   }),
 }));
 
+import { UnavailableDelegateArtifactPolicyError } from "../../agents/delegate-artifacts.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   noopTracer,
@@ -208,6 +220,7 @@ import {
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { runWithGatewayRootWorkAdmissionForTest as runWithGatewayRootWorkAdmission } from "../../process/gateway-work-admission.test-helpers.js";
+import { armDelegateDispatchHedge } from "./delegate-dispatch-hedge.js";
 import {
   recoverAndReleaseStagedPostCompactionDelegates,
   recoverPendingContinuationDelegates,
@@ -298,6 +311,8 @@ beforeEach(() => {
   enqueueSystemEventMock.mockClear();
   loggerRecords.length = 0;
   spawnSubagentDirectMock.mockReset().mockResolvedValue({ status: "accepted" });
+  assertDelegateArtifactPolicyPreparedMock.mockReset();
+  removeUnacceptedDelegateArtifactPolicyMock.mockClear();
   loadSessionStoreForRecoveryMock.mockReset().mockReturnValue({});
   flowIdCounter = 0;
   listTaskFlowsShouldThrow = false;
@@ -428,6 +443,85 @@ describe("recoverPendingContinuationDelegates", () => {
     });
   });
 
+  it("persists a recovered chain-token fold before rejecting an expired artifact policy", async () => {
+    const sessionKey = "agent:main:subagent:expired-policy-chain-fold";
+    enqueuePendingDelegate(sessionKey, {
+      task: "reject expired artifact policy with durable cost",
+      chainTokensFold: 250_000,
+      returnOptions: { artifacts: "required" },
+    });
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: {
+        sessionId: "session-child",
+        continuationChainCount: 1,
+        continuationChainStartedAt: 1_700_000_000_000,
+        continuationChainTokens: 300_000,
+      },
+    });
+    assertDelegateArtifactPolicyPreparedMock.mockImplementationOnce(() => {
+      throw new UnavailableDelegateArtifactPolicyError();
+    });
+
+    const result = await recoverPendingContinuationDelegates({});
+
+    expect(result).toMatchObject({ sessions: 1, dispatched: 0, rejected: 1 });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "failed" });
+    expect(findPersistedRecoveryEntry(sessionKey)).toMatchObject({
+      continuationChainCount: 1,
+      continuationChainTokens: 550_000,
+    });
+  });
+
+  it("does not reapply a shared fold after a later expired-policy persist fails", async () => {
+    const sessionKey = "agent:main:subagent:expired-policy-shared-fold-persist-fail";
+    for (const task of ["first expired", "second expired", "third expired"]) {
+      enqueuePendingDelegate(sessionKey, {
+        task,
+        chainTokensFold: 50_000,
+        returnOptions: { artifacts: "required" },
+      });
+    }
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: {
+        sessionId: "session-child",
+        continuationChainCount: 1,
+        continuationChainStartedAt: 1_700_000_000_000,
+        continuationChainTokens: 300_000,
+      },
+    });
+    assertDelegateArtifactPolicyPreparedMock.mockImplementation(() => {
+      throw new UnavailableDelegateArtifactPolicyError();
+    });
+    updateSessionStoreForRecoveryThrowOnRequiredWriteCall = 2;
+
+    const first = await recoverPendingContinuationDelegates({});
+
+    expect(first).toMatchObject({ sessions: 1, dispatched: 0, rejected: 0 });
+    expect(findPersistedRecoveryEntry(sessionKey)).toMatchObject({
+      continuationChainTokens: 350_000,
+    });
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "failed" });
+    expect(mockFlows.get("flow-2")).toMatchObject({ status: "running" });
+    expect(mockFlows.get("flow-3")).toMatchObject({ status: "running" });
+    expect(
+      (mockFlows.get("flow-2")?.stateJson as Record<string, unknown> | undefined)?.chainTokensFold,
+    ).toBeUndefined();
+    expect(
+      (mockFlows.get("flow-3")?.stateJson as Record<string, unknown> | undefined)?.chainTokensFold,
+    ).toBeUndefined();
+
+    updateSessionStoreForRecoveryThrowOnRequiredWriteCall = undefined;
+    const retried = await recoverPendingContinuationDelegates({});
+
+    expect(retried).toMatchObject({ sessions: 1, dispatched: 0, rejected: 2 });
+    expect(mockFlows.get("flow-2")).toMatchObject({ status: "failed" });
+    expect(mockFlows.get("flow-3")).toMatchObject({ status: "failed" });
+    expect(findPersistedRecoveryEntry(sessionKey)).toMatchObject({
+      continuationChainTokens: 350_000,
+    });
+  });
+
   it("clears persisted chain-token folds so later delayed hedges do not reapply them", async () => {
     setRuntimeConfigSnapshot({
       agents: {
@@ -516,6 +610,215 @@ describe("recoverPendingContinuationDelegates", () => {
     const spawnParams = spawnSubagentDirectMock.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(spawnParams).toMatchObject({
       task: expect.stringContaining("delayed inherited child"),
+      silentAnnounce: true,
+      wakeOnReturn: true,
+    });
+  });
+
+  it("retries managed delegates when runtime artifact support becomes enabled", async () => {
+    const sessionKey = "agent:main:managed-runtime-retry";
+    enqueuePendingDelegate(sessionKey, {
+      task: "managed retry",
+      returnOptions: { artifacts: "optional" },
+    });
+    setRuntimeConfigSnapshot({
+      agents: { defaults: { continuation: { enabled: false } } },
+    });
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      config: continuationConfig(),
+    });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+
+    setRuntimeConfigSnapshot({
+      agents: { defaults: { continuation: { enabled: true } } },
+    });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries cross-session managed delegates when runtime targeting becomes enabled", async () => {
+    const sessionKey = "agent:main:managed-cross-session-retry";
+    enqueuePendingDelegate(sessionKey, {
+      task: "managed cross-session retry",
+      targetSessionKey: "agent:main:other",
+      targetSessionKeys: ["agent:main:other"],
+      returnOptions: { artifacts: "optional" },
+      recipientContext: { purpose: "Return the managed report" },
+    });
+    setRuntimeConfigSnapshot({
+      agents: {
+        defaults: {
+          continuation: { enabled: true, crossSessionTargeting: "disabled" },
+        },
+      },
+    });
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      config: continuationConfig({ crossSessionTargeting: "enabled" }),
+    });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+
+    setRuntimeConfigSnapshot({
+      agents: {
+        defaults: {
+          continuation: { enabled: true, crossSessionTargeting: "enabled" },
+        },
+      },
+    });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("widens a preserved recovery hedge to include newly queued delegates", async () => {
+    const sessionKey = "agent:main:managed-cutoff-merge";
+    const chainState = {
+      currentChainCount: 0,
+      chainStartedAt: Date.now(),
+      accumulatedChainTokens: 0,
+    };
+    const recoveryCutoff = Date.now();
+    const dispatch = vi.fn().mockResolvedValue({
+      dispatched: 0,
+      rejected: 0,
+      chainState,
+    });
+
+    armDelegateDispatchHedge(
+      sessionKey,
+      Date.now() + 10_000,
+      {
+        chainState,
+        ctx: { sessionKey },
+        maxChainLength: 10,
+        recoverRunningDelegates: true,
+        queuedCreatedAtOrBefore: recoveryCutoff,
+        includeRunningUpdatedAtOrBefore: recoveryCutoff,
+      },
+      dispatch,
+    );
+    armDelegateDispatchHedge(
+      sessionKey,
+      Date.now() + 30_000,
+      {
+        chainState,
+        ctx: { sessionKey },
+        maxChainLength: 10,
+      },
+      dispatch,
+    );
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        recoverRunningDelegates: true,
+        includeRunningUpdatedAtOrBefore: recoveryCutoff,
+      }),
+    );
+    expect(dispatch.mock.calls[0]?.[0]).not.toHaveProperty("queuedCreatedAtOrBefore");
+  });
+
+  it("preserves a newer live hedge when bounded recovery finds no eligible delayed row", async () => {
+    const sessionKey = "agent:main:bounded-recovery-preserves-live-hedge";
+    const chainState = {
+      currentChainCount: 0,
+      chainStartedAt: Date.now(),
+      accumulatedChainTokens: 0,
+    };
+    const recoveryCutoff = Date.now();
+    vi.setSystemTime(recoveryCutoff + 1);
+    enqueuePendingDelegate(sessionKey, {
+      task: "newer live delayed child",
+      delayMs: 10_000,
+    });
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState,
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      config: continuationConfig(),
+    });
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState,
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      recoverRunningDelegates: true,
+      queuedCreatedAtOrBefore: recoveryCutoff,
+      includeRunningUpdatedAtOrBefore: recoveryCutoff,
+      config: continuationConfig(),
+    });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(spawnSubagentDirectMock.mock.calls[0]?.[0]).toMatchObject({
+      task: expect.stringContaining("newer live delayed child"),
+    });
+  });
+
+  it("preserves an earlier hedge and inherited policy across managed deferral", async () => {
+    const sessionKey = "agent:main:managed-earliest-hedge";
+    enqueuePendingDelegate(sessionKey, {
+      task: "earlier delayed child",
+      delayMs: 10_000,
+    });
+    const managed = enqueuePendingDelegate(sessionKey, {
+      task: "managed restart child",
+      mode: "normal",
+      returnOptions: { artifacts: "optional" },
+    });
+    setRuntimeConfigSnapshot({
+      agents: { defaults: { continuation: { enabled: false } } },
+    });
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      inheritedSilent: true,
+      inheritedWake: true,
+      config: continuationConfig(),
+    });
+    expect(mockFlows.get(managed?.flowId ?? "")?.stateJson).toMatchObject({
+      inheritedSilent: true,
+      inheritedWake: true,
+    });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(spawnSubagentDirectMock.mock.calls[0]?.[0]).toMatchObject({
+      task: expect.stringContaining("earlier delayed child"),
+    });
+
+    resetDelegateDispatchHedgesForTests();
+    setRuntimeConfigSnapshot({
+      agents: { defaults: { continuation: { enabled: true } } },
+    });
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: {
+        sessionId: "session-child",
+        continuationChainCount: 0,
+        continuationChainStartedAt: 1_700_000_000_000,
+        continuationChainTokens: 0,
+      },
+    });
+    await recoverPendingContinuationDelegates({});
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(2);
+    expect(spawnSubagentDirectMock.mock.calls[1]?.[0]).toMatchObject({
+      task: expect.stringContaining("managed restart child"),
       silentAnnounce: true,
       wakeOnReturn: true,
     });

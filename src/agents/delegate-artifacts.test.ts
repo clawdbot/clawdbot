@@ -38,7 +38,7 @@ describe("managed delegate artifact claims", () => {
       max_artifact_count: 8,
       max_artifact_bytes: 16 * 1024 * 1024,
       max_total_bytes: 32 * 1024 * 1024,
-      retention_deadline: 1_000 + DELEGATE_ARTIFACT_RETENTION_MS,
+      retention_deadline: 31_100 + DELEGATE_ARTIFACT_RETENTION_MS,
     });
     expect(JSON.parse(String(storedPolicy.route_json))).toEqual({
       kind: "targets",
@@ -627,8 +627,11 @@ describe("managed delegate artifact claims", () => {
 
     createDelegateArtifactPolicy(policy(), options);
     publish(options);
-    expect(() => removeUnacceptedDelegateArtifactPolicy("flow-1", options)).toThrow(
-      "cannot remove an accepted delegate artifact policy",
-    );
+    removeUnacceptedDelegateArtifactPolicy("flow-1", options);
+    expect(
+      openOpenClawStateDatabase(options)
+        .db.prepare("SELECT count(*) AS count FROM delegate_artifact_policies")
+        .get(),
+    ).toEqual({ count: 1 });
   });
 });

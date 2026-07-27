@@ -24,6 +24,7 @@ export {
   MissingDelegateArtifactPolicyError,
   purgeExpiredDelegateArtifacts,
   removeUnacceptedDelegateArtifactPolicy,
+  UnavailableDelegateArtifactPolicyError,
 } from "./delegate-artifact-policy-store.js";
 export {
   finalizeDelegateArtifacts,

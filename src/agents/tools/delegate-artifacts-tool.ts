@@ -23,6 +23,7 @@ import {
   readDelegateArtifactForMaterialization,
 } from "../delegate-artifacts.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
+import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, ToolInputError } from "./common.js";
 
@@ -38,12 +39,7 @@ const PublishSchema = Type.Object(
 
 const OperationsSchema = Type.Object(
   {
-    action: Type.Union([
-      Type.Literal("list"),
-      Type.Literal("inspect"),
-      Type.Literal("materialize"),
-      Type.Literal("discard"),
-    ]),
+    action: stringEnum(["list", "inspect", "materialize", "discard"] as const),
     claimId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
     destination: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
   },

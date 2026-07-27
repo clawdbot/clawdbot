@@ -35,15 +35,22 @@ type DelegateDispatchHedgeParams = Pick<
 >;
 
 // Per-session hedge timer for re-checking unmatured pending delegates in fully
-// quiet channels. A fresh dispatch cancels and replaces the existing hedge.
-const hedgeTimers = new Map<string, NodeJS.Timeout>();
+// quiet channels. Re-arming preserves the earliest pending deadline.
+type DelegateDispatchHedge = {
+  handle: NodeJS.Timeout;
+  fireAt: number;
+  params: DelegateDispatchHedgeParams;
+  dispatchToolDelegates: DispatchToolDelegates;
+};
+
+const hedgeTimers = new Map<string, DelegateDispatchHedge>();
 
 export function clearDelegateDispatchHedge(sessionKey: string): void {
   const existing = hedgeTimers.get(sessionKey);
   if (existing) {
-    clearTimeout(existing);
+    clearTimeout(existing.handle);
     hedgeTimers.delete(sessionKey);
-    unregisterContinuationTimerHandle(sessionKey, existing);
+    unregisterContinuationTimerHandle(sessionKey, existing.handle);
   }
 }
 
@@ -64,12 +71,72 @@ function surfaceHedgeDispatchFailure(sessionKey: string, errorMessage: string): 
   }
 }
 
+function mergeOptionalUpperBound(
+  existing: number | undefined,
+  incoming: number | undefined,
+): number | undefined {
+  return existing === undefined || incoming === undefined
+    ? undefined
+    : Math.max(existing, incoming);
+}
+
+function mergeHedgeParams(
+  existing: DelegateDispatchHedgeParams,
+  incoming: DelegateDispatchHedgeParams,
+): DelegateDispatchHedgeParams {
+  const merged: DelegateDispatchHedgeParams = {
+    ...existing,
+    ...incoming,
+    ...(existing.applyDelegateChainTokensFold || incoming.applyDelegateChainTokensFold
+      ? { applyDelegateChainTokensFold: true }
+      : {}),
+    ...(existing.persistBeforeTerminalCommit || incoming.persistBeforeTerminalCommit
+      ? { persistBeforeTerminalCommit: true }
+      : {}),
+    ...(existing.recoverRunningDelegates || incoming.recoverRunningDelegates
+      ? { recoverRunningDelegates: true }
+      : {}),
+    ...(existing.inheritedSilent || incoming.inheritedSilent ? { inheritedSilent: true } : {}),
+    ...(existing.inheritedWake || incoming.inheritedWake ? { inheritedWake: true } : {}),
+  };
+  const queuedCreatedAtOrBefore = mergeOptionalUpperBound(
+    existing.queuedCreatedAtOrBefore,
+    incoming.queuedCreatedAtOrBefore,
+  );
+  if (queuedCreatedAtOrBefore === undefined) {
+    delete merged.queuedCreatedAtOrBefore;
+  } else {
+    merged.queuedCreatedAtOrBefore = queuedCreatedAtOrBefore;
+  }
+  if (incoming.recoverRunningDelegates) {
+    const includeRunningUpdatedAtOrBefore = existing.recoverRunningDelegates
+      ? mergeOptionalUpperBound(
+          existing.includeRunningUpdatedAtOrBefore,
+          incoming.includeRunningUpdatedAtOrBefore,
+        )
+      : incoming.includeRunningUpdatedAtOrBefore;
+    if (includeRunningUpdatedAtOrBefore === undefined) {
+      delete merged.includeRunningUpdatedAtOrBefore;
+    } else {
+      merged.includeRunningUpdatedAtOrBefore = includeRunningUpdatedAtOrBefore;
+    }
+  }
+  return merged;
+}
+
 export function armDelegateDispatchHedge(
   sessionKey: string,
   fireAt: number,
   params: DelegateDispatchHedgeParams,
   dispatchToolDelegates: DispatchToolDelegates,
 ): void {
+  const existing = hedgeTimers.get(sessionKey);
+  if (existing && existing.fireAt <= fireAt) {
+    existing.params = mergeHedgeParams(existing.params, params);
+    existing.dispatchToolDelegates = dispatchToolDelegates;
+    return;
+  }
+  const mergedParams = existing ? mergeHedgeParams(existing.params, params) : params;
   clearDelegateDispatchHedge(sessionKey);
   const fireIn = Math.max(0, fireAt - Date.now());
   log.info(
@@ -77,44 +144,51 @@ export function armDelegateDispatchHedge(
   );
   retainContinuationTimerRef(sessionKey);
   const handle = setTimeout(() => {
+    const hedge = hedgeTimers.get(sessionKey);
+    if (hedge?.handle !== handle) {
+      return;
+    }
     hedgeTimers.delete(sessionKey);
     // Natural fire must release the same timer ref and handle as cancellation,
     // or continuation state remains alive after the hedge has done its work.
     unregisterContinuationTimerHandle(sessionKey, handle);
     log.info(`[continuation:delegate-hedge-fired] session=${sessionKey}`);
+    const { params: activeParams, dispatchToolDelegates: activeDispatchToolDelegates } = hedge;
     void runWithGatewayIndependentRootWorkAdmission(async () => {
       // Enforce the budget against the latest persisted chain state rather than
       // the snapshot captured when the hedge was armed.
-      const refreshedChainState = params.loadFreshChainState
-        ? params.loadFreshChainState()
-        : params.chainState;
-      const result = await dispatchToolDelegates({
+      const refreshedChainState = activeParams.loadFreshChainState
+        ? activeParams.loadFreshChainState()
+        : activeParams.chainState;
+      const result = await activeDispatchToolDelegates({
         sessionKey,
         chainState: refreshedChainState,
-        ctx: params.ctx,
-        maxChainLength: params.maxChainLength,
-        ...(params.config ? { config: params.config } : {}),
-        loadFreshChainState: params.loadFreshChainState,
-        ...(params.applyDelegateChainTokensFold ? { applyDelegateChainTokensFold: true } : {}),
-        persistChainState: params.persistChainState,
-        ...(params.persistBeforeTerminalCommit || params.persistChainState
+        ctx: activeParams.ctx,
+        maxChainLength: activeParams.maxChainLength,
+        ...(activeParams.config ? { config: activeParams.config } : {}),
+        loadFreshChainState: activeParams.loadFreshChainState,
+        ...(activeParams.applyDelegateChainTokensFold
+          ? { applyDelegateChainTokensFold: true }
+          : {}),
+        persistChainState: activeParams.persistChainState,
+        ...(activeParams.persistBeforeTerminalCommit || activeParams.persistChainState
           ? { persistBeforeTerminalCommit: true }
           : {}),
-        ...(params.recoverRunningDelegates ? { recoverRunningDelegates: true } : {}),
-        ...(params.queuedCreatedAtOrBefore !== undefined
-          ? { queuedCreatedAtOrBefore: params.queuedCreatedAtOrBefore }
+        ...(activeParams.recoverRunningDelegates ? { recoverRunningDelegates: true } : {}),
+        ...(activeParams.queuedCreatedAtOrBefore !== undefined
+          ? { queuedCreatedAtOrBefore: activeParams.queuedCreatedAtOrBefore }
           : {}),
-        ...(params.includeRunningUpdatedAtOrBefore !== undefined
-          ? { includeRunningUpdatedAtOrBefore: params.includeRunningUpdatedAtOrBefore }
+        ...(activeParams.includeRunningUpdatedAtOrBefore !== undefined
+          ? { includeRunningUpdatedAtOrBefore: activeParams.includeRunningUpdatedAtOrBefore }
           : {}),
         // Delayed descendants of a silent/wake chain must remain internal when
         // the hedge eventually dispatches them.
-        ...(params.inheritedSilent ? { inheritedSilent: true } : {}),
-        ...(params.inheritedWake ? { inheritedWake: true } : {}),
+        ...(activeParams.inheritedSilent ? { inheritedSilent: true } : {}),
+        ...(activeParams.inheritedWake ? { inheritedWake: true } : {}),
       });
-      if (params.persistChainState && (result.dispatched > 0 || result.rejected > 0)) {
+      if (activeParams.persistChainState && (result.dispatched > 0 || result.rejected > 0)) {
         if (!result.chainStatePersistedBeforeTerminalCommit) {
-          await params.persistChainState(result.chainState);
+          await activeParams.persistChainState(result.chainState);
         }
         if (result.appliedChainTokensFold && result.appliedChainTokensFold > 0) {
           clearRecoverableDelegatesChainTokensFold(sessionKey);
@@ -129,12 +203,12 @@ export function armDelegateDispatchHedge(
           sessionKey,
           Date.now() + DELEGATE_DISPATCH_RETRY_MS,
           {
-            ...params,
-            ...(params.persistChainState ? { persistBeforeTerminalCommit: true } : {}),
+            ...activeParams,
+            ...(activeParams.persistChainState ? { persistBeforeTerminalCommit: true } : {}),
             recoverRunningDelegates: true,
             includeRunningUpdatedAtOrBefore: Date.now(),
           },
-          dispatchToolDelegates,
+          activeDispatchToolDelegates,
         );
       } catch (rearmErr) {
         log.error(
@@ -145,14 +219,19 @@ export function armDelegateDispatchHedge(
   }, fireIn);
   registerContinuationTimerHandle(sessionKey, handle);
   handle.unref();
-  hedgeTimers.set(sessionKey, handle);
+  hedgeTimers.set(sessionKey, {
+    handle,
+    fireAt,
+    params: mergedParams,
+    dispatchToolDelegates,
+  });
 }
 
 /** Test-only: cancel pending hedge timers and clear the registry. */
 export function resetDelegateDispatchHedgesForTests(): void {
-  for (const [sessionKey, handle] of hedgeTimers) {
-    clearTimeout(handle);
-    unregisterContinuationTimerHandle(sessionKey, handle);
+  for (const [sessionKey, timer] of hedgeTimers) {
+    clearTimeout(timer.handle);
+    unregisterContinuationTimerHandle(sessionKey, timer.handle);
   }
   hedgeTimers.clear();
 }

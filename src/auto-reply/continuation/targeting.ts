@@ -11,8 +11,11 @@ import {
   ackSessionDelivery,
   enqueueSessionDelivery,
 } from "../../infra/session-delivery-queue-storage.js";
-import type { SessionDeliveryContext } from "../../infra/session-delivery-queue-storage.js";
-import type { DelegateArtifactDeliveryReceipt } from "../../infra/session-delivery-queue-storage.js";
+import type {
+  DelegateArtifactDeliveryReceipt,
+  QueuedSessionDeliveryPayload,
+  SessionDeliveryContext,
+} from "../../infra/session-delivery-queue-storage.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import {
   CONTINUATION_DELEGATE_FANOUT_MODES,
@@ -124,29 +127,32 @@ export async function enqueueContinuationReturnDeliveries(
     ) {
       throw new Error("managed delegate artifact delivery binding mismatch");
     }
-    const deliveryId = await deps.enqueueSessionDelivery(
-      {
-        kind: "systemEvent",
-        sessionKey,
-        text,
-        ...(expectedSessionId ? { expectedSessionId } : {}),
-        ...(delegateArtifactReceipt && delegateArtifactProjection
-          ? {
-              managedDelegateArtifactDelivery: {
-                receipt: delegateArtifactReceipt,
-                projection: delegateArtifactProjection,
-              },
-            }
-          : {}),
-        ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
-        ...(params.traceparent ? { traceparent: params.traceparent } : {}),
-        // Recipient position is not stable when a cleaned intermediate is
-        // removed from a tree/all fanout.  Keep retries keyed to the durable
-        // recipient identity instead.
-        idempotencyKey: `${params.idempotencyKeyBase}:${sessionKey}`,
-      },
-      params.stateDir,
-    );
+    const commonPayload = {
+      kind: "systemEvent" as const,
+      sessionKey,
+      text,
+      ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
+      ...(params.traceparent ? { traceparent: params.traceparent } : {}),
+      // Recipient position is not stable when a cleaned intermediate is
+      // removed from a tree/all fanout. Keep retries keyed to the durable
+      // recipient identity instead.
+      idempotencyKey: `${params.idempotencyKeyBase}:${sessionKey}`,
+    };
+    const payload: QueuedSessionDeliveryPayload =
+      delegateArtifactReceipt && delegateArtifactProjection
+        ? {
+            ...commonPayload,
+            expectedSessionId: delegateArtifactReceipt.recipientSessionId,
+            managedDelegateArtifactDelivery: {
+              receipt: delegateArtifactReceipt,
+              projection: delegateArtifactProjection,
+            },
+          }
+        : {
+            ...commonPayload,
+            ...(expectedSessionId ? { expectedSessionId } : {}),
+          };
+    const deliveryId = await deps.enqueueSessionDelivery(payload, params.stateDir);
     deliveryIds.push(deliveryId);
 
     const enqueued = deps.enqueueSystemEvent(text, {

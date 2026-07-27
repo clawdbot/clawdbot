@@ -39,6 +39,8 @@ import { setBroadcastHealthUpdate } from "./server/health-state.js";
 // stage-before-row-commit window.
 const DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS = 60 * 60_000;
 const DELEGATE_ARTIFACT_GC_INTERVAL_MS = 60 * 60_000;
+const DELEGATE_ARTIFACT_GC_BATCH_SIZE = 100;
+const DELEGATE_ARTIFACT_GC_YIELD_BATCHES = 10;
 
 export function startGatewayMaintenanceTimers(params: {
   broadcast: (
@@ -73,7 +75,7 @@ export function startGatewayMaintenanceTimers(params: {
   getRuntimeConfig: () => OpenClawConfig;
   runWorktreeGc?: () => Promise<unknown>;
   runDeliveryQueueMediaGc?: () => Promise<unknown>;
-  runDelegateArtifactGc?: () => unknown;
+  runDelegateArtifactGc?: () => number | Promise<number>;
   enableSkillCurator?: boolean;
   runSkillCuratorSweep?: () => Promise<unknown>;
   registerSkillUsageTracking?: () => () => void;
@@ -163,13 +165,33 @@ export function startGatewayMaintenanceTimers(params: {
   const runDelegateArtifactGc =
     params.runDelegateArtifactGc ?? (() => purgeExpiredDelegateArtifacts());
   let delegateArtifactGcInFlight: Promise<void> | null = null;
+  let delegateArtifactGcCancelled = false;
   const performDelegateArtifactGc = () => {
-    if (delegateArtifactGcInFlight) {
+    if (delegateArtifactGcInFlight || delegateArtifactGcCancelled) {
       return delegateArtifactGcInFlight;
     }
     delegateArtifactGcInFlight = Promise.resolve()
       .then(async () => {
-        await runDelegateArtifactGc();
+        let fullBatchesSinceYield = 0;
+        while (true) {
+          if (delegateArtifactGcCancelled) {
+            break;
+          }
+          const purged = await runDelegateArtifactGc();
+          if (delegateArtifactGcCancelled || purged < DELEGATE_ARTIFACT_GC_BATCH_SIZE) {
+            break;
+          }
+          fullBatchesSinceYield += 1;
+          if (fullBatchesSinceYield >= DELEGATE_ARTIFACT_GC_YIELD_BATCHES) {
+            fullBatchesSinceYield = 0;
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, 0);
+            });
+            if (delegateArtifactGcCancelled) {
+              break;
+            }
+          }
+        }
       })
       .catch((err: unknown) => {
         params.logHealth.error(`delegate artifact cleanup failed: ${formatError(err)}`);
@@ -185,14 +207,19 @@ export function startGatewayMaintenanceTimers(params: {
   );
   void performDelegateArtifactGc();
 
-  let skillCuratorCleanup = () => {};
+  let curatorCleanup = () => {};
   if (params.enableSkillCurator) {
-    skillCuratorCleanup = startSkillCuratorMaintenance({
+    curatorCleanup = startSkillCuratorMaintenance({
       onError: (err) => params.logHealth.error(`skill curator sweep failed: ${formatError(err)}`),
       registerUsageTracking: params.registerSkillUsageTracking,
       runSweep: params.runSkillCuratorSweep,
     });
   }
+  const skillCuratorCleanup = () => {
+    delegateArtifactGcCancelled = true;
+    clearInterval(delegateArtifactCleanup);
+    curatorCleanup();
+  };
 
   // dedupe cache cleanup
   const dedupeCleanup = setInterval(() => {

@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { UnavailableDelegateArtifactPolicyError } from "../../agents/delegate-artifacts.js";
 
 // Mock TaskFlow registry — delegate-store resolves it transitively.
 const mockFlows = new Map<string, Record<string, unknown>>();
@@ -403,8 +404,75 @@ describe("managed artifact pre-spawn lifecycle", () => {
 
     expect(result).toMatchObject({ dispatched: 0, rejected: 0 });
     expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
-    expect(assertDelegateArtifactPolicyPreparedMock).not.toHaveBeenCalled();
+    expect(assertDelegateArtifactPolicyPreparedMock).toHaveBeenCalledTimes(1);
     expect([...mockFlows.values()]).toContainEqual(expect.objectContaining({ status: "queued" }));
+  });
+
+  it("terminalizes managed work whose accepted artifact policy expired before spawn", async () => {
+    const sessionKey = "agent:main:managed-policy-expired";
+    const delegate = enqueuePendingDelegate(sessionKey, {
+      task: "produce expired report",
+      returnOptions: { artifacts: "required" },
+    });
+    assertDelegateArtifactPolicyPreparedMock.mockImplementationOnce(() => {
+      throw new UnavailableDelegateArtifactPolicyError();
+    });
+    setRuntimeConfigSnapshot({
+      agents: { defaults: { continuation: { enabled: false } } },
+    });
+
+    const result = await dispatchToolDelegates({
+      sessionKey,
+      chainState: {
+        currentChainCount: 0,
+        chainStartedAt: Date.now(),
+        accumulatedChainTokens: 0,
+      },
+      ctx: { sessionKey },
+      maxChainLength: 8,
+      config: continuationConfig({ enabled: true, crossSessionTargeting: "enabled" }),
+    });
+
+    expect(result).toMatchObject({ dispatched: 0, rejected: 1 });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get(delegate?.flowId ?? "")).toMatchObject({ status: "failed" });
+    expect(removeUnacceptedDelegateArtifactPolicyMock).toHaveBeenCalledWith(delegate?.flowId);
+  });
+
+  it("terminalizes expired managed work before cross-session targeting deferral", async () => {
+    const sessionKey = "agent:main:managed-policy-expired-cross-session";
+    const delegate = enqueuePendingDelegate(sessionKey, {
+      task: "produce expired cross-session report",
+      targetSessionKey: "agent:other:root",
+      returnOptions: { artifacts: "required" },
+    });
+    assertDelegateArtifactPolicyPreparedMock.mockImplementationOnce(() => {
+      throw new UnavailableDelegateArtifactPolicyError();
+    });
+    setRuntimeConfigSnapshot({
+      agents: {
+        defaults: {
+          continuation: { enabled: true, crossSessionTargeting: "disabled" },
+        },
+      },
+    });
+
+    const result = await dispatchToolDelegates({
+      sessionKey,
+      chainState: {
+        currentChainCount: 0,
+        chainStartedAt: Date.now(),
+        accumulatedChainTokens: 0,
+      },
+      ctx: { sessionKey },
+      maxChainLength: 8,
+      config: continuationConfig({ enabled: true, crossSessionTargeting: "enabled" }),
+    });
+
+    expect(result).toMatchObject({ dispatched: 0, rejected: 1 });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get(delegate?.flowId ?? "")).toMatchObject({ status: "failed" });
+    expect(removeUnacceptedDelegateArtifactPolicyMock).toHaveBeenCalledWith(delegate?.flowId);
   });
 
   it("removes claimless policies when admission rejects before spawn", async () => {
@@ -492,6 +560,7 @@ describe("managed artifact pre-spawn lifecycle", () => {
     const sessionKey = "agent:main:managed-transient";
     const delegate = enqueuePendingDelegate(sessionKey, {
       task: "retry managed report",
+      mode: "normal",
       returnOptions: { artifacts: "required" },
     });
     arrangeSpawn();
@@ -508,6 +577,8 @@ describe("managed artifact pre-spawn lifecycle", () => {
       },
       ctx: { sessionKey },
       maxChainLength: 8,
+      inheritedSilent: true,
+      inheritedWake: true,
       config: continuationConfig({
         enabled: true,
         crossSessionTargeting: "enabled",
@@ -515,13 +586,23 @@ describe("managed artifact pre-spawn lifecycle", () => {
     });
 
     expect(result).toMatchObject({ dispatched: 0, rejected: 0 });
-    expect(mockFlows.get(delegate?.flowId ?? "")).toMatchObject({ status: "queued" });
+    expect(mockFlows.get(delegate?.flowId ?? "")).toMatchObject({
+      status: "queued",
+      stateJson: {
+        inheritedSilent: true,
+        inheritedWake: true,
+      },
+    });
     expect(removeUnacceptedDelegateArtifactPolicyMock).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(1);
 
     await vi.advanceTimersByTimeAsync(30_000);
 
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(2);
+    expect(spawnSubagentDirectMock.mock.calls[1]?.[0]).toMatchObject({
+      silentAnnounce: true,
+      wakeOnReturn: true,
+    });
     expect(mockFlows.get(delegate?.flowId ?? "")).toMatchObject({ status: "succeeded" });
   });
 });
@@ -774,7 +855,7 @@ describe("trusted delegate task echoes", () => {
       }
     }
 
-    expect(taskReferences).toHaveLength(13);
+    expect(taskReferences).toHaveLength(15);
     expect(
       taskReferences.every((taskReference) => {
         const parent = taskReference.parent;

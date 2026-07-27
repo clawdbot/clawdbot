@@ -19,9 +19,16 @@ type ToolResult = {
 };
 
 const PREVIEW_LINES = 12;
+const REDACTED_ARG_FALLBACKS: Record<string, string> = {
+  delegate_artifacts_publish: "artifact paths redacted",
+};
 
-// Prefer curated display summaries, then fall back to sanitized JSON args.
+// Redact sensitive tools before consulting shared detail-key fallbacks.
 function formatArgs(toolName: string, args: unknown): string {
+  const redactedFallback = REDACTED_ARG_FALLBACKS[toolName.trim().toLowerCase()];
+  if (redactedFallback) {
+    return redactedFallback;
+  }
   const display = resolveToolDisplay({ name: toolName, args });
   const detail = formatToolDetail(display);
   if (detail) {

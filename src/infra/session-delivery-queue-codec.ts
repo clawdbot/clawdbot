@@ -77,7 +77,16 @@ type QueuedSessionDeliveryGenericPayload =
       sessionKey: string;
       text: string;
       expectedSessionId?: string;
-      managedDelegateArtifactDelivery?: ManagedDelegateArtifactDelivery;
+      managedDelegateArtifactDelivery?: never;
+      deliveryContext?: SessionDeliveryContext;
+      idempotencyKey?: string;
+    } & QueuedSessionDeliveryPayloadMetadata)
+  | ({
+      kind: "systemEvent";
+      sessionKey: string;
+      text: string;
+      expectedSessionId: string;
+      managedDelegateArtifactDelivery: ManagedDelegateArtifactDelivery;
       deliveryContext?: SessionDeliveryContext;
       idempotencyKey?: string;
     } & QueuedSessionDeliveryPayloadMetadata)
@@ -245,29 +254,38 @@ const DelegateArtifactDeliveryReceiptSchema = z
   })
   .strict();
 
-const QueuedSystemEventSchema = z
+const QueuedPlainSystemEventSchema = z
   .object({
     ...QueuedGenericCommonSchema,
     kind: z.literal("systemEvent"),
     sessionKey: z.string(),
     text: z.string(),
     expectedSessionId: z.string().optional(),
+    managedDelegateArtifactDelivery: z.never().optional(),
+    deliveryContext: QueuedGenericDeliveryContextSchema.optional(),
+    idempotencyKey: z.string().optional(),
+  })
+  .strict();
+
+const QueuedManagedSystemEventSchema = z
+  .object({
+    ...QueuedGenericCommonSchema,
+    kind: z.literal("systemEvent"),
+    sessionKey: z.string(),
+    text: z.string(),
+    expectedSessionId: z.string().min(1),
     managedDelegateArtifactDelivery: z
       .object({
         receipt: DelegateArtifactDeliveryReceiptSchema,
         projection: DelegateArtifactRecipientProjectionSchema,
       })
-      .strict()
-      .optional(),
+      .strict(),
     deliveryContext: QueuedGenericDeliveryContextSchema.optional(),
     idempotencyKey: z.string().optional(),
   })
   .strict()
   .superRefine((entry, ctx) => {
     const managed = entry.managedDelegateArtifactDelivery;
-    if (!managed) {
-      return;
-    }
     if (
       entry.expectedSessionId !== managed.receipt.recipientSessionId ||
       entry.sessionKey !== managed.receipt.recipientSessionKey ||
@@ -302,8 +320,9 @@ const QueuedAgentTurnSchema = z
   })
   .strict();
 
-const QueuedGenericDeliverySchema = z.discriminatedUnion("kind", [
-  QueuedSystemEventSchema,
+const QueuedGenericDeliverySchema = z.union([
+  QueuedPlainSystemEventSchema,
+  QueuedManagedSystemEventSchema,
   QueuedAgentTurnSchema,
 ]);
 
