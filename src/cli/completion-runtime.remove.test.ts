@@ -34,13 +34,13 @@ describe("removeCompletionBlockFromProfile (#112625)", () => {
     expect(next).toContain("# more");
   });
 
-  it("removes a dynamic `openclaw completion` source line", () => {
+  it("preserves a user-managed standalone dynamic completion line (#112631 review)", () => {
+    // A bare `source <(openclaw completion bash)` with no OpenClaw header and no cache-file
+    // reference may be user-managed; uninstall must not delete it.
     const content = ["setup", "source <(openclaw completion bash)", "done"].join("\n");
     const { next, changed } = removeCompletionBlockFromProfile(content, "openclaw", null);
-    expect(changed).toBe(true);
-    expect(next).not.toContain("openclaw completion");
-    expect(next).toContain("setup");
-    expect(next).toContain("done");
+    expect(changed).toBe(false);
+    expect(next).toBe(content);
   });
 
   it("is a no-op when there is no OpenClaw block", () => {

@@ -181,7 +181,11 @@ export function removeCompletionBlockFromProfile(
       i += 1; // drop the source line that follows the header too
       continue;
     }
-    if (isCompletionProfileLine(line, binName, cachePath)) {
+    // Only remove a STANDALONE line that points at OpenClaw's own completion cache file
+    // (unambiguously installer-written). A bare `source <(openclaw completion ...)` with no
+    // header and no cache reference may be user-managed, so uninstall must preserve it.
+    // (#112631 review: preserve user-managed dynamic completion commands)
+    if (cachePath !== null && line.includes(cachePath)) {
       removed = true;
       continue;
     }
