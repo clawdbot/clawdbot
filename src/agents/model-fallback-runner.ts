@@ -665,6 +665,16 @@ async function runWithModelFallbackInternal<T>(
         continue;
       }
 
+      const pointsAtCurrentOrEarlierCandidate = candidates
+        .slice(0, i + 1)
+        .some((fallbackCandidate) => sameModelCandidate(fallbackCandidate, err));
+      if (!pointsAtCurrentOrEarlierCandidate) {
+        // The user selected a model outside this fallback chain. Return the
+        // control signal to the bounded outer owner so it can rebuild runtime,
+        // auth, and fallback state around that exact selection.
+        throw err;
+      }
+
       const switchMsg = err.message;
       const switchNormalized = new FailoverError(switchMsg, {
         reason: "unknown",

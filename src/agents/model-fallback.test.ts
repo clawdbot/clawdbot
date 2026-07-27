@@ -2917,13 +2917,51 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
-  it("continues fallback chain past LiveSessionModelSwitchError to next candidate (#58496 family)", async () => {
-    const cfg = makeCfg();
+  it("returns an unconfigured live switch target to the retry owner (#101676)", async () => {
     const switchError = new LiveSessionModelSwitchError({
       provider: "anthropic",
       model: "claude-sonnet-4-6",
     });
-    const run = vi.fn().mockRejectedValueOnce(switchError).mockResolvedValueOnce("ok");
+    const run = vi.fn().mockRejectedValue(switchError);
+
+    await expect(
+      runWithModelFallback({
+        cfg: makeCfg(),
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        fallbacksOverride: [],
+        run,
+      }),
+    ).rejects.toBe(switchError);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("continues fallback past a stale switch to an earlier candidate (#58496 family)", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5", "openrouter/deepseek-chat"],
+          },
+        },
+      },
+    });
+    const switchError = new LiveSessionModelSwitchError({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+    });
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new FailoverError("rate limited", {
+          reason: "rate_limit",
+          provider: "openai",
+          model: "gpt-4.1-mini",
+        }),
+      )
+      .mockRejectedValueOnce(switchError)
+      .mockResolvedValueOnce("ok");
 
     const result = await runWithModelFallback({
       cfg,
@@ -2932,7 +2970,9 @@ describe("runWithModelFallback", () => {
       run,
     });
     expect(result.result).toBe("ok");
-    expect(run).toHaveBeenCalledTimes(2);
+    expect(result.provider).toBe("openrouter");
+    expect(result.model).toBe("openrouter/deepseek-chat");
+    expect(run).toHaveBeenCalledTimes(3);
   });
 
   it("jumps directly to a later live-session model switch candidate (#57471)", async () => {
