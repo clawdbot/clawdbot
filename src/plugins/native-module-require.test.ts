@@ -62,20 +62,22 @@ describe("tryNativeRequireJavaScriptModule", () => {
     const error = Object.assign(new Error("ESM is still loading"), {
       code: "ERR_REQUIRE_ESM_RACE_CONDITION",
     });
-    const moduleWithLoad = Module as typeof Module & {
-      _load: (request: string, parent: NodeJS.Module | undefined, isMain: boolean) => unknown;
-    };
-    const originalLoad = moduleWithLoad._load;
-    moduleWithLoad._load = () => {
+    type ModuleLoad = (
+      request: string,
+      parent: NodeJS.Module | undefined,
+      isMain: boolean,
+    ) => unknown;
+    const originalLoad = Reflect.get(Module, "_load") as ModuleLoad;
+    Reflect.set(Module, "_load", () => {
       throw error;
-    };
+    });
 
     try {
       expect(tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true })).toEqual({
         ok: false,
       });
     } finally {
-      moduleWithLoad._load = originalLoad;
+      Reflect.set(Module, "_load", originalLoad);
     }
   });
 
