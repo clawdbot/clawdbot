@@ -1,9 +1,7 @@
+// Matrix type declarations define plugin contracts.
+import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import type { CoreConfig } from "../../types.js";
-import {
-  MATRIX_ANNOTATION_RELATION_TYPE,
-  MATRIX_REACTION_EVENT_TYPE,
-  type MatrixReactionEventContent,
-} from "../reaction-common.js";
+import { MATRIX_ANNOTATION_RELATION_TYPE, MATRIX_REACTION_EVENT_TYPE } from "../reaction-common.js";
 import type {
   DimensionalFileInfo,
   EncryptedFile,
@@ -38,6 +36,8 @@ export const EventType = {
   RoomMessage: "m.room.message",
 } as const;
 
+export const MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY = "com.openclaw.finalized_preview" as const;
+
 export type MatrixDirectAccountData = Record<string, string[]>;
 
 export type MatrixReplyRelation = {
@@ -53,7 +53,7 @@ export type MatrixThreadRelation = {
 
 export type MatrixRelation = MatrixReplyRelation | MatrixThreadRelation;
 
-export type MatrixReplyMeta = {
+type MatrixReplyMeta = {
   "m.relates_to"?: MatrixRelation;
 };
 
@@ -77,24 +77,33 @@ export type MatrixMediaContent = MessageEventContent &
 
 export type MatrixOutboundContent = MatrixTextContent | MatrixMediaContent;
 
-export type ReactionEventContent = MatrixReactionEventContent;
-
 export type MatrixSendResult = {
   messageId: string;
   roomId: string;
+  primaryMessageId?: string;
+  receipt: MessageReceipt;
 };
 
 export type MatrixSendOpts = {
+  cfg: CoreConfig;
   client?: import("../sdk.js").MatrixClient;
-  cfg?: CoreConfig;
   mediaUrl?: string;
+  mediaAccess?: {
+    localRoots?: readonly string[];
+    readFile?: (filePath: string) => Promise<Buffer>;
+  };
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   accountId?: string;
   replyToId?: string;
   threadId?: string | number | null;
   timeoutMs?: number;
+  /** Additional Matrix event content fields to merge into the first sent event. */
+  extraContent?: MatrixExtraContentFields;
   /** Send audio as voice message instead of audio file. Defaults to false. */
   audioAsVoice?: boolean;
+  /** Persist each concrete platform send before any later event can fail. */
+  onDeliveryResult?: (result: MatrixSendResult) => Promise<void> | void;
 };
 
 export type MatrixMediaMsgType =
@@ -103,9 +112,21 @@ export type MatrixMediaMsgType =
   | typeof MsgType.Video
   | typeof MsgType.File;
 
-export type MediaKind = "image" | "audio" | "video" | "document" | "unknown";
+export type MatrixTextMsgType = typeof MsgType.Text | typeof MsgType.Notice;
 
 export type MatrixFormattedContent = MessageEventContent & {
   format?: string;
   formatted_body?: string;
 };
+
+export type MatrixExtraContentFields = Record<string, unknown>;
+
+/**
+ * MSC4357 live marker key.
+ * When present on event content, signals that the message is still being
+ * streamed (e.g. an LLM generating a response). Supporting clients render
+ * the message with a streaming animation until an edit without this marker
+ * arrives, indicating the stream is complete.
+ * @see https://github.com/matrix-org/matrix-spec-proposals/pull/4357
+ */
+export const MSC4357_LIVE_KEY = "org.matrix.msc4357.live" as const;

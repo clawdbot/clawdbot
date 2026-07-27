@@ -1,3 +1,4 @@
-import { describeZAIProviderRuntimeContract } from "../../test/helpers/extensions/provider-runtime-contract.js";
+// Zai tests cover provider runtime.contract plugin behavior.
+import { describeZAIProviderRuntimeContract } from "openclaw/plugin-sdk/provider-test-contracts";
 
-describeZAIProviderRuntimeContract();
+describeZAIProviderRuntimeContract(() => import("./index.js"));

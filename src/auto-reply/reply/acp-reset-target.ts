@@ -1,3 +1,8 @@
+// Resolves ACP reset targets from sessions and command directives.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   buildConfiguredAcpSessionKey,
   normalizeBindingConfig,
@@ -5,7 +10,7 @@ import {
 } from "../../acp/persistent-bindings.types.js";
 import { resolveConfiguredBindingRecord } from "../../channels/plugins/binding-registry.js";
 import { listAcpBindings } from "../../config/bindings.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { DEFAULT_ACCOUNT_ID, isAcpSessionKey } from "../../routing/session-key.js";
 
@@ -15,7 +20,7 @@ const acpResetTargetDeps = {
   resolveConfiguredBindingRecord,
 };
 
-export const __testing = {
+const acpResetTargetTestApi = {
   setDepsForTest(
     overrides?: Partial<{
       getSessionBindingService: typeof getSessionBindingService;
@@ -31,8 +36,26 @@ export const __testing = {
   },
 };
 
-function normalizeText(value: string | undefined | null): string {
-  return value?.trim() ?? "";
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.acpResetTargetTestApi")] =
+    acpResetTargetTestApi;
+}
+
+function resolveResetTargetAccountId(params: {
+  cfg: OpenClawConfig;
+  channel: string;
+  accountId?: string | null;
+}): string {
+  const explicit = normalizeOptionalString(params.accountId) ?? "";
+  if (explicit) {
+    return explicit;
+  }
+
+  const channelCfg = (
+    params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>
+  )[params.channel];
+  const configuredDefault = channelCfg?.defaultAccount;
+  return normalizeOptionalString(configuredDefault) ?? DEFAULT_ACCOUNT_ID;
 }
 
 function resolveRawConfiguredAcpSessionKey(params: {
@@ -43,17 +66,19 @@ function resolveRawConfiguredAcpSessionKey(params: {
   parentConversationId?: string;
 }): string | undefined {
   for (const binding of acpResetTargetDeps.listAcpBindings(params.cfg)) {
-    const bindingChannel = normalizeText(binding.match.channel).toLowerCase();
+    const bindingChannel = normalizeLowercaseStringOrEmpty(
+      normalizeOptionalString(binding.match.channel),
+    );
     if (!bindingChannel || bindingChannel !== params.channel) {
       continue;
     }
 
-    const bindingAccountId = normalizeText(binding.match.accountId);
+    const bindingAccountId = normalizeOptionalString(binding.match.accountId) ?? "";
     if (bindingAccountId && bindingAccountId !== "*" && bindingAccountId !== params.accountId) {
       continue;
     }
 
-    const peerId = normalizeText(binding.match.peer?.id);
+    const peerId = normalizeOptionalString(binding.match.peer?.id) ?? "";
     const matchedConversationId =
       peerId === params.conversationId
         ? params.conversationId
@@ -92,18 +117,22 @@ export function resolveEffectiveResetTargetSessionKey(params: {
   skipConfiguredFallbackWhenActiveSessionNonAcp?: boolean;
   fallbackToActiveAcpWhenUnbound?: boolean;
 }): string | undefined {
-  const activeSessionKey = normalizeText(params.activeSessionKey);
+  const activeSessionKey = normalizeOptionalString(params.activeSessionKey);
   const activeAcpSessionKey =
     activeSessionKey && isAcpSessionKey(activeSessionKey) ? activeSessionKey : undefined;
   const activeIsNonAcp = Boolean(activeSessionKey) && !activeAcpSessionKey;
 
-  const channel = normalizeText(params.channel).toLowerCase();
-  const conversationId = normalizeText(params.conversationId);
+  const channel = normalizeLowercaseStringOrEmpty(normalizeOptionalString(params.channel));
+  const conversationId = normalizeOptionalString(params.conversationId) ?? "";
   if (!channel || !conversationId) {
     return activeAcpSessionKey;
   }
-  const accountId = normalizeText(params.accountId) || DEFAULT_ACCOUNT_ID;
-  const parentConversationId = normalizeText(params.parentConversationId) || undefined;
+  const accountId = resolveResetTargetAccountId({
+    cfg: params.cfg,
+    channel,
+    accountId: params.accountId,
+  });
+  const parentConversationId = normalizeOptionalString(params.parentConversationId) || undefined;
   const allowNonAcpBindingSessionKey = Boolean(params.allowNonAcpBindingSessionKey);
 
   const serviceBinding = acpResetTargetDeps.getSessionBindingService().resolveByConversation({

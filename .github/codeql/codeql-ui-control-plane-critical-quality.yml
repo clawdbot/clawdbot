@@ -1,0 +1,36 @@
+name: openclaw-codeql-ui-control-plane-critical-quality
+
+disable-default-queries: true
+
+queries:
+  - uses: security-and-quality
+
+query-filters:
+  - include:
+      problem.severity:
+        - error
+  - exclude:
+      tags:
+        - security
+
+paths:
+  - ui/src/main.ts
+  - ui/src/local-storage.ts
+  - ui/src/ui
+  - src/tasks/task-registry-control*.ts
+
+paths-ignore:
+  - "**/node_modules"
+  - "**/coverage"
+  - "**/*.generated.ts"
+  - "**/*.bundle.js"
+  - "**/*-runtime.js"
+  - "**/*.test.ts"
+  - "**/*.test.tsx"
+  - "**/*.e2e.test.ts"
+  - "**/*.e2e.test.tsx"
+  - "**/*test-support*"
+  - "**/*test-helper*"
+  - "**/*mock*"
+  - "**/*fixture*"
+  - "**/*bench*"

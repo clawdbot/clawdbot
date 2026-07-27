@@ -1,3 +1,4 @@
+// Discord tests cover message handler.bot self filter plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   createDiscordMessageHandler,
@@ -9,6 +10,11 @@ import {
   createDiscordHandlerParams,
   createDiscordPreflightContext,
 } from "./message-handler.test-helpers.js";
+
+async function flushAsyncWork() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
 
 function createMessageData(authorId: string, channelId = "ch-1") {
   return {
@@ -46,8 +52,10 @@ describe("createDiscordMessageHandler bot-self filter", () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
     preflightDiscordMessageMock.mockImplementation(
-      async (params: { data: { channel_id: string } }) =>
-        createPreflightContext(params.data.channel_id),
+      async (params: { data: { channel_id: string } }) => ({
+        ...params,
+        ...createPreflightContext(params.data.channel_id),
+      }),
     );
 
     const handler = createDiscordMessageHandler(createDiscordHandlerParams());
@@ -56,6 +64,7 @@ describe("createDiscordMessageHandler bot-self filter", () => {
       handler(createMessageData("user-456") as never, {} as never),
     ).resolves.toBeUndefined();
 
+    await flushAsyncWork();
     await vi.waitFor(() => {
       expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(1);
       expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);

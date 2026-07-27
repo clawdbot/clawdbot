@@ -1,0 +1,75 @@
+name: OpenGrep — Full
+
+# Manual repository-wide scan for the high-precision OpenGrep rule super-config.
+# This is intentionally separate from PR scanning so broad/backlog findings do
+# not block unrelated pull requests.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: opengrep-full-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  scan:
+    name: Scan full repository (precise)
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Install opengrep
+        env:
+          # Pin both the install script (by commit SHA) and the binary version.
+          # The script SHA must match the v1.25.0 release tag in opengrep/opengrep
+          # so a compromised or force-pushed `main` cannot RCE in our CI runner.
+          # Bump both together when upgrading.
+          OPENGREP_VERSION: v1.25.0
+          OPENGREP_INSTALL_SHA: 27b5fba1b315fbc63d0fd474d01f5d8235cc86e2
+        run: |
+          # Download first so a timed-out transfer cannot execute a partial installer.
+          installer="$(mktemp "${RUNNER_TEMP}/opengrep-install.XXXXXX")"
+          trap 'rm -f "$installer"' EXIT
+          curl -fsSL --connect-timeout 10 --max-time 120 \
+            -o "$installer" \
+            "https://raw.githubusercontent.com/opengrep/opengrep/${OPENGREP_INSTALL_SHA}/install.sh"
+          bash "$installer" -v "$OPENGREP_VERSION"
+          echo "$HOME/.opengrep/cli/latest" >> "$GITHUB_PATH"
+
+      - name: Verify opengrep
+        run: opengrep --version
+
+      - name: Run full opengrep scan
+        # Manual full scans cover all first-party source paths so maintainers can
+        # audit the complete rulepack without making PRs inherit unrelated backlog.
+        run: |
+          mkdir -p .opengrep-out
+          scripts/run-opengrep.sh --sarif --error
+
+      - name: Upload SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a
+        # Only upload if the scan actually produced a SARIF file.
+        if: always() && hashFiles('.opengrep-out/precise.sarif') != ''
+        with:
+          sarif_file: .opengrep-out/precise.sarif
+          category: opengrep-full
+
+      - name: Upload SARIF as workflow artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: opengrep-full-sarif
+          path: .opengrep-out/precise.sarif
+          if-no-files-found: error
+          retention-days: 30

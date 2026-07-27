@@ -1,4 +1,5 @@
-import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
+// Implements session abort commands and active-run stop targeting.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
@@ -8,16 +9,20 @@ import {
   type AbortCutoff,
 } from "./abort-cutoff.js";
 import {
+  abortSessionRunTargetWithOutcome,
   formatAbortReplyText,
   isAbortTrigger,
-  resolveSessionEntryForKey,
   setAbortMemory,
   stopSubagentsForRequester,
 } from "./abort.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
-import { persistAbortTargetEntry } from "./commands-session-store.js";
+import {
+  persistAbortTargetEntry,
+  resolveCommandSessionEntryForKey,
+} from "./commands-session-store.js";
 import type { CommandHandler } from "./commands-types.js";
 import { clearSessionQueues } from "./queue.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
 
 type AbortTarget = {
   entry?: SessionEntry;
@@ -31,19 +36,33 @@ function resolveAbortTarget(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
 }): AbortTarget {
-  const targetSessionKey = params.ctx.CommandTargetSessionKey?.trim() || params.sessionKey;
-  const { entry, key } = resolveSessionEntryForKey(params.sessionStore, targetSessionKey);
+  const targetSessionKey =
+    normalizeOptionalString(params.ctx.CommandTargetSessionKey) || params.sessionKey;
+  const { entry, key } = resolveCommandSessionEntryForKey(params.sessionStore, targetSessionKey);
   if (entry && key) {
-    return { entry, key, sessionId: entry.sessionId };
+    return {
+      entry,
+      key,
+      sessionId: replyRunRegistry.resolveSessionId(key) ?? entry.sessionId,
+    };
   }
-  if (params.sessionEntry && params.sessionKey) {
+  if (
+    params.sessionEntry &&
+    params.sessionKey &&
+    (!targetSessionKey || targetSessionKey === params.sessionKey)
+  ) {
     return {
       entry: params.sessionEntry,
       key: params.sessionKey,
-      sessionId: params.sessionEntry.sessionId,
+      sessionId:
+        replyRunRegistry.resolveSessionId(params.sessionKey) ?? params.sessionEntry.sessionId,
     };
   }
-  return { entry: undefined, key: targetSessionKey, sessionId: undefined };
+  return {
+    entry: undefined,
+    key: targetSessionKey,
+    sessionId: targetSessionKey ? replyRunRegistry.resolveSessionId(targetSessionKey) : undefined,
+  };
 }
 
 function resolveAbortCutoffForTarget(params: {
@@ -70,8 +89,12 @@ async function applyAbortTarget(params: {
   abortCutoff?: AbortCutoff;
 }) {
   const { abortTarget } = params;
-  if (abortTarget.sessionId) {
-    abortEmbeddedPiRun(abortTarget.sessionId);
+  const abortOutcome = abortSessionRunTargetWithOutcome({
+    key: abortTarget.key,
+    sessionId: abortTarget.sessionId,
+  });
+  if (abortOutcome.active && !abortOutcome.aborted) {
+    return abortOutcome;
   }
 
   const persisted = await persistAbortTargetEntry({
@@ -84,6 +107,7 @@ async function applyAbortTarget(params: {
   if (!persisted && params.abortKey) {
     setAbortMemory(params.abortKey, true);
   }
+  return abortOutcome;
 }
 
 function buildAbortTargetApplyParams(
@@ -126,7 +150,7 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
       `stop: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
     );
   }
-  await applyAbortTarget(buildAbortTargetApplyParams(params, abortTarget));
+  const abortOutcome = await applyAbortTarget(buildAbortTargetApplyParams(params, abortTarget));
 
   // Trigger internal hook for stop command
   const hookEvent = createInternalHookEvent(
@@ -134,7 +158,7 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
     "stop",
     abortTarget.key ?? params.sessionKey ?? "",
     {
-      sessionEntry: abortTarget.entry ?? params.sessionEntry,
+      sessionEntry: abortTarget.entry,
       sessionId: abortTarget.sessionId,
       commandSource: params.command.surface,
       senderId: params.command.senderId,
@@ -147,7 +171,12 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
     requesterSessionKey: abortTarget.key ?? params.sessionKey,
   });
 
-  return { shouldContinue: false, reply: { text: formatAbortReplyText(stopped) } };
+  const rejectionReason =
+    abortOutcome.active && !abortOutcome.aborted ? ("finalizing" as const) : undefined;
+  return {
+    shouldContinue: false,
+    reply: { text: formatAbortReplyText(stopped, rejectionReason) },
+  };
 };
 
 export const handleAbortTrigger: CommandHandler = async (params, allowTextCommands) => {
@@ -167,6 +196,11 @@ export const handleAbortTrigger: CommandHandler = async (params, allowTextComman
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
   });
-  await applyAbortTarget(buildAbortTargetApplyParams(params, abortTarget));
-  return { shouldContinue: false, reply: { text: "⚙️ Agent was aborted." } };
+  const abortOutcome = await applyAbortTarget(buildAbortTargetApplyParams(params, abortTarget));
+  const rejectionReason =
+    abortOutcome.active && !abortOutcome.aborted ? ("finalizing" as const) : undefined;
+  return {
+    shouldContinue: false,
+    reply: { text: formatAbortReplyText(undefined, rejectionReason) },
+  };
 };

@@ -1,0 +1,35 @@
+title: Matrix E2EE sync state_after opt-in stays disabled for encrypted rooms
+scenario:
+  id: matrix-e2ee-state-after-missing-encryption
+  surface: channels
+  coverage:
+    primary:
+      - matrix.legacy-state
+  execution:
+    profiles: { "matrix:all": 66, "matrix:e2ee-deep": 0 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 150000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        encryption: true
+        startupVerification: off
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: true
+            key: e2ee-state-after-missing-encryption
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA E2EE State After Missing Encryption Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-messages.js
+  call: runMatrixQaE2eeStateAfterMissingEncryptionScenario
+  args:
+    - expr: "scenarioContext"

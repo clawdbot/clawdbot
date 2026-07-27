@@ -1,3 +1,4 @@
+// Msteams tests cover errors plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   classifyMSTeamsSendError,
@@ -18,31 +19,136 @@ describe("msteams errors", () => {
     expect(classifyMSTeamsSendError({ statusCode: 403 }).kind).toBe("auth");
   });
 
-  it("classifies throttling errors and parses retry-after", () => {
-    expect(classifyMSTeamsSendError({ statusCode: 429, retryAfter: "1.5" })).toMatchObject({
-      kind: "throttled",
-      statusCode: 429,
-      retryAfterMs: 1500,
+  it("classifies ContentStreamNotAllowed as permanent instead of auth", () => {
+    const result = classifyMSTeamsSendError({
+      statusCode: 403,
+      response: {
+        body: {
+          error: {
+            code: "ContentStreamNotAllowed",
+          },
+        },
+      },
     });
+    expect(result.kind).toBe("permanent");
+    expect(result.statusCode).toBe(403);
+    expect(result.errorCode).toBe("ContentStreamNotAllowed");
+  });
+
+  it("classifies throttling errors and parses retry-after", () => {
+    const result = classifyMSTeamsSendError({ statusCode: 429, retryAfter: "1.5" });
+    expect(result.kind).toBe("throttled");
+    expect(result.statusCode).toBe(429);
+    expect(result.retryAfterMs).toBe(1500);
+  });
+
+  it("does not parse partial retry-after values", () => {
+    expect(
+      classifyMSTeamsSendError({ statusCode: 429, retryAfter: "1.5s" }).retryAfterMs,
+    ).toBeUndefined();
+    expect(
+      classifyMSTeamsSendError({
+        statusCode: 429,
+        response: { headers: { "retry-after": "2 seconds" } },
+      }).retryAfterMs,
+    ).toBeUndefined();
+    expect(
+      classifyMSTeamsSendError({
+        statusCode: 429,
+        response: { headers: new Headers({ "retry-after": "3 seconds" }) },
+      }).retryAfterMs,
+    ).toBeUndefined();
+  });
+
+  it("ignores unsafe retry-after magnitudes", () => {
+    expect(
+      classifyMSTeamsSendError({
+        statusCode: 429,
+        retryAfterMs: Number.MAX_SAFE_INTEGER + 1,
+      }).retryAfterMs,
+    ).toBeUndefined();
+    expect(
+      classifyMSTeamsSendError({
+        statusCode: 429,
+        retryAfter: Number.MAX_SAFE_INTEGER,
+      }).retryAfterMs,
+    ).toBeUndefined();
+    expect(
+      classifyMSTeamsSendError({
+        statusCode: 429,
+        retryAfter: "9007199254741",
+      }).retryAfterMs,
+    ).toBeUndefined();
+    expect(
+      classifyMSTeamsSendError({
+        statusCode: 429,
+        response: { headers: { "retry-after": "9007199254741" } },
+      }).retryAfterMs,
+    ).toBeUndefined();
+    expect(
+      classifyMSTeamsSendError({
+        statusCode: 429,
+        response: { headers: new Headers({ "retry-after": "9007199254741" }) },
+      }).retryAfterMs,
+    ).toBeUndefined();
+  });
+
+  it("does not parse partial or fractional status codes", () => {
+    expect(classifyMSTeamsSendError({ statusCode: "429oops" }).kind).toBe("unknown");
+    expect(classifyMSTeamsSendError({ statusCode: 429.5 }).kind).toBe("unknown");
+    expect(
+      classifyMSTeamsSendError({ response: { status: "503 temporarily unavailable" } }).kind,
+    ).toBe("unknown");
   });
 
   it("classifies transient errors", () => {
-    expect(classifyMSTeamsSendError({ statusCode: 503 })).toMatchObject({
-      kind: "transient",
-      statusCode: 503,
-    });
+    const result = classifyMSTeamsSendError({ statusCode: 503 });
+    expect(result.kind).toBe("transient");
+    expect(result.statusCode).toBe(503);
   });
 
   it("classifies permanent 4xx errors", () => {
-    expect(classifyMSTeamsSendError({ statusCode: 400 })).toMatchObject({
-      kind: "permanent",
-      statusCode: 400,
-    });
+    const result = classifyMSTeamsSendError({ statusCode: 400 });
+    expect(result.kind).toBe("permanent");
+    expect(result.statusCode).toBe(400);
   });
 
   it("provides actionable hints for common cases", () => {
     expect(formatMSTeamsSendErrorHint({ kind: "auth" })).toContain("msteams");
     expect(formatMSTeamsSendErrorHint({ kind: "throttled" })).toContain("throttled");
+    expect(
+      formatMSTeamsSendErrorHint({
+        kind: "permanent",
+        errorCode: "ContentStreamNotAllowed",
+      }),
+    ).toContain("expired the content stream");
+  });
+
+  it("classifies transport-level network errors and provides smba egress hint (#77674)", () => {
+    const econnrefused = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+    const enotfound = Object.assign(new Error("getaddrinfo ENOTFOUND smba.trafficmanager.net"), {
+      code: "ENOTFOUND",
+    });
+    const etimedout = Object.assign(new Error("ETIMEDOUT"), { code: "ETIMEDOUT" });
+
+    const econnrefusedResult = classifyMSTeamsSendError(econnrefused);
+    expect(econnrefusedResult.kind).toBe("network");
+    expect(econnrefusedResult.errorCode).toBe("ECONNREFUSED");
+    const enotfoundResult = classifyMSTeamsSendError(enotfound);
+    expect(enotfoundResult.kind).toBe("network");
+    expect(enotfoundResult.errorCode).toBe("ENOTFOUND");
+    const etimedoutResult = classifyMSTeamsSendError(etimedout);
+    expect(etimedoutResult.kind).toBe("network");
+    expect(etimedoutResult.errorCode).toBe("ETIMEDOUT");
+
+    // Hints for network errors must mention smba (Connector endpoint) and egress
+    expect(formatMSTeamsSendErrorHint({ kind: "network" })).toContain("smba");
+    expect(formatMSTeamsSendErrorHint({ kind: "network" })).toContain("egress");
+  });
+
+  it("still classifies HTTP errors as unknown when no status code and no network code", () => {
+    expect(classifyMSTeamsSendError(new Error("unexpected error")).kind).toBe("unknown");
+    expect(classifyMSTeamsSendError(null).kind).toBe("unknown");
   });
 
   describe("isRevokedProxyError", () => {

@@ -1,3 +1,5 @@
+// Normalizes error objects for codes, names, messages, and redacted logs.
+import { formatErrorMessage as formatSharedErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { redactSensitiveText } from "../logging/redact.js";
 
 export function extractErrorCode(err: unknown): string | undefined {
@@ -66,23 +68,10 @@ export function hasErrnoCode(err: unknown, code: string): boolean {
 }
 
 export function formatErrorMessage(err: unknown): string {
-  let formatted: string;
-  if (err instanceof Error) {
-    formatted = err.message || err.name || "Error";
-  } else if (typeof err === "string") {
-    formatted = err;
-  } else if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
-    formatted = String(err);
-  } else {
-    try {
-      formatted = JSON.stringify(err);
-    } catch {
-      formatted = Object.prototype.toString.call(err);
-    }
-  }
-  // Security: best-effort token redaction before returning/logging.
-  return redactSensitiveText(formatted);
+  return formatSharedErrorMessage(err, { redact: redactSensitiveText });
 }
+
+export { stringifyNonErrorCause, toErrorObject } from "@openclaw/normalization-core/error-coercion";
 
 export function formatUncaughtError(err: unknown): string {
   if (extractErrorCode(err) === "INVALID_CONFIG") {

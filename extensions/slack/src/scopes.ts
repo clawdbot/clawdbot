@@ -1,6 +1,13 @@
+// Slack plugin module implements scopes behavior.
 import type { WebClient } from "@slack/web-api";
-import { isRecord } from "openclaw/plugin-sdk/text-runtime";
+import {
+  isRecord,
+  normalizeStringEntries,
+  normalizeOptionalString,
+  sortUniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createSlackWebClient } from "./client.js";
+import { formatSlackError } from "./errors.js";
 
 export type SlackScopesResult = {
   ok: boolean;
@@ -10,6 +17,7 @@ export type SlackScopesResult = {
 };
 
 type SlackScopesSource = "auth.scopes" | "apps.permissions.info";
+type SlackScopesMethod = "auth.test" | SlackScopesSource;
 
 function collectScopes(value: unknown, into: string[]) {
   if (!value) {
@@ -47,7 +55,7 @@ function collectScopes(value: unknown, into: string[]) {
 }
 
 function normalizeScopes(scopes: string[]) {
-  return Array.from(new Set(scopes.map((scope) => scope.trim()).filter(Boolean))).toSorted();
+  return sortUniqueStrings(normalizeStringEntries(scopes));
 }
 
 function extractScopes(payload: unknown): string[] {
@@ -57,6 +65,9 @@ function extractScopes(payload: unknown): string[] {
   const scopes: string[] = [];
   collectScopes(payload.scopes, scopes);
   collectScopes(payload.scope, scopes);
+  if (isRecord(payload.response_metadata)) {
+    collectScopes(payload.response_metadata.scopes, scopes);
+  }
   if (isRecord(payload.info)) {
     collectScopes(payload.info.scopes, scopes);
     collectScopes(payload.info.scope, scopes);
@@ -66,17 +77,9 @@ function extractScopes(payload: unknown): string[] {
   return normalizeScopes(scopes);
 }
 
-function readError(payload: unknown): string | undefined {
-  if (!isRecord(payload)) {
-    return undefined;
-  }
-  const error = payload.error;
-  return typeof error === "string" && error.trim() ? error.trim() : undefined;
-}
-
 async function callSlack(
   client: WebClient,
-  method: SlackScopesSource,
+  method: SlackScopesMethod,
 ): Promise<Record<string, unknown> | null> {
   try {
     const result = await client.apiCall(method);
@@ -84,7 +87,7 @@ async function callSlack(
   } catch (err) {
     return {
       ok: false,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatSlackError(err),
     };
   }
 }
@@ -94,7 +97,7 @@ export async function fetchSlackScopes(
   timeoutMs: number,
 ): Promise<SlackScopesResult> {
   const client = createSlackWebClient(token, { timeout: timeoutMs });
-  const attempts: SlackScopesSource[] = ["auth.scopes", "apps.permissions.info"];
+  const attempts: SlackScopesMethod[] = ["auth.test", "auth.scopes", "apps.permissions.info"];
   const errors: string[] = [];
 
   for (const method of attempts) {
@@ -103,7 +106,7 @@ export async function fetchSlackScopes(
     if (scopes.length > 0) {
       return { ok: true, scopes, source: method };
     }
-    const error = readError(result);
+    const error = isRecord(result) ? normalizeOptionalString(result.error) : undefined;
     if (error) {
       errors.push(`${method}: ${error}`);
     }

@@ -1,3 +1,5 @@
+// Voice Call tests cover timers plugin behavior.
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { persistCallRecordMock } = vi.hoisted(() => ({
@@ -82,6 +84,38 @@ describe("voice-call manager timers", () => {
     expect(onTimeout).not.toHaveBeenCalled();
   });
 
+  it("caps oversized max duration and transcript timers", () => {
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const ctx = {
+      activeCalls: new Map([["call-1", { id: "call-1", state: "active" }]]),
+      maxDurationTimers: new Map(),
+      transcriptWaiters: new Map(),
+      config: {
+        maxDurationSeconds: Number.MAX_SAFE_INTEGER,
+        transcriptTimeoutMs: Number.MAX_SAFE_INTEGER,
+      },
+      storePath: "/tmp/voice-call",
+    };
+
+    try {
+      startMaxDurationTimer({
+        ctx: ctx as never,
+        callId: "call-1",
+        onTimeout: vi.fn(async () => {}),
+      });
+      const transcript = waitForFinalTranscript(ctx as never, "call-2");
+
+      expect(
+        timeoutSpy.mock.calls.filter(([, delay]) => delay === MAX_TIMER_TIMEOUT_MS),
+      ).toHaveLength(2);
+      clearMaxDurationTimer(ctx as never, "call-1");
+      rejectTranscriptWaiter(ctx as never, "call-2", "done");
+      void transcript.catch(() => {});
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
   it("waits for transcripts, resolves matching tokens, rejects mismatches and timeouts", async () => {
     const ctx = {
       transcriptWaiters: new Map(),
@@ -99,13 +133,13 @@ describe("voice-call manager timers", () => {
     rejectTranscriptWaiter(ctx as never, "call-2", "provider failed");
     await expect(another).rejects.toThrow("provider failed");
 
-    const timedOut = waitForFinalTranscript(ctx as never, "call-3").catch((error) => error);
-    await vi.advanceTimersByTimeAsync(1_000);
-    await expect(timedOut).resolves.toEqual(
-      expect.objectContaining({
-        message: "Timed out waiting for transcript after 1000ms",
-      }),
+    const timedOut = waitForFinalTranscript(ctx as never, "call-3").catch(
+      (error: unknown) => error,
     );
+    await vi.advanceTimersByTimeAsync(1_000);
+    const timeoutError = await timedOut;
+    expect(timeoutError).toBeInstanceOf(Error);
+    expect((timeoutError as Error).message).toBe("Timed out waiting for transcript after 1000ms");
 
     const toClear = waitForFinalTranscript(ctx as never, "call-4");
     clearTranscriptWaiter(ctx as never, "call-4");

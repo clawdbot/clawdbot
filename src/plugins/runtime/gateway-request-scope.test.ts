@@ -1,14 +1,11 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
+// Gateway request scope tests cover request-local plugin runtime context propagation.
+import { describe, expect, it, vi } from "vitest";
+import type { PluginRuntimeGatewayRequestScope } from "./gateway-request-scope.test-fixtures.js";
 
 const TEST_SCOPE: PluginRuntimeGatewayRequestScope = {
   context: {} as PluginRuntimeGatewayRequestScope["context"],
   isWebchatConnect: (() => false) as PluginRuntimeGatewayRequestScope["isWebchatConnect"],
 };
-
-afterEach(() => {
-  vi.resetModules();
-});
 
 describe("gateway request scope", () => {
   async function importGatewayRequestScopeModule() {

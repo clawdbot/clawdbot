@@ -1,3 +1,8 @@
+/**
+ * Channel directory adapter helpers.
+ *
+ * Provides null/empty defaults for plugins without directory support.
+ */
 import type { ChannelDirectoryAdapter } from "./types.adapters.js";
 
 export const nullChannelDirectorySelf: NonNullable<ChannelDirectoryAdapter["self"]> = async () =>

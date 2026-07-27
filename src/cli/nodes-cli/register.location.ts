@@ -1,10 +1,19 @@
+// Node location commands: invokes location.get on a paired node and formats the location payload.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { randomIdempotencyKey } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runNodesCommand } from "./cli-utils.js";
-import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
+import {
+  callGatewayCli,
+  nodesCallOpts,
+  parseOptionalNodeNonNegativeInteger,
+  parseOptionalNodePositiveInteger,
+  resolveNodeId,
+} from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
+/** Register node location lookup commands. */
 export function registerNodesLocationCommands(nodes: Command) {
   const location = nodes.command("location").description("Fetch location from a paired node");
 
@@ -22,22 +31,23 @@ export function registerNodesLocationCommands(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 20000)", "20000")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("location get", async () => {
-          const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
-          const maxAgeMs = opts.maxAge ? Number.parseInt(String(opts.maxAge), 10) : undefined;
-          const desiredAccuracyRaw =
-            typeof opts.accuracy === "string" ? opts.accuracy.trim().toLowerCase() : undefined;
+          const nodeId = await resolveNodeId(opts, opts.node ?? "");
+          const maxAgeMs = parseOptionalNodeNonNegativeInteger(opts.maxAge, "--max-age");
+          const desiredAccuracyRaw = normalizeOptionalLowercaseString(opts.accuracy);
           const desiredAccuracy =
             desiredAccuracyRaw === "coarse" ||
             desiredAccuracyRaw === "balanced" ||
             desiredAccuracyRaw === "precise"
               ? desiredAccuracyRaw
               : undefined;
-          const timeoutMs = opts.locationTimeout
-            ? Number.parseInt(String(opts.locationTimeout), 10)
-            : undefined;
-          const invokeTimeoutMs = opts.invokeTimeout
-            ? Number.parseInt(String(opts.invokeTimeout), 10)
-            : undefined;
+          const timeoutMs = parseOptionalNodePositiveInteger(
+            opts.locationTimeout,
+            "--location-timeout",
+          );
+          const invokeTimeoutMs = parseOptionalNodePositiveInteger(
+            opts.invokeTimeout,
+            "--invoke-timeout",
+          );
 
           const invokeParams: Record<string, unknown> = {
             nodeId,

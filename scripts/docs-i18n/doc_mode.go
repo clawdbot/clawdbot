@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,26 +18,37 @@ const (
 	bodyTagEnd          = "</body>"
 )
 
-func processFileDoc(ctx context.Context, translator *PiTranslator, docsRoot, filePath, srcLang, tgtLang string, overwrite bool) (bool, error) {
+type docOutputStatus int
+
+const (
+	docOutputNeedsTranslation docOutputStatus = iota
+	docOutputReady
+	docOutputNeedsPostprocess
+)
+
+func processFileDoc(ctx context.Context, translator docsTranslator, docsRoot, filePath, srcLang, tgtLang string, overwrite bool) (bool, string, error) {
 	absPath, relPath, err := resolveDocsPath(docsRoot, filePath)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	content, err := os.ReadFile(absPath)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	currentHash := hashBytes(content)
 
 	outputPath := filepath.Join(docsRoot, tgtLang, relPath)
 	if !overwrite {
-		skip, err := shouldSkipDoc(outputPath, currentHash)
+		status, err := classifyDocOutput(outputPath, currentHash, tgtLang)
 		if err != nil {
-			return false, err
+			return false, "", err
 		}
-		if skip {
-			return true, nil
+		switch status {
+		case docOutputReady:
+			return true, "", nil
+		case docOutputNeedsPostprocess:
+			return true, outputPath, nil
 		}
 	}
 
@@ -44,43 +56,31 @@ func processFileDoc(ctx context.Context, translator *PiTranslator, docsRoot, fil
 	frontData := map[string]any{}
 	if strings.TrimSpace(sourceFront) != "" {
 		if err := yaml.Unmarshal([]byte(sourceFront), &frontData); err != nil {
-			return false, fmt.Errorf("frontmatter parse failed for %s: %w", relPath, err)
+			return false, "", fmt.Errorf("frontmatter parse failed for %s: %w", relPath, err)
 		}
 	}
-	frontTemplate, markers := buildFrontmatterTemplate(frontData)
-	taggedInput := formatTaggedDocument(frontTemplate, sourceBody)
-
-	translatedDoc, err := translator.TranslateRaw(ctx, taggedInput, srcLang, tgtLang)
-	if err != nil {
-		return false, fmt.Errorf("translate failed (%s): %w", relPath, err)
+	docTM := &TranslationMemory{entries: map[string]TMEntry{}}
+	if err := translateFrontMatter(ctx, translator, docTM, frontData, relPath, srcLang, tgtLang); err != nil {
+		return false, "", fmt.Errorf("frontmatter translation failed for %s: %w", relPath, err)
 	}
-
-	translatedFront, translatedBody, err := parseTaggedDocument(translatedDoc)
-	if err != nil {
-		return false, fmt.Errorf("tagged output invalid for %s: %w", relPath, err)
-	}
-	if sourceFront != "" && strings.TrimSpace(translatedFront) == "" {
-		return false, fmt.Errorf("translation removed frontmatter for %s", relPath)
-	}
-	if err := applyFrontmatterTranslations(frontData, markers, translatedFront); err != nil {
-		return false, fmt.Errorf("frontmatter translation failed for %s: %w", relPath, err)
-	}
-
 	updatedFront, err := encodeFrontMatter(frontData, relPath, content)
 	if err != nil {
-		return false, err
+		return false, "", err
+	}
+	translatedBody, err := translateDocBodyChunked(ctx, translator, relPath, sourceBody, srcLang, tgtLang)
+	if err != nil {
+		return false, "", fmt.Errorf("body translate failed for %s: %w", relPath, err)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	output := updatedFront + translatedBody
-	return false, os.WriteFile(outputPath, []byte(output), 0o644)
-}
-
-func formatTaggedDocument(frontMatter, body string) string {
-	return fmt.Sprintf("%s\n%s\n%s\n%s\n%s\n%s", frontmatterTagStart, frontMatter, frontmatterTagEnd, bodyTagStart, body, bodyTagEnd)
+	if !sameI18NProtocolMarkers(string(content), output) {
+		return false, "", fmt.Errorf("protocol token leaked in final output: __OC_I18N_")
+	}
+	return false, outputPath, os.WriteFile(outputPath, []byte(output), 0o644)
 }
 
 func parseTaggedDocument(text string) (string, string, error) {
@@ -100,21 +100,46 @@ func parseTaggedDocument(text string) (string, string, error) {
 		return "", "", fmt.Errorf("missing %s", bodyTagStart)
 	}
 	bodyStart += frontEnd + len(bodyTagStart)
-	bodyEnd := strings.Index(text[bodyStart:], bodyTagEnd)
+
+	bodyEnd := findTaggedBodyEnd(text, bodyStart)
 	if bodyEnd == -1 {
 		return "", "", fmt.Errorf("missing %s", bodyTagEnd)
 	}
-	bodyEnd += bodyStart
+	body := trimTagNewlines(text[bodyStart:bodyEnd])
+	suffix := strings.TrimSpace(text[bodyEnd+len(bodyTagEnd):])
 
 	prefix := strings.TrimSpace(text[:frontStart-len(frontmatterTagStart)])
-	suffix := strings.TrimSpace(text[bodyEnd+len(bodyTagEnd):])
 	if prefix != "" || suffix != "" {
 		return "", "", fmt.Errorf("unexpected text outside tagged sections")
 	}
 
 	frontMatter := trimTagNewlines(text[frontStart:frontEnd])
-	body := trimTagNewlines(text[bodyStart:bodyEnd])
 	return frontMatter, body, nil
+}
+
+func findTaggedBodyEnd(text string, bodyStart int) int {
+	if bodyStart < 0 || bodyStart > len(text) {
+		return -1
+	}
+	search := text[bodyStart:]
+	candidate := -1
+	offset := 0
+	for {
+		index := strings.Index(search[offset:], bodyTagEnd)
+		if index == -1 {
+			return candidate
+		}
+		index += offset
+		absolute := bodyStart + index
+		suffix := strings.TrimSpace(text[absolute+len(bodyTagEnd):])
+		if suffix == "" {
+			candidate = absolute
+		}
+		offset = index + len(bodyTagEnd)
+		if offset >= len(search) {
+			return candidate
+		}
+	}
 }
 
 func trimTagNewlines(value string) string {
@@ -123,126 +148,57 @@ func trimTagNewlines(value string) string {
 	return value
 }
 
-type frontmatterMarker struct {
-	Field string
-	Index int
-	Start string
-	End   string
-}
-
-func buildFrontmatterTemplate(data map[string]any) (string, []frontmatterMarker) {
-	if len(data) == 0 {
-		return "", nil
-	}
-	markers := []frontmatterMarker{}
-	lines := []string{}
-
-	if summary, ok := data["summary"].(string); ok {
-		start, end := markerPair("SUMMARY", 0)
-		markers = append(markers, frontmatterMarker{Field: "summary", Index: 0, Start: start, End: end})
-		lines = append(lines, fmt.Sprintf("summary: %s%s%s", start, summary, end))
-	}
-
-	if title, ok := data["title"].(string); ok {
-		start, end := markerPair("TITLE", 0)
-		markers = append(markers, frontmatterMarker{Field: "title", Index: 0, Start: start, End: end})
-		lines = append(lines, fmt.Sprintf("title: %s%s%s", start, title, end))
-	}
-
-	if readWhen, ok := data["read_when"].([]any); ok {
-		lines = append(lines, "read_when:")
-		for idx, item := range readWhen {
-			textValue, ok := item.(string)
-			if !ok {
-				lines = append(lines, fmt.Sprintf("  - %v", item))
-				continue
-			}
-			start, end := markerPair("READ_WHEN", idx)
-			markers = append(markers, frontmatterMarker{Field: "read_when", Index: idx, Start: start, End: end})
-			lines = append(lines, fmt.Sprintf("  - %s%s%s", start, textValue, end))
-		}
-	}
-
-	return strings.Join(lines, "\n"), markers
-}
-
-func markerPair(field string, index int) (string, string) {
-	return fmt.Sprintf("[[[FM_%s_%d_START]]]", field, index), fmt.Sprintf("[[[FM_%s_%d_END]]]", field, index)
-}
-
-func applyFrontmatterTranslations(data map[string]any, markers []frontmatterMarker, translatedFront string) error {
-	if len(markers) == 0 {
-		return nil
-	}
-	for _, marker := range markers {
-		value, err := extractMarkerValue(translatedFront, marker.Start, marker.End)
-		if err != nil {
-			return err
-		}
-		value = strings.TrimSpace(value)
-		switch marker.Field {
-		case "summary":
-			data["summary"] = value
-		case "title":
-			data["title"] = value
-		case "read_when":
-			data["read_when"] = setReadWhenValue(data["read_when"], marker.Index, value)
-		}
-	}
-	return nil
-}
-
-func extractMarkerValue(text, start, end string) (string, error) {
-	startIndex := strings.Index(text, start)
-	if startIndex == -1 {
-		return "", fmt.Errorf("missing marker %s", start)
-	}
-	startIndex += len(start)
-	endIndex := strings.Index(text[startIndex:], end)
-	if endIndex == -1 {
-		return "", fmt.Errorf("missing marker %s", end)
-	}
-	endIndex += startIndex
-	return text[startIndex:endIndex], nil
-}
-
-func setReadWhenValue(existing any, index int, value string) []any {
-	readWhen, ok := existing.([]any)
-	if !ok {
-		readWhen = []any{}
-	}
-	for len(readWhen) <= index {
-		readWhen = append(readWhen, "")
-	}
-	readWhen[index] = value
-	return readWhen
-}
-
-func shouldSkipDoc(outputPath string, sourceHash string) (bool, error) {
+func classifyDocOutput(outputPath string, sourceHash string, targetLang string) (docOutputStatus, error) {
 	data, err := os.ReadFile(outputPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return false, nil
+			return docOutputNeedsTranslation, nil
 		}
-		return false, err
+		return docOutputNeedsTranslation, err
 	}
 	frontMatter, _ := splitFrontMatter(string(data))
 	if frontMatter == "" {
-		return false, nil
+		return docOutputNeedsTranslation, nil
 	}
 	frontData := map[string]any{}
 	if err := yaml.Unmarshal([]byte(frontMatter), &frontData); err != nil {
-		return false, nil
+		return docOutputNeedsTranslation, nil
 	}
 	storedHash := extractSourceHash(frontData)
 	if storedHash == "" {
-		return false, nil
+		return docOutputNeedsTranslation, nil
 	}
-	return strings.EqualFold(storedHash, sourceHash), nil
+	if !strings.EqualFold(storedHash, sourceHash) {
+		return docOutputNeedsTranslation, nil
+	}
+	if strings.EqualFold(strings.TrimSpace(targetLang), "en") {
+		return docOutputReady, nil
+	}
+	if extractPromptVersion(frontData) != promptVersion {
+		return docOutputNeedsTranslation, nil
+	}
+
+	postprocessVersion := extractPostprocessVersion(frontData)
+	if strings.EqualFold(postprocessVersion, localizedLinkPostprocessVersion) {
+		return docOutputReady, nil
+	}
+	return docOutputNeedsPostprocess, nil
+}
+
+func extractPromptVersion(frontData map[string]any) int {
+	xi, ok := extractXI18N(frontData)
+	if !ok {
+		return 0
+	}
+	value, ok := xi["prompt_version"].(int)
+	if !ok {
+		return 0
+	}
+	return value
 }
 
 func extractSourceHash(frontData map[string]any) string {
-	xi, ok := frontData["x-i18n"].(map[string]any)
+	xi, ok := extractXI18N(frontData)
 	if !ok {
 		return ""
 	}
@@ -251,6 +207,34 @@ func extractSourceHash(frontData map[string]any) string {
 		return ""
 	}
 	return strings.TrimSpace(value)
+}
+
+func extractPostprocessVersion(frontData map[string]any) string {
+	xi, ok := extractXI18N(frontData)
+	if !ok {
+		return ""
+	}
+	value, ok := xi["postprocess_version"].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value)
+}
+
+func extractXI18N(frontData map[string]any) (map[string]any, bool) {
+	xi, ok := frontData["x-i18n"].(map[string]any)
+	if ok {
+		return xi, true
+	}
+	return nil, false
+}
+
+func logDocChunkPlan(relPath string, blocks []string, groups [][]string) {
+	totalBytes := 0
+	for _, block := range blocks {
+		totalBytes += len(block)
+	}
+	log.Printf("docs-i18n: body-chunks %s blocks=%d groups=%d bytes=%d", relPath, len(blocks), len(groups), totalBytes)
 }
 
 func resolveDocsPath(docsRoot, filePath string) (string, string, error) {

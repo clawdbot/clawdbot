@@ -1,10 +1,13 @@
-import { normalizeChatChannelId } from "../channels/registry.js";
-import type { OpenClawConfig } from "../config/config.js";
+// Toggles plugin enablement config for channels and agents.
+import { normalizeChatChannelId } from "../channels/ids.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
+/** Returns config with a plugin enabled/disabled and optional built-in channel state synced. */
 export function setPluginEnabledInConfig(
   config: OpenClawConfig,
   pluginId: string,
   enabled: boolean,
+  options: { updateChannelConfig?: boolean } = {},
 ): OpenClawConfig {
   const builtInChannelId = normalizeChatChannelId(pluginId);
   const resolvedId = builtInChannelId ?? pluginId;
@@ -23,7 +26,7 @@ export function setPluginEnabledInConfig(
     },
   };
 
-  if (!builtInChannelId) {
+  if (!builtInChannelId || options.updateChannelConfig === false) {
     return next;
   }
 

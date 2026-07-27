@@ -1,31 +1,37 @@
+// Subagent followup tests cover followup handling after isolated cron agent runs.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // vi.hoisted runs before module imports, ensuring FAST_TEST_MODE is picked up.
 vi.hoisted(() => {
-  process.env.OPENCLAW_TEST_FAST = "1";
+  vi.stubEnv("OPENCLAW_TEST_FAST", "1");
 });
 
+import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 import {
-  expectsSubagentFollowup,
-  isLikelyInterimCronMessage,
   readDescendantSubagentFallbackReply,
   waitForDescendantSubagentSummary,
 } from "./subagent-followup.js";
 
-vi.mock("../../agents/subagent-registry.js", () => ({
+vi.mock("../../agents/subagent-registry-read.js", () => ({
   listDescendantRunsForRequester: vi.fn().mockReturnValue([]),
 }));
 
-vi.mock("../../agents/tools/agent-step.js", () => ({
-  readLatestAssistantReply: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock("../../agents/run-wait.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/run-wait.js")>(
+    "../../agents/run-wait.js",
+  );
+  return {
+    ...actual,
+    readLatestAssistantReply: vi.fn().mockResolvedValue(undefined),
+  };
+});
 
 vi.mock("../../gateway/call.js", () => ({
   callGateway: vi.fn().mockResolvedValue({ status: "ok" }),
 }));
 
-const { listDescendantRunsForRequester } = await import("../../agents/subagent-registry.js");
-const { readLatestAssistantReply } = await import("../../agents/tools/agent-step.js");
+const { listDescendantRunsForRequester } = await import("../../agents/subagent-registry-read.js");
+const { readLatestAssistantReply } = await import("../../agents/run-wait.js");
 const { callGateway } = await import("../../gateway/call.js");
 
 async function resolveAfterAdvancingTimers<T>(promise: Promise<T>, advanceMs = 100): Promise<T> {
@@ -39,7 +45,8 @@ function createDescendantRun(params?: {
   task?: string;
   cleanup?: "keep" | "delete";
   endedAt?: number;
-  frozenResultText?: string | null;
+  resultText?: string | null;
+  hasInternalTranscript?: boolean;
 }) {
   return {
     runId: params?.runId ?? "run-1",
@@ -50,9 +57,22 @@ function createDescendantRun(params?: {
     cleanup: params?.cleanup ?? "keep",
     createdAt: 1000,
     endedAt: params?.endedAt ?? 2000,
-    ...(params?.frozenResultText === undefined
+    ...(params?.resultText === undefined
       ? {}
-      : { frozenResultText: params.frozenResultText }),
+      : { completion: { required: true, resultText: params.resultText } }),
+    ...(params?.hasInternalTranscript
+      ? {
+          execution: {
+            status: "terminal" as const,
+            transcriptTarget: {
+              agentId: "main",
+              sessionId: "internal-run",
+              sessionKey: "agent:main:internal-session-effects:run",
+              storePath: "/tmp/test-store",
+            },
+          },
+        }
+      : {}),
   };
 }
 
@@ -121,7 +141,7 @@ describe("readDescendantSubagentFallbackReply", () => {
     vi.mocked(listDescendantRunsForRequester).mockReturnValue([
       createDescendantRun({
         cleanup: "delete",
-        frozenResultText: "frozen child output",
+        resultText: "frozen child output",
       }),
     ]);
     vi.mocked(readLatestAssistantReply).mockResolvedValue(undefined);
@@ -134,7 +154,7 @@ describe("readDescendantSubagentFallbackReply", () => {
 
   it("prefers session transcript over frozenResultText", async () => {
     vi.mocked(listDescendantRunsForRequester).mockReturnValue([
-      createDescendantRun({ frozenResultText: "frozen text" }),
+      createDescendantRun({ resultText: "frozen text" }),
     ]);
     vi.mocked(readLatestAssistantReply).mockResolvedValue("live transcript text");
     const result = await readDescendantSubagentFallbackReply({
@@ -144,15 +164,47 @@ describe("readDescendantSubagentFallbackReply", () => {
     expect(result).toBe("live transcript text");
   });
 
+  it("prefers captured completion for internally resumed descendants", async () => {
+    vi.mocked(listDescendantRunsForRequester).mockReturnValue([
+      createDescendantRun({
+        resultText: "fresh recovered output",
+        hasInternalTranscript: true,
+      }),
+    ]);
+    vi.mocked(readLatestAssistantReply).mockResolvedValue("stale visible transcript");
+    const result = await readDescendantSubagentFallbackReply({
+      sessionKey: "test-session",
+      runStartedAt,
+    });
+    expect(result).toBe("fresh recovered output");
+  });
+
+  it("does not fall back to visible transcript for internally resumed descendants without captured output", async () => {
+    vi.mocked(listDescendantRunsForRequester).mockReturnValue([
+      createDescendantRun({
+        resultText: null,
+        hasInternalTranscript: true,
+      }),
+    ]);
+    vi.mocked(readLatestAssistantReply).mockClear();
+    vi.mocked(readLatestAssistantReply).mockResolvedValue("stale visible transcript");
+    const result = await readDescendantSubagentFallbackReply({
+      sessionKey: "test-session",
+      runStartedAt,
+    });
+    expect(result).toBeUndefined();
+    expect(readLatestAssistantReply).not.toHaveBeenCalled();
+  });
+
   it("joins replies from multiple descendants", async () => {
     vi.mocked(listDescendantRunsForRequester).mockReturnValue([
-      createDescendantRun({ frozenResultText: "first child output" }),
+      createDescendantRun({ resultText: "first child output" }),
       createDescendantRun({
         runId: "run-2",
         childSessionKey: "child-2",
         task: "task-2",
         endedAt: 3000,
-        frozenResultText: "second child output",
+        resultText: "second child output",
       }),
     ]);
     vi.mocked(readLatestAssistantReply).mockResolvedValue(undefined);
@@ -171,7 +223,7 @@ describe("readDescendantSubagentFallbackReply", () => {
         childSessionKey: "child-2",
         task: "task-2",
         endedAt: 3000,
-        frozenResultText: "useful output",
+        resultText: "useful output",
       }),
     ]);
     vi.mocked(readLatestAssistantReply).mockImplementation(async (params) => {
@@ -187,11 +239,11 @@ describe("readDescendantSubagentFallbackReply", () => {
     expect(result).toBe("useful output");
   });
 
-  it("returns undefined when frozenResultText is null", async () => {
+  it("returns undefined when completion result is null", async () => {
     vi.mocked(listDescendantRunsForRequester).mockReturnValue([
       createDescendantRun({
         cleanup: "delete",
-        frozenResultText: null,
+        resultText: null,
       }),
     ]);
     vi.mocked(readLatestAssistantReply).mockResolvedValue(undefined);
@@ -213,7 +265,7 @@ describe("readDescendantSubagentFallbackReply", () => {
         cleanup: "keep",
         createdAt: 500,
         endedAt: 900,
-        frozenResultText: "stale output from previous run",
+        completion: { required: true, resultText: "stale output from previous run" },
       },
     ]);
     vi.mocked(readLatestAssistantReply).mockResolvedValue(undefined);
@@ -279,12 +331,14 @@ describe("waitForDescendantSubagentSummary", () => {
 
     expect(result).toBe("Morning briefing complete!");
     // agent.wait should have been called with the active run's ID
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "agent.wait",
-        params: expect.objectContaining({ runId: "run-abc" }),
-      }),
-    );
+    const gatewayCalls = (
+      callGateway as unknown as {
+        mock: { calls: Array<[{ method?: string; params?: { runId?: string } }]> };
+      }
+    ).mock.calls;
+    const waitCall = gatewayCalls.find(([request]) => request.method === "agent.wait")?.[0];
+    expect(waitCall?.method).toBe("agent.wait");
+    expect(waitCall?.params?.runId).toBe("run-abc");
   });
 
   it("returns undefined when descendants finish but only interim text remains after grace period", async () => {

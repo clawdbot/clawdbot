@@ -1,3 +1,4 @@
+// Groq provider module implements model/runtime integration.
 import {
   transcribeOpenAiCompatibleAudio,
   type MediaUnderstandingProvider,
@@ -9,6 +10,8 @@ const DEFAULT_GROQ_AUDIO_MODEL = "whisper-large-v3-turbo";
 export const groqMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "groq",
   capabilities: ["audio"],
+  defaultModels: { audio: DEFAULT_GROQ_AUDIO_MODEL },
+  autoPriority: { audio: 20 },
   transcribeAudio: (req) =>
     transcribeOpenAiCompatibleAudio({
       ...req,

@@ -1,3 +1,4 @@
+// JSON-mode metadata for Commander commands; distinguishes JSON output from parse-only flags.
 import type { Command } from "commander";
 import { hasFlag } from "../argv.js";
 
@@ -25,34 +26,20 @@ function getDeclaredCommandJsonMode(command: Command): JsonMode | null {
   return null;
 }
 
-function commandSelectedJsonFlag(command: Command, argv: string[]): boolean {
-  const commandWithGlobals = command as Command & {
-    optsWithGlobals?: <T extends Record<string, unknown>>() => T;
-  };
-  if (typeof commandWithGlobals.optsWithGlobals === "function") {
-    const resolved = commandWithGlobals.optsWithGlobals<Record<string, unknown>>().json;
-    if (resolved === true) {
-      return true;
-    }
-  }
-  return hasFlag(argv, "--json");
-}
-
+/** Mark a command as having a special JSON mode beyond ordinary JSON output. */
 export function setCommandJsonMode(command: Command, mode: JsonMode): Command {
   (command as JsonModeCommand)[jsonModeSymbol] = mode;
   return command;
 }
 
-export function getCommandJsonMode(
-  command: Command,
-  argv: string[] = process.argv,
-): JsonMode | null {
-  if (!commandSelectedJsonFlag(command, argv)) {
+function getCommandJsonMode(command: Command, argv: string[] = process.argv): JsonMode | null {
+  if (command.optsWithGlobals<{ json?: unknown }>().json !== true && !hasFlag(argv, "--json")) {
     return null;
   }
   return getDeclaredCommandJsonMode(command);
 }
 
+/** Return true only when `--json` selects machine-readable command output. */
 export function isCommandJsonOutputMode(command: Command, argv: string[] = process.argv): boolean {
   return getCommandJsonMode(command, argv) === "output";
 }

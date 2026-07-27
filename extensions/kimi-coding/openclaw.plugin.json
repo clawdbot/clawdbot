@@ -1,20 +1,64 @@
 {
   "id": "kimi",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["kimi", "kimi-coding"],
-  "providerAuthEnvVars": {
-    "kimi": ["KIMI_API_KEY", "KIMICODE_API_KEY"],
-    "kimi-coding": ["KIMI_API_KEY", "KIMICODE_API_KEY"]
+  "providerRequest": {
+    "providers": {
+      "kimi": {
+        "family": "moonshot",
+        "compatibilityFamily": "moonshot"
+      },
+      "kimi-coding": {
+        "family": "moonshot",
+        "compatibilityFamily": "moonshot"
+      }
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "kimi": {
+        "openRouter": {
+          "provider": "moonshotai"
+        },
+        "liteLLM": {
+          "provider": "moonshot"
+        }
+      },
+      "kimi-coding": {
+        "openRouter": {
+          "provider": "moonshotai"
+        },
+        "liteLLM": {
+          "provider": "moonshot"
+        }
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "kimi",
+        "envVars": ["KIMI_API_KEY", "KIMICODE_API_KEY"]
+      },
+      {
+        "id": "kimi-coding",
+        "envVars": ["KIMI_API_KEY", "KIMICODE_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {
       "provider": "kimi",
       "method": "api-key",
       "choiceId": "kimi-code-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Kimi Code API key (subscription)",
       "groupId": "moonshot",
-      "groupLabel": "Moonshot AI (Kimi K2.5)",
-      "groupHint": "Kimi K2.5",
+      "groupLabel": "Moonshot AI (Kimi)",
+      "groupHint": "Kimi Code membership · https://www.kimi.com/membership/pricing",
       "optionKey": "kimiCodeApiKey",
       "cliFlag": "--kimi-code-api-key",
       "cliOption": "--kimi-code-api-key <key>",

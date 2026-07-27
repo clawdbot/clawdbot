@@ -1,3 +1,6 @@
+// Resolves response-prefix templates for channel and sender scoped replies.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+
 /**
  * Template interpolation for response prefix.
  *
@@ -6,11 +9,11 @@
  */
 
 export type ResponsePrefixContext = {
-  /** Short model name (e.g., "gpt-5.2", "claude-opus-4-6") */
+  /** Short model name (e.g., "gpt-5.4", "claude-opus-4-6") */
   model?: string;
-  /** Full model ID including provider (e.g., "openai-codex/gpt-5.2") */
+  /** Full model ID including provider (e.g., "openai/gpt-5.6-sol") */
   modelFull?: string;
-  /** Provider name (e.g., "openai-codex", "anthropic") */
+  /** Provider name (e.g., "openai", "anthropic") */
   provider?: string;
   /** Current thinking level (e.g., "high", "low", "off") */
   thinkingLevel?: string;
@@ -30,10 +33,10 @@ const TEMPLATE_VAR_PATTERN = /\{([a-zA-Z][a-zA-Z0-9.]*)\}/g;
  *
  * @example
  * resolveResponsePrefixTemplate("[{model} | think:{thinkingLevel}]", {
- *   model: "gpt-5.2",
+ *   model: "gpt-5.4",
  *   thinkingLevel: "high"
  * })
- * // Returns: "[gpt-5.2 | think:high]"
+ * // Returns: "[gpt-5.4 | think:high]"
  */
 export function resolveResponsePrefixTemplate(
   template: string | undefined,
@@ -44,7 +47,7 @@ export function resolveResponsePrefixTemplate(
   }
 
   return template.replace(TEMPLATE_VAR_PATTERN, (match, varName: string) => {
-    const normalizedVar = varName.toLowerCase();
+    const normalizedVar = normalizeLowercaseStringOrEmpty(varName);
 
     switch (normalizedVar) {
       case "model":
@@ -70,14 +73,14 @@ export function resolveResponsePrefixTemplate(
  * Extract short model name from a full model string.
  *
  * Strips:
- * - Provider prefix (e.g., "openai/" from "openai/gpt-5.2")
+ * - Provider prefix (e.g., "openai/" from "openai/gpt-5.4")
  * - Date suffixes (e.g., "-20260205" from "claude-opus-4-6-20260205")
  * - Common version suffixes (e.g., "-latest")
  *
  * @example
- * extractShortModelName("openai-codex/gpt-5.2") // "gpt-5.2"
+ * extractShortModelName("openai/gpt-5.6-sol") // "gpt-5.6-sol"
  * extractShortModelName("claude-opus-4-6-20260205") // "claude-opus-4-6"
- * extractShortModelName("gpt-5.2-latest") // "gpt-5.2"
+ * extractShortModelName("gpt-5.4-latest") // "gpt-5.4"
  */
 export function extractShortModelName(fullModel: string): string {
   // Strip provider prefix
@@ -86,16 +89,4 @@ export function extractShortModelName(fullModel: string): string {
 
   // Strip date suffixes (YYYYMMDD format)
   return modelPart.replace(/-\d{8}$/, "").replace(/-latest$/, "");
-}
-
-/**
- * Check if a template string contains any template variables.
- */
-export function hasTemplateVariables(template: string | undefined): boolean {
-  if (!template) {
-    return false;
-  }
-  // Reset lastIndex since we're using a global regex
-  TEMPLATE_VAR_PATTERN.lastIndex = 0;
-  return TEMPLATE_VAR_PATTERN.test(template);
 }

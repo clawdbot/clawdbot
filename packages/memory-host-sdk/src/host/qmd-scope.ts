@@ -1,4 +1,8 @@
-import { parseAgentSessionKey } from "../../../../src/sessions/session-key-utils.js";
+// Memory Host SDK module implements qmd scope behavior.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { ResolvedQmdConfig } from "./backend-config.js";
 
 type ParsedQmdSessionScope = {
@@ -15,7 +19,7 @@ export function isQmdScopeAllowed(scope: ResolvedQmdConfig["scope"], sessionKey?
   const channel = parsed.channel;
   const chatType = parsed.chatType;
   const normalizedKey = parsed.normalizedKey ?? "";
-  const rawKey = sessionKey?.trim().toLowerCase() ?? "";
+  const rawKey = normalizeLowercaseStringOrEmpty(sessionKey ?? "");
   for (const rule of scope.rules ?? []) {
     if (!rule) {
       continue;
@@ -27,8 +31,8 @@ export function isQmdScopeAllowed(scope: ResolvedQmdConfig["scope"], sessionKey?
     if (match.chatType && match.chatType !== chatType) {
       continue;
     }
-    const normalizedPrefix = match.keyPrefix?.trim().toLowerCase() || undefined;
-    const rawPrefix = match.rawKeyPrefix?.trim().toLowerCase() || undefined;
+    const normalizedPrefix = normalizeOptionalLowercaseString(match.keyPrefix) || undefined;
+    const rawPrefix = normalizeOptionalLowercaseString(match.rawKeyPrefix) || undefined;
 
     if (rawPrefix && !rawKey.startsWith(rawPrefix)) {
       continue;
@@ -76,7 +80,7 @@ function parseQmdSessionScope(key?: string): ParsedQmdSessionScope {
     }
     return {
       normalizedKey: normalized,
-      channel: parts[0]?.toLowerCase(),
+      channel: normalizeOptionalLowercaseString(parts[0]),
       chatType: chatType ?? "direct",
     };
   }
@@ -98,9 +102,22 @@ function normalizeQmdSessionKey(key?: string): string | undefined {
     return undefined;
   }
   const parsed = parseAgentSessionKey(trimmed);
-  const normalized = (parsed?.rest ?? trimmed).toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(parsed?.rest ?? trimmed);
   if (normalized.startsWith("subagent:")) {
     return undefined;
   }
   return normalized;
+}
+
+function parseAgentSessionKey(sessionKey: string | undefined | null): { rest: string } | null {
+  const raw = normalizeOptionalLowercaseString(sessionKey);
+  if (!raw) {
+    return null;
+  }
+  const parts = raw.split(":").filter(Boolean);
+  if (parts.length < 3 || parts[0] !== "agent") {
+    return null;
+  }
+  const rest = parts.slice(2).join(":");
+  return rest ? { rest } : null;
 }

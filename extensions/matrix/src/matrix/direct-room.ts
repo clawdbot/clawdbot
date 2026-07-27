@@ -1,19 +1,13 @@
+// Matrix plugin module implements direct room behavior.
+import { normalizeNullableString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MatrixClient } from "./sdk.js";
 
-function trimMaybeString(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
-export function normalizeJoinedMatrixMembers(joinedMembers: unknown): string[] {
+function normalizeJoinedMatrixMembers(joinedMembers: unknown): string[] {
   if (!Array.isArray(joinedMembers)) {
     return [];
   }
   return joinedMembers
-    .map((entry) => trimMaybeString(entry))
+    .map((entry) => normalizeNullableString(entry))
     .filter((entry): entry is string => Boolean(entry));
 }
 
@@ -22,8 +16,8 @@ export function isStrictDirectMembership(params: {
   remoteUserId?: string | null;
   joinedMembers?: readonly string[] | null;
 }): boolean {
-  const selfUserId = trimMaybeString(params.selfUserId);
-  const remoteUserId = trimMaybeString(params.remoteUserId);
+  const selfUserId = normalizeNullableString(params.selfUserId);
+  const remoteUserId = normalizeNullableString(params.remoteUserId);
   const joinedMembers = params.joinedMembers ?? [];
   return Boolean(
     selfUserId &&
@@ -49,23 +43,33 @@ export async function hasDirectMatrixMemberFlag(
   client: MatrixClient,
   roomId: string,
   userId?: string | null,
-): Promise<boolean> {
-  const normalizedUserId = trimMaybeString(userId);
+): Promise<boolean | null> {
+  const normalizedUserId = normalizeNullableString(userId);
   if (!normalizedUserId) {
-    return false;
+    return null;
   }
   try {
     const state = await client.getRoomStateEvent(roomId, "m.room.member", normalizedUserId);
-    return state?.is_direct === true;
+    // Return true if is_direct is explicitly true, false if explicitly false, null if absent
+    if (state?.is_direct === true) {
+      return true;
+    }
+    if (state?.is_direct === false) {
+      return false;
+    }
+    // is_direct field is absent from the membership event
+    return null;
   } catch {
-    return false;
+    // API/network error - treat as unavailable
+    return null;
   }
 }
 
-export type MatrixDirectRoomEvidence = {
+type MatrixDirectRoomEvidence = {
   joinedMembers: string[] | null;
   strict: boolean;
   viaMemberState: boolean;
+  memberStateFlag: boolean | null;
 };
 
 export async function inspectMatrixDirectRoomEvidence(params: {
@@ -76,8 +80,8 @@ export async function inspectMatrixDirectRoomEvidence(params: {
 }): Promise<MatrixDirectRoomEvidence> {
   const selfUserId =
     params.selfUserId !== undefined
-      ? trimMaybeString(params.selfUserId)
-      : trimMaybeString(await params.client.getUserId().catch(() => null));
+      ? normalizeNullableString(params.selfUserId)
+      : normalizeNullableString(await params.client.getUserId().catch(() => null));
   const joinedMembers = await readJoinedMatrixMembers(params.client, params.roomId);
   const strict = isStrictDirectMembership({
     selfUserId,
@@ -89,14 +93,15 @@ export async function inspectMatrixDirectRoomEvidence(params: {
       joinedMembers,
       strict: false,
       viaMemberState: false,
+      memberStateFlag: null,
     };
   }
+  const memberStateFlag = await hasDirectMatrixMemberFlag(params.client, params.roomId, selfUserId);
   return {
     joinedMembers,
     strict,
-    viaMemberState:
-      (await hasDirectMatrixMemberFlag(params.client, params.roomId, params.remoteUserId)) ||
-      (await hasDirectMatrixMemberFlag(params.client, params.roomId, selfUserId)),
+    viaMemberState: memberStateFlag === true,
+    memberStateFlag,
   };
 }
 

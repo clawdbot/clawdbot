@@ -1,3 +1,4 @@
+// Reasoning tag tests cover parsing and stripping reasoning tag blocks.
 import { describe, expect, it } from "vitest";
 import { stripReasoningTagsFromText } from "./reasoning-tags.js";
 
@@ -49,6 +50,26 @@ describe("stripReasoningTagsFromText", () => {
         name: "strips antthinking tags",
         input: "X <antthinking>internal</antthinking> Y",
         expected: "X  Y",
+      },
+      {
+        name: "strips antml namespaced thinking tags",
+        input: "Before <antml:thinking>secret</antml:thinking> after",
+        expected: "Before  after",
+      },
+      {
+        name: "strips mm namespaced think tags (MiniMax)",
+        input: "<mm:think>internal reasoning</mm:think>Visible answer.",
+        expected: "Visible answer.",
+      },
+      {
+        name: "strips mm namespaced thinking/thought variants",
+        input: "<mm:thinking>x</mm:thinking>A<mm:thought>y</mm:thought>B",
+        expected: "AB",
+      },
+      {
+        name: "recovers visible text after truncated mm:think opening tag",
+        input: "leaked preamble</mm:think>Real answer.",
+        expected: "Real answer.",
       },
       {
         name: "strips multiple reasoning blocks",
@@ -116,6 +137,14 @@ describe("stripReasoningTagsFromText", () => {
         expected: "You can start with <think and then close with",
       },
       {
+        input: "Internal reasoning </think> final answer",
+        expected: "final answer",
+      },
+      {
+        input: "Use `<think>` to open and `</think>` to close. Final sentence.",
+        expected: "Use `<think>` to open and `</think>` to close. Final sentence.",
+      },
+      {
         input: "A < think >content< /think > B",
         expected: "A  B",
       },
@@ -163,7 +192,7 @@ describe("stripReasoningTagsFromText", () => {
     it.each([
       {
         input: "<think>outer <think>inner</think> still outer</think>visible",
-        expected: "still outervisible",
+        expected: "visible",
       },
       {
         input: "A<final>1</final>B<final>2</final>C",
@@ -176,6 +205,38 @@ describe("stripReasoningTagsFromText", () => {
       {
         input: "A <FINAL data-x='1'>visible</Final> B",
         expected: "A visible B",
+      },
+      {
+        input: "A <final/>visible <final data-model='gemini'>answer</final> B",
+        expected: "A visible answer B",
+      },
+      {
+        input: "A <final data-model=openrouter/google/gemini>answer</final> B",
+        expected: "A answer B",
+      },
+      {
+        input: "A <final-result>visible</final-result> B",
+        expected: "A <final-result>visible</final-result> B",
+      },
+      {
+        input: "  <final-result>visible</final-result>  ",
+        expected: "  <final-result>visible</final-result>  ",
+      },
+      {
+        input: 'A <final reason="a>b">visible B',
+        expected: 'A <final reason="a>b">visible B',
+      },
+      {
+        input: "A <final / nottag>visible B",
+        expected: "A <final / nottag>visible B",
+      },
+      {
+        input: `A <final ${" ".repeat(10_000)} B`,
+        expected: `A <final ${" ".repeat(10_000)} B`,
+      },
+      {
+        input: `A <final ${" ".repeat(10_000)}= > B`,
+        expected: `A <final ${" ".repeat(10_000)}= > B`,
       },
     ] as const)("handles nested/final tag behavior: %j", (testCase) => {
       expectStrippedCase(testCase);
@@ -193,6 +254,10 @@ describe("stripReasoningTagsFromText", () => {
       {
         input: "A <THINK>hidden</THINK> <Thinking>also hidden</Thinking> B",
         expected: "A   B",
+      },
+      {
+        input: "A <ANTML:THINKING hidden='1'>secret</ANTML:THINKING> B",
+        expected: "A  B",
       },
     ] as const)("handles unicode/attributes/case-insensitive names: %j", (testCase) => {
       expectStrippedCase(testCase);
@@ -213,9 +278,21 @@ describe("stripReasoningTagsFromText", () => {
   describe("strict vs preserve mode", () => {
     it.each([
       {
-        name: "applies strict mode to unclosed tags",
+        name: "keeps strict mode from leaking unclosed trailing reasoning after visible text",
         input: "Before <think>unclosed content after",
         expected: "Before",
+        opts: { mode: "strict" as const },
+      },
+      {
+        name: "recovers fully wrapped unclosed tags that would otherwise deliver empty text",
+        input: "<think>Answer after malformed opening tag",
+        expected: "Answer after malformed opening tag",
+        opts: { mode: "strict" as const },
+      },
+      {
+        name: "does not recover fully closed reasoning-only blocks in strict mode",
+        input: "<think>hidden reasoning only</think>",
+        expected: "",
         opts: { mode: "strict" as const },
       },
       {

@@ -1,21 +1,30 @@
 package ai.openclaw.app.node
 
-import android.content.Context
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.takeUtf16Safe
+import android.content.Context
 import kotlinx.serialization.json.JsonPrimitive
 
+private const val LOGCAT_PATH = "/system/bin/logcat"
+
+/**
+ * Debug-only node.invoke commands for Android cryptography and log diagnostics.
+ */
 class DebugHandler(
   private val appContext: Context,
   private val identityStore: DeviceIdentityStore,
 ) {
-
+  /**
+   * Runs an Ed25519 self-test and returns redacted diagnostics for debug builds.
+   */
   fun handleEd25519(): GatewaySession.InvokeResult {
     if (!BuildConfig.DEBUG) {
       return GatewaySession.InvokeResult.error(code = "UNAVAILABLE", message = "debug commands are disabled in release builds")
     }
-    // Self-test Ed25519 signing and return diagnostic info
+    // Self-test Ed25519 signing without returning full private/public key material.
     try {
       val identity = identityStore.loadOrCreate()
       val testPayload = "test|${identity.deviceId}|${System.currentTimeMillis()}"
@@ -24,15 +33,14 @@ class DebugHandler(
       results.add("publicKeyRawBase64: ${identity.publicKeyRawBase64.take(20)}...")
       results.add("privateKeyPkcs8Base64: ${identity.privateKeyPkcs8Base64.take(20)}...")
 
-      // Test publicKeyBase64Url
+      // Public-key URL encoding must match the gateway device-auth payload contract.
       val pubKeyUrl = identityStore.publicKeyBase64Url(identity)
-      results.add("publicKeyBase64Url: ${pubKeyUrl ?: "NULL (FAILED)"}")
+      results.add("publicKeyBase64Url: ${pubKeyUrl ?: nativeString("NULL (FAILED)")}")
 
-      // Test signing
+      // Sign/verify through DeviceIdentityStore to catch provider and key-format failures together.
       val signature = identityStore.signPayload(testPayload, identity)
-      results.add("signPayload: ${if (signature != null) "${signature.take(20)}... (OK)" else "NULL (FAILED)"}")
+      results.add("signPayload: ${if (signature != null) nativeString("\${signature.take(20)}... (OK)", signature.take(20)) else nativeString("NULL (FAILED)")}")
 
-      // Test self-verify
       if (signature != null) {
         val verifyOk = identityStore.verifySelfSignature(testPayload, signature, identity)
         results.add("verifySelfSignature: $verifyOk")
@@ -40,9 +48,10 @@ class DebugHandler(
 
       // Check available providers
       val providers = java.security.Security.getProviders()
-      val ed25519Providers = providers.filter { p ->
-        p.services.any { s -> s.algorithm.contains("Ed25519", ignoreCase = true) }
-      }
+      val ed25519Providers =
+        providers.filter { p ->
+          p.services.any { s -> s.algorithm.contains("Ed25519", ignoreCase = true) }
+        }
       results.add("Ed25519 providers: ${ed25519Providers.map { "${it.name} v${it.version}" }}")
       results.add("Provider order: ${providers.take(5).map { it.name }}")
 
@@ -65,54 +74,84 @@ class DebugHandler(
       val diagnostics = results.joinToString("\n")
       return GatewaySession.InvokeResult.ok("""{"diagnostics":${JsonPrimitive(diagnostics)}}""")
     } catch (e: Throwable) {
-      return GatewaySession.InvokeResult.error(code = "ED25519_TEST_FAILED", message = "${e.javaClass.simpleName}: ${e.message}\n${e.stackTraceToString().take(500)}")
+      return GatewaySession.InvokeResult.error(
+        code = "ED25519_TEST_FAILED",
+        message = "${e.javaClass.simpleName}: ${e.message}\n${e.stackTraceToString().takeUtf16Safe(500)}",
+      )
     }
   }
 
+  /**
+   * Returns a filtered logcat snapshot plus CameraX debug log for debug builds.
+   */
   fun handleLogs(): GatewaySession.InvokeResult {
     if (!BuildConfig.DEBUG) {
       return GatewaySession.InvokeResult.error(code = "UNAVAILABLE", message = "debug commands are disabled in release builds")
     }
     val pid = android.os.Process.myPid()
     val rt = Runtime.getRuntime()
-    val info = "v6 pid=$pid thread=${Thread.currentThread().name} free=${rt.freeMemory()/1024}K total=${rt.totalMemory()/1024}K max=${rt.maxMemory()/1024}K uptime=${android.os.SystemClock.elapsedRealtime()/1000}s sdk=${android.os.Build.VERSION.SDK_INT} device=${android.os.Build.MODEL}\n"
-    // Run logcat on current dispatcher thread (no withContext) with file redirect
-    val logResult = try {
-      val tmpFile = java.io.File(appContext.cacheDir, "debug_logs.txt")
-      if (tmpFile.exists()) tmpFile.delete()
-      val pb = ProcessBuilder("logcat", "-d", "-t", "200", "--pid=$pid")
-      pb.redirectOutput(tmpFile)
-      pb.redirectErrorStream(true)
-      val proc = pb.start()
-      val finished = proc.waitFor(4, java.util.concurrent.TimeUnit.SECONDS)
-      if (!finished) proc.destroyForcibly()
-      val raw = if (tmpFile.exists() && tmpFile.length() > 0) {
-        tmpFile.readText().take(128000)
-      } else {
-        "(no output, finished=$finished, exists=${tmpFile.exists()})"
+    val info = "v6 pid=$pid thread=${Thread.currentThread().name} free=${rt.freeMemory() / 1024}K total=${rt.totalMemory() / 1024}K max=${rt.maxMemory() / 1024}K uptime=${android.os.SystemClock.elapsedRealtime() / 1000}s sdk=${android.os.Build.VERSION.SDK_INT} device=${android.os.Build.MODEL}\n"
+    // Capture only this process and redirect through a temp file to avoid blocking on pipe backpressure.
+    val logResult =
+      try {
+        val tmpFile = java.io.File(appContext.cacheDir, "debug_logs.txt")
+        if (tmpFile.exists()) tmpFile.delete()
+        val pb = ProcessBuilder(LOGCAT_PATH, "-d", "-t", "200", "--pid=$pid")
+        pb.redirectOutput(tmpFile)
+        pb.redirectErrorStream(true)
+        val proc = pb.start()
+        val finished = proc.waitFor(4, java.util.concurrent.TimeUnit.SECONDS)
+        if (!finished) proc.destroyForcibly()
+        val raw =
+          if (tmpFile.exists() && tmpFile.length() > 0) {
+            tmpFile.readText().takeUtf16Safe(128_000)
+          } else {
+            "(no output, finished=$finished, exists=${tmpFile.exists()})"
+          }
+        tmpFile.delete()
+        val spamPatterns =
+          listOf(
+            "setRequestedFrameRate",
+            "I View    :",
+            "BLASTBufferQueue",
+            "VRI[Pop-Up",
+            "InsetsController:",
+            "VRI[MainActivity",
+            "InsetsSource:",
+            "handleResized",
+            "ProfileInstaller",
+            "I VRI[",
+            "onStateChanged: host=",
+            "D StrictMode:",
+            "E StrictMode:",
+            "ImeFocusController",
+            "InputTransport",
+            "IncorrectContextUseViolation",
+          )
+        val sb = StringBuilder()
+        for (line in raw.lineSequence()) {
+          if (line.isBlank()) continue
+          if (spamPatterns.any { line.contains(it) }) continue
+          if (sb.length + line.length > 16000) {
+            // Keep debug.invoke responses small enough for the gateway WebSocket frame budget.
+            sb.append("\n(truncated)")
+            break
+          }
+          if (sb.isNotEmpty()) sb.append('\n')
+          sb.append(line)
+        }
+        sb.toString().ifEmpty { "(all ${raw.lines().size} lines filtered as spam)" }
+      } catch (e: Throwable) {
+        "(logcat error: ${e::class.java.simpleName}: ${e.message})"
       }
-      tmpFile.delete()
-      val spamPatterns = listOf("setRequestedFrameRate", "I View    :", "BLASTBufferQueue", "VRI[Pop-Up",
-        "InsetsController:", "VRI[MainActivity", "InsetsSource:", "handleResized", "ProfileInstaller",
-        "I VRI[", "onStateChanged: host=", "D StrictMode:", "E StrictMode:", "ImeFocusController",
-        "InputTransport", "IncorrectContextUseViolation")
-      val sb = StringBuilder()
-      for (line in raw.lineSequence()) {
-        if (line.isBlank()) continue
-        if (spamPatterns.any { line.contains(it) }) continue
-        if (sb.length + line.length > 16000) { sb.append("\n(truncated)"); break }
-        if (sb.isNotEmpty()) sb.append('\n')
-        sb.append(line)
-      }
-      sb.toString().ifEmpty { "(all ${raw.lines().size} lines filtered as spam)" }
-    } catch (e: Throwable) {
-      "(logcat error: ${e::class.java.simpleName}: ${e.message})"
-    }
-    // Also include camera debug log if it exists
+    // Camera capture writes a separate debug file because CameraX failures often happen off logcat's hot path.
     val camLogFile = java.io.File(appContext.cacheDir, "camera_debug.log")
-    val camLog = if (camLogFile.exists() && camLogFile.length() > 0) {
-      "\n--- camera_debug.log ---\n" + camLogFile.readText().take(4000)
-    } else ""
+    val camLog =
+      if (camLogFile.exists() && camLogFile.length() > 0) {
+        "\n--- camera_debug.log ---\n" + camLogFile.readText().takeUtf16Safe(4_000)
+      } else {
+        ""
+      }
     return GatewaySession.InvokeResult.ok("""{"logs":${JsonPrimitive(info + logResult + camLog)}}""")
   }
 }

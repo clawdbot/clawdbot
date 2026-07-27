@@ -5,19 +5,67 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   resolveDefaultAgentId,
   resolveAgentWorkspaceDir,
   resolveAgentDir,
-  resolveAgentEffectiveModelPrimary,
 } from "../agents/agent-scope.js";
-import { DEFAULT_PROVIDER, DEFAULT_MODEL } from "../agents/defaults.js";
-import { parseModelRef } from "../agents/model-selection.js";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { runEmbeddedAgent } from "../agents/embedded-agent.js";
+import { resolveAgentTimeoutMs } from "../agents/timeout.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  extractLeadingHttpStatus,
+  parseApiErrorPayload,
+} from "../shared/assistant-error-format.js";
 
 const log = createSubsystemLogger("llm-slug-generator");
+const DEFAULT_SLUG_GENERATOR_TIMEOUT_MS = 15_000;
+const PROVIDER_ERROR_PREFIX_RE =
+  /^(?:provider\s+)?(?:api|llm|model|openai|anthropic|codex|gateway)\s+(?:request\s+)?(?:error|failed|failure)\b/i;
+const PROVIDER_ERROR_DETAIL_RE =
+  /\b(?:insufficient[_ -]?quota|quota (?:exceeded|exhausted)|exceeded your current quota|payment required|insufficient credits|credit balance|insufficient[_ -]?(?:balance|funds)|rate[_ -]?limit(?:ed)?|too many requests|invalid[_ -]?api[_ -]?key|incorrect api key|authentication failed|oauth token refresh failed|missing (?:token|projectid|credentials)|google cloud credentials|re-?authenticate|unauthorized|forbidden|permission_error|billing hard limit|spend(?:ing)? limit)\b/i;
+
+function resolveSlugGeneratorTimeoutMs(cfg: OpenClawConfig): number {
+  const configuredTimeoutSeconds = cfg.agents?.defaults?.timeoutSeconds;
+  if (typeof configuredTimeoutSeconds !== "number" || !Number.isFinite(configuredTimeoutSeconds)) {
+    return DEFAULT_SLUG_GENERATOR_TIMEOUT_MS;
+  }
+  return resolveAgentTimeoutMs({ cfg });
+}
+
+function isErrorSlugPayload(payload: { text?: string; isError?: boolean } | undefined): boolean {
+  if (!payload) {
+    return false;
+  }
+  if (payload.isError === true) {
+    return true;
+  }
+  const text = payload.text?.trim();
+  if (!text) {
+    return false;
+  }
+  if (parseApiErrorPayload(text)) {
+    return true;
+  }
+  const leadingStatus = extractLeadingHttpStatus(text);
+  if (leadingStatus) {
+    if ([401, 402, 403, 429].includes(leadingStatus.code)) {
+      return true;
+    }
+    if (
+      leadingStatus.code === 400 &&
+      (parseApiErrorPayload(leadingStatus.rest) ||
+        PROVIDER_ERROR_PREFIX_RE.test(leadingStatus.rest) ||
+        PROVIDER_ERROR_DETAIL_RE.test(leadingStatus.rest))
+    ) {
+      return true;
+    }
+  }
+  return PROVIDER_ERROR_PREFIX_RE.test(text) || PROVIDER_ERROR_DETAIL_RE.test(text);
+}
 
 /**
  * Generate a short 1-2 word filename slug from session content using LLM
@@ -25,6 +73,8 @@ const log = createSubsystemLogger("llm-slug-generator");
 export async function generateSlugViaLLM(params: {
   sessionContent: string;
   cfg: OpenClawConfig;
+  /** Optional hook-level override; the embedded runner owns model resolution. */
+  model?: string;
 }): Promise<string | null> {
   let tempSessionFile: string | null = null;
 
@@ -40,17 +90,13 @@ export async function generateSlugViaLLM(params: {
     const prompt = `Based on this conversation, generate a short 1-2 word filename slug (lowercase, hyphen-separated, no file extension).
 
 Conversation summary:
-${params.sessionContent.slice(0, 2000)}
+${truncateUtf16Safe(params.sessionContent, 2000)}
 
 Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", "bug-fix"`;
 
-    // Resolve model from agent config instead of using hardcoded defaults
-    const modelRef = resolveAgentEffectiveModelPrimary(params.cfg, agentId);
-    const parsed = modelRef ? parseModelRef(modelRef, DEFAULT_PROVIDER) : null;
-    const provider = parsed?.provider ?? DEFAULT_PROVIDER;
-    const model = parsed?.model ?? DEFAULT_MODEL;
+    const timeoutMs = resolveSlugGeneratorTimeoutMs(params.cfg);
 
-    const result = await runEmbeddedPiAgent({
+    const result = await runEmbeddedAgent({
       sessionId: `slug-generator-${Date.now()}`,
       sessionKey: "temp:slug-generator",
       agentId,
@@ -59,24 +105,30 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       agentDir,
       config: params.cfg,
       prompt,
-      provider,
-      model,
-      timeoutMs: 15_000, // 15 second timeout
+      model: params.model,
+      timeoutMs,
       runId: `slug-gen-${Date.now()}`,
+      cleanupBundleMcpOnRunEnd: true,
+      // Internal helper run: route failures lane-local so an upstream 400/billing
+      // here cannot poison the shared profile (#71709).
+      authProfileFailurePolicy: "local",
     });
 
     // Extract text from payloads
     if (result.payloads && result.payloads.length > 0) {
-      const text = result.payloads[0]?.text;
+      const payload = result.payloads[0];
+      const text = payload?.text;
       if (text) {
+        if (isErrorSlugPayload(payload)) {
+          return null;
+        }
         // Clean up the response - extract just the slug
-        const slug = text
-          .trim()
-          .toLowerCase()
+        const slug = normalizeLowercaseStringOrEmpty(text)
           .replace(/[^a-z0-9-]/g, "-")
           .replace(/-+/g, "-")
-          .replace(/^-|-$/g, "")
-          .slice(0, 30); // Max 30 chars
+          .replace(/^-+|-+$/g, "")
+          .slice(0, 30)
+          .replace(/^-+|-+$/g, ""); // Max 30 chars
 
         return slug || null;
       }

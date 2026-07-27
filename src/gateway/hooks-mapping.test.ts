@@ -1,7 +1,16 @@
+// Hook mapping tests protect webhook path matching, templated agent actions,
+// transform results, skipped mappings, and file-backed mapping config.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+
+const hooksTempDirs: string[] = [];
+
+afterAll(() => {
+  cleanupTempDirs(hooksTempDirs);
+});
 import { applyHookMappings, resolveHookMappings } from "./hooks-mapping.js";
 
 const baseUrl = new URL("http://127.0.0.1:18789/hooks/gmail");
@@ -110,6 +119,51 @@ describe("hooks mapping", () => {
     });
   }
 
+  async function applyGmailTransformSessionKey(params: {
+    tempPrefix: string;
+    transformLines: string[];
+    payload?: Record<string, unknown>;
+    sessionKey?: string;
+  }) {
+    const configDir = makeTempDir(hooksTempDirs, params.tempPrefix);
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+    fs.writeFileSync(path.join(transformsRoot, "transform.mjs"), params.transformLines.join("\n"));
+
+    const mappings = resolveHookMappings(
+      {
+        mappings: [
+          {
+            match: { path: "gmail" },
+            action: "agent",
+            messageTemplate: "Subject: {{messages[0].subject}}",
+            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+            transform: { module: "transform.mjs" },
+          },
+        ],
+      },
+      { configDir },
+    );
+
+    return applyHookMappings(mappings, {
+      payload: params.payload ?? gmailPayload,
+      headers: {},
+      url: baseUrl,
+      path: "gmail",
+    });
+  }
+
+  function expectAgentSessionKey(
+    result: Awaited<ReturnType<typeof applyHookMappings>>,
+    params: { sessionKey: string; sessionKeySource?: "static" | "templated" },
+  ) {
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "agent") {
+      expect(result.action.sessionKey).toBe(params.sessionKey);
+      expect(result.action.sessionKeySource).toBe(params.sessionKeySource);
+    }
+  }
+
   it("resolves gmail preset", () => {
     const mappings = resolveHookMappings({ presets: ["gmail"] });
     expect(mappings.length).toBeGreaterThan(0);
@@ -144,8 +198,46 @@ describe("hooks mapping", () => {
     }
   });
 
+  it("marks template-derived session keys as templated", async () => {
+    const result = await applyGmailMappings({
+      mappings: [
+        {
+          id: "templated-session-key",
+          match: { path: "gmail" },
+          action: "agent",
+          messageTemplate: "Subject: {{messages[0].subject}}",
+          sessionKey: "hook:gmail:{{messages[0].subject}}",
+        },
+      ],
+    });
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "agent") {
+      expect(result.action.sessionKey).toBe("hook:gmail:Hello");
+      expect(result.action.sessionKeySource).toBe("templated");
+    }
+  });
+
+  it("marks literal session keys as static", async () => {
+    const result = await applyGmailMappings({
+      mappings: [
+        {
+          id: "static-session-key",
+          match: { path: "gmail" },
+          action: "agent",
+          messageTemplate: "Subject: {{messages[0].subject}}",
+          sessionKey: "hook:gmail:static",
+        },
+      ],
+    });
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "agent") {
+      expect(result.action.sessionKey).toBe("hook:gmail:static");
+      expect(result.action.sessionKeySource).toBe("static");
+    }
+  });
+
   it("runs transform module", async () => {
-    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-"));
+    const configDir = makeTempDir(hooksTempDirs, "openclaw-config-");
     const transformsRoot = path.join(configDir, "hooks", "transforms");
     fs.mkdirSync(transformsRoot, { recursive: true });
     const modPath = path.join(transformsRoot, "transform.mjs");
@@ -182,8 +274,81 @@ describe("hooks mapping", () => {
     }
   });
 
+  it("treats transform-provided session keys as templated by default", async () => {
+    const result = await applyGmailTransformSessionKey({
+      tempPrefix: "openclaw-config-sessionkey-xform-",
+      payload: { subject: "external" },
+      sessionKey: "hook:gmail:static",
+      transformLines: [
+        "export default ({ payload }) => ({",
+        '  kind: "agent",',
+        '  message: "Transformed",',
+        "  sessionKey: `hook:gmail:${payload.subject}`,",
+        "});",
+      ],
+    });
+
+    expectAgentSessionKey(result, {
+      sessionKey: "hook:gmail:external",
+      sessionKeySource: "templated",
+    });
+  });
+
+  it("uses transform-provided static session key source metadata", async () => {
+    const result = await applyGmailTransformSessionKey({
+      tempPrefix: "openclaw-config-sessionkey-static-",
+      sessionKey: "hook:gmail:{{messages[0].subject}}",
+      transformLines: [
+        "export default () => ({",
+        '  kind: "agent",',
+        '  message: "Transformed",',
+        '  sessionKey: "hook:gmail:fixed",',
+        '  sessionKeySource: "static",',
+        "});",
+      ],
+    });
+
+    expectAgentSessionKey(result, { sessionKey: "hook:gmail:fixed", sessionKeySource: "static" });
+  });
+
+  it("treats empty transform session keys as absent for source tracking", async () => {
+    const result = await applyGmailTransformSessionKey({
+      tempPrefix: "openclaw-config-sessionkey-empty-",
+      sessionKey: "hook:gmail:{{messages[0].subject}}",
+      transformLines: [
+        "export default () => ({",
+        '  kind: "agent",',
+        '  message: "Transformed",',
+        '  sessionKey: "",',
+        '  sessionKeySource: "templated",',
+        "});",
+      ],
+    });
+
+    expectAgentSessionKey(result, { sessionKey: "" });
+  });
+
+  it("defaults invalid transform session key source metadata to templated", async () => {
+    const result = await applyGmailTransformSessionKey({
+      tempPrefix: "openclaw-config-sessionkey-invalid-",
+      transformLines: [
+        "export default () => ({",
+        '  kind: "agent",',
+        '  message: "Transformed",',
+        '  sessionKey: "hook:gmail:from-transform",',
+        '  sessionKeySource: "bogus",',
+        "});",
+      ],
+    });
+
+    expectAgentSessionKey(result, {
+      sessionKey: "hook:gmail:from-transform",
+      sessionKeySource: "templated",
+    });
+  });
+
   it("rejects transform module traversal outside transformsDir", () => {
-    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-traversal-"));
+    const configDir = makeTempDir(hooksTempDirs, "openclaw-config-traversal-");
     const transformsRoot = path.join(configDir, "hooks", "transforms");
     fs.mkdirSync(transformsRoot, { recursive: true });
     expect(() =>
@@ -203,7 +368,7 @@ describe("hooks mapping", () => {
   });
 
   it("rejects absolute transform module path outside transformsDir", () => {
-    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-abs-"));
+    const configDir = makeTempDir(hooksTempDirs, "openclaw-config-abs-");
     const transformsRoot = path.join(configDir, "hooks", "transforms");
     fs.mkdirSync(transformsRoot, { recursive: true });
     const outside = path.join(os.tmpdir(), "evil.mjs");
@@ -224,7 +389,7 @@ describe("hooks mapping", () => {
   });
 
   it("rejects transformsDir traversal outside the transforms root", () => {
-    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-xformdir-trav-"));
+    const configDir = makeTempDir(hooksTempDirs, "openclaw-config-xformdir-trav-");
     const transformsRoot = path.join(configDir, "hooks", "transforms");
     fs.mkdirSync(transformsRoot, { recursive: true });
     expect(() =>
@@ -245,7 +410,7 @@ describe("hooks mapping", () => {
   });
 
   it("rejects transformsDir absolute path outside the transforms root", () => {
-    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-xformdir-abs-"));
+    const configDir = makeTempDir(hooksTempDirs, "openclaw-config-xformdir-abs-");
     const transformsRoot = path.join(configDir, "hooks", "transforms");
     fs.mkdirSync(transformsRoot, { recursive: true });
     expect(() =>
@@ -266,7 +431,7 @@ describe("hooks mapping", () => {
   });
 
   it("accepts transformsDir subdirectory within the transforms root", async () => {
-    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-xformdir-ok-"));
+    const configDir = makeTempDir(hooksTempDirs, "openclaw-config-xformdir-ok-");
     const result = await applyNullTransformFromTempConfig({ configDir, transformsDir: "subdir" });
     expectSkippedTransformResult(result);
   });
@@ -274,10 +439,10 @@ describe("hooks mapping", () => {
   it.runIf(process.platform !== "win32")(
     "rejects transform module symlink escape outside transformsDir",
     () => {
-      const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-symlink-module-"));
+      const configDir = makeTempDir(hooksTempDirs, "openclaw-config-symlink-module-");
       const transformsRoot = path.join(configDir, "hooks", "transforms");
       fs.mkdirSync(transformsRoot, { recursive: true });
-      const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-outside-module-"));
+      const outsideDir = makeTempDir(hooksTempDirs, "openclaw-outside-module-");
       const outsideModule = path.join(outsideDir, "evil.mjs");
       fs.writeFileSync(outsideModule, 'export default () => ({ kind: "wake", text: "owned" });');
       fs.symlinkSync(outsideModule, path.join(transformsRoot, "linked.mjs"));
@@ -301,10 +466,10 @@ describe("hooks mapping", () => {
   it.runIf(process.platform !== "win32")(
     "rejects transformsDir symlink escape outside transforms root",
     () => {
-      const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-symlink-dir-"));
+      const configDir = makeTempDir(hooksTempDirs, "openclaw-config-symlink-dir-");
       const transformsRoot = path.join(configDir, "hooks", "transforms");
       fs.mkdirSync(transformsRoot, { recursive: true });
-      const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-outside-dir-"));
+      const outsideDir = makeTempDir(hooksTempDirs, "openclaw-outside-dir-");
       fs.writeFileSync(path.join(outsideDir, "transform.mjs"), "export default () => null;");
       fs.symlinkSync(outsideDir, path.join(transformsRoot, "escape"), "dir");
       expect(() =>
@@ -326,7 +491,7 @@ describe("hooks mapping", () => {
   );
 
   it.runIf(process.platform !== "win32")("accepts in-root transform module symlink", async () => {
-    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-symlink-ok-"));
+    const configDir = makeTempDir(hooksTempDirs, "openclaw-config-symlink-ok-");
     const transformsRoot = path.join(configDir, "hooks", "transforms");
     const nestedDir = path.join(transformsRoot, "nested");
     fs.mkdirSync(nestedDir, { recursive: true });
@@ -357,7 +522,7 @@ describe("hooks mapping", () => {
   });
 
   it("treats null transform as a handled skip", async () => {
-    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-skip-"));
+    const configDir = makeTempDir(hooksTempDirs, "openclaw-config-skip-");
     const result = await applyNullTransformFromTempConfig({ configDir });
     expectSkippedTransformResult(result);
   });
@@ -407,7 +572,7 @@ describe("hooks mapping", () => {
   });
 
   it("caches transform functions by module path and export name", async () => {
-    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-export-"));
+    const configDir = makeTempDir(hooksTempDirs, "openclaw-hooks-export-");
     const transformsRoot = path.join(configDir, "hooks", "transforms");
     fs.mkdirSync(transformsRoot, { recursive: true });
     const modPath = path.join(transformsRoot, "multi-export.mjs");

@@ -1,6 +1,7 @@
+// Matrix plugin module implements profile update behavior.
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { updateMatrixOwnProfile } from "./matrix/actions/profile.js";
 import { updateMatrixAccountConfig, resolveMatrixConfigPath } from "./matrix/config-update.js";
-import { normalizeAccountId } from "./runtime-api.js";
 import { getMatrixRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
@@ -27,7 +28,7 @@ export async function applyMatrixProfileUpdate(params: {
   mediaLocalRoots?: readonly string[];
 }): Promise<MatrixProfileUpdateResult> {
   const runtime = getMatrixRuntime();
-  const persistedCfg = runtime.config.loadConfig() as CoreConfig;
+  const persistedCfg = runtime.config.current() as CoreConfig;
   const accountId = normalizeAccountId(params.account);
   const displayName = params.displayName?.trim() || null;
   const avatarUrl = params.avatarUrl?.trim() || null;
@@ -50,7 +51,10 @@ export async function applyMatrixProfileUpdate(params: {
     name: displayName ?? undefined,
     avatarUrl: persistedAvatarUrl ?? undefined,
   });
-  await runtime.config.writeConfigFile(updated as never);
+  await runtime.config.replaceConfigFile({
+    nextConfig: updated as never,
+    afterWrite: { mode: "auto" },
+  });
 
   return {
     accountId,

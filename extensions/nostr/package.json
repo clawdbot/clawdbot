@@ -1,16 +1,22 @@
 {
   "name": "@openclaw/nostr",
-  "version": "2026.3.27",
-  "description": "OpenClaw Nostr channel plugin for NIP-04 encrypted DMs",
+  "version": "2026.7.2",
+  "description": "OpenClaw Nostr channel plugin for NIP-04 encrypted direct messages.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
   "dependencies": {
-    "nostr-tools": "^2.23.3"
+    "nostr-tools": "2.23.12",
+    "zod": "4.4.3"
   },
   "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.3.27"
+    "openclaw": ">=2026.7.2"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -24,21 +30,41 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "nostr",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "NOSTR_PRIVATE_KEY"
+          ]
+        }
+      },
       "label": "Nostr",
       "selectionLabel": "Nostr (NIP-04 DMs)",
       "docsPath": "/channels/nostr",
       "docsLabel": "nostr",
       "blurb": "Decentralized protocol; encrypted DMs via NIP-04.",
       "order": 55,
-      "quickstartAllowFrom": true
+      "quickstartAllowFrom": true,
+      "setup": {
+        "fields": [
+          { "key": "privateKey", "kind": "string", "sensitive": true, "cli": { "flags": "--private-key <key>", "description": "Nostr private key" } },
+          { "key": "relayUrls", "kind": "string", "cli": { "flags": "--relay-urls <urls>", "description": "Nostr relay URLs" } },
+          { "key": "useEnv", "kind": "boolean", "cli": { "flags": "--use-env", "description": "Use NOSTR_PRIVATE_KEY" } }
+        ]
+      }
     },
     "install": {
       "npmSpec": "@openclaw/nostr",
-      "localPath": "extensions/nostr",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.3.27"
+      "minHostVersion": ">=2026.4.10"
+    },
+    "compat": {
+      "pluginApi": ">=2026.7.2"
+    },
+    "build": {
+      "openclawVersion": "2026.7.2"
     },
     "release": {
+      "publishToClawHub": true,
       "publishToNpm": true
     }
   }

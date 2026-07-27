@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+// Covers plugin-provided memory embedding provider registration.
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearMemoryEmbeddingProviders,
   getMemoryEmbeddingProvider,
@@ -7,11 +8,11 @@ import {
   listRegisteredMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider,
   restoreRegisteredMemoryEmbeddingProviders,
-  restoreMemoryEmbeddingProviders,
   type MemoryEmbeddingProviderAdapter,
 } from "./memory-embedding-providers.js";
 
 const MEMORY_EMBEDDING_PROVIDERS_KEY = Symbol.for("openclaw.memoryEmbeddingProviders");
+const INITIAL_REGISTERED_MEMORY_EMBEDDING_PROVIDERS = listRegisteredMemoryEmbeddingProviders();
 
 function createAdapter(id: string): MemoryEmbeddingProviderAdapter {
   return {
@@ -92,8 +93,12 @@ function expectRegisteredProviderSnapshotCase(params: {
   });
 }
 
-afterEach(() => {
+beforeEach(() => {
   clearMemoryEmbeddingProviders();
+});
+
+afterEach(() => {
+  restoreRegisteredMemoryEmbeddingProviders(INITIAL_REGISTERED_MEMORY_EMBEDDING_PROVIDERS);
 });
 
 describe("memory embedding provider registry", () => {
@@ -107,17 +112,6 @@ describe("memory embedding provider registry", () => {
       expectedIds: ["alpha", "beta"],
       expectedCurrent: { id: "alpha", adapter: alpha },
     });
-  });
-
-  it("restores a previous snapshot", () => {
-    const alpha = createAdapter("alpha");
-    const beta = createAdapter("beta");
-    registerMemoryEmbeddingProvider(alpha);
-
-    restoreMemoryEmbeddingProviders([beta]);
-
-    expectCurrentMemoryEmbeddingProvider("alpha", undefined);
-    expectCurrentMemoryEmbeddingProvider("beta", beta);
   });
 
   it.each([

@@ -1,3 +1,4 @@
+// Zalo tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { ZaloConfigSchema } from "./config-schema.js";
 

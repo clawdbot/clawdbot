@@ -1,19 +1,14 @@
-export type {
-  ChannelMessageActionAdapter,
-  ChannelPlugin,
-  OpenClawConfig,
-  OpenClawPluginApi,
-  PluginRuntime,
-  TelegramAccountConfig,
-  TelegramActionConfig,
-  TelegramNetworkConfig,
-} from "openclaw/plugin-sdk/telegram-core";
+// Telegram API module exposes the plugin public contract.
+export type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+export type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
 export type { TelegramApiOverride } from "./src/send.js";
 export type {
   OpenClawPluginService,
   OpenClawPluginServiceContext,
   PluginLogger,
-} from "openclaw/plugin-sdk/core";
+} from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 export type {
   AcpRuntime,
   AcpRuntimeCapabilities,
@@ -29,19 +24,20 @@ export type {
 export { AcpRuntimeError } from "openclaw/plugin-sdk/acp-runtime";
 
 export {
-  buildTokenChannelStatusSummary,
-  clearAccountEntryFields,
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
+  emptyPluginConfigSchema,
+  formatPairingApproveHint,
+  getChatChannelMeta,
+} from "openclaw/plugin-sdk/channel-plugin-common";
+export { clearAccountEntryFields } from "openclaw/plugin-sdk/channel-core";
+export { buildChannelConfigSchema, TelegramConfigSchema } from "./config-api.js";
+export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+export {
   PAIRING_APPROVED_MESSAGE,
-  parseTelegramTopicConversation,
+  buildTokenChannelStatusSummary,
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
-  resolveTelegramPollVisibility,
-} from "openclaw/plugin-sdk/telegram-core";
+} from "openclaw/plugin-sdk/channel-status";
 export {
-  buildChannelConfigSchema,
-  getChatChannelMeta,
   jsonResult,
   readNumberParam,
   readReactionParams,
@@ -49,8 +45,7 @@ export {
   readStringOrNumberParam,
   readStringParam,
   resolvePollMaxSelections,
-  TelegramConfigSchema,
-} from "openclaw/plugin-sdk/telegram-core";
+} from "openclaw/plugin-sdk/channel-actions";
 export type { TelegramProbe } from "./src/probe.js";
 export { auditTelegramGroupMembership, collectTelegramUnmentionedGroupIds } from "./src/audit.js";
 export { resolveTelegramRuntimeGroupPolicy } from "./src/group-access.js";
@@ -90,3 +85,13 @@ export {
   setTelegramThreadBindingMaxAgeBySessionKey,
 } from "./src/thread-bindings.js";
 export { resolveTelegramToken } from "./src/token.js";
+export { setTelegramRuntime } from "./src/runtime.js";
+export type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+export type TelegramAccountConfig = NonNullable<
+  NonNullable<RuntimeOpenClawConfig["channels"]>["telegram"]
+>;
+export type TelegramActionConfig = NonNullable<TelegramAccountConfig["actions"]>;
+export type TelegramNetworkConfig = NonNullable<TelegramAccountConfig["network"]>;
+export { parseTelegramTopicConversation } from "./src/topic-conversation.js";
+export { resolveTelegramPollVisibility } from "./src/poll-visibility.js";

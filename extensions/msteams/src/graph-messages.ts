@@ -1,14 +1,16 @@
+// Msteams plugin module implements graph messages behavior.
 import type { OpenClawConfig } from "../runtime-api.js";
-import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
+import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
+import { stripHtmlFromTeamsMessage } from "./graph-thread.js";
 import {
-  type GraphResponse,
   deleteGraphRequest,
-  escapeOData,
+  fetchGraphAbsoluteUrl,
   fetchGraphJson,
   postGraphBetaJson,
   postGraphJson,
   resolveGraphToken,
 } from "./graph.js";
+import { getMSTeamsReactionEmoji, resolveMSTeamsReactionEmoji } from "./reaction-types.js";
 
 type GraphMessageBody = {
   content?: string;
@@ -34,6 +36,7 @@ type GraphPinnedMessage = {
 
 type GraphPinnedMessagesResponse = {
   value?: GraphPinnedMessage[];
+  "@odata.nextLink"?: string;
 };
 
 /**
@@ -62,7 +65,7 @@ function stripTargetPrefix(raw: string): string {
  * actual `19:xxx@thread.*` chat ID that Graph API requires.
  * Conversation IDs and `teamId/channelId` pairs pass through unchanged.
  */
-async function resolveGraphConversationId(to: string): Promise<string> {
+export async function resolveGraphConversationId(to: string): Promise<string> {
   const trimmed = to.trim();
   const isUserTarget = /^user:/i.test(trimmed);
   const cleaned = stripTargetPrefix(trimmed);
@@ -73,7 +76,7 @@ async function resolveGraphConversationId(to: string): Promise<string> {
   }
 
   // user:<aadId> — look up the conversation store for the real chat ID
-  const store = createMSTeamsConversationStoreFs();
+  const store = createMSTeamsConversationStoreState();
   const found = await store.findPreferredDmByUserId(cleaned);
   if (!found) {
     throw new Error(
@@ -82,22 +85,16 @@ async function resolveGraphConversationId(to: string): Promise<string> {
     );
   }
 
-  // Prefer the cached Graph-native chat ID (19:xxx format) over the Bot Framework
-  // conversation ID, which may be in a non-Graph format (a:xxx / 8:orgid:xxx) for
-  // personal DMs. send-context.ts resolves and caches this on first send.
-  if (found.reference.graphChatId) {
-    return found.reference.graphChatId;
-  }
   if (found.conversationId.startsWith("19:")) {
     return found.conversationId;
   }
   throw new Error(
     `Conversation for user:${cleaned} uses a Bot Framework ID (${found.conversationId}) ` +
-      "that Graph API does not accept. Send a message to this user first so the Graph chat ID is cached.",
+      "that Graph API does not accept. Use a Graph-native conversation:19:... target when available.",
   );
 }
 
-function resolveConversationPath(to: string): {
+export function resolveConversationPath(to: string): {
   kind: "chat" | "channel";
   basePath: string;
   chatId?: string;
@@ -105,15 +102,22 @@ function resolveConversationPath(to: string): {
   channelId?: string;
 } {
   const cleaned = stripTargetPrefix(to);
-  if (cleaned.includes("/")) {
-    const [teamId, channelId] = cleaned.split("/", 2);
+  const separatorIndex = cleaned.indexOf("/");
+  if (separatorIndex !== -1) {
+    const teamId = cleaned.slice(0, separatorIndex);
+    const channelId = cleaned.slice(separatorIndex + 1).replace(/\/.*$/, "");
     return {
       kind: "channel",
-      basePath: `/teams/${encodeURIComponent(teamId!)}/channels/${encodeURIComponent(channelId!)}`,
+      basePath: `/teams/${encodeURIComponent(teamId)}/channels/${encodeURIComponent(channelId)}`,
       teamId,
       channelId,
     };
   }
+  // Conversation IDs like 19:xxx@thread.tacv2 may represent either group chats
+  // or channel threads. Without a teamId/channelId pair (format "teamId/channelId")
+  // we route through /chats/{id} which works for group chats and 1:1 DMs.
+  // Channel operations that require /teams/{teamId}/channels/{channelId} paths
+  // must be called with the explicit teamId/channelId target format.
   return {
     kind: "chat",
     basePath: `/chats/${encodeURIComponent(cleaned)}`,
@@ -121,13 +125,13 @@ function resolveConversationPath(to: string): {
   };
 }
 
-export type GetMessageMSTeamsParams = {
+type GetMessageMSTeamsParams = {
   cfg: OpenClawConfig;
   to: string;
   messageId: string;
 };
 
-export type GetMessageMSTeamsResult = {
+type GetMessageMSTeamsResult = {
   id: string;
   text: string | undefined;
   from: GraphMessageFrom | undefined;
@@ -153,7 +157,7 @@ export async function getMessageMSTeams(
   };
 }
 
-export type PinMessageMSTeamsParams = {
+type PinMessageMSTeamsParams = {
   cfg: OpenClawConfig;
   to: string;
   messageId: string;
@@ -161,7 +165,14 @@ export type PinMessageMSTeamsParams = {
 
 /**
  * Pin a message in a chat conversation via Graph API.
- * Channel pinning uses a different endpoint (beta) handled separately.
+ *
+ * Chat pinning uses the v1.0 endpoint: `POST /chats/{chatId}/pinnedMessages`.
+ *
+ * Channel pinning uses `POST /teams/{teamId}/channels/{channelId}/pinnedMessages`.
+ * **Note:** The channel pin endpoint may require the Graph beta API or specific
+ * tenant-level permissions. As of March 2026, general availability is not
+ * confirmed for all tenants. If the call returns 404 or 403, the endpoint may
+ * not be enabled for the target tenant.
  */
 export async function pinMessageMSTeams(
   params: PinMessageMSTeamsParams,
@@ -171,25 +182,27 @@ export async function pinMessageMSTeams(
   const conv = resolveConversationPath(conversationId);
 
   if (conv.kind === "channel") {
-    // Graph v1.0 doesn't have channel pin — use the pinnedMessages pattern on chat
-    // For channels, attempt POST to pinnedMessages (same shape, may require beta)
-    await postGraphJson<unknown>({
-      token,
-      path: `${conv.basePath}/pinnedMessages`,
-      body: { message: { id: params.messageId } },
-    });
-    return { ok: true };
+    // Graph v1.0 does not expose pinnedMessages on channels — only on chats.
+    // Attempting this would 404.
+    throw new Error(
+      "Pin/unpin is not supported for channel messages on Graph v1.0. " +
+        "Only chat conversations support pinned messages.",
+    );
   }
 
+  // Graph API expects message@odata.bind with the full message resource URI
+  const body = {
+    "message@odata.bind": `https://graph.microsoft.com/v1.0/chats/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(params.messageId)}`,
+  };
   const result = await postGraphJson<{ id?: string }>({
     token,
     path: `${conv.basePath}/pinnedMessages`,
-    body: { message: { id: params.messageId } },
+    body,
   });
   return { ok: true, pinnedMessageId: result.id };
 }
 
-export type UnpinMessageMSTeamsParams = {
+type UnpinMessageMSTeamsParams = {
   cfg: OpenClawConfig;
   to: string;
   /** The pinned-message resource ID returned by pin or list-pins (not the message ID). */
@@ -200,6 +213,9 @@ export type UnpinMessageMSTeamsParams = {
  * Unpin a message in a chat conversation via Graph API.
  * `pinnedMessageId` is the pinned-message resource ID (from pin or list-pins),
  * not the underlying chat message ID.
+ *
+ * Channel unpin uses `DELETE /teams/{teamId}/channels/{channelId}/pinnedMessages/{id}`.
+ * See the note on {@link pinMessageMSTeams} regarding beta/GA status.
  */
 export async function unpinMessageMSTeams(
   params: UnpinMessageMSTeamsParams,
@@ -207,22 +223,35 @@ export async function unpinMessageMSTeams(
   const token = await resolveGraphToken(params.cfg);
   const conversationId = await resolveGraphConversationId(params.to);
   const conv = resolveConversationPath(conversationId);
+  if (conv.kind === "channel") {
+    throw new Error(
+      "Pin/unpin is not supported for channel messages on Graph v1.0. " +
+        "Only chat conversations support pinned messages.",
+    );
+  }
   const path = `${conv.basePath}/pinnedMessages/${encodeURIComponent(params.pinnedMessageId)}`;
   await deleteGraphRequest({ token, path });
   return { ok: true };
 }
 
-export type ListPinsMSTeamsParams = {
+type ListPinsMSTeamsParams = {
   cfg: OpenClawConfig;
   to: string;
 };
 
-export type ListPinsMSTeamsResult = {
+type ListPinsMSTeamsResult = {
   pins: Array<{ id: string; pinnedMessageId: string; messageId?: string; text?: string }>;
 };
 
+/** Maximum number of pagination pages to follow to avoid unbounded loops. */
+const LIST_PINS_MAX_PAGES = 10;
+
 /**
  * List all pinned messages in a chat conversation via Graph API.
+ * Follows `@odata.nextLink` pagination to collect the full pin set.
+ *
+ * Channel list-pins uses the same endpoint pattern as channel pin/unpin.
+ * See the note on {@link pinMessageMSTeams} regarding beta/GA status.
  */
 export async function listPinsMSTeams(
   params: ListPinsMSTeamsParams,
@@ -230,30 +259,46 @@ export async function listPinsMSTeams(
   const token = await resolveGraphToken(params.cfg);
   const conversationId = await resolveGraphConversationId(params.to);
   const conv = resolveConversationPath(conversationId);
+
+  if (conv.kind === "channel") {
+    throw new Error(
+      "Listing pinned messages is not supported for channels on Graph v1.0. " +
+        "Only chat conversations support pinned messages.",
+    );
+  }
+
   const path = `${conv.basePath}/pinnedMessages?$expand=message`;
-  const res = await fetchGraphJson<GraphPinnedMessagesResponse>({ token, path });
-  const pins = (res.value ?? []).map((pin) => ({
-    id: pin.id ?? "",
-    pinnedMessageId: pin.id ?? "",
-    messageId: pin.message?.id,
-    text: pin.message?.body?.content,
-  }));
-  return { pins };
+  const allPins: Array<{ id: string; pinnedMessageId: string; messageId?: string; text?: string }> =
+    [];
+
+  let res = await fetchGraphJson<GraphPinnedMessagesResponse>({ token, path });
+  let pages = 1;
+
+  while (true) {
+    for (const pin of res.value ?? []) {
+      allPins.push({
+        id: pin.id ?? "",
+        pinnedMessageId: pin.id ?? "",
+        messageId: pin.message?.id,
+        text: pin.message?.body?.content,
+      });
+    }
+
+    const nextLink = res["@odata.nextLink"];
+    if (!nextLink || pages >= LIST_PINS_MAX_PAGES) {
+      break;
+    }
+
+    res = await fetchGraphAbsoluteUrl<GraphPinnedMessagesResponse>({ token, url: nextLink });
+    pages++;
+  }
+
+  return { pins: allPins };
 }
 
 // ---------------------------------------------------------------------------
 // Reactions
 // ---------------------------------------------------------------------------
-
-export const TEAMS_REACTION_TYPES = [
-  "like",
-  "heart",
-  "laugh",
-  "surprised",
-  "sad",
-  "angry",
-] as const;
-export type TeamsReactionType = (typeof TEAMS_REACTION_TYPES)[number];
 
 type GraphReaction = {
   reactionType?: string;
@@ -265,47 +310,46 @@ type GraphMessageWithReactions = GraphMessage & {
   reactions?: GraphReaction[];
 };
 
-export type ReactMessageMSTeamsParams = {
+type ReactMessageMSTeamsParams = {
   cfg: OpenClawConfig;
   to: string;
   messageId: string;
   reactionType: string;
 };
 
-export type ListReactionsMSTeamsParams = {
+type ListReactionsMSTeamsParams = {
   cfg: OpenClawConfig;
   to: string;
   messageId: string;
 };
 
-export type ReactionSummary = {
+type ReactionSummary = {
   reactionType: string;
+  /** Display name for the reaction (matches reactionType for known types). */
+  name: string;
+  /** Emoji representation when available. */
+  emoji?: string;
   count: number;
   users: Array<{ id: string; displayName?: string }>;
 };
 
-export type ListReactionsMSTeamsResult = {
+type ListReactionsMSTeamsResult = {
   reactions: ReactionSummary[];
 };
 
-function validateReactionType(raw: string): TeamsReactionType {
-  const normalized = raw.toLowerCase().trim();
-  if (!TEAMS_REACTION_TYPES.includes(normalized as TeamsReactionType)) {
-    throw new Error(
-      `Invalid reaction type "${raw}". Valid types: ${TEAMS_REACTION_TYPES.join(", ")}`,
-    );
-  }
-  return normalized as TeamsReactionType;
-}
-
 /**
  * Add an emoji reaction to a message via Graph API (beta).
+ *
+ * Writes (setReaction) require a Delegated token, so we pass
+ * `preferDelegated: true`. The resolver falls back to the app-only token when
+ * delegated auth is not configured, preserving today's behavior while letting
+ * delegated-auth-enabled deployments hit the user-scoped endpoint.
  */
 export async function reactMessageMSTeams(
   params: ReactMessageMSTeamsParams,
 ): Promise<{ ok: true }> {
-  const reactionType = validateReactionType(params.reactionType);
-  const token = await resolveGraphToken(params.cfg);
+  const reactionType = resolveMSTeamsReactionEmoji(params.reactionType);
+  const token = await resolveGraphToken(params.cfg, { preferDelegated: true });
   const conversationId = await resolveGraphConversationId(params.to);
   const { basePath } = resolveConversationPath(conversationId);
   const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}/setReaction`;
@@ -315,12 +359,15 @@ export async function reactMessageMSTeams(
 
 /**
  * Remove an emoji reaction from a message via Graph API (beta).
+ *
+ * Writes (unsetReaction) require a Delegated token, so we pass
+ * `preferDelegated: true`. See `reactMessageMSTeams` for fallback rules.
  */
 export async function unreactMessageMSTeams(
   params: ReactMessageMSTeamsParams,
 ): Promise<{ ok: true }> {
-  const reactionType = validateReactionType(params.reactionType);
-  const token = await resolveGraphToken(params.cfg);
+  const reactionType = resolveMSTeamsReactionEmoji(params.reactionType);
+  const token = await resolveGraphToken(params.cfg, { preferDelegated: true });
   const conversationId = await resolveGraphConversationId(params.to);
   const { basePath } = resolveConversationPath(conversationId);
   const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}/unsetReaction`;
@@ -341,24 +388,33 @@ export async function listReactionsMSTeams(
   const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}`;
   const msg = await fetchGraphJson<GraphMessageWithReactions>({ token, path });
 
-  const grouped = new Map<string, Array<{ id: string; displayName?: string }>>();
+  const grouped = new Map<
+    string,
+    { count: number; users: Array<{ id: string; displayName?: string }> }
+  >();
   for (const reaction of msg.reactions ?? []) {
     const type = reaction.reactionType ?? "unknown";
     if (!grouped.has(type)) {
-      grouped.set(type, []);
+      grouped.set(type, { count: 0, users: [] });
     }
+    const group = grouped.get(type)!;
+    // Count every reaction regardless of whether the user ID is present
+    // (deleted accounts, guests, or anonymous users may lack a user ID)
+    group.count++;
     if (reaction.user?.id) {
-      grouped.get(type)!.push({
+      group.users.push({
         id: reaction.user.id,
         displayName: reaction.user.displayName,
       });
     }
   }
 
-  const reactions: ReactionSummary[] = Array.from(grouped.entries()).map(([type, users]) => ({
+  const reactions: ReactionSummary[] = Array.from(grouped.entries()).map(([type, group]) => ({
     reactionType: type,
-    count: users.length,
-    users,
+    name: type,
+    emoji: getMSTeamsReactionEmoji(type),
+    count: group.count,
+    users: group.users,
   }));
 
   return { reactions };
@@ -368,7 +424,7 @@ export async function listReactionsMSTeams(
 // Search
 // ---------------------------------------------------------------------------
 
-export type SearchMessagesMSTeamsParams = {
+type SearchMessagesMSTeamsParams = {
   cfg: OpenClawConfig;
   to: string;
   query: string;
@@ -376,21 +432,48 @@ export type SearchMessagesMSTeamsParams = {
   limit?: number;
 };
 
-export type SearchMessagesMSTeamsResult = {
+type SearchMessagesMSTeamsResult = {
   messages: Array<{
     id: string;
     text: string | undefined;
     from: GraphMessageFrom | undefined;
     createdAt: string | undefined;
   }>;
+  truncated: boolean;
 };
 
 const SEARCH_DEFAULT_LIMIT = 25;
 const SEARCH_MAX_LIMIT = 50;
+const SEARCH_PAGE_SIZE = 50;
+const SEARCH_MAX_PAGES = 10;
+
+type GraphMessagesPage = {
+  value?: GraphMessage[];
+  "@odata.nextLink"?: string;
+};
+
+function normalizeSearchText(message: GraphMessage): string {
+  const content = message.body?.content ?? "";
+  return message.body?.contentType?.toLowerCase() === "html"
+    ? stripHtmlFromTeamsMessage(content)
+    : content.trim();
+}
+
+function matchesSearchSender(message: GraphMessage, from: string | undefined): boolean {
+  const normalized = from?.trim().toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+  const sender = message.from?.user ?? message.from?.application;
+  return [sender?.id, sender?.displayName].some(
+    (value) => value?.trim().toLowerCase() === normalized,
+  );
+}
 
 /**
- * Search messages in a chat or channel by content via Graph API.
- * Uses `$search` for full-text body search and optional `$filter` for sender.
+ * Search messages within one already-authorized chat or channel.
+ * Graph does not support collection `$search` here, so filter bounded pages
+ * locally without widening the read to the account's global message index.
  */
 export async function searchMessagesMSTeams(
   params: SearchMessagesMSTeamsParams,
@@ -403,34 +486,43 @@ export async function searchMessagesMSTeams(
   const top = Number.isFinite(rawLimit)
     ? Math.min(Math.max(Math.floor(rawLimit), 1), SEARCH_MAX_LIMIT)
     : SEARCH_DEFAULT_LIMIT;
+  const query = params.query.trim().toLowerCase();
+  const messages: SearchMessagesMSTeamsResult["messages"] = [];
+  let nextUrl: string | undefined;
+  let truncated = false;
 
-  // Strip double quotes from the query to prevent OData $search injection
-  const sanitizedQuery = params.query.replace(/"/g, "");
+  for (let page = 0; page < SEARCH_MAX_PAGES; page++) {
+    const response: GraphMessagesPage = nextUrl
+      ? await fetchGraphAbsoluteUrl<GraphMessagesPage>({ token, url: nextUrl })
+      : await fetchGraphJson<GraphMessagesPage>({
+          token,
+          path: `${basePath}/messages?$top=${SEARCH_PAGE_SIZE}`,
+        });
 
-  // Build query string manually (not URLSearchParams) to preserve literal $
-  // in OData parameter names, consistent with other Graph calls in this module.
-  const parts = [`$search=${encodeURIComponent(`"${sanitizedQuery}"`)}`];
-  parts.push(`$top=${top}`);
-  if (params.from) {
-    parts.push(
-      `$filter=${encodeURIComponent(`from/user/displayName eq '${escapeOData(params.from)}'`)}`,
-    );
+    for (const message of response.value ?? []) {
+      const searchText = normalizeSearchText(message);
+      if (searchText.toLowerCase().includes(query) && matchesSearchSender(message, params.from)) {
+        if (messages.length >= top) {
+          return { messages, truncated: true };
+        }
+        messages.push({
+          id: message.id ?? "",
+          text: message.body?.content,
+          from: message.from,
+          createdAt: message.createdDateTime,
+        });
+      }
+    }
+
+    nextUrl = response["@odata.nextLink"];
+    if (messages.length >= top) {
+      return { messages, truncated: Boolean(nextUrl) };
+    }
+    if (!nextUrl) {
+      return { messages, truncated: false };
+    }
+    truncated = page === SEARCH_MAX_PAGES - 1;
   }
 
-  const path = `${basePath}/messages?${parts.join("&")}`;
-  // ConsistencyLevel: eventual is required by Graph API for $search queries
-  const res = await fetchGraphJson<GraphResponse<GraphMessage>>({
-    token,
-    path,
-    headers: { ConsistencyLevel: "eventual" },
-  });
-
-  const messages = (res.value ?? []).map((msg) => ({
-    id: msg.id ?? "",
-    text: msg.body?.content,
-    from: msg.from,
-    createdAt: msg.createdDateTime,
-  }));
-
-  return { messages };
+  return { messages, truncated };
 }

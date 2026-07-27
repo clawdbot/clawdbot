@@ -1,12 +1,25 @@
+// Mattermost helper module supports config schema core behavior.
 import {
   BlockStreamingCoalesceSchema,
+  ChannelImplicitMentionsSchema,
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
+  buildGroupEntrySchema,
+  buildMultiAccountChannelSchema,
   requireOpenAllowFrom,
-} from "openclaw/plugin-sdk/channel-config-primitives";
-import { z } from "openclaw/plugin-sdk/zod";
+} from "openclaw/plugin-sdk/channel-config-schema";
+import { z } from "zod";
 import { buildSecretInputSchema } from "./secret-input.js";
+
+const MattermostGroupSchema = buildGroupEntrySchema().omit({
+  tools: true,
+  toolsBySender: true,
+  skills: true,
+  enabled: true,
+  allowFrom: true,
+  systemPrompt: true,
+});
 
 function requireMattermostOpenAllowFrom(params: {
   policy?: string;
@@ -63,6 +76,56 @@ const MattermostSlashCommandsSchema = z
   .strict()
   .optional();
 
+const MattermostNetworkSchema = z
+  .object({
+    /** Dangerous opt-in for self-hosted Mattermost on trusted private/internal hosts. */
+    dangerouslyAllowPrivateNetwork: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
+const MattermostStreamingModeSchema = z.enum(["off", "partial", "block", "progress"]);
+const MattermostStreamingProgressSchema = z
+  .object({
+    label: z.union([z.string(), z.literal(false)]).optional(),
+    labels: z.array(z.string()).optional(),
+    maxLines: z.number().int().positive().optional(),
+    maxLineChars: z.number().int().positive().optional(),
+    toolProgress: z.boolean().optional(),
+    commandText: z.enum(["raw", "status"]).optional(),
+  })
+  .strict();
+const MattermostStreamingPreviewSchema = z
+  .object({
+    toolProgress: z.boolean().optional(),
+    commandText: z.enum(["raw", "status"]).optional(),
+  })
+  .strict();
+const MattermostStreamingBlockSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    coalesce: BlockStreamingCoalesceSchema.optional(),
+  })
+  .strict();
+const MattermostStreamingSchema = z
+  .object({
+    mode: MattermostStreamingModeSchema.optional(),
+    chunkMode: z.enum(["length", "newline"]).optional(),
+    preview: MattermostStreamingPreviewSchema.optional(),
+    progress: MattermostStreamingProgressSchema.optional(),
+    block: MattermostStreamingBlockSchema.optional(),
+  })
+  .strict();
+
+const MattermostReplyToModeSchema = z.enum(["off", "first", "all", "batched"]);
+const MattermostReplyToModeByChatTypeSchema = z
+  .object({
+    direct: MattermostReplyToModeSchema.optional(),
+    group: MattermostReplyToModeSchema.optional(),
+    channel: MattermostReplyToModeSchema.optional(),
+  })
+  .strict();
+
 const MattermostAccountSchemaBase = z
   .object({
     name: z.string().optional(),
@@ -76,15 +139,15 @@ const MattermostAccountSchemaBase = z
     chatmode: z.enum(["oncall", "onmessage", "onchar"]).optional(),
     oncharPrefixes: z.array(z.string()).optional(),
     requireMention: z.boolean().optional(),
+    implicitMentions: ChannelImplicitMentionsSchema.optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     textChunkLimit: z.number().int().positive().optional(),
-    chunkMode: z.enum(["length", "newline"]).optional(),
-    blockStreaming: z.boolean().optional(),
-    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
-    replyToMode: z.enum(["off", "first", "all"]).optional(),
+    streaming: MattermostStreamingSchema.optional(),
+    replyToMode: MattermostReplyToModeSchema.optional(),
+    replyToModeByChatType: MattermostReplyToModeByChatTypeSchema.optional(),
     responsePrefix: z.string().optional(),
     actions: z
       .object({
@@ -98,28 +161,22 @@ const MattermostAccountSchemaBase = z
         allowedSourceIps: z.array(z.string()).optional(),
       })
       .optional(),
-    /** Allow fetching from private/internal IP addresses (e.g. localhost). Required for self-hosted Mattermost on LAN/VPN. */
-    allowPrivateNetwork: z.boolean().optional(),
+    /** Per-group configuration (keyed by Mattermost channel ID or "*" for default). */
+    groups: z.record(z.string(), MattermostGroupSchema.optional()).optional(),
+    /** Network policy overrides for self-hosted Mattermost on trusted private/internal hosts. */
+    network: MattermostNetworkSchema,
     /** Retry configuration for DM channel creation */
     dmChannelRetry: DmChannelRetrySchema,
   })
   .strict();
 
-const MattermostAccountSchema = MattermostAccountSchemaBase.superRefine((value, ctx) => {
-  requireMattermostOpenAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-  });
-});
-
-export const MattermostConfigSchema = MattermostAccountSchemaBase.extend({
-  accounts: z.record(z.string(), MattermostAccountSchema.optional()).optional(),
-  defaultAccount: z.string().optional(),
-}).superRefine((value, ctx) => {
-  requireMattermostOpenAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-  });
+export const MattermostConfigSchema = buildMultiAccountChannelSchema(MattermostAccountSchemaBase, {
+  optionalAccount: true,
+  refine: (value, ctx) => {
+    requireMattermostOpenAllowFrom({
+      policy: value.dmPolicy,
+      allowFrom: value.allowFrom,
+      ctx,
+    });
+  },
 });

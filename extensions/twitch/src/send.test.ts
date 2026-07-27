@@ -104,10 +104,35 @@ describe("send", () => {
 
       expect(result.ok).toBe(true);
       expect(result.messageId).toBe("twitch-msg-123");
+      expect(typeof result.receipt.sentAt).toBe("number");
+      expect({ ...result.receipt, sentAt: 0 }).toEqual({
+        primaryPlatformMessageId: "twitch-msg-123",
+        platformMessageIds: ["twitch-msg-123"],
+        parts: [
+          {
+            platformMessageId: "twitch-msg-123",
+            kind: "text",
+            index: 0,
+            raw: {
+              channel: "twitch",
+              conversationId: "testchannel",
+              messageId: "twitch-msg-123",
+            },
+          },
+        ],
+        raw: [
+          {
+            channel: "twitch",
+            conversationId: "testchannel",
+            messageId: "twitch-msg-123",
+          },
+        ],
+        sentAt: 0,
+      });
     });
 
     it("should strip markdown when enabled", async () => {
-      const { stripMarkdownForTwitch } = await mockSuccessfulSend({
+      const { stripMarkdownForTwitch: stripMarkdownForTwitchLocal } = await mockSuccessfulSend({
         messageId: "twitch-msg-456",
         stripMarkdown: (text) => text.replace(/\*\*/g, ""),
       });
@@ -121,7 +146,7 @@ describe("send", () => {
         mockLogger as unknown as Console,
       );
 
-      expect(stripMarkdownForTwitch).toHaveBeenCalledWith("**Bold** text");
+      expect(stripMarkdownForTwitchLocal).toHaveBeenCalledWith("**Bold** text");
     });
 
     it("should return error when account not found", async () => {
@@ -192,6 +217,8 @@ describe("send", () => {
 
       expect(result.ok).toBe(true);
       expect(result.messageId).toBe("skipped");
+      expect(result.receipt.platformMessageIds).toStrictEqual([]);
+      expect(result.receipt.parts).toStrictEqual([]);
     });
 
     it("should return error when client manager not found", async () => {
@@ -256,6 +283,59 @@ describe("send", () => {
         "Hello!",
         mockConfig,
         "default",
+      );
+    });
+
+    it("uses the configured default account when accountId is omitted", async () => {
+      const secondaryAccount = {
+        ...mockAccount,
+        username: "secondary-user",
+        channel: "secondary-channel",
+      };
+      vi.mocked(resolveTwitchAccountContext).mockImplementation((_cfg, accountId) => ({
+        accountId: accountId?.trim() || "secondary",
+        account: secondaryAccount,
+        tokenResolution: { source: "config", token: secondaryAccount.accessToken ?? "" },
+        configured: true,
+        availableAccountIds: ["default", "secondary"],
+      }));
+      const mockSend = vi.fn().mockResolvedValue({
+        ok: true,
+        messageId: "twitch-msg-secondary",
+      });
+      vi.mocked(getClientManager).mockReturnValue({
+        sendMessage: mockSend,
+      } as unknown as ReturnType<typeof getClientManager>);
+
+      const result = await sendMessageTwitchInternal(
+        "",
+        "Hello!",
+        {
+          channels: {
+            twitch: {
+              defaultAccount: "secondary",
+            },
+          },
+        } as never,
+        undefined,
+        false,
+        mockLogger as unknown as Console,
+      );
+
+      expect(result.ok).toBe(true);
+      expect(getClientManager).toHaveBeenCalledWith("secondary");
+      expect(mockSend).toHaveBeenCalledWith(
+        secondaryAccount,
+        "secondary-channel",
+        "Hello!",
+        {
+          channels: {
+            twitch: {
+              defaultAccount: "secondary",
+            },
+          },
+        },
+        "secondary",
       );
     });
   });

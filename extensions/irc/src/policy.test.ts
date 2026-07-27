@@ -1,11 +1,10 @@
+// Irc tests cover policy plugin behavior.
+import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
 import { describe, expect, it } from "vitest";
-import { resolveChannelGroupPolicy } from "../../../src/config/group-policy.js";
 import {
-  resolveIrcGroupAccessGate,
   resolveIrcGroupMatch,
-  resolveIrcGroupSenderAllowed,
-  resolveIrcMentionGate,
-  resolveIrcRequireMention,
+  resolveIrcGroupRequireMention,
+  resolveIrcGroupToolPolicy,
 } from "./policy.js";
 
 describe("irc policy", () => {
@@ -17,7 +16,12 @@ describe("irc policy", () => {
       target: "#ops",
     });
     expect(direct.allowed).toBe(true);
-    expect(resolveIrcRequireMention({ groupConfig: direct.groupConfig })).toBe(false);
+    expect(
+      resolveIrcGroupRequireMention({
+        groups: { "#ops": { requireMention: false } },
+        target: "#ops",
+      }),
+    ).toBe(false);
 
     const wildcard = resolveIrcGroupMatch({
       groups: {
@@ -26,95 +30,12 @@ describe("irc policy", () => {
       target: "#random",
     });
     expect(wildcard.allowed).toBe(true);
-    expect(resolveIrcRequireMention({ wildcardConfig: wildcard.wildcardConfig })).toBe(true);
-  });
-
-  it("enforces allowlist by default in groups", () => {
-    const message = {
-      messageId: "m1",
-      target: "#ops",
-      senderNick: "alice",
-      senderUser: "ident",
-      senderHost: "example.org",
-      text: "hi",
-      timestamp: Date.now(),
-      isGroup: true,
-    };
-
     expect(
-      resolveIrcGroupSenderAllowed({
-        groupPolicy: "allowlist",
-        message,
-        outerAllowFrom: [],
-        innerAllowFrom: [],
-      }),
-    ).toBe(false);
-
-    expect(
-      resolveIrcGroupSenderAllowed({
-        groupPolicy: "allowlist",
-        message,
-        outerAllowFrom: ["alice!ident@example.org"],
-        innerAllowFrom: [],
+      resolveIrcGroupRequireMention({
+        groups: { "*": { requireMention: true } },
+        target: "#random",
       }),
     ).toBe(true);
-    expect(
-      resolveIrcGroupSenderAllowed({
-        groupPolicy: "allowlist",
-        message,
-        outerAllowFrom: ["alice"],
-        innerAllowFrom: [],
-      }),
-    ).toBe(false);
-    expect(
-      resolveIrcGroupSenderAllowed({
-        groupPolicy: "allowlist",
-        message,
-        outerAllowFrom: ["alice"],
-        innerAllowFrom: [],
-        allowNameMatching: true,
-      }),
-    ).toBe(true);
-  });
-
-  it('allows unconfigured channels when groupPolicy is "open"', () => {
-    const groupMatch = resolveIrcGroupMatch({
-      groups: undefined,
-      target: "#random",
-    });
-    const gate = resolveIrcGroupAccessGate({
-      groupPolicy: "open",
-      groupMatch,
-    });
-    expect(gate.allowed).toBe(true);
-    expect(gate.reason).toBe("open");
-  });
-
-  it("honors explicit group disable even in open mode", () => {
-    const groupMatch = resolveIrcGroupMatch({
-      groups: {
-        "#ops": { enabled: false },
-      },
-      target: "#ops",
-    });
-    const gate = resolveIrcGroupAccessGate({
-      groupPolicy: "open",
-      groupMatch,
-    });
-    expect(gate.allowed).toBe(false);
-    expect(gate.reason).toBe("disabled");
-  });
-
-  it("allows authorized control commands without mention", () => {
-    const gate = resolveIrcMentionGate({
-      isGroup: true,
-      requireMention: true,
-      wasMentioned: false,
-      hasControlCommand: true,
-      allowTextCommands: true,
-      commandAuthorized: true,
-    });
-    expect(gate.shouldSkip).toBe(false);
   });
 
   it("keeps case-insensitive group matching aligned with shared channel policy resolution", () => {
@@ -145,5 +66,26 @@ describe("irc policy", () => {
     });
     expect(sharedDisabled.allowed).toBe(inboundDisabled.allowed);
     expect(inboundDisabled.groupConfig?.enabled).toBe(false);
+  });
+
+  it("uses exact keys before case-insensitive matches", () => {
+    const groups = {
+      "#Ops": { requireMention: false },
+      "#ops": { requireMention: true },
+    };
+
+    expect(resolveIrcGroupRequireMention({ groups, target: "#ops" })).toBe(true);
+  });
+
+  it("falls through to wildcard fields when the matched field is unset", () => {
+    const groups = {
+      "#ops": { toolsBySender: { "*": { allow: ["sessions.list"] } } },
+      "*": { requireMention: false, tools: { deny: ["exec"] } },
+    };
+
+    expect(resolveIrcGroupRequireMention({ groups, target: "#ops" })).toBe(false);
+    expect(resolveIrcGroupToolPolicy({ groups, target: "#ops" })).toEqual({
+      deny: ["exec"],
+    });
   });
 });

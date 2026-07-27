@@ -1,5 +1,6 @@
+// Vitest performance config tests validate performance test project setup.
 import { describe, expect, it } from "vitest";
-import { loadVitestExperimentalConfig } from "../vitest.performance-config.ts";
+import { loadVitestExperimentalConfig } from "./vitest/vitest.performance-config.ts";
 
 describe("loadVitestExperimentalConfig", () => {
   it("enables the filesystem module cache by default", () => {
@@ -42,7 +43,7 @@ describe("loadVitestExperimentalConfig", () => {
   });
 
   it("disables the filesystem module cache by default on Windows", () => {
-    expect(loadVitestExperimentalConfig({}, "win32")).toEqual({});
+    expect(loadVitestExperimentalConfig({}, "win32")).toStrictEqual({});
   });
 
   it("still allows enabling the filesystem module cache explicitly on Windows", () => {
@@ -68,7 +69,7 @@ describe("loadVitestExperimentalConfig", () => {
         },
         "linux",
       ),
-    ).toEqual({});
+    ).toStrictEqual({});
   });
 
   it("enables import timing output and import breakdown reporting", () => {
@@ -90,6 +91,6 @@ describe("loadVitestExperimentalConfig", () => {
   });
 
   it("uses RUNNER_OS to detect Windows even when the platform is not win32", () => {
-    expect(loadVitestExperimentalConfig({ RUNNER_OS: "Windows" }, "linux")).toEqual({});
+    expect(loadVitestExperimentalConfig({ RUNNER_OS: "Windows" }, "linux")).toStrictEqual({});
   });
 });

@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/web-content-core",
+  "version": "0.0.0-private",
+  "private": true,
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "exports": {
+    "./provider-runtime-shared": {
+      "types": "./dist/provider-runtime-shared.d.mts",
+      "import": "./dist/provider-runtime-shared.mjs",
+      "default": "./dist/provider-runtime-shared.mjs"
+    }
+  },
+  "scripts": {
+    "build": "tsdown src/provider-runtime-shared.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+  }
+}

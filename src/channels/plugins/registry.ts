@@ -1,82 +1,82 @@
+/**
+ * Runtime channel plugin registry facade.
+ *
+ * Lists, resolves, and normalizes active channel plugins with bundled fallback.
+ */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeAnyChannelId } from "../registry.js";
+import { getBundledChannelPlugin } from "./bundled.js";
 import {
-  getActivePluginChannelRegistryVersion,
-  requireActivePluginChannelRegistry,
-} from "../../plugins/runtime.js";
-import { CHAT_CHANNEL_ORDER, type ChatChannelId, normalizeAnyChannelId } from "../registry.js";
-import type { ChannelId, ChannelPlugin } from "./types.js";
+  getLoadedChannelPluginById,
+  getLoadedChannelPluginEntryById,
+  listLoadedChannelPlugins,
+} from "./registry-loaded.js";
+import type { ChannelPlugin } from "./types.plugin.js";
+import type { ChannelId } from "./types.public.js";
 
-function dedupeChannels(channels: ChannelPlugin[]): ChannelPlugin[] {
-  const seen = new Set<string>();
-  const resolved: ChannelPlugin[] = [];
-  for (const plugin of channels) {
-    const id = String(plugin.id).trim();
-    if (!id || seen.has(id)) {
-      continue;
-    }
-    seen.add(id);
-    resolved.push(plugin);
-  }
-  return resolved;
-}
-
-type CachedChannelPlugins = {
-  registryVersion: number;
-  sorted: ChannelPlugin[];
-  byId: Map<string, ChannelPlugin>;
-};
-
-const EMPTY_CHANNEL_PLUGIN_CACHE: CachedChannelPlugins = {
-  registryVersion: -1,
-  sorted: [],
-  byId: new Map(),
-};
-
-let cachedChannelPlugins = EMPTY_CHANNEL_PLUGIN_CACHE;
-
-function resolveCachedChannelPlugins(): CachedChannelPlugins {
-  const registry = requireActivePluginChannelRegistry();
-  const registryVersion = getActivePluginChannelRegistryVersion();
-  const cached = cachedChannelPlugins;
-  if (cached.registryVersion === registryVersion) {
-    return cached;
-  }
-
-  const sorted = dedupeChannels(registry.channels.map((entry) => entry.plugin)).toSorted((a, b) => {
-    const indexA = CHAT_CHANNEL_ORDER.indexOf(a.id as ChatChannelId);
-    const indexB = CHAT_CHANNEL_ORDER.indexOf(b.id as ChatChannelId);
-    const orderA = a.meta.order ?? (indexA === -1 ? 999 : indexA);
-    const orderB = b.meta.order ?? (indexB === -1 ? 999 : indexB);
-    if (orderA !== orderB) {
-      return orderA - orderB;
-    }
-    return a.id.localeCompare(b.id);
-  });
-  const byId = new Map<string, ChannelPlugin>();
-  for (const plugin of sorted) {
-    byId.set(plugin.id, plugin);
-  }
-
-  const next: CachedChannelPlugins = {
-    registryVersion,
-    sorted,
-    byId,
-  };
-  cachedChannelPlugins = next;
-  return next;
-}
-
+/**
+ * Lists currently loaded channel plugins in registry order.
+ */
 export function listChannelPlugins(): ChannelPlugin[] {
-  return resolveCachedChannelPlugins().sorted.slice();
+  return listLoadedChannelPlugins() as ChannelPlugin[];
 }
 
-export function getChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
-  const resolvedId = String(id).trim();
+/**
+ * Returns a loaded channel plugin without falling back to bundled metadata.
+ */
+export function getLoadedChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
+  const resolvedId = normalizeOptionalString(id) ?? "";
   if (!resolvedId) {
     return undefined;
   }
-  return resolveCachedChannelPlugins().byId.get(resolvedId);
+  return getLoadedChannelPluginById(resolvedId) as ChannelPlugin | undefined;
 }
 
+/**
+ * Returns the package/install origin for a loaded channel plugin.
+ */
+export function getLoadedChannelPluginOrigin(id: ChannelId): string | undefined {
+  const resolvedId = normalizeOptionalString(id) ?? "";
+  if (!resolvedId) {
+    return undefined;
+  }
+  return normalizeOptionalString(getLoadedChannelPluginEntryById(resolvedId)?.origin) ?? undefined;
+}
+
+/**
+ * Resolves the active channel implementation together with host-owned provenance.
+ */
+export function resolveChannelPluginRegistration(
+  id: ChannelId,
+): { plugin: ChannelPlugin; origin?: string } | undefined {
+  const resolvedId = normalizeOptionalString(id) ?? "";
+  if (!resolvedId) {
+    return undefined;
+  }
+  // Resolve implementation and provenance together. Loaded overrides win and
+  // must never borrow bundled authority from the fallback with the same id.
+  const loadedEntry = getLoadedChannelPluginEntryById(resolvedId);
+  if (loadedEntry) {
+    const origin = normalizeOptionalString(loadedEntry.origin) ?? undefined;
+    return {
+      plugin: loadedEntry.plugin as ChannelPlugin,
+      ...(origin ? { origin } : {}),
+    };
+  }
+  const plugin = getBundledChannelPlugin(resolvedId);
+  return plugin ? { plugin, origin: "bundled" } : undefined;
+}
+
+/**
+ * Returns the active channel plugin, with bundled fallback for built-in channels.
+ */
+export function getChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
+  return resolveChannelPluginRegistration(id)?.plugin;
+}
+
+/**
+ * Normalizes user-facing channel aliases to canonical channel ids.
+ */
 export function normalizeChannelId(raw?: string | null): ChannelId | null {
   return normalizeAnyChannelId(raw);
 }

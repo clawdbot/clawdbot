@@ -1,3 +1,13 @@
+// Matrix plugin module implements test runtime behavior.
+import {
+  implicitMentionKindWhen,
+  resolveInboundMentionDecision,
+} from "openclaw/plugin-sdk/channel-mention-gating";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  createPluginStateSyncKeyedStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { vi } from "vitest";
 import type { PluginRuntime } from "./runtime-api.js";
 import { setMatrixRuntime } from "./runtime.js";
@@ -9,11 +19,54 @@ type MatrixTestRuntimeOptions = {
   stateDir?: string;
 };
 
+type MatrixRuntimeStub = {
+  config: Pick<PluginRuntime["config"], "current" | "mutateConfigFile" | "replaceConfigFile">;
+  channel?: PluginRuntime["channel"];
+  logging?: PluginRuntime["logging"];
+  state: Pick<
+    NonNullable<PluginRuntime["state"]>,
+    "openKeyedStore" | "openSyncKeyedStore" | "resolveStateDir"
+  >;
+};
+
+function createMatrixRuntimeMediaMock(
+  overrides: Partial<NonNullable<PluginRuntime["channel"]>["media"]> = {},
+): NonNullable<PluginRuntime["channel"]>["media"] {
+  const readRemoteMediaBuffer = vi.fn() as NonNullable<
+    PluginRuntime["channel"]
+  >["media"]["readRemoteMediaBuffer"];
+  return {
+    readRemoteMediaBuffer,
+    fetchRemoteMedia: readRemoteMediaBuffer,
+    saveRemoteMedia: vi.fn().mockResolvedValue({
+      path: "/tmp/test-media.jpg",
+      contentType: "image/jpeg",
+    }) as NonNullable<PluginRuntime["channel"]>["media"]["saveRemoteMedia"],
+    saveResponseMedia: vi.fn().mockResolvedValue({
+      path: "/tmp/test-media.jpg",
+      contentType: "image/jpeg",
+    }) as NonNullable<PluginRuntime["channel"]>["media"]["saveResponseMedia"],
+    saveMediaBuffer: vi.fn().mockResolvedValue({
+      path: "/tmp/test-media.jpg",
+      contentType: "image/jpeg",
+    }) as NonNullable<PluginRuntime["channel"]>["media"]["saveMediaBuffer"],
+    ...overrides,
+  };
+}
+
 export function installMatrixTestRuntime(options: MatrixTestRuntimeOptions = {}): void {
+  const osHomedirForTest = () => "/tmp";
   const defaultStateDirResolver: NonNullable<PluginRuntime["state"]>["resolveStateDir"] = (
     _env,
     homeDir,
   ) => options.stateDir ?? (homeDir ?? (() => "/tmp"))();
+  const resolvePluginStateEnv = (storeOptions: OpenKeyedStoreOptions): NodeJS.ProcessEnv => ({
+    ...(storeOptions.env ?? process.env),
+    OPENCLAW_STATE_DIR:
+      storeOptions.env?.OPENCLAW_STATE_DIR?.trim() ||
+      defaultStateDirResolver(storeOptions.env, osHomedirForTest),
+  });
+  const getRuntimeConfig = () => options.cfg ?? {};
   const logging: PluginRuntime["logging"] | undefined = options.logging
     ? ({
         shouldLogVerbose: () => false,
@@ -26,16 +79,30 @@ export function installMatrixTestRuntime(options: MatrixTestRuntimeOptions = {})
       } as PluginRuntime["logging"])
     : undefined;
 
-  setMatrixRuntime({
+  const runtime: MatrixRuntimeStub = {
     config: {
-      loadConfig: () => options.cfg ?? {},
+      current: getRuntimeConfig,
+      mutateConfigFile: vi.fn(),
+      replaceConfigFile: vi.fn(),
     },
     ...(options.channel ? { channel: options.channel as PluginRuntime["channel"] } : {}),
     ...(logging ? { logging } : {}),
     state: {
       resolveStateDir: defaultStateDirResolver,
+      openKeyedStore: (<T>(storeOptions: OpenKeyedStoreOptions) =>
+        createPluginStateKeyedStoreForTests<T>("matrix", {
+          ...storeOptions,
+          env: resolvePluginStateEnv(storeOptions),
+        })) as PluginRuntime["state"]["openKeyedStore"],
+      openSyncKeyedStore: (<T>(storeOptions: OpenKeyedStoreOptions) =>
+        createPluginStateSyncKeyedStoreForTests<T>("matrix", {
+          ...storeOptions,
+          env: resolvePluginStateEnv(storeOptions),
+        })) as PluginRuntime["state"]["openSyncKeyedStore"],
     },
-  } as PluginRuntime);
+  };
+
+  setMatrixRuntime(runtime as unknown as PluginRuntime);
 }
 
 type MatrixMonitorTestRuntimeOptions = Pick<MatrixTestRuntimeOptions, "cfg" | "stateDir"> & {
@@ -56,11 +123,12 @@ export function installMatrixMonitorTestRuntime(
           options.matchesMentionPatterns ??
           ((text: string, patterns: RegExp[]) => patterns.some((pattern) => pattern.test(text))),
         matchesMentionWithExplicit: () => false,
+        implicitMentionKindWhen,
+        resolveInboundMentionDecision,
       },
-      media: {
-        fetchRemoteMedia: vi.fn(),
+      media: createMatrixRuntimeMediaMock({
         saveMediaBuffer: options.saveMediaBuffer ?? vi.fn(),
-      },
+      }),
     },
   });
 }

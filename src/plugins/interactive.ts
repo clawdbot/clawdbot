@@ -1,281 +1,104 @@
-import { createDedupeCache, resolveGlobalDedupeCache } from "../infra/dedupe.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+// Resolves interactive plugin entries from registry metadata.
 import {
-  dispatchDiscordInteractiveHandler,
-  dispatchSlackInteractiveHandler,
-  dispatchTelegramInteractiveHandler,
-  type DiscordInteractiveDispatchContext,
-  type SlackInteractiveDispatchContext,
-  type TelegramInteractiveDispatchContext,
-} from "./interactive-dispatch-adapters.js";
-import type {
-  PluginInteractiveDiscordHandlerContext,
-  PluginInteractiveButtons,
-  PluginInteractiveDiscordHandlerRegistration,
-  PluginInteractiveHandlerRegistration,
-  PluginInteractiveSlackHandlerContext,
-  PluginInteractiveSlackHandlerRegistration,
-  PluginInteractiveTelegramHandlerRegistration,
-  PluginInteractiveTelegramHandlerContext,
-} from "./types.js";
+  resolvePluginInteractiveNamespaceMatch,
+  resolvePluginInteractiveRegistrationsMatch,
+} from "./interactive-registry.js";
+import {
+  claimPluginInteractiveCallbackDedupe,
+  commitPluginInteractiveCallbackDedupe,
+  releasePluginInteractiveCallbackDedupe,
+  type RegisteredInteractiveHandler,
+} from "./interactive-state.js";
+import { collectLivePluginRegistries } from "./runtime.js";
 
-type RegisteredInteractiveHandler = PluginInteractiveHandlerRegistration & {
-  pluginId: string;
-  pluginName?: string;
-  pluginRoot?: string;
-};
-
-type InteractiveRegistrationResult = {
-  ok: boolean;
-  error?: string;
-};
-
-type InteractiveDispatchResult =
+type InteractiveDispatchResult<TResult = unknown> =
   | { matched: false; handled: false; duplicate: false }
-  | { matched: true; handled: boolean; duplicate: boolean };
+  | { matched: true; handled: boolean; duplicate: boolean; result?: TResult };
 
-type InteractiveState = {
-  interactiveHandlers: Map<string, RegisteredInteractiveHandler>;
-  callbackDedupe: ReturnType<typeof createDedupeCache>;
+type PluginInteractiveDispatchRegistration = {
+  channel: string;
+  namespace: string;
 };
 
-const PLUGIN_INTERACTIVE_STATE_KEY = Symbol.for("openclaw.pluginInteractiveState");
+/** Resolved interactive handler match passed to plugin callback dispatch. */
+type PluginInteractiveMatch<TRegistration extends PluginInteractiveDispatchRegistration> = {
+  registration: RegisteredInteractiveHandler & TRegistration;
+  namespace: string;
+  payload: string;
+};
 
-const getState = () =>
-  resolveGlobalSingleton<InteractiveState>(PLUGIN_INTERACTIVE_STATE_KEY, () => ({
-    interactiveHandlers: new Map<string, RegisteredInteractiveHandler>(),
-    callbackDedupe: resolveGlobalDedupeCache(
-      Symbol.for("openclaw.pluginInteractiveCallbackDedupe"),
-      {
-        ttlMs: 5 * 60_000,
-        maxSize: 4096,
-      },
-    ),
-  }));
+export {
+  clearPluginInteractiveHandlers,
+  registerPluginInteractiveHandler,
+} from "./interactive-registry.js";
 
-const getInteractiveHandlers = () => getState().interactiveHandlers;
-const getCallbackDedupe = () => getState().callbackDedupe;
-
-function toRegistryKey(channel: string, namespace: string): string {
-  return `${channel.trim().toLowerCase()}:${namespace.trim()}`;
-}
-
-function normalizeNamespace(namespace: string): string {
-  return namespace.trim();
-}
-
-function validateNamespace(namespace: string): string | null {
-  if (!namespace.trim()) {
-    return "Interactive handler namespace cannot be empty";
+function resolveLivePluginInteractiveNamespaceMatch(channel: string, data: string) {
+  const existing = resolvePluginInteractiveNamespaceMatch(channel, data);
+  if (existing && existing.registration.registryOwned !== true) {
+    return existing;
   }
-  if (!/^[A-Za-z0-9._-]+$/.test(namespace.trim())) {
-    return "Interactive handler namespace must contain only letters, numbers, dots, underscores, and hyphens";
+
+  // Registry membership is lifecycle-owned. Resolve registry registrations only
+  // through live owners so a replaced or released registry cannot keep executing.
+  for (const registry of collectLivePluginRegistries()) {
+    const match = resolvePluginInteractiveRegistrationsMatch(
+      registry.interactiveHandlers,
+      channel,
+      data,
+    );
+    if (match) {
+      return match;
+    }
   }
   return null;
 }
 
-function resolveNamespaceMatch(
-  channel: string,
-  data: string,
-): { registration: RegisteredInteractiveHandler; namespace: string; payload: string } | null {
-  const interactiveHandlers = getInteractiveHandlers();
-  const trimmedData = data.trim();
-  if (!trimmedData) {
-    return null;
-  }
-
-  const separatorIndex = trimmedData.indexOf(":");
-  const namespace =
-    separatorIndex >= 0 ? trimmedData.slice(0, separatorIndex) : normalizeNamespace(trimmedData);
-  const registration = interactiveHandlers.get(toRegistryKey(channel, namespace));
-  if (!registration) {
-    return null;
-  }
-
-  return {
-    registration,
-    namespace,
-    payload: separatorIndex >= 0 ? trimmedData.slice(separatorIndex + 1) : "",
-  };
-}
-
-export function registerPluginInteractiveHandler(
-  pluginId: string,
-  registration: PluginInteractiveHandlerRegistration,
-  opts?: { pluginName?: string; pluginRoot?: string },
-): InteractiveRegistrationResult {
-  const interactiveHandlers = getInteractiveHandlers();
-  const namespace = normalizeNamespace(registration.namespace);
-  const validationError = validateNamespace(namespace);
-  if (validationError) {
-    return { ok: false, error: validationError };
-  }
-  const key = toRegistryKey(registration.channel, namespace);
-  const existing = interactiveHandlers.get(key);
-  if (existing) {
-    return {
-      ok: false,
-      error: `Interactive handler namespace "${namespace}" already registered by plugin "${existing.pluginId}"`,
-    };
-  }
-  if (registration.channel === "telegram") {
-    interactiveHandlers.set(key, {
-      ...registration,
-      namespace,
-      channel: "telegram",
-      pluginId,
-      pluginName: opts?.pluginName,
-      pluginRoot: opts?.pluginRoot,
-    });
-  } else if (registration.channel === "slack") {
-    interactiveHandlers.set(key, {
-      ...registration,
-      namespace,
-      channel: "slack",
-      pluginId,
-      pluginName: opts?.pluginName,
-      pluginRoot: opts?.pluginRoot,
-    });
-  } else {
-    interactiveHandlers.set(key, {
-      ...registration,
-      namespace,
-      channel: "discord",
-      pluginId,
-      pluginName: opts?.pluginName,
-      pluginRoot: opts?.pluginRoot,
-    });
-  }
-  return { ok: true };
-}
-
-export function clearPluginInteractiveHandlers(): void {
-  const interactiveHandlers = getInteractiveHandlers();
-  const callbackDedupe = getCallbackDedupe();
-  interactiveHandlers.clear();
-  callbackDedupe.clear();
-}
-
-export function clearPluginInteractiveHandlersForPlugin(pluginId: string): void {
-  const interactiveHandlers = getInteractiveHandlers();
-  for (const [key, value] of interactiveHandlers.entries()) {
-    if (value.pluginId === pluginId) {
-      interactiveHandlers.delete(key);
-    }
-  }
-}
-
-export async function dispatchPluginInteractiveHandler(params: {
-  channel: "telegram";
+/** Dispatches one interactive callback payload to a matching plugin handler. */
+export async function dispatchPluginInteractiveHandler<
+  TRegistration extends PluginInteractiveDispatchRegistration,
+  TResult extends { handled?: boolean } | void = { handled?: boolean } | void,
+>(params: {
+  channel: TRegistration["channel"];
   data: string;
-  callbackId: string;
-  ctx: TelegramInteractiveDispatchContext;
-  respond: {
-    reply: (params: { text: string; buttons?: PluginInteractiveButtons }) => Promise<void>;
-    editMessage: (params: { text: string; buttons?: PluginInteractiveButtons }) => Promise<void>;
-    editButtons: (params: { buttons: PluginInteractiveButtons }) => Promise<void>;
-    clearButtons: () => Promise<void>;
-    deleteMessage: () => Promise<void>;
-  };
+  dedupeId?: string;
   onMatched?: () => Promise<void> | void;
-}): Promise<InteractiveDispatchResult>;
-export async function dispatchPluginInteractiveHandler(params: {
-  channel: "discord";
-  data: string;
-  interactionId: string;
-  ctx: DiscordInteractiveDispatchContext;
-  respond: PluginInteractiveDiscordHandlerContext["respond"];
-  onMatched?: () => Promise<void> | void;
-}): Promise<InteractiveDispatchResult>;
-export async function dispatchPluginInteractiveHandler(params: {
-  channel: "slack";
-  data: string;
-  interactionId: string;
-  ctx: SlackInteractiveDispatchContext;
-  respond: PluginInteractiveSlackHandlerContext["respond"];
-  onMatched?: () => Promise<void> | void;
-}): Promise<InteractiveDispatchResult>;
-export async function dispatchPluginInteractiveHandler(params: {
-  channel: "telegram" | "discord" | "slack";
-  data: string;
-  callbackId?: string;
-  interactionId?: string;
-  ctx:
-    | TelegramInteractiveDispatchContext
-    | DiscordInteractiveDispatchContext
-    | SlackInteractiveDispatchContext;
-  respond:
-    | {
-        reply: (params: { text: string; buttons?: PluginInteractiveButtons }) => Promise<void>;
-        editMessage: (params: {
-          text: string;
-          buttons?: PluginInteractiveButtons;
-        }) => Promise<void>;
-        editButtons: (params: { buttons: PluginInteractiveButtons }) => Promise<void>;
-        clearButtons: () => Promise<void>;
-        deleteMessage: () => Promise<void>;
-      }
-    | PluginInteractiveDiscordHandlerContext["respond"]
-    | PluginInteractiveSlackHandlerContext["respond"];
-  onMatched?: () => Promise<void> | void;
-}): Promise<InteractiveDispatchResult> {
-  const callbackDedupe = getCallbackDedupe();
-  const match = resolveNamespaceMatch(params.channel, params.data);
+  invoke: (match: PluginInteractiveMatch<TRegistration>) => Promise<TResult> | TResult;
+  afterInvoke?: (result: TResult) => Promise<void> | void;
+}): Promise<InteractiveDispatchResult<TResult>> {
+  const match = resolveLivePluginInteractiveNamespaceMatch(params.channel, params.data);
   if (!match) {
     return { matched: false, handled: false, duplicate: false };
   }
 
-  const dedupeKey =
-    params.channel === "telegram" ? params.callbackId?.trim() : params.interactionId?.trim();
-  if (dedupeKey && callbackDedupe.peek(dedupeKey)) {
+  const dedupeKey = params.dedupeId?.trim();
+  if (dedupeKey && !claimPluginInteractiveCallbackDedupe(dedupeKey)) {
     return { matched: true, handled: true, duplicate: true };
   }
 
-  await params.onMatched?.();
+  try {
+    await params.onMatched?.();
+    const resolved = await params.invoke(match as PluginInteractiveMatch<TRegistration>);
+    // Channel post-processing stays inside the dedupe claim. Committing first
+    // would swallow a retry after a retryable post-handler failure.
+    await params.afterInvoke?.(resolved);
+    if (dedupeKey) {
+      commitPluginInteractiveCallbackDedupe(dedupeKey);
+    }
+    const shouldExposeResult =
+      Boolean(resolved) &&
+      typeof resolved === "object" &&
+      Object.keys(resolved as Record<string, unknown>).some((key) => key !== "handled");
 
-  let result:
-    | ReturnType<PluginInteractiveTelegramHandlerRegistration["handler"]>
-    | ReturnType<PluginInteractiveDiscordHandlerRegistration["handler"]>
-    | ReturnType<PluginInteractiveSlackHandlerRegistration["handler"]>;
-  if (params.channel === "telegram") {
-    result = dispatchTelegramInteractiveHandler({
-      registration: match.registration as RegisteredInteractiveHandler &
-        PluginInteractiveTelegramHandlerRegistration,
-      data: params.data,
-      namespace: match.namespace,
-      payload: match.payload,
-      ctx: params.ctx as TelegramInteractiveDispatchContext,
-      respond: params.respond as PluginInteractiveTelegramHandlerContext["respond"],
-    });
-  } else if (params.channel === "discord") {
-    result = dispatchDiscordInteractiveHandler({
-      registration: match.registration as RegisteredInteractiveHandler &
-        PluginInteractiveDiscordHandlerRegistration,
-      data: params.data,
-      namespace: match.namespace,
-      payload: match.payload,
-      ctx: params.ctx as DiscordInteractiveDispatchContext,
-      respond: params.respond as PluginInteractiveDiscordHandlerContext["respond"],
-    });
-  } else {
-    result = dispatchSlackInteractiveHandler({
-      registration: match.registration as RegisteredInteractiveHandler &
-        PluginInteractiveSlackHandlerRegistration,
-      data: params.data,
-      namespace: match.namespace,
-      payload: match.payload,
-      ctx: params.ctx as SlackInteractiveDispatchContext,
-      respond: params.respond as PluginInteractiveSlackHandlerContext["respond"],
-    });
+    return {
+      matched: true,
+      handled: resolved?.handled ?? true,
+      duplicate: false,
+      ...(shouldExposeResult ? { result: resolved } : {}),
+    };
+  } catch (error) {
+    if (dedupeKey) {
+      releasePluginInteractiveCallbackDedupe(dedupeKey);
+    }
+    throw error;
   }
-  const resolved = await result;
-  if (dedupeKey) {
-    callbackDedupe.check(dedupeKey);
-  }
-
-  return {
-    matched: true,
-    handled: resolved?.handled ?? true,
-    duplicate: false,
-  };
 }

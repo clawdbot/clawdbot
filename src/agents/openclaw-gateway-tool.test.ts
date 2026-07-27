@@ -1,13 +1,50 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+// Verifies the read-only OpenClaw gateway tool schema and config reads.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withEnvAsync } from "../test-utils/env.js";
-import "./test-helpers/fast-core-tools.js";
+import { GatewayClientRequestError } from "../gateway/client.js";
+import { createGatewayTool } from "./tools/gateway-tool.js";
+import { callGatewayTool } from "./tools/gateway.js";
 
-function createGatewayToolModuleMocks() {
-  return {
-    callGatewayTool: vi.fn(async (method: string) => {
+const { callGatewayToolMock, readGatewayCallOptionsMock } = vi.hoisted(() => ({
+  callGatewayToolMock: vi.fn(),
+  readGatewayCallOptionsMock: vi.fn(() => ({})),
+}));
+
+vi.mock("./tools/gateway.js", () => ({
+  callGatewayTool: callGatewayToolMock,
+  readGatewayCallOptions: readGatewayCallOptionsMock,
+}));
+
+type GatewayCall = [method: string, options: unknown, params?: unknown];
+
+function gatewayCall(method: string): GatewayCall {
+  const call = (vi.mocked(callGatewayTool).mock.calls as GatewayCall[]).find(
+    ([candidate]) => candidate === method,
+  );
+  if (!call) {
+    throw new Error(`Expected gateway call for ${method}`);
+  }
+  return call;
+}
+
+function expectRecordFields(
+  record: unknown,
+  expected: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
+  const actual = record as Record<string, unknown>;
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(value);
+  }
+  return actual;
+}
+
+describe("gateway tool", () => {
+  beforeEach(() => {
+    callGatewayToolMock.mockClear();
+    readGatewayCallOptionsMock.mockClear();
+    callGatewayToolMock.mockImplementation(async (method: string) => {
       if (method === "config.get") {
         return {
           hash: "hash-1",
@@ -24,9 +61,7 @@ function createGatewayToolModuleMocks() {
       if (method === "config.schema.lookup") {
         return {
           path: "gateway.auth",
-          schema: {
-            type: "object",
-          },
+          schema: { type: "object" },
           hint: { label: "Gateway Auth" },
           hintPath: "gateway.auth",
           children: [
@@ -43,290 +78,152 @@ function createGatewayToolModuleMocks() {
         };
       }
       return { ok: true };
-    }),
-    readGatewayCallOptions: vi.fn(() => ({})),
-  };
-}
+    });
+  });
 
-vi.mock("./tools/gateway.js", () => createGatewayToolModuleMocks());
-
-let createOpenClawTools: typeof import("./openclaw-tools.js").createOpenClawTools;
-
-async function loadFreshOpenClawToolsModuleForTest() {
-  vi.resetModules();
-  vi.doMock("./tools/gateway.js", () => createGatewayToolModuleMocks());
-  ({ createOpenClawTools } = await import("./openclaw-tools.js"));
-}
-
-function requireGatewayTool(agentSessionKey?: string) {
-  const tool = createOpenClawTools({
-    ...(agentSessionKey ? { agentSessionKey } : {}),
-    config: { commands: { restart: true } },
-  }).find((candidate) => candidate.name === "gateway");
-  expect(tool).toBeDefined();
-  if (!tool) {
-    throw new Error("missing gateway tool");
-  }
-  return tool;
-}
-
-function expectConfigMutationCall(params: {
-  callGatewayTool: {
-    mock: {
-      calls: Array<readonly unknown[]>;
+  it("exposes only config read actions", () => {
+    const tool = createGatewayTool();
+    const parameters = tool.parameters as {
+      properties?: { action?: { enum?: string[] } };
     };
-  };
-  action: "config.apply" | "config.patch";
-  raw: string;
-  sessionKey: string;
-}) {
-  expect(params.callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
-  expect(params.callGatewayTool).toHaveBeenCalledWith(
-    params.action,
-    expect.any(Object),
-    expect.objectContaining({
-      raw: params.raw.trim(),
-      baseHash: "hash-1",
-      sessionKey: params.sessionKey,
-    }),
-  );
-}
 
-describe("gateway tool", () => {
-  beforeEach(async () => {
-    await loadFreshOpenClawToolsModuleForTest();
+    expect(parameters.properties?.action?.enum).toEqual(["config.get", "config.schema.lookup"]);
+    expect(tool.description).toBe(
+      "Read gateway config + schema. Writes/restart: use openclaw tool.",
+    );
   });
 
-  it("marks gateway as owner-only", async () => {
-    const tool = requireGatewayTool();
-    expect(tool.ownerOnly).toBe(true);
-  });
+  it("scopes config.get output to the requested path and keeps metadata compact", async () => {
+    const result = await createGatewayTool().execute("call-config-get", {
+      action: "config.get",
+      path: "tools.exec",
+    });
 
-  it("schedules SIGUSR1 restart", async () => {
-    vi.useFakeTimers();
-    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
-
-    try {
-      await withEnvAsync(
-        { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_PROFILE: "isolated" },
-        async () => {
-          const tool = requireGatewayTool();
-
-          const result = await tool.execute("call1", {
-            action: "restart",
-            delayMs: 0,
-          });
-          expect(result.details).toMatchObject({
+    expect(result.details).toEqual({ ok: true });
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: JSON.stringify(
+          {
             ok: true,
-            pid: process.pid,
-            signal: "SIGUSR1",
-            delayMs: 0,
-          });
+            result: {
+              hash: "hash-1",
+              path: "tools.exec",
+              config: {
+                ask: "on-miss",
+                security: "allowlist",
+              },
+            },
+          },
+          null,
+          2,
+        ),
+      },
+    ]);
+  });
 
-          const sentinelPath = path.join(stateDir, "restart-sentinel.json");
-          const raw = await fs.readFile(sentinelPath, "utf-8");
-          const parsed = JSON.parse(raw) as {
-            payload?: { kind?: string; doctorHint?: string | null };
-          };
-          expect(parsed.payload?.kind).toBe("restart");
-          expect(parsed.payload?.doctorHint).toBe(
-            "Run: openclaw --profile isolated doctor --non-interactive",
-          );
+  it.each([
+    ["tools.missing", "config path not found: tools.missing"],
+    ["...", "config path not found: ..."],
+    ["constructor.prototype", "config path not found: constructor.prototype"],
+  ])("rejects invalid config.get path %s", async (path, message) => {
+    await expect(
+      createGatewayTool().execute("call-invalid-config-path", {
+        action: "config.get",
+        path,
+      }),
+    ).rejects.toThrow(message);
+  });
 
-          expect(kill).not.toHaveBeenCalled();
-          await vi.runAllTimersAsync();
-          expect(kill).toHaveBeenCalledWith(process.pid, "SIGUSR1");
+  it("reads config.get paths with bracketed array indexes", async () => {
+    callGatewayToolMock.mockResolvedValueOnce({
+      config: {
+        agents: {
+          list: [{ id: "ops" }],
         },
-      );
-    } finally {
-      kill.mockRestore();
-      vi.useRealTimers();
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
+      },
+    });
+
+    const result = await createGatewayTool().execute("call-indexed-config-path", {
+      action: "config.get",
+      path: "agents.list[0].id",
+    });
+
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: JSON.stringify(
+          {
+            ok: true,
+            result: {
+              path: "agents.list[0].id",
+              config: "ops",
+            },
+          },
+          null,
+          2,
+        ),
+      },
+    ]);
   });
 
-  it("passes config.apply through gateway call", async () => {
-    const { callGatewayTool } = await import("./tools/gateway.js");
-    const sessionKey = "agent:main:whatsapp:dm:+15555550123";
-    const tool = requireGatewayTool(sessionKey);
-
-    const raw =
-      '{\n  agents: { defaults: { workspace: "~/openclaw" } },\n  tools: { exec: { ask: "on-miss", security: "allowlist" } }\n}\n';
-    await tool.execute("call2", {
-      action: "config.apply",
-      raw,
+  it("requires a narrower config.get path for oversized output", async () => {
+    callGatewayToolMock.mockResolvedValueOnce({
+      config: { oversized: "x".repeat(100_000) },
     });
-
-    expectConfigMutationCall({
-      callGatewayTool: vi.mocked(callGatewayTool),
-      action: "config.apply",
-      raw,
-      sessionKey,
-    });
-  });
-
-  it("passes config.patch through gateway call", async () => {
-    const { callGatewayTool } = await import("./tools/gateway.js");
-    const sessionKey = "agent:main:whatsapp:dm:+15555550123";
-    const tool = requireGatewayTool(sessionKey);
-
-    const raw = '{\n  channels: { telegram: { groups: { "*": { requireMention: false } } } }\n}\n';
-    await tool.execute("call4", {
-      action: "config.patch",
-      raw,
-    });
-
-    expectConfigMutationCall({
-      callGatewayTool: vi.mocked(callGatewayTool),
-      action: "config.patch",
-      raw,
-      sessionKey,
-    });
-  });
-
-  it("rejects config.patch when it changes exec approval settings", async () => {
-    const { callGatewayTool } = await import("./tools/gateway.js");
-    const tool = requireGatewayTool();
 
     await expect(
-      tool.execute("call-protected-patch", {
-        action: "config.patch",
-        raw: '{ tools: { exec: { ask: "off" } } }',
-      }),
-    ).rejects.toThrow("gateway config.patch cannot change protected config paths: tools.exec.ask");
-    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
-    expect(callGatewayTool).not.toHaveBeenCalledWith(
-      "config.patch",
-      expect.any(Object),
-      expect.anything(),
-    );
-  });
-
-  it("rejects config.patch when a legacy tools.bash alias changes exec security", async () => {
-    const { callGatewayTool } = await import("./tools/gateway.js");
-    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
-      if (method === "config.get") {
-        return { hash: "hash-1", config: {} };
-      }
-      return { ok: true };
-    });
-    const tool = requireGatewayTool();
-
-    await expect(
-      tool.execute("call-legacy-protected-patch", {
-        action: "config.patch",
-        raw: '{ tools: { bash: { security: "full" } } }',
+      createGatewayTool().execute("call-large-config", {
+        action: "config.get",
       }),
     ).rejects.toThrow(
-      "gateway config.patch cannot change protected config paths: tools.exec.security",
+      "config.get response is too large; use path to request a narrower config subtree",
     );
-    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
-    expect(callGatewayTool).not.toHaveBeenCalledWith(
-      "config.patch",
-      expect.any(Object),
-      expect.anything(),
-    );
-  });
-
-  it("rejects config.apply when it changes exec security settings", async () => {
-    const { callGatewayTool } = await import("./tools/gateway.js");
-    const tool = requireGatewayTool();
-
-    await expect(
-      tool.execute("call-protected-apply", {
-        action: "config.apply",
-        raw: '{ tools: { exec: { ask: "on-miss", security: "full" } } }',
-      }),
-    ).rejects.toThrow(
-      "gateway config.apply cannot change protected config paths: tools.exec.security",
-    );
-    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
-    expect(callGatewayTool).not.toHaveBeenCalledWith(
-      "config.apply",
-      expect.any(Object),
-      expect.anything(),
-    );
-  });
-
-  it("rejects config.apply when protected exec settings are omitted", async () => {
-    const { callGatewayTool } = await import("./tools/gateway.js");
-    const tool = requireGatewayTool();
-
-    await expect(
-      tool.execute("call-missing-protected", {
-        action: "config.apply",
-        raw: '{ agents: { defaults: { workspace: "~/openclaw" } } }',
-      }),
-    ).rejects.toThrow(
-      "gateway config.apply cannot change protected config paths: tools.exec.ask, tools.exec.security",
-    );
-    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
-    expect(callGatewayTool).not.toHaveBeenCalledWith(
-      "config.apply",
-      expect.any(Object),
-      expect.anything(),
-    );
-  });
-
-  it("passes update.run through gateway call", async () => {
-    const { callGatewayTool } = await import("./tools/gateway.js");
-    const sessionKey = "agent:main:whatsapp:dm:+15555550123";
-    const tool = requireGatewayTool(sessionKey);
-
-    await tool.execute("call3", {
-      action: "update.run",
-      note: "test update",
-    });
-
-    expect(callGatewayTool).toHaveBeenCalledWith(
-      "update.run",
-      expect.any(Object),
-      expect.objectContaining({
-        note: "test update",
-        sessionKey,
-      }),
-    );
-    const updateCall = vi
-      .mocked(callGatewayTool)
-      .mock.calls.find((call) => call[0] === "update.run");
-    expect(updateCall).toBeDefined();
-    if (updateCall) {
-      const [, opts, params] = updateCall;
-      expect(opts).toMatchObject({ timeoutMs: 20 * 60_000 });
-      expect(params).toMatchObject({ timeoutMs: 20 * 60_000 });
-    }
   });
 
   it("returns a path-scoped schema lookup result", async () => {
-    const { callGatewayTool } = await import("./tools/gateway.js");
-    const tool = requireGatewayTool();
-
-    const result = await tool.execute("call5", {
+    const result = await createGatewayTool().execute("call-schema", {
       action: "config.schema.lookup",
       path: "gateway.auth",
     });
 
-    expect(callGatewayTool).toHaveBeenCalledWith("config.schema.lookup", expect.any(Object), {
+    expect(gatewayCall("config.schema.lookup")[2]).toEqual({ path: "gateway.auth" });
+    const details = expectRecordFields(result.details, { ok: true });
+    const lookupResult = expectRecordFields(details.result, {
       path: "gateway.auth",
+      hintPath: "gateway.auth",
     });
-    expect(result.details).toMatchObject({
-      ok: true,
-      result: {
-        path: "gateway.auth",
-        hintPath: "gateway.auth",
-        children: [
-          expect.objectContaining({
-            key: "token",
-            path: "gateway.auth.token",
-            required: true,
-            hintPath: "gateway.auth.token",
-          }),
-        ],
-      },
+    const children = lookupResult.children as Array<unknown>;
+    expect(children).toHaveLength(1);
+    expectRecordFields(children[0], {
+      key: "token",
+      path: "gateway.auth.token",
+      required: true,
+      hintPath: "gateway.auth.token",
     });
-    const schema = (result.details as { result?: { schema?: { properties?: unknown } } }).result
-      ?.schema;
-    expect(schema?.properties).toBeUndefined();
+  });
+
+  it("returns an in-band schema lookup miss for unknown paths", async () => {
+    callGatewayToolMock.mockRejectedValueOnce(
+      new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "config schema path not found",
+      }),
+    );
+
+    const result = await createGatewayTool().execute("call-missing-schema", {
+      action: "config.schema.lookup",
+      path: "agents.main.authorizedSenders",
+    });
+
+    expect(gatewayCall("config.schema.lookup")[2]).toEqual({
+      path: "agents.main.authorizedSenders",
+    });
+    expect(result.details).toEqual({
+      ok: false,
+      code: "schema_path_not_found",
+      path: "agents.main.authorizedSenders",
+      message: "config schema path not found",
+    });
   });
 });

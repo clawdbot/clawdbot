@@ -1,11 +1,16 @@
-import type { SnapshotAriaNode } from "./client.js";
-import {
-  getRoleSnapshotStats,
-  type RoleRefMap,
-  type RoleSnapshotOptions,
-} from "./pw-role-snapshot.js";
+/**
+ * Chrome MCP snapshot conversion helpers.
+ *
+ * Converts chrome-devtools-mcp structured snapshots into OpenClaw ARIA nodes
+ * and compact AI snapshots with stable refs and duplicate tracking.
+ */
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeString } from "../record-shared.js";
+import type { SnapshotAriaNode } from "./client.types.js";
+import type { RoleRefMap, RoleSnapshotOptions } from "./pw-role-snapshot.js";
 import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
+/** Structured snapshot node shape returned by chrome-devtools-mcp. */
 export type ChromeMcpSnapshotNode = {
   id?: string;
   role?: string;
@@ -16,23 +21,16 @@ export type ChromeMcpSnapshotNode = {
 };
 
 function normalizeRole(node: ChromeMcpSnapshotNode): string {
-  const role = typeof node.role === "string" ? node.role.trim().toLowerCase() : "";
+  const role = normalizeLowercaseStringOrEmpty(node.role);
   return role || "generic";
 }
 
-function normalizeString(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed || undefined;
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  return undefined;
-}
-
 function escapeQuoted(value: string): string {
-  return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+  return value
+    .replaceAll("\\", "\\\\")
+    .replaceAll('"', '\\"')
+    .replaceAll("\r", "\\r")
+    .replaceAll("\n", "\\n");
 }
 
 function shouldIncludeNode(params: {
@@ -84,6 +82,7 @@ function registerRef(
   return undefined;
 }
 
+/** Flatten a Chrome MCP snapshot tree into OpenClaw ARIA-style nodes. */
 export function flattenChromeMcpSnapshotToAriaNodes(
   root: ChromeMcpSnapshotNode,
   limit = 500,
@@ -118,15 +117,13 @@ export function flattenChromeMcpSnapshotToAriaNodes(
   return out;
 }
 
+/** Build a compact text snapshot and ref map from a Chrome MCP snapshot tree. */
 export function buildAiSnapshotFromChromeMcpSnapshot(params: {
   root: ChromeMcpSnapshotNode;
   options?: RoleSnapshotOptions;
-  maxChars?: number;
 }): {
   snapshot: string;
-  truncated?: boolean;
   refs: RoleRefMap;
-  stats: { lines: number; chars: number; refs: number; interactive: number };
 } {
   const refs: RoleRefMap = {};
   const tracker = createDuplicateTracker();
@@ -177,17 +174,5 @@ export function buildAiSnapshotFromChromeMcpSnapshot(params: {
     }
   }
 
-  let snapshot = lines.join("\n");
-  let truncated = false;
-  const maxChars =
-    typeof params.maxChars === "number" && Number.isFinite(params.maxChars) && params.maxChars > 0
-      ? Math.floor(params.maxChars)
-      : undefined;
-  if (maxChars && snapshot.length > maxChars) {
-    snapshot = `${snapshot.slice(0, maxChars)}\n\n[...TRUNCATED - page too large]`;
-    truncated = true;
-  }
-
-  const stats = getRoleSnapshotStats(snapshot, refs);
-  return truncated ? { snapshot, truncated, refs, stats } : { snapshot, refs, stats };
+  return { snapshot: lines.join("\n"), refs };
 }

@@ -1,28 +1,7 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+// Covers shared provider usage helpers.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  clampPercent,
-  resolveLegacyPiAgentAccessToken,
-  resolveUsageProviderId,
-  withTimeout,
-} from "./provider-usage.shared.js";
-
-async function withLegacyPiAuthFile(
-  contents: string,
-  run: (home: string) => Promise<void> | void,
-): Promise<void> {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-usage-"));
-  await fs.mkdir(path.join(home, ".pi", "agent"), { recursive: true });
-  await fs.writeFile(path.join(home, ".pi", "agent", "auth.json"), contents, "utf8");
-
-  try {
-    await run(home);
-  } finally {
-    await fs.rm(home, { recursive: true, force: true });
-  }
-}
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+import { clampPercent, resolveUsageProviderId, withTimeout } from "./provider-usage.shared.js";
 
 describe("provider-usage.shared", () => {
   afterEach(() => {
@@ -31,13 +10,28 @@ describe("provider-usage.shared", () => {
   });
 
   it.each([
-    { value: "z-ai", expected: "zai" },
+    { value: "clawrouter", expected: "clawrouter" },
+    { value: "deepseek", expected: "deepseek" },
+    { value: "zai", expected: "zai" },
+    { value: "z-ai", expected: "z-ai" },
     { value: " GOOGLE-GEMINI-CLI ", expected: "google-gemini-cli" },
-    { value: "unknown-provider", expected: undefined },
+    { value: "minimax-portal", expected: "minimax" },
+    { value: "minimax-cn", expected: "minimax" },
+    { value: "minimax-portal-cn", expected: "minimax" },
+    { value: "claude-cli", expected: "anthropic" },
+    { value: " CLAUDE-CLI ", expected: "anthropic" },
+    { value: " XIAOMI-TOKEN-PLAN ", expected: "xiaomi-token-plan" },
+    { value: "unknown-provider", expected: "unknown-provider" },
     { value: undefined, expected: undefined },
     { value: null, expected: undefined },
   ])("normalizes provider ids for %j", ({ value, expected }) => {
     expect(resolveUsageProviderId(value)).toBe(expected);
+  });
+
+  it("maps canonical OpenAI subscription profiles to Codex usage windows", () => {
+    expect(resolveUsageProviderId("openai", { credentialType: "oauth" })).toBe("openai");
+    expect(resolveUsageProviderId("openai", { credentialType: "token" })).toBe("openai");
+    expect(resolveUsageProviderId("openai", { credentialType: "api_key" })).toBeUndefined();
   });
 
   it.each([
@@ -71,9 +65,23 @@ describe("provider-usage.shared", () => {
 
   it("returns fallback when timeout wins", async () => {
     vi.useFakeTimers();
-    const late = new Promise<string>((resolve) => setTimeout(() => resolve("late"), 50));
+    const late = new Promise<string>((resolve) => {
+      setTimeout(() => resolve("late"), 50);
+    });
     const result = withTimeout(late, 1, "fallback");
     await vi.advanceTimersByTimeAsync(1);
+    await expect(result).resolves.toBe("fallback");
+  });
+
+  it("clamps oversized timeout delays before scheduling", async () => {
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    const result = withTimeout(new Promise<string>(() => {}), Number.MAX_SAFE_INTEGER, "fallback");
+
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+
+    await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
     await expect(result).resolves.toBe("fallback");
   });
 
@@ -83,22 +91,5 @@ describe("provider-usage.shared", () => {
     await expect(withTimeout(Promise.resolve("ok"), 100, "fallback")).resolves.toBe("ok");
 
     expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([
-    {
-      name: "reads legacy pi auth tokens for known provider aliases",
-      contents: `${JSON.stringify({ "z-ai": { access: "legacy-zai-key" } }, null, 2)}\n`,
-      expected: "legacy-zai-key",
-    },
-    {
-      name: "returns undefined for invalid legacy pi auth files",
-      contents: "{not-json",
-      expected: undefined,
-    },
-  ])("$name", async ({ contents, expected }) => {
-    await withLegacyPiAuthFile(contents, async (home) => {
-      expect(resolveLegacyPiAgentAccessToken({ HOME: home }, ["z-ai", "zai"])).toBe(expected);
-    });
   });
 });

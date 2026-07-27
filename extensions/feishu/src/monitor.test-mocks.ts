@@ -1,3 +1,4 @@
+// Feishu plugin module implements monitor mocks behavior.
 import { vi } from "vitest";
 
 export function createFeishuClientMockModule(): {
@@ -34,6 +35,7 @@ export function createFeishuRuntimeMockModule(): {
           createInboundDebouncer: () => ({
             enqueue: async () => {},
             flushKey: async () => {},
+            cancelKey: () => false,
           }),
         },
         text: {

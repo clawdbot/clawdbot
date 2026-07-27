@@ -1,6 +1,19 @@
+// Tests fatal unhandled rejection detection in process bootstrap.
 import process from "node:process";
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
-import { installUnhandledRejectionHandler } from "./unhandled-rejections.js";
+
+const restoreTerminalStateMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../packages/terminal-core/src/restore.js", () => ({
+  restoreTerminalState: restoreTerminalStateMock,
+}));
+
+import { resetFatalErrorHooksForTest } from "./fatal-error-hooks.js";
+import {
+  installUnhandledRejectionHandler,
+  isUncaughtExceptionHandled,
+  registerUncaughtExceptionHandler,
+} from "./unhandled-rejections.js";
 
 describe("installUnhandledRejectionHandler - fatal detection", () => {
   let exitCalls: Array<string | number | null> = [];
@@ -15,6 +28,7 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
 
   beforeEach(() => {
     exitCalls = [];
+    resetFatalErrorHooksForTest();
 
     vi.spyOn(process, "exit").mockImplementation((code?: string | number | null): never => {
       if (code !== undefined && code !== null) {
@@ -41,10 +55,32 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
     process.emit("unhandledRejection", reason, Promise.resolve());
   }
 
-  function expectExitCodeFromUnhandled(reason: unknown, expected: number[]): void {
+  function expectConsoleLogWithMessage(
+    spy: ReturnType<typeof vi.spyOn>,
+    label: string,
+    message: string,
+  ): void {
+    const call = spy.mock.calls.find((entry: unknown[]) => entry[0] === label);
+    expect(call?.[0]).toBe(label);
+    expect(String(call?.[1])).toContain(message);
+  }
+
+  function expectExitCodeFromUnhandled(
+    reason: unknown,
+    expected: number[],
+    expectedRestoreReason?: string,
+  ): void {
     exitCalls = [];
+    restoreTerminalStateMock.mockClear();
     emitUnhandled(reason);
     expect(exitCalls).toEqual(expected);
+    if (expectedRestoreReason) {
+      expect(restoreTerminalStateMock).toHaveBeenCalledWith(expectedRestoreReason, {
+        resumeStdinIfPaused: false,
+      });
+      return;
+    }
+    expect(restoreTerminalStateMock).not.toHaveBeenCalled();
   }
 
   describe("fatal errors", () => {
@@ -56,30 +92,59 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
       ] as const;
 
       for (const { code, message } of fatalCases) {
-        expectExitCodeFromUnhandled(Object.assign(new Error(message), { code }), [1]);
+        expectExitCodeFromUnhandled(
+          Object.assign(new Error(message), { code }),
+          [1],
+          "fatal unhandled rejection",
+        );
       }
 
-      expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expectConsoleLogWithMessage(
+        consoleErrorSpy,
         "[openclaw] FATAL unhandled rejection:",
-        expect.stringContaining("Out of memory"),
+        "Out of memory",
       );
     });
   });
 
-  describe("configuration errors", () => {
-    it("exits on configuration error codes", () => {
-      const configurationCases = [
-        { code: "INVALID_CONFIG", message: "Invalid config" },
-        { code: "MISSING_API_KEY", message: "Missing API key" },
-      ] as const;
+  describe("scoped uncaught exception handlers", () => {
+    it("lets registered handlers suppress known dependency exceptions", () => {
+      const cleanup = registerUncaughtExceptionHandler((error) => {
+        return error instanceof Error && error.message === "known dependency assertion";
+      });
 
-      for (const { code, message } of configurationCases) {
-        expectExitCodeFromUnhandled(Object.assign(new Error(message), { code }), [1]);
+      expect(isUncaughtExceptionHandled(new Error("known dependency assertion"))).toBe(true);
+      expect(isUncaughtExceptionHandled(new Error("unknown"))).toBe(false);
+
+      cleanup();
+      expect(isUncaughtExceptionHandled(new Error("known dependency assertion"))).toBe(false);
+    });
+  });
+
+  describe("configuration errors", () => {
+    it("uses exit 78 only for invalid configuration", () => {
+      expectExitCodeFromUnhandled(
+        Object.assign(new Error("Invalid config"), { code: "INVALID_CONFIG" }),
+        [78],
+        "configuration error",
+      );
+
+      const transientCredentialCases = [
+        { code: "MISSING_API_KEY", message: "Missing API key" },
+        { code: "MISSING_CREDENTIALS", message: "Missing credentials" },
+      ] as const;
+      for (const { code, message } of transientCredentialCases) {
+        expectExitCodeFromUnhandled(
+          Object.assign(new Error(message), { code }),
+          [1],
+          "configuration error",
+        );
       }
 
-      expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expectConsoleLogWithMessage(
+        consoleErrorSpy,
         "[openclaw] CONFIGURATION ERROR - requires fix:",
-        expect.stringContaining("Invalid config"),
+        "Invalid config",
       );
     });
   });
@@ -91,6 +156,9 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
           cause: { code: "UND_ERR_CONNECT_TIMEOUT", syscall: "connect" },
         }),
         Object.assign(new Error("DNS resolve failed"), { code: "UND_ERR_DNS_RESOLVE_FAILED" }),
+        Object.assign(new Error("connect ENETDOWN 149.154.167.220:443"), {
+          code: "ENETDOWN",
+        }),
         Object.assign(new Error("Connection reset"), { code: "ECONNRESET" }),
         Object.assign(new Error("Timeout"), { code: "ETIMEDOUT" }),
         Object.assign(
@@ -120,19 +188,45 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
         expectExitCodeFromUnhandled(transientErr, []);
       }
 
-      expect(consoleWarnSpy).toHaveBeenCalledWith(
+      expectConsoleLogWithMessage(
+        consoleWarnSpy,
         "[openclaw] Non-fatal unhandled rejection (continuing):",
-        expect.stringContaining("fetch failed"),
+        "fetch failed",
+      );
+    });
+
+    it("does not exit on transient SQLite errors", () => {
+      const sqliteCases: unknown[] = [
+        Object.assign(new Error("unable to open database file"), {
+          code: "SQLITE_CANTOPEN",
+        }),
+        Object.assign(new Error("database is locked"), {
+          code: "ERR_SQLITE_ERROR",
+          errcode: 5,
+          errstr: "database is locked",
+        }),
+        new Error("SQLITE_IOERR: disk I/O error"),
+      ];
+
+      for (const sqliteErr of sqliteCases) {
+        expectExitCodeFromUnhandled(sqliteErr, []);
+      }
+
+      expectConsoleLogWithMessage(
+        consoleWarnSpy,
+        "[openclaw] Non-fatal unhandled rejection (continuing):",
+        "unable to open database file",
       );
     });
 
     it("exits on generic errors without code", () => {
       const genericErr = new Error("Something went wrong");
 
-      expectExitCodeFromUnhandled(genericErr, [1]);
-      expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expectExitCodeFromUnhandled(genericErr, [1], "unhandled rejection");
+      expectConsoleLogWithMessage(
+        consoleErrorSpy,
         "[openclaw] Unhandled promise rejection:",
-        expect.stringContaining("Something went wrong"),
+        "Something went wrong",
       );
     });
 
@@ -144,7 +238,7 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
         },
       );
 
-      expectExitCodeFromUnhandled(slackErr, [1]);
+      expectExitCodeFromUnhandled(slackErr, [1], "unhandled rejection");
     });
 
     it("does not exit on AbortError and logs suppression warning", () => {
@@ -152,9 +246,10 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
       abortErr.name = "AbortError";
 
       expectExitCodeFromUnhandled(abortErr, []);
-      expect(consoleWarnSpy).toHaveBeenCalledWith(
+      expectConsoleLogWithMessage(
+        consoleWarnSpy,
         "[openclaw] Suppressed AbortError:",
-        expect.stringContaining("This operation was aborted"),
+        "This operation was aborted",
       );
     });
   });

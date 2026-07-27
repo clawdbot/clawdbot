@@ -1,12 +1,23 @@
+/**
+ * Test helpers for Browser CLI manage command suites.
+ */
+import type { Command } from "commander";
 import { vi } from "vitest";
 import * as parentCoreApiModule from "../core-api.js";
 import * as browserCliSharedModule from "./browser-cli-shared.js";
 import * as cliCoreApiModule from "./core-api.js";
 
-type BrowserRequest = { path?: string };
+type BrowserRequest = {
+  path?: string;
+  query?: Record<string, string | number | boolean | undefined>;
+};
 type BrowserRuntimeOptions = { timeoutMs?: number };
 
-export type BrowserManageCall = [unknown, BrowserRequest, BrowserRuntimeOptions | undefined];
+type BrowserManageCall = [
+  { timeout?: string } | undefined,
+  BrowserRequest,
+  BrowserRuntimeOptions | undefined,
+];
 
 const browserManageMocks = vi.hoisted(() => ({
   callBrowserRequest: vi.fn<
@@ -56,7 +67,8 @@ vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(browserCliR
 
 const { registerBrowserManageCommands } = await import("./browser-cli-manage.js");
 
-export function createBrowserManageProgram(params?: { withParentTimeout?: boolean }) {
+/** Creates a Browser CLI program with manage commands registered. */
+export function createBrowserManageProgram(params?: { withParentTimeout?: boolean }): Command {
   const { program, browser, parentOpts } = createBrowserProgram();
   if (params?.withParentTimeout) {
     browser.option("--timeout <ms>", "Timeout in ms", "30000");
@@ -65,10 +77,12 @@ export function createBrowserManageProgram(params?: { withParentTimeout?: boolea
   return program;
 }
 
+/** Returns the mocked callBrowserRequest used by manage command tests. */
 export function getBrowserManageCallBrowserRequestMock() {
   return browserManageMocks.callBrowserRequest;
 }
 
+/** Finds the first mocked Browser manage request for a route path. */
 export function findBrowserManageCall(path: string): BrowserManageCall | undefined {
   return browserManageMocks.callBrowserRequest.mock.calls.find(
     (call) => (call[1] ?? {}).path === path,

@@ -1,0 +1,80 @@
+title: Telegram tool-only usage footer
+
+scenario:
+  id: telegram-tool-only-usage-footer
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
+  coverage:
+    primary:
+      - observability.model-usage
+    secondary:
+      - channels.channel-native-commands
+  regressionRefs:
+    - openclaw/openclaw#87392
+  objective: Verify Telegram usage mode decorates a message-tool-only visible reply.
+  successCriteria:
+    - The usage command enables token footer mode.
+    - The next exact-marker reply includes the marker and a visible Usage footer.
+  codeRefs:
+    - src/auto-reply/reply/commands-session.ts
+    - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
+  execution:
+    profiles: { "telegram:adapter": 12, "telegram:all": 11 }
+    kind: flow
+    channel: telegram
+    summary: Enable token usage mode, then verify the next Telegram reply footer.
+    config:
+      marker: QA-TELEGRAM-USAGE-FOOTER-OK
+
+flow:
+  steps:
+    - name: next visible reply includes usage footer
+      actions:
+        - resetTransport: true
+        - sendInbound:
+            conversation: { id: telegram-command-room, kind: channel }
+            senderId: qa-command-operator
+            senderName: QA Command Operator
+            text:
+              expr: "transport.id === 'telegram' ? '/usage@openclaw tokens' : '/usage tokens'"
+        - waitForOutbound:
+            conversation: { id: telegram-command-room, kind: channel }
+            textIncludes: tokens
+            timeoutMs: 60000
+        - try:
+            actions:
+              - set: startIndex
+                value:
+                  expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+              - sendInbound:
+                  conversation: { id: telegram-command-room, kind: channel }
+                  senderId: qa-command-operator
+                  senderName: QA Command Operator
+                  text:
+                    expr: "`@openclaw Telegram usage footer QA. Reply exactly: ${config.marker}`"
+              - waitForOutbound:
+                  conversation: { id: telegram-command-room, kind: channel }
+                  sinceIndex: { ref: startIndex }
+                  textIncludes: { ref: config.marker }
+                  timeoutMs: 90000
+              - call: sleep
+                args: [1000]
+              - set: joinedReply
+                value:
+                  expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(startIndex).map((message) => message.text).join('\\n')"
+              - assert:
+                  expr: "joinedReply.includes(config.marker) && joinedReply.includes('Usage:')"
+                  message:
+                    expr: "`usage footer reply missing marker or footer: ${joinedReply}`"
+            finally:
+              - sendInbound:
+                  conversation: { id: telegram-command-room, kind: channel }
+                  senderId: qa-command-operator
+                  senderName: QA Command Operator
+                  text:
+                    expr: "transport.id === 'telegram' ? '/usage@openclaw off' : '/usage off'"
+              - waitForOutbound:
+                  conversation: { id: telegram-command-room, kind: channel }
+                  textIncludes: "Usage footer: off"
+                  timeoutMs: 60000
+      detailsExpr: joinedReply

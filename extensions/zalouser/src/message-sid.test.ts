@@ -1,21 +1,12 @@
+// Zalouser tests cover message sid plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   formatZalouserMessageSidFull,
-  parseZalouserMessageSidFull,
   resolveZalouserMessageSid,
   resolveZalouserReactionMessageIds,
 } from "./message-sid.js";
 
 describe("zalouser message sid helpers", () => {
-  it("parses MessageSidFull pairs", () => {
-    expect(parseZalouserMessageSidFull("111:222")).toEqual({
-      msgId: "111",
-      cliMsgId: "222",
-    });
-    expect(parseZalouserMessageSidFull("111")).toBeNull();
-    expect(parseZalouserMessageSidFull(undefined)).toBeNull();
-  });
-
   it("resolves reaction ids from explicit params first", () => {
     expect(
       resolveZalouserReactionMessageIds({

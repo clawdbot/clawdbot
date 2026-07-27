@@ -1,122 +1,154 @@
+// Windows schtasks tests cover scheduled task service lifecycle behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { encodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
 import {
-  deriveScheduledTaskRuntimeStatus,
-  parseSchtasksQuery,
   readScheduledTaskCommand,
+  readScheduledTaskRuntime,
   resolveTaskScriptPath,
 } from "./schtasks.js";
 
-describe("schtasks runtime parsing", () => {
-  it.each(["Ready", "Running"])("parses %s status", (status) => {
-    const output = [
+const schtasksResponses = vi.hoisted(
+  (): Array<{ code: number; stdout: string; stderr: string }> => [],
+);
+const resolveWindowsOemEncodingMock = vi.hoisted(() => vi.fn((): string | null => null));
+
+vi.mock("./schtasks-exec.js", () => ({
+  execSchtasks: async () => schtasksResponses.shift() ?? { code: 0, stdout: "", stderr: "" },
+}));
+
+vi.mock("../infra/windows-encoding.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/windows-encoding.js")>(
+    "../infra/windows-encoding.js",
+  );
+  return {
+    ...actual,
+    resolveWindowsOemCodePage: () => 437,
+    resolveWindowsOemEncoding: () => resolveWindowsOemEncodingMock(),
+  };
+});
+
+beforeEach(() => {
+  schtasksResponses.length = 0;
+  resolveWindowsOemEncodingMock.mockReset();
+  resolveWindowsOemEncodingMock.mockReturnValue(null);
+});
+
+describe("scheduled task runtime derivation", () => {
+  async function readRuntimeFromQueryOutput(output: string) {
+    schtasksResponses.push(
+      { code: 0, stdout: "", stderr: "" },
+      { code: 0, stdout: output, stderr: "" },
+    );
+    return await readScheduledTaskRuntime({
+      USERPROFILE: "C:\\Users\\test",
+      OPENCLAW_PROFILE: "default",
+    });
+  }
+
+  function taskQueryOutput(lines: string[]): string {
+    return [
       "TaskName: \\OpenClaw Gateway",
-      `Status: ${status}`,
       "Last Run Time: 1/8/2026 1:23:45 AM",
-      "Last Run Result: 0x0",
+      ...lines,
+      "",
     ].join("\r\n");
-    expect(parseSchtasksQuery(output)).toEqual({
-      status,
+  }
+
+  it.each(["Ready", "Running"])("parses %s status metadata", async (status) => {
+    const runtime = await readRuntimeFromQueryOutput(
+      [
+        "TaskName: \\OpenClaw Gateway",
+        `Status: ${status}`,
+        "Last Run Time: 1/8/2026 1:23:45 AM",
+        "Last Run Result: 0x0",
+      ].join("\r\n"),
+    );
+    expect(runtime).toMatchObject({
+      state: status,
       lastRunTime: "1/8/2026 1:23:45 AM",
       lastRunResult: "0x0",
     });
   });
 
-  it("parses 'Last Result' key variant (without 'Run') (#47726)", () => {
-    const output = [
-      "TaskName: \\OpenClaw Gateway",
-      "Status: Running",
-      "Last Run Time: 2026/3/16 8:34:15",
-      "Last Result: 267009",
-    ].join("\r\n");
-    expect(parseSchtasksQuery(output)).toEqual({
-      status: "Running",
+  it("parses 'Last Result' key variant (without 'Run') (#47726)", async () => {
+    const runtime = await readRuntimeFromQueryOutput(
+      [
+        "TaskName: \\OpenClaw Gateway",
+        "Status: Running",
+        "Last Run Time: 2026/3/16 8:34:15",
+        "Last Result: 267009",
+      ].join("\r\n"),
+    );
+    expect(runtime).toMatchObject({
+      status: "running",
+      state: "Running",
       lastRunTime: "2026/3/16 8:34:15",
       lastRunResult: "267009",
     });
   });
-});
 
-describe("scheduled task runtime derivation", () => {
-  it("treats Running + 0x41301 as running", () => {
-    expect(
-      deriveScheduledTaskRuntimeStatus({
-        status: "Running",
-        lastRunResult: "0x41301",
-      }),
-    ).toEqual({ status: "running" });
+  it("treats Running + 0x41301 as running", async () => {
+    await expect(
+      readRuntimeFromQueryOutput(taskQueryOutput(["Status: Running", "Last Run Result: 0x41301"])),
+    ).resolves.toMatchObject({ status: "running" });
   });
 
-  it("treats Running + decimal 267009 as running", () => {
-    expect(
-      deriveScheduledTaskRuntimeStatus({
-        status: "Running",
-        lastRunResult: "267009",
-      }),
-    ).toEqual({ status: "running" });
+  it("treats Running + decimal 267009 as running", async () => {
+    await expect(
+      readRuntimeFromQueryOutput(taskQueryOutput(["Status: Running", "Last Run Result: 267009"])),
+    ).resolves.toMatchObject({ status: "running" });
   });
 
-  it("treats Running without numeric result as unknown", () => {
-    expect(
-      deriveScheduledTaskRuntimeStatus({
-        status: "Running",
-      }),
-    ).toEqual({
+  it("treats Running without numeric result as unknown", async () => {
+    await expect(
+      readRuntimeFromQueryOutput(taskQueryOutput(["Status: Running"])),
+    ).resolves.toMatchObject({
       status: "unknown",
       detail: "Task status is locale-dependent and no numeric Last Run Result was available.",
     });
   });
 
-  it("treats non-running result codes as stopped", () => {
-    expect(
-      deriveScheduledTaskRuntimeStatus({
-        status: "Running",
-        lastRunResult: "0x0",
-      }),
-    ).toEqual({
+  it("treats non-running result codes as stopped", async () => {
+    await expect(
+      readRuntimeFromQueryOutput(taskQueryOutput(["Status: Running", "Last Run Result: 0x0"])),
+    ).resolves.toMatchObject({
       status: "stopped",
       detail: "Task Last Run Result=0x0; treating as not running.",
     });
   });
 
-  it("detects running via result code when status is localized (German)", () => {
-    expect(
-      deriveScheduledTaskRuntimeStatus({
-        status: "Wird ausgeführt",
-        lastRunResult: "0x41301",
-      }),
-    ).toEqual({ status: "running" });
+  it("detects running via result code when status is localized (German)", async () => {
+    await expect(
+      readRuntimeFromQueryOutput(
+        taskQueryOutput(["Status: Wird ausgeführt", "Last Run Result: 0x41301"]),
+      ),
+    ).resolves.toMatchObject({ status: "running" });
   });
 
-  it("detects running via result code when status is localized (French)", () => {
-    expect(
-      deriveScheduledTaskRuntimeStatus({
-        status: "En cours",
-        lastRunResult: "267009",
-      }),
-    ).toEqual({ status: "running" });
+  it("detects running via result code when status is localized (French)", async () => {
+    await expect(
+      readRuntimeFromQueryOutput(taskQueryOutput(["Status: En cours", "Last Run Result: 267009"])),
+    ).resolves.toMatchObject({ status: "running" });
   });
 
-  it("treats localized status as stopped when result code is not a running code", () => {
-    expect(
-      deriveScheduledTaskRuntimeStatus({
-        status: "Wird ausgeführt",
-        lastRunResult: "0x0",
-      }),
-    ).toEqual({
+  it("treats localized status as stopped when result code is not a running code", async () => {
+    await expect(
+      readRuntimeFromQueryOutput(
+        taskQueryOutput(["Status: Wird ausgeführt", "Last Run Result: 0x0"]),
+      ),
+    ).resolves.toMatchObject({
       status: "stopped",
       detail: "Task Last Run Result=0x0; treating as not running.",
     });
   });
 
-  it("treats localized status without result code as unknown", () => {
-    expect(
-      deriveScheduledTaskRuntimeStatus({
-        status: "Wird ausgeführt",
-      }),
-    ).toEqual({
+  it("treats localized status without result code as unknown", async () => {
+    await expect(
+      readRuntimeFromQueryOutput(taskQueryOutput(["Status: Wird ausgeführt"])),
+    ).resolves.toMatchObject({
       status: "unknown",
       detail: "Task status is locale-dependent and no numeric Last Run Result was available.",
     });
@@ -149,8 +181,31 @@ describe("resolveTaskScriptPath", () => {
       env: { HOME: "/home/test", OPENCLAW_PROFILE: "default" },
       expected: path.join("/home/test", ".openclaw", "gateway.cmd"),
     },
+    {
+      name: "uses a custom task script file name inside the state directory",
+      env: {
+        USERPROFILE: "C:\\Users\\test",
+        OPENCLAW_TASK_SCRIPT_NAME: "gateway-node.cmd",
+      },
+      expected: path.join("C:\\Users\\test", ".openclaw", "gateway-node.cmd"),
+    },
   ])("$name", ({ env, expected }) => {
     expect(resolveTaskScriptPath(env)).toBe(expected);
+  });
+
+  it.each([
+    "../gateway.cmd",
+    "..\\gateway.cmd",
+    "nested/gateway.cmd",
+    "nested\\gateway.cmd",
+    "gateway..cmd",
+  ])("rejects non-file task script name %s", (scriptName) => {
+    expect(() =>
+      resolveTaskScriptPath({
+        USERPROFILE: "C:\\Users\\test",
+        OPENCLAW_TASK_SCRIPT_NAME: scriptName,
+      }),
+    ).toThrow("OPENCLAW_TASK_SCRIPT_NAME must be a file name only");
   });
 });
 
@@ -158,6 +213,7 @@ describe("readScheduledTaskCommand", () => {
   async function withScheduledTaskScript(
     options: {
       scriptLines?: string[];
+      scriptEncoding?: "utf8" | "gbk";
       env?:
         | Record<string, string | undefined>
         | ((tmpDir: string) => Record<string, string | undefined>);
@@ -174,8 +230,15 @@ describe("readScheduledTaskCommand", () => {
       };
       if (options.scriptLines) {
         const scriptPath = resolveTaskScriptPath(env);
+        const script = options.scriptLines.join("\r\n");
         await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-        await fs.writeFile(scriptPath, options.scriptLines.join("\r\n"), "utf8");
+        let scriptBytes: Buffer = Buffer.from(script, "utf8");
+        if (options.scriptEncoding === "gbk") {
+          // Production bytes for a code-page install: marker line + GBK body.
+          resolveWindowsOemEncodingMock.mockReturnValueOnce("gbk");
+          scriptBytes = encodeWindowsLauncherScript({ format: "cmd", content: script });
+        }
+        await fs.writeFile(scriptPath, scriptBytes);
       }
       await run(env);
     } finally {
@@ -193,6 +256,58 @@ describe("readScheduledTaskCommand", () => {
         const result = await readScheduledTaskCommand(env);
         expect(result).toEqual({
           programArguments: ["C:/Program Files/Node/node.exe", "gateway.js"],
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
+  it("reads legacy UTF-8 scripts with CJK paths written before the encoding fix", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: ["@echo off", 'cd /d "C:\\Users\\苗振\\.openclaw"', "node gateway.js"],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js"],
+          workingDirectory: "C:\\Users\\苗振\\.openclaw",
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
+  it("reads marked ANSI scripts with CJK paths under a CJK code page (#107416)", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: ["@echo off", 'cd /d "C:\\Users\\苗振\\.openclaw"', "node gateway.js"],
+        scriptEncoding: "gbk",
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js"],
+          workingDirectory: "C:\\Users\\苗振\\.openclaw",
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
+  it("reads back GBK launchers whose bytes are also valid UTF-8 (隆) without corruption", async () => {
+    // GBK "隆" is C2 A1, which UTF-8 accepts as "¡"; the marker keeps readback
+    // from sniffing these bytes as UTF-8 and parsing a corrupted path.
+    await withScheduledTaskScript(
+      {
+        scriptLines: ["@echo off", 'cd /d "C:\\Users\\隆\\.openclaw"', "node gateway.js"],
+        scriptEncoding: "gbk",
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js"],
+          workingDirectory: "C:\\Users\\隆\\.openclaw",
           sourcePath: resolveTaskScriptPath(env),
         });
       },
@@ -236,6 +351,10 @@ describe("readScheduledTaskCommand", () => {
           environment: {
             NODE_ENV: "production",
             OPENCLAW_PORT: "18789",
+          },
+          environmentValueSources: {
+            NODE_ENV: "inline",
+            OPENCLAW_PORT: "inline",
           },
           sourcePath: resolveTaskScriptPath(env),
         });

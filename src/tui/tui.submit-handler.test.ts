@@ -1,6 +1,11 @@
+// Covers TUI submit handler behavior for chat input and slash commands.
+import type { TUI } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
+import { CustomEditor } from "./components/custom-editor.js";
+import { editorTheme } from "./theme/theme.js";
 import { createSubmitHarness } from "./tui-submit-test-helpers.js";
 import {
+  createEditorSubmitHandler,
   createSubmitBurstCoalescer,
   shouldEnableWindowsGitBashPasteFallback,
 } from "./tui-submit.js";
@@ -46,6 +51,71 @@ describe("createEditorSubmitHandler", () => {
     expect(editor.addToHistory).toHaveBeenCalledWith("hello");
   });
 
+  it("preserves normal message drafts when chat is busy", () => {
+    const { editor, sendMessage, handleCommand, handleBangLine, onBlockedMessageSubmit, onSubmit } =
+      createSubmitHarness({
+        admitMessage: () => "pending",
+      });
+
+    onSubmit("  wait, use c++ instead  ");
+
+    expect(editor.setText).toHaveBeenCalledWith("wait, use c++ instead");
+    expect(editor.addToHistory).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(handleCommand).not.toHaveBeenCalled();
+    expect(handleBangLine).not.toHaveBeenCalled();
+    expect(onBlockedMessageSubmit).toHaveBeenCalledWith("wait, use c++ instead", "pending");
+  });
+
+  it("passes the submitted text to the busy gate", () => {
+    const admitMessage = vi.fn((value: string) =>
+      value === "please stop" ? ("allowed" as const) : ("pending" as const),
+    );
+    const { sendMessage, onSubmit } = createSubmitHarness({ admitMessage });
+
+    onSubmit("please stop");
+
+    expect(admitMessage).toHaveBeenCalledWith("please stop");
+    expect(sendMessage).toHaveBeenCalledWith("please stop");
+  });
+
+  it("restores the real editor value after pi-tui clears a busy submit", () => {
+    const tui = { requestRender: vi.fn() } as unknown as TUI;
+    const editor = new CustomEditor(tui, editorTheme);
+    const sendMessage = vi.fn();
+    const onBlockedMessageSubmit = vi.fn();
+    editor.setText("wait, use c++ instead");
+    editor.onSubmit = createEditorSubmitHandler({
+      editor,
+      handleCommand: vi.fn(),
+      sendMessage,
+      handleBangLine: vi.fn(),
+      onSubmitError: vi.fn(),
+      admitMessage: () => "pending",
+      onBlockedMessageSubmit,
+    });
+
+    editor.handleInput("\r");
+
+    expect(editor.getText()).toBe("wait, use c++ instead");
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(onBlockedMessageSubmit).toHaveBeenCalledWith("wait, use c++ instead", "pending");
+  });
+
+  it("continues to route slash commands while chat is busy", () => {
+    const { editor, handleCommand, sendMessage, onBlockedMessageSubmit, onSubmit } =
+      createSubmitHarness({
+        admitMessage: () => "pending",
+      });
+
+    onSubmit("/abort");
+
+    expect(editor.setText).toHaveBeenCalledWith("");
+    expect(handleCommand).toHaveBeenCalledWith("/abort");
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(onBlockedMessageSubmit).not.toHaveBeenCalled();
+  });
+
   it("preserves internal newlines for multiline messages", () => {
     const { editor, handleCommand, sendMessage, handleBangLine, onSubmit } = createSubmitHarness();
 
@@ -55,6 +125,30 @@ describe("createEditorSubmitHandler", () => {
     expect(editor.addToHistory).toHaveBeenCalledWith("Line 1\nLine 2\nLine 3");
     expect(handleCommand).not.toHaveBeenCalled();
     expect(handleBangLine).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["local shell", "!false", "handleBangLine"],
+    ["command", "/broken", "handleCommand"],
+    ["message", "hello", "sendMessage"],
+  ] as const)("reports rejected %s handlers", async (action, input, handler) => {
+    const harness = createSubmitHarness();
+    harness[handler].mockRejectedValueOnce(new Error("gateway unavailable"));
+
+    harness.onSubmit(input);
+    await Promise.resolve();
+
+    expect(harness.onSubmitError).toHaveBeenCalledWith(action, expect.any(Error));
+  });
+
+  it("reports synchronous submit handler failures", () => {
+    const harness = createSubmitHarness();
+    harness.handleCommand.mockImplementationOnce(() => {
+      throw new Error("command exploded");
+    });
+
+    expect(() => harness.onSubmit("/broken")).not.toThrow();
+    expect(harness.onSubmitError).toHaveBeenCalledWith("command", expect.any(Error));
   });
 });
 

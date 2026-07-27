@@ -1,8 +1,9 @@
+// Imessage plugin module implements conversation id behavior.
 import {
   matchIMessageAcpConversation,
   normalizeIMessageAcpConversationId,
   resolveIMessageConversationIdFromTarget,
-} from "openclaw/plugin-sdk/imessage-core";
+} from "./conversation-id-core.js";
 import { normalizeIMessageHandle } from "./targets.js";
 
 export {

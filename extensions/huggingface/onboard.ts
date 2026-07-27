@@ -1,3 +1,4 @@
+// Huggingface setup module handles plugin onboarding behavior.
 import {
   createModelCatalogPresetAppliers,
   type OpenClawConfig,
@@ -20,10 +21,6 @@ const huggingfacePresetAppliers = createModelCatalogPresetAppliers({
     aliases: [{ modelRef: HUGGINGFACE_DEFAULT_MODEL_REF, alias: "Hugging Face" }],
   }),
 });
-
-export function applyHuggingfaceProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return huggingfacePresetAppliers.applyProviderConfig(cfg);
-}
 
 export function applyHuggingfaceConfig(cfg: OpenClawConfig): OpenClawConfig {
   return huggingfacePresetAppliers.applyConfig(cfg);

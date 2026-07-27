@@ -1,6 +1,7 @@
+// Parses config command set/unset requests into typed config operations.
 import { parseStandardSetUnsetSlashCommand } from "./commands-setunset-standard.js";
 
-export type ConfigCommand =
+type ConfigCommand =
   | { action: "show"; path?: string }
   | { action: "set"; path: string; value: unknown }
   | { action: "unset"; path: string }

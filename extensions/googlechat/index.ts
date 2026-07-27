@@ -1,15 +1,21 @@
-import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
-import { googlechatPlugin } from "./src/channel.js";
-import { setGoogleChatRuntime } from "./src/runtime.js";
+// Googlechat plugin entrypoint registers its OpenClaw integration.
+import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
-export { googlechatPlugin } from "./src/channel.js";
-export { setGoogleChatRuntime } from "./src/runtime.js";
-
-export default defineChannelPluginEntry({
+export default defineBundledChannelEntry({
   id: "googlechat",
   name: "Google Chat",
   description: "OpenClaw Google Chat channel plugin",
-  plugin: googlechatPlugin as ChannelPlugin,
-  setRuntime: setGoogleChatRuntime,
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./channel-plugin-api.js",
+    exportName: "googlechatPlugin",
+  },
+  secrets: {
+    specifier: "./secret-contract-api.js",
+    exportName: "channelSecrets",
+  },
+  runtime: {
+    specifier: "./runtime-api.js",
+    exportName: "setGoogleChatRuntime",
+  },
 });

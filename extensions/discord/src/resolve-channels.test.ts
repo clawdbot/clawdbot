@@ -1,5 +1,6 @@
+// Discord tests cover resolve channels plugin behavior.
+import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import { withFetchPreconnect } from "../../../test/helpers/extensions/fetch-mock.js";
 import { resolveDiscordChannelAllowlist } from "./resolve-channels.js";
 import { jsonResponse, urlToString } from "./test-http-helpers.js";
 
@@ -122,13 +123,14 @@ describe("resolveDiscordChannelAllowlist", () => {
       entry: "111/222",
     });
 
-    expect(res[0]).toMatchObject({
+    expect(res[0]).toEqual({
       input: "111/222",
       resolved: true,
       guildId: "111",
+      guildName: "Guild One",
       channelId: "222",
       channelName: "general",
-      guildName: "Guild One",
+      archived: undefined,
     });
   });
 
@@ -142,7 +144,7 @@ describe("resolveDiscordChannelAllowlist", () => {
       entry: "111/222",
     });
 
-    expect(res[0]).toMatchObject({
+    expect(res[0]).toEqual({
       input: "111/222",
       resolved: false,
       guildId: "111",

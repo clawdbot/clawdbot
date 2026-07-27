@@ -1,3 +1,4 @@
+// Minimax API module exposes the plugin public contract.
 export { buildMinimaxPortalProvider, buildMinimaxProvider } from "./provider-catalog.js";
 export {
   buildMinimaxApiModelDefinition,
@@ -19,3 +20,9 @@ export {
   MINIMAX_TEXT_MODEL_ORDER,
   MINIMAX_TEXT_MODEL_REFS,
 } from "./provider-models.js";
+export {
+  applyMinimaxApiConfig,
+  applyMinimaxApiConfigCn,
+  applyMinimaxApiProviderConfig,
+  applyMinimaxApiProviderConfigCn,
+} from "./onboard.js";

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
+// Generate Config Doc Baseline script supports OpenClaw repository automation.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { writeConfigDocBaselineStatefile } from "../src/config/doc-baseline.js";
+import { writeConfigDocBaselineArtifacts } from "../src/config/doc-baseline.js";
 
 const args = new Set(process.argv.slice(2));
 const checkOnly = args.has("--check");
@@ -12,7 +13,7 @@ if (checkOnly && args.has("--write")) {
 }
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const result = await writeConfigDocBaselineStatefile({
+const result = await writeConfigDocBaselineArtifacts({
   repoRoot,
   check: checkOnly,
 });
@@ -20,25 +21,38 @@ const result = await writeConfigDocBaselineStatefile({
 if (checkOnly) {
   if (!result.changed) {
     console.log(
-      `OK ${path.relative(repoRoot, result.jsonPath)} ${path.relative(repoRoot, result.statefilePath)}`,
+      `OK ${path.relative(repoRoot, result.hashPath)} and ${path.relative(repoRoot, result.countsPath)}`,
     );
     process.exit(0);
   }
-  console.error(
-    [
-      "Config baseline drift detected.",
-      `Expected current: ${path.relative(repoRoot, result.jsonPath)}`,
-      `Expected current: ${path.relative(repoRoot, result.statefilePath)}`,
-      "If this config-surface change is intentional, run `pnpm config:docs:gen` and commit the updated baseline files.",
-      "If not intentional, treat this as docs drift or a possible breaking config change and fix the schema/help changes first.",
-    ].join("\n"),
-  );
+  if (result.countBudgetError) {
+    console.error(
+      `Config baseline count budget invalid: ${result.countBudgetError}. Run \`pnpm config:docs:gen\` to recreate ${path.relative(repoRoot, result.countsPath)}.`,
+    );
+  }
+  for (const violation of result.countViolations) {
+    console.error(violation.message);
+  }
+  if (result.hashChanged) {
+    console.error(
+      [
+        "Config baseline drift detected.",
+        `Hash mismatch: ${path.relative(repoRoot, result.hashPath)}`,
+        "If this config-surface change is intentional, run `pnpm config:docs:gen` and commit the updated hash file.",
+        "If not intentional, treat this as docs drift or a possible breaking config change and fix the schema/help changes first.",
+      ].join("\n"),
+    );
+  }
   process.exit(1);
 }
 
 console.log(
   [
-    `Wrote ${path.relative(repoRoot, result.jsonPath)}`,
-    `Wrote ${path.relative(repoRoot, result.statefilePath)}`,
+    `Wrote ${path.relative(repoRoot, result.hashPath)}`,
+    `Wrote ${path.relative(repoRoot, result.countsPath)}`,
+    `Wrote ${path.relative(repoRoot, result.jsonPaths.combined)} (gitignored, local only)`,
+    `Wrote ${path.relative(repoRoot, result.jsonPaths.core)} (gitignored, local only)`,
+    `Wrote ${path.relative(repoRoot, result.jsonPaths.channel)} (gitignored, local only)`,
+    `Wrote ${path.relative(repoRoot, result.jsonPaths.plugin)} (gitignored, local only)`,
   ].join("\n"),
 );

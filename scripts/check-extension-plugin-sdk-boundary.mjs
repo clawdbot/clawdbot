@@ -1,20 +1,24 @@
 #!/usr/bin/env node
 
+// Inventories extension imports to enforce plugin SDK boundary rules.
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
 import {
+  BUNDLED_PLUGIN_PATH_PREFIX,
+  BUNDLED_PLUGIN_ROOT_DIR,
+} from "./lib/bundled-plugin-paths.mjs";
+import { classifyBundledExtensionSourcePath } from "./lib/extension-source-classifier.mjs";
+import {
+  collectModuleReferencesFromSource,
   diffInventoryEntries,
   normalizeRepoPath,
   resolveRepoSpecifier,
-  visitModuleSpecifiers,
   writeLine,
 } from "./lib/guard-inventory-utils.mjs";
-import { toLine } from "./lib/ts-guard-utils.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const extensionsRoot = path.join(repoRoot, "extensions");
+const extensionsRoot = path.join(repoRoot, BUNDLED_PLUGIN_ROOT_DIR);
 
 const MODES = new Set([
   "src-outside-plugin-sdk",
@@ -35,36 +39,26 @@ const baselinePathByMode = {
     "fixtures",
     "extension-plugin-sdk-internal-inventory.json",
   ),
-  "relative-outside-package": path.join(
-    repoRoot,
-    "test",
-    "fixtures",
-    "extension-relative-outside-package-inventory.json",
-  ),
 };
 
 let allInventoryByModePromise;
-let parsedExtensionSourceFilesPromise;
+let extensionModuleReferencesPromise;
 
 const ruleTextByMode = {
   "src-outside-plugin-sdk":
-    "Rule: production extensions/** must not import src/** outside src/plugin-sdk/**",
+    "Rule: production bundled plugins must not import src/** outside src/plugin-sdk/**",
   "plugin-sdk-internal":
-    "Rule: production extensions/** must not import src/plugin-sdk-internal/**",
+    "Rule: production bundled plugins must not import src/plugin-sdk-internal/**",
   "relative-outside-package":
-    "Rule: production extensions/** must not use relative imports that escape their own extension package root",
+    "Rule: production bundled plugins must not use relative imports that escape their own package root",
 };
 
 function isCodeFile(fileName) {
   return /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(fileName);
 }
 
-function isTestLikeFile(relativePath) {
-  return (
-    /(^|\/)(__tests__|fixtures|test|tests)\//.test(relativePath) ||
-    /(^|\/)[^/]*test-(support|helpers)\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(relativePath) ||
-    /\.(test|spec)\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(relativePath)
-  );
+function isBoundaryCanaryFile(fileName) {
+  return fileName.includes("__rootdir_boundary_canary__");
 }
 
 async function collectExtensionSourceFiles(rootDir) {
@@ -80,11 +74,11 @@ async function collectExtensionSourceFiles(rootDir) {
         await walk(fullPath);
         continue;
       }
-      if (!entry.isFile() || !isCodeFile(entry.name)) {
+      if (!entry.isFile() || !isCodeFile(entry.name) || isBoundaryCanaryFile(entry.name)) {
         continue;
       }
       const relativePath = normalizeRepoPath(repoRoot, fullPath);
-      if (isTestLikeFile(relativePath)) {
+      if (classifyBundledExtensionSourcePath(relativePath).isTestLike) {
         continue;
       }
       out.push(fullPath);
@@ -96,38 +90,40 @@ async function collectExtensionSourceFiles(rootDir) {
   );
 }
 
-async function collectParsedExtensionSourceFiles() {
-  if (!parsedExtensionSourceFilesPromise) {
-    parsedExtensionSourceFilesPromise = (async () => {
+async function collectExtensionModuleReferences() {
+  if (!extensionModuleReferencesPromise) {
+    extensionModuleReferencesPromise = (async () => {
       const files = await collectExtensionSourceFiles(extensionsRoot);
-      return await Promise.all(
+      const referenced = await Promise.all(
         files.map(async (filePath) => {
           const source = await fs.readFile(filePath, "utf8");
-          const scriptKind =
-            filePath.endsWith(".tsx") || filePath.endsWith(".jsx")
-              ? ts.ScriptKind.TSX
-              : ts.ScriptKind.TS;
+          if (!mayContainModuleSpecifier(source)) {
+            return null;
+          }
           return {
             filePath,
-            sourceFile: ts.createSourceFile(
-              filePath,
-              source,
-              ts.ScriptTarget.Latest,
-              true,
-              scriptKind,
-            ),
+            references: collectModuleReferencesFromSource(source),
           };
         }),
       );
+      return referenced.filter((entry) => entry && entry.references.length > 0);
     })();
   }
-  return await parsedExtensionSourceFilesPromise;
+  return await extensionModuleReferencesPromise;
+}
+
+function mayContainModuleSpecifier(source) {
+  return (
+    /\bfrom\s*["']/.test(source) ||
+    /\bimport\s*(?:\(|["']|type\b|[\w*{])/.test(source) ||
+    /\bexport\s*(?:type\s+)?(?:\*|{)[^;\n]*\bfrom\s*["']/.test(source)
+  );
 }
 
 function resolveExtensionRoot(filePath) {
   const relativePath = normalizeRepoPath(repoRoot, filePath);
   const segments = relativePath.split("/");
-  if (segments[0] !== "extensions" || !segments[1]) {
+  if (segments[0] !== BUNDLED_PLUGIN_ROOT_DIR || !segments[1]) {
     return null;
   }
   return `${segments[0]}/${segments[1]}`;
@@ -147,8 +143,8 @@ function classifyReason(mode, kind, resolvedPath, specifier) {
     if (resolvedPath?.startsWith("src/")) {
       return `${verb} core src path via relative path outside the extension package`;
     }
-    if (resolvedPath?.startsWith("extensions/")) {
-      return `${verb} another extension via relative path outside the extension package`;
+    if (resolvedPath?.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
+      return `${verb} another bundled plugin via relative path outside the extension package`;
     }
     return `${verb} relative path ${specifier} outside the extension package`;
   }
@@ -185,7 +181,7 @@ function shouldReport(mode, resolvedPath) {
   return !resolvedPath.startsWith("src/plugin-sdk/");
 }
 
-function collectEntriesByModeFromSourceFile(sourceFile, filePath) {
+function collectEntriesByModeFromModuleReferences(filePath, references) {
   const entriesByMode = {
     "src-outside-plugin-sdk": [],
     "plugin-sdk-internal": [],
@@ -194,11 +190,11 @@ function collectEntriesByModeFromSourceFile(sourceFile, filePath) {
   const extensionRoot = resolveExtensionRoot(filePath);
   const relativeFile = normalizeRepoPath(repoRoot, filePath);
 
-  function push(kind, specifierNode, specifier) {
+  function push(kind, line, specifier) {
     const resolvedPath = resolveRepoSpecifier(repoRoot, specifier, filePath);
     const baseEntry = {
       file: relativeFile,
-      line: toLine(sourceFile, specifierNode),
+      line,
       kind,
       specifier,
       resolvedPath,
@@ -224,26 +220,29 @@ function collectEntriesByModeFromSourceFile(sourceFile, filePath) {
     }
   }
 
-  visitModuleSpecifiers(ts, sourceFile, ({ kind, specifier, specifierNode }) => {
-    push(kind, specifierNode, specifier);
-  });
+  for (const { kind, line, specifier } of references) {
+    push(kind, line, specifier);
+  }
   return entriesByMode;
 }
 
-export async function collectExtensionPluginSdkBoundaryInventory(mode) {
+/**
+ * Collects the current extension plugin SDK boundary inventory.
+ */
+async function collectExtensionPluginSdkBoundaryInventory(mode) {
   if (!MODES.has(mode)) {
     throw new Error(`Unknown mode: ${mode}`);
   }
   if (!allInventoryByModePromise) {
     allInventoryByModePromise = (async () => {
-      const files = await collectParsedExtensionSourceFiles();
+      const files = await collectExtensionModuleReferences();
       const inventoryByMode = {
         "src-outside-plugin-sdk": [],
         "plugin-sdk-internal": [],
         "relative-outside-package": [],
       };
-      for (const { filePath, sourceFile } of files) {
-        const entriesByMode = collectEntriesByModeFromSourceFile(sourceFile, filePath);
+      for (const { filePath, references } of files) {
+        const entriesByMode = collectEntriesByModeFromModuleReferences(filePath, references);
         for (const inventoryMode of MODES) {
           inventoryByMode[inventoryMode].push(...entriesByMode[inventoryMode]);
         }
@@ -258,14 +257,15 @@ export async function collectExtensionPluginSdkBoundaryInventory(mode) {
   return inventoryByMode[mode];
 }
 
+/**
+ * Reads the checked-in expected boundary inventory.
+ */
 export async function readExpectedInventory(mode) {
   try {
     return JSON.parse(await fs.readFile(baselinePathByMode[mode], "utf8"));
   } catch (error) {
     if (
-      (mode === "plugin-sdk-internal" ||
-        mode === "src-outside-plugin-sdk" ||
-        mode === "relative-outside-package") &&
+      (mode === "plugin-sdk-internal" || mode === "src-outside-plugin-sdk") &&
       error &&
       typeof error === "object" &&
       "code" in error &&
@@ -277,6 +277,9 @@ export async function readExpectedInventory(mode) {
   }
 }
 
+/**
+ * Diffs expected and actual boundary inventory entries.
+ */
 export function diffInventory(expected, actual) {
   return diffInventoryEntries(expected, actual, compareEntries);
 }
@@ -301,10 +304,14 @@ function formatInventoryHuman(mode, inventory) {
   return lines.join("\n");
 }
 
-export async function runExtensionPluginSdkBoundaryCheck(argv = process.argv.slice(2), io) {
+/**
+ * Runs the boundary inventory check with CLI-style inputs and outputs.
+ */
+async function runExtensionPluginSdkBoundaryCheck(argv, io) {
+  const args = argv ?? process.argv.slice(2);
   const streams = io ?? { stdout: process.stdout, stderr: process.stderr };
-  const json = argv.includes("--json");
-  const modeArg = argv.find((arg) => arg.startsWith("--mode="));
+  const json = args.includes("--json");
+  const modeArg = args.find((arg) => arg.startsWith("--mode="));
   const mode = modeArg?.slice("--mode=".length) ?? "src-outside-plugin-sdk";
   if (!MODES.has(mode)) {
     throw new Error(`Unknown mode: ${mode}`);
@@ -349,7 +356,10 @@ export async function runExtensionPluginSdkBoundaryCheck(argv = process.argv.sli
   return 1;
 }
 
-export async function main(argv = process.argv.slice(2), io) {
+/**
+ * Entrypoint wrapper for the extension plugin SDK boundary check.
+ */
+export async function main(argv, io) {
   const exitCode = await runExtensionPluginSdkBoundaryCheck(argv, io);
   if (!io) {
     process.exitCode = exitCode;

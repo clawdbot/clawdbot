@@ -1,3 +1,4 @@
+// Covers exec host socket request signing and response handling.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const requestJsonlSocketMock = vi.hoisted(() => vi.fn());
@@ -7,6 +8,21 @@ vi.mock("./jsonl-socket.js", () => ({
 }));
 
 import { requestExecHostViaSocket } from "./exec-host.js";
+
+type JsonlSocketCall = {
+  socketPath: string;
+  requestLine: string;
+  timeoutMs: number;
+  accept: (msg: unknown) => unknown;
+};
+
+function requireJsonlSocketCall(): JsonlSocketCall {
+  const call = requestJsonlSocketMock.mock.calls[0]?.[0];
+  if (!call) {
+    throw new Error("expected requestJsonlSocket call");
+  }
+  return call as JsonlSocketCall;
+}
 
 describe("requestExecHostViaSocket", () => {
   beforeEach(() => {
@@ -45,21 +61,11 @@ describe("requestExecHostViaSocket", () => {
       }),
     ).resolves.toEqual({ ok: true, payload: { success: true } });
 
-    const call = requestJsonlSocketMock.mock.calls[0]?.[0] as
-      | {
-          socketPath: string;
-          payload: string;
-          timeoutMs: number;
-          accept: (msg: unknown) => unknown;
-        }
-      | undefined;
-    if (!call) {
-      throw new Error("expected requestJsonlSocket call");
-    }
+    const call = requireJsonlSocketCall();
 
     expect(call.socketPath).toBe("/tmp/socket");
     expect(call.timeoutMs).toBe(20_000);
-    const payload = JSON.parse(call.payload) as {
+    const payload = JSON.parse(call.requestLine) as {
       type: string;
       id: string;
       nonce: string;
@@ -102,8 +108,6 @@ describe("requestExecHostViaSocket", () => {
       }),
     ).resolves.toBeNull();
 
-    expect(
-      (requestJsonlSocketMock.mock.calls[0]?.[0] as { timeoutMs?: number } | undefined)?.timeoutMs,
-    ).toBe(123);
+    expect(requireJsonlSocketCall().timeoutMs).toBe(123);
   });
 });

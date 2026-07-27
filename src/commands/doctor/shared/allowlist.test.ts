@@ -1,3 +1,4 @@
+// Allowlist tests cover doctor allowlist diagnostics and repair helpers.
 import { describe, expect, it } from "vitest";
 import { hasAllowFromEntries } from "./allowlist.js";
 

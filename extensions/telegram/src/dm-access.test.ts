@@ -1,5 +1,6 @@
+// Telegram tests cover dm access plugin behavior.
 import type { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const createChannelPairingChallengeIssuerMock = vi.hoisted(() => vi.fn());
 const upsertChannelPairingRequestMock = vi.hoisted(() =>
@@ -31,7 +32,7 @@ vi.mock("./api-logging.js", () => ({
   withTelegramApiErrorLogging: withTelegramApiErrorLoggingMock,
 }));
 
-import type { Message } from "@grammyjs/types";
+import type { Message } from "grammy/types";
 import { normalizeAllowFrom } from "./bot-access.js";
 let enforceTelegramDmAccess: typeof import("./dm-access.js").enforceTelegramDmAccess;
 
@@ -51,26 +52,59 @@ function createDmMessage(overrides: Partial<Message> = {}): Message {
   } as Message;
 }
 
+async function enforceDefaultDmAccess(params: {
+  dmPolicy: "open" | "disabled" | "pairing";
+  allow?: string[];
+}) {
+  const bot = { api: { sendMessage: vi.fn(async () => undefined) } };
+  const allowed = await enforceTelegramDmAccess({
+    isGroup: false,
+    dmPolicy: params.dmPolicy,
+    msg: createDmMessage(),
+    chatId: 42,
+    effectiveDmAllow: normalizeAllowFrom(params.allow ?? []),
+    accountId: "main",
+    bot: bot as never,
+    logger: { info: vi.fn() },
+    upsertPairingRequest: upsertChannelPairingRequestMock,
+  });
+
+  return { allowed, bot };
+}
+
 describe("enforceTelegramDmAccess", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.clearAllMocks();
+  beforeAll(async () => {
     ({ enforceTelegramDmAccess } = await import("./dm-access.js"));
   });
 
-  it("allows DMs when policy is open", async () => {
-    const bot = { api: { sendMessage: vi.fn(async () => undefined) } };
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
 
-    const allowed = await enforceTelegramDmAccess({
-      isGroup: false,
+  it("allows DMs when policy is open with wildcard allowFrom", async () => {
+    const { allowed, bot } = await enforceDefaultDmAccess({
       dmPolicy: "open",
-      msg: createDmMessage(),
-      chatId: 42,
-      effectiveDmAllow: normalizeAllowFrom([]),
-      accountId: "main",
-      bot: bot as never,
-      logger: { info: vi.fn() },
-      upsertPairingRequest: upsertChannelPairingRequestMock,
+      allow: ["*"],
+    });
+
+    expect(allowed).toBe(true);
+    expect(bot.api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("blocks non-allowlisted DMs when open policy has no wildcard", async () => {
+    const { allowed, bot } = await enforceDefaultDmAccess({
+      dmPolicy: "open",
+      allow: ["99999"],
+    });
+
+    expect(allowed).toBe(false);
+    expect(bot.api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("allows allowlisted DMs when open policy was constrained by a restrictive allowFrom", async () => {
+    const { allowed, bot } = await enforceDefaultDmAccess({
+      dmPolicy: "open",
+      allow: ["12345"],
     });
 
     expect(allowed).toBe(true);
@@ -78,32 +112,15 @@ describe("enforceTelegramDmAccess", () => {
   });
 
   it("blocks DMs when policy is disabled", async () => {
-    const allowed = await enforceTelegramDmAccess({
-      isGroup: false,
-      dmPolicy: "disabled",
-      msg: createDmMessage(),
-      chatId: 42,
-      effectiveDmAllow: normalizeAllowFrom([]),
-      accountId: "main",
-      bot: { api: { sendMessage: vi.fn(async () => undefined) } } as never,
-      logger: { info: vi.fn() },
-      upsertPairingRequest: upsertChannelPairingRequestMock,
-    });
+    const { allowed } = await enforceDefaultDmAccess({ dmPolicy: "disabled" });
 
     expect(allowed).toBe(false);
   });
 
   it("allows DMs for allowlisted senders under pairing policy", async () => {
-    const allowed = await enforceTelegramDmAccess({
-      isGroup: false,
+    const { allowed } = await enforceDefaultDmAccess({
       dmPolicy: "pairing",
-      msg: createDmMessage(),
-      chatId: 42,
-      effectiveDmAllow: normalizeAllowFrom(["12345"]),
-      accountId: "main",
-      bot: { api: { sendMessage: vi.fn(async () => undefined) } } as never,
-      logger: { info: vi.fn() },
-      upsertPairingRequest: upsertChannelPairingRequestMock,
+      allow: ["12345"],
     });
 
     expect(allowed).toBe(true);
@@ -140,15 +157,17 @@ describe("enforceTelegramDmAccess", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
     const [firstCall] = sendMessage.mock.calls as Array<unknown[]>;
     expect(firstCall?.[0]).toBe(42);
-    const sentText = String(firstCall?.[1] ?? "");
+    const sentText = typeof firstCall?.[1] === "string" ? firstCall[1] : "";
     expect(sentText).toContain("Pairing code:");
-    expect(firstCall?.[2]).toEqual(expect.objectContaining({ parse_mode: "HTML" }));
+    expect(firstCall?.[2]).toEqual({ parse_mode: "HTML" });
     expect(logger.info).toHaveBeenCalledWith(
-      expect.objectContaining({
+      {
         chatId: "42",
         senderUserId: "12345",
         username: "tester",
-      }),
+        firstName: "Test",
+        lastName: undefined,
+      },
       "telegram pairing request",
     );
   });

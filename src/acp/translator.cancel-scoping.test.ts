@@ -1,8 +1,10 @@
 import type { CancelNotification, PromptRequest, PromptResponse } from "@agentclientprotocol/sdk";
+import { createInMemorySessionStore } from "@openclaw/acp-core/session";
+/** Tests prompt cancellation scoping across concurrent ACP sessions and Gateway runs. */
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
-import type { EventFrame } from "../gateway/protocol/index.js";
-import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
 
@@ -12,6 +14,16 @@ type Harness = {
   sessionUpdateSpy: ReturnType<typeof vi.fn>;
   sessionStore: ReturnType<typeof createInMemorySessionStore>;
   sentRunIds: string[];
+};
+
+type SessionUpdatePayload = {
+  sessionId?: string;
+  update?: {
+    sessionUpdate?: string;
+    content?: unknown;
+    toolCallId?: string;
+    status?: string;
+  };
 };
 
 function createPromptRequest(sessionId: string): PromptRequest {
@@ -69,8 +81,7 @@ function createHarness(sessions: Array<{ sessionId: string; sessionKey: string }
   return {
     agent,
     requestSpy,
-    // eslint-disable-next-line @typescript-eslint/unbound-method
-    sessionUpdateSpy: connection.sessionUpdate as unknown as ReturnType<typeof vi.fn>,
+    sessionUpdateSpy: connection["sessionUpdate"] as unknown as ReturnType<typeof vi.fn>,
     sessionStore,
     sentRunIds,
   };
@@ -87,7 +98,7 @@ async function startPendingPrompt(
   });
   return {
     promptPromise,
-    runId: harness.sentRunIds[before],
+    runId: expectDefined(harness.sentRunIds[before], "harness.sentRunIds[before] test invariant"),
   };
 }
 
@@ -121,6 +132,14 @@ async function deliverFinalChatEventAndExpectEndTurn(
     }),
   );
   await expect(pending.promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+}
+
+function sessionUpdatePayloadAt(harness: Harness, index: number): SessionUpdatePayload {
+  const [payload] = harness.sessionUpdateSpy.mock.calls[index] ?? [];
+  if (!payload) {
+    throw new Error(`expected session update call ${index + 1}`);
+  }
+  return payload as SessionUpdatePayload;
 }
 
 describe("acp translator cancel and run scoping", () => {
@@ -215,26 +234,21 @@ describe("acp translator cancel and run scoping", () => {
       }),
     );
 
-    expect(harness.sessionUpdateSpy).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        sessionId: "session-1",
-        update: expect.objectContaining({
-          sessionUpdate: "agent_thought_chunk",
-          content: { type: "text", text: "Internal loop about NO_REPLY" },
-        }),
-      }),
-    );
-    expect(harness.sessionUpdateSpy).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        sessionId: "session-1",
-        update: expect.objectContaining({
-          sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text: "Final visible reply" },
-        }),
-      }),
-    );
+    const thoughtPayload = sessionUpdatePayloadAt(harness, 0);
+    expect(thoughtPayload.sessionId).toBe("session-1");
+    expect(thoughtPayload.update?.sessionUpdate).toBe("agent_thought_chunk");
+    expect(thoughtPayload.update?.content).toEqual({
+      type: "text",
+      text: "Internal loop about NO_REPLY",
+    });
+
+    const messagePayload = sessionUpdatePayloadAt(harness, 1);
+    expect(messagePayload.sessionId).toBe("session-1");
+    expect(messagePayload.update?.sessionUpdate).toBe("agent_message_chunk");
+    expect(messagePayload.update?.content).toEqual({
+      type: "text",
+      text: "Final visible reply",
+    });
   });
 
   it("drops tool events when runId does not match the active prompt", async () => {
@@ -293,17 +307,12 @@ describe("acp translator cancel and run scoping", () => {
         },
       }),
     );
-    expect(harness.sessionUpdateSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "session-2",
-        update: expect.objectContaining({
-          sessionUpdate: "tool_call",
-          toolCallId: "tool-2",
-          status: "in_progress",
-        }),
-      }),
-    );
     expect(harness.sessionUpdateSpy).toHaveBeenCalledTimes(1);
+    const toolPayload = sessionUpdatePayloadAt(harness, 0);
+    expect(toolPayload.sessionId).toBe("session-2");
+    expect(toolPayload.update?.sessionUpdate).toBe("tool_call");
+    expect(toolPayload.update?.toolCallId).toBe("tool-2");
+    expect(toolPayload.update?.status).toBe("in_progress");
 
     await deliverFinalChatEventAndExpectEndTurn(harness, sessionKey, pending2, 1);
     expect(harness.sessionStore.getSession("session-1")?.activeRunId).toBe(pending1.runId);

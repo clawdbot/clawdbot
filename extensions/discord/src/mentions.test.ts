@@ -1,9 +1,12 @@
+// Discord tests cover mentions plugin behavior.
 import { beforeEach, describe, expect, it } from "vitest";
+import { rememberDiscordDirectoryUser } from "./directory-cache.js";
+import { clearDiscordDirectoryCacheForTest } from "./directory-cache.test-support.js";
 import {
-  __resetDiscordDirectoryCacheForTest,
-  rememberDiscordDirectoryUser,
-} from "./directory-cache.js";
-import { formatMention, rewriteDiscordKnownMentions } from "./mentions.js";
+  discordTextHasBroadcastMention,
+  formatMention,
+  rewriteDiscordKnownMentions,
+} from "./mentions.js";
 
 describe("formatMention", () => {
   it("formats user mentions from ids", () => {
@@ -29,7 +32,7 @@ describe("formatMention", () => {
 
 describe("rewriteDiscordKnownMentions", () => {
   beforeEach(() => {
-    __resetDiscordDirectoryCacheForTest();
+    clearDiscordDirectoryCacheForTest();
   });
 
   it("rewrites @name mentions when a cached user id exists", () => {
@@ -42,6 +45,32 @@ describe("rewriteDiscordKnownMentions", () => {
       accountId: "default",
     });
     expect(rewritten).toBe("ping <@123456789> and <@123456789>");
+  });
+
+  it("rewrites configured mention aliases before the cache", () => {
+    rememberDiscordDirectoryUser({
+      accountId: "default",
+      userId: "111111111",
+      handles: ["vladislava"],
+    });
+    const rewritten = rewriteDiscordKnownMentions("ping @Vladislava and @BuildBot#1234", {
+      accountId: "default",
+      mentionAliases: {
+        BuildBot: "222222222",
+        Vladislava: "333333333",
+      },
+    });
+    expect(rewritten).toBe("ping <@333333333> and <@222222222>");
+  });
+
+  it("supports configured aliases with a leading @ key", () => {
+    const rewritten = rewriteDiscordKnownMentions("ping @OpsLead", {
+      accountId: "default",
+      mentionAliases: {
+        "@opslead": "444444444",
+      },
+    });
+    expect(rewritten).toBe("ping <@444444444>");
   });
 
   it("preserves unknown mentions and reserved mentions", () => {
@@ -71,6 +100,19 @@ describe("rewriteDiscordKnownMentions", () => {
     expect(rewritten).toBe("inline `@alice` fence ```\n@alice\n``` text <@123456789>");
   });
 
+  it("does not end longer code fences at triple-backtick literals inside the body", () => {
+    rememberDiscordDirectoryUser({
+      accountId: "default",
+      userId: "123456789",
+      handles: ["alice"],
+    });
+    const text = '````ts\nconst fence = "```";\n@alice\n```` text @alice';
+    const rewritten = rewriteDiscordKnownMentions(text, {
+      accountId: "default",
+    });
+    expect(rewritten).toBe('````ts\nconst fence = "```";\n@alice\n```` text <@123456789>');
+  });
+
   it("is account-scoped", () => {
     rememberDiscordDirectoryUser({
       accountId: "ops",
@@ -81,5 +123,17 @@ describe("rewriteDiscordKnownMentions", () => {
     const opsRewrite = rewriteDiscordKnownMentions("@alice", { accountId: "ops" });
     expect(defaultRewrite).toBe("@alice");
     expect(opsRewrite).toBe("<@999888777>");
+  });
+});
+
+describe("discordTextHasBroadcastMention", () => {
+  it("detects @everyone and @here", () => {
+    expect(discordTextHasBroadcastMention("heads up @everyone")).toBe(true);
+    expect(discordTextHasBroadcastMention("@here please")).toBe(true);
+  });
+
+  it("ignores targeted mentions and lookalikes", () => {
+    expect(discordTextHasBroadcastMention("ping <@123>")).toBe(false);
+    expect(discordTextHasBroadcastMention("mail me at a@everyones")).toBe(false);
   });
 });

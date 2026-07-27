@@ -1,35 +1,31 @@
+// Media utility adapters for node CLI commands and temporary media outputs.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+export { asFiniteNumber as asNumber } from "../../packages/normalization-core/src/number-coercion.js";
+import { readStringValue } from "../../packages/normalization-core/src/string-coerce.js";
+export { asRecord } from "../../packages/normalization-core/src/record-coerce.js";
+export { asBoolean } from "../utils/boolean.js";
 
-export function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-}
-
-export function asString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
-export function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-export function asBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
-}
+export const asString = readStringValue;
 
 export function resolveTempPathParts(opts: { ext: string; tmpDir?: string; id?: string }): {
   ext: string;
   tmpDir: string;
   id: string;
 } {
+  // Restrict extensions before writing temp media paths derived from CLI/user input.
   const tmpDir = opts.tmpDir ?? resolvePreferredOpenClawTmpDir();
+  const rawExt = opts.ext.startsWith(".") ? opts.ext : `.${opts.ext}`;
+  if (!/^\.[A-Za-z0-9][A-Za-z0-9_-]{0,15}$/u.test(rawExt)) {
+    throw new Error("invalid media format");
+  }
   if (!opts.tmpDir) {
     fs.mkdirSync(tmpDir, { recursive: true, mode: 0o700 });
   }
   return {
     tmpDir,
     id: opts.id ?? randomUUID(),
-    ext: opts.ext.startsWith(".") ? opts.ext : `.${opts.ext}`,
+    ext: rawExt,
   };
 }

@@ -1,3 +1,4 @@
+// Typing start guard tests cover debounce and safety checks before starting typing indicators.
 import { describe, expect, it, vi } from "vitest";
 import { createTypingStartGuard } from "./typing-start-guard.js";
 

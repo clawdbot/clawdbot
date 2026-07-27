@@ -19,7 +19,7 @@ type htmlReplacement struct {
 	Value string
 }
 
-func translateHTMLBlocks(ctx context.Context, translator *PiTranslator, body, srcLang, tgtLang string) (string, error) {
+func translateHTMLBlocks(ctx context.Context, translator docsTranslator, body, srcLang, tgtLang string) (string, error) {
 	source := []byte(body)
 	r := text.NewReader(source)
 	md := goldmark.New(
@@ -95,7 +95,7 @@ func sortHTMLReplacements(replacements []htmlReplacement) {
 	})
 }
 
-func translateHTMLBlock(ctx context.Context, translator *PiTranslator, htmlText, srcLang, tgtLang string) (string, error) {
+func translateHTMLBlock(ctx context.Context, translator docsTranslator, htmlText, srcLang, tgtLang string) (string, error) {
 	tokenizer := html.NewTokenizer(strings.NewReader(htmlText))
 	var out strings.Builder
 	skipDepth := 0

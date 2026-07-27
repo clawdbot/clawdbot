@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "../config/config.js";
+// Shared test helpers for provider usage loaders.
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createProviderUsageFetch } from "../test-utils/provider-usage-fetch.js";
 import type { ProviderAuth } from "./provider-usage.auth.js";
 import type { UsageSummary } from "./provider-usage.types.js";
@@ -25,7 +26,7 @@ export async function loadUsageWithAuth<T extends ProviderUsageLoader>(
     now: usageNow,
     auth,
     fetch: mockFetch as unknown as typeof fetch,
-    // These tests exercise the built-in usage fetchers, not provider plugin hooks.
-    config: { plugins: { enabled: false } } as OpenClawConfig,
+    // Keep config minimal; bundled provider usage hooks own the provider-specific fetchers now.
+    config: {} as OpenClawConfig,
   });
 }

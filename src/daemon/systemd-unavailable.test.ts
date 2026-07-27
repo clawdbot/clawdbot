@@ -1,3 +1,4 @@
+// Systemd unavailable tests cover fallback behavior when systemd is not present.
 import { describe, expect, it } from "vitest";
 import {
   classifySystemdUnavailableDetail,
@@ -20,6 +21,11 @@ describe("classifySystemdUnavailableDetail", () => {
     expect(
       classifySystemdUnavailableDetail(
         "systemctl --user unavailable: Failed to connect to bus: No medium found",
+      ),
+    ).toBe("user_bus_unavailable");
+    expect(
+      classifySystemdUnavailableDetail(
+        "systemctl --user unavailable: Failed to connect to bus: Permission denied",
       ),
     ).toBe("user_bus_unavailable");
   });

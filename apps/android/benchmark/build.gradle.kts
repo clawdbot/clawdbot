@@ -1,45 +1,46 @@
 plugins {
-    id("com.android.test")
-    id("org.jlleitschuh.gradle.ktlint")
+  alias(libs.plugins.android.test)
+  alias(libs.plugins.ktlint)
 }
 
 android {
-    namespace = "ai.openclaw.app.benchmark"
-    compileSdk = 36
+  namespace = "ai.openclaw.app.benchmark"
+  // Match the target app while targetSdk remains an independent behavior opt-in.
+  compileSdk = 37
 
-    defaultConfig {
-        minSdk = 31
-        targetSdk = 36
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        testInstrumentationRunnerArguments["androidx.benchmark.suppressErrors"] = "DEBUGGABLE,EMULATOR"
-    }
+  defaultConfig {
+    minSdk = 31
+    targetSdk = 36
+    testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    testInstrumentationRunnerArguments["androidx.benchmark.suppressErrors"] = "DEBUGGABLE,EMULATOR"
+  }
 
-    targetProjectPath = ":app"
-    experimentalProperties["android.experimental.self-instrumenting"] = true
+  targetProjectPath = ":app"
+  experimentalProperties["android.experimental.self-instrumenting"] = true
 
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
+  compileOptions {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+  }
 }
 
 kotlin {
-    compilerOptions {
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
-        allWarningsAsErrors.set(true)
-    }
+  compilerOptions {
+    jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    allWarningsAsErrors.set(true)
+  }
 }
 
 ktlint {
-    android.set(true)
-    ignoreFailures.set(false)
-    filter {
-        exclude("**/build/**")
-    }
+  android.set(true)
+  ignoreFailures.set(false)
+  filter {
+    exclude("**/build/**")
+  }
 }
 
 dependencies {
-    implementation("androidx.benchmark:benchmark-macro-junit4:1.4.1")
-    implementation("androidx.test.ext:junit:1.2.1")
-    implementation("androidx.test.uiautomator:uiautomator:2.4.0-alpha06")
+  implementation(libs.androidx.benchmark.macro.junit4)
+  implementation(libs.androidx.test.ext.junit)
+  implementation(libs.androidx.uiautomator)
 }

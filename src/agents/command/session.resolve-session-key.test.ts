@@ -1,0 +1,179 @@
+// Covers cross-store session-key resolution for multi-agent session stores.
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+
+const hoisted = vi.hoisted(() => ({
+  listSessionEntriesMock: vi.fn<
+    (scope?: { storePath?: string; clone?: boolean }) => Array<{
+      entry: SessionEntry;
+      sessionKey: string;
+    }>
+  >(),
+  listAgentIdsMock: vi.fn<() => string[]>(),
+}));
+
+vi.mock("../../config/sessions/session-accessor.js", () => ({
+  listSessionEntries: (scope?: { storePath?: string; clone?: boolean }) =>
+    hoisted.listSessionEntriesMock(scope),
+}));
+
+vi.mock("../../config/sessions/paths.js", () => ({
+  resolveStorePath: (_store?: string, params?: { agentId?: string }) =>
+    `/stores/${params?.agentId ?? "main"}.json`,
+}));
+
+vi.mock("../../config/sessions/main-session.js", () => ({
+  resolveAgentIdFromSessionKey: () => "main",
+  resolveExplicitAgentSessionKey: () => undefined,
+}));
+
+vi.mock("../agent-scope.js", () => ({
+  listAgentIds: () => hoisted.listAgentIdsMock(),
+  resolveDefaultAgentId: () => "main",
+}));
+
+const { resolveSessionKeyForRequest, resolveStoredSessionKeyForSessionId } =
+  await import("./session.js");
+
+function mockSessionStores(storesByPath: Record<string, Record<string, SessionEntry>>): void {
+  hoisted.listSessionEntriesMock.mockImplementation((scope) =>
+    Object.entries(storesByPath[scope?.storePath ?? ""] ?? {}).map(([sessionKey, entry]) => ({
+      sessionKey,
+      entry,
+    })),
+  );
+}
+
+function expectResolvedRequestSession(params: {
+  sessionId: string;
+  sessionKey: string;
+  sessionStore: Record<string, SessionEntry>;
+  storePath: string;
+}): void {
+  const result = resolveSessionKeyForRequest({
+    cfg: {
+      session: {
+        store: "/stores/{agentId}.json",
+      },
+    } satisfies OpenClawConfig,
+    sessionId: params.sessionId,
+  });
+
+  expect(result.sessionKey).toBe(params.sessionKey);
+  expect(result.sessionStore).toEqual(params.sessionStore);
+  expect(result.storePath).toBe(params.storePath);
+}
+
+describe("resolveSessionKeyForRequest", () => {
+  beforeEach(() => {
+    hoisted.listSessionEntriesMock.mockReset();
+    hoisted.listAgentIdsMock.mockReset();
+    hoisted.listAgentIdsMock.mockReturnValue(["main", "other"]);
+  });
+
+  it("prefers the current store when equal duplicates exist across stores", () => {
+    const mainStore = {
+      "agent:main:main": { sessionId: "sid", updatedAt: 10 },
+    } satisfies Record<string, SessionEntry>;
+    const otherStore = {
+      "agent:other:main": { sessionId: "sid", updatedAt: 10 },
+    } satisfies Record<string, SessionEntry>;
+    mockSessionStores({
+      "/stores/main.json": mainStore,
+      "/stores/other.json": otherStore,
+    });
+
+    expectResolvedRequestSession({
+      sessionId: "sid",
+      sessionKey: "agent:main:main",
+      sessionStore: mainStore,
+      storePath: "/stores/main.json",
+    });
+  });
+
+  it("keeps a cross-store structural winner over a newer local fuzzy duplicate", () => {
+    // Structural keys beat fuzzy timestamp matches so ACP/subagent resumes do
+    // not accidentally attach to a newer generic main-session duplicate.
+    const mainStore = {
+      "agent:main:main": { sessionId: "sid", updatedAt: 20 },
+    } satisfies Record<string, SessionEntry>;
+    const otherStore = {
+      "agent:other:acp:sid": { sessionId: "sid", updatedAt: 10 },
+    } satisfies Record<string, SessionEntry>;
+    mockSessionStores({
+      "/stores/main.json": mainStore,
+      "/stores/other.json": otherStore,
+    });
+
+    expectResolvedRequestSession({
+      sessionId: "sid",
+      sessionKey: "agent:other:acp:sid",
+      sessionStore: otherStore,
+      storePath: "/stores/other.json",
+    });
+  });
+
+  it("scopes stored session-key lookup to the requested agent store", () => {
+    const embeddedAgentStore = {
+      "agent:embedded-agent:main": { sessionId: "other-session", updatedAt: 2 },
+      "agent:embedded-agent:work": { sessionId: "resume-agent-1", updatedAt: 1 },
+    } satisfies Record<string, SessionEntry>;
+    mockSessionStores({ "/stores/embedded-agent.json": embeddedAgentStore });
+
+    const result = resolveStoredSessionKeyForSessionId({
+      cfg: {
+        session: {
+          store: "/stores/{agentId}.json",
+        },
+      } satisfies OpenClawConfig,
+      sessionId: "resume-agent-1",
+      agentId: "embedded-agent",
+    });
+
+    expect(result.sessionKey).toBe("agent:embedded-agent:work");
+    expect(result.sessionStore).toEqual(embeddedAgentStore);
+    expect(result.storePath).toBe("/stores/embedded-agent.json");
+    expect(hoisted.listSessionEntriesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("borrows session stores when requested", () => {
+    // clone=false is used by callers that intend to mutate the selected store,
+    // so the resolver must pass that option through every candidate load.
+    const mainStore = {
+      "agent:main:main": { sessionId: "sid", updatedAt: 10 },
+    } satisfies Record<string, SessionEntry>;
+    const otherStore = {
+      "agent:other:acp:sid": { sessionId: "sid", updatedAt: 20 },
+    } satisfies Record<string, SessionEntry>;
+    mockSessionStores({
+      "/stores/main.json": mainStore,
+      "/stores/other.json": otherStore,
+    });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: {
+        session: {
+          store: "/stores/{agentId}.json",
+        },
+      } satisfies OpenClawConfig,
+      sessionId: "sid",
+      clone: false,
+    });
+
+    expect(result.sessionKey).toBe("agent:other:acp:sid");
+    expect(result.sessionStore).toEqual(otherStore);
+    expect(hoisted.listSessionEntriesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storePath: "/stores/main.json",
+        clone: false,
+      }),
+    );
+    expect(hoisted.listSessionEntriesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storePath: "/stores/other.json",
+        clone: false,
+      }),
+    );
+  });
+});

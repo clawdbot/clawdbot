@@ -1,18 +1,30 @@
-import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/channel-setup";
-import { createSetupInputPresenceValidator } from "openclaw/plugin-sdk/setup-runtime";
-import { resolveMattermostAccount, type ResolvedMattermostAccount } from "./mattermost/accounts.js";
-import { normalizeMattermostBaseUrl } from "./mattermost/client.js";
+// Mattermost plugin module implements setup core behavior.
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import {
+  defineChannelSetupContract,
+  type ChannelSetupAdapter,
+  type ChannelSetupInput,
+} from "openclaw/plugin-sdk/channel-setup";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,
-  DEFAULT_ACCOUNT_ID,
   migrateBaseNameToDefaultAccount,
-  normalizeAccountId,
-  type OpenClawConfig,
-} from "./runtime-api.js";
-import { hasConfiguredSecretInput } from "./secret-input.js";
+} from "openclaw/plugin-sdk/setup";
+import { createSetupInputPresenceValidator } from "openclaw/plugin-sdk/setup-runtime";
+import {
+  resolveMattermostAccount,
+  type ResolvedMattermostAccount,
+} from "./setup.accounts.runtime.js";
+import { normalizeMattermostBaseUrl } from "./setup.client.runtime.js";
+import { hasConfiguredSecretInput } from "./setup.secret-input.runtime.js";
 
 const channel = "mattermost" as const;
+
+type MattermostSetupInput = ChannelSetupInput & {
+  botToken?: string;
+  httpUrl?: string;
+};
 
 export function isMattermostConfigured(account: ResolvedMattermostAccount): boolean {
   const tokenConfigured =
@@ -25,6 +37,33 @@ export function resolveMattermostAccountWithSecrets(cfg: OpenClawConfig, account
     cfg,
     accountId,
     allowUnresolvedSecretRef: true,
+  });
+}
+
+export function applyMattermostSetupConfigPatch(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  name?: string;
+  patch: Record<string, unknown>;
+}): OpenClawConfig {
+  const namedConfig = applyAccountNameToChannelSection({
+    cfg: params.cfg,
+    channelKey: channel,
+    accountId: params.accountId,
+    name: params.name,
+  });
+  const next =
+    params.accountId !== DEFAULT_ACCOUNT_ID
+      ? migrateBaseNameToDefaultAccount({
+          cfg: namedConfig,
+          channelKey: channel,
+        })
+      : namedConfig;
+  return applySetupAccountConfigPatch({
+    cfg: next,
+    channelKey: channel,
+    accountId: params.accountId,
+    patch: params.patch,
   });
 }
 
@@ -49,39 +88,28 @@ export const mattermostSetupAdapter: ChannelSetupAdapter = {
         message: "Mattermost requires --bot-token and --http-url (or --use-env).",
       },
     ],
-    validate: ({ accountId, input }) => {
-      const token = input.botToken ?? input.token;
-      const baseUrl = normalizeMattermostBaseUrl(input.httpUrl);
-      if (!input.useEnv && (!token || !baseUrl)) {
+    validate: ({ input }) => {
+      const setupInput = input as MattermostSetupInput;
+      const token = setupInput.botToken ?? setupInput.token;
+      const baseUrl = normalizeMattermostBaseUrl(setupInput.httpUrl);
+      if (!setupInput.useEnv && (!token || !baseUrl)) {
         return "Mattermost requires --bot-token and --http-url (or --use-env).";
       }
-      if (input.httpUrl && !baseUrl) {
+      if (setupInput.httpUrl && !baseUrl) {
         return "Mattermost --http-url must include a valid base URL.";
       }
       return null;
     },
   }),
   applyAccountConfig: ({ cfg, accountId, input }) => {
-    const token = input.botToken ?? input.token;
-    const baseUrl = normalizeMattermostBaseUrl(input.httpUrl);
-    const namedConfig = applyAccountNameToChannelSection({
+    const setupInput = input as MattermostSetupInput;
+    const token = setupInput.botToken ?? setupInput.token;
+    const baseUrl = normalizeMattermostBaseUrl(setupInput.httpUrl);
+    return applyMattermostSetupConfigPatch({
       cfg,
-      channelKey: channel,
       accountId,
-      name: input.name,
-    });
-    const next =
-      accountId !== DEFAULT_ACCOUNT_ID
-        ? migrateBaseNameToDefaultAccount({
-            cfg: namedConfig,
-            channelKey: channel,
-          })
-        : namedConfig;
-    return applySetupAccountConfigPatch({
-      cfg: next,
-      channelKey: channel,
-      accountId,
-      patch: input.useEnv
+      name: setupInput.name,
+      patch: setupInput.useEnv
         ? {}
         : {
             ...(token ? { botToken: token } : {}),
@@ -90,3 +118,27 @@ export const mattermostSetupAdapter: ChannelSetupAdapter = {
     });
   },
 };
+
+export const mattermostSetupContract = defineChannelSetupContract({
+  fields: {
+    token: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--token <token>", description: "Mattermost bot token" },
+    },
+    botToken: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--bot-token <token>", description: "Mattermost bot token" },
+    },
+    httpUrl: {
+      kind: "string",
+      cli: { flags: "--http-url <url>", description: "Mattermost server URL" },
+    },
+    useEnv: {
+      kind: "boolean",
+      cli: { flags: "--use-env", description: "Use Mattermost environment credentials" },
+    },
+  },
+  legacyAdapter: mattermostSetupAdapter,
+});

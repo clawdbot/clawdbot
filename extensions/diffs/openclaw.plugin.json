@@ -1,9 +1,25 @@
 {
   "id": "diffs",
+  "activation": {
+    "onStartup": true
+  },
   "name": "Diffs",
-  "description": "Read-only diff viewer and file renderer for agents.",
+  "description": "OpenClaw read-only diff viewer plugin and file renderer for agents.",
+  "catalog": { "featured": true, "order": 40 },
+  "contracts": {
+    "tools": ["diffs"]
+  },
+  "toolMetadata": {
+    "diffs": {
+      "optional": true
+    }
+  },
   "skills": ["./skills"],
   "uiHints": {
+    "viewerBaseUrl": {
+      "label": "Viewer Base URL",
+      "help": "Persistent gateway base URL used for returned viewer links when a tool call does not pass baseUrl."
+    },
     "defaults.fontFamily": {
       "label": "Default Font",
       "help": "Preferred font family name for diff content and headers."
@@ -60,6 +76,10 @@
       "label": "Default Output Mode",
       "help": "Tool default when mode is omitted. Use view for canvas/gateway viewer, file for PNG/PDF, or both."
     },
+    "defaults.ttlSeconds": {
+      "label": "Default Artifact TTL",
+      "help": "Default lifetime in seconds for diff viewer and file artifacts. Maximum: 21600."
+    },
     "security.allowRemoteViewer": {
       "label": "Allow Remote Viewer",
       "help": "Allow non-loopback access to diff viewer URLs when the token path is known."
@@ -69,6 +89,14 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "viewerBaseUrl": {
+        "type": "string",
+        "format": "uri",
+        "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://",
+        "not": {
+          "pattern": "[?#]"
+        }
+      },
       "defaults": {
         "type": "object",
         "additionalProperties": false,
@@ -118,45 +146,46 @@
           },
           "fileFormat": {
             "type": "string",
-            "enum": ["png", "pdf"],
-            "default": "png"
+            "enum": ["png", "pdf"]
           },
           "format": {
             "type": "string",
+            "description": "Deprecated alias for fileFormat.",
             "enum": ["png", "pdf"]
           },
           "fileQuality": {
             "type": "string",
-            "enum": ["standard", "hq", "print"],
-            "default": "standard"
+            "enum": ["standard", "hq", "print"]
           },
           "fileScale": {
             "type": "number",
             "minimum": 1,
-            "maximum": 4,
-            "default": 2
+            "maximum": 4
           },
           "fileMaxWidth": {
             "type": "number",
             "minimum": 640,
-            "maximum": 2400,
-            "default": 960
+            "maximum": 2400
           },
           "imageFormat": {
             "type": "string",
+            "description": "Deprecated alias for fileFormat.",
             "enum": ["png", "pdf"]
           },
           "imageQuality": {
             "type": "string",
+            "description": "Deprecated alias for fileQuality.",
             "enum": ["standard", "hq", "print"]
           },
           "imageScale": {
             "type": "number",
+            "description": "Deprecated alias for fileScale.",
             "minimum": 1,
             "maximum": 4
           },
           "imageMaxWidth": {
             "type": "number",
+            "description": "Deprecated alias for fileMaxWidth.",
             "minimum": 640,
             "maximum": 2400
           },
@@ -164,6 +193,12 @@
             "type": "string",
             "enum": ["view", "image", "file", "both"],
             "default": "both"
+          },
+          "ttlSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 21600,
+            "default": 1800
           }
         }
       },

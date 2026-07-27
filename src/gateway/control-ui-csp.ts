@@ -1,4 +1,7 @@
+// Control UI content-security-policy helpers.
+// Computes inline script hashes and builds the Gateway-served CSP header.
 import { createHash } from "node:crypto";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 const SCRIPT_ATTRIBUTE_NAME_RE = /\s([^\s=/>]+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?/g;
 
@@ -27,24 +30,52 @@ export function computeInlineScriptHashes(html: string): string[] {
 
 function hasScriptSrcAttribute(openTag: string): boolean {
   return Array.from(openTag.matchAll(SCRIPT_ATTRIBUTE_NAME_RE)).some(
-    (match) => (match[1] ?? "").toLowerCase() === "src",
+    (match) => normalizeLowercaseStringOrEmpty(match[1]) === "src",
   );
 }
 
-export function buildControlUiCspHeader(opts?: { inlineScriptHashes?: string[] }): string {
+/** Build the CSP header applied to Gateway-served Control UI HTML. */
+export function buildControlUiCspHeader(opts?: {
+  inlineScriptHashes?: string[];
+  /**
+   * Relax the policy just enough for the embedded terminal's ghostty-web engine.
+   * `'wasm-unsafe-eval'` permits WebAssembly compilation. Gated on the terminal
+   * being enabled so the baseline Control UI CSP stays tight otherwise.
+   */
+  allowWasm?: boolean;
+}): string {
   const hashes = opts?.inlineScriptHashes;
-  const scriptSrc = hashes?.length
-    ? `script-src 'self' ${hashes.map((h) => `'${h}'`).join(" ")}`
-    : "script-src 'self'";
+  const scriptTokens = ["'self'"];
+  if (hashes?.length) {
+    scriptTokens.push(...hashes.map((h) => `'${h}'`));
+  }
+  if (opts?.allowWasm) {
+    scriptTokens.push("'wasm-unsafe-eval'");
+  }
+  // Web Awesome resolves its bundled system icons to data: SVGs, then fetches
+  // them before rendering. This allows local bytes only, not another origin.
+  const connectTokens = [
+    "'self'",
+    "ws:",
+    "wss:",
+    "data:",
+    "https://api.openai.com",
+    "https://tweakcn.com",
+  ];
   return [
     "default-src 'self'",
     "base-uri 'none'",
     "object-src 'none'",
     "frame-ancestors 'none'",
-    scriptSrc,
+    // Gateway selection can move to a remote dedicated MCP Apps origin after
+    // this document loads. The component still validates the exact endpoint.
+    "frame-src 'self' http: https:",
+    `script-src ${scriptTokens.join(" ")}`,
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "img-src 'self' data: https:",
+    "img-src 'self' data: blob: https://gravatar.com",
+    "media-src 'self' data: blob:",
     "font-src 'self' https://fonts.gstatic.com",
-    "connect-src 'self' ws: wss:",
+    "worker-src 'self'",
+    `connect-src ${connectTokens.join(" ")}`,
   ].join("; ");
 }

@@ -51,6 +51,11 @@ calc_status_from_expires() {
     fi
 }
 
+format_epoch_seconds() {
+    local epoch_seconds="$1"
+    date -r "$epoch_seconds" 2>/dev/null || date -d "@$epoch_seconds"
+}
+
 json_expires_for_claude_cli() {
     echo "$STATUS_JSON" | jq -r '
         [.auth.oauth.profiles[]
@@ -223,7 +228,7 @@ else
         echo "  Consider running: claude setup-token"
     else
         echo -e "  Status: ${GREEN}OK${NC}"
-        echo "  Expires: $(date -d @$((expires_at/1000))) (${hours}h ${mins}m)"
+        echo "  Expires: $(format_epoch_seconds "$((expires_at/1000))") (${hours}h ${mins}m)"
     fi
 fi
 
@@ -267,7 +272,7 @@ else
         echo -e "  Status: ${YELLOW}EXPIRING SOON (${mins}m remaining)${NC}"
     else
         echo -e "  Status: ${GREEN}OK${NC}"
-        echo "  Expires: $(date -d @$((expires/1000))) (${hours}h ${mins}m)"
+        echo "  Expires: $(format_epoch_seconds "$((expires/1000))") (${hours}h ${mins}m)"
     fi
 fi
 

@@ -1,15 +1,16 @@
+// Covers provider usage auth profile key normalization.
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 
 vi.mock("../agents/auth-profiles.js", () => {
   const normalizeProvider = (provider?: string | null): string =>
-    String(provider ?? "")
+    (provider ?? "")
       .trim()
       .toLowerCase()
       .replace(/^z-ai$/, "zai");
@@ -121,6 +122,8 @@ vi.mock("../agents/auth-profiles.js", () => {
   return {
     clearRuntimeAuthProfileStoreSnapshots: () => {},
     ensureAuthProfileStore: (agentDir?: string) => readStore(agentDir),
+    hasAnyAuthProfileStoreSource: (agentDir?: string) =>
+      Boolean(agentDir && nodeFs.existsSync(path.join(agentDir, "auth-profiles.json"))),
     dedupeProfileIds,
     listProfilesForProvider,
     resolveApiKeyForProfile,
@@ -129,13 +132,11 @@ vi.mock("../agents/auth-profiles.js", () => {
 });
 
 const providerRuntimeMocks = vi.hoisted(() => ({
-  resolveProviderUsageAuthWithPluginMock: vi.fn(async (..._args: unknown[]) => null),
   providerRuntimeMock: {
     augmentModelCatalogWithProviderPlugins: vi.fn((catalog: unknown) => catalog),
     buildProviderAuthDoctorHintWithPlugin: vi.fn(() => undefined),
     buildProviderMissingAuthMessageWithPlugin: vi.fn(() => undefined),
     buildProviderUnknownModelHintWithPlugin: vi.fn(() => undefined),
-    clearProviderRuntimeHookCache: vi.fn(() => {}),
     createProviderEmbeddingProvider: vi.fn(() => undefined),
     formatProviderAuthProfileApiKeyWithPlugin: vi.fn(() => undefined),
     normalizeProviderResolvedModelWithPlugin: vi.fn(() => undefined),
@@ -143,9 +144,7 @@ const providerRuntimeMocks = vi.hoisted(() => ({
     prepareProviderExtraParams: vi.fn(() => undefined),
     prepareProviderRuntimeAuth: vi.fn(async () => undefined),
     refreshProviderOAuthCredentialWithPlugin: vi.fn(async () => undefined),
-    resetProviderRuntimeHookCacheForTest: vi.fn(() => {}),
     resolveProviderBinaryThinking: vi.fn(() => undefined),
-    resolveProviderBuiltInModelSuppression: vi.fn(() => undefined),
     resolveProviderCacheTtlEligibility: vi.fn(() => undefined),
     resolveProviderCapabilitiesWithPlugin: vi.fn(() => undefined),
     resolveProviderDefaultThinkingLevel: vi.fn(() => undefined),
@@ -153,28 +152,133 @@ const providerRuntimeMocks = vi.hoisted(() => ({
     resolveProviderRuntimePlugin: vi.fn(() => undefined),
     resolveProviderStreamFn: vi.fn(() => undefined),
     resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),
-    resolveProviderUsageSnapshotWithPlugin: vi.fn(async () => undefined),
+    resolveProviderUsageAuthWithPlugin: vi.fn(async (params) => {
+      const resolveToken = (options?: {
+        providerIds?: string[];
+        envDirect?: Array<string | undefined>;
+      }) => params.context.resolveApiKeyFromConfigAndStore(options);
+      if (params.provider === "zai") {
+        const token = resolveToken({
+          providerIds: ["zai", "z-ai"],
+          envDirect: [params.context.env?.ZAI_API_KEY, params.context.env?.Z_AI_API_KEY],
+        });
+        return token ? { token } : null;
+      }
+
+      if (params.provider === "anthropic") {
+        const adminKey =
+          params.context.env?.ANTHROPIC_ADMIN_KEY ?? params.context.env?.ANTHROPIC_ADMIN_API_KEY;
+        if (adminKey) {
+          return {
+            token: `openclaw:anthropic-admin:v1:${JSON.stringify({ token: adminKey })}`,
+          };
+        }
+        const candidates =
+          (await params.context.resolveApiKeyCandidatesFromConfigAndStore?.({
+            providerIds: ["anthropic"],
+          })) ?? [];
+        const storedAdminKey = candidates.find((candidate: string) =>
+          candidate.startsWith("sk-ant-admin"),
+        );
+        if (storedAdminKey) {
+          return {
+            token: `openclaw:anthropic-admin:v1:${JSON.stringify({ token: storedAdminKey })}`,
+          };
+        }
+        const oauth = await params.context.resolveOAuthToken();
+        if (oauth) {
+          return oauth;
+        }
+        const token = resolveToken({
+          providerIds: ["anthropic"],
+          envDirect: [params.context.env?.ANTHROPIC_API_KEY],
+        });
+        return token?.startsWith("sk-ant-oat01-") ? { token } : { handled: true };
+      }
+
+      if (params.provider === "openai") {
+        const adminKey = params.context.env?.OPENAI_ADMIN_KEY;
+        if (adminKey) {
+          return { token: `openclaw:openai-admin:v1:${JSON.stringify({ token: adminKey })}` };
+        }
+        const oauth = await params.context.resolveOAuthToken();
+        if (oauth) {
+          return oauth;
+        }
+        return { handled: true };
+      }
+
+      if (params.provider === "minimax") {
+        const token = resolveToken({
+          providerIds: ["minimax"],
+          envDirect: [
+            params.context.env?.MINIMAX_CODE_PLAN_KEY,
+            params.context.env?.MINIMAX_CODING_API_KEY,
+            params.context.env?.MINIMAX_API_KEY,
+          ],
+        });
+        return token ? { token } : null;
+      }
+
+      if (params.provider === "xiaomi") {
+        const token = resolveToken({
+          providerIds: ["xiaomi"],
+          envDirect: [params.context.env?.XIAOMI_API_KEY],
+        });
+        return token ? { token } : null;
+      }
+
+      if (params.provider === "xiaomi-token-plan") {
+        const token = resolveToken({
+          providerIds: ["xiaomi-token-plan"],
+          envDirect: [params.context.env?.XIAOMI_TOKEN_PLAN_API_KEY],
+        });
+        return token ? { token } : null;
+      }
+
+      if (params.provider === "google-gemini-cli") {
+        const resolved = await params.context.resolveOAuthToken({
+          provider: "google-gemini-cli",
+        });
+        if (!resolved?.token) {
+          return null;
+        }
+        try {
+          const parsed = JSON.parse(resolved.token) as { token?: string };
+          const token = parsed.token ?? resolved.token;
+          return resolved.accountId ? { token, accountId: resolved.accountId } : { token };
+        } catch {
+          return resolved.accountId
+            ? { token: resolved.token, accountId: resolved.accountId }
+            : { token: resolved.token };
+        }
+      }
+
+      return null;
+    }),
     resolveProviderXHighThinking: vi.fn(() => undefined),
     runProviderDynamicModel: vi.fn(() => undefined),
     wrapProviderStreamFn: vi.fn(() => undefined),
   },
 }));
 
-vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
+vi.mock("../plugins/provider-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+    "../plugins/provider-runtime.js",
+  );
   return {
     ...actual,
     ...providerRuntimeMocks.providerRuntimeMock,
-    resolveProviderUsageAuthWithPlugin: providerRuntimeMocks.resolveProviderUsageAuthWithPluginMock,
   };
 });
 
-vi.mock("../plugins/provider-runtime.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/provider-runtime.ts")>();
+vi.mock("../plugins/provider-runtime.ts", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.ts")>(
+    "../plugins/provider-runtime.ts",
+  );
   return {
     ...actual,
     ...providerRuntimeMocks.providerRuntimeMock,
-    resolveProviderUsageAuthWithPlugin: providerRuntimeMocks.resolveProviderUsageAuthWithPluginMock,
   };
 });
 
@@ -190,48 +294,49 @@ vi.mock("../agents/auth-profiles/external-cli-sync.js", () => ({
 let resolveProviderAuths: typeof import("./provider-usage.auth.js").resolveProviderAuths;
 let clearRuntimeAuthProfileStoreSnapshots: typeof import("../agents/auth-profiles.js").clearRuntimeAuthProfileStoreSnapshots;
 let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
+let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
+const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-provider-auth-suite-" });
 
 describe("resolveProviderAuths key normalization", () => {
-  let suiteRoot = "";
-  let suiteCase = 0;
   const EMPTY_PROVIDER_ENV = {
     ZAI_API_KEY: undefined,
     Z_AI_API_KEY: undefined,
     MINIMAX_API_KEY: undefined,
     MINIMAX_CODE_PLAN_KEY: undefined,
+    MINIMAX_CODING_API_KEY: undefined,
+    OPENAI_API_KEY: undefined,
+    OPENAI_ADMIN_KEY: undefined,
+    ANTHROPIC_ADMIN_KEY: undefined,
+    ANTHROPIC_ADMIN_API_KEY: undefined,
     XIAOMI_API_KEY: undefined,
   } satisfies Record<string, string | undefined>;
 
   beforeAll(async () => {
-    suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-auth-suite-"));
+    await suiteRootTracker.setup();
+    ({ resolveProviderAuths } = await import("./provider-usage.auth.js"));
+    ({ clearRuntimeAuthProfileStoreSnapshots } = await import("../agents/auth-profiles.js"));
+    ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
   });
 
   afterAll(async () => {
-    await fs.rm(suiteRoot, { recursive: true, force: true });
-    suiteRoot = "";
-    suiteCase = 0;
+    await suiteRootTracker.cleanup();
   });
 
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ resolveProviderAuths } = await import("./provider-usage.auth.js"));
-    ({ clearRuntimeAuthProfileStoreSnapshots } = await import("../agents/auth-profiles.js"));
-    ({ clearConfigCache } = await import("../config/config.js"));
+  beforeEach(() => {
+    clearRuntimeConfigSnapshot();
     clearConfigCache();
     clearRuntimeAuthProfileStoreSnapshots();
-    providerRuntimeMocks.resolveProviderUsageAuthWithPluginMock.mockReset();
-    providerRuntimeMocks.resolveProviderUsageAuthWithPluginMock.mockResolvedValue(null);
   });
 
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
     clearConfigCache();
     clearRuntimeAuthProfileStoreSnapshots();
     vi.restoreAllMocks();
   });
 
   async function withSuiteHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-    const base = path.join(suiteRoot, `case-${++suiteCase}`);
-    nodeFs.mkdirSync(base, { recursive: true });
+    const base = await suiteRootTracker.make("case");
     const stateDir = path.join(base, ".openclaw");
     const agentDir = path.join(stateDir, "agents", "main", "agent");
     nodeFs.mkdirSync(path.join(stateDir, "agents", "main", "sessions"), { recursive: true });
@@ -304,12 +409,6 @@ describe("resolveProviderAuths key normalization", () => {
     );
   }
 
-  async function writeLegacyPiAuth(home: string, raw: string) {
-    const legacyDir = path.join(home, ".pi", "agent");
-    await fs.mkdir(legacyDir, { recursive: true });
-    await fs.writeFile(path.join(legacyDir, "auth.json"), raw, "utf8");
-  }
-
   function createTestModelDefinition(): ModelDefinitionConfig {
     return {
       id: "test-model",
@@ -370,16 +469,18 @@ describe("resolveProviderAuths key normalization", () => {
 
   it("strips embedded CR/LF from env keys", async () => {
     await expectResolvedAuthsFromSuiteHome({
-      providers: ["zai", "minimax", "xiaomi"],
+      providers: ["zai", "minimax", "xiaomi", "xiaomi-token-plan"],
       env: {
         ZAI_API_KEY: "zai-\r\nkey",
         MINIMAX_API_KEY: "minimax-\r\nkey",
         XIAOMI_API_KEY: "xiaomi-\r\nkey",
+        XIAOMI_TOKEN_PLAN_API_KEY: "xiaomi-token-\r\nplan",
       },
       expected: [
         { provider: "zai", token: "zai-key" },
         { provider: "minimax", token: "minimax-key" },
         { provider: "xiaomi", token: "xiaomi-key" },
+        { provider: "xiaomi-token-plan", token: "xiaomi-token-plan" },
       ],
     });
   }, 300_000);
@@ -416,18 +517,34 @@ describe("resolveProviderAuths key normalization", () => {
     });
   });
 
+  it("accepts MINIMAX_CODING_API_KEY as a coding-plan alias", async () => {
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["minimax"],
+      env: {
+        MINIMAX_CODING_API_KEY: "coding-api-key",
+      },
+      expected: [{ provider: "minimax", token: "coding-api-key" }],
+    });
+  });
+
   it("strips embedded CR/LF from stored auth profiles (token + api_key)", async () => {
     await expectResolvedAuthsFromSuiteHome({
-      providers: ["minimax", "xiaomi"],
+      providers: ["minimax", "xiaomi", "xiaomi-token-plan"],
       setup: async (home) => {
         await writeAuthProfiles(home, {
           "minimax:default": { type: "token", provider: "minimax", token: "mini-\r\nmax" },
           "xiaomi:default": { type: "api_key", provider: "xiaomi", key: "xiao-\r\nmi" },
+          "xiaomi-token-plan:default": {
+            type: "api_key",
+            provider: "xiaomi-token-plan",
+            key: "token-\r\nplan",
+          },
         });
       },
       expected: [
         { provider: "minimax", token: "mini-max" },
         { provider: "xiaomi", token: "xiao-mi" },
+        { provider: "xiaomi-token-plan", token: "token-plan" },
       ],
     });
   });
@@ -438,21 +555,6 @@ describe("resolveProviderAuths key normalization", () => {
       auth: [{ provider: "anthropic", token: "token-1", accountId: "acc-1" }],
     });
     expect(auths).toEqual([{ provider: "anthropic", token: "token-1", accountId: "acc-1" }]);
-  });
-
-  it("falls back to legacy .pi auth file for zai keys even after os.homedir() is primed", async () => {
-    // Prime os.homedir() to simulate long-lived workers that may have touched it before HOME changes.
-    os.homedir();
-    await expectResolvedAuthsFromSuiteHome({
-      providers: ["zai"],
-      setup: async (home) => {
-        await writeLegacyPiAuth(
-          home,
-          `${JSON.stringify({ "z-ai": { access: "legacy-zai-key" } }, null, 2)}\n`,
-        );
-      },
-      expected: [{ provider: "zai", token: "legacy-zai-key" }],
-    });
   });
 
   it.each([
@@ -467,8 +569,11 @@ describe("resolveProviderAuths key normalization", () => {
       expectedToken: "plain-google-token",
     },
   ])("$name", async ({ token, expectedToken }) => {
+    const googleGeminiCliUsageProvider = "google-gemini-cli" as unknown as Parameters<
+      typeof resolveProviderAuths
+    >[0]["providers"][number];
     await expectResolvedAuthsFromSuiteHome({
-      providers: ["google-gemini-cli"],
+      providers: [googleGeminiCliUsageProvider],
       setup: async (home) => {
         await writeAuthProfiles(home, {
           "google-gemini-cli:default": {
@@ -478,7 +583,7 @@ describe("resolveProviderAuths key normalization", () => {
           },
         });
       },
-      expected: [{ provider: "google-gemini-cli", token: expectedToken }],
+      expected: [{ provider: googleGeminiCliUsageProvider, token: expectedToken }],
     });
   });
 
@@ -501,11 +606,16 @@ describe("resolveProviderAuths key normalization", () => {
             models: [createTestModelDefinition()],
             apiKey: "cfg-xiaomi-key", // pragma: allowlist secret
           },
+          "xiaomi-token-plan": {
+            baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
+            models: [createTestModelDefinition()],
+            apiKey: "cfg-xiaomi-token-plan-key", // pragma: allowlist secret
+          },
         },
       },
     } satisfies OpenClawConfig;
     await expectResolvedAuthsFromSuiteHome({
-      providers: ["zai", "minimax", "xiaomi"],
+      providers: ["zai", "minimax", "xiaomi", "xiaomi-token-plan"],
       setup: async (home) => {
         await writeConfig(home, config);
       },
@@ -514,13 +624,14 @@ describe("resolveProviderAuths key normalization", () => {
         { provider: "zai", token: "cfg-zai-key" },
         { provider: "minimax", token: "cfg-minimax-key" },
         { provider: "xiaomi", token: "cfg-xiaomi-key" },
+        { provider: "xiaomi-token-plan", token: "cfg-xiaomi-token-plan-key" },
       ],
     });
   });
 
   it("returns no auth when providers have no configured credentials", async () => {
     await expectResolvedAuthsFromSuiteHome({
-      providers: ["zai", "minimax", "xiaomi"],
+      providers: ["zai", "minimax", "xiaomi", "xiaomi-token-plan"],
       expected: [],
     });
   });
@@ -537,13 +648,66 @@ describe("resolveProviderAuths key normalization", () => {
     });
   });
 
-  it("ignores invalid legacy z-ai auth files", async () => {
+  it("routes the dedicated OpenAI admin key to the provider-owned usage path", async () => {
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [createTestModelDefinition()],
+            apiKey: "cfg-openai-key", // pragma: allowlist secret
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
     await expectResolvedAuthsFromSuiteHome({
-      providers: ["zai"],
+      providers: ["openai"],
+      env: {
+        OPENAI_ADMIN_KEY: "env-openai-admin-key",
+        OPENAI_API_KEY: "env-openai-key",
+      },
       setup: async (home) => {
-        await writeLegacyPiAuth(home, "{not-json");
+        await writeConfig(home, config);
+        await writeAuthProfiles(home, {
+          "openai:default": { type: "api_key", provider: "openai", key: "profile-openai-key" },
+        });
+      },
+      config,
+      expected: [
+        {
+          provider: "openai",
+          token: 'openclaw:openai-admin:v1:{"token":"env-openai-admin-key"}',
+        },
+      ],
+    });
+  });
+
+  it("does not route OpenAI inference keys to organization usage", async () => {
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["openai"],
+      env: { OPENAI_API_KEY: "env-openai-key" },
+      setup: async (home) => {
+        await writeAuthProfiles(home, {
+          "openai:default": { type: "api_key", provider: "openai", key: "profile-openai-key" },
+        });
       },
       expected: [],
+    });
+  });
+
+  it("uses OpenAI oauth-compatible profiles for ChatGPT usage auth", async () => {
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["openai"],
+      setup: async (home) => {
+        await writeAuthProfiles(home, {
+          "openai:default": {
+            type: "token",
+            provider: "openai",
+            token: "chatgpt-token",
+          },
+        });
+      },
+      expected: [{ provider: "openai", token: "chatgpt-token" }],
     });
   });
 
@@ -571,7 +735,7 @@ describe("resolveProviderAuths key normalization", () => {
         config,
         env: buildSuiteEnv(home),
       });
-      expect(auths).toEqual([]);
+      expect(auths).toStrictEqual([]);
     });
   });
 
@@ -583,7 +747,7 @@ describe("resolveProviderAuths key normalization", () => {
         config: {},
         env: buildSuiteEnv(home),
       });
-      expect(auths).toEqual([]);
+      expect(auths).toStrictEqual([]);
     });
   });
 
@@ -628,9 +792,73 @@ describe("resolveProviderAuths key normalization", () => {
     });
   });
 
+  it("does not use standard Anthropic API keys for provider usage auth", async () => {
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["anthropic"],
+      env: {
+        ANTHROPIC_API_KEY: "sk-ant-api03-status-key", // pragma: allowlist secret
+      },
+      expected: [],
+    });
+  });
+
+  it("allows Anthropic setup tokens from API-key sources for provider usage auth", async () => {
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["anthropic"],
+      env: {
+        ANTHROPIC_API_KEY: `sk-ant-oat01-${"a".repeat(80)}`,
+      },
+      expected: [{ provider: "anthropic", token: `sk-ant-oat01-${"a".repeat(80)}` }],
+    });
+  });
+
+  it("routes Anthropic Admin API keys to provider cost usage", async () => {
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["anthropic"],
+      env: {
+        ANTHROPIC_ADMIN_KEY: "sk-ant-admin-status-key",
+      },
+      expected: [
+        {
+          provider: "anthropic",
+          token: 'openclaw:anthropic-admin:v1:{"token":"sk-ant-admin-status-key"}',
+        },
+      ],
+    });
+  });
+
+  it("selects a stored Anthropic Admin key before coexisting OAuth and API auth", async () => {
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["anthropic"],
+      env: {
+        ANTHROPIC_API_KEY: "sk-ant-api03-inference",
+      },
+      setup: async (home) => {
+        await writeAuthProfiles(home, {
+          "anthropic:oauth": {
+            type: "oauth",
+            provider: "anthropic",
+            accessToken: "oauth-token",
+          },
+          "anthropic:billing": {
+            type: "api_key",
+            provider: "anthropic",
+            key: "sk-ant-admin-billing",
+          },
+        });
+      },
+      expected: [
+        {
+          provider: "anthropic",
+          token: 'openclaw:anthropic-admin:v1:{"token":"sk-ant-admin-billing"}',
+        },
+      ],
+    });
+  });
+
   it("ignores marker-backed config keys for provider usage auth resolution", async () => {
     const auths = await resolveMinimaxAuthFromConfiguredKey(NON_ENV_SECRETREF_MARKER);
-    expect(auths).toEqual([]);
+    expect(auths).toStrictEqual([]);
   });
 
   it("keeps all-caps plaintext config keys eligible for provider usage auth resolution", async () => {

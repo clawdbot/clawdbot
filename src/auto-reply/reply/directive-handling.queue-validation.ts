@@ -1,10 +1,12 @@
-import type { OpenClawConfig } from "../../config/config.js";
+/** Validation and status handling for /queue directives. */
 import type { SessionEntry } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ReplyPayload } from "../types.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { withOptions } from "./directive-handling.shared.js";
-import { resolveQueueSettings } from "./queue.js";
+import { resolveQueueSettings } from "./queue/settings.js";
 
+/** Validates `/queue` directives and returns immediate status/error replies. */
 export function maybeHandleQueueDirective(params: {
   directives: InlineDirectives;
   cfg: OpenClawConfig;
@@ -25,6 +27,7 @@ export function maybeHandleQueueDirective(params: {
     directives.rawCap === undefined &&
     directives.rawDrop === undefined;
   if (wantsStatus) {
+    // Bare `/queue` is status, not mutation.
     const settings = resolveQueueSettings({
       cfg: params.cfg,
       channel: params.channel,
@@ -37,7 +40,7 @@ export function maybeHandleQueueDirective(params: {
     return {
       text: withOptions(
         `Current queue settings: mode=${settings.mode}, debounce=${debounceLabel}, cap=${capLabel}, drop=${dropLabel}.`,
-        "modes steer, followup, collect, steer+backlog, interrupt; debounce:<ms|s|m>, cap:<n>, drop:old|new|summarize",
+        "modes steer, followup, collect, interrupt; debounce:<ms|s|m>, cap:<n>, drop:old|new|summarize",
       ),
     };
   }
@@ -53,7 +56,7 @@ export function maybeHandleQueueDirective(params: {
     const errors: string[] = [];
     if (queueModeInvalid) {
       errors.push(
-        `Unrecognized queue mode "${directives.rawQueueMode ?? ""}". Valid modes: steer, followup, collect, steer+backlog, interrupt.`,
+        `Unrecognized queue mode "${directives.rawQueueMode ?? ""}". Valid modes: steer, followup, collect, interrupt.`,
       );
     }
     if (queueDebounceInvalid) {

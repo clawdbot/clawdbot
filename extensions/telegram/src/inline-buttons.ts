@@ -1,14 +1,20 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { TelegramInlineButtonsScope } from "openclaw/plugin-sdk/config-runtime";
-import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
+// Telegram plugin module implements inline buttons behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { TelegramInlineButtonsScope } from "openclaw/plugin-sdk/config-contracts";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { inspectTelegramAccount } from "./account-inspect.js";
+import { listTelegramAccountIds } from "./accounts.js";
 
 const DEFAULT_INLINE_BUTTONS_SCOPE: TelegramInlineButtonsScope = "allowlist";
 
 function normalizeInlineButtonsScope(value: unknown): TelegramInlineButtonsScope | undefined {
-  if (typeof value !== "string") {
+  const trimmed = normalizeOptionalLowercaseString(value);
+  if (!trimmed) {
     return undefined;
   }
-  const trimmed = value.trim().toLowerCase();
   if (
     trimmed === "off" ||
     trimmed === "dm" ||
@@ -41,8 +47,11 @@ export function resolveTelegramInlineButtonsScopeFromCapabilities(
     return DEFAULT_INLINE_BUTTONS_SCOPE;
   }
   if (Array.isArray(capabilities)) {
+    if (capabilities.length === 0) {
+      return DEFAULT_INLINE_BUTTONS_SCOPE;
+    }
     const enabled = capabilities.some(
-      (entry) => String(entry).trim().toLowerCase() === "inlinebuttons",
+      (entry) => normalizeLowercaseStringOrEmpty(String(entry)) === "inlinebuttons",
     );
     return enabled ? "all" : "off";
   }
@@ -56,7 +65,7 @@ export function resolveTelegramInlineButtonsScope(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): TelegramInlineButtonsScope {
-  const account = resolveTelegramAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = inspectTelegramAccount({ cfg: params.cfg, accountId: params.accountId });
   return resolveTelegramInlineButtonsScopeFromCapabilities(account.config.capabilities);
 }
 

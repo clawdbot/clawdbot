@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Blocks host-random tmpdir usage in messaging/channel runtime sources.
 import ts from "typescript";
 import { runCallsiteGuard } from "./lib/callsite-guard.mjs";
 import {
@@ -8,15 +9,17 @@ import {
   unwrapExpression,
 } from "./lib/ts-guard-utils.mjs";
 
-const sourceRoots = [
+/**
+ * Source roots scanned for unsafe messaging tmpdir usage.
+ */
+export const messagingTmpdirGuardSourceRoots = [
   "src/channels",
   "src/infra/outbound",
   "src/line",
+  "src/media",
   "src/media-understanding",
   "extensions",
 ];
-const allowedRelativePaths = new Set(["extensions/feishu/src/dedup.ts"]);
-
 function collectOsTmpdirImports(sourceFile) {
   const osModuleSpecifiers = new Set(["node:os", "os"]);
   const osNamespaceOrDefault = new Set();
@@ -51,6 +54,9 @@ function collectOsTmpdirImports(sourceFile) {
   return { osNamespaceOrDefault, namedTmpdir };
 }
 
+/**
+ * Finds `os.tmpdir()` or imported `tmpdir()` call lines in source.
+ */
 export function findMessagingTmpdirCallLines(content, fileName = "source.ts") {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   const { osNamespaceOrDefault, namedTmpdir } = collectOsTmpdirImports(sourceFile);
@@ -68,12 +74,14 @@ export function findMessagingTmpdirCallLines(content, fileName = "source.ts") {
   });
 }
 
+/**
+ * Runs the messaging tmpdir guard.
+ */
 export async function main() {
   await runCallsiteGuard({
     importMetaUrl: import.meta.url,
-    sourceRoots,
+    sourceRoots: messagingTmpdirGuardSourceRoots,
     findCallLines: findMessagingTmpdirCallLines,
-    skipRelativePath: (relativePath) => allowedRelativePaths.has(relativePath),
     header: "Found os.tmpdir()/tmpdir() usage in messaging/channel runtime sources:",
     footer:
       "Use resolvePreferredOpenClawTmpDir() or plugin-sdk temp helpers instead of host tmp defaults.",

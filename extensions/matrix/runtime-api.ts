@@ -1,20 +1,39 @@
-// Keep the external runtime API light so Jiti callers can resolve Matrix config
-// helpers without traversing the full plugin-sdk/runtime graph or bootstrapping
-// matrix-js-sdk during plain runtime-api import.
-export * from "./src/auth-precedence.js";
+// Matrix API module exposes the plugin public contract.
+export {
+  type MatrixResolvedStringField,
+  type MatrixResolvedStringValues,
+  resolveMatrixAccountStringValues,
+} from "./src/auth-precedence.js";
 export {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
 } from "./src/account-selection.js";
-export * from "./src/account-selection.js";
-export * from "./src/env-vars.js";
-export * from "./src/storage-paths.js";
+export {
+  findMatrixAccountEntry,
+  resolveConfiguredMatrixAccountIds,
+  resolveMatrixChannelConfig,
+} from "./src/account-selection.js";
+export {
+  getMatrixScopedEnvVarNames,
+  listMatrixEnvAccountIds,
+  resolveMatrixEnvAccountToken,
+} from "./src/env-vars.js";
+export {
+  hashMatrixAccessToken,
+  resolveMatrixAccountStorageRoot,
+  resolveMatrixCredentialsDir,
+  resolveMatrixCredentialsFilename,
+  resolveMatrixCredentialsPath,
+  resolveMatrixHomeserverKey,
+  sanitizeMatrixPathSegment,
+} from "./src/storage-paths.js";
+export { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./src/matrix/deps.js";
 export {
   assertHttpUrlTargetsPrivateNetwork,
   closeDispatcher,
   createPinnedDispatcher,
   resolvePinnedHostnameWithPolicy,
-  ssrfPolicyFromAllowPrivateNetwork,
+  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
   type LookupFn,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -27,13 +46,12 @@ export { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 export type {
   ChannelDirectoryEntry,
   ChannelMessageActionContext,
-  OpenClawConfig,
-  PluginRuntime,
-  RuntimeLogger,
-  RuntimeEnv,
-  WizardPrompter,
-} from "openclaw/plugin-sdk/matrix-runtime-shared";
-export { formatZonedTimestamp } from "openclaw/plugin-sdk/matrix-runtime-shared";
+} from "openclaw/plugin-sdk/channel-contract";
+export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+export { formatZonedTimestamp } from "openclaw/plugin-sdk/time-runtime";
+export type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
+export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+export type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 
 export function chunkTextForOutbound(text: string, limit: number): string[] {
   const chunks: string[] = [];

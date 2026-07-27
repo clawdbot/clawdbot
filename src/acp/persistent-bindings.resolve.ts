@@ -1,10 +1,9 @@
+/** Resolves configured channel conversation bindings into ACP session binding specs. */
 import {
   resolveConfiguredBindingRecord,
   resolveConfiguredBindingRecordBySessionKey,
-  resolveConfiguredBindingRecordForConversation,
 } from "../channels/plugins/binding-registry.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveConfiguredAcpBindingSpecFromRecord,
   toResolvedConfiguredAcpBinding,
@@ -12,6 +11,7 @@ import {
   type ResolvedConfiguredAcpBinding,
 } from "./persistent-bindings.types.js";
 
+/** Resolves a configured ACP binding for a concrete channel conversation. */
 export function resolveConfiguredAcpBindingRecord(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -23,14 +23,7 @@ export function resolveConfiguredAcpBindingRecord(params: {
   return resolved ? toResolvedConfiguredAcpBinding(resolved.record) : null;
 }
 
-export function resolveConfiguredAcpBindingRecordForConversation(params: {
-  cfg: OpenClawConfig;
-  conversation: ConversationRef;
-}): ResolvedConfiguredAcpBinding | null {
-  const resolved = resolveConfiguredBindingRecordForConversation(params);
-  return resolved ? toResolvedConfiguredAcpBinding(resolved.record) : null;
-}
-
+/** Resolves the configured ACP binding spec that owns a generated session key. */
 export function resolveConfiguredAcpBindingSpecBySessionKey(params: {
   cfg: OpenClawConfig;
   sessionKey: string;

@@ -1,0 +1,236 @@
+---
+name: openclaw-secret-scanning-maintainer
+description: Triage, redact, clean up, and resolve OpenClaw GitHub Secret Scanning alerts in issues or PRs.
+---
+
+# OpenClaw Secret Scanning Maintainer
+
+**Maintainer-only.** This skill requires repo admin / maintainer permissions to edit or delete other users' comments and resolve secret scanning alerts.
+
+Use this skill when processing alerts from `https://github.com/openclaw/openclaw/security/secret-scanning`.
+
+**Language rule:** All notification comments and replacement comments MUST be written in English.
+
+## Script
+
+All mechanical operations (API calls, temp file management, security enforcements) are handled by:
+
+```
+$REPO_ROOT/.agents/skills/openclaw-secret-scanning-maintainer/scripts/secret-scanning.mjs
+```
+
+The script enforces:
+
+- `hide_secret=true` on all alert fetches (no plaintext secrets in stdout)
+- `mktemp` with random UUIDs for all temp files
+- `-F body=@file` for all body uploads (no inline shell quoting)
+- Notification templates branched by location type
+- Never prints `.secret` or `.body` to stdout
+
+## Overall Flow
+
+Supports single or multiple alerts. For multiple alerts, process in ascending order.
+
+For each alert:
+
+1. **Identify** — `fetch-alert` + `fetch-content` to get metadata and body
+2. **Decide** — Agent reads the body file, identifies whether plaintext secrets remain, and produces a redacted version only when needed
+3. **Redact** — `redact-body-if-needed` for issue/PR body; skip for comments (delete directly)
+4. **Purge** — `delete-comment` + `recreate-comment` for comments; cannot purge body history
+5. **Notify** — `notify` posts the right template per location type, unless the current issue/PR body is already redacted
+6. **Resolve** — `resolve` closes the alert
+7. **Summary** — `summary` prints formatted results
+
+## Step 1: Identify
+
+```bash
+# List all open alerts
+node secret-scanning.mjs list-open
+
+# Fetch specific alert metadata + locations
+node secret-scanning.mjs fetch-alert <NUMBER>
+
+# Fetch content for each location (saves body to temp file)
+node secret-scanning.mjs fetch-content '<location-json>'
+```
+
+The `fetch-content` output includes:
+
+- `body_file`: path to temp file with full body content
+- `author`: who posted it
+- `issue_number` / `pr_number`: where it is
+- `edit_history_count`: number of existing edits
+- `type`: location type for routing
+- For `discussion_comment`, it also includes `comment_node_id`, `discussion_node_id`, and `reply_to_node_id` when the original comment was a reply.
+
+### Location type routing
+
+| type                          | Flow                                          |
+| ----------------------------- | --------------------------------------------- |
+| `issue_comment`               | Comment: delete+recreate                      |
+| `pull_request_comment`        | Comment: delete+recreate                      |
+| `pull_request_review_comment` | Comment: delete+recreate                      |
+| `discussion_comment`          | Discussion comment: delete+recreate (GraphQL) |
+| `issue_body`                  | Body: redact in place                         |
+| `pull_request_body`           | Body: redact in place                         |
+| `commit`                      | Notify only                                   |
+| _other_                       | Skip and report                               |
+
+## Step 2: Decide (Agent)
+
+The agent reads the body file from `fetch-content` output and:
+
+1. Identifies ALL secrets in the content (there may be more than the alert flagged)
+2. Determines whether any plaintext credential remains in the current body
+3. Replaces each remaining secret with `[REDACTED <secret_type>]` — **no partial values, no prefix/suffix**
+4. Saves the redacted content to a new temp file
+
+This is the only step that requires semantic understanding. Everything else is mechanical.
+
+For `issue_body` and `pull_request_body`: if the current body has already been redacted by the author and no plaintext credential remains, **do not post a public notification comment**. Resolve the alert with a maintainer-only resolution comment such as:
+
+```bash
+node secret-scanning.mjs resolve <ALERT_NUMBER> revoked "Current issue/PR body is already redacted; no public notification posted."
+```
+
+This avoids creating a fresh public pointer to historical sensitive content.
+
+## Step 3: Redact
+
+### For comments (issue_comment / PR comments)
+
+**Do NOT redact.** Skip directly to Step 4 (delete + recreate). PATCHing before DELETE creates an unnecessary edit history revision.
+
+### For issue_body / pull_request_body
+
+```bash
+node secret-scanning.mjs redact-body-if-needed <issue|pr> <NUMBER> <current-body-file> <redacted-body-file> <result-file>
+```
+
+Use the `body_file` from `fetch-content` as `<current-body-file>`. The command writes `notify_required` to `<result-file>` and only PATCHes the body when the redacted file differs from the current body.
+
+## Step 4: Purge Edit History
+
+### Comments — Delete and Recreate
+
+For issue/PR comments:
+
+```bash
+# Delete original (all edit history gone)
+node secret-scanning.mjs delete-comment <COMMENT_ID>
+
+# Recreate with redacted content
+node secret-scanning.mjs recreate-comment <ISSUE_NUMBER> <body-file>
+```
+
+For discussion comments (uses GraphQL):
+
+```bash
+# Delete original
+node secret-scanning.mjs delete-discussion-comment <COMMENT_NODE_ID>
+
+# Recreate with redacted content
+node secret-scanning.mjs recreate-discussion-comment <DISCUSSION_NODE_ID> <body-file> [REPLY_TO_NODE_ID]
+```
+
+The `fetch-content` output for `discussion_comment` includes `comment_node_id` and `discussion_node_id` for these commands. When the original discussion comment was a reply, it also includes `reply_to_node_id`; pass that optional third argument so the redacted replacement stays in the original thread.
+
+The recreated comment should follow this format:
+
+```
+> **Note:** The original comment by @<AUTHOR> has been removed due to secret leakage. Below is the redacted version of the original content.
+
+---
+
+<redacted original content>
+```
+
+### issue_body / pull_request_body — Cannot Purge Edit History
+
+Editing creates an edit history revision with the pre-edit plaintext. This cannot be cleared via API.
+
+Do not advise authors publicly to delete/recreate issues or close/reopen PRs. That can draw attention to historical content. Keep purge guidance maintainer-only.
+
+**Output to maintainer terminal only (never in public comments):**
+
+```
+⚠️ Issue/PR body edit history still contains plaintext secrets.
+Contact GitHub Support to purge: https://support.github.com/contact
+Request purge of issue/PR #{NUMBER} userContentEdits.
+```
+
+> **CRITICAL:** Do NOT mention edit history or the "edited" button in any public comment or resolution_comment.
+
+### Commits
+
+Cannot clean. Notify author to delete branch or force-push (for unmerged PRs).
+
+## Step 5: Notify
+
+```bash
+node secret-scanning.mjs notify <TARGET> <AUTHOR> <LOCATION_TYPE> <SECRET_TYPES> [REPLY_TO_NODE_ID|BODY_REDACTION_RESULT_FILE]
+```
+
+- For non-discussion types, `<TARGET>` is the issue/PR number.
+- For `discussion_comment`, `<TARGET>` is the `discussion_node_id` returned by `fetch-content`.
+- For reply-style `discussion_comment` locations, pass the optional `reply_to_node_id` from `fetch-content` so the notification stays in the same thread.
+- For `issue_body` and `pull_request_body`, pass the `<result-file>` from `redact-body-if-needed`. The script skips notification when `notify_required` is `false` and refuses body notifications without this file.
+
+Secret types are comma-separated: `"Discord Bot Token,Feishu App Secret"`
+
+The script picks the right template:
+
+- **comment types**: "your comment … removed and replaced"
+- **body types**: "your issue/PR description … redacted in place"
+- **commit**: "code you committed"
+
+For `issue_body` and `pull_request_body`, only notify when the current body still contained plaintext and maintainers redacted it. If the user already redacted the current body, skip this step and resolve silently.
+
+## Step 6: Resolve
+
+```bash
+node secret-scanning.mjs resolve <ALERT_NUMBER>
+# or with custom resolution:
+node secret-scanning.mjs resolve <ALERT_NUMBER> revoked "Custom comment"
+```
+
+Resolution is `revoked` by default. As maintainers we cannot control whether users rotate — our responsibility is to remove current plaintext exposure and notify only when public notification is useful. The `revoked` means "this secret should be considered leaked", not "I confirmed it was revoked".
+
+## Step 7: Summary
+
+After processing, create a JSON results file and pass it to the summary command:
+
+```bash
+node secret-scanning.mjs summary /tmp/results.json
+```
+
+The script outputs a block delimited by `---BEGIN SUMMARY---` and `---END SUMMARY---`. **You MUST output the content between these markers verbatim to the user. Do NOT rephrase, reformat, abbreviate, or create your own summary.** The script already includes full URLs for every alert and location.
+
+The JSON format:
+
+```json
+[
+  {
+    "number": 72,
+    "secret_type": "Discord Bot Token",
+    "location_label": "Issue #63101 comment",
+    "location_url": "https://github.com/openclaw/openclaw/issues/63101#issuecomment-xxx",
+    "actions": "Deleted+Recreated+Notified",
+    "history_cleared": true
+  }
+]
+```
+
+For unsupported types, add `"skipped": true, "unsupported_type": "<type>"`.
+
+## Safety Rules
+
+- **Agent reads content, identifies secrets, produces redaction.** Script handles all API calls.
+- **Never include any portion of a secret** in public comments, redaction markers, or terminal output.
+- **Never include alert URLs or numbers** in public comments.
+- **For comments, skip PATCH — go directly to DELETE + recreate.**
+- **Never mention edit history, "edited" button, or commit SHAs** in any public content.
+- **Ask for confirmation** before deleting any comment.
+- **One alert at a time** unless user requests batch.
+- **All public comments in English.**
+- **Skip unsupported location types** and report in summary.

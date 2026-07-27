@@ -1,0 +1,196 @@
+{
+  "id": "active-memory",
+  "activation": {
+    "onStartup": true
+  },
+  "name": "Active Memory",
+  "description": "Runs bounded pre-reply memory retrieval and implements per-agent Remember across conversations for eligible private conversations.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean" },
+      "agents": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "model": { "type": "string" },
+      "modelFallback": { "type": "string" },
+      "modelFallbackPolicy": {
+        "type": "string",
+        "enum": ["default-remote", "resolved-only"]
+      },
+      "allowedChatTypes": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": ["direct", "group", "channel", "explicit"]
+        }
+      },
+      "allowedChatIds": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "deniedChatIds": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "thinking": {
+        "type": "string",
+        "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"]
+      },
+      "fastMode": {
+        "anyOf": [
+          { "type": "boolean" },
+          { "type": "string", "enum": ["auto"] }
+        ]
+      },
+      "timeoutMs": { "type": "integer", "minimum": 250, "maximum": 120000 },
+      "setupGraceTimeoutMs": { "type": "integer", "minimum": 0, "maximum": 30000 },
+      "queryMode": {
+        "type": "string",
+        "enum": ["message", "recent", "full"]
+      },
+      "promptStyle": {
+        "type": "string",
+        "enum": [
+          "balanced",
+          "strict",
+          "contextual",
+          "recall-heavy",
+          "precision-heavy",
+          "preference-only"
+        ]
+      },
+      "toolsAllow": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "pattern": "^(?!\\*$)(?![Gg][Rr][Oo][Uu][Pp]:).+"
+        },
+        "maxItems": 32
+      },
+      "promptOverride": { "type": "string" },
+      "promptAppend": { "type": "string" },
+      "maxSummaryChars": { "type": "integer", "minimum": 40, "maximum": 1000 },
+      "recentUserTurns": { "type": "integer", "minimum": 0, "maximum": 4 },
+      "recentAssistantTurns": { "type": "integer", "minimum": 0, "maximum": 3 },
+      "recentUserChars": { "type": "integer", "minimum": 40, "maximum": 1000 },
+      "recentAssistantChars": { "type": "integer", "minimum": 40, "maximum": 1000 },
+      "logging": { "type": "boolean" },
+      "persistTranscripts": { "type": "boolean" },
+      "transcriptDir": { "type": "string" },
+      "cacheTtlMs": { "type": "integer", "minimum": 1000, "maximum": 120000 },
+      "circuitBreakerMaxTimeouts": { "type": "integer", "minimum": 1, "maximum": 20 },
+      "circuitBreakerCooldownMs": { "type": "integer", "minimum": 5000, "maximum": 600000 },
+      "qmd": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "searchMode": {
+            "type": "string",
+            "enum": ["inherit", "search", "vsearch", "query"]
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "enabled": {
+      "label": "Active Memory Recall",
+      "help": "Globally enable or pause Active Memory recall while keeping the plugin command available. Remember across conversations requires this plugin to remain enabled."
+    },
+    "agents": {
+      "label": "Target Agents",
+      "help": "Advanced: explicit agent IDs that may use configured Active Memory recall. Agents with Remember across conversations enabled are automatically targeted for private-conversation transcript recall."
+    },
+    "model": {
+      "label": "Memory Model",
+      "help": "Provider/model used for the blocking memory sub-agent."
+    },
+    "modelFallback": {
+      "label": "Fallback Memory Model",
+      "help": "Optional provider/model to use if no explicit plugin model, session model, or agent primary model resolves."
+    },
+    "modelFallbackPolicy": {
+      "label": "Model Fallback Policy",
+      "help": "Deprecated compatibility field. modelFallback is only the chain-resolution last resort when no explicit plugin model, session model, or agent primary model resolves; it is not runtime failover."
+    },
+    "allowedChatTypes": {
+      "label": "Allowed Chat Types",
+      "help": "Advanced: choose which conversation types may run configured Active Memory. Remember across conversations remains limited to private direct and explicit UI conversations regardless of this setting."
+    },
+    "allowedChatIds": {
+      "label": "Allowed Chat IDs",
+      "help": "Optional explicit allowlist of chat/user IDs (e.g. Feishu chat_id oc_xxx, open_id ou_xxx, Telegram chat id, Slack channel id). When non-empty, Active Memory only runs for sessions whose conversation id is in the list, across **every** chat type at once (direct, group, channel). Setting this narrows every allowed chat type simultaneously — if you want 'all directs + only specific groups', use allowedChatTypes: ['group'] + allowedChatIds: [<group ids>] and rely on direct chats being matched via the direct session id (e.g. the user's open_id) instead. Leave empty to fall back to allowedChatTypes alone."
+    },
+    "deniedChatIds": {
+      "label": "Denied Chat IDs",
+      "help": "Optional explicit denylist of chat/user IDs. Sessions whose resolved conversation id matches the list are skipped even when the chat type is allowed. Applied after allowedChatIds."
+    },
+    "timeoutMs": {
+      "label": "Timeout (ms)",
+      "help": "Recall work budget on the main lane. Defaults to 15000 ms, or 45000 ms when the recall is eligible for CLI-backend dispatch on subscription-only claude-cli auth (CLI-backed recalls include process startup); API-key routes keep 15000 ms. Explicit values always win. Before recall, the hook allows up to 1500 ms for session/config preflight. After recall starts, it reserves another fixed 1500 ms only for abort settlement and transcript recovery."
+    },
+    "setupGraceTimeoutMs": {
+      "label": "Setup Grace Timeout (ms)",
+      "help": "Advanced: extra recall-work budget for cold embedded-run setup. Defaults to 0. The separate 1500 ms preflight cap and 1500 ms post-recall completion allowance still apply."
+    },
+    "queryMode": {
+      "label": "Query Mode",
+      "help": "Choose whether the blocking memory sub-agent sees only the latest user message, a small recent tail, or the full conversation."
+    },
+    "promptStyle": {
+      "label": "Prompt Style",
+      "help": "Choose how eager or strict the blocking memory sub-agent should be when deciding whether to return memory."
+    },
+    "toolsAllow": {
+      "label": "Allowed Memory Tools",
+      "help": "Advanced: tool names the blocking memory sub-agent may use. Defaults to memory_search and memory_get for built-in memory, or memory_recall for LanceDB; configure this for other memory providers. Wildcards, group entries, and core agent tools are ignored."
+    },
+    "thinking": {
+      "label": "Thinking Override",
+      "help": "Advanced: optional thinking level for the blocking memory sub-agent. Defaults to off for speed."
+    },
+    "fastMode": {
+      "label": "Fast Mode Override",
+      "help": "Advanced: optional fast-mode override for the blocking memory sub-agent. Leave unset to inherit normal agent, session, and model defaults."
+    },
+    "promptOverride": {
+      "label": "Prompt Override",
+      "help": "Advanced: replace the default Active Memory sub-agent instructions. Conversation context is still appended."
+    },
+    "promptAppend": {
+      "label": "Prompt Append",
+      "help": "Advanced: append extra operator instructions after the default Active Memory sub-agent instructions."
+    },
+    "maxSummaryChars": {
+      "label": "Max Summary Characters",
+      "help": "Maximum total characters allowed in the active-memory summary."
+    },
+    "logging": {
+      "label": "Enable Logging",
+      "help": "Emit active memory timing and result logs."
+    },
+    "circuitBreakerMaxTimeouts": {
+      "label": "Circuit Breaker Max Timeouts",
+      "help": "Skip recall after this many consecutive timeouts for the same agent/model. Resets on a successful recall or after the cooldown expires. Default: 3."
+    },
+    "circuitBreakerCooldownMs": {
+      "label": "Circuit Breaker Cooldown (ms)",
+      "help": "How long to skip recall after the circuit breaker trips, in milliseconds. Default: 60000 (1 minute)."
+    },
+    "persistTranscripts": {
+      "label": "Persist Transcripts",
+      "help": "Keep blocking memory sub-agent session transcripts on disk in a separate plugin-owned directory."
+    },
+    "transcriptDir": {
+      "label": "Transcript Directory",
+      "help": "Relative directory under the agent sessions folder used when transcript persistence is enabled."
+    },
+    "qmd.searchMode": {
+      "label": "QMD Search Mode",
+      "help": "Override the QMD search mode used by the blocking memory sub-agent. Defaults to fast lexical search; use inherit to match the main memory backend setting."
+    }
+  }
+}

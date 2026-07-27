@@ -1,3 +1,19 @@
+/**
+ * ACPX plugin service lifecycle. It resolves config, prepares isolated adapter
+ * wrappers, registers the ACP backend, and manages startup/cleanup probes.
+ */
+import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { inspect } from "node:util";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   AcpRuntime,
   OpenClawPluginService,
@@ -5,33 +21,304 @@ import type {
   PluginLogger,
 } from "../runtime-api.js";
 import { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "../runtime-api.js";
-import { resolveAcpxPluginConfig, type ResolvedAcpxPluginConfig } from "./config.js";
-import { ensureAcpx } from "./ensure.js";
-import { ACPX_BACKEND_ID, AcpxRuntime } from "./runtime.js";
+import { prepareAcpxCodexAuthConfig } from "./codex-auth-bridge.js";
+import { DEFAULT_ACPX_TIMEOUT_SECONDS } from "./config-schema.js";
+import {
+  resolveAcpxPluginConfig,
+  toAcpMcpServers,
+  type ResolvedAcpxPluginConfig,
+} from "./config.js";
+import {
+  createAcpxProcessLeaseStore,
+  openAcpxProcessLeaseStateStore,
+  type AcpxProcessLeaseStore,
+} from "./process-lease.js";
+import {
+  cleanupOpenClawOwnedAcpxProcessTree,
+  reapStaleOpenClawOwnedAcpxOrphans,
+  type AcpxProcessCleanupDeps,
+} from "./process-reaper.js";
+import { createLazyAcpRuntimeProxy } from "./runtime-proxy.js";
+import {
+  ACPX_GATEWAY_INSTANCE_KEY,
+  ACPX_GATEWAY_INSTANCE_MAX_ENTRIES,
+  ACPX_GATEWAY_INSTANCE_NAMESPACE,
+  normalizeAcpxGatewayInstanceRecord,
+  type AcpxGatewayInstanceRecord,
+} from "./state.js";
 
 type AcpxRuntimeLike = AcpRuntime & {
   probeAvailability(): Promise<void>;
   isHealthy(): boolean;
+  doctor?(): Promise<{
+    ok: boolean;
+    message: string;
+    details?: string[];
+  }>;
 };
+const ENABLE_STARTUP_PROBE_ENV = "OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE";
+const SKIP_RUNTIME_PROBE_ENV = "OPENCLAW_SKIP_ACPX_RUNTIME_PROBE";
+const ACPX_BACKEND_ID = "acpx";
 
 type AcpxRuntimeFactoryParams = {
   pluginConfig: ResolvedAcpxPluginConfig;
-  queueOwnerTtlSeconds: number;
+  gatewayInstanceId: string;
+  processLeaseStore: AcpxProcessLeaseStore;
+  wrapperRoot: string;
   logger?: PluginLogger;
 };
 
 type CreateAcpxRuntimeServiceParams = {
   pluginConfig?: unknown;
-  runtimeFactory?: (params: AcpxRuntimeFactoryParams) => AcpxRuntimeLike;
+  openKeyedStore?: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
+  runtimeFactory?: (params: AcpxRuntimeFactoryParams) => AcpxRuntimeLike | Promise<AcpxRuntimeLike>;
+  processCleanupDeps?: AcpxProcessCleanupDeps;
 };
 
-function createDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntimeLike {
-  return new AcpxRuntime(params.pluginConfig, {
-    logger: params.logger,
-    queueOwnerTtlSeconds: params.queueOwnerTtlSeconds,
+const loadRuntimeModule = createLazyRuntimeModule(() => import("./runtime.js"));
+
+/** Convert ACPX timeout seconds into timer-safe milliseconds. */
+export function resolveAcpxTimerTimeoutMs(timeoutSeconds: number | undefined): number | undefined {
+  if (timeoutSeconds === undefined) {
+    return undefined;
+  }
+  return finiteSecondsToTimerSafeMilliseconds(timeoutSeconds) ?? 1;
+}
+
+function createLazyDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntimeLike {
+  let runtime: AcpxRuntimeLike | null = null;
+  let runtimePromise: Promise<AcpxRuntimeLike> | null = null;
+
+  async function resolveRuntime(): Promise<AcpxRuntimeLike> {
+    if (runtime) {
+      return runtime;
+    }
+    runtimePromise ??= loadRuntimeModule().then((module) => {
+      runtime = new module.AcpxRuntime({
+        cwd: params.pluginConfig.cwd,
+        openclawGatewayInstanceId: params.gatewayInstanceId,
+        openclawProcessLeaseStore: params.processLeaseStore,
+        openclawWrapperRoot: params.wrapperRoot,
+        sessionStore: module.createFileSessionStore({
+          stateDir: params.pluginConfig.stateDir,
+        }),
+        agentRegistry: module.createAgentRegistry({
+          overrides: params.pluginConfig.agents,
+        }),
+        probeAgent: params.pluginConfig.probeAgent,
+        mcpServers: toAcpMcpServers(params.pluginConfig.mcpServers),
+        pluginToolsMcpBridgeEnabled: params.pluginConfig.pluginToolsMcpBridge,
+        openclawToolsMcpBridgeEnabled: params.pluginConfig.openClawToolsMcpBridge,
+        permissionMode: params.pluginConfig.permissionMode,
+        nonInteractivePermissions: params.pluginConfig.nonInteractivePermissions,
+        timeoutMs: resolveAcpxTimerTimeoutMs(params.pluginConfig.timeoutSeconds),
+      }) as AcpxRuntimeLike;
+      return runtime;
+    });
+    return await runtimePromise;
+  }
+
+  return {
+    ...createLazyAcpRuntimeProxy(resolveRuntime),
+    async probeAvailability() {
+      await (await resolveRuntime()).probeAvailability();
+    },
+    isHealthy() {
+      return runtime?.isHealthy() ?? false;
+    },
+  };
+}
+
+function warnOnIgnoredLegacyCompatibilityConfig(params: {
+  pluginConfig: ResolvedAcpxPluginConfig;
+  logger?: PluginLogger;
+}): void {
+  const ignoredFields: string[] = [];
+  if (params.pluginConfig.legacyCompatibilityConfig.queueOwnerTtlSeconds != null) {
+    ignoredFields.push("queueOwnerTtlSeconds");
+  }
+  if (params.pluginConfig.legacyCompatibilityConfig.strictWindowsCmdWrapper === false) {
+    ignoredFields.push("strictWindowsCmdWrapper=false");
+  }
+  if (ignoredFields.length === 0) {
+    return;
+  }
+  params.logger?.warn(
+    `embedded acpx runtime ignores legacy compatibility config: ${ignoredFields.join(", ")}`,
+  );
+}
+
+function formatDoctorDetail(detail: unknown): string | null {
+  if (!detail) {
+    return null;
+  }
+  if (typeof detail === "string") {
+    return detail.trim() || null;
+  }
+  if (detail instanceof Error) {
+    return formatErrorMessage(detail);
+  }
+  if (typeof detail === "object") {
+    try {
+      return JSON.stringify(detail) ?? inspect(detail, { breakLength: Infinity, depth: 3 });
+    } catch {
+      return inspect(detail, { breakLength: Infinity, depth: 3 });
+    }
+  }
+  if (
+    typeof detail === "number" ||
+    typeof detail === "boolean" ||
+    typeof detail === "bigint" ||
+    typeof detail === "symbol"
+  ) {
+    return detail.toString();
+  }
+  return inspect(detail, { breakLength: Infinity, depth: 3 });
+}
+
+function formatDoctorFailureMessage(report: { message: string; details?: unknown[] }): string {
+  const detailText = report.details?.map(formatDoctorDetail).filter(Boolean).join("; ").trim();
+  return detailText ? `${report.message} (${detailText})` : report.message;
+}
+
+function resolveAllowedAgentsProbeAgent(ctx: OpenClawPluginServiceContext): string | undefined {
+  for (const agent of ctx.config.acp?.allowedAgents ?? []) {
+    const normalized = normalizeLowercaseStringOrEmpty(agent);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return undefined;
+}
+
+async function measureAcpxStartup<T>(
+  ctx: OpenClawPluginServiceContext,
+  name: string,
+  run: () => T | Promise<T>,
+): Promise<T> {
+  return ctx.startupTrace ? await ctx.startupTrace.measure(name, run) : await run();
+}
+
+function detailAcpxStartup(
+  ctx: OpenClawPluginServiceContext,
+  name: string,
+  metrics: ReadonlyArray<readonly [string, number | string]>,
+): void {
+  ctx.startupTrace?.detail?.(name, metrics);
+}
+
+function shouldRunStartupProbe(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env[ENABLE_STARTUP_PROBE_ENV] !== "0";
+}
+
+function shouldProbeRuntimeAtStartup(env: NodeJS.ProcessEnv = process.env): boolean {
+  return shouldRunStartupProbe(env) && env[SKIP_RUNTIME_PROBE_ENV] !== "1";
+}
+
+async function withStartupProbeTimeout<T>(params: {
+  promise: Promise<T>;
+  timeoutSeconds: number;
+}): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutMs = resolveAcpxTimerTimeoutMs(params.timeoutSeconds) ?? 1;
+  try {
+    return await Promise.race([
+      params.promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(
+            new Error(
+              `embedded acpx runtime backend startup probe timed out after ${params.timeoutSeconds}s`,
+            ),
+          );
+        }, timeoutMs);
+        (timeout as { unref?: () => void }).unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+function openGatewayInstanceStateStore(
+  openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
+): PluginStateKeyedStore<AcpxGatewayInstanceRecord> {
+  return openKeyedStore<AcpxGatewayInstanceRecord>({
+    namespace: ACPX_GATEWAY_INSTANCE_NAMESPACE,
+    maxEntries: ACPX_GATEWAY_INSTANCE_MAX_ENTRIES,
   });
 }
 
+async function resolveGatewayInstanceId(
+  openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
+): Promise<string> {
+  const store = openGatewayInstanceStateStore(openKeyedStore);
+  const existing = normalizeAcpxGatewayInstanceRecord(
+    await store.lookup(ACPX_GATEWAY_INSTANCE_KEY),
+  );
+  if (existing) {
+    return existing.instanceId;
+  }
+  const next = randomUUID();
+  await store.register(ACPX_GATEWAY_INSTANCE_KEY, {
+    instanceId: next,
+    createdAt: Date.now(),
+  });
+  return next;
+}
+
+async function reapOpenAcpxProcessLeases(params: {
+  gatewayInstanceId: string;
+  leaseStore: AcpxProcessLeaseStore;
+  deps?: AcpxProcessCleanupDeps;
+}): Promise<{ inspectedPids: number[]; terminatedPids: number[] }> {
+  const leases = await params.leaseStore.listOpen(params.gatewayInstanceId);
+  const inspectedPids: number[] = [];
+  const terminatedPids: number[] = [];
+  const pendingLeaseRootResults = new Map<
+    string,
+    { inspectedPids: number[]; terminatedPids: number[] }
+  >();
+  for (const lease of leases) {
+    if (lease.rootPid <= 0) {
+      await params.leaseStore.markState(lease.leaseId, "closing");
+      let result = pendingLeaseRootResults.get(lease.wrapperRoot);
+      if (!result) {
+        result = await reapStaleOpenClawOwnedAcpxOrphans({
+          wrapperRoot: lease.wrapperRoot,
+          deps: params.deps,
+        });
+        pendingLeaseRootResults.set(lease.wrapperRoot, result);
+        inspectedPids.push(...result.inspectedPids);
+        terminatedPids.push(...result.terminatedPids);
+      }
+      await params.leaseStore.markState(
+        lease.leaseId,
+        result.terminatedPids.length > 0 ? "closed" : "lost",
+      );
+      continue;
+    }
+    await params.leaseStore.markState(lease.leaseId, "closing");
+    const result = await cleanupOpenClawOwnedAcpxProcessTree({
+      rootPid: lease.rootPid,
+      expectedLeaseId: lease.leaseId,
+      expectedGatewayInstanceId: lease.gatewayInstanceId,
+      wrapperRoot: lease.wrapperRoot,
+      deps: params.deps,
+    });
+    inspectedPids.push(...result.inspectedPids);
+    terminatedPids.push(...result.terminatedPids);
+    await params.leaseStore.markState(
+      lease.leaseId,
+      result.terminatedPids.length > 0 ? "closed" : "lost",
+    );
+  }
+  return { inspectedPids, terminatedPids };
+}
+
+/** Create the ACPX plugin service that owns runtime registration and cleanup. */
 export function createAcpxRuntimeService(
   params: CreateAcpxRuntimeServiceParams = {},
 ): OpenClawPluginService {
@@ -41,60 +328,131 @@ export function createAcpxRuntimeService(
   return {
     id: "acpx-runtime",
     async start(ctx: OpenClawPluginServiceContext): Promise<void> {
-      const pluginConfig = resolveAcpxPluginConfig({
-        rawConfig: params.pluginConfig,
-        workspaceDir: ctx.workspaceDir,
+      if (process.env.OPENCLAW_SKIP_ACPX_RUNTIME === "1") {
+        ctx.logger.info("skipping embedded acpx runtime backend (OPENCLAW_SKIP_ACPX_RUNTIME=1)");
+        return;
+      }
+      const openKeyedStore = params.openKeyedStore;
+      if (!openKeyedStore) {
+        throw new Error("ACPX runtime service requires plugin keyed state");
+      }
+
+      const basePluginConfig = await measureAcpxStartup(ctx, "config.resolve", () =>
+        resolveAcpxPluginConfig({
+          rawConfig: params.pluginConfig,
+          workspaceDir: ctx.workspaceDir,
+        }),
+      );
+      const effectiveBasePluginConfig: ResolvedAcpxPluginConfig = {
+        ...basePluginConfig,
+        probeAgent: basePluginConfig.probeAgent ?? resolveAllowedAgentsProbeAgent(ctx),
+      };
+      const pluginConfig = await measureAcpxStartup(ctx, "config.prepare-codex-auth", () =>
+        prepareAcpxCodexAuthConfig({
+          pluginConfig: effectiveBasePluginConfig,
+          stateDir: ctx.stateDir,
+          logger: ctx.logger,
+        }),
+      );
+      const wrapperRoot = path.join(ctx.stateDir, "acpx");
+      await measureAcpxStartup(ctx, "filesystem.prepare", async () => {
+        await fs.mkdir(pluginConfig.stateDir, { recursive: true });
+        await fs.mkdir(wrapperRoot, { recursive: true });
       });
-      const runtimeFactory = params.runtimeFactory ?? createDefaultRuntime;
-      runtime = runtimeFactory({
+      const gatewayInstanceId = await measureAcpxStartup(ctx, "gateway-instance-id", () =>
+        resolveGatewayInstanceId(openKeyedStore),
+      );
+      const processLeaseStore = createAcpxProcessLeaseStore({
+        store: openAcpxProcessLeaseStateStore(openKeyedStore),
+      });
+      const startupReap = await measureAcpxStartup(ctx, "process-leases.reap", () =>
+        reapOpenAcpxProcessLeases({
+          gatewayInstanceId,
+          leaseStore: processLeaseStore,
+          deps: params.processCleanupDeps,
+        }),
+      );
+      if (startupReap.terminatedPids.length > 0) {
+        ctx.logger.info(
+          `reaped ${startupReap.terminatedPids.length} stale OpenClaw-owned ACPX process${startupReap.terminatedPids.length === 1 ? "" : "es"}`,
+        );
+      }
+      warnOnIgnoredLegacyCompatibilityConfig({
         pluginConfig,
-        queueOwnerTtlSeconds: pluginConfig.queueOwnerTtlSeconds,
         logger: ctx.logger,
       });
 
-      registerAcpRuntimeBackend({
-        id: ACPX_BACKEND_ID,
-        runtime,
-        healthy: () => runtime?.isHealthy() ?? false,
-      });
-      const expectedVersionLabel = pluginConfig.expectedVersion ?? "any";
-      const installLabel = pluginConfig.allowPluginLocalInstall ? "enabled" : "disabled";
-      ctx.logger.info(
-        `acpx runtime backend registered (command: ${pluginConfig.command}, expectedVersion: ${expectedVersionLabel}, pluginLocalInstall: ${installLabel})`,
+      const startedRuntime = await measureAcpxStartup(ctx, "runtime.create", () =>
+        params.runtimeFactory
+          ? params.runtimeFactory({
+              pluginConfig,
+              gatewayInstanceId,
+              processLeaseStore,
+              wrapperRoot,
+              logger: ctx.logger,
+            })
+          : createLazyDefaultRuntime({
+              pluginConfig,
+              gatewayInstanceId,
+              processLeaseStore,
+              wrapperRoot,
+              logger: ctx.logger,
+            }),
       );
+      runtime = startedRuntime;
+
+      const shouldProbeRuntime = shouldProbeRuntimeAtStartup();
+      detailAcpxStartup(ctx, "probe-policy", [
+        ["startupProbeEnabledCount", shouldProbeRuntime ? 1 : 0],
+        ["probeAgent", pluginConfig.probeAgent ?? "default"],
+      ]);
+      await measureAcpxStartup(ctx, "backend.register", () => {
+        registerAcpRuntimeBackend({
+          id: ACPX_BACKEND_ID,
+          runtime: startedRuntime,
+          ...(shouldProbeRuntime ? { healthy: () => runtime?.isHealthy() ?? false } : {}),
+        });
+        ctx.logger.info(`embedded acpx runtime backend registered (cwd: ${pluginConfig.cwd})`);
+      });
+
+      if (!shouldProbeRuntime) {
+        return;
+      }
 
       lifecycleRevision += 1;
       const currentRevision = lifecycleRevision;
-      void (async () => {
-        try {
-          await ensureAcpx({
-            command: pluginConfig.command,
-            logger: ctx.logger,
-            expectedVersion: pluginConfig.expectedVersion,
-            allowInstall: pluginConfig.allowPluginLocalInstall,
-            stripProviderAuthEnvVars: pluginConfig.stripProviderAuthEnvVars,
-            spawnOptions: {
-              strictWindowsCmdWrapper: pluginConfig.strictWindowsCmdWrapper,
-            },
-          });
-          if (currentRevision !== lifecycleRevision) {
-            return;
-          }
-          await runtime?.probeAvailability();
-          if (runtime?.isHealthy()) {
-            ctx.logger.info("acpx runtime backend ready");
-          } else {
-            ctx.logger.warn("acpx runtime backend probe failed after local install");
-          }
-        } catch (err) {
-          if (currentRevision !== lifecycleRevision) {
-            return;
-          }
-          ctx.logger.warn(
-            `acpx runtime setup failed: ${err instanceof Error ? err.message : String(err)}`,
-          );
+      try {
+        await measureAcpxStartup(ctx, "probe.availability", () =>
+          withStartupProbeTimeout({
+            promise: startedRuntime.probeAvailability(),
+            timeoutSeconds: pluginConfig.timeoutSeconds ?? DEFAULT_ACPX_TIMEOUT_SECONDS,
+          }),
+        );
+        if (currentRevision !== lifecycleRevision) {
+          return;
         }
-      })();
+        if (startedRuntime.isHealthy()) {
+          detailAcpxStartup(ctx, "probe.result", [["healthyCount", 1]]);
+          ctx.logger.info("embedded acpx runtime backend ready");
+          return;
+        }
+        const doctorReport = await measureAcpxStartup(ctx, "probe.doctor", () =>
+          startedRuntime.doctor?.(),
+        );
+        if (currentRevision !== lifecycleRevision) {
+          return;
+        }
+        detailAcpxStartup(ctx, "probe.result", [["healthyCount", 0]]);
+        ctx.logger.warn(
+          `embedded acpx runtime backend probe failed: ${doctorReport ? formatDoctorFailureMessage(doctorReport) : "backend remained unhealthy after probe"}`,
+        );
+      } catch (err) {
+        if (currentRevision !== lifecycleRevision) {
+          return;
+        }
+        detailAcpxStartup(ctx, "probe.result", [["healthyCount", 0]]);
+        ctx.logger.warn(`embedded acpx runtime setup failed: ${formatErrorMessage(err)}`);
+      }
     },
     async stop(_ctx: OpenClawPluginServiceContext): Promise<void> {
       lifecycleRevision += 1;

@@ -1,0 +1,173 @@
+title: Active goal context survives compaction
+
+scenario:
+  id: goal-context-survives-compaction
+  surface: goals
+  category: session-memory.context-engine
+  coverage:
+    primary:
+      - session-memory.goal-continuance-context-injection
+    secondary:
+      - session-memory.goal-continuance-continuance
+      - session-memory.compaction
+  objective: Verify compaction does not remove active session-goal context from the next model turn.
+  successCriteria:
+    - An authorized channel turn starts a session goal through `/goal start`.
+    - The same session completes a manual `/compact` operation.
+    - The first post-compaction inbound turn reaches the mock model with the exact active-goal context line.
+    - The assertion uses the captured post-compaction provider request.
+  gatewayConfigPatch:
+    agents:
+      defaults:
+        compaction:
+          reserveTokens: 64
+          reserveTokensFloor: 0
+          keepRecentTokens: 64
+  docsRefs:
+    - docs/tools/goal.md
+    - docs/concepts/compaction.md
+  codeRefs:
+    - src/auto-reply/reply/inbound-meta.ts
+    - src/auto-reply/reply/commands-compact.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
+  execution:
+    kind: flow
+    summary: Start a goal, compact the session, then inspect the next mock-provider request for active-goal context.
+    channel: qa-channel
+    config:
+      requiredProviderMode: mock-openai
+      conversationId: goal-context-compaction
+      senderId: qa-goal-operator
+      goalObjective: Preserve the deployment audit objective
+      expectedGoalContext: "Active goal: Preserve the deployment audit objective — advance it or update its status (get_goal/update_goal)."
+      contextSeedMarker: GOAL-COMPACTION-CONTEXT-SEED
+      postCompactionMessage: GOAL-CONTEXT-POST-COMPACTION unrelated lunch question
+
+flow:
+  steps:
+    - name: injects active goal context after manual compaction
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: this request-payload assertion requires mock-openai
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - resetTransport: true
+        - set: conversationId
+          value:
+            expr: "`${config.conversationId}-${randomUUID().slice(0, 8)}`"
+        - set: outboundIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            senderId:
+              ref: config.senderId
+            senderName: QA Goal Operator
+            text:
+              expr: "`/goal start ${config.goalObjective}`"
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            sinceIndex:
+              ref: outboundIndex
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+        - set: seedOutboundIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            senderId:
+              ref: config.senderId
+            senderName: QA Goal Operator
+            text:
+              expr: "`${config.contextSeedMarker} ${'retain this audit context '.repeat(80)}`"
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            sinceIndex:
+              ref: seedOutboundIndex
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+        - set: compactOutboundIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            senderId:
+              ref: config.senderId
+            senderName: QA Goal Operator
+            text: /compact
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            sinceIndex:
+              ref: compactOutboundIndex
+            textIncludes: Compact
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+          saveAs: compactReply
+        - assert:
+            expr: "!normalizeLowercaseStringOrEmpty(compactReply.text).includes('skipped')"
+            message:
+              expr: "`manual compaction did not compact the seeded session: ${compactReply.text}`"
+        - set: requestCursorBeforePostCompactionTurn
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: postCompactOutboundIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            senderId:
+              ref: config.senderId
+            senderName: QA Goal Operator
+            text:
+              ref: config.postCompactionMessage
+        - call: waitForCondition
+          saveAs: postCompactionRequest
+          args:
+            - lambda:
+                async: true
+                expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforePostCompactionTurn}`)).find((request) => String(request.prompt ?? '').includes(config.postCompactionMessage))"
+            - expr: liveTurnTimeoutMs(env, 60000)
+            - 100
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            sinceIndex:
+              ref: postCompactOutboundIndex
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+          saveAs: postCompactionReply
+        - assert:
+            expr: "String(postCompactionRequest.allInputText ?? '').includes(config.expectedGoalContext)"
+            message: post-compaction provider request input missed active goal context
+      detailsExpr: "`compact=${compactReply.text}; post-compaction=${postCompactionReply.text}`"

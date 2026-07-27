@@ -1,3 +1,4 @@
+// Process supervisor types describe supervised runs, states, and termination reasons.
 export type RunState = "starting" | "running" | "exiting" | "exited";
 
 export type TerminationReason =
@@ -43,15 +44,23 @@ export type ManagedRun = {
   stdin?: ManagedRunStdin;
   wait: () => Promise<RunExit>;
   cancel: (reason?: TerminationReason) => void;
+  /** Stop delivering output callbacks before owner teardown kills the child. */
+  detachOutput?: () => void;
 };
-
-export type SpawnMode = "child" | "pty";
 
 export type ManagedRunStdin = {
   write: (data: string, cb?: (err?: Error | null) => void) => void;
   end: () => void;
   destroy?: () => void;
   destroyed?: boolean;
+  writable?: boolean;
+  writableEnded?: boolean;
+  writableFinished?: boolean;
+};
+
+export type SpawnSecretInput = {
+  fd: number;
+  createData: () => Buffer;
 };
 
 export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
@@ -78,6 +87,11 @@ type SpawnBaseInput = {
    * When false, stdout/stderr are streamed via callbacks only and not retained in RunExit payload.
    */
   captureOutput?: boolean;
+  /**
+   * Maximum retained stdout/stderr characters per stream when captureOutput is enabled.
+   * Streaming callbacks still receive full chunks.
+   */
+  maxCapturedOutputChars?: number;
   onStdout?: (chunk: string) => void;
   onStderr?: (chunk: string) => void;
 };
@@ -88,6 +102,7 @@ type SpawnChildInput = SpawnBaseInput & {
   windowsVerbatimArguments?: boolean;
   input?: string;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
+  secretInput?: SpawnSecretInput;
 };
 
 type SpawnPtyInput = SpawnBaseInput & {
@@ -101,6 +116,5 @@ export interface ProcessSupervisor {
   spawn(input: SpawnInput): Promise<ManagedRun>;
   cancel(runId: string, reason?: TerminationReason): void;
   cancelScope(scopeKey: string, reason?: TerminationReason): void;
-  reconcileOrphans(): Promise<void>;
   getRecord(runId: string): RunRecord | undefined;
 }

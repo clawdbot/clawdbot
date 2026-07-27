@@ -1,17 +1,28 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { describe, expect, it } from "vitest";
+// Tiny-audio runner tests cover minimum-size skip behavior before provider
+// transcription runs.
+
+import { expectDefined } from "@openclaw/normalization-core";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { MIN_AUDIO_FILE_BYTES } from "./defaults.js";
-import {
-  buildProviderRegistry,
+import type {
   createMediaAttachmentCache,
   normalizeMediaAttachments,
-  runCapability,
-} from "./runner.js";
+} from "./runner.attachments.js";
+import { buildProviderRegistry, runCapability } from "./runner.js";
+import { withMediaFixture } from "./runner.test-utils.js";
 import type { AudioTranscriptionRequest } from "./types.js";
+
+vi.mock("../agents/model-auth.js", async () => {
+  const { createAvailableModelAuthMockModule } = await import("./runner.test-mocks.js");
+  return createAvailableModelAuthMockModule();
+});
+
+vi.mock("../plugins/capability-provider-runtime.js", async () => {
+  const { createEmptyCapabilityProviderMockModule } = await import("./runner.test-mocks.js");
+  return createEmptyCapabilityProviderMockModule();
+});
 
 async function withAudioFixture(params: {
   filePrefix: string;
@@ -24,28 +35,15 @@ async function withAudioFixture(params: {
     cache: ReturnType<typeof createMediaAttachmentCache>;
   }) => Promise<void>;
 }) {
-  const originalPath = process.env.PATH;
-  process.env.PATH = "/usr/bin:/bin";
-
-  const tmpPath = path.join(
-    os.tmpdir(),
-    `${params.filePrefix}-${Date.now().toString()}.${params.extension}`,
+  await withMediaFixture(
+    {
+      filePrefix: params.filePrefix,
+      extension: params.extension,
+      mediaType: params.mediaType,
+      fileContents: params.fileContents,
+    },
+    params.run,
   );
-  await fs.writeFile(tmpPath, params.fileContents);
-
-  const ctx: MsgContext = { MediaPath: tmpPath, MediaType: params.mediaType };
-  const media = normalizeMediaAttachments(ctx);
-  const cache = createMediaAttachmentCache(media, {
-    localPathRoots: [path.dirname(tmpPath)],
-  });
-
-  try {
-    await params.run({ ctx, media, cache });
-  } finally {
-    process.env.PATH = originalPath;
-    await cache.cleanup();
-    await fs.unlink(tmpPath).catch(() => {});
-  }
 }
 
 const AUDIO_CAPABILITY_CFG = {
@@ -84,6 +82,10 @@ async function runAudioCapabilityWithTranscriber(params: {
 }
 
 describe("runCapability skips tiny audio files", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   it("skips audio transcription when file is smaller than MIN_AUDIO_FILE_BYTES", async () => {
     await withAudioFixture({
       filePrefix: "openclaw-tiny-audio",
@@ -109,9 +111,30 @@ describe("runCapability skips tiny audio files", () => {
         expect(result.outputs).toHaveLength(0);
         expect(result.decision.outcome).toBe("skipped");
         expect(result.decision.attachments).toHaveLength(1);
-        expect(result.decision.attachments[0].attempts).toHaveLength(1);
-        expect(result.decision.attachments[0].attempts[0].outcome).toBe("skipped");
-        expect(result.decision.attachments[0].attempts[0].reason).toContain("tooSmall");
+        expect(
+          expectDefined(
+            result.decision.attachments[0],
+            "result.decision.attachments[0] test invariant",
+          ).attempts,
+        ).toHaveLength(1);
+        expect(
+          expectDefined(
+            expectDefined(
+              result.decision.attachments[0],
+              "result.decision.attachments[0] test invariant",
+            ).attempts[0],
+            'expectDefined( result.decision.attachments[0], "result.decision.attac... test invariant',
+          ).outcome,
+        ).toBe("skipped");
+        expect(
+          expectDefined(
+            expectDefined(
+              result.decision.attachments[0],
+              "result.decision.attachments[0] test invariant",
+            ).attempts[0],
+            'expectDefined( result.decision.attachments[0], "result.decision.attac... test invariant',
+          ).reason,
+        ).toContain("tooSmall");
       },
     });
   });
@@ -160,8 +183,44 @@ describe("runCapability skips tiny audio files", () => {
 
         expect(transcribeCalled).toBe(true);
         expect(result.outputs).toHaveLength(1);
-        expect(result.outputs[0].text).toBe("hello world");
+        expect(expectDefined(result.outputs[0], "result.outputs[0] test invariant").text).toBe(
+          "hello world",
+        );
         expect(result.decision.outcome).toBe("success");
+      },
+    });
+  });
+
+  it("marks the decision as failed when every audio model attempt fails", async () => {
+    await withAudioFixture({
+      filePrefix: "openclaw-failed-audio",
+      extension: "ogg",
+      mediaType: "audio/ogg",
+      fileContents: Buffer.alloc(MIN_AUDIO_FILE_BYTES + 100),
+      run: async ({ ctx, media, cache }) => {
+        const result = await runAudioCapabilityWithTranscriber({
+          ctx,
+          media,
+          cache,
+          transcribeAudio: async () => {
+            throw Object.assign(new Error("HTTP 400 validation failed"), { status: 400 });
+          },
+        });
+
+        expect(result.outputs).toHaveLength(0);
+        expect(result.decision.outcome).toBe("failed");
+        expect(result.decision.attachments).toHaveLength(1);
+        const attachment = result.decision.attachments[0];
+        if (!attachment) {
+          throw new Error("expected failed audio decision attachment");
+        }
+        expect(attachment.attempts).toHaveLength(1);
+        const attempt = attachment.attempts[0];
+        if (!attempt) {
+          throw new Error("expected failed audio decision attempt");
+        }
+        expect(attempt.outcome).toBe("failed");
+        expect(attempt.reason).toContain("HTTP 400 validation failed");
       },
     });
   });

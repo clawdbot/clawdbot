@@ -24,37 +24,38 @@ enum OnboardingStateStore {
     private static let lastSuccessTimeDefaultsKey = "onboarding.last_success_time"
 
     @MainActor
-    static func shouldPresentOnLaunch(appModel: NodeAppModel, defaults: UserDefaults = .standard) -> Bool {
-        if defaults.bool(forKey: Self.completedDefaultsKey) { return false }
-        // If we have a last-known connection config, don't force onboarding on launch. Auto-connect
-        // should handle reconnecting, and users can always open onboarding manually if needed.
-        if GatewaySettingsStore.loadLastGatewayConnection() != nil { return false }
+    static func shouldPresentOnLaunch(
+        appModel: NodeAppModel,
+        defaults: UserDefaults = .standard,
+        hasSavedGatewayConnection: Bool? = nil)
+        -> Bool
+    {
+        if defaults.bool(forKey: self.completedDefaultsKey) { return false }
+        let hasSavedGatewayConnection =
+            hasSavedGatewayConnection ?? (GatewaySettingsStore.activeGatewayEntry() != nil)
+        if hasSavedGatewayConnection { return false }
         return appModel.gatewayServerName == nil
     }
 
     static func markCompleted(mode: OnboardingConnectionMode? = nil, defaults: UserDefaults = .standard) {
-        defaults.set(true, forKey: Self.completedDefaultsKey)
+        defaults.set(true, forKey: self.completedDefaultsKey)
         if let mode {
-            defaults.set(mode.rawValue, forKey: Self.lastModeDefaultsKey)
+            defaults.set(mode.rawValue, forKey: self.lastModeDefaultsKey)
         }
         defaults.set(Int(Date().timeIntervalSince1970), forKey: Self.lastSuccessTimeDefaultsKey)
     }
 
     static func shouldPresentFirstRunIntro(defaults: UserDefaults = .standard) -> Bool {
-        !defaults.bool(forKey: Self.firstRunIntroSeenDefaultsKey)
+        !defaults.bool(forKey: self.firstRunIntroSeenDefaultsKey)
     }
 
     static func markFirstRunIntroSeen(defaults: UserDefaults = .standard) {
-        defaults.set(true, forKey: Self.firstRunIntroSeenDefaultsKey)
-    }
-
-    static func markIncomplete(defaults: UserDefaults = .standard) {
-        defaults.set(false, forKey: Self.completedDefaultsKey)
+        defaults.set(true, forKey: self.firstRunIntroSeenDefaultsKey)
     }
 
     static func reset(defaults: UserDefaults = .standard) {
-        defaults.set(false, forKey: Self.completedDefaultsKey)
-        defaults.set(false, forKey: Self.firstRunIntroSeenDefaultsKey)
+        defaults.set(false, forKey: self.completedDefaultsKey)
+        defaults.set(false, forKey: self.firstRunIntroSeenDefaultsKey)
     }
 
     static func lastMode(defaults: UserDefaults = .standard) -> OnboardingConnectionMode? {

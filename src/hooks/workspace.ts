@@ -1,13 +1,15 @@
+// Hook workspace helpers resolve hook roots and workspace-local hook files.
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { openRootFileSync } from "../infra/boundary-file-read.js";
+import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { resolveBundledHooksDir } from "./bundled-dir.js";
-import { shouldIncludeHook } from "./config.js";
 import {
   parseFrontmatter,
   resolveHookInvocationPolicy,
@@ -15,14 +17,11 @@ import {
 } from "./frontmatter.js";
 import { resolvePluginHookDirs } from "./plugin-hooks.js";
 import { resolveHookEntries } from "./policy.js";
-import type {
-  Hook,
-  HookEligibilityContext,
-  HookEntry,
-  HookSnapshot,
-  HookSource,
-  ParsedHookFrontmatter,
-} from "./types.js";
+import type { Hook, HookEntry, HookSource, ParsedHookFrontmatter } from "./types.js";
+
+// Hook descriptors are small metadata. Bounding the pinned descriptor read also
+// covers files that grow after the boundary open validates their identity.
+const HOOK_METADATA_MAX_BYTES = 1024 * 1024;
 
 type HookPackageManifest = {
   name?: string;
@@ -34,20 +33,13 @@ type LoadedHook = {
   frontmatter: ParsedHookFrontmatter;
 };
 
-function filterHookEntries(
-  entries: HookEntry[],
-  config?: OpenClawConfig,
-  eligibility?: HookEligibilityContext,
-): HookEntry[] {
-  return entries.filter((entry) => shouldIncludeHook({ entry, config, eligibility }));
-}
-
 function readHookPackageManifest(dir: string): HookPackageManifest | null {
   const manifestPath = path.join(dir, "package.json");
-  const raw = readBoundaryFileUtf8({
+  const raw = readRootFileUtf8({
     absolutePath: manifestPath,
     rootPath: dir,
     boundaryLabel: "hook package directory",
+    maxBytes: HOOK_METADATA_MAX_BYTES,
   });
   if (raw === null) {
     return null;
@@ -60,11 +52,7 @@ function readHookPackageManifest(dir: string): HookPackageManifest | null {
 }
 
 function resolvePackageHooks(manifest: HookPackageManifest): string[] {
-  const raw = manifest[MANIFEST_KEY]?.hooks;
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-  return raw.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
+  return normalizeTrimmedStringList(manifest[MANIFEST_KEY]?.hooks);
 }
 
 function resolveContainedDir(baseDir: string, targetDir: string): string | null {
@@ -87,10 +75,11 @@ function loadHookFromDir(params: {
   nameHint?: string;
 }): LoadedHook | null {
   const hookMdPath = path.join(params.hookDir, "HOOK.md");
-  const content = readBoundaryFileUtf8({
+  const content = readRootFileUtf8({
     absolutePath: hookMdPath,
     rootPath: params.hookDir,
     boundaryLabel: "hook directory",
+    maxBytes: HOOK_METADATA_MAX_BYTES,
   });
   if (content === null) {
     return null;
@@ -105,7 +94,7 @@ function loadHookFromDir(params: {
     let handlerPath: string | undefined;
     for (const candidate of handlerCandidates) {
       const candidatePath = path.join(params.hookDir, candidate);
-      const safeCandidatePath = resolveBoundaryFilePath({
+      const safeCandidatePath = resolveRootFilePath({
         absolutePath: candidatePath,
         rootPath: params.hookDir,
         boundaryLabel: "hook directory",
@@ -214,7 +203,7 @@ function loadHooksFromDir(params: {
   return hooks;
 }
 
-export function loadHookEntriesFromDir(params: {
+function loadHookEntriesFromDir(params: {
   dir: string;
   source: HookSource;
   pluginId?: string;
@@ -239,7 +228,7 @@ export function loadHookEntriesFromDir(params: {
   });
 }
 
-export function discoverWorkspaceHookEntries(
+function discoverWorkspaceHookEntries(
   workspaceDir: string,
   opts?: {
     config?: OpenClawConfig;
@@ -251,9 +240,7 @@ export function discoverWorkspaceHookEntries(
   const workspaceHooksDir = path.join(workspaceDir, "hooks");
   const bundledHooksDir = opts?.bundledHooksDir ?? resolveBundledHooksDir();
   const extraDirsRaw = opts?.config?.hooks?.internal?.load?.extraDirs ?? [];
-  const extraDirs = extraDirsRaw
-    .map((d) => (typeof d === "string" ? d.trim() : ""))
-    .filter(Boolean);
+  const extraDirs = normalizeTrimmedStringList(extraDirsRaw);
   const pluginHookDirs = resolvePluginHookDirs({
     workspaceDir,
     config: opts?.config,
@@ -291,30 +278,6 @@ export function discoverWorkspaceHookEntries(
   return [...extraHooks, ...bundledHooks, ...pluginHooks, ...managedHooks, ...workspaceHooks];
 }
 
-export function buildWorkspaceHookSnapshot(
-  workspaceDir: string,
-  opts?: {
-    config?: OpenClawConfig;
-    managedHooksDir?: string;
-    bundledHooksDir?: string;
-    entries?: HookEntry[];
-    eligibility?: HookEligibilityContext;
-    snapshotVersion?: number;
-  },
-): HookSnapshot {
-  const hookEntries = opts?.entries ?? loadWorkspaceHookEntries(workspaceDir, opts);
-  const eligible = filterHookEntries(hookEntries, opts?.config, opts?.eligibility);
-
-  return {
-    hooks: eligible.map((entry) => ({
-      name: entry.hook.name,
-      events: entry.metadata?.events ?? [],
-    })),
-    resolvedHooks: eligible.map((entry) => entry.hook),
-    version: opts?.snapshotVersion,
-  };
-}
-
 export function loadWorkspaceHookEntries(
   workspaceDir: string,
   opts?: {
@@ -333,21 +296,27 @@ export function loadWorkspaceHookEntries(
   });
 }
 
-function readBoundaryFileUtf8(params: {
+function readRootFileUtf8(params: {
   absolutePath: string;
   rootPath: string;
   boundaryLabel: string;
+  maxBytes: number;
 }): string | null {
-  return withOpenedBoundaryFileSync(params, (opened) => {
+  return withOpenedRootFileSync(params, (opened) => {
     try {
-      return fs.readFileSync(opened.fd, "utf-8");
-    } catch {
+      return readFileDescriptorBoundedSync(opened.fd, params.maxBytes).toString("utf-8");
+    } catch (err) {
+      if (err instanceof RangeError) {
+        log.warn(
+          `Ignoring oversized hook metadata ${params.absolutePath}: file exceeds the ${params.maxBytes}-byte limit`,
+        );
+      }
       return null;
     }
   });
 }
 
-function withOpenedBoundaryFileSync<T>(
+function withOpenedRootFileSync<T>(
   params: {
     absolutePath: string;
     rootPath: string;
@@ -355,7 +324,7 @@ function withOpenedBoundaryFileSync<T>(
   },
   read: (opened: { fd: number; path: string }) => T,
 ): T | null {
-  const opened = openBoundaryFileSync({
+  const opened = openRootFileSync({
     absolutePath: params.absolutePath,
     rootPath: params.rootPath,
     boundaryLabel: params.boundaryLabel,
@@ -370,10 +339,10 @@ function withOpenedBoundaryFileSync<T>(
   }
 }
 
-function resolveBoundaryFilePath(params: {
+function resolveRootFilePath(params: {
   absolutePath: string;
   rootPath: string;
   boundaryLabel: string;
 }): string | null {
-  return withOpenedBoundaryFileSync(params, (opened) => opened.path);
+  return withOpenedRootFileSync(params, (opened) => opened.path);
 }

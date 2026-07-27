@@ -1,3 +1,4 @@
+// Irc plugin module implements connect options behavior.
 import type { ResolvedIrcAccount } from "./accounts.js";
 import type { IrcClientOptions } from "./client.js";
 

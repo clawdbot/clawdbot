@@ -1,12 +1,11 @@
-import type { OpenClawConfig } from "../../../config/config.js";
-import { sanitizeForLog } from "../../../terminal/ansi.js";
+// Doctor repair for open DM policies that still need explicit allowFrom wildcards.
+import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
+import { ensureOpenDmPolicyAllowFromWildcard } from "../../../channels/plugins/dm-access.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveAllowFromMode, type AllowFromMode } from "./allow-from-mode.js";
 import { asObjectRecord } from "./object.js";
 
-function hasWildcard(list?: Array<string | number>) {
-  return list?.some((v) => String(v).trim() === "*") ?? false;
-}
-
+/** Format doctor warnings for open DM policies missing allowFrom wildcards. */
 export function collectOpenPolicyAllowFromWarnings(params: {
   changes: string[];
   doctorFixCommand: string;
@@ -20,6 +19,7 @@ export function collectOpenPolicyAllowFromWarnings(params: {
   ];
 }
 
+/** Add allowFrom wildcards for open DM policies where channel metadata requires them. */
 export function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];
@@ -37,64 +37,12 @@ export function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
     prefix: string,
     mode: AllowFromMode,
   ) => {
-    const dmEntry = account.dm;
-    const dm =
-      dmEntry && typeof dmEntry === "object" && !Array.isArray(dmEntry)
-        ? (dmEntry as Record<string, unknown>)
-        : undefined;
-    const dmPolicy =
-      (account.dmPolicy as string | undefined) ?? (dm?.policy as string | undefined) ?? undefined;
-
-    if (dmPolicy !== "open") {
-      return;
-    }
-
-    const topAllowFrom = account.allowFrom as Array<string | number> | undefined;
-    const nestedAllowFrom = dm?.allowFrom as Array<string | number> | undefined;
-
-    if (mode === "nestedOnly") {
-      if (hasWildcard(nestedAllowFrom)) {
-        return;
-      }
-      if (dm && Array.isArray(nestedAllowFrom)) {
-        dm.allowFrom = [...nestedAllowFrom, "*"];
-        changes.push(`- ${prefix}.dm.allowFrom: added "*" (required by dmPolicy="open")`);
-      } else {
-        const nextDm = dm ?? {};
-        nextDm.allowFrom = ["*"];
-        account.dm = nextDm;
-        changes.push(`- ${prefix}.dm.allowFrom: set to ["*"] (required by dmPolicy="open")`);
-      }
-      return;
-    }
-
-    if (mode === "topOrNested") {
-      if (hasWildcard(topAllowFrom) || hasWildcard(nestedAllowFrom)) {
-        return;
-      }
-      if (Array.isArray(topAllowFrom)) {
-        account.allowFrom = [...topAllowFrom, "*"];
-        changes.push(`- ${prefix}.allowFrom: added "*" (required by dmPolicy="open")`);
-      } else if (dm && Array.isArray(nestedAllowFrom)) {
-        dm.allowFrom = [...nestedAllowFrom, "*"];
-        changes.push(`- ${prefix}.dm.allowFrom: added "*" (required by dmPolicy="open")`);
-      } else {
-        account.allowFrom = ["*"];
-        changes.push(`- ${prefix}.allowFrom: set to ["*"] (required by dmPolicy="open")`);
-      }
-      return;
-    }
-
-    if (hasWildcard(topAllowFrom)) {
-      return;
-    }
-    if (Array.isArray(topAllowFrom)) {
-      account.allowFrom = [...topAllowFrom, "*"];
-      changes.push(`- ${prefix}.allowFrom: added "*" (required by dmPolicy="open")`);
-    } else {
-      account.allowFrom = ["*"];
-      changes.push(`- ${prefix}.allowFrom: set to ["*"] (required by dmPolicy="open")`);
-    }
+    ensureOpenDmPolicyAllowFromWildcard({
+      entry: account,
+      mode,
+      pathPrefix: prefix,
+      changes,
+    });
   };
 
   const nextChannels = next.channels as Record<string, Record<string, unknown>>;

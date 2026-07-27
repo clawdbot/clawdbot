@@ -1,5 +1,6 @@
+// Discord tests cover account inspect plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 import { inspectDiscordAccount } from "./account-inspect.js";
 
 function asConfig(value: unknown): OpenClawConfig {

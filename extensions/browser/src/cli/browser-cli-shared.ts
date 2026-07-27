@@ -1,9 +1,27 @@
+/**
+ * Shared Browser CLI option parsing and gateway request helpers.
+ */
+import {
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "openclaw/plugin-sdk/number-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  BROWSER_REQUEST_GATEWAY_METHOD,
+  BROWSER_REQUEST_GATEWAY_SCOPES,
+} from "../browser-gateway-contract.js";
+import { normalizeBrowserTimerDelayMs } from "../browser/timer-delay.js";
 import { callGatewayFromCli, type GatewayRpcOpts } from "./core-api.js";
 
+/** Parent Browser CLI options inherited by subcommands. */
 export type BrowserParentOpts = GatewayRpcOpts & {
   json?: boolean;
   browserProfile?: string;
 };
+
+/** Help text for user-facing tab references accepted by Browser CLI commands. */
+export const BROWSER_TAB_REFERENCE_HELP =
+  "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix";
 
 type BrowserRequestParams = {
   method: "GET" | "POST" | "DELETE";
@@ -26,6 +44,35 @@ function normalizeQuery(query: BrowserRequestParams["query"]): Record<string, st
   return Object.keys(out).length ? out : undefined;
 }
 
+/** Parses a positive integer value for Browser CLI options. */
+export function parseBrowserPositiveIntegerValue(value: unknown): number | undefined {
+  return parseStrictPositiveInteger(value);
+}
+
+/** Parses a non-negative integer value for Browser CLI options. */
+export function parseBrowserNonNegativeIntegerValue(value: unknown): number | undefined {
+  return parseStrictNonNegativeInteger(value);
+}
+
+/** Parses and validates a required positive integer CLI option. */
+export function parseBrowserPositiveIntegerOption(raw: string, flag: string): number {
+  const parsed = parseBrowserPositiveIntegerValue(raw);
+  if (parsed === undefined) {
+    throw new Error(`${flag} must be a positive integer.`);
+  }
+  return parsed;
+}
+
+/** Parses and validates a required non-negative integer CLI option. */
+export function parseBrowserNonNegativeIntegerOption(raw: string, flag: string): number {
+  const parsed = parseBrowserNonNegativeIntegerValue(raw);
+  if (parsed === undefined) {
+    throw new Error(`${flag} must be a non-negative integer.`);
+  }
+  return parsed;
+}
+
+/** Calls the Browser gateway request method with normalized timeout/query options. */
 export async function callBrowserRequest<T>(
   opts: BrowserParentOpts,
   params: BrowserRequestParams,
@@ -33,9 +80,9 @@ export async function callBrowserRequest<T>(
 ): Promise<T> {
   const resolvedTimeoutMs =
     typeof extra?.timeoutMs === "number" && Number.isFinite(extra.timeoutMs)
-      ? Math.max(1, Math.floor(extra.timeoutMs))
+      ? normalizeBrowserTimerDelayMs(extra.timeoutMs)
       : typeof opts.timeout === "string"
-        ? Number.parseInt(opts.timeout, 10)
+        ? normalizeBrowserTimerDelayMs(parseBrowserPositiveIntegerOption(opts.timeout, "--timeout"))
         : undefined;
   const resolvedTimeout =
     typeof resolvedTimeoutMs === "number" && Number.isFinite(resolvedTimeoutMs)
@@ -43,7 +90,7 @@ export async function callBrowserRequest<T>(
       : undefined;
   const timeout = typeof resolvedTimeout === "number" ? String(resolvedTimeout) : opts.timeout;
   const payload = await callGatewayFromCli(
-    "browser.request",
+    BROWSER_REQUEST_GATEWAY_METHOD,
     { ...opts, timeout },
     {
       method: params.method,
@@ -52,7 +99,7 @@ export async function callBrowserRequest<T>(
       body: params.body,
       timeoutMs: resolvedTimeout,
     },
-    { progress: extra?.progress },
+    { progress: extra?.progress, scopes: [...BROWSER_REQUEST_GATEWAY_SCOPES] },
   );
   if (payload === undefined) {
     throw new Error("Unexpected browser.request response");
@@ -60,6 +107,7 @@ export async function callBrowserRequest<T>(
   return payload as T;
 }
 
+/** Sends a Browser resize action through the shared request helper. */
 export async function callBrowserResize(
   opts: BrowserParentOpts,
   params: { profile?: string; width: number; height: number; targetId?: string },
@@ -75,7 +123,7 @@ export async function callBrowserResize(
         kind: "resize",
         width: params.width,
         height: params.height,
-        targetId: params.targetId?.trim() || undefined,
+        targetId: normalizeOptionalString(params.targetId),
       },
     },
     extra,

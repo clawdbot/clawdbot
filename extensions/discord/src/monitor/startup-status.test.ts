@@ -1,3 +1,4 @@
+// Discord tests cover startup status plugin behavior.
 import { describe, expect, it } from "vitest";
 import { formatDiscordStartupStatusMessage } from "./startup-status.js";
 

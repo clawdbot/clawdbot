@@ -1,3 +1,4 @@
+// Gmail watcher lifecycle tests cover start, stop, and restart behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { startGmailWatcherMock } = vi.hoisted(() => ({
@@ -27,6 +28,24 @@ describe("startGmailWatcherWithLogs", () => {
 
   afterEach(() => {
     delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
+  });
+
+  it("passes cancellation state to watcher startup", async () => {
+    const isCancelled = vi.fn(() => true);
+    const abortController = new AbortController();
+    startGmailWatcherMock.mockResolvedValue({ started: false, reason: "startup cancelled" });
+
+    await startGmailWatcherWithLogs({
+      cfg: {},
+      log,
+      isCancelled,
+      signal: abortController.signal,
+    });
+
+    expect(startGmailWatcherMock).toHaveBeenCalledWith(
+      {},
+      { isCancelled, signal: abortController.signal },
+    );
   });
 
   it("logs startup success", async () => {

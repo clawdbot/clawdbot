@@ -1,8 +1,9 @@
+// Feishu plugin module implements pins behavior.
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 
-export type FeishuPin = {
+type FeishuPin = {
   messageId: string;
   chatId?: string;
   operatorId?: string;

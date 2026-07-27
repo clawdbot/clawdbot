@@ -1,0 +1,88 @@
+// Package manifest contract tests cover plugin package manifest requirements.
+import { describePackageManifestContract } from "openclaw/plugin-sdk/plugin-test-contracts";
+
+type PackageManifestContractParams = Parameters<typeof describePackageManifestContract>[0];
+
+const packageManifestContractTests: PackageManifestContractParams[] = [
+  {
+    pluginId: "buzz",
+    pluginLocalRuntimeDeps: ["nostr-tools"],
+    minHostVersionBaseline: "2026.7.2",
+  },
+  {
+    pluginId: "discord",
+    pluginLocalRuntimeDeps: ["@discordjs/voice", "discord-api-types", "libopus-wasm"],
+    minHostVersionBaseline: "2026.3.22",
+  },
+  {
+    pluginId: "feishu",
+    pluginLocalRuntimeDeps: ["@larksuiteoapi/node-sdk"],
+    minHostVersionBaseline: "2026.3.22",
+  },
+  { pluginId: "google" },
+  { pluginId: "google-meet" },
+  {
+    pluginId: "googlechat",
+    pluginLocalRuntimeDeps: ["google-auth-library"],
+    minHostVersionBaseline: "2026.3.22",
+  },
+  { pluginId: "irc", minHostVersionBaseline: "2026.3.22" },
+  { pluginId: "line", minHostVersionBaseline: "2026.3.22" },
+  { pluginId: "amazon-bedrock" },
+  { pluginId: "amazon-bedrock-mantle" },
+  {
+    pluginId: "diffs",
+    pluginLocalRuntimeDeps: ["@pierre/diffs"],
+  },
+  { pluginId: "file-transfer" },
+  {
+    pluginId: "matrix",
+    pluginLocalRuntimeDeps: [
+      "@matrix-org/matrix-sdk-crypto-nodejs",
+      "@matrix-org/matrix-sdk-crypto-wasm",
+      "fake-indexeddb",
+      "matrix-js-sdk",
+      "music-metadata",
+    ],
+    minHostVersionBaseline: "2026.3.22",
+  },
+  { pluginId: "mattermost", minHostVersionBaseline: "2026.3.22" },
+  {
+    pluginId: "memory-lancedb",
+    pluginLocalRuntimeDeps: ["@lancedb/lancedb", "apache-arrow"],
+    minHostVersionBaseline: "2026.3.22",
+  },
+  {
+    pluginId: "msteams",
+    pluginLocalRuntimeDeps: ["@azure/identity", "@microsoft/teams.apps"],
+    minHostVersionBaseline: "2026.3.22",
+  },
+  { pluginId: "nextcloud-talk", minHostVersionBaseline: "2026.3.22" },
+  {
+    pluginId: "nostr",
+    pluginLocalRuntimeDeps: ["nostr-tools"],
+    minHostVersionBaseline: "2026.3.22",
+  },
+  { pluginId: "openshell" },
+  {
+    pluginId: "qqbot",
+    pluginLocalRuntimeDeps: ["@tencent-connect/qqbot-connector", "mpg123-decoder", "silk-wasm"],
+  },
+  { pluginId: "slack" },
+  { pluginId: "synology-chat", minHostVersionBaseline: "2026.3.22" },
+  { pluginId: "telegram" },
+  { pluginId: "tlon", minHostVersionBaseline: "2026.3.22" },
+  { pluginId: "twitch", minHostVersionBaseline: "2026.3.22" },
+  { pluginId: "voice-call", minHostVersionBaseline: "2026.3.22" },
+  {
+    pluginId: "whatsapp",
+    pluginLocalRuntimeDeps: ["audio-decode", "baileys"],
+    minHostVersionBaseline: "2026.3.22",
+  },
+  { pluginId: "zalo", minHostVersionBaseline: "2026.3.22" },
+  { pluginId: "zalouser", minHostVersionBaseline: "2026.3.22" },
+];
+
+for (const params of packageManifestContractTests) {
+  describePackageManifestContract(params);
+}

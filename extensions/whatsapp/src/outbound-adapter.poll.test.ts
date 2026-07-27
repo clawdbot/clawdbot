@@ -1,14 +1,21 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
+// Whatsapp tests cover outbound adapter.poll plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   sendPollWhatsApp: vi.fn(async () => ({ messageId: "poll-1", toJid: "1555@s.whatsapp.net" })),
   sendReactionWhatsApp: vi.fn(async () => undefined),
 }));
 
-vi.mock("../../../src/globals.js", () => ({
-  shouldLogVerbose: () => false,
-}));
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
+  return {
+    ...actual,
+    shouldLogVerbose: () => false,
+  };
+});
 
 vi.mock("./send.js", () => ({
   sendPollWhatsApp: hoisted.sendPollWhatsApp,
@@ -18,9 +25,13 @@ vi.mock("./send.js", () => ({
 let whatsappOutbound: typeof import("./outbound-adapter.js").whatsappOutbound;
 
 describe("whatsappOutbound sendPoll", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ whatsappOutbound } = await import("./outbound-adapter.js"));
+  });
+
+  beforeEach(() => {
+    hoisted.sendPollWhatsApp.mockClear();
+    hoisted.sendReactionWhatsApp.mockClear();
   });
 
   it("threads cfg through poll send options", async () => {

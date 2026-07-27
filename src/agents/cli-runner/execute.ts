@@ -1,82 +1,101 @@
-import { shouldLogVerbose } from "../../globals.js";
+/** Executes prepared CLI backend runs and owns their queue and resource lifecycle. */
+import crypto from "node:crypto";
+import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
-import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
+import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { getProcessSupervisor } from "../../process/supervisor/index.js";
-import { scopedHeartbeatWakeOptions } from "../../routing/session-key.js";
-import { prependBootstrapPromptWarning } from "../bootstrap-budget.js";
-import { parseCliOutput, type CliOutput } from "../cli-output.js";
-import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
-import { classifyFailoverReason } from "../pi-embedded-helpers.js";
+import type { CliBackendThinkingLevel } from "../../plugins/cli-backend.types.js";
+import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
+import { appendBootstrapPromptWarning } from "../bootstrap-budget.js";
 import {
-  appendImagePathsToPrompt,
-  buildCliSupervisorScopeKey,
+  fingerprintCliRuntimeArtifact,
+  resolveCliRuntimeOwnerFingerprint,
+} from "../cli-auth-epoch.js";
+import { resolveCliExecutableIdentity } from "../cli-executable-identity.js";
+import type { CliOutput } from "../cli-output.js";
+import {
+  detectImageReferences,
+  hasHydratableMediaImages,
+} from "../embedded-agent-runner/run/images.js";
+import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
+import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
+import {
+  closeClaudeLiveSessionForContext,
+  shouldUseClaudeLiveSession,
+} from "./claude-live-session.js";
+import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
+import { executeDeps } from "./execute-deps.js";
+import { createCliEventHandlers } from "./execute-events.js";
+import {
+  buildCliEnvAuthLog,
+  buildCliExecLogLine,
+  CLAUDE_SELECTED_AUTH_ENV_KEYS,
+  CLI_BACKEND_PRESERVE_ENV,
+  logCliInvocation,
+  NODE_CLAUDE_FORWARD_ENV_KEYS,
+  parseCliBackendPreserveEnv,
+  resolveNodeClaudeAuthEnv,
+} from "./execute-logging.js";
+import {
+  createCliAbortError,
+  resolveNodeClaudePlacement,
+  stripGatewayLocalClaudeArgs,
+} from "./execute-node-claude.js";
+import { executeCliProcess } from "./execute-process.js";
+import { createCliToolTracking } from "./execute-tool-tracking.js";
+import {
+  buildClaudeOwnerKey,
   buildCliArgs,
   enqueueCliRun,
-  loadPromptRefImages,
+  prepareCliPromptImagePayload,
   resolveCliNoOutputTimeoutMs,
+  resolveCliRunQueueKey,
+  resolveCliRunTimeoutOverrideMs,
   resolvePromptInput,
   resolveSessionIdToSend,
   resolveSystemPromptUsage,
-  writeCliImages,
 } from "./helpers.js";
 import {
   cliBackendLog,
   CLI_BACKEND_LOG_OUTPUT_ENV,
   LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV,
 } from "./log.js";
+import { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
+import { buildCliBackendToolAvailability } from "./tool-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
 
-function buildCliLogArgs(params: {
-  args: string[];
-  systemPromptArg?: string;
-  sessionArg?: string;
-  modelArg?: string;
-  imageArg?: string;
-  argsPrompt?: string;
-}): string[] {
-  const logArgs: string[] = [];
-  for (let i = 0; i < params.args.length; i += 1) {
-    const arg = params.args[i] ?? "";
-    if (arg === params.systemPromptArg) {
-      const systemPromptValue = params.args[i + 1] ?? "";
-      logArgs.push(arg, `<systemPrompt:${systemPromptValue.length} chars>`);
-      i += 1;
-      continue;
-    }
-    if (arg === params.sessionArg) {
-      logArgs.push(arg, params.args[i + 1] ?? "");
-      i += 1;
-      continue;
-    }
-    if (arg === params.modelArg) {
-      logArgs.push(arg, params.args[i + 1] ?? "");
-      i += 1;
-      continue;
-    }
-    if (arg === params.imageArg) {
-      logArgs.push(arg, "<image>");
-      i += 1;
-      continue;
-    }
-    logArgs.push(arg);
-  }
-  if (params.argsPrompt) {
-    const promptIndex = logArgs.indexOf(params.argsPrompt);
-    if (promptIndex >= 0) {
-      logArgs[promptIndex] = `<prompt:${params.argsPrompt.length} chars>`;
-    }
-  }
-  return logArgs;
+function normalizeCliBackendThinkingLevel(
+  level: PreparedCliRunContext["params"]["thinkLevel"],
+): CliBackendThinkingLevel | undefined {
+  return level === "ultra" ? "max" : level;
 }
 
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cliRunnerExecuteTestApi")] = {
+    buildCliEnvAuthLog,
+    buildCliExecLogLine,
+    setCliRunnerExecuteTestDeps: (overrides: Record<string, unknown>) => {
+      Object.assign(executeDeps, overrides as Partial<typeof executeDeps>);
+    },
+  };
+}
+
+type ExecutePreparedCliRunOptions = {
+  onPhase?: (phase: "send" | "resolve" | "cleanup") => void;
+};
+
+/** Executes a prepared CLI run context and returns normalized CLI output. */
 export async function executePreparedCliRun(
   context: PreparedCliRunContext,
   cliSessionIdToUse?: string,
+  options?: ExecutePreparedCliRunOptions,
 ): Promise<CliOutput> {
   const params = context.params;
+  if (params.abortSignal?.aborted) {
+    throw createCliAbortError();
+  }
   const backend = context.preparedBackend.backend;
+  const nodePlacement = resolveNodeClaudePlacement(context);
   const { sessionId: resolvedSessionId, isNew } = resolveSessionIdToSend({
     backend,
     cliSessionId: cliSessionIdToUse,
@@ -84,187 +103,485 @@ export async function executePreparedCliRun(
   const useResume = Boolean(
     cliSessionIdToUse && resolvedSessionId && backend.resumeArgs && backend.resumeArgs.length > 0,
   );
+  const resendSystemPromptForSoftResume = context.reusableCliSession.mode === "reuse-with-drift";
   const systemPromptArg = resolveSystemPromptUsage({
     backend,
-    isNewSession: isNew,
+    isNewSession: isNew || resendSystemPromptForSoftResume,
     systemPrompt: context.systemPrompt,
   });
+  const shouldSendSystemPrompt =
+    systemPromptArg &&
+    (!useResume || backend.systemPromptWhen === "always" || resendSystemPromptForSoftResume);
+  const systemPromptFile =
+    !nodePlacement && shouldSendSystemPrompt
+      ? await executeDeps.writeCliSystemPromptFile({ backend, systemPrompt: systemPromptArg })
+      : undefined;
+  const nodeSystemPrompt = nodePlacement && shouldSendSystemPrompt ? systemPromptArg : undefined;
 
-  let imagePaths: string[] | undefined;
-  let cleanupImages: (() => Promise<void>) | undefined;
-  let prompt = prependBootstrapPromptWarning(params.prompt, context.bootstrapPromptWarningLines, {
-    preserveExactPrompt: context.heartbeatPrompt,
-  });
-  const resolvedImages =
-    params.images && params.images.length > 0
-      ? params.images
-      : await loadPromptRefImages({ prompt, workspaceDir: context.workspaceDir });
-  if (resolvedImages.length > 0) {
-    const imagePayload = await writeCliImages(resolvedImages);
-    imagePaths = imagePayload.paths;
-    cleanupImages = imagePayload.cleanup;
-    if (!backend.imageArg) {
-      prompt = appendImagePathsToPrompt(prompt, imagePaths);
-    }
+  const basePrompt = cliSessionIdToUse
+    ? params.prompt
+    : (context.openClawHistoryPrompt ?? params.prompt);
+  let prompt = applyPluginTextReplacements(
+    appendBootstrapPromptWarning(basePrompt, context.bootstrapPromptWarningLines, {
+      preserveExactPrompt: context.heartbeatPrompt,
+    }),
+    context.backendResolved.textTransforms?.input,
+  );
+  if (
+    nodePlacement &&
+    ((params.images?.length ?? 0) > 0 ||
+      hasHydratableMediaImages(params.media) ||
+      (params.imagePrompt ? detectImageReferences(params.imagePrompt).length > 0 : false))
+  ) {
+    throw new Error("paired-node Claude CLI sessions do not support attachments or images");
   }
-
-  const { argsPrompt, stdin } = resolvePromptInput({
-    backend,
-    prompt,
-  });
-  const stdinPayload = stdin ?? "";
+  const imagePayload = nodePlacement
+    ? { prompt, imagePaths: [] as string[], cleanupImages: async () => {} }
+    : await prepareCliPromptImagePayload({
+        backend,
+        prompt,
+        imagePrompt: params.imagePrompt,
+        workspaceDir: context.workspaceDir,
+        images: params.images,
+        imageOrder: params.imageOrder,
+        media: params.media,
+      });
+  prompt = imagePayload.prompt;
+  const { argsPrompt, stdin } = resolvePromptInput({ backend, prompt });
   const baseArgs = useResume ? (backend.resumeArgs ?? backend.args ?? []) : (backend.args ?? []);
   const resolvedArgs = useResume
     ? baseArgs.map((entry) => entry.replaceAll("{sessionId}", resolvedSessionId ?? ""))
     : baseArgs;
+  const fallbackClaudeSkillsPlugin =
+    !nodePlacement && context.claudeSkillsPluginArgs === undefined
+      ? await prepareClaudeCliSkillsPlugin({
+          backendId: context.backendResolved.id,
+          skillsSnapshot: params.skillsSnapshot,
+        })
+      : undefined;
+  let fallbackClaudeSkillsPluginCleanupOwned = false;
+  const claudeSkillsPluginArgs = nodePlacement
+    ? []
+    : (context.claudeSkillsPluginArgs ?? fallbackClaudeSkillsPlugin?.args ?? []);
+  const baseArgsWithSkills =
+    claudeSkillsPluginArgs.length > 0 ? [...resolvedArgs, ...claudeSkillsPluginArgs] : resolvedArgs;
+  const resolvedExecutionArgs = context.backendResolved.resolveExecutionArgs?.({
+    config: params.config,
+    workspaceDir: context.workspaceDir,
+    provider: params.provider,
+    modelId: context.modelId,
+    authProfileId: context.effectiveAuthProfileId,
+    thinkingLevel: normalizeCliBackendThinkingLevel(params.thinkLevel),
+    executionMode: params.executionMode ?? "agent",
+    // Node runs project the native subset only: gateway-loopback MCP tools do
+    // not exist on the node, and auto-approval must not cross that boundary.
+    toolAvailability: params.cliToolAvailability
+      ? buildCliBackendToolAvailability(
+          nodePlacement
+            ? { native: params.cliToolAvailability.native, openClaw: [] }
+            : params.cliToolAvailability,
+        )
+      : undefined,
+    useResume,
+    baseArgs: baseArgsWithSkills,
+  });
+  if (
+    params.cliToolAvailability &&
+    context.backendResolved.toolAvailabilityEnforcement === "execution-args" &&
+    !resolvedExecutionArgs
+  ) {
+    throw new Error(
+      `CLI backend ${context.backendResolved.id} did not enforce exact per-run tool availability`,
+    );
+  }
+  const executionBaseArgs = nodePlacement
+    ? stripGatewayLocalClaudeArgs(resolvedExecutionArgs ?? baseArgsWithSkills)
+    : (resolvedExecutionArgs ?? baseArgsWithSkills);
   const args = buildCliArgs({
-    backend,
-    baseArgs: resolvedArgs,
+    backend: nodePlacement
+      ? { ...backend, systemPromptArg: undefined, systemPromptFileArg: undefined }
+      : backend,
+    baseArgs: Array.from(executionBaseArgs),
     modelId: context.normalizedModel,
     sessionId: resolvedSessionId,
-    systemPrompt: systemPromptArg,
-    imagePaths,
+    systemPrompt: nodePlacement ? undefined : systemPromptArg,
+    systemPromptFilePath: systemPromptFile?.filePath,
+    imagePaths: imagePayload.imagePaths,
     promptArg: argsPrompt,
     useResume,
+    forkResume: params.forkCliSessionOnResume,
+    resumeAt: params.cliSessionResumeAt,
+    sendSystemPromptOnResume: resendSystemPromptForSoftResume,
   });
 
-  const serialize = backend.serialize ?? true;
-  const queueKey = serialize
-    ? context.backendResolved.id
-    : `${context.backendResolved.id}:${params.runId}`;
-
-  try {
-    return await enqueueCliRun(queueKey, async () => {
+  const claudeOwnerKey = buildClaudeOwnerKey({
+    agentAccountId: params.agentAccountId,
+    agentId: params.agentId,
+    authProfileId: context.effectiveAuthProfileId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+  });
+  const queueKey = resolveCliRunQueueKey({
+    backendId: context.backendResolved.id,
+    liveSession: backend.liveSession,
+    serialize: backend.serialize,
+    runId: params.runId,
+    workspaceDir: context.workspaceDir,
+    cliSessionId: useResume ? resolvedSessionId : undefined,
+    ownerKey: claudeOwnerKey,
+  });
+  const useManagedClaudeLiveSession =
+    shouldUseClaudeLiveSession(context) && !params.onSuccessfulAuthBinding;
+  // Fresh-session retries invoke this function again. Keep one helper per
+  // observable CLI attempt so every started call retains its own terminal event.
+  const diagnostics = createClaudeCliModelCallDiagnostics({
+    context,
+    prompt,
+    systemPrompt: systemPromptArg ?? undefined,
+    transport: nodePlacement
+      ? "paired-node-cli"
+      : useManagedClaudeLiveSession
+        ? "stdio-live"
+        : "stdio",
+  });
+  let completedOutput: CliOutput | undefined;
+  let executionError: unknown;
+  let outerCleanupError: Error | undefined;
+  let forkResumeClaimed = false;
+  let forkSuccessorObserved = false;
+  let forkSuccessorPersistence: Promise<void> | undefined;
+  const observeForkSuccessor = (sessionId: string) => {
+    if (
+      forkSuccessorObserved ||
+      !forkResumeClaimed ||
+      !resolvedSessionId ||
+      sessionId === resolvedSessionId
+    ) {
+      return;
+    }
+    forkSuccessorObserved = true;
+    forkSuccessorPersistence = params.persistCliSessionForkSuccessor?.(sessionId);
+    void forkSuccessorPersistence?.catch(() => undefined);
+  };
+  const finishForkSuccessorPersistence = async () => {
+    try {
+      await forkSuccessorPersistence;
+    } catch (error) {
+      forkSuccessorObserved = false;
+      throw error;
+    }
+  };
+  const cleanupOuterResource = async (cleanup: (() => Promise<void>) | undefined) => {
+    try {
+      await cleanup?.();
+    } catch (error) {
+      if (completedOutput?.didSendViaMessagingTool) {
+        cliBackendLog.warn(
+          `CLI outer resource cleanup failed after confirmed message delivery: ${formatErrorMessage(error)}`,
+        );
+        return;
+      }
+      if (executionError !== undefined) {
+        cliBackendLog.warn(
+          `CLI outer resource cleanup also failed after run error: ${formatErrorMessage(error)}`,
+        );
+        return;
+      }
+      throw error;
+    }
+  };
+  const executeAttempt = async (): Promise<CliOutput> => {
+    await context.preparedBackend.beforeExecution?.();
+    const cliTurnStartedAt = Date.now();
+    const restoreSkillEnv = params.skillsSnapshot
+      ? applySkillEnvOverridesFromSnapshot({
+          snapshot: params.skillsSnapshot,
+          config: params.config,
+        })
+      : undefined;
+    let cleanupMcpCaptureAttempt: (() => Promise<void>) | undefined;
+    let runOutput: CliOutput | undefined;
+    let runError: unknown;
+    let runFailed = false;
+    const recordRunError = (error: unknown) => {
+      if (!runFailed) {
+        runFailed = true;
+        runError = error;
+      }
+    };
+    const toolTracking = createCliToolTracking(context);
+    const events = createCliEventHandlers({
+      context,
+      toolTracking,
+      getRunState: () => ({ failed: runFailed, error: runError }),
+    });
+    try {
       cliBackendLog.info(
-        `cli exec: provider=${params.provider} model=${context.normalizedModel} promptChars=${params.prompt.length}`,
+        buildCliExecLogLine({
+          provider: params.provider,
+          model: context.normalizedModel,
+          promptChars: basePrompt.length,
+          trigger: params.trigger,
+          useResume,
+          cliSessionId: cliSessionIdToUse,
+          resolvedSessionId,
+          reusableSession: context.reusableCliSession,
+          hasHistoryPrompt: Boolean(context.openClawHistoryPrompt),
+        }),
       );
       const logOutputText =
         isTruthyEnvValue(process.env[CLI_BACKEND_LOG_OUTPUT_ENV]) ||
         isTruthyEnvValue(process.env[LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV]);
+      const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
+      const initialGatewayCaptureKey =
+        useManagedClaudeLiveSession || nodePlacement || !context.mcpDeliveryCapture
+          ? undefined
+          : crypto.randomUUID();
+      const mcpCaptureAttempt = nodePlacement
+        ? { env: {}, cleanup: undefined }
+        : await prepareCliBundleMcpCaptureAttempt({
+            mode: context.backendResolved.bundleMcpMode,
+            backend,
+            env: context.preparedBackend.env,
+            captureKey: initialGatewayCaptureKey,
+          });
+      cleanupMcpCaptureAttempt = mcpCaptureAttempt.cleanup;
+      const preparedBackendEnv = context.preparedBackend.env ?? {};
+      const hasSelectedClaudeAuth =
+        Boolean(context.preparedBackend.secretInput) ||
+        [...CLAUDE_SELECTED_AUTH_ENV_KEYS].some((key) => Object.hasOwn(preparedBackendEnv, key));
+      const selectedClaudeClearEnv = hasSelectedClaudeAuth
+        ? new Set(backend.clearEnv ?? [])
+        : undefined;
+      const configuredBackendEnv = Object.fromEntries(
+        Object.entries(backend.env ?? {}).filter(([key]) => !selectedClaudeClearEnv?.has(key)),
+      );
+      const backendEnv = { ...configuredBackendEnv, ...preparedBackendEnv };
+      const nodeEnvEntries = Object.entries(preparedBackendEnv).filter(([key]) =>
+        NODE_CLAUDE_FORWARD_ENV_KEYS.has(key),
+      );
+      const nodeEnv = nodePlacement
+        ? {
+            ...Object.fromEntries(nodeEnvEntries),
+            ...resolveNodeClaudeAuthEnv(context),
+          }
+        : undefined;
+      const env = sanitizeHostExecEnv({ baseEnv: process.env, blockPathOverrides: true });
+      const preservedEnv = parseCliBackendPreserveEnv(process.env[CLI_BACKEND_PRESERVE_ENV]);
+      for (const key of backend.clearEnv ?? []) {
+        if (!preservedEnv.has(key) || selectedClaudeClearEnv?.has(key)) {
+          delete env[key];
+        }
+      }
+      if (Object.keys(backendEnv).length > 0) {
+        Object.assign(
+          env,
+          sanitizeHostExecEnv({
+            baseEnv: {},
+            overrides: backendEnv,
+            blockPathOverrides: true,
+          }),
+        );
+      }
+      Object.assign(env, mcpCaptureAttempt.env);
+      // Never mark Claude CLI as host-managed. That marker routes runs into
+      // Anthropic's separate host-managed usage tier instead of normal CLI use.
+      delete env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST;
+
+      let executionCommand = backend.command;
+      let executionLeadingArgv: readonly string[] = [];
+      context.runtimeOwnerFingerprint = undefined;
+      context.runtimeArtifactFingerprint = undefined;
+      if (params.onSuccessfulAuthBinding && !nodePlacement) {
+        const executableIdentity = await resolveCliExecutableIdentity({
+          command: backend.command,
+          cwd: context.cwd ?? context.workspaceDir,
+          env,
+          ...(context.backendResolved.runtimeArtifact
+            ? { runtimeArtifact: context.backendResolved.runtimeArtifact }
+            : {}),
+        });
+        if (!executableIdentity) {
+          throw new Error(
+            `CLI backend ${context.backendResolved.id} executable cannot be bound to one durable absolute owner`,
+          );
+        }
+        executionCommand = executableIdentity.invocation.command;
+        executionLeadingArgv = executableIdentity.invocation.leadingArgv;
+        context.runtimeArtifactFingerprint = fingerprintCliRuntimeArtifact({
+          provider: params.provider,
+          backendId: context.backendResolved.id,
+          executableIdentity,
+        });
+        if (!context.authBindingFingerprint) {
+          context.runtimeOwnerFingerprint = await resolveCliRuntimeOwnerFingerprint({
+            provider: params.provider,
+            config: params.config ?? context.contextEngineConfig,
+            ...(context.agentDir ? { agentDir: context.agentDir } : {}),
+            agentId: params.agentId,
+            runtimeOwnerId: context.backendResolved.id,
+            ...(context.effectiveAuthProfileId
+              ? { authProfileId: context.effectiveAuthProfileId }
+              : {}),
+            ...(context.authBindingSkipsLocalCredential ? { skipLocalCredential: true } : {}),
+            runtimeArtifactFingerprint: context.runtimeArtifactFingerprint,
+          });
+        }
+      }
       if (logOutputText) {
-        const logArgs = buildCliLogArgs({
+        logCliInvocation({
           args,
+          command: executionCommand,
+          env,
           systemPromptArg: backend.systemPromptArg,
-          sessionArg: backend.sessionArg,
           modelArg: backend.modelArg,
           imageArg: backend.imageArg,
           argsPrompt,
+          log: (message) => cliBackendLog.info(message),
         });
-        cliBackendLog.info(`cli argv: ${backend.command} ${logArgs.join(" ")}`);
       }
-
-      const env = (() => {
-        const next = sanitizeHostExecEnv({
-          baseEnv: process.env,
-          overrides: backend.env,
-          blockPathOverrides: true,
-        });
-        for (const key of backend.clearEnv ?? []) {
-          delete next[key];
-        }
-        return next;
-      })();
+      const runTimeoutOverrideMs = resolveCliRunTimeoutOverrideMs({
+        config: params.config,
+        lane: params.lane,
+        timeoutMs: params.timeoutMs,
+        runTimeoutOverrideMs: params.runTimeoutOverrideMs,
+      });
       const noOutputTimeoutMs = resolveCliNoOutputTimeoutMs({
         backend,
         timeoutMs: params.timeoutMs,
+        runTimeoutOverrideMs,
         useResume,
+        trigger: params.trigger,
       });
-      const supervisor = getProcessSupervisor();
-      const scopeKey = buildCliSupervisorScopeKey({
+      toolTracking.beginGatewayCapture(initialGatewayCaptureKey);
+      runOutput = await executeCliProcess({
+        context,
         backend,
-        backendId: context.backendResolved.id,
-        cliSessionId: useResume ? resolvedSessionId : undefined,
-      });
-
-      const managedRun = await supervisor.spawn({
-        sessionId: params.sessionId,
-        backendId: context.backendResolved.id,
-        scopeKey,
-        replaceExistingScope: Boolean(useResume && scopeKey),
-        mode: "child",
-        argv: [backend.command, ...args],
-        timeoutMs: params.timeoutMs,
-        noOutputTimeoutMs,
-        cwd: context.workspaceDir,
+        deps: executeDeps,
+        events,
+        toolTracking,
+        diagnostics,
+        nodePlacement,
+        nodeSystemPrompt,
+        nodeEnv: nodeEnv && Object.keys(nodeEnv).length > 0 ? nodeEnv : undefined,
+        nodeClearEnv: selectedClaudeClearEnv ? [...selectedClaudeClearEnv] : undefined,
+        useManagedClaudeLiveSession,
+        useResume,
+        cliSessionIdToUse,
+        resolvedSessionId,
+        executionCommand,
+        executionLeadingArgv,
+        executionArgs: args,
         env,
-        input: stdinPayload,
+        prompt,
+        argsPrompt,
+        stdin,
+        noOutputTimeoutMs,
+        outputMode,
+        logOutputText,
+        cliTurnStartedAt,
+        fallbackCleanup: fallbackClaudeSkillsPlugin?.cleanup,
+        claimFallbackCleanup: () => {
+          fallbackClaudeSkillsPluginCleanupOwned = fallbackClaudeSkillsPlugin !== undefined;
+        },
+        observeForkSuccessor,
+        options,
       });
-      const result = await managedRun.wait();
-
-      const stdout = result.stdout.trim();
-      const stderr = result.stderr.trim();
-      if (logOutputText) {
-        if (stdout) {
-          cliBackendLog.info(`cli stdout:\n${stdout}`);
-        }
-        if (stderr) {
-          cliBackendLog.info(`cli stderr:\n${stderr}`);
-        }
-      }
-      if (shouldLogVerbose()) {
-        if (stdout) {
-          cliBackendLog.debug(`cli stdout:\n${stdout}`);
-        }
-        if (stderr) {
-          cliBackendLog.debug(`cli stderr:\n${stderr}`);
-        }
-      }
-
-      if (result.exitCode !== 0 || result.reason !== "exit") {
-        if (result.reason === "no-output-timeout" || result.noOutputTimedOut) {
-          const timeoutReason = `CLI produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`;
-          cliBackendLog.warn(
-            `cli watchdog timeout: provider=${params.provider} model=${context.modelId} session=${resolvedSessionId ?? params.sessionId} noOutputTimeoutMs=${noOutputTimeoutMs} pid=${managedRun.pid ?? "unknown"}`,
-          );
-          if (params.sessionKey) {
-            const stallNotice = [
-              `CLI agent (${params.provider}) produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`,
-              "It may have been waiting for interactive input or an approval prompt.",
-              "For Claude Code, prefer --permission-mode bypassPermissions --print.",
-            ].join(" ");
-            enqueueSystemEvent(stallNotice, { sessionKey: params.sessionKey });
-            requestHeartbeatNow(
-              scopedHeartbeatWakeOptions(params.sessionKey, { reason: "cli:watchdog:stall" }),
-            );
-          }
-          throw new FailoverError(timeoutReason, {
-            reason: "timeout",
-            provider: params.provider,
-            model: context.modelId,
-            status: resolveFailoverStatus("timeout"),
-          });
-        }
-        if (result.reason === "overall-timeout") {
-          const timeoutReason = `CLI exceeded timeout (${Math.round(params.timeoutMs / 1000)}s) and was terminated.`;
-          throw new FailoverError(timeoutReason, {
-            reason: "timeout",
-            provider: params.provider,
-            model: context.modelId,
-            status: resolveFailoverStatus("timeout"),
-          });
-        }
-        const err = stderr || stdout || "CLI failed.";
-        const reason = classifyFailoverReason(err) ?? "unknown";
-        const status = resolveFailoverStatus(reason);
-        throw new FailoverError(err, {
-          reason,
-          provider: params.provider,
-          model: context.modelId,
-          status,
-        });
-      }
-
-      return parseCliOutput({
-        raw: stdout,
-        backend,
-        providerId: context.backendResolved.id,
-        outputMode: useResume ? (backend.resumeOutput ?? backend.output) : backend.output,
-        fallbackSessionId: resolvedSessionId,
+    } catch (error) {
+      recordRunError(error);
+    } finally {
+      await toolTracking.finishDeliveryTracking({
+        useManagedClaudeLiveSession,
+        recordRunError,
       });
+      toolTracking.finalizeCapture(events.finalizeParsedTools);
+      try {
+        await cleanupMcpCaptureAttempt?.();
+      } catch (error) {
+        recordRunError(error);
+      }
+      try {
+        restoreSkillEnv?.();
+      } catch (error) {
+        recordRunError(error);
+      }
+    }
+    if (runFailed) {
+      throw toolTracking.attachDeliveryEvidence(runError);
+    }
+    if (!runOutput) {
+      throw new Error("CLI run completed without output");
+    }
+    return toolTracking.withExecutionEvidence(runOutput);
+  };
+  try {
+    completedOutput = await enqueueCliRun(queueKey, async () => {
+      if (params.lifecycleGeneration) {
+        assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+      }
+      diagnostics?.emitStarted();
+      if (params.forkCliSessionOnResume && useResume) {
+        if (!params.persistCliSessionForkSuccessor) {
+          throw new Error("CLI session fork successor persistence is unavailable");
+        }
+        forkResumeClaimed = (await params.claimCliSessionFork?.()) === true;
+        if (!forkResumeClaimed) {
+          throw new Error("CLI session fork marker is no longer available");
+        }
+        // The fork argument only applies at process startup; a cached warm child
+        // would run inside the source session. Force a fresh spawn.
+        await closeClaudeLiveSessionForContext(context);
+      }
+      return await executeAttempt();
     });
+    if (completedOutput.sessionId) {
+      observeForkSuccessor(completedOutput.sessionId);
+    }
+    await finishForkSuccessorPersistence();
+    if (forkResumeClaimed && !forkSuccessorObserved) {
+      await params.restoreCliSessionFork?.();
+      forkResumeClaimed = false;
+      throw new Error("forked CLI session did not report a successor session id");
+    }
+  } catch (error) {
+    executionError = error;
+    diagnostics?.emitError(error);
+    let failure = error;
+    try {
+      await finishForkSuccessorPersistence();
+    } catch (persistenceError) {
+      failure = new AggregateError(
+        [error, persistenceError],
+        "CLI turn failed and its fork successor could not be persisted",
+      );
+    }
+    if (forkResumeClaimed && !forkSuccessorObserved) {
+      await params.restoreCliSessionFork?.();
+    }
+    throw failure;
   } finally {
-    if (cleanupImages) {
-      await cleanupImages();
+    try {
+      if (!fallbackClaudeSkillsPluginCleanupOwned) {
+        await cleanupOuterResource(fallbackClaudeSkillsPlugin?.cleanup);
+      }
+      await cleanupOuterResource(systemPromptFile?.cleanup);
+      await cleanupOuterResource(imagePayload.cleanupImages);
+    } catch (error) {
+      outerCleanupError = toErrorObject(error, "CLI outer resource cleanup failed");
     }
   }
+  if (outerCleanupError) {
+    options?.onPhase?.("cleanup");
+    diagnostics?.emitError(outerCleanupError);
+    throw outerCleanupError;
+  }
+  if (!completedOutput) {
+    const error = new Error("CLI run completed without output");
+    diagnostics?.emitError(error);
+    throw error;
+  }
+  // Success stays provisional until persistence and cleanup finish; otherwise
+  // a rejected turn would be exported as completed.
+  diagnostics?.emitCompleted(completedOutput);
+  return completedOutput;
 }

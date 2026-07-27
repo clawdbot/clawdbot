@@ -1,6 +1,9 @@
+// Gateway hook test fixtures.
+// Builds resolved hook config and IncomingMessage-like requests for tests.
 import type { IncomingMessage } from "node:http";
 import type { HooksConfigResolved } from "./hooks.js";
 
+/** Creates the default resolved hook config used by gateway hook tests. */
 export function createHooksConfig(): HooksConfigResolved {
   return {
     basePath: "/hooks",
@@ -20,6 +23,7 @@ export function createHooksConfig(): HooksConfigResolved {
   };
 }
 
+/** Builds an IncomingMessage-shaped request for hook handler tests. */
 export function createGatewayRequest(params: {
   path: string;
   authorization?: string;

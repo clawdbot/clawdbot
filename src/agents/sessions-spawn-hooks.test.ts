@@ -1,52 +1,143 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import "./test-helpers/fast-core-tools.js";
+// Verifies sessions_spawn lifecycle hooks, binding cleanup, and gateway calls.
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  findGatewayRequest,
-  getCallGatewayMock,
-  getGatewayMethods,
-  getSessionsSpawnTool,
-  setSessionsSpawnConfigOverride,
-} from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
-import { resetSubagentRegistryForTests } from "./subagent-registry.js";
+  createSubagentSpawnTestConfig,
+  loadSubagentSpawnModuleForTest,
+} from "./subagent-spawn.test-helpers.js";
+
+type GatewayRequest = { method?: string; params?: Record<string, unknown> };
+type TestBindingRequest = {
+  targetSessionKey: string;
+  targetKind?: string;
+  conversation: {
+    channel: string;
+    accountId?: string;
+    conversationId: string;
+    parentConversationId?: string;
+  };
+  placement: "current" | "child";
+  metadata?: Record<string, unknown>;
+};
+
+const hoisted = vi.hoisted(() => ({
+  callGatewayMock: vi.fn(),
+  configOverride: {} as Record<string, unknown>,
+  updateSessionStoreMock: vi.fn(),
+}));
 
 const hookRunnerMocks = vi.hoisted(() => ({
   hasSubagentEndedHook: true,
-  runSubagentSpawning: vi.fn(async (event: unknown) => {
-    const input = event as {
-      threadRequested?: boolean;
-      requester?: { channel?: string };
-    };
-    if (!input.threadRequested) {
-      return undefined;
-    }
-    const channel = input.requester?.channel?.trim().toLowerCase();
-    if (channel !== "discord") {
-      const channelLabel = input.requester?.channel?.trim() || "unknown";
-      return {
-        status: "error" as const,
-        error: `thread=true is not supported for channel "${channelLabel}". Only Discord thread-bound subagent sessions are supported right now.`,
-      };
-    }
-    return {
-      status: "ok" as const,
-      threadBindingReady: true,
-    };
-  }),
   runSubagentSpawned: vi.fn(async () => {}),
+  runSubagentProgress: vi.fn(async () => {}),
   runSubagentEnded: vi.fn(async () => {}),
 }));
 
-vi.mock("../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: vi.fn(() => ({
-    hasHooks: (hookName: string) =>
-      hookName === "subagent_spawning" ||
-      hookName === "subagent_spawned" ||
-      (hookName === "subagent_ended" && hookRunnerMocks.hasSubagentEndedHook),
-    runSubagentSpawning: hookRunnerMocks.runSubagentSpawning,
-    runSubagentSpawned: hookRunnerMocks.runSubagentSpawned,
-    runSubagentEnded: hookRunnerMocks.runSubagentEnded,
+const bindingMocks = vi.hoisted(() => ({
+  getCapabilities: vi.fn(() => ({
+    adapterAvailable: true,
+    bindSupported: true,
+    placements: ["child"] as Array<"current" | "child">,
   })),
+  bind: vi.fn(async (request: TestBindingRequest) => {
+    const conversation = request.conversation;
+    return {
+      targetSessionKey: request.targetSessionKey,
+      targetKind: request.targetKind,
+      status: "active",
+      conversation: {
+        channel: conversation.channel,
+        accountId: conversation.accountId ?? "default",
+        conversationId: "456",
+        parentConversationId: conversation.conversationId,
+      },
+    };
+  }),
+  listBySession: vi.fn(() => []),
 }));
+
+let resetSubagentRegistryForTests: typeof import("./subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
+let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
+
+function getGatewayRequests(): GatewayRequest[] {
+  // Gateway call list is the observable side effect for spawn orchestration.
+  return hoisted.callGatewayMock.mock.calls.map((call) => call[0] as GatewayRequest);
+}
+
+function getGatewayMethods() {
+  return getGatewayRequests().map((request) => request.method);
+}
+
+function findGatewayRequest(method: string): GatewayRequest | undefined {
+  return getGatewayRequests().find((request) => request.method === method);
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectFields(value: unknown, expected: Record<string, unknown>, label = "object"): void {
+  const record = requireRecord(value, label);
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], `${label}.${key}`).toEqual(expectedValue);
+  }
+}
+
+function expectSubagentSessionKey(value: unknown, label: string): string {
+  expect(value, label).toBeTypeOf("string");
+  const sessionKey = value as string;
+  expect(sessionKey.startsWith("agent:main:subagent:")).toBe(true);
+  return sessionKey;
+}
+
+function setConfig(next: Record<string, unknown>) {
+  hoisted.configOverride = createSubagentSpawnTestConfig(undefined, next);
+}
+
+async function spawn(params?: {
+  toolCallId?: string;
+  task?: string;
+  label?: string;
+  model?: string;
+  runTimeoutSeconds?: number;
+  thread?: boolean;
+  mode?: "run" | "session";
+  context?: "isolated" | "fork";
+  agentSessionKey?: string;
+  agentChannel?: string;
+  agentAccountId?: string;
+  agentTo?: string;
+  agentThreadId?: string | number;
+  currentMessagingTarget?: string;
+  currentChannelId?: string;
+  currentMessageId?: string | number;
+}) {
+  return await spawnSubagentDirect(
+    {
+      task: params?.task ?? "do thing",
+      ...(params?.label ? { label: params.label } : {}),
+      ...(params?.model ? { model: params.model } : {}),
+      ...(typeof params?.runTimeoutSeconds === "number"
+        ? { runTimeoutSeconds: params.runTimeoutSeconds }
+        : {}),
+      ...(params?.thread ? { thread: true } : {}),
+      ...(params?.mode ? { mode: params.mode } : {}),
+      context: params?.context ?? "isolated",
+    },
+    {
+      agentSessionKey: params?.agentSessionKey ?? "main",
+      agentChannel: params?.agentChannel ?? "discord",
+      agentAccountId: params?.agentAccountId,
+      agentTo: params?.agentTo,
+      agentThreadId: params?.agentThreadId,
+      currentMessagingTarget: params?.currentMessagingTarget,
+      currentChannelId: params?.currentChannelId,
+      currentMessageId: params?.currentMessageId,
+    },
+  );
+}
 
 function expectSessionsDeleteWithoutAgentStart() {
   const methods = getGatewayMethods();
@@ -55,8 +146,7 @@ function expectSessionsDeleteWithoutAgentStart() {
 }
 
 function mockAgentStartFailure() {
-  const callGatewayMock = getCallGatewayMock();
-  callGatewayMock.mockImplementation(async (opts: unknown) => {
+  hoisted.callGatewayMock.mockImplementation(async (opts: unknown) => {
     const request = opts as { method?: string };
     if (request.method === "agent") {
       throw new Error("spawn failed");
@@ -65,96 +155,134 @@ function mockAgentStartFailure() {
   });
 }
 
-async function runSessionThreadSpawnAndGetError(params: {
-  toolCallId: string;
-  spawningResult: { status: "error"; error: string } | { status: "ok"; threadBindingReady: false };
-}): Promise<{ error?: string; childSessionKey?: string }> {
-  hookRunnerMocks.runSubagentSpawning.mockResolvedValueOnce(params.spawningResult);
-  const tool = await getSessionsSpawnTool({
-    agentSessionKey: "main",
-    agentChannel: "discord",
-    agentAccountId: "work",
-    agentTo: "channel:123",
-  });
-
-  const result = await tool.execute(params.toolCallId, {
-    task: "do thing",
-    runTimeoutSeconds: 1,
-    thread: true,
-    mode: "session",
-  });
-  expect(result.details).toMatchObject({ status: "error" });
-  return result.details as { error?: string; childSessionKey?: string };
-}
-
-async function getDiscordThreadSessionTool() {
-  return await getSessionsSpawnTool({
-    agentSessionKey: "main",
-    agentChannel: "discord",
-    agentAccountId: "work",
-    agentTo: "channel:123",
-    agentThreadId: "456",
-  });
-}
-
-async function executeDiscordThreadSessionSpawn(toolCallId: string) {
-  const tool = await getDiscordThreadSessionTool();
-  return await tool.execute(toolCallId, {
-    task: "do thing",
-    thread: true,
-    mode: "session",
-  });
+function requireSpawnedHookCall(): [Record<string, unknown>, Record<string, unknown>] {
+  const call = hookRunnerMocks.runSubagentSpawned.mock.calls[0] as readonly unknown[] | undefined;
+  if (!call) {
+    throw new Error("expected spawned hook call");
+  }
+  return [requireRecord(call[0], "spawned event"), requireRecord(call[1], "spawned context")];
 }
 
 function getSpawnedEventCall(): Record<string, unknown> {
-  const [event] = (hookRunnerMocks.runSubagentSpawned.mock.calls[0] ?? []) as unknown as [
-    Record<string, unknown>,
-  ];
+  const [event] = requireSpawnedHookCall();
   return event;
 }
 
-function expectErrorResultMessage(result: { details: unknown }, pattern: RegExp): void {
-  expect(result.details).toMatchObject({ status: "error" });
-  const details = result.details as { error?: string };
-  expect(details.error).toMatch(pattern);
+function requireEndedHookEvent(): Record<string, unknown> {
+  const call = hookRunnerMocks.runSubagentEnded.mock.calls[0] as readonly unknown[] | undefined;
+  if (!call) {
+    throw new Error("expected ended hook call");
+  }
+  return requireRecord(call[0], "ended event");
+}
+
+function expectErrorResultMessage(
+  result: { error?: string; status: string },
+  pattern: RegExp,
+): void {
+  expect(result.status).toBe("error");
+  expect(result.error).toMatch(pattern);
 }
 
 function expectThreadBindFailureCleanup(
-  details: { childSessionKey?: string; error?: string },
+  result: { childSessionKey?: string; error?: string },
   pattern: RegExp,
 ): void {
-  expect(details.error).toMatch(pattern);
+  // Failed child-thread binding must delete the child before agent startup.
+  expect(result.error).toMatch(pattern);
   expect(hookRunnerMocks.runSubagentSpawned).not.toHaveBeenCalled();
   expectSessionsDeleteWithoutAgentStart();
   const deleteCall = findGatewayRequest("sessions.delete");
-  expect(deleteCall?.params).toMatchObject({
-    key: details.childSessionKey,
-    emitLifecycleHooks: false,
-  });
+  expectFields(
+    deleteCall?.params,
+    {
+      key: result.childSessionKey,
+      emitLifecycleHooks: false,
+    },
+    "delete params",
+  );
 }
+
+beforeAll(async () => {
+  ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
+    callGatewayMock: hoisted.callGatewayMock,
+    getRuntimeConfig: () => hoisted.configOverride,
+    updateSessionStoreMock: hoisted.updateSessionStoreMock,
+    hookRunner: {
+      hasHooks: (hookName: string) =>
+        hookName === "subagent_spawned" ||
+        hookName === "subagent_progress" ||
+        (hookName === "subagent_ended" && hookRunnerMocks.hasSubagentEndedHook),
+      runSubagentSpawned: hookRunnerMocks.runSubagentSpawned,
+      runSubagentProgress: hookRunnerMocks.runSubagentProgress,
+      runSubagentEnded: hookRunnerMocks.runSubagentEnded,
+    },
+    getSessionBindingService: () => bindingMocks,
+    resetModules: false,
+    sessionStorePath: "/tmp/subagent-spawn-hooks-session-store.json",
+  }));
+});
 
 describe("sessions_spawn subagent lifecycle hooks", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
+    hoisted.callGatewayMock.mockReset();
+    hoisted.updateSessionStoreMock.mockReset();
     hookRunnerMocks.hasSubagentEndedHook = true;
-    hookRunnerMocks.runSubagentSpawning.mockClear();
     hookRunnerMocks.runSubagentSpawned.mockClear();
+    hookRunnerMocks.runSubagentProgress.mockClear();
     hookRunnerMocks.runSubagentEnded.mockClear();
-    const callGatewayMock = getCallGatewayMock();
-    callGatewayMock.mockClear();
-    setSessionsSpawnConfigOverride({
+    bindingMocks.getCapabilities.mockClear();
+    bindingMocks.getCapabilities.mockReturnValue({
+      adapterAvailable: true,
+      bindSupported: true,
+      placements: ["child"],
+    });
+    bindingMocks.bind.mockClear();
+    bindingMocks.bind.mockImplementation(async (request: TestBindingRequest) => {
+      const conversation = request.conversation;
+      return {
+        targetSessionKey: request.targetSessionKey,
+        targetKind: request.targetKind,
+        status: "active",
+        conversation: {
+          channel: conversation.channel,
+          accountId: conversation.accountId ?? "default",
+          conversationId: "456",
+          parentConversationId: conversation.conversationId,
+        },
+      };
+    });
+    bindingMocks.listBySession.mockClear();
+    setConfig({
       session: {
         mainKey: "main",
         scope: "per-sender",
+        threadBindings: {
+          defaultSpawnContext: "isolated",
+        },
       },
     });
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
+    const store: Record<string, Record<string, unknown>> = {};
+    hoisted.updateSessionStoreMock.mockImplementation(
+      async (_storePath: unknown, mutator: unknown) => {
+        if (typeof mutator !== "function") {
+          throw new Error("missing session store mutator");
+        }
+        await mutator(store);
+        return store;
+      },
+    );
+    hoisted.callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
-      if (request.method === "agent") {
-        return { runId: "run-1", status: "accepted", acceptedAt: 1 };
+      if (request.method === "sessions.patch") {
+        return { ok: true };
       }
-      if (request.method === "agent.wait") {
-        return { runId: "run-1", status: "running" };
+      if (request.method === "sessions.delete") {
+        return { ok: true };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-1", status: "accepted", acceptedAt: 1_001 };
       }
       return {};
     });
@@ -164,252 +292,303 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     resetSubagentRegistryForTests();
   });
 
-  it("runs subagent_spawning and emits subagent_spawned with requester metadata", async () => {
-    const tool = await getSessionsSpawnTool({
-      agentSessionKey: "main",
-      agentChannel: "discord",
+  it("binds the subagent thread in core and emits subagent_spawned with requester metadata", async () => {
+    const result = await spawn({
+      label: "research",
+      model: "openai/gpt-5.4",
+      runTimeoutSeconds: 1,
+      thread: true,
       agentAccountId: "work",
       agentTo: "channel:123",
       agentThreadId: 456,
+      currentMessagingTarget: "channel:source",
+      currentChannelId: "source-native",
+      currentMessageId: "message-789",
+      context: "isolated",
     });
 
-    const result = await tool.execute("call", {
-      task: "do thing",
-      label: "research",
-      runTimeoutSeconds: 1,
-      thread: true,
+    expectFields(
+      result,
+      {
+        status: "accepted",
+        runId: "run-1",
+        resolvedModel: "openai/gpt-5.4",
+        resolvedProvider: "openai",
+      },
+      "spawn result",
+    );
+    expect(bindingMocks.getCapabilities).toHaveBeenCalledWith({
+      channel: "discord",
+      accountId: "work",
     });
-
-    expect(result.details).toMatchObject({ status: "accepted", runId: "run-1" });
-    expect(hookRunnerMocks.runSubagentSpawning).toHaveBeenCalledTimes(1);
-    expect(hookRunnerMocks.runSubagentSpawning).toHaveBeenCalledWith(
+    expect(bindingMocks.bind).toHaveBeenCalledTimes(1);
+    const bindingRequest = requireRecord(bindingMocks.bind.mock.calls[0]?.[0], "binding request");
+    const bindingChildSessionKey = expectSubagentSessionKey(
+      bindingRequest.targetSessionKey,
+      "binding target session key",
+    );
+    expectFields(
+      bindingRequest,
       {
-        childSessionKey: expect.stringMatching(/^agent:main:subagent:/),
-        agentId: "main",
-        label: "research",
-        mode: "session",
-        requester: {
-          channel: "discord",
-          accountId: "work",
-          to: "channel:123",
-          threadId: 456,
-        },
-        threadRequested: true,
+        targetSessionKey: bindingChildSessionKey,
+        targetKind: "subagent",
+        placement: "child",
       },
+      "binding request",
+    );
+    expectFields(
+      bindingRequest.conversation,
       {
-        childSessionKey: expect.stringMatching(/^agent:main:subagent:/),
-        requesterSessionKey: "main",
+        channel: "discord",
+        accountId: "work",
+        conversationId: "456",
+        parentConversationId: "123",
       },
+      "binding conversation",
     );
 
     expect(hookRunnerMocks.runSubagentSpawned).toHaveBeenCalledTimes(1);
-    const [event, ctx] = (hookRunnerMocks.runSubagentSpawned.mock.calls[0] ?? []) as unknown as [
-      Record<string, unknown>,
-      Record<string, unknown>,
-    ];
-    expect(event).toMatchObject({
-      runId: "run-1",
-      agentId: "main",
-      label: "research",
-      mode: "session",
-      requester: {
+    const [event, ctx] = requireSpawnedHookCall();
+    expectFields(
+      event,
+      {
+        runId: "run-1",
+        agentId: "main",
+        label: "research",
+        mode: "session",
+        threadRequested: true,
+        resolvedModel: "openai/gpt-5.4",
+        resolvedProvider: "openai",
+      },
+      "spawned event",
+    );
+    expectFields(
+      event.requester,
+      {
         channel: "discord",
         accountId: "work",
         to: "channel:123",
         threadId: 456,
       },
-      threadRequested: true,
-    });
-    expect(event.childSessionKey).toEqual(expect.stringMatching(/^agent:main:subagent:/));
-    expect(ctx).toMatchObject({
-      runId: "run-1",
-      requesterSessionKey: "main",
-      childSessionKey: event.childSessionKey,
-    });
+      "spawned requester",
+    );
+    expectSubagentSessionKey(event.childSessionKey, "spawned event child session key");
+    expectFields(
+      ctx,
+      {
+        runId: "run-1",
+        requesterSessionKey: "main",
+        childSessionKey: event.childSessionKey,
+      },
+      "spawned context",
+    );
+    expect(hookRunnerMocks.runSubagentProgress).toHaveBeenCalledWith(
+      {
+        phase: "started",
+        runId: "run-1",
+        childSessionKey: event.childSessionKey,
+        requester: {
+          channel: "discord",
+          accountId: "work",
+          to: "channel:source",
+          threadId: 456,
+          channelId: "source-native",
+          messageId: "message-789",
+        },
+      },
+      ctx,
+    );
+    expect(
+      hookRunnerMocks.runSubagentProgress.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    ).toBeLessThan(
+      hookRunnerMocks.runSubagentSpawned.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
   });
 
   it("emits subagent_spawned with threadRequested=false when not requested", async () => {
-    const tool = await getSessionsSpawnTool({
-      agentSessionKey: "main",
-      agentChannel: "discord",
+    const result = await spawn({
+      runTimeoutSeconds: 1,
       agentTo: "channel:123",
     });
 
-    const result = await tool.execute("call2", {
-      task: "do thing",
-      runTimeoutSeconds: 1,
-    });
-
-    expect(result.details).toMatchObject({ status: "accepted", runId: "run-1" });
-    expect(hookRunnerMocks.runSubagentSpawning).not.toHaveBeenCalled();
+    expectFields(result, { status: "accepted", runId: "run-1" }, "spawn result");
     expect(hookRunnerMocks.runSubagentSpawned).toHaveBeenCalledTimes(1);
-    const [event] = (hookRunnerMocks.runSubagentSpawned.mock.calls[0] ?? []) as unknown as [
-      Record<string, unknown>,
-    ];
-    expect(event).toMatchObject({
-      mode: "run",
-      threadRequested: false,
-      requester: {
+    const event = getSpawnedEventCall();
+    expectFields(
+      event,
+      {
+        mode: "run",
+        threadRequested: false,
+      },
+      "spawned event",
+    );
+    expectFields(
+      event.requester,
+      {
         channel: "discord",
         to: "channel:123",
       },
-    });
+      "spawned requester",
+    );
   });
 
   it("respects explicit mode=run when thread binding is requested", async () => {
-    const tool = await getSessionsSpawnTool({
-      agentSessionKey: "main",
-      agentChannel: "discord",
-      agentTo: "channel:123",
-    });
-
-    const result = await tool.execute("call3", {
-      task: "do thing",
+    const result = await spawn({
       runTimeoutSeconds: 1,
       thread: true,
       mode: "run",
+      agentTo: "channel:123",
+      context: "isolated",
     });
 
-    expect(result.details).toMatchObject({ status: "accepted", runId: "run-1", mode: "run" });
-    expect(hookRunnerMocks.runSubagentSpawning).toHaveBeenCalledTimes(1);
+    expectFields(result, { status: "accepted", runId: "run-1", mode: "run" }, "spawn result");
+    expect(bindingMocks.bind).toHaveBeenCalledTimes(1);
     const event = getSpawnedEventCall();
-    expect(event).toMatchObject({
-      mode: "run",
-      threadRequested: true,
-    });
+    expectFields(
+      event,
+      {
+        mode: "run",
+        threadRequested: true,
+      },
+      "spawned event",
+    );
   });
 
   it("returns error when thread binding cannot be created", async () => {
-    const details = await runSessionThreadSpawnAndGetError({
+    bindingMocks.bind.mockRejectedValueOnce(
+      new Error("Unable to create or bind a Discord thread for this subagent session."),
+    );
+    const result = await spawn({
       toolCallId: "call4",
-      spawningResult: {
-        status: "error",
-        error: "Unable to create or bind a Discord thread for this subagent session.",
-      },
+      runTimeoutSeconds: 1,
+      thread: true,
+      mode: "session",
+      agentAccountId: "work",
+      agentTo: "channel:123",
+      context: "isolated",
     });
-    expectThreadBindFailureCleanup(details, /thread/i);
+
+    expectThreadBindFailureCleanup(result, /thread/i);
   });
 
-  it("returns error when thread binding is not marked ready", async () => {
-    const details = await runSessionThreadSpawnAndGetError({
-      toolCallId: "call4b",
-      spawningResult: {
-        status: "ok",
-        threadBindingReady: false,
+  it("returns error when thread binding does not produce a conversation", async () => {
+    bindingMocks.bind.mockResolvedValueOnce({
+      targetSessionKey: "agent:main:subagent:test",
+      targetKind: "subagent",
+      status: "active",
+      conversation: {
+        channel: "discord",
+        accountId: "work",
+        conversationId: "",
+        parentConversationId: "123",
       },
     });
-    expectThreadBindFailureCleanup(details, /unable to create or bind a thread/i);
+    const result = await spawn({
+      toolCallId: "call4b",
+      runTimeoutSeconds: 1,
+      thread: true,
+      mode: "session",
+      agentAccountId: "work",
+      agentTo: "channel:123",
+      context: "isolated",
+    });
+
+    expectThreadBindFailureCleanup(result, /unable to create or bind a thread/i);
   });
 
   it("rejects mode=session when thread=true is not requested", async () => {
-    const tool = await getSessionsSpawnTool({
-      agentSessionKey: "main",
-      agentChannel: "discord",
+    const result = await spawn({
+      mode: "session",
       agentTo: "channel:123",
     });
 
-    const result = await tool.execute("call6", {
-      task: "do thing",
-      mode: "session",
-    });
-
     expectErrorResultMessage(result, /requires thread=true/i);
-    expect(hookRunnerMocks.runSubagentSpawning).not.toHaveBeenCalled();
     expect(hookRunnerMocks.runSubagentSpawned).not.toHaveBeenCalled();
-    const callGatewayMock = getCallGatewayMock();
-    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("rejects thread=true on channels without thread support", async () => {
-    const tool = await getSessionsSpawnTool({
-      agentSessionKey: "main",
-      agentChannel: "signal",
-      agentTo: "+123",
+    bindingMocks.getCapabilities.mockReturnValueOnce({
+      adapterAvailable: false,
+      bindSupported: false,
+      placements: [],
     });
-
-    const result = await tool.execute("call5", {
-      task: "do thing",
+    const result = await spawn({
       thread: true,
       mode: "session",
+      agentChannel: "signal",
+      agentTo: "+123",
+      context: "isolated",
     });
 
-    expectErrorResultMessage(result, /only discord/i);
-    expect(hookRunnerMocks.runSubagentSpawning).toHaveBeenCalledTimes(1);
+    expectErrorResultMessage(result, /only available on channels that expose thread bindings/i);
     expect(hookRunnerMocks.runSubagentSpawned).not.toHaveBeenCalled();
     expectSessionsDeleteWithoutAgentStart();
   });
 
   it("runs subagent_ended cleanup hook when agent start fails after successful bind", async () => {
     mockAgentStartFailure();
-    const result = await executeDiscordThreadSessionSpawn("call7");
+    const result = await spawn({
+      thread: true,
+      mode: "session",
+      agentAccountId: "work",
+      agentTo: "channel:123",
+      agentThreadId: "456",
+      context: "isolated",
+    });
 
-    expect(result.details).toMatchObject({ status: "error" });
+    expect(result.status).toBe("error");
     expect(hookRunnerMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
-    const [event] = (hookRunnerMocks.runSubagentEnded.mock.calls[0] ?? []) as unknown as [
-      Record<string, unknown>,
-    ];
-    expect(event).toMatchObject({
-      targetSessionKey: expect.stringMatching(/^agent:main:subagent:/),
-      accountId: "work",
-      targetKind: "subagent",
-      reason: "spawn-failed",
-      sendFarewell: true,
-      outcome: "error",
-      error: "Session failed to start",
-    });
+    const event = requireEndedHookEvent();
+    expectSubagentSessionKey(event.targetSessionKey, "ended event target session key");
+    expectFields(
+      event,
+      {
+        accountId: "work",
+        targetKind: "subagent",
+        reason: "spawn-failed",
+        sendFarewell: true,
+        outcome: "error",
+        error: "Session failed to start",
+      },
+      "ended event",
+    );
     const deleteCall = findGatewayRequest("sessions.delete");
-    expect(deleteCall?.params).toMatchObject({
-      key: event.targetSessionKey,
-      deleteTranscript: true,
-      emitLifecycleHooks: false,
-    });
+    expectFields(
+      deleteCall?.params,
+      {
+        key: event.targetSessionKey,
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+      },
+      "delete params",
+    );
   });
 
   it("falls back to sessions.delete cleanup when subagent_ended hook is unavailable", async () => {
     hookRunnerMocks.hasSubagentEndedHook = false;
     mockAgentStartFailure();
-    const result = await executeDiscordThreadSessionSpawn("call8");
+    const result = await spawn({
+      thread: true,
+      mode: "session",
+      agentAccountId: "work",
+      agentTo: "channel:123",
+      agentThreadId: "456",
+      context: "isolated",
+    });
 
-    expect(result.details).toMatchObject({ status: "error" });
+    expect(result.status).toBe("error");
     expect(hookRunnerMocks.runSubagentEnded).not.toHaveBeenCalled();
     const methods = getGatewayMethods();
     expect(methods).toContain("sessions.delete");
     const deleteCall = findGatewayRequest("sessions.delete");
-    expect(deleteCall?.params).toMatchObject({
-      deleteTranscript: true,
-      emitLifecycleHooks: true,
-    });
-  });
-
-  it("cleans up the provisional session when lineage patching fails after thread binding", async () => {
-    const callGatewayMock = getCallGatewayMock();
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string; params?: Record<string, unknown> };
-      if (request.method === "sessions.patch" && typeof request.params?.spawnedBy === "string") {
-        throw new Error("lineage patch failed");
-      }
-      if (request.method === "sessions.delete") {
-        return { ok: true };
-      }
-      return {};
-    });
-
-    const result = await executeDiscordThreadSessionSpawn("call9");
-
-    expect(result.details).toMatchObject({
-      status: "error",
-      error: "lineage patch failed",
-    });
-    expect(hookRunnerMocks.runSubagentSpawned).not.toHaveBeenCalled();
-    expect(hookRunnerMocks.runSubagentEnded).not.toHaveBeenCalled();
-    const methods = getGatewayMethods();
-    expect(methods).toContain("sessions.delete");
-    expect(methods).not.toContain("agent");
-    const deleteCall = findGatewayRequest("sessions.delete");
-    expect(deleteCall?.params).toMatchObject({
-      key: (result.details as { childSessionKey?: string }).childSessionKey,
-      deleteTranscript: true,
-      emitLifecycleHooks: true,
-    });
+    expectFields(
+      deleteCall?.params,
+      {
+        deleteTranscript: true,
+        emitLifecycleHooks: true,
+      },
+      "delete params",
+    );
   });
 });

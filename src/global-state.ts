@@ -1,3 +1,4 @@
+// Stores process-global CLI flags shared by command modules.
 let globalVerbose = false;
 let globalYes = false;
 

@@ -1,32 +1,35 @@
-import { countPendingDescendantRuns } from "../../../agents/subagent-registry.js";
+// Lists available agents for subagent spawn and focus commands.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { subagentRuns } from "../../../agents/subagent-registry-memory.js";
+import { countPendingDescendantRunsFromRuns } from "../../../agents/subagent-registry-queries.js";
+import { getSubagentRunsSnapshotForRead } from "../../../agents/subagent-registry-state.js";
+import { getChannelPlugin, normalizeChannelId } from "../../../channels/plugins/index.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
+import { resolveChannelAccountId, resolveCommandSurfaceChannel } from "../channel-context.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { formatRunLabel, sortSubagentRuns } from "../subagents-utils.js";
-import {
-  RECENT_WINDOW_MINUTES,
-  type SubagentsCommandContext,
-  resolveChannelAccountId,
-  resolveCommandSurfaceChannel,
-  stopWithText,
-} from "./shared.js";
+import { RECENT_WINDOW_MINUTES, type SubagentsCommandContext, stopWithText } from "./shared.js";
 
-function formatConversationBindingText(params: {
-  channel: string;
-  conversationId: string;
-}): string {
-  if (params.channel === "discord" || params.channel === "matrix") {
-    return `thread:${params.conversationId}`;
-  }
-  if (params.channel === "telegram") {
-    return `conversation:${params.conversationId}`;
-  }
+function formatConversationBindingText(params: { conversationId: string }): string {
   return `binding:${params.conversationId}`;
+}
+
+function supportsConversationBindings(channel: string): boolean {
+  const channelId = normalizeChannelId(channel);
+  if (!channelId) {
+    return false;
+  }
+  return (
+    getChannelPlugin(channelId)?.conversationBindings?.supportsCurrentConversationBinding === true
+  );
 }
 
 export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): CommandHandlerResult {
   const { params, requesterKey, runs } = ctx;
+  const runsSnapshot = getSubagentRunsSnapshotForRead(subagentRuns);
   const channel = resolveCommandSurfaceChannel(params);
   const accountId = resolveChannelAccountId(params);
+  const currentConversationBindingsSupported = supportsConversationBindings(channel);
   const bindingService = getSessionBindingService();
   const bindingsBySession = new Map<string, ReturnType<typeof bindingService.listBySession>>();
 
@@ -60,12 +63,14 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
   const recentCutoff = Date.now() - RECENT_WINDOW_MINUTES * 60_000;
   const numericOrder = [
     ...dedupedRuns.filter(
-      (entry) => !entry.endedAt || countPendingDescendantRuns(entry.childSessionKey) > 0,
+      (entry) =>
+        !entry.endedAt ||
+        countPendingDescendantRunsFromRuns(runsSnapshot, entry.childSessionKey) > 0,
     ),
     ...dedupedRuns.filter(
       (entry) =>
         entry.endedAt &&
-        countPendingDescendantRuns(entry.childSessionKey) === 0 &&
+        countPendingDescendantRunsFromRuns(runsSnapshot, entry.childSessionKey) === 0 &&
         entry.endedAt >= recentCutoff,
     ),
   ];
@@ -77,7 +82,7 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
   for (const entry of dedupedRuns) {
     const visible =
       !entry.endedAt ||
-      countPendingDescendantRuns(entry.childSessionKey) > 0 ||
+      countPendingDescendantRunsFromRuns(runsSnapshot, entry.childSessionKey) > 0 ||
       resolveSessionBindings(entry.childSessionKey).length > 0;
     if (!visible) {
       continue;
@@ -93,12 +98,11 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
       const binding = resolveSessionBindings(entry.childSessionKey)[0];
       const bindingText = binding
         ? formatConversationBindingText({
-            channel,
             conversationId: binding.conversation.conversationId,
           })
-        : channel === "discord" || channel === "telegram" || channel === "matrix"
+        : currentConversationBindingsSupported
           ? "unbound"
-          : "bindings available on discord/telegram";
+          : "bindings unavailable";
       const resolvedIndex = indexByChildSessionKey.get(entry.childSessionKey);
       const prefix = resolvedIndex ? `${resolvedIndex}.` : "-";
       lines.push(`${prefix} ${formatRunLabel(entry)} (${bindingText})`);
@@ -111,13 +115,9 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
   if (requesterBindings.length > 0) {
     lines.push("", "acp/session bindings:", "-----");
     for (const binding of requesterBindings) {
-      const label =
-        typeof binding.metadata?.label === "string" && binding.metadata.label.trim()
-          ? binding.metadata.label.trim()
-          : binding.targetSessionKey;
+      const label = normalizeOptionalString(binding.metadata?.label) ?? binding.targetSessionKey;
       lines.push(
         `- ${label} (${formatConversationBindingText({
-          channel,
           conversationId: binding.conversation.conversationId,
         })}, session:${binding.targetSessionKey})`,
       );

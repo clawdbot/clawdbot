@@ -1,32 +1,119 @@
-import type { OpenClawConfig } from "../config/config.js";
-import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
+// Resolves approval delivery targets from sessions and turn sources.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveSessionConversationRef } from "../channels/plugins/session-conversation.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeMessageChannel } from "../utils/message-channel.js";
+import {
+  doesApprovalRequestMatchChannelAccount,
+  resolvePersistedApprovalRequestSessionEntry,
+} from "./approval-request-account-binding.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import { resolveSessionDeliveryTarget } from "./outbound/targets.js";
+import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
+/** Delivery target recovered from an approval request's live turn-source or stored session. */
 export type ExecApprovalSessionTarget = {
   channel?: string;
   to: string;
   accountId?: string;
-  threadId?: number;
+  threadId?: string | number;
 };
 
-function normalizeOptionalString(value?: string | null): string | undefined {
-  const normalized = value?.trim();
-  return normalized ? normalized : undefined;
-}
+/** Parsed session conversation metadata used by channel-native approval routing. */
+export type ApprovalRequestSessionConversation = {
+  channel: string;
+  kind: "group" | "channel";
+  id: string;
+  rawId: string;
+  threadId?: string;
+  baseSessionKey: string;
+  baseConversationId: string;
+  parentConversationCandidates: string[];
+};
 
-function normalizeOptionalThreadId(value?: string | number | null): number | undefined {
+type ApprovalRequestLike = ExecApprovalRequest | PluginApprovalRequest;
+type ApprovalRequestOriginTargetResolver<TTarget> = {
+  cfg: OpenClawConfig;
+  request: ApprovalRequestLike;
+  channel: string;
+  accountId?: string | null;
+  resolveTurnSourceTarget: (request: ApprovalRequestLike) => TTarget | null;
+  resolveSessionTarget: (sessionTarget: ExecApprovalSessionTarget) => TTarget | null;
+  targetsMatch: (a: TTarget, b: TTarget) => boolean;
+  resolveFallbackTarget?: (request: ApprovalRequestLike) => TTarget | null;
+};
+
+function normalizeOptionalThreadValue(value?: string | number | null): string | number | undefined {
   if (typeof value === "number") {
     return Number.isFinite(value) ? value : undefined;
   }
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = Number.parseInt(value, 10);
-  return Number.isFinite(normalized) ? normalized : undefined;
+  const normalized = value.trim();
+  return normalized ? normalized : undefined;
 }
 
+function isExecApprovalRequest(request: ApprovalRequestLike): request is ExecApprovalRequest {
+  return "command" in request.request;
+}
+
+function toExecLikeApprovalRequest(request: ApprovalRequestLike): ExecApprovalRequest {
+  if (isExecApprovalRequest(request)) {
+    return request;
+  }
+  return {
+    id: request.id,
+    request: {
+      command: request.request.title,
+      sessionKey: request.request.sessionKey ?? undefined,
+      turnSourceChannel: request.request.turnSourceChannel ?? undefined,
+      turnSourceTo: request.request.turnSourceTo ?? undefined,
+      turnSourceAccountId: request.request.turnSourceAccountId ?? undefined,
+      turnSourceThreadId: request.request.turnSourceThreadId ?? undefined,
+    },
+    createdAtMs: request.createdAtMs,
+    expiresAtMs: request.expiresAtMs,
+  };
+}
+
+function normalizeOptionalChannel(value?: string | null): string | undefined {
+  return normalizeMessageChannel(value);
+}
+
+/** Resolves the conversation encoded in an approval request session key for an optional channel. */
+export function resolveApprovalRequestSessionConversation(params: {
+  request: ApprovalRequestLike;
+  channel?: string | null;
+  bundledFallback?: boolean;
+}): ApprovalRequestSessionConversation | null {
+  const sessionKey = normalizeOptionalString(params.request.request.sessionKey);
+  if (!sessionKey) {
+    return null;
+  }
+  const resolved = resolveSessionConversationRef(sessionKey, {
+    bundledFallback: params.bundledFallback,
+  });
+  if (!resolved) {
+    return null;
+  }
+  const expectedChannel = normalizeOptionalChannel(params.channel);
+  if (expectedChannel && normalizeOptionalChannel(resolved.channel) !== expectedChannel) {
+    return null;
+  }
+  return {
+    channel: resolved.channel,
+    kind: resolved.kind,
+    id: resolved.id,
+    rawId: resolved.rawId,
+    threadId: resolved.threadId,
+    baseSessionKey: resolved.baseSessionKey,
+    baseConversationId: resolved.baseConversationId,
+    parentConversationCandidates: resolved.parentConversationCandidates,
+  };
+}
+
+/** Resolves the best known message target for an exec approval request. */
 export function resolveExecApprovalSessionTarget(params: {
   cfg: OpenClawConfig;
   request: ExecApprovalRequest;
@@ -39,22 +126,21 @@ export function resolveExecApprovalSessionTarget(params: {
   if (!sessionKey) {
     return null;
   }
-  const parsed = parseAgentSessionKey(sessionKey);
-  const agentId = parsed?.agentId ?? params.request.request.agentId ?? "main";
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
-  const store = loadSessionStore(storePath);
-  const entry = store[sessionKey];
-  if (!entry) {
+  const persisted = resolvePersistedApprovalRequestSessionEntry({
+    cfg: params.cfg,
+    request: params.request,
+  });
+  if (!persisted) {
     return null;
   }
 
   const target = resolveSessionDeliveryTarget({
-    entry,
+    entry: persisted.entry,
     requestedChannel: "last",
     turnSourceChannel: normalizeOptionalString(params.turnSourceChannel),
     turnSourceTo: normalizeOptionalString(params.turnSourceTo),
     turnSourceAccountId: normalizeOptionalString(params.turnSourceAccountId),
-    turnSourceThreadId: normalizeOptionalThreadId(params.turnSourceThreadId),
+    turnSourceThreadId: normalizeOptionalThreadValue(params.turnSourceThreadId),
   });
   if (!target.to) {
     return null;
@@ -64,6 +150,70 @@ export function resolveExecApprovalSessionTarget(params: {
     channel: normalizeOptionalString(target.channel),
     to: target.to,
     accountId: normalizeOptionalString(target.accountId),
-    threadId: normalizeOptionalThreadId(target.threadId),
+    threadId: normalizeOptionalThreadValue(target.threadId),
   };
+}
+
+/** Resolves the best known message target for either exec or plugin approval requests. */
+export function resolveApprovalRequestSessionTarget(params: {
+  cfg: OpenClawConfig;
+  request: ApprovalRequestLike;
+}): ExecApprovalSessionTarget | null {
+  const execLikeRequest = toExecLikeApprovalRequest(params.request);
+  return resolveExecApprovalSessionTarget({
+    cfg: params.cfg,
+    request: execLikeRequest,
+    turnSourceChannel: execLikeRequest.request.turnSourceChannel ?? undefined,
+    turnSourceTo: execLikeRequest.request.turnSourceTo ?? undefined,
+    turnSourceAccountId: execLikeRequest.request.turnSourceAccountId ?? undefined,
+    turnSourceThreadId: execLikeRequest.request.turnSourceThreadId ?? undefined,
+  });
+}
+
+function resolveApprovalRequestStoredSessionTarget(params: {
+  cfg: OpenClawConfig;
+  request: ApprovalRequestLike;
+}): ExecApprovalSessionTarget | null {
+  const execLikeRequest = toExecLikeApprovalRequest(params.request);
+  return resolveExecApprovalSessionTarget({
+    cfg: params.cfg,
+    request: execLikeRequest,
+  });
+}
+
+/** Resolves a channel-specific origin target only when live and stored bindings are consistent. */
+export function resolveApprovalRequestOriginTarget<TTarget>(
+  params: ApprovalRequestOriginTargetResolver<TTarget>,
+): TTarget | null {
+  if (
+    !doesApprovalRequestMatchChannelAccount({
+      cfg: params.cfg,
+      request: params.request,
+      channel: params.channel,
+      accountId: params.accountId,
+    })
+  ) {
+    return null;
+  }
+
+  const turnSourceTarget = params.resolveTurnSourceTarget(params.request);
+  const expectedChannel = normalizeOptionalChannel(params.channel);
+  const sessionTargetBinding = resolveApprovalRequestStoredSessionTarget({
+    cfg: params.cfg,
+    request: params.request,
+  });
+  const sessionTarget =
+    sessionTargetBinding &&
+    normalizeOptionalChannel(sessionTargetBinding.channel) === expectedChannel
+      ? params.resolveSessionTarget(sessionTargetBinding)
+      : null;
+
+  if (turnSourceTarget && sessionTarget && !params.targetsMatch(turnSourceTarget, sessionTarget)) {
+    // Avoid routing to an origin when live turn metadata disagrees with persisted session state.
+    return null;
+  }
+
+  return (
+    turnSourceTarget ?? sessionTarget ?? params.resolveFallbackTarget?.(params.request) ?? null
+  );
 }

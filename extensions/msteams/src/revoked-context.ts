@@ -1,3 +1,4 @@
+// Msteams plugin module implements revoked context behavior.
 import { isRevokedProxyError } from "./errors.js";
 
 export async function withRevokedProxyFallback<T>(params: {

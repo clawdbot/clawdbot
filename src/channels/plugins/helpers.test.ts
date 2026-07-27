@@ -1,3 +1,4 @@
+// Channel plugin helper tests cover shared plugin helper behavior and edge cases.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -71,6 +72,67 @@ describe("buildAccountScopedDmSecurityPolicy", () => {
         policyPath: undefined,
         allowFromPath: "channels.demo-nested.accounts.work.dm.",
         approveHint: formatPairingApproveHint("demo-nested"),
+        normalizeEntry: undefined,
+      },
+    },
+    {
+      name: "uses accounts.default paths when shared defaults are inherited",
+      input: {
+        cfg: cfgWithChannel("demo-default-account", {
+          default: {
+            dmPolicy: "allowlist",
+            allowFrom: ["+15550001111"],
+          },
+          work: {},
+        }),
+        channelKey: "demo-default-account",
+        accountId: "work",
+        fallbackAccountId: "default",
+        policy: "allowlist",
+        allowFrom: ["+15550001111"],
+        policyPathSuffix: "dmPolicy",
+        inheritSharedDefaultsFromDefaultAccount: true,
+      },
+      expected: {
+        policy: "allowlist",
+        allowFrom: ["+15550001111"],
+        policyPath: "channels.demo-default-account.accounts.default.dmPolicy",
+        allowFromPath: "channels.demo-default-account.accounts.default.",
+        approveHint: formatPairingApproveHint("demo-default-account"),
+        normalizeEntry: undefined,
+      },
+    },
+    {
+      name: "ignores accounts.default paths unless the channel opts into shared default-account inheritance",
+      input: {
+        cfg: {
+          channels: {
+            "demo-root": {
+              dmPolicy: "pairing",
+              allowFrom: ["*"],
+              accounts: {
+                default: {
+                  dmPolicy: "allowlist",
+                  allowFrom: ["+15550001111"],
+                },
+                work: {},
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        channelKey: "demo-root",
+        accountId: "work",
+        fallbackAccountId: "default",
+        policy: "pairing",
+        allowFrom: ["*"],
+        policyPathSuffix: "dmPolicy",
+      },
+      expected: {
+        policy: "pairing",
+        allowFrom: ["*"],
+        policyPath: "channels.demo-root.dmPolicy",
+        allowFromPath: "channels.demo-root.",
+        approveHint: formatPairingApproveHint("demo-root"),
         normalizeEntry: undefined,
       },
     },

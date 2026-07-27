@@ -1,9 +1,12 @@
+// Mattermost helper module supports normalize behavior.
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+
 export function normalizeMattermostMessagingTarget(raw: string): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed) {
     return undefined;
   }
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (lower.startsWith("channel:")) {
     const id = trimmed.slice("channel:".length).trim();
     return id ? `channel:${id}` : undefined;
@@ -34,7 +37,7 @@ export function normalizeMattermostMessagingTarget(raw: string): string | undefi
   return undefined;
 }
 
-export function looksLikeMattermostTargetId(raw: string, normalized?: string): boolean {
+export function looksLikeMattermostTargetId(raw: string, _normalized?: string): boolean {
   const trimmed = raw.trim();
   if (!trimmed) {
     return false;

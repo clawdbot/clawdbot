@@ -1,9 +1,11 @@
+// Allowlist config edit helpers build safe config mutations for channel allowlists.
 import type { ConfigWriteTarget } from "../channels/plugins/config-writes.js";
 import type { ChannelAllowlistAdapter } from "../channels/plugins/types.adapters.js";
-import type { ChannelId } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+import { isRecord } from "../utils.js";
 
 type AllowlistConfigPaths = {
   readPaths: string[][];
@@ -11,7 +13,10 @@ type AllowlistConfigPaths = {
   cleanupPaths?: string[][];
 };
 
+/** Named allowlist entries attached to a route-specific override. */
 export type AllowlistGroupOverride = { label: string; entries: string[] };
+
+/** Per-entry display-name lookup results for channel allowlist UIs. */
 export type AllowlistNameResolution = Array<{
   input: string;
   resolved: boolean;
@@ -43,10 +48,12 @@ const LEGACY_DM_ALLOWLIST_CONFIG_PATHS: AllowlistConfigPaths = {
   cleanupPaths: [["dm", "allowFrom"]],
 };
 
+/** Resolve modern DM/group allowlist paths for account-scoped channel config writes. */
 export function resolveDmGroupAllowlistConfigPaths(scope: "dm" | "group") {
   return scope === "dm" ? DM_ALLOWLIST_CONFIG_PATHS : GROUP_ALLOWLIST_CONFIG_PATHS;
 }
 
+/** Resolve DM-only paths that still read and clean up the old nested dm.allowFrom location. */
 export function resolveLegacyDmAllowlistConfigPaths(scope: "dm" | "group") {
   return scope === "dm" ? LEGACY_DM_ALLOWLIST_CONFIG_PATHS : null;
 }
@@ -181,6 +188,8 @@ function resolveAccountScopedWriteTarget(
       writeTarget: { kind: "channel", scope: { channelId } } as const satisfies ConfigWriteTarget,
     };
   }
+  // Once an accounts map exists, even the default account writes through it so scoped
+  // and unscoped config do not diverge inside the same channel stanza.
   const accounts = (channel.accounts ??= {}) as Record<string, unknown>;
   const existingAccount = Object.hasOwn(accounts, normalizedAccountId)
     ? accounts[normalizedAccountId]
@@ -226,30 +235,32 @@ function ensureNestedObject(
 }
 
 function setNestedValue(root: Record<string, unknown>, path: string[], value: unknown) {
-  if (path.length === 0) {
+  const leaf = path.at(-1);
+  if (leaf === undefined) {
     return;
   }
   if (path.length === 1) {
-    root[path[0]] = value;
+    root[leaf] = value;
     return;
   }
   const parent = ensureNestedObject(root, path.slice(0, -1));
-  parent[path[path.length - 1]] = value;
+  parent[leaf] = value;
 }
 
 function deleteNestedValue(root: Record<string, unknown>, path: string[]) {
-  if (path.length === 0) {
+  const leaf = path.at(-1);
+  if (leaf === undefined) {
     return;
   }
   if (path.length === 1) {
-    delete root[path[0]];
+    delete root[leaf];
     return;
   }
   const parent = getNestedValue(root, path.slice(0, -1));
-  if (!parent || typeof parent !== "object") {
+  if (!isRecord(parent)) {
     return;
   }
-  delete (parent as Record<string, unknown>)[path[path.length - 1]];
+  delete parent[leaf];
 }
 
 function applyAccountScopedAllowlistConfigEdit(params: {
@@ -259,6 +270,7 @@ function applyAccountScopedAllowlistConfigEdit(params: {
   action: "add" | "remove";
   entry: string;
   normalize: (values: Array<string | number>) => string[];
+  resolveEffectiveEntries?: () => Array<string | number> | null | undefined;
   paths: AllowlistConfigPaths;
 }): NonNullable<Awaited<ReturnType<NonNullable<ChannelAllowlistAdapter["applyConfigEdit"]>>>> {
   const resolvedTarget = resolveAccountScopedWriteTarget(
@@ -267,12 +279,25 @@ function applyAccountScopedAllowlistConfigEdit(params: {
     params.accountId,
   );
   const existing: string[] = [];
+  let hasStoredList = false;
   for (const path of params.paths.readPaths) {
     const existingRaw = getNestedValue(resolvedTarget.target, path);
     if (!Array.isArray(existingRaw)) {
       continue;
     }
+    hasStoredList = true;
     for (const entry of existingRaw) {
+      const value = String(entry).trim();
+      if (!value || existing.includes(value)) {
+        continue;
+      }
+      existing.push(value);
+    }
+  }
+  // A new account override starts from its effective inherited list; otherwise the
+  // first scoped edit would silently discard every channel-level entry.
+  if (!hasStoredList) {
+    for (const entry of params.resolveEffectiveEntries?.() ?? []) {
       const value = String(entry).trim();
       if (!value || existing.includes(value)) {
         continue;
@@ -311,11 +336,10 @@ function applyAccountScopedAllowlistConfigEdit(params: {
   }
 
   if (changed) {
-    if (next.length === 0) {
-      deleteNestedValue(resolvedTarget.target, params.paths.writePath);
-    } else {
-      setNestedValue(resolvedTarget.target, params.paths.writePath, next);
-    }
+    // Keep empty lists explicit: deleting the key can reactivate effective entries inherited
+    // from another config surface, including after an earlier edit materialized that list.
+    setNestedValue(resolvedTarget.target, params.paths.writePath, next);
+    // Legacy readers can observe multiple paths, but writes must leave one canonical path.
     for (const path of params.paths.cleanupPaths ?? []) {
       deleteNestedValue(resolvedTarget.target, path);
     }
@@ -333,6 +357,11 @@ function applyAccountScopedAllowlistConfigEdit(params: {
 export function buildAccountScopedAllowlistConfigEditor(params: {
   channelId: ChannelId;
   normalize: AllowlistNormalizer;
+  resolveEffectiveEntries?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    scope: "dm" | "group";
+  }) => Array<string | number> | null | undefined;
   resolvePaths: (scope: "dm" | "group") => AllowlistConfigPaths | null;
 }): NonNullable<ChannelAllowlistAdapter["applyConfigEdit"]> {
   return ({ cfg, parsedConfig, accountId, scope, action, entry }) => {
@@ -347,6 +376,7 @@ export function buildAccountScopedAllowlistConfigEditor(params: {
       action,
       entry,
       normalize: (values) => params.normalize({ cfg, accountId, values }),
+      resolveEffectiveEntries: () => params.resolveEffectiveEntries?.({ cfg, accountId, scope }),
       paths,
     });
   };
@@ -360,15 +390,26 @@ function buildAccountAllowlistAdapter<ResolvedAccount>(params: {
   resolvePaths: (scope: "dm" | "group") => AllowlistConfigPaths | null;
   readConfig: (
     account: ResolvedAccount,
+    context: { cfg: OpenClawConfig; accountId?: string | null },
   ) => Awaited<ReturnType<NonNullable<ChannelAllowlistAdapter["readConfig"]>>>;
+  resolveEntries: (
+    account: ResolvedAccount,
+    scope: "dm" | "group",
+    context: { cfg: OpenClawConfig; accountId?: string | null },
+  ) => Array<string | number> | null | undefined;
 }): Pick<ChannelAllowlistAdapter, "supportsScope" | "readConfig" | "applyConfigEdit"> {
   return {
     supportsScope: params.supportsScope,
     readConfig: ({ cfg, accountId }) =>
-      params.readConfig(params.resolveAccount({ cfg, accountId })),
+      params.readConfig(params.resolveAccount({ cfg, accountId }), { cfg, accountId }),
     applyConfigEdit: buildAccountScopedAllowlistConfigEditor({
       channelId: params.channelId,
       normalize: params.normalize,
+      resolveEffectiveEntries: ({ cfg, accountId, scope }) =>
+        params.resolveEntries(params.resolveAccount({ cfg, accountId }), scope, {
+          cfg,
+          accountId,
+        }),
       resolvePaths: params.resolvePaths,
     }),
   };
@@ -379,7 +420,10 @@ export function buildDmGroupAccountAllowlistAdapter<ResolvedAccount>(params: {
   channelId: ChannelId;
   resolveAccount: AllowlistAccountResolver<ResolvedAccount>;
   normalize: AllowlistNormalizer;
-  resolveDmAllowFrom: (account: ResolvedAccount) => Array<string | number> | null | undefined;
+  resolveDmAllowFrom: (
+    account: ResolvedAccount,
+    context: { cfg: OpenClawConfig; accountId?: string | null },
+  ) => Array<string | number> | null | undefined;
   resolveGroupAllowFrom: (account: ResolvedAccount) => Array<string | number> | null | undefined;
   resolveDmPolicy?: (account: ResolvedAccount) => string | null | undefined;
   resolveGroupPolicy?: (account: ResolvedAccount) => string | null | undefined;
@@ -391,8 +435,12 @@ export function buildDmGroupAccountAllowlistAdapter<ResolvedAccount>(params: {
     normalize: params.normalize,
     supportsScope: ({ scope }) => scope === "dm" || scope === "group" || scope === "all",
     resolvePaths: resolveDmGroupAllowlistConfigPaths,
-    readConfig: (account) => ({
-      dmAllowFrom: readConfiguredAllowlistEntries(params.resolveDmAllowFrom(account)),
+    resolveEntries: (account, scope, context) =>
+      scope === "dm"
+        ? params.resolveDmAllowFrom(account, context)
+        : params.resolveGroupAllowFrom(account),
+    readConfig: (account, context) => ({
+      dmAllowFrom: readConfiguredAllowlistEntries(params.resolveDmAllowFrom(account, context)),
       groupAllowFrom: readConfiguredAllowlistEntries(params.resolveGroupAllowFrom(account)),
       dmPolicy: params.resolveDmPolicy?.(account) ?? undefined,
       groupPolicy: params.resolveGroupPolicy?.(account) ?? undefined,
@@ -406,7 +454,10 @@ export function buildLegacyDmAccountAllowlistAdapter<ResolvedAccount>(params: {
   channelId: ChannelId;
   resolveAccount: AllowlistAccountResolver<ResolvedAccount>;
   normalize: AllowlistNormalizer;
-  resolveDmAllowFrom: (account: ResolvedAccount) => Array<string | number> | null | undefined;
+  resolveDmAllowFrom: (
+    account: ResolvedAccount,
+    context: { cfg: OpenClawConfig; accountId?: string | null },
+  ) => Array<string | number> | null | undefined;
   resolveGroupPolicy?: (account: ResolvedAccount) => string | null | undefined;
   resolveGroupOverrides?: (account: ResolvedAccount) => AllowlistGroupOverride[] | undefined;
 }): Pick<ChannelAllowlistAdapter, "supportsScope" | "readConfig" | "applyConfigEdit"> {
@@ -416,8 +467,9 @@ export function buildLegacyDmAccountAllowlistAdapter<ResolvedAccount>(params: {
     normalize: params.normalize,
     supportsScope: ({ scope }) => scope === "dm",
     resolvePaths: resolveLegacyDmAllowlistConfigPaths,
-    readConfig: (account) => ({
-      dmAllowFrom: readConfiguredAllowlistEntries(params.resolveDmAllowFrom(account)),
+    resolveEntries: (account, _scope, context) => params.resolveDmAllowFrom(account, context),
+    readConfig: (account, context) => ({
+      dmAllowFrom: readConfiguredAllowlistEntries(params.resolveDmAllowFrom(account, context)),
       groupPolicy: params.resolveGroupPolicy?.(account) ?? undefined,
       groupOverrides: params.resolveGroupOverrides?.(account),
     }),

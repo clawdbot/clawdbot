@@ -8,22 +8,29 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { z } from "openclaw/plugin-sdk/zod";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import {
-  createFixedWindowRateLimiter,
-  isBlockedHostnameOrIp,
-  readJsonBodyWithLimit,
-  requestBodyErrorToText,
-} from "../api.js";
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { z } from "zod";
 import { publishNostrProfile, getNostrProfileState } from "./channel.js";
 import { NostrProfileSchema, type NostrProfile } from "./config-schema.js";
+import {
+  createFixedWindowRateLimiter,
+  getPluginRuntimeGatewayRequestScope,
+  readJsonBodyWithLimit,
+  requestBodyErrorToText,
+} from "./nostr-profile-http-runtime.js";
 import { importProfileFromRelays, mergeProfiles } from "./nostr-profile-import.js";
+import { validateUrlSafety } from "./nostr-profile-url-safety.js";
 
 // ============================================================================
 // Types
 // ============================================================================
 
-export interface NostrProfileHttpContext {
+interface NostrProfileHttpContext {
   /** Get current profile from config */
   getConfigProfile: (accountId: string) => NostrProfile | undefined;
   /** Update profile in config (after successful publish) */
@@ -51,18 +58,6 @@ const profileRateLimiter = createFixedWindowRateLimiter({
   maxTrackedKeys: RATE_LIMIT_MAX_TRACKED_KEYS,
 });
 
-export function clearNostrProfileRateLimitStateForTest(): void {
-  profileRateLimiter.clear();
-}
-
-export function getNostrProfileRateLimitStateSizeForTest(): number {
-  return profileRateLimiter.size();
-}
-
-export function isNostrProfileRateLimitedForTest(accountId: string, nowMs: number): boolean {
-  return profileRateLimiter.isRateLimited(accountId, nowMs);
-}
-
 function checkRateLimit(accountId: string): boolean {
   return !profileRateLimiter.isRateLimited(accountId);
 }
@@ -71,59 +66,11 @@ function checkRateLimit(accountId: string): boolean {
 // Mutex for Concurrent Publish Prevention
 // ============================================================================
 
-const publishLocks = new Map<string, Promise<void>>();
+const publishLocks = new KeyedAsyncQueue();
 
 async function withPublishLock<T>(accountId: string, fn: () => Promise<T>): Promise<T> {
-  // Atomic mutex using promise chaining - prevents TOCTOU race condition
-  const prev = publishLocks.get(accountId) ?? Promise.resolve();
-  let resolve: () => void;
-  const next = new Promise<void>((r) => {
-    resolve = r;
-  });
-  // Atomically replace the lock before awaiting - any concurrent request
-  // will now wait on our `next` promise
-  publishLocks.set(accountId, next);
-
-  // Wait for previous operation to complete
-  await prev.catch(() => {});
-
-  try {
-    return await fn();
-  } finally {
-    resolve!();
-    // Clean up if we're the last in chain
-    if (publishLocks.get(accountId) === next) {
-      publishLocks.delete(accountId);
-    }
-  }
+  return await publishLocks.enqueue(accountId, fn);
 }
-
-// ============================================================================
-// SSRF Protection
-// ============================================================================
-
-function validateUrlSafety(urlStr: string): { ok: true } | { ok: false; error: string } {
-  try {
-    const url = new URL(urlStr);
-
-    if (url.protocol !== "https:") {
-      return { ok: false, error: "URL must use https:// protocol" };
-    }
-
-    const hostname = url.hostname.toLowerCase();
-
-    if (isBlockedHostnameOrIp(hostname)) {
-      return { ok: false, error: "URL must not point to private/internal addresses" };
-    }
-
-    return { ok: true };
-  } catch {
-    return { ok: false, error: "Invalid URL format" };
-  }
-}
-
-// Export for use in import validation
-export { validateUrlSafety };
 
 // ============================================================================
 // Validation Schemas
@@ -146,6 +93,8 @@ const ProfileUpdateSchema = NostrProfileSchema.extend({
   nip05: nip05FormatSchema,
   lud16: lud16FormatSchema,
 });
+
+const PROFILE_MUTATION_SCOPE = "operator.admin";
 
 // ============================================================================
 // Request Helpers
@@ -193,7 +142,7 @@ function isLoopbackRemoteAddress(remoteAddress: string | undefined): boolean {
     return false;
   }
 
-  const ipLower = remoteAddress.toLowerCase().replace(/^\[|\]$/g, "");
+  const ipLower = normalizeLowercaseStringOrEmpty(remoteAddress).replace(/^\[|\]$/g, "");
 
   // IPv6 loopback
   if (ipLower === "::1") {
@@ -217,7 +166,7 @@ function isLoopbackRemoteAddress(remoteAddress: string | undefined): boolean {
 function isLoopbackOriginLike(value: string): boolean {
   try {
     const url = new URL(value);
-    const hostname = url.hostname.toLowerCase();
+    const hostname = normalizeLowercaseStringOrEmpty(url.hostname);
     return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
   } catch {
     return false;
@@ -228,7 +177,7 @@ function firstHeaderValue(value: string | string[] | undefined): string | undefi
   if (Array.isArray(value)) {
     return value[0];
   }
-  return typeof value === "string" ? value : undefined;
+  return readStringValue(value);
 }
 
 function normalizeIpCandidate(raw: string): string {
@@ -290,7 +239,9 @@ function enforceLoopbackMutationGuards(
     return false;
   }
 
-  const secFetchSite = firstHeaderValue(req.headers["sec-fetch-site"])?.trim().toLowerCase();
+  const secFetchSite = normalizeOptionalLowercaseString(
+    firstHeaderValue(req.headers["sec-fetch-site"]),
+  );
   if (secFetchSite === "cross-site") {
     ctx.log?.warn?.("Rejected mutation with cross-site sec-fetch-site header");
     sendJson(res, 403, { ok: false, error: "Forbidden" });
@@ -313,6 +264,21 @@ function enforceLoopbackMutationGuards(
   }
 
   return true;
+}
+
+function enforceGatewayMutationScope(
+  ctx: NostrProfileHttpContext,
+  accountId: string,
+  res: ServerResponse,
+): boolean {
+  const runtimeScopes = getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes;
+  const scopes = Array.isArray(runtimeScopes) ? runtimeScopes : [];
+  if (scopes.includes(PROFILE_MUTATION_SCOPE)) {
+    return true;
+  }
+  ctx.log?.warn?.(`[${accountId}] Rejected profile mutation missing ${PROFILE_MUTATION_SCOPE}`);
+  sendJson(res, 403, { ok: false, error: `missing scope: ${PROFILE_MUTATION_SCOPE}` });
+  return false;
 }
 
 // ============================================================================
@@ -397,6 +363,9 @@ async function handleUpdateProfile(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<true> {
+  if (!enforceGatewayMutationScope(ctx, accountId, res)) {
+    return true;
+  }
   if (!enforceLoopbackMutationGuards(ctx, req, res)) {
     return true;
   }
@@ -500,6 +469,9 @@ async function handleImportProfile(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<true> {
+  if (!enforceGatewayMutationScope(ctx, accountId, res)) {
+    return true;
+  }
   if (!enforceLoopbackMutationGuards(ctx, req, res)) {
     return true;
   }

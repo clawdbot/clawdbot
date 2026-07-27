@@ -1,0 +1,127 @@
+/**
+ * Canvas plugin config parsing, enablement, and schema metadata.
+ */
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  normalizePluginsConfig,
+  resolveEffectiveEnableState,
+  resolvePluginConfigObject,
+} from "openclaw/plugin-sdk/plugin-config-runtime";
+import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
+import {
+  asBoolean as readBoolean,
+  isRecord,
+  readStringValue as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+
+/** Host-server configuration for Canvas and A2UI assets. */
+export type CanvasHostConfig = {
+  enabled?: boolean;
+  root?: string;
+  port?: number;
+  liveReload?: boolean;
+};
+
+/** Canvas plugin configuration shape. */
+export type CanvasPluginConfig = {
+  host?: CanvasHostConfig;
+};
+
+type CanvasPluginConfigSchema = {
+  parse: (value: unknown) => CanvasPluginConfig;
+  uiHints: Record<string, { label: string; help?: string; advanced?: boolean }>;
+};
+
+function readPositiveInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+function parseCanvasHostConfig(value: unknown): CanvasHostConfig | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return {
+    ...(readBoolean(value.enabled) !== undefined ? { enabled: readBoolean(value.enabled) } : {}),
+    ...(readString(value.root) !== undefined ? { root: readString(value.root) } : {}),
+    ...(readPositiveInteger(value.port) !== undefined
+      ? { port: readPositiveInteger(value.port) }
+      : {}),
+    ...(readBoolean(value.liveReload) !== undefined
+      ? { liveReload: readBoolean(value.liveReload) }
+      : {}),
+  };
+}
+
+/** Parses raw Canvas plugin config into a typed, normalized shape. */
+export function parseCanvasPluginConfig(value: unknown): CanvasPluginConfig {
+  if (!isRecord(value)) {
+    return {};
+  }
+  const host = parseCanvasHostConfig(value.host);
+  return host ? { host } : {};
+}
+
+/** Returns whether the bundled Canvas plugin is effectively enabled. */
+export function isCanvasPluginEnabled(config?: OpenClawConfig): boolean {
+  if (!config) {
+    return true;
+  }
+  return resolveEffectiveEnableState({
+    id: "canvas",
+    origin: "bundled",
+    config: normalizePluginsConfig(config.plugins),
+    rootConfig: config,
+    enabledByDefault: true,
+  }).enabled;
+}
+
+/** Resolves Canvas host config from plugin config or root config. */
+export function resolveCanvasHostConfig(params: {
+  config?: OpenClawConfig;
+  pluginConfig?: Record<string, unknown>;
+}): CanvasHostConfig {
+  const pluginConfig =
+    params.pluginConfig ?? resolvePluginConfigObject(params.config, "canvas") ?? {};
+  const parsedPluginConfig = parseCanvasPluginConfig(pluginConfig);
+  return parsedPluginConfig.host ?? {};
+}
+
+/** Returns whether the Canvas hosted route/server surface should be active. */
+export function isCanvasHostEnabled(config?: OpenClawConfig): boolean {
+  if (isTruthyEnvValue(process.env.OPENCLAW_SKIP_CANVAS_HOST)) {
+    return false;
+  }
+  if (!isCanvasPluginEnabled(config)) {
+    return false;
+  }
+  return resolveCanvasHostConfig({ config }).enabled !== false;
+}
+
+/** Config schema metadata for Canvas plugin settings. */
+export const canvasConfigSchema: CanvasPluginConfigSchema = {
+  parse: parseCanvasPluginConfig,
+  uiHints: {
+    host: {
+      label: "Canvas Host",
+      help: "Serves local Canvas and A2UI files for paired nodes.",
+      advanced: true,
+    },
+    "host.enabled": {
+      label: "Canvas Host Enabled",
+      advanced: true,
+    },
+    "host.root": {
+      label: "Canvas Host Root Directory",
+      help: "Directory to serve. Defaults to the OpenClaw state canvas directory.",
+      advanced: true,
+    },
+    "host.port": {
+      label: "Canvas Host Port",
+      advanced: true,
+    },
+    "host.liveReload": {
+      label: "Canvas Host Live Reload",
+      advanced: true,
+    },
+  },
+};

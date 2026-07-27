@@ -1,5 +1,7 @@
+// Supervisor registry tracks active and historical supervised process runs.
 import type { RunRecord, RunState, TerminationReason } from "./types.js";
 
+/** In-memory run index for the supervisor; callers receive detached snapshots. */
 function nowMs() {
   return Date.now();
 }
@@ -13,11 +15,9 @@ function resolveMaxExitedRecords(value?: number): number {
   return Math.max(1, Math.floor(value));
 }
 
-export type RunRegistry = {
+type RunRegistry = {
   add: (record: RunRecord) => void;
   get: (runId: string) => RunRecord | undefined;
-  list: () => RunRecord[];
-  listByScope: (scopeKey: string) => RunRecord[];
   updateState: (
     runId: string,
     state: RunState,
@@ -32,9 +32,12 @@ export type RunRegistry = {
       exitSignal: NodeJS.Signals | number | null;
     },
   ) => { record: RunRecord; firstFinalize: boolean } | null;
-  delete: (runId: string) => void;
 };
 
+/**
+ * Create the supervisor's mutable run registry. Exited records are retained
+ * only for diagnostics, so the cap bounds memory without touching live runs.
+ */
 export function createRunRegistry(options?: { maxExitedRecords?: number }): RunRegistry {
   const records = new Map<string, RunRecord>();
   const maxExitedRecords = resolveMaxExitedRecords(options?.maxExitedRecords);
@@ -53,6 +56,7 @@ export function createRunRegistry(options?: { maxExitedRecords?: number }): RunR
       return;
     }
     let remove = exited - maxExitedRecords;
+    // Map insertion order is the retention policy: oldest exited records leave first.
     for (const [runId, record] of records.entries()) {
       if (remove <= 0) {
         break;
@@ -72,19 +76,6 @@ export function createRunRegistry(options?: { maxExitedRecords?: number }): RunR
   const get: RunRegistry["get"] = (runId) => {
     const record = records.get(runId);
     return record ? { ...record } : undefined;
-  };
-
-  const list: RunRegistry["list"] = () => {
-    return Array.from(records.values()).map((record) => ({ ...record }));
-  };
-
-  const listByScope: RunRegistry["listByScope"] = (scopeKey) => {
-    if (!scopeKey.trim()) {
-      return [];
-    }
-    return Array.from(records.values())
-      .filter((record) => record.scopeKey === scopeKey)
-      .map((record) => ({ ...record }));
   };
 
   const updateState: RunRegistry["updateState"] = (runId, state, patch) => {
@@ -127,6 +118,8 @@ export function createRunRegistry(options?: { maxExitedRecords?: number }): RunR
     const next: RunRecord = {
       ...current,
       state: "exited",
+      // First terminal observation wins; late fallback timers must not rewrite
+      // the exit reason or signal after a real process exit has been recorded.
       terminationReason: current.terminationReason ?? exit.reason,
       exitCode: current.exitCode !== undefined ? current.exitCode : exit.exitCode,
       exitSignal: current.exitSignal !== undefined ? current.exitSignal : exit.exitSignal,
@@ -137,18 +130,11 @@ export function createRunRegistry(options?: { maxExitedRecords?: number }): RunR
     return { record: { ...next }, firstFinalize };
   };
 
-  const del: RunRegistry["delete"] = (runId) => {
-    records.delete(runId);
-  };
-
   return {
     add,
     get,
-    list,
-    listByScope,
     updateState,
     touchOutput,
     finalize,
-    delete: del,
   };
 }

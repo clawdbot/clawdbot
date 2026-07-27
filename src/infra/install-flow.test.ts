@@ -1,7 +1,8 @@
+// Covers install archive extraction and existing install path resolution.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import * as archive from "./archive.js";
 import { resolveExistingInstallPath, withExtractedArchiveRoot } from "./install-flow.js";
 import * as installSource from "./install-source-utils.js";
@@ -19,41 +20,37 @@ async function runExtractedArchiveFailureCase(configureArchive: () => void) {
   });
 }
 
+function firstMockCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T | undefined {
+  return mock.mock.calls[0];
+}
+
 describe("resolveExistingInstallPath", () => {
-  let fixtureRoot = "";
-
-  beforeEach(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-flow-"));
-  });
-
-  afterEach(async () => {
-    if (fixtureRoot) {
-      await fs.rm(fixtureRoot, { recursive: true, force: true });
-    }
-  });
-
   it("returns resolved path and stat for existing files", async () => {
-    const filePath = path.join(fixtureRoot, "plugin.tgz");
-    await fs.writeFile(filePath, "archive");
+    await withTempDir({ prefix: "openclaw-install-flow-" }, async (fixtureRoot) => {
+      const filePath = path.join(fixtureRoot, "plugin.tgz");
+      await fs.writeFile(filePath, "archive");
 
-    const result = await resolveExistingInstallPath(filePath);
+      const result = await resolveExistingInstallPath(filePath);
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-    expect(result.resolvedPath).toBe(filePath);
-    expect(result.stat.isFile()).toBe(true);
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      expect(result.resolvedPath).toBe(filePath);
+      expect(result.stat.isFile()).toBe(true);
+    });
   });
 
   it("returns a path-not-found error for missing paths", async () => {
-    const missing = path.join(fixtureRoot, "missing.tgz");
+    await withTempDir({ prefix: "openclaw-install-flow-" }, async (fixtureRoot) => {
+      const missing = path.join(fixtureRoot, "missing.tgz");
 
-    const result = await resolveExistingInstallPath(missing);
+      const result = await resolveExistingInstallPath(missing);
 
-    expect(result).toEqual({
-      ok: false,
-      error: `path not found: ${missing}`,
+      expect(result).toEqual({
+        ok: false,
+        error: `path not found: ${missing}`,
+      });
     });
   });
 });
@@ -83,12 +80,12 @@ describe("withExtractedArchiveRoot", () => {
       onExtracted,
     });
 
-    expect(withTempDirSpy).toHaveBeenCalledWith("openclaw-plugin-", expect.any(Function));
-    expect(extractSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        archivePath,
-      }),
-    );
+    expect(withTempDirSpy).toHaveBeenCalledTimes(1);
+    const withTempDirCall = firstMockCall(withTempDirSpy);
+    expect(withTempDirCall?.[0]).toBe("openclaw-plugin-");
+    expect(typeof withTempDirCall?.[1]).toBe("function");
+    expect(extractSpy).toHaveBeenCalledOnce();
+    expect(firstMockCall(extractSpy)?.[0]?.archivePath).toBe(archivePath);
     expect(resolveRootSpy).toHaveBeenCalledWith(extractDir, {
       rootMarkers: ["package.json"],
     });

@@ -1,12 +1,18 @@
+// Applies fast-lane reply directives before normal delivery processing.
 import type { ReplyPayload } from "../types.js";
+import { isDirectiveOnly } from "./directive-handling.directive-only.js";
 import { handleDirectiveOnly } from "./directive-handling.impl.js";
 import { resolveCurrentDirectiveLevels } from "./directive-handling.levels.js";
 import type { ApplyInlineDirectivesFastLaneParams } from "./directive-handling.params.js";
-import { isDirectiveOnly } from "./directive-handling.parse.js";
 
 export async function applyInlineDirectivesFastLane(
   params: ApplyInlineDirectivesFastLaneParams,
-): Promise<{ directiveAck?: ReplyPayload; provider: string; model: string }> {
+): Promise<{
+  directiveAck?: ReplyPayload;
+  provider: string;
+  model: string;
+  sessionChangesApplied: boolean;
+}> {
   const {
     directives,
     commandAuthorized,
@@ -25,6 +31,7 @@ export async function applyInlineDirectivesFastLane(
     defaultProvider,
     defaultModel,
     aliasIndex,
+    policyAliasIndex,
     allowedModelKeys,
     allowedModelCatalog,
     resetModelOverride,
@@ -44,7 +51,7 @@ export async function applyInlineDirectivesFastLane(
       isGroup,
     })
   ) {
-    return { directiveAck: undefined, provider, model };
+    return { directiveAck: undefined, provider, model, sessionChangesApplied: true };
   }
 
   const agentCfg = params.agentCfg;
@@ -57,9 +64,12 @@ export async function applyInlineDirectivesFastLane(
   } = await resolveCurrentDirectiveLevels({
     sessionEntry,
     agentCfg,
-    resolveDefaultThinkingLevel: () => modelState.resolveDefaultThinkingLevel(),
+    resolveDefaultThinkingLevel: directives.hasThinkDirective
+      ? () => modelState.resolveDefaultThinkingLevel()
+      : async () => undefined,
   });
 
+  const persistenceState = { sessionChangesApplied: true };
   const directiveAck = await handleDirectiveOnly({
     cfg,
     directives,
@@ -74,8 +84,10 @@ export async function applyInlineDirectivesFastLane(
     defaultProvider,
     defaultModel,
     aliasIndex,
+    policyAliasIndex,
     allowedModelKeys,
     allowedModelCatalog,
+    thinkingCatalog: await modelState.resolveThinkingCatalog(),
     resetModelOverride,
     provider,
     model,
@@ -86,8 +98,14 @@ export async function applyInlineDirectivesFastLane(
     currentVerboseLevel,
     currentReasoningLevel,
     currentElevatedLevel,
+    ctx,
+    messageProvider: ctx.Provider,
     surface: ctx.Surface,
     gatewayClientScopes: ctx.GatewayClientScopes,
+    commandAuthorized,
+    senderIsOwner: params.senderIsOwner,
+    workspaceDir: params.workspaceDir,
+    persistenceState,
   });
 
   if (sessionEntry?.providerOverride) {
@@ -97,5 +115,5 @@ export async function applyInlineDirectivesFastLane(
     model = sessionEntry.modelOverride;
   }
 
-  return { directiveAck, provider, model };
+  return { directiveAck, provider, model, ...persistenceState };
 }

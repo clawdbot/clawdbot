@@ -1,7 +1,9 @@
+// Matrix plugin module implements client behavior.
 export type { MatrixAuth } from "./client/types.js";
 export { isBunRuntime } from "./client/runtime.js";
 export { getMatrixScopedEnvVarNames } from "../env-vars.js";
 export {
+  backfillMatrixAuthDeviceIdAfterStartup,
   hasReadyMatrixEnvAuth,
   resolveMatrixEnvAuthReadiness,
   resolveMatrixConfigForAccount,

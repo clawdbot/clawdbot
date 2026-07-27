@@ -1,55 +1,52 @@
-import { resolveMergedAccountConfig } from "../channels/plugins/account-helpers.js";
+/**
+ * Channel config adapter and DM-access helpers for plugin setup.
+ *
+ * Not part of the config-schema facade trio despite the similar name: those
+ * export Zod schema builders, while this subpath owns config CRUD adapters,
+ * config-write authorization, and DM access/policy resolution for accounts.
+ */
+import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
+import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
 import {
   deleteAccountFromConfigSection as deleteAccountFromConfigSectionInSection,
   setAccountEnabledInConfigSection as setAccountEnabledInConfigSectionInSection,
 } from "../channels/plugins/config-helpers.js";
+import {
+  authorizeConfigWriteShared,
+  canBypassConfigWritePolicyShared,
+  formatConfigWriteDeniedMessageShared,
+  resolveChannelConfigWritesShared,
+  type ConfigWriteAuthorizationResultLike,
+  type ConfigWriteScopeLike,
+  type ConfigWriteTargetLike,
+} from "../channels/plugins/config-write-policy-shared.js";
+import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
 import type { ChannelConfigAdapter } from "../channels/plugins/types.adapters.js";
-import { formatCliCommand } from "../cli/command-format.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { resolveAccountEntry } from "../routing/account-lookup.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 
-type SimpleDirectMessageConfig = {
-  allowFrom?: Array<string | number>;
-  defaultTo?: string | number | null;
-};
+export {
+  ensureOpenDmPolicyAllowFromWildcard,
+  normalizeChannelDmPolicy,
+  normalizeLegacyDmAliases,
+  resolveChannelDmAccess,
+  resolveChannelDmAllowFrom,
+  resolveChannelDmPolicy,
+  setCanonicalDmAllowFrom,
+  type ChannelDmAccess,
+  type ChannelDmAllowFromMode,
+  type ChannelDmPolicy,
+  type DmAccessRecord,
+} from "../channels/plugins/dm-access.js";
 
-type SimpleScopedChannelConfig = SimpleDirectMessageConfig & {
-  accounts?: Record<string, Partial<SimpleDirectMessageConfig>>;
-};
-
-const WHATSAPP_USER_JID_RE = /^(\d+)(?::\d+)?@s\.whatsapp\.net$/i;
-const WHATSAPP_LID_RE = /^(\d+)@lid$/i;
 const INTERNAL_MESSAGE_CHANNEL = "webchat";
 
-type AccountConfigWithWrites = {
-  configWrites?: boolean;
-};
-
-type ChannelConfigWithAccounts = {
-  configWrites?: boolean;
-  accounts?: Record<string, AccountConfigWithWrites>;
-};
-
-export type ConfigWriteScope = {
-  channelId?: string | null;
-  accountId?: string | null;
-};
-
-export type ConfigWriteTarget =
-  | { kind: "global" }
-  | { kind: "channel"; scope: { channelId: string } }
-  | { kind: "account"; scope: { channelId: string; accountId: string } }
-  | { kind: "ambiguous"; scopes: ConfigWriteScope[] };
-
-export type ConfigWriteAuthorizationResult =
-  | { allowed: true }
-  | {
-      allowed: false;
-      reason: "ambiguous-target" | "origin-disabled" | "target-disabled";
-      blockedScope?: { kind: "origin" | "target"; scope: ConfigWriteScope };
-    };
+/** Origin scope used when authorizing channel config writes. */
+export type ConfigWriteScope = ConfigWriteScopeLike;
+/** Target account/channel for a config write authorization check. */
+export type ConfigWriteTarget = ConfigWriteTargetLike;
+/** Decision returned by channel config write policy helpers. */
+export type ConfigWriteAuthorizationResult = ConfigWriteAuthorizationResultLike;
 
 type ChannelCrudConfigAdapter<ResolvedAccount> = Pick<
   ChannelConfigAdapter<ResolvedAccount>,
@@ -74,214 +71,43 @@ type ChannelConfigAdapterWithAccessors<ResolvedAccount> = Pick<
   | "resolveDefaultTo"
 >;
 
-function formatPairingApproveHint(channelId: string): string {
-  const listCmd = formatCliCommand(`openclaw pairing list ${channelId}`);
-  const approveCmd = formatCliCommand(`openclaw pairing approve ${channelId} <code>`);
-  return `Approve via: ${listCmd} / ${approveCmd}`;
-}
-
-function buildAccountScopedDmSecurityPolicy(params: {
-  cfg: OpenClawConfig;
-  channelKey: string;
-  accountId?: string | null;
-  fallbackAccountId?: string | null;
-  policy?: string | null;
-  allowFrom?: Array<string | number> | null;
-  defaultPolicy?: string;
-  allowFromPathSuffix?: string;
-  policyPathSuffix?: string;
-  approveChannelId?: string;
-  approveHint?: string;
-  normalizeEntry?: (raw: string) => string;
-}) {
-  const resolvedAccountId = params.accountId ?? params.fallbackAccountId ?? DEFAULT_ACCOUNT_ID;
-  const channelConfig = (params.cfg.channels as Record<string, unknown> | undefined)?.[
-    params.channelKey
-  ] as { accounts?: Record<string, unknown> } | undefined;
-  const useAccountPath = Boolean(channelConfig?.accounts?.[resolvedAccountId]);
-  const basePath = useAccountPath
-    ? `channels.${params.channelKey}.accounts.${resolvedAccountId}.`
-    : `channels.${params.channelKey}.`;
-  const allowFromPath = `${basePath}${params.allowFromPathSuffix ?? ""}`;
-  const policyPath =
-    params.policyPathSuffix != null ? `${basePath}${params.policyPathSuffix}` : undefined;
-
-  return {
-    policy: params.policy ?? params.defaultPolicy ?? "pairing",
-    allowFrom: params.allowFrom ?? [],
-    policyPath,
-    allowFromPath,
-    approveHint:
-      params.approveHint ?? formatPairingApproveHint(params.approveChannelId ?? params.channelKey),
-    normalizeEntry: params.normalizeEntry,
-  };
-}
-
-function normalizeLocalE164(number: string): string {
-  const withoutPrefix = number.replace(/^whatsapp:/i, "").trim();
-  const digits = withoutPrefix.replace(/[^\d+]/g, "");
-  if (digits.startsWith("+")) {
-    return `+${digits.slice(1)}`;
-  }
-  return `+${digits}`;
-}
-
-function stripWhatsAppTargetPrefixes(value: string): string {
-  let candidate = value.trim();
-  for (;;) {
-    const before = candidate;
-    candidate = candidate.replace(/^whatsapp:/i, "").trim();
-    if (candidate === before) {
-      return candidate;
-    }
-  }
-}
-
-function normalizeLocalWhatsAppTarget(value: string): string | null {
-  const candidate = stripWhatsAppTargetPrefixes(value);
-  if (!candidate) {
-    return null;
-  }
-  if (candidate.toLowerCase().endsWith("@g.us")) {
-    const localPart = candidate.slice(0, candidate.length - "@g.us".length);
-    return /^[0-9]+(-[0-9]+)*$/.test(localPart) ? `${localPart}@g.us` : null;
-  }
-  const userMatch = candidate.match(WHATSAPP_USER_JID_RE);
-  const lidMatch = candidate.match(WHATSAPP_LID_RE);
-  const phone = userMatch?.[1] ?? lidMatch?.[1];
-  if (phone) {
-    const normalized = normalizeLocalE164(phone);
-    return normalized.length > 1 ? normalized : null;
-  }
-  if (candidate.includes("@")) {
-    return null;
-  }
-  const normalized = normalizeLocalE164(candidate);
-  return normalized.length > 1 ? normalized : null;
-}
-
-function resolveChannelConfig(
-  cfg: OpenClawConfig,
-  channelId?: string | null,
-): ChannelConfigWithAccounts | undefined {
-  if (!channelId) {
-    return undefined;
-  }
-  return (cfg.channels as Record<string, ChannelConfigWithAccounts> | undefined)?.[channelId];
-}
-
-function resolveChannelAccountConfig(
-  channelConfig: ChannelConfigWithAccounts,
-  accountId?: string | null,
-): AccountConfigWithWrites | undefined {
-  return resolveAccountEntry(channelConfig.accounts, normalizeAccountId(accountId));
-}
-
-function listConfigWriteTargetScopes(target?: ConfigWriteTarget): ConfigWriteScope[] {
-  if (!target || target.kind === "global") {
-    return [];
-  }
-  if (target.kind === "ambiguous") {
-    return target.scopes;
-  }
-  return [target.scope];
-}
-
+/** Returns whether config writes are enabled for a channel/account target. */
 export function resolveChannelConfigWrites(params: {
   cfg: OpenClawConfig;
   channelId?: string | null;
   accountId?: string | null;
 }): boolean {
-  const channelConfig = resolveChannelConfig(params.cfg, params.channelId);
-  if (!channelConfig) {
-    return true;
-  }
-  const accountConfig = resolveChannelAccountConfig(channelConfig, params.accountId);
-  const value = accountConfig?.configWrites ?? channelConfig.configWrites;
-  return value !== false;
+  return resolveChannelConfigWritesShared(params);
 }
 
+/** Authorizes a channel config mutation against origin and target policy. */
 export function authorizeConfigWrite(params: {
   cfg: OpenClawConfig;
   origin?: ConfigWriteScope;
   target?: ConfigWriteTarget;
   allowBypass?: boolean;
 }): ConfigWriteAuthorizationResult {
-  if (params.allowBypass) {
-    return { allowed: true };
-  }
-  if (params.target?.kind === "ambiguous") {
-    return { allowed: false, reason: "ambiguous-target" };
-  }
-  if (
-    params.origin?.channelId &&
-    !resolveChannelConfigWrites({
-      cfg: params.cfg,
-      channelId: params.origin.channelId,
-      accountId: params.origin.accountId,
-    })
-  ) {
-    return {
-      allowed: false,
-      reason: "origin-disabled",
-      blockedScope: { kind: "origin", scope: params.origin },
-    };
-  }
-  const seen = new Set<string>();
-  for (const target of listConfigWriteTargetScopes(params.target)) {
-    if (!target.channelId) {
-      continue;
-    }
-    const key = `${target.channelId}:${normalizeAccountId(target.accountId)}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    if (
-      !resolveChannelConfigWrites({
-        cfg: params.cfg,
-        channelId: target.channelId,
-        accountId: target.accountId,
-      })
-    ) {
-      return {
-        allowed: false,
-        reason: "target-disabled",
-        blockedScope: { kind: "target", scope: target },
-      };
-    }
-  }
-  return { allowed: true };
+  return authorizeConfigWriteShared(params);
 }
 
+/** Returns true when trusted internal message scopes can bypass config write policy. */
 export function canBypassConfigWritePolicy(params: {
   channel?: string | null;
   gatewayClientScopes?: string[] | null;
 }): boolean {
-  return (
-    params.channel?.trim().toLowerCase() === INTERNAL_MESSAGE_CHANNEL &&
-    params.gatewayClientScopes?.includes("operator.admin") === true
-  );
+  return canBypassConfigWritePolicyShared({
+    ...params,
+    isInternalMessageChannel: (channel) =>
+      normalizeOptionalLowercaseString(channel) === INTERNAL_MESSAGE_CHANNEL,
+  });
 }
 
+/** Formats the denial message shown when config write authorization fails. */
 export function formatConfigWriteDeniedMessage(params: {
   result: Exclude<ConfigWriteAuthorizationResult, { allowed: true }>;
   fallbackChannelId?: string | null;
 }): string {
-  if (params.result.reason === "ambiguous-target") {
-    return "⚠️ Channel-initiated /config writes cannot replace channels, channel roots, or accounts collections. Use a more specific path or gateway operator.admin.";
-  }
-
-  const blocked = params.result.blockedScope?.scope;
-  const channelLabel = blocked?.channelId ?? params.fallbackChannelId ?? "this channel";
-  const hint = blocked?.channelId
-    ? blocked.accountId
-      ? `channels.${blocked.channelId}.accounts.${blocked.accountId}.configWrites=true`
-      : `channels.${blocked.channelId}.configWrites=true`
-    : params.fallbackChannelId
-      ? `channels.${params.fallbackChannelId}.configWrites=true`
-      : "channels.<channel>.configWrites=true";
-  return `⚠️ Config writes are disabled for ${channelLabel}. Set ${hint} to enable.`;
+  return formatConfigWriteDeniedMessageShared(params);
 }
 
 type ChannelConfigAccessorParams<Config extends OpenClawConfig = OpenClawConfig> = {
@@ -304,6 +130,18 @@ type MultiAccountChannelConfigAdapterParams<
   resolveAllowFrom: (account: AccessorAccount) => Array<string | number> | null | undefined;
   formatAllowFrom: (allowFrom: Array<string | number>) => string[];
   resolveDefaultTo?: (account: AccessorAccount) => string | number | null | undefined;
+};
+
+type NamedAccountChannelConfigBaseParams<
+  ResolvedAccount,
+  Config extends OpenClawConfig = OpenClawConfig,
+> = {
+  sectionKey: string;
+  listAccountIds: (cfg: Config) => string[];
+  resolveAccount: (cfg: Config, accountId?: string | null) => ResolvedAccount;
+  defaultAccountId: (cfg: Config) => string;
+  inspectAccount?: (cfg: Config, accountId?: string | null) => unknown;
+  clearBaseFields: string[];
 };
 
 /** Coerce mixed allowlist config values into plain strings without trimming or deduping. */
@@ -339,11 +177,16 @@ export function adaptScopedAccountAccessor<Result, Config extends OpenClawConfig
 /** Build the shared allowlist/default target adapter surface for account-scoped channel configs. */
 export function createScopedAccountConfigAccessors<
   ResolvedAccount,
+  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Config preserves caller-specific config subtype for account resolvers.
   Config extends OpenClawConfig = OpenClawConfig,
 >(params: {
+  /** Resolves the account used by read-only config accessors from `{ cfg, accountId }`. */
   resolveAccount: (params: { cfg: Config; accountId?: string | null }) => ResolvedAccount;
+  /** Reads raw allowlist entries from the resolved account. */
   resolveAllowFrom: (account: ResolvedAccount) => Array<string | number> | null | undefined;
+  /** Formats allowlist entries for display or config inspection. */
   formatAllowFrom: (allowFrom: Array<string | number>) => string[];
+  /** Optional default destination selector; omitted when the channel has no default target. */
   resolveDefaultTo?: (account: ResolvedAccount) => string | number | null | undefined;
 }): Pick<
   ChannelConfigAdapter<ResolvedAccount>,
@@ -427,6 +270,8 @@ function resolveAccessorAccountWithFallback<
     | undefined,
   fallbackResolveAccessorAccount: (params: ChannelConfigAccessorParams<Config>) => AccessorAccount,
 ): (params: ChannelConfigAccessorParams<Config>) => AccessorAccount {
+  // Read-only accessors can use a lighter account projection than runtime setup;
+  // fall back to the runtime resolver only when the channel has no projection hook.
   return resolveAccessorAccount ?? fallbackResolveAccessorAccount;
 }
 
@@ -482,23 +327,11 @@ function createChannelConfigAdapterFromBase<
 export function createScopedChannelConfigBase<
   ResolvedAccount,
   Config extends OpenClawConfig = OpenClawConfig,
->(params: {
-  sectionKey: string;
-  listAccountIds: (cfg: Config) => string[];
-  resolveAccount: (cfg: Config, accountId?: string | null) => ResolvedAccount;
-  defaultAccountId: (cfg: Config) => string;
-  inspectAccount?: (cfg: Config, accountId?: string | null) => unknown;
-  clearBaseFields: string[];
-  allowTopLevel?: boolean;
-}): Pick<
-  ChannelConfigAdapter<ResolvedAccount>,
-  | "listAccountIds"
-  | "resolveAccount"
-  | "inspectAccount"
-  | "defaultAccountId"
-  | "setAccountEnabled"
-  | "deleteAccount"
-> {
+>(
+  params: NamedAccountChannelConfigBaseParams<ResolvedAccount, Config> & {
+    allowTopLevel?: boolean;
+  },
+): ChannelCrudConfigAdapter<ResolvedAccount> {
   return createNamedAccountConfigBase<ResolvedAccount, Config>({
     listAccountIds: params.listAccountIds,
     resolveAccount: params.resolveAccount,
@@ -707,23 +540,11 @@ export function createTopLevelChannelConfigAdapter<
 export function createHybridChannelConfigBase<
   ResolvedAccount,
   Config extends OpenClawConfig = OpenClawConfig,
->(params: {
-  sectionKey: string;
-  listAccountIds: (cfg: Config) => string[];
-  resolveAccount: (cfg: Config, accountId?: string | null) => ResolvedAccount;
-  defaultAccountId: (cfg: Config) => string;
-  inspectAccount?: (cfg: Config, accountId?: string | null) => unknown;
-  clearBaseFields: string[];
-  preserveSectionOnDefaultDelete?: boolean;
-}): Pick<
-  ChannelConfigAdapter<ResolvedAccount>,
-  | "listAccountIds"
-  | "resolveAccount"
-  | "inspectAccount"
-  | "defaultAccountId"
-  | "setAccountEnabled"
-  | "deleteAccount"
-> {
+>(
+  params: NamedAccountChannelConfigBaseParams<ResolvedAccount, Config> & {
+    preserveSectionOnDefaultDelete?: boolean;
+  },
+): ChannelCrudConfigAdapter<ResolvedAccount> {
   return createNamedAccountConfigBase<ResolvedAccount, Config>({
     listAccountIds: params.listAccountIds,
     resolveAccount: params.resolveAccount,
@@ -747,6 +568,8 @@ export function createHybridChannelConfigBase<
     deleteAccount({ cfg, accountId }) {
       if (normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID) {
         if (params.preserveSectionOnDefaultDelete) {
+          // Some hybrid channels keep non-account config at the root, so deleting
+          // default account credentials must clear only account-owned fields.
           return clearTopLevelChannelConfigFields({
             cfg,
             sectionKey: params.sectionKey,
@@ -807,6 +630,14 @@ export function createScopedDmSecurityResolver<
   channelKey: string;
   resolvePolicy: (account: ResolvedAccount) => string | null | undefined;
   resolveAllowFrom: (account: ResolvedAccount) => Array<string | number> | null | undefined;
+  resolveAccess?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    account: ResolvedAccount;
+  }) => {
+    dmPolicy?: string | null;
+    allowFrom?: Array<string | number> | null;
+  };
   resolveFallbackAccountId?: (account: ResolvedAccount) => string | null | undefined;
   defaultPolicy?: string;
   allowFromPathSuffix?: string;
@@ -814,6 +645,7 @@ export function createScopedDmSecurityResolver<
   approveChannelId?: string;
   approveHint?: string;
   normalizeEntry?: (raw: string) => string;
+  inheritSharedDefaultsFromDefaultAccount?: boolean;
 }) {
   return ({
     cfg,
@@ -823,104 +655,24 @@ export function createScopedDmSecurityResolver<
     cfg: OpenClawConfig;
     accountId?: string | null;
     account: ResolvedAccount;
-  }) =>
-    buildAccountScopedDmSecurityPolicy({
+  }) => {
+    const access = params.resolveAccess?.({ cfg, accountId, account });
+    return buildAccountScopedDmSecurityPolicy({
       cfg,
       channelKey: params.channelKey,
       accountId,
       fallbackAccountId: params.resolveFallbackAccountId?.(account) ?? account.accountId,
-      policy: params.resolvePolicy(account),
-      allowFrom: params.resolveAllowFrom(account) ?? [],
+      policy: access?.dmPolicy ?? params.resolvePolicy(account),
+      allowFrom: access?.allowFrom ?? params.resolveAllowFrom(account) ?? [],
       defaultPolicy: params.defaultPolicy,
       allowFromPathSuffix: params.allowFromPathSuffix,
       policyPathSuffix: params.policyPathSuffix,
       approveChannelId: params.approveChannelId,
       approveHint: params.approveHint,
       normalizeEntry: params.normalizeEntry,
+      inheritSharedDefaultsFromDefaultAccount: params.inheritSharedDefaultsFromDefaultAccount,
     });
+  };
 }
 
 export { buildAccountScopedDmSecurityPolicy };
-function resolveMergedSimpleChannelAccountConfig(params: {
-  cfg: OpenClawConfig;
-  channelKey: string;
-  accountId?: string | null;
-  omitKeys?: string[];
-}): SimpleDirectMessageConfig {
-  const channelRoot = params.cfg.channels?.[params.channelKey] as
-    | SimpleScopedChannelConfig
-    | undefined;
-  return resolveMergedAccountConfig<SimpleDirectMessageConfig>({
-    channelConfig: channelRoot,
-    accounts: channelRoot?.accounts,
-    accountId: normalizeAccountId(params.accountId),
-    omitKeys: params.omitKeys,
-  });
-}
-
-/** Read the effective WhatsApp allowlist from merged root/account config without registry indirection. */
-export function resolveWhatsAppConfigAllowFrom(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): string[] {
-  return mapAllowFromEntries(
-    resolveMergedSimpleChannelAccountConfig({
-      cfg: params.cfg,
-      channelKey: "whatsapp",
-      accountId: params.accountId,
-      omitKeys: ["defaultAccount"],
-    }).allowFrom,
-  );
-}
-
-/** Format WhatsApp allowlist entries with the same normalization used by the channel plugin. */
-export function formatWhatsAppConfigAllowFromEntries(allowFrom: Array<string | number>): string[] {
-  return allowFrom
-    .map((entry) => String(entry).trim())
-    .filter((entry): entry is string => Boolean(entry))
-    .map((entry) => (entry === "*" ? entry : normalizeLocalWhatsAppTarget(entry)))
-    .filter((entry): entry is string => Boolean(entry));
-}
-
-/** Resolve the effective WhatsApp default recipient after account and root config fallback. */
-export function resolveWhatsAppConfigDefaultTo(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): string | undefined {
-  return resolveOptionalConfigString(
-    resolveMergedSimpleChannelAccountConfig({
-      cfg: params.cfg,
-      channelKey: "whatsapp",
-      accountId: params.accountId,
-      omitKeys: ["defaultAccount"],
-    }).defaultTo,
-  );
-}
-
-/** Read iMessage allowlist entries from merged root/account config without registry indirection. */
-export function resolveIMessageConfigAllowFrom(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): string[] {
-  return mapAllowFromEntries(
-    resolveMergedSimpleChannelAccountConfig({
-      cfg: params.cfg,
-      channelKey: "imessage",
-      accountId: params.accountId,
-    }).allowFrom,
-  );
-}
-
-/** Resolve the effective iMessage default recipient from merged root/account config. */
-export function resolveIMessageConfigDefaultTo(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): string | undefined {
-  return resolveOptionalConfigString(
-    resolveMergedSimpleChannelAccountConfig({
-      cfg: params.cfg,
-      channelKey: "imessage",
-      accountId: params.accountId,
-    }).defaultTo,
-  );
-}

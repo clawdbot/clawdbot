@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Lists source docs pages and routes for docs-aware tooling.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
@@ -64,7 +65,7 @@ function walkMarkdownFiles(dir, base = dir) {
         continue;
       }
       files.push(...walkMarkdownFiles(fullPath, base));
-    } else if (entry.isFile() && entry.name.endsWith(".md")) {
+    } else if (entry.isFile() && /\.(md|mdx)$/i.test(entry.name)) {
       files.push(relative(base, fullPath));
     }
   }
@@ -115,6 +116,11 @@ function extractMetadata(fullPath) {
         } catch {
           // ignore malformed inline arrays
         }
+      } else if (
+        (inline.startsWith('"') && inline.endsWith('"')) ||
+        (inline.startsWith("'") && inline.endsWith("'"))
+      ) {
+        readWhen.push(...compactStrings([inline.slice(1, -1)]));
       }
       continue;
     }

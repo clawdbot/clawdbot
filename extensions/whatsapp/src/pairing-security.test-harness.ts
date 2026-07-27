@@ -1,4 +1,5 @@
-import { vi } from "vitest";
+// Whatsapp plugin module implements pairing security harness behavior.
+import { vi, type Mock } from "vitest";
 
 export type AsyncMock<TArgs extends unknown[] = unknown[], TResult = unknown> = {
   (...args: TArgs): Promise<TResult>;
@@ -6,8 +7,9 @@ export type AsyncMock<TArgs extends unknown[] = unknown[], TResult = unknown> = 
   mockResolvedValue: (value: TResult) => AsyncMock<TArgs, TResult>;
   mockResolvedValueOnce: (value: TResult) => AsyncMock<TArgs, TResult>;
 };
+type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 
-export const loadConfigMock = vi.fn();
+export const loadConfigMock: UnknownMock = vi.fn();
 export const readAllowFromStoreMock = vi.fn() as AsyncMock;
 export const upsertPairingRequestMock = vi.fn() as AsyncMock;
 
@@ -17,33 +19,42 @@ export function resetPairingSecurityMocks(config: Record<string, unknown>) {
   upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
 }
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
+  >("openclaw/plugin-sdk/runtime-config-snapshot");
   return {
     ...actual,
-    loadConfig: (...args: unknown[]) => loadConfigMock(...args),
+    getRuntimeConfig: (...args: unknown[]) => loadConfigMock(...args),
   };
 });
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+vi.mock("openclaw/plugin-sdk/conversation-runtime", () => {
   return {
-    ...actual,
     upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
   };
 });
 
-vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
+vi.mock("openclaw/plugin-sdk/security-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/security-runtime")>(
+    "openclaw/plugin-sdk/security-runtime",
+  );
   return {
     ...actual,
-    readStoreAllowFromForDmPolicy: async (
-      params: Parameters<typeof actual.readStoreAllowFromForDmPolicy>[0],
-    ) =>
-      await actual.readStoreAllowFromForDmPolicy({
-        ...params,
-        readStore: async (provider, accountId) =>
-          (await readAllowFromStoreMock(provider, accountId)) as string[],
-      }),
+    readStoreAllowFromForDmPolicy: async (params: {
+      provider: string;
+      accountId: string;
+      dmPolicy?: string | null;
+      shouldRead?: boolean | null;
+    }) => {
+      if (params.shouldRead === false || params.dmPolicy === "allowlist") {
+        return [];
+      }
+      try {
+        return (await readAllowFromStoreMock(params.provider, params.accountId)) as string[];
+      } catch {
+        return [];
+      }
+    },
   };
 });

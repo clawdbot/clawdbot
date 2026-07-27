@@ -1,0 +1,99 @@
+/**
+ * Contract suite for bundled web search provider registration and runtime behavior.
+ */
+import { beforeAll, describe, expect, it } from "vitest";
+import {
+  pluginRegistrationContractRegistry,
+  resolveWebSearchProviderContractEntriesForPluginId,
+} from "../../plugins/contracts/registry.js";
+import { resolveBundledExplicitWebSearchProvidersFromPublicArtifacts } from "../../plugins/web-provider-public-artifacts.explicit.js";
+import { installWebSearchProviderContractSuite } from "./provider-contract-suites.js";
+
+type WebSearchContractEntry = ReturnType<
+  typeof resolveWebSearchProviderContractEntriesForPluginId
+>[number];
+
+function resolveWebSearchCredentialValue(provider: {
+  id: string;
+  requiresCredential?: boolean;
+  envVars: readonly string[];
+}): unknown {
+  if (provider.requiresCredential === false) {
+    return `${provider.id}-no-key-needed`;
+  }
+  const envVar = provider.envVars.find((entry) => entry.trim().length > 0);
+  if (!envVar) {
+    return `${provider.id}-test`;
+  }
+  if (envVar === "OPENROUTER_API_KEY") {
+    return "openrouter-test";
+  }
+  return envVar.toLowerCase().includes("api_key") ? `${provider.id}-test` : "sk-test";
+}
+
+export function describeWebSearchProviderContracts(pluginId: string) {
+  const providerIds =
+    pluginRegistrationContractRegistry.find((entry) => entry.pluginId === pluginId)
+      ?.webSearchProviderIds ?? [];
+
+  let providerEntries: WebSearchContractEntry[] | undefined;
+  const resolveProviders = (): WebSearchContractEntry[] => {
+    if (providerEntries) {
+      return providerEntries;
+    }
+    const publicArtifactProviders = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
+      onlyPluginIds: [pluginId],
+    });
+    if (publicArtifactProviders) {
+      providerEntries = publicArtifactProviders.map((provider) => ({
+        pluginId: provider.pluginId,
+        provider,
+        credentialValue: resolveWebSearchCredentialValue(provider),
+      }));
+      return providerEntries;
+    }
+    providerEntries = resolveWebSearchProviderContractEntriesForPluginId(pluginId);
+    return providerEntries;
+  };
+
+  describe(`${pluginId} web search provider contract registry load`, () => {
+    beforeAll(() => {
+      // Public-artifact loading is suite setup shared by every provider
+      // assertion; keep its cold module cost out of an arbitrary first test.
+      resolveProviders();
+    });
+
+    it("loads bundled web search providers", () => {
+      expect(resolveProviders().length).toBeGreaterThan(0);
+    });
+  });
+
+  for (const providerId of providerIds) {
+    describe(`${pluginId}:${providerId} web search contract`, () => {
+      installWebSearchProviderContractSuite({
+        provider: () => {
+          const entry = resolveProviders().find(
+            (entryValue) => entryValue.provider.id === providerId,
+          );
+          if (!entry) {
+            throw new Error(
+              `web search provider contract entry missing for ${pluginId}:${providerId}`,
+            );
+          }
+          return entry.provider;
+        },
+        credentialValue: () => {
+          const entry = resolveProviders().find(
+            (entryLocal) => entryLocal.provider.id === providerId,
+          );
+          if (!entry) {
+            throw new Error(
+              `web search provider contract entry missing for ${pluginId}:${providerId}`,
+            );
+          }
+          return entry.credentialValue;
+        },
+      });
+    });
+  }
+}

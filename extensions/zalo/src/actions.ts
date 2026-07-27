@@ -1,11 +1,13 @@
-import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import { listEnabledZaloAccounts } from "./accounts.js";
+// Zalo plugin module implements actions behavior.
+import { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
-  OpenClawConfig,
-} from "./runtime-api.js";
-import { extractToolSend, jsonResult, readStringParam } from "./runtime-api.js";
+} from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
+import { listEnabledZaloAccounts, resolveZaloAccount } from "./accounts.js";
 
 const loadZaloActionsRuntime = createLazyRuntimeNamedExport(
   () => import("./actions.runtime.js"),
@@ -13,22 +15,23 @@ const loadZaloActionsRuntime = createLazyRuntimeNamedExport(
 );
 
 const providerId = "zalo";
+const ZALO_ACTIONS = new Set<ChannelMessageActionName>(["send"]);
 
-function listEnabledAccounts(cfg: OpenClawConfig) {
-  return listEnabledZaloAccounts(cfg).filter(
-    (account) => account.enabled && account.tokenSource !== "none",
-  );
+function listEnabledAccounts(cfg: OpenClawConfig, accountId?: string | null) {
+  return (
+    accountId ? [resolveZaloAccount({ cfg, accountId })] : listEnabledZaloAccounts(cfg)
+  ).filter((account) => account.enabled && account.tokenSource !== "none");
 }
 
 export const zaloMessageActions: ChannelMessageActionAdapter = {
-  describeMessageTool: ({ cfg }) => {
-    const accounts = listEnabledAccounts(cfg);
+  describeMessageTool: ({ cfg, accountId }) => {
+    const accounts = listEnabledAccounts(cfg, accountId);
     if (accounts.length === 0) {
       return null;
     }
-    const actions = new Set<ChannelMessageActionName>(["send"]);
-    return { actions: Array.from(actions), capabilities: [] };
+    return { actions: Array.from(ZALO_ACTIONS), capabilities: [] };
   },
+  supportsAction: ({ action }) => ZALO_ACTIONS.has(action),
   extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
   handleAction: async ({ action, params, cfg, accountId }) => {
     if (action === "send") {
@@ -43,7 +46,7 @@ export const zaloMessageActions: ChannelMessageActionAdapter = {
       const result = await sendMessageZalo(to ?? "", content ?? "", {
         accountId: accountId ?? undefined,
         mediaUrl: mediaUrl ?? undefined,
-        cfg: cfg,
+        cfg,
       });
 
       if (!result.ok) {

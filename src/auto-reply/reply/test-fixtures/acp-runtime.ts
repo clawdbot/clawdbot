@@ -1,5 +1,6 @@
-import type { OpenClawConfig } from "../../../config/config.js";
+// Test fixture helpers for constructing ACP runtime session metadata.
 import type { SessionAcpMeta } from "../../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 
 export function createAcpTestConfig(overrides?: Partial<OpenClawConfig>): OpenClawConfig {
   return {

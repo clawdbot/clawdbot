@@ -1,0 +1,17 @@
+{
+  "id": "tokenjuice",
+  "activation": {
+    "onStartup": false
+  },
+  "name": "tokenjuice",
+  "description": "Compacts exec and bash tool results with tokenjuice reducers.",
+  "catalog": { "featured": true, "order": 60 },
+  "contracts": {
+    "agentToolResultMiddleware": ["openclaw", "codex"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

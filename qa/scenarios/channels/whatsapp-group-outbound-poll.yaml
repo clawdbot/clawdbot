@@ -1,0 +1,19 @@
+title: WhatsApp direct Gateway poll delivers native poll to a group
+scenario:
+  id: whatsapp-group-outbound-poll
+  surface: channels
+  coverage:
+    primary:
+      - channels.provider-specific-channeldata
+  execution:
+    profiles: { "whatsapp:mock-default": 23 }
+    kind: flow
+    channel: whatsapp
+    timeoutMs: 90000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { whatsappScenarioId: whatsapp-group-outbound-poll }
+flow:
+  module: ./live-transports/whatsapp/scenario-runtime.js
+  call: runWhatsAppGroupOutboundPollScenario
+  args: [{ expr: whatsappScenarioContext }]

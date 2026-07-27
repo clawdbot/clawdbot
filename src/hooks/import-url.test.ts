@@ -1,3 +1,4 @@
+// Hook import URL tests cover file URL conversion for hook modules.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

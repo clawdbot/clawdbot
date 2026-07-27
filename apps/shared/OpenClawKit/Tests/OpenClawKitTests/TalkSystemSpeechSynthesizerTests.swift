@@ -1,6 +1,7 @@
 import XCTest
 @testable import OpenClawKit
 
+@MainActor
 final class TalkSystemSpeechSynthesizerTests: XCTestCase {
     func testWatchdogTimeoutDefaultsToLatinProfile() {
         let timeout = TalkSystemSpeechSynthesizer.watchdogTimeoutSeconds(

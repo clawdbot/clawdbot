@@ -1,3 +1,6 @@
+// Matrix plugin module implements target ids behavior.
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+
 type MatrixTarget = { kind: "room"; id: string } | { kind: "user"; id: string };
 const MATRIX_PREFIX = "matrix:";
 const ROOM_PREFIX = "room:";
@@ -7,7 +10,7 @@ const USER_PREFIX = "user:";
 function stripKnownPrefixes(raw: string, prefixes: readonly string[]): string {
   let normalized = raw.trim();
   while (normalized) {
-    const lowered = normalized.toLowerCase();
+    const lowered = normalizeLowercaseStringOrEmpty(normalized);
     const matched = prefixes.find((prefix) => lowered.startsWith(prefix));
     if (!matched) {
       return normalized;
@@ -22,7 +25,7 @@ export function resolveMatrixTargetIdentity(raw: string): MatrixTarget | null {
   if (!normalized) {
     return null;
   }
-  const lowered = normalized.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(normalized);
   if (lowered.startsWith(USER_PREFIX)) {
     const id = normalized.slice(USER_PREFIX.length).trim();
     return id ? { kind: "user", id } : null;
@@ -58,29 +61,6 @@ export function normalizeMatrixMessagingTarget(raw: string): string | undefined 
     USER_PREFIX,
   ]);
   return normalized || undefined;
-}
-
-export function normalizeMatrixDirectoryUserId(raw: string): string | undefined {
-  const normalized = stripKnownPrefixes(raw, [MATRIX_PREFIX, USER_PREFIX]);
-  if (!normalized || normalized === "*") {
-    return undefined;
-  }
-  return isMatrixQualifiedUserId(normalized) ? `user:${normalized}` : normalized;
-}
-
-export function normalizeMatrixDirectoryGroupId(raw: string): string | undefined {
-  const normalized = stripKnownPrefixes(raw, [MATRIX_PREFIX]);
-  if (!normalized || normalized === "*") {
-    return undefined;
-  }
-  const lowered = normalized.toLowerCase();
-  if (lowered.startsWith(ROOM_PREFIX) || lowered.startsWith(CHANNEL_PREFIX)) {
-    return normalized;
-  }
-  if (normalized.startsWith("!")) {
-    return `room:${normalized}`;
-  }
-  return normalized;
 }
 
 export function resolveMatrixDirectUserId(params: {

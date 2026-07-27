@@ -1,11 +1,50 @@
 # OpenClaw docs i18n assets
 
-This folder stores **generated** and **config** files for documentation translations.
+This folder stores translation config for the source docs repo.
 
-## Files
+Generated locale trees and live translation memory now live in the publish repo:
 
-- `glossary.<lang>.json` — preferred term mappings (used in prompt guidance).
-- `<lang>.tm.jsonl` — translation memory (cache) keyed by workflow + model + text hash.
+- repo: `openclaw/docs`
+- local checkout: `~/Projects/openclaw-docs`
+
+## Source of truth
+
+- English docs are authored in `openclaw/openclaw`.
+- The source docs tree lives under `docs/`.
+- The source repo no longer keeps committed generated locale trees such as `docs/zh-CN/**`, `docs/zh-TW/**`, `docs/ja-JP/**`, `docs/es/**`, `docs/pt-BR/**`, `docs/ko/**`, `docs/de/**`, `docs/fr/**`, `docs/hi/**`, `docs/ar/**`, `docs/it/**`, `docs/vi/**`, `docs/nl/**`, `docs/fa/**`, `docs/ru/**`, `docs/tr/**`, `docs/uk/**`, `docs/id/**`, `docs/pl/**`, or `docs/th/**`.
+
+## End-to-end flow
+
+1. Edit English docs in `openclaw/openclaw`.
+2. Push to `main`.
+3. `openclaw/openclaw/.github/workflows/docs-sync-publish.yml` mirrors the docs tree into `openclaw/docs`.
+4. The sync script rewrites the publish `docs/docs.json` so the generated locale picker blocks exist there even though they are no longer committed in the source repo.
+5. `openclaw/docs/.github/workflows/translate-all.yml` waits for `main` to settle, translates only stale or missing locale pages, and uploads per-locale artifacts.
+6. The publish repo finalizer applies successful locale artifacts and pushes one aggregate `chore(i18n): refresh translations` commit.
+7. A weekly `full` run reconciles every locale/page path so flaky model failures are retried without making hot docs commits wait.
+
+## Why the split exists
+
+- Keep generated locale output out of the main product repo.
+- Keep Mintlify on a single published docs tree.
+- Preserve the built-in language switcher for Mintlify-supported generated locales by letting the publish repo own generated locale trees.
+- Keep generated Thai (`th`) and Persian (`fa`) docs plus translation memory even though Mintlify does not currently accept those codes in `navigation.languages`. Their absence from the built-in docs language picker is a host limitation, not a failed translation run.
+
+## Locale visibility
+
+- Control UI supports `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `hi`, `ar`, `it`, `vi`, `nl`, `fa`, `ru`, `tr`, `uk`, `id`, `pl`, and `th`.
+- Docs translation workflows generate the same non-English locale set in `openclaw/docs`.
+- The Mintlify docs language picker can expose only the locales accepted by Mintlify `navigation.languages`; Russian (`ru`) and Hindi (`hi`) are now included in the publish configuration.
+- Do not treat locale visibility in generated `docs/docs.json` as proof that translation artifacts exist. Verify each generated locale folder and its translation memory in `openclaw/docs`.
+
+## Files in this folder
+
+- `glossary.<lang>.json` — preferred term mappings used as prompt guidance.
+- `zh-Hans-navigation.json` — curated zh-Hans Mintlify locale navigation reinserted into the publish repo during sync.
+- `ar-navigation.json`, `de-navigation.json`, `es-navigation.json`, `fr-navigation.json`, `id-navigation.json`, `it-navigation.json`, `ja-navigation.json`, `ko-navigation.json`, `pl-navigation.json`, `pt-BR-navigation.json`, and `tr-navigation.json` — starter locale metadata kept alongside the source repo, but the publish sync now clones the full English nav tree for clone-en locales so translated pages are visible in Mintlify without hand-maintaining per-locale nav JSON.
+- `<lang>.tm.jsonl` — translation memory keyed by workflow + model + text hash.
+
+In this repo, generated locale TM files such as `docs/.i18n/zh-CN.tm.jsonl`, `docs/.i18n/zh-TW.tm.jsonl`, `docs/.i18n/ja-JP.tm.jsonl`, `docs/.i18n/es.tm.jsonl`, `docs/.i18n/pt-BR.tm.jsonl`, `docs/.i18n/ko.tm.jsonl`, `docs/.i18n/de.tm.jsonl`, `docs/.i18n/fr.tm.jsonl`, `docs/.i18n/ar.tm.jsonl`, `docs/.i18n/it.tm.jsonl`, `docs/.i18n/vi.tm.jsonl`, `docs/.i18n/nl.tm.jsonl`, `docs/.i18n/fa.tm.jsonl`, `docs/.i18n/tr.tm.jsonl`, `docs/.i18n/uk.tm.jsonl`, `docs/.i18n/id.tm.jsonl`, `docs/.i18n/pl.tm.jsonl`, and `docs/.i18n/th.tm.jsonl` are intentionally no longer committed.
 
 ## Glossary format
 
@@ -14,9 +53,7 @@ This folder stores **generated** and **config** files for documentation translat
 ```json
 {
   "source": "troubleshooting",
-  "target": "故障排除",
-  "ignore_case": true,
-  "whole_word": false
+  "target": "故障排除"
 }
 ```
 
@@ -25,7 +62,20 @@ Fields:
 - `source`: English (or source) phrase to prefer.
 - `target`: preferred translation output.
 
-## Notes
+## Translation mechanics
 
-- Glossary entries are passed to the model as **prompt guidance** (no deterministic rewrites).
-- The translation memory is updated by `scripts/docs-i18n`.
+- `scripts/docs-i18n` still owns translation generation.
+- Doc mode writes `x-i18n.source_hash` into each translated page.
+- The publish workflow precomputes a pending file list by comparing the current English source hash to the stored locale `x-i18n.source_hash`.
+- If the pending count is `0`, the expensive translation step is skipped entirely.
+- If there are pending files, the workflow translates only those files.
+- Locale workers retry transient model-format failures, but unchanged files stay skipped because the same hash check runs on each retry.
+- Locale workers upload artifacts; the publish repo finalizer commits all successful locale outputs together.
+- Published GitHub releases dispatch one aggregate translation refresh so release docs can catch up without waiting for the weekly reconciliation.
+
+## Operational notes
+
+- Sync metadata is written to `.openclaw-sync/source.json` in the publish repo.
+- Source repo secret: `OPENCLAW_DOCS_SYNC_TOKEN`
+- Publish repo secret: `OPENCLAW_DOCS_I18N_OPENAI_API_KEY`
+- If locale output looks stale, check the `Translate All` workflow in `openclaw/docs` first.

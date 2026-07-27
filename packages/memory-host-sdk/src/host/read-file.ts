@@ -1,18 +1,78 @@
+// Memory Host SDK module implements read file behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveAgentWorkspaceDir } from "../../../../src/agents/agent-scope.js";
-import { resolveMemorySearchConfig } from "../../../../src/agents/memory-search.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import { isFileMissingError, statRegularFile } from "./fs-utils.js";
+import {
+  resolveMemoryHostAgentContextLimits,
+  resolveMemoryHostAgentWorkspaceDir,
+  resolveMemoryHostSearchPathConfig,
+  type OpenClawConfig,
+} from "./config-utils.js";
+import {
+  assertNoSymlinkParents,
+  isFileMissingError,
+  isPathInside,
+  isPathInsideWithRealpath,
+  readRegularFile,
+  root,
+  statRegularFile,
+} from "./fs-utils.js";
 import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
+import {
+  buildMemoryReadResult,
+  DEFAULT_MEMORY_READ_LINES,
+  type MemoryReadResult,
+} from "./read-file-shared.js";
+import { retryTransientMemoryRead } from "./read-retry.js";
 
+// Secure markdown memory-file reader for workspace and configured extra paths.
+
+/** Check that an absolute path stays inside an allowed extra directory without symlink escapes. */
+async function isAllowedAdditionalDirectoryPath(
+  additionalPath: string,
+  absPath: string,
+): Promise<boolean> {
+  if (!isPathInside(additionalPath, absPath)) {
+    return false;
+  }
+  try {
+    await assertNoSymlinkParents({ rootDir: additionalPath, targetPath: absPath });
+  } catch {
+    return false;
+  }
+  if (!isPathInsideWithRealpath(additionalPath, absPath)) {
+    try {
+      await fs.lstat(absPath);
+    } catch (err) {
+      return isFileMissingError(err);
+    }
+    return false;
+  }
+  return true;
+}
+
+/** Return true when a file vanished after path validation but before content read. */
+function isFileDisappearedDuringReadError(err: unknown): boolean {
+  return (
+    isFileMissingError(err) ||
+    Boolean(
+      err &&
+      typeof err === "object" &&
+      "code" in err &&
+      (err as { code?: unknown }).code === "path-mismatch",
+    )
+  );
+}
+
+/** Read a validated memory markdown file from workspace or configured extra paths. */
 export async function readMemoryFile(params: {
   workspaceDir: string;
   extraPaths?: string[];
   relPath: string;
   from?: number;
   lines?: number;
-}): Promise<{ text: string; path: string }> {
+  defaultLines?: number;
+  maxChars?: number;
+}): Promise<MemoryReadResult> {
   const rawPath = params.relPath.trim();
   if (!rawPath) {
     throw new Error("path required");
@@ -33,7 +93,11 @@ export async function readMemoryFile(params: {
           continue;
         }
         if (stat.isDirectory()) {
-          if (absPath === additionalPath || absPath.startsWith(`${additionalPath}${path.sep}`)) {
+          if (await isAllowedAdditionalDirectoryPath(additionalPath, absPath)) {
+            const candidateStat = await fs.lstat(absPath).catch(() => null);
+            if (candidateStat?.isSymbolicLink()) {
+              continue;
+            }
             allowedAdditional = true;
             break;
           }
@@ -52,45 +116,66 @@ export async function readMemoryFile(params: {
   if (!absPath.endsWith(".md")) {
     throw new Error("path required");
   }
+  if (allowedWorkspace) {
+    try {
+      // Workspace reads use the safe fs root so symlink escapes are rejected before file IO.
+      const workspaceRoot = await root(params.workspaceDir);
+      await workspaceRoot.resolve(relPath);
+    } catch (err) {
+      if (isFileMissingError(err)) {
+        return { text: "", path: relPath };
+      }
+      throw err;
+    }
+  }
   const statResult = await statRegularFile(absPath);
   if (statResult.missing) {
     return { text: "", path: relPath };
   }
   let content: string;
   try {
-    content = await fs.readFile(absPath, "utf-8");
+    content = (
+      await retryTransientMemoryRead(
+        () => readRegularFile({ filePath: absPath }),
+        `read memory file ${absPath}`,
+      )
+    ).buffer.toString("utf-8");
   } catch (err) {
-    if (isFileMissingError(err)) {
+    if (isFileDisappearedDuringReadError(err)) {
       return { text: "", path: relPath };
     }
     throw err;
   }
-  if (!params.from && !params.lines) {
-    return { text: content, path: relPath };
-  }
-  const fileLines = content.split("\n");
-  const start = Math.max(1, params.from ?? 1);
-  const count = Math.max(1, params.lines ?? fileLines.length);
-  const slice = fileLines.slice(start - 1, start - 1 + count);
-  return { text: slice.join("\n"), path: relPath };
+  return buildMemoryReadResult({
+    content,
+    relPath,
+    from: params.from,
+    lines: params.lines,
+    defaultLines: params.defaultLines ?? DEFAULT_MEMORY_READ_LINES,
+    maxChars: params.maxChars,
+    suggestReadFallback: allowedWorkspace,
+  });
 }
 
+/** Resolve agent memory config and read one memory file for that agent. */
 export async function readAgentMemoryFile(params: {
   cfg: OpenClawConfig;
   agentId: string;
   relPath: string;
   from?: number;
   lines?: number;
-}): Promise<{ text: string; path: string }> {
-  const settings = resolveMemorySearchConfig(params.cfg, params.agentId);
+}): Promise<MemoryReadResult> {
+  const settings = resolveMemoryHostSearchPathConfig(params.cfg, params.agentId);
   if (!settings) {
     throw new Error("memory search disabled");
   }
+  const contextLimits = resolveMemoryHostAgentContextLimits(params.cfg, params.agentId);
   return await readMemoryFile({
-    workspaceDir: resolveAgentWorkspaceDir(params.cfg, params.agentId),
+    workspaceDir: resolveMemoryHostAgentWorkspaceDir(params.cfg, params.agentId),
     extraPaths: settings.extraPaths,
     relPath: params.relPath,
     from: params.from,
     lines: params.lines,
+    maxChars: contextLimits?.memoryGetMaxChars,
   });
 }

@@ -1,0 +1,94 @@
+/**
+ * Caches and prewarms session managers used by embedded-agent runs.
+ */
+import { Buffer } from "node:buffer";
+import fs from "node:fs/promises";
+import { createExpiringMapCache, isCacheEnabled } from "../../config/cache-utils.js";
+import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
+
+const DEFAULT_SESSION_MANAGER_TTL_MS = 45_000; // 45 seconds
+const MIN_SESSION_MANAGER_CACHE_PRUNE_INTERVAL_MS = 1_000;
+const MAX_SESSION_MANAGER_CACHE_PRUNE_INTERVAL_MS = 30_000;
+
+function resolveSessionManagerCachePruneInterval(ttlMs: number): number {
+  return Math.min(
+    Math.max(ttlMs, MIN_SESSION_MANAGER_CACHE_PRUNE_INTERVAL_MS),
+    MAX_SESSION_MANAGER_CACHE_PRUNE_INTERVAL_MS,
+  );
+}
+
+type SessionManagerCache = {
+  clear: () => void;
+  isSessionManagerCached: (sessionFile: string) => boolean;
+  keys: () => string[];
+  prewarmSessionFile: (sessionFile: string) => Promise<void>;
+  trackSessionManagerAccess: (sessionFile: string) => void;
+};
+
+function createSessionManagerCache(options?: {
+  clock?: () => number;
+  fsModule?: Pick<typeof fs, "open">;
+  ttlMs?: number | (() => number);
+}): SessionManagerCache {
+  const getTtlMs = () =>
+    typeof options?.ttlMs === "function"
+      ? options.ttlMs()
+      : (options?.ttlMs ?? DEFAULT_SESSION_MANAGER_TTL_MS);
+  const cache = createExpiringMapCache<string, true>({
+    ttlMs: getTtlMs,
+    pruneIntervalMs: resolveSessionManagerCachePruneInterval,
+    clock: options?.clock,
+  });
+  const fsModule = options?.fsModule ?? fs;
+
+  return {
+    clear: () => {
+      cache.clear();
+    },
+    isSessionManagerCached: (sessionFile) => cache.get(sessionFile) === true,
+    keys: () => cache.keys(),
+    prewarmSessionFile: async (sessionFile) => {
+      if (!isCacheEnabled(getTtlMs())) {
+        return;
+      }
+      if (parseSqliteSessionFileMarker(sessionFile)) {
+        return;
+      }
+      if (cache.get(sessionFile) === true) {
+        return;
+      }
+
+      try {
+        // Read a small chunk to encourage OS page cache warmup.
+        const handle = await fsModule.open(sessionFile, "r");
+        try {
+          const buffer = Buffer.alloc(4096);
+          await handle.read(buffer, 0, buffer.length, 0);
+        } finally {
+          await handle.close();
+        }
+        cache.set(sessionFile, true);
+      } catch {
+        // File doesn't exist yet, SessionManager will create it
+      }
+    },
+    trackSessionManagerAccess: (sessionFile) => {
+      cache.set(sessionFile, true);
+    },
+  };
+}
+
+const sessionManagerCache = createSessionManagerCache();
+
+export function trackSessionManagerAccess(sessionFile: string): void {
+  sessionManagerCache.trackSessionManagerAccess(sessionFile);
+}
+
+export async function prewarmSessionFile(sessionFile: string): Promise<void> {
+  await sessionManagerCache.prewarmSessionFile(sessionFile);
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.sessionManagerCacheTestApi")] =
+    { createSessionManagerCache };
+}

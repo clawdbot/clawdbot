@@ -1,5 +1,9 @@
-import { spawn } from "node:child_process";
+// Reads effective SSH target config from the local ssh client.
+import { runCommandWithTimeout } from "../process/exec.js";
+import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import type { SshParsedTarget } from "./ssh-tunnel.js";
+
+export const SSH_CONFIG_OUTPUT_MAX_CHARS = 64 * 1024;
 
 export type SshResolvedConfig = {
   user?: string;
@@ -12,8 +16,8 @@ function parsePort(value: string | undefined): number | undefined {
   if (!value) {
     return undefined;
   }
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined || parsed > 65535) {
     return undefined;
   }
   return parsed;
@@ -70,36 +74,18 @@ export async function resolveSshConfig(
   // Use "--" so userHost can't be parsed as an ssh option.
   args.push("--", userHost);
 
-  return await new Promise<SshResolvedConfig | null>((resolve) => {
-    const child = spawn(sshPath, args, {
-      stdio: ["ignore", "pipe", "ignore"],
+  try {
+    const result = await runCommandWithTimeout([sshPath, ...args], {
+      maxOutputBytes: SSH_CONFIG_OUTPUT_MAX_CHARS,
+      outputCapture: "head",
+      terminateOnOutputLimit: true,
+      timeoutMs: Math.max(200, opts.timeoutMs ?? 800),
     });
-    let stdout = "";
-    child.stdout?.setEncoding("utf8");
-    child.stdout?.on("data", (chunk) => {
-      stdout += String(chunk);
-    });
-
-    const timeoutMs = Math.max(200, opts.timeoutMs ?? 800);
-    const timer = setTimeout(() => {
-      try {
-        child.kill("SIGKILL");
-      } finally {
-        resolve(null);
-      }
-    }, timeoutMs);
-
-    child.once("error", () => {
-      clearTimeout(timer);
-      resolve(null);
-    });
-    child.once("exit", (code) => {
-      clearTimeout(timer);
-      if (code !== 0 || !stdout.trim()) {
-        resolve(null);
-        return;
-      }
-      resolve(parseSshConfigOutput(stdout));
-    });
-  });
+    if (result.code !== 0 || result.termination !== "exit" || !result.stdout.trim()) {
+      return null;
+    }
+    return parseSshConfigOutput(result.stdout);
+  } catch {
+    return null;
+  }
 }

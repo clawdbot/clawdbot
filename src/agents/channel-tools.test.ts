@@ -1,19 +1,18 @@
+/** Tests channel action discovery from plugin message-tool descriptors. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
-import {
-  __testing,
-  listAllChannelSupportedActions,
-  listChannelSupportedActions,
-} from "./channel-tools.js";
+import { listAllChannelSupportedActions, listChannelSupportedActions } from "./channel-tools.js";
 
 describe("channel tools", () => {
   const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
 
   beforeEach(() => {
+    // A throwing plugin verifies discovery degrades and logs once instead of
+    // making all channel tooling unavailable.
     const plugin: ChannelPlugin = {
       id: "test",
       meta: {
@@ -35,22 +34,20 @@ describe("channel tools", () => {
       },
     };
 
-    __testing.resetLoggedListActionErrors();
     errorSpy.mockClear();
     setActivePluginRegistry(createTestRegistry([{ pluginId: "test", source: "test", plugin }]));
   });
 
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry([]));
-    errorSpy.mockClear();
   });
 
   it("skips crashing plugins and logs once", () => {
     const cfg = {} as OpenClawConfig;
-    expect(listAllChannelSupportedActions({ cfg })).toEqual([]);
+    expect(listAllChannelSupportedActions({ cfg })).toStrictEqual([]);
     expect(errorSpy).toHaveBeenCalledTimes(1);
 
-    expect(listAllChannelSupportedActions({ cfg })).toEqual([]);
+    expect(listAllChannelSupportedActions({ cfg })).toStrictEqual([]);
     expect(errorSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -81,8 +78,8 @@ describe("channel tools", () => {
     setActivePluginRegistry(createTestRegistry([{ pluginId: "polltest", source: "test", plugin }]));
 
     const cfg = {} as OpenClawConfig;
-    expect(listChannelSupportedActions({ cfg, channel: "polltest" })).toEqual([]);
-    expect(listAllChannelSupportedActions({ cfg })).toEqual([]);
+    expect(listChannelSupportedActions({ cfg, channel: "polltest" })).toStrictEqual([]);
+    expect(listAllChannelSupportedActions({ cfg })).toStrictEqual([]);
   });
 
   it("normalizes channel aliases before listing supported actions", () => {

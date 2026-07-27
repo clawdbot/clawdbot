@@ -1,134 +1,124 @@
+/**
+ * Implements subagent control operations: list, kill, steer, and send-message.
+ * The module enforces controller ownership before mutating child sessions or
+ * routing internal follow-up messages.
+ */
 import crypto from "node:crypto";
-import { clearSessionQueues } from "../auto-reply/reply/queue.js";
-import {
-  resolveSubagentLabel,
-  resolveSubagentTargetFromRuns,
-  sortSubagentRuns,
-  type SubagentTargetResolution,
-} from "../auto-reply/reply/subagents-utils.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { SessionEntry } from "../config/sessions.js";
-import { loadSessionStore, resolveStorePath, updateSessionStore } from "../config/sessions.js";
+import type { ClearSessionQueueResult } from "../auto-reply/reply/queue.js";
+import { resolveSubagentLabel, sortSubagentRuns } from "../auto-reply/reply/subagents-utils.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { loadSessionEntry, patchSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { logVerbose } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { isSubagentSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
-  isSubagentSessionKey,
-  parseAgentSessionKey,
-  type ParsedAgentSessionKey,
-} from "../routing/session-key.js";
-import {
-  formatDurationCompact,
-  formatTokenUsageDisplay,
-  resolveTotalTokens,
-  truncateLine,
-} from "../shared/subagents-format.js";
+  SUBAGENT_KILL_TASK_ERROR,
+  type DetachedTaskTerminalState,
+} from "../tasks/detached-task-runtime-contract.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
-import { abortEmbeddedPiRun } from "./pi-embedded.js";
+import {
+  readLatestAssistantReplySnapshot,
+  waitForAgentRunAndReadUpdatedAssistantReply,
+} from "./run-wait.js";
 import { resolveStoredSubagentCapabilities } from "./subagent-capabilities.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
+import { buildLatestSubagentRunIndex, resolveSessionEntryForKey } from "./subagent-list.js";
+import {
+  resolveFinalizedSubagentTaskState,
+  resolveKilledSubagentTaskEndedAt,
+} from "./subagent-registry-completion.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
+import {
+  getLatestSubagentRunByChildSessionKey,
+  listSubagentRunsForController,
+} from "./subagent-registry-read.js";
+import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
   clearSubagentRunSteerRestart,
   countPendingDescendantRuns,
-  getLatestSubagentRunByChildSessionKey,
-  getSubagentSessionRuntimeMs,
-  getSubagentSessionStartedAt,
-  listSubagentRunsForController,
   markSubagentRunTerminated,
   markSubagentRunForSteerRestart,
   replaceSubagentRunAfterSteer,
-  type SubagentRunRecord,
 } from "./subagent-registry.js";
-import {
-  extractAssistantText,
-  resolveInternalSessionKey,
-  resolveMainSessionAlias,
-  stripToolMessages,
-} from "./tools/sessions-helpers.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
+/** Recent-run default window used by subagent control UI/tools. */
 export const DEFAULT_RECENT_MINUTES = 30;
+/** Maximum recent-run window accepted by subagent control UI/tools. */
 export const MAX_RECENT_MINUTES = 24 * 60;
-export const MAX_STEER_MESSAGE_CHARS = 4_000;
-export const STEER_RATE_LIMIT_MS = 2_000;
-export const STEER_ABORT_SETTLE_TIMEOUT_MS = 5_000;
+const STEER_RATE_LIMIT_MS = 2_000;
+const STEER_ABORT_SETTLE_TIMEOUT_MS = 5_000;
 const SUBAGENT_REPLY_HISTORY_LIMIT = 50;
 
 const steerRateLimit = new Map<string, number>();
 
 type GatewayCaller = typeof callGateway;
+type PatchSessionEntry = typeof patchSessionEntry;
+type AbortEmbeddedAgentRun = (sessionId: string) => boolean;
+type IsEmbeddedAgentRunActive = (sessionId: string) => boolean;
+type ClearSessionQueues = (keys: Array<string | undefined>) => ClearSessionQueueResult;
 
 const defaultSubagentControlDeps = {
   callGateway,
+  patchSessionEntry,
 };
 
 let subagentControlDeps: {
   callGateway: GatewayCaller;
+  patchSessionEntry: PatchSessionEntry;
+  abortEmbeddedAgentRun?: AbortEmbeddedAgentRun;
+  isEmbeddedAgentRunActive?: IsEmbeddedAgentRunActive;
+  clearSessionQueues?: ClearSessionQueues;
 } = defaultSubagentControlDeps;
 
-export type SessionEntryResolution = {
-  storePath: string;
-  entry: SessionEntry | undefined;
-};
+const subagentControlRuntimeLoader = createLazyImportLoader(
+  () => import("./subagent-control.runtime.js"),
+);
 
+function loadSubagentControlRuntime() {
+  return subagentControlRuntimeLoader.load();
+}
+
+async function resolveSubagentControlRuntime(): Promise<{
+  abortEmbeddedAgentRun: AbortEmbeddedAgentRun;
+  isEmbeddedAgentRunActive: IsEmbeddedAgentRunActive;
+  clearSessionQueues: ClearSessionQueues;
+}> {
+  if (
+    subagentControlDeps.abortEmbeddedAgentRun &&
+    subagentControlDeps.isEmbeddedAgentRunActive &&
+    subagentControlDeps.clearSessionQueues
+  ) {
+    return {
+      abortEmbeddedAgentRun: subagentControlDeps.abortEmbeddedAgentRun,
+      isEmbeddedAgentRunActive: subagentControlDeps.isEmbeddedAgentRunActive,
+      clearSessionQueues: subagentControlDeps.clearSessionQueues,
+    };
+  }
+  const runtime = await loadSubagentControlRuntime();
+  return {
+    abortEmbeddedAgentRun:
+      subagentControlDeps.abortEmbeddedAgentRun ?? runtime.abortEmbeddedAgentRun,
+    isEmbeddedAgentRunActive:
+      subagentControlDeps.isEmbeddedAgentRunActive ?? runtime.isEmbeddedAgentRunActive,
+    clearSessionQueues: subagentControlDeps.clearSessionQueues ?? runtime.clearSessionQueues,
+  };
+}
+
+/** Controller identity and capability scope resolved from the caller session. */
 export type ResolvedSubagentController = {
   controllerSessionKey: string;
   callerSessionKey: string;
   callerIsSubagent: boolean;
   controlScope: "children" | "none";
 };
-
-export type SubagentListItem = {
-  index: number;
-  line: string;
-  runId: string;
-  sessionKey: string;
-  label: string;
-  task: string;
-  status: string;
-  pendingDescendants: number;
-  runtime: string;
-  runtimeMs: number;
-  childSessions?: string[];
-  model?: string;
-  totalTokens?: number;
-  startedAt?: number;
-  endedAt?: number;
-};
-
-export type BuiltSubagentList = {
-  total: number;
-  active: SubagentListItem[];
-  recent: SubagentListItem[];
-  text: string;
-};
-
-function resolveStorePathForKey(
-  cfg: OpenClawConfig,
-  key: string,
-  parsed?: ParsedAgentSessionKey | null,
-) {
-  return resolveStorePath(cfg.session?.store, {
-    agentId: parsed?.agentId,
-  });
-}
-
-export function resolveSessionEntryForKey(params: {
-  cfg: OpenClawConfig;
-  key: string;
-  cache: Map<string, Record<string, SessionEntry>>;
-}): SessionEntryResolution {
-  const parsed = parseAgentSessionKey(params.key);
-  const storePath = resolveStorePathForKey(params.cfg, params.key, parsed);
-  let store = params.cache.get(storePath);
-  if (!store) {
-    store = loadSessionStore(storePath);
-    params.cache.set(storePath, store);
-  }
-  return {
-    storePath,
-    entry: store[params.key],
-  };
-}
-
+/** Resolves which subagent runs the caller is allowed to control. */
 export function resolveSubagentController(params: {
   cfg: OpenClawConfig;
   agentSessionKey?: string;
@@ -159,235 +149,27 @@ export function resolveSubagentController(params: {
   };
 }
 
+function isSubagentRunVisibleToSession(entry: SubagentRunRecord, sessionKey: string): boolean {
+  const controllerKey = entry.controllerSessionKey?.trim();
+  const requesterKey = entry.requesterSessionKey.trim();
+  // Completion routing can target a different session than control ownership.
+  // Both owners may read the run, while ensureControllerOwnsRun still gates mutations.
+  return controllerKey === sessionKey || requesterKey === sessionKey;
+}
+
+/** Lists latest child runs controlled by a session key. */
 export function listControlledSubagentRuns(controllerSessionKey: string): SubagentRunRecord[] {
-  const filtered: SubagentRunRecord[] = [];
-  for (const entry of sortSubagentRuns(listSubagentRunsForController(controllerSessionKey))) {
-    const latest = getLatestSubagentRunByChildSessionKey(entry.childSessionKey);
-    const latestControllerSessionKey =
-      latest?.controllerSessionKey?.trim() || latest?.requesterSessionKey?.trim();
-    if (
-      !latest ||
-      latest.runId !== entry.runId ||
-      latestControllerSessionKey !== controllerSessionKey
-    ) {
-      continue;
-    }
-    filtered.push(entry);
+  const key = controllerSessionKey.trim();
+  if (!key) {
+    return [];
   }
-  return filtered;
-}
 
-export function createPendingDescendantCounter() {
-  const pendingDescendantCache = new Map<string, number>();
-  return (sessionKey: string) => {
-    if (pendingDescendantCache.has(sessionKey)) {
-      return pendingDescendantCache.get(sessionKey) ?? 0;
-    }
-    const pending = Math.max(0, countPendingDescendantRuns(sessionKey));
-    pendingDescendantCache.set(sessionKey, pending);
-    return pending;
-  };
-}
-
-export function isActiveSubagentRun(
-  entry: SubagentRunRecord,
-  pendingDescendantCount: (sessionKey: string) => number,
-) {
-  return !entry.endedAt || pendingDescendantCount(entry.childSessionKey) > 0;
-}
-
-function resolveLatestAssistantReplySnapshot(messages: unknown[]): {
-  text?: string;
-  fingerprint?: string;
-} {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    const text = extractAssistantText(message);
-    if (!text) {
-      continue;
-    }
-    let fingerprint: string | undefined;
-    try {
-      fingerprint = JSON.stringify(message);
-    } catch {
-      fingerprint = text;
-    }
-    return { text, fingerprint };
-  }
-  return {};
-}
-
-function resolveRunStatus(entry: SubagentRunRecord, options?: { pendingDescendants?: number }) {
-  const pendingDescendants = Math.max(0, options?.pendingDescendants ?? 0);
-  if (pendingDescendants > 0) {
-    const childLabel = pendingDescendants === 1 ? "child" : "children";
-    return `active (waiting on ${pendingDescendants} ${childLabel})`;
-  }
-  if (!entry.endedAt) {
-    return "running";
-  }
-  const status = entry.outcome?.status ?? "done";
-  if (status === "ok") {
-    return "done";
-  }
-  if (status === "error") {
-    return "failed";
-  }
-  return status;
-}
-
-function resolveModelRef(entry?: SessionEntry) {
-  const model = typeof entry?.model === "string" ? entry.model.trim() : "";
-  const provider = typeof entry?.modelProvider === "string" ? entry.modelProvider.trim() : "";
-  if (model.includes("/")) {
-    return model;
-  }
-  if (model && provider) {
-    return `${provider}/${model}`;
-  }
-  if (model) {
-    return model;
-  }
-  if (provider) {
-    return provider;
-  }
-  const overrideModel = typeof entry?.modelOverride === "string" ? entry.modelOverride.trim() : "";
-  const overrideProvider =
-    typeof entry?.providerOverride === "string" ? entry.providerOverride.trim() : "";
-  if (overrideModel.includes("/")) {
-    return overrideModel;
-  }
-  if (overrideModel && overrideProvider) {
-    return `${overrideProvider}/${overrideModel}`;
-  }
-  if (overrideModel) {
-    return overrideModel;
-  }
-  return overrideProvider || undefined;
-}
-
-function resolveModelDisplay(entry?: SessionEntry, fallbackModel?: string) {
-  const modelRef = resolveModelRef(entry) || fallbackModel || undefined;
-  if (!modelRef) {
-    return "model n/a";
-  }
-  const slash = modelRef.lastIndexOf("/");
-  if (slash >= 0 && slash < modelRef.length - 1) {
-    return modelRef.slice(slash + 1);
-  }
-  return modelRef;
-}
-
-function buildListText(params: {
-  active: Array<{ line: string }>;
-  recent: Array<{ line: string }>;
-  recentMinutes: number;
-}) {
-  const lines: string[] = [];
-  lines.push("active subagents:");
-  if (params.active.length === 0) {
-    lines.push("(none)");
-  } else {
-    lines.push(...params.active.map((entry) => entry.line));
-  }
-  lines.push("");
-  lines.push(`recent (last ${params.recentMinutes}m):`);
-  if (params.recent.length === 0) {
-    lines.push("(none)");
-  } else {
-    lines.push(...params.recent.map((entry) => entry.line));
-  }
-  return lines.join("\n");
-}
-
-export function buildSubagentList(params: {
-  cfg: OpenClawConfig;
-  runs: SubagentRunRecord[];
-  recentMinutes: number;
-  taskMaxChars?: number;
-}): BuiltSubagentList {
-  const now = Date.now();
-  const recentCutoff = now - params.recentMinutes * 60_000;
-  const dedupedRuns: SubagentRunRecord[] = [];
-  const seenChildSessionKeys = new Set<string>();
-  for (const entry of sortSubagentRuns(params.runs)) {
-    if (seenChildSessionKeys.has(entry.childSessionKey)) {
-      continue;
-    }
-    seenChildSessionKeys.add(entry.childSessionKey);
-    dedupedRuns.push(entry);
-  }
-  const cache = new Map<string, Record<string, SessionEntry>>();
-  const pendingDescendantCount = createPendingDescendantCounter();
-  let index = 1;
-  const buildListEntry = (entry: SubagentRunRecord, runtimeMs: number) => {
-    const sessionEntry = resolveSessionEntryForKey({
-      cfg: params.cfg,
-      key: entry.childSessionKey,
-      cache,
-    }).entry;
-    const totalTokens = resolveTotalTokens(sessionEntry);
-    const usageText = formatTokenUsageDisplay(sessionEntry);
-    const pendingDescendants = pendingDescendantCount(entry.childSessionKey);
-    const status = resolveRunStatus(entry, {
-      pendingDescendants,
-    });
-    const childSessions = Array.from(
-      new Set(
-        listSubagentRunsForController(entry.childSessionKey)
-          .map((run) => run.childSessionKey?.trim())
-          .filter((childSessionKey): childSessionKey is string => Boolean(childSessionKey))
-          .filter((childSessionKey) => {
-            const latest = getLatestSubagentRunByChildSessionKey(childSessionKey);
-            const latestControllerSessionKey =
-              latest?.controllerSessionKey?.trim() || latest?.requesterSessionKey?.trim();
-            return latestControllerSessionKey === entry.childSessionKey;
-          }),
-      ),
-    );
-    const runtime = formatDurationCompact(runtimeMs);
-    const label = truncateLine(resolveSubagentLabel(entry), 48);
-    const task = truncateLine(entry.task.trim(), params.taskMaxChars ?? 72);
-    const line = `${index}. ${label} (${resolveModelDisplay(sessionEntry, entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
-    const view: SubagentListItem = {
-      index,
-      line,
-      runId: entry.runId,
-      sessionKey: entry.childSessionKey,
-      label,
-      task,
-      status,
-      pendingDescendants,
-      runtime,
-      runtimeMs,
-      ...(childSessions.length > 0 ? { childSessions } : {}),
-      model: resolveModelRef(sessionEntry) || entry.model,
-      totalTokens,
-      startedAt: getSubagentSessionStartedAt(entry),
-      ...(entry.endedAt ? { endedAt: entry.endedAt } : {}),
-    };
-    index += 1;
-    return view;
-  };
-  const active = dedupedRuns
-    .filter((entry) => isActiveSubagentRun(entry, pendingDescendantCount))
-    .map((entry) => buildListEntry(entry, getSubagentSessionRuntimeMs(entry, now) ?? 0));
-  const recent = dedupedRuns
-    .filter(
-      (entry) =>
-        !isActiveSubagentRun(entry, pendingDescendantCount) &&
-        !!entry.endedAt &&
-        (entry.endedAt ?? 0) >= recentCutoff,
-    )
-    .map((entry) =>
-      buildListEntry(entry, getSubagentSessionRuntimeMs(entry, entry.endedAt ?? now) ?? 0),
-    );
-  return {
-    total: dedupedRuns.length,
-    active,
-    recent,
-    text: buildListText({ active, recent, recentMinutes: params.recentMinutes }),
-  };
+  const snapshot = getSubagentRunsSnapshotForRead(subagentRuns);
+  const latestByChildSessionKey = buildLatestSubagentRunIndex(snapshot).latestByChildSessionKey;
+  const filtered = Array.from(latestByChildSessionKey.values()).filter((entry) =>
+    isSubagentRunVisibleToSession(entry, key),
+  );
+  return sortSubagentRuns(filtered);
 }
 
 function ensureControllerOwnsRun(params: {
@@ -401,12 +183,113 @@ function ensureControllerOwnsRun(params: {
   return "Subagents can only control runs spawned from their own session.";
 }
 
+function isFinishedForSteerControl(entry: SubagentRunRecord, hasPendingDescendants: boolean) {
+  return Boolean(entry.endedAt) && entry.pauseReason !== "sessions_yield" && !hasPendingDescendants;
+}
+
+type SubagentKillTargetState =
+  | { state: "finalizing" }
+  | { state: "terminal"; task: DetachedTaskTerminalState };
+
+function resolveSubagentKillTargetState(
+  entry: SubagentRunRecord,
+): SubagentKillTargetState | undefined {
+  if (
+    entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+    entry.suppressAnnounceReason !== "steer-restart"
+  ) {
+    const taskEndedAt = resolveKilledSubagentTaskEndedAt(entry);
+    return typeof taskEndedAt === "number"
+      ? {
+          state: "terminal",
+          task: {
+            status: "cancelled",
+            endedAt: taskEndedAt,
+            lastEventAt: taskEndedAt,
+            error: SUBAGENT_KILL_TASK_ERROR,
+            progressSummary: entry.completion?.resultText ?? undefined,
+            terminalSummary: null,
+          },
+        }
+      : undefined;
+  }
+  const terminal = resolveFinalizedSubagentTaskState(entry);
+  if (terminal) {
+    return { state: "terminal", task: terminal };
+  }
+  return typeof entry.endedAt === "number" &&
+    entry.pauseReason !== "sessions_yield" &&
+    (entry.endedReason !== SUBAGENT_ENDED_REASON_KILLED ||
+      entry.suppressAnnounceReason === "steer-restart")
+    ? { state: "finalizing" }
+    : undefined;
+}
+
+async function persistSubagentAbortedLastRun(params: {
+  childSessionKey: string;
+  storePath: string;
+  hasSessionEntry: boolean;
+  abortedLastRun: boolean;
+}): Promise<void> {
+  if (!params.hasSessionEntry) {
+    return;
+  }
+  try {
+    await subagentControlDeps.patchSessionEntry(
+      { storePath: params.storePath, sessionKey: params.childSessionKey },
+      (current) => ({
+        ...current,
+        abortedLastRun: params.abortedLastRun,
+        updatedAt: Date.now(),
+      }),
+      { replaceEntry: true },
+    );
+  } catch (error) {
+    logVerbose(
+      `subagents control kill: failed to persist abortedLastRun=${params.abortedLastRun} for ${params.childSessionKey}: ${formatErrorMessage(error)}`,
+    );
+  }
+}
+
+function markSubagentRunTerminatedBestEffort(
+  params: Parameters<typeof markSubagentRunTerminated>[0],
+): number {
+  try {
+    return markSubagentRunTerminated(params);
+  } catch (error) {
+    // The registry transition rolled back atomically. Keep multi-run control
+    // moving so one persistence failure cannot leave siblings running.
+    logVerbose(
+      `subagents control kill: failed to persist ${params.runId ?? params.childSessionKey ?? "unknown"}: ${formatErrorMessage(error)}`,
+    );
+    return 0;
+  }
+}
+
 async function killSubagentRun(params: {
   cfg: OpenClawConfig;
   entry: SubagentRunRecord;
   cache: Map<string, Record<string, SessionEntry>>;
-}): Promise<{ killed: boolean; sessionId?: string }> {
-  if (params.entry.endedAt) {
+}): Promise<{
+  killed: boolean;
+  sessionId?: string;
+  targetState?: SubagentKillTargetState;
+}> {
+  const initialTargetState = resolveSubagentKillTargetState(params.entry);
+  if (initialTargetState) {
+    if (
+      params.entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+      params.entry.suppressAnnounceReason !== "steer-restart"
+    ) {
+      markSubagentRunTerminatedBestEffort({
+        runId: params.entry.runId,
+        childSessionKey: params.entry.childSessionKey,
+        reason: "killed",
+      });
+    }
+    return { killed: false, targetState: initialTargetState };
+  }
+  if (params.entry.endedAt && params.entry.pauseReason !== "sessions_yield") {
     return { killed: false };
   }
   const childSessionKey = params.entry.childSessionKey;
@@ -416,39 +299,69 @@ async function killSubagentRun(params: {
     cache: params.cache,
   });
   const sessionId = resolved.entry?.sessionId;
-  const aborted = sessionId ? abortEmbeddedPiRun(sessionId) : false;
-  const cleared = clearSessionQueues([childSessionKey, sessionId]);
+  const runtime = await resolveSubagentControlRuntime();
+  const targetStateAfterRuntimeLoad = resolveSubagentKillTargetState(params.entry);
+  if (targetStateAfterRuntimeLoad) {
+    if (
+      params.entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+      params.entry.suppressAnnounceReason !== "steer-restart"
+    ) {
+      markSubagentRunTerminatedBestEffort({
+        runId: params.entry.runId,
+        childSessionKey,
+        reason: "killed",
+      });
+    }
+    return { killed: false, sessionId, targetState: targetStateAfterRuntimeLoad };
+  }
+  const active = sessionId ? runtime.isEmbeddedAgentRunActive(sessionId) : false;
+  const aborted = sessionId ? runtime.abortEmbeddedAgentRun(sessionId) : false;
+  const cleared = runtime.clearSessionQueues([childSessionKey, sessionId]);
   if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
     logVerbose(
       `subagents control kill: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
     );
   }
-  if (resolved.entry) {
-    try {
-      await updateSessionStore(resolved.storePath, (store) => {
-        const current = store[childSessionKey];
-        if (!current) {
-          return;
-        }
-        current.abortedLastRun = true;
-        current.updatedAt = Date.now();
-        store[childSessionKey] = current;
-      });
-    } catch (error) {
-      logVerbose(
-        `subagents control kill: failed to persist abortedLastRun for ${childSessionKey}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
+  if (active && !aborted) {
+    return { killed: false, sessionId };
   }
-  const marked = markSubagentRunTerminated({
+  const persistAbortedLastRun = (abortedLastRun: boolean) =>
+    persistSubagentAbortedLastRun({
+      childSessionKey,
+      storePath: resolved.storePath,
+      hasSessionEntry: resolved.entry !== undefined,
+      abortedLastRun,
+    });
+  await persistAbortedLastRun(true);
+  const targetState = resolveSubagentKillTargetState(params.entry);
+  if (targetState) {
+    const killedTarget =
+      targetState.state === "terminal" &&
+      targetState.task.status === "cancelled" &&
+      targetState.task.error === SUBAGENT_KILL_TASK_ERROR;
+    if (killedTarget) {
+      markSubagentRunTerminatedBestEffort({
+        runId: params.entry.runId,
+        childSessionKey,
+        reason: "killed",
+      });
+    } else {
+      await persistAbortedLastRun(false);
+    }
+    const killed =
+      killedTarget && (aborted || cleared.followupCleared > 0 || cleared.laneCleared > 0);
+    return { killed, sessionId, targetState };
+  }
+  const marked = markSubagentRunTerminatedBestEffort({
     runId: params.entry.runId,
     childSessionKey,
     reason: "killed",
   });
   const killed = marked > 0 || aborted || cleared.followupCleared > 0 || cleared.laneCleared > 0;
-  return { killed, sessionId };
+  return {
+    killed,
+    sessionId,
+  };
 }
 
 async function cascadeKillChildren(params: {
@@ -473,10 +386,7 @@ async function cascadeKillChildren(params: {
     ) {
       continue;
     }
-    const existing = childRunsBySessionKey.get(childKey);
-    if (!existing || run.createdAt >= existing.createdAt) {
-      childRunsBySessionKey.set(childKey, run);
-    }
+    childRunsBySessionKey.set(childKey, run);
   }
   const childRuns = Array.from(childRunsBySessionKey.values());
   const seenChildSessionKeys = params.seenChildSessionKeys ?? new Set<string>();
@@ -490,7 +400,7 @@ async function cascadeKillChildren(params: {
     }
     seenChildSessionKeys.add(childKey);
 
-    if (!run.endedAt) {
+    if (!run.endedAt || run.pauseReason === "sessions_yield") {
       const stopResult = await killSubagentRun({
         cfg: params.cfg,
         entry: run,
@@ -515,6 +425,7 @@ async function cascadeKillChildren(params: {
   return { killed, labels };
 }
 
+/** Kills every currently controlled child run and its descendants. */
 export async function killAllControlledSubagentRuns(params: {
   cfg: OpenClawConfig;
   controller: ResolvedSubagentController;
@@ -543,7 +454,7 @@ export async function killAllControlledSubagentRuns(params: {
     }
     seenChildSessionKeys.add(childKey);
 
-    if (!currentEntry.endedAt) {
+    if (!currentEntry.endedAt || currentEntry.pauseReason === "sessions_yield") {
       const stopResult = await killSubagentRun({ cfg: params.cfg, entry: currentEntry, cache });
       if (stopResult.killed) {
         killed += 1;
@@ -563,6 +474,7 @@ export async function killAllControlledSubagentRuns(params: {
   return { status: "ok" as const, killed, labels: killedLabels };
 }
 
+/** Kills one controlled subagent run and any active descendants. */
 export async function killControlledSubagentRun(params: {
   cfg: OpenClawConfig;
   controller: ResolvedSubagentController;
@@ -639,6 +551,7 @@ export async function killControlledSubagentRun(params: {
   };
 }
 
+/** Admin kill path for a subagent session key, bypassing caller ownership checks. */
 export async function killSubagentRunAdmin(params: { cfg: OpenClawConfig; sessionKey: string }) {
   const targetSessionKey = params.sessionKey.trim();
   if (!targetSessionKey) {
@@ -662,10 +575,38 @@ export async function killSubagentRunAdmin(params: { cfg: OpenClawConfig; sessio
     cache: killCache,
     seenChildSessionKeys,
   });
+  // Descendant cleanup can yield long enough for the target run to finish.
+  // Return the freshest registry state so task cancellation cannot make a stale kill sticky.
+  const targetState = resolveSubagentKillTargetState(entry) ?? stopResult.targetState;
+  const killedTarget =
+    targetState?.state === "terminal" &&
+    targetState.task.status === "cancelled" &&
+    targetState.task.error === SUBAGENT_KILL_TASK_ERROR;
+  const stopResultAlreadyClearedAbort =
+    stopResult.targetState !== undefined &&
+    !(
+      stopResult.targetState.state === "terminal" &&
+      stopResult.targetState.task.status === "cancelled" &&
+      stopResult.targetState.task.error === SUBAGENT_KILL_TASK_ERROR
+    );
+  if (targetState && !killedTarget && !stopResultAlreadyClearedAbort) {
+    const resolved = resolveSessionEntryForKey({
+      cfg: params.cfg,
+      key: targetSessionKey,
+      cache: killCache,
+    });
+    await persistSubagentAbortedLastRun({
+      childSessionKey: targetSessionKey,
+      storePath: resolved.storePath,
+      hasSessionEntry: resolved.entry !== undefined,
+      abortedLastRun: false,
+    });
+  }
 
   return {
     found: true as const,
     killed: stopResult.killed || cascade.killed > 0,
+    ...(targetState ? { targetState } : {}),
     runId: entry.runId,
     sessionKey: entry.childSessionKey,
     cascadeKilled: cascade.killed,
@@ -673,6 +614,7 @@ export async function killSubagentRunAdmin(params: { cfg: OpenClawConfig; sessio
   };
 }
 
+/** Restarts a controlled subagent run with a new steering message. */
 export async function steerControlledSubagentRun(params: {
   cfg: OpenClawConfig;
   controller: ResolvedSubagentController;
@@ -709,6 +651,14 @@ export async function steerControlledSubagentRun(params: {
       error: ownershipError,
     };
   }
+  if (params.entry.collect) {
+    return {
+      status: "forbidden",
+      runId: params.entry.runId,
+      sessionKey: params.entry.childSessionKey,
+      error: "Collector subagents cannot be steered; use agents_wait or cancel the task.",
+    };
+  }
   if (params.controller.controlScope !== "children") {
     return {
       status: "forbidden",
@@ -718,7 +668,7 @@ export async function steerControlledSubagentRun(params: {
     };
   }
   const targetHasPendingDescendants = countPendingDescendantRuns(params.entry.childSessionKey) > 0;
-  if (params.entry.endedAt && !targetHasPendingDescendants) {
+  if (isFinishedForSteerControl(params.entry, targetHasPendingDescendants)) {
     return {
       status: "done",
       runId: params.entry.runId,
@@ -735,12 +685,13 @@ export async function steerControlledSubagentRun(params: {
     };
   }
   const currentEntry = getLatestSubagentRunByChildSessionKey(params.entry.childSessionKey);
-  const currentHasPendingDescendants =
-    currentEntry && countPendingDescendantRuns(currentEntry.childSessionKey) > 0;
+  const currentHasPendingDescendants = currentEntry
+    ? countPendingDescendantRuns(currentEntry.childSessionKey) > 0
+    : false;
   if (
     !currentEntry ||
     currentEntry.runId !== params.entry.runId ||
-    (currentEntry.endedAt && !currentHasPendingDescendants)
+    isFinishedForSteerControl(currentEntry, currentHasPendingDescendants)
   ) {
     return {
       status: "done",
@@ -776,11 +727,24 @@ export async function steerControlledSubagentRun(params: {
     typeof targetSession.entry?.sessionId === "string" && targetSession.entry.sessionId.trim()
       ? targetSession.entry.sessionId.trim()
       : undefined;
+  const restartSessionId = sessionId ? crypto.randomUUID() : undefined;
+  const runtime = await resolveSubagentControlRuntime();
 
   if (sessionId) {
-    abortEmbeddedPiRun(sessionId);
+    const active = runtime.isEmbeddedAgentRunActive(sessionId);
+    const aborted = runtime.abortEmbeddedAgentRun(sessionId);
+    if (active && !aborted) {
+      clearSubagentRunSteerRestart(params.entry.runId);
+      return {
+        status: "error",
+        runId: params.entry.runId,
+        sessionKey: params.entry.childSessionKey,
+        sessionId,
+        error: "Subagent reply is already finalizing and can no longer be restarted.",
+      };
+    }
   }
-  const cleared = clearSessionQueues([params.entry.childSessionKey, sessionId]);
+  const cleared = runtime.clearSessionQueues([params.entry.childSessionKey, sessionId]);
   if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
     logVerbose(
       `subagents control steer: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
@@ -808,7 +772,7 @@ export async function steerControlledSubagentRun(params: {
       params: {
         message: params.message,
         sessionKey: params.entry.childSessionKey,
-        sessionId,
+        sessionId: restartSessionId,
         idempotencyKey,
         deliver: false,
         channel: INTERNAL_MESSAGE_CHANNEL,
@@ -822,12 +786,12 @@ export async function steerControlledSubagentRun(params: {
     }
   } catch (err) {
     clearSubagentRunSteerRestart(params.entry.runId);
-    const error = err instanceof Error ? err.message : String(err);
+    const error = formatErrorMessage(err);
     return {
       status: "error",
       runId,
       sessionKey: params.entry.childSessionKey,
-      sessionId,
+      sessionId: restartSessionId,
       error,
     };
   }
@@ -837,6 +801,11 @@ export async function steerControlledSubagentRun(params: {
     nextRunId: runId,
     fallback: params.entry,
     runTimeoutSeconds: params.entry.runTimeoutSeconds ?? 0,
+    // Preserve the steered instruction so that restart redispatch rewraps the
+    // new message rather than the stale pre-steer task. Persisting the older
+    // task would cause `recoverOrphanedSubagentSessions` to re-issue the
+    // original instruction after a crash, silently dropping the user's steer.
+    task: params.message,
   });
   if (!replaced) {
     clearSubagentRunSteerRestart(params.entry.runId);
@@ -844,7 +813,7 @@ export async function steerControlledSubagentRun(params: {
       status: "error",
       runId,
       sessionKey: params.entry.childSessionKey,
-      sessionId,
+      sessionId: restartSessionId,
       error: "failed to replace steered subagent run",
     };
   }
@@ -853,13 +822,14 @@ export async function steerControlledSubagentRun(params: {
     status: "accepted",
     runId,
     sessionKey: params.entry.childSessionKey,
-    sessionId,
+    sessionId: restartSessionId,
     mode: "restart",
     label: resolveSubagentLabel(params.entry),
     text: `steered ${resolveSubagentLabel(params.entry)}.`,
   };
 }
 
+/** Sends a follow-up message to a controlled subagent and waits for a reply. */
 export async function sendControlledSubagentMessage(params: {
   cfg: OpenClawConfig;
   controller: ResolvedSubagentController;
@@ -872,6 +842,12 @@ export async function sendControlledSubagentMessage(params: {
   });
   if (ownershipError) {
     return { status: "forbidden" as const, error: ownershipError };
+  }
+  if (params.entry.collect) {
+    return {
+      status: "forbidden" as const,
+      error: "Collector subagents cannot receive follow-up messages; use agents_wait.",
+    };
   }
   if (params.controller.controlScope !== "children") {
     return {
@@ -891,8 +867,11 @@ export async function sendControlledSubagentMessage(params: {
   const targetSessionKey = params.entry.childSessionKey;
   const parsed = parseAgentSessionKey(targetSessionKey);
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: parsed?.agentId });
-  const store = loadSessionStore(storePath);
-  const targetSessionEntry = store[targetSessionKey];
+  const targetSessionEntry = loadSessionEntry({
+    storePath,
+    sessionKey: targetSessionKey,
+    clone: false,
+  });
   const targetSessionId =
     typeof targetSessionEntry?.sessionId === "string" && targetSessionEntry.sessionId.trim()
       ? targetSessionEntry.sessionId.trim()
@@ -901,13 +880,11 @@ export async function sendControlledSubagentMessage(params: {
   const idempotencyKey = crypto.randomUUID();
   let runId: string = idempotencyKey;
   try {
-    const historyBefore = await subagentControlDeps.callGateway<{ messages: Array<unknown> }>({
-      method: "chat.history",
-      params: { sessionKey: targetSessionKey, limit: SUBAGENT_REPLY_HISTORY_LIMIT },
+    const baselineReply = await readLatestAssistantReplySnapshot({
+      sessionKey: targetSessionKey,
+      limit: SUBAGENT_REPLY_HISTORY_LIMIT,
+      callGateway: subagentControlDeps.callGateway,
     });
-    const baselineReply = resolveLatestAssistantReplySnapshot(
-      stripToolMessages(Array.isArray(historyBefore?.messages) ? historyBefore.messages : []),
-    );
 
     const response = await subagentControlDeps.callGateway<{ runId: string }>({
       method: "agent",
@@ -928,63 +905,41 @@ export async function sendControlledSubagentMessage(params: {
       runId = responseRunId;
     }
 
-    const waitMs = 30_000;
-    const wait = await subagentControlDeps.callGateway<{ status?: string; error?: string }>({
-      method: "agent.wait",
-      params: { runId, timeoutMs: waitMs },
-      timeoutMs: waitMs + 2_000,
+    const result = await waitForAgentRunAndReadUpdatedAssistantReply({
+      runId,
+      sessionKey: targetSessionKey,
+      timeoutMs: 30_000,
+      limit: SUBAGENT_REPLY_HISTORY_LIMIT,
+      baseline: baselineReply,
+      callGateway: subagentControlDeps.callGateway,
     });
-    if (wait?.status === "timeout") {
+    if (result.status === "timeout") {
       return { status: "timeout" as const, runId };
     }
-    if (wait?.status === "error") {
-      const waitError = typeof wait.error === "string" ? wait.error : "unknown error";
-      return { status: "error" as const, runId, error: waitError };
+    if (result.status === "error") {
+      return {
+        status: "error" as const,
+        runId,
+        error: result.error ?? "unknown error",
+      };
     }
-
-    const history = await subagentControlDeps.callGateway<{ messages: Array<unknown> }>({
-      method: "chat.history",
-      params: { sessionKey: targetSessionKey, limit: SUBAGENT_REPLY_HISTORY_LIMIT },
-    });
-    const latestReply = resolveLatestAssistantReplySnapshot(
-      stripToolMessages(Array.isArray(history?.messages) ? history.messages : []),
-    );
-    const replyText =
-      latestReply.text && latestReply.fingerprint !== baselineReply.fingerprint
-        ? latestReply.text
-        : undefined;
-    return { status: "ok" as const, runId, replyText };
+    return { status: "ok" as const, runId, replyText: result.replyText };
   } catch (err) {
-    const error = err instanceof Error ? err.message : String(err);
+    const error = formatErrorMessage(err);
     return { status: "error" as const, runId, error };
   }
 }
 
-export function resolveControlledSubagentTarget(
-  runs: SubagentRunRecord[],
-  token: string | undefined,
-  options?: { recentMinutes?: number; isActive?: (entry: SubagentRunRecord) => boolean },
-): SubagentTargetResolution {
-  return resolveSubagentTargetFromRuns({
-    runs,
-    token,
-    recentWindowMinutes: options?.recentMinutes ?? DEFAULT_RECENT_MINUTES,
-    label: (entry) => resolveSubagentLabel(entry),
-    isActive: options?.isActive,
-    errors: {
-      missingTarget: "Missing subagent target.",
-      invalidIndex: (value) => `Invalid subagent index: ${value}`,
-      unknownSession: (value) => `Unknown subagent session: ${value}`,
-      ambiguousLabel: (value) => `Ambiguous subagent label: ${value}`,
-      ambiguousLabelPrefix: (value) => `Ambiguous subagent label prefix: ${value}`,
-      ambiguousRunIdPrefix: (value) => `Ambiguous subagent run id prefix: ${value}`,
-      unknownTarget: (value) => `Unknown subagent target: ${value}`,
-    },
-  });
-}
-
-export const __testing = {
-  setDepsForTest(overrides?: Partial<{ callGateway: GatewayCaller }>) {
+const testing = {
+  setDepsForTest(
+    overrides?: Partial<{
+      callGateway: GatewayCaller;
+      patchSessionEntry: PatchSessionEntry;
+      abortEmbeddedAgentRun: AbortEmbeddedAgentRun;
+      isEmbeddedAgentRunActive: IsEmbeddedAgentRunActive;
+      clearSessionQueues: ClearSessionQueues;
+    }>,
+  ) {
     subagentControlDeps = overrides
       ? {
           ...defaultSubagentControlDeps,
@@ -993,3 +948,8 @@ export const __testing = {
       : defaultSubagentControlDeps;
   },
 };
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.subagentControlTestApi")] =
+    testing;
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

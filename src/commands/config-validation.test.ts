@@ -1,18 +1,22 @@
+// Config validation tests cover config snapshot validation and command error handling.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
-import { createCompatibilityNotice } from "../plugins/status.test-helpers.js";
+import { createCompatibilityNotice } from "../plugins/status.test-fixtures.js";
+import { requireValidConfigSnapshot } from "./config-validation.js";
 
-const readConfigFileSnapshot = vi.fn();
-const buildPluginCompatibilityNotices = vi.fn<(_params?: unknown) => PluginCompatibilityNotice[]>(
-  () => [],
-);
+const { readConfigFileSnapshot, buildPluginCompatibilitySnapshotNotices } = vi.hoisted(() => ({
+  readConfigFileSnapshot: vi.fn(),
+  buildPluginCompatibilitySnapshotNotices: vi.fn<
+    (_params?: unknown) => PluginCompatibilityNotice[]
+  >(() => []),
+}));
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot,
 }));
 
 vi.mock("../plugins/status.js", () => ({
-  buildPluginCompatibilityNotices,
+  buildPluginCompatibilitySnapshotNotices,
   formatPluginCompatibilityNotice: (notice: { pluginId: string; message: string }) =>
     `${notice.pluginId} ${notice.message}`,
 }));
@@ -29,8 +33,8 @@ describe("requireValidConfigSnapshot", () => {
       config: { plugins: {} },
       issues: [],
     });
-    buildPluginCompatibilityNotices.mockReturnValue([
-      createCompatibilityNotice({ pluginId: "legacy-plugin", code: "legacy-before-agent-start" }),
+    buildPluginCompatibilitySnapshotNotices.mockReturnValue([
+      createCompatibilityNotice({ pluginId: "legacy-plugin", code: "hook-only" }),
     ]);
   }
 
@@ -42,17 +46,28 @@ describe("requireValidConfigSnapshot", () => {
     };
   }
 
+  function requireFirstLog(runtime: ReturnType<typeof createRuntime>): string {
+    const [call] = runtime.log.mock.calls;
+    if (!call) {
+      throw new Error("expected runtime log message");
+    }
+    const [message] = call;
+    if (message === undefined) {
+      throw new Error("expected runtime log message");
+    }
+    return String(message);
+  }
+
   it("returns config without emitting compatibility advice by default", async () => {
     createValidSnapshot();
     const runtime = createRuntime();
 
-    const { requireValidConfigSnapshot } = await import("./config-validation.js");
     const config = await requireValidConfigSnapshot(runtime);
 
     expect(config).toEqual({ plugins: {} });
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
-    expect(buildPluginCompatibilityNotices).not.toHaveBeenCalled();
+    expect(buildPluginCompatibilitySnapshotNotices).not.toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
@@ -60,7 +75,6 @@ describe("requireValidConfigSnapshot", () => {
     createValidSnapshot();
     const runtime = createRuntime();
 
-    const { requireValidConfigSnapshot } = await import("./config-validation.js");
     const config = await requireValidConfigSnapshot(runtime, {
       includeCompatibilityAdvisory: true,
     });
@@ -68,9 +82,12 @@ describe("requireValidConfigSnapshot", () => {
     expect(config).toEqual({ plugins: {} });
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
-    expect(String(runtime.log.mock.calls[0]?.[0])).toContain("Plugin compatibility: 1 notice.");
-    expect(String(runtime.log.mock.calls[0]?.[0])).toContain(
-      "legacy-plugin still uses legacy before_agent_start",
+    expect(requireFirstLog(runtime)).toBe(
+      [
+        "Plugin compatibility: 1 notice.",
+        "- legacy-plugin is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.",
+        "Review: openclaw doctor",
+      ].join("\n"),
     );
   });
 
@@ -83,7 +100,6 @@ describe("requireValidConfigSnapshot", () => {
     });
     const runtime = createRuntime();
 
-    const { requireValidConfigSnapshot } = await import("./config-validation.js");
     const config = await requireValidConfigSnapshot(runtime, {
       includeCompatibilityAdvisory: true,
     });
@@ -92,5 +108,55 @@ describe("requireValidConfigSnapshot", () => {
     expect(runtime.error).toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(runtime.log).not.toHaveBeenCalled();
+  });
+
+  it("replaces doctor fix advice for plugin packaging compiled-output failures", async () => {
+    readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: false,
+      config: {},
+      issues: [
+        {
+          path: "plugins.slots.memory",
+          message: "plugin not found: source-only-pack",
+        },
+      ],
+      warnings: [
+        {
+          path: "plugins",
+          message:
+            "plugin source-only-pack: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js. This is a plugin packaging issue, not a local config problem.",
+        },
+      ],
+      legacyIssues: [],
+    });
+    const runtime = createRuntime();
+
+    const config = await requireValidConfigSnapshot(runtime);
+
+    expect(config).toBeNull();
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("plugin not found"));
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Fix: This is a plugin packaging issue, not a local config problem.\nUpdate or reinstall the plugin after the publisher ships compiled JavaScript, or disable/uninstall the plugin until then.",
+    );
+    expect(runtime.error).not.toHaveBeenCalledWith("Fix: openclaw doctor --fix");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("keeps doctor fix advice for normal invalid config failures", async () => {
+    readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: false,
+      config: {},
+      issues: [{ path: "gateway.mode", message: "Expected 'local' or 'remote'" }],
+      legacyIssues: [],
+    });
+    const runtime = createRuntime();
+
+    const config = await requireValidConfigSnapshot(runtime);
+
+    expect(config).toBeNull();
+    expect(runtime.error).toHaveBeenCalledWith("Fix: openclaw doctor --fix");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });

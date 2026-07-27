@@ -25,15 +25,26 @@ public enum GatewayDiscoveryStatusText {
             }
         }
 
-        if states.contains(where: { if case .ready = $0 { true } else { false } }) {
+        if states.contains(where: {
+            if case .ready = $0 {
+                true
+            } else {
+                false
+            }
+        }) {
             return "Searching…"
         }
 
-        if states.contains(where: { if case .setup = $0 { true } else { false } }) {
+        if states.contains(where: {
+            if case .setup = $0 {
+                true
+            } else {
+                false
+            }
+        }) {
             return "Setup"
         }
 
         return "Searching…"
     }
 }
-

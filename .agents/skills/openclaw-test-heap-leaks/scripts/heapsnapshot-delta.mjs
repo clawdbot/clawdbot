@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+/**
+ * Heap snapshot diff utility for OpenClaw test memory leak investigations.
+ */
 
 import fs from "node:fs";
 import path from "node:path";
@@ -62,6 +65,243 @@ function parseArgs(argv) {
   }
 
   return options;
+}
+
+class JsonStreamScanner {
+  constructor(filePath) {
+    this.stream = fs.createReadStream(filePath, {
+      encoding: "utf8",
+      highWaterMark: 1024 * 1024,
+    });
+    this.iterator = this.stream[Symbol.asyncIterator]();
+    this.buffer = "";
+    this.offset = 0;
+    this.done = false;
+  }
+
+  compactBuffer() {
+    if (this.offset > 65536) {
+      this.buffer = this.buffer.slice(this.offset);
+      this.offset = 0;
+    }
+  }
+
+  async ensureAvailable(count = 1) {
+    while (!this.done && this.buffer.length - this.offset < count) {
+      const next = await this.iterator.next();
+      if (next.done) {
+        this.done = true;
+        break;
+      }
+      this.buffer += next.value;
+    }
+  }
+
+  async peek() {
+    await this.ensureAvailable(1);
+    return this.buffer[this.offset] ?? null;
+  }
+
+  async next() {
+    await this.ensureAvailable(1);
+    if (this.offset >= this.buffer.length) {
+      return null;
+    }
+    const char = this.buffer[this.offset];
+    this.offset += 1;
+    this.compactBuffer();
+    return char;
+  }
+
+  async skipWhitespace() {
+    while (true) {
+      const char = await this.peek();
+      if (char === null || !/\s/u.test(char)) {
+        return;
+      }
+      await this.next();
+    }
+  }
+
+  async expectChar(expected) {
+    const char = await this.next();
+    if (char !== expected) {
+      fail(`Expected ${expected} but found ${char ?? "<eof>"}`);
+    }
+  }
+
+  async find(sequence) {
+    let matched = 0;
+    while (true) {
+      const char = await this.next();
+      if (char === null) {
+        fail(`Could not find ${sequence}`);
+      }
+      if (char === sequence[matched]) {
+        matched += 1;
+        if (matched === sequence.length) {
+          return;
+        }
+        continue;
+      }
+      matched = char === sequence[0] ? 1 : 0;
+      if (matched === sequence.length) {
+        return;
+      }
+    }
+  }
+
+  async readBalancedObject() {
+    const start = await this.next();
+    if (start !== "{") {
+      fail(`Expected { but found ${start ?? "<eof>"}`);
+    }
+    let text = "{";
+    let depth = 1;
+    let inString = false;
+    let escaped = false;
+    while (depth > 0) {
+      const char = await this.next();
+      if (char === null) {
+        fail("Unexpected EOF while reading JSON object");
+      }
+      text += char;
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (char === "\\") {
+          escaped = true;
+        } else if (char === '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (char === '"') {
+        inString = true;
+      } else if (char === "{") {
+        depth += 1;
+      } else if (char === "}") {
+        depth -= 1;
+      }
+    }
+    return text;
+  }
+
+  async parseNumberArray(onValue) {
+    await this.skipWhitespace();
+    await this.expectChar("[");
+    await this.skipWhitespace();
+    if ((await this.peek()) === "]") {
+      await this.next();
+      return;
+    }
+
+    let token = "";
+    let index = 0;
+    const flush = () => {
+      if (token.length === 0) {
+        fail("Unexpected empty number token");
+      }
+      const value = Number.parseInt(token, 10);
+      if (!Number.isFinite(value)) {
+        fail(`Invalid numeric token: ${token}`);
+      }
+      onValue(value, index);
+      index += 1;
+      token = "";
+    };
+
+    while (true) {
+      const char = await this.next();
+      if (char === null) {
+        fail("Unexpected EOF while reading number array");
+      }
+      if (char === "]") {
+        flush();
+        return;
+      }
+      if (char === ",") {
+        flush();
+        continue;
+      }
+      if (/\s/u.test(char)) {
+        continue;
+      }
+      token += char;
+    }
+  }
+
+  async readJsonString() {
+    await this.expectChar('"');
+    let value = "";
+    while (true) {
+      const char = await this.next();
+      if (char === null) {
+        fail("Unexpected EOF while reading JSON string");
+      }
+      if (char === '"') {
+        return value;
+      }
+      if (char !== "\\") {
+        value += char;
+        continue;
+      }
+      const escaped = await this.next();
+      if (escaped === null) {
+        fail("Unexpected EOF while reading JSON string escape");
+      }
+      if (escaped === "u") {
+        let hex = "";
+        for (let index = 0; index < 4; index += 1) {
+          const hexChar = await this.next();
+          if (hexChar === null) {
+            fail("Unexpected EOF while reading JSON unicode escape");
+          }
+          hex += hexChar;
+        }
+        value += String.fromCharCode(Number.parseInt(hex, 16));
+        continue;
+      }
+      value +=
+        escaped === "b"
+          ? "\b"
+          : escaped === "f"
+            ? "\f"
+            : escaped === "n"
+              ? "\n"
+              : escaped === "r"
+                ? "\r"
+                : escaped === "t"
+                  ? "\t"
+                  : escaped;
+    }
+  }
+
+  async parseStringArray(onValue) {
+    await this.skipWhitespace();
+    await this.expectChar("[");
+    await this.skipWhitespace();
+    if ((await this.peek()) === "]") {
+      await this.next();
+      return;
+    }
+
+    let index = 0;
+    while (true) {
+      const value = await this.readJsonString();
+      onValue(value, index);
+      index += 1;
+      await this.skipWhitespace();
+      const separator = await this.next();
+      if (separator === "]") {
+        return;
+      }
+      if (separator !== ",") {
+        fail(`Expected , or ] but found ${separator ?? "<eof>"}`);
+      }
+      await this.skipWhitespace();
+    }
+  }
 }
 
 function parseHeapFilename(filePath) {
@@ -151,38 +391,89 @@ function resolvePair(options) {
   };
 }
 
-function loadSummary(filePath) {
-  const data = JSON.parse(fs.readFileSync(filePath, "utf8"));
-  const meta = data.snapshot?.meta;
+async function parseSnapshotMeta(scanner) {
+  await scanner.find('"snapshot":');
+  await scanner.skipWhitespace();
+  const metaObjectText = await scanner.readBalancedObject();
+  const parsed = JSON.parse(metaObjectText);
+  return parsed?.meta ?? null;
+}
+
+async function buildSummary(filePath) {
+  const scanner = new JsonStreamScanner(filePath);
+  const meta = await parseSnapshotMeta(scanner);
   if (!meta) {
     fail(`Invalid heap snapshot: ${filePath}`);
   }
 
   const nodeFieldCount = meta.node_fields.length;
   const typeNames = meta.node_types[0];
-  const strings = data.strings;
   const typeIndex = meta.node_fields.indexOf("type");
   const nameIndex = meta.node_fields.indexOf("name");
   const selfSizeIndex = meta.node_fields.indexOf("self_size");
+  if (typeIndex === -1 || nameIndex === -1 || selfSizeIndex === -1) {
+    fail(`Unsupported heap snapshot schema: ${filePath}`);
+  }
 
-  const summary = new Map();
-  for (let offset = 0; offset < data.nodes.length; offset += nodeFieldCount) {
-    const type = typeNames[data.nodes[offset + typeIndex]];
-    const name = strings[data.nodes[offset + nameIndex]];
-    const selfSize = data.nodes[offset + selfSizeIndex];
-    const key = `${type}\t${name}`;
-    const current = summary.get(key) ?? {
-      type,
-      name,
+  const summaryByIndex = new Map();
+  let nodeCount = 0;
+  let currentTypeId = 0;
+  let currentNameId = 0;
+  let currentSelfSize = 0;
+  await scanner.find('"nodes":');
+  await scanner.parseNumberArray((value, index) => {
+    const fieldIndex = index % nodeFieldCount;
+    if (fieldIndex === typeIndex) {
+      currentTypeId = value;
+      return;
+    }
+    if (fieldIndex === nameIndex) {
+      currentNameId = value;
+      return;
+    }
+    if (fieldIndex === selfSizeIndex) {
+      currentSelfSize = value;
+    }
+    if (fieldIndex !== nodeFieldCount - 1) {
+      return;
+    }
+    const key = `${currentTypeId}\t${currentNameId}`;
+    const current = summaryByIndex.get(key) ?? {
+      typeId: currentTypeId,
+      nameId: currentNameId,
       selfSize: 0,
       count: 0,
     };
-    current.selfSize += selfSize;
+    current.selfSize += currentSelfSize;
     current.count += 1;
-    summary.set(key, current);
+    summaryByIndex.set(key, current);
+    nodeCount += 1;
+  });
+
+  const requiredNameIds = new Set(
+    Array.from(summaryByIndex.values(), (entry) => entry.nameId).filter((value) => value >= 0),
+  );
+  const nameStrings = new Map();
+  await scanner.find('"strings":');
+  await scanner.parseStringArray((value, index) => {
+    if (requiredNameIds.has(index)) {
+      nameStrings.set(index, value);
+    }
+  });
+
+  const summary = new Map();
+  for (const entry of summaryByIndex.values()) {
+    const key = `${typeNames[entry.typeId] ?? "unknown"}\t${nameStrings.get(entry.nameId) ?? ""}`;
+    summary.set(key, {
+      type: typeNames[entry.typeId] ?? "unknown",
+      name: nameStrings.get(entry.nameId) ?? "",
+      selfSize: entry.selfSize,
+      count: entry.count,
+    });
   }
+
   return {
-    nodeCount: data.snapshot.node_count,
+    nodeCount,
     summary,
   };
 }
@@ -205,11 +496,11 @@ function truncate(text, maxLength) {
   return text.length <= maxLength ? text : `${text.slice(0, maxLength - 1)}…`;
 }
 
-function main() {
+async function main() {
   const options = parseArgs(process.argv.slice(2));
   const pair = resolvePair(options);
-  const before = loadSummary(pair.before);
-  const after = loadSummary(pair.after);
+  const before = await buildSummary(pair.before);
+  const after = await buildSummary(pair.after);
   const minBytes = options.minKb * 1024;
 
   const rows = [];
@@ -262,4 +553,4 @@ function main() {
   }
 }
 
-main();
+await main();

@@ -5,16 +5,17 @@
  * Used to import existing profiles before editing.
  */
 
-import { SimplePool, verifyEvent, type Event } from "nostr-tools";
-import type { NostrProfile } from "./config-schema.js";
-import { validateUrlSafety } from "./nostr-profile-http.js";
-import { contentToProfile, type ProfileContent } from "./nostr-profile.js";
+import { SimplePool, type Event } from "nostr-tools";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { type NostrProfile, NostrProfileSchema } from "./config-schema.js";
+import { contentToProfile, type ProfileContent } from "./nostr-profile-core.js";
+import { validateUrlSafety } from "./nostr-profile-url-safety.js";
 
 // ============================================================================
 // Types
 // ============================================================================
 
-export interface ProfileImportResult {
+interface ProfileImportResult {
   /** Whether the import was successful */
   ok: boolean;
   /** The imported profile (if found and valid) */
@@ -33,7 +34,7 @@ export interface ProfileImportResult {
   sourceRelay?: string;
 }
 
-export interface ProfileImportOptions {
+interface ProfileImportOptions {
   /** The public key to fetch profile for */
   pubkey: string;
   /** Relay URLs to query */
@@ -85,7 +86,8 @@ function sanitizeProfileUrls(profile: NostrProfile): NostrProfile {
 export async function importProfileFromRelays(
   opts: ProfileImportOptions,
 ): Promise<ProfileImportResult> {
-  const { pubkey, relays, timeoutMs = DEFAULT_TIMEOUT_MS } = opts;
+  const { pubkey, relays } = opts;
+  const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, DEFAULT_TIMEOUT_MS);
 
   if (!pubkey || !/^[0-9a-fA-F]{64}$/.test(pubkey)) {
     return {
@@ -104,61 +106,43 @@ export async function importProfileFromRelays(
   }
 
   const pool = new SimplePool();
-  const relaysQueried: string[] = [];
+  const relaysQueried = [...relays];
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<void>((resolve) => {
+    deadlineTimer = setTimeout(resolve, timeoutMs);
+    deadlineTimer.unref?.();
+  });
+  const subscriptions: Array<ReturnType<typeof pool.subscribeMany>> = [];
 
   try {
-    // Query all relays for kind:0 events from this pubkey
+    // Keep subscriptions separate: pool-wide ID dedupe runs before signature verification.
     const events: Array<{ event: Event; relay: string }> = [];
-
-    // Create timeout promise
-    const timeoutPromise = new Promise<void>((resolve) => {
-      setTimeout(resolve, timeoutMs);
-    });
-
-    // Create subscription promise
-    const subscriptionPromise = new Promise<void>((resolve) => {
-      let completed = 0;
-
-      for (const relay of relays) {
-        relaysQueried.push(relay);
-
-        const sub = pool.subscribeMany(
-          [relay],
-          [
-            {
-              kinds: [0],
-              authors: [pubkey],
-              limit: 1,
-            },
-          ] as unknown as Parameters<typeof pool.subscribeMany>[1],
-          {
-            onevent(event) {
-              events.push({ event, relay });
-            },
-            oneose() {
-              completed++;
-              if (completed >= relays.length) {
-                resolve();
-              }
-            },
-            onclose() {
-              completed++;
-              if (completed >= relays.length) {
-                resolve();
-              }
-            },
-          },
-        );
-
-        // Clean up subscription after timeout
-        setTimeout(() => {
-          sub.close();
-        }, timeoutMs);
-      }
-    });
-
-    // Wait for either all relays to respond or timeout
-    await Promise.race([subscriptionPromise, timeoutPromise]);
+    await Promise.race([
+      Promise.all(
+        relays.map(
+          (relay) =>
+            new Promise<void>((resolve) => {
+              const subscription = pool.subscribeMany(
+                [relay],
+                { kinds: [0], authors: [pubkey], limit: 1 },
+                {
+                  onevent(event) {
+                    events.push({ event, relay });
+                  },
+                  oneose() {
+                    resolve();
+                  },
+                  onclose() {
+                    resolve();
+                  },
+                },
+              );
+              subscriptions.push(subscription);
+            }),
+        ),
+      ),
+      deadline,
+    ]);
 
     // No events found
     if (events.length === 0) {
@@ -170,36 +154,14 @@ export async function importProfileFromRelays(
     }
 
     // Find the event with the highest created_at (newest wins for replaceable events)
-    let bestEvent: { event: Event; relay: string } | null = null;
-    for (const item of events) {
-      if (!bestEvent || item.event.created_at > bestEvent.event.created_at) {
-        bestEvent = item;
-      }
-    }
-
-    if (!bestEvent) {
-      return {
-        ok: false,
-        error: "No valid profile event found",
-        relaysQueried,
-      };
-    }
-
-    // Verify the event signature
-    const isValid = verifyEvent(bestEvent.event);
-    if (!isValid) {
-      return {
-        ok: false,
-        error: "Profile event has invalid signature",
-        relaysQueried,
-        sourceRelay: bestEvent.relay,
-      };
-    }
+    const bestEvent = events.reduce((current, candidate) =>
+      candidate.event.created_at > current.event.created_at ? candidate : current,
+    );
 
     // Parse the profile content
-    let content: ProfileContent;
+    let parsedContent: unknown;
     try {
-      content = JSON.parse(bestEvent.event.content) as ProfileContent;
+      parsedContent = JSON.parse(bestEvent.event.content) as unknown;
     } catch {
       return {
         ok: false,
@@ -208,16 +170,39 @@ export async function importProfileFromRelays(
         sourceRelay: bestEvent.relay,
       };
     }
+    if (
+      typeof parsedContent !== "object" ||
+      parsedContent === null ||
+      Array.isArray(parsedContent)
+    ) {
+      return {
+        ok: false,
+        error: "Profile event content must be a JSON object",
+        relaysQueried,
+        sourceRelay: bestEvent.relay,
+      };
+    }
+    const content = parsedContent as ProfileContent;
 
     // Convert to our profile format
     const profile = contentToProfile(content);
 
-    // Sanitize URLs from imported profile to prevent SSRF when auto-merging
+    // Drop unsafe URLs before schema validation so an otherwise valid profile remains importable.
+    // Other invalid known fields reject the event atomically instead of silently changing its data.
     const sanitizedProfile = sanitizeProfileUrls(profile);
+    const validatedProfile = NostrProfileSchema.safeParse(sanitizedProfile);
+    if (!validatedProfile.success) {
+      return {
+        ok: false,
+        error: "Profile event content has invalid fields",
+        relaysQueried,
+        sourceRelay: bestEvent.relay,
+      };
+    }
 
     return {
       ok: true,
-      profile: sanitizedProfile,
+      profile: validatedProfile.data,
       event: {
         id: bestEvent.event.id,
         pubkey: bestEvent.event.pubkey,
@@ -227,6 +212,13 @@ export async function importProfileFromRelays(
       sourceRelay: bestEvent.relay,
     };
   } finally {
+    if (deadlineTimer) {
+      clearTimeout(deadlineTimer);
+    }
+    // Individual closers catch relay connections that finish after the deadline.
+    for (const subscription of subscriptions) {
+      subscription.close();
+    }
     pool.close(relays);
   }
 }

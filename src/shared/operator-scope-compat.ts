@@ -1,3 +1,4 @@
+// Operator scope compatibility helpers normalize legacy operator role names.
 const OPERATOR_ROLE = "operator";
 const OPERATOR_ADMIN_SCOPE = "operator.admin";
 const OPERATOR_READ_SCOPE = "operator.read";
@@ -16,7 +17,10 @@ function normalizeScopeList(scopes: readonly string[]): string[] {
 }
 
 function operatorScopeSatisfied(requestedScope: string, granted: Set<string>): boolean {
-  if (granted.has(OPERATOR_ADMIN_SCOPE) && requestedScope.startsWith(OPERATOR_SCOPE_PREFIX)) {
+  if (!requestedScope.startsWith(OPERATOR_SCOPE_PREFIX)) {
+    return false;
+  }
+  if (granted.has(OPERATOR_ADMIN_SCOPE)) {
     return true;
   }
   if (requestedScope === OPERATOR_READ_SCOPE) {
@@ -28,6 +32,7 @@ function operatorScopeSatisfied(requestedScope: string, granted: Set<string>): b
   return granted.has(requestedScope);
 }
 
+/** Returns true when a role grant satisfies requested scopes, including operator implications. */
 export function roleScopesAllow(params: {
   role: string;
   requestedScopes: readonly string[];
@@ -43,11 +48,13 @@ export function roleScopesAllow(params: {
   }
   const allowedSet = new Set(allowed);
   if (params.role.trim() !== OPERATOR_ROLE) {
-    return requested.every((scope) => allowedSet.has(scope));
+    const prefix = `${params.role.trim()}.`;
+    return requested.every((scope) => scope.startsWith(prefix) && allowedSet.has(scope));
   }
   return requested.every((scope) => operatorScopeSatisfied(scope, allowedSet));
 }
 
+/** Returns the first requested scope not covered by the role's allowed scopes. */
 export function resolveMissingRequestedScope(params: {
   role: string;
   requestedScopes: readonly string[];
@@ -61,6 +68,26 @@ export function resolveMissingRequestedScope(params: {
         allowedScopes: params.allowedScopes,
       })
     ) {
+      return scope;
+    }
+  }
+  return null;
+}
+
+/** Returns the first requested scope that does not belong to any requested role. */
+export function resolveScopeOutsideRequestedRoles(params: {
+  requestedRoles: readonly string[];
+  requestedScopes: readonly string[];
+}): string | null {
+  for (const scope of params.requestedScopes) {
+    const matchesRequestedRole = params.requestedRoles.some((role) =>
+      roleScopesAllow({
+        role,
+        requestedScopes: [scope],
+        allowedScopes: [scope],
+      }),
+    );
+    if (!matchesRequestedRole) {
       return scope;
     }
   }

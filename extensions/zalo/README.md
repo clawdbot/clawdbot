@@ -5,7 +5,7 @@ Zalo channel plugin for OpenClaw (Bot API).
 ## Install (local checkout)
 
 ```bash
-openclaw plugins install ./extensions/zalo
+openclaw plugins install ./path/to/local/zalo-plugin
 ```
 
 ## Install (npm)

@@ -1,21 +1,53 @@
+/** Shared Vitest module mocks for isolated-agent cron tests. */
+// Isolated turns lazily consume this process-stable runtime after agent execution. Load it during
+// suite setup so first-test timings cover cron behavior rather than module initialization.
+import "../utils/usage-format.js";
 import { vi } from "vitest";
-import {
-  makeIsolatedAgentJobFixture,
-  makeIsolatedAgentParamsFixture,
-} from "./isolated-agent/job-fixtures.js";
 
-vi.mock("../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: vi.fn(),
+const loadPreparedModelCatalog = vi.hoisted(() => vi.fn());
+
+vi.mock("../agents/embedded-agent.js", () => ({
+  abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
+  runEmbeddedAgent: vi.fn(),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
 
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog: vi.fn(),
-}));
+vi.mock("../agents/prepared-model-catalog.js", async () => {
+  const { resolveAgentDir, resolveAgentWorkspaceDir, resolveDefaultAgentId } =
+    await vi.importActual<typeof import("../agents/agent-scope.js")>("../agents/agent-scope.js");
+  return {
+    loadPreparedModelCatalog,
+    loadPublishedPreparedModelCatalog: loadPreparedModelCatalog,
+    publishedModelCatalogOwnerMatchesAgent: (owner: { agentId: string }, agentId: string) =>
+      owner.agentId === agentId.trim().toLowerCase(),
+    loadResolvedPublishedModelCatalogOwner: vi.fn(
+      async (params: {
+        agentId?: string;
+        agentDir?: string;
+        config?: object;
+        workspaceDir?: string;
+      }) => {
+        const config = params.config ?? {};
+        const agentId = params.agentId ?? resolveDefaultAgentId(config);
+        return {
+          agentId,
+          agentDir: params.agentDir ?? resolveAgentDir(config, agentId),
+          workspaceDir: params.workspaceDir ?? resolveAgentWorkspaceDir(config, agentId),
+          config,
+          modelCatalog: {
+            entries: (await loadPreparedModelCatalog(params)) ?? [],
+            routeVariants: [],
+          },
+        };
+      },
+    ),
+  };
+});
 
-vi.mock("../agents/model-selection.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/model-selection.js")>();
+vi.mock("../agents/model-selection.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/model-selection.js")>(
+    "../agents/model-selection.js",
+  );
   return {
     ...actual,
     isCliProvider: vi.fn(() => false),
@@ -26,9 +58,10 @@ vi.mock("../agents/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(),
 }));
 
+vi.mock("../plugins/runtime-plugins.runtime.js", () => ({
+  ensureRuntimePluginsLoaded: vi.fn(),
+}));
+
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(),
 }));
-
-export const makeIsolatedAgentJob = makeIsolatedAgentJobFixture;
-export const makeIsolatedAgentParams = makeIsolatedAgentParamsFixture;

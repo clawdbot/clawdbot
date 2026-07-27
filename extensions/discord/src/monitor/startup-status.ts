@@ -1,3 +1,4 @@
+// Discord plugin module implements startup status behavior.
 export function formatDiscordStartupStatusMessage(params: {
   gatewayReady: boolean;
   botIdentity?: string;

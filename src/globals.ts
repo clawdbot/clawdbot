@@ -1,7 +1,8 @@
+// Re-exports global CLI flag state used across command modules.
 export { isVerbose, isYes, setVerbose, setYes } from "./global-state.js";
+import { theme } from "../packages/terminal-core/src/theme.js";
 import { isVerbose } from "./global-state.js";
 import { getLogger, isFileLogLevelEnabled } from "./logging/logger.js";
-import { theme } from "./terminal/theme.js";
 
 export function shouldLogVerbose() {
   return isVerbose() || isFileLogLevelEnabled("debug");
@@ -29,7 +30,9 @@ export function logVerboseConsole(message: string) {
   console.log(theme.muted(message));
 }
 
-export const success = theme.success;
-export const warn = theme.warn;
-export const info = theme.info;
-export const danger = theme.error;
+type ThemeFormatter = (value: string) => string;
+
+export const success: ThemeFormatter = theme.success;
+export const warn: ThemeFormatter = theme.warn;
+export const info: ThemeFormatter = theme.info;
+export const danger: ThemeFormatter = theme.error;

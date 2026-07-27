@@ -1,85 +1,116 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import "./test-helpers/fast-core-tools.js";
-import * as harness from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
-import { resetSubagentRegistryForTests } from "./subagent-registry.js";
+// Verifies sessions_spawn thinking defaults, overrides, and inheritance.
+import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
+import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
 
-const MAIN_SESSION_KEY = "agent:test:main";
+type ThinkingLevel = "high" | "medium" | "low" | "off";
 
-type ThinkingLevel = "high" | "medium" | "low";
-
-function applyThinkingDefault(thinking: ThinkingLevel) {
-  harness.setSessionsSpawnConfigOverride({
-    session: { mainKey: "main", scope: "per-sender" },
-    agents: { defaults: { subagents: { thinking } } },
-  });
-}
-
-function findSubagentThinking(
-  calls: Array<{ method?: string; params?: unknown }>,
-): string | undefined {
-  for (const call of calls) {
-    if (call.method !== "agent") {
-      continue;
-    }
-    const params = call.params as { lane?: string; thinking?: string } | undefined;
-    if (params?.lane === "subagent") {
-      return params.thinking;
-    }
-  }
-  return undefined;
-}
-
-function findPatchedThinking(
-  calls: Array<{ method?: string; params?: unknown }>,
-): string | undefined {
-  for (let index = calls.length - 1; index >= 0; index -= 1) {
-    const entry = calls[index];
-    if (!entry || entry.method !== "sessions.patch") {
-      continue;
-    }
-    const params = entry.params as { thinkingLevel?: string } | undefined;
-    if (params?.thinkingLevel) {
-      return params.thinkingLevel;
-    }
-  }
-  return undefined;
-}
-
-async function expectThinkingPropagation(input: {
-  callId: string;
-  payload: Record<string, unknown>;
+function expectResolvedThinkingPlan(input: {
   expected: ThinkingLevel;
+  expectedOverride?: ThinkingLevel | null;
+  thinkingOverrideRaw?: string;
+  callerThinkingRaw?: string;
+  requesterAgentConfig?: unknown;
+  targetAgentConfig?: unknown;
+  cfg?: OpenClawConfig;
 }) {
-  const gateway = harness.setupSessionsSpawnGatewayMock({});
-  const tool = await harness.getSessionsSpawnTool({ agentSessionKey: MAIN_SESSION_KEY });
-  const result = await tool.execute(input.callId, input.payload);
-  expect(result.details).toMatchObject({ status: "accepted" });
+  // Assert both the effective override and initial session patch in one place.
+  const cfg =
+    input.cfg ??
+    ({
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: { defaults: { subagents: { thinking: "high" } } },
+    } as OpenClawConfig);
 
-  expect(findSubagentThinking(gateway.calls)).toBe(input.expected);
-  expect(findPatchedThinking(gateway.calls)).toBe(input.expected);
+  const plan = resolveSubagentThinkingOverride({
+    cfg,
+    requesterAgentConfig: input.requesterAgentConfig,
+    targetAgentConfig: input.targetAgentConfig,
+    thinkingOverrideRaw: input.thinkingOverrideRaw,
+    callerThinkingRaw: input.callerThinkingRaw,
+  });
+
+  expect(plan).toEqual({
+    status: "ok",
+    thinkingOverride:
+      input.expectedOverride === null ? undefined : (input.expectedOverride ?? input.expected),
+    initialSessionPatch: { thinkingLevel: input.expected },
+  });
 }
 
 describe("sessions_spawn thinking defaults", () => {
-  beforeEach(() => {
-    harness.resetSessionsSpawnConfigOverride();
-    resetSubagentRegistryForTests();
-    harness.getCallGatewayMock().mockClear();
-    applyThinkingDefault("high");
-  });
-
-  it("applies agents.defaults.subagents.thinking when thinking is omitted", async () => {
-    await expectThinkingPropagation({
-      callId: "call-1",
-      payload: { task: "hello" },
+  it("applies agents.defaults.subagents.thinking when thinking is omitted", () => {
+    expectResolvedThinkingPlan({
       expected: "high",
     });
   });
 
-  it("prefers explicit sessions_spawn.thinking over config default", async () => {
-    await expectThinkingPropagation({
-      callId: "call-2",
-      payload: { task: "hello", thinking: "low" },
+  it("prefers explicit sessions_spawn.thinking over config default", () => {
+    expectResolvedThinkingPlan({
+      thinkingOverrideRaw: "low",
       expected: "low",
+    });
+  });
+
+  it("prefers per-agent subagent thinking over global subagent thinking", () => {
+    expectResolvedThinkingPlan({
+      targetAgentConfig: { subagents: { thinking: "medium" } },
+      expected: "medium",
+    });
+  });
+
+  it("prefers requester-agent subagent thinking over target-agent subagent thinking", () => {
+    expectResolvedThinkingPlan({
+      requesterAgentConfig: { subagents: { thinking: "low" } },
+      targetAgentConfig: { subagents: { thinking: "medium" } },
+      callerThinkingRaw: "high",
+      expected: "low",
+    });
+  });
+
+  it("inherits caller thinking when no explicit or configured subagent thinking exists", () => {
+    expectResolvedThinkingPlan({
+      cfg: {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: { defaults: {} },
+      } as OpenClawConfig,
+      callerThinkingRaw: "medium",
+      expected: "medium",
+      expectedOverride: null,
+    });
+  });
+
+  it("prefers global subagent thinking over caller thinking", () => {
+    expectResolvedThinkingPlan({
+      callerThinkingRaw: "medium",
+      expected: "high",
+    });
+  });
+
+  it("preserves caller thinking off when inherited", () => {
+    expectResolvedThinkingPlan({
+      cfg: {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: { defaults: {} },
+      } as OpenClawConfig,
+      callerThinkingRaw: "off",
+      expected: "off",
+      expectedOverride: null,
+    });
+  });
+
+  it("preserves explicit thinking off", () => {
+    expectResolvedThinkingPlan({
+      thinkingOverrideRaw: "off",
+      expected: "off",
+    });
+  });
+
+  it("preserves configured subagent thinking off", () => {
+    expectResolvedThinkingPlan({
+      targetAgentConfig: { subagents: { thinking: "off" } },
+      callerThinkingRaw: "high",
+      expected: "off",
     });
   });
 });

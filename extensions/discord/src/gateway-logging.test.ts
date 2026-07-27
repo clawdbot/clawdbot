@@ -1,8 +1,10 @@
+// Discord tests cover gateway logging plugin behavior.
 import { EventEmitter } from "node:events";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   logVerbose: vi.fn(),
+  warn: (message: string) => `warn:${message}`,
 }));
 
 let logVerbose: typeof import("openclaw/plugin-sdk/runtime-env").logVerbose;
@@ -15,16 +17,15 @@ const makeRuntime = () => ({
 });
 
 describe("attachDiscordGatewayLogging", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ logVerbose } = await import("openclaw/plugin-sdk/runtime-env"));
+  beforeAll(async () => {
+    const { logVerbose: loadedLogVerbose } = await import("openclaw/plugin-sdk/runtime-env");
+    logVerbose = loadedLogVerbose;
     ({ attachDiscordGatewayLogging } = await import("./gateway-logging.js"));
   });
 
-  afterEach(() => {
+  beforeEach(() => {
     vi.clearAllMocks();
   });
-
   it("logs debug events and promotes reconnect/close to info", () => {
     const emitter = new EventEmitter();
     const runtime = makeRuntime();
@@ -34,26 +35,31 @@ describe("attachDiscordGatewayLogging", () => {
       runtime,
     });
 
-    emitter.emit("debug", "WebSocket connection opened");
-    emitter.emit("debug", "WebSocket connection closed with code 1001");
-    emitter.emit("debug", "Reconnecting with backoff: 1000ms after code 1001");
+    emitter.emit("debug", "Gateway websocket opened");
+    emitter.emit("debug", "Gateway websocket closed: 1001");
+    emitter.emit("debug", "Gateway reconnect scheduled in 1000ms (close, resume=true)");
+    emitter.emit("debug", "Gateway forcing fresh IDENTIFY after 3 failed resume attempts");
 
     const logVerboseMock = vi.mocked(logVerbose);
-    expect(logVerboseMock).toHaveBeenCalledTimes(3);
-    expect(runtime.log).toHaveBeenCalledTimes(2);
+    expect(logVerboseMock).toHaveBeenCalledTimes(4);
+    expect(runtime.log).toHaveBeenCalledTimes(3);
     expect(runtime.log).toHaveBeenNthCalledWith(
       1,
-      "discord gateway: WebSocket connection closed with code 1001",
+      "discord gateway: Gateway websocket closed: 1001",
     );
     expect(runtime.log).toHaveBeenNthCalledWith(
       2,
-      "discord gateway: Reconnecting with backoff: 1000ms after code 1001",
+      "discord gateway: Gateway reconnect scheduled in 1000ms (close, resume=true)",
+    );
+    expect(runtime.log).toHaveBeenNthCalledWith(
+      3,
+      "discord gateway: Gateway forcing fresh IDENTIFY after 3 failed resume attempts",
     );
 
     cleanup();
   });
 
-  it("logs warnings and metrics only to verbose", () => {
+  it("promotes warnings while keeping metrics verbose-only", () => {
     const emitter = new EventEmitter();
     const runtime = makeRuntime();
 
@@ -67,7 +73,9 @@ describe("attachDiscordGatewayLogging", () => {
 
     const logVerboseMock = vi.mocked(logVerbose);
     expect(logVerboseMock).toHaveBeenCalledTimes(2);
-    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "warn:discord gateway warning: High latency detected: 1200ms",
+    );
 
     cleanup();
   });
@@ -85,7 +93,7 @@ describe("attachDiscordGatewayLogging", () => {
     const logVerboseMock = vi.mocked(logVerbose);
     logVerboseMock.mockClear();
 
-    emitter.emit("debug", "WebSocket connection closed with code 1001");
+    emitter.emit("debug", "Gateway websocket closed: 1001");
     emitter.emit("warning", "High latency detected: 1200ms");
     emitter.emit("metrics", { latency: 42 });
 

@@ -1,10 +1,17 @@
-import type { OpenClawConfig } from "../../config/config.js";
+/** Builds normalized command context from inbound message and authorization state. */
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeAnyChannelId } from "../../channels/registry.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
-import { normalizeCommandBody } from "../commands-registry.js";
+import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import type { MsgContext } from "../templating.js";
 import type { CommandContext } from "./commands-types.js";
 import { stripMentions } from "./mentions.js";
 
+/** Builds command routing/auth metadata consumed by command handlers. */
 export function buildCommandContext(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
@@ -20,9 +27,16 @@ export function buildCommandContext(params: {
     cfg,
     commandAuthorized: params.commandAuthorized,
   });
-  const surface = (ctx.Surface ?? ctx.Provider ?? "").trim().toLowerCase();
-  const channel = (ctx.Provider ?? surface).trim().toLowerCase();
-  const abortKey = sessionKey ?? (auth.from || undefined) ?? (auth.to || undefined);
+  const surface = normalizeLowercaseStringOrEmpty(ctx.Surface ?? ctx.Provider);
+  const channel = normalizeLowercaseStringOrEmpty(
+    ctx.OriginatingChannel ?? ctx.Provider ?? surface,
+  );
+  const from = auth.from ?? normalizeOptionalString(ctx.SenderId);
+  const to = auth.to ?? normalizeOptionalString(ctx.OriginatingTo);
+  const abortKey = sessionKey ?? from ?? to;
+  const channelId =
+    normalizeAnyChannelId(channel) ??
+    (channel ? (channel as CommandContext["channelId"]) : undefined);
   const rawBodyNormalized = triggerBodyNormalized;
   const commandBodyNormalized = normalizeCommandBody(
     isGroup ? stripMentions(rawBodyNormalized, ctx, cfg, agentId) : rawBodyNormalized,
@@ -32,7 +46,8 @@ export function buildCommandContext(params: {
   return {
     surface,
     channel,
-    channelId: auth.providerId,
+    channelId: channelId ?? auth.providerId,
+    accountId: normalizeOptionalString(ctx.AccountId),
     ownerList: auth.ownerList,
     senderIsOwner: auth.senderIsOwner,
     isAuthorizedSender: auth.isAuthorizedSender,
@@ -40,7 +55,7 @@ export function buildCommandContext(params: {
     abortKey,
     rawBodyNormalized,
     commandBodyNormalized,
-    from: auth.from,
-    to: auth.to,
+    from,
+    to,
   };
 }

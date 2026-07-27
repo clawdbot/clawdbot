@@ -14,6 +14,9 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/host-timeout.sh
+source "$SCRIPT_DIR/lib/host-timeout.sh"
 PLATFORM_NAME="$(uname -s 2>/dev/null || echo unknown)"
 
 resolve_user_home() {
@@ -34,6 +37,10 @@ resolve_user_home() {
 fail() {
   echo "$*" >&2
   exit 1
+}
+
+run_podman_detached() {
+  openclaw_host_timeout_cmd "$PODMAN_RUN_TIMEOUT" podman run "$@"
 }
 
 validate_single_line_value() {
@@ -167,7 +174,7 @@ load_podman_env_file() {
     key="${key%"${key##*[![:space:]]}"}"
     [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
     case "$key" in
-      OPENCLAW_GATEWAY_TOKEN|OPENCLAW_PODMAN_CONTAINER|OPENCLAW_PODMAN_IMAGE|OPENCLAW_IMAGE|OPENCLAW_PODMAN_PULL|OPENCLAW_PODMAN_GATEWAY_HOST_PORT|OPENCLAW_GATEWAY_PORT|OPENCLAW_PODMAN_BRIDGE_HOST_PORT|OPENCLAW_BRIDGE_PORT|OPENCLAW_GATEWAY_BIND|OPENCLAW_PODMAN_USERNS|OPENCLAW_BIND_MOUNT_OPTIONS|OPENCLAW_PODMAN_PUBLISH_HOST)
+      OPENCLAW_GATEWAY_TOKEN|OPENCLAW_PODMAN_CONTAINER|OPENCLAW_PODMAN_IMAGE|OPENCLAW_IMAGE|OPENCLAW_PODMAN_PULL|OPENCLAW_PODMAN_RUN_TIMEOUT|OPENCLAW_PODMAN_GATEWAY_HOST_PORT|OPENCLAW_GATEWAY_PORT|OPENCLAW_PODMAN_BRIDGE_HOST_PORT|OPENCLAW_BRIDGE_PORT|OPENCLAW_GATEWAY_BIND|OPENCLAW_PODMAN_USERNS|OPENCLAW_BIND_MOUNT_OPTIONS|OPENCLAW_PODMAN_PUBLISH_HOST)
         ;;
       *)
         continue
@@ -208,10 +215,6 @@ if [[ "${1:-}" == "setup-host" ]]; then
   if [[ -f "$SETUP_PODMAN" ]]; then
     exec "$SETUP_PODMAN" "$@"
   fi
-  SETUP_PODMAN="$REPO_ROOT/setup-podman.sh"
-  if [[ -f "$SETUP_PODMAN" ]]; then
-    exec "$SETUP_PODMAN" "$@"
-  fi
   echo "Podman setup script not found. Run from repo root: ./scripts/podman/setup.sh" >&2
   exit 1
 fi
@@ -240,6 +243,7 @@ WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$CONFIG_DIR/workspace}"
 CONTAINER_NAME="${OPENCLAW_PODMAN_CONTAINER:-openclaw}"
 OPENCLAW_IMAGE="${OPENCLAW_PODMAN_IMAGE:-${OPENCLAW_IMAGE:-openclaw:local}}"
 PODMAN_PULL="${OPENCLAW_PODMAN_PULL:-never}"
+PODMAN_RUN_TIMEOUT="${OPENCLAW_PODMAN_RUN_TIMEOUT:-600s}"
 HOST_GATEWAY_PORT="${OPENCLAW_PODMAN_GATEWAY_HOST_PORT:-${OPENCLAW_GATEWAY_PORT:-18789}}"
 HOST_BRIDGE_PORT="${OPENCLAW_PODMAN_BRIDGE_HOST_PORT:-${OPENCLAW_BRIDGE_PORT:-18790}}"
 PUBLISH_HOST="${OPENCLAW_PODMAN_PUBLISH_HOST:-127.0.0.1}"
@@ -266,9 +270,20 @@ chmod 700 "$CONFIG_DIR" "$WORKSPACE_DIR"
 ensure_private_existing_dir_owned_by_user "config directory" "$CONFIG_DIR"
 ensure_private_existing_dir_owned_by_user "workspace directory" "$WORKSPACE_DIR"
 
+resolve_config_gateway_bind() {
+  local config_dir="$1"
+  if ! command -v openclaw >/dev/null 2>&1; then
+    return 0
+  fi
+  OPENCLAW_CONTAINER="" OPENCLAW_CONFIG_DIR="$config_dir" \
+    openclaw config get gateway.bind 2>/dev/null || true
+}
+
 # For published container ports, the gateway must listen on the container
-# interface. Keep host access local-only by default via 127.0.0.1 publish.
-GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-lan}"
+# interface, so the Podman launcher defaults to lan. Respect an explicit
+# OPENCLAW_GATEWAY_BIND first, then gateway.bind in local config.
+CONFIG_GATEWAY_BIND="$(resolve_config_gateway_bind "$CONFIG_DIR")"
+GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-${CONFIG_GATEWAY_BIND:-lan}}"
 
 upsert_env_var() {
   local file="$1"
@@ -505,7 +520,6 @@ RUN_UID="$(id -u)"
 RUN_GID="$(id -g)"
 if [[ "$PODMAN_USERNS" == "keep-id" ]]; then
   RUN_USER_ARGS=(--user "${RUN_UID}:${RUN_GID}")
-  echo "Starting container as uid=${RUN_UID} gid=${RUN_GID} (must match owner of $CONFIG_DIR)" >&2
 else
   echo "Starting container without --user (OPENCLAW_PODMAN_USERNS=$PODMAN_USERNS), mounts may require ownership fixes." >&2
 fi
@@ -540,7 +554,7 @@ if [[ "$RUN_SETUP" == true ]]; then
 fi
 
 TOKEN_ENV_FILE="$(create_token_env_file "$ENV_FILE" "$OPENCLAW_GATEWAY_TOKEN")"
-podman run --pull="$PODMAN_PULL" -d --replace \
+run_podman_detached --pull="$PODMAN_PULL" -d --replace \
   --name "$CONTAINER_NAME" \
   --init \
   "${USERNS_ARGS[@]}" "${RUN_USER_ARGS[@]}" \
@@ -553,22 +567,12 @@ podman run --pull="$PODMAN_PULL" -d --replace \
   -p "${PUBLISH_HOST}:${HOST_GATEWAY_PORT}:18789" \
   -p "${PUBLISH_HOST}:${HOST_BRIDGE_PORT}:18790" \
   "$OPENCLAW_IMAGE" \
-  node dist/index.js gateway --bind "$GATEWAY_BIND" --port 18789
+  node dist/index.js gateway --bind "$GATEWAY_BIND" --port 18789 >/dev/null
 
-echo "Container $CONTAINER_NAME started. Dashboard: http://127.0.0.1:${HOST_GATEWAY_PORT}/"
-echo "Host CLI: openclaw --container $CONTAINER_NAME dashboard --no-open"
-echo "Logs: podman logs -f $CONTAINER_NAME"
-if [[ "$PLATFORM_NAME" == "Darwin" ]]; then
-  echo "macOS Podman note: if Control UI login hits device-auth errors, prefer the SSH-tunnel or Tailscale paths in docs/install/podman.md."
-  echo "Local-safe workaround:"
-  echo "  OPENCLAW_CONTAINER=$CONTAINER_NAME openclaw dashboard --no-open"
-  echo "  One-time setup:"
-  echo "    OPENCLAW_CONTAINER=$CONTAINER_NAME openclaw config set gateway.controlUi.allowedOrigins '[\"http://127.0.0.1:18789\",\"http://localhost:18789\",\"http://127.0.0.1:28889\",\"http://localhost:28889\"]' --strict-json"
-  echo "    podman restart $CONTAINER_NAME"
-  echo "  ssh -N -i ~/.local/share/containers/podman/machine/machine -p <podman-vm-ssh-port> -L 28889:127.0.0.1:18789 core@127.0.0.1"
-  echo "  Then open http://127.0.0.1:28889/"
-  echo "  Note: find <podman-vm-ssh-port> with: podman system connection list"
-fi
+echo "Container $CONTAINER_NAME started: http://127.0.0.1:${HOST_GATEWAY_PORT}/"
+echo "podman exec -it $CONTAINER_NAME openclaw dashboard --no-open"
+echo "podman exec -it $CONTAINER_NAME openclaw devices approve --latest  # if pairing required"
+echo "podman logs -f $CONTAINER_NAME"
 if [[ "$PLATFORM_NAME" == "Linux" ]]; then
   echo "For auto-start/restarts, use: ./scripts/podman/setup.sh --quadlet (Quadlet + systemd user service)."
 fi

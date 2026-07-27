@@ -20,8 +20,8 @@ public enum TalkConfigParsing {
     public static func selectProviderConfig(
         _ talk: [String: AnyCodable]?,
         defaultProvider: String,
-        allowLegacyFallback: Bool = true,
-    ) -> TalkProviderConfigSelection? {
+        allowLegacyFallback: Bool = true) -> TalkProviderConfigSelection?
+    {
         guard let talk else { return nil }
         if let resolvedSelection = self.resolvedProviderConfig(talk) {
             return resolvedSelection
@@ -56,14 +56,54 @@ public enum TalkConfigParsing {
         self.resolvedPositiveInt(talk?["silenceTimeoutMs"], fallback: fallback)
     }
 
+    public static func normalizedSpeechLocaleID(_ value: String?) -> String? {
+        let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed.replacingOccurrences(of: "_", with: "-")
+    }
+
+    public static func resolvedSpeechLocaleID(
+        _ talk: [String: AnyCodable]?,
+        fallback: String? = nil) -> String?
+    {
+        self.normalizedSpeechLocaleID(talk?["speechLocale"]?.stringValue)
+            ?? self.normalizedSpeechLocaleID(fallback)
+    }
+
+    public static func normalizedExplicitSpeechLocaleID(
+        _ value: String?,
+        automaticID: String = "auto") -> String?
+    {
+        let normalized = self.normalizedSpeechLocaleID(value)
+        return normalized == automaticID ? nil : normalized
+    }
+
+    public static func resolvedSpeechRecognitionLocaleID(
+        preferredLocaleIDs: [String?],
+        fallbackLocaleID: String = "en-US",
+        supportedLocaleIDs: Set<String>) -> String?
+    {
+        let supported = Set(supportedLocaleIDs.compactMap(self.normalizedSpeechLocaleID))
+        var seen = Set<String>()
+        let candidates = (preferredLocaleIDs + [fallbackLocaleID])
+            .compactMap(self.normalizedSpeechLocaleID)
+
+        for candidate in candidates {
+            guard seen.insert(candidate).inserted else { continue }
+            if supported.isEmpty || supported.contains(candidate) {
+                return candidate
+            }
+        }
+        return nil
+    }
+
     private static func normalizedTalkProviderID(_ raw: String?) -> String? {
         let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return trimmed.isEmpty ? nil : trimmed
     }
 
     private static func resolvedProviderConfig(
-        _ talk: [String: AnyCodable]
-    ) -> TalkProviderConfigSelection? {
+        _ talk: [String: AnyCodable]) -> TalkProviderConfigSelection?
+    {
         guard
             let resolved = talk["resolved"]?.dictionaryValue,
             let providerID = self.normalizedTalkProviderID(resolved["provider"]?.stringValue)

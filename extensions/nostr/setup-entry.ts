@@ -1,4 +1,10 @@
-import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
-import { nostrPlugin } from "./src/channel.js";
+// Nostr plugin module implements setup entry behavior.
+import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
-export default defineSetupPluginEntry(nostrPlugin);
+export default defineBundledChannelSetupEntry({
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./setup-plugin-api.js",
+    exportName: "nostrSetupPlugin",
+  },
+});

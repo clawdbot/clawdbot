@@ -1,3 +1,14 @@
+/**
+ * Shared web tool cache, timeout, and response helpers.
+ *
+ * Keeps web_fetch and web_search providers aligned on bounded IO and cache semantics.
+ */
+import { decodeTextPrefix } from "@openclaw/normalization-core";
+import {
+  asDateTimestampMs,
+  MAX_TIMER_TIMEOUT_SECONDS,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
 export type CacheEntry<T> = {
   value: T;
   expiresAt: number;
@@ -10,7 +21,13 @@ const DEFAULT_CACHE_MAX_ENTRIES = 100;
 
 export function resolveTimeoutSeconds(value: unknown, fallback: number): number {
   const parsed = typeof value === "number" && Number.isFinite(value) ? value : fallback;
-  return Math.max(1, Math.floor(parsed));
+  return Math.min(MAX_TIMER_TIMEOUT_SECONDS, Math.max(1, Math.floor(parsed)));
+}
+
+export function resolvePositiveTimeoutSeconds(value: unknown, fallback: number): number {
+  const parsed =
+    typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+  return Math.min(MAX_TIMER_TIMEOUT_SECONDS, Math.max(1, Math.floor(parsed)));
 }
 
 export function resolveCacheTtlMs(value: unknown, fallbackMinutes: number): number {
@@ -20,7 +37,9 @@ export function resolveCacheTtlMs(value: unknown, fallbackMinutes: number): numb
 }
 
 export function normalizeCacheKey(value: string): string {
-  return value.trim().toLowerCase();
+  // Request paths and query values can be case-sensitive; only surrounding
+  // whitespace is non-semantic when callers compose cache keys.
+  return value.trim();
 }
 
 export function readCache<T>(
@@ -31,7 +50,8 @@ export function readCache<T>(
   if (!entry) {
     return null;
   }
-  if (Date.now() > entry.expiresAt) {
+  const now = asDateTimestampMs(Date.now());
+  if (now === undefined || now > entry.expiresAt) {
     cache.delete(key);
     return null;
   }
@@ -47,6 +67,11 @@ export function writeCache<T>(
   if (ttlMs <= 0) {
     return;
   }
+  const now = Date.now();
+  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: now });
+  if (expiresAt === undefined) {
+    return;
+  }
   if (cache.size >= DEFAULT_CACHE_MAX_ENTRIES) {
     const oldest = cache.keys().next();
     if (!oldest.done) {
@@ -55,42 +80,123 @@ export function writeCache<T>(
   }
   cache.set(key, {
     value,
-    expiresAt: Date.now() + ttlMs,
-    insertedAt: Date.now(),
+    expiresAt,
+    insertedAt: now,
   });
 }
 
-export function withTimeout(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
-  if (timeoutMs <= 0) {
-    return signal ?? new AbortController().signal;
-  }
-  const controller = new AbortController();
-  const timer = setTimeout(controller.abort.bind(controller), timeoutMs);
-  if (signal) {
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        controller.abort();
-      },
-      { once: true },
-    );
-  }
-  controller.signal.addEventListener(
-    "abort",
-    () => {
-      clearTimeout(timer);
-    },
-    { once: true },
-  );
-  return controller.signal;
-}
-
-export type ReadResponseTextResult = {
+type ReadResponseTextResult = {
   text: string;
   truncated: boolean;
   bytesRead: number;
 };
+
+const RESPONSE_CHARSET_SCAN_BYTES = 4096;
+const latin1Decoder = new TextDecoder("latin1");
+
+function normalizeCharset(value: string | undefined): string | undefined {
+  const normalized = value?.trim().replace(/^["']|["']$/g, "") ?? "";
+  return normalized && normalized.length <= 64 && /^[A-Za-z0-9._:-]+$/.test(normalized)
+    ? normalized
+    : undefined;
+}
+
+function readCharsetParam(value: string | null | undefined): string | undefined {
+  const match = /(?:^|;)\s*charset\s*=\s*(?:"([^"]+)"|'([^']+)'|([^;\s]+))/i.exec(value ?? "");
+  return normalizeCharset(match?.[1] ?? match?.[2] ?? match?.[3]);
+}
+
+function readAttribute(tag: string, name: string): string | undefined {
+  const target = name.toLowerCase();
+  for (const match of tag.matchAll(
+    /([A-Za-z0-9:_-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g,
+  )) {
+    if (match[1]?.toLowerCase() === target) {
+      return match[2] ?? match[3] ?? match[4] ?? "";
+    }
+  }
+  return undefined;
+}
+
+function shouldSniffDocumentCharset(contentType: string | null): boolean {
+  const mediaType = contentType?.split(";", 1)[0]?.trim().toLowerCase();
+  if (!mediaType) {
+    return true;
+  }
+  return (
+    mediaType === "text/html" ||
+    mediaType === "application/xhtml+xml" ||
+    mediaType === "text/xml" ||
+    mediaType === "application/xml" ||
+    mediaType.endsWith("+xml")
+  );
+}
+
+function sniffCharset(contentType: string | null, bytes: Uint8Array): string | undefined {
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    return "utf-8";
+  }
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) {
+    return "utf-16le";
+  }
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) {
+    return "utf-16be";
+  }
+  if (!shouldSniffDocumentCharset(contentType)) {
+    return undefined;
+  }
+
+  const head = latin1Decoder.decode(
+    bytes.subarray(0, Math.min(bytes.byteLength, RESPONSE_CHARSET_SCAN_BYTES)),
+  );
+  const xmlEncoding = /<\?xml\s+[^>]*\bencoding\s*=\s*(?:"([^"]+)"|'([^']+)')/i.exec(head);
+  if (xmlEncoding) {
+    return normalizeCharset(xmlEncoding[1] ?? xmlEncoding[2]);
+  }
+
+  for (const match of head.matchAll(/<meta\b[^>]*>/gi)) {
+    const tag = match[0];
+    const charset = normalizeCharset(readAttribute(tag, "charset"));
+    if (charset) {
+      return charset;
+    }
+    if (/^content-type$/i.test(readAttribute(tag, "http-equiv") ?? "")) {
+      const contentCharset = readCharsetParam(readAttribute(tag, "content"));
+      if (contentCharset) {
+        return contentCharset;
+      }
+    }
+  }
+  return undefined;
+}
+
+function concatBytes(parts: Uint8Array[], totalBytes: number): Uint8Array {
+  if (parts.length === 1 && parts[0]?.byteLength === totalBytes) {
+    return parts[0];
+  }
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const part of parts) {
+    bytes.set(part, offset);
+    offset += part.byteLength;
+  }
+  return bytes;
+}
+
+function responseContentType(res: Response): string | null {
+  const headers = (res as { headers?: { get?: (name: string) => string | null } }).headers;
+  return typeof headers?.get === "function" ? headers.get("content-type") : null;
+}
+
+function decodeResponseBytes(res: Response, bytes: Uint8Array, truncated = false): string {
+  const contentType = responseContentType(res);
+  const charset = readCharsetParam(contentType) ?? sniffCharset(contentType, bytes);
+  try {
+    return decodeTextPrefix(bytes, { encoding: charset ?? "utf-8", truncated });
+  } catch {
+    return decodeTextPrefix(bytes, { encoding: "utf-8", truncated });
+  }
+}
 
 export async function readResponseText(
   res: Response,
@@ -111,10 +217,9 @@ export async function readResponseText(
     typeof (body as { getReader: () => unknown }).getReader === "function"
   ) {
     const reader = (body as ReadableStream<Uint8Array>).getReader();
-    const decoder = new TextDecoder();
     let bytesRead = 0;
     let truncated = false;
-    const parts: string[] = [];
+    const parts: Uint8Array[] = [];
 
     try {
       while (true) {
@@ -138,32 +243,78 @@ export async function readResponseText(
         }
 
         bytesRead += chunk.byteLength;
-        parts.push(decoder.decode(chunk, { stream: true }));
+        parts.push(chunk);
 
-        if (truncated || bytesRead >= maxBytes) {
+        if (truncated) {
+          break;
+        }
+        if (bytesRead >= maxBytes) {
+          // Reached the byte cap. A body that is exactly maxBytes bytes is
+          // complete only once EOF confirms it. Keep the conservative result
+          // if that confirming read fails or the body continues.
           truncated = true;
+          while (true) {
+            const { done: atEnd, value: extra } = await reader.read();
+            if (atEnd) {
+              truncated = false;
+              break;
+            }
+            if (extra && extra.byteLength > 0) {
+              truncated = true;
+              break;
+            }
+          }
           break;
         }
       }
     } catch {
-      // Best-effort: return whatever we decoded so far.
+      // Stream errors mean the accumulated bytes are only a partial body.
+      truncated = true;
     } finally {
       if (truncated) {
-        try {
-          await reader.cancel();
-        } catch {
-          // ignore
-        }
+        // Some mocked or non-compliant streams never settle cancel(); do not
+        // let cleanup turn a bounded read into a hung fetch.
+        void reader.cancel().catch(() => undefined);
+      }
+      try {
+        reader.releaseLock();
+      } catch {
+        // The read/cancel path already produced the best-effort body result;
+        // lock-release failures must not replace that outcome.
       }
     }
 
-    parts.push(decoder.decode());
-    return { text: parts.join(""), truncated, bytesRead };
+    const bytes = concatBytes(parts, bytesRead);
+    return { text: decodeResponseBytes(res, bytes, truncated), truncated, bytesRead };
+  }
+
+  if (maxBytes) {
+    if (res instanceof Response && res.body === null) {
+      return { text: "", truncated: false, bytesRead: 0 };
+    }
+    // Whole-body fallbacks allocate before returning, so they cannot honor a byte cap.
+    // Fail closed instead of making maxBytes a returned-text limit only.
+    return { text: "", truncated: true, bytesRead: 0 };
+  }
+
+  const readBytes = (res as { arrayBuffer?: () => Promise<ArrayBuffer> }).arrayBuffer;
+  if (typeof readBytes === "function") {
+    try {
+      const bytes = new Uint8Array(await readBytes.call(res));
+      return {
+        text: decodeResponseBytes(res, bytes),
+        truncated: false,
+        bytesRead: bytes.byteLength,
+      };
+    } catch {
+      // Fall back to text() for lightweight Response-like mocks that do not expose bytes.
+    }
   }
 
   try {
     const text = await res.text();
-    return { text, truncated: false, bytesRead: text.length };
+    const bytes = new TextEncoder().encode(text);
+    return { text, truncated: false, bytesRead: bytes.byteLength };
   } catch {
     return { text: "", truncated: false, bytesRead: 0 };
   }

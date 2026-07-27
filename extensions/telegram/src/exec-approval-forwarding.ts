@@ -1,11 +1,12 @@
+// Telegram plugin module implements exec approval forwarding behavior.
 import {
-  buildExecApprovalPendingReplyPayload,
+  buildTypedExecApprovalPendingReplyPayload,
+  resolveExecApprovalRequestAllowedDecisions,
   resolveExecApprovalCommandDisplay,
-  type ExecApprovalRequest,
-} from "openclaw/plugin-sdk/approval-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/approval-reply-runtime";
+import type { ExecApprovalRequest } from "openclaw/plugin-sdk/approval-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeMessageChannel } from "openclaw/plugin-sdk/routing";
-import { buildTelegramExecApprovalButtons } from "./approval-buttons.js";
 import { isTelegramExecApprovalClientEnabled } from "./exec-approvals.js";
 
 export function shouldSuppressTelegramExecApprovalForwardingFallback(params: {
@@ -30,26 +31,17 @@ export function buildTelegramExecApprovalPendingPayload(params: {
   request: ExecApprovalRequest;
   nowMs: number;
 }) {
-  const payload = buildExecApprovalPendingReplyPayload({
+  return buildTypedExecApprovalPendingReplyPayload({
     approvalId: params.request.id,
     approvalSlug: params.request.id.slice(0, 8),
     approvalCommandId: params.request.id,
+    warningText: params.request.request.warningText ?? undefined,
     command: resolveExecApprovalCommandDisplay(params.request.request).commandText,
     cwd: params.request.request.cwd ?? undefined,
     host: params.request.request.host === "node" ? "node" : "gateway",
     nodeId: params.request.request.nodeId ?? undefined,
+    allowedDecisions: resolveExecApprovalRequestAllowedDecisions(params.request.request),
     expiresAtMs: params.request.expiresAtMs,
     nowMs: params.nowMs,
   });
-  const buttons = buildTelegramExecApprovalButtons(params.request.id);
-  if (!buttons) {
-    return payload;
-  }
-  return {
-    ...payload,
-    channelData: {
-      ...payload.channelData,
-      telegram: { buttons },
-    },
-  };
 }

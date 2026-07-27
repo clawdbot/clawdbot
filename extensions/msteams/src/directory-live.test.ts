@@ -1,3 +1,4 @@
+// Msteams tests cover directory live plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {

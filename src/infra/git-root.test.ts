@@ -1,12 +1,9 @@
+// Covers git root and HEAD path discovery.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import { findGitRoot, resolveGitHeadPath } from "./git-root.js";
-
-async function makeTempDir(label: string): Promise<string> {
-  return fs.mkdtemp(path.join(os.tmpdir(), `openclaw-${label}-`));
-}
 
 async function expectGitRootResolution(params: {
   label: string;
@@ -14,10 +11,11 @@ async function expectGitRootResolution(params: {
     temp: string,
   ) => Promise<{ startPath: string; expectedRoot: string | null; expectedHead: string | null }>;
 }): Promise<void> {
-  const temp = await makeTempDir(params.label);
-  const { startPath, expectedRoot, expectedHead } = await params.setup(temp);
-  expect(findGitRoot(startPath)).toBe(expectedRoot);
-  expect(resolveGitHeadPath(startPath)).toBe(expectedHead);
+  await withTempDir({ prefix: `openclaw-${params.label}-` }, async (temp) => {
+    const { startPath, expectedRoot, expectedHead } = await params.setup(temp);
+    expect(findGitRoot(startPath)).toBe(expectedRoot);
+    expect(resolveGitHeadPath(startPath)).toBe(expectedHead);
+  });
 }
 
 describe("git-root", () => {
@@ -104,13 +102,14 @@ describe("git-root", () => {
   });
 
   it("respects maxDepth traversal limit", async () => {
-    const temp = await makeTempDir("git-root-depth");
-    const repoRoot = path.join(temp, "repo");
-    const nested = path.join(repoRoot, "a", "b", "c");
-    await fs.mkdir(path.join(repoRoot, ".git"), { recursive: true });
-    await fs.mkdir(nested, { recursive: true });
+    await withTempDir({ prefix: "openclaw-git-root-depth-" }, async (temp) => {
+      const repoRoot = path.join(temp, "repo");
+      const nested = path.join(repoRoot, "a", "b", "c");
+      await fs.mkdir(path.join(repoRoot, ".git"), { recursive: true });
+      await fs.mkdir(nested, { recursive: true });
 
-    expect(findGitRoot(nested, { maxDepth: 2 })).toBeNull();
-    expect(resolveGitHeadPath(nested, { maxDepth: 2 })).toBeNull();
+      expect(findGitRoot(nested, { maxDepth: 2 })).toBeNull();
+      expect(resolveGitHeadPath(nested, { maxDepth: 2 })).toBeNull();
+    });
   });
 });

@@ -1,4 +1,10 @@
-import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
-import { tlonPlugin } from "./src/channel.js";
+// Tlon plugin module implements setup entry behavior.
+import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
-export default defineSetupPluginEntry(tlonPlugin);
+export default defineBundledChannelSetupEntry({
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./api.js",
+    exportName: "tlonPlugin",
+  },
+});

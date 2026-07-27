@@ -1,3 +1,4 @@
+// Channel MCP tools expose channel operations through an MCP server.
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { OpenClawChannelBridge } from "./channel-bridge.js";
@@ -5,9 +6,17 @@ import {
   extractAttachmentsFromMessage,
   resolveMessageId,
   summarizeResult,
+  summarizeStructuredResult,
   toText,
 } from "./channel-shared.js";
 
+/**
+ * MCP tool registration for channel conversation access.
+ *
+ * Tool handlers stay thin: schemas validate public inputs and the bridge owns
+ * Gateway readiness, routing, event queueing, and approval resolution.
+ */
+/** Return protocol capabilities advertised when Claude channel mode is enabled. */
 export function getChannelMcpCapabilities(claudeChannelMode: "off" | "on" | "auto") {
   if (claudeChannelMode === "off") {
     return undefined;
@@ -20,6 +29,7 @@ export function getChannelMcpCapabilities(claudeChannelMode: "off" | "on" | "aut
   };
 }
 
+/** Register all channel MCP tools against a server instance. */
 export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChannelBridge): void {
   server.tool(
     "conversations_list",
@@ -34,7 +44,7 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     async (args) => {
       const conversations = await bridge.listConversations(args);
       return {
-        ...summarizeResult("conversations", conversations.length),
+        ...summarizeStructuredResult("conversations", conversations.length, { conversations }),
         structuredContent: { conversations },
       };
     },
@@ -69,7 +79,7 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     async ({ session_key, limit }) => {
       const messages = await bridge.readMessages(session_key, limit ?? 20);
       return {
-        ...summarizeResult("messages", messages.length),
+        ...summarizeStructuredResult("messages", messages.length, { messages }),
         structuredContent: { messages },
       };
     },

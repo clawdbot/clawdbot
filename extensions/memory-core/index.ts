@@ -1,22 +1,189 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { registerMemoryCli } from "./src/cli.js";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+// Memory Core plugin entrypoint registers its OpenClaw integration.
 import {
-  buildMemoryFlushPlan,
-  DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES,
-  DEFAULT_MEMORY_FLUSH_PROMPT,
-  DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
-} from "./src/flush-plan.js";
-import { registerBuiltInMemoryEmbeddingProviders } from "./src/memory/provider-adapters.js";
+  jsonResult,
+  resolveMemorySearchConfig,
+  resolveSessionAgentIds,
+  type MemoryPluginRuntime,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { resolveMemoryBackendConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import {
+  definePluginEntry,
+  type AnyAgentTool,
+  type OpenClawPluginToolContext,
+} from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateLeaseRunner,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { TSchema } from "typebox";
+import { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
+import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
+import { buildMemoryFlushPlan } from "./src/flush-plan.js";
+import type { MemoryCoreAcquireLocalService } from "./src/memory/embedding-local-service.js";
+import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
 import { buildPromptSection } from "./src/prompt-section.js";
-import { memoryRuntime } from "./src/runtime-provider.js";
-import { createMemoryGetTool, createMemorySearchTool } from "./src/tools.js";
-export {
-  buildMemoryFlushPlan,
-  DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES,
-  DEFAULT_MEMORY_FLUSH_PROMPT,
-  DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
-} from "./src/flush-plan.js";
-export { buildPromptSection } from "./src/prompt-section.js";
+
+type MemoryToolsModule = typeof import("./src/tools.js");
+
+type MemoryToolOptions = {
+  config?: OpenClawConfig;
+  getConfig?: () => OpenClawConfig | undefined;
+  agentId?: string;
+  agentSessionKey?: string;
+  sandboxed?: boolean;
+  oneShotCliRun?: boolean;
+  conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
+  acquireLocalService?: MemoryCoreAcquireLocalService;
+  withLease?: PluginStateLeaseRunner;
+};
+
+const loadMemoryToolsModule = createLazyRuntimeModule(() => import("./src/tools.js"));
+
+const loadRuntimeProviderModule = createLazyRuntimeModule(
+  () => import("./src/runtime-provider.js"),
+);
+
+function getToolConfig(options: MemoryToolOptions): OpenClawConfig | undefined {
+  return options.getConfig?.() ?? options.config;
+}
+
+function hasMemoryToolContext(options: MemoryToolOptions): boolean {
+  const cfg = getToolConfig(options);
+  if (!cfg) {
+    return false;
+  }
+  const { sessionAgentId: agentId } = resolveSessionAgentIds({
+    sessionKey: options.agentSessionKey,
+    config: cfg,
+    agentId: options.agentId,
+  });
+  return Boolean(resolveMemorySearchConfig(cfg, agentId));
+}
+
+const MemorySearchSchema = {
+  type: "object",
+  properties: {
+    query: { type: "string" },
+    maxResults: { type: "integer", minimum: 1 },
+    minScore: { type: "number" },
+    corpus: { type: "string", enum: ["memory", "wiki", "all", "sessions"] },
+  },
+  required: ["query"],
+  additionalProperties: false,
+} as const satisfies TSchema;
+
+const MemoryGetSchema = {
+  type: "object",
+  properties: {
+    path: { type: "string" },
+    from: { type: "integer", minimum: 1 },
+    lines: { type: "integer", minimum: 1 },
+    corpus: { type: "string", enum: ["memory", "wiki", "all"] },
+  },
+  required: ["path"],
+  additionalProperties: false,
+} as const satisfies TSchema;
+
+function createLazyMemoryTool(params: {
+  options: MemoryToolOptions;
+  label: string;
+  name: "memory_search" | "memory_get";
+  description: string;
+  parameters: typeof MemorySearchSchema | typeof MemoryGetSchema;
+  load: (module: MemoryToolsModule, options: MemoryToolOptions) => AnyAgentTool | null;
+}): AnyAgentTool | null {
+  if (!hasMemoryToolContext(params.options)) {
+    return null;
+  }
+
+  let toolPromise: Promise<AnyAgentTool | null> | undefined;
+  const loadTool = async () => {
+    toolPromise ??= loadMemoryToolsModule().then((module) => params.load(module, params.options));
+    return await toolPromise;
+  };
+
+  return {
+    label: params.label,
+    name: params.name,
+    description: params.description,
+    parameters: params.parameters,
+    execute: async (toolCallId, toolParams, signal, onUpdate) => {
+      const tool = await loadTool();
+      if (!tool) {
+        return jsonResult({
+          disabled: true,
+          unavailable: true,
+          error: "memory search unavailable",
+        });
+      }
+      return await tool.execute(toolCallId, toolParams, signal, onUpdate);
+    },
+  };
+}
+
+function createLazyMemorySearchTool(options: MemoryToolOptions): AnyAgentTool | null {
+  return createLazyMemoryTool({
+    options,
+    label: "Memory Search",
+    name: "memory_search",
+    description:
+      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos. Optional `corpus=wiki` or `corpus=all` also searches registered compiled-wiki supplements. `corpus=memory` restricts hits to indexed memory files (excludes session transcript chunks from ranking). `corpus=sessions` restricts hits to indexed session transcripts (same visibility rules as session history tools). If response has disabled=true, memory retrieval is unavailable and should be surfaced to the user.",
+    parameters: MemorySearchSchema,
+    load: (module, loadOptions) => module.createMemorySearchTool(loadOptions),
+  });
+}
+
+function createLazyMemoryGetTool(options: MemoryToolOptions): AnyAgentTool | null {
+  return createLazyMemoryTool({
+    options,
+    label: "Memory Get",
+    name: "memory_get",
+    description:
+      "Safe exact excerpt read from MEMORY.md or memory/*.md. Defaults to a bounded excerpt when lines are omitted, includes truncation/continuation info when more content exists, and `corpus=wiki` reads from registered compiled-wiki supplements.",
+    parameters: MemoryGetSchema,
+    load: (module, loadOptions) => module.createMemoryGetTool(loadOptions),
+  });
+}
+
+function resolveMemoryToolOptions(
+  ctx: OpenClawPluginToolContext,
+  host: MemoryCoreRuntimeHost,
+): MemoryToolOptions {
+  const getConfig = () => ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
+  return {
+    config: getConfig(),
+    getConfig,
+    agentId: ctx.agentId,
+    agentSessionKey: ctx.sessionKey,
+    sandboxed: ctx.sandboxed,
+    oneShotCliRun: ctx.oneShotCliRun,
+    conversationRecall: ctx.conversationRecall,
+    ...(host.acquireLocalService ? { acquireLocalService: host.acquireLocalService } : {}),
+    ...(host.withLease ? { withLease: host.withLease } : {}),
+  };
+}
+
+function createLazyMemoryRuntime(host: MemoryCoreRuntimeHost): MemoryPluginRuntime {
+  return {
+    async getMemorySearchManager(params) {
+      const { createMemoryRuntime } = await loadRuntimeProviderModule();
+      return await createMemoryRuntime(host).getMemorySearchManager(params);
+    },
+    resolveMemoryBackendConfig(params) {
+      return resolveMemoryBackendConfig(params);
+    },
+    async closeAllMemorySearchManagers() {
+      const { memoryRuntime: runtime } = await loadRuntimeProviderModule();
+      await runtime.closeAllMemorySearchManagers?.();
+    },
+    async closeMemorySearchManager(params) {
+      const { memoryRuntime: runtime } = await loadRuntimeProviderModule();
+      await runtime.closeMemorySearchManager?.(params);
+    },
+  };
+}
 
 export default definePluginEntry({
   id: "memory-core",
@@ -24,32 +191,48 @@ export default definePluginEntry({
   description: "File-backed memory search tools and CLI",
   kind: "memory",
   register(api) {
-    registerBuiltInMemoryEmbeddingProviders(api);
-    api.registerMemoryPromptSection(buildPromptSection);
-    api.registerMemoryFlushPlan(buildMemoryFlushPlan);
-    api.registerMemoryRuntime(memoryRuntime);
-
-    api.registerTool(
-      (ctx) =>
-        createMemorySearchTool({
-          config: ctx.config,
-          agentSessionKey: ctx.sessionKey,
-        }),
-      { names: ["memory_search"] },
+    const acquireLocalService = api.runtime.llm?.acquireLocalService;
+    const withLease = api.runtime.state.withLease.bind(api.runtime.state);
+    const host = { acquireLocalService, withLease } satisfies MemoryCoreRuntimeHost;
+    configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
+      api.runtime.state.openKeyedStore<T>(options),
     );
+    registerShortTermPromotionDreaming(api);
+    api.registerMemoryCapability({
+      promptBuilder: buildPromptSection,
+      flushPlanResolver: buildMemoryFlushPlan,
+      runtime: createLazyMemoryRuntime(host),
+      publicArtifacts: {
+        async listArtifacts(params) {
+          const { listMemoryCorePublicArtifacts } = await import("./src/public-artifacts.js");
+          return await listMemoryCorePublicArtifacts(params);
+        },
+      },
+    });
 
-    api.registerTool(
-      (ctx) =>
-        createMemoryGetTool({
-          config: ctx.config,
-          agentSessionKey: ctx.sessionKey,
-        }),
-      { names: ["memory_get"] },
-    );
+    api.registerTool((ctx) => createLazyMemorySearchTool(resolveMemoryToolOptions(ctx, host)), {
+      names: ["memory_search"],
+    });
+
+    api.registerTool((ctx) => createLazyMemoryGetTool(resolveMemoryToolOptions(ctx, host)), {
+      names: ["memory_get"],
+    });
+
+    api.registerCommand({
+      name: "dreaming",
+      description: "Enable or disable memory dreaming.",
+      acceptsArgs: true,
+      exposeSenderIsOwner: true,
+      handler: async (ctx) => {
+        const { handleDreamingCommand } = await import("./src/dreaming-command.js");
+        return await handleDreamingCommand(api, ctx);
+      },
+    });
 
     api.registerCli(
-      ({ program }) => {
-        registerMemoryCli(program);
+      async ({ program }) => {
+        const { registerMemoryCli } = await import("./cli.js");
+        registerMemoryCli(program, host);
       },
       {
         descriptors: [

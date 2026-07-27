@@ -1,14 +1,11 @@
-import type { ChannelPlugin } from "../api.js";
-import {
-  resolveLineAccount,
-  type OpenClawConfig,
-  type ResolvedLineAccount,
-} from "../runtime-api.js";
-import { hasLineCredentials, parseLineAllowFromId } from "./account-helpers.js";
+// Line plugin module implements channel shared behavior.
+import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { hasLineCredentials } from "./account-helpers.js";
+import type { ChannelPlugin, ResolvedLineAccount } from "./channel-api.js";
 import { lineConfigAdapter } from "./config-adapter.js";
 import { LineChannelConfigSchema } from "./config-schema.js";
 
-export const lineChannelMeta = {
+const lineChannelMeta = {
   id: "line",
   label: "LINE",
   selectionLabel: "LINE (Messaging API)",
@@ -37,22 +34,19 @@ export const lineChannelPluginCommon = {
   config: {
     ...lineConfigAdapter,
     isConfigured: (account: ResolvedLineAccount) => hasLineCredentials(account),
-    describeAccount: (account: ResolvedLineAccount) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: hasLineCredentials(account),
-      tokenSource: account.tokenSource ?? undefined,
-    }),
+    describeAccount: (account: ResolvedLineAccount) =>
+      describeWebhookAccountSnapshot({
+        account,
+        configured: hasLineCredentials(account),
+        extra: {
+          tokenSource: account.tokenSource ?? undefined,
+          signingSecretSource: account.signingSecretSource ?? undefined,
+          tokenStatus: account.tokenStatus,
+          signingSecretStatus: account.signingSecretStatus,
+        },
+      }),
   },
 } satisfies Pick<
   ChannelPlugin<ResolvedLineAccount>,
   "meta" | "capabilities" | "reload" | "configSchema" | "config"
 >;
-
-export function isLineConfigured(cfg: OpenClawConfig, accountId: string): boolean {
-  return hasLineCredentials(resolveLineAccount({ cfg, accountId }));
-}
-
-export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../runtime-api.js";
-export { parseLineAllowFromId };

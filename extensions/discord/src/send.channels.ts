@@ -1,5 +1,13 @@
+// Discord plugin module implements send.channels behavior.
 import type { APIChannel } from "discord-api-types/v10";
-import { Routes } from "discord-api-types/v10";
+import {
+  createGuildChannel,
+  deleteChannel,
+  deleteChannelPermission,
+  editChannel,
+  moveGuildChannels,
+  putChannelPermission,
+} from "./internal/discord.js";
 import { resolveDiscordRest } from "./send.shared.js";
 import type {
   DiscordChannelCreate,
@@ -11,7 +19,7 @@ import type {
 
 export async function createChannelDiscord(
   payload: DiscordChannelCreate,
-  opts: DiscordReactOpts = {},
+  opts: DiscordReactOpts,
 ): Promise<APIChannel> {
   const rest = resolveDiscordRest(opts);
   const body: Record<string, unknown> = {
@@ -32,14 +40,14 @@ export async function createChannelDiscord(
   if (payload.nsfw !== undefined) {
     body.nsfw = payload.nsfw;
   }
-  return (await rest.post(Routes.guildChannels(payload.guildId), {
+  return await createGuildChannel(rest, payload.guildId, {
     body,
-  })) as APIChannel;
+  });
 }
 
 export async function editChannelDiscord(
   payload: DiscordChannelEdit,
-  opts: DiscordReactOpts = {},
+  opts: DiscordReactOpts,
 ): Promise<APIChannel> {
   const rest = resolveDiscordRest(opts);
   const body: Record<string, unknown> = {};
@@ -79,18 +87,18 @@ export async function editChannelDiscord(
       ...(t.emoji_name !== undefined && { emoji_name: t.emoji_name }),
     }));
   }
-  return (await rest.patch(Routes.channel(payload.channelId), {
+  return await editChannel(rest, payload.channelId, {
     body,
-  })) as APIChannel;
+  });
 }
 
-export async function deleteChannelDiscord(channelId: string, opts: DiscordReactOpts = {}) {
+export async function deleteChannelDiscord(channelId: string, opts: DiscordReactOpts) {
   const rest = resolveDiscordRest(opts);
-  await rest.delete(Routes.channel(channelId));
+  await deleteChannel(rest, channelId);
   return { ok: true, channelId };
 }
 
-export async function moveChannelDiscord(payload: DiscordChannelMove, opts: DiscordReactOpts = {}) {
+export async function moveChannelDiscord(payload: DiscordChannelMove, opts: DiscordReactOpts) {
   const rest = resolveDiscordRest(opts);
   const body: Array<Record<string, unknown>> = [
     {
@@ -99,13 +107,13 @@ export async function moveChannelDiscord(payload: DiscordChannelMove, opts: Disc
       ...(payload.position !== undefined && { position: payload.position }),
     },
   ];
-  await rest.patch(Routes.guildChannels(payload.guildId), { body });
+  await moveGuildChannels(rest, payload.guildId, { body });
   return { ok: true };
 }
 
 export async function setChannelPermissionDiscord(
   payload: DiscordChannelPermissionSet,
-  opts: DiscordReactOpts = {},
+  opts: DiscordReactOpts,
 ) {
   const rest = resolveDiscordRest(opts);
   const body: Record<string, unknown> = {
@@ -117,16 +125,16 @@ export async function setChannelPermissionDiscord(
   if (payload.deny !== undefined) {
     body.deny = payload.deny;
   }
-  await rest.put(`/channels/${payload.channelId}/permissions/${payload.targetId}`, { body });
+  await putChannelPermission(rest, payload.channelId, payload.targetId, { body });
   return { ok: true };
 }
 
 export async function removeChannelPermissionDiscord(
   channelId: string,
   targetId: string,
-  opts: DiscordReactOpts = {},
+  opts: DiscordReactOpts,
 ) {
   const rest = resolveDiscordRest(opts);
-  await rest.delete(`/channels/${channelId}/permissions/${targetId}`);
+  await deleteChannelPermission(rest, channelId, targetId);
   return { ok: true };
 }

@@ -1,3 +1,4 @@
-import { describeMinimaxProviderDiscoveryContract } from "../../test/helpers/extensions/provider-discovery-contract.js";
+// Minimax tests cover provider discovery.contract plugin behavior.
+import { describeMinimaxProviderDiscoveryContract } from "openclaw/plugin-sdk/provider-test-contracts";
 
-describeMinimaxProviderDiscoveryContract();
+describeMinimaxProviderDiscoveryContract(() => import("./index.js"));

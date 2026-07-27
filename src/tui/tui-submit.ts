@@ -1,3 +1,23 @@
+// Handles TUI input submission and command dispatch.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { TuiChatSubmitAdmission } from "./tui-submit-state.js";
+
+export type TuiSubmitAction = "local shell" | "command" | "message";
+
+function runSubmitAction(
+  action: TuiSubmitAction,
+  run: () => Promise<void> | void,
+  onError: (action: TuiSubmitAction, error: unknown) => void,
+): void {
+  try {
+    void Promise.resolve(run()).catch((error: unknown) => {
+      onError(action, error);
+    });
+  } catch (error) {
+    onError(action, error);
+  }
+}
+
 export function createEditorSubmitHandler(params: {
   editor: {
     setText: (value: string) => void;
@@ -6,14 +26,20 @@ export function createEditorSubmitHandler(params: {
   handleCommand: (value: string) => Promise<void> | void;
   sendMessage: (value: string) => Promise<void> | void;
   handleBangLine: (value: string) => Promise<void> | void;
+  onSubmitError: (action: TuiSubmitAction, error: unknown) => void;
+  admitMessage?: (value: string) => TuiChatSubmitAdmission;
+  onBlockedMessageSubmit?: (
+    value: string,
+    reason: Exclude<TuiChatSubmitAdmission, "allowed">,
+  ) => void;
 }) {
   return (text: string) => {
     const raw = text;
     const value = raw.trim();
-    params.editor.setText("");
 
     // Keep previous behavior: ignore empty/whitespace-only submissions.
     if (!value) {
+      params.editor.setText("");
       return;
     }
 
@@ -21,20 +47,31 @@ export function createEditorSubmitHandler(params: {
     // IMPORTANT: use the raw (untrimmed) text so leading spaces do NOT trigger.
     // Per requirement: a lone '!' should be treated as a normal message.
     if (raw.startsWith("!") && raw !== "!") {
+      params.editor.setText("");
       params.editor.addToHistory(raw);
-      void params.handleBangLine(raw);
+      runSubmitAction("local shell", () => params.handleBangLine(raw), params.onSubmitError);
       return;
     }
-
-    // Enable built-in editor prompt history navigation (up/down).
-    params.editor.addToHistory(value);
 
     if (value.startsWith("/")) {
-      void params.handleCommand(value);
+      params.editor.setText("");
+      // Enable built-in editor prompt history navigation (up/down).
+      params.editor.addToHistory(value);
+      runSubmitAction("command", () => params.handleCommand(value), params.onSubmitError);
       return;
     }
 
-    void params.sendMessage(value);
+    const admission = params.admitMessage?.(value) ?? "allowed";
+    if (admission !== "allowed") {
+      params.editor.setText(value);
+      params.onBlockedMessageSubmit?.(value, admission);
+      return;
+    }
+
+    params.editor.setText("");
+    // Enable built-in editor prompt history navigation (up/down).
+    params.editor.addToHistory(value);
+    runSubmitAction("message", () => params.sendMessage(value), params.onSubmitError);
   };
 }
 
@@ -44,7 +81,7 @@ export function shouldEnableWindowsGitBashPasteFallback(params?: {
 }): boolean {
   const platform = params?.platform ?? process.platform;
   const env = params?.env ?? process.env;
-  const termProgram = (env.TERM_PROGRAM ?? "").toLowerCase();
+  const termProgram = normalizeLowercaseStringOrEmpty(env.TERM_PROGRAM);
 
   // Some macOS terminals emit multiline paste as rapid single-line submits.
   // Enable burst coalescing so pasted blocks stay as one user message.
@@ -64,7 +101,7 @@ export function shouldEnableWindowsGitBashPasteFallback(params?: {
   if (msystem.startsWith("MINGW") || msystem.startsWith("MSYS")) {
     return true;
   }
-  if (shell.toLowerCase().includes("bash")) {
+  if (normalizeLowercaseStringOrEmpty(shell).includes("bash")) {
     return true;
   }
   return termProgram.includes("mintty");

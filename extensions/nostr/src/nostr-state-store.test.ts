@@ -1,6 +1,12 @@
+// Nostr tests cover nostr state store plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { describe, expect, it } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import {
@@ -16,8 +22,14 @@ async function withTempStateDir<T>(fn: (dir: string) => Promise<T>) {
   const previous = process.env.OPENCLAW_STATE_DIR;
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-nostr-"));
   process.env.OPENCLAW_STATE_DIR = dir;
+  resetPluginStateStoreForTests();
   setNostrRuntime({
     state: {
+      openKeyedStore: (options: OpenKeyedStoreOptions) =>
+        createPluginStateKeyedStoreForTests("nostr", {
+          ...options,
+          env: { ...process.env, OPENCLAW_STATE_DIR: dir },
+        }),
       resolveStateDir: (env, homedir) => {
         const stateEnv = env ?? process.env;
         const override = stateEnv.OPENCLAW_STATE_DIR?.trim();
@@ -86,52 +98,18 @@ describe("nostr bus state store", () => {
     });
   });
 
-  it("upgrades v1 bus state files on read", async () => {
-    await withTempStateDir(async (dir) => {
-      const filePath = path.join(dir, "nostr", "bus-state-test-bot.json");
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(
-        filePath,
-        JSON.stringify({
-          version: 1,
-          lastProcessedAt: 1700000000,
-          gatewayStartedAt: 1700000100,
-        }),
-        "utf-8",
-      );
-
-      const state = await readNostrBusState({ accountId: "test-bot" });
-      expect(state).toEqual({
-        version: 2,
-        lastProcessedAt: 1700000000,
-        gatewayStartedAt: 1700000100,
-        recentEventIds: [],
+  it("preserves legacy account key bytes for state lookup", async () => {
+    await withTempStateDir(async () => {
+      await writeNostrBusState({
+        accountId: " Team.A ",
+        lastProcessedAt: 1234,
+        gatewayStartedAt: 1200,
       });
-    });
-  });
 
-  it("drops malformed recent event ids while keeping the state", async () => {
-    await withTempStateDir(async (dir) => {
-      const filePath = path.join(dir, "nostr", "bus-state-test-bot.json");
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(
-        filePath,
-        JSON.stringify({
-          version: 2,
-          lastProcessedAt: 1700000000,
-          gatewayStartedAt: 1700000100,
-          recentEventIds: ["evt-1", 2, null],
-        }),
-        "utf-8",
-      );
-
-      const state = await readNostrBusState({ accountId: "test-bot" });
-      expect(state).toEqual({
-        version: 2,
-        lastProcessedAt: 1700000000,
-        gatewayStartedAt: 1700000100,
-        recentEventIds: ["evt-1"],
+      await expect(readNostrBusState({ accountId: "Team.A" })).resolves.toMatchObject({
+        lastProcessedAt: 1234,
       });
+      await expect(readNostrBusState({ accountId: "team-a" })).resolves.toBeNull();
     });
   });
 });
@@ -156,34 +134,6 @@ describe("nostr profile state store", () => {
         lastPublishResults: {
           "wss://relay.example": "ok",
         },
-      });
-    });
-  });
-
-  it("drops malformed relay results while keeping valid state fields", async () => {
-    await withTempStateDir(async (dir) => {
-      const filePath = path.join(dir, "nostr", "profile-state-test-bot.json");
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(
-        filePath,
-        JSON.stringify({
-          version: 1,
-          lastPublishedAt: 1700000000,
-          lastPublishedEventId: "evt-1",
-          lastPublishResults: {
-            "wss://relay.example": "ok",
-            "wss://relay.bad": "unknown",
-          },
-        }),
-        "utf-8",
-      );
-
-      const state = await readNostrProfileState({ accountId: "test-bot" });
-      expect(state).toEqual({
-        version: 1,
-        lastPublishedAt: 1700000000,
-        lastPublishedEventId: "evt-1",
-        lastPublishResults: null,
       });
     });
   });

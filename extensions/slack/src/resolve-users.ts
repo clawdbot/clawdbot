@@ -1,9 +1,12 @@
+// Slack plugin module implements resolve users behavior.
 import type { WebClient } from "@slack/web-api";
-import { createSlackWebClient } from "./client.js";
+import { resolveDirectoryAllowlistEntries } from "openclaw/plugin-sdk/directory-runtime";
 import {
-  collectSlackCursorItems,
-  resolveSlackAllowlistEntries,
-} from "./resolve-allowlist-common.js";
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { createSlackLookupClient } from "./client.js";
+import { collectSlackCursorPages } from "./cursor-pages.js";
 
 export type SlackUserLookup = {
   id: string;
@@ -27,23 +30,6 @@ export type SlackUserResolution = {
   note?: string;
 };
 
-type SlackListUsersResponse = {
-  members?: Array<{
-    id?: string;
-    name?: string;
-    deleted?: boolean;
-    is_bot?: boolean;
-    is_app_user?: boolean;
-    real_name?: string;
-    profile?: {
-      display_name?: string;
-      real_name?: string;
-      email?: string;
-    };
-  }>;
-  response_metadata?: { next_cursor?: string };
-};
-
 function parseSlackUserInput(raw: string): { id?: string; name?: string; email?: string } {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -58,24 +44,24 @@ function parseSlackUserInput(raw: string): { id?: string; name?: string; email?:
     return { id: prefixed.toUpperCase() };
   }
   if (trimmed.includes("@") && !trimmed.startsWith("@")) {
-    return { email: trimmed.toLowerCase() };
+    return { email: normalizeLowercaseStringOrEmpty(trimmed) };
   }
   const name = trimmed.replace(/^@/, "").trim();
   return name ? { name } : {};
 }
 
 async function listSlackUsers(client: WebClient): Promise<SlackUserLookup[]> {
-  return collectSlackCursorItems({
-    fetchPage: async (cursor) =>
-      (await client.users.list({
+  return collectSlackCursorPages({
+    fetchPage: (cursor) =>
+      client.users.list({
         limit: 200,
         cursor,
-      })) as SlackListUsersResponse,
+      }),
     collectPageItems: (res) =>
       (res.members ?? [])
         .map((member) => {
-          const id = member.id?.trim();
-          const name = member.name?.trim();
+          const id = normalizeOptionalString(member.id);
+          const name = normalizeOptionalString(member.name);
           if (!id || !name) {
             return null;
           }
@@ -83,9 +69,14 @@ async function listSlackUsers(client: WebClient): Promise<SlackUserLookup[]> {
           return {
             id,
             name,
-            displayName: profile.display_name?.trim() || undefined,
-            realName: profile.real_name?.trim() || member.real_name?.trim() || undefined,
-            email: profile.email?.trim()?.toLowerCase() || undefined,
+            displayName: normalizeOptionalString(profile.display_name),
+            realName:
+              normalizeOptionalString(profile.real_name) ??
+              normalizeOptionalString(member.real_name),
+            email:
+              normalizeOptionalString(profile.email) == null
+                ? undefined
+                : normalizeLowercaseStringOrEmpty(profile.email),
             deleted: Boolean(member.deleted),
             isBot: Boolean(member.is_bot),
             isAppUser: Boolean(member.is_app_user),
@@ -107,10 +98,10 @@ function scoreSlackUser(user: SlackUserLookup, match: { name?: string; email?: s
     score += 5;
   }
   if (match.name) {
-    const target = match.name.toLowerCase();
+    const target = normalizeLowercaseStringOrEmpty(match.name);
     const candidates = [user.name, user.displayName, user.realName]
-      .map((value) => value?.toLowerCase())
-      .filter(Boolean) as string[];
+      .map((value) => normalizeLowercaseStringOrEmpty(value))
+      .filter(Boolean);
     if (candidates.some((value) => value === target)) {
       score += 2;
     }
@@ -127,6 +118,9 @@ function resolveSlackUserFromMatches(
     .map((user) => ({ user, score: scoreSlackUser(user, parsed) }))
     .toSorted((a, b) => b.score - a.score);
   const best = scored[0]?.user ?? matches[0];
+  if (!best) {
+    return { input, resolved: false };
+  }
   return {
     input,
     resolved: true,
@@ -144,9 +138,9 @@ export async function resolveSlackUserAllowlist(params: {
   entries: string[];
   client?: WebClient;
 }): Promise<SlackUserResolution[]> {
-  const client = params.client ?? createSlackWebClient(params.token);
+  const client = params.client ?? createSlackLookupClient(params.token);
   const users = await listSlackUsers(client);
-  return resolveSlackAllowlistEntries<
+  return resolveDirectoryAllowlistEntries<
     { id?: string; name?: string; email?: string },
     SlackUserLookup,
     SlackUserResolution
@@ -172,11 +166,11 @@ export async function resolveSlackUserAllowlist(params: {
         }
       }
       if (parsed.name) {
-        const target = parsed.name.toLowerCase();
+        const target = normalizeLowercaseStringOrEmpty(parsed.name);
         const matches = lookup.filter((user) => {
           const candidates = [user.name, user.displayName, user.realName]
-            .map((value) => value?.toLowerCase())
-            .filter(Boolean) as string[];
+            .map((value) => normalizeLowercaseStringOrEmpty(value))
+            .filter(Boolean);
           return candidates.includes(target);
         });
         if (matches.length > 0) {

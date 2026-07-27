@@ -1,26 +1,21 @@
 ---
-summary: "DuckDuckGo web search -- key-free fallback provider (experimental, HTML-based)"
+summary: "DuckDuckGo web search -- key-free provider (experimental, HTML-based)"
 read_when:
   - You want a web search provider that requires no API key
   - You want to use DuckDuckGo for web_search
-  - You need a zero-config search fallback
-title: "DuckDuckGo Search"
+  - You want an explicitly selected key-free search provider
+title: "DuckDuckGo search"
 ---
 
-# DuckDuckGo Search
-
-OpenClaw supports DuckDuckGo as a **key-free** `web_search` provider. No API
-key or account is required.
+OpenClaw supports DuckDuckGo as a **key-free** `web_search` provider. No API key or account is required.
 
 <Warning>
-  DuckDuckGo is an **experimental, unofficial** integration that pulls results
-  from DuckDuckGo's non-JavaScript search pages — not an official API. Expect
-  occasional breakage from bot-challenge pages or HTML changes.
+  DuckDuckGo is an **experimental, unofficial** integration that scrapes DuckDuckGo's non-JavaScript HTML search pages -- not an official API. Expect occasional breakage from bot-challenge pages or HTML changes.
 </Warning>
 
 ## Setup
 
-No API key needed — just set DuckDuckGo as your provider:
+DuckDuckGo is never auto-selected, since auto-detection only considers providers with usable credentials. Set it explicitly:
 
 <Steps>
   <Step title="Configure">
@@ -32,6 +27,8 @@ No API key needed — just set DuckDuckGo as your provider:
 </Steps>
 
 ## Config
+
+Set the provider directly in config:
 
 ```json5
 {
@@ -66,32 +63,34 @@ Optional plugin-level settings for region and SafeSearch:
 
 ## Tool parameters
 
-| Parameter    | Description                                                |
-| ------------ | ---------------------------------------------------------- |
-| `query`      | Search query (required)                                    |
-| `count`      | Results to return (1-10, default: 5)                       |
-| `region`     | DuckDuckGo region code (e.g. `us-en`, `uk-en`, `de-de`)    |
-| `safeSearch` | SafeSearch level: `strict`, `moderate` (default), or `off` |
+<ParamField path="query" type="string" required>
+Search query.
+</ParamField>
 
-Region and SafeSearch can also be set in plugin config (see above) — tool
-parameters override config values per-query.
+<ParamField path="count" type="number" default="5">
+Results to return (1-10).
+</ParamField>
+
+<ParamField path="region" type="string">
+DuckDuckGo region code (e.g. `us-en`, `uk-en`, `de-de`).
+</ParamField>
+
+<ParamField path="safeSearch" type="'strict' | 'moderate' | 'off'" default="moderate">
+SafeSearch level.
+</ParamField>
+
+`region` and `safeSearch` tool parameters override the plugin config values above on a per-query basis.
 
 ## Notes
 
-- **No API key** — works out of the box, zero configuration
-- **Experimental** — gathers results from DuckDuckGo's non-JavaScript HTML
-  search pages, not an official API or SDK
-- **Bot-challenge risk** — DuckDuckGo may serve CAPTCHAs or block requests
-  under heavy or automated use
-- **HTML parsing** — results depend on page structure, which can change without
-  notice
-- **Auto-detection order** — DuckDuckGo is checked last (order 100) in
-  auto-detection, so any API-backed provider with a key takes priority
-- **SafeSearch defaults to moderate** when not configured
+- **No API key** -- works once DuckDuckGo is selected as the `web_search` provider.
+- **Experimental** -- scrapes DuckDuckGo's non-JavaScript HTML search pages, not an official API or SDK. Results depend on page structure, which can change without notice.
+- **Bot-challenge risk** -- DuckDuckGo may serve CAPTCHAs or block requests under heavy or automated use.
+- **Explicit selection only** -- OpenClaw's auto-detect only considers providers with usable credentials, so a key-free provider like DuckDuckGo is never chosen automatically; you must set `provider: "duckduckgo"`.
+- **SafeSearch defaults to `moderate`** when not configured.
 
 <Tip>
-  For production use, consider [Brave Search](/tools/brave-search) (free tier
-  available) or another API-backed provider.
+  For production use, consider [Brave Search](/tools/brave-search) (free tier available) or another API-backed provider.
 </Tip>
 
 ## Related

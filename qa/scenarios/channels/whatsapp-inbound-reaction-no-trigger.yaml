@@ -1,0 +1,19 @@
+title: WhatsApp inbound user reaction does not start a fresh run
+scenario:
+  id: whatsapp-inbound-reaction-no-trigger
+  surface: channels
+  coverage:
+    primary:
+      - channels.message-actions
+  execution:
+    profiles: { "whatsapp:mock-default": 14 }
+    kind: flow
+    channel: whatsapp
+    timeoutMs: 90000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { whatsappScenarioId: whatsapp-inbound-reaction-no-trigger }
+flow:
+  module: ./live-transports/whatsapp/scenario-runtime.js
+  call: runWhatsAppInboundReactionNoTriggerScenario
+  args: [{ expr: whatsappScenarioContext }]

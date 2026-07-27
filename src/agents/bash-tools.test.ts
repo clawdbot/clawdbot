@@ -1,24 +1,248 @@
+/**
+ * Integration-style tests for the public Bash/process tool barrel.
+ * Exercises exec and process behavior through the shared exported tool factory.
+ */
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  resetHeartbeatWakeStateForTests,
-  setHeartbeatWakeHandler,
-} from "../infra/heartbeat-wake.js";
+import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { requestHeartbeat, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
 import { applyPathPrepend, findPathKey } from "../infra/path-prepend.js";
-import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
+import {
+  peekSystemEventEntries,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "../infra/system-events.js";
 import { captureEnv } from "../test-utils/env.js";
-import { getFinishedSession, resetProcessRegistryForTests } from "./bash-process-registry.js";
+import {
+  addSession,
+  appendOutput,
+  getFinishedSession,
+  markBackgrounded,
+  markExited,
+  type ProcessSession,
+} from "./bash-process-registry.js";
+import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
-import { resolveShellFromPath, sanitizeBinaryOutput } from "./shell-utils.js";
+import { getBashShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
+
+vi.mock("../infra/channel-summary.js", () => ({
+  buildChannelSummary: vi.fn(async () => []),
+}));
+
+vi.mock("../infra/exec-approval-surface.js", () => ({
+  describeNativeExecApprovalClientSetup: () => null,
+  listNativeExecApprovalClientLabels: () => [],
+  resolveExecApprovalInitiatingSurfaceState: (params: {
+    channel?: string | null;
+    accountId?: string | null;
+  }) => {
+    const channel = params.channel ?? undefined;
+    return {
+      kind: "enabled",
+      channel,
+      channelLabel:
+        channel === "tui" ? "terminal UI" : channel === "internal" ? "Web UI" : "this platform",
+      accountId: params.accountId ?? undefined,
+    };
+  },
+  supportsNativeExecApprovalClient: (channel?: string | null) =>
+    !channel || channel === "internal" || channel === "tui",
+}));
+
+vi.mock("../utils/delivery-context.js", () => ({
+  normalizeDeliveryContext: (context?: {
+    channel?: string | null;
+    to?: string | number | null;
+    accountId?: string | null;
+    threadId?: string | number | null;
+  }) => {
+    if (!context) {
+      return undefined;
+    }
+    const channel = context.channel?.trim().toLowerCase();
+    const to = context.to == null ? undefined : String(context.to).trim();
+    const accountId = context.accountId?.trim();
+    const threadId = context.threadId == null ? undefined : context.threadId;
+    if (!channel && !to && !accountId && threadId == null) {
+      return undefined;
+    }
+    return {
+      channel: channel || undefined,
+      to: to || undefined,
+      accountId: accountId || undefined,
+      ...(threadId != null && threadId !== "" ? { threadId } : {}),
+    };
+  },
+}));
+
+vi.mock("./bash-tools.exec-approval-followup.js", () => ({
+  sendExecApprovalFollowup: vi.fn(async () => false),
+}));
+
+vi.mock("./tools/gateway.js", () => ({
+  callGatewayTool: vi.fn(async () => ({ ok: true })),
+  readGatewayCallOptions: vi.fn(() => ({})),
+}));
+
+vi.mock("../infra/shell-env.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../infra/shell-env.js")>("../infra/shell-env.js");
+  return {
+    ...actual,
+    getShellPathFromLoginShell: vi.fn(() => null),
+    resolveShellEnvFallbackTimeoutMs: vi.fn(() => 0),
+  };
+});
+
+vi.mock("../process/supervisor/index.js", () => {
+  type SpawnInput = {
+    argv?: string[];
+    ptyCommand?: string;
+    env?: NodeJS.ProcessEnv;
+    onStdout?: (chunk: string) => void;
+  };
+
+  const immediate = () =>
+    new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+  const readPathKey = (env?: NodeJS.ProcessEnv) =>
+    env && "Path" in env && !("PATH" in env) ? "Path" : "PATH";
+  const readEnvPath = (env?: NodeJS.ProcessEnv) => env?.[readPathKey(env)] ?? "";
+  const writeEnvPath = (env: NodeJS.ProcessEnv, value: string) => {
+    env[readPathKey(env)] = value;
+  };
+  const extractCommand = (input: SpawnInput) => input.ptyCommand ?? input.argv?.at(-1) ?? "";
+  const parseShellSingleQuoted = (input: string) => {
+    if (!input.startsWith("'")) {
+      return null;
+    }
+    let output = "";
+    for (let index = 1; index < input.length; index += 1) {
+      const char = input[index];
+      if (char !== "'") {
+        output += char;
+        continue;
+      }
+      if (input.startsWith("'\\''", index)) {
+        output += "'";
+        index += 3;
+        continue;
+      }
+      return input.slice(index + 1).trim().length === 0 ? output : null;
+    }
+    return null;
+  };
+  const unwrapSnapshotEvalCommand = (command: string) => {
+    const evalIndex = command.lastIndexOf("\neval ");
+    const evalCommand =
+      evalIndex === -1
+        ? command.trimStart().startsWith("eval ")
+          ? command.trimStart().slice("eval ".length)
+          : null
+        : command.slice(evalIndex + "\neval ".length);
+    return evalCommand ? (parseShellSingleQuoted(evalCommand.trim()) ?? command) : command;
+  };
+  const splitCommands = (command: string) => {
+    const commands: string[] = [];
+    for (const part of command.split(";")) {
+      const trimmed = part.trim();
+      if (trimmed.length > 0) {
+        commands.push(trimmed);
+      }
+    }
+    return commands;
+  };
+  const applySegmentShellEffects = (segment: string, env: NodeJS.ProcessEnv) => {
+    if (segment === 'export PATH="${OPENCLAW_PREPEND_PATH}${PATH:+:$PATH}"') {
+      const prepend = env.OPENCLAW_PREPEND_PATH ?? "";
+      const current = readEnvPath(env);
+      writeEnvPath(env, `${prepend}${current ? `:${current}` : ""}`);
+      return;
+    }
+    if (segment === "unset OPENCLAW_PREPEND_PATH") {
+      delete env.OPENCLAW_PREPEND_PATH;
+    }
+  };
+  const stdoutForSegment = (segment: string, env: NodeJS.ProcessEnv) => {
+    if (segment === "echo $PATH" || segment === "Write-Output $env:PATH") {
+      return `${readEnvPath(env)}\n`;
+    }
+    if (segment.startsWith("echo ")) {
+      return `${segment.slice("echo ".length)}\n`;
+    }
+    if (segment.startsWith("Write-Output ")) {
+      return `${segment.slice("Write-Output ".length)}\n`;
+    }
+    return "";
+  };
+
+  const commandOutput = (command: string, env?: NodeJS.ProcessEnv) => {
+    const shellEnv = { ...env };
+    return splitCommands(unwrapSnapshotEvalCommand(command))
+      .map((segment) => {
+        applySegmentShellEffects(segment, shellEnv);
+        return stdoutForSegment(segment, shellEnv);
+      })
+      .join("");
+  };
+
+  return {
+    getProcessSupervisor: () => ({
+      spawn: async (input: SpawnInput) => {
+        const command = extractCommand(input);
+        const output = commandOutput(command, input.env);
+        const exitCode = splitCommands(unwrapSnapshotEvalCommand(command)).includes("exit 1")
+          ? 1
+          : 0;
+        const stagedOutput = command.includes("after")
+          ? output.replace(/after[^\n]*\n?/gu, "")
+          : output;
+        const deferredOutput = output.slice(stagedOutput.length);
+        if (stagedOutput) {
+          input.onStdout?.(stagedOutput);
+        }
+        return {
+          runId: "mock-bash-run",
+          startedAtMs: Date.now(),
+          pid: 123,
+          stdin: undefined,
+          wait: async () => {
+            await immediate();
+            await immediate();
+            if (deferredOutput) {
+              input.onStdout?.(deferredOutput);
+            }
+            return {
+              reason: "exit" as const,
+              exitCode,
+              exitSignal: null,
+              durationMs: 0,
+              stdout: "",
+              stderr: "",
+              timedOut: false,
+              noOutputTimedOut: false,
+            };
+          },
+          cancel: vi.fn(),
+        };
+      },
+      cancel: vi.fn(),
+      cancelScope: vi.fn(),
+      getRecord: vi.fn(),
+    }),
+  };
+});
 
 const isWin = process.platform === "win32";
 const defaultShell = isWin
   ? undefined
-  : process.env.OPENCLAW_TEST_SHELL || resolveShellFromPath("bash") || process.env.SHELL || "sh";
+  : process.env.OPENCLAW_TEST_SHELL || getBashShellConfig().shell;
 // PowerShell: Start-Sleep for delays, ; for command separation, $null for null device
 const shortDelayCmd = isWin ? "Start-Sleep -Milliseconds 4" : "sleep 0.004";
-const yieldDelayCmd = isWin ? "Start-Sleep -Milliseconds 16" : "sleep 0.016";
-const POLL_INTERVAL_MS = 15;
+const POLL_INTERVAL_MS = isWin ? 15 : 2;
 const BACKGROUND_POLL_TIMEOUT_MS = isWin ? 8000 : 1200;
 const NOTIFY_EVENT_TIMEOUT_MS = isWin ? 12_000 : 5_000;
 const BACKGROUND_POLL_OPTIONS = {
@@ -29,8 +253,8 @@ const NOTIFY_POLL_OPTIONS = {
   timeout: NOTIFY_EVENT_TIMEOUT_MS,
   interval: POLL_INTERVAL_MS,
 };
-const SHELL_ENV_KEYS = ["SHELL"] as const;
-const PATH_SHELL_ENV_KEYS = ["PATH", "SHELL"] as const;
+const SHELL_ENV_KEYS = ["OPENCLAW_EXEC_SHELL_SNAPSHOT", "SHELL"] as const;
+const PATH_SHELL_ENV_KEYS = ["OPENCLAW_EXEC_SHELL_SNAPSHOT", "PATH", "SHELL"] as const;
 const PROCESS_STATUS_RUNNING = "running";
 const PROCESS_STATUS_COMPLETED = "completed";
 const PROCESS_STATUS_FAILED = "failed";
@@ -39,16 +263,22 @@ const OUTPUT_NOPE = "nope";
 const OUTPUT_EXEC_COMPLETED = "Exec completed";
 const OUTPUT_EXIT_CODE_1 = "Command exited with code 1";
 const shellEcho = (message: string) => (isWin ? `Write-Output ${message}` : `echo ${message}`);
+const COMMAND_NOOP = isWin ? "$null" : ":";
 const COMMAND_ECHO_HELLO = shellEcho("hello");
 const COMMAND_PRINT_PATH = isWin ? "Write-Output $env:PATH" : "echo $PATH";
 const COMMAND_EXIT_WITH_ERROR = "exit 1";
 const SCOPE_KEY_ALPHA = "agent:alpha";
 const SCOPE_KEY_BETA = "agent:beta";
-const TEST_EXEC_DEFAULTS = { security: "full" as const, ask: "off" as const };
+const TEST_EXEC_DEFAULTS = {
+  host: "gateway" as const,
+  security: "full" as const,
+  ask: "off" as const,
+};
 const DEFAULT_NOTIFY_SESSION_KEY = "agent:main:main";
 const ECHO_HI_COMMAND = shellEcho("hi");
 let callIdCounter = 0;
 const nextCallId = () => `call${++callIdCounter}`;
+const notifyCfg = {} as OpenClawConfig;
 type ExecToolInstance = ReturnType<typeof createExecTool>;
 type ProcessToolInstance = ReturnType<typeof createProcessTool>;
 type ExecToolArgs = Parameters<ExecToolInstance["execute"]>[1];
@@ -87,8 +317,6 @@ const withLabel = <T extends object>(label: string, fields: T): T & LabeledCase 
 });
 // Both PowerShell and bash use ; for command separation
 const joinCommands = (commands: string[]) => commands.join("; ");
-const echoAfterDelay = (message: string) => joinCommands([shortDelayCmd, shellEcho(message)]);
-const echoLines = (lines: string[]) => joinCommands(lines.map((line) => shellEcho(line)));
 const normalizeText = (value?: string) =>
   sanitizeBinaryOutput(value ?? "")
     .replace(/\r\n/g, "\n")
@@ -104,6 +332,10 @@ const readNormalizedTextContent = (content: ToolTextContent) =>
   normalizeText(readTextContent(content));
 const readTrimmedLines = (content: ToolTextContent) =>
   (readTextContent(content) ?? "").split("\n").map((line) => line.trim());
+const waitOneTurn = () =>
+  new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 const readTotalLines = (details: unknown) => (details as { totalLines?: number }).totalLines;
 const readProcessStatus = (details: unknown) => (details as { status?: string }).status;
 const readProcessStatusOrRunning = (details: unknown) =>
@@ -155,6 +387,7 @@ async function pollProcessSession(params: {
   };
 }
 function applyDefaultShellEnv() {
+  process.env.OPENCLAW_EXEC_SHELL_SNAPSHOT = "0";
   if (!isWin && defaultShell) {
     process.env.SHELL = defaultShell;
   }
@@ -195,18 +428,18 @@ const requireRunningSessionId = (result: { details: unknown }) => {
   return requireSessionId(result.details as { sessionId?: string });
 };
 
-function hasNotifyEventForPrefix(prefix: string): boolean {
-  return peekSystemEvents(DEFAULT_NOTIFY_SESSION_KEY).some((event) => event.includes(prefix));
+function hasNotifyEventForPrefix(prefix: string, sessionKey = DEFAULT_NOTIFY_SESSION_KEY): boolean {
+  return peekSystemEvents(sessionKey).some((event) => event.includes(prefix));
 }
 
-async function waitForNotifyEvent(sessionId: string) {
+async function waitForNotifyEvent(sessionId: string, sessionKey = DEFAULT_NOTIFY_SESSION_KEY) {
   const prefix = sessionId.slice(0, 8);
   let finished = getFinishedSession(sessionId);
-  let hasEvent = hasNotifyEventForPrefix(prefix);
+  let hasEvent = hasNotifyEventForPrefix(prefix, sessionKey);
   await expect
     .poll(() => {
       finished = getFinishedSession(sessionId);
-      hasEvent = hasNotifyEventForPrefix(prefix);
+      hasEvent = hasNotifyEventForPrefix(prefix, sessionKey);
       return Boolean(finished && hasEvent);
     }, NOTIFY_POLL_OPTIONS)
     .toBe(true);
@@ -220,6 +453,31 @@ async function startBackgroundCommand(tool: ExecToolInstance, command: string) {
   const result = await executeExecCommand(tool, command, { background: true });
   return requireRunningSessionId(result);
 }
+
+async function expectNotifyOnExitWake(tool: ExecToolInstance, expected: Record<string, unknown>) {
+  const wakeHandler = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
+  const dispose = setHeartbeatWakeHandler(
+    wakeHandler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0],
+  );
+  try {
+    await startBackgroundCommand(tool, shellEcho("notify"));
+    await expect
+      .poll(() => wakeHandler.mock.calls.at(0)?.[0], NOTIFY_POLL_OPTIONS)
+      .toEqual(expected);
+  } finally {
+    dispose();
+  }
+}
+
+async function drainNotifyEvents(sessionKey = DEFAULT_NOTIFY_SESSION_KEY) {
+  return await drainFormattedSystemEvents({
+    cfg: notifyCfg,
+    sessionKey,
+    isMainSession: false,
+    isNewSession: false,
+  });
+}
+
 async function runBackgroundCommandToCompletion(tool: ExecToolInstance, command: string) {
   const sessionId = await startBackgroundCommand(tool, command);
   const status = await waitForCompletion(sessionId);
@@ -264,12 +522,26 @@ type DisallowedElevationCase = LabeledCase & {
   expectedOutputIncludes?: string;
 };
 type NotifyNoopCase = LabeledCase & {
-  notifyOnExitEmptySuccess: boolean;
+  defaults?: Partial<ExecToolConfig>;
+  expectNotification: boolean;
 };
 const NOOP_NOTIFY_CASES: NotifyNoopCase[] = [
-  withLabel("default behavior skips no-op completion events", { notifyOnExitEmptySuccess: false }),
+  withLabel("default behavior skips no-op completion events", { expectNotification: false }),
+  withLabel("chat providers default no-op completion notifications on", {
+    defaults: { messageProvider: " Telegram " },
+    expectNotification: true,
+  }),
+  withLabel("explicit false keeps chat provider no-op completions silent", {
+    defaults: { messageProvider: "telegram", notifyOnExitEmptySuccess: false },
+    expectNotification: false,
+  }),
+  withLabel("generic providers keep no-op completions silent by default", {
+    defaults: { messageProvider: "generic" },
+    expectNotification: false,
+  }),
   withLabel("explicitly enabling no-op completion emits completion events", {
-    notifyOnExitEmptySuccess: true,
+    defaults: { notifyOnExitEmptySuccess: true },
+    expectNotification: true,
   }),
 ];
 const DISALLOWED_ELEVATION_CASES: DisallowedElevationCase[] = [
@@ -319,18 +591,17 @@ const LONG_LOG_EXPECTATION_CASES: LongLogExpectationCase[] = [
 ];
 const expectNotifyNoopEvents = (
   events: string[],
-  notifyOnExitEmptySuccess: boolean,
+  expectNotification: boolean,
+  sessionId: string,
   label: string,
 ) => {
-  if (!notifyOnExitEmptySuccess) {
-    expect(events, label).toEqual([]);
+  if (!expectNotification) {
+    expect(events, label).toStrictEqual([]);
     return;
   }
-  expect(events.length, label).toBeGreaterThan(0);
-  expect(
-    events.some((event) => event.includes(OUTPUT_EXEC_COMPLETED)),
-    label,
-  ).toBe(true);
+  expect(events, label).toStrictEqual([
+    `${OUTPUT_EXEC_COMPLETED} (${sessionId.slice(0, 8)}, code 0)`,
+  ]);
 };
 const runDisallowedElevationCase = async ({
   defaultLevel,
@@ -367,7 +638,7 @@ const readBackgroundLogSnapshot = async (
   lines: string[],
   options: ProcessLogWindow = {},
 ): Promise<ProcessLogSnapshot> => {
-  const { sessionId } = await runBackgroundCommandToCompletion(execTool, echoLines(lines));
+  const sessionId = seedFinishedLogSession(lines);
   const log = await readProcessLog(sessionId, options);
   return {
     text: readTextContent(log.content) ?? "",
@@ -375,6 +646,31 @@ const readBackgroundLogSnapshot = async (
     lines: readTrimmedLines(log.content),
     totalLines: readTotalLines(log.details),
   };
+};
+const seedFinishedLogSession = (lines: string[]) => {
+  const session: ProcessSession = {
+    id: `seeded-log-${nextCallId()}`,
+    command: "seeded log",
+    startedAt: Date.now(),
+    maxOutputChars: 100_000,
+    pendingMaxOutputChars: 100_000,
+    pendingStdout: [],
+    pendingStderr: [],
+    pendingStdoutChars: 0,
+    pendingStderrChars: 0,
+    totalOutputChars: 0,
+    aggregated: "",
+    tail: "",
+    exited: false,
+    truncated: false,
+    backgrounded: false,
+    cursorKeyMode: "unknown",
+  };
+  addSession(session);
+  appendOutput(session, "stdout", lines.join("\n"));
+  markBackgrounded(session);
+  markExited(session, 0, null, PROCESS_STATUS_COMPLETED);
+  return session.id;
 };
 const runLongLogExpectationCase = async ({
   options,
@@ -395,16 +691,38 @@ const runLongLogExpectationCase = async ({
   expectTextContainsValues(snapshot.text, mustContain, true);
   expectTextContainsValues(snapshot.text, mustNotContain, false);
 };
-const runNotifyNoopCase = async ({ label, notifyOnExitEmptySuccess }: NotifyNoopCase) => {
-  const tool = createNotifyOnExitExecTool(
-    notifyOnExitEmptySuccess ? { notifyOnExitEmptySuccess: true } : {},
-  );
+const runNotifyNoopCase = async ({ label, defaults, expectNotification }: NotifyNoopCase) => {
+  const tool = createNotifyOnExitExecTool(defaults);
 
-  const { status } = await runBackgroundCommandToCompletion(tool, shortDelayCmd);
+  const { sessionId, status } = await runBackgroundCommandToCompletion(tool, COMMAND_NOOP);
   expect(status).toBe(PROCESS_STATUS_COMPLETED);
   const events = peekSystemEvents(DEFAULT_NOTIFY_SESSION_KEY);
-  expectNotifyNoopEvents(events, notifyOnExitEmptySuccess, label);
+  expectNotifyNoopEvents(events, expectNotification, sessionId, label);
 };
+
+describe("tool descriptions", () => {
+  it("adds cron-specific deferred follow-up guidance only when cron is available", () => {
+    const execWithCron = createTestExecTool({ hasCronTool: true });
+    const processWithCron = createProcessTool({ hasCronTool: true });
+
+    expect(execWithCron.description).toContain(
+      "automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion",
+    );
+    expect(processWithCron.description).toContain("completion without auto-wake");
+    expect(processWithCron.description).toContain("write, send-keys, submit, paste, kill");
+    expect(execWithCron.description).toContain(
+      "No sleep/delay loops for reminders/follow-ups; use cron.",
+    );
+    expect(processWithCron.description).toContain(
+      "No polling as timer/reminder; scheduled follow-up uses cron.",
+    );
+    expect(execTool.description).not.toContain("use cron instead");
+    expect(processTool.description).not.toContain("scheduled follow-ups");
+    expect(execTool.description).toContain("otherwise process confirms completion");
+    expect(processTool.description).toContain("completion without auto-wake");
+    expect(processTool.description).toContain("write, send-keys, submit, paste, kill");
+  });
+});
 
 beforeEach(() => {
   callIdCounter = 0;
@@ -418,11 +736,7 @@ describe("exec tool backgrounding", () => {
   it(
     "backgrounds after yield and can be polled",
     async () => {
-      const result = await executeExecCommand(
-        execTool,
-        joinCommands([yieldDelayCmd, shellEcho(OUTPUT_DONE)]),
-        { yieldMs: 10 },
-      );
+      const result = await executeExecCommand(execTool, shellEcho(OUTPUT_DONE), { yieldMs: 0 });
 
       // Timing can race here: command may already be complete before the first response.
       if (result.details.status === PROCESS_STATUS_COMPLETED) {
@@ -501,62 +815,84 @@ describe("exec exit codes", () => {
 });
 
 describe("exec notifyOnExit", () => {
-  beforeEach(() => {
-    resetHeartbeatWakeStateForTests();
-  });
+  useCapturedEnv([...SHELL_ENV_KEYS], applyDefaultShellEnv);
 
-  afterEach(() => {
-    resetHeartbeatWakeStateForTests();
-  });
+  async function drainPendingHeartbeatWakes(): Promise<void> {
+    const handler = vi.fn(async () => ({ status: "ran" as const, durationMs: 0 }));
+    const dispose = setHeartbeatWakeHandler(handler);
+    try {
+      requestHeartbeat({
+        source: "other",
+        intent: "immediate",
+        reason: "test-cleanup",
+        coalesceMs: 0,
+      });
+      await expect.poll(() => handler.mock.calls.length, NOTIFY_POLL_OPTIONS).toBeGreaterThan(0);
+    } finally {
+      dispose();
+    }
+  }
+
+  beforeEach(drainPendingHeartbeatWakes);
+
+  afterEach(drainPendingHeartbeatWakes);
 
   it("enqueues a system event when a backgrounded exec exits", async () => {
     const tool = createNotifyOnExitExecTool();
 
-    const sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
+    const sessionId = await startBackgroundCommand(tool, shellEcho("notify"));
 
     const { finished, hasEvent } = await waitForNotifyEvent(sessionId);
+    const queuedEvent = peekSystemEventEntries(DEFAULT_NOTIFY_SESSION_KEY).find((event) =>
+      event.text.includes(sessionId.slice(0, 8)),
+    );
+    const formatted = await drainNotifyEvents();
 
-    expect(finished).toBeTruthy();
+    expect(finished?.id).toBe(sessionId);
+    expect(finished?.status).toBe(PROCESS_STATUS_COMPLETED);
+    expect(finished?.exitCode).toBe(0);
     expect(hasEvent).toBe(true);
+    expect(queuedEvent).toBeDefined();
+    expect(formatted).toBeUndefined();
+  });
+
+  it("preserves the origin delivery context on background exec completion events", async () => {
+    const sessionKey = "agent:main:telegram:group:-1003774691294:topic:47";
+    const tool = createNotifyOnExitExecTool({
+      sessionKey,
+      messageProvider: "telegram",
+      currentChannelId: "telegram:-1003774691294:topic:47",
+      currentThreadTs: "47",
+    });
+
+    const sessionId = await startBackgroundCommand(tool, shellEcho("notify"));
+
+    await waitForNotifyEvent(sessionId, sessionKey);
+    const queuedEvent = peekSystemEventEntries(sessionKey).find((event) =>
+      event.text.includes(sessionId.slice(0, 8)),
+    );
+
+    expect(queuedEvent).toBeDefined();
+    expect(queuedEvent?.deliveryContext?.channel).toBe("telegram");
+    expect(queuedEvent?.deliveryContext?.to).toBe("telegram:-1003774691294:topic:47");
+    expect(queuedEvent?.deliveryContext?.threadId).toBe("47");
   });
 
   it("scopes notifyOnExit heartbeat wake to the exec session key", async () => {
-    const tool = createNotifyOnExitExecTool();
-    const wakeHandler = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
-    const dispose = setHeartbeatWakeHandler(
-      wakeHandler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0],
-    );
-    try {
-      const sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
-
-      await expect
-        .poll(() => wakeHandler.mock.calls[0]?.[0], NOTIFY_POLL_OPTIONS)
-        .toMatchObject({
-          reason: `exec:${sessionId}:exit`,
-          sessionKey: DEFAULT_NOTIFY_SESSION_KEY,
-        });
-    } finally {
-      dispose();
-    }
+    await expectNotifyOnExitWake(createNotifyOnExitExecTool(), {
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      sessionKey: DEFAULT_NOTIFY_SESSION_KEY,
+    });
   });
 
   it("keeps notifyOnExit heartbeat wake unscoped for non-agent session keys", async () => {
-    const tool = createNotifyOnExitExecTool({ sessionKey: "global" });
-    const wakeHandler = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
-    const dispose = setHeartbeatWakeHandler(
-      wakeHandler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0],
-    );
-    try {
-      const sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
-
-      await expect
-        .poll(() => wakeHandler.mock.calls[0]?.[0], NOTIFY_POLL_OPTIONS)
-        .toEqual({
-          reason: `exec:${sessionId}:exit`,
-        });
-    } finally {
-      dispose();
-    }
+    await expectNotifyOnExitWake(createNotifyOnExitExecTool({ sessionKey: "global" }), {
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+    });
   });
 
   it.each<NotifyNoopCase>(NOOP_NOTIFY_CASES)("$label", runNotifyNoopCase);
@@ -580,13 +916,32 @@ describe("exec PATH handling", () => {
       expect(index).toBeGreaterThanOrEqual(0);
     }
     for (let i = 1; i < prependIndexes.length; i += 1) {
-      expect(prependIndexes[i]).toBeGreaterThan(prependIndexes[i - 1]);
+      expect(prependIndexes[i]).toBeGreaterThan(
+        expectDefined(prependIndexes[i - 1], "prependIndexes[i - 1] test invariant"),
+      );
     }
     const baseIndex = entries.indexOf(basePath);
     expect(baseIndex).toBeGreaterThanOrEqual(0);
     for (const index of prependIndexes) {
       expect(index).toBeLessThan(baseIndex);
     }
+  });
+
+  it("protects POSIX prepended paths from shell startup overrides", async () => {
+    if (isWin) {
+      return;
+    }
+    process.env.PATH = "/evil/bin:/usr/bin";
+    const tool = createTestExecTool({ pathPrepend: ["/custom/bin"] });
+
+    const result = await executeExecCommand(tool, COMMAND_PRINT_PATH);
+
+    const text = readNormalizedTextContent(result.content);
+    const entries = text.split(path.delimiter);
+
+    // Simulate a shell startup file prepending /evil/bin before the command runs.
+    // The exec wrapper must still restore configured pathPrepend entries to the front.
+    expect(entries).toEqual(["/custom/bin", "/evil/bin", "/usr/bin"]);
   });
 });
 
@@ -628,7 +983,7 @@ describe("applyPathPrepend with case-insensitive PATH key", () => {
     const existingPath = existing.join(delim);
     const env: Record<string, string> = { Path: existingPath };
     applyPathPrepend(env, prepend);
-    const parts = env.Path.split(delim);
+    const parts = expectDefined(env.Path, "env.Path test invariant").split(delim);
     expect(parts[0]).toBe(prepend[0]);
     for (const entry of existing) {
       expect(parts).toContain(entry);
@@ -642,4 +997,107 @@ describe("applyPathPrepend with case-insensitive PATH key", () => {
     expect("PATH" in env).toBe(false);
     expect("Path" in env).toBe(false);
   });
+});
+
+describe("exec backgrounded onUpdate suppression", () => {
+  useCapturedEnv([...SHELL_ENV_KEYS], applyDefaultShellEnv);
+
+  it(
+    "does not invoke onUpdate after the session is backgrounded",
+    async () => {
+      const onUpdateSpy = vi.fn();
+      const tool = createTestExecTool({ allowBackground: true, backgroundMs: 0 });
+      const command = joinCommands([shellEcho("before"), shortDelayCmd, shellEcho("after")]);
+      const result = await tool.execute(
+        nextCallId(),
+        { command, background: true },
+        undefined,
+        onUpdateSpy,
+      );
+
+      expect(readProcessStatus(result.details)).toBe(PROCESS_STATUS_RUNNING);
+      const sessionId = requireSessionId(result.details as { sessionId?: string });
+      const callsBeforeBackground = onUpdateSpy.mock.calls.length;
+      await expect
+        .poll(() => {
+          const finished = getFinishedSession(sessionId);
+          return Boolean(finished);
+        }, BACKGROUND_POLL_OPTIONS)
+        .toBe(true);
+      expect(onUpdateSpy.mock.calls.length).toBe(callsBeforeBackground);
+    },
+    isWin ? 15_000 : 5_000,
+  );
+
+  it(
+    "does not invoke onUpdate after the foreground exec process exits",
+    async () => {
+      const onUpdateSpy = vi.fn();
+      // Run a foreground command that produces output then exits.
+      const command = joinCommands([shellEcho("line1"), shellEcho("line2")]);
+      await execTool.execute(nextCallId(), { command }, undefined, onUpdateSpy);
+      const callsAtExit = onUpdateSpy.mock.calls.length;
+      // Allow a tick for any straggling stdout data events.
+      await waitOneTurn();
+      expect(onUpdateSpy.mock.calls.length).toBe(callsAtExit);
+    },
+    isWin ? 10_000 : 5_000,
+  );
+
+  it("removes the abort listener after a foreground exec process exits", async () => {
+    const abortController = new AbortController();
+    const addListenerSpy = vi.spyOn(abortController.signal, "addEventListener");
+    const removeListenerSpy = vi.spyOn(abortController.signal, "removeEventListener");
+
+    await execTool.execute(
+      nextCallId(),
+      { command: shellEcho("foreground-cleanup") },
+      abortController.signal,
+      vi.fn(),
+    );
+
+    const abortListener = addListenerSpy.mock.calls.find(([type]) => type === "abort")?.[1];
+    expect(abortListener).toBeDefined();
+    expect(removeListenerSpy).toHaveBeenCalledWith("abort", abortListener);
+  });
+
+  it("removes the abort listener when an exec process is backgrounded", async () => {
+    const abortController = new AbortController();
+    const addListenerSpy = vi.spyOn(abortController.signal, "addEventListener");
+    const removeListenerSpy = vi.spyOn(abortController.signal, "removeEventListener");
+    const tool = createTestExecTool({ allowBackground: true, backgroundMs: 0 });
+
+    const result = await tool.execute(
+      nextCallId(),
+      { command: shellEcho("background-cleanup"), background: true },
+      abortController.signal,
+      vi.fn(),
+    );
+
+    expect(readProcessStatus(result.details)).toBe(PROCESS_STATUS_RUNNING);
+    const abortListener = addListenerSpy.mock.calls.find(([type]) => type === "abort")?.[1];
+    expect(abortListener).toBeDefined();
+    expect(removeListenerSpy).toHaveBeenCalledWith("abort", abortListener);
+  });
+
+  it(
+    "suppresses onUpdate after abort signal fires",
+    async () => {
+      const abortController = new AbortController();
+      const onUpdateSpy = vi.fn(() => abortController.abort());
+      // Run a command that produces output over time.
+      const command = joinCommands([
+        shellEcho("before-abort"),
+        shortDelayCmd,
+        shellEcho("after-abort"),
+      ]);
+      await execTool.execute(nextCallId(), { command }, abortController.signal, onUpdateSpy);
+      expect(onUpdateSpy).toHaveBeenCalledTimes(1);
+      // Allow a tick for any straggling stdout data events.
+      await waitOneTurn();
+      // After abort, no new onUpdate calls should have been made.
+      expect(onUpdateSpy).toHaveBeenCalledTimes(1);
+    },
+    isWin ? 10_000 : 5_000,
+  );
 });

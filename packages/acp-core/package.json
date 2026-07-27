@@ -1,0 +1,89 @@
+{
+  "name": "@openclaw/acp-core",
+  "version": "0.0.0-private",
+  "private": true,
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./normalize-text": {
+      "types": "./dist/normalize-text.d.mts",
+      "import": "./dist/normalize-text.mjs",
+      "default": "./dist/normalize-text.mjs"
+    },
+    "./meta": {
+      "types": "./dist/meta.d.mts",
+      "import": "./dist/meta.mjs",
+      "default": "./dist/meta.mjs"
+    },
+    "./numeric-options": {
+      "types": "./dist/numeric-options.d.mts",
+      "import": "./dist/numeric-options.mjs",
+      "default": "./dist/numeric-options.mjs"
+    },
+    "./record-shared": {
+      "types": "./dist/record-shared.d.mts",
+      "import": "./dist/record-shared.mjs",
+      "default": "./dist/record-shared.mjs"
+    },
+    "./session": {
+      "types": "./dist/session.d.mts",
+      "import": "./dist/session.mjs",
+      "default": "./dist/session.mjs"
+    },
+    "./session-interaction-mode": {
+      "types": "./dist/session-interaction-mode.d.mts",
+      "import": "./dist/session-interaction-mode.mjs",
+      "default": "./dist/session-interaction-mode.mjs"
+    },
+    "./session-lineage-meta": {
+      "types": "./dist/session-lineage-meta.d.mts",
+      "import": "./dist/session-lineage-meta.mjs",
+      "default": "./dist/session-lineage-meta.mjs"
+    },
+    "./types": {
+      "types": "./dist/types.d.mts",
+      "import": "./dist/types.mjs",
+      "default": "./dist/types.mjs"
+    },
+    "./runtime/error-text": {
+      "types": "./dist/runtime/error-text.d.mts",
+      "import": "./dist/runtime/error-text.mjs",
+      "default": "./dist/runtime/error-text.mjs"
+    },
+    "./runtime/errors": {
+      "types": "./dist/runtime/errors.d.mts",
+      "import": "./dist/runtime/errors.mjs",
+      "default": "./dist/runtime/errors.mjs"
+    },
+    "./runtime/session-identifiers": {
+      "types": "./dist/runtime/session-identifiers.d.mts",
+      "import": "./dist/runtime/session-identifiers.mjs",
+      "default": "./dist/runtime/session-identifiers.mjs"
+    },
+    "./runtime/session-identity": {
+      "types": "./dist/runtime/session-identity.d.mts",
+      "import": "./dist/runtime/session-identity.mjs",
+      "default": "./dist/runtime/session-identity.mjs"
+    },
+    "./runtime/types": {
+      "types": "./dist/runtime/types.d.mts",
+      "import": "./dist/runtime/types.mjs",
+      "default": "./dist/runtime/types.mjs"
+    }
+  },
+  "dependencies": {
+    "@openclaw/normalization-core": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsdown src/index.ts src/error-format.ts src/meta.ts src/normalize-text.ts src/numeric-options.ts src/record-shared.ts src/session.ts src/session-interaction-mode.ts src/session-lineage-meta.ts src/types.ts src/runtime/error-text.ts src/runtime/errors.ts src/runtime/session-identifiers.ts src/runtime/session-identity.ts src/runtime/types.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+  }
+}

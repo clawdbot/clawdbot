@@ -1,34 +1,26 @@
-import crypto from "node:crypto";
-import type { OpenClawConfig } from "../config/config.js";
+/**
+ * Owner display settings for prompt rendering.
+ *
+ * Owner ids are rendered raw; no config or secret is required.
+ */
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-export type OwnerDisplaySetting = {
+type OwnerDisplaySetting = {
   ownerDisplay?: "raw" | "hash";
   ownerDisplaySecret?: string;
 };
 
-export type OwnerDisplaySecretResolution = {
+type OwnerDisplaySecretResolution = {
   config: OpenClawConfig;
   generatedSecret?: string;
 };
-
-function trimToUndefined(value?: string): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
 
 /**
  * Resolve owner display settings for prompt rendering.
  * Keep auth secrets decoupled from owner hash secrets.
  */
-export function resolveOwnerDisplaySetting(config?: OpenClawConfig): OwnerDisplaySetting {
-  const ownerDisplay = config?.commands?.ownerDisplay;
-  if (ownerDisplay !== "hash") {
-    return { ownerDisplay, ownerDisplaySecret: undefined };
-  }
-  return {
-    ownerDisplay: "hash",
-    ownerDisplaySecret: trimToUndefined(config?.commands?.ownerDisplaySecret),
-  };
+export function resolveOwnerDisplaySetting(_config?: OpenClawConfig): OwnerDisplaySetting {
+  return { ownerDisplay: "raw", ownerDisplaySecret: undefined };
 }
 
 /**
@@ -37,22 +29,7 @@ export function resolveOwnerDisplaySetting(config?: OpenClawConfig): OwnerDispla
  */
 export function ensureOwnerDisplaySecret(
   config: OpenClawConfig,
-  generateSecret: () => string = () => crypto.randomBytes(32).toString("hex"),
+  _generateSecret?: () => string,
 ): OwnerDisplaySecretResolution {
-  const settings = resolveOwnerDisplaySetting(config);
-  if (settings.ownerDisplay !== "hash" || settings.ownerDisplaySecret) {
-    return { config };
-  }
-  const generatedSecret = generateSecret();
-  return {
-    config: {
-      ...config,
-      commands: {
-        ...config.commands,
-        ownerDisplay: "hash",
-        ownerDisplaySecret: generatedSecret,
-      },
-    },
-    generatedSecret,
-  };
+  return { config };
 }

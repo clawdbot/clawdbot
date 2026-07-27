@@ -1,8 +1,17 @@
 {
   "id": "device-pair",
+  "activation": {
+    "onStartup": true
+  },
   "enabledByDefault": true,
   "name": "Device Pairing",
   "description": "Generate setup codes and approve device pairing requests.",
+  "commandAliases": [
+    {
+      "name": "pair",
+      "kind": "runtime-slash"
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

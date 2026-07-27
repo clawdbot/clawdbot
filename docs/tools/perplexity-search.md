@@ -3,21 +3,26 @@ summary: "Perplexity Search API and Sonar/OpenRouter compatibility for web_searc
 read_when:
   - You want to use Perplexity Search for web search
   - You need PERPLEXITY_API_KEY or OPENROUTER_API_KEY setup
-title: "Perplexity Search"
+title: "Perplexity search"
 ---
 
-# Perplexity Search API
+OpenClaw supports the Perplexity Search API as a `web_search` provider. It returns structured results with `title`, `url`, and `snippet` fields.
 
-OpenClaw supports Perplexity Search API as a `web_search` provider.
-It returns structured results with `title`, `url`, and `snippet` fields.
+For compatibility, OpenClaw also supports legacy Perplexity Sonar/OpenRouter setups. If you use `OPENROUTER_API_KEY`, an `sk-or-...` key in `plugins.entries.perplexity.config.webSearch.apiKey`, or set `plugins.entries.perplexity.config.webSearch.baseUrl` / `model`, the provider switches to the chat-completions path and returns AI-synthesized answers with citations instead of structured Search API results.
 
-For compatibility, OpenClaw also supports legacy Perplexity Sonar/OpenRouter setups.
-If you use `OPENROUTER_API_KEY`, an `sk-or-...` key in `plugins.entries.perplexity.config.webSearch.apiKey`, or set `plugins.entries.perplexity.config.webSearch.baseUrl` / `model`, the provider switches to the chat-completions path and returns AI-synthesized answers with citations instead of structured Search API results.
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/perplexity-plugin
+openclaw gateway restart
+```
 
 ## Getting a Perplexity API key
 
-1. Create a Perplexity account at [perplexity.ai/settings/api](https://www.perplexity.ai/settings/api)
-2. Generate an API key in the dashboard
+1. Create a Perplexity account at [perplexity.ai/settings/api](https://www.perplexity.ai/settings/api).
+2. Generate an API key in the dashboard.
 3. Store the key in config or set `PERPLEXITY_API_KEY` in the Gateway environment.
 
 ## OpenRouter compatibility
@@ -85,13 +90,9 @@ Optional compatibility controls:
 
 ## Where to set the key
 
-**Via config:** run `openclaw configure --section web`. It stores the key in
-`~/.openclaw/openclaw.json` under `plugins.entries.perplexity.config.webSearch.apiKey`.
-That field also accepts SecretRef objects.
+**Via config:** run `openclaw configure --section web`. It stores the key in `~/.openclaw/openclaw.json` under `plugins.entries.perplexity.config.webSearch.apiKey`. That field also accepts SecretRef objects.
 
-**Via environment:** set `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY`
-in the Gateway process environment. For a gateway install, put it in
-`~/.openclaw/.env` (or your service environment). See [Env vars](/help/faq#env-vars-and-env-loading).
+**Via environment:** set `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY` in the Gateway process environment. For a gateway install, put it in `~/.openclaw/.env` (or your service environment). See [Env vars](/help/faq#env-vars-and-env-loading).
 
 If `provider: "perplexity"` is configured and the Perplexity key SecretRef is unresolved with no env fallback, startup/reload fails fast.
 
@@ -99,21 +100,51 @@ If `provider: "perplexity"` is configured and the Perplexity key SecretRef is un
 
 These parameters apply to the native Perplexity Search API path.
 
-| Parameter             | Description                                          |
-| --------------------- | ---------------------------------------------------- |
-| `query`               | Search query (required)                              |
-| `count`               | Number of results to return (1-10, default: 5)       |
-| `country`             | 2-letter ISO country code (e.g., "US", "DE")         |
-| `language`            | ISO 639-1 language code (e.g., "en", "de", "fr")     |
-| `freshness`           | Time filter: `day` (24h), `week`, `month`, or `year` |
-| `date_after`          | Only results published after this date (YYYY-MM-DD)  |
-| `date_before`         | Only results published before this date (YYYY-MM-DD) |
-| `domain_filter`       | Domain allowlist/denylist array (max 20)             |
-| `max_tokens`          | Total content budget (default: 25000, max: 1000000)  |
-| `max_tokens_per_page` | Per-page token limit (default: 2048)                 |
+<ParamField path="query" type="string" required>
+Search query.
+</ParamField>
 
-For the legacy Sonar/OpenRouter compatibility path, only `query` and `freshness` are supported.
-Search API-only filters such as `country`, `language`, `date_after`, `date_before`, `domain_filter`, `max_tokens`, and `max_tokens_per_page` return explicit errors.
+<ParamField path="count" type="number" default="5">
+Number of results to return (1-10).
+</ParamField>
+
+<ParamField path="country" type="string">
+2-letter ISO country code (e.g. `US`, `DE`).
+</ParamField>
+
+<ParamField path="language" type="string">
+ISO 639-1 language code (e.g. `en`, `de`, `fr`).
+</ParamField>
+
+<ParamField path="freshness" type="'day' | 'week' | 'month' | 'year'">
+Time filter - `day` is 24 hours.
+</ParamField>
+
+<ParamField path="date_after" type="string">
+Only results published after this date (`YYYY-MM-DD`).
+</ParamField>
+
+<ParamField path="date_before" type="string">
+Only results published before this date (`YYYY-MM-DD`).
+</ParamField>
+
+<ParamField path="domain_filter" type="string[]">
+Domain allowlist/denylist array (max 20).
+</ParamField>
+
+<ParamField path="max_tokens" type="number" default="25000">
+Total content budget (max 1000000).
+</ParamField>
+
+<ParamField path="max_tokens_per_page" type="number" default="2048">
+Per-page token limit.
+</ParamField>
+
+For the legacy Sonar/OpenRouter compatibility path:
+
+- `query`, `count`, and `freshness` are accepted.
+- `count` is compatibility-only there; the response is still one synthesized answer with citations rather than an N-result list.
+- Search API-only filters (`country`, `language`, `date_after`, `date_before`, `domain_filter`, `max_tokens`, `max_tokens_per_page`) return explicit errors.
 
 **Examples:**
 
@@ -160,19 +191,30 @@ await web_search({
 
 ### Domain filter rules
 
-- Maximum 20 domains per filter
-- Cannot mix allowlist and denylist in the same request
-- Use `-` prefix for denylist entries (e.g., `["-reddit.com"]`)
+- Maximum 20 domains per filter.
+- Cannot mix allowlist and denylist entries in the same request.
+- Use a `-` prefix for denylist entries (e.g., `["-reddit.com"]`).
 
 ## Notes
 
-- Perplexity Search API returns structured web search results (`title`, `url`, `snippet`)
-- OpenRouter or explicit `plugins.entries.perplexity.config.webSearch.baseUrl` / `model` switches Perplexity back to Sonar chat completions for compatibility
-- Results are cached for 15 minutes by default (configurable via `cacheTtlMinutes`)
+- Perplexity Search API returns structured web search results (`title`, `url`, `snippet`).
+- OpenRouter, or an explicit `plugins.entries.perplexity.config.webSearch.baseUrl` / `model`, switches Perplexity back to Sonar chat completions for compatibility.
+- Sonar/OpenRouter compatibility returns one synthesized answer with citations, not structured result rows.
+- Results are cached for 15 minutes by default (configurable via `cacheTtlMinutes`).
 
 ## Related
 
-- [Web Search overview](/tools/web) -- all providers and auto-detection
-- [Perplexity Search API docs](https://docs.perplexity.ai/docs/search/quickstart) -- official Perplexity documentation
-- [Brave Search](/tools/brave-search) -- structured results with country/language filters
-- [Exa Search](/tools/exa-search) -- neural search with content extraction
+<CardGroup cols={2}>
+  <Card title="Web search overview" href="/tools/web" icon="globe">
+    All providers and auto-detection rules.
+  </Card>
+  <Card title="Brave search" href="/tools/brave-search" icon="shield">
+    Structured results with country and language filters.
+  </Card>
+  <Card title="Exa search" href="/tools/exa-search" icon="magnifying-glass">
+    Neural search with content extraction.
+  </Card>
+  <Card title="Perplexity Search API docs" href="https://docs.perplexity.ai/docs/search/quickstart" icon="arrow-up-right-from-square">
+    Official Perplexity Search API quickstart and reference.
+  </Card>
+</CardGroup>

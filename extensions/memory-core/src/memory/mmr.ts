@@ -1,3 +1,6 @@
+// Memory Core plugin module implements mmr behavior.
+import { jaccardSimilarity, tokenize } from "./tokenize.js";
+
 /**
  * Maximal Marginal Relevance (MMR) re-ranking algorithm.
  *
@@ -7,7 +10,7 @@
  * @see Carbonell & Goldstein, "The Use of MMR, Diversity-Based Reranking" (1998)
  */
 
-export type MMRItem = {
+type MMRItem = {
   id: string;
   score: number;
   content: string;
@@ -24,82 +27,6 @@ export const DEFAULT_MMR_CONFIG: MMRConfig = {
   enabled: false,
   lambda: 0.7,
 };
-
-/**
- * Regex matching CJK-family characters that lack whitespace word boundaries:
- * - CJK Unified Ideographs (Chinese hanzi, Japanese kanji, Korean hanja)
- * - CJK Extension A
- * - Hiragana & Katakana (Japanese)
- * - Hangul Syllables & Jamo (Korean)
- */
-const CJK_RE = /[\u3040-\u309f\u30a0-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u1100-\u11ff]/;
-
-/**
- * Tokenize text for Jaccard similarity computation.
- * Extracts alphanumeric tokens, CJK-family characters (unigrams),
- * and consecutive CJK character pairs (bigrams).
- *
- * Bigrams are only created from characters that are adjacent in the
- * original text, so mixed content like "我喜欢hello你好" will NOT
- * produce the spurious bigram "欢你".
- */
-export function tokenize(text: string): Set<string> {
-  const lower = text.toLowerCase();
-  const ascii = lower.match(/[a-z0-9_]+/g) ?? [];
-
-  // Track CJK characters with their original positions
-  const chars = Array.from(lower);
-  const cjkData: { char: string; index: number }[] = [];
-  for (let i = 0; i < chars.length; i++) {
-    if (CJK_RE.test(chars[i])) {
-      cjkData.push({ char: chars[i], index: i });
-    }
-  }
-
-  // Build bigrams only from originally adjacent CJK characters
-  const bigrams: string[] = [];
-  for (let i = 0; i < cjkData.length - 1; i++) {
-    if (cjkData[i + 1].index === cjkData[i].index + 1) {
-      bigrams.push(cjkData[i].char + cjkData[i + 1].char);
-    }
-  }
-
-  const unigrams = cjkData.map((d) => d.char);
-  return new Set([...ascii, ...bigrams, ...unigrams]);
-}
-
-/**
- * Compute Jaccard similarity between two token sets.
- * Returns a value in [0, 1] where 1 means identical sets.
- */
-export function jaccardSimilarity(setA: Set<string>, setB: Set<string>): number {
-  if (setA.size === 0 && setB.size === 0) {
-    return 1;
-  }
-  if (setA.size === 0 || setB.size === 0) {
-    return 0;
-  }
-
-  let intersectionSize = 0;
-  const smaller = setA.size <= setB.size ? setA : setB;
-  const larger = setA.size <= setB.size ? setB : setA;
-
-  for (const token of smaller) {
-    if (larger.has(token)) {
-      intersectionSize++;
-    }
-  }
-
-  const unionSize = setA.size + setB.size - intersectionSize;
-  return unionSize === 0 ? 0 : intersectionSize / unionSize;
-}
-
-/**
- * Compute text similarity between two content strings using Jaccard on tokens.
- */
-export function textSimilarity(contentA: string, contentB: string): number {
-  return jaccardSimilarity(tokenize(contentA), tokenize(contentB));
-}
 
 /**
  * Compute the maximum similarity between an item and all selected items.
@@ -131,7 +58,7 @@ function maxSimilarityToSelected(
  * Compute MMR score for a candidate item.
  * MMR = λ * relevance - (1-λ) * max_similarity_to_selected
  */
-export function computeMMRScore(relevance: number, maxSimilarity: number, lambda: number): number {
+function computeMMRScore(relevance: number, maxSimilarity: number, lambda: number): number {
   return lambda * relevance - (1 - lambda) * maxSimilarity;
 }
 
@@ -147,7 +74,7 @@ export function computeMMRScore(relevance: number, maxSimilarity: number, lambda
  * @param config - MMR configuration (lambda, enabled)
  * @returns Re-ranked items in MMR order
  */
-export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConfig> = {}): T[] {
+function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConfig> = {}): T[] {
   const { enabled = DEFAULT_MMR_CONFIG.enabled, lambda = DEFAULT_MMR_CONFIG.lambda } = config;
 
   // Early exits

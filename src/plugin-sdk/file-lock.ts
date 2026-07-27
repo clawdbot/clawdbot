@@ -1,10 +1,20 @@
-import fsSync from "node:fs";
+// File lock helpers serialize plugin writes that share a filesystem-backed state file.
+import "../infra/fs-safe-defaults.js";
 import fs from "node:fs/promises";
-import path from "node:path";
-import { isPidAlive } from "../shared/pid-alive.js";
-import { resolveProcessScopedMap } from "../shared/process-scoped-map.js";
+import {
+  acquireFileLock as acquireFsSafeFileLock,
+  drainFileLockManagerForTest,
+  resetFileLockManagerForTest,
+} from "@openclaw/fs-safe/file-lock";
+import {
+  isLockOwnerDefinitelyStale,
+  shouldRemoveDeadOwnerOrExpiredLock,
+} from "../infra/stale-lock-file.js";
+import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 
+/** Retry and stale-recovery policy for acquiring a filesystem lock. */
 export type FileLockOptions = {
+  /** Retry policy used while waiting for another process or re-entrant holder to release. */
   retries: {
     retries: number;
     factor: number;
@@ -12,137 +22,121 @@ export type FileLockOptions = {
     maxTimeout: number;
     randomize?: boolean;
   };
+  /** Milliseconds used to classify contended sidecars as stale. */
   stale: number;
+  /** Fail closed for security-sensitive state; generic locks retain shipped stale recovery. */
+  staleRecovery?: "fail-closed" | "remove-if-unchanged";
 };
 
-type LockFilePayload = {
-  pid: number;
-  createdAt: string;
-};
-
-type HeldLock = {
-  count: number;
-  handle: fs.FileHandle;
-  lockPath: string;
-};
-
-const HELD_LOCKS_KEY = Symbol.for("openclaw.fileLockHeldLocks");
-const HELD_LOCKS = resolveProcessScopedMap<HeldLock>(HELD_LOCKS_KEY);
-const CLEANUP_REGISTERED_KEY = Symbol.for("openclaw.fileLockCleanupRegistered");
-
-function releaseAllLocksSync(): void {
-  for (const [normalizedFile, held] of HELD_LOCKS) {
-    // Kick off best-effort async closes before dropping references so tests
-    // don't leave FileHandle objects for GC to close later.
-    void held.handle.close().catch(() => undefined);
-    rmLockPathSync(held.lockPath);
-    HELD_LOCKS.delete(normalizedFile);
-  }
-}
-
-async function drainAllLocks(): Promise<void> {
-  for (const [normalizedFile, held] of Array.from(HELD_LOCKS.entries())) {
-    HELD_LOCKS.delete(normalizedFile);
-    await held.handle.close().catch(() => undefined);
-    await fs.rm(held.lockPath, { force: true }).catch(() => undefined);
-  }
-}
-
-function rmLockPathSync(lockPath: string): void {
-  try {
-    fsSync.rmSync(lockPath, { force: true });
-  } catch {
-    // Best-effort exit cleanup only.
-  }
-}
-
-function ensureExitCleanupRegistered(): void {
-  const proc = process as NodeJS.Process & { [CLEANUP_REGISTERED_KEY]?: boolean };
-  if (proc[CLEANUP_REGISTERED_KEY]) {
-    return;
-  }
-  proc[CLEANUP_REGISTERED_KEY] = true;
-  process.on("exit", releaseAllLocksSync);
-}
-
-function computeDelayMs(retries: FileLockOptions["retries"], attempt: number): number {
-  const base = Math.min(
-    retries.maxTimeout,
-    Math.max(retries.minTimeout, retries.minTimeout * retries.factor ** attempt),
-  );
-  const jitter = retries.randomize ? 1 + Math.random() : 1;
-  return Math.min(retries.maxTimeout, Math.round(base * jitter));
-}
-
-async function readLockPayload(lockPath: string): Promise<LockFilePayload | null> {
-  try {
-    const raw = await fs.readFile(lockPath, "utf8");
-    const parsed = JSON.parse(raw) as Partial<LockFilePayload>;
-    if (typeof parsed.pid !== "number" || typeof parsed.createdAt !== "string") {
-      return null;
-    }
-    return { pid: parsed.pid, createdAt: parsed.createdAt };
-  } catch {
-    return null;
-  }
-}
-
-async function resolveNormalizedFilePath(filePath: string): Promise<string> {
-  const resolved = path.resolve(filePath);
-  const dir = path.dirname(resolved);
-  await fs.mkdir(dir, { recursive: true });
-  try {
-    const realDir = await fs.realpath(dir);
-    return path.join(realDir, path.basename(resolved));
-  } catch {
-    return resolved;
-  }
-}
-
-async function isStaleLock(lockPath: string, staleMs: number): Promise<boolean> {
-  const payload = await readLockPayload(lockPath);
-  if (payload?.pid && !isPidAlive(payload.pid)) {
-    return true;
-  }
-  if (payload?.createdAt) {
-    const createdAt = Date.parse(payload.createdAt);
-    if (!Number.isFinite(createdAt) || Date.now() - createdAt > staleMs) {
-      return true;
-    }
-  }
-  try {
-    const stat = await fs.stat(lockPath);
-    return Date.now() - stat.mtimeMs > staleMs;
-  } catch {
-    return true;
-  }
-}
-
+/** Live file-lock handle returned after successful acquisition. */
 export type FileLockHandle = {
+  /** Absolute path to the `.lock` sidecar held for this file path. */
   lockPath: string;
+  /** Releases one held reference; callers must await it before assuming peers can proceed. */
   release: () => Promise<void>;
 };
 
-async function releaseHeldLock(normalizedFile: string): Promise<void> {
-  const current = HELD_LOCKS.get(normalizedFile);
-  if (!current) {
-    return;
+/** Stable error code used when lock acquisition retries are exhausted. */
+export const FILE_LOCK_TIMEOUT_ERROR_CODE = "file_lock_timeout";
+/** Stable error code used when stale lock recovery cannot proceed safely. */
+export const FILE_LOCK_STALE_ERROR_CODE = "file_lock_stale";
+
+/** Typed error thrown when a lock cannot be acquired before timeout. */
+export type FileLockTimeoutError = Error & {
+  /** Stable error discriminator for lock acquisition timeout handling. */
+  code: typeof FILE_LOCK_TIMEOUT_ERROR_CODE;
+  /** Lock sidecar path that could not be acquired before retries were exhausted. */
+  lockPath: string;
+};
+
+/** Typed error thrown when a stale lock sidecar cannot be reclaimed safely. */
+export type FileLockStaleError = Error & {
+  /** Stable error discriminator for stale-lock reclaim failures. */
+  code: typeof FILE_LOCK_STALE_ERROR_CODE;
+  /** Lock sidecar path that could not be safely reclaimed. */
+  lockPath: string;
+};
+
+const FILE_LOCK_MANAGER_KEY = "openclaw.plugin-sdk.file-lock";
+const STALE_FILE_LOCK_RECLAIM_MANAGER_KEY = "openclaw.plugin-sdk.stale-file-lock-reclaim";
+let currentProcessStartTime: number | null | undefined;
+
+function getCurrentProcessStartTime(): number | null {
+  if (currentProcessStartTime === undefined) {
+    currentProcessStartTime = getFileLockProcessStartTime(process.pid);
   }
-  current.count -= 1;
-  if (current.count > 0) {
-    return;
-  }
-  HELD_LOCKS.delete(normalizedFile);
-  await current.handle.close().catch(() => undefined);
-  await fs.rm(current.lockPath, { force: true }).catch(() => undefined);
+  return currentProcessStartTime;
 }
 
+function createCurrentProcessLockPayload(): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    pid: process.pid,
+    createdAt: new Date().toISOString(),
+  };
+  const starttime = getCurrentProcessStartTime();
+  if (starttime !== null) {
+    payload.starttime = starttime;
+  }
+  return payload;
+}
+
+function sameStatValue(left: number | bigint, right: number | bigint): boolean {
+  return typeof left === typeof right ? left === right : BigInt(left) === BigInt(right);
+}
+
+function sameFileIdentity(
+  left: { dev: number | bigint; ino: number | bigint },
+  right: { dev: number | bigint; ino: number | bigint },
+): boolean {
+  if (!sameStatValue(left.ino, right.ino)) {
+    return false;
+  }
+  if (sameStatValue(left.dev, right.dev)) {
+    return true;
+  }
+  // Windows path stats may report dev=0 while fd stats know the volume id.
+  return (
+    process.platform === "win32" &&
+    (left.dev === 0 || left.dev === 0n || right.dev === 0 || right.dev === 0n)
+  );
+}
+
+async function isSameRegularFile(
+  filePath: string,
+  observed: { dev: number | bigint; ino: number | bigint },
+): Promise<boolean> {
+  try {
+    const current = await fs.lstat(filePath, { bigint: true });
+    return current.isFile() && sameFileIdentity(current, observed);
+  } catch {
+    return false;
+  }
+}
+
+function normalizeLockError(err: unknown): never {
+  if ((err as { code?: unknown }).code === FILE_LOCK_TIMEOUT_ERROR_CODE) {
+    throw Object.assign(new Error((err as Error).message), {
+      code: FILE_LOCK_TIMEOUT_ERROR_CODE,
+      lockPath: (err as { lockPath?: string }).lockPath ?? "",
+    }) as FileLockTimeoutError;
+  }
+  if ((err as { code?: unknown }).code === FILE_LOCK_STALE_ERROR_CODE) {
+    throw Object.assign(new Error((err as Error).message), {
+      code: FILE_LOCK_STALE_ERROR_CODE,
+      lockPath: (err as { lockPath?: string }).lockPath ?? "",
+    }) as FileLockStaleError;
+  }
+  throw err;
+}
+
+/** Reset process-local file-lock state for tests that isolate lock managers. */
 export function resetFileLockStateForTest(): void {
-  releaseAllLocksSync();
+  resetFileLockManagerForTest(FILE_LOCK_MANAGER_KEY, FILE_LOCK_MANAGER_KEY);
 }
 
+/** Wait for process-local file-lock state to drain before test teardown. */
 export async function drainFileLockStateForTest(): Promise<void> {
-  await drainAllLocks();
+  await drainFileLockManagerForTest(FILE_LOCK_MANAGER_KEY, FILE_LOCK_MANAGER_KEY);
 }
 
 /** Acquire a re-entrant process-local file lock backed by a `.lock` sidecar file. */
@@ -150,48 +144,84 @@ export async function acquireFileLock(
   filePath: string,
   options: FileLockOptions,
 ): Promise<FileLockHandle> {
-  ensureExitCleanupRegistered();
-  const normalizedFile = await resolveNormalizedFilePath(filePath);
-  const lockPath = `${normalizedFile}.lock`;
-  const held = HELD_LOCKS.get(normalizedFile);
-  if (held) {
-    held.count += 1;
-    return {
-      lockPath,
-      release: () => releaseHeldLock(normalizedFile),
-    };
+  const staleRecovery = options.staleRecovery ?? "remove-if-unchanged";
+  try {
+    const lock = await acquireFsSafeFileLock(filePath, {
+      managerKey: FILE_LOCK_MANAGER_KEY,
+      staleMs: options.stale,
+      retry: options.retries,
+      staleRecovery,
+      allowReentrant: true,
+      payload: createCurrentProcessLockPayload,
+      shouldReclaim: (params) =>
+        staleRecovery === "fail-closed"
+          ? isLockOwnerDefinitelyStale({ payload: params.payload })
+          : shouldRemoveDeadOwnerOrExpiredLock({
+              payload: params.payload,
+              staleMs: params.staleMs,
+              nowMs: params.nowMs,
+            }),
+      ...(staleRecovery === "remove-if-unchanged"
+        ? {
+            shouldRemoveStaleLock: (snapshot: { payload: Record<string, unknown> | null }) =>
+              shouldRemoveDeadOwnerOrExpiredLock({
+                payload: snapshot.payload,
+                staleMs: options.stale,
+              }),
+          }
+        : {}),
+    });
+    return { lockPath: lock.lockPath, release: lock.release };
+  } catch (err) {
+    return normalizeLockError(err);
   }
+}
 
-  const attempts = Math.max(1, options.retries.retries + 1);
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    try {
-      const handle = await fs.open(lockPath, "wx");
-      await handle.writeFile(
-        JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }, null, 2),
-        "utf8",
-      );
-      HELD_LOCKS.set(normalizedFile, { count: 1, handle, lockPath });
-      return {
-        lockPath,
-        release: () => releaseHeldLock(normalizedFile),
-      };
-    } catch (err) {
-      const code = (err as { code?: string }).code;
-      if (code !== "EEXIST") {
-        throw err;
-      }
-      if (await isStaleLock(lockPath, options.stale)) {
-        await fs.rm(lockPath, { force: true }).catch(() => undefined);
-        continue;
-      }
-      if (attempt >= attempts - 1) {
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, computeDelayMs(options.retries, attempt)));
+/** Result of a doctor-owned attempt to remove one retired file-lock sidecar. */
+export type StaleFileLockReclaimResult = "missing" | "removed" | "retained";
+
+/** Remove one definitely stale, unchanged regular lock sidecar; retain every ambiguous owner. */
+export async function reclaimDefinitelyStaleFileLock(
+  lockPath: string,
+): Promise<StaleFileLockReclaimResult> {
+  let observed: { dev: number | bigint; ino: number | bigint; isFile: () => boolean };
+  try {
+    observed = await fs.lstat(lockPath, { bigint: true });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return "missing";
     }
+    throw err;
+  }
+  if (!observed.isFile()) {
+    return "retained";
   }
 
-  throw new Error(`file lock timeout for ${normalizedFile}`);
+  // Pin approval to the regular-file identity first observed. fs-safe then
+  // rechecks that identity and raw payload immediately before path removal.
+  const ownerIsDefinitelyStale = async (payload: Record<string, unknown> | null) =>
+    (await isSameRegularFile(lockPath, observed)) && isLockOwnerDefinitelyStale({ payload });
+  const targetPath = lockPath.endsWith(".lock") ? lockPath.slice(0, -".lock".length) : lockPath;
+  try {
+    const reclaimed = await acquireFsSafeFileLock(targetPath, {
+      managerKey: STALE_FILE_LOCK_RECLAIM_MANAGER_KEY,
+      lockPath,
+      staleMs: 0,
+      retry: { retries: 0 },
+      staleRecovery: "remove-if-unchanged",
+      payload: createCurrentProcessLockPayload,
+      shouldReclaim: ({ payload }) => ownerIsDefinitelyStale(payload),
+      shouldRemoveStaleLock: ({ payload }) => ownerIsDefinitelyStale(payload),
+    });
+    await reclaimed.release();
+    return "removed";
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === FILE_LOCK_TIMEOUT_ERROR_CODE || code === FILE_LOCK_STALE_ERROR_CODE) {
+      return "retained";
+    }
+    throw err;
+  }
 }
 
 /** Run an async callback while holding a file lock, always releasing the lock afterward. */

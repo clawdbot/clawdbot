@@ -1,6 +1,8 @@
+// Covers runtime config overrides and precedence.
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   applyConfigOverrides,
+  captureConfigOverrideApplier,
   getConfigOverrides,
   resetConfigOverrides,
   setConfigOverride,
@@ -15,11 +17,20 @@ describe("runtime overrides", () => {
 
   it("sets and applies nested overrides", () => {
     const cfg = {
-      messages: { responsePrefix: "[openclaw]" },
+      channels: { whatsapp: { responsePrefix: "[openclaw]" } },
     } as OpenClawConfig;
-    setConfigOverride("messages.responsePrefix", "[debug]");
+    setConfigOverride("channels.whatsapp.responsePrefix", "[debug]");
     const next = applyConfigOverrides(cfg);
-    expect(next.messages?.responsePrefix).toBe("[debug]");
+    expect(next.channels?.whatsapp?.responsePrefix).toBe("[debug]");
+  });
+
+  it("captures an immutable override applier", () => {
+    setConfigOverride("gateway.auth.token", "startup-token");
+    const applyStartupOverrides = captureConfigOverrideApplier();
+    setConfigOverride("gateway.auth.token", "later-token");
+
+    expect(applyStartupOverrides({}).gateway?.auth?.token).toBe("startup-token");
+    expect(applyConfigOverrides({}).gateway?.auth?.token).toBe("later-token");
   });
 
   it("merges object overrides without clobbering siblings", () => {
@@ -35,8 +46,7 @@ describe("runtime overrides", () => {
   it("unsets overrides and prunes empty branches", () => {
     setConfigOverride("channels.whatsapp.dmPolicy", "open");
     const removed = unsetConfigOverride("channels.whatsapp.dmPolicy");
-    expect(removed.ok).toBe(true);
-    expect(removed.removed).toBe(true);
+    expect(removed).toEqual({ ok: true, value: true });
     expect(Object.keys(getConfigOverrides()).length).toBe(0);
   });
 
@@ -55,7 +65,7 @@ describe("runtime overrides", () => {
 
     const next = applyConfigOverrides(cfg);
     expect(next.commands?.bash).toBeUndefined();
-    expect(Object.prototype.hasOwnProperty.call(next.commands ?? {}, "bash")).toBe(false);
+    expect(Object.hasOwn(next.commands ?? {}, "bash")).toBe(false);
   });
 
   it("blocks constructor/prototype keys inside override object values", () => {
@@ -64,7 +74,7 @@ describe("runtime overrides", () => {
 
     const next = applyConfigOverrides(cfg);
     expect(next.commands?.bash).toBeUndefined();
-    expect(Object.prototype.hasOwnProperty.call(next.commands ?? {}, "bash")).toBe(false);
+    expect(Object.hasOwn(next.commands ?? {}, "bash")).toBe(false);
   });
 
   it("sanitizes blocked object keys when writing overrides", () => {

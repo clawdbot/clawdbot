@@ -1,19 +1,26 @@
+/** Runs gateway discovery, optional SSH tunneling, and per-target probes. */
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.js";
 import { probeGateway } from "../../gateway/probe.js";
 import {
   discoverGatewayBeacons,
   type GatewayBonjourBeacon,
 } from "../../infra/bonjour-discovery.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { pickGatewaySelfPresence } from "../gateway-presence.js";
 import { pickAutoSshTargetFromDiscovery } from "./discovery.js";
 import {
   extractConfigSummary,
-  pickGatewaySelfPresence,
   resolveAuthForTarget,
   resolveProbeBudgetMs,
   type GatewayConfigSummary,
   type GatewayStatusTarget,
 } from "./helpers.js";
 
+/** Single gateway status target plus probe details and derived display metadata. */
 export type GatewayStatusProbedTarget = {
   target: GatewayStatusTarget;
   probe: Awaited<ReturnType<typeof probeGateway>>;
@@ -22,6 +29,7 @@ export type GatewayStatusProbedTarget = {
   authDiagnostics: string[];
 };
 
+/** Probes configured, explicit, and optionally SSH-discovered gateway targets. */
 export async function runGatewayStatusProbePass(params: {
   cfg: OpenClawConfig;
   opts: {
@@ -37,6 +45,7 @@ export async function runGatewayStatusProbePass(params: {
   sshTarget: string | null;
   sshIdentity: string | null;
   loadSshTunnelModule: () => Promise<typeof import("../../infra/ssh-tunnel.js")>;
+  localTlsFingerprint?: string;
 }): Promise<{
   discovery: GatewayBonjourBeacon[];
   probed: GatewayStatusProbedTarget[];
@@ -69,7 +78,7 @@ export async function runGatewayStatusProbePass(params: {
       sshTunnelStarted = true;
       return tunnel;
     } catch (err) {
-      sshTunnelError = err instanceof Error ? err.message : String(err);
+      sshTunnelError = formatErrorMessage(err);
       return null;
     }
   };
@@ -83,10 +92,12 @@ export async function runGatewayStatusProbePass(params: {
     sshTarget = pickAutoSshTargetFromDiscovery({
       discovery,
       parseSshTarget,
-      sshUser: process.env.USER?.trim() || "",
+      sshUser: normalizeOptionalString(process.env.USER) ?? "",
     });
   }
 
+  // Prefer the concurrently-started tunnel, but allow auto-discovered SSH
+  // targets to start after Bonjour finishes.
   const tunnel =
     tunnelFirst ||
     (sshTarget && !sshTunnelStarted && !sshTunnelError ? await tryStartTunnel() : null);
@@ -115,8 +126,8 @@ export async function runGatewayStatusProbePass(params: {
     const probed = await Promise.all(
       targets.map(async (target) => {
         const authResolution = await resolveAuthForTarget(params.cfg, target, {
-          token: typeof params.opts.token === "string" ? params.opts.token : undefined,
-          password: typeof params.opts.password === "string" ? params.opts.password : undefined,
+          token: readStringValue(params.opts.token),
+          password: readStringValue(params.opts.password),
         });
         const probe = await probeGateway({
           url: target.url,
@@ -124,6 +135,10 @@ export async function runGatewayStatusProbePass(params: {
             token: authResolution.token,
             password: authResolution.password,
           },
+          tlsFingerprint:
+            target.kind === "localLoopback" && target.url.startsWith("wss://")
+              ? params.localTlsFingerprint
+              : undefined,
           timeoutMs: resolveProbeBudgetMs(params.overallTimeoutMs, target),
         });
         return {
@@ -148,7 +163,7 @@ export async function runGatewayStatusProbePass(params: {
       try {
         await tunnel.stop();
       } catch {
-        // best-effort
+        // Status output must not fail just because tunnel cleanup races process exit.
       }
     }
   }

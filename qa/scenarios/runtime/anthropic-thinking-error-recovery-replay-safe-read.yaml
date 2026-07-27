@@ -1,0 +1,96 @@
+title: Anthropic thinking error recovery after replay-safe read
+
+scenario:
+  id: anthropic-thinking-error-recovery-replay-safe-read
+  surface: runtime
+  coverage:
+    primary:
+      - anthropic.signed-redacted-thinking-replay
+    secondary:
+      - agent-runtime.failure-recovery-retry-policy
+  gatewayConfigPatch:
+    agents:
+      defaults:
+        models:
+          anthropic/claude-opus-4-8:
+            params: {}
+  objective: Verify an Anthropic stream error after signed thinking and a replay-safe read retries the same prompt into a visible answer.
+  successCriteria:
+    - Scenario is mock-openai only so live lanes do not pick it up implicitly.
+    - The agent performs a replay-safe read before the Anthropic stream error.
+    - The runtime retries the same prompt without injecting the visible-answer continuation instruction.
+    - The final visible reply contains the exact recovery marker.
+  docsRefs:
+    - docs/help/testing.md
+  codeRefs:
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
+    - src/agents/embedded-agent-runner/run/incomplete-turn.ts
+  execution:
+    kind: flow
+    summary: Verify Anthropic stream errors after signed thinking recover after a replay-safe read.
+    config:
+      requiredProviderMode: mock-openai
+      anthropicModelRef: anthropic/claude-opus-4-8
+      promptSnippet: Anthropic thinking error QA check
+      prompt: "Anthropic thinking error QA check: read QA_KICKOFF_TASK.md, then answer with exactly ANTHROPIC-THINKING-ERROR-RECOVERED-OK."
+      expectedReply: ANTHROPIC-THINKING-ERROR-RECOVERED-OK
+      visibleAnswerRetryNeedle: The previous attempt did not produce a user-visible answer.
+
+flow:
+  steps:
+    - name: retries a thinking-only Anthropic error after a replay-safe read
+      actions:
+        - assert:
+            expr: "env.providerMode === 'mock-openai'"
+            message: this seeded scenario is mock-openai only
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: requestCursorBefore
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
+        - set: sessionKey
+          value:
+            expr: "`agent:qa:anthropic-thinking-error:${randomUUID().slice(0, 8)}`"
+        - set: modelAck
+          value:
+            expr: "await env.gateway.call('sessions.patch', { key: sessionKey, model: config.anthropicModelRef }, { timeoutMs: liveTurnTimeoutMs(env, 45000) })"
+        - call: runAgentPrompt
+          args:
+            - ref: env
+            - sessionKey:
+                ref: sessionKey
+              message:
+                expr: config.prompt
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 45000)
+        - call: waitForOutboundMessage
+          saveAs: outbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.conversation.id === 'qa-operator' && candidate.text.includes(config.expectedReply)"
+            - expr: liveTurnTimeoutMs(env, 30000)
+        - assert:
+            expr: "outbound.text.includes(config.expectedReply)"
+            message:
+              expr: "`missing Anthropic thinking-error recovery marker: ${outbound.text}`"
+        - if:
+            expr: "Boolean(env.mock)"
+            then:
+              - set: scenarioRequests
+                value:
+                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`))"
+              - assert:
+                  expr: "scenarioRequests.some((request) => String(request.allInputText ?? '').includes(config.promptSnippet) && request.providerVariant === 'anthropic' && request.plannedToolName === 'read')"
+                  message: expected replay-safe read request on the Anthropic mock route
+              - assert:
+                  expr: "scenarioRequests.filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet) && request.providerVariant === 'anthropic').length >= 3"
+                  message: expected initial read, terminal-error attempt, and same-prompt retry
+              - assert:
+                  expr: "!scenarioRequests.some((request) => String(request.allInputText ?? '').includes(config.visibleAnswerRetryNeedle))"
+                  message: expected same-prompt retry, not visible-answer continuation retry
+      detailsExpr: "env.mock ? `${outbound.text}\\nrequests=${String(scenarioRequests?.length ?? 0)}` : outbound.text"

@@ -8,6 +8,11 @@ enum ConfigStore {
         var saveLocal: (@MainActor @Sendable ([String: Any]) -> Void)?
         var loadRemote: (@MainActor @Sendable () async -> [String: Any])?
         var saveRemote: (@MainActor @Sendable ([String: Any]) async throws -> Void)?
+        var saveGateway: (@MainActor @Sendable ([String: Any]) async throws -> Void)?
+        #if DEBUG
+        /// Isolates focused notification assertions without changing the production sender contract.
+        var notificationCenter: NotificationCenter?
+        #endif
     }
 
     private actor OverrideStore {
@@ -48,7 +53,10 @@ enum ConfigStore {
     }
 
     @MainActor
-    static func save(_ root: sending [String: Any]) async throws {
+    static func save(
+        _ root: sending [String: Any],
+        allowGatewayAuthMutation: Bool = false) async throws
+    {
         let overrides = await self.overrideStore.overrides
         if await self.isRemoteMode() {
             if let override = overrides.saveRemote {
@@ -63,10 +71,28 @@ enum ConfigStore {
                 do {
                     try await self.saveToGateway(root)
                 } catch {
-                    OpenClawConfigFile.saveDict(root)
+                    guard self.shouldFallbackToLocalWrite(afterGatewaySaveError: error) else {
+                        self.lastHash = nil
+                        throw error
+                    }
+                    guard OpenClawConfigFile.saveDict(
+                        root,
+                        preserveExistingKeys: true,
+                        allowGatewayAuthMutation: allowGatewayAuthMutation)
+                    else {
+                        throw NSError(domain: "ConfigStore", code: 2, userInfo: [
+                            NSLocalizedDescriptionKey: "Local config write rejected to protect gateway auth/mode.",
+                        ])
+                    }
                 }
             }
         }
+        #if DEBUG
+        let notificationCenter = overrides.notificationCenter ?? .default
+        #else
+        let notificationCenter = NotificationCenter.default
+        #endif
+        notificationCenter.post(name: .openclawConfigDidChange, object: nil)
     }
 
     @MainActor
@@ -83,8 +109,30 @@ enum ConfigStore {
         }
     }
 
+    private static func shouldFallbackToLocalWrite(afterGatewaySaveError error: Error) -> Bool {
+        let nsError = error as NSError
+        let message = "\(nsError.domain) \(nsError.localizedDescription)".lowercased()
+        let blockedFragments = [
+            "invalid_request",
+            "invalid request",
+            "invalid config",
+            "config changed since last load",
+            "base hash",
+            "basehash",
+            "unauthorized",
+            "token mismatch",
+            "auth",
+        ]
+        return !blockedFragments.contains { message.contains($0) }
+    }
+
     @MainActor
     private static func saveToGateway(_ root: [String: Any]) async throws {
+        let overrides = await self.overrideStore.overrides
+        if let saveGateway = overrides.saveGateway {
+            try await saveGateway(root)
+            return
+        }
         if self.lastHash == nil {
             _ = await self.loadFromGateway()
         }
@@ -114,4 +162,8 @@ enum ConfigStore {
         await self.overrideStore.setOverride(.init())
     }
     #endif
+}
+
+extension Notification.Name {
+    static let openclawConfigDidChange = Notification.Name("openclaw.config.did-change")
 }

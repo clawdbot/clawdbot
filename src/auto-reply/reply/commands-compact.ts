@@ -1,21 +1,30 @@
+// Implements compaction commands for session context and model state.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
-  abortEmbeddedPiRun,
-  compactEmbeddedPiSession,
-  isEmbeddedPiRunActive,
-  waitForEmbeddedPiRunEnd,
-} from "../../agents/pi-embedded.js";
-import type { OpenClawConfig } from "../../config/config.js";
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveContextTokensForModel } from "../../agents/context.js";
+import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import {
-  resolveFreshSessionTotalTokens,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-} from "../../config/sessions.js";
+  OPENAI_CODEX_PROVIDER_ID,
+  OPENAI_PROVIDER_ID,
+  resolveContextConfigProviderForRuntime,
+} from "../../agents/openai-routing.js";
+import { resolvePersistedSessionRuntimeId } from "../../agents/session-runtime-compat.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { formatContextUsageShort, formatTokenCount } from "../status.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { CommandHandler } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
-import { incrementCompactionCount } from "./session-updates.js";
+
+const compactRuntimeLoader = createLazyImportLoader(() => import("./commands-compact.runtime.js"));
+
+function loadCompactRuntime(): Promise<typeof import("./commands-compact.runtime.js")> {
+  return compactRuntimeLoader.load();
+}
 
 function extractCompactInstructions(params: {
   rawBody?: string;
@@ -32,7 +41,7 @@ function extractCompactInstructions(params: {
   if (!trimmed) {
     return undefined;
   }
-  const lowered = trimmed.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
   const prefix = lowered.startsWith("/compact") ? "/compact" : null;
   if (!prefix) {
     return undefined;
@@ -45,35 +54,130 @@ function extractCompactInstructions(params: {
 }
 
 function isCompactionSkipReason(reason?: string): boolean {
-  const text = reason?.trim().toLowerCase() ?? "";
+  const classification = classifyCompactionReason(reason);
+  // Manual /compact mirrors preflight semantics: already-small sessions are a
+  // successful no-op, not a failed compaction.
   return (
-    text.includes("nothing to compact") ||
-    text.includes("below threshold") ||
-    text.includes("already compacted") ||
-    text.includes("no real conversation messages")
+    classification === "no_compactable_entries" ||
+    classification === "below_threshold" ||
+    classification === "already_compacted_recently"
   );
 }
 
 function formatCompactionReason(reason?: string): string | undefined {
-  const text = reason?.trim();
+  const text = normalizeOptionalString(reason);
   if (!text) {
     return undefined;
   }
 
-  const lower = text.toLowerCase();
-  if (lower.includes("nothing to compact")) {
-    return "nothing compactable in this session yet";
+  const classification = classifyCompactionReason(reason);
+  const lower = normalizeLowercaseStringOrEmpty(reason);
+  switch (classification) {
+    case "no_compactable_entries":
+      return "nothing compactable in this session yet";
+    case "below_threshold":
+      return lower.includes("already under target")
+        ? "context is already under the compaction target"
+        : "context is below the compaction threshold";
+    case "already_compacted_recently":
+      return "session was already compacted recently";
+    default:
+      return text;
   }
-  if (lower.includes("below threshold")) {
-    return "context is below the compaction threshold";
+}
+
+function resolveManualCompactContextTokenBudget(params: {
+  cfg: OpenClawConfig;
+  provider?: string;
+  model?: string;
+  agentId: string;
+  sessionKey: string;
+  liveContextTokens?: number;
+  persistedContextTokens?: number;
+}): number | undefined {
+  const liveContextTokens =
+    typeof params.liveContextTokens === "number" &&
+    Number.isFinite(params.liveContextTokens) &&
+    params.liveContextTokens > 0
+      ? Math.floor(params.liveContextTokens)
+      : undefined;
+
+  const model = normalizeOptionalString(params.model);
+  const provider = normalizeOptionalString(params.provider);
+  if (!model || !provider) {
+    return liveContextTokens ?? resolvePersistedContextTokens(params.persistedContextTokens);
   }
-  if (lower.includes("already compacted")) {
-    return "session was already compacted recently";
+
+  const harnessPolicy = resolveAgentHarnessPolicy({
+    provider,
+    modelId: model,
+    config: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
+  const contextConfigProvider = resolveContextConfigProviderForRuntime({
+    provider,
+    runtimeId: harnessPolicy.runtime,
+    config: params.cfg,
+  });
+  const configuredContextTokens = resolveContextTokensForModel({
+    cfg: params.cfg,
+    provider: contextConfigProvider,
+    model: resolveManualCompactContextModelId({
+      provider,
+      contextConfigProvider,
+      model,
+    }),
+    allowAsyncLoad: false,
+  });
+  if (typeof configuredContextTokens === "number" && configuredContextTokens > 0) {
+    const configuredBudget = Math.floor(configuredContextTokens);
+    return liveContextTokens !== undefined
+      ? Math.min(liveContextTokens, configuredBudget)
+      : configuredBudget;
   }
-  if (lower.includes("no real conversation messages")) {
-    return "no real conversation messages yet";
+
+  if (liveContextTokens !== undefined) {
+    return liveContextTokens;
   }
-  return text;
+
+  return resolvePersistedContextTokens(params.persistedContextTokens);
+}
+
+function resolvePersistedContextTokens(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
+}
+
+function resolveManualCompactContextModelId(params: {
+  provider: string;
+  contextConfigProvider: string;
+  model: string;
+}): string {
+  const model = params.model.trim();
+  const slashIndex = model.indexOf("/");
+  if (slashIndex <= 0) {
+    return model;
+  }
+
+  const modelProvider = normalizeProviderId(model.slice(0, slashIndex));
+  const selectedProvider = normalizeProviderId(params.provider);
+  const contextConfigProvider = normalizeProviderId(params.contextConfigProvider);
+  const modelId = model.slice(slashIndex + 1).trim();
+  if (!modelId) {
+    return model;
+  }
+
+  if (
+    modelProvider === selectedProvider ||
+    modelProvider === contextConfigProvider ||
+    (modelProvider === OPENAI_PROVIDER_ID && contextConfigProvider === OPENAI_CODEX_PROVIDER_ID)
+  ) {
+    return modelId;
+  }
+
+  return model;
 }
 
 export const handleCompactCommand: CommandHandler = async (params) => {
@@ -89,47 +193,99 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     );
     return { shouldContinue: false };
   }
-  if (!params.sessionEntry?.sessionId) {
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+  if (!targetSessionEntry?.sessionId) {
     return {
       shouldContinue: false,
-      reply: { text: "⚙️ Compaction unavailable (missing session id)." },
+      reply: {
+        text: "⚙️ Compaction unavailable (missing session id).",
+        isStatusNotice: true,
+      },
     };
   }
-  const sessionId = params.sessionEntry.sessionId;
-  if (isEmbeddedPiRunActive(sessionId)) {
-    abortEmbeddedPiRun(sessionId);
-    await waitForEmbeddedPiRunEnd(sessionId, 15_000);
+  const runtime = await loadCompactRuntime();
+  const sessionId = targetSessionEntry.sessionId;
+  if (runtime.isEmbeddedAgentRunAbortableForCompaction(sessionId)) {
+    runtime.abortEmbeddedAgentRun(sessionId);
+    const drained = await runtime.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
+    if (!drained) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: "⚙️ Compaction unavailable: the previous run is still stopping.",
+          isStatusNotice: true,
+        },
+      };
+    }
   }
+  const sessionAgentId = params.sessionKey
+    ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
+    : (params.agentId ?? "main");
+  const currentAgentId = params.agentId ?? "main";
+  const sessionAgentDir =
+    sessionAgentId === currentAgentId && params.agentDir
+      ? params.agentDir
+      : resolveAgentDir(params.cfg, sessionAgentId);
   const customInstructions = extractCompactInstructions({
-    rawBody: params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body,
+    rawBody: params.ctx.commandText,
     ctx: params.ctx,
     cfg: params.cfg,
-    agentId: params.agentId,
+    agentId: sessionAgentId,
     isGroup: params.isGroup,
   });
-  const result = await compactEmbeddedPiSession({
+  const contextTokenBudget = resolveManualCompactContextTokenBudget({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.model,
+    agentId: sessionAgentId,
+    sessionKey: params.sessionKey,
+    liveContextTokens: params.contextTokens,
+    persistedContextTokens: targetSessionEntry.contextTokens,
+  });
+  const result = await runtime.compactEmbeddedAgentSession({
+    abortSignal: params.opts?.abortSignal,
     sessionId,
     sessionKey: params.sessionKey,
     allowGatewaySubagentBinding: true,
     messageChannel: params.command.channel,
-    groupId: params.sessionEntry.groupId,
-    groupChannel: params.sessionEntry.groupChannel,
-    groupSpace: params.sessionEntry.space,
-    spawnedBy: params.sessionEntry.spawnedBy,
-    sessionFile: resolveSessionFilePath(
+    clientCaps: params.ctx.GatewayClientCaps,
+    groupId: targetSessionEntry.groupId,
+    groupChannel: targetSessionEntry.groupChannel,
+    groupSpace: targetSessionEntry.space,
+    spawnedBy: targetSessionEntry.spawnedBy,
+    senderId: params.command.senderId,
+    senderName: params.ctx.SenderName,
+    senderUsername: params.ctx.SenderUsername,
+    senderE164: params.ctx.SenderE164,
+    inputProvenance: params.ctx.InputProvenance,
+    sessionFile: runtime.resolveSessionFilePath(
       sessionId,
-      params.sessionEntry,
-      resolveSessionFilePathOptions({
-        agentId: params.agentId,
+      targetSessionEntry,
+      runtime.resolveSessionFilePathOptions({
+        agentId: sessionAgentId,
         storePath: params.storePath,
       }),
     ),
     workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
+    agentDir: sessionAgentDir,
     config: params.cfg,
-    skillsSnapshot: params.sessionEntry.skillsSnapshot,
+    skillsSnapshot: targetSessionEntry.skillsSnapshot,
     provider: params.provider,
     model: params.model,
+    authProfileId: targetSessionEntry.authProfileOverride,
+    authProfileIdSource:
+      targetSessionEntry.authProfileOverrideSource ??
+      (targetSessionEntry.authProfileOverride
+        ? typeof targetSessionEntry.authProfileOverrideCompactionCount === "number"
+          ? "auto"
+          : "user"
+        : undefined),
+    contextTokenBudget,
+    agentHarnessId:
+      targetSessionEntry.modelSelectionLocked === true
+        ? resolvePersistedSessionRuntimeId(targetSessionEntry)
+        : targetSessionEntry.agentHarnessId,
+    modelSelectionLocked: targetSessionEntry.modelSelectionLocked === true,
     thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
     bashElevated: {
       enabled: false,
@@ -138,7 +294,6 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     },
     customInstructions,
     trigger: "manual",
-    senderIsOwner: params.command.senderIsOwner,
     ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
   });
 
@@ -146,33 +301,45 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     result.ok || isCompactionSkipReason(result.reason)
       ? result.compacted
         ? result.result?.tokensBefore != null && result.result?.tokensAfter != null
-          ? `Compacted (${formatTokenCount(result.result.tokensBefore)} → ${formatTokenCount(result.result.tokensAfter)})`
+          ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(result.result.tokensAfter)})`
           : result.result?.tokensBefore
-            ? `Compacted (${formatTokenCount(result.result.tokensBefore)} before)`
+            ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} before)`
             : "Compacted"
         : "Compaction skipped"
       : "Compaction failed";
   if (result.ok && result.compacted) {
-    await incrementCompactionCount({
-      sessionEntry: params.sessionEntry,
+    await runtime.incrementCompactionCount({
+      cfg: params.cfg,
+      sessionEntry: targetSessionEntry,
       sessionStore: params.sessionStore,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
       // Update token counts after compaction
       tokensAfter: result.result?.tokensAfter,
+      newSessionId: result.result?.sessionId,
+      newSessionFile: result.result?.sessionFile,
     });
   }
   // Use the post-compaction token count for context summary if available
   const tokensAfterCompaction = result.result?.tokensAfter;
-  const totalTokens = tokensAfterCompaction ?? resolveFreshSessionTotalTokens(params.sessionEntry);
-  const contextSummary = formatContextUsageShort(
+  const totalTokens =
+    result.ok && result.compacted
+      ? tokensAfterCompaction
+      : runtime.resolveFreshSessionTotalTokens(targetSessionEntry);
+  const contextSummary = runtime.formatContextUsageShort(
     typeof totalTokens === "number" && totalTokens > 0 ? totalTokens : null,
-    params.contextTokens ?? params.sessionEntry.contextTokens ?? null,
+    contextTokenBudget ?? null,
   );
   const reason = formatCompactionReason(result.reason);
   const line = reason
     ? `${compactLabel}: ${reason} • ${contextSummary}`
     : `${compactLabel} • ${contextSummary}`;
-  enqueueSystemEvent(line, { sessionKey: params.sessionKey });
-  return { shouldContinue: false, reply: { text: `⚙️ ${line}` } };
+  runtime.enqueueSystemEvent(line, { sessionKey: params.sessionKey });
+  return {
+    shouldContinue: false,
+    reply: {
+      text: `⚙️ ${line}`,
+      isStatusNotice: true,
+    },
+  };
 };

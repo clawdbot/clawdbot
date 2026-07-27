@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Prevents direct pairing-store group auth reads outside resolver helpers.
 import ts from "typescript";
 import { createPairingGuardContext } from "./lib/pairing-guard-context.mjs";
 import {
@@ -12,7 +13,7 @@ import {
 const { repoRoot, sourceRoots, resolveFromRepo } = createPairingGuardContext(import.meta.url);
 
 const allowedFiles = new Set([
-  resolveFromRepo("src/security/dm-policy-shared.ts"),
+  resolveFromRepo("src/channels/message-access/legacy-policy.ts"),
   resolveFromRepo("src/channels/allow-from.ts"),
   // Config migration/audit logic may intentionally reference store + group fields.
   resolveFromRepo("src/security/fix.ts"),

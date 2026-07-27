@@ -1,13 +1,18 @@
-import type { OpenClawConfig } from "../../../config/config.js";
+// Doctor scanner and repair for legacy untyped toolsBySender sender keys.
+import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { parseToolsBySenderTypedKey } from "../../../config/types.tools.js";
-import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { formatConfigPath, resolveConfigPathTarget } from "../../doctor-config-analysis.js";
 import { asObjectRecord } from "./object.js";
 
-export type LegacyToolsBySenderKeyHit = {
+type LegacyToolsBySenderKeyHit = {
+  /** Path parts pointing to the containing toolsBySender object. */
   toolsBySenderPath: Array<string | number>;
+  /** Formatted config path for user-facing warnings. */
   pathLabel: string;
+  /** Original untyped sender key. */
   key: string;
+  /** Typed replacement key using the id: namespace. */
   targetKey: string;
 };
 
@@ -53,12 +58,14 @@ function collectLegacyToolsBySenderKeyHits(
   }
 }
 
+/** Find untyped toolsBySender keys that should be migrated to explicit id: keys. */
 export function scanLegacyToolsBySenderKeys(cfg: OpenClawConfig): LegacyToolsBySenderKeyHit[] {
   const hits: LegacyToolsBySenderKeyHit[] = [];
   collectLegacyToolsBySenderKeyHits(cfg, [], hits);
   return hits;
 }
 
+/** Format doctor warnings for legacy untyped toolsBySender keys. */
 export function collectLegacyToolsBySenderWarnings(params: {
   hits: LegacyToolsBySenderKeyHit[];
   doctorFixCommand: string;
@@ -77,16 +84,17 @@ export function collectLegacyToolsBySenderWarnings(params: {
   ];
 }
 
+/** Migrate untyped toolsBySender keys to typed id: keys where possible. */
 export function maybeRepairLegacyToolsBySenderKeys(cfg: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];
 } {
-  const next = structuredClone(cfg);
-  const hits = scanLegacyToolsBySenderKeys(next);
+  const hits = scanLegacyToolsBySenderKeys(cfg);
   if (hits.length === 0) {
     return { config: cfg, changes: [] };
   }
 
+  const next = structuredClone(cfg);
   const summary = new Map<string, { migrated: number; dropped: number; examples: string[] }>();
   let changed = false;
 

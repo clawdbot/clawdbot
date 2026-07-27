@@ -1,4 +1,5 @@
-import { promises as fs } from "node:fs";
+// Shared TypeScript AST and source-file helpers for guard scripts.
+import { existsSync, promises as fs } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,19 +14,40 @@ function getTypeScript() {
 
 const baseTestSuffixes = [".test.ts", ".test-utils.ts", ".test-harness.ts", ".e2e-harness.ts"];
 
+/**
+ * Resolves the repository root by walking upward from the caller module.
+ */
 export function resolveRepoRoot(importMetaUrl) {
+  // Walk up from the caller's directory until we find the repo root (.git).
+  // This handles callers at any depth (scripts/*.mjs, scripts/lib/*.mjs, etc.)
+  // instead of assuming a fixed number of parent traversals.
+  let dir = path.dirname(fileURLToPath(importMetaUrl));
+  const { root } = path.parse(dir);
+  while (dir !== root) {
+    if (existsSync(path.join(dir, ".git"))) {
+      return dir;
+    }
+    dir = path.dirname(dir);
+  }
+  // Fallback: two levels up (original behavior).
   return path.resolve(path.dirname(fileURLToPath(importMetaUrl)), "..", "..");
 }
 
+/**
+ * Converts repo-relative source roots into absolute paths.
+ */
 export function resolveSourceRoots(repoRoot, relativeRoots) {
   return relativeRoots.map((root) => path.join(repoRoot, ...root.split("/").filter(Boolean)));
 }
 
-export function isTestLikeTypeScriptFile(filePath, options = {}) {
+function isTestLikeTypeScriptFile(filePath, options = {}) {
   const extraTestSuffixes = options.extraTestSuffixes ?? [];
   return [...baseTestSuffixes, ...extraTestSuffixes].some((suffix) => filePath.endsWith(suffix));
 }
 
+/**
+ * Recursively collects TypeScript files under a file or directory target.
+ */
 export async function collectTypeScriptFiles(targetPath, options = {}) {
   const includeTests = options.includeTests ?? false;
   const extraTestSuffixes = options.extraTestSuffixes ?? [];
@@ -80,6 +102,9 @@ export async function collectTypeScriptFiles(targetPath, options = {}) {
   return out;
 }
 
+/**
+ * Collects TypeScript files from multiple roots, ignoring missing roots by default.
+ */
 export async function collectTypeScriptFilesFromRoots(sourceRoots, options = {}) {
   return (
     await Promise.all(
@@ -94,8 +119,12 @@ export async function collectTypeScriptFilesFromRoots(sourceRoots, options = {})
   ).flat();
 }
 
+/**
+ * Runs a guard's violation scanner across collected TypeScript source files.
+ */
 export async function collectFileViolations(params) {
   const files = await collectTypeScriptFilesFromRoots(params.sourceRoots, {
+    includeTests: params.includeTests,
     extraTestSuffixes: params.extraTestSuffixes,
   });
 
@@ -116,10 +145,16 @@ export async function collectFileViolations(params) {
   return violations;
 }
 
+/**
+ * Returns the one-based source line for a TypeScript AST node.
+ */
 export function toLine(sourceFile, node) {
   return sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
 }
 
+/**
+ * Extracts text from identifier, string, or numeric property names.
+ */
 export function getPropertyNameText(name) {
   const ts = getTypeScript();
   if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
@@ -128,6 +163,9 @@ export function getPropertyNameText(name) {
   return null;
 }
 
+/**
+ * Removes harmless expression wrappers before AST shape checks.
+ */
 export function unwrapExpression(expression) {
   const ts = getTypeScript();
   let current = expression;
@@ -148,6 +186,9 @@ export function unwrapExpression(expression) {
   }
 }
 
+/**
+ * Collects one-based line numbers for call expressions selected by a callback.
+ */
 export function collectCallExpressionLines(ts, sourceFile, resolveLineNode) {
   const lines = [];
   const visit = (node) => {
@@ -163,7 +204,7 @@ export function collectCallExpressionLines(ts, sourceFile, resolveLineNode) {
   return lines;
 }
 
-export function isDirectExecution(importMetaUrl) {
+function isDirectExecution(importMetaUrl) {
   const entry = process.argv[1];
   if (!entry) {
     return false;
@@ -171,6 +212,9 @@ export function isDirectExecution(importMetaUrl) {
   return path.resolve(entry) === fileURLToPath(importMetaUrl);
 }
 
+/**
+ * Runs a script main function only when the module is the direct entrypoint.
+ */
 export function runAsScript(importMetaUrl, main) {
   if (!isDirectExecution(importMetaUrl)) {
     return;

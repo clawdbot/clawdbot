@@ -2,42 +2,171 @@ import Foundation
 import OpenClawProtocol
 
 extension ChannelsStore {
-    func loadConfigSchema() async {
-        guard !self.configSchemaLoading else { return }
+    func loadConfigSchema(force: Bool = false) async {
+        let sourceKey = self.currentConfigCacheSourceKey()
+        self.resetConfigSchemaCacheIfSourceChanged(sourceKey)
+        if !force, self.configSchema != nil {
+            return
+        }
+        guard !self.queueConfigSchemaReloadIfLoading(sourceKey: sourceKey, force: force) else { return }
         self.configSchemaLoading = true
-        defer { self.configSchemaLoading = false }
+        self.configSchemaLoadingSourceKey = sourceKey
+        defer {
+            self.configSchemaLoading = false
+            self.configSchemaLoadingSourceKey = nil
+        }
 
-        do {
-            let res: ConfigSchemaResponse = try await GatewayConnection.shared.requestDecoded(
-                method: .configSchema,
-                params: nil,
-                timeoutMs: 8000)
-            let schemaValue = res.schema.foundationValue
-            self.configSchema = ConfigSchemaNode(raw: schemaValue)
-            let hintValues = res.uihints.mapValues { $0.foundationValue }
-            self.configUiHints = decodeUiHints(hintValues)
-        } catch {
-            self.configStatus = error.localizedDescription
+        var requestSourceKey = sourceKey
+
+        while true {
+            self.configSchemaLoadingSourceKey = requestSourceKey
+            do {
+                let res: ConfigSchemaResponse = try await GatewayConnection.shared.requestDecoded(
+                    method: .configSchema,
+                    params: nil,
+                    timeoutMs: 8000)
+                self.applyConfigSchemaResponse(res, sourceKey: requestSourceKey)
+            } catch {
+                self.configStatus = error.localizedDescription
+            }
+
+            guard self.configSchemaReloadPending else { break }
+            self.configSchemaReloadPending = false
+            requestSourceKey = self.currentConfigCacheSourceKey()
+            self.resetConfigSchemaCacheIfSourceChanged(requestSourceKey)
         }
     }
 
-    func loadConfig() async {
-        do {
-            let snap: ConfigSnapshot = try await GatewayConnection.shared.requestDecoded(
-                method: .configGet,
-                params: nil,
-                timeoutMs: 10000)
-            self.configStatus = snap.valid == false
-                ? "Config invalid; fix it in ~/.openclaw/openclaw.json."
-                : nil
-            self.configRoot = snap.config?.mapValues { $0.foundationValue } ?? [:]
-            self.configDraft = cloneConfigValue(self.configRoot) as? [String: Any] ?? self.configRoot
-            self.configDirty = false
-            self.configLoaded = true
+    @discardableResult
+    func loadConfigSchemaLookup(path: String, force: Bool = false) async -> ConfigSchemaLookupNode? {
+        let sourceKey = self.currentConfigCacheSourceKey()
+        self.resetConfigSchemaCacheIfSourceChanged(sourceKey)
+        let normalizedPath = Self.normalizeConfigLookupPath(path)
+        if !force, let cached = self.configLookupNode(path: normalizedPath) {
+            return cached
+        }
+        if self.configLookupLoadingPaths.contains(normalizedPath) {
+            return self.configLookupNode(path: normalizedPath)
+        }
 
-            self.applyUIConfig(snap)
+        self.configLookupLoadingPaths.insert(normalizedPath)
+        defer { self.configLookupLoadingPaths.remove(normalizedPath) }
+
+        do {
+            let res: ConfigSchemaLookupResult = try await GatewayConnection.shared.requestDecoded(
+                method: .configSchemaLookup,
+                params: ["path": AnyCodable(normalizedPath)],
+                timeoutMs: 5000)
+            guard let node = self.makeConfigLookupNode(res) else {
+                self.configStatus = "Config schema lookup returned an unsupported payload."
+                return nil
+            }
+            self.applyConfigLookupNode(node, sourceKey: sourceKey)
+            return node
         } catch {
             self.configStatus = error.localizedDescription
+            return nil
+        }
+    }
+
+    func loadConfig(force: Bool = true) async {
+        let sourceKey = self.currentConfigCacheSourceKey()
+        self.resetConfigCacheIfSourceChanged(sourceKey)
+        if !force, self.configLoaded {
+            return
+        }
+        guard !self.queueConfigReloadIfLoading(sourceKey: sourceKey, force: force) else { return }
+        self.configLoading = true
+        self.configLoadingSourceKey = sourceKey
+        defer {
+            self.configLoading = false
+            self.configLoadingSourceKey = nil
+        }
+
+        var requestForce = force
+        var requestSourceKey = sourceKey
+
+        while true {
+            self.configLoadingSourceKey = requestSourceKey
+            do {
+                let snap: ConfigSnapshot = try await GatewayConnection.shared.requestDecoded(
+                    method: .configGet,
+                    params: nil,
+                    timeoutMs: 10000)
+                self.applyConfigSnapshot(snap, sourceKey: requestSourceKey, force: requestForce)
+            } catch {
+                self.configStatus = error.localizedDescription
+            }
+
+            guard self.configForceReloadPending else { break }
+            self.configForceReloadPending = false
+            requestForce = true
+            requestSourceKey = self.currentConfigCacheSourceKey()
+            self.resetConfigCacheIfSourceChanged(requestSourceKey)
+        }
+    }
+
+    func applyConfigSnapshot(_ snap: ConfigSnapshot, sourceKey: String, force: Bool) {
+        guard self.configSourceKey == sourceKey else { return }
+        guard force || !self.configDirty else { return }
+
+        self.configStatus = snap.valid == false
+            ? "Config invalid; fix it in ~/.openclaw/openclaw.json."
+            : nil
+        self.configRoot = snap.config?.mapValues { $0.foundationValue } ?? [:]
+        self.configDraft = cloneConfigValue(self.configRoot) as? [String: Any] ?? self.configRoot
+        self.configDirty = false
+        self.configLoaded = true
+        self.configSourceKey = sourceKey
+
+        self.applyUIConfig(snap)
+    }
+
+    func applyConfigSchemaResponse(_ res: ConfigSchemaResponse, sourceKey: String) {
+        guard self.configSchemaSourceKey == sourceKey else { return }
+
+        let schemaValue = res.schema.foundationValue
+        self.configSchema = ConfigSchemaNode(raw: schemaValue)
+        let hintValues = res.uihints.mapValues { $0.foundationValue }
+        self.configUiHints = decodeUiHints(hintValues)
+        self.configSchemaSourceKey = sourceKey
+    }
+
+    func configLookupNode(path: String) -> ConfigSchemaLookupNode? {
+        let normalizedPath = Self.normalizeConfigLookupPath(path)
+        if normalizedPath == "." {
+            return self.configLookupRoot
+        }
+        return self.configLookupCache[normalizedPath]
+    }
+
+    func makeConfigLookupNode(_ res: ConfigSchemaLookupResult) -> ConfigSchemaLookupNode? {
+        let schemaValue = res.schema.foundationValue
+        guard let schema = ConfigSchemaNode(raw: schemaValue) else { return nil }
+        let hint = res.hint.map { ConfigUiHint(raw: $0.mapValues(\.foundationValue)) }
+        let children = res.children.compactMap(ConfigSchemaLookupChild.init(raw:))
+        return ConfigSchemaLookupNode(
+            path: Self.normalizeConfigLookupPath(res.path),
+            schema: schema,
+            hint: hint,
+            hintPath: res.hintpath,
+            children: children)
+    }
+
+    func applyConfigLookupNode(_ node: ConfigSchemaLookupNode, sourceKey: String) {
+        guard self.configSchemaSourceKey == sourceKey else { return }
+        if node.path == "." {
+            self.configLookupRoot = node
+        } else {
+            self.configLookupCache[node.path] = node
+        }
+        if let hint = node.hint {
+            self.configUiHints[node.path] = hint
+        }
+        for child in node.children {
+            if let hint = child.hint {
+                self.configUiHints[child.path] = hint
+            }
         }
     }
 
@@ -85,7 +214,83 @@ extension ChannelsStore {
     }
 
     func reloadConfigDraft() async {
-        await self.loadConfig()
+        await self.loadConfig(force: true)
+    }
+
+    func resetConfigSchemaCacheIfSourceChanged(_ sourceKey: String) {
+        guard let cachedSourceKey = self.configSchemaSourceKey else {
+            self.configSchemaSourceKey = sourceKey
+            return
+        }
+        guard cachedSourceKey != sourceKey else { return }
+        self.configSchema = nil
+        self.configLookupRoot = nil
+        self.configLookupCache.removeAll(keepingCapacity: true)
+        self.configLookupLoadingPaths.removeAll(keepingCapacity: true)
+        self.configUiHints = [:]
+        self.configSchemaSourceKey = sourceKey
+    }
+
+    func resetConfigCacheIfSourceChanged(_ sourceKey: String) {
+        guard let cachedSourceKey = self.configSourceKey else {
+            self.configSourceKey = sourceKey
+            return
+        }
+        guard cachedSourceKey != sourceKey else { return }
+        self.configRoot = [:]
+        self.configDraft = [:]
+        self.configDirty = false
+        self.configLoaded = false
+        self.configSourceKey = sourceKey
+    }
+
+    func queueConfigReloadIfLoading(sourceKey: String, force: Bool) -> Bool {
+        guard self.configLoading else { return false }
+        if force || self.configLoadingSourceKey != sourceKey {
+            self.configForceReloadPending = true
+        }
+        return true
+    }
+
+    func queueConfigSchemaReloadIfLoading(sourceKey: String, force: Bool) -> Bool {
+        guard self.configSchemaLoading else { return false }
+        if force || self.configSchemaLoadingSourceKey != sourceKey {
+            self.configSchemaReloadPending = true
+        }
+        return true
+    }
+
+    private func currentConfigCacheSourceKey() -> String {
+        let root = OpenClawConfigFile.loadDict()
+        let settings = CommandResolver.connectionSettings(configRoot: root)
+        let env = ProcessInfo.processInfo.environment
+        return [
+            "mode:\(settings.mode.rawValue)",
+            "target:\(settings.target)",
+            "identity:\(settings.identity)",
+            "project:\(settings.projectRoot)",
+            "cli:\(settings.cliPath)",
+            "port:\(GatewayEnvironment.gatewayPort())",
+            "gateway:\(Self.configFingerprint(root["gateway"]))",
+            "token:\(Self.configFingerprint(env["OPENCLAW_GATEWAY_TOKEN"]))",
+            "password:\(Self.configFingerprint(env["OPENCLAW_GATEWAY_PASSWORD"]))",
+        ].joined(separator: "|")
+    }
+
+    static func normalizeConfigLookupPath(_ path: String) -> String {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "." : trimmed
+    }
+
+    private static func configFingerprint(_ value: Any?) -> String {
+        guard let value else { return "nil" }
+        if JSONSerialization.isValidJSONObject(value),
+           let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
+        {
+            return "\(data.count):\(data.hashValue)"
+        }
+        let text = String(describing: value)
+        return "\(text.count):\(text.hashValue)"
     }
 }
 

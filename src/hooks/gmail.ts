@@ -1,10 +1,18 @@
+// Gmail hook helpers manage Gmail OAuth setup and watcher launch state.
 import { randomBytes } from "node:crypto";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   type OpenClawConfig,
   DEFAULT_GATEWAY_PORT,
   type HooksGmailTailscaleMode,
   resolveGatewayPort,
 } from "../config/config.js";
+import { resolveExecutable } from "../infra/executable-path.js";
+import {
+  buildWindowsCmdExeCommandLine,
+  isWindowsBatchCommand,
+  resolveTrustedWindowsCmdExe,
+} from "../process/windows-command.js";
 
 export const DEFAULT_GMAIL_LABEL = "INBOX";
 export const DEFAULT_GMAIL_TOPIC = "gog-gmail-watch";
@@ -14,7 +22,9 @@ export const DEFAULT_GMAIL_SERVE_PORT = 8788;
 export const DEFAULT_GMAIL_SERVE_PATH = "/gmail-pubsub";
 export const DEFAULT_GMAIL_MAX_BYTES = 20_000;
 export const DEFAULT_GMAIL_RENEW_MINUTES = 12 * 60;
-export const DEFAULT_HOOKS_PATH = "/hooks";
+const DEFAULT_HOOKS_PATH = "/hooks";
+const GMAIL_WATCH_SENSITIVE_FLAGS = new Set(["--token", "--hook-url", "--hook-token"]);
+let gogBin: string | undefined;
 
 export type GmailHookOverrides = {
   account?: string;
@@ -63,7 +73,7 @@ export function generateHookToken(bytes = 24): string {
 }
 
 export function mergeHookPresets(existing: string[] | undefined, preset: string): string[] {
-  const next = new Set((existing ?? []).map((item) => item.trim()).filter(Boolean));
+  const next = new Set(normalizeUniqueStringEntries(existing));
   next.add(preset);
   return Array.from(next);
 }
@@ -250,6 +260,36 @@ export function buildGogWatchServeArgs(cfg: GmailHookRuntimeConfig): string[] {
   return args;
 }
 
+export function buildGogWatchServeLogArgs(cfg: GmailHookRuntimeConfig): string[] {
+  return buildGogWatchServeArgs(cfg).filter(
+    (arg, index, args) =>
+      !GMAIL_WATCH_SENSITIVE_FLAGS.has(arg) &&
+      !GMAIL_WATCH_SENSITIVE_FLAGS.has(args[index - 1] ?? ""),
+  );
+}
+
+export function resolveGogExecutable(): string {
+  return (gogBin ??= resolveExecutable("gog"));
+}
+
+export function resolveGogServeInvocation(args: string[]): {
+  args: string[];
+  command: string;
+  windowsHide?: true;
+  windowsVerbatimArguments?: true;
+} {
+  const command = resolveGogExecutable();
+  if (!isWindowsBatchCommand(command)) {
+    return { command, args, windowsHide: process.platform === "win32" ? true : undefined };
+  }
+  return {
+    command: resolveTrustedWindowsCmdExe(),
+    args: ["/d", "/s", "/c", buildWindowsCmdExeCommandLine(command, args)],
+    windowsHide: true,
+    windowsVerbatimArguments: true,
+  };
+}
+
 export function buildTopicPath(projectId: string, topicName: string): string {
   return `projects/${projectId}/topics/${topicName}`;
 }
@@ -262,10 +302,10 @@ export function parseTopicPath(topic: string): { projectId: string; topicName: s
   return { projectId: match[1] ?? "", topicName: match[2] ?? "" };
 }
 
-function joinUrl(base: string, path: string): string {
+function joinUrl(base: string, pathLocal: string): string {
   const url = new URL(base);
   const basePath = url.pathname.replace(/\/+$/, "");
-  const extra = path.startsWith("/") ? path : `/${path}`;
+  const extra = pathLocal.startsWith("/") ? pathLocal : `/${pathLocal}`;
   url.pathname = `${basePath}${extra}`;
   return url.toString();
 }

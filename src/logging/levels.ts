@@ -1,3 +1,4 @@
+// Log level constants define accepted logger levels and ordering.
 export const ALLOWED_LOG_LEVELS = [
   "silent",
   "fatal",
@@ -23,14 +24,15 @@ export function normalizeLogLevel(level?: string, fallback: LogLevel = "info") {
 }
 
 export function levelToMinLevel(level: LogLevel): number {
-  // tslog level ordering: fatal=0, error=1, warn=2, info=3, debug=4, trace=5
+  // tslog v4 logLevelId (src/index.ts): silly=0, trace=1, debug=2, info=3, warn=4, error=5, fatal=6
+  // tslog filters: logLevelId < minLevel is dropped, so higher minLevel = more restrictive.
   const map: Record<LogLevel, number> = {
-    fatal: 0,
-    error: 1,
-    warn: 2,
+    trace: 1,
+    debug: 2,
     info: 3,
-    debug: 4,
-    trace: 5,
+    warn: 4,
+    error: 5,
+    fatal: 6,
     silent: Number.POSITIVE_INFINITY,
   };
   return map[level];

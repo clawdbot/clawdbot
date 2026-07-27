@@ -1,3 +1,4 @@
-import { describeCloudflareAiGatewayProviderDiscoveryContract } from "../../test/helpers/extensions/provider-discovery-contract.js";
+// Cloudflare Ai Gateway tests cover provider discovery.contract plugin behavior.
+import { describeCloudflareAiGatewayProviderDiscoveryContract } from "openclaw/plugin-sdk/provider-test-contracts";
 
-describeCloudflareAiGatewayProviderDiscoveryContract();
+describeCloudflareAiGatewayProviderDiscoveryContract(() => import("./index.js"));

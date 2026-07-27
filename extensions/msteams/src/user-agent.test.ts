@@ -1,25 +1,63 @@
+// Msteams tests cover user agent plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mock the runtime before importing buildUserAgent
-const mockRuntime = {
-  version: "2026.3.19",
-};
+const runtimeMockState = vi.hoisted(() => ({
+  getMSTeamsRuntime: vi.fn(),
+  runtime: { version: "2026.3.19" },
+}));
+const mockRuntime = runtimeMockState.runtime;
 
 vi.mock("./runtime.js", () => ({
-  getMSTeamsRuntime: vi.fn(() => mockRuntime),
+  getMSTeamsRuntime: runtimeMockState.getMSTeamsRuntime,
 }));
+
+vi.mock("../runtime-api.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../runtime-api.js")>();
+  return {
+    ...original,
+    fetchWithSsrFGuard: async (params: { url: string; init?: RequestInit }) => ({
+      response: await globalThis.fetch(params.url, params.init),
+      finalUrl: params.url,
+      release: async () => undefined,
+    }),
+  };
+});
 
 import { fetchGraphJson } from "./graph.js";
 import { getMSTeamsRuntime } from "./runtime.js";
-import { buildUserAgent, resetUserAgentCache } from "./user-agent.js";
+
+let buildUserAgent: typeof import("./user-agent.js").buildUserAgent;
+let ensureUserAgentHeader: typeof import("./user-agent.js").ensureUserAgentHeader;
+
+function readFirstFetchInit(mockFetch: { mock: { calls: unknown[][] } }): {
+  headers: Record<string, string>;
+} {
+  const [call] = mockFetch.mock.calls;
+  if (!call) {
+    throw new Error("Expected Graph fetch call");
+  }
+  const [, init] = call;
+  if (
+    !init ||
+    typeof init !== "object" ||
+    !("headers" in init) ||
+    typeof init.headers !== "object" ||
+    init.headers === null
+  ) {
+    throw new Error("Expected Graph fetch init headers");
+  }
+  return init as { headers: Record<string, string> };
+}
 
 describe("buildUserAgent", () => {
-  beforeEach(() => {
-    resetUserAgentCache();
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ buildUserAgent, ensureUserAgentHeader } = await import("./user-agent.js"));
     vi.mocked(getMSTeamsRuntime).mockReturnValue(mockRuntime as never);
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
@@ -45,25 +83,27 @@ describe("buildUserAgent", () => {
   });
 
   it("sends the generated User-Agent in Graph requests by default", async () => {
-    const mockFetch = vi.fn().mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ value: [] }),
-    });
+    const mockFetch = vi.fn().mockResolvedValueOnce(
+      new Response(JSON.stringify({ value: [] }), {
+        headers: { "content-type": "application/json" },
+      }),
+    );
     vi.stubGlobal("fetch", mockFetch);
 
     await fetchGraphJson({ token: "test-token", path: "/groups" });
 
     expect(mockFetch).toHaveBeenCalledOnce();
-    const [, init] = mockFetch.mock.calls[0];
+    const init = readFirstFetchInit(mockFetch);
     expect(init.headers["User-Agent"]).toMatch(/^teams\.ts\[apps\]\/.+ OpenClaw\/2026\.3\.19$/);
     expect(init.headers).toHaveProperty("Authorization", "Bearer test-token");
   });
 
   it("lets caller headers override the default Graph User-Agent", async () => {
-    const mockFetch = vi.fn().mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ value: [] }),
-    });
+    const mockFetch = vi.fn().mockResolvedValueOnce(
+      new Response(JSON.stringify({ value: [] }), {
+        headers: { "content-type": "application/json" },
+      }),
+    );
     vi.stubGlobal("fetch", mockFetch);
 
     await fetchGraphJson({
@@ -72,7 +112,15 @@ describe("buildUserAgent", () => {
       headers: { "User-Agent": "custom-agent/1.0" },
     });
 
-    const [, init] = mockFetch.mock.calls[0];
+    const init = readFirstFetchInit(mockFetch);
     expect(init.headers["User-Agent"]).toBe("custom-agent/1.0");
+  });
+
+  it("adds the generated User-Agent to Headers instances without overwriting callers", () => {
+    const generated = ensureUserAgentHeader();
+    expect(generated.get("User-Agent")).toMatch(/^teams\.ts\[apps\]\/.+ OpenClaw\/2026\.3\.19$/);
+
+    const custom = ensureUserAgentHeader({ "User-Agent": "custom-agent/2.0" });
+    expect(custom.get("User-Agent")).toBe("custom-agent/2.0");
   });
 });

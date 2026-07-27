@@ -1,69 +1,19 @@
-import { EventEmitter } from "node:events";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { PassThrough } from "node:stream";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+// Lobster tests cover lobster tool plugin behavior.
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../runtime-api.js";
-import {
-  createWindowsCmdShimFixture,
-  restorePlatformPathEnv,
-  setProcessPlatform,
-  snapshotPlatformPathEnv,
-} from "./test-helpers.js";
-import { resolveWindowsLobsterSpawn } from "./windows-spawn.js";
-
-const spawnState = vi.hoisted(() => ({
-  queue: [] as Array<{ stdout: string; stderr?: string; exitCode?: number }>,
-  spawn: vi.fn(),
-}));
-
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  return {
-    ...actual,
-    spawn: (...args: unknown[]) => spawnState.spawn(...args),
-  };
-});
-
-let createLobsterTool: typeof import("./lobster-tool.js").createLobsterTool;
+import { createLobsterTool } from "./lobster-tool.js";
+import { createFakeTaskFlow } from "./taskflow-test-helpers.js";
 
 function fakeApi(overrides: Partial<OpenClawPluginApi> = {}): OpenClawPluginApi {
-  return {
+  return createTestPluginApi({
     id: "lobster",
     name: "lobster",
     source: "test",
-    registrationMode: "full",
-    config: {},
-    pluginConfig: {},
-    // oxlint-disable-next-line typescript/no-explicit-any
-    runtime: { version: "test" } as any,
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    registerTool() {},
-    registerChannel() {},
-    registerGatewayMethod() {},
-    registerCli() {},
-    registerService() {},
-    registerCliBackend() {},
-    registerProvider() {},
-    registerSpeechProvider() {},
-    registerMediaUnderstandingProvider() {},
-    registerImageGenerationProvider() {},
-    registerWebSearchProvider() {},
-    registerInteractiveHandler() {},
-    onConversationBindingResolved() {},
-    registerHook() {},
-    registerHttpRoute() {},
-    registerCommand() {},
-    registerContextEngine() {},
-    registerMemoryPromptSection() {},
-    registerMemoryFlushPlan() {},
-    registerMemoryRuntime() {},
-    registerMemoryEmbeddingProvider() {},
-    on() {},
+    runtime: { version: "test" } as OpenClawPluginApi["runtime"],
     resolvePath: (p) => p,
     ...overrides,
-  };
+  });
 }
 
 function fakeCtx(overrides: Partial<OpenClawPluginToolContext> = {}): OpenClawPluginToolContext {
@@ -80,154 +30,526 @@ function fakeCtx(overrides: Partial<OpenClawPluginToolContext> = {}): OpenClawPl
   };
 }
 
-async function expectUnwrappedShim(params: {
-  scriptPath: string;
-  shimPath: string;
-  shimLine: string;
-}) {
-  await createWindowsCmdShimFixture(params);
-
-  const target = resolveWindowsLobsterSpawn(params.shimPath, ["run", "noop"], process.env);
-  expect(target.command).toBe(process.execPath);
-  expect(target.argv).toEqual([params.scriptPath, "run", "noop"]);
-  expect(target.windowsHide).toBe(true);
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be a record`);
+  }
+  return value as Record<string, unknown>;
 }
 
 describe("lobster plugin tool", () => {
-  let tempDir = "";
-  const originalProcessState = snapshotPlatformPathEnv();
-
-  beforeAll(async () => {
-    ({ createLobsterTool } = await import("./lobster-tool.js"));
-
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lobster-plugin-"));
-  });
-
-  afterEach(() => {
-    restorePlatformPathEnv(originalProcessState);
-  });
-
-  afterAll(async () => {
-    if (!tempDir) {
-      return;
-    }
-    if (process.platform === "win32") {
-      await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
-    } else {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  beforeEach(() => {
-    spawnState.queue.length = 0;
-    spawnState.spawn.mockReset();
-    spawnState.spawn.mockImplementation(() => {
-      const next = spawnState.queue.shift() ?? { stdout: "" };
-      const stdout = new PassThrough();
-      const stderr = new PassThrough();
-      const child = new EventEmitter() as EventEmitter & {
-        stdout: PassThrough;
-        stderr: PassThrough;
-        kill: (signal?: string) => boolean;
-      };
-      child.stdout = stdout;
-      child.stderr = stderr;
-      child.kill = () => true;
-
-      setImmediate(() => {
-        if (next.stderr) {
-          stderr.end(next.stderr);
-        } else {
-          stderr.end();
-        }
-        stdout.end(next.stdout);
-        child.emit("exit", next.exitCode ?? 0);
-      });
-
-      return child;
-    });
-  });
-
-  const queueSuccessfulEnvelope = (hello = "world") => {
-    spawnState.queue.push({
-      stdout: JSON.stringify({
-        ok: true,
-        status: "ok",
-        output: [{ hello }],
-        requiresApproval: null,
-      }),
-    });
-  };
-
-  it("runs lobster and returns parsed envelope in details", async () => {
-    spawnState.queue.push({
-      stdout: JSON.stringify({
+  it("returns the Lobster envelope in details", async () => {
+    const runner = {
+      run: vi.fn().mockResolvedValue({
         ok: true,
         status: "ok",
         output: [{ hello: "world" }],
         requiresApproval: null,
       }),
-    });
+    };
 
-    const tool = createLobsterTool(fakeApi());
+    const tool = createLobsterTool(fakeApi(), { runner });
     const res = await tool.execute("call1", {
       action: "run",
       pipeline: "noop",
       timeoutMs: 1000,
     });
 
-    expect(spawnState.spawn).toHaveBeenCalled();
-    expect(res.details).toMatchObject({ ok: true, status: "ok" });
-  });
-
-  it("tolerates noisy stdout before the JSON envelope", async () => {
-    const payload = { ok: true, status: "ok", output: [], requiresApproval: null };
-    spawnState.queue.push({
-      stdout: `noise before json\n${JSON.stringify(payload)}`,
-    });
-
-    const tool = createLobsterTool(fakeApi());
-    const res = await tool.execute("call-noisy", {
+    expect(runner.run).toHaveBeenCalledWith({
       action: "run",
       pipeline: "noop",
+      cwd: process.cwd(),
       timeoutMs: 1000,
+      maxStdoutBytes: 512_000,
+    });
+    const details = requireRecord(res.details, "lobster tool details");
+    expect(details.ok).toBe(true);
+    expect(details.status).toBe("ok");
+    expect(details.output).toEqual([{ hello: "world" }]);
+    expect(details.requiresApproval).toBeNull();
+  });
+
+  it("supports approval envelopes without changing the tool contract", async () => {
+    const runner = {
+      run: vi.fn().mockResolvedValue({
+        ok: true,
+        status: "needs_approval",
+        output: [],
+        requiresApproval: {
+          type: "approval_request",
+          prompt: "Send these alerts?",
+          items: [{ id: "alert-1" }],
+          resumeToken: "resume-token-1",
+        },
+      }),
+    };
+
+    const tool = createLobsterTool(fakeApi(), { runner });
+    const res = await tool.execute("call-injected-runner", {
+      action: "run",
+      pipeline: "noop",
+      argsJson: '{"since_hours":1}',
+      timeoutMs: 1500,
+      maxStdoutBytes: 4096,
     });
 
-    expect(res.details).toMatchObject({ ok: true, status: "ok" });
+    expect(runner.run).toHaveBeenCalledWith({
+      action: "run",
+      pipeline: "noop",
+      argsJson: '{"since_hours":1}',
+      cwd: process.cwd(),
+      timeoutMs: 1500,
+      maxStdoutBytes: 4096,
+    });
+    const details = requireRecord(res.details, "approval lobster tool details");
+    expect(details.ok).toBe(true);
+    expect(details.status).toBe("needs_approval");
+    const approval = requireRecord(details.requiresApproval, "approval request");
+    expect(approval.type).toBe("approval_request");
+    expect(approval.prompt).toBe("Send these alerts?");
+    expect(approval.resumeToken).toBe("resume-token-1");
+  });
+
+  it("keeps ordinary run on the embedded runner when flow defaults are injected", async () => {
+    const runner = {
+      run: vi.fn().mockResolvedValue({
+        ok: true,
+        status: "needs_approval",
+        output: [],
+        requiresApproval: {
+          type: "approval_request",
+          prompt: "Continue?",
+          items: [],
+          resumeToken: "resume-token-1",
+        },
+      }),
+    };
+    const taskFlow = createFakeTaskFlow();
+
+    const tool = createLobsterTool(fakeApi(), { runner, taskFlow });
+    const res = await tool.execute("call-default-flow-run", {
+      action: "run",
+      pipeline: "noop",
+      flowStateJson: "{}",
+      flowExpectedRevision: 0,
+    });
+
+    expect(taskFlow.createManaged).not.toHaveBeenCalled();
+    expect(runner.run).toHaveBeenCalledWith({
+      action: "run",
+      pipeline: "noop",
+      cwd: process.cwd(),
+      timeoutMs: 20_000,
+      maxStdoutBytes: 512_000,
+    });
+    const details = requireRecord(res.details, "ordinary run with flow defaults details");
+    expect(details.status).toBe("needs_approval");
+  });
+
+  it.each([{ flowId: "flow-1" }, { flowExpectedRevision: 1 }])(
+    "rejects resume-only fields on run before the ordinary fallback",
+    async (resumeFields) => {
+      const runner = { run: vi.fn() };
+      const tool = createLobsterTool(fakeApi(), {
+        runner,
+        taskFlow: createFakeTaskFlow(),
+      });
+
+      await expect(
+        tool.execute("call-run-with-resume-fields", {
+          action: "run",
+          pipeline: "noop",
+          flowStateJson: "{}",
+          flowExpectedRevision: 0,
+          ...resumeFields,
+        }),
+      ).rejects.toThrow(/run action does not accept flowId or flowExpectedRevision/);
+      expect(runner.run).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps ordinary resume on the embedded runner when flow defaults are injected", async () => {
+    const runner = {
+      run: vi.fn().mockResolvedValue({
+        ok: true,
+        status: "ok",
+        output: [{ approved: true }],
+        requiresApproval: null,
+      }),
+    };
+    const taskFlow = createFakeTaskFlow();
+
+    const tool = createLobsterTool(fakeApi(), { runner, taskFlow });
+    const res = await tool.execute("call-default-flow-resume", {
+      action: "resume",
+      token: "resume-token-1",
+      approve: true,
+      flowStateJson: "{}",
+      flowExpectedRevision: 0,
+    });
+
+    expect(taskFlow.resume).not.toHaveBeenCalled();
+    expect(runner.run).toHaveBeenCalledWith({
+      action: "resume",
+      token: "resume-token-1",
+      approve: true,
+      cwd: process.cwd(),
+      timeoutMs: 20_000,
+      maxStdoutBytes: 512_000,
+    });
+    const details = requireRecord(res.details, "ordinary resume with flow defaults details");
+    expect(details.ok).toBe(true);
+    expect(details.status).toBe("ok");
+  });
+
+  it.each([
+    { flowControllerId: "tests/lobster" },
+    { flowGoal: "Run Lobster workflow" },
+    { flowStateJson: '{"lane":"email"}' },
+  ])("rejects run-only fields on resume before the ordinary fallback", async (runFields) => {
+    const runner = { run: vi.fn() };
+    const tool = createLobsterTool(fakeApi(), {
+      runner,
+      taskFlow: createFakeTaskFlow(),
+    });
+
+    await expect(
+      tool.execute("call-resume-with-run-fields", {
+        action: "resume",
+        token: "resume-token-1",
+        approve: true,
+        flowExpectedRevision: 0,
+        ...runFields,
+      }),
+    ).rejects.toThrow(/resume action does not accept flowControllerId, flowGoal, or flowStateJson/);
+    expect(runner.run).not.toHaveBeenCalled();
+  });
+
+  it("rejects resume with a non-default flow revision but no flowId", async () => {
+    const runner = { run: vi.fn() };
+    const tool = createLobsterTool(fakeApi(), {
+      runner,
+      taskFlow: createFakeTaskFlow(),
+    });
+
+    await expect(
+      tool.execute("call-revision-without-flow-id", {
+        action: "resume",
+        token: "resume-token-1",
+        approve: true,
+        flowExpectedRevision: 1,
+      }),
+    ).rejects.toThrow(/flowId required when using managed TaskFlow resume mode/);
+    expect(runner.run).not.toHaveBeenCalled();
+  });
+
+  it("normalizes numeric string run limits before invoking the runner", async () => {
+    const runner = {
+      run: vi.fn().mockResolvedValue({
+        ok: true,
+        status: "ok",
+        output: [],
+        requiresApproval: null,
+      }),
+    };
+
+    const tool = createLobsterTool(fakeApi(), { runner });
+    await tool.execute("call-string-limits", {
+      action: "run",
+      pipeline: "noop",
+      timeoutMs: "1500",
+      maxStdoutBytes: "4096",
+    });
+
+    expect(runner.run).toHaveBeenCalledWith({
+      action: "run",
+      pipeline: "noop",
+      cwd: process.cwd(),
+      timeoutMs: 1500,
+      maxStdoutBytes: 4096,
+    });
+  });
+
+  it("rejects malformed numeric run limits before invoking the runner", async () => {
+    const runner = { run: vi.fn() };
+    const tool = createLobsterTool(fakeApi(), { runner });
+
+    await expect(
+      tool.execute("call-bad-timeout", {
+        action: "run",
+        pipeline: "noop",
+        timeoutMs: "1500.5",
+      }),
+    ).rejects.toThrow("timeoutMs must be a positive integer");
+    await expect(
+      tool.execute("call-bad-stdout", {
+        action: "run",
+        pipeline: "noop",
+        maxStdoutBytes: 0,
+      }),
+    ).rejects.toThrow("maxStdoutBytes must be a positive integer");
+    expect(runner.run).not.toHaveBeenCalled();
+  });
+
+  it("throws when the runner returns an error envelope", async () => {
+    const tool = createLobsterTool(fakeApi(), {
+      runner: {
+        run: vi.fn().mockResolvedValue({
+          ok: false,
+          error: {
+            type: "runtime_error",
+            message: "boom",
+          },
+        }),
+      },
+    });
+
+    await expect(
+      tool.execute("call-runner-error", {
+        action: "run",
+        pipeline: "noop",
+      }),
+    ).rejects.toThrow("boom");
+  });
+
+  it("can run through managed TaskFlow mode", async () => {
+    const runner = {
+      run: vi.fn().mockResolvedValue({
+        ok: true,
+        status: "needs_approval",
+        output: [],
+        requiresApproval: {
+          type: "approval_request",
+          prompt: "Approve this?",
+          items: [{ id: "item-1" }],
+          resumeToken: "resume-1",
+          approvalId: "approval-1",
+        },
+      }),
+    };
+    const taskFlow = createFakeTaskFlow();
+
+    const tool = createLobsterTool(fakeApi(), { runner, taskFlow });
+    const res = await tool.execute("call-managed-run", {
+      action: "run",
+      pipeline: "noop",
+      flowControllerId: "tests/lobster",
+      flowGoal: "Run Lobster workflow",
+      flowStateJson: '{"lane":"email"}',
+      flowExpectedRevision: 0,
+      flowCurrentStep: "run_lobster",
+      flowWaitingStep: "await_review",
+    });
+
+    expect(taskFlow.createManaged).toHaveBeenCalledWith({
+      controllerId: "tests/lobster",
+      goal: "Run Lobster workflow",
+      currentStep: "run_lobster",
+      stateJson: { lane: "email" },
+    });
+    expect(taskFlow.setWaiting).toHaveBeenCalledWith({
+      flowId: "flow-1",
+      expectedRevision: 1,
+      currentStep: "await_review",
+      waitJson: {
+        kind: "lobster_approval",
+        prompt: "Approve this?",
+        items: [{ id: "item-1" }],
+        resumeToken: "resume-1",
+        approvalId: "approval-1",
+      },
+    });
+    const details = requireRecord(res.details, "managed run lobster tool details");
+    expect(details.ok).toBe(true);
+    expect(details.status).toBe("needs_approval");
+    const flow = requireRecord(details.flow, "managed run flow details");
+    expect(flow.flowId).toBe("flow-1");
+    const mutation = requireRecord(details.mutation, "managed run mutation details");
+    expect(mutation.applied).toBe(true);
+  });
+
+  it("preserves explicit empty flow state in managed TaskFlow run mode", async () => {
+    const runner = {
+      run: vi.fn().mockResolvedValue({
+        ok: true,
+        status: "ok",
+        output: [],
+        requiresApproval: null,
+      }),
+    };
+    const taskFlow = createFakeTaskFlow();
+
+    const tool = createLobsterTool(fakeApi(), { runner, taskFlow });
+    await tool.execute("call-managed-run-empty-state", {
+      action: "run",
+      pipeline: "noop",
+      flowControllerId: "tests/lobster",
+      flowGoal: "Run Lobster workflow",
+      flowStateJson: "{}",
+    });
+
+    expect(taskFlow.createManaged).toHaveBeenCalledWith({
+      controllerId: "tests/lobster",
+      goal: "Run Lobster workflow",
+      currentStep: "run_lobster",
+      stateJson: {},
+    });
+    expect(runner.run).toHaveBeenCalledWith({
+      action: "run",
+      pipeline: "noop",
+      cwd: process.cwd(),
+      timeoutMs: 20_000,
+      maxStdoutBytes: 512_000,
+    });
+  });
+
+  it("rejects managed TaskFlow params when no bound taskFlow runtime is available", async () => {
+    const tool = createLobsterTool(fakeApi(), {
+      runner: { run: vi.fn() },
+    });
+
+    await expect(
+      tool.execute("call-missing-taskflow", {
+        action: "run",
+        pipeline: "noop",
+        flowControllerId: "tests/lobster",
+        flowGoal: "Run Lobster workflow",
+      }),
+    ).rejects.toThrow(/Managed TaskFlow run mode requires a bound taskFlow runtime/);
+  });
+
+  it("rejects invalid flowStateJson in managed TaskFlow mode", async () => {
+    const tool = createLobsterTool(fakeApi(), {
+      runner: { run: vi.fn() },
+      taskFlow: createFakeTaskFlow(),
+    });
+
+    await expect(
+      tool.execute("call-invalid-flow-json", {
+        action: "run",
+        pipeline: "noop",
+        flowControllerId: "tests/lobster",
+        flowGoal: "Run Lobster workflow",
+        flowStateJson: "{bad",
+      }),
+    ).rejects.toThrow(/flowStateJson must be valid JSON/);
+  });
+
+  it("can resume managed TaskFlow mode with only approvalId", async () => {
+    const runner = {
+      run: vi.fn().mockResolvedValue({
+        ok: true,
+        status: "ok",
+        output: [],
+        requiresApproval: null,
+      }),
+    };
+    const taskFlow = createFakeTaskFlow();
+    const tool = createLobsterTool(fakeApi(), { runner, taskFlow });
+
+    const res = await tool.execute("call-managed-resume-approval-id", {
+      action: "resume",
+      approvalId: "approval-1",
+      approve: true,
+      flowId: "flow-1",
+      flowExpectedRevision: 1,
+      flowStateJson: "{}",
+      flowCurrentStep: "resume_lobster",
+    });
+
+    expect(taskFlow.resume).toHaveBeenCalledWith({
+      flowId: "flow-1",
+      expectedRevision: 1,
+      status: "running",
+      currentStep: "resume_lobster",
+    });
+    expect(runner.run).toHaveBeenCalledWith({
+      action: "resume",
+      approvalId: "approval-1",
+      approve: true,
+      cwd: process.cwd(),
+      timeoutMs: 20_000,
+      maxStdoutBytes: 512_000,
+    });
+    const details = requireRecord(res.details, "managed resume lobster tool details");
+    expect(details.ok).toBe(true);
+    expect(details.status).toBe("ok");
+    const mutation = requireRecord(details.mutation, "managed resume mutation details");
+    expect(mutation.applied).toBe(true);
+  });
+
+  it("normalizes numeric string flowExpectedRevision before managed resume", async () => {
+    const runner = {
+      run: vi.fn().mockResolvedValue({
+        ok: true,
+        status: "ok",
+        output: [],
+        requiresApproval: null,
+      }),
+    };
+    const taskFlow = createFakeTaskFlow();
+    const tool = createLobsterTool(fakeApi(), { runner, taskFlow });
+
+    await tool.execute("call-managed-resume-string-revision", {
+      action: "resume",
+      approvalId: "approval-1",
+      approve: true,
+      flowId: "flow-1",
+      flowExpectedRevision: "1",
+      flowCurrentStep: "resume_lobster",
+    });
+
+    expect(taskFlow.resume).toHaveBeenCalledWith({
+      flowId: "flow-1",
+      expectedRevision: 1,
+      status: "running",
+      currentStep: "resume_lobster",
+    });
+  });
+
+  it("rejects managed TaskFlow resume mode without a token or approvalId", async () => {
+    const tool = createLobsterTool(fakeApi(), {
+      runner: { run: vi.fn() },
+      taskFlow: createFakeTaskFlow(),
+    });
+
+    await expect(
+      tool.execute("call-missing-resume-token", {
+        action: "resume",
+        flowId: "flow-1",
+        flowExpectedRevision: 1,
+        approve: true,
+      }),
+    ).rejects.toThrow(/token or approvalId required when using managed TaskFlow resume mode/);
+  });
+
+  it("rejects managed TaskFlow resume mode without approve", async () => {
+    const tool = createLobsterTool(fakeApi(), {
+      runner: { run: vi.fn() },
+      taskFlow: createFakeTaskFlow(),
+    });
+
+    await expect(
+      tool.execute("call-missing-resume-approve", {
+        action: "resume",
+        token: "resume-token",
+        flowId: "flow-1",
+        flowExpectedRevision: 1,
+      }),
+    ).rejects.toThrow(/approve required when using managed TaskFlow resume mode/);
   });
 
   it("requires action", async () => {
-    const tool = createLobsterTool(fakeApi());
+    const tool = createLobsterTool(fakeApi(), {
+      runner: { run: vi.fn() },
+    });
     await expect(tool.execute("call-action-missing", {})).rejects.toThrow(/action required/);
   });
 
-  it("requires pipeline for run action", async () => {
-    const tool = createLobsterTool(fakeApi());
-    await expect(
-      tool.execute("call-pipeline-missing", {
-        action: "run",
-      }),
-    ).rejects.toThrow(/pipeline required/);
-  });
-
-  it("requires token and approve for resume action", async () => {
-    const tool = createLobsterTool(fakeApi());
-    await expect(
-      tool.execute("call-resume-token-missing", {
-        action: "resume",
-        approve: true,
-      }),
-    ).rejects.toThrow(/token required/);
-    await expect(
-      tool.execute("call-resume-approve-missing", {
-        action: "resume",
-        token: "resume-token",
-      }),
-    ).rejects.toThrow(/approve required/);
-  });
-
   it("rejects unknown action", async () => {
-    const tool = createLobsterTool(fakeApi());
+    const tool = createLobsterTool(fakeApi(), {
+      runner: { run: vi.fn() },
+    });
     await expect(
       tool.execute("call-action-unknown", {
         action: "explode",
@@ -236,9 +558,11 @@ describe("lobster plugin tool", () => {
   });
 
   it("rejects absolute cwd", async () => {
-    const tool = createLobsterTool(fakeApi());
+    const tool = createLobsterTool(fakeApi(), {
+      runner: { run: vi.fn() },
+    });
     await expect(
-      tool.execute("call2c", {
+      tool.execute("call-absolute-cwd", {
         action: "run",
         pipeline: "noop",
         cwd: "/tmp",
@@ -247,9 +571,11 @@ describe("lobster plugin tool", () => {
   });
 
   it("rejects cwd that escapes the gateway working directory", async () => {
-    const tool = createLobsterTool(fakeApi());
+    const tool = createLobsterTool(fakeApi(), {
+      runner: { run: vi.fn() },
+    });
     await expect(
-      tool.execute("call2d", {
+      tool.execute("call-escape-cwd", {
         action: "run",
         pipeline: "noop",
         cwd: "../../etc",
@@ -257,175 +583,18 @@ describe("lobster plugin tool", () => {
     ).rejects.toThrow(/must stay within/);
   });
 
-  it("rejects invalid JSON from lobster", async () => {
-    spawnState.queue.push({ stdout: "nope" });
-
-    const tool = createLobsterTool(fakeApi());
-    await expect(
-      tool.execute("call3", {
-        action: "run",
-        pipeline: "noop",
-      }),
-    ).rejects.toThrow(/invalid JSON/);
-  });
-
-  it("runs Windows cmd shims through Node without enabling shell", async () => {
-    setProcessPlatform("win32");
-    const shimScriptPath = path.join(tempDir, "shim-dist", "lobster-cli.cjs");
-    const shimPath = path.join(tempDir, "shim-bin", "lobster.cmd");
-    await createWindowsCmdShimFixture({
-      shimPath,
-      scriptPath: shimScriptPath,
-      shimLine: `"%dp0%\\..\\shim-dist\\lobster-cli.cjs" %*`,
-    });
-    process.env.PATHEXT = ".CMD;.EXE";
-    process.env.PATH = `${path.dirname(shimPath)};${process.env.PATH ?? ""}`;
-    queueSuccessfulEnvelope();
-
-    const tool = createLobsterTool(fakeApi());
-    await tool.execute("call-win-shim", {
-      action: "run",
-      pipeline: "noop",
-    });
-
-    const [command, argv, options] = spawnState.spawn.mock.calls[0] ?? [];
-    expect(command).toBe(process.execPath);
-    expect(argv).toEqual([shimScriptPath, "run", "--mode", "tool", "noop"]);
-    expect(options).toMatchObject({ windowsHide: true });
-    expect(options).not.toHaveProperty("shell");
-  });
-
-  it("does not retry a failed Windows spawn with shell fallback", async () => {
-    setProcessPlatform("win32");
-    spawnState.spawn.mockReset();
-    spawnState.spawn.mockImplementationOnce(() => {
-      const child = new EventEmitter() as EventEmitter & {
-        stdout: PassThrough;
-        stderr: PassThrough;
-        kill: (signal?: string) => boolean;
-      };
-      child.stdout = new PassThrough();
-      child.stderr = new PassThrough();
-      child.kill = () => true;
-      const err = Object.assign(new Error("spawn failed"), { code: "ENOENT" });
-      setImmediate(() => child.emit("error", err));
-      return child;
-    });
-
-    const tool = createLobsterTool(fakeApi());
-    await expect(
-      tool.execute("call-win-no-retry", {
-        action: "run",
-        pipeline: "noop",
-      }),
-    ).rejects.toThrow(/spawn failed/);
-    expect(spawnState.spawn).toHaveBeenCalledTimes(1);
-  });
-
-  it("can be gated off in sandboxed contexts", async () => {
+  it("can be gated off in sandboxed contexts", () => {
     const api = fakeApi();
     const factoryTool = (ctx: OpenClawPluginToolContext) => {
       if (ctx.sandboxed) {
         return null;
       }
-      return createLobsterTool(api);
+      return createLobsterTool(api, {
+        runner: { run: vi.fn() },
+      });
     };
 
     expect(factoryTool(fakeCtx({ sandboxed: true }))).toBeNull();
     expect(factoryTool(fakeCtx({ sandboxed: false }))?.name).toBe("lobster");
-  });
-});
-
-describe("resolveWindowsLobsterSpawn", () => {
-  let tempDir = "";
-  const originalProcessState = snapshotPlatformPathEnv();
-
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lobster-win-spawn-"));
-    setProcessPlatform("win32");
-  });
-
-  afterEach(async () => {
-    restorePlatformPathEnv(originalProcessState);
-    if (tempDir) {
-      await fs.rm(tempDir, { recursive: true, force: true });
-      tempDir = "";
-    }
-  });
-
-  it("unwraps cmd shim with %dp0% token", async () => {
-    const scriptPath = path.join(tempDir, "shim-dist", "lobster-cli.cjs");
-    const shimPath = path.join(tempDir, "shim", "lobster.cmd");
-    await expectUnwrappedShim({
-      shimPath,
-      scriptPath,
-      shimLine: `"%dp0%\\..\\shim-dist\\lobster-cli.cjs" %*`,
-    });
-  });
-
-  it("unwraps cmd shim with %~dp0% token", async () => {
-    const scriptPath = path.join(tempDir, "shim-dist", "lobster-cli.cjs");
-    const shimPath = path.join(tempDir, "shim", "lobster.cmd");
-    await expectUnwrappedShim({
-      shimPath,
-      scriptPath,
-      shimLine: `"%~dp0%\\..\\shim-dist\\lobster-cli.cjs" %*`,
-    });
-  });
-
-  it("ignores node.exe shim entries and picks lobster script", async () => {
-    const shimDir = path.join(tempDir, "shim-with-node");
-    const scriptPath = path.join(tempDir, "shim-dist-node", "lobster-cli.cjs");
-    const shimPath = path.join(shimDir, "lobster.cmd");
-    await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-    await fs.mkdir(shimDir, { recursive: true });
-    await fs.writeFile(path.join(shimDir, "node.exe"), "", "utf8");
-    await fs.writeFile(scriptPath, "module.exports = {};\n", "utf8");
-    await fs.writeFile(
-      shimPath,
-      `@echo off\r\n"%~dp0%\\node.exe" "%~dp0%\\..\\shim-dist-node\\lobster-cli.cjs" %*\r\n`,
-      "utf8",
-    );
-
-    const target = resolveWindowsLobsterSpawn(shimPath, ["run", "noop"], process.env);
-    expect(target.command).toBe(process.execPath);
-    expect(target.argv).toEqual([scriptPath, "run", "noop"]);
-    expect(target.windowsHide).toBe(true);
-  });
-
-  it("resolves lobster.cmd from PATH and unwraps npm layout shim", async () => {
-    const binDir = path.join(tempDir, "node_modules", ".bin");
-    const packageDir = path.join(tempDir, "node_modules", "lobster");
-    const scriptPath = path.join(packageDir, "dist", "cli.js");
-    const shimPath = path.join(binDir, "lobster.cmd");
-    await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-    await fs.mkdir(binDir, { recursive: true });
-    await fs.writeFile(shimPath, "@echo off\r\n", "utf8");
-    await fs.writeFile(
-      path.join(packageDir, "package.json"),
-      JSON.stringify({ name: "lobster", version: "0.0.0", bin: { lobster: "dist/cli.js" } }),
-      "utf8",
-    );
-    await fs.writeFile(scriptPath, "module.exports = {};\n", "utf8");
-
-    const env = {
-      ...process.env,
-      PATH: `${binDir};${process.env.PATH ?? ""}`,
-      PATHEXT: ".CMD;.EXE",
-    };
-    const target = resolveWindowsLobsterSpawn("lobster", ["run", "noop"], env);
-    expect(target.command).toBe(process.execPath);
-    expect(target.argv).toEqual([scriptPath, "run", "noop"]);
-    expect(target.windowsHide).toBe(true);
-  });
-
-  it("fails fast when wrapper cannot be resolved without shell execution", async () => {
-    const badShimPath = path.join(tempDir, "bad-shim", "lobster.cmd");
-    await fs.mkdir(path.dirname(badShimPath), { recursive: true });
-    await fs.writeFile(badShimPath, "@echo off\r\nREM no entrypoint\r\n", "utf8");
-
-    expect(() => resolveWindowsLobsterSpawn(badShimPath, ["run", "noop"], process.env)).toThrow(
-      /without shell execution/,
-    );
   });
 });

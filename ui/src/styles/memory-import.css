@@ -1,0 +1,238 @@
+/* Memory Import keeps custom styling only for what the settings design
+   language cannot express: the collection review list (select-all checkbox +
+   collapsible per-file status list), the apply-result report, the loading
+   skeleton, and the confirmation dialog spacing. Everything else renders
+   through settings-ui primitives (ui/src/styles/settings.css). */
+
+.memory-import__provider-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.memory-import__provider-icon {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+}
+
+.memory-import__collection.settings-row {
+  display: block;
+  padding: 0;
+}
+
+.memory-import__collection-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+}
+
+.memory-import__collection details > summary {
+  padding: 7px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 650;
+  list-style: none;
+}
+
+.memory-import__collection details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.memory-import__collection details > summary::before {
+  display: inline-block;
+  margin-right: 6px;
+  content: "▸";
+  transition: transform 120ms ease;
+}
+
+.memory-import__collection details[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.memory-import__collection-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.memory-import__collection-choice input {
+  margin-top: 2px;
+}
+
+.memory-import__collection-choice span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.memory-import__collection-choice strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-import__collection-choice small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.memory-import__files {
+  max-height: 240px;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  list-style: none;
+  overflow: auto;
+}
+
+.memory-import__files li {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+
+.memory-import__files li:last-child {
+  border-bottom: 0;
+}
+
+.memory-import__file-icon,
+.memory-import__result > span {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.memory-import__file-icon svg,
+.memory-import__result svg {
+  width: 14px;
+  height: 14px;
+}
+
+.memory-import__files code {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-import__file-status {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.memory-import__file-status--planned,
+.memory-import__file-status--migrated {
+  color: var(--ok);
+}
+
+.memory-import__file-status--conflict {
+  color: var(--warn);
+}
+
+.memory-import__result.settings-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: color-mix(in srgb, var(--ok) 9%, transparent);
+  color: var(--ok);
+}
+
+.memory-import__result.memory-import__result--incomplete {
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+  color: var(--danger);
+}
+
+.memory-import__result div {
+  display: grid;
+  gap: 2px;
+}
+
+.memory-import__result strong {
+  font-size: 11px;
+}
+
+.memory-import__result div span {
+  font-size: 10px;
+}
+
+.memory-import__result-path,
+.memory-import__result-issues li {
+  min-width: 0;
+}
+
+.memory-import__result-path,
+.memory-import__result-artifact {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px;
+  align-items: baseline;
+}
+
+.memory-import__result-path code,
+.memory-import__result-artifact code,
+.memory-import__result-issues code {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  color: inherit;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-import__result-issues {
+  display: grid;
+  gap: 6px;
+  margin: 5px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.memory-import__result-issues li {
+  display: grid;
+  gap: 1px;
+}
+
+.memory-import__result-issues strong,
+.memory-import__result-issues span {
+  font-size: 10px;
+}
+
+.memory-import__loading {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+
+.memory-import__skeleton {
+  height: 96px;
+  border-radius: var(--radius-md);
+  background: linear-gradient(90deg, var(--bg-muted), var(--bg-elevated), var(--bg-muted));
+  background-size: 200% 100%;
+  animation: memory-import-pulse 1.4s ease infinite;
+}
+
+.memory-import__confirm .callout {
+  margin-top: 12px;
+}
+
+@keyframes memory-import-pulse {
+  to {
+    background-position: -200% 0;
+  }
+}

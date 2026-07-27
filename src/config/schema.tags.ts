@@ -1,6 +1,9 @@
-import type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
+// Normalizes config tag metadata for schema and docs surfaces.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { ConfigUiHint, ConfigUiHints } from "../shared/config-ui-hints-types.js";
 
-export const CONFIG_TAGS = [
+/** Stable config UI tag vocabulary used for filtering and grouping schema hints. */
+const CONFIG_TAGS = [
   "security",
   "auth",
   "network",
@@ -18,7 +21,7 @@ export const CONFIG_TAGS = [
   "advanced",
 ] as const;
 
-export type ConfigTag = (typeof CONFIG_TAGS)[number];
+type ConfigTag = (typeof CONFIG_TAGS)[number];
 
 const TAG_PRIORITY: Record<ConfigTag, number> = {
   security: 0,
@@ -39,21 +42,39 @@ const TAG_PRIORITY: Record<ConfigTag, number> = {
 };
 
 const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
+  cloudWorkers: ["network", "automation"],
   "gateway.auth.token": ["security", "auth", "access", "network"],
   "gateway.auth.password": ["security", "auth", "access", "network"],
   "gateway.push.apns.relay.baseUrl": ["network", "advanced"],
+  "gateway.controlUi.embedSandbox": ["security", "access", "advanced"],
+  "gateway.controlUi.allowExternalEmbedUrls": ["security", "access", "network", "advanced"],
+  "gateway.controlUi.toolTitles": ["advanced"],
+  "gateway.controlUi.sessionObserver": ["advanced"],
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback": [
     "security",
     "access",
     "network",
     "advanced",
   ],
-  "gateway.controlUi.dangerouslyDisableDeviceAuth": ["security", "access", "network", "advanced"],
-  "gateway.controlUi.allowInsecureAuth": ["security", "access", "network", "advanced"],
+  "gateway.nodes.pairing.autoApproveCidrs": ["security", "access", "network", "advanced"],
+  "gateway.nodes.pairing.sshVerify": ["security", "access", "network", "advanced"],
+  "mcp.apps.enabled": ["security", "access", "advanced"],
+  "mcp.apps.sandboxOrigin": ["security", "network", "advanced"],
+  "mcp.apps.sandboxPort": ["network", "advanced"],
+  "gateway.nodes.pluginTools.enabled": ["tools", "security", "access", "network", "advanced"],
+  "gateway.nodes.allowSkills": ["tools", "security", "access", "network", "advanced"],
+  "nodeHost.agentRuns.claude.enabled": ["tools", "security", "access", "network", "advanced"],
+  "nodeHost.mcp.servers": ["tools", "network", "advanced"],
+  "nodeHost.skills.enabled": ["tools", "network", "advanced"],
+  "proxy.tls.caFile": ["security", "network", "storage", "advanced"],
   "tools.exec.applyPatch.workspaceOnly": ["tools", "security", "access", "advanced"],
+  "tools.exec.mode": ["tools", "security", "access"],
+  "session.sharing": ["access", "privacy", "storage"],
+  "session.sharing.*": ["access", "privacy", "storage"],
 };
 
 const PREFIX_RULES: Array<{ prefix: string; tags: ConfigTag[] }> = [
+  { prefix: "cloudworkers.", tags: ["network", "automation"] },
   { prefix: "channels.", tags: ["channels", "network"] },
   { prefix: "tools.", tags: ["tools"] },
   { prefix: "gateway.", tags: ["network"] },
@@ -86,7 +107,7 @@ const AUTOMATION_PATH_PATTERN = /(cron|heartbeat|schedule|onstart|watchdebounce)
 const AUTH_KEYWORD_PATTERN = /(token|password|secret|api[_.-]?key|credential|oauth)/i;
 
 function normalizeTag(tag: string): ConfigTag | null {
-  const normalized = tag.trim().toLowerCase() as ConfigTag;
+  const normalized = normalizeLowercaseStringOrEmpty(tag) as ConfigTag;
   return CONFIG_TAGS.includes(normalized) ? normalized : null;
 }
 
@@ -99,6 +120,18 @@ function normalizeTags(tags: ReadonlyArray<string>): ConfigTag[] {
     }
   }
   return [...out].toSorted((a, b) => TAG_PRIORITY[a] - TAG_PRIORITY[b]);
+}
+
+function collectUnknownTags(tags: ReadonlyArray<string>): string[] {
+  const out = new Set<string>();
+  for (const tag of tags) {
+    const normalized = normalizeLowercaseStringOrEmpty(tag);
+    if (!normalized || normalizeTag(normalized)) {
+      continue;
+    }
+    out.add(normalized);
+  }
+  return [...out];
 }
 
 function patternToRegExp(pattern: string): RegExp {
@@ -128,8 +161,9 @@ function addTags(set: Set<ConfigTag>, tags: ReadonlyArray<ConfigTag>): void {
   }
 }
 
-export function deriveTagsForPath(path: string, hint?: ConfigUiHint): ConfigTag[] {
-  const lowerPath = path.toLowerCase();
+/** Derive known config UI tags from a schema path and optional hint metadata. */
+function deriveTagsForPath(path: string, hint?: ConfigUiHint): ConfigTag[] {
+  const lowerPath = normalizeLowercaseStringOrEmpty(path);
   const override = resolveOverride(path);
   if (override) {
     return normalizeTags(override);
@@ -168,19 +202,20 @@ export function deriveTagsForPath(path: string, hint?: ConfigUiHint): ConfigTag[
     tags.add("advanced");
   }
 
-  if (tags.size === 0) {
-    tags.add("advanced");
-  }
-
   return normalizeTags([...tags]);
 }
 
+/** Return hints with derived known tags merged ahead of any existing custom tags. */
 export function applyDerivedTags(hints: ConfigUiHints): ConfigUiHints {
   const next: ConfigUiHints = {};
   for (const [path, hint] of Object.entries(hints)) {
     const existingTags = Array.isArray(hint?.tags) ? hint.tags : [];
     const derivedTags = deriveTagsForPath(path, hint);
-    const tags = normalizeTags([...derivedTags, ...existingTags]);
+    // Preserve unknown tags after known tags so external/custom UI tags survive normalization.
+    const tags = [
+      ...normalizeTags([...derivedTags, ...existingTags]),
+      ...collectUnknownTags(existingTags),
+    ];
     next[path] = { ...hint, tags };
   }
   return next;

@@ -1,23 +1,24 @@
+import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
+// Googlechat plugin module implements setup surface behavior.
 import {
   applySetupAccountConfigPatch,
-  createNestedChannelParsedAllowFromPrompt,
-  createNestedChannelDmPolicy,
+  createPromptParsedAllowFromForAccount,
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
   mergeAllowFromEntries,
   migrateBaseNameToDefaultAccount,
   splitSetupEntries,
-  type ChannelSetupDmPolicy,
+  createSetupTranslator,
   type ChannelSetupWizard,
-  type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
 import {
-  listGoogleChatAccountIds,
-  resolveDefaultGoogleChatAccountId,
-  resolveGoogleChatAccount,
-} from "./accounts.js";
-import { googlechatSetupAdapter } from "./setup-core.js";
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveDefaultGoogleChatAccountId, resolveGoogleChatAccount } from "./accounts.js";
+
+const t = createSetupTranslator();
 
 const channel = "googlechat" as const;
 const ENV_SERVICE_ACCOUNT = "GOOGLE_CHAT_SERVICE_ACCOUNT";
@@ -25,61 +26,102 @@ const ENV_SERVICE_ACCOUNT_FILE = "GOOGLE_CHAT_SERVICE_ACCOUNT_FILE";
 const USE_ENV_FLAG = "__googlechatUseEnv";
 const AUTH_METHOD_FLAG = "__googlechatAuthMethod";
 
-const promptAllowFrom = createNestedChannelParsedAllowFromPrompt({
-  channel,
-  section: "dm",
-  defaultAccountId: DEFAULT_ACCOUNT_ID,
-  enabled: true,
-  message: "Google Chat allowFrom (users/<id> or raw email; avoid users/<email>)",
+type GoogleChatTextInput = NonNullable<ChannelSetupWizard["textInputs"]>[number];
+type GoogleChatTextInputKey = GoogleChatTextInput["inputKey"];
+
+const promptAllowFrom = createPromptParsedAllowFromForAccount({
+  defaultAccountId: resolveDefaultGoogleChatAccountId,
+  message: t("wizard.googlechat.allowFromPrompt"),
   placeholder: "users/123456789, name@example.com",
   parseEntries: (raw) => ({
     entries: mergeAllowFromEntries(undefined, splitSetupEntries(raw)),
   }),
+  getExistingAllowFrom: ({ cfg, accountId }) =>
+    resolveGoogleChatAccount({ cfg, accountId }).config.allowFrom ?? [],
+  applyAllowFrom: ({ cfg, accountId, allowFrom }) =>
+    applySetupAccountConfigPatch({
+      cfg,
+      channelKey: channel,
+      accountId,
+      patch: { allowFrom },
+    }),
 });
 
-const googlechatDmPolicy: ChannelSetupDmPolicy = createNestedChannelDmPolicy({
+const googlechatDmPolicy = createChannelDmPolicy({
   label: "Google Chat",
   channel,
-  section: "dm",
-  policyKey: "channels.googlechat.dm.policy",
-  allowFromKey: "channels.googlechat.dm.allowFrom",
-  getCurrent: (cfg) => cfg.channels?.googlechat?.dm?.policy ?? "pairing",
+  resolveAccount: (cfg, accountId) =>
+    resolveGoogleChatAccount({
+      cfg,
+      accountId: accountId ?? resolveDefaultGoogleChatAccountId(cfg),
+    }),
+  applyPatch: ({ cfg, account, patch }) =>
+    applySetupAccountConfigPatch({
+      cfg,
+      channelKey: channel,
+      accountId: account.accountId,
+      patch,
+    }),
   promptAllowFrom,
-  enabled: true,
 });
 
-export { googlechatSetupAdapter } from "./setup-core.js";
+function createServiceAccountTextInput(params: {
+  inputKey: GoogleChatTextInputKey;
+  message: string;
+  placeholder: string;
+  authMethod: "file" | "inline";
+  patchKey: "serviceAccountFile" | "serviceAccount";
+}): GoogleChatTextInput {
+  return {
+    inputKey: params.inputKey,
+    message: params.message,
+    placeholder: params.placeholder,
+    shouldPrompt: ({ credentialValues }) =>
+      credentialValues[USE_ENV_FLAG] !== "1" &&
+      credentialValues[AUTH_METHOD_FLAG] === params.authMethod,
+    validate: ({ value }) => (normalizeStringifiedOptionalString(value) ? undefined : "Required"),
+    normalizeValue: ({ value }) => normalizeStringifiedOptionalString(value) ?? "",
+    applySet: async ({ cfg, accountId, value }) =>
+      applySetupAccountConfigPatch({
+        cfg,
+        channelKey: channel,
+        accountId,
+        patch: { [params.patchKey]: value },
+      }),
+  };
+}
 
 export const googlechatSetupWizard: ChannelSetupWizard = {
   channel,
   status: createStandardChannelSetupStatus({
     channelLabel: "Google Chat",
-    configuredLabel: "configured",
-    unconfiguredLabel: "needs service account",
-    configuredHint: "configured",
-    unconfiguredHint: "needs auth",
+    configuredLabel: t("wizard.channels.statusConfigured"),
+    unconfiguredLabel: t("wizard.channels.statusNeedsServiceAccount"),
+    configuredHint: t("wizard.channels.statusConfigured"),
+    unconfiguredHint: t("wizard.channels.statusNeedsAuth"),
     includeStatusLine: true,
-    resolveConfigured: ({ cfg }) =>
-      listGoogleChatAccountIds(cfg).some(
-        (accountId) => resolveGoogleChatAccount({ cfg, accountId }).credentialSource !== "none",
-      ),
+    resolveConfigured: ({ cfg, accountId }) =>
+      resolveGoogleChatAccount({ cfg, accountId }).credentialSource !== "none",
   }),
   introNote: {
-    title: "Google Chat setup",
+    title: t("wizard.googlechat.setupTitle"),
     lines: [
-      "Google Chat apps use service-account auth and an HTTPS webhook.",
-      "Set the Chat API scopes in your service account and configure the Chat app URL.",
-      "Webhook verification requires audience type + audience value.",
-      `Docs: ${formatDocsLink("/channels/googlechat", "googlechat")}`,
+      t("wizard.googlechat.setupServiceAccount"),
+      t("wizard.googlechat.setupScopes"),
+      t("wizard.googlechat.setupAudience"),
+      t("wizard.channels.docs", { link: formatDocsLink("/channels/googlechat", "googlechat") }),
     ],
   },
   prepare: async ({ cfg, accountId, credentialValues, prompter }) => {
     const envReady =
       accountId === DEFAULT_ACCOUNT_ID &&
-      (Boolean(process.env[ENV_SERVICE_ACCOUNT]) || Boolean(process.env[ENV_SERVICE_ACCOUNT_FILE]));
+      Boolean(
+        normalizeOptionalString(process.env[ENV_SERVICE_ACCOUNT]) ||
+        normalizeOptionalString(process.env[ENV_SERVICE_ACCOUNT_FILE]),
+      );
     if (envReady) {
       const useEnv = await prompter.confirm({
-        message: "Use GOOGLE_CHAT_SERVICE_ACCOUNT env vars?",
+        message: t("wizard.googlechat.useEnvPrompt"),
         initialValue: true,
       });
       if (useEnv) {
@@ -99,10 +141,10 @@ export const googlechatSetupWizard: ChannelSetupWizard = {
     }
 
     const method = await prompter.select({
-      message: "Google Chat auth method",
+      message: t("wizard.googlechat.authMethod"),
       options: [
-        { value: "file", label: "Service account JSON file" },
-        { value: "inline", label: "Paste service account JSON" },
+        { value: "file", label: t("wizard.googlechat.serviceAccountFile") },
+        { value: "inline", label: t("wizard.googlechat.serviceAccountInline") },
       ],
       initialValue: "file",
     });
@@ -111,44 +153,26 @@ export const googlechatSetupWizard: ChannelSetupWizard = {
       credentialValues: {
         ...credentialValues,
         [USE_ENV_FLAG]: "0",
-        [AUTH_METHOD_FLAG]: String(method),
+        [AUTH_METHOD_FLAG]: method,
       },
     };
   },
   credentials: [],
   textInputs: [
-    {
+    createServiceAccountTextInput({
       inputKey: "tokenFile",
-      message: "Service account JSON path",
+      message: t("wizard.googlechat.serviceAccountPath"),
       placeholder: "/path/to/service-account.json",
-      shouldPrompt: ({ credentialValues }) =>
-        credentialValues[USE_ENV_FLAG] !== "1" && credentialValues[AUTH_METHOD_FLAG] === "file",
-      validate: ({ value }) => (String(value ?? "").trim() ? undefined : "Required"),
-      normalizeValue: ({ value }) => String(value).trim(),
-      applySet: async ({ cfg, accountId, value }) =>
-        applySetupAccountConfigPatch({
-          cfg,
-          channelKey: channel,
-          accountId,
-          patch: { serviceAccountFile: value },
-        }),
-    },
-    {
+      authMethod: "file",
+      patchKey: "serviceAccountFile",
+    }),
+    createServiceAccountTextInput({
       inputKey: "token",
-      message: "Service account JSON (single line)",
+      message: t("wizard.googlechat.serviceAccountJson"),
       placeholder: '{"type":"service_account", ... }',
-      shouldPrompt: ({ credentialValues }) =>
-        credentialValues[USE_ENV_FLAG] !== "1" && credentialValues[AUTH_METHOD_FLAG] === "inline",
-      validate: ({ value }) => (String(value ?? "").trim() ? undefined : "Required"),
-      normalizeValue: ({ value }) => String(value).trim(),
-      applySet: async ({ cfg, accountId, value }) =>
-        applySetupAccountConfigPatch({
-          cfg,
-          channelKey: channel,
-          accountId,
-          patch: { serviceAccount: value },
-        }),
-    },
+      authMethod: "inline",
+      patchKey: "serviceAccount",
+    }),
   ],
   finalize: async ({ cfg, accountId, prompter }) => {
     const account = resolveGoogleChatAccount({
@@ -156,19 +180,23 @@ export const googlechatSetupWizard: ChannelSetupWizard = {
       accountId,
     });
     const audienceType = await prompter.select({
-      message: "Webhook audience type",
+      message: t("wizard.googlechat.webhookAudienceType"),
       options: [
-        { value: "app-url", label: "App URL (recommended)" },
-        { value: "project-number", label: "Project number" },
+        { value: "app-url", label: t("wizard.googlechat.appUrlRecommended") },
+        { value: "project-number", label: t("wizard.googlechat.projectNumber") },
       ],
       initialValue: account.config.audienceType === "project-number" ? "project-number" : "app-url",
     });
     const audience = await prompter.text({
-      message: audienceType === "project-number" ? "Project number" : "App URL",
+      message:
+        audienceType === "project-number"
+          ? t("wizard.googlechat.projectNumber")
+          : t("wizard.googlechat.appUrl"),
       placeholder:
         audienceType === "project-number" ? "1234567890" : "https://your.host/googlechat",
       initialValue: account.config.audience || undefined,
-      validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+      validate: (value) =>
+        normalizeStringifiedOptionalString(value) ? undefined : t("common.required"),
     });
     return {
       cfg: migrateBaseNameToDefaultAccount({
@@ -178,7 +206,7 @@ export const googlechatSetupWizard: ChannelSetupWizard = {
           accountId,
           patch: {
             audienceType,
-            audience: String(audience).trim(),
+            audience: normalizeOptionalString(audience) ?? "",
           },
         }),
         channelKey: channel,

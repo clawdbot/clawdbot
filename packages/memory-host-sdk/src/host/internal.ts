@@ -1,18 +1,41 @@
+// Memory Host SDK module implements internal behavior.
 import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import { homedir } from "node:os";
 import path from "node:path";
-import { detectMime } from "../../../../src/media/mime.js";
-import { runTasksWithConcurrency } from "../../../../src/utils/run-with-concurrency.js";
+import { normalizeStringEntries, uniqueStrings } from "@openclaw/normalization-core";
+import { runWithConcurrency as runWithConcurrencyImpl } from "./concurrency.js";
+import { MEMORY_HOST_ROOT_FILENAME } from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
 import { buildTextEmbeddingInput, type EmbeddingInput } from "./embedding-inputs.js";
-import { isFileMissingError } from "./fs-utils.js";
+import {
+  isFileMissingError,
+  readRegularFile,
+  statRegularFile,
+  walkDirectory,
+  type WalkDirectoryEntry,
+} from "./fs-utils.js";
 import {
   buildMemoryMultimodalLabel,
   classifyMemoryMultimodalPath,
   type MemoryMultimodalModality,
   type MemoryMultimodalSettings,
 } from "./multimodal.js";
+import {
+  CHARS_PER_TOKEN_ESTIMATE,
+  detectMime,
+  estimateStringChars,
+  truncateUtf16Safe,
+} from "./openclaw-runtime-io.js";
+import {
+  resolveCanonicalRootMemoryFile,
+  shouldSkipRootMemoryAuxiliaryPath,
+} from "./openclaw-runtime-memory.js";
+import { retryTransientMemoryRead } from "./read-retry.js";
+
+export { hashText } from "./hash.js";
+import { hashText } from "./hash.js";
 
 export type MemoryFileEntry = {
   path: string;
@@ -35,7 +58,7 @@ export type MemoryChunk = {
   embeddingInput?: EmbeddingInput;
 };
 
-export type MultimodalMemoryChunk = {
+type MultimodalMemoryChunk = {
   chunk: MemoryChunk;
   structuredInputBytes: number;
 };
@@ -46,29 +69,38 @@ const DISABLED_MULTIMODAL_SETTINGS: MemoryMultimodalSettings = {
   maxFileBytes: 0,
 };
 
-export function ensureDir(dir: string): string {
-  try {
-    fsSync.mkdirSync(dir, { recursive: true });
-  } catch {}
+function ensureMemoryHostDir(dir: string): string {
+  fsSync.mkdirSync(dir, { recursive: true });
   return dir;
 }
 
-export function normalizeRelPath(value: string): string {
+export { ensureMemoryHostDir as ensureDir };
+
+function normalizeRelPath(value: string): string {
   const trimmed = value.trim().replace(/^[./]+/, "");
   return trimmed.replace(/\\/g, "/");
+}
+
+function expandHomePath(value: string): string {
+  if (value === "~") {
+    return homedir();
+  }
+  if (value.startsWith("~/") || value.startsWith("~\\")) {
+    return path.join(homedir(), value.slice(2));
+  }
+  return value;
 }
 
 export function normalizeExtraMemoryPaths(workspaceDir: string, extraPaths?: string[]): string[] {
   if (!extraPaths?.length) {
     return [];
   }
-  const resolved = extraPaths
-    .map((value) => value.trim())
-    .filter(Boolean)
+  const resolved = normalizeStringEntries(extraPaths)
+    .map((value) => expandHomePath(value))
     .map((value) =>
       path.isAbsolute(value) ? path.resolve(value) : path.resolve(workspaceDir, value),
     );
-  return Array.from(new Set(resolved));
+  return uniqueStrings(resolved);
 }
 
 export function isMemoryPath(relPath: string): boolean {
@@ -76,7 +108,7 @@ export function isMemoryPath(relPath: string): boolean {
   if (!normalized) {
     return false;
   }
-  if (normalized === "MEMORY.md" || normalized === "memory.md") {
+  if (normalized === MEMORY_HOST_ROOT_FILENAME || normalized.toLowerCase() === "dreams.md") {
     return true;
   }
   return normalized.startsWith("memory/");
@@ -91,25 +123,31 @@ function isAllowedMemoryFilePath(filePath: string, multimodal?: MemoryMultimodal
   );
 }
 
-async function walkDir(dir: string, files: string[], multimodal?: MemoryMultimodalSettings) {
-  const entries = await fs.readdir(dir, { withFileTypes: true });
-  for (const entry of entries) {
-    const full = path.join(dir, entry.name);
-    if (entry.isSymbolicLink()) {
-      continue;
-    }
-    if (entry.isDirectory()) {
-      await walkDir(full, files, multimodal);
-      continue;
-    }
-    if (!entry.isFile()) {
-      continue;
-    }
-    if (!isAllowedMemoryFilePath(full, multimodal)) {
-      continue;
-    }
-    files.push(full);
+function shouldDescendMemoryEntry(
+  entry: WalkDirectoryEntry,
+  shouldSkipPath?: (absPath: string) => boolean,
+): boolean {
+  if (shouldSkipPath?.(entry.path)) {
+    return false;
   }
+  return entry.kind === "directory" && entry.name !== ".openclaw-repair";
+}
+
+async function collectMemoryFilesFromDir(
+  dir: string,
+  files: string[],
+  multimodal?: MemoryMultimodalSettings,
+  shouldSkipPath?: (absPath: string) => boolean,
+): Promise<void> {
+  const scan = await walkDirectory(dir, {
+    symlinks: "skip",
+    descend: (entry) => shouldDescendMemoryEntry(entry, shouldSkipPath),
+    include: (entry) =>
+      !shouldSkipPath?.(entry.path) &&
+      entry.kind === "file" &&
+      isAllowedMemoryFilePath(entry.path, multimodal),
+  });
+  files.push(...scan.entries.map((entry) => entry.path));
 }
 
 export async function listMemoryFiles(
@@ -118,14 +156,15 @@ export async function listMemoryFiles(
   multimodal?: MemoryMultimodalSettings,
 ): Promise<string[]> {
   const result: string[] = [];
-  const memoryFile = path.join(workspaceDir, "MEMORY.md");
-  const altMemoryFile = path.join(workspaceDir, "memory.md");
   const memoryDir = path.join(workspaceDir, "memory");
+
+  const shouldSkipWorkspaceMemoryPath = (absPath: string): boolean =>
+    shouldSkipRootMemoryAuxiliaryPath({ workspaceDir, absPath });
 
   const addMarkdownFile = async (absPath: string) => {
     try {
-      const stat = await fs.lstat(absPath);
-      if (stat.isSymbolicLink() || !stat.isFile()) {
+      const stat = await statRegularFile(absPath);
+      if (stat.missing) {
         return;
       }
       if (!absPath.endsWith(".md")) {
@@ -135,25 +174,35 @@ export async function listMemoryFiles(
     } catch {}
   };
 
-  await addMarkdownFile(memoryFile);
-  await addMarkdownFile(altMemoryFile);
+  const memoryFile = await resolveCanonicalRootMemoryFile(workspaceDir);
+  if (memoryFile) {
+    await addMarkdownFile(memoryFile);
+  }
   try {
     const dirStat = await fs.lstat(memoryDir);
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
-      await walkDir(memoryDir, result);
+      await collectMemoryFilesFromDir(memoryDir, result, multimodal, shouldSkipWorkspaceMemoryPath);
     }
   } catch {}
 
   const normalizedExtraPaths = normalizeExtraMemoryPaths(workspaceDir, extraPaths);
   if (normalizedExtraPaths.length > 0) {
     for (const inputPath of normalizedExtraPaths) {
+      if (shouldSkipWorkspaceMemoryPath(inputPath)) {
+        continue;
+      }
       try {
         const stat = await fs.lstat(inputPath);
         if (stat.isSymbolicLink()) {
           continue;
         }
         if (stat.isDirectory()) {
-          await walkDir(inputPath, result, multimodal);
+          await collectMemoryFilesFromDir(
+            inputPath,
+            result,
+            multimodal,
+            shouldSkipWorkspaceMemoryPath,
+          );
           continue;
         }
         if (stat.isFile() && isAllowedMemoryFilePath(inputPath, multimodal)) {
@@ -181,24 +230,16 @@ export async function listMemoryFiles(
   return deduped;
 }
 
-export function hashText(value: string): string {
-  return crypto.createHash("sha256").update(value).digest("hex");
-}
-
 export async function buildFileEntry(
   absPath: string,
   workspaceDir: string,
   multimodal?: MemoryMultimodalSettings,
 ): Promise<MemoryFileEntry | null> {
-  let stat;
-  try {
-    stat = await fs.stat(absPath);
-  } catch (err) {
-    if (isFileMissingError(err)) {
-      return null;
-    }
-    throw err;
+  const regularFile = await statRegularFile(absPath);
+  if (regularFile.missing) {
+    return null;
   }
+  const stat = regularFile.stat;
   const normalizedPath = path.relative(workspaceDir, absPath).replace(/\\/g, "/");
   const multimodalSettings = multimodal ?? DISABLED_MULTIMODAL_SETTINGS;
   const modality = classifyMemoryMultimodalPath(absPath, multimodalSettings);
@@ -208,7 +249,16 @@ export async function buildFileEntry(
     }
     let buffer: Buffer;
     try {
-      buffer = await fs.readFile(absPath);
+      buffer = (
+        await retryTransientMemoryRead(
+          () =>
+            readRegularFile({
+              filePath: absPath,
+              maxBytes: multimodalSettings.maxFileBytes,
+            }),
+          `read multimodal memory file ${absPath}`,
+        )
+      ).buffer;
     } catch (err) {
       if (isFileMissingError(err)) {
         return null;
@@ -244,7 +294,12 @@ export async function buildFileEntry(
   }
   let content: string;
   try {
-    content = await fs.readFile(absPath, "utf-8");
+    content = (
+      await retryTransientMemoryRead(
+        () => readRegularFile({ filePath: absPath }),
+        `read memory index file ${absPath}`,
+      )
+    ).buffer.toString("utf-8");
   } catch (err) {
     if (isFileMissingError(err)) {
       return null;
@@ -271,21 +326,22 @@ async function loadMultimodalEmbeddingInput(
   if (entry.kind !== "multimodal" || !entry.contentText || !entry.mimeType) {
     return null;
   }
-  let stat;
-  try {
-    stat = await fs.stat(entry.absPath);
-  } catch (err) {
-    if (isFileMissingError(err)) {
-      return null;
-    }
-    throw err;
+  const regularFile = await statRegularFile(entry.absPath);
+  if (regularFile.missing) {
+    return null;
   }
+  const stat = regularFile.stat;
   if (stat.size !== entry.size) {
     return null;
   }
   let buffer: Buffer;
   try {
-    buffer = await fs.readFile(entry.absPath);
+    buffer = (
+      await retryTransientMemoryRead(
+        () => readRegularFile({ filePath: entry.absPath, maxBytes: entry.size }),
+        `read multimodal indexing file ${entry.absPath}`,
+      )
+    ).buffer;
   } catch (err) {
     if (isFileMissingError(err)) {
       return null;
@@ -339,8 +395,8 @@ export function chunkMarkdown(
   if (lines.length === 0) {
     return [];
   }
-  const maxChars = Math.max(32, chunking.tokens * 4);
-  const overlapChars = Math.max(0, chunking.overlap * 4);
+  const maxChars = Math.max(32, chunking.tokens * CHARS_PER_TOKEN_ESTIMATE);
+  const overlapChars = Math.max(0, chunking.overlap * CHARS_PER_TOKEN_ESTIMATE);
   const chunks: MemoryChunk[] = [];
 
   let current: Array<{ line: string; lineNo: number }> = [];
@@ -380,14 +436,14 @@ export function chunkMarkdown(
       if (!entry) {
         continue;
       }
-      acc += entry.line.length + 1;
+      acc += estimateStringChars(entry.line) + 1;
       kept.unshift(entry);
       if (acc >= overlapChars) {
         break;
       }
     }
     current = kept;
-    currentChars = kept.reduce((sum, entry) => sum + entry.line.length + 1, 0);
+    currentChars = acc;
   };
 
   for (let i = 0; i < lines.length; i += 1) {
@@ -397,12 +453,31 @@ export function chunkMarkdown(
     if (line.length === 0) {
       segments.push("");
     } else {
-      for (let start = 0; start < line.length; start += maxChars) {
-        segments.push(line.slice(start, start + maxChars));
+      // First pass: slice at maxChars (preserves original behaviour for Latin).
+      // Second pass: if a segment's *weighted* size still exceeds the budget
+      // (happens for CJK-heavy text where 1 char ≈ 1 token), re-split it at
+      // chunking.tokens so the chunk stays within the token budget.
+      for (let start = 0; start < line.length;) {
+        const coarse = truncateUtf16Safe(line.slice(start), maxChars);
+        if (estimateStringChars(coarse) > maxChars) {
+          const fineStep = Math.max(1, chunking.tokens);
+          for (let j = 0; j < coarse.length;) {
+            let end = Math.min(j + fineStep, coarse.length);
+            const lastCodeUnit = coarse.charCodeAt(end - 1);
+            if (lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff && end < coarse.length) {
+              end += 1;
+            }
+            segments.push(coarse.slice(j, end));
+            j = end;
+          }
+        } else {
+          segments.push(coarse);
+        }
+        start += coarse.length;
       }
     }
     for (const segment of segments) {
-      const lineSize = segment.length + 1;
+      const lineSize = estimateStringChars(segment) + 1;
       if (currentChars + lineSize > maxChars && current.length > 0) {
         flush();
         carryOverlap();
@@ -466,17 +541,11 @@ export function cosineSimilarity(a: number[], b: number[]): number {
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-export async function runWithConcurrency<T>(
+export function runMemoryHostTasksWithConcurrency<T>(
   tasks: Array<() => Promise<T>>,
   limit: number,
 ): Promise<T[]> {
-  const { results, firstError, hasError } = await runTasksWithConcurrency({
-    tasks,
-    limit,
-    errorMode: "stop",
-  });
-  if (hasError) {
-    throw firstError;
-  }
-  return results;
+  return runWithConcurrencyImpl(tasks, limit);
 }
+
+export { runMemoryHostTasksWithConcurrency as runWithConcurrency };

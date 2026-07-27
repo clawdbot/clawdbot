@@ -1,3 +1,6 @@
+// Google plugin module implements oauth.project behavior.
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithTimeout } from "./oauth.http.js";
 import {
   CODE_ASSIST_ENDPOINT_PROD,
@@ -8,26 +11,27 @@ import {
   USERINFO_URL,
 } from "./oauth.shared.js";
 
-function resolvePlatform(): "WINDOWS" | "MACOS" | "PLATFORM_UNSPECIFIED" {
-  if (process.platform === "win32") {
-    return "WINDOWS";
-  }
-  if (process.platform === "darwin") {
-    return "MACOS";
-  }
-  return "PLATFORM_UNSPECIFIED";
-}
+const LOAD_CODE_ASSIST_METADATA = {
+  ideType: "IDE_UNSPECIFIED",
+  platform: "PLATFORM_UNSPECIFIED",
+  pluginType: "GEMINI",
+} as const;
 
-async function getUserEmail(accessToken: string): Promise<string | undefined> {
+async function getUserEmail(
+  accessToken: string,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
   try {
     const response = await fetchWithTimeout(USERINFO_URL, {
       headers: { Authorization: `Bearer ${accessToken}` },
+      ...(signal ? { signal } : {}),
     });
     if (response.ok) {
-      const data = (await response.json()) as { email?: string };
+      const data = await readProviderJsonResponse<{ email?: string }>(response, "google.userinfo");
       return data.email;
     }
   } catch {
+    signal?.throwIfAborted();
     // ignore
   }
   return undefined;
@@ -66,19 +70,21 @@ async function pollOperation(
   endpoint: string,
   operationName: string,
   headers: Record<string, string>,
+  signal?: AbortSignal,
 ): Promise<{ done?: boolean; response?: { cloudaicompanionProject?: { id?: string } } }> {
   for (let attempt = 0; attempt < 24; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 5000));
+    await sleepWithAbort(5000, signal);
     const response = await fetchWithTimeout(`${endpoint}/v1internal/${operationName}`, {
       headers,
+      ...(signal ? { signal } : {}),
     });
     if (!response.ok) {
       continue;
     }
-    const data = (await response.json()) as {
+    const data = await readProviderJsonResponse<{
       done?: boolean;
       response?: { cloudaicompanionProject?: { id?: string } };
-    };
+    }>(response, "google.poll-operation");
     if (data.done) {
       return data;
     }
@@ -86,35 +92,42 @@ async function pollOperation(
   throw new Error("Operation polling timeout");
 }
 
-export async function resolveGoogleOAuthIdentity(accessToken: string): Promise<{
+export async function resolveGoogleOAuthIdentity(
+  accessToken: string,
+  signal?: AbortSignal,
+): Promise<{
   email?: string;
-  projectId: string;
+  projectId?: string;
 }> {
-  const email = await getUserEmail(accessToken);
-  const projectId = await discoverProject(accessToken);
+  const email = await getUserEmail(accessToken, signal);
+  const projectId = await discoverProject(accessToken, signal);
   return { email, projectId };
 }
 
-async function discoverProject(accessToken: string): Promise<string> {
+export async function resolveGooglePersonalOAuthIdentity(
+  accessToken: string,
+  signal?: AbortSignal,
+): Promise<{
+  email?: string;
+  projectId?: string;
+}> {
+  return { email: await getUserEmail(accessToken, signal) };
+}
+
+async function discoverProject(accessToken: string, signal?: AbortSignal): Promise<string> {
   const envProject = process.env.GOOGLE_CLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT_ID;
-  const platform = resolvePlatform();
-  const metadata = {
-    ideType: "ANTIGRAVITY",
-    platform,
-    pluginType: "GEMINI",
-  };
   const headers = {
     Authorization: `Bearer ${accessToken}`,
     "Content-Type": "application/json",
     "User-Agent": "google-api-nodejs-client/9.15.1",
     "X-Goog-Api-Client": `gl-node/${process.versions.node}`,
-    "Client-Metadata": JSON.stringify(metadata),
+    "Client-Metadata": JSON.stringify(LOAD_CODE_ASSIST_METADATA),
   };
 
   const loadBody = {
     ...(envProject ? { cloudaicompanionProject: envProject } : {}),
     metadata: {
-      ...metadata,
+      ...LOAD_CODE_ASSIST_METADATA,
       ...(envProject ? { duetProject: envProject } : {}),
     },
   };
@@ -132,10 +145,14 @@ async function discoverProject(accessToken: string): Promise<string> {
         method: "POST",
         headers,
         body: JSON.stringify(loadBody),
+        ...(signal ? { signal } : {}),
       });
 
       if (!response.ok) {
-        const errorPayload = await response.json().catch(() => null);
+        const errorPayload = await readProviderJsonResponse(
+          response,
+          "google.load-code-assist",
+        ).catch(() => null);
         if (isVpcScAffected(errorPayload)) {
           data = { currentTier: { id: TIER_STANDARD } };
           activeEndpoint = endpoint;
@@ -146,11 +163,12 @@ async function discoverProject(accessToken: string): Promise<string> {
         continue;
       }
 
-      data = (await response.json()) as typeof data;
+      data = await readProviderJsonResponse<typeof data>(response, "google.load-code-assist");
       activeEndpoint = endpoint;
       loadError = undefined;
       break;
     } catch (err) {
+      signal?.throwIfAborted();
       loadError = err instanceof Error ? err : new Error("loadCodeAssist failed", { cause: err });
     }
   }
@@ -193,7 +211,7 @@ async function discoverProject(accessToken: string): Promise<string> {
   const onboardBody: Record<string, unknown> = {
     tierId,
     metadata: {
-      ...metadata,
+      ...LOAD_CODE_ASSIST_METADATA,
     },
   };
   if (tierId !== TIER_FREE && envProject) {
@@ -205,20 +223,21 @@ async function discoverProject(accessToken: string): Promise<string> {
     method: "POST",
     headers,
     body: JSON.stringify(onboardBody),
+    ...(signal ? { signal } : {}),
   });
 
   if (!onboardResponse.ok) {
     throw new Error(`onboardUser failed: ${onboardResponse.status} ${onboardResponse.statusText}`);
   }
 
-  let lro = (await onboardResponse.json()) as {
+  let lro = await readProviderJsonResponse<{
     done?: boolean;
     name?: string;
     response?: { cloudaicompanionProject?: { id?: string } };
-  };
+  }>(onboardResponse, "google.onboard-user");
 
   if (!lro.done && lro.name) {
-    lro = await pollOperation(activeEndpoint, lro.name, headers);
+    lro = await pollOperation(activeEndpoint, lro.name, headers, signal);
   }
 
   const projectId = lro.response?.cloudaicompanionProject?.id;

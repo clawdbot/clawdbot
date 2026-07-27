@@ -1,0 +1,19 @@
+title: Matrix thread root preservation
+scenario:
+  id: matrix-thread-root-preservation
+  surface: channels
+  coverage:
+    primary:
+      - matrix.matrix-thread-reply-routing
+  execution:
+    profiles: { "matrix:all": 2, "matrix:transport": 1 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 60000
+    retryCount: 0
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-room.js
+  call: runThreadRootPreservationScenario
+  args:
+    - expr: "scenarioContext"

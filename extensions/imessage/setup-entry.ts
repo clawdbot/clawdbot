@@ -1,6 +1,17 @@
-import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
-import { imessageSetupPlugin } from "./src/channel.setup.js";
+// Imessage plugin module implements setup entry behavior.
+import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
-export { imessageSetupPlugin } from "./src/channel.setup.js";
-
-export default defineSetupPluginEntry(imessageSetupPlugin);
+export default defineBundledChannelSetupEntry({
+  importMetaUrl: import.meta.url,
+  features: {
+    legacyStateMigrations: true,
+  },
+  plugin: {
+    specifier: "./api.js",
+    exportName: "imessageSetupPlugin",
+  },
+  legacyStateMigrations: {
+    specifier: "./legacy-state-migrations-api.js",
+    exportName: "detectIMessageLegacyStateMigrations",
+  },
+});

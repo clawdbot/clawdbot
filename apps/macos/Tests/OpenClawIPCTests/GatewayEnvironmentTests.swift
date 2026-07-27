@@ -30,6 +30,17 @@ struct GatewayEnvironmentTests {
         #expect(Semver.parse(normalized) == Semver(major: 2026, minor: 3, patch: 23))
     }
 
+    @Test func `gateway version output strips trailing commit hash`() {
+        let normalized = GatewayEnvironment.normalizeGatewayVersionOutput("OpenClaw 2026.4.2 (d74a122)")
+        #expect(normalized == "2026.4.2")
+        #expect(Semver.parse(normalized) == Semver(major: 2026, minor: 4, patch: 2))
+
+        // Pre-release suffix + commit hash combined
+        let normalized2 = GatewayEnvironment.normalizeGatewayVersionOutput("OpenClaw 2026.4.2-1 (d74a122)")
+        #expect(normalized2 == "2026.4.2-1")
+        #expect(Semver.parse(normalized2) == Semver(major: 2026, minor: 4, patch: 2))
+    }
+
     @Test func `semver compatibility requires same major and not older`() {
         let required = Semver(major: 2, minor: 1, patch: 0)
         #expect(Semver(major: 2, minor: 1, patch: 0).compatible(with: required))

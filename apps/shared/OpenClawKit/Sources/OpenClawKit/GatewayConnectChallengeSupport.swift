@@ -8,21 +8,4 @@ public enum GatewayConnectChallengeSupport {
         guard !trimmed.isEmpty else { return nil }
         return trimmed
     }
-
-    public static func waitForNonce<E: Error>(
-        timeoutSeconds: Double,
-        onTimeout: @escaping @Sendable () -> E,
-        receiveNonce: @escaping @Sendable () async throws -> String?) async throws -> String
-    {
-        try await AsyncTimeout.withTimeout(
-            seconds: timeoutSeconds,
-            onTimeout: onTimeout,
-            operation: {
-                while true {
-                    if let nonce = try await receiveNonce() {
-                        return nonce
-                    }
-                }
-            })
-    }
 }

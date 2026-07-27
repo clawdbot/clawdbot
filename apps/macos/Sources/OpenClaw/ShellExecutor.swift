@@ -2,13 +2,92 @@ import Foundation
 import OpenClawIPC
 
 enum ShellExecutor {
-    struct ShellResult {
+    struct ShellResult: Sendable {
         var stdout: String
         var stderr: String
         var exitCode: Int?
         var timedOut: Bool
         var success: Bool
         var errorMessage: String?
+    }
+
+    /// A background descendant may inherit stdout after its parent exits.
+    /// Seekable files let the parent result finish without waiting for that unrelated process.
+    private final class OutputFiles: @unchecked Sendable {
+        let stdout: FileHandle
+        let stderr: FileHandle
+        private let stdoutURL: URL
+        private let stderrURL: URL
+
+        init() throws {
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("openclaw-shell-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            self.stdoutURL = directory.appendingPathComponent("stdout")
+            self.stderrURL = directory.appendingPathComponent("stderr")
+            FileManager.default.createFile(atPath: self.stdoutURL.path, contents: nil)
+            FileManager.default.createFile(atPath: self.stderrURL.path, contents: nil)
+            self.stdout = try FileHandle(forWritingTo: self.stdoutURL)
+            self.stderr = try FileHandle(forWritingTo: self.stderrURL)
+        }
+
+        func readAndRemove() -> (stdout: String, stderr: String) {
+            try? self.stdout.close()
+            try? self.stderr.close()
+            let stdoutData = (try? Data(contentsOf: self.stdoutURL)) ?? Data()
+            let stderrData = (try? Data(contentsOf: self.stderrURL)) ?? Data()
+            try? FileManager.default.removeItem(at: self.stdoutURL.deletingLastPathComponent())
+            return (
+                String(bytes: stdoutData, encoding: .utf8) ?? "",
+                String(bytes: stderrData, encoding: .utf8) ?? "")
+        }
+    }
+
+    private final class CompletionBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var finished = false
+        private let continuation: CheckedContinuation<ShellResult, Never>
+        private let output: OutputFiles
+
+        init(continuation: CheckedContinuation<ShellResult, Never>, output: OutputFiles) {
+            self.continuation = continuation
+            self.output = output
+        }
+
+        func finish(
+            status: Int?,
+            timedOut: Bool,
+            errorMessage: String?,
+            beforeCapture: (@Sendable () -> Void)? = nil)
+        {
+            self.lock.lock()
+            guard !self.finished else {
+                self.lock.unlock()
+                return
+            }
+            self.finished = true
+            self.lock.unlock()
+            beforeCapture?()
+            let captured = self.output.readAndRemove()
+            self.continuation.resume(returning: ShellResult(
+                stdout: captured.stdout,
+                stderr: captured.stderr,
+                exitCode: status,
+                timedOut: timedOut,
+                success: status == 0 && !timedOut && errorMessage == nil,
+                errorMessage: errorMessage ?? status.flatMap { $0 == 0 ? nil : "exit \($0)" }))
+        }
+    }
+
+    private static func completedResult(status: Int, output: OutputFiles) -> ShellResult {
+        let captured = output.readAndRemove()
+        return ShellResult(
+            stdout: captured.stdout,
+            stderr: captured.stderr,
+            exitCode: status,
+            timedOut: false,
+            success: status == 0,
+            errorMessage: status == 0 ? nil : "exit \(status)")
     }
 
     static func runDetailed(
@@ -30,16 +109,16 @@ enum ShellExecutor {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = command
-        if let cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
-        if let env { process.environment = env }
+        if let cwd {
+            process.currentDirectoryURL = URL(fileURLWithPath: cwd)
+        }
+        if let env {
+            process.environment = env
+        }
 
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
+        let output: OutputFiles
         do {
-            try process.run()
+            output = try OutputFiles()
         } catch {
             return ShellResult(
                 stdout: "",
@@ -47,49 +126,57 @@ enum ShellExecutor {
                 exitCode: nil,
                 timedOut: false,
                 success: false,
-                errorMessage: "failed to start: \(error.localizedDescription)")
+                errorMessage: "failed to capture output: \(error.localizedDescription)")
         }
-
-        let outTask = Task { stdoutPipe.fileHandleForReading.readToEndSafely() }
-        let errTask = Task { stderrPipe.fileHandleForReading.readToEndSafely() }
-
-        let waitTask = Task { () -> ShellResult in
-            process.waitUntilExit()
-            let out = await outTask.value
-            let err = await errTask.value
-            let status = Int(process.terminationStatus)
-            return ShellResult(
-                stdout: String(bytes: out, encoding: .utf8) ?? "",
-                stderr: String(bytes: err, encoding: .utf8) ?? "",
-                exitCode: status,
-                timedOut: false,
-                success: status == 0,
-                errorMessage: status == 0 ? nil : "exit \(status)")
-        }
+        process.standardOutput = output.stdout
+        process.standardError = output.stderr
 
         if let timeout, timeout > 0 {
-            let nanos = UInt64(timeout * 1_000_000_000)
-            return await withTaskGroup(of: ShellResult.self) { group in
-                group.addTask { await waitTask.value }
-                group.addTask {
-                    try? await Task.sleep(nanoseconds: nanos)
-                    if process.isRunning { process.terminate() }
-                    _ = await waitTask.value // drain pipes after termination
-                    return ShellResult(
-                        stdout: "",
-                        stderr: "",
-                        exitCode: nil,
-                        timedOut: true,
-                        success: false,
-                        errorMessage: "timeout")
+            return await withCheckedContinuation { continuation in
+                let completion = CompletionBox(continuation: continuation, output: output)
+
+                process.terminationHandler = { terminatedProcess in
+                    let status = Int(terminatedProcess.terminationStatus)
+                    completion.finish(status: status, timedOut: false, errorMessage: nil)
                 }
-                let first = await group.next()!
-                group.cancelAll()
-                return first
+
+                do {
+                    try process.run()
+                } catch {
+                    completion.finish(
+                        status: nil,
+                        timedOut: false,
+                        errorMessage: "failed to start: \(error.localizedDescription)")
+                    return
+                }
+
+                DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout) {
+                    guard process.isRunning else { return }
+                    // Claim timeout classification before SIGTERM can trigger the termination handler.
+                    completion.finish(
+                        status: nil,
+                        timedOut: true,
+                        errorMessage: "timeout",
+                        beforeCapture: { process.terminate() })
+                }
             }
         }
 
-        return await waitTask.value
+        do {
+            try process.run()
+        } catch {
+            let captured = output.readAndRemove()
+            return ShellResult(
+                stdout: captured.stdout,
+                stderr: captured.stderr,
+                exitCode: nil,
+                timedOut: false,
+                success: false,
+                errorMessage: "failed to start: \(error.localizedDescription)")
+        }
+
+        process.waitUntilExit()
+        return self.completedResult(status: Int(process.terminationStatus), output: output)
     }
 
     static func run(command: [String], cwd: String?, env: [String: String]?, timeout: Double?) async -> Response {

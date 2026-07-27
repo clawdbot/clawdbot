@@ -1,6 +1,11 @@
+// Formats terminal-safe strings for TUI messages and status surfaces.
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { stripLeadingInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import type { SessionGoal } from "../config/sessions/types.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
-import { stripAnsi } from "../terminal/ansi.js";
+import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
+import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
 import { formatTokenCount } from "../utils/usage-format.js";
 
 const REPLACEMENT_CHAR_RE = /\uFFFD/g;
@@ -12,11 +17,28 @@ const URL_PREFIX_RE = /^(https?:\/\/|file:\/\/)/i;
 const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
 const FILE_LIKE_RE = /^[a-zA-Z0-9._-]+$/;
 const EDGE_PUNCTUATION_RE = /^[`"'([{<]+|[`"')\]}>.,:;!?]+$/g;
+const ALPHANUMERIC_RE = /[A-Za-z0-9]/;
 const TOKENISH_MIN_LENGTH = 24;
 const RTL_SCRIPT_RE = /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufefc]/;
+const CJK_SCRIPT_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 const BIDI_CONTROL_RE = /[\u202a-\u202e\u2066-\u2069]/;
 const RTL_ISOLATE_START = "\u2067";
 const RTL_ISOLATE_END = "\u2069";
+// Fenced code blocks (``` or ~~~). Lazy on content; tolerates info string after
+// the opening fence. Closing fence must sit on its own line.
+const FENCED_CODE_RE = /(```|~~~)[^\n]*\n[\s\S]*?\n\1[^\n]*/g;
+// Inline code spans with balanced backtick run (`code`, ``co`de``, ...).
+const INLINE_CODE_RE = /(`+)(?:(?!\1).)+?\1/g;
+
+/** Keep routing/provider/profile details in session state, not the compact footer. */
+export function formatModelFooter(params: {
+  model?: string | null;
+  thinkingLevel?: string | null;
+}): string {
+  const model = splitTrailingAuthProfile(params.model ?? "").model || "unknown";
+  const thinkingLevel = params.thinkingLevel?.trim();
+  return thinkingLevel && thinkingLevel !== "off" ? `${model} ${thinkingLevel}` : model;
+}
 
 function hasControlChars(text: string): boolean {
   for (const char of text) {
@@ -46,39 +68,33 @@ function stripControlChars(text: string): string {
   return sanitized;
 }
 
-function chunkToken(token: string, maxChars: number): string[] {
-  if (token.length <= maxChars) {
-    return [token];
-  }
-  const chunks: string[] = [];
-  for (let i = 0; i < token.length; i += maxChars) {
-    chunks.push(token.slice(i, i + maxChars));
-  }
-  return chunks;
-}
-
 function isCopySensitiveToken(token: string): boolean {
   const coreToken = token.replace(EDGE_PUNCTUATION_RE, "");
   const candidate = coreToken || token;
 
-  if (URL_PREFIX_RE.test(token)) {
+  if (URL_PREFIX_RE.test(candidate)) {
     return true;
   }
   if (
-    token.startsWith("/") ||
-    token.startsWith("~/") ||
-    token.startsWith("./") ||
-    token.startsWith("../")
+    candidate.startsWith("/") ||
+    candidate.startsWith("~/") ||
+    candidate.startsWith("./") ||
+    candidate.startsWith("../")
   ) {
     return true;
   }
-  if (WINDOWS_DRIVE_RE.test(token) || token.startsWith("\\\\")) {
+  if (WINDOWS_DRIVE_RE.test(candidate) || candidate.startsWith("\\\\")) {
     return true;
   }
-  if (token.includes("/") || token.includes("\\")) {
+  if (candidate.includes("/") || candidate.includes("\\")) {
     return true;
   }
-  if (token.includes("_") && FILE_LIKE_RE.test(token)) {
+  // Identifiers that look file-like, dotted, or hyphen/underscore-separated:
+  // package names, entity IDs, kebab/snake CLI flags, dotted module paths.
+  if (
+    FILE_LIKE_RE.test(candidate) &&
+    (candidate.includes("_") || candidate.includes("-") || candidate.includes("."))
+  ) {
     return true;
   }
 
@@ -95,7 +111,54 @@ function normalizeLongTokenForDisplay(token: string): string {
   if (isCopySensitiveToken(token)) {
     return token;
   }
-  return chunkToken(token, MAX_TOKEN_CHARS).join(" ");
+  // CJK text naturally appears without spaces between words. Inserting spaces
+  // into long CJK runs makes assistant prose render with visible artifacts such
+  // as "苦难 者". Let the TUI renderer wrap these runs at grapheme boundaries.
+  if (CJK_SCRIPT_RE.test(token)) {
+    return token;
+  }
+  // Pure symbol/punctuation runs (table borders made of `─`, `=`, `-`) carry
+  // no copyable identifier; chunking would corrupt the visible structure.
+  if (!ALPHANUMERIC_RE.test(token)) {
+    return token;
+  }
+  return chunkTextByBreakResolver(token, MAX_TOKEN_CHARS, () => MAX_TOKEN_CHARS).join(" ");
+}
+
+type Segment = { kind: "prose" | "code"; text: string };
+
+function partitionByRegex(text: string, re: RegExp): Segment[] {
+  const parts: Segment[] = [];
+  let lastIndex = 0;
+  for (const match of text.matchAll(re)) {
+    const start = match.index ?? 0;
+    if (start > lastIndex) {
+      parts.push({ kind: "prose", text: text.slice(lastIndex, start) });
+    }
+    parts.push({ kind: "code", text: match[0] });
+    lastIndex = start + match[0].length;
+  }
+  if (lastIndex < text.length) {
+    parts.push({ kind: "prose", text: text.slice(lastIndex) });
+  }
+  return parts;
+}
+
+// Apply `transform` only to spans of `text` that are not inside fenced code
+// blocks or inline code spans. Code regions pass through verbatim so long
+// identifiers, dotted IDs, package names, and shell line-continuations the
+// user may copy stay byte-for-byte intact.
+function transformOutsideCode(text: string, transform: (segment: string) => string): string {
+  const fenced = partitionByRegex(text, FENCED_CODE_RE);
+  return fenced
+    .map((seg) => {
+      if (seg.kind === "code") {
+        return seg.text;
+      }
+      const inline = partitionByRegex(seg.text, INLINE_CODE_RE);
+      return inline.map((s) => (s.kind === "code" ? s.text : transform(s.text))).join("");
+    })
+    .join("");
 }
 
 function redactBinaryLikeLine(line: string): string {
@@ -131,7 +194,7 @@ export function sanitizeRenderableText(text: string): string {
     return text;
   }
 
-  const hasAnsi = text.includes("\u001b");
+  const hasAnsi = text.includes("\u001b") || text.includes("\u009b") || text.includes("\u009d");
   const hasReplacementChars = text.includes("\uFFFD");
   const hasLongTokens = LONG_TOKEN_TEST_RE.test(text);
   const hasControls = hasControlChars(text);
@@ -148,7 +211,11 @@ export function sanitizeRenderableText(text: string): string {
         .join("\n")
     : withoutControlChars;
   const tokenSafe = LONG_TOKEN_TEST_RE.test(redacted)
-    ? redacted.replace(LONG_TOKEN_RE, normalizeLongTokenForDisplay)
+    ? transformOutsideCode(redacted, (segment) =>
+        LONG_TOKEN_TEST_RE.test(segment)
+          ? segment.replace(LONG_TOKEN_RE, normalizeLongTokenForDisplay)
+          : segment,
+      )
     : redacted;
   return applyRtlIsolation(tokenSafe);
 }
@@ -271,6 +338,15 @@ export function extractContentFromMessage(message: unknown): string {
   }
   const { record, content } = resolved;
 
+  if (record.role === "assistant") {
+    if (typeof content === "string") {
+      return sanitizeRenderableText(content).trim();
+    }
+    if (Array.isArray(content)) {
+      return extractAssistantRenderableContent(record);
+    }
+  }
+
   if (typeof content === "string") {
     return sanitizeRenderableText(content).trim();
   }
@@ -284,6 +360,40 @@ export function extractContentFromMessage(message: unknown): string {
     return parts.join("\n").trim();
   }
   return formatAssistantErrorFromRecord(record);
+}
+
+function extractAssistantRenderableContent(record: Record<string, unknown>): string {
+  const visible = sanitizeRenderableText(extractAssistantVisibleText(record) ?? "").trim();
+  const pairingQr = extractPairingQrTerminalText(record);
+  const content = [visible, pairingQr].filter(Boolean).join("\n\n").trim();
+  if (content) {
+    return content;
+  }
+  return formatAssistantErrorFromRecord(record);
+}
+
+function extractPairingQrTerminalText(record: Record<string, unknown>): string {
+  const content = record.content;
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const blockRecord = block as Record<string, unknown>;
+    if (
+      blockRecord.type === "openclaw_pairing_qr" &&
+      typeof blockRecord.terminalText === "string"
+    ) {
+      const text = sanitizeRenderableText(blockRecord.terminalText).trim();
+      if (text) {
+        parts.push(text);
+      }
+    }
+  }
+  return parts.join("\n\n").trim();
 }
 
 function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean }): string {
@@ -323,9 +433,16 @@ export function extractTextFromMessage(
   if (!record) {
     return "";
   }
+  if (record.role === "assistant") {
+    return composeThinkingAndContent({
+      thinkingText: extractThinkingFromMessage(record),
+      contentText: extractAssistantRenderableContent(record),
+      showThinking: opts?.includeThinking ?? false,
+    });
+  }
   const text = extractTextBlocks(record.content, opts);
   if (text) {
-    if (record.role === "user") {
+    if (record.role === "user" || record.command === true) {
       return stripLeadingInboundMetadata(text);
     }
     return text;
@@ -358,6 +475,36 @@ export function formatTokens(total?: number | null, context?: number | null) {
       ? Math.min(999, Math.round((total / context) * 100))
       : null;
   return `tokens ${totalLabel}/${formatTokenCount(context)}${pct !== null ? ` (${pct}%)` : ""}`;
+}
+
+function formatGoalUsage(goal: SessionGoal): string | null {
+  if (goal.tokenBudget === undefined) {
+    return goal.tokensUsed > 0 ? formatTokenCount(goal.tokensUsed) : null;
+  }
+  return `${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget)}`;
+}
+
+export function formatGoalFooter(goal?: SessionGoal): string | null {
+  if (!goal) {
+    return null;
+  }
+  const usage = formatGoalUsage(goal);
+  const suffix = usage ? ` (${usage})` : "";
+  switch (goal.status) {
+    case "active":
+      return `Pursuing goal${suffix}`;
+    case "paused":
+      return "Goal paused (/goal resume)";
+    case "blocked":
+      return "Goal blocked (/goal resume)";
+    case "usage_limited":
+      return "Goal hit usage limits (/goal resume)";
+    case "budget_limited":
+      return `Goal unmet${suffix}`;
+    case "complete":
+      return `Goal achieved${suffix}`;
+  }
+  return null;
 }
 
 export function formatContextUsageLine(params: {

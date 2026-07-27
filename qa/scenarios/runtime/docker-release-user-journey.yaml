@@ -1,0 +1,29 @@
+title: Docker release user journey
+
+scenario:
+  id: docker-release-user-journey
+  surface: containers
+  category: containers.image-release-and-validation
+  coverage:
+    primary:
+      - containers.release-path-install
+  objective: Verify the package-installed Docker release journey from clean install through agent, plugin, channel, Gateway restart, and doctor checks.
+  successCriteria:
+    - The packed OpenClaw tarball installs globally in a clean Docker home.
+    - Non-interactive onboarding configures the loopback Gateway and mock model provider.
+    - A package-installed agent turn, external plugin install/uninstall, ClickClack outbound/inbound messaging, Gateway restart, and doctor repair all pass.
+  docsRefs:
+    - docs/help/testing.md
+    - docs/help/testing-updates-plugins.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - scripts/e2e/release-user-journey-docker.sh
+    - scripts/e2e/lib/release-user-journey/scenario.sh
+    - scripts/e2e/lib/release-user-journey/assertions.mjs
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
+    summary: Runs the existing release-user-journey Docker E2E lane and records QA Lab evidence for release-path install coverage.
+    args:
+      - --lane
+      - release-user-journey

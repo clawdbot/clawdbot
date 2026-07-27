@@ -1,3 +1,6 @@
+// Defines command approval configuration types.
+export type NativeExecApprovalEnableMode = boolean | "auto";
+
 export type ExecApprovalForwardingMode = "session" | "targets" | "both";
 
 export type ExecApprovalForwardTarget = {

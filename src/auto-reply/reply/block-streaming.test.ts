@@ -1,3 +1,4 @@
+// Tests block streaming policy and buffered reply pipeline behavior.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -47,8 +48,8 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
   it("honors newline chunkMode for plugin channels even before the plugin registry is loaded", () => {
     const cfg = {
       channels: {
-        bluebubbles: {
-          chunkMode: "newline",
+        imessage: {
+          streaming: { chunkMode: "newline" },
         },
       },
       agents: {
@@ -64,12 +65,61 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
 
     const resolved = resolveEffectiveBlockStreamingConfig({
       cfg,
-      provider: "bluebubbles",
+      provider: "imessage",
     });
 
     expect(resolved.chunking.flushOnParagraph).toBe(true);
     expect(resolved.coalescing.flushOnEnqueue).toBeUndefined();
     expect(resolved.coalescing.joiner).toBe("\n\n");
+  });
+
+  it("honors channel and account scoped nested block coalescing", () => {
+    const cfg = {
+      channels: {
+        imessage: {
+          streaming: { block: { coalesce: { minChars: 25, maxChars: 80, idleMs: 5 } } },
+          accounts: {
+            personal: {
+              streaming: { block: { coalesce: { minChars: 10, maxChars: 40, idleMs: 2 } } },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveEffectiveBlockStreamingConfig({ cfg, provider: "imessage" }).coalescing,
+    ).toMatchObject({ minChars: 25, maxChars: 80, idleMs: 5 });
+    expect(
+      resolveEffectiveBlockStreamingConfig({
+        cfg,
+        provider: "imessage",
+        accountId: "personal",
+      }).coalescing,
+    ).toMatchObject({ minChars: 10, maxChars: 40, idleMs: 2 });
+  });
+
+  it("merges partial account nested block coalescing over channel config", () => {
+    const cfg = {
+      channels: {
+        imessage: {
+          streaming: { block: { coalesce: { minChars: 25, maxChars: 80, idleMs: 5 } } },
+          accounts: {
+            personal: {
+              streaming: { block: { coalesce: { idleMs: 2 } } },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveEffectiveBlockStreamingConfig({
+        cfg,
+        provider: "imessage",
+        accountId: "personal",
+      }).coalescing,
+    ).toMatchObject({ minChars: 25, maxChars: 80, idleMs: 2 });
   });
 
   it("allows ACP maxChunkChars overrides above base defaults up to provider text limits", () => {

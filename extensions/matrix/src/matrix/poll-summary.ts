@@ -1,3 +1,4 @@
+// Matrix plugin module implements poll summary behavior.
 import type { MatrixMessageSummary } from "./actions/types.js";
 import {
   buildPollResultsSummary,

@@ -1,3 +1,5 @@
+// Matrix plugin module implements resolve targets behavior.
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } from "./directory-live.js";
 import { isMatrixQualifiedUserId, normalizeMatrixMessagingTarget } from "./matrix/target-ids.js";
 import type {
@@ -8,7 +10,7 @@ import type {
 } from "./runtime-api.js";
 
 function normalizeLookupQuery(query: string): string {
-  return query.trim().toLowerCase();
+  return normalizeOptionalLowercaseString(query) ?? "";
 }
 
 function findExactDirectoryMatches(
@@ -20,9 +22,9 @@ function findExactDirectoryMatches(
     return [];
   }
   return matches.filter((match) => {
-    const id = match.id.trim().toLowerCase();
-    const name = match.name?.trim().toLowerCase();
-    const handle = match.handle?.trim().toLowerCase();
+    const id = normalizeOptionalLowercaseString(match.id);
+    const name = normalizeOptionalLowercaseString(match.name);
+    const handle = normalizeOptionalLowercaseString(match.handle);
     return normalized === id || normalized === name || normalized === handle;
   });
 }

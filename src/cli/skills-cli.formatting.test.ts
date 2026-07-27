@@ -1,10 +1,11 @@
+// Skills CLI formatting tests cover skill listing and display formatting.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
-import type { SkillEntry } from "../agents/skills.js";
-import { createCanonicalFixtureSkill } from "../agents/skills.test-helpers.js";
+import { buildWorkspaceSkillStatus } from "../skills/discovery/status.js";
+import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
+import type { SkillEntry } from "../skills/types.js";
 import { captureEnv } from "../test-utils/env.js";
 import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
 
@@ -55,7 +56,7 @@ describe("skills-cli (e2e)", () => {
       entries,
     });
 
-    expect(report.skills.length).toBeGreaterThan(0);
+    expect(report.skills).toHaveLength(1);
 
     const listOutput = formatSkillsList(report, {});
     expect(listOutput).toContain("Skills");
@@ -65,7 +66,33 @@ describe("skills-cli (e2e)", () => {
 
     const jsonOutput = formatSkillsList(report, { json: true });
     const parsed = JSON.parse(jsonOutput);
-    expect(parsed.skills).toBeInstanceOf(Array);
+    expect(parsed).toEqual({
+      workspaceDir: tempWorkspaceDir,
+      managedSkillsDir: "/nonexistent",
+      skills: [
+        {
+          name: "peekaboo",
+          description: "Capture UI screenshots",
+          emoji: "📸",
+          eligible: true,
+          disabled: false,
+          blockedByAllowlist: false,
+          blockedByAgentFilter: false,
+          modelVisible: true,
+          userInvocable: true,
+          commandVisible: true,
+          source: "openclaw-bundled",
+          bundled: true,
+          missing: {
+            bins: [],
+            anyBins: [],
+            env: [],
+            config: [],
+            os: [],
+          },
+        },
+      ],
+    });
   });
 
   it("formats info for a real bundled skill (peekaboo)", () => {

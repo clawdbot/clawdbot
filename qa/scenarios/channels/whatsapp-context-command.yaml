@@ -1,0 +1,45 @@
+title: WhatsApp context command reply
+
+scenario:
+  id: whatsapp-context-command
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
+  coverage:
+    primary:
+      - channels.channel-native-commands
+  objective: Verify WhatsApp returns the current context breakdown.
+  successCriteria:
+    - The context list command succeeds in a WhatsApp DM.
+    - The reply includes workspace and tool-schema context sections.
+  codeRefs:
+    - src/auto-reply/reply/commands-context.ts
+    - extensions/qa-lab/src/live-transports/whatsapp/adapter.runtime.ts
+  execution:
+    profiles: { "whatsapp:mock-default": 36 }
+    kind: flow
+    channel: whatsapp
+    config:
+      requiredProviderMode: mock-openai
+      expectedAny: [Context breakdown, "Workspace:", Tool schemas]
+    summary: Run WhatsApp context list and verify the context breakdown.
+
+flow:
+  steps:
+    - name: context list returns breakdown
+      actions:
+        - resetTransport: true
+        - sendInbound:
+            conversation: { id: whatsapp-command-dm, kind: direct }
+            senderId: qa-command-operator
+            senderName: QA Command Operator
+            text: /context list
+        - waitForOutbound:
+            conversation: { id: whatsapp-command-dm, kind: direct }
+            textIncludes: Context breakdown
+            timeoutMs: 60000
+          saveAs: reply
+        - assert:
+            expr: "config.expectedAny.every((needle) => reply.text.includes(needle))"
+            message:
+              expr: "`context reply missing expected text: ${reply.text}`"
+      detailsExpr: reply.text

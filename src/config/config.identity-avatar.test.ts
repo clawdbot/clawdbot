@@ -1,7 +1,8 @@
+// Covers identity avatar config normalization and file-path handling.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { validateConfigObject } from "./config.js";
 import { withTempHome } from "./test-helpers.js";
+import { validateConfigObject } from "./validation.js";
 
 describe("identity avatar validation", () => {
   it("accepts workspace-relative avatar paths", async () => {
@@ -9,7 +10,9 @@ describe("identity avatar validation", () => {
       const workspace = path.join(home, "openclaw");
       const res = validateConfigObject({
         agents: {
-          list: [{ id: "main", workspace, identity: { avatar: "avatars/openclaw.png" } }],
+          entries: {
+            main: { default: true, workspace, identity: { avatar: "avatars/openclaw.png" } },
+          },
         },
       });
       expect(res.ok).toBe(true);
@@ -21,14 +24,26 @@ describe("identity avatar validation", () => {
       const workspace = path.join(home, "openclaw");
       const httpRes = validateConfigObject({
         agents: {
-          list: [{ id: "main", workspace, identity: { avatar: "https://example.com/avatar.png" } }],
+          entries: {
+            main: {
+              default: true,
+              workspace,
+              identity: { avatar: "https://example.com/avatar.png" },
+            },
+          },
         },
       });
       expect(httpRes.ok).toBe(true);
 
       const dataRes = validateConfigObject({
         agents: {
-          list: [{ id: "main", workspace, identity: { avatar: "data:image/png;base64,AAA" } }],
+          entries: {
+            main: {
+              default: true,
+              workspace,
+              identity: { avatar: "data:image/png;base64,AAA" },
+            },
+          },
         },
       });
       expect(dataRes.ok).toBe(true);
@@ -40,12 +55,21 @@ describe("identity avatar validation", () => {
       const workspace = path.join(home, "openclaw");
       const res = validateConfigObject({
         agents: {
-          list: [{ id: "main", workspace, identity: { avatar: "../oops.png" } }],
+          entries: {
+            main: { default: true, workspace, identity: { avatar: "../oops.png" } },
+          },
         },
       });
       expect(res.ok).toBe(false);
       if (!res.ok) {
-        expect(res.issues[0]?.path).toBe("agents.list.0.identity.avatar");
+        expect(res.issues[0]?.path).toBe("agents.entries.main.identity.avatar");
+        expect(res.issues[0]?.pathSegments).toEqual([
+          "agents",
+          "entries",
+          "main",
+          "identity",
+          "avatar",
+        ]);
       }
     });
   });

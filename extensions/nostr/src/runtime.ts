@@ -1,6 +1,10 @@
+// Nostr plugin module implements runtime behavior.
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
-import type { PluginRuntime } from "../api.js";
 
 const { setRuntime: setNostrRuntime, getRuntime: getNostrRuntime } =
-  createPluginRuntimeStore<PluginRuntime>("Nostr runtime not initialized");
+  createPluginRuntimeStore<PluginRuntime>({
+    pluginId: "nostr",
+    errorMessage: "Nostr runtime not initialized",
+  });
 export { getNostrRuntime, setNostrRuntime };

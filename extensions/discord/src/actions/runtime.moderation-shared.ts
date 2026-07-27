@@ -1,5 +1,6 @@
+// Discord plugin module implements runtime.moderation shared behavior.
 import { PermissionFlagsBits } from "discord-api-types/v10";
-import { readNumberParam, readStringParam } from "../runtime-api.js";
+import { readNonNegativeIntegerParam, readStringParam } from "../runtime-api.js";
 
 export type DiscordModerationAction = "timeout" | "kick" | "ban";
 
@@ -40,9 +41,12 @@ export function readDiscordModerationCommand(
     action,
     guildId: readStringParam(params, "guildId", { required: true }),
     userId: readStringParam(params, "userId", { required: true }),
-    durationMinutes: readNumberParam(params, "durationMinutes", { integer: true }),
+    durationMinutes: readNonNegativeIntegerParam(params, "durationMinutes"),
     until: readStringParam(params, "until"),
     reason: readStringParam(params, "reason"),
-    deleteMessageDays: readNumberParam(params, "deleteMessageDays", { integer: true }),
+    deleteMessageDays: readNonNegativeIntegerParam(params, "deleteMessageDays", {
+      max: 7,
+      message: "deleteMessageDays must be an integer from 0 to 7",
+    }),
   };
 }

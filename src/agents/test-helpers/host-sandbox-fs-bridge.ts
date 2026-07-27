@@ -1,13 +1,32 @@
+/**
+ * Host-backed sandbox filesystem bridge fixtures.
+ *
+ * Adapts a path resolver into the sandbox fs bridge contract for local tests.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveSandboxPath } from "../sandbox-paths.js";
 import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "../sandbox/fs-bridge.js";
 
+/** Creates a sandbox fs bridge from a caller-provided path resolver. */
 export function createSandboxFsBridgeFromResolver(
   resolvePath: (filePath: string, cwd?: string) => SandboxResolvedPath,
 ): SandboxFsBridge {
   return {
     resolvePath: ({ filePath, cwd }) => resolvePath(filePath, cwd),
+    copyFile: async ({ sourcePath, destinationPath, cwd, mkdir = true }) => {
+      const source = resolvePath(sourcePath, cwd);
+      const destination = resolvePath(destinationPath, cwd);
+      if (!source.hostPath || !destination.hostPath) {
+        throw new Error(
+          `Expected hostPath for copy: ${source.containerPath} -> ${destination.containerPath}`,
+        );
+      }
+      if (mkdir) {
+        await fs.mkdir(path.dirname(destination.hostPath), { recursive: true });
+      }
+      await fs.copyFile(source.hostPath, destination.hostPath);
+    },
     readFile: async ({ filePath, cwd }) => {
       const target = resolvePath(filePath, cwd);
       if (!target.hostPath) {
@@ -76,6 +95,7 @@ export function createSandboxFsBridgeFromResolver(
   };
 }
 
+/** Creates a sandbox fs bridge rooted at a real host directory. */
 export function createHostSandboxFsBridge(rootDir: string): SandboxFsBridge {
   const root = path.resolve(rootDir);
 

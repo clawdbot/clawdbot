@@ -1,14 +1,8 @@
-import { createDedupeCache } from "openclaw/plugin-sdk/core";
+// Whatsapp plugin module implements dedupe behavior.
+import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 
-const RECENT_WEB_MESSAGE_TTL_MS = 20 * 60_000;
-const RECENT_WEB_MESSAGE_MAX = 5000;
 const RECENT_OUTBOUND_MESSAGE_TTL_MS = 20 * 60_000;
 const RECENT_OUTBOUND_MESSAGE_MAX = 5000;
-
-const recentInboundMessages = createDedupeCache({
-  ttlMs: RECENT_WEB_MESSAGE_TTL_MS,
-  maxSize: RECENT_WEB_MESSAGE_MAX,
-});
 const recentOutboundMessages = createDedupeCache({
   ttlMs: RECENT_OUTBOUND_MESSAGE_TTL_MS,
   maxSize: RECENT_OUTBOUND_MESSAGE_MAX,
@@ -29,12 +23,7 @@ function buildMessageKey(params: {
 }
 
 export function resetWebInboundDedupe(): void {
-  recentInboundMessages.clear();
   recentOutboundMessages.clear();
-}
-
-export function isRecentInboundMessage(key: string): boolean {
-  return recentInboundMessages.check(key);
 }
 
 export function rememberRecentOutboundMessage(params: {

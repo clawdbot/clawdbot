@@ -1,3 +1,10 @@
+/**
+ * Browser agent action routes for download handling.
+ *
+ * Registers endpoints that wait for a pending download or trigger a referenced
+ * page download while keeping files scoped to the configured downloads root.
+ */
+import { formatErrorMessage } from "../../infra/errors.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
@@ -6,10 +13,12 @@ import {
   resolveTargetIdFromBody,
   withRouteTabContext,
 } from "./agent.shared.js";
+import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import { ensureOutputRootDir, resolveWritableOutputPathOrRespond } from "./output-paths.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./path-output.js";
+import { readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
-import { jsonError, toNumber, toStringOrEmpty } from "./utils.js";
+import { jsonError, toStringOrEmpty } from "./utils.js";
 
 function buildDownloadRequestBase(cdpUrl: string, targetId: string, timeoutMs: number | undefined) {
   return {
@@ -19,6 +28,7 @@ function buildDownloadRequestBase(cdpUrl: string, targetId: string, timeoutMs: n
   };
 }
 
+/** Register download action endpoints on the browser control server. */
 export function registerBrowserAgentActDownloadRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
@@ -27,20 +37,22 @@ export function registerBrowserAgentActDownloadRoutes(
     const body = readBody(req);
     const targetId = resolveTargetIdFromBody(body);
     const out = toStringOrEmpty(body.path) || "";
-    const timeoutMs = toNumber(body.timeoutMs);
+    let timeoutMs: number | undefined;
+    try {
+      timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
+    } catch (err) {
+      return jsonError(res, 400, formatErrorMessage(err));
+    }
 
     await withRouteTabContext({
       req,
       res,
       ctx,
       targetId,
+      enforceCurrentUrlAllowed: true,
       run: async ({ profileCtx, cdpUrl, tab }) => {
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-          return jsonError(
-            res,
-            501,
-            "download waiting is not supported for existing-session profiles yet.",
-          );
+          return jsonError(res, 501, EXISTING_SESSION_LIMITS.download.waitUnsupported);
         }
         const pw = await requirePwAi(res, "wait for download");
         if (!pw) {
@@ -64,6 +76,7 @@ export function registerBrowserAgentActDownloadRoutes(
         const result = await pw.waitForDownloadViaPlaywright({
           ...requestBase,
           path: downloadPath,
+          rootDir: DEFAULT_DOWNLOAD_DIR,
         });
         res.json({ ok: true, targetId: tab.targetId, download: result });
       },
@@ -75,7 +88,12 @@ export function registerBrowserAgentActDownloadRoutes(
     const targetId = resolveTargetIdFromBody(body);
     const ref = toStringOrEmpty(body.ref);
     const out = toStringOrEmpty(body.path);
-    const timeoutMs = toNumber(body.timeoutMs);
+    let timeoutMs: number | undefined;
+    try {
+      timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
+    } catch (err) {
+      return jsonError(res, 400, formatErrorMessage(err));
+    }
     if (!ref) {
       return jsonError(res, 400, "ref is required");
     }
@@ -88,13 +106,10 @@ export function registerBrowserAgentActDownloadRoutes(
       res,
       ctx,
       targetId,
+      enforceCurrentUrlAllowed: true,
       run: async ({ profileCtx, cdpUrl, tab }) => {
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-          return jsonError(
-            res,
-            501,
-            "downloads are not supported for existing-session profiles yet.",
-          );
+          return jsonError(res, 501, EXISTING_SESSION_LIMITS.download.downloadUnsupported);
         }
         const pw = await requirePwAi(res, "download");
         if (!pw) {
@@ -115,6 +130,7 @@ export function registerBrowserAgentActDownloadRoutes(
           ...requestBase,
           ref,
           path: downloadPath,
+          rootDir: DEFAULT_DOWNLOAD_DIR,
         });
         res.json({ ok: true, targetId: tab.targetId, download: result });
       },

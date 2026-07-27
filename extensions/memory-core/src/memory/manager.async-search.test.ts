@@ -1,118 +1,88 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MemoryIndexManager } from "./index.js";
-import { closeAllMemorySearchManagers } from "./index.js";
-import { createOpenAIEmbeddingProviderMock } from "./test-embeddings-mock.js";
-import { createMemoryManagerOrThrow } from "./test-manager.js";
-
-const embedBatch = vi.fn(async (_input: string[]): Promise<number[][]> => []);
-const embedQuery = vi.fn(async (_input: string): Promise<number[]> => [0.2, 0.2, 0.2]);
-
-vi.mock("./embeddings.js", () => ({
-  createEmbeddingProvider: async (_options: unknown) =>
-    createOpenAIEmbeddingProviderMock({
-      embedQuery: embedQuery as unknown as (input: string) => Promise<number[]>,
-      embedBatch: embedBatch as unknown as (input: string[]) => Promise<number[][]>,
-    }),
-}));
+// Memory Core tests cover manager.async search plugin behavior.
+import { describe, expect, it, vi } from "vitest";
+import { awaitPendingManagerWork, startAsyncSearchSync } from "./manager-async-state.js";
+import { MemoryIndexManager } from "./manager.js";
 
 describe("memory search async sync", () => {
-  let workspaceDir: string;
-  let indexPath: string;
-  let manager: MemoryIndexManager | null = null;
+  it("returns before provider or index bootstrap for a blank query", async () => {
+    const manager = Object.create(MemoryIndexManager.prototype) as MemoryIndexManager;
+    const ensureProviderInitialized = vi.fn(async () => {});
+    const assertRequiredProviderAvailable = vi.fn();
+    const hasIndexedContent = vi.fn(() => false);
+    const sync = vi.fn(async () => {});
+    Object.assign(manager as unknown as Record<string, unknown>, {
+      providerRequirement: { mode: "required" },
+      ensureProviderInitialized,
+      assertRequiredProviderAvailable,
+      hasIndexedContent,
+      sync,
+    });
 
-  const buildConfig = (): OpenClawConfig =>
-    ({
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "text-embedding-3-small",
-            store: { path: indexPath },
-            sync: { watch: false, onSessionStart: false, onSearch: true },
-            query: { minScore: 0 },
-            remote: { batch: { enabled: false, wait: false } },
-          },
-        },
-        list: [{ id: "main", default: true }],
-      },
-    }) as OpenClawConfig;
-
-  beforeEach(async () => {
-    await closeAllMemorySearchManagers();
-    embedBatch.mockClear();
-    embedBatch.mockImplementation(async (input: string[]) => input.map(() => [0.2, 0.2, 0.2]));
-    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-async-"));
-    indexPath = path.join(workspaceDir, "index.sqlite");
-    await fs.mkdir(path.join(workspaceDir, "memory"));
-    await fs.writeFile(path.join(workspaceDir, "memory", "2026-01-07.md"), "hello\n");
+    await expect(manager.search(" \n\t ")).resolves.toStrictEqual([]);
+    expect(ensureProviderInitialized).not.toHaveBeenCalled();
+    expect(assertRequiredProviderAvailable).not.toHaveBeenCalled();
+    expect(hasIndexedContent).not.toHaveBeenCalled();
+    expect(sync).not.toHaveBeenCalled();
   });
 
-  afterEach(async () => {
-    vi.unstubAllGlobals();
-    if (manager) {
-      await manager.close();
-      manager = null;
-    }
-    await closeAllMemorySearchManagers();
-    await fs.rm(workspaceDir, { recursive: true, force: true });
-  });
-
-  it("does not await sync when searching", async () => {
-    const cfg = buildConfig();
-    manager = await createMemoryManagerOrThrow(cfg);
-
-    let releaseSync = () => {};
-    const pending = new Promise<void>((resolve) => {
-      releaseSync = () => resolve();
-    }).finally(() => {
-      (manager as unknown as { syncing: Promise<void> | null }).syncing = null;
-    });
-    const syncMock = vi.fn(async () => {
-      (manager as unknown as { syncing: Promise<void> | null }).syncing = pending;
-      return pending;
-    });
-    (manager as unknown as { sync: () => Promise<void> }).sync = syncMock;
-
-    const activeManager = manager;
-    if (!activeManager) {
-      throw new Error("manager missing");
-    }
-    await activeManager.search("hello");
-    expect(syncMock).toHaveBeenCalledTimes(1);
-    releaseSync();
-    await vi.waitFor(() => {
-      expect((manager as unknown as { syncing: Promise<void> | null }).syncing).toBeNull();
-    });
-  }, 300_000);
-
-  it("waits for in-flight search sync during close", async () => {
-    const cfg = buildConfig();
-    manager = await createMemoryManagerOrThrow(cfg);
+  it("waits for dirty sync before querying", async () => {
     let releaseSync = () => {};
     const pendingSync = new Promise<void>((resolve) => {
       releaseSync = () => resolve();
-    }).finally(() => {
-      (manager as unknown as { syncing: Promise<void> | null }).syncing = null;
     });
     const syncMock = vi.fn(async () => {
-      (manager as unknown as { syncing: Promise<void> | null }).syncing = pendingSync;
       return pendingSync;
     });
-    (manager as unknown as { dirty: boolean }).dirty = true;
-    (manager as unknown as { sync: () => Promise<void> }).sync = syncMock;
+    const queryMock = vi.fn(async () => []);
+    const manager = Object.create(MemoryIndexManager.prototype) as MemoryIndexManager;
+    Object.assign(manager as unknown as Record<string, unknown>, {
+      providerRequirement: { mode: "fts-only", provider: "none" },
+      hasIndexedContent: () => true,
+      settings: {
+        sync: { onSearch: true },
+        query: {
+          minScore: 0,
+          maxResults: 5,
+          hybrid: {
+            enabled: true,
+            candidateMultiplier: 2,
+            temporalDecay: { enabled: false, halfLifeDays: 30 },
+          },
+        },
+      },
+      warmSession: vi.fn(),
+      ensureProviderInitialized: vi.fn(async () => {}),
+      assertRequiredProviderAvailable: vi.fn(),
+      dirty: true,
+      sessionsDirty: false,
+      syncAdmitted: syncMock,
+      provider: null,
+      providerLifecycle: { mode: "fts-only", reason: "test" },
+      refreshIndexIdentityDirty: () => ({ status: "valid" }),
+      sources: new Set(["memory"]),
+      fts: { enabled: true, available: true },
+      searchKeywordWithFallback: queryMock,
+      workspaceDir: "",
+    });
 
-    await manager.search("hello");
-    await vi.waitFor(() => {
-      expect((manager as unknown as { syncing: Promise<void> | null }).syncing).toBe(pendingSync);
+    const searchPromise = manager.search("current memory");
+    await vi.waitFor(() => expect(syncMock).toHaveBeenCalledWith({ reason: "search" }));
+    expect(queryMock).not.toHaveBeenCalled();
+
+    expect(syncMock).toHaveBeenCalledTimes(1);
+    releaseSync();
+    await searchPromise;
+    expect(queryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for in-flight search sync during close", async () => {
+    let releaseSync = () => {};
+    const pendingSync = new Promise<void>((resolve) => {
+      releaseSync = () => resolve();
     });
 
     let closed = false;
-    const closePromise = manager.close().then(() => {
+    const closePromise = awaitPendingManagerWork({ pendingSync }).then(() => {
       closed = true;
     });
 
@@ -121,6 +91,53 @@ describe("memory search async sync", () => {
 
     releaseSync();
     await closePromise;
-    manager = null;
+  });
+
+  it("reports pending sync failures during close", async () => {
+    const onError = vi.fn();
+    const syncError = new Error("sync failed");
+
+    await awaitPendingManagerWork({
+      pendingSync: Promise.reject(syncError),
+      onError,
+    });
+
+    expect(onError).toHaveBeenCalledWith(syncError);
+  });
+
+  it("reports pending provider initialization failures during close", async () => {
+    const onError = vi.fn();
+    const providerError = new Error("provider init failed");
+
+    await awaitPendingManagerWork({
+      pendingProviderInit: Promise.reject(providerError),
+      onError,
+    });
+
+    expect(onError).toHaveBeenCalledWith(providerError);
+  });
+
+  it("does not report errors for completed pending close work", async () => {
+    const onError = vi.fn();
+
+    await awaitPendingManagerWork({
+      pendingSync: Promise.resolve(),
+      pendingProviderInit: Promise.resolve(),
+      onError,
+    });
+
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("skips background search sync when search-triggered sync is disabled", async () => {
+    const syncMock = vi.fn(async () => {});
+    await startAsyncSearchSync({
+      enabled: false,
+      dirty: true,
+      sessionsDirty: false,
+      sync: syncMock,
+      onError: vi.fn(),
+    });
+    expect(syncMock).not.toHaveBeenCalled();
   });
 });

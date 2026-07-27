@@ -1,93 +1,31 @@
-import {
-  type ChannelOutboundAdapter,
-  createAttachedChannelResultAdapter,
-  createEmptyChannelResult,
-} from "openclaw/plugin-sdk/channel-send-result";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
-import {
-  resolveSendableOutboundReplyParts,
-  sendTextMediaPayload,
-} from "openclaw/plugin-sdk/reply-payload";
-import { chunkText } from "openclaw/plugin-sdk/reply-runtime";
+// Whatsapp plugin module implements outbound adapter behavior.
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { chunkText } from "openclaw/plugin-sdk/reply-chunking";
 import { shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolveWhatsAppOutboundTarget } from "./runtime-api.js";
-import { sendMessageWhatsApp, sendPollWhatsApp } from "./send.js";
+import { createWhatsAppOutboundBase } from "./outbound-base.js";
+import { normalizeWhatsAppPayloadText } from "./outbound-media-contract.js";
+import { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
 
-function trimLeadingWhitespace(text: string | undefined): string {
-  return text?.trimStart() ?? "";
+const loadWhatsAppSendModule = createLazyRuntimeModule(() => import("./send.js"));
+
+function normalizeOutboundText(text: string | undefined): string {
+  return normalizeWhatsAppPayloadText(text);
 }
 
-export const whatsappOutbound: ChannelOutboundAdapter = {
-  deliveryMode: "gateway",
+export const whatsappOutbound: ChannelOutboundAdapter = createWhatsAppOutboundBase({
   chunker: chunkText,
-  chunkerMode: "text",
-  textChunkLimit: 4000,
-  pollMaxOptions: 12,
+  sendMessageWhatsApp: async (to, text, options) =>
+    await (
+      await loadWhatsAppSendModule()
+    ).sendMessageWhatsApp(to, normalizeOutboundText(text), {
+      ...options,
+    }),
+  sendPollWhatsApp: async (to, poll, options) =>
+    await (await loadWhatsAppSendModule()).sendPollWhatsApp(to, poll, options),
+  shouldLogVerbose: () => shouldLogVerbose(),
   resolveTarget: ({ to, allowFrom, mode }) =>
     resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
-  sendPayload: async (ctx) => {
-    const text = trimLeadingWhitespace(ctx.payload.text);
-    const hasMedia = resolveSendableOutboundReplyParts(ctx.payload).hasMedia;
-    if (!text && !hasMedia) {
-      return createEmptyChannelResult("whatsapp");
-    }
-    return await sendTextMediaPayload({
-      channel: "whatsapp",
-      ctx: {
-        ...ctx,
-        payload: {
-          ...ctx.payload,
-          text,
-        },
-      },
-      adapter: whatsappOutbound,
-    });
-  },
-  ...createAttachedChannelResultAdapter({
-    channel: "whatsapp",
-    sendText: async ({ cfg, to, text, accountId, deps, gifPlayback }) => {
-      const normalizedText = trimLeadingWhitespace(text);
-      if (!normalizedText) {
-        return createEmptyChannelResult("whatsapp");
-      }
-      const send =
-        resolveOutboundSendDep<typeof import("./send.js").sendMessageWhatsApp>(deps, "whatsapp") ??
-        (await import("./send.js")).sendMessageWhatsApp;
-      return await send(to, normalizedText, {
-        verbose: false,
-        cfg,
-        accountId: accountId ?? undefined,
-        gifPlayback,
-      });
-    },
-    sendMedia: async ({
-      cfg,
-      to,
-      text,
-      mediaUrl,
-      mediaLocalRoots,
-      accountId,
-      deps,
-      gifPlayback,
-    }) => {
-      const normalizedText = trimLeadingWhitespace(text);
-      const send =
-        resolveOutboundSendDep<typeof import("./send.js").sendMessageWhatsApp>(deps, "whatsapp") ??
-        (await import("./send.js")).sendMessageWhatsApp;
-      return await send(to, normalizedText, {
-        verbose: false,
-        cfg,
-        mediaUrl,
-        mediaLocalRoots,
-        accountId: accountId ?? undefined,
-        gifPlayback,
-      });
-    },
-    sendPoll: async ({ cfg, to, poll, accountId }) =>
-      await sendPollWhatsApp(to, poll, {
-        verbose: shouldLogVerbose(),
-        accountId: accountId ?? undefined,
-        cfg,
-      }),
-  }),
-};
+  normalizeText: normalizeOutboundText,
+  skipEmptyText: true,
+});

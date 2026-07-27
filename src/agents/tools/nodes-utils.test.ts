@@ -1,3 +1,5 @@
+// Node utility tests cover node selection defaults and gateway fallback between
+// current and legacy node list methods.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const gatewayMocks = vi.hoisted(() => ({
@@ -8,9 +10,7 @@ vi.mock("./gateway.js", () => ({
 }));
 
 import type { NodeListNode } from "./nodes-utils.js";
-
-let listNodes: typeof import("./nodes-utils.js").listNodes;
-let resolveNodeIdFromList: typeof import("./nodes-utils.js").resolveNodeIdFromList;
+import { listNodes, resolveNodeIdFromList } from "./nodes-utils.js";
 
 function node({ nodeId, ...overrides }: Partial<NodeListNode> & { nodeId: string }): NodeListNode {
   return {
@@ -21,13 +21,20 @@ function node({ nodeId, ...overrides }: Partial<NodeListNode> & { nodeId: string
   };
 }
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeEach(() => {
   gatewayMocks.callGatewayTool.mockReset();
-  ({ listNodes, resolveNodeIdFromList } = await import("./nodes-utils.js"));
 });
 
 describe("resolveNodeIdFromList defaults", () => {
+  it("keeps compact display-name matching opt-in", () => {
+    const nodes = [node({ nodeId: "mac-1", displayName: "Mac Studio" })];
+
+    expect(() => resolveNodeIdFromList(nodes, "MacStudio")).toThrow(/unknown node: MacStudio/);
+    expect(
+      resolveNodeIdFromList(nodes, "MacStudio", false, { allowCompactDisplayName: true }),
+    ).toBe("mac-1");
+  });
+
   it("falls back to most recently connected node when multiple non-Mac candidates exist", () => {
     const nodes: NodeListNode[] = [
       node({ nodeId: "ios-1", platform: "ios", connectedAtMs: 1 }),
@@ -47,6 +54,8 @@ describe("resolveNodeIdFromList defaults", () => {
   });
 
   it("uses stable nodeId ordering when connectedAtMs is unavailable", () => {
+    // Deterministic tie-breaking keeps repeated tool calls from bouncing
+    // between connected nodes.
     const nodes: NodeListNode[] = [
       node({ nodeId: "z-node", platform: "ios", connectedAtMs: undefined }),
       node({ nodeId: "a-node", platform: "android", connectedAtMs: undefined }),
@@ -58,6 +67,8 @@ describe("resolveNodeIdFromList defaults", () => {
 
 describe("listNodes", () => {
   it("falls back to node.pair.list only when node.list is unavailable", async () => {
+    // Old gateways only expose node.pair.list; newer authorization failures
+    // must still surface instead of being hidden by fallback.
     gatewayMocks.callGatewayTool
       .mockRejectedValueOnce(new Error("unknown method: node.list"))
       .mockResolvedValueOnce({
@@ -65,7 +76,8 @@ describe("listNodes", () => {
         paired: [{ nodeId: "pair-1", displayName: "Pair 1", platform: "ios", remoteIp: "1.2.3.4" }],
       });
 
-    await expect(listNodes({})).resolves.toEqual([
+    const signal = new AbortController().signal;
+    await expect(listNodes({}, signal)).resolves.toEqual([
       {
         nodeId: "pair-1",
         displayName: "Pair 1",
@@ -73,8 +85,22 @@ describe("listNodes", () => {
         remoteIp: "1.2.3.4",
       },
     ]);
-    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(1, "node.list", {}, {});
-    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(2, "node.pair.list", {}, {});
+    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
+      1,
+      "node.list",
+      {},
+      {},
+      { signal },
+    );
+    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
+      2,
+      "node.pair.list",
+      {},
+      {},
+      {
+        signal,
+      },
+    );
   });
 
   it("rethrows unexpected node.list failures without fallback", async () => {
@@ -82,8 +108,9 @@ describe("listNodes", () => {
       new Error("gateway closed (1008): unauthorized"),
     );
 
-    await expect(listNodes({})).rejects.toThrow("gateway closed (1008): unauthorized");
+    const signal = new AbortController().signal;
+    await expect(listNodes({}, signal)).rejects.toThrow("gateway closed (1008): unauthorized");
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(1);
-    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith("node.list", {}, {});
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith("node.list", {}, {}, { signal });
   });
 });

@@ -1,10 +1,15 @@
+/**
+ * Docker sandbox backend implementation.
+ *
+ * Creates/reuses Docker containers and exposes backend-neutral exec and shell-command handles.
+ */
 import { buildDockerExecArgs } from "../bash-tools.shared.js";
+import type { SandboxBackendCommandParams } from "./backend-handle.types.js";
 import type {
   CreateSandboxBackendParams,
-  SandboxBackendManager,
-  SandboxBackendCommandParams,
   SandboxBackendHandle,
-} from "./backend.js";
+  SandboxBackendManager,
+} from "./backend.types.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import {
   dockerContainerState,
@@ -13,6 +18,20 @@ import {
   execDockerRaw,
 } from "./docker.js";
 
+function resolveConfiguredDockerRuntimeImage(params: {
+  config: CreateSandboxBackendParams["cfg"] | import("../../config/config.js").OpenClawConfig;
+  agentId?: string;
+  configLabelKind?: string;
+}): string {
+  const sandboxCfg = resolveSandboxConfigForAgent(params.config, params.agentId);
+  switch (params.configLabelKind) {
+    case "BrowserImage":
+      return sandboxCfg.browser.image;
+    default:
+      return sandboxCfg.docker.image;
+  }
+}
+
 export async function createDockerSandboxBackend(
   params: CreateSandboxBackendParams,
 ): Promise<SandboxBackendHandle> {
@@ -20,7 +39,11 @@ export async function createDockerSandboxBackend(
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
     agentWorkspaceDir: params.agentWorkspaceDir,
+    skillsWorkspaceDir: params.skillsWorkspaceDir,
     cfg: params.cfg,
+    ...(params.requireCurrentConfig !== undefined
+      ? { requireCurrentConfig: params.requireCurrentConfig }
+      : {}),
   });
   return createDockerSandboxBackendHandle({
     containerName,
@@ -30,7 +53,7 @@ export async function createDockerSandboxBackend(
   });
 }
 
-export function createDockerSandboxBackendHandle(params: {
+function createDockerSandboxBackendHandle(params: {
   containerName: string;
   workdir: string;
   env?: Record<string, string>;
@@ -84,7 +107,7 @@ export function runDockerSandboxShellCommand(
     "sh",
     "-c",
     params.script,
-    "moltbot-sandbox-fs",
+    "openclaw-sandbox-fs",
   ];
   if (params.args?.length) {
     dockerArgs.push(...params.args);
@@ -113,7 +136,11 @@ export const dockerSandboxBackendManager: SandboxBackendManager = {
         // ignore inspect failures
       }
     }
-    const configuredImage = resolveSandboxConfigForAgent(config, agentId).docker.image;
+    const configuredImage = resolveConfiguredDockerRuntimeImage({
+      config,
+      agentId,
+      configLabelKind: entry.configLabelKind,
+    });
     return {
       running: state.running,
       actualConfigLabel,
@@ -121,10 +148,13 @@ export const dockerSandboxBackendManager: SandboxBackendManager = {
     };
   },
   async removeRuntime({ entry }) {
-    try {
-      await execDocker(["rm", "-f", entry.containerName], { allowFailure: true });
-    } catch {
-      // ignore removal failures
+    const result = await execDocker(["rm", "-f", entry.containerName], { allowFailure: true });
+    if (result.code !== 0) {
+      const detail = result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`;
+      if (/No such (container|object)/iu.test(detail)) {
+        return;
+      }
+      throw new Error(`Failed to remove Docker sandbox runtime ${entry.containerName}: ${detail}`);
     }
   },
 };

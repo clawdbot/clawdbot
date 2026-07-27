@@ -1,18 +1,19 @@
+// Mattermost plugin module implements session route behavior.
 import {
   buildChannelOutboundSessionRoute,
-  resolveThreadSessionKeys,
+  buildThreadAwareOutboundSessionRoute,
   stripChannelTargetPrefix,
   stripTargetKindPrefix,
   type ChannelOutboundSessionRouteParams,
 } from "openclaw/plugin-sdk/core";
-import { normalizeOutboundThreadId } from "openclaw/plugin-sdk/routing";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export function resolveMattermostOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
   let trimmed = stripChannelTargetPrefix(params.target, "mattermost");
   if (!trimmed) {
     return null;
   }
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   const resolvedKind = params.resolvedTarget?.kind;
   const isUser =
     resolvedKind === "user" ||
@@ -26,11 +27,16 @@ export function resolveMattermostOutboundSessionRoute(params: ChannelOutboundSes
   if (!rawId) {
     return null;
   }
+  const hasExplicitUserKind = resolvedKind === "user" || lower.startsWith("user:");
+  // User ids map to inbound DM sender ids. Channel ids do not encode whether
+  // the conversation is public, private, or a group DM, so they stay inexact.
+  const recipientSessionExact = isUser && hasExplicitUserKind && /^[a-z0-9]{26}$/.test(rawId);
   const baseRoute = buildChannelOutboundSessionRoute({
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "mattermost",
     accountId: params.accountId,
+    recipientSessionExact,
     peer: {
       kind: isUser ? "direct" : "channel",
       id: rawId,
@@ -39,14 +45,12 @@ export function resolveMattermostOutboundSessionRoute(params: ChannelOutboundSes
     from: isUser ? `mattermost:${rawId}` : `mattermost:channel:${rawId}`,
     to: isUser ? `user:${rawId}` : `channel:${rawId}`,
   });
-  const threadId = normalizeOutboundThreadId(params.replyToId ?? params.threadId);
-  const threadKeys = resolveThreadSessionKeys({
-    baseSessionKey: baseRoute.baseSessionKey,
-    threadId,
+  return buildThreadAwareOutboundSessionRoute({
+    route: baseRoute,
+    replyToId: params.replyToId,
+    threadId: params.threadId,
+    currentSessionKey: params.currentSessionKey,
+    canRecoverCurrentThread: ({ route }) =>
+      route.chatType !== "direct" || (params.cfg.session?.dmScope ?? "main") !== "main",
   });
-  return {
-    ...baseRoute,
-    sessionKey: threadKeys.sessionKey,
-    ...(threadId !== undefined ? { threadId } : {}),
-  };
 }

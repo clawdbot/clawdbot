@@ -1,16 +1,24 @@
+// System CLI commands that call Gateway RPC methods for events, heartbeats, and presence.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { theme } from "../terminal/theme.js";
+import { formatCliCommand } from "./command-format.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 
-type SystemEventOpts = GatewayRpcOpts & { text?: string; mode?: string; json?: boolean };
+type SystemEventOpts = GatewayRpcOpts & {
+  text?: string;
+  mode?: string;
+  sessionKey?: string;
+  json?: boolean;
+};
 type SystemGatewayOpts = GatewayRpcOpts & { json?: boolean };
 
 const normalizeWakeMode = (raw: unknown) => {
-  const mode = typeof raw === "string" ? raw.trim() : "";
+  const mode = normalizeOptionalString(raw) ?? "";
   if (!mode) {
     return "next-heartbeat" as const;
   }
@@ -38,6 +46,7 @@ async function runSystemGatewayCommand(
   }
 }
 
+/** Register Gateway-backed system event, heartbeat, and presence commands. */
 export function registerSystemCli(program: Command) {
   const system = program
     .command("system")
@@ -54,17 +63,29 @@ export function registerSystemCli(program: Command) {
       .description("Enqueue a system event and optionally trigger a heartbeat")
       .requiredOption("--text <text>", "System event text")
       .option("--mode <mode>", "Wake mode (now|next-heartbeat)", "next-heartbeat")
+      .option(
+        "--session-key <sessionKey>",
+        "Target a specific session for the event (defaults to the agent's main session)",
+      )
       .option("--json", "Output JSON", false),
   ).action(async (opts: SystemEventOpts) => {
     await runSystemGatewayCommand(
       opts,
       async () => {
-        const text = typeof opts.text === "string" ? opts.text.trim() : "";
+        const text = normalizeOptionalString(opts.text) ?? "";
         if (!text) {
-          throw new Error("--text is required");
+          throw new Error(
+            `--text is required. Example: ${formatCliCommand('openclaw system event --text "deploy finished"')}.`,
+          );
         }
         const mode = normalizeWakeMode(opts.mode);
-        return await callGatewayFromCli("wake", opts, { mode, text }, { expectFinal: false });
+        const sessionKey = normalizeOptionalString(opts.sessionKey);
+        return await callGatewayFromCli(
+          "wake",
+          opts,
+          sessionKey ? { mode, text, sessionKey } : { mode, text },
+          { expectFinal: false },
+        );
       },
       "ok",
     );

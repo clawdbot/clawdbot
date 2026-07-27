@@ -1,14 +1,52 @@
+// Defines agent-related Zod schema fragments for config parsing.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
 import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
-import { TranscribeAudioSchema } from "./zod-schema.core.js";
+
+const AgentEntryConfigSchema = z.preprocess(
+  (value, ctx) => {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      for (const key of Object.getOwnPropertyNames(value)) {
+        if (!isBlockedObjectKey(key)) {
+          continue;
+        }
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [key],
+          message: "agent entries must not contain blocked object keys",
+        });
+        return z.NEVER;
+      }
+    }
+    return value;
+  },
+  AgentEntrySchema.omit({ id: true }),
+);
 
 export const AgentsSchema = z
   .object({
     defaults: z.lazy(() => AgentDefaultsSchema).optional(),
-    list: z.array(AgentEntrySchema).optional(),
+    entries: z
+      .record(
+        z.string().regex(/^[a-z0-9_][a-z0-9_-]{0,63}$/i, "Invalid agent id"),
+        AgentEntryConfigSchema,
+      )
+      .optional(),
   })
   .strict()
+  .superRefine((value, ctx) => {
+    const agents = Object.values(value.entries ?? {});
+    const defaultCount = agents.filter((agent) => agent.default === true).length;
+    if (defaultCount !== 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["entries"],
+        message: `agents.entries must contain exactly one default=true entry (found ${defaultCount})`,
+      });
+    }
+  })
   .optional();
 
 const BindingMatchSchema = z
@@ -17,13 +55,7 @@ const BindingMatchSchema = z
     accountId: z.string().optional(),
     peer: z
       .object({
-        kind: z.union([
-          z.literal("direct"),
-          z.literal("group"),
-          z.literal("channel"),
-          /** @deprecated Use `direct` instead. Kept for backward compatibility. */
-          z.literal("dm"),
-        ]),
+        kind: z.union([z.literal("direct"), z.literal("group"), z.literal("channel")]),
         id: z.string(),
       })
       .strict()
@@ -34,12 +66,26 @@ const BindingMatchSchema = z
   })
   .strict();
 
+const BindingSessionSchema = z
+  .object({
+    dmScope: z
+      .union([
+        z.literal("main"),
+        z.literal("per-peer"),
+        z.literal("per-channel-peer"),
+        z.literal("per-account-channel-peer"),
+      ])
+      .optional(),
+  })
+  .strict();
+
 const RouteBindingSchema = z
   .object({
     type: z.literal("route").optional(),
     agentId: z.string(),
     comment: z.string().optional(),
     match: BindingMatchSchema,
+    session: BindingSessionSchema.optional(),
   })
   .strict();
 
@@ -61,67 +107,23 @@ const AcpBindingSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
-    const peerId = value.match.peer?.id?.trim() ?? "";
+    const peerId = normalizeOptionalString(value.match.peer?.id) ?? "";
     if (!peerId) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["match", "peer"],
         message: "ACP bindings require match.peer.id to target a concrete conversation.",
       });
-      return;
-    }
-    const channel = value.match.channel.trim().toLowerCase();
-    if (channel !== "discord" && channel !== "telegram" && channel !== "feishu") {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["match", "channel"],
-        message:
-          'ACP bindings currently support only "discord", "telegram", and "feishu" channels.',
-      });
-      return;
-    }
-    if (channel === "telegram" && !/^-\d+:topic:\d+$/.test(peerId)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["match", "peer", "id"],
-        message:
-          "Telegram ACP bindings require canonical topic IDs in the form -1001234567890:topic:42.",
-      });
-    }
-    if (channel === "feishu") {
-      const peerKind = value.match.peer?.kind;
-      const isDirectId =
-        (peerKind === "direct" || peerKind === "dm") &&
-        /^[^:]+$/.test(peerId) &&
-        !peerId.startsWith("oc_") &&
-        !peerId.startsWith("on_");
-      const isTopicId =
-        peerKind === "group" && /^oc_[^:]+:topic:[^:]+(?::sender:ou_[^:]+)?$/.test(peerId);
-      if (!isDirectId && !isTopicId) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["match", "peer", "id"],
-          message:
-            "Feishu ACP bindings require direct peer IDs for DMs or topic IDs in the form oc_group:topic:om_root[:sender:ou_xxx].",
-        });
-      }
     }
   });
 
 export const BindingsSchema = z.array(z.union([RouteBindingSchema, AcpBindingSchema])).optional();
 
-export const BroadcastStrategySchema = z.enum(["parallel", "sequential"]);
+const BroadcastStrategySchema = z.enum(["parallel", "sequential"]);
 
 export const BroadcastSchema = z
   .object({
     strategy: BroadcastStrategySchema.optional(),
   })
   .catchall(z.array(z.string()))
-  .optional();
-
-export const AudioSchema = z
-  .object({
-    transcription: TranscribeAudioSchema,
-  })
-  .strict()
   .optional();

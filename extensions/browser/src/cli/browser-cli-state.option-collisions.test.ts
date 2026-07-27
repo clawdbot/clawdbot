@@ -1,3 +1,4 @@
+// Browser tests cover browser cli state.option collisions plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as parentCoreApiModule from "../core-api.js";
 import * as browserCliResizeModule from "./browser-cli-resize.js";
@@ -38,6 +39,9 @@ vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(browserCliR
 const { registerBrowserStateCommands } = await import("./browser-cli-state.js");
 
 describe("browser state option collisions", () => {
+  const ansiPattern = new RegExp(String.raw`\u001b\[[0-9;]*m`, "g");
+  const stripAnsi = (value: string) => value.replace(ansiPattern, "");
+
   const createStateProgram = ({ withGatewayUrl = false } = {}) => {
     const { program, browser, parentOpts } = createBrowserProgramShared({ withGatewayUrl });
     registerBrowserStateCommands(browser, parentOpts);
@@ -46,7 +50,6 @@ describe("browser state option collisions", () => {
 
   const getLastRequest = () => {
     const call = mocks.callBrowserRequest.mock.calls.at(-1);
-    expect(call).toBeDefined();
     if (!call) {
       throw new Error("expected browser request call");
     }
@@ -61,6 +64,13 @@ describe("browser state option collisions", () => {
   const runBrowserCommandAndGetRequest = async (argv: string[]) => {
     await runBrowserCommand(argv);
     return getLastRequest();
+  };
+
+  const expectErrorMessage = (expected: string) => {
+    const calls = getBrowserCliRuntime().error.mock.calls;
+    const lastCall = calls.at(-1);
+    expect(lastCall).toHaveLength(1);
+    expect(stripAnsi(String(lastCall?.[0]))).toBe(expected);
   };
 
   beforeEach(() => {
@@ -101,9 +111,7 @@ describe("browser state option collisions", () => {
       ],
       { from: "user" },
     );
-    const call = mocks.callBrowserRequest.mock.calls.at(-1);
-    expect(call).toBeDefined();
-    const request = call![1] as { body?: { cookie?: { url?: string } } };
+    const request = getLastRequest() as { body?: { cookie?: { url?: string } } };
     expect(request.body?.cookie?.url).toBe("https://example.com");
   });
 
@@ -113,9 +121,7 @@ describe("browser state option collisions", () => {
       ["browser", "--url", "https://inherited.example.com", "cookies", "set", "session", "abc"],
       { from: "user" },
     );
-    const call = mocks.callBrowserRequest.mock.calls.at(-1);
-    expect(call).toBeDefined();
-    const request = call![1] as { body?: { cookie?: { url?: string } } };
+    const request = getLastRequest() as { body?: { cookie?: { url?: string } } };
     expect(request.body?.cookie?.url).toBe("https://inherited.example.com");
   });
 
@@ -147,9 +153,23 @@ describe("browser state option collisions", () => {
     await runBrowserCommand(["set", "offline", "maybe"]);
 
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-    expect(getBrowserCliRuntime().error).toHaveBeenCalledWith(
-      expect.stringContaining("Expected on|off"),
-    );
+    expectErrorMessage("Expected on|off");
+    expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
+  });
+
+  it("rejects non-decimal viewport dimensions before resize dispatch", async () => {
+    await runBrowserCommand(["set", "viewport", "1e3", "768"]);
+
+    expect(mocks.runBrowserResizeWithOutput).not.toHaveBeenCalled();
+    expectErrorMessage("Invalid width: must be a positive integer");
+    expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
+  });
+
+  it("rejects excessive viewport dimensions before resize dispatch", async () => {
+    await runBrowserCommand(["set", "viewport", "8193", "768"]);
+
+    expect(mocks.runBrowserResizeWithOutput).not.toHaveBeenCalled();
+    expectErrorMessage("Invalid width: maximum is 8192");
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });
 
@@ -157,18 +177,47 @@ describe("browser state option collisions", () => {
     await runBrowserCommand(["set", "media", "sepia"]);
 
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-    expect(getBrowserCliRuntime().error).toHaveBeenCalledWith(
-      expect.stringContaining("Expected dark|light|none"),
-    );
+    expectErrorMessage("Expected dark|light|no-preference|none");
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
+  });
+
+  it("passes no-preference through to /set/media", async () => {
+    const request = await runBrowserCommandAndGetRequest(["set", "media", "no-preference"]);
+
+    expect(request.body).toMatchObject({ colorScheme: "no-preference" });
+  });
+
+  it("rejects invalid geolocation numbers before dispatch", async () => {
+    await runBrowserCommand(["set", "geo", "48.208", "16.373", "--accuracy", "fast"]);
+
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+    expectErrorMessage("Invalid --accuracy: must be a finite number");
+    expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
+  });
+
+  it("passes valid decimal geolocation numbers", async () => {
+    const request = await runBrowserCommandAndGetRequest([
+      "set",
+      "geo",
+      "48.2082",
+      "16.3738",
+      "--accuracy",
+      "12.5",
+    ]);
+
+    expect(request.body).toMatchObject({
+      latitude: 48.2082,
+      longitude: 16.3738,
+      accuracy: 12.5,
+    });
   });
 
   it("errors when headers JSON is missing", async () => {
     await runBrowserCommand(["set", "headers"]);
 
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-    expect(getBrowserCliRuntime().error).toHaveBeenCalledWith(
-      expect.stringContaining("Missing headers JSON"),
+    expectErrorMessage(
+      "Error: Missing headers JSON (pass --headers-json or positional JSON argument)",
     );
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });
@@ -177,9 +226,7 @@ describe("browser state option collisions", () => {
     await runBrowserCommand(["set", "headers", "--json", "[]"]);
 
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-    expect(getBrowserCliRuntime().error).toHaveBeenCalledWith(
-      expect.stringContaining("Headers JSON must be a JSON object"),
-    );
+    expectErrorMessage("Error: Headers JSON must be a JSON object");
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });
 });

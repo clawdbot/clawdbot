@@ -1,32 +1,75 @@
-import { Type } from "@sinclair/typebox";
+// Whatsapp plugin module implements agent tools login behavior.
+import {
+  optionalPositiveIntegerSchema,
+  readPositiveIntegerParam,
+} from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelAgentTool } from "openclaw/plugin-sdk/channel-contract";
+import { Type } from "typebox";
 import { startWebLoginWithQr, waitForWebLogin } from "../login-qr-api.js";
+
+const QR_DATA_URL_MAX_LENGTH = 16_384;
+
+function readOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
 
 export function createWhatsAppLoginTool(): ChannelAgentTool {
   return {
     label: "WhatsApp Login",
     name: "whatsapp_login",
-    ownerOnly: true,
     description: "Generate a WhatsApp QR code for linking, or wait for the scan to complete.",
-    // NOTE: Using Type.Unsafe for action enum instead of Type.Union([Type.Literal(...)]
-    // because Claude API on Vertex AI rejects nested anyOf schemas as invalid JSON Schema.
     parameters: Type.Object({
-      action: Type.Unsafe<"start" | "wait">({
-        type: "string",
-        enum: ["start", "wait"],
-      }),
-      timeoutMs: Type.Optional(Type.Number()),
+      action: Type.Enum(["start", "wait"], { type: "string" }),
+      timeoutMs: optionalPositiveIntegerSchema(),
       force: Type.Optional(Type.Boolean()),
+      accountId: Type.Optional(Type.String()),
+      currentQrDataUrl: Type.Optional(
+        Type.String({
+          maxLength: QR_DATA_URL_MAX_LENGTH,
+          pattern: "^data:image/png;base64,",
+        }),
+      ),
     }),
     execute: async (_toolCallId, args) => {
+      const renderQrReply = (params: {
+        message: string;
+        qrDataUrl: string;
+        connected?: boolean;
+      }) => {
+        const text = [
+          params.message,
+          "",
+          "Open WhatsApp → Linked Devices and scan:",
+          "",
+          `![whatsapp-qr](${params.qrDataUrl})`,
+        ].join("\n");
+        return {
+          content: [{ type: "text" as const, text }],
+          details: {
+            connected: params.connected ?? false,
+            qr: true,
+          },
+        };
+      };
+
       const action = (args as { action?: string })?.action ?? "start";
+      const accountId = readOptionalString((args as { accountId?: unknown }).accountId);
+      const timeoutMs = readPositiveIntegerParam(args as Record<string, unknown>, "timeoutMs");
       if (action === "wait") {
         const result = await waitForWebLogin({
-          timeoutMs:
-            typeof (args as { timeoutMs?: unknown }).timeoutMs === "number"
-              ? (args as { timeoutMs?: number }).timeoutMs
-              : undefined,
+          accountId,
+          timeoutMs,
+          currentQrDataUrl: readOptionalString(
+            (args as { currentQrDataUrl?: unknown }).currentQrDataUrl,
+          ),
         });
+        if (result.qrDataUrl) {
+          return renderQrReply({
+            message: result.message,
+            qrDataUrl: result.qrDataUrl,
+            connected: result.connected,
+          });
+        }
         return {
           content: [{ type: "text", text: result.message }],
           details: { connected: result.connected },
@@ -34,10 +77,8 @@ export function createWhatsAppLoginTool(): ChannelAgentTool {
       }
 
       const result = await startWebLoginWithQr({
-        timeoutMs:
-          typeof (args as { timeoutMs?: unknown }).timeoutMs === "number"
-            ? (args as { timeoutMs?: number }).timeoutMs
-            : undefined,
+        accountId,
+        timeoutMs,
         force:
           typeof (args as { force?: unknown }).force === "boolean"
             ? (args as { force?: boolean }).force
@@ -56,17 +97,11 @@ export function createWhatsAppLoginTool(): ChannelAgentTool {
         };
       }
 
-      const text = [
-        result.message,
-        "",
-        "Open WhatsApp → Linked Devices and scan:",
-        "",
-        `![whatsapp-qr](${result.qrDataUrl})`,
-      ].join("\n");
-      return {
-        content: [{ type: "text", text }],
-        details: { qr: true },
-      };
+      return renderQrReply({
+        message: result.message,
+        qrDataUrl: result.qrDataUrl,
+        connected: result.connected,
+      });
     },
   };
 }

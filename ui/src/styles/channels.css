@@ -1,0 +1,400 @@
+/* Channels hub extras on top of settings.css: art tiles in rows, the channel
+   detail overlay, and the guided setup wizard dialog. Everything else uses the
+   shared settings design language. */
+
+/* Row with a leading 44px art tile (mirrors the plugins hub row anatomy). */
+.channels-empty {
+  display: grid;
+  place-items: center;
+  padding-top: var(--space-4);
+}
+
+.channels-empty .settings-empty {
+  padding-top: var(--space-1);
+}
+
+.channels-item {
+  width: 100%;
+  text-align: left;
+}
+
+.channels-tile {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+
+.channels-tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.channels-tile--fallback {
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--channels-art-a), var(--channels-art-b));
+  color: rgb(255 255 255 / 92%);
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 700;
+  text-shadow: 0 1px 2px rgb(0 0 0 / 25%);
+}
+
+/* Wide cover art used by the detail overlay header. */
+.channels-cover {
+  display: grid;
+  width: 100%;
+  aspect-ratio: 32 / 9;
+  place-items: center;
+  overflow: hidden;
+  background: var(--bg-elevated);
+}
+
+.channels-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.channels-cover--fallback {
+  background: linear-gradient(135deg, var(--channels-art-a), var(--channels-art-b));
+  color: rgb(255 255 255 / 92%);
+  font-family: var(--mono);
+  font-size: 22px;
+  font-weight: 700;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 25%);
+}
+
+/* ---------- detail overlay ---------- */
+
+.channels-detail {
+  display: flex;
+  flex-direction: column;
+  width: min(680px, calc(100vw - 48px));
+  max-height: min(85dvh, 860px);
+  overflow-y: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xl);
+  background: var(--popover);
+  box-shadow: var(--shadow-xl);
+}
+
+.channels-detail__header {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.channels-detail__header-actions {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.channels-detail__header-actions .btn {
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  backdrop-filter: blur(4px);
+}
+
+.channels-detail__close {
+  width: 32px;
+  height: 32px;
+  padding: 7px;
+}
+
+.channels-detail__body {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-4) var(--space-5);
+}
+
+/* ---------- DM sender access requests ---------- */
+
+.channels-pairing-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.channels-pairing-filters label {
+  display: grid;
+  flex: 1 1 180px;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.channels-pairing-filters select {
+  width: 100%;
+}
+
+.channels-pairing-request {
+  align-items: stretch;
+}
+
+.channels-pairing-request__main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+}
+
+.channels-pairing-request__actions {
+  flex-wrap: wrap;
+}
+
+.channels-pairing-request__details {
+  width: 100%;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.channels-pairing-request__details summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.channels-pairing-request__details .settings-kv {
+  margin-top: var(--space-2);
+}
+
+.channels-pairing-help {
+  padding: var(--space-3);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.5;
+}
+
+.channels-pairing-dialog {
+  display: grid;
+  width: min(520px, calc(100vw - 48px));
+  gap: var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xl);
+  padding: var(--space-4);
+  background: var(--popover);
+  box-shadow: var(--shadow-xl);
+}
+
+.channels-pairing-dialog__option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.channels-pairing-dialog__option input {
+  margin-top: 3px;
+}
+
+.channels-pairing-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+@media (max-width: 640px) {
+  .channels-pairing-request__main {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .channels-pairing-request__actions {
+    justify-content: flex-start;
+  }
+}
+
+/* ---------- setup wizard dialog ---------- */
+
+.channels-wizard {
+  display: flex;
+  flex-direction: column;
+  width: min(540px, calc(100vw - 48px));
+  max-height: min(85dvh, 760px);
+  overflow-y: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xl);
+  background: var(--popover);
+  box-shadow: var(--shadow-xl);
+}
+
+.channels-wizard__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-4) 0;
+}
+
+.channels-wizard__heading {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.channels-wizard__heading h2 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-lg);
+  font-weight: 660;
+  letter-spacing: -0.015em;
+}
+
+.channels-wizard__heading .muted {
+  font-size: var(--control-ui-text-sm);
+}
+
+.channels-wizard__body {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4) var(--space-4);
+}
+
+.channels-wizard__note {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.5;
+}
+
+.channels-wizard__note--code {
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+}
+
+.channels-wizard__message {
+  color: var(--text-strong);
+  font-weight: 620;
+  line-height: 1.4;
+}
+
+.channels-wizard__options {
+  display: grid;
+  gap: var(--space-2);
+}
+
+wa-radio-group.channels-wizard__options::part(radios) {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.channels-wizard__option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  background: var(--card);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out);
+}
+
+.channels-wizard__option:hover,
+.channels-wizard__option:focus-visible {
+  border-color: var(--border-hover);
+  background: var(--bg-elevated);
+}
+
+.channels-wizard__option[aria-pressed="true"],
+.channels-wizard__option[checked],
+.channels-wizard__option:state(checked) {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: var(--accent-subtle);
+}
+
+.channels-wizard__option-label {
+  color: var(--text-strong);
+  font-weight: 620;
+}
+
+.channels-wizard__option-hint {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.channels-wizard__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.channels-wizard__footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.channels-wizard__error {
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  background: var(--danger-subtle);
+  color: var(--danger);
+  font-size: var(--control-ui-text-sm);
+}
+
+.channels-wizard__qr {
+  display: grid;
+  gap: var(--space-2);
+  justify-items: center;
+  padding: var(--space-2) 0;
+}
+
+.channels-wizard__qr img {
+  width: min(260px, 70vw);
+  border-radius: var(--radius-md);
+  background: #fff;
+  padding: var(--space-2);
+}
+
+.channels-wizard__spinner {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+/* Text/tile area of an available row doubles as the detail opener. */
+.channels-item__detail {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.channels-item__detail:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}

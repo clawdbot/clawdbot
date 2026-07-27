@@ -1,29 +1,27 @@
+/**
+ * Browser CLI cookie and Web Storage commands.
+ */
 import type { Command } from "commander";
-import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  BROWSER_TAB_REFERENCE_HELP,
+  callBrowserRequest,
+  type BrowserParentOpts,
+} from "./browser-cli-shared.js";
 import { danger, defaultRuntime, inheritOptionFromParent } from "./core-api.js";
 
 function resolveUrl(opts: { url?: string }, command: Command): string | undefined {
-  if (typeof opts.url === "string" && opts.url.trim()) {
-    return opts.url.trim();
-  }
-  const inherited = inheritOptionFromParent<string>(command, "url");
-  if (typeof inherited === "string" && inherited.trim()) {
-    return inherited.trim();
-  }
-  return undefined;
+  return (
+    normalizeOptionalString(opts.url) ??
+    normalizeOptionalString(inheritOptionFromParent<string>(command, "url"))
+  );
 }
 
 function resolveTargetId(rawTargetId: unknown, command: Command): string | undefined {
-  const local = typeof rawTargetId === "string" ? rawTargetId.trim() : "";
-  if (local) {
-    return local;
-  }
-  const inherited = inheritOptionFromParent<string>(command, "targetId");
-  if (typeof inherited !== "string") {
-    return undefined;
-  }
-  const trimmed = inherited.trim();
-  return trimmed ? trimmed : undefined;
+  return (
+    normalizeOptionalString(rawTargetId) ??
+    normalizeOptionalString(inheritOptionFromParent<string>(command, "targetId"))
+  );
 }
 
 async function runMutationRequest(params: {
@@ -44,41 +42,40 @@ async function runMutationRequest(params: {
   }
 }
 
+/** Registers Browser cookies and storage subcommands. */
 export function registerBrowserCookiesAndStorageCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
 ) {
   const cookies = browser.command("cookies").description("Read/write cookies");
 
-  cookies
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
-    .action(async (opts, cmd) => {
-      const parent = parentOpts(cmd);
-      const profile = parent?.browserProfile;
-      const targetId = resolveTargetId(opts.targetId, cmd);
-      try {
-        const result = await callBrowserRequest<{ cookies?: unknown[] }>(
-          parent,
-          {
-            method: "GET",
-            path: "/cookies",
-            query: {
-              targetId,
-              profile,
-            },
+  cookies.option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP).action(async (opts, cmd) => {
+    const parent = parentOpts(cmd);
+    const profile = parent?.browserProfile;
+    const targetId = resolveTargetId(opts.targetId, cmd);
+    try {
+      const result = await callBrowserRequest<{ cookies?: unknown[] }>(
+        parent,
+        {
+          method: "GET",
+          path: "/cookies",
+          query: {
+            targetId,
+            profile,
           },
-          { timeoutMs: 20000 },
-        );
-        if (parent?.json) {
-          defaultRuntime.writeJson(result);
-          return;
-        }
-        defaultRuntime.writeJson(result.cookies ?? []);
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
+        },
+        { timeoutMs: 20000 },
+      );
+      if (parent?.json) {
+        defaultRuntime.writeJson(result);
+        return;
       }
-    });
+      defaultRuntime.writeJson(result.cookies ?? []);
+    } catch (err) {
+      defaultRuntime.error(danger(String(err)));
+      defaultRuntime.exit(1);
+    }
+  });
 
   cookies
     .command("set")
@@ -86,7 +83,7 @@ export function registerBrowserCookiesAndStorageCommands(
     .argument("<name>", "Cookie name")
     .argument("<value>", "Cookie value")
     .option("--url <url>", "Cookie URL scope (recommended)")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (name: string, value: string, opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
@@ -115,7 +112,7 @@ export function registerBrowserCookiesAndStorageCommands(
   cookies
     .command("clear")
     .description("Clear all cookies")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
@@ -143,7 +140,7 @@ export function registerBrowserCookiesAndStorageCommands(
       .command("get")
       .description(`Get ${kind}Storage (all keys or one key)`)
       .argument("[key]", "Key (optional)")
-      .option("--target-id <id>", "CDP target id (or unique prefix)")
+      .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
       .action(async (key: string | undefined, opts, cmd2) => {
         const parent = parentOpts(cmd2);
         const profile = parent?.browserProfile;
@@ -155,7 +152,7 @@ export function registerBrowserCookiesAndStorageCommands(
               method: "GET",
               path: `/storage/${kind}`,
               query: {
-                key: key?.trim() || undefined,
+                key: normalizeOptionalString(key),
                 targetId,
                 profile,
               },
@@ -178,7 +175,7 @@ export function registerBrowserCookiesAndStorageCommands(
       .description(`Set a ${kind}Storage key`)
       .argument("<key>", "Key")
       .argument("<value>", "Value")
-      .option("--target-id <id>", "CDP target id (or unique prefix)")
+      .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
       .action(async (key: string, value: string, opts, cmd2) => {
         const parent = parentOpts(cmd2);
         const profile = parent?.browserProfile;
@@ -202,7 +199,7 @@ export function registerBrowserCookiesAndStorageCommands(
     cmd
       .command("clear")
       .description(`Clear all ${kind}Storage keys`)
-      .option("--target-id <id>", "CDP target id (or unique prefix)")
+      .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
       .action(async (opts, cmd2) => {
         const parent = parentOpts(cmd2);
         const profile = parent?.browserProfile;

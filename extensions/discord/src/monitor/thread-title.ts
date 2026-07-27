@@ -1,17 +1,24 @@
+// Discord plugin module implements thread title behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   completeWithPreparedSimpleCompletionModel,
   extractAssistantText,
   prepareSimpleCompletionModelForAgent,
-} from "openclaw/plugin-sdk/agent-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+} from "openclaw/plugin-sdk/simple-completion-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { withAbortTimeout } from "./timeouts.js";
 
-const DEFAULT_THREAD_TITLE_TIMEOUT_MS = 10_000;
+const DEFAULT_THREAD_TITLE_TIMEOUT_MS = 60_000;
 const MAX_THREAD_TITLE_SOURCE_CHARS = 600;
 const MAX_THREAD_TITLE_CHANNEL_NAME_CHARS = 120;
 const MAX_THREAD_TITLE_CHANNEL_DESCRIPTION_CHARS = 320;
-const DISCORD_THREAD_TITLE_MAX_TOKENS = 24;
-const DISCORD_THREAD_TITLE_TEMPERATURE = 0.2;
+// Budget generous enough to cover reasoning-model thinking tokens plus the
+// short text output. Lower values (e.g. 24) starve reasoning models of output
+// capacity: the entire budget is consumed by the thinking block before any
+// text is emitted, so extractAssistantText returns empty and the rename is
+// silently skipped.
+const DISCORD_THREAD_TITLE_MAX_TOKENS = 4_096;
 const DISCORD_THREAD_TITLE_SYSTEM_PROMPT =
   "Generate a concise Discord thread title (3-6 words). Return only the title. Use channel context when provided and avoid redundant channel-name words unless needed for clarity.";
 
@@ -33,6 +40,7 @@ export async function generateThreadTitle(params: {
     cfg: params.cfg,
     agentId: params.agentId,
     ...(params.modelRef ? { modelRef: params.modelRef } : {}),
+    useUtilityModel: true,
     allowMissingApiKeyModes: ["aws-sdk"],
   });
   if ("error" in prepared) {
@@ -44,9 +52,8 @@ export async function generateThreadTitle(params: {
   }
 
   try {
-    const promptText = truncateThreadTitleSourceText(sourceText);
-    const userMessage = buildThreadTitleUserMessage({
-      sourceText: promptText,
+    const userMessage = buildThreadTitleCompletionUserMessage({
+      sourceText,
       channelName: params.channelName,
       channelDescription: params.channelDescription,
     });
@@ -71,38 +78,38 @@ async function completeThreadTitle(params: {
   userMessage: string;
   timeoutMs: number;
 }) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), params.timeoutMs);
-  try {
-    return await completeWithPreparedSimpleCompletionModel({
-      model: params.model,
-      auth: params.auth,
-      context: {
-        systemPrompt: DISCORD_THREAD_TITLE_SYSTEM_PROMPT,
-        messages: [
-          {
-            role: "user",
-            content: params.userMessage,
-            timestamp: Date.now(),
-          },
-        ],
-      },
-      options: {
-        maxTokens: DISCORD_THREAD_TITLE_MAX_TOKENS,
-        temperature: DISCORD_THREAD_TITLE_TEMPERATURE,
-        signal: controller.signal,
-      },
-    });
-  } finally {
-    clearTimeout(timer);
-  }
+  const maxTokens = Math.min(DISCORD_THREAD_TITLE_MAX_TOKENS, Math.floor(params.model.maxTokens));
+  return await withAbortTimeout({
+    timeoutMs: params.timeoutMs,
+    createTimeoutError: () => new Error(`thread-title timed out after ${params.timeoutMs}ms`),
+    run: async (signal) =>
+      await completeWithPreparedSimpleCompletionModel({
+        model: params.model,
+        auth: params.auth,
+        context: {
+          systemPrompt: DISCORD_THREAD_TITLE_SYSTEM_PROMPT,
+          messages: [
+            {
+              role: "user",
+              content: params.userMessage,
+              timestamp: Date.now(),
+            },
+          ],
+        },
+        options: {
+          maxTokens,
+          signal,
+        },
+      }),
+  });
 }
 
-function buildThreadTitleUserMessage(params: {
+function buildThreadTitleCompletionUserMessage(params: {
   sourceText: string;
   channelName?: string;
   channelDescription?: string;
 }): string {
+  const sourceText = truncateThreadTitleSourceText(params.sourceText);
   const channelName = normalizeTitleContextField(
     params.channelName,
     MAX_THREAD_TITLE_CHANNEL_NAME_CHARS,
@@ -118,7 +125,7 @@ function buildThreadTitleUserMessage(params: {
   if (channelDescription) {
     messageLines.push(`Channel description: ${channelDescription}`);
   }
-  messageLines.push(`Message:\n${params.sourceText}`);
+  messageLines.push(`Message:\n${sourceText}`);
   return messageLines.join("\n\n");
 }
 
@@ -126,14 +133,14 @@ function truncateThreadTitleSourceText(sourceText: string): string {
   if (sourceText.length <= MAX_THREAD_TITLE_SOURCE_CHARS) {
     return sourceText;
   }
-  return `${sourceText.slice(0, MAX_THREAD_TITLE_SOURCE_CHARS)}...`;
+  return `${truncateUtf16Safe(sourceText, MAX_THREAD_TITLE_SOURCE_CHARS)}...`;
 }
 
 function resolveThreadTitleTimeoutMs(timeoutMs: number | undefined): number {
   return Math.max(100, Math.floor(timeoutMs ?? DEFAULT_THREAD_TITLE_TIMEOUT_MS));
 }
 
-export function normalizeGeneratedThreadTitle(raw: string): string {
+function normalizeGeneratedThreadTitle(raw: string): string {
   const lines = raw.replace(/\r/g, "").split("\n");
   let firstLine = "";
   for (const line of lines) {
@@ -156,13 +163,34 @@ function stripThreadTitleWrappers(raw: string): string {
   while (current && current !== previous) {
     previous = current;
     current = current.replace(/^["'`]+|["'`]+$/g, "").trim();
-    current = current.replace(/^\*\*(.+)\*\*$/u, "$1").trim();
-    current = current.replace(/^__(.+)__$/u, "$1").trim();
-    current = current.replace(/^\*(.+)\*$/u, "$1").trim();
-    current = current.replace(/^_(.+)_$/u, "$1").trim();
-    current = current.replace(/^~~(.+)~~$/u, "$1").trim();
+    // Unwrap only a title that is a SINGLE wrapped span. The inner content
+    // must not contain the same marker, so a title with two separate spans
+    // (e.g. "*Plan* for *project*") is left intact instead of having its
+    // outer markers stripped and stray ones left mid-string. For two-char
+    // bold markers (`**`, `__`), a single nested emphasis marker is allowed
+    // inside (e.g. `**Release *plan***` -> `Release *plan*`), because bold
+    // legitimately wraps italic/underscore but never itself.
+    current = stripBalancedWrapper(current, "**");
+    current = stripBalancedWrapper(current, "__");
+    current = stripBalancedWrapper(current, "*");
+    current = stripBalancedWrapper(current, "_");
+    current = stripBalancedWrapper(current, "~~");
   }
   return current;
+}
+
+function stripBalancedWrapper(text: string, marker: string): string {
+  if (text.length < marker.length * 2 + 1) {
+    return text;
+  }
+  if (!text.startsWith(marker) || !text.endsWith(marker)) {
+    return text;
+  }
+  const inner = text.slice(marker.length, text.length - marker.length);
+  if (!inner || inner.includes(marker)) {
+    return text;
+  }
+  return inner;
 }
 
 function normalizeTitleContextField(raw: string | undefined, maxChars: number): string | undefined {
@@ -174,5 +202,5 @@ function normalizeTitleContextField(raw: string | undefined, maxChars: number): 
   if (singleLine.length <= maxChars) {
     return singleLine;
   }
-  return `${singleLine.slice(0, maxChars)}...`;
+  return `${truncateUtf16Safe(singleLine, maxChars)}...`;
 }

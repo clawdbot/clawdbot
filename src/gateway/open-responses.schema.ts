@@ -13,14 +13,14 @@ import { z } from "zod";
 // Content Parts
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const InputTextContentPartSchema = z
+const InputTextContentPartSchema = z
   .object({
     type: z.literal("input_text"),
     text: z.string(),
   })
   .strict();
 
-export const OutputTextContentPartSchema = z
+const OutputTextContentPartSchema = z
   .object({
     type: z.literal("output_text"),
     text: z.string(),
@@ -28,7 +28,7 @@ export const OutputTextContentPartSchema = z
   .strict();
 
 // OpenResponses Image Content: Supports URL or base64 sources
-export const InputImageSourceSchema = z.discriminatedUnion("type", [
+const InputImageSourceSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("url"),
     url: z.string().url(),
@@ -47,7 +47,7 @@ export const InputImageSourceSchema = z.discriminatedUnion("type", [
   }),
 ]);
 
-export const InputImageContentPartSchema = z
+const InputImageContentPartSchema = z
   .object({
     type: z.literal("input_image"),
     source: InputImageSourceSchema,
@@ -55,7 +55,7 @@ export const InputImageContentPartSchema = z
   .strict();
 
 // OpenResponses File Content: Supports URL or base64 sources
-export const InputFileSourceSchema = z.discriminatedUnion("type", [
+const InputFileSourceSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("url"),
     url: z.string().url(),
@@ -68,14 +68,14 @@ export const InputFileSourceSchema = z.discriminatedUnion("type", [
   }),
 ]);
 
-export const InputFileContentPartSchema = z
+const InputFileContentPartSchema = z
   .object({
     type: z.literal("input_file"),
     source: InputFileSourceSchema,
   })
   .strict();
 
-export const ContentPartSchema = z.discriminatedUnion("type", [
+const ContentPartSchema = z.discriminatedUnion("type", [
   InputTextContentPartSchema,
   OutputTextContentPartSchema,
   InputImageContentPartSchema,
@@ -88,19 +88,29 @@ export type ContentPart = z.infer<typeof ContentPartSchema>;
 // Item Types (ItemParam)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const MessageItemRoleSchema = z.enum(["system", "developer", "user", "assistant"]);
+const MessageItemRoleSchema = z.enum(["system", "developer", "user", "assistant"]);
 
-export type MessageItemRole = z.infer<typeof MessageItemRoleSchema>;
+const AssistantPhaseSchema = z.enum(["commentary", "final_answer"]);
 
-export const MessageItemSchema = z
+const MessageItemSchema = z
   .object({
     type: z.literal("message"),
     role: MessageItemRoleSchema,
     content: z.union([z.string(), z.array(ContentPartSchema)]),
+    phase: AssistantPhaseSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.phase !== undefined && value.role !== "assistant") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["phase"],
+        message: "`phase` is only valid on assistant messages.",
+      });
+    }
+  });
 
-export const FunctionCallItemSchema = z
+const FunctionCallItemSchema = z
   .object({
     type: z.literal("function_call"),
     id: z.string().optional(),
@@ -110,7 +120,7 @@ export const FunctionCallItemSchema = z
   })
   .strict();
 
-export const FunctionCallOutputItemSchema = z
+const FunctionCallOutputItemSchema = z
   .object({
     type: z.literal("function_call_output"),
     call_id: z.string(),
@@ -118,7 +128,7 @@ export const FunctionCallOutputItemSchema = z
   })
   .strict();
 
-export const ReasoningItemSchema = z
+const ReasoningItemSchema = z
   .object({
     type: z.literal("reasoning"),
     content: z.string().optional(),
@@ -127,14 +137,14 @@ export const ReasoningItemSchema = z
   })
   .strict();
 
-export const ItemReferenceItemSchema = z
+const ItemReferenceItemSchema = z
   .object({
     type: z.literal("item_reference"),
     id: z.string(),
   })
   .strict();
 
-export const ItemParamSchema = z.discriminatedUnion("type", [
+const ItemParamSchema = z.discriminatedUnion("type", [
   MessageItemSchema,
   FunctionCallItemSchema,
   FunctionCallOutputItemSchema,
@@ -148,34 +158,40 @@ export type ItemParam = z.infer<typeof ItemParamSchema>;
 // Tool Definitions
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const FunctionToolDefinitionSchema = z
+// Responses API tool definition uses a flat format (not the Chat Completions
+// wrapped-function format). Fields are at the top level alongside `type`.
+const FunctionToolDefinitionSchema = z
   .object({
     type: z.literal("function"),
-    function: z.object({
-      name: z.string().min(1, "Tool name cannot be empty"),
-      description: z.string().optional(),
-      parameters: z.record(z.string(), z.unknown()).optional(),
-    }),
+    name: z.string().min(1, "Tool name cannot be empty"),
+    description: z.string().optional(),
+    parameters: z.record(z.string(), z.unknown()).optional(),
+    strict: z.boolean().optional(),
   })
   .strict();
 
-// OpenResponses tool definitions match internal ToolDefinition structure
-export const ToolDefinitionSchema = FunctionToolDefinitionSchema;
-
-export type ToolDefinition = z.infer<typeof ToolDefinitionSchema>;
+const ToolDefinitionSchema = FunctionToolDefinitionSchema;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Request Body
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const ToolChoiceSchema = z.union([
+const ToolChoiceSchema = z.union([
   z.literal("auto"),
   z.literal("none"),
   z.literal("required"),
-  z.object({
-    type: z.literal("function"),
-    function: z.object({ name: z.string() }),
-  }),
+  z
+    .object({
+      type: z.literal("function"),
+      name: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("function"),
+      function: z.object({ name: z.string().min(1) }),
+    })
+    .strict(),
 ]);
 
 export const CreateResponseBodySchema = z
@@ -189,9 +205,10 @@ export const CreateResponseBodySchema = z
     max_output_tokens: z.number().int().positive().optional(),
     max_tool_calls: z.number().int().positive().optional(),
     user: z.string().optional(),
-    // Phase 1: ignore but accept these fields
-    temperature: z.number().optional(),
-    top_p: z.number().optional(),
+    // Sampling overrides forwarded to provider (best-effort; some backends like
+    // ChatGPT Codex Responses strip these — see openai-transport-stream.ts).
+    temperature: z.number().min(0).max(2).optional(),
+    top_p: z.number().min(0).max(1).optional(),
     metadata: z.record(z.string(), z.string()).optional(),
     store: z.boolean().optional(),
     previous_response_id: z.string().optional(),
@@ -211,7 +228,7 @@ export type CreateResponseBody = z.infer<typeof CreateResponseBodySchema>;
 // Response Resource
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const ResponseStatusSchema = z.enum([
+const ResponseStatusSchema = z.enum([
   "in_progress",
   "completed",
   "failed",
@@ -219,15 +236,14 @@ export const ResponseStatusSchema = z.enum([
   "incomplete",
 ]);
 
-export type ResponseStatus = z.infer<typeof ResponseStatusSchema>;
-
-export const OutputItemSchema = z.discriminatedUnion("type", [
+const OutputItemSchema = z.discriminatedUnion("type", [
   z
     .object({
       type: z.literal("message"),
       id: z.string(),
       role: z.literal("assistant"),
       content: z.array(OutputTextContentPartSchema),
+      phase: AssistantPhaseSchema.optional(),
       status: z.enum(["in_progress", "completed"]).optional(),
     })
     .strict(),
@@ -253,7 +269,7 @@ export const OutputItemSchema = z.discriminatedUnion("type", [
 
 export type OutputItem = z.infer<typeof OutputItemSchema>;
 
-export const UsageSchema = z.object({
+const UsageSchema = z.object({
   input_tokens: z.number().int().nonnegative(),
   output_tokens: z.number().int().nonnegative(),
   total_tokens: z.number().int().nonnegative(),
@@ -261,7 +277,7 @@ export const UsageSchema = z.object({
 
 export type Usage = z.infer<typeof UsageSchema>;
 
-export const ResponseResourceSchema = z.object({
+const ResponseResourceSchema = z.object({
   id: z.string(),
   object: z.literal("response"),
   created_at: z.number().int(),
@@ -284,39 +300,39 @@ export type ResponseResource = z.infer<typeof ResponseResourceSchema>;
 // Streaming Event Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const ResponseCreatedEventSchema = z.object({
+const ResponseCreatedEventSchema = z.object({
   type: z.literal("response.created"),
   response: ResponseResourceSchema,
 });
 
-export const ResponseInProgressEventSchema = z.object({
+const ResponseInProgressEventSchema = z.object({
   type: z.literal("response.in_progress"),
   response: ResponseResourceSchema,
 });
 
-export const ResponseCompletedEventSchema = z.object({
+const ResponseCompletedEventSchema = z.object({
   type: z.literal("response.completed"),
   response: ResponseResourceSchema,
 });
 
-export const ResponseFailedEventSchema = z.object({
+const ResponseFailedEventSchema = z.object({
   type: z.literal("response.failed"),
   response: ResponseResourceSchema,
 });
 
-export const OutputItemAddedEventSchema = z.object({
+const OutputItemAddedEventSchema = z.object({
   type: z.literal("response.output_item.added"),
   output_index: z.number().int().nonnegative(),
   item: OutputItemSchema,
 });
 
-export const OutputItemDoneEventSchema = z.object({
+const OutputItemDoneEventSchema = z.object({
   type: z.literal("response.output_item.done"),
   output_index: z.number().int().nonnegative(),
   item: OutputItemSchema,
 });
 
-export const ContentPartAddedEventSchema = z.object({
+const ContentPartAddedEventSchema = z.object({
   type: z.literal("response.content_part.added"),
   item_id: z.string(),
   output_index: z.number().int().nonnegative(),
@@ -324,7 +340,7 @@ export const ContentPartAddedEventSchema = z.object({
   part: OutputTextContentPartSchema,
 });
 
-export const ContentPartDoneEventSchema = z.object({
+const ContentPartDoneEventSchema = z.object({
   type: z.literal("response.content_part.done"),
   item_id: z.string(),
   output_index: z.number().int().nonnegative(),
@@ -332,7 +348,7 @@ export const ContentPartDoneEventSchema = z.object({
   part: OutputTextContentPartSchema,
 });
 
-export const OutputTextDeltaEventSchema = z.object({
+const OutputTextDeltaEventSchema = z.object({
   type: z.literal("response.output_text.delta"),
   item_id: z.string(),
   output_index: z.number().int().nonnegative(),
@@ -340,7 +356,7 @@ export const OutputTextDeltaEventSchema = z.object({
   delta: z.string(),
 });
 
-export const OutputTextDoneEventSchema = z.object({
+const OutputTextDoneEventSchema = z.object({
   type: z.literal("response.output_text.done"),
   item_id: z.string(),
   output_index: z.number().int().nonnegative(),

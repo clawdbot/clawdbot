@@ -1,17 +1,22 @@
+// Public outbound delivery queue facade for storage and recovery operations.
 export {
   ackDelivery,
   enqueueDelivery,
-  ensureQueueDir,
+  enqueueDeliveryOnce,
   failDelivery,
-  loadPendingDeliveries,
-  moveToFailed,
+  failDeliveryAfterPlatformSend,
+  failDeliveryBeforePlatformSend,
+  markDeliveryPlatformOutcomeUnknown,
+  markDeliveryPlatformSendDispatched,
+  markDeliveryPlatformSendAttemptStarted,
 } from "./delivery-queue-storage.js";
-export type { QueuedDelivery, QueuedDeliveryPayload } from "./delivery-queue-storage.js";
+export type {
+  QueuedReplyPayloadSendingHook,
+  QueuedRenderedMessageBatchPlan,
+} from "./delivery-queue-storage.js";
 export {
-  computeBackoffMs,
-  isEntryEligibleForRecoveryRetry,
-  isPermanentDeliveryError,
-  MAX_RETRIES,
+  drainPendingDeliveries,
   recoverPendingDeliveries,
+  withActiveDeliveryClaim,
 } from "./delivery-queue-recovery.js";
-export type { DeliverFn, RecoveryLogger, RecoverySummary } from "./delivery-queue-recovery.js";
+export type { DeliverFn, RecoveryLogger } from "./delivery-queue-recovery.js";

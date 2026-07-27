@@ -1,18 +1,41 @@
-import { loadAuthProfileStore } from "../../agents/auth-profiles.js";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
+// Implements `openclaw channels list` across runtime accounts, local config, and catalog-only entries.
+import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
+import { isChannelVisibleInConfiguredLists } from "../../channels/plugins/exposure.js";
+import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
-import type { ChannelAccountSnapshot, ChannelPlugin } from "../../channels/plugins/types.js";
-import { withProgress } from "../../cli/progress.js";
-import { formatUsageReportLines, loadProviderUsageSummary } from "../../infra/provider-usage.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import {
+  normalizeRuntimeChannelAccountSnapshots,
+  resolveChannelAccountStatusRows,
+  type RuntimeChannelStatusPayload,
+} from "../../channels/status/read-model.js";
+import { callGateway } from "../../gateway/call.js";
+import { resolveMissingOfficialExternalChannelPluginRepairHint } from "../../plugins/official-external-plugin-repair-hints.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import { formatDocsLink } from "../../terminal/links.js";
-import { theme } from "../../terminal/theme.js";
+import { isCatalogChannelInstalled } from "../channel-setup/discovery.js";
+import { listTrustedChannelPluginCatalogEntries } from "../channel-setup/trusted-catalog.js";
 import { formatChannelAccountLabel, requireValidConfig } from "./shared.js";
 
 export type ChannelsListOptions = {
   json?: boolean;
-  usage?: boolean;
+  all?: boolean;
 };
+
+async function readGatewayChannelStatus(): Promise<RuntimeChannelStatusPayload | null> {
+  try {
+    return (await callGateway({
+      method: "channels.status",
+      params: { probe: false, timeoutMs: 5_000 },
+      timeoutMs: 5_000,
+    })) as RuntimeChannelStatusPayload;
+  } catch {
+    return null;
+  }
+}
 
 const colorValue = (value: string) => {
   if (value === "none") {
@@ -32,14 +55,24 @@ function formatConfigured(value: boolean): string {
   return value ? theme.success("configured") : theme.warn("not configured");
 }
 
-function formatTokenSource(source?: string): string {
-  const value = source || "none";
-  return `token=${colorValue(value)}`;
+function formatInstalled(value: boolean): string {
+  return value ? theme.success("installed") : theme.warn("not installed");
 }
 
-function formatSource(label: string, source?: string): string {
+function formatCredentialSource(source?: string, status?: string): string {
   const value = source || "none";
-  return `${label}=${colorValue(value)}`;
+  if (status === "configured_unavailable" && value !== "none") {
+    return theme.warn(`${value}-unavailable`);
+  }
+  return colorValue(value);
+}
+
+function formatTokenSource(source?: string, status?: string): string {
+  return `token=${formatCredentialSource(source, status)}`;
+}
+
+function formatSource(label: string, source?: string, status?: string): string {
+  return `${label}=${formatCredentialSource(source, status)}`;
 }
 
 function formatLinked(value: boolean): string {
@@ -47,59 +80,69 @@ function formatLinked(value: boolean): string {
 }
 
 function shouldShowConfigured(channel: ChannelPlugin): boolean {
-  return channel.meta.showConfigured !== false;
+  return isChannelVisibleInConfiguredLists(channel.meta);
 }
 
 function formatAccountLine(params: {
   channel: ChannelPlugin;
   snapshot: ChannelAccountSnapshot;
+  installed: boolean;
 }): string {
-  const { channel, snapshot } = params;
+  const { channel, snapshot, installed } = params;
   const label = formatChannelAccountLabel({
     channel: channel.id,
     accountId: snapshot.accountId,
     name: snapshot.name,
+    channelLabel: channel.meta.label ?? channel.id,
     channelStyle: theme.accent,
     accountStyle: theme.heading,
   });
   const bits: string[] = [];
-  if (snapshot.linked !== undefined) {
-    bits.push(formatLinked(snapshot.linked));
-  }
+  bits.push(formatInstalled(installed));
   if (shouldShowConfigured(channel) && typeof snapshot.configured === "boolean") {
     bits.push(formatConfigured(snapshot.configured));
-  }
-  if (snapshot.tokenSource) {
-    bits.push(formatTokenSource(snapshot.tokenSource));
-  }
-  if (snapshot.botTokenSource) {
-    bits.push(formatSource("bot", snapshot.botTokenSource));
-  }
-  if (snapshot.appTokenSource) {
-    bits.push(formatSource("app", snapshot.appTokenSource));
-  }
-  if (snapshot.baseUrl) {
-    bits.push(`base=${theme.muted(snapshot.baseUrl)}`);
   }
   if (typeof snapshot.enabled === "boolean") {
     bits.push(formatEnabled(snapshot.enabled));
   }
+  if (snapshot.linked !== undefined) {
+    bits.push(formatLinked(snapshot.linked));
+  }
+  if (snapshot.tokenSource) {
+    bits.push(formatTokenSource(snapshot.tokenSource, snapshot.tokenStatus));
+  }
+  if (snapshot.botTokenSource) {
+    bits.push(formatSource("bot", snapshot.botTokenSource, snapshot.botTokenStatus));
+  }
+  if (snapshot.appTokenSource) {
+    bits.push(formatSource("app", snapshot.appTokenSource, snapshot.appTokenStatus));
+  }
+  if (snapshot.baseUrl) {
+    bits.push(`base=${theme.muted(snapshot.baseUrl)}`);
+  }
   return `- ${label}: ${bits.join(", ")}`;
 }
-async function loadUsageWithProgress(
-  runtime: RuntimeEnv,
-): Promise<Awaited<ReturnType<typeof loadProviderUsageSummary>> | null> {
-  try {
-    return await withProgress(
-      { label: "Fetching usage snapshot…", indeterminate: true, enabled: true },
-      async () => await loadProviderUsageSummary(),
-    );
-  } catch (err) {
-    runtime.error(String(err));
-    return null;
+
+function formatCatalogOnlyLine(params: {
+  entry: ChannelPluginCatalogEntry;
+  installed: boolean;
+  configured: boolean;
+  repairHint?: string;
+}): string {
+  const { entry, installed, configured, repairHint } = params;
+  const channelText = theme.accent(entry.meta.label ?? entry.id);
+  const bits: string[] = [
+    formatInstalled(installed),
+    formatConfigured(configured),
+    formatEnabled(false),
+  ];
+  if (repairHint) {
+    bits.push(repairHint);
   }
+  return `- ${channelText}: ${bits.join(", ")}`;
 }
 
+/** Print or serialize configured, available, and installable chat channel accounts. */
 export async function channelsListCommand(
   opts: ChannelsListOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -108,76 +151,197 @@ export async function channelsListCommand(
   if (!cfg) {
     return;
   }
-  const includeUsage = opts.usage !== false;
+  const showAll = opts.all === true;
 
-  const plugins = listChannelPlugins();
+  const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
+    includeSetupFallbackPlugins: true,
+  });
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+  const catalogEntries = listTrustedChannelPluginCatalogEntries({
+    cfg,
+    ...(workspaceDir ? { workspaceDir } : {}),
+  });
+  const runtimeAccountsByChannel =
+    opts.json === true
+      ? new Map<string, ChannelAccountSnapshot[]>()
+      : normalizeRuntimeChannelAccountSnapshots(await readGatewayChannelStatus());
+  const installedByChannelId = new Map<string, boolean>();
+  for (const entry of catalogEntries) {
+    installedByChannelId.set(
+      entry.id,
+      isCatalogChannelInstalled({
+        cfg,
+        entry,
+        ...(workspaceDir ? { workspaceDir } : {}),
+      }),
+    );
+  }
+  // A plugin loaded into the runtime registry is, by definition, installed.
+  // Catalog-tracked channels may still be flagged as not installed when the
+  // plugin object only came in via setup fallback metadata; in that case the
+  // explicit catalog check above wins.
+  const isInstalled = (channelId: string): boolean => installedByChannelId.get(channelId) ?? true;
 
-  const authStore = loadAuthProfileStore();
-  const authProfiles = Object.entries(authStore.profiles).map(([profileId, profile]) => ({
-    id: profileId,
-    provider: profile.provider,
-    type: profile.type,
-    isExternal: false,
-  }));
-  if (opts.json) {
-    const usage = includeUsage ? await loadProviderUsageSummary() : undefined;
-    const chat: Record<string, string[]> = {};
-    for (const plugin of plugins) {
-      chat[plugin.id] = plugin.config.listAccountIds(cfg);
+  type AccountLineSource = {
+    plugin: ChannelPlugin;
+    snapshot: ChannelAccountSnapshot;
+    installed: boolean;
+  };
+  const accountLines: AccountLineSource[] = [];
+  const renderedChannelIds = new Set<string>();
+
+  for (const plugin of plugins) {
+    const accountIds = plugin.config.listAccountIds(cfg);
+    if (accountIds && accountIds.length > 0) {
+      renderedChannelIds.add(plugin.id);
+      const runtimeAccounts = runtimeAccountsByChannel.get(plugin.id) ?? [];
+      const rows = await resolveChannelAccountStatusRows({
+        localAccountIds: accountIds,
+        runtimeAccounts,
+        resolveLocalSnapshot: (accountId) =>
+          buildChannelAccountSnapshot({ plugin, cfg, accountId }),
+      });
+      for (const row of rows) {
+        accountLines.push({
+          plugin,
+          snapshot: row.snapshot,
+          installed: isInstalled(plugin.id),
+        });
+      }
+      continue;
     }
-    const payload = { chat, auth: authProfiles, ...(usage ? { usage } : {}) };
-    writeRuntimeJson(runtime, payload);
+    if (!showAll) {
+      continue;
+    }
+    if (!shouldShowConfigured(plugin)) {
+      continue;
+    }
+    // --all: surface installed-but-unconfigured plugins (bundled, or
+    // catalog plugins that already landed on disk) so users can see the
+    // full set of channels they could enable without first running
+    // `channels add`. Use the channel's default account so the snapshot
+    // can reflect "not configured / not enabled" state.
+    const snapshot = await buildChannelAccountSnapshot({
+      plugin,
+      cfg,
+      accountId: "default",
+    });
+    const runtimeSnapshot = runtimeAccountsByChannel
+      .get(plugin.id)
+      ?.find((account) => account.accountId === "default");
+    renderedChannelIds.add(plugin.id);
+    accountLines.push({
+      plugin,
+      snapshot: runtimeSnapshot ?? snapshot,
+      installed: isInstalled(plugin.id),
+    });
+  }
+
+  // Catalog entries that are not already represented by a plugin row above can
+  // still be useful in two shapes:
+  //   1. Catalog plugin package is not yet installed on disk — rendered as
+  //      `not installed, not configured, disabled` so the channel still
+  //      appears in the listing as installable.
+  //   2. Catalog plugin package IS installed but the user has no config
+  //      entry for the channel, AND the read-only loader did not surface
+  //      a plugin object for it (because it only activates based on
+  //      configured channels). These would otherwise silently disappear
+  //      from the listing — render them as `installed, not configured,
+  //      disabled` so operators can tell the plugin is ready to configure.
+  // Without --all, keep this limited to configured channels whose official
+  // external plugin owner is missing, otherwise `channels list` can claim
+  // there are no configured channels even though openclaw.json has one.
+  const catalogOnlyLines = catalogEntries
+    .filter((entry) => !renderedChannelIds.has(entry.id))
+    .map((entry) => {
+      const hint = resolveMissingOfficialExternalChannelPluginRepairHint({
+        config: cfg,
+        channelId: entry.id,
+        ...(workspaceDir ? { workspaceDir } : {}),
+      });
+      return {
+        entry,
+        installed: isInstalled(entry.id),
+        configured: Boolean(hint),
+        repairHint: hint ? `run ${hint.installCommand} or ${hint.doctorFixCommand}` : undefined,
+      };
+    })
+    .filter((line) => showAll || line.configured);
+
+  if (opts.json) {
+    type JsonChannelEntry = {
+      accounts: string[];
+      installed: boolean;
+      origin: "configured" | "available" | "installable";
+    };
+    const chat: Record<string, JsonChannelEntry> = {};
+    for (const plugin of plugins) {
+      const accountIds = plugin.config.listAccountIds(cfg);
+      const installed = isInstalled(plugin.id);
+      if (accountIds && accountIds.length > 0) {
+        chat[plugin.id] = {
+          accounts: accountIds,
+          installed,
+          origin: "configured",
+        };
+      } else if (showAll && shouldShowConfigured(plugin)) {
+        chat[plugin.id] = {
+          accounts: [],
+          installed,
+          origin: "available",
+        };
+      }
+    }
+    for (const line of catalogOnlyLines) {
+      chat[line.entry.id] = {
+        accounts: [],
+        installed: line.installed,
+        origin: line.configured ? "configured" : line.installed ? "available" : "installable",
+      };
+    }
+    writeRuntimeJson(runtime, { chat });
     return;
   }
 
   const lines: string[] = [];
   lines.push(theme.heading("Chat channels:"));
-
-  for (const plugin of plugins) {
-    const accounts = plugin.config.listAccountIds(cfg);
-    if (!accounts || accounts.length === 0) {
-      continue;
-    }
-    for (const accountId of accounts) {
-      const snapshot = await buildChannelAccountSnapshot({
-        plugin,
-        cfg,
-        accountId,
-      });
+  if (accountLines.length === 0 && catalogOnlyLines.length === 0) {
+    lines.push(
+      theme.muted(
+        showAll
+          ? "- no chat channels found"
+          : "- no configured chat channels (run `openclaw channels list --all` to see installable channels)",
+      ),
+    );
+  } else {
+    for (const line of accountLines) {
       lines.push(
         formatAccountLine({
-          channel: plugin,
-          snapshot,
+          channel: line.plugin,
+          snapshot: line.snapshot,
+          installed: line.installed,
+        }),
+      );
+    }
+    for (const line of catalogOnlyLines) {
+      lines.push(
+        formatCatalogOnlyLine({
+          entry: line.entry,
+          installed: line.installed,
+          configured: line.configured,
+          ...(line.repairHint ? { repairHint: line.repairHint } : {}),
         }),
       );
     }
   }
 
-  lines.push("");
-  lines.push(theme.heading("Auth providers (OAuth + API keys):"));
-  if (authProfiles.length === 0) {
-    lines.push(theme.muted("- none"));
-  } else {
-    for (const profile of authProfiles) {
-      const external = profile.isExternal ? theme.muted(" (synced)") : "";
-      lines.push(`- ${theme.accent(profile.id)} (${theme.success(profile.type)}${external})`);
-    }
-  }
-
   runtime.log(lines.join("\n"));
 
-  if (includeUsage) {
-    runtime.log("");
-    const usage = await loadUsageWithProgress(runtime);
-    if (usage) {
-      const usageLines = formatUsageReportLines(usage);
-      if (usageLines.length > 0) {
-        usageLines[0] = theme.accent(usageLines[0]);
-        runtime.log(usageLines.join("\n"));
-      }
-    }
-  }
-
   runtime.log("");
+  runtime.log(
+    theme.muted(
+      "Model provider usage moved out of `channels list` — see `openclaw status` or `openclaw models list`.",
+    ),
+  );
   runtime.log(`Docs: ${formatDocsLink("/gateway/configuration", "gateway/configuration")}`);
 }

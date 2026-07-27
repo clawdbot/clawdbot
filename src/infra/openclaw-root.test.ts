@@ -1,6 +1,9 @@
+// Covers OpenClaw package root resolution.
+import actualFs from "node:fs";
+import actualFsPromises from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 type FakeFsEntry = { kind: "file"; content: string } | { kind: "dir" };
 
@@ -39,15 +42,14 @@ function expectResolvedPackageRoot(
   return expect(asyncResolver(opts)).resolves.toBe(expected);
 }
 
-vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
+const mockFsModule = () => {
   const wrapped = {
-    ...actual,
+    ...actualFs,
     existsSync: (p: string) =>
-      isFixturePath(p) ? state.entries.has(abs(p)) : actual.existsSync(p),
+      isFixturePath(p) ? state.entries.has(abs(p)) : actualFs.existsSync(p),
     readFileSync: (p: string, encoding?: BufferEncoding) => {
       if (!isFixturePath(p)) {
-        return actual.readFileSync(p, encoding);
+        return actualFs.readFileSync(p, encoding);
       }
       const entry = state.entries.get(abs(p));
       if (!entry || entry.kind !== "file") {
@@ -57,7 +59,7 @@ vi.mock("node:fs", async (importOriginal) => {
     },
     statSync: (p: string) => {
       if (!isFixturePath(p)) {
-        return actual.statSync(p);
+        return actualFs.statSync(p);
       }
       const entry = state.entries.get(abs(p));
       if (!entry) {
@@ -77,18 +79,17 @@ vi.mock("node:fs", async (importOriginal) => {
             }
             return state.realpaths.get(resolved) ?? resolved;
           })()
-        : actual.realpathSync(p),
+        : actualFs.realpathSync(p),
   };
-  return { ...wrapped, default: wrapped };
-});
+  return wrapped;
+};
 
-vi.mock("node:fs/promises", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs/promises")>();
+const mockFsPromisesModule = () => {
   const wrapped = {
-    ...actual,
+    ...actualFsPromises,
     readFile: async (p: string, encoding?: BufferEncoding) => {
       if (!isFixturePath(p)) {
-        return await actual.readFile(p, encoding);
+        return await actualFsPromises.readFile(p, encoding);
       }
       const entry = state.entries.get(abs(p));
       if (!entry || entry.kind !== "file") {
@@ -97,20 +98,21 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       return entry.content;
     },
   };
-  return { ...wrapped, default: wrapped };
-});
+  return wrapped;
+};
+
+vi.mock("./openclaw-root.fs.runtime.js", () => ({
+  openClawRootFsSync: mockFsModule(),
+  openClawRootFs: mockFsPromisesModule(),
+}));
 
 describe("resolveOpenClawPackageRoot", () => {
   let resolveOpenClawPackageRoot: typeof import("./openclaw-root.js").resolveOpenClawPackageRoot;
   let resolveOpenClawPackageRootSync: typeof import("./openclaw-root.js").resolveOpenClawPackageRootSync;
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ resolveOpenClawPackageRoot, resolveOpenClawPackageRootSync } =
       await import("./openclaw-root.js"));
-    state.entries.clear();
-    state.realpaths.clear();
-    state.realpathErrors.clear();
   });
 
   it.each([
@@ -133,6 +135,25 @@ describe("resolveOpenClawPackageRoot", () => {
         state.realpaths.set(abs(bin), abs(path.join(realPkg, "openclaw.mjs")));
         setPackageRoot(realPkg);
         return { opts: { argv1: bin }, expected: realPkg };
+      },
+    },
+    {
+      name: "prefers a symlink target nested under another openclaw package",
+      setup: () => {
+        const sourceRoot = fx("nested-symlink-scenario");
+        const bin = path.join(sourceRoot, ".artifacts", "prefix", "bin", "openclaw");
+        const installedRoot = path.join(
+          sourceRoot,
+          ".artifacts",
+          "prefix",
+          "lib",
+          "node_modules",
+          "openclaw",
+        );
+        state.realpaths.set(abs(bin), abs(path.join(installedRoot, "openclaw.mjs")));
+        setPackageRoot(sourceRoot);
+        setPackageRoot(installedRoot);
+        return { opts: { argv1: bin }, expected: installedRoot };
       },
     },
     {
@@ -204,6 +225,35 @@ describe("resolveOpenClawPackageRoot", () => {
         const pkgRoot = path.join(project, "node_modules", "openclaw");
         setPackageRoot(pkgRoot);
         return { opts: { argv1 }, expected: pkgRoot };
+      },
+    },
+    {
+      name: "does not cross a node_modules boundary into an enclosing checkout",
+      setup: () => {
+        // Nested git worktrees resolve tooling (vitest, tinypool) from the
+        // enclosing checkout's node_modules; its root must never win.
+        const outerCheckout = fx("nested-worktree-outer");
+        setPackageRoot(outerCheckout);
+        setPackageRoot(path.join(outerCheckout, "node_modules", "vitest"), "vitest");
+        const argv1 = path.join(
+          outerCheckout,
+          "node_modules",
+          "vitest",
+          "dist",
+          "workers",
+          "threads.js",
+        );
+        return { opts: { argv1 }, expected: null };
+      },
+    },
+    {
+      name: "still resolves the openclaw package below a node_modules boundary",
+      setup: () => {
+        const project = fx("installed-below-boundary");
+        setPackageRoot(project);
+        const pkgRoot = path.join(project, "node_modules", "openclaw");
+        setPackageRoot(pkgRoot);
+        return { opts: { argv1: path.join(pkgRoot, "dist", "entry.js") }, expected: pkgRoot };
       },
     },
     {

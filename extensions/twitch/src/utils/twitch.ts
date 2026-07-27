@@ -1,4 +1,6 @@
+// Twitch plugin module implements twitch behavior.
 import { randomUUID } from "node:crypto";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /**
  * Twitch-specific utility functions
@@ -18,7 +20,7 @@ import { randomUUID } from "node:crypto";
  * normalizeTwitchChannel("MyChannel") // "mychannel"
  */
 export function normalizeTwitchChannel(channel: string): string {
-  const trimmed = channel.trim().toLowerCase();
+  const trimmed = normalizeLowercaseStringOrEmpty(channel);
   return trimmed.startsWith("#") ? trimmed.slice(1) : trimmed;
 }
 

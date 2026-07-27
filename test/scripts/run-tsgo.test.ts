@@ -1,0 +1,178 @@
+// Run Tsgo tests cover run tsgo script behavior.
+import fs from "node:fs";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import {
+  createSparseTsgoSkipEnv,
+  getSparseTsgoGuardError,
+  shouldSkipSparseTsgoGuardError,
+} from "../../scripts/lib/tsgo-sparse-guard.mjs";
+import { createScriptTestHarness } from "./test-helpers.js";
+
+const { createTempDir } = createScriptTestHarness();
+
+describe("run-tsgo sparse guard", () => {
+  it("ignores non-core projects", () => {
+    const cwd = createTempDir("openclaw-run-tsgo-");
+
+    expect(
+      getSparseTsgoGuardError(["-p", "tsconfig.extensions.json"], {
+        cwd,
+        isSparseCheckoutEnabled: () => true,
+      }),
+    ).toBeNull();
+  });
+
+  it("ignores full worktrees", () => {
+    const cwd = createTempDir("openclaw-run-tsgo-");
+
+    expect(
+      getSparseTsgoGuardError(["-p", "test/tsconfig/tsconfig.core.test.json"], {
+        cwd,
+        isSparseCheckoutEnabled: () => false,
+      }),
+    ).toBeNull();
+  });
+
+  it("ignores metadata-only commands", () => {
+    const cwd = createTempDir("openclaw-run-tsgo-");
+
+    expect(
+      getSparseTsgoGuardError(["-p", "test/tsconfig/tsconfig.core.test.json", "--showConfig"], {
+        cwd,
+        isSparseCheckoutEnabled: () => true,
+      }),
+    ).toBeNull();
+  });
+
+  it("ignores sparse worktrees when the required files are present", () => {
+    const cwd = createTempDir("openclaw-run-tsgo-");
+    const requiredPaths = [
+      "packages/plugin-package-contract/src/index.ts",
+      "ui/config/control-ui-chunking.ts",
+      "ui/src/i18n/lib/registry.ts",
+      "ui/src/i18n/lib/types.ts",
+      "ui/src/app/settings.ts",
+      "ui/src/api/gateway.ts",
+    ];
+
+    for (const relativePath of requiredPaths) {
+      const absolutePath = path.join(cwd, relativePath);
+      const dir = path.dirname(absolutePath);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(absolutePath, "", "utf8");
+    }
+
+    expect(
+      getSparseTsgoGuardError(["-p", "test/tsconfig/tsconfig.core.test.non-agents.json"], {
+        cwd,
+        isSparseCheckoutEnabled: () => true,
+        sparseCheckoutPatterns: ["/packages/", "/ui/config/", "/ui/src/"],
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects sparse core worktrees that include only selected ui and package files", () => {
+    const cwd = createTempDir("openclaw-run-tsgo-");
+    const requiredPaths = [
+      "packages/plugin-package-contract/src/index.ts",
+      "ui/config/control-ui-chunking.ts",
+      "ui/src/i18n/lib/registry.ts",
+      "ui/src/i18n/lib/types.ts",
+      "ui/src/app/settings.ts",
+      "ui/src/api/gateway.ts",
+    ];
+
+    for (const relativePath of requiredPaths) {
+      const absolutePath = path.join(cwd, relativePath);
+      fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+      fs.writeFileSync(absolutePath, "", "utf8");
+    }
+
+    expect(
+      getSparseTsgoGuardError(["-p", "test/tsconfig/tsconfig.core.test.json"], {
+        cwd,
+        isSparseCheckoutEnabled: () => true,
+        sparseCheckoutPatterns: [
+          "/packages/plugin-package-contract/src/index.ts",
+          "/ui/config/control-ui-chunking.ts",
+          "/ui/src/i18n/lib/registry.ts",
+          "/ui/src/i18n/lib/types.ts",
+          "/ui/src/app/settings.ts",
+          "/ui/src/api/gateway.ts",
+        ],
+      }),
+    ).toMatchInlineSnapshot(`
+      "tsconfig.core.test.json cannot be typechecked from this sparse checkout because tracked project inputs are missing or only partially included:
+      - packages
+      - ui/config
+      - ui/src
+      Expand this worktree's sparse checkout to include those paths, or rerun in a full worktree."
+    `);
+  });
+
+  it("returns a helpful message for sparse UI worktrees missing transitive project files", () => {
+    const cwd = createTempDir("openclaw-run-tsgo-");
+    const uiToolDisplay = path.join(cwd, "ui/src/lib/chat/tool-display.ts");
+    fs.mkdirSync(path.dirname(uiToolDisplay), { recursive: true });
+    fs.writeFileSync(uiToolDisplay, "", "utf8");
+
+    expect(
+      getSparseTsgoGuardError(["-p", "tsconfig.ui.json"], {
+        cwd,
+        isSparseCheckoutEnabled: () => true,
+      }),
+    ).toMatchInlineSnapshot(`
+      "tsconfig.ui.json cannot be typechecked from this sparse checkout because tracked project inputs are missing or only partially included:
+      - apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json
+      Expand this worktree's sparse checkout to include those paths, or rerun in a full worktree."
+    `);
+  });
+
+  it("rejects sparse UI worktrees missing the transitive src root", () => {
+    const cwd = createTempDir("openclaw-run-tsgo-");
+
+    expect(
+      getSparseTsgoGuardError(["-p", "tsconfig.ui.json"], {
+        cwd,
+        fileExists: () => true,
+        isSparseCheckoutEnabled: () => true,
+        sparseCheckoutPatterns: ["/packages/", "/ui/config/", "/ui/src/"],
+      }),
+    ).toMatchInlineSnapshot(`
+      "tsconfig.ui.json cannot be typechecked from this sparse checkout because tracked project inputs are missing or only partially included:
+      - src
+      Expand this worktree's sparse checkout to include those paths, or rerun in a full worktree."
+    `);
+  });
+
+  it("returns a helpful message for sparse core-test worktrees missing ui and packages files", () => {
+    const cwd = createTempDir("openclaw-run-tsgo-");
+
+    expect(
+      getSparseTsgoGuardError(["-p", "test/tsconfig/tsconfig.core.test.json"], {
+        cwd,
+        isSparseCheckoutEnabled: () => true,
+      }),
+    ).toMatchInlineSnapshot(`
+      "tsconfig.core.test.json cannot be typechecked from this sparse checkout because tracked project inputs are missing or only partially included:
+      - packages/plugin-package-contract/src/index.ts
+      - ui/config/control-ui-chunking.ts
+      - ui/src/api/gateway.ts
+      - ui/src/app/settings.ts
+      - ui/src/i18n/lib/registry.ts
+      - ui/src/i18n/lib/types.ts
+      Expand this worktree's sparse checkout to include those paths, or rerun in a full worktree."
+    `);
+  });
+
+  it("recognizes the check:changed sparse-skip env", () => {
+    expect(shouldSkipSparseTsgoGuardError({ OPENCLAW_TSGO_SPARSE_SKIP: "1" })).toBe(true);
+    expect(shouldSkipSparseTsgoGuardError({ OPENCLAW_TSGO_SPARSE_SKIP: "true" })).toBe(true);
+    expect(shouldSkipSparseTsgoGuardError({ OPENCLAW_TSGO_SPARSE_SKIP: "0" })).toBe(false);
+    expect(createSparseTsgoSkipEnv({ PATH: "/usr/bin" })).toStrictEqual({
+      PATH: "/usr/bin",
+      OPENCLAW_TSGO_SPARSE_SKIP: "1",
+    });
+  });
+});

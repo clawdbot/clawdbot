@@ -1,0 +1,1244 @@
+// Read/write/edit tool wrappers for host and sandbox workspaces.
+// Adds workspace-root guards, adaptive read paging, image validation, memory
+// append-only writes, and parameter cleanup around the session file tools.
+
+import fs from "node:fs/promises";
+import path from "node:path";
+import { URL } from "node:url";
+import { detectMime } from "@openclaw/media-core/mime";
+import { formatByteSize } from "@openclaw/normalization-core";
+import { isWindowsDrivePath } from "../infra/archive-path.js";
+import { toErrorObject } from "../infra/errors.js";
+import {
+  canonicalPathFromExistingAncestor,
+  root as fsRoot,
+  FsSafeError,
+} from "../infra/fs-safe.js";
+import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
+import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
+import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
+import {
+  classifyMediaReferenceSource,
+  normalizeMediaReferenceSource,
+  resolveMediaReferenceSandboxPath,
+} from "../media/media-reference.js";
+import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
+import { clampNumber } from "../utils.js";
+import {
+  REQUIRED_PARAM_GROUPS,
+  assertRequiredParams,
+  getToolParamsRecord,
+  normalizeFileToolPathParam,
+  normalizeFileToolPathParamsFromKeys,
+  wrapToolParamValidation,
+} from "./agent-tools.params.js";
+import type { AnyAgentTool } from "./agent-tools.types.js";
+import type { ImageSanitizationLimits } from "./image-sanitization.js";
+import { toRelativeWorkspacePath } from "./path-policy.js";
+import type { AgentToolResult } from "./runtime/index.js";
+import { assertSandboxPath } from "./sandbox-paths.js";
+import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import {
+  createEditTool,
+  createReadTool,
+  createWriteTool,
+  type ReadToolDetails,
+  type ReadToolTruncationDetails,
+} from "./sessions/index.js";
+import { sanitizeToolResultImages } from "./tool-images.js";
+
+// NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
+// to sanitize oversized images before they hit providers.
+type ToolContentBlock = AgentToolResult<unknown>["content"][number];
+type ImageContentBlock = Extract<ToolContentBlock, { type: "image" }>;
+type TextContentBlock = Extract<ToolContentBlock, { type: "text" }>;
+
+const DEFAULT_READ_PAGE_MAX_BYTES = 32 * 1024;
+const MAX_ADAPTIVE_READ_MAX_BYTES = 128 * 1024;
+const ADAPTIVE_READ_CONTEXT_SHARE = 0.1;
+const CHARS_PER_TOKEN_ESTIMATE = 4;
+const MAX_ADAPTIVE_READ_PAGES = 4;
+
+type OpenClawReadToolOptions = {
+  modelContextWindowTokens?: number;
+  imageSanitization?: ImageSanitizationLimits;
+};
+
+type SkillReadContent = {
+  filePath: string;
+  readContent?: string;
+};
+
+type ReadTruncationDetails = {
+  truncated: boolean;
+  outputLines: number;
+  firstLineExceedsLimit: boolean;
+};
+
+const OFFSET_BEYOND_EOF_RE = /^Offset \d+ is beyond end of file \(\d+ lines total\)$/;
+const READ_CONTINUATION_NOTICE_RE =
+  /\n\n\[(?:Showing lines [^\]]*?Use offset=\d+ to continue\.|\d+ more lines in file\. Use offset=\d+ to continue\.)\]\s*$/;
+const DAILY_MEMORY_PATH_RE = /^memory\/\d{4}-\d{2}-\d{2}\.md$/;
+
+function resolveAdaptiveReadMaxBytes(options?: OpenClawReadToolOptions): number {
+  const contextWindowTokens = options?.modelContextWindowTokens;
+  if (
+    typeof contextWindowTokens !== "number" ||
+    !Number.isFinite(contextWindowTokens) ||
+    contextWindowTokens <= 0
+  ) {
+    return DEFAULT_READ_PAGE_MAX_BYTES;
+  }
+  const fromContext = Math.floor(
+    contextWindowTokens * CHARS_PER_TOKEN_ESTIMATE * ADAPTIVE_READ_CONTEXT_SHARE,
+  );
+  return clampNumber(fromContext, DEFAULT_READ_PAGE_MAX_BYTES, MAX_ADAPTIVE_READ_MAX_BYTES);
+}
+
+function malformedXmlArgValuePathError(key: string): Error {
+  return new Error(`Malformed path parameter: ${key}. Supply correct parameters before retrying.`);
+}
+
+function formatBytes(bytes: number): string {
+  return formatByteSize(bytes, {
+    style: "legacy-binary",
+    maxUnit: "mega",
+    separator: "",
+    fractionDigits: (_value, unit) => (unit === "byte" ? null : unit === "kilo" ? 0 : 1),
+  });
+}
+
+function getToolResultText(result: AgentToolResult<unknown>): string | undefined {
+  const content = Array.isArray(result.content) ? result.content : [];
+  const textBlocks = content
+    .map((block) => {
+      if (
+        block &&
+        typeof block === "object" &&
+        (block as { type?: unknown }).type === "text" &&
+        typeof (block as { text?: unknown }).text === "string"
+      ) {
+        return (block as { text: string }).text;
+      }
+      return undefined;
+    })
+    .filter((value): value is string => typeof value === "string");
+  if (textBlocks.length === 0) {
+    return undefined;
+  }
+  return textBlocks.join("\n");
+}
+
+function withToolResultText(
+  result: AgentToolResult<unknown>,
+  text: string,
+): AgentToolResult<unknown> {
+  const content = Array.isArray(result.content) ? result.content : [];
+  let replaced = false;
+  const nextContent: ToolContentBlock[] = content.map((block) => {
+    if (
+      !replaced &&
+      block &&
+      typeof block === "object" &&
+      (block as { type?: unknown }).type === "text"
+    ) {
+      replaced = true;
+      return Object.assign({}, block as TextContentBlock, { text });
+    }
+    return block;
+  });
+  if (replaced) {
+    return {
+      ...result,
+      content: nextContent as unknown as AgentToolResult<unknown>["content"],
+    };
+  }
+  const textBlock = { type: "text", text } as unknown as TextContentBlock;
+  return {
+    ...result,
+    content: [textBlock] as unknown as AgentToolResult<unknown>["content"],
+  };
+}
+
+function extractReadTruncationDetails(
+  result: AgentToolResult<unknown>,
+): ReadTruncationDetails | null {
+  const details = (result as { details?: unknown }).details;
+  if (!details || typeof details !== "object") {
+    return null;
+  }
+  const truncation = (details as { truncation?: unknown }).truncation;
+  if (!truncation || typeof truncation !== "object") {
+    return null;
+  }
+  const record = truncation as Record<string, unknown>;
+  if (record.truncated !== true) {
+    return null;
+  }
+  const outputLinesRaw = record.outputLines;
+  const outputLines =
+    typeof outputLinesRaw === "number" && Number.isFinite(outputLinesRaw)
+      ? Math.max(0, Math.floor(outputLinesRaw))
+      : 0;
+  return {
+    truncated: true,
+    outputLines,
+    firstLineExceedsLimit: record.firstLineExceedsLimit === true,
+  };
+}
+
+function stripReadContinuationNotice(text: string): string {
+  return text.replace(READ_CONTINUATION_NOTICE_RE, "");
+}
+
+function stripReadTruncationContentDetails(
+  result: AgentToolResult<unknown>,
+): AgentToolResult<unknown> {
+  const details = (result as { details?: unknown }).details;
+  if (!details || typeof details !== "object") {
+    return result;
+  }
+
+  const detailsRecord = details as Record<string, unknown>;
+  const truncationRaw = detailsRecord.truncation;
+  if (!truncationRaw || typeof truncationRaw !== "object") {
+    return result;
+  }
+
+  const truncation = truncationRaw as Record<string, unknown>;
+  if (!Object.hasOwn(truncation, "content")) {
+    return result;
+  }
+
+  const { content: _content, ...restTruncation } = truncation;
+  return {
+    ...result,
+    details: {
+      ...detailsRecord,
+      truncation: restTruncation,
+    },
+  };
+}
+
+function isOffsetBeyondEof(error: unknown, args: Record<string, unknown>): boolean {
+  const offset = args.offset;
+  return (
+    typeof offset === "number" &&
+    Number.isFinite(offset) &&
+    offset > 0 &&
+    error instanceof Error &&
+    OFFSET_BEYOND_EOF_RE.test(error.message)
+  );
+}
+
+function emptyReadResult(): AgentToolResult<unknown> {
+  const textBlock = { type: "text", text: "" } satisfies TextContentBlock;
+  return { content: [textBlock], details: undefined };
+}
+
+function missingDailyMemoryReadResult(relativePath: string): AgentToolResult<unknown> {
+  return {
+    content: [
+      {
+        type: "text",
+        text: `No daily memory file exists yet at ${relativePath}.`,
+      },
+    ],
+    details: {
+      status: "not_found",
+      path: relativePath,
+      optional: true,
+    },
+  };
+}
+
+function normalizeDailyMemoryReadPath(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^\.\/+/, "");
+  return DAILY_MEMORY_PATH_RE.test(normalized) ? normalized : undefined;
+}
+
+function isNotFoundError(error: unknown): boolean {
+  if (typeof (error as NodeJS.ErrnoException | undefined)?.code === "string") {
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
+  }
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return /\bENOENT\b|no such file or directory|file not found/i.test(error.message);
+}
+
+async function executeReadPage(params: {
+  base: AnyAgentTool;
+  toolCallId: string;
+  args: Record<string, unknown>;
+  signal?: AbortSignal;
+}): Promise<AgentToolResult<unknown>> {
+  try {
+    return await params.base.execute(params.toolCallId, params.args, params.signal);
+  } catch (error) {
+    if (isOffsetBeyondEof(error, params.args)) {
+      return emptyReadResult();
+    }
+    const missingDailyMemoryPath = normalizeDailyMemoryReadPath(params.args.path);
+    if (missingDailyMemoryPath && isNotFoundError(error)) {
+      return missingDailyMemoryReadResult(missingDailyMemoryPath);
+    }
+    throw error;
+  }
+}
+
+async function executeReadWithAdaptivePaging(params: {
+  base: AnyAgentTool;
+  toolCallId: string;
+  args: Record<string, unknown>;
+  signal?: AbortSignal;
+  maxBytes: number;
+}): Promise<AgentToolResult<unknown>> {
+  const userLimit = params.args.limit;
+  const hasExplicitLimit =
+    typeof userLimit === "number" && Number.isFinite(userLimit) && userLimit > 0;
+  if (hasExplicitLimit) {
+    return await executeReadPage(params);
+  }
+
+  const offsetRaw = params.args.offset;
+  let nextOffset =
+    typeof offsetRaw === "number" && Number.isFinite(offsetRaw) && offsetRaw > 0
+      ? Math.floor(offsetRaw)
+      : 1;
+  let firstResult: AgentToolResult<unknown> | null = null;
+  let aggregatedText = "";
+  let aggregatedBytes = 0;
+  let capped = false;
+  let continuationOffset: number | undefined;
+
+  for (let page = 0; page < MAX_ADAPTIVE_READ_PAGES; page += 1) {
+    const pageArgs = { ...params.args, offset: nextOffset };
+    const pageResult = await executeReadPage({
+      base: params.base,
+      toolCallId: params.toolCallId,
+      args: pageArgs,
+      signal: params.signal,
+    });
+    firstResult ??= pageResult;
+
+    const rawText = getToolResultText(pageResult);
+    if (typeof rawText !== "string") {
+      return pageResult;
+    }
+
+    const truncation = extractReadTruncationDetails(pageResult);
+    const canContinue =
+      Boolean(truncation?.truncated) &&
+      !truncation?.firstLineExceedsLimit &&
+      (truncation?.outputLines ?? 0) > 0 &&
+      page < MAX_ADAPTIVE_READ_PAGES - 1;
+    const pageText = canContinue ? stripReadContinuationNotice(rawText) : rawText;
+    const delimiter = aggregatedText && pageText ? "\n\n" : "";
+    const nextBytes = Buffer.byteLength(`${delimiter}${pageText}`, "utf-8");
+
+    if (aggregatedText && aggregatedBytes + nextBytes > params.maxBytes) {
+      capped = true;
+      continuationOffset = nextOffset;
+      break;
+    }
+
+    aggregatedText += `${delimiter}${pageText}`;
+    aggregatedBytes += nextBytes;
+
+    if (!canContinue || !truncation) {
+      return withToolResultText(pageResult, aggregatedText);
+    }
+
+    nextOffset += truncation.outputLines;
+    continuationOffset = nextOffset;
+
+    if (aggregatedBytes >= params.maxBytes) {
+      capped = true;
+      break;
+    }
+  }
+
+  if (!firstResult) {
+    return await executeReadPage(params);
+  }
+
+  let finalText = aggregatedText;
+  if (capped && continuationOffset) {
+    finalText += `\n\n[Read output capped at ${formatBytes(params.maxBytes)} for this call. Use offset=${continuationOffset} to continue.]`;
+  }
+  return withToolResultText(firstResult, finalText);
+}
+
+function rewriteReadImageHeader(text: string, mimeType: string): string {
+  // session runtime uses: "Read image file [image/png]"
+  if (text.startsWith("Read image file [") && text.endsWith("]")) {
+    return `Read image file [${mimeType}]`;
+  }
+  return text;
+}
+
+async function normalizeReadImageResult(
+  result: AgentToolResult<unknown>,
+  filePath: string,
+): Promise<AgentToolResult<unknown>> {
+  const content = Array.isArray(result.content) ? result.content : [];
+
+  const image = content.find(
+    (b): b is ImageContentBlock =>
+      Boolean(b) &&
+      typeof b === "object" &&
+      (b as { type?: unknown }).type === "image" &&
+      typeof (b as { data?: unknown }).data === "string" &&
+      typeof (b as { mimeType?: unknown }).mimeType === "string",
+  );
+  if (!image) {
+    return result;
+  }
+
+  if (!image.data.trim()) {
+    throw new Error(`read: image payload is empty (${filePath})`);
+  }
+
+  const sniffed = await sniffMimeFromBase64(image.data);
+  if (!sniffed) {
+    return result;
+  }
+
+  if (!sniffed.startsWith("image/")) {
+    throw new Error(
+      `read: file looks like ${sniffed} but was treated as ${image.mimeType} (${filePath})`,
+    );
+  }
+
+  if (sniffed === image.mimeType) {
+    return result;
+  }
+
+  const nextContent = content.map((block) => {
+    if (block && typeof block === "object" && (block as { type?: unknown }).type === "image") {
+      const b = block as ImageContentBlock & { mimeType: string };
+      return Object.assign({}, b, { mimeType: sniffed }) satisfies ImageContentBlock;
+    }
+    if (
+      block &&
+      typeof block === "object" &&
+      (block as { type?: unknown }).type === "text" &&
+      typeof (block as { text?: unknown }).text === "string"
+    ) {
+      const b = block as TextContentBlock & { text: string };
+      return Object.assign({}, b, {
+        text: rewriteReadImageHeader(b.text, sniffed),
+      }) satisfies TextContentBlock;
+    }
+    return block;
+  });
+
+  return { ...result, content: nextContent };
+}
+
+function normalizeReadResultDetails(
+  result: AgentToolResult<unknown>,
+): AgentToolResult<ReadToolDetails> {
+  const currentDetails =
+    result.details && typeof result.details === "object"
+      ? (result.details as Record<string, unknown>)
+      : undefined;
+  if (
+    currentDetails?.status === "not_found" &&
+    typeof currentDetails.path === "string" &&
+    currentDetails.optional === true
+  ) {
+    return {
+      ...result,
+      details: {
+        kind: "not_found",
+        status: "not_found",
+        path: currentDetails.path,
+        optional: true,
+      },
+    };
+  }
+
+  const content = Array.isArray(result.content) ? result.content : [];
+  const text = getToolResultText(result) ?? "";
+  const image = content.find(
+    (block): block is ImageContentBlock =>
+      Boolean(block) &&
+      typeof block === "object" &&
+      (block as { type?: unknown }).type === "image" &&
+      typeof (block as { mimeType?: unknown }).mimeType === "string",
+  );
+  if (image) {
+    return { ...result, details: { kind: "image", content: text, mimeType: image.mimeType } };
+  }
+
+  const truncation = currentDetails?.truncation;
+  if (truncation && typeof truncation === "object") {
+    return {
+      ...result,
+      details: {
+        kind: "truncated",
+        content: text,
+        truncation: truncation as ReadToolTruncationDetails,
+      },
+    };
+  }
+  return { ...result, details: { kind: "text", content: text } };
+}
+
+/** Wrap a file tool so path params stay inside the workspace root. */
+export function wrapToolWorkspaceRootGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
+  return wrapToolWorkspaceRootGuardWithOptions(tool, root);
+}
+
+function mapContainerPathToWorkspaceRoot(params: {
+  filePath: string;
+  root: string;
+  containerWorkdir?: string;
+}): string {
+  return mapContainerPathToRoot({
+    filePath: params.filePath,
+    root: params.root,
+    containerRoot: params.containerWorkdir,
+  }).filePath;
+}
+
+function resolveContainerPathCandidate(filePath: string): string | null {
+  let candidate = filePath.startsWith("@") ? filePath.slice(1) : filePath;
+  if (/^file:\/\//i.test(candidate)) {
+    const localFilePath = trySafeFileURLToPath(candidate);
+    if (localFilePath) {
+      candidate = localFilePath;
+    } else {
+      // Windows rejects posix-style file:///workspace/... in fileURLToPath; map via URL pathname
+      // when it clearly refers to the container workdir (same idea as sandbox-paths).
+      let parsed: URL;
+      try {
+        parsed = new URL(candidate);
+      } catch {
+        return filePath;
+      }
+      if (parsed.protocol !== "file:") {
+        return filePath;
+      }
+      const host = parsed.hostname.trim().toLowerCase();
+      if (host && host !== "localhost") {
+        return filePath;
+      }
+      if (hasEncodedFileUrlSeparator(parsed.pathname)) {
+        return filePath;
+      }
+      let normalizedPathname: string;
+      try {
+        normalizedPathname = decodeURIComponent(parsed.pathname).replace(/\\/g, "/");
+      } catch {
+        return filePath;
+      }
+      candidate = normalizedPathname;
+    }
+  }
+  return candidate;
+}
+
+function mapContainerPathToRoot(params: {
+  filePath: string;
+  root: string;
+  containerRoot?: string;
+}): { filePath: string; matched: boolean } {
+  const containerRoot = params.containerRoot?.trim();
+  if (!containerRoot) {
+    return { filePath: params.filePath, matched: false };
+  }
+  const normalizedRoot = containerRoot.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (!normalizedRoot.startsWith("/") || !normalizedRoot) {
+    return { filePath: params.filePath, matched: false };
+  }
+
+  const candidate = resolveContainerPathCandidate(params.filePath);
+  if (candidate === null) {
+    return { filePath: params.filePath, matched: false };
+  }
+
+  const normalizedCandidate = path.posix.normalize(candidate.replace(/\\/g, "/"));
+  if (normalizedCandidate === normalizedRoot) {
+    return { filePath: path.resolve(params.root), matched: true };
+  }
+  const prefix = `${normalizedRoot}/`;
+  if (!normalizedCandidate.startsWith(prefix)) {
+    return { filePath: candidate, matched: false };
+  }
+  const relative = normalizedCandidate.slice(prefix.length);
+  if (!relative) {
+    return { filePath: path.resolve(params.root), matched: true };
+  }
+  return {
+    filePath: path.resolve(params.root, ...relative.split("/").filter(Boolean)),
+    matched: true,
+  };
+}
+
+/** Resolve a model-supplied file path against the host workspace root. */
+function resolveToolPathAgainstWorkspaceRoot(params: {
+  filePath: string;
+  root: string;
+  containerWorkdir?: string;
+}): string {
+  const mapped = mapContainerPathToWorkspaceRoot(params);
+  const candidate = mapped.startsWith("@") ? mapped.slice(1) : mapped;
+  if (isWindowsDrivePath(candidate)) {
+    return path.win32.normalize(candidate);
+  }
+  if (path.isAbsolute(candidate)) {
+    return path.resolve(candidate);
+  }
+  return path.resolve(params.root, candidate || ".");
+}
+
+type MemoryFlushAppendOnlyWriteOptions = {
+  root: string;
+  relativePath: string;
+  containerWorkdir?: string;
+  sandbox?: {
+    root: string;
+    bridge: SandboxFsBridge;
+  };
+};
+
+async function readOptionalUtf8File(params: {
+  absolutePath: string;
+  relativePath: string;
+  sandbox?: MemoryFlushAppendOnlyWriteOptions["sandbox"];
+  signal?: AbortSignal;
+}): Promise<string> {
+  try {
+    if (params.sandbox) {
+      const stat = await params.sandbox.bridge.stat({
+        filePath: params.relativePath,
+        cwd: params.sandbox.root,
+        signal: params.signal,
+      });
+      if (!stat) {
+        return "";
+      }
+      const buffer = await params.sandbox.bridge.readFile({
+        filePath: params.relativePath,
+        cwd: params.sandbox.root,
+        signal: params.signal,
+      });
+      return buffer.toString("utf-8");
+    }
+    return await fs.readFile(params.absolutePath, "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+      return "";
+    }
+    throw error;
+  }
+}
+
+async function appendMemoryFlushContent(params: {
+  absolutePath: string;
+  root: string;
+  relativePath: string;
+  content: string;
+  sandbox?: MemoryFlushAppendOnlyWriteOptions["sandbox"];
+  signal?: AbortSignal;
+}) {
+  if (!params.sandbox) {
+    const root = await fsRoot(params.root);
+    await root.append(params.relativePath, params.content, {
+      mkdir: true,
+      prependNewlineIfNeeded: true,
+    });
+    return;
+  }
+
+  const existing = await readOptionalUtf8File({
+    absolutePath: params.absolutePath,
+    relativePath: params.relativePath,
+    sandbox: params.sandbox,
+    signal: params.signal,
+  });
+  const separator =
+    existing.length > 0 && !existing.endsWith("\n") && !params.content.startsWith("\n") ? "\n" : "";
+  const next = `${existing}${separator}${params.content}`;
+  if (params.sandbox) {
+    const parent = path.posix.dirname(params.relativePath);
+    if (parent && parent !== ".") {
+      await params.sandbox.bridge.mkdirp({
+        filePath: parent,
+        cwd: params.sandbox.root,
+        signal: params.signal,
+      });
+    }
+    await params.sandbox.bridge.writeFile({
+      filePath: params.relativePath,
+      cwd: params.sandbox.root,
+      data: next,
+      mkdir: true,
+      signal: params.signal,
+    });
+    return;
+  }
+  await fs.mkdir(path.dirname(params.absolutePath), { recursive: true });
+  await fs.writeFile(params.absolutePath, next, "utf-8");
+}
+
+/** Restrict a write tool to appending memory-flush content to one path. */
+export function wrapToolMemoryFlushAppendOnlyWrite(
+  tool: AnyAgentTool,
+  options: MemoryFlushAppendOnlyWriteOptions,
+): AnyAgentTool {
+  const allowedAbsolutePath = path.resolve(options.root, options.relativePath);
+  return {
+    ...tool,
+    description: `${tool.description} During memory flush, this tool may only append to ${options.relativePath}.`,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      const record = getToolParamsRecord(args);
+      const normalizedRecord = record
+        ? normalizeFileToolPathParamsFromKeys(record, ["path"])
+        : undefined;
+      assertRequiredParams(normalizedRecord, REQUIRED_PARAM_GROUPS.write, tool.name);
+      const filePath =
+        typeof normalizedRecord?.path === "string" && normalizedRecord.path.trim()
+          ? normalizedRecord.path
+          : undefined;
+      const content = typeof record?.content === "string" ? record.content : undefined;
+      if (!filePath || content === undefined) {
+        return tool.execute(toolCallId, args, signal, onUpdate);
+      }
+
+      const resolvedPath = resolveToolPathAgainstWorkspaceRoot({
+        filePath,
+        root: options.root,
+        containerWorkdir: options.containerWorkdir,
+      });
+      if (resolvedPath !== allowedAbsolutePath) {
+        throw new Error(
+          `Memory flush writes are restricted to ${options.relativePath}; use that path only.`,
+        );
+      }
+
+      await appendMemoryFlushContent({
+        absolutePath: allowedAbsolutePath,
+        root: options.root,
+        relativePath: options.relativePath,
+        content,
+        sandbox: options.sandbox,
+        signal,
+      });
+      return {
+        content: [{ type: "text", text: `Appended content to ${options.relativePath}.` }],
+        details: {
+          path: options.relativePath,
+          appendOnly: true,
+        },
+      };
+    },
+  };
+}
+
+function isSandboxRootEscapeError(error: unknown): error is Error {
+  return error instanceof Error && /^Path escapes sandbox root \(/i.test(error.message);
+}
+
+function withWorkspaceSafeTempHint(error: unknown): unknown {
+  if (!isSandboxRootEscapeError(error)) {
+    return error;
+  }
+  const message = error.message.includes(".openclaw/tmp/")
+    ? error.message
+    : `${error.message}. Use a relative path under \`.openclaw/tmp/\` inside the workspace for scratch/temp/meta files that file tools need to read or write later.`;
+  return new Error(message, { cause: error });
+}
+
+async function assertSandboxPathWithinAnyRoot(params: {
+  filePath: string;
+  roots: readonly string[];
+}) {
+  let firstRootEscapeError: unknown;
+  const seen = new Set<string>();
+  for (const candidateRoot of params.roots) {
+    const trimmedRoot = candidateRoot.trim();
+    if (!trimmedRoot) {
+      continue;
+    }
+    const root = path.resolve(trimmedRoot);
+    if (seen.has(root)) {
+      continue;
+    }
+    seen.add(root);
+    try {
+      return await assertSandboxPath({
+        filePath: params.filePath,
+        cwd: root,
+        root,
+      });
+    } catch (error) {
+      if (!isSandboxRootEscapeError(error)) {
+        throw error;
+      }
+      firstRootEscapeError ??= error;
+    }
+  }
+  throw toErrorObject(
+    firstRootEscapeError ?? new Error("Path guard has no configured roots."),
+    "Non-Error thrown",
+  );
+}
+
+/** Wrap a file tool with workspace guards and optional container path mapping. */
+export function wrapToolWorkspaceRootGuardWithOptions(
+  tool: AnyAgentTool,
+  root: string,
+  options?: {
+    additionalRoots?: readonly string[];
+    additionalContainerMounts?: readonly {
+      containerRoot: string;
+      hostRoot: string;
+    }[];
+    containerWorkdir?: string;
+    pathParamKeys?: readonly string[];
+    normalizeGuardedPathParams?: boolean;
+  },
+): AnyAgentTool {
+  const pathParamKeys =
+    options?.pathParamKeys && options.pathParamKeys.length > 0 ? options.pathParamKeys : ["path"];
+  return {
+    ...tool,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      const record = getToolParamsRecord(args);
+      let normalizedRecord: Record<string, unknown> | undefined;
+      for (const key of pathParamKeys) {
+        const rawFilePath = record?.[key];
+        if (typeof rawFilePath !== "string" || !rawFilePath.trim()) {
+          continue;
+        }
+        const filePath = normalizeFileToolPathParam(rawFilePath);
+        if (!filePath.trim()) {
+          throw malformedXmlArgValuePathError(key);
+        }
+        if (filePath !== rawFilePath && record) {
+          normalizedRecord ??= { ...record };
+          normalizedRecord[key] = filePath;
+        }
+        let guardedRoot = root;
+        let workspaceMapping: ReturnType<typeof mapContainerPathToRoot> | undefined;
+        let sandboxPath = filePath;
+        for (const mount of [...(options?.additionalContainerMounts ?? [])].toSorted(
+          (a, b) => b.containerRoot.length - a.containerRoot.length,
+        )) {
+          const mountMapping = mapContainerPathToRoot({
+            filePath,
+            root: mount.hostRoot,
+            containerRoot: mount.containerRoot,
+          });
+          if (mountMapping.matched) {
+            guardedRoot = path.resolve(mount.hostRoot);
+            sandboxPath = mountMapping.filePath;
+            break;
+          }
+        }
+        if (guardedRoot === root) {
+          workspaceMapping = mapContainerPathToRoot({
+            filePath,
+            root,
+            containerRoot: options?.containerWorkdir,
+          });
+          sandboxPath = workspaceMapping.filePath;
+        }
+        const additionalRoots =
+          guardedRoot === root && !workspaceMapping?.matched
+            ? (options?.additionalRoots ?? [])
+            : [];
+        let sandboxResult: Awaited<ReturnType<typeof assertSandboxPathWithinAnyRoot>>;
+        try {
+          sandboxResult = await assertSandboxPathWithinAnyRoot({
+            filePath: sandboxPath,
+            roots: [guardedRoot, ...additionalRoots],
+          });
+        } catch (error) {
+          throw withWorkspaceSafeTempHint(error);
+        }
+        if (options?.normalizeGuardedPathParams && record) {
+          normalizedRecord ??= { ...record };
+          normalizedRecord[key] = sandboxResult.resolved;
+        }
+      }
+      return tool.execute(toolCallId, normalizedRecord ?? args, signal, onUpdate);
+    },
+  };
+}
+
+type SandboxToolParams = {
+  root: string;
+  bridge: SandboxFsBridge;
+  modelContextWindowTokens?: number;
+  imageSanitization?: ImageSanitizationLimits;
+};
+
+/** Create a sandbox-backed read tool with OpenClaw result normalization. */
+export function createSandboxedReadTool(params: SandboxToolParams) {
+  const base = createReadTool(params.root, {
+    operations: createSandboxReadOperations(params),
+  }) as unknown as AnyAgentTool;
+  return createOpenClawReadTool(base, {
+    modelContextWindowTokens: params.modelContextWindowTokens,
+    imageSanitization: params.imageSanitization,
+  });
+}
+
+/** Create a sandbox-backed write tool with required-parameter validation. */
+export function createSandboxedWriteTool(params: SandboxToolParams) {
+  const base = createWriteTool(params.root, {
+    operations: createSandboxWriteOperations(params),
+  }) as unknown as AnyAgentTool;
+  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+}
+
+/** Create a sandbox-backed edit tool with required-parameter validation. */
+export function createSandboxedEditTool(params: SandboxToolParams) {
+  const base = createEditTool(params.root, {
+    operations: createSandboxEditOperations(params),
+  }) as unknown as AnyAgentTool;
+  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit);
+}
+
+/** Create a host workspace write tool using guarded filesystem operations. */
+export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
+  const base = createWriteTool(root, {
+    operations: createHostWriteOperations(root, options),
+  }) as unknown as AnyAgentTool;
+  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+}
+
+/** Create a host workspace edit tool using guarded filesystem operations. */
+export function createHostWorkspaceEditTool(root: string, options?: { workspaceOnly?: boolean }) {
+  const base = createEditTool(root, {
+    operations: createHostEditOperations(root, options),
+  }) as unknown as AnyAgentTool;
+  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit);
+}
+
+/** Wrap the base read tool with OpenClaw paging, MIME, and image handling. */
+export function createOpenClawReadTool(
+  base: AnyAgentTool,
+  options?: OpenClawReadToolOptions,
+): AnyAgentTool {
+  return {
+    ...base,
+    execute: async (toolCallId, params, signal) => {
+      const record = getToolParamsRecord(params);
+      const normalizedRecord = record
+        ? normalizeFileToolPathParamsFromKeys(record, ["path"])
+        : undefined;
+      assertRequiredParams(normalizedRecord, REQUIRED_PARAM_GROUPS.read, base.name);
+      const result = await executeReadWithAdaptivePaging({
+        base,
+        toolCallId,
+        args: normalizedRecord ?? {},
+        signal,
+        maxBytes: resolveAdaptiveReadMaxBytes(options),
+      });
+      const filePath =
+        typeof normalizedRecord?.path === "string" ? normalizedRecord.path : "<unknown>";
+      const strippedDetailsResult = stripReadTruncationContentDetails(result);
+      const normalizedResult = await normalizeReadImageResult(strippedDetailsResult, filePath);
+      const sanitizedResult = await sanitizeToolResultImages(
+        normalizedResult,
+        `read:${filePath}`,
+        options?.imageSanitization,
+      );
+      return normalizeReadResultDetails(sanitizedResult);
+    },
+  };
+}
+
+/** Serve exact non-filesystem skill locators before workspace path guards run. */
+export function wrapReadToolWithSkillContent(
+  tool: AnyAgentTool,
+  skills: readonly SkillReadContent[] | undefined,
+  options?: OpenClawReadToolOptions,
+): AnyAgentTool {
+  const contentByPath = new Map(
+    (skills ?? []).flatMap((skill) =>
+      skill.filePath.startsWith("node://") && typeof skill.readContent === "string"
+        ? [[skill.filePath, skill.readContent] as const]
+        : [],
+    ),
+  );
+  if (contentByPath.size === 0) {
+    return tool;
+  }
+  const readContent = (filePath: string): string => {
+    const content = contentByPath.get(filePath);
+    if (content === undefined) {
+      throw Object.assign(new Error(`Virtual skill file not found: ${filePath}`), {
+        code: "ENOENT",
+      });
+    }
+    return content;
+  };
+  const virtualBase = createReadTool("/", {
+    operations: {
+      resolvePath: (filePath) => filePath,
+      access: async (filePath) => void readContent(filePath),
+      readFile: async (filePath) => Buffer.from(readContent(filePath), "utf8"),
+    },
+  }) as unknown as AnyAgentTool;
+  const virtualRead = createOpenClawReadTool(virtualBase, options);
+  return {
+    ...tool,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      const record = getToolParamsRecord(args);
+      const rawPath = record?.path;
+      const normalizedPath =
+        typeof rawPath === "string" ? normalizeFileToolPathParam(rawPath) : undefined;
+      if (normalizedPath && contentByPath.has(normalizedPath)) {
+        const virtualArgs =
+          normalizedPath === rawPath || !record ? args : { ...record, path: normalizedPath };
+        return virtualRead.execute(toolCallId, virtualArgs, signal, onUpdate);
+      }
+      return tool.execute(toolCallId, args, signal, onUpdate);
+    },
+  };
+}
+
+function createSandboxReadOperations(params: SandboxToolParams) {
+  return {
+    resolvePath: (filePath: string) => {
+      const normalizedMediaSource = normalizeMediaReferenceSource(filePath);
+      if (classifyMediaReferenceSource(normalizedMediaSource).isMediaStoreUrl) {
+        return resolveMediaReferenceSandboxPath(normalizedMediaSource, "media/inbound").resolved;
+      }
+      return resolveContainerPathCandidate(filePath) ?? filePath;
+    },
+    decodeText: ({ buffer, absolutePath }: { buffer: Buffer; absolutePath: string }) =>
+      params.bridge.resolvePath({ filePath: absolutePath, cwd: params.root }).hostPath
+        ? decodeWindowsTextFileBuffer({ buffer })
+        : buffer.toString("utf8"),
+    readFile: (absolutePath: string) =>
+      params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
+    access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),
+    detectImageMimeType: async (absolutePath: string) => {
+      const buffer = await params.bridge.readFile({ filePath: absolutePath, cwd: params.root });
+      const mime = await detectMime({ buffer, filePath: absolutePath });
+      return mime && mime.startsWith("image/") ? mime : undefined;
+    },
+  } as const;
+}
+
+function createSandboxWriteOperations(params: SandboxToolParams) {
+  return {
+    mkdir: async (dir: string) => {
+      await params.bridge.mkdirp({ filePath: dir, cwd: params.root });
+    },
+    writeFile: async (absolutePath: string, content: string) => {
+      await params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content });
+    },
+    readFile: (absolutePath: string) =>
+      params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
+    statFile: (absolutePath: string) =>
+      params.bridge.stat({ filePath: absolutePath, cwd: params.root }),
+  } as const;
+}
+
+function createSandboxEditOperations(params: SandboxToolParams) {
+  return {
+    readFile: (absolutePath: string) =>
+      params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
+    writeFile: (absolutePath: string, content: string) =>
+      params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content }),
+    access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),
+  } as const;
+}
+
+async function assertSandboxFileExists(params: SandboxToolParams, absolutePath: string) {
+  const stat = await params.bridge.stat({ filePath: absolutePath, cwd: params.root });
+  if (!stat) {
+    throw createFsAccessError("ENOENT", absolutePath);
+  }
+}
+
+function expandTildeToOsHome(filePath: string): string {
+  const home = resolveOsHomeDir();
+  return home ? expandHomePrefix(filePath, { home }) : filePath;
+}
+
+function resolveHostPath(filePath: string): string {
+  return path.resolve(expandTildeToOsHome(filePath));
+}
+
+async function writeHostFile(absolutePath: string, content: string) {
+  const resolved = resolveHostPath(absolutePath);
+  await fs.mkdir(path.dirname(resolved), { recursive: true });
+  await fs.writeFile(resolved, content, "utf-8");
+}
+
+async function statHostFile(absolutePath: string) {
+  try {
+    const stat = await fs.stat(absolutePath);
+    return {
+      type: stat.isFile() ? "file" : stat.isDirectory() ? "directory" : "other",
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+    } as const;
+  } catch (error) {
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      (error as { code?: unknown }).code === "ENOENT"
+    ) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function writeWorkspaceFile(
+  root: string,
+  getRoot: () => ReturnType<typeof fsRoot>,
+  absolutePath: string,
+  content: string,
+) {
+  // Validate the path before starting the fs-safe root: call getRoot() (which opens the
+  // root dir, rejecting if the workspace is missing) only after toCanonicalRelativeWorkspacePath
+  // succeeds. Eagerly starting it would orphan a rejecting root promise as an unhandled
+  // rejection when validation fails first — the readFile/access paths already defer the same way.
+  const relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
+  await (await getRoot()).write(relative, content, { mkdir: true });
+}
+
+function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
+  const workspaceOnly = options?.workspaceOnly ?? false;
+
+  if (!workspaceOnly) {
+    // When workspaceOnly is false, allow writes anywhere on the host
+    return {
+      mkdir: async (dir: string) => {
+        const resolved = resolveHostPath(dir);
+        await fs.mkdir(resolved, { recursive: true });
+      },
+      writeFile: writeHostFile,
+      readFile: async (absolutePath: string) =>
+        fs.readFile(path.resolve(expandTildeToOsHome(absolutePath))),
+      statFile: (absolutePath: string) =>
+        statHostFile(path.resolve(expandTildeToOsHome(absolutePath))),
+    } as const;
+  }
+
+  // When workspaceOnly is true, enforce workspace boundary. Resolve the fs-safe
+  // root lazily on first use: constructing the tool (e.g. doctor projecting tool
+  // schemas) must not open an fs handle, and a missing workspace dir must not
+  // orphan a rejecting promise as "Unhandled promise rejection: root dir not found".
+  let rootPromise: ReturnType<typeof fsRoot> | undefined;
+  const getRoot = () => (rootPromise ??= fsRoot(root));
+  return {
+    mkdir: async (dir: string) => {
+      const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
+      const resolved = relative ? path.resolve(root, relative) : path.resolve(root);
+      await assertSandboxPath({ filePath: resolved, cwd: root, root });
+      await fs.mkdir(resolved, { recursive: true });
+    },
+    writeFile: (absolutePath: string, content: string) =>
+      writeWorkspaceFile(root, getRoot, absolutePath, content),
+    readFile: async (absolutePath: string) => {
+      const relative = toRelativeWorkspacePath(root, absolutePath);
+      return (await (await getRoot()).read(relative)).buffer;
+    },
+    statFile: async (absolutePath: string) => {
+      const relative = toRelativeWorkspacePath(root, absolutePath);
+      return statHostFile(path.resolve(root, relative));
+    },
+  } as const;
+}
+
+function createHostEditOperations(root: string, options?: { workspaceOnly?: boolean }) {
+  const workspaceOnly = options?.workspaceOnly ?? false;
+
+  if (!workspaceOnly) {
+    // When workspaceOnly is false, allow edits anywhere on the host
+    return {
+      readFile: async (absolutePath: string) => {
+        return await fs.readFile(resolveHostPath(absolutePath));
+      },
+      writeFile: writeHostFile,
+      access: async (absolutePath: string) => {
+        await fs.access(resolveHostPath(absolutePath));
+      },
+    } as const;
+  }
+
+  // When workspaceOnly is true, enforce workspace boundary. Resolve the fs-safe
+  // root lazily on first use: constructing the tool (e.g. doctor projecting tool
+  // schemas) must not open an fs handle, and a missing workspace dir must not
+  // orphan a rejecting promise as "Unhandled promise rejection: root dir not found".
+  let rootPromise: ReturnType<typeof fsRoot> | undefined;
+  const getRoot = () => (rootPromise ??= fsRoot(root));
+  return {
+    readFile: async (absolutePath: string) => {
+      const relative = toRelativeWorkspacePath(root, absolutePath);
+      const safeRead = await (await getRoot()).read(relative);
+      return safeRead.buffer;
+    },
+    writeFile: (absolutePath: string, content: string) =>
+      writeWorkspaceFile(root, getRoot, absolutePath, content),
+    access: async (absolutePath: string) => {
+      let relative: string;
+      try {
+        relative = toRelativeWorkspacePath(root, absolutePath);
+      } catch {
+        // Path escapes workspace root.  Don't throw here – the upstream
+        // library replaces any `access` error with a misleading "File not
+        // found" message.  By returning silently the subsequent `readFile`
+        // call will throw the same "Path escapes workspace root" error
+        // through a code-path that propagates the original message.
+        return;
+      }
+      try {
+        const opened = await (await getRoot()).open(relative);
+        await opened.handle.close().catch(() => {});
+      } catch (error) {
+        if (error instanceof FsSafeError && error.code === "not-found") {
+          throw createFsAccessError("ENOENT", absolutePath);
+        }
+        if (error instanceof FsSafeError && error.code === "outside-workspace") {
+          // Don't throw here – see the comment above about the upstream
+          // library swallowing access errors as "File not found".
+          return;
+        }
+        throw error;
+      }
+    },
+  } as const;
+}
+
+async function toCanonicalRelativeWorkspacePath(
+  root: string,
+  absolutePath: string,
+): Promise<string> {
+  const lexicalRelative = toRelativeWorkspacePath(root, absolutePath);
+  const lexicalPath = path.resolve(root, lexicalRelative);
+  const parentPath = path.dirname(lexicalPath);
+  const [rootReal, canonicalParentPath] = await Promise.all([
+    fs.realpath(root),
+    canonicalPathFromExistingAncestor(parentPath),
+  ]);
+  const canonicalPath = path.join(canonicalParentPath, path.basename(lexicalPath));
+  return toRelativeWorkspacePath(rootReal, canonicalPath);
+}
+
+function createFsAccessError(code: string, filePath: string): NodeJS.ErrnoException {
+  const error = new Error(`Sandbox FS error (${code}): ${filePath}`) as NodeJS.ErrnoException;
+  error.code = code;
+  return error;
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

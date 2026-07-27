@@ -1,10 +1,9 @@
+// Hook config helpers read, normalize, and update hook configuration.
 import type { OpenClawConfig, HookConfig } from "../config/config.js";
 import {
   evaluateRuntimeEligibility,
   hasBinary,
   isConfigPathTruthyWithDefaults,
-  resolveConfigPath,
-  resolveRuntimePlatform,
 } from "../shared/config-eval.js";
 import { resolveHookConfig, resolveHookEnableState } from "./policy.js";
 import type { HookEligibilityContext, HookEntry } from "./types.js";
@@ -15,13 +14,21 @@ const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
   "workspace.dir": true,
 };
 
-export { hasBinary, resolveConfigPath, resolveRuntimePlatform };
+export { hasBinary };
 
-export function isConfigPathTruthy(config: OpenClawConfig | undefined, pathStr: string): boolean {
+/** Evaluate a config path with hook-specific defaults for legacy runtime requirements. */
+export function isHookConfigPathTruthy(
+  config: OpenClawConfig | undefined,
+  pathStr: string,
+): boolean {
   return isConfigPathTruthyWithDefaults(config, pathStr, DEFAULT_CONFIG_VALUES);
 }
 
 export { resolveHookConfig };
+
+export function isHookEnvSatisfied(envName: string, hookConfig?: HookConfig): boolean {
+  return Boolean(process.env[envName]?.trim() || hookConfig?.env?.[envName]?.trim());
+}
 
 function evaluateHookRuntimeEligibility(params: {
   entry: HookEntry;
@@ -31,6 +38,8 @@ function evaluateHookRuntimeEligibility(params: {
 }): boolean {
   const { entry, config, hookConfig, eligibility } = params;
   const remote = eligibility?.remote;
+  // Hook metadata uses the same requirement language as plugins, but hook env
+  // can also come from the per-hook config block.
   const base = {
     os: entry.metadata?.os,
     remotePlatforms: remote?.platforms,
@@ -42,11 +51,12 @@ function evaluateHookRuntimeEligibility(params: {
   return evaluateRuntimeEligibility({
     ...base,
     hasBin: hasBinary,
-    hasEnv: (envName) => Boolean(process.env[envName] || hookConfig?.env?.[envName]),
-    isConfigPathTruthy: (configPath) => isConfigPathTruthy(config, configPath),
+    hasEnv: (envName) => isHookEnvSatisfied(envName, hookConfig),
+    isConfigPathTruthy: (configPath) => isHookConfigPathTruthy(config, configPath),
   });
 }
 
+/** Return true when a hook passes enable policy and runtime requirements. */
 export function shouldIncludeHook(params: {
   entry: HookEntry;
   config?: OpenClawConfig;

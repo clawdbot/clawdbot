@@ -1,3 +1,8 @@
+/**
+ * Sandbox defaults and state paths.
+ *
+ * Centralizes image names, container prefixes, workspace paths, browser ports, and registry locations.
+ */
 import path from "node:path";
 import { CHANNEL_IDS } from "../../channels/ids.js";
 import { STATE_DIR } from "../../config/paths.js";
@@ -10,6 +15,10 @@ export const DEFAULT_SANDBOX_WORKDIR = "/workspace";
 export const DEFAULT_SANDBOX_IDLE_HOURS = 24;
 export const DEFAULT_SANDBOX_MAX_AGE_DAYS = 7;
 
+// Shell bridges materialize complete stdout/stderr buffers in the gateway.
+// Bound sandbox-controlled output before it can exhaust the host heap.
+export const SANDBOX_COMMAND_MAX_BUFFER_BYTES = 100 * 1024 * 1024;
+
 export const DEFAULT_TOOL_ALLOW = [
   "exec",
   "process",
@@ -20,6 +29,7 @@ export const DEFAULT_TOOL_ALLOW = [
   "image",
   "sessions_list",
   "sessions_history",
+  "sessions_search",
   "sessions_send",
   "sessions_spawn",
   "sessions_yield",
@@ -31,6 +41,8 @@ export const DEFAULT_TOOL_ALLOW = [
 export const DEFAULT_TOOL_DENY = [
   "browser",
   "canvas",
+  "computer",
+  "mobile_ui",
   "nodes",
   "cron",
   "gateway",
@@ -39,7 +51,12 @@ export const DEFAULT_TOOL_DENY = [
 
 export const DEFAULT_SANDBOX_BROWSER_IMAGE = "openclaw-sandbox-browser:bookworm-slim";
 export const DEFAULT_SANDBOX_COMMON_IMAGE = "openclaw-sandbox-common:bookworm-slim";
-export const SANDBOX_BROWSER_SECURITY_HASH_EPOCH = "2026-02-28-no-sandbox-env";
+export const SANDBOX_BROWSER_SECURITY_HASH_EPOCH = "2026-05-12-cdp-relay-auth";
+export const SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH = "2026-05-12-cdp-relay-auth";
+
+// Bump with shared Docker create-flag changes so existing ordinary and browser
+// sandboxes roll through the hash/recreate path instead of keeping stale flags.
+export const SANDBOX_DOCKER_CREATE_ARGS_EPOCH = "2026-07-10-init";
 
 export const DEFAULT_SANDBOX_BROWSER_PREFIX = "openclaw-sbx-browser-";
 export const DEFAULT_SANDBOX_BROWSER_NETWORK = "openclaw-sandbox-browser";
@@ -53,3 +70,5 @@ export const SANDBOX_AGENT_WORKSPACE_MOUNT = "/agent";
 export const SANDBOX_STATE_DIR = path.join(STATE_DIR, "sandbox");
 export const SANDBOX_REGISTRY_PATH = path.join(SANDBOX_STATE_DIR, "containers.json");
 export const SANDBOX_BROWSER_REGISTRY_PATH = path.join(SANDBOX_STATE_DIR, "browsers.json");
+export const SANDBOX_CONTAINERS_DIR = path.join(SANDBOX_STATE_DIR, "containers");
+export const SANDBOX_BROWSERS_DIR = path.join(SANDBOX_STATE_DIR, "browsers");

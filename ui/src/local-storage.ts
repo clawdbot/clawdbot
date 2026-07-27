@@ -1,3 +1,4 @@
+// Control UI module implements local storage behavior.
 function isStorage(value: unknown): value is Storage {
   return (
     Boolean(value) &&

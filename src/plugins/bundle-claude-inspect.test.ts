@@ -1,10 +1,11 @@
+// Covers Claude bundle inspection for plugin packaging metadata.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
+import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 /**
  * Integration test: builds a Claude Code bundle plugin fixture on disk
@@ -13,6 +14,7 @@ import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
  */
 describe("Claude bundle plugin inspect integration", () => {
   let rootDir: string;
+  const tempDirs: string[] = [];
 
   function writeFixtureText(relativePath: string, value: string) {
     fs.mkdirSync(path.dirname(path.join(rootDir, relativePath)), { recursive: true });
@@ -100,15 +102,15 @@ describe("Claude bundle plugin inspect integration", () => {
 
   function expectClaudeManifestField(params: {
     field: "skills" | "hooks" | "settingsFiles" | "capabilities";
-    includes: readonly string[];
+    expected: readonly string[];
   }) {
     const manifest = expectLoadedClaudeManifest();
     const values = manifest[params.field];
-    expect(values).toEqual(expect.arrayContaining([...params.includes]));
+    expect(values).toEqual([...params.expected]);
   }
 
   function expectNoDiagnostics(diagnostics: unknown[]) {
-    expect(diagnostics).toEqual([]);
+    expect(diagnostics).toStrictEqual([]);
   }
 
   function expectBundleRuntimeSupport(params: {
@@ -122,9 +124,7 @@ describe("Claude bundle plugin inspect integration", () => {
     hasSupportedKey: "hasSupportedStdioServer" | "hasStdioServer";
   }) {
     expect(params.actual[params.hasSupportedKey]).toBe(true);
-    expect(params.actual.supportedServerNames).toEqual(
-      expect.arrayContaining([...params.supportedServerNames]),
-    );
+    expect(params.actual.supportedServerNames).toEqual([...params.supportedServerNames]);
     expect(params.actual.unsupportedServerNames).toEqual([...params.unsupportedServerNames]);
     expectNoDiagnostics(params.actual.diagnostics);
   }
@@ -151,21 +151,35 @@ describe("Claude bundle plugin inspect integration", () => {
   }
 
   beforeAll(() => {
-    rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-bundle-"));
+    rootDir = makeTrackedTempDir("openclaw-claude-bundle", tempDirs);
     setupClaudeInspectFixture();
   });
 
   afterAll(() => {
-    fs.rmSync(rootDir, { recursive: true, force: true });
+    cleanupTrackedTempDirs(tempDirs);
   });
 
   it("loads the full Claude bundle manifest with all capabilities", () => {
     const m = expectLoadedClaudeManifest();
-    expect(m).toMatchObject({
+    expect(m).toEqual({
+      id: "test-claude-plugin",
       name: "Test Claude Plugin",
       description: "Integration test fixture for Claude bundle inspection",
       version: "1.0.0",
+      skills: ["skill-packs", "extra-commands", "agents", "output-styles"],
+      settingsFiles: ["settings.json"],
+      hooks: ["hooks/hooks.json", "custom-hooks"],
       bundleFormat: "claude",
+      capabilities: [
+        "skills",
+        "commands",
+        "agents",
+        "hooks",
+        "mcpServers",
+        "lspServers",
+        "outputStyles",
+        "settings",
+      ],
     });
   });
 
@@ -173,22 +187,22 @@ describe("Claude bundle plugin inspect integration", () => {
     {
       name: "resolves skills from skills, commands, and agents paths",
       field: "skills" as const,
-      includes: ["skill-packs", "extra-commands", "agents", "output-styles"],
+      expected: ["skill-packs", "extra-commands", "agents", "output-styles"],
     },
     {
       name: "resolves hooks from default and declared paths",
       field: "hooks" as const,
-      includes: ["hooks/hooks.json", "custom-hooks"],
+      expected: ["hooks/hooks.json", "custom-hooks"],
     },
     {
       name: "detects settings files",
       field: "settingsFiles" as const,
-      includes: ["settings.json"],
+      expected: ["settings.json"],
     },
     {
       name: "detects all bundle capabilities",
       field: "capabilities" as const,
-      includes: [
+      expected: [
         "skills",
         "commands",
         "agents",
@@ -199,8 +213,8 @@ describe("Claude bundle plugin inspect integration", () => {
         "settings",
       ],
     },
-  ] as const)("$name", ({ field, includes }) => {
-    expectClaudeManifestField({ field, includes });
+  ] as const)("$name", ({ field, expected }) => {
+    expectClaudeManifestField({ field, expected });
   });
 
   it.each([

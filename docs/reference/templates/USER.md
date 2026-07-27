@@ -1,6 +1,6 @@
 ---
-title: "USER Template"
 summary: "User profile record"
+title: "USER template"
 read_when:
   - Bootstrapping a workspace manually
 ---
@@ -22,3 +22,7 @@ _(What do they care about? What projects are they working on? What annoys them? 
 ---
 
 The more you know, the better you can help. But remember — you're learning about a person, not building a dossier. Respect the difference.
+
+## Related
+
+- [Agent workspace](/concepts/agent-workspace)

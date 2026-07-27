@@ -1,4 +1,5 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+// Matrix tests cover resolve targets plugin behavior.
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelDirectoryEntry } from "../runtime-api.js";
 
 vi.mock("./directory-live.js", () => ({
@@ -20,11 +21,13 @@ async function resolveUserTarget(input = "Alice") {
 }
 
 describe("resolveMatrixTargets (users)", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } =
       await import("./directory-live.js"));
     ({ resolveMatrixTargets } = await import("./resolve-targets.js"));
+  });
+
+  beforeEach(() => {
     vi.mocked(listMatrixDirectoryPeersLive).mockReset();
     vi.mocked(listMatrixDirectoryGroupsLive).mockReset();
   });

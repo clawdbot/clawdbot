@@ -1,3 +1,4 @@
+// Plugin config tests cover plugin config command parsing and output formatting.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setPluginEnabledInConfig } from "./plugins-config.js";

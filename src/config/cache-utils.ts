@@ -1,20 +1,6 @@
-import fs from "node:fs";
-import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
+// Provides small synchronous config cache helpers.
 
-export function resolveCacheTtlMs(params: {
-  envValue: string | undefined;
-  defaultTtlMs: number;
-}): number {
-  const { envValue, defaultTtlMs } = params;
-  if (envValue) {
-    const parsed = parseStrictNonNegativeInteger(envValue);
-    if (parsed !== undefined) {
-      return parsed;
-    }
-  }
-  return defaultTtlMs;
-}
-
+/** Returns whether a TTL keeps cache reads and writes active. */
 export function isCacheEnabled(ttlMs: number): boolean {
   return ttlMs > 0;
 }
@@ -27,7 +13,7 @@ type ExpiringMapCacheEntry<TValue> = {
   value: TValue;
 };
 
-export type ExpiringMapCache<TKey, TValue> = {
+type ExpiringMapCache<TKey, TValue> = {
   get: (key: TKey) => TValue | undefined;
   set: (key: TKey, value: TValue) => void;
   delete: (key: TKey) => void;
@@ -58,6 +44,7 @@ function isCacheEntryExpired(storedAt: number, now: number, ttlMs: number): bool
   return now - storedAt > ttlMs;
 }
 
+/** Creates a small synchronous map cache with dynamic TTLs and explicit pruning hooks. */
 export function createExpiringMapCache<TKey, TValue>(options: {
   ttlMs: CacheTtlResolver;
   pruneIntervalMs?: CachePruneIntervalResolver;
@@ -68,6 +55,8 @@ export function createExpiringMapCache<TKey, TValue>(options: {
   let lastPruneAt = 0;
 
   function getTtlMs(): number {
+    // Re-read TTL on every operation so callers can disable or shrink caches without rebuilding
+    // the cache object.
     return Math.max(0, Math.floor(resolveCacheNumeric(options.ttlMs)));
   }
 
@@ -75,6 +64,8 @@ export function createExpiringMapCache<TKey, TValue>(options: {
     if (!isCacheEnabled(ttlMs)) {
       return;
     }
+    // Pruning is opportunistic; individual reads still check expiry so skipped sweeps cannot
+    // return stale values.
     if (nowMs - lastPruneAt < resolvePruneIntervalMs(ttlMs, options.pruneIntervalMs)) {
       return;
     }
@@ -139,21 +130,4 @@ export function createExpiringMapCache<TKey, TValue>(options: {
       lastPruneAt = nowMs;
     },
   };
-}
-
-export type FileStatSnapshot = {
-  mtimeMs: number;
-  sizeBytes: number;
-};
-
-export function getFileStatSnapshot(filePath: string): FileStatSnapshot | undefined {
-  try {
-    const stats = fs.statSync(filePath);
-    return {
-      mtimeMs: stats.mtimeMs,
-      sizeBytes: stats.size,
-    };
-  } catch {
-    return undefined;
-  }
 }

@@ -1,3 +1,4 @@
+/** Tests model reference formatting and parsing helpers used by auto-reply. */
 import { describe, expect, it } from "vitest";
 import { extractModelDirective } from "./model.js";
 
@@ -24,9 +25,17 @@ describe("extractModelDirective", () => {
     });
 
     it("extracts /model with provider/model format", () => {
-      const result = extractModelDirective("/model anthropic/claude-opus-4-5");
+      const result = extractModelDirective("/model anthropic/claude-opus-4-6");
       expect(result.hasDirective).toBe(true);
-      expect(result.rawModel).toBe("anthropic/claude-opus-4-5");
+      expect(result.rawModel).toBe("anthropic/claude-opus-4-6");
+    });
+
+    it("extracts /model with a runtime override", () => {
+      const result = extractModelDirective("/model anthropic/claude-opus-4-7 --runtime claude-cli");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("anthropic/claude-opus-4-7");
+      expect(result.rawRuntime).toBe("claude-cli");
+      expect(result.cleaned).toBe("");
     });
 
     it("extracts /model with profile override", () => {
@@ -62,6 +71,20 @@ describe("extractModelDirective", () => {
       expect(result.hasDirective).toBe(true);
       expect(result.rawModel).toBe("openai/@cf/openai/gpt-oss-20b");
       expect(result.rawProfile).toBe("cf:default");
+    });
+
+    it("keeps LM Studio @iq* quant suffixes inside model ids", () => {
+      const result = extractModelDirective("/model lmstudio/qwen3.6-27b@iq3_xxs");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("lmstudio/qwen3.6-27b@iq3_xxs");
+      expect(result.rawProfile).toBeUndefined();
+    });
+
+    it("allows profile overrides after LM Studio @iq* quant suffixes", () => {
+      const result = extractModelDirective("/model lmstudio/qwen3.6-27b@iq3_xxs@work");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("lmstudio/qwen3.6-27b@iq3_xxs");
+      expect(result.rawProfile).toBe("work");
     });
 
     it("returns no directive for plain text", () => {

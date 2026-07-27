@@ -1,5 +1,6 @@
+// Slack tests cover threading tool context plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 import { buildSlackThreadingToolContext } from "./threading-tool-context.js";
 
 const emptyCfg = {} as OpenClawConfig;
@@ -76,18 +77,6 @@ describe("buildSlackThreadingToolContext", () => {
     expect(result.replyToMode).toBe("first");
   });
 
-  it("uses legacy dm.replyToMode for direct messages when no chat-type override exists", () => {
-    expect(
-      resolveReplyToModeWithConfig({
-        slackConfig: {
-          replyToMode: "off",
-          dm: { replyToMode: "all" },
-        },
-        context: { ChatType: "direct" },
-      }),
-    ).toBe("all");
-  });
-
   it("uses all mode when MessageThreadId is present", () => {
     expect(
       resolveReplyToModeWithConfig({
@@ -119,6 +108,121 @@ describe("buildSlackThreadingToolContext", () => {
     ).toBe("off");
   });
 
+  it("uses ReplyToId as the current thread when MessageThreadId is omitted", () => {
+    const result = buildSlackThreadingToolContext({
+      cfg: {
+        channels: {
+          slack: {
+            replyToMode: "all",
+            replyToModeByChatType: { direct: "off" },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: null,
+      context: {
+        ChatType: "direct",
+        To: "user:U8SUVSVGS",
+        NativeChannelId: "D8SRXRDNF",
+        CurrentMessageId: "1772000000.111111",
+        ReplyToId: "1771999998.834199",
+      },
+    });
+
+    expect(result.currentThreadTs).toBe("1771999998.834199");
+    expect(result.replyToMode).toBe("all");
+    expect(result.sameChannelThreadRequired).toBe(true);
+  });
+
+  it("uses TransportThreadId when ReplyToId matches the current message", () => {
+    const result = buildSlackThreadingToolContext({
+      cfg: {
+        channels: {
+          slack: {
+            replyToMode: "all",
+            replyToModeByChatType: { direct: "off" },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: null,
+      context: {
+        ChatType: "direct",
+        CurrentMessageId: "1771999998.834199",
+        ReplyToId: "1771999998.834199",
+        TransportThreadId: "1771999998.834199",
+      },
+    });
+
+    expect(result.currentThreadTs).toBe("1771999998.834199");
+    expect(result.replyToMode).toBe("all");
+    expect(result.sameChannelThreadRequired).toBe(true);
+  });
+
+  it("keeps top-level ReplyToId as an anchor without forcing configured off mode", () => {
+    const result = buildSlackThreadingToolContext({
+      cfg: {
+        channels: {
+          slack: {
+            replyToMode: "all",
+            replyToModeByChatType: { direct: "off" },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: null,
+      context: {
+        ChatType: "direct",
+        CurrentMessageId: "1771999998.834199",
+        ReplyToId: "1771999998.834199",
+      },
+    });
+
+    expect(result.currentThreadTs).toBe("1771999998.834199");
+    expect(result.replyToMode).toBe("off");
+    expect(result.sameChannelThreadRequired).toBe(false);
+  });
+
+  it("keeps top-level ReplyToId as the first-reply anchor for single-use modes", () => {
+    const result = buildSlackThreadingToolContext({
+      cfg: {
+        channels: {
+          slack: {
+            replyToMode: "first",
+          },
+        },
+      } as OpenClawConfig,
+      accountId: null,
+      context: {
+        ChatType: "direct",
+        CurrentMessageId: "1771999998.834199",
+        ReplyToId: "1771999998.834199",
+      },
+    });
+
+    expect(result.currentThreadTs).toBe("1771999998.834199");
+    expect(result.replyToMode).toBe("first");
+  });
+
+  it("uses CurrentMessageId as a non-explicit anchor when ReplyToId is omitted", () => {
+    const result = buildSlackThreadingToolContext({
+      cfg: {
+        channels: {
+          slack: {
+            replyToMode: "first",
+          },
+        },
+      } as OpenClawConfig,
+      accountId: null,
+      context: {
+        ChatType: "channel",
+        To: "channel:C123",
+        CurrentMessageId: "1771999998.834199",
+      },
+    });
+
+    expect(result.currentThreadTs).toBe("1771999998.834199");
+    expect(result.replyToMode).toBe("first");
+    expect(result.sameChannelThreadRequired).toBe(false);
+  });
+
   it("keeps configured channel behavior when not in a thread", () => {
     const cfg = {
       channels: {
@@ -134,6 +238,26 @@ describe("buildSlackThreadingToolContext", () => {
       context: { ChatType: "channel", ThreadLabel: "label-only" },
     });
     expect(result.replyToMode).toBe("first");
+  });
+
+  it("prefers the prepared per-channel reply mode over account config", () => {
+    const result = buildSlackThreadingToolContext({
+      cfg: {
+        channels: {
+          slack: { replyToMode: "all" },
+        },
+      } as OpenClawConfig,
+      accountId: null,
+      context: {
+        ChatType: "channel",
+        To: "channel:C123",
+        ReplyToMode: "off",
+        CurrentMessageId: "1771999998.834199",
+        ReplyToId: "1771999998.834199",
+      },
+    });
+
+    expect(result.replyToMode).toBe("off");
   });
 
   it("defaults to off when no replyToMode is configured", () => {
@@ -152,9 +276,20 @@ describe("buildSlackThreadingToolContext", () => {
       context: { ChatType: "channel", To: "channel:C1234ABC" },
     });
     expect(result.currentChannelId).toBe("C1234ABC");
+    expect(result.currentMessagingTarget).toBe("channel:C1234ABC");
   });
 
-  it("uses NativeChannelId for DM when To is user-prefixed", () => {
+  it("does not expose the core Channel provider as a Slack room name", () => {
+    const result = buildSlackThreadingToolContext({
+      cfg: emptyCfg,
+      accountId: null,
+      context: { ChatType: "channel", Channel: "slack", To: "channel:C1234ABC" },
+    });
+    expect(result).not.toHaveProperty("currentChannelName");
+    expect(result.currentChannelId).toBe("C1234ABC");
+  });
+
+  it("preserves native and routable DM targets", () => {
     const result = buildSlackThreadingToolContext({
       cfg: emptyCfg,
       accountId: null,
@@ -165,14 +300,16 @@ describe("buildSlackThreadingToolContext", () => {
       },
     });
     expect(result.currentChannelId).toBe("D8SRXRDNF");
+    expect(result.currentMessagingTarget).toBe("user:U8SUVSVGS");
   });
 
-  it("returns undefined currentChannelId when neither channel: To nor NativeChannelId is set", () => {
+  it("uses the user target for implicit DM sends when NativeChannelId is missing", () => {
     const result = buildSlackThreadingToolContext({
       cfg: emptyCfg,
       accountId: null,
       context: { ChatType: "direct", To: "user:U8SUVSVGS" },
     });
-    expect(result.currentChannelId).toBeUndefined();
+    expect(result.currentChannelId).toBe("user:U8SUVSVGS");
+    expect(result.currentMessagingTarget).toBe("user:U8SUVSVGS");
   });
 });

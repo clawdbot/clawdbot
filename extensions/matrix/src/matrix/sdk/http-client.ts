@@ -1,13 +1,28 @@
+// Matrix plugin module implements http client behavior.
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import type { SsrFPolicy } from "../../runtime-api.js";
 import { buildHttpError } from "./event-helpers.js";
 import { type HttpMethod, type QueryParams, performMatrixRequest } from "./transport.js";
 
+type MatrixAuthedHttpClientParams = {
+  homeserver: string;
+  accessToken: string;
+  ssrfPolicy?: SsrFPolicy;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+};
+
 export class MatrixAuthedHttpClient {
-  constructor(
-    private readonly homeserver: string,
-    private readonly accessToken: string,
-    private readonly ssrfPolicy?: SsrFPolicy,
-  ) {}
+  private readonly homeserver: string;
+  private readonly accessToken: string;
+  private readonly ssrfPolicy?: SsrFPolicy;
+  private readonly dispatcherPolicy?: PinnedDispatcherPolicy;
+
+  constructor(params: MatrixAuthedHttpClientParams) {
+    this.homeserver = params.homeserver;
+    this.accessToken = params.accessToken;
+    this.ssrfPolicy = params.ssrfPolicy;
+    this.dispatcherPolicy = params.dispatcherPolicy;
+  }
 
   async requestJson(params: {
     method: HttpMethod;
@@ -26,17 +41,25 @@ export class MatrixAuthedHttpClient {
       body: params.body,
       timeoutMs: params.timeoutMs,
       ssrfPolicy: this.ssrfPolicy,
+      dispatcherPolicy: this.dispatcherPolicy,
       allowAbsoluteEndpoint: params.allowAbsoluteEndpoint,
     });
     if (!response.ok) {
       throw buildHttpError(response.status, text);
     }
     const contentType = response.headers.get("content-type") ?? "";
-    if (contentType.includes("application/json")) {
+    const mediaType = contentType.split(";", 1)[0]?.trim().toLowerCase();
+    if (mediaType === "application/json") {
       if (!text.trim()) {
         return {};
       }
-      return JSON.parse(text);
+      try {
+        return JSON.parse(text);
+      } catch {
+        throw Object.assign(new Error("Matrix homeserver returned malformed JSON"), {
+          statusCode: response.status,
+        });
+      }
     }
     return text;
   }
@@ -61,6 +84,7 @@ export class MatrixAuthedHttpClient {
       maxBytes: params.maxBytes,
       readIdleTimeoutMs: params.readIdleTimeoutMs,
       ssrfPolicy: this.ssrfPolicy,
+      dispatcherPolicy: this.dispatcherPolicy,
       allowAbsoluteEndpoint: params.allowAbsoluteEndpoint,
     });
     if (!response.ok) {

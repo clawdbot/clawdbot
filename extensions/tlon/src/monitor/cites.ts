@@ -1,5 +1,6 @@
-import type { RuntimeEnv } from "../../api.js";
-import { extractCites, extractMessageText, type ParsedCite } from "./utils.js";
+// Tlon plugin module implements cites behavior.
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import { asRecord, extractCites, extractMessageText, type ParsedCite } from "./utils.js";
 
 type TlonScryApi = {
   scry: (path: string) => Promise<unknown>;
@@ -17,9 +18,10 @@ export function createTlonCitationResolver(params: { api: TlonScryApi; runtime: 
       const scryPath = `/channels/v4/${cite.nest}/posts/post/${cite.postId}.json`;
       runtime.log?.(`[tlon] Fetching cited post: ${scryPath}`);
 
-      const data: any = await api.scry(scryPath);
-      if (data?.essay?.content) {
-        return extractMessageText(data.essay.content) || null;
+      const data = asRecord(await api.scry(scryPath));
+      const essay = asRecord(data?.essay);
+      if (essay?.content) {
+        return extractMessageText(essay.content) || null;
       }
 
       return null;

@@ -1,4 +1,6 @@
-import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/core";
+import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-core";
+// Telegram helper module supports config ui hints behavior.
+import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const telegramChannelConfigUiHints = {
   "": {
@@ -13,49 +15,72 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Bot Token",
     help: "Telegram bot token used to authenticate Bot API requests for this account/provider config. Use secret/env substitution and rotate tokens if exposure is suspected.",
   },
-  dmPolicy: {
-    label: "Telegram DM Policy",
-    help: 'Direct message access control ("pairing" recommended). "open" requires channels.telegram.allowFrom=["*"].',
-  },
-  configWrites: {
-    label: "Telegram Config Writes",
-    help: "Allow Telegram to write config in response to channel events/commands (default: true).",
-  },
-  "commands.native": {
-    label: "Telegram Native Commands",
-    help: 'Override native commands for Telegram (bool or "auto").',
-  },
-  "commands.nativeSkills": {
-    label: "Telegram Native Skill Commands",
-    help: 'Override native skill commands for Telegram (bool or "auto").',
-  },
+  ...createChannelConfigUiHints({
+    channelLabel: "Telegram",
+    dmPolicy: { channelKey: "telegram" },
+    configWrites: true,
+    mentionPatterns: {
+      targetDescription: "Telegram group chat IDs or chatId:topic:threadId topic IDs",
+      policyNote: "Native Telegram bot mentions still trigger even when regex patterns are denied.",
+      denyNote: "Native bot mentions still trigger.",
+    },
+    nativeCommands: true,
+  }),
   streaming: {
     label: "Telegram Streaming Mode",
-    help: 'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "partial"). "progress" maps to "partial" on Telegram. Legacy boolean/streamMode keys are auto-mapped.',
+    help: 'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "partial"). "progress" keeps a single editable progress draft until final delivery. Legacy boolean/streamMode keys are detected; run doctor --fix to migrate.',
   },
-  "retry.attempts": {
-    label: "Telegram Retry Attempts",
-    help: "Max retry attempts for outbound Telegram API calls (default: 3).",
+  "streaming.mode": {
+    label: "Telegram Streaming Mode",
+    help: 'Canonical Telegram preview mode: "off" | "partial" | "block" | "progress" (default: "partial").',
   },
-  "retry.minDelayMs": {
-    label: "Telegram Retry Min Delay (ms)",
-    help: "Minimum retry delay in ms for Telegram outbound calls.",
+  "streaming.chunkMode": {
+    label: "Telegram Chunk Mode",
+    help: 'Chunking mode for outbound Telegram text delivery: "length" (default) or "newline".',
   },
-  "retry.maxDelayMs": {
-    label: "Telegram Retry Max Delay (ms)",
-    help: "Maximum retry delay cap in ms for Telegram outbound calls.",
+  richMessages: {
+    label: "Telegram Rich Messages",
+    help: "Opt into Bot API 10.1 rich text sends and edits, including native tables and rich media. Default: false because some current Telegram clients render these messages as unsupported.",
   },
-  "retry.jitter": {
-    label: "Telegram Retry Jitter",
-    help: "Jitter factor (0-1) applied to Telegram retry delays.",
+  "streaming.block.enabled": {
+    label: "Telegram Block Streaming Enabled",
+    help: 'Enable chunked block-style Telegram preview delivery when channels.telegram.streaming.mode="block".',
   },
+  "streaming.block.coalesce": {
+    label: "Telegram Block Streaming Coalesce",
+    help: "Merge streamed Telegram block replies before sending final delivery.",
+  },
+  "streaming.preview.chunk.minChars": {
+    label: "Telegram Draft Chunk Min Chars",
+    help: 'Minimum chars before emitting a Telegram block preview chunk when channels.telegram.streaming.mode="block".',
+  },
+  "streaming.preview.chunk.maxChars": {
+    label: "Telegram Draft Chunk Max Chars",
+    help: 'Target max size for a Telegram block preview chunk when channels.telegram.streaming.mode="block".',
+  },
+  "streaming.preview.chunk.breakPreference": {
+    label: "Telegram Draft Chunk Break Preference",
+    help: "Preferred breakpoints for Telegram draft chunks (paragraph | newline | sentence).",
+  },
+  "streaming.preview.toolProgress": {
+    label: "Telegram Draft Tool Progress",
+    help: "Show tool/progress activity in the live draft preview message (default: true when preview streaming is active). Set false to keep tool updates out of the edited Telegram preview.",
+  },
+  "streaming.preview.commandText": {
+    label: "Telegram Draft Command Text",
+    help: 'Command/exec detail in preview tool-progress lines: "raw" preserves released behavior; "status" shows only the tool label.',
+  },
+  ...createChannelConfigUiHints({
+    channelLabel: "Telegram",
+    progress: { includeCommentary: true, commentaryOrder: "after-command" },
+  }),
   "network.autoSelectFamily": {
     label: "Telegram autoSelectFamily",
     help: "Override Node autoSelectFamily for Telegram (true=enable, false=disable).",
   },
-  timeoutSeconds: {
-    label: "Telegram API Timeout (seconds)",
-    help: "Max seconds before Telegram API requests are aborted (default: 500 per grammY).",
+  "network.dangerouslyAllowPrivateNetwork": {
+    label: "Telegram Dangerously Allow Private Network",
+    help: "Dangerous opt-in for trusted fake-IP or transparent-proxy environments where Telegram media downloads resolve api.telegram.org to private/internal/special-use addresses.",
   },
   silentErrorReplies: {
     label: "Telegram Silent Error Replies",
@@ -63,7 +88,11 @@ export const telegramChannelConfigUiHints = {
   },
   apiRoot: {
     label: "Telegram API Root URL",
-    help: "Custom Telegram Bot API root URL. Use for self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) or reverse proxies in regions where api.telegram.org is blocked.",
+    help: "Custom Telegram Bot API root URL. Use the API root only (for example https://api.telegram.org), not a full /bot<TOKEN> endpoint. Use for self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) or reverse proxies in regions where api.telegram.org is blocked.",
+  },
+  trustedLocalFileRoots: {
+    label: "Telegram Trusted Local File Roots",
+    help: "Trusted local filesystem roots for self-hosted Telegram Bot API file_path values. Exact in-root paths are read directly; container paths under /var/lib/telegram-bot-api can map into a host volume mount. Other absolute paths are rejected.",
   },
   autoTopicLabel: {
     label: "Telegram Auto Topic Label",
@@ -83,15 +112,15 @@ export const telegramChannelConfigUiHints = {
   },
   execApprovals: {
     label: "Telegram Exec Approvals",
-    help: "Telegram-native exec approval routing and approver authorization. Enable this only when Telegram should act as an explicit exec-approval client for the selected bot account.",
+    help: "Telegram-native exec approval routing and approver authorization. When unset, OpenClaw auto-enables DM-first native approvals if approvers can be resolved for the selected bot account.",
   },
   "execApprovals.enabled": {
     label: "Telegram Exec Approvals Enabled",
-    help: "Enable Telegram exec approvals for this account. When false or unset, Telegram messages/buttons cannot approve exec requests.",
+    help: 'Controls Telegram native exec approvals for this account: unset or "auto" enables DM-first native approvals when approvers can be resolved, true forces native approvals on, and false disables them.',
   },
   "execApprovals.approvers": {
     label: "Telegram Exec Approval Approvers",
-    help: "Telegram user IDs allowed to approve exec requests for this bot account. Use numeric Telegram user IDs; prompts are only delivered to these approvers when target includes dm.",
+    help: "Telegram user IDs allowed to approve exec requests for this bot account. Use numeric Telegram user IDs. If you leave this unset, OpenClaw falls back to numeric owner IDs inferred from commands.ownerAllowFrom when possible.",
   },
   "execApprovals.agentFilter": {
     label: "Telegram Exec Approval Agent Filter",
@@ -117,12 +146,12 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Thread Binding Max Age (hours)",
     help: "Optional hard max age in hours for Telegram bound sessions. Set 0 to disable hard cap (default: 0). Overrides session.threadBindings.maxAgeHours when set.",
   },
-  "threadBindings.spawnSubagentSessions": {
-    label: "Telegram Thread-Bound Subagent Spawn",
-    help: "Allow subagent spawns with thread=true to auto-bind Telegram current conversations when supported.",
+  "threadBindings.spawnSessions": {
+    label: "Telegram Thread-Bound Session Spawn",
+    help: "Allow sessions_spawn(thread=true) and ACP thread spawns to auto-bind Telegram current conversations when supported.",
   },
-  "threadBindings.spawnAcpSessions": {
-    label: "Telegram Thread-Bound ACP Spawn",
-    help: "Allow ACP spawns with thread=true to auto-bind Telegram current conversations when supported.",
+  "threadBindings.defaultSpawnContext": {
+    label: "Telegram Thread Spawn Context",
+    help: 'Default native subagent context for thread-bound spawns. "fork" starts from the requester transcript; "isolated" starts clean. Default: "fork".',
   },
 } satisfies Record<string, ChannelConfigUiHint>;

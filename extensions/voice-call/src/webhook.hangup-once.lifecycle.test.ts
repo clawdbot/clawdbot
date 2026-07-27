@@ -1,9 +1,39 @@
-import { afterEach, describe, expect, it } from "vitest";
+// Voice Call tests cover webhook.hangup once.lifecycle plugin behavior.
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateSyncKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
 import { CallManager } from "./manager.js";
 import { createTestStorePath, FakeProvider } from "./manager.test-harness.js";
+import { setVoiceCallStateRuntime } from "./runtime-state.js";
 import type { WebhookContext, WebhookParseOptions } from "./types.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
+
+function installStateRuntime(): void {
+  setVoiceCallStateRuntime({
+    state: {
+      resolveStateDir: () => "",
+      openKeyedStore: (() => {
+        throw new Error("openKeyedStore is not used by voice-call webhook lifecycle tests");
+      }) as never,
+      openSyncKeyedStore: (options: OpenKeyedStoreOptions) =>
+        createPluginStateSyncKeyedStoreForTests("voice-call", options),
+      openChannelIngressQueue: (() => {
+        throw new Error(
+          "openChannelIngressQueue is not used by voice-call webhook lifecycle tests",
+        );
+      }) as never,
+      openChannelIngressDrain: (() => {
+        throw new Error(
+          "openChannelIngressDrain is not used by voice-call webhook lifecycle tests",
+        );
+      }) as never,
+    },
+  });
+}
 
 const createConfig = (overrides: Partial<VoiceCallConfig> = {}): VoiceCallConfig => {
   const base = VoiceCallConfigSchema.parse({
@@ -19,7 +49,7 @@ const createConfig = (overrides: Partial<VoiceCallConfig> = {}): VoiceCallConfig
     ...overrides,
     serve: {
       ...base.serve,
-      ...(overrides.serve ?? {}),
+      ...overrides.serve,
     },
   };
 };
@@ -75,12 +105,12 @@ function expectSingleRejectedReplayHangup(params: {
   expect(params.first.status).toBe(200);
   expect(params.second.status).toBe(200);
   expect(params.provider.hangupCalls).toHaveLength(1);
-  expect(params.provider.hangupCalls[0]).toEqual(
-    expect.objectContaining({
-      providerCallId: "provider-inbound-1",
-      reason: "hangup-bot",
-    }),
-  );
+  const [hangupCall] = params.provider.hangupCalls;
+  if (!hangupCall) {
+    throw new Error("Expected rejected replay hangup call");
+  }
+  expect(hangupCall.providerCallId).toBe("provider-inbound-1");
+  expect(hangupCall.reason).toBe("hangup-bot");
   expect(params.manager.getCallByProviderCallId("provider-inbound-1")).toBeUndefined();
 }
 
@@ -117,8 +147,13 @@ class RejectInboundReplayWithHangupFailureProvider extends RejectInboundReplayPr
 }
 
 describe("Voice-call webhook hangup-once lifecycle", () => {
+  beforeEach(() => {
+    resetPluginStateStoreForTests();
+    installStateRuntime();
+  });
+
   afterEach(() => {
-    // Each test uses an isolated store path, so only server cleanup is needed.
+    resetPluginStateStoreForTests();
   });
 
   it("hangs up a rejected inbound replay only once across duplicate webhook delivery", async () => {
@@ -131,5 +166,47 @@ describe("Voice-call webhook hangup-once lifecycle", () => {
     const provider = new RejectInboundReplayWithHangupFailureProvider("plivo");
     const { first, second, manager } = await runDuplicateInboundReplayLifecycleTest(provider);
     expectSingleRejectedReplayHangup({ first, second, provider, manager });
+  });
+
+  it("keeps rejected inbound replay keys after manager restart", async () => {
+    const storePath = createTestStorePath();
+    const config = createConfig();
+    const firstProvider = new RejectInboundReplayProvider("plivo");
+    const firstManager = new CallManager(config, storePath);
+    await firstManager.initialize(firstProvider, "https://example.com/voice/webhook");
+    const firstServer = new VoiceCallWebhookServer(config, firstManager, firstProvider);
+
+    try {
+      const baseUrl = await firstServer.start();
+      const first = await postWebhookForm(
+        firstServer,
+        baseUrl,
+        "CallSid=CA123&From=%2B15552222222",
+      );
+      expect(first.status).toBe(200);
+    } finally {
+      await firstServer.stop();
+    }
+    expect(firstProvider.hangupCalls).toHaveLength(1);
+
+    const secondProvider = new RejectInboundReplayProvider("plivo");
+    const secondManager = new CallManager(config, storePath);
+    await secondManager.initialize(secondProvider, "https://example.com/voice/webhook");
+    const secondServer = new VoiceCallWebhookServer(config, secondManager, secondProvider);
+
+    try {
+      const baseUrl = await secondServer.start();
+      const replay = await postWebhookForm(
+        secondServer,
+        baseUrl,
+        "CallSid=CA123&From=%2B15552222222",
+      );
+      expect(replay.status).toBe(200);
+    } finally {
+      await secondServer.stop();
+    }
+
+    expect(secondProvider.hangupCalls).toHaveLength(0);
+    expect(secondManager.getCallByProviderCallId("provider-inbound-1")).toBeUndefined();
   });
 });

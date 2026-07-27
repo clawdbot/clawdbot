@@ -1,3 +1,5 @@
+// Offsetless zoned datetime parsing interprets local wall-clock ISO strings in
+// an explicit IANA time zone and rejects impossible DST times.
 const OFFSETLESS_ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d+)?$/;
 const OFFSETLESS_ISO_DATETIME_PARTS_RE =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$/;
@@ -87,6 +89,10 @@ function getTimeZoneOffsetMs(utcMs: number, timeZone: string): number {
     parts.hour,
     parts.minute,
     parts.second,
+    // Include the sub-second component (carried from utcMs via getUTCMilliseconds)
+    // so the offset is exact. Dropping it makes the offset wrong by the fraction,
+    // which fails the millisecond re-validation and rejects valid sub-second input.
+    parts.millisecond,
   );
 
   return localAsUtc - utcMs;

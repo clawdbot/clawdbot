@@ -1,12 +1,17 @@
+// Mattermost plugin module implements model picker behavior.
 import { createHash } from "node:crypto";
 import {
-  loadSessionStore,
-  normalizeProviderId,
-  resolveStorePath,
   resolveStoredModelOverride,
   type ModelsProviderData,
-  type OpenClawConfig,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/command-auth-native";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MattermostInteractiveButtonInput } from "./interactions.js";
 
 const MATTERMOST_MODEL_PICKER_CONTEXT_KEY = "oc_model_picker";
@@ -18,35 +23,55 @@ const ACTION_IDS = {
   back: "mdlback",
 } as const;
 
-export type MattermostModelPickerEntry =
+type MattermostModelPickerEntry =
   | { kind: "summary" }
   | { kind: "providers" }
   | { kind: "models"; provider: string };
 
-export type MattermostModelPickerState =
+type MattermostModelPickerState =
   | { action: "providers"; ownerUserId: string }
   | { action: "back"; ownerUserId: string }
   | { action: "list"; ownerUserId: string; provider: string; page: number }
   | { action: "select"; ownerUserId: string; provider: string; page: number; model: string };
 
-export type MattermostModelPickerRenderedView = {
+type MattermostModelPickerRenderedView = {
   text: string;
   buttons: MattermostInteractiveButtonInput[][];
 };
 
 function splitModelRef(modelRef?: string | null): { provider: string; model: string } | null {
-  const trimmed = modelRef?.trim();
+  const trimmed = normalizeOptionalString(modelRef);
   const match = trimmed?.match(/^([^/]+)\/(.+)$/u);
   if (!match) {
     return null;
   }
-  const provider = normalizeProviderId(match[1]);
+  const rawProvider = match[1];
+  if (!rawProvider) {
+    return null;
+  }
+  const provider = normalizeProviderId(rawProvider);
   // Mattermost copy should normalize accidental whitespace around the model.
-  const model = match[2].trim();
+  const model = normalizeOptionalString(match[2]);
   if (!provider || !model) {
     return null;
   }
   return { provider, model };
+}
+
+function readContextString(context: Record<string, unknown>, key: string, fallback = ""): string {
+  const value = context[key];
+  return typeof value === "string" ? value : fallback;
+}
+
+function readContextNumber(context: Record<string, unknown>, key: string): number | undefined {
+  const value = context[key];
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return parseStrictInteger(value);
+  }
+  return undefined;
 }
 
 function normalizePage(value: number | undefined): number {
@@ -109,7 +134,7 @@ function buildButton(params: {
             ownerUserId: params.ownerUserId,
             provider: normalizeProviderId(params.provider ?? ""),
             page: normalizePage(params.page),
-            model: String(params.model ?? "").trim(),
+            model: normalizeStringifiedOptionalString(params.model) ?? "",
           };
 
   return {
@@ -160,8 +185,8 @@ export function parseMattermostModelPickerContext(
     return null;
   }
 
-  const ownerUserId = String(context.ownerUserId ?? "").trim();
-  const action = String(context.action ?? "").trim();
+  const ownerUserId = normalizeOptionalString(readContextString(context, "ownerUserId")) ?? "";
+  const action = normalizeOptionalString(readContextString(context, "action")) ?? "";
   if (!ownerUserId) {
     return null;
   }
@@ -170,8 +195,8 @@ export function parseMattermostModelPickerContext(
     return { action, ownerUserId };
   }
 
-  const provider = normalizeProviderId(String(context.provider ?? ""));
-  const page = Number.parseInt(String(context.page ?? "1"), 10);
+  const provider = normalizeProviderId(readContextString(context, "provider"));
+  const page = readContextNumber(context, "page");
   if (!provider) {
     return null;
   }
@@ -186,7 +211,7 @@ export function parseMattermostModelPickerContext(
   }
 
   if (action === "select") {
-    const model = String(context.model ?? "").trim();
+    const model = normalizeOptionalString(readContextString(context, "model")) ?? "";
     if (!model) {
       return null;
     }
@@ -216,21 +241,29 @@ export function resolveMattermostModelPickerCurrentModel(params: {
   cfg: OpenClawConfig;
   route: { agentId: string; sessionKey: string };
   data: ModelsProviderData;
-  skipCache?: boolean;
+  readConsistency?: "latest";
 }): string {
   const fallback = `${params.data.resolvedDefault.provider}/${params.data.resolvedDefault.model}`;
   try {
     const storePath = resolveStorePath(params.cfg.session?.store, {
       agentId: params.route.agentId,
     });
-    const sessionStore = params.skipCache
-      ? loadSessionStore(storePath, { skipCache: true })
-      : loadSessionStore(storePath);
-    const sessionEntry = sessionStore[params.route.sessionKey];
+    const sessionEntry = getSessionEntry({
+      storePath,
+      sessionKey: params.route.sessionKey,
+      ...(params.readConsistency === "latest" ? { readConsistency: "latest" as const } : {}),
+    });
     const override = resolveStoredModelOverride({
       sessionEntry,
-      sessionStore,
+      loadSessionEntry: (sessionKey) =>
+        getSessionEntry({
+          storePath,
+          sessionKey,
+          ...(params.readConsistency === "latest" ? { readConsistency: "latest" as const } : {}),
+        }),
       sessionKey: params.route.sessionKey,
+      parentSessionKey: sessionEntry?.parentSessionKey,
+      defaultProvider: params.data.resolvedDefault.provider,
     });
     if (!override?.model) {
       return fallback;
@@ -252,6 +285,7 @@ export function renderMattermostModelSummaryView(params: {
       "",
       "Tap below to browse models, or use:",
       "/oc_model <provider/model> to switch",
+      "Browse keeps the current runtime; use /oc_model <provider/model> --runtime <runtime> to switch runtime too",
       "/oc_model status for details",
     ].join("\n"),
     buttons: [
@@ -320,7 +354,7 @@ export function renderMattermostModelsPickerView(params: {
 
   const page = paginateItems(models, params.page);
   const rows: MattermostInteractiveButtonInput[][] = page.items.map((model) => {
-    const isCurrent = current?.provider === provider && current.model === model;
+    const isCurrent = current?.provider === provider && current?.model === model;
     return [
       buildButton({
         action: "select",

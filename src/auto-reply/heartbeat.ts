@@ -1,24 +1,65 @@
-import { escapeRegExp } from "../utils.js";
+/** Heartbeat prompt defaults, token stripping, task parsing, and due-time helpers. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { escapeRegExp } from "../shared/regexp.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
 // Default heartbeat prompt (used when config.agents.defaults.heartbeat.prompt is unset).
 // Keep it tight and avoid encouraging the model to invent/rehash "open loops" from prior chat context.
-export const HEARTBEAT_PROMPT =
-  "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.";
+export const HEARTBEAT_CRON_TASK_GUIDANCE =
+  "Recurring tasks are cron jobs; create or change their schedules with cron tools or the openclaw cron CLI, not heartbeat scratch.";
+const HEARTBEAT_CONTEXT_PROMPT = `Follow the heartbeat monitor scratch context when provided. ${HEARTBEAT_CRON_TASK_GUIDANCE} Do not infer or repeat old tasks from prior chats.`;
+/** Default prompt for heartbeat turns when config does not override it. */
+export const HEARTBEAT_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} If nothing needs attention, reply HEARTBEAT_OK.`;
+export const HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS =
+  "Use heartbeat_respond to report the wake outcome. Set notify=false when nothing needs the user's attention. Set notify=true with notificationText only when the user should be interrupted.";
+export const HEARTBEAT_RESPONSE_TOOL_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} ${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`;
+export const HEARTBEAT_TRANSCRIPT_PROMPT = "[OpenClaw heartbeat poll]";
 export const DEFAULT_HEARTBEAT_EVERY = "30m";
 export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
 
+function stripLeadingHtmlCommentScaffolding(
+  line: string,
+  state: { inHtmlComment: boolean },
+): string {
+  let remaining = line;
+  while (state.inHtmlComment || remaining.trimStart().startsWith("<!--")) {
+    const searchText = state.inHtmlComment ? remaining : remaining.trimStart();
+    const commentEnd = searchText.indexOf("-->");
+    if (commentEnd === -1) {
+      state.inHtmlComment = true;
+      return "";
+    }
+
+    state.inHtmlComment = false;
+    if (searchText === remaining) {
+      remaining = remaining.slice(commentEnd + 3);
+    } else {
+      const leadingWidth = remaining.length - searchText.length;
+      remaining = remaining.slice(0, leadingWidth) + searchText.slice(commentEnd + 3);
+    }
+  }
+  return remaining;
+}
+
+function stripHeartbeatHtmlComments(content: string): string[] {
+  const state = { inHtmlComment: false };
+  return content.split("\n").map((line) => stripLeadingHtmlCommentScaffolding(line, state));
+}
+
 /**
- * Check if HEARTBEAT.md content is "effectively empty" - meaning it has no actionable tasks.
+ * Check if heartbeat scratch is "effectively empty" - meaning it has no actionable tasks.
  * This allows skipping heartbeat API calls when no tasks are configured.
  *
  * A file is considered effectively empty if it contains only:
- * - Whitespace
- * - Comment lines (lines starting with #)
- * - Empty lines
+ * - Whitespace / empty lines
+ * - Markdown/HTML comments
+ * - Markdown ATX headers (`#`, `##`, ...)
+ * - One-line HTML comments (`<!-- ... -->`)
+ * - Markdown fence markers such as ``` or ```markdown
+ * - Empty list item stubs (`- `, `- [ ]`, `* `, `+ `)
  *
- * Note: A missing file returns false (not effectively empty) so the LLM can still
- * decide what to do. This function is only for when the file exists but has no content.
+ * Note: Missing scratch returns false (not effectively empty) so the model can
+ * still decide what to do. This function applies only when a scratch row exists.
  */
 export function isHeartbeatContentEffectivelyEmpty(content: string | undefined | null): boolean {
   if (content === undefined || content === null) {
@@ -28,11 +69,15 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
     return false;
   }
 
-  const lines = content.split("\n");
+  const lines = stripHeartbeatHtmlComments(content);
   for (const line of lines) {
     const trimmed = line.trim();
     // Skip empty lines
     if (!trimmed) {
+      continue;
+    }
+    // Skip single-line HTML comments used by the bundled runtime template.
+    if (/^<!--.*-->$/.test(trimmed)) {
       continue;
     }
     // Skip markdown header lines (# followed by space or EOL, ## etc)
@@ -41,8 +86,16 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
     if (/^#+(\s|$)/.test(trimmed)) {
       continue;
     }
+    if (/^<!--.*-->$/.test(trimmed)) {
+      continue;
+    }
     // Skip empty markdown list items like "- [ ]" or "* [ ]" or just "- "
     if (/^[-*+]\s*(\[[\sXx]?\]\s*)?$/.test(trimmed)) {
+      continue;
+    }
+    // Ignore markdown fence markers and HTML comments that only document the
+    // workspace template; neither carries heartbeat task semantics.
+    if (/^```[A-Za-z0-9_-]*$/.test(trimmed) || /^<!--.*-->$/.test(trimmed)) {
       continue;
     }
     // Found a non-empty, non-comment line - there's actionable content
@@ -52,12 +105,32 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
   return true;
 }
 
+/** Resolves configured heartbeat prompt text with the built-in default fallback. */
 export function resolveHeartbeatPrompt(raw?: string): string {
-  const trimmed = typeof raw === "string" ? raw.trim() : "";
+  const trimmed = normalizeOptionalString(raw) ?? "";
   return trimmed || HEARTBEAT_PROMPT;
 }
 
-export type StripHeartbeatMode = "heartbeat" | "message";
+function appendHeartbeatResponseToolInstructions(prompt: string): string {
+  const trimmed = normalizeOptionalString(prompt) ?? "";
+  if (!trimmed) {
+    return HEARTBEAT_RESPONSE_TOOL_PROMPT;
+  }
+  if (trimmed.includes(HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS)) {
+    return trimmed;
+  }
+  return `${trimmed}\n\n${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`;
+}
+
+/** Resolves heartbeat prompt text and guarantees heartbeat_respond tool instructions are present. */
+export function resolveHeartbeatPromptForResponseTool(raw?: string): string {
+  const trimmed = normalizeOptionalString(raw) ?? "";
+  return trimmed
+    ? appendHeartbeatResponseToolInstructions(trimmed)
+    : HEARTBEAT_RESPONSE_TOOL_PROMPT;
+}
+
+type StripHeartbeatMode = "heartbeat" | "message";
 
 function stripTokenAtEdges(raw: string): { text: string; didStrip: boolean } {
   let text = raw.trim();
@@ -107,6 +180,7 @@ function stripTokenAtEdges(raw: string): { text: string; didStrip: boolean } {
   return { text: collapsed, didStrip };
 }
 
+/** Strips HEARTBEAT_OK acknowledgements and decides whether visible notification is needed. */
 export function stripHeartbeatToken(
   raw?: string,
   opts: { mode?: StripHeartbeatMode; maxAckChars?: number } = {},

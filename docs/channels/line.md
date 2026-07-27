@@ -7,19 +7,17 @@ read_when:
 title: LINE
 ---
 
-# LINE (plugin)
-
 LINE connects to OpenClaw via the LINE Messaging API. The plugin runs as a webhook
-receiver on the gateway and uses your channel access token + channel secret for
+receiver on the Gateway and uses your channel access token + channel secret for
 authentication.
 
-Status: supported via plugin. Direct messages, group chats, media, locations, Flex
-messages, template messages, and quick replies are supported. Reactions and threads
-are not supported.
+Status: official plugin, installed separately. Direct messages, group chats, media,
+locations, Flex messages, template messages, and quick replies are supported.
+Reactions and threads are not supported.
 
-## Plugin required
+## Install
 
-Install the LINE plugin:
+Install LINE before configuring the channel:
 
 ```bash
 openclaw plugins install @openclaw/line
@@ -28,7 +26,7 @@ openclaw plugins install @openclaw/line
 Local checkout (when running from a git repo):
 
 ```bash
-openclaw plugins install ./extensions/line
+openclaw plugins install ./path/to/local/line-plugin
 ```
 
 ## Setup
@@ -40,17 +38,27 @@ openclaw plugins install ./extensions/line
 4. Enable **Use webhook** in the Messaging API settings.
 5. Set the webhook URL to your gateway endpoint (HTTPS required):
 
-```
+```text
 https://gateway-host/line/webhook
 ```
 
-The gateway responds to LINE’s webhook verification (GET) and inbound events (POST).
+The Gateway answers LINE's webhook verification (GET). For signed inbound events
+(POST), it writes each event to the durable ingress queue before returning `200`;
+agent processing continues asynchronously. Failed delivery is retried from the
+queue, including after a Gateway restart, and poison events become failed queue
+records after bounded retries. If durable persistence fails, the request returns
+`500` instead of acknowledging an event that could be lost.
+Delivery is at least once across the queue-to-agent boundary: a Gateway shutdown or
+crash during an active delivery can replay the turn. Message events deduplicate by
+LINE message ID; other event types use `webhookEventId`. Retained completion records
+suppress ordinary duplicate webhooks, but handlers that perform external side effects
+should still be idempotent.
 If you need a custom path, set `channels.line.webhookPath` or
 `channels.line.accounts.<id>.webhookPath` and update the URL accordingly.
 
-Security note:
+Security notes:
 
-- LINE signature verification is body-dependent (HMAC over the raw body), so OpenClaw applies strict pre-auth body limits and timeout before verification.
+- LINE signature verification is body-dependent (HMAC over the raw body), so OpenClaw applies a strict pre-auth body limit (64 KB) and read timeout before verification.
 - OpenClaw processes webhook events from the verified raw request bytes. Upstream middleware-transformed `req.body` values are ignored for signature-integrity safety.
 
 ## Configure
@@ -65,6 +73,22 @@ Minimal config:
       channelAccessToken: "LINE_CHANNEL_ACCESS_TOKEN",
       channelSecret: "LINE_CHANNEL_SECRET",
       dmPolicy: "pairing",
+    },
+  },
+}
+```
+
+Public DM config:
+
+```json5
+{
+  channels: {
+    line: {
+      enabled: true,
+      channelAccessToken: "LINE_CHANNEL_ACCESS_TOKEN",
+      channelSecret: "LINE_CHANNEL_SECRET",
+      dmPolicy: "open",
+      allowFrom: ["*"],
     },
   },
 }
@@ -89,6 +113,7 @@ Token/secret files:
 ```
 
 `tokenFile` and `secretFile` must point to regular files. Symlinks are rejected.
+Inline config values win over files; env vars are the last fallback for the default account.
 
 Multiple accounts:
 
@@ -111,7 +136,7 @@ Multiple accounts:
 ## Access control
 
 Direct messages default to pairing. Unknown senders get a pairing code and their
-messages are ignored until approved.
+messages are ignored until approved:
 
 ```bash
 openclaw pairing list line
@@ -120,11 +145,13 @@ openclaw pairing approve line <CODE>
 
 Allowlists and policies:
 
-- `channels.line.dmPolicy`: `pairing | allowlist | open | disabled`
-- `channels.line.allowFrom`: allowlisted LINE user IDs for DMs
-- `channels.line.groupPolicy`: `allowlist | open | disabled`
-- `channels.line.groupAllowFrom`: allowlisted LINE user IDs for groups
-- Per-group overrides: `channels.line.groups.<groupId>.allowFrom`
+- `channels.line.dmPolicy`: `pairing | allowlist | open | disabled` (default `pairing`)
+- `channels.line.allowFrom`: allowlisted LINE user IDs for DMs; `dmPolicy: "open"` requires `["*"]`
+- `channels.line.groupPolicy`: `allowlist | open | disabled` (default `allowlist`)
+- `channels.line.groupAllowFrom`: allowlisted LINE user IDs for groups; DM `allowFrom` entries do not admit group senders
+- Per-group overrides: `channels.line.groups.<groupId>.allowFrom` (plus `enabled`, `requireMention`, `systemPrompt`, `skills`). With
+  `groupPolicy: "allowlist"`, set `groupAllowFrom` or the per-group `allowFrom`; an empty group allowlist blocks group messages even when DMs are open.
+- Static sender access groups can be referenced from `allowFrom`, `groupAllowFrom`, and per-group `allowFrom` with `accessGroup:<name>`; see [Access groups](/channels/access-groups).
 - Runtime note: if `channels.line` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
 
 LINE IDs are case-sensitive. Valid IDs look like:
@@ -141,6 +168,8 @@ LINE IDs are case-sensitive. Valid IDs look like:
 - Streaming responses are buffered; LINE receives full chunks with a loading
   animation while the agent works.
 - Media downloads are capped by `channels.line.mediaMaxMb` (default 10).
+- Inbound media is saved under `~/.openclaw/media/inbound/` before it is passed
+  to the agent, matching the shared media store used by other channel plugins.
 
 ## Channel data (rich messages)
 
@@ -161,9 +190,7 @@ messages.
       },
       flexMessage: {
         altText: "Status card",
-        contents: {
-          /* Flex payload */
-        },
+        contents: {/* Flex payload */},
       },
       templateMessage: {
         type: "confirm",
@@ -180,9 +207,35 @@ messages.
 
 The LINE plugin also ships a `/card` command for Flex message presets:
 
-```
+```text
 /card info "Welcome" "Thanks for joining!"
 ```
+
+## ACP support
+
+LINE supports ACP (Agent Communication Protocol) conversation bindings:
+
+- `/acp spawn <agent> --bind here` binds the current LINE chat to an ACP session without creating a child thread.
+- Configured ACP bindings and active conversation-bound ACP sessions work on LINE like other conversation channels.
+
+See [ACP agents](/tools/acp-agents) for details.
+
+## Outbound media
+
+The LINE plugin sends images, videos, and audio through the agent message tool:
+
+- **Images**: sent as LINE image messages; the preview image defaults to the media URL.
+- **Videos**: require a preview image; set `channelData.line.previewImageUrl` to an image URL.
+- **Audio**: sent as LINE audio messages; duration defaults to 60 seconds unless `channelData.line.durationMs` is set.
+
+The media kind is taken from `channelData.line.mediaKind` when set, otherwise inferred
+from the other LINE options or the URL file suffix, with image as the fallback.
+
+Outbound media URLs must be public HTTPS URLs of at most 2000 characters. OpenClaw
+validates the target hostname before handing the URL to LINE and rejects loopback,
+link-local, and private-network targets.
+
+Generic media sends without LINE-specific options use the image route.
 
 ## Troubleshooting
 
@@ -192,3 +245,11 @@ The LINE plugin also ships a `/card` command for Flex message presets:
   and that the gateway is reachable from LINE.
 - **Media download errors:** raise `channels.line.mediaMaxMb` if media exceeds the
   default limit.
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening

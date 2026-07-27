@@ -1,15 +1,17 @@
+// Openshell tests cover backend plugin behavior.
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { createSandboxTestContext } from "../../../src/agents/sandbox/test-fixtures.js";
+import { expectDefined } from "@openclaw/normalization-core";
+import { createSandboxTestContext } from "openclaw/plugin-sdk/test-fixtures";
 import {
   createSandboxBrowserConfig,
   createSandboxPruneConfig,
   createSandboxSshConfig,
-} from "../../../test/helpers/sandbox-fixtures.js";
+} from "openclaw/plugin-sdk/test-fixtures";
+import { describe, expect, it } from "vitest";
 import { createOpenShellSandboxBackendFactory } from "./backend.js";
 import { resolveOpenShellPluginConfig } from "./config.js";
 
@@ -17,21 +19,24 @@ const OPENCLAW_OPENSHELL_E2E = process.env.OPENCLAW_E2E_OPENSHELL === "1";
 const OPENCLAW_OPENSHELL_E2E_TIMEOUT_MS = 12 * 60_000;
 const OPENCLAW_OPENSHELL_COMMAND =
   process.env.OPENCLAW_E2E_OPENSHELL_COMMAND?.trim() || "openshell";
+const OPENCLAW_OPENSHELL_CONFIG_HOME =
+  process.env.OPENCLAW_E2E_OPENSHELL_CONFIG_HOME?.trim() || null;
+const OPENCLAW_OPENSHELL_HOST_IP = process.env.OPENCLAW_E2E_OPENSHELL_HOST_IP?.trim() || null;
+const ANSI_ESCAPE_RE = new RegExp(`${String.fromCharCode(0x1b)}\\[[0-?]*[ -/]*[@-~]`, "gu");
 
 const CUSTOM_IMAGE_DOCKERFILE = `FROM python:3.13-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \\
-    coreutils \\
-    curl \\
-    findutils \\
-    iproute2 \\
+    coreutils curl findutils iproute2 nftables \\
   && rm -rf /var/lib/apt/lists/*
 
-RUN groupadd -g 1000 sandbox && \\
-    useradd -m -u 1000 -g sandbox sandbox
+RUN groupadd -g 1000660000 sandbox && \\
+    useradd -m -u 1000660000 -g sandbox sandbox && \\
+    install -d -o sandbox -g sandbox /sandbox
 
 RUN echo "openclaw-openshell-e2e" > /opt/openshell-e2e-marker.txt
 
+USER sandbox
 WORKDIR /sandbox
 CMD ["sleep", "infinity"]
 `;
@@ -52,7 +57,7 @@ async function runCommand(params: {
   args: string[];
   cwd?: string;
   env?: NodeJS.ProcessEnv;
-  stdin?: string | Buffer;
+  stdin?: string | Uint8Array;
   allowFailure?: boolean;
   timeoutMs?: number;
 }): Promise<ExecResult> {
@@ -88,18 +93,19 @@ async function runCommand(params: {
       }
       const exitCode = code ?? 0;
       if (exitCode !== 0 && !params.allowFailure) {
-        reject(
-          new Error(
-            [
-              `command failed: ${params.command} ${params.args.join(" ")}`,
-              `exit: ${exitCode}`,
-              stdout.trim() ? `stdout:\n${stdout}` : "",
-              stderr.trim() ? `stderr:\n${stderr}` : "",
-            ]
-              .filter(Boolean)
-              .join("\n"),
-          ),
-        );
+        const message = [
+          `command failed: ${params.command} ${params.args.join(" ")}`,
+          `exit: ${exitCode}`,
+        ];
+        const trimmedStdout = stdout.trim();
+        if (trimmedStdout.length > 0) {
+          message.push(`stdout:\n${stdout}`);
+        }
+        const trimmedStderr = stderr.trim();
+        if (trimmedStderr.length > 0) {
+          message.push(`stderr:\n${stderr}`);
+        }
+        reject(new Error(message.join("\n")));
         return;
       }
       resolve({ code: exitCode, stdout, stderr });
@@ -117,9 +123,62 @@ async function commandAvailable(command: string): Promise<boolean> {
       allowFailure: true,
       timeoutMs: 20_000,
     });
-    return result.code === 0 || result.stdout.length > 0 || result.stderr.length > 0;
+    return result.code === 0;
   } catch {
     return false;
+  }
+}
+
+async function activeOpenShellGateway(
+  command: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string | null> {
+  try {
+    const result = await runCommand({
+      command,
+      args: ["gateway", "list"],
+      env,
+      allowFailure: true,
+      timeoutMs: 20_000,
+    });
+    if (result.code !== 0) {
+      return null;
+    }
+    const output = `${result.stdout}\n${result.stderr}`.replace(ANSI_ESCAPE_RE, "");
+    for (const line of output.split(/\r?\n/u)) {
+      const match = line.match(/\*\s+(\S+)/u);
+      if (match) {
+        const gateway = expectDefined(match[1], "OpenShell gateway name");
+        const info = await runCommand({
+          command,
+          args: ["gateway", "info", "--gateway", gateway],
+          env,
+          allowFailure: true,
+          timeoutMs: 20_000,
+        });
+        const endpoint = `${info.stdout}\n${info.stderr}`
+          .replace(ANSI_ESCAPE_RE, "")
+          .match(/Gateway endpoint:\s+(\S+)/u)?.[1];
+        if (
+          info.code === 0 &&
+          endpoint &&
+          /^(?:https?:\/\/)?(?:127\.0\.0\.1|localhost)(?::\d+)?(?:\/|$)/u.test(endpoint)
+        ) {
+          const status = await runCommand({
+            command,
+            args: ["--gateway", gateway, "sandbox", "list"],
+            env,
+            allowFailure: true,
+            timeoutMs: 20_000,
+          });
+          return status.code === 0 ? gateway : null;
+        }
+        return null;
+      }
+    }
+    return null;
+  } catch {
+    return null;
   }
 }
 
@@ -135,6 +194,41 @@ async function dockerReady(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function resolveOpenShellHostIp(): Promise<string> {
+  if (OPENCLAW_OPENSHELL_HOST_IP) {
+    return OPENCLAW_OPENSHELL_HOST_IP;
+  }
+  const networks = await runCommand({
+    command: "docker",
+    args: ["network", "ls", "--format", "{{.Name}}"],
+    timeoutMs: 20_000,
+  });
+  for (const network of networks.stdout.split(/\r?\n/u).map((value) => value.trim())) {
+    if (!network.startsWith("openshell")) {
+      continue;
+    }
+    const gateway = await runCommand({
+      command: "docker",
+      args: [
+        "network",
+        "inspect",
+        network,
+        "--format",
+        "{{range .IPAM.Config}}{{.Gateway}}{{end}}",
+      ],
+      allowFailure: true,
+      timeoutMs: 20_000,
+    });
+    const hostIp = gateway.stdout.trim();
+    if (gateway.code === 0 && hostIp) {
+      return hostIp;
+    }
+  }
+  throw new Error(
+    "OpenShell E2E could not resolve the OpenShell Docker network gateway; set OPENCLAW_E2E_OPENSHELL_HOST_IP",
+  );
 }
 
 async function allocatePort(): Promise<number> {
@@ -255,7 +349,9 @@ HTTPServer(("0.0.0.0", 8000), Handler).serve_forever()
         },
       };
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
   }
 
   await runCommand({
@@ -267,21 +363,28 @@ HTTPServer(("0.0.0.0", 8000), Handler).serve_forever()
   throw new Error("docker-backed host policy server did not become ready");
 }
 
-function buildOpenShellPolicyYaml(params: { port: number; binaryPath: string }): string {
+function buildOpenShellPolicyYaml(params: {
+  port: number;
+  binaryPath: string;
+  hostIp: string;
+}): string {
   const networkPolicies = `  host_echo:
     name: host-echo
     endpoints:
       - host: host.openshell.internal
         port: ${params.port}
+        protocol: rest
+        enforcement: enforce
+        access: full
         allowed_ips:
-          - "0.0.0.0/0"
+          - "${params.hostIp}/32"
     binaries:
       - path: ${params.binaryPath}`;
   return `version: 1
 
 filesystem_policy:
   include_workdir: true
-  read_only: [/usr, /lib, /proc, /dev/urandom, /app, /etc, /var/log]
+  read_only: [/usr, /lib, /proc, /dev/urandom, /app, /etc, /var/log, /opt]
   read_write: [/sandbox, /tmp, /dev/null]
 
 landlock:
@@ -307,7 +410,7 @@ async function runBackendExec(params: {
     env: {},
     usePty: false,
   });
-  let result: ExecResult | null = null;
+  let result: ExecResult | null | undefined;
   try {
     result = await runCommand({
       command: execSpec.argv[0] ?? "ssh",
@@ -333,10 +436,24 @@ describe("openshell sandbox backend e2e", () => {
     { timeout: OPENCLAW_OPENSHELL_E2E_TIMEOUT_MS },
     async () => {
       if (!(await dockerReady())) {
-        return;
+        throw new Error("OpenShell E2E requires a working Docker daemon");
       }
       if (!(await commandAvailable(OPENCLAW_OPENSHELL_COMMAND))) {
-        return;
+        throw new Error(`OpenShell CLI is unavailable: ${OPENCLAW_OPENSHELL_COMMAND}`);
+      }
+      if (!OPENCLAW_OPENSHELL_CONFIG_HOME) {
+        throw new Error(
+          "OpenShell E2E requires OPENCLAW_E2E_OPENSHELL_CONFIG_HOME because tests isolate HOME and XDG_CONFIG_HOME",
+        );
+      }
+      const openshellConfigHome = OPENCLAW_OPENSHELL_CONFIG_HOME;
+      const hostIp = await resolveOpenShellHostIp();
+      const gatewayName = await activeOpenShellGateway(OPENCLAW_OPENSHELL_COMMAND, {
+        ...process.env,
+        XDG_CONFIG_HOME: openshellConfigHome,
+      });
+      if (!gatewayName) {
+        throw new Error("OpenShell E2E requires an active local registered gateway");
       }
 
       const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-openshell-e2e-"));
@@ -350,11 +467,9 @@ describe("openshell sandbox backend e2e", () => {
       const denyPolicyPath = path.join(rootDir, "deny-policy.yaml");
       const allowPolicyPath = path.join(rootDir, "allow-policy.yaml");
       const scopeSuffix = `${process.pid}-${Date.now()}`;
-      const gatewayName = `openclaw-e2e-${scopeSuffix}`;
       const scopeKey = `session:openshell-e2e-deny:${scopeSuffix}`;
       const allowSandboxName = `openclaw-policy-allow-${scopeSuffix}`;
-      const gatewayPort = await allocatePort();
-      let hostPolicyServer: HostPolicyServer | null = null;
+      let hostPolicyServer: HostPolicyServer | null | undefined;
       const sandboxCfg = {
         mode: "all" as const,
         backend: "openshell" as const,
@@ -404,6 +519,16 @@ describe("openshell sandbox backend e2e", () => {
         }
         await fs.mkdir(workspaceDir, { recursive: true });
         await fs.mkdir(dockerfileDir, { recursive: true });
+        const isolatedConfigHome = env.XDG_CONFIG_HOME;
+        if (!isolatedConfigHome) {
+          throw new Error("OpenShell E2E could not create an isolated XDG config home");
+        }
+        await fs.mkdir(isolatedConfigHome, { recursive: true });
+        await fs.cp(
+          path.join(openshellConfigHome, "openshell"),
+          path.join(isolatedConfigHome, "openshell"),
+          { recursive: true },
+        );
         await fs.writeFile(path.join(workspaceDir, "seed.txt"), "seed-from-local\n", "utf8");
         await fs.writeFile(dockerfilePath, CUSTOM_IMAGE_DOCKERFILE, "utf8");
         await fs.writeFile(
@@ -411,6 +536,7 @@ describe("openshell sandbox backend e2e", () => {
           buildOpenShellPolicyYaml({
             port: hostPolicyServer.port,
             binaryPath: "/usr/bin/false",
+            hostIp,
           }),
           "utf8",
         );
@@ -418,25 +544,11 @@ describe("openshell sandbox backend e2e", () => {
           allowPolicyPath,
           buildOpenShellPolicyYaml({
             port: hostPolicyServer.port,
-            binaryPath: "/**",
+            binaryPath: "/usr/bin/curl",
+            hostIp,
           }),
           "utf8",
         );
-
-        await runCommand({
-          command: OPENCLAW_OPENSHELL_COMMAND,
-          args: [
-            "gateway",
-            "start",
-            "--name",
-            gatewayName,
-            "--port",
-            String(gatewayPort),
-            "--recreate",
-          ],
-          env,
-          timeoutMs: 8 * 60_000,
-        });
 
         const execResult = await runBackendExec({
           backend,
@@ -475,9 +587,14 @@ describe("openshell sandbox backend e2e", () => {
         }
 
         await bridge.writeFile({ filePath: "nested/remote-only.txt", data: "hello-remote\n" });
-        await expect(
-          fs.readFile(path.join(workspaceDir, "nested", "remote-only.txt"), "utf8"),
-        ).rejects.toThrow();
+        const hostReadError = await fs
+          .readFile(path.join(workspaceDir, "nested", "remote-only.txt"), "utf8")
+          .then(
+            () => undefined,
+            (error: unknown) => error,
+          );
+        expect(hostReadError).toBeInstanceOf(Error);
+        expect((hostReadError as NodeJS.ErrnoException).code).toBe("ENOENT");
         await expect(bridge.readFile({ filePath: "nested/remote-only.txt" })).resolves.toEqual(
           Buffer.from("hello-remote\n"),
         );
@@ -541,13 +658,6 @@ describe("openshell sandbox backend e2e", () => {
           env,
           allowFailure: true,
           timeoutMs: 2 * 60_000,
-        });
-        await runCommand({
-          command: OPENCLAW_OPENSHELL_COMMAND,
-          args: ["gateway", "destroy", "--name", gatewayName],
-          env,
-          allowFailure: true,
-          timeoutMs: 3 * 60_000,
         });
         await hostPolicyServer?.close().catch(() => {});
         await fs.rm(rootDir, { recursive: true, force: true });

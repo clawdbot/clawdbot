@@ -1,26 +1,17 @@
-import { normalizeProviderId } from "../agents/provider-id.js";
-import { getActivePluginRegistry } from "./runtime.js";
-import type {
-  ProviderDefaultThinkingPolicyContext,
-  ProviderPlugin,
-  ProviderThinkingPolicyContext,
-} from "./types.js";
+// Resolves provider thinking-level policy from active plugins or plugin metadata.
+import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { resolveProviderPolicySurface } from "./provider-public-artifacts.js";
+import { resolveActiveProviderThinkingProfile } from "./provider-thinking-active.js";
+import type { ProviderDefaultThinkingPolicyContext } from "./provider-thinking.types.js";
 
-function matchesProviderId(provider: ProviderPlugin, providerId: string): boolean {
-  const normalized = normalizeProviderId(providerId);
-  if (!normalized) {
-    return false;
-  }
-  if (normalizeProviderId(provider.id) === normalized) {
-    return true;
-  }
-  return (provider.aliases ?? []).some((alias) => normalizeProviderId(alias) === normalized);
-}
-
-function resolveActiveThinkingProvider(providerId: string): ProviderPlugin | undefined {
-  return getActivePluginRegistry()?.providers.find((entry) => {
-    return matchesProviderId(entry.provider, providerId);
-  })?.provider;
+function resolveProviderPublicPolicySurface(providerId: string) {
+  const metadataSnapshot = getCurrentPluginMetadataSnapshot({
+    allowScopedSnapshot: true,
+    allowWorkspaceScopedSnapshot: true,
+  });
+  return resolveProviderPolicySurface(providerId, {
+    manifestRegistry: metadataSnapshot?.manifestRegistry,
+  });
 }
 
 type ThinkingHookParams<TContext> = {
@@ -28,22 +19,19 @@ type ThinkingHookParams<TContext> = {
   context: TContext;
 };
 
-export function resolveProviderBinaryThinking(
-  params: ThinkingHookParams<ProviderThinkingPolicyContext>,
-) {
-  return resolveActiveThinkingProvider(params.provider)?.isBinaryThinking?.(params.context);
-}
-
-export function resolveProviderXHighThinking(
-  params: ThinkingHookParams<ProviderThinkingPolicyContext>,
-) {
-  return resolveActiveThinkingProvider(params.provider)?.supportsXHighThinking?.(params.context);
-}
-
-export function resolveProviderDefaultThinkingLevel(
+/** Resolves a provider thinking profile from active plugins or bundled policy surface. */
+export function resolveProviderThinkingProfile(
   params: ThinkingHookParams<ProviderDefaultThinkingPolicyContext>,
+  options?: { allowPublicArtifactFallback?: boolean },
 ) {
-  return resolveActiveThinkingProvider(params.provider)?.resolveDefaultThinkingLevel?.(
+  const activeProfile = resolveActiveProviderThinkingProfile(params);
+  if (activeProfile !== undefined) {
+    return activeProfile;
+  }
+  if (options?.allowPublicArtifactFallback === false) {
+    return undefined;
+  }
+  return resolveProviderPublicPolicySurface(params.provider)?.resolveThinkingProfile?.(
     params.context,
   );
 }

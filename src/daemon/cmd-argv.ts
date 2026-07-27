@@ -1,3 +1,4 @@
+/** Windows cmd argument quoting and parser mirror used by service tests. */
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { assertNoCmdLineBreak } from "./cmd-set.js";
 
@@ -13,7 +14,7 @@ export function quoteCmdScriptArg(value: string): string {
   return `"${escaped}"`;
 }
 
-export function unescapeCmdScriptArg(value: string): string {
+function unescapeCmdScriptArg(value: string): string {
   return value.replace(/\^!/g, "!").replace(/%%/g, "%");
 }
 

@@ -1,3 +1,4 @@
+// Verifies runtime auth refresh timers stay within safe JavaScript timer bounds.
 import { describe, expect, it } from "vitest";
 import { clampRuntimeAuthRefreshDelayMs } from "./runtime-auth-refresh.js";
 

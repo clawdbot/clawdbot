@@ -1,51 +1,71 @@
+// Root help renderer that combines core, sub-CLI, and optional plugin command descriptors.
 import { Command } from "commander";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getPluginCliCommandDescriptors } from "../../plugins/cli.js";
+import type { PluginLoadOptions } from "../../plugins/loader.js";
 import { VERSION } from "../../version.js";
+import {
+  addCommandDescriptorsToProgram,
+  collectUniqueCommandDescriptors,
+} from "./command-descriptor-utils.js";
 import { getCoreCliCommandDescriptors } from "./core-command-descriptors.js";
-import { configureProgramHelp } from "./help.js";
+import { configureProgramHelp, formatProgramHelpOutput } from "./help.js";
 import { getSubCliEntries } from "./subcli-descriptors.js";
 
-function buildRootHelpProgram(): Command {
-  const program = new Command();
-  configureProgramHelp(program, {
-    programVersion: VERSION,
-    channelOptions: [],
-    messageChannelOptions: "",
-    agentChannelOptions: "",
-  });
+/** Options for rendering root help without fully registering the live CLI. */
+export type RootHelpRenderOptions = Pick<PluginLoadOptions, "pluginSdkResolution"> & {
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  includePluginDescriptors?: boolean;
+};
 
-  const existingCommands = new Set<string>();
-  for (const command of getCoreCliCommandDescriptors()) {
-    program.command(command.name).description(command.description);
-    existingCommands.add(command.name);
-  }
-  for (const command of getSubCliEntries()) {
-    if (existingCommands.has(command.name)) {
-      continue;
-    }
-    program.command(command.name).description(command.description);
-    existingCommands.add(command.name);
-  }
+async function buildRootHelpProgram(renderOptions?: RootHelpRenderOptions): Promise<Command> {
+  const program = new Command();
+  const pluginDescriptors =
+    renderOptions?.includePluginDescriptors === true || renderOptions?.config
+      ? await getPluginCliCommandDescriptors(renderOptions.config, renderOptions.env, {
+          pluginSdkResolution: renderOptions.pluginSdkResolution,
+        })
+      : [];
+  configureProgramHelp(
+    program,
+    {
+      programVersion: VERSION,
+      channelOptions: [],
+      messageChannelOptions: "",
+      agentChannelOptions: "",
+    },
+    {
+      commandsWithSubcommands: new Set(
+        pluginDescriptors
+          .filter((descriptor) => descriptor.hasSubcommands)
+          .map((descriptor) => descriptor.name),
+      ),
+    },
+  );
+
+  addCommandDescriptorsToProgram(
+    program,
+    collectUniqueCommandDescriptors([
+      getCoreCliCommandDescriptors(),
+      getSubCliEntries(),
+      pluginDescriptors,
+    ]),
+  );
 
   return program;
 }
 
-export function renderRootHelpText(): string {
-  const program = buildRootHelpProgram();
+/** Render root help text for tests, docs, and command output. */
+export async function renderRootHelpText(renderOptions?: RootHelpRenderOptions): Promise<string> {
+  const program = await buildRootHelpProgram(renderOptions);
   let output = "";
-  const originalWrite = process.stdout.write.bind(process.stdout);
-  const captureWrite: typeof process.stdout.write = ((chunk: string | Uint8Array) => {
-    output += String(chunk);
-    return true;
-  }) as typeof process.stdout.write;
-  process.stdout.write = captureWrite;
-  try {
-    program.outputHelp();
-  } finally {
-    process.stdout.write = originalWrite;
-  }
+  program.configureOutput({ writeOut: (chunk) => (output += formatProgramHelpOutput(chunk)) });
+  program.outputHelp();
   return output;
 }
 
-export function outputRootHelp(): void {
-  process.stdout.write(renderRootHelpText());
+/** Write rendered root help directly to stdout. */
+export async function outputRootHelp(renderOptions?: RootHelpRenderOptions): Promise<void> {
+  process.stdout.write(await renderRootHelpText(renderOptions));
 }

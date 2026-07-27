@@ -1,7 +1,12 @@
+// Diffs plugin module implements viewer payload behavior.
 import { DIFF_INDICATORS, DIFF_LAYOUTS, DIFF_THEMES } from "./types.js";
 import type { DiffViewerPayload } from "./types.js";
 
 const OVERFLOW_VALUES = ["scroll", "wrap"] as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
 
 export function parseViewerPayloadJson(raw: string): DiffViewerPayload {
   let parsed: unknown;
@@ -83,10 +88,6 @@ function isViewerOptions(value: unknown): boolean {
   }
 
   return true;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
 
 function includesValue<T extends readonly string[]>(values: T, value: unknown): value is T[number] {

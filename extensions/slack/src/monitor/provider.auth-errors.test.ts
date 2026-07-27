@@ -1,5 +1,6 @@
+// Slack tests cover provider.auth errors plugin behavior.
 import { describe, it, expect } from "vitest";
-import { isNonRecoverableSlackAuthError } from "./provider.js";
+import { isNonRecoverableSlackAuthError } from "./reconnect-policy.js";
 
 describe("isNonRecoverableSlackAuthError", () => {
   it.each([
@@ -10,6 +11,8 @@ describe("isNonRecoverableSlackAuthError", () => {
     "An API error occurred: not_authed",
     "An API error occurred: org_login_required",
     "An API error occurred: team_access_not_granted",
+    "An API error occurred: user_removed_from_team",
+    "An API error occurred: team_disabled",
     "An API error occurred: missing_scope",
     "An API error occurred: cannot_find_service",
     "An API error occurred: invalid_token",
@@ -35,6 +38,20 @@ describe("isNonRecoverableSlackAuthError", () => {
     "rate_limited",
   ])("returns false for recoverable/transient error: %s", (msg) => {
     expect(isNonRecoverableSlackAuthError(new Error(msg))).toBe(false);
+  });
+
+  it.each([
+    {
+      code: "slack_webapi_request_error",
+      original: new Error("ECONNRESET"),
+    },
+    {
+      code: "slack_webapi_http_error",
+      statusCode: 503,
+      statusMessage: "Service Unavailable",
+    },
+  ])("returns false for recoverable Slack Web API errors", (error) => {
+    expect(isNonRecoverableSlackAuthError(error)).toBe(false);
   });
 
   it("returns false for non-error values", () => {

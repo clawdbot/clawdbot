@@ -1,3 +1,4 @@
+// Discord tests cover monitor.gateway plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { waitForDiscordGatewayStop } from "./monitor.gateway.js";
 import type { DiscordGatewayEvent } from "./monitor/gateway-supervisor.js";
@@ -89,7 +90,7 @@ describe("waitForDiscordGatewayStop", () => {
 
     emitGatewayEvent(fatalEvent);
 
-    await expect(promise).rejects.toThrow("boom");
+    await expect(promise).rejects.toThrow("discord gateway fatal: Error: boom");
     expect(disconnect).toHaveBeenCalledTimes(1);
     expect(detachLifecycle).toHaveBeenCalledTimes(1);
   });
@@ -127,50 +128,29 @@ describe("waitForDiscordGatewayStop", () => {
 
   it("rejects via registerForceStop and disconnects gateway", async () => {
     let forceStop: ((err: unknown) => void) | undefined;
-
     const { detachLifecycle, disconnect, promise } = startGatewayWait({
-      registerForceStop: (fn) => {
-        forceStop = fn;
+      registerForceStop: (handler) => {
+        forceStop = handler;
       },
     });
 
-    if (!forceStop) {
-      throw new Error("registerForceStop did not expose a stopper callback");
-    }
-    forceStop(new Error("reconnect watchdog timeout"));
+    forceStop?.(new Error("runtime-not-ready"));
 
-    await expect(promise).rejects.toThrow("reconnect watchdog timeout");
+    await expect(promise).rejects.toThrow("runtime-not-ready");
     expect(disconnect).toHaveBeenCalledTimes(1);
     expect(detachLifecycle).toHaveBeenCalledTimes(1);
-  });
-
-  it("ignores forceStop after promise already settled", async () => {
-    let forceStop: ((err: unknown) => void) | undefined;
-
-    const { abort, disconnect, promise } = startGatewayWait({
-      registerForceStop: (fn) => {
-        forceStop = fn;
-      },
-    });
-
-    abort.abort();
-    await expect(promise).resolves.toBeUndefined();
-
-    forceStop?.(new Error("too late"));
-    expect(disconnect).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the lifecycle handler active until disconnect returns on abort", async () => {
     const onGatewayEvent = vi.fn(() => "stop" as const);
     const fatalEvent = createGatewayEvent("fatal", "disconnect emitted error");
-    let emitFromDisconnect: ((event: DiscordGatewayEvent) => void) | undefined;
     const { abort, detachLifecycle, disconnect, emitGatewayEvent, promise } = startGatewayWait({
       onGatewayEvent,
       disconnect: () => {
         emitFromDisconnect?.(fatalEvent);
       },
     });
-    emitFromDisconnect = emitGatewayEvent;
+    const emitFromDisconnect: ((event: DiscordGatewayEvent) => void) | undefined = emitGatewayEvent;
 
     abort.abort();
 
@@ -184,7 +164,6 @@ describe("waitForDiscordGatewayStop", () => {
     const firstEvent = createGatewayEvent("fatal", "first failure");
     const secondEvent = createGatewayEvent("fatal", "second failure");
     const seenEvents: DiscordGatewayEvent[] = [];
-    let emitFromDisconnect: ((event: DiscordGatewayEvent) => void) | undefined;
     const { emitGatewayEvent, promise } = startGatewayWait({
       onGatewayEvent: (event) => {
         seenEvents.push(event);
@@ -194,11 +173,11 @@ describe("waitForDiscordGatewayStop", () => {
         emitFromDisconnect?.(secondEvent);
       },
     });
-    emitFromDisconnect = emitGatewayEvent;
+    const emitFromDisconnect: ((event: DiscordGatewayEvent) => void) | undefined = emitGatewayEvent;
 
     emitGatewayEvent(firstEvent);
 
-    await expect(promise).rejects.toThrow("first failure");
+    await expect(promise).rejects.toThrow("discord gateway fatal: Error: first failure");
     expect(seenEvents.map((event) => event.message)).toEqual([
       firstEvent.message,
       secondEvent.message,

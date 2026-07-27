@@ -1,8 +1,30 @@
+// Enqueues follow-up reply runs and schedules queue drains.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeChatType } from "../../../channels/chat-type.js";
 import { resolveGlobalDedupeCache } from "../../../infra/dedupe.js";
-import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
-import { kickFollowupDrainIfIdle, rememberFollowupDrainCallback } from "./drain.js";
-import { getExistingFollowupQueue, getFollowupQueue } from "./state.js";
-import type { FollowupRun, QueueDedupeMode, QueueSettings } from "./types.js";
+import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
+import {
+  applyQueueDropPolicy,
+  countPendingQueueItems,
+  shouldSkipQueueItem,
+} from "../../../utils/queue-helpers.js";
+import {
+  createOverflowSummaryRetrySource,
+  kickFollowupDrainIfIdle,
+  rememberFollowupDrainCallback,
+  resolveFollowupDeliveryContextKey,
+  resolveFollowupReplyAnchor,
+} from "./drain.js";
+import { getExistingFollowupQueue, getFollowupQueue, trimSummaryElisionsToCap } from "./state.js";
+import {
+  completeFollowupRunLifecycle,
+  isFollowupRunAborted,
+  markFollowupRunEnqueued,
+  type EnqueueFollowupRunOptions,
+  type FollowupRun,
+  type QueueDedupeMode,
+  type QueueSettings,
+} from "./types.js";
 
 /**
  * Keep queued message-id dedupe shared across bundled chunks so redeliveries
@@ -15,22 +37,40 @@ const RECENT_QUEUE_MESSAGE_IDS = resolveGlobalDedupeCache(RECENT_QUEUE_MESSAGE_I
   maxSize: 10_000,
 });
 
+function followupRouteIdentityKey(run: FollowupRun): string {
+  return JSON.stringify([
+    channelRouteDedupeKey({
+      channel: run.originatingChannel,
+      to: run.originatingTo,
+      accountId: run.originatingAccountId,
+      threadId: run.originatingThreadId,
+    }),
+    resolveFollowupReplyAnchor(run) ?? "",
+    run.originatingReplyToMode ?? "",
+    normalizeChatType(run.originatingChatType) ?? "",
+  ]);
+}
+
+function followupMessageRouteIdentityKey(run: FollowupRun): string {
+  return JSON.stringify([
+    channelRouteDedupeKey({
+      channel: run.originatingChannel,
+      to: run.originatingTo,
+      accountId: run.originatingAccountId,
+      threadId: run.originatingThreadId,
+    }),
+    normalizeChatType(run.originatingChatType) ?? "",
+  ]);
+}
+
 function buildRecentMessageIdKey(run: FollowupRun, queueKey: string): string | undefined {
-  const messageId = run.messageId?.trim();
+  const messageId = normalizeOptionalString(run.messageId);
   if (!messageId) {
     return undefined;
   }
   // Use JSON tuple serialization to avoid delimiter-collision edge cases when
   // channel/to/account values contain "|" characters.
-  return JSON.stringify([
-    "queue",
-    queueKey,
-    run.originatingChannel ?? "",
-    run.originatingTo ?? "",
-    run.originatingAccountId ?? "",
-    run.originatingThreadId == null ? "" : String(run.originatingThreadId),
-    messageId,
-  ]);
+  return JSON.stringify(["queue", queueKey, followupMessageRouteIdentityKey(run), messageId]);
 }
 
 function isRunAlreadyQueued(
@@ -38,20 +78,22 @@ function isRunAlreadyQueued(
   items: FollowupRun[],
   allowPromptFallback = false,
 ): boolean {
-  const hasSameRouting = (item: FollowupRun) =>
-    item.originatingChannel === run.originatingChannel &&
-    item.originatingTo === run.originatingTo &&
-    item.originatingAccountId === run.originatingAccountId &&
-    item.originatingThreadId === run.originatingThreadId;
-
-  const messageId = run.messageId?.trim();
+  const messageId = normalizeOptionalString(run.messageId);
   if (messageId) {
-    return items.some((item) => item.messageId?.trim() === messageId && hasSameRouting(item));
+    const messageRouteKey = followupMessageRouteIdentityKey(run);
+    return items.some(
+      (item) =>
+        normalizeOptionalString(item.messageId) === messageId &&
+        followupMessageRouteIdentityKey(item) === messageRouteKey,
+    );
   }
   if (!allowPromptFallback) {
     return false;
   }
-  return items.some((item) => item.prompt === run.prompt && hasSameRouting(item));
+  const routeKey = followupRouteIdentityKey(run);
+  return items.some(
+    (item) => item.prompt === run.prompt && followupRouteIdentityKey(item) === routeKey,
+  );
 }
 
 export function enqueueFollowupRun(
@@ -61,7 +103,14 @@ export function enqueueFollowupRun(
   dedupeMode: QueueDedupeMode = "message-id",
   runFollowup?: (run: FollowupRun) => Promise<void>,
   restartIfIdle = true,
+  options: EnqueueFollowupRunOptions = {},
 ): boolean {
+  if (isFollowupRunAborted(run)) {
+    return false;
+  }
+  if (options.position === "front") {
+    run.protectFromQueueOverflow = true;
+  }
   const queue = getFollowupQueue(key, settings);
   const recentMessageIdKey = dedupeMode !== "none" ? buildRecentMessageIdKey(run, key) : undefined;
   if (recentMessageIdKey && RECENT_QUEUE_MESSAGE_IDS.peek(recentMessageIdKey)) {
@@ -78,19 +127,78 @@ export function enqueueFollowupRun(
   if (shouldSkipQueueItem({ item: run, items: queue.items, dedupe })) {
     return false;
   }
-
-  queue.lastEnqueuedAt = Date.now();
-  queue.lastRun = run.run;
-
-  const shouldEnqueue = applyQueueDropPolicy({
-    queue,
-    summarize: (item) => item.summaryLine?.trim() || item.prompt.trim(),
-  });
-  if (!shouldEnqueue) {
+  // drop:new rejects this source without mutating the existing queue. Do not
+  // publish an external queued identity for work that will never be admitted.
+  const pendingCount = countPendingQueueItems(queue.items, queue.inFlight);
+  if (queue.dropPolicy === "new" && queue.cap > 0 && pendingCount >= queue.cap) {
+    completeFollowupRunLifecycle(run);
+    return false;
+  }
+  if (!markFollowupRunEnqueued(run)) {
     return false;
   }
 
-  queue.items.push(run);
+  const shouldEnqueue = applyQueueDropPolicy({
+    queue,
+    inFlight: queue.inFlight,
+    summarize: (item) => normalizeOptionalString(item.summaryLine) || item.prompt.trim(),
+    onDrop: (dropped) => {
+      if (queue.dropPolicy === "summarize") {
+        queue.summarySources.push(...dropped);
+        return;
+      }
+      for (const item of dropped) {
+        completeFollowupRunLifecycle(item);
+      }
+    },
+    isProtected: (item) => item.protectFromQueueOverflow === true,
+  });
+  if (queue.dropPolicy === "summarize") {
+    const overflow = queue.summarySources.length - queue.summaryLines.length;
+    if (overflow > 0) {
+      const removed = queue.summarySources.splice(0, overflow);
+      for (const item of removed) {
+        const contextKey = resolveFollowupDeliveryContextKey(item);
+        const lastElision = queue.summaryElisions.at(-1);
+        if (lastElision?.contextKey === contextKey) {
+          const compactSource = createOverflowSummaryRetrySource(item);
+          lastElision.count += 1;
+          lastElision.sources.push(compactSource);
+          lastElision.sourceRefs.set(item, compactSource);
+          if (queue.activeSummarySources.has(item)) {
+            queue.activeSummarySources.add(compactSource);
+          }
+        } else {
+          const compactSource = createOverflowSummaryRetrySource(item);
+          queue.summaryElisions.push({
+            contextKey,
+            count: 1,
+            sources: [compactSource],
+            sourceRefs: new WeakMap([[item, compactSource]]),
+          });
+          if (queue.activeSummarySources.has(item)) {
+            queue.activeSummarySources.add(compactSource);
+          }
+        }
+        trimSummaryElisionsToCap(queue);
+      }
+    }
+  }
+  if (!shouldEnqueue) {
+    completeFollowupRunLifecycle(run);
+    return false;
+  }
+  // Only admitted items refresh debounce; rejected overflow must not starve
+  // protected stranded-reply retries waiting for the quiet window.
+  queue.lastEnqueuedAt = Date.now();
+  queue.lastRun = run.run;
+
+  run.queueAbortSignal = queue.abortController.signal;
+  if (options.position === "front") {
+    queue.items.unshift(run);
+  } else {
+    queue.items.push(run);
+  }
   if (recentMessageIdKey) {
     RECENT_QUEUE_MESSAGE_IDS.check(recentMessageIdKey);
   }
@@ -111,9 +219,15 @@ export function getFollowupQueueDepth(key: string): number {
   if (!queue) {
     return 0;
   }
-  return queue.items.length;
+  return countPendingQueueItems(queue.items, queue.inFlight);
 }
 
-export function resetRecentQueuedMessageIdDedupe(): void {
+function resetRecentQueuedMessageIdDedupe(): void {
   RECENT_QUEUE_MESSAGE_IDS.clear();
+}
+
+if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.queueEnqueueTestApi")] = {
+    resetRecentQueuedMessageIdDedupe,
+  };
 }

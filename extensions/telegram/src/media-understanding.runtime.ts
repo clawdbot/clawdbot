@@ -1,3 +1,4 @@
+// Telegram plugin module implements media understanding behavior.
 import {
   describeImageWithModel as describeImageWithModelImpl,
   transcribeFirstAudio as transcribeFirstAudioImpl,

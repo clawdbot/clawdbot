@@ -1,0 +1,35 @@
+title: Matrix E2EE CLI setup leaves the gateway able to reply in encrypted rooms
+scenario:
+  id: matrix-e2ee-cli-setup-then-gateway-reply
+  surface: channels
+  coverage:
+    primary:
+      - matrix.encryption-setup
+  execution:
+    profiles: { "matrix:all": 91, "matrix:e2ee-cli": 7 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 180000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        encryption: false
+        startupVerification: off
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: true
+            key: e2ee-cli-setup-then-gateway-reply
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA E2EE CLI Setup Gateway Reply Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-gateway.js
+  call: runMatrixQaE2eeCliSetupThenGatewayReplyScenario
+  args:
+    - expr: "scenarioContext"

@@ -1,5 +1,0 @@
-**REQUIRED PROPERTIES:** You MUST include ALL required properties for every component, even if they are inside a template or will be bound to data.
-- For 'Text', you MUST provide 'text'. If dynamic, use { "path": "..." }.
-- For 'Image', you MUST provide 'url'. If dynamic, use { "path": "..." }.
-- For 'Button', you MUST provide 'action'.
-- For 'TextField', 'CheckBox', etc., you MUST provide 'label'.

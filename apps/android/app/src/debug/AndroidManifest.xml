@@ -1,0 +1,27 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <permission
+        android:name="${applicationId}.permission.RUN_VOICE_E2E"
+        android:protectionLevel="signature" />
+
+    <uses-permission android:name="${applicationId}.permission.RUN_VOICE_E2E" />
+
+    <application>
+        <activity
+            android:name=".ui.CanvasLifecycleTestActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode|density|keyboard|keyboardHidden|navigation"
+            android:exported="false"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+        <receiver
+            android:name=".VoiceE2eReceiver"
+            android:permission="${applicationId}.permission.RUN_VOICE_E2E"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="ai.openclaw.app.debug.RUN_VOICE_E2E" />
+            </intent-filter>
+        </receiver>
+        <service
+            android:name=".VoiceE2eService"
+            android:exported="false" />
+    </application>
+</manifest>

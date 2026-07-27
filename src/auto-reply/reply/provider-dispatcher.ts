@@ -1,44 +1,39 @@
-import type { OpenClawConfig } from "../../config/config.js";
-import type { DispatchInboundResult } from "../dispatch.js";
+// Dispatch adapters that bridge provider reply resolution into inbound dispatchers.
 import {
   dispatchInboundMessageWithBufferedDispatcher,
   dispatchInboundMessageWithDispatcher,
 } from "../dispatch.js";
-import type { FinalizedMsgContext, MsgContext } from "../templating.js";
-import type { GetReplyOptions } from "../types.js";
 import type {
-  ReplyDispatcherOptions,
-  ReplyDispatcherWithTypingOptions,
-} from "./reply-dispatcher.js";
+  DispatchReplyWithBufferedBlockDispatcher,
+  DispatchReplyWithDispatcher,
+} from "./provider-dispatcher.types.js";
 
-export async function dispatchReplyWithBufferedBlockDispatcher(params: {
-  ctx: MsgContext | FinalizedMsgContext;
-  cfg: OpenClawConfig;
-  dispatcherOptions: ReplyDispatcherWithTypingOptions;
-  replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
-  replyResolver?: typeof import("../reply.js").getReplyFromConfig;
-}): Promise<DispatchInboundResult> {
-  return await dispatchInboundMessageWithBufferedDispatcher({
-    ctx: params.ctx,
-    cfg: params.cfg,
-    dispatcherOptions: params.dispatcherOptions,
-    replyResolver: params.replyResolver,
-    replyOptions: params.replyOptions,
-  });
-}
+export type {
+  DispatchReplyWithBufferedBlockDispatcher,
+  DispatchReplyWithDispatcher,
+} from "./provider-dispatcher.types.js";
 
-export async function dispatchReplyWithDispatcher(params: {
-  ctx: MsgContext | FinalizedMsgContext;
-  cfg: OpenClawConfig;
-  dispatcherOptions: ReplyDispatcherOptions;
-  replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
-  replyResolver?: typeof import("../reply.js").getReplyFromConfig;
-}): Promise<DispatchInboundResult> {
+/** Dispatch a reply using the buffered block dispatcher path. */
+export const dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher =
+  async (params) => {
+    return await dispatchInboundMessageWithBufferedDispatcher({
+      ctx: params.ctx,
+      cfg: params.cfg,
+      dispatcherOptions: params.dispatcherOptions,
+      toolsAllow: params.toolsAllow,
+      replyResolver: params.replyResolver,
+      replyOptions: params.replyOptions,
+    });
+  };
+
+/** Dispatch a reply using the standard dispatcher path. */
+export const dispatchReplyWithDispatcher: DispatchReplyWithDispatcher = async (params) => {
   return await dispatchInboundMessageWithDispatcher({
     ctx: params.ctx,
     cfg: params.cfg,
     dispatcherOptions: params.dispatcherOptions,
+    toolsAllow: params.toolsAllow,
     replyResolver: params.replyResolver,
     replyOptions: params.replyOptions,
   });
-}
+};

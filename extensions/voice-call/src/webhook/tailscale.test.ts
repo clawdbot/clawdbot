@@ -1,12 +1,10 @@
-import { EventEmitter } from "node:events";
+// Voice Call tests cover bounded Tailscale command execution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { spawnMock } = vi.hoisted(() => ({
-  spawnMock: vi.fn(),
-}));
+const { runCommandMock } = vi.hoisted(() => ({ runCommandMock: vi.fn() }));
 
-vi.mock("node:child_process", () => ({
-  spawn: spawnMock,
+vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
+  runCommandWithTimeout: runCommandMock,
 }));
 
 import {
@@ -18,74 +16,72 @@ import {
   setupTailscaleExposureRoute,
 } from "./tailscale.js";
 
-function createProc(params?: { code?: number; stdout?: string }) {
-  const proc = new EventEmitter() as EventEmitter & {
-    stdout: EventEmitter;
-    kill: ReturnType<typeof vi.fn>;
+function commandResult(overrides: Record<string, unknown> = {}) {
+  return {
+    stdout: "",
+    stderr: "",
+    code: 0,
+    signal: null,
+    killed: false,
+    termination: "exit",
+    ...overrides,
   };
-  proc.stdout = new EventEmitter();
-  proc.kill = vi.fn();
-  setTimeout(() => {
-    if (params?.stdout) {
-      proc.stdout.emit("data", Buffer.from(params.stdout));
-    }
-    proc.emit("close", params?.code ?? 0);
-  }, 0);
-  return proc;
 }
 
 describe("voice-call tailscale helpers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    runCommandMock.mockResolvedValue(commandResult());
   });
 
-  it("reads dns and node id from tailscale status json", async () => {
-    spawnMock
-      .mockReturnValueOnce(
-        createProc({
-          stdout: JSON.stringify({
-            Self: {
-              DNSName: "bot.example.ts.net.",
-              ID: "node-123",
-            },
-          }),
-        }),
-      )
-      .mockReturnValueOnce(
-        createProc({
-          stdout: JSON.stringify({
-            Self: {
-              DNSName: "bot.example.ts.net.",
-              ID: "node-123",
-            },
-          }),
-        }),
-      );
+  it("reads dns and node id through the canonical bounded wrapper", async () => {
+    const stdout = JSON.stringify({
+      Self: { DNSName: "bot.example.ts.net.", ID: "node-123" },
+    });
+    runCommandMock.mockResolvedValue(commandResult({ stdout }));
 
     await expect(getTailscaleSelfInfo()).resolves.toEqual({
       dnsName: "bot.example.ts.net",
       nodeId: "node-123",
     });
     await expect(getTailscaleDnsName()).resolves.toBe("bot.example.ts.net");
+    expect(runCommandMock).toHaveBeenCalledWith(
+      ["tailscale", "status", "--json", "--peers=false"],
+      expect.objectContaining({
+        killProcessTree: true,
+        maxOutputBytes: { stdout: 4 * 1024 * 1024, stderr: 1 },
+        terminateOnOutputLimit: { stdout: true },
+        timeoutMs: 2500,
+      }),
+    );
   });
 
-  it("returns null for failing or invalid status responses", async () => {
-    spawnMock.mockReturnValueOnce(createProc({ code: 1, stdout: "bad" }));
+  it("returns null for command, timeout, output-limit, and JSON failures", async () => {
+    runCommandMock.mockResolvedValueOnce(commandResult({ code: 1, stdout: "bad" }));
     await expect(getTailscaleSelfInfo()).resolves.toBeNull();
 
-    spawnMock.mockReturnValueOnce(createProc({ stdout: "{not-json" }));
+    runCommandMock.mockResolvedValueOnce(commandResult({ stdout: "{not-json" }));
+    await expect(getTailscaleSelfInfo()).resolves.toBeNull();
+
+    runCommandMock.mockRejectedValueOnce(new Error("tailscale missing"));
+    await expect(getTailscaleSelfInfo()).resolves.toBeNull();
+
+    runCommandMock.mockResolvedValueOnce(commandResult({ code: null, termination: "timeout" }));
+    await expect(getTailscaleSelfInfo()).resolves.toBeNull();
+
+    runCommandMock.mockResolvedValueOnce(
+      commandResult({ code: null, termination: "signal", outputLimitExceeded: true }),
+    );
     await expect(getTailscaleSelfInfo()).resolves.toBeNull();
   });
 
   it("sets up and cleans up exposure routes with the selected mode", async () => {
-    spawnMock
-      .mockReturnValueOnce(
-        createProc({
-          stdout: JSON.stringify({ Self: { DNSName: "bot.example.ts.net." } }),
-        }),
+    runCommandMock
+      .mockResolvedValueOnce(
+        commandResult({ stdout: JSON.stringify({ Self: { DNSName: "bot.example.ts.net." } }) }),
       )
-      .mockReturnValueOnce(createProc({ code: 0 }))
-      .mockReturnValueOnce(createProc({ code: 0 }));
+      .mockResolvedValueOnce(commandResult())
+      .mockResolvedValueOnce(commandResult());
 
     await expect(
       setupTailscaleExposureRoute({
@@ -94,38 +90,35 @@ describe("voice-call tailscale helpers", () => {
         localUrl: "http://127.0.0.1:8787/webhook",
       }),
     ).resolves.toBe("https://bot.example.ts.net/voice");
-
     await cleanupTailscaleExposureRoute({ mode: "serve", path: "/voice" });
 
-    expect(spawnMock).toHaveBeenNthCalledWith(
-      1,
-      "tailscale",
-      ["status", "--json"],
-      expect.objectContaining({ stdio: ["ignore", "pipe", "pipe"] }),
-    );
-    expect(spawnMock).toHaveBeenNthCalledWith(
+    expect(runCommandMock).toHaveBeenNthCalledWith(
       2,
-      "tailscale",
-      ["serve", "--bg", "--yes", "--set-path", "/voice", "http://127.0.0.1:8787/webhook"],
+      [
+        "tailscale",
+        "serve",
+        "--bg",
+        "--yes",
+        "--set-path",
+        "/voice",
+        "http://127.0.0.1:8787/webhook",
+      ],
       expect.any(Object),
     );
-    expect(spawnMock).toHaveBeenNthCalledWith(
+    expect(runCommandMock).toHaveBeenNthCalledWith(
       3,
-      "tailscale",
-      ["serve", "off", "/voice"],
+      ["tailscale", "serve", "off", "/voice"],
       expect.any(Object),
     );
   });
 
   it("returns null when setup cannot resolve dns or route activation fails", async () => {
-    spawnMock
-      .mockReturnValueOnce(createProc({ code: 1 }))
-      .mockReturnValueOnce(
-        createProc({
-          stdout: JSON.stringify({ Self: { DNSName: "bot.example.ts.net." } }),
-        }),
+    runCommandMock
+      .mockResolvedValueOnce(commandResult({ code: 1 }))
+      .mockResolvedValueOnce(
+        commandResult({ stdout: JSON.stringify({ Self: { DNSName: "bot.example.ts.net." } }) }),
       )
-      .mockReturnValueOnce(createProc({ code: 1 }));
+      .mockResolvedValueOnce(commandResult({ code: 1 }));
 
     await expect(
       setupTailscaleExposureRoute({
@@ -134,7 +127,6 @@ describe("voice-call tailscale helpers", () => {
         localUrl: "http://127.0.0.1:8787/webhook",
       }),
     ).resolves.toBeNull();
-
     await expect(
       setupTailscaleExposureRoute({
         mode: "funnel",
@@ -145,14 +137,12 @@ describe("voice-call tailscale helpers", () => {
   });
 
   it("maps config modes to serve or funnel and skips off", async () => {
-    spawnMock
-      .mockReturnValueOnce(
-        createProc({
-          stdout: JSON.stringify({ Self: { DNSName: "bot.example.ts.net." } }),
-        }),
+    runCommandMock
+      .mockResolvedValueOnce(
+        commandResult({ stdout: JSON.stringify({ Self: { DNSName: "bot.example.ts.net." } }) }),
       )
-      .mockReturnValueOnce(createProc({ code: 0 }))
-      .mockReturnValueOnce(createProc({ code: 0 }));
+      .mockResolvedValueOnce(commandResult())
+      .mockResolvedValueOnce(commandResult());
 
     await expect(
       setupTailscaleExposure({
@@ -160,30 +150,26 @@ describe("voice-call tailscale helpers", () => {
         serve: { port: 8787, path: "/webhook" },
       } as never),
     ).resolves.toBeNull();
-
     await expect(
       setupTailscaleExposure({
         tailscale: { mode: "funnel", path: "/voice" },
         serve: { port: 8787, path: "/webhook" },
       } as never),
     ).resolves.toBe("https://bot.example.ts.net/voice");
-
     await cleanupTailscaleExposure({
       tailscale: { mode: "serve", path: "/voice" },
       serve: { port: 8787, path: "/webhook" },
     } as never);
 
-    expect(spawnMock).toHaveBeenNthCalledWith(
-      2,
+    expect(runCommandMock.mock.calls[1]?.[0]).toEqual([
       "tailscale",
-      ["funnel", "--bg", "--yes", "--set-path", "/voice", "http://127.0.0.1:8787/webhook"],
-      expect.any(Object),
-    );
-    expect(spawnMock).toHaveBeenNthCalledWith(
-      3,
-      "tailscale",
-      ["serve", "off", "/voice"],
-      expect.any(Object),
-    );
+      "funnel",
+      "--bg",
+      "--yes",
+      "--set-path",
+      "/voice",
+      "http://127.0.0.1:8787/webhook",
+    ]);
+    expect(runCommandMock.mock.calls[2]?.[0]).toEqual(["tailscale", "serve", "off", "/voice"]);
   });
 });

@@ -1,4 +1,6 @@
+// Chat log tests cover message rendering order and layout behavior.
 import { describe, expect, it } from "vitest";
+import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { ChatLog } from "./chat-log.js";
 
 describe("ChatLog", () => {
@@ -12,6 +14,39 @@ describe("ChatLog", () => {
     const rendered = chatLog.render(120).join("\n");
     expect(rendered).toContain("system-40");
     expect(rendered).not.toContain("system-1");
+  });
+
+  it("coalesces consecutive repeatable system messages", () => {
+    const chatLog = new ChatLog(20);
+
+    chatLog.addSystem("no active run", { coalesceConsecutive: true });
+    chatLog.addSystem("no active run", { coalesceConsecutive: true });
+    chatLog.addSystem("no active run", { coalesceConsecutive: true });
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(chatLog.children.length).toBe(1);
+    expect(rendered).toContain("no active run x3");
+  });
+
+  it("does not coalesce ordinary system messages", () => {
+    const chatLog = new ChatLog(20);
+
+    chatLog.addSystem("status unchanged");
+    chatLog.addSystem("status unchanged");
+
+    expect(chatLog.children.length).toBe(2);
+  });
+
+  it("starts a new repeatable system message after other chat content", () => {
+    const chatLog = new ChatLog(20);
+
+    chatLog.addSystem("no active run", { coalesceConsecutive: true });
+    chatLog.addUser("hello");
+    chatLog.addSystem("no active run", { coalesceConsecutive: true });
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(chatLog.children.length).toBe(3);
+    expect(rendered).not.toContain("no active run x2");
   });
 
   it("drops stale streaming references when old components are pruned", () => {
@@ -40,6 +75,16 @@ describe("ChatLog", () => {
     expect(chatLog.children.length).toBe(1);
   });
 
+  it("reserves assistant position without clearing existing streamed text", () => {
+    const chatLog = new ChatLog(40);
+    chatLog.startAssistant("partial", "run-active");
+    chatLog.reserveAssistantSlot("run-active");
+
+    const rendered = chatLog.render(120).join("\n");
+    expect(rendered).toContain("partial");
+    expect(chatLog.children.length).toBe(1);
+  });
+
   it("drops stale tool references when old components are pruned", () => {
     const chatLog = new ChatLog(20);
     chatLog.startTool("tool-1", "read_file", { path: "a.txt" });
@@ -53,6 +98,22 @@ describe("ChatLog", () => {
     expect(chatLog.children.length).toBe(20);
   });
 
+  it("clears visible tool entries and stale tool references", () => {
+    const chatLog = new ChatLog(20);
+    chatLog.startTool("tool-1", "read_file", { path: "a.txt" });
+    chatLog.updateToolResult("tool-1", { content: [{ type: "text", text: "done" }] });
+
+    let rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered).toContain("Read File");
+
+    chatLog.clearTools();
+    chatLog.updateToolResult("tool-1", { content: [{ type: "text", text: "stale" }] });
+
+    rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered).not.toContain("Read File");
+    expect(rendered).not.toContain("stale");
+  });
+
   it("prunes system messages atomically when a non-system entry overflows the log", () => {
     const chatLog = new ChatLog(20);
     for (let i = 1; i <= 20; i++) {
@@ -61,7 +122,7 @@ describe("ChatLog", () => {
 
     chatLog.addUser("hello");
 
-    const rendered = chatLog.render(120).join("\n");
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
     expect(rendered).not.toMatch(/\bsystem-1\b/);
     expect(rendered).toMatch(/\bsystem-2\b/);
     expect(rendered).toMatch(/\bsystem-20\b/);
@@ -88,5 +149,106 @@ describe("ChatLog", () => {
     rendered = chatLog.render(120).join("\n");
     expect(rendered).not.toContain("BTW: what is 17 * 19?");
     expect(chatLog.hasVisibleBtw()).toBe(false);
+  });
+
+  it("preserves pending user messages across history rebuilds", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addPendingUser("run-1", "queued hello");
+    chatLog.clearAll({ preservePendingUsers: true });
+    chatLog.addSystem("session agent:main:main");
+    chatLog.restorePendingUsers();
+
+    const rendered = chatLog.render(120).join("\n");
+    expect(rendered).toContain("queued hello");
+    expect(chatLog.countPendingUsers()).toBe(1);
+  });
+
+  it("does not append the same pending component twice when it is already mounted", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addPendingUser("run-1", "queued hello");
+    chatLog.restorePendingUsers();
+
+    expect(chatLog.children.length).toBe(1);
+    expect(chatLog.render(120).join("\n")).toContain("queued hello");
+  });
+
+  it("re-keys a pending user in place without moving its position", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addPendingUser("local", "queued hello", 1_000);
+    chatLog.startAssistant("hi there", "r-accepted");
+
+    expect(chatLog.rekeyPendingUser("local", "r-accepted")).toBe(true);
+
+    const rendered = chatLog.render(120).join("\n");
+    expect(rendered.indexOf("queued hello")).toBeLessThan(rendered.indexOf("hi there"));
+    // The row is now addressable by the gateway-assigned runId.
+    expect(chatLog.dropPendingUser("r-accepted")).toBe(true);
+    expect(chatLog.countPendingUsers()).toBe(0);
+  });
+
+  it("reconciles pending users against rebuilt history using timestamps", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addPendingUser("run-1", "queued hello", 2_000);
+
+    expect(
+      chatLog.reconcilePendingUsers([
+        { text: "queued hello", timestamp: 2_100 },
+        { text: "older", timestamp: 1_000 },
+      ]),
+    ).toEqual(["run-1"]);
+    expect(chatLog.countPendingUsers()).toBe(0);
+  });
+
+  it("reconciles pending users when the gateway clock is slightly behind the client", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addPendingUser("run-1", "queued hello", 65_000);
+
+    expect(chatLog.reconcilePendingUsers([{ text: "queued hello", timestamp: 20_000 }])).toEqual([
+      "run-1",
+    ]);
+    expect(chatLog.countPendingUsers()).toBe(0);
+  });
+
+  it("dismisses a pending system notice by runId", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addPendingSystem("run-1", "taking longer than expected");
+    let rendered = chatLog.render(120).join("\n");
+    expect(rendered).toContain("taking longer than expected");
+
+    const dismissed = chatLog.dismissPendingSystem("run-1");
+    expect(dismissed).toBe(true);
+
+    rendered = chatLog.render(120).join("\n");
+    expect(rendered).not.toContain("taking longer than expected");
+    expect(chatLog.dismissPendingSystem("run-1")).toBe(false);
+  });
+
+  it("replaces an existing pending system notice for the same runId", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addPendingSystem("run-1", "first notice");
+    chatLog.addPendingSystem("run-1", "second notice");
+
+    const rendered = chatLog.render(120).join("\n");
+    expect(rendered).not.toContain("first notice");
+    expect(rendered).toContain("second notice");
+    expect(chatLog.children.length).toBe(1);
+  });
+
+  it("does not hide a new repeated prompt when only older history matches", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addPendingUser("run-1", "continue", 5_000);
+
+    expect(chatLog.reconcilePendingUsers([{ text: "continue", timestamp: -56_000 }])).toStrictEqual(
+      [],
+    );
+    expect(chatLog.countPendingUsers()).toBe(1);
   });
 });

@@ -1,11 +1,16 @@
-import type { Guild, Message, User } from "@buape/carbon";
+// Discord plugin module implements reply context behavior.
+import type { Guild, Message, User } from "../internal/discord.js";
 import { resolveTimestampMs } from "./format.js";
 import { resolveDiscordSenderIdentity } from "./sender-identity.js";
 
-export type DiscordReplyContext = {
+type DiscordReplyContext = {
   id: string;
   channelId: string;
   sender: string;
+  senderId?: string;
+  senderName?: string;
+  senderTag?: string;
+  memberRoleIds?: string[];
   body: string;
   timestamp?: number;
 };
@@ -32,6 +37,13 @@ export function resolveReplyContext(
     id: referenced.id,
     channelId: referenced.channelId,
     sender: sender.tag ?? sender.label ?? "unknown",
+    senderId: referenced.author.id,
+    senderName: referenced.author.username ?? undefined,
+    senderTag: sender.tag ?? undefined,
+    memberRoleIds: (() => {
+      const roles = (referenced as { member?: { roles?: string[] } }).member?.roles;
+      return Array.isArray(roles) ? roles.map((roleId) => roleId) : undefined;
+    })(),
     body: referencedText,
     timestamp: resolveTimestampMs(referenced.timestamp),
   };

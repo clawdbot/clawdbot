@@ -1,19 +1,20 @@
-import { callGateway } from "../../gateway/call.js";
-import { ErrorCodes } from "../../gateway/protocol/index.js";
+import { expectDefined } from "@openclaw/normalization-core";
+// Implements approval commands for pending tool and execution requests.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  getChannelPlugin,
+  resolveChannelApprovalCapability,
+} from "../../channels/plugins/index.js";
 import { logVerbose } from "../../globals.js";
-import {
-  isDiscordExecApprovalApprover,
-  isDiscordExecApprovalClientEnabled,
-} from "../../plugin-sdk/discord-surface.js";
-import {
-  isTelegramExecApprovalApprover,
-  isTelegramExecApprovalClientEnabled,
-} from "../../plugin-sdk/telegram-runtime.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
-import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
+import { isApprovalNotFoundError } from "../../infra/approval-errors.js";
+import { resolveApprovalOverGateway } from "../../infra/approval-gateway-resolver.js";
+import { resolveApprovalCommandAuthorization } from "../../infra/channel-approval-auth.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveChannelAccountId } from "./channel-context.js";
+import { requireGatewayClientScope } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 
-const COMMAND_REGEX = /^\/approve(?:\s|$)/i;
+const COMMAND_REGEX = /^\/?approve(?:\s|$)/i;
 const FOREIGN_COMMAND_MENTION_REGEX = /^\/approve@([^\s]+)(?:\s|$)/i;
 
 const DECISION_ALIASES: Record<string, "allow-once" | "allow-always" | "deny"> = {
@@ -33,6 +34,9 @@ type ParsedApproveCommand =
   | { ok: true; id: string; decision: "allow-once" | "allow-always" | "deny" }
   | { ok: false; error: string };
 
+const APPROVE_USAGE_TEXT =
+  "Usage: /approve <id> <decision> (see the pending approval message for available decisions)";
+
 function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   const trimmed = raw.trim();
   if (FOREIGN_COMMAND_MENTION_REGEX.test(trimmed)) {
@@ -44,15 +48,15 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   }
   const rest = trimmed.slice(commandMatch[0].length).trim();
   if (!rest) {
-    return { ok: false, error: "Usage: /approve <id> allow-once|allow-always|deny" };
+    return { ok: false, error: APPROVE_USAGE_TEXT };
   }
   const tokens = rest.split(/\s+/).filter(Boolean);
   if (tokens.length < 2) {
-    return { ok: false, error: "Usage: /approve <id> allow-once|allow-always|deny" };
+    return { ok: false, error: APPROVE_USAGE_TEXT };
   }
 
-  const first = tokens[0].toLowerCase();
-  const second = tokens[1].toLowerCase();
+  const first = normalizeLowercaseStringOrEmpty(tokens[0]);
+  const second = normalizeLowercaseStringOrEmpty(tokens[1]);
 
   if (DECISION_ALIASES[first]) {
     return {
@@ -65,10 +69,10 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
     return {
       ok: true,
       decision: DECISION_ALIASES[second],
-      id: tokens[0],
+      id: expectDefined(tokens[0], "tokens entry at 0"),
     };
   }
-  return { ok: false, error: "Usage: /approve <id> allow-once|allow-always|deny" };
+  return { ok: false, error: APPROVE_USAGE_TEXT };
 }
 
 function buildResolvedByLabel(params: Parameters<CommandHandler>[0]): string {
@@ -77,37 +81,35 @@ function buildResolvedByLabel(params: Parameters<CommandHandler>[0]): string {
   return `${channel}:${sender}`;
 }
 
-function readErrorCode(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value : null;
+function formatApprovalSubmitError(error: unknown): string {
+  return formatErrorMessage(error);
 }
 
-function readApprovalNotFoundDetailsReason(value: unknown): string | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  const reason = (value as { reason?: unknown }).reason;
-  return typeof reason === "string" && reason.trim() ? reason : null;
+type ApprovalKind = "exec" | "plugin";
+type ApproveCommandBehavior =
+  | { kind: "allow" }
+  | { kind: "ignore" }
+  | { kind: "reply"; text: string };
+
+function resolveAuthorizedApprovalKinds(params: {
+  execAuthorization: ReturnType<typeof resolveApprovalCommandAuthorization>;
+  pluginAuthorization: ReturnType<typeof resolveApprovalCommandAuthorization>;
+}): ApprovalKind[] {
+  return [
+    ...(params.execAuthorization.authorized ? (["exec"] as const) : []),
+    ...(params.pluginAuthorization.authorized ? (["plugin"] as const) : []),
+  ];
 }
 
-function isApprovalNotFoundError(err: unknown): boolean {
-  if (!(err instanceof Error)) {
-    return false;
-  }
-  const gatewayCode = readErrorCode((err as { gatewayCode?: unknown }).gatewayCode);
-  if (gatewayCode === ErrorCodes.APPROVAL_NOT_FOUND) {
-    return true;
-  }
-
-  const detailsReason = readApprovalNotFoundDetailsReason((err as { details?: unknown }).details);
-  if (
-    gatewayCode === ErrorCodes.INVALID_REQUEST &&
-    detailsReason === ErrorCodes.APPROVAL_NOT_FOUND
-  ) {
-    return true;
-  }
-
-  // Legacy server/client combinations may only include the message text.
-  return /unknown or expired approval id/i.test(err.message);
+function resolveApprovalAuthorizationError(params: {
+  execAuthorization: ReturnType<typeof resolveApprovalCommandAuthorization>;
+  pluginAuthorization: ReturnType<typeof resolveApprovalCommandAuthorization>;
+}): string {
+  return (
+    params.execAuthorization.reason ??
+    params.pluginAuthorization.reason ??
+    "❌ You are not authorized to approve this request."
+  );
 }
 
 export const handleApproveCommand: CommandHandler = async (params, allowTextCommands) => {
@@ -119,94 +121,40 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   if (!parsed) {
     return null;
   }
-  if (!params.command.isAuthorizedSender) {
+  if (!parsed.ok) {
+    return { shouldContinue: false, reply: { text: parsed.error } };
+  }
+
+  const effectiveAccountId = resolveChannelAccountId({
+    cfg: params.cfg,
+    ctx: params.ctx,
+    command: params.command,
+  });
+  const execApprovalAuthorization = resolveApprovalCommandAuthorization({
+    cfg: params.cfg,
+    channel: params.command.channel,
+    accountId: effectiveAccountId,
+    senderId: params.command.senderId,
+    kind: "exec",
+  });
+  const pluginApprovalAuthorization = resolveApprovalCommandAuthorization({
+    cfg: params.cfg,
+    channel: params.command.channel,
+    accountId: effectiveAccountId,
+    senderId: params.command.senderId,
+    kind: "plugin",
+  });
+  const hasExplicitApprovalAuthorization =
+    (execApprovalAuthorization.explicit && execApprovalAuthorization.authorized) ||
+    (pluginApprovalAuthorization.explicit && pluginApprovalAuthorization.authorized);
+  if (!params.command.isAuthorizedSender && !hasExplicitApprovalAuthorization) {
     logVerbose(
       `Ignoring /approve from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
     return { shouldContinue: false };
   }
 
-  if (!parsed.ok) {
-    return { shouldContinue: false, reply: { text: parsed.error } };
-  }
-  const isPluginId = parsed.id.startsWith("plugin:");
-  let discordExecApprovalDeniedReply: { shouldContinue: false; reply: { text: string } } | null =
-    null;
-
-  if (params.command.channel === "telegram") {
-    const telegramApproverContext = {
-      cfg: params.cfg,
-      accountId: params.ctx.AccountId,
-      senderId: params.command.senderId,
-    };
-
-    if (!isPluginId) {
-      if (
-        !isTelegramExecApprovalClientEnabled({ cfg: params.cfg, accountId: params.ctx.AccountId })
-      ) {
-        return {
-          shouldContinue: false,
-          reply: { text: "❌ Telegram exec approvals are not enabled for this bot account." },
-        };
-      }
-      if (!isTelegramExecApprovalApprover(telegramApproverContext)) {
-        return {
-          shouldContinue: false,
-          reply: { text: "❌ You are not authorized to approve exec requests on Telegram." },
-        };
-      }
-    }
-
-    // Keep plugin-ID routing independent from exec approval client enablement so
-    // forwarded plugin approvals remain resolvable, but still require explicit
-    // Telegram approver membership for security parity.
-    if (isPluginId && !isTelegramExecApprovalApprover(telegramApproverContext)) {
-      return {
-        shouldContinue: false,
-        reply: { text: "❌ You are not authorized to approve plugin requests on Telegram." },
-      };
-    }
-  }
-
-  if (params.command.channel === "discord" && !isPluginId) {
-    const discordApproverContext = {
-      cfg: params.cfg,
-      accountId: params.ctx.AccountId,
-      senderId: params.command.senderId,
-    };
-    if (!isDiscordExecApprovalClientEnabled(discordApproverContext)) {
-      discordExecApprovalDeniedReply = {
-        shouldContinue: false,
-        reply: { text: "❌ Discord exec approvals are not enabled for this bot account." },
-      };
-    }
-    if (!discordExecApprovalDeniedReply && !isDiscordExecApprovalApprover(discordApproverContext)) {
-      discordExecApprovalDeniedReply = {
-        shouldContinue: false,
-        reply: { text: "❌ You are not authorized to approve exec requests on Discord." },
-      };
-    }
-  }
-
-  // Keep plugin-ID routing independent from exec approval client enablement so
-  // forwarded plugin approvals remain resolvable, but still require explicit
-  // Discord approver membership for security parity.
-  if (
-    params.command.channel === "discord" &&
-    isPluginId &&
-    !isDiscordExecApprovalApprover({
-      cfg: params.cfg,
-      accountId: params.ctx.AccountId,
-      senderId: params.command.senderId,
-    })
-  ) {
-    return {
-      shouldContinue: false,
-      reply: { text: "❌ You are not authorized to approve plugin requests on Discord." },
-    };
-  }
-
-  const missingScope = requireGatewayClientScopeForInternalChannel(params, {
+  const missingScope = requireGatewayClientScope(params, {
     label: "/approve",
     allowedScopes: ["operator.approvals", "operator.admin"],
     missingText: "❌ /approve requires operator.approvals for gateway clients.",
@@ -215,64 +163,89 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
     return missingScope;
   }
 
+  const approvalCapability = resolveChannelApprovalCapability(
+    getChannelPlugin(params.command.channel),
+  );
+  const commandBehaviors = new Map<ApprovalKind, ApproveCommandBehavior | undefined>();
+  for (const approvalKind of ["exec", "plugin"] as const) {
+    commandBehaviors.set(
+      approvalKind,
+      approvalCapability?.resolveApproveCommandBehavior?.({
+        cfg: params.cfg,
+        accountId: effectiveAccountId,
+        senderId: params.command.senderId,
+        approvalKind,
+      }),
+    );
+  }
+  const blockedCommandResult = (): Awaited<ReturnType<CommandHandler>> => {
+    const replyBehavior = Array.from(commandBehaviors.values()).find(
+      (behavior) => behavior?.kind === "reply",
+    );
+    if (replyBehavior?.kind === "reply") {
+      return { shouldContinue: false, reply: { text: replyBehavior.text } };
+    }
+    if (Array.from(commandBehaviors.values()).some((behavior) => behavior?.kind === "ignore")) {
+      return { shouldContinue: false };
+    }
+    return null;
+  };
+
   const resolvedBy = buildResolvedByLabel(params);
-  const callApprovalMethod = async (method: string): Promise<void> => {
-    await callGateway({
-      method,
-      params: { id: parsed.id, decision: parsed.decision },
-      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+  const callApprovalMethod = async (resolveMethod: ApprovalKind): Promise<void> => {
+    await resolveApprovalOverGateway({
+      cfg: params.cfg,
+      approvalId: parsed.id,
+      decision: parsed.decision,
+      senderId: params.command.senderId,
+      resolveMethod,
       clientDisplayName: `Chat approval (${resolvedBy})`,
-      mode: GATEWAY_CLIENT_MODES.BACKEND,
     });
   };
 
-  // Plugin approval IDs are kind-prefixed (`plugin:<uuid>`); route directly when detected.
-  // Unprefixed IDs try exec first, then fall back to plugin for backward compat.
-  if (isPluginId) {
-    try {
-      await callApprovalMethod("plugin.approval.resolve");
-    } catch (err) {
-      return {
-        shouldContinue: false,
-        reply: { text: `❌ Failed to submit approval: ${String(err)}` },
-      };
+  const methods = resolveAuthorizedApprovalKinds({
+    execAuthorization: execApprovalAuthorization,
+    pluginAuthorization: pluginApprovalAuthorization,
+  }).filter((approvalKind) => {
+    const behavior = commandBehaviors.get(approvalKind);
+    return !behavior || behavior.kind === "allow";
+  });
+  if (methods.length === 0) {
+    const blocked = blockedCommandResult();
+    if (blocked) {
+      return blocked;
     }
-  } else {
-    if (discordExecApprovalDeniedReply) {
-      // Preserve the legacy unprefixed plugin fallback on Discord even when
-      // exec approvals are unavailable to this sender.
-      try {
-        await callApprovalMethod("plugin.approval.resolve");
-      } catch (pluginErr) {
-        if (isApprovalNotFoundError(pluginErr)) {
-          return discordExecApprovalDeniedReply;
-        }
+    return {
+      shouldContinue: false,
+      reply: {
+        text: resolveApprovalAuthorizationError({
+          execAuthorization: execApprovalAuthorization,
+          pluginAuthorization: pluginApprovalAuthorization,
+        }),
+      },
+    };
+  }
+
+  for (const [index, method] of methods.entries()) {
+    try {
+      await callApprovalMethod(method);
+      break;
+    } catch (error) {
+      const isLastMethod = index === methods.length - 1;
+      if (!isApprovalNotFoundError(error)) {
         return {
           shouldContinue: false,
-          reply: { text: `❌ Failed to submit approval: ${String(pluginErr)}` },
+          reply: { text: `❌ Failed to submit approval: ${formatApprovalSubmitError(error)}` },
         };
       }
-      return {
-        shouldContinue: false,
-        reply: { text: `✅ Approval ${parsed.decision} submitted for ${parsed.id}.` },
-      };
-    }
-    try {
-      await callApprovalMethod("exec.approval.resolve");
-    } catch (err) {
-      if (isApprovalNotFoundError(err)) {
-        try {
-          await callApprovalMethod("plugin.approval.resolve");
-        } catch (pluginErr) {
-          return {
-            shouldContinue: false,
-            reply: { text: `❌ Failed to submit approval: ${String(pluginErr)}` },
-          };
+      if (isLastMethod) {
+        const blocked = blockedCommandResult();
+        if (blocked) {
+          return blocked;
         }
-      } else {
         return {
           shouldContinue: false,
-          reply: { text: `❌ Failed to submit approval: ${String(err)}` },
+          reply: { text: `❌ Failed to submit approval: ${formatApprovalSubmitError(error)}` },
         };
       }
     }

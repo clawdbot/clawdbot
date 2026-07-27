@@ -1,0 +1,34 @@
+title: Matrix generated images deliver as real image attachments while streaming
+scenario:
+  id: matrix-room-generated-image-delivery
+  surface: channels
+  coverage:
+    primary:
+      - matrix.media-and-rich-content
+  execution:
+    profiles: { "matrix:all": 52, "matrix:media": 1 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 180000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        streaming: quiet
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: false
+            key: media
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA Media Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-media.js
+  call: runGeneratedImageDeliveryScenario
+  args:
+    - expr: "scenarioContext"

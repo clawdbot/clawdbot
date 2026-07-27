@@ -1,6 +1,12 @@
+/**
+ * Test fixtures for bash process registry state.
+ * Provides complete session objects so tests can focus on the field under
+ * inspection without repeating registry defaults.
+ */
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import type { ProcessSession } from "./bash-process-registry.js";
 
+/** Build a process-session fixture with safe defaults for registry tests. */
 export function createProcessSessionFixture(params: {
   id: string;
   command?: string;

@@ -1,15 +1,22 @@
-import type {
-  AudioMessage,
-  ImageMessage,
-  LocationMessage,
-  StickerMessage,
-  TextMessage,
-  VideoMessage,
-  WebhookEvent,
-} from "@line/bot-sdk";
+// Line type declarations define plugin contracts.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
+import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
+import type { MediaKind } from "openclaw/plugin-sdk/media-runtime";
 
 export type LineTokenSource = "config" | "env" | "file" | "none";
+export type LineCredentialStatus = "available" | "configured_unavailable" | "missing";
+export type LineCredentialUnavailableDiagnostic = Extract<
+  ReturnType<typeof import("openclaw/plugin-sdk/secret-file-runtime").tryReadSecretFileSync>,
+  { status: "configured_unavailable" }
+>["diagnostic"];
+
+interface LineThreadBindingsConfig {
+  enabled?: boolean;
+  idleHours?: number;
+  maxAgeHours?: number;
+  spawnSessions?: boolean;
+  defaultSpawnContext?: "isolated" | "fork";
+}
 
 interface LineAccountBaseConfig {
   enabled?: boolean;
@@ -25,6 +32,7 @@ interface LineAccountBaseConfig {
   responsePrefix?: string;
   mediaMaxMb?: number;
   webhookPath?: string;
+  threadBindings?: LineThreadBindingsConfig;
   groups?: Record<string, LineGroupConfig>;
 }
 
@@ -50,31 +58,21 @@ export interface ResolvedLineAccount {
   channelAccessToken: string;
   channelSecret: string;
   tokenSource: LineTokenSource;
+  signingSecretSource?: LineTokenSource;
+  tokenStatus?: LineCredentialStatus;
+  signingSecretStatus?: LineCredentialStatus;
+  credentialDiagnostics?: LineCredentialUnavailableDiagnostic[];
   config: LineConfig & LineAccountConfig;
-}
-
-export type LineMessageType =
-  | TextMessage
-  | ImageMessage
-  | VideoMessage
-  | AudioMessage
-  | StickerMessage
-  | LocationMessage;
-
-export interface LineWebhookContext {
-  event: WebhookEvent;
-  replyToken?: string;
-  userId?: string;
-  groupId?: string;
-  roomId?: string;
 }
 
 export interface LineSendResult {
   messageId: string;
   chatId: string;
+  receipt: MessageReceipt;
 }
 
 export type LineProbeResult = BaseProbeResult<string> & {
+  elapsedMs?: number;
   bot?: {
     displayName?: string;
     userId?: string;
@@ -83,7 +81,7 @@ export type LineProbeResult = BaseProbeResult<string> & {
   };
 };
 
-export type LineFlexMessagePayload = {
+type LineFlexMessagePayload = {
   altText: string;
   contents: unknown;
 };
@@ -100,7 +98,7 @@ export type LineTemplateMessagePayload =
     }
   | {
       type: "buttons";
-      title: string;
+      title?: string;
       text: string;
       actions: Array<{
         type: "message" | "uri" | "postback";
@@ -129,6 +127,10 @@ export type LineTemplateMessagePayload =
 
 export type LineChannelData = {
   quickReplies?: string[];
+  mediaKind?: LineOutboundMediaKind;
+  previewImageUrl?: string;
+  durationMs?: number;
+  trackingId?: string;
   location?: {
     title: string;
     address: string;
@@ -138,3 +140,5 @@ export type LineChannelData = {
   flexMessage?: LineFlexMessagePayload;
   templateMessage?: LineTemplateMessagePayload;
 };
+
+export type LineOutboundMediaKind = Extract<MediaKind, "image" | "video" | "audio">;

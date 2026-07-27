@@ -1,103 +1,21 @@
+// Audits channel configuration for exposure, auth, and trust risks.
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   hasConfiguredUnavailableCredentialStatus,
   hasResolvedCredentialValue,
 } from "../channels/account-snapshot-fields.js";
+import { resolveDmAllowAuditState } from "../channels/message-access/dm-allow-state.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import type { listChannelPlugins } from "../channels/plugins/index.js";
-import type { ChannelId } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
 import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveNativeCommandsEnabled, resolveNativeSkillsEnabled } from "../config/commands.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
-import type { SecurityAuditFinding, SecurityAuditSeverity } from "./audit.js";
-import { resolveDmAllowState } from "./dm-policy-shared.js";
+import type { SecurityAuditFinding, SecurityAuditSeverity } from "./audit.types.js";
 
-const loadAuditChannelDiscordRuntimeModule = createLazyRuntimeSurface(
-  () => import("./audit-channel.discord.runtime.js"),
-  ({ auditChannelDiscordRuntime }) => auditChannelDiscordRuntime,
-);
-
-const loadAuditChannelAllowFromRuntimeModule = createLazyRuntimeSurface(
-  () => import("./audit-channel.allow-from.runtime.js"),
-  ({ auditChannelAllowFromRuntime }) => auditChannelAllowFromRuntime,
-);
-
-const loadAuditChannelTelegramRuntimeModule = createLazyRuntimeSurface(
-  () => import("./audit-channel.telegram.runtime.js"),
-  ({ auditChannelTelegramRuntime }) => auditChannelTelegramRuntime,
-);
-
-const loadAuditChannelZalouserRuntimeModule = createLazyRuntimeSurface(
-  () => import("./audit-channel.zalouser.runtime.js"),
-  ({ auditChannelZalouserRuntime }) => auditChannelZalouserRuntime,
-);
-
-function normalizeAllowFromList(list: Array<string | number> | undefined | null): string[] {
-  return normalizeStringEntries(Array.isArray(list) ? list : undefined);
-}
-
-function addDiscordNameBasedEntries(params: {
-  target: Set<string>;
-  values: unknown;
-  source: string;
-  isDiscordMutableAllowEntry: (value: string) => boolean;
-}): void {
-  if (!Array.isArray(params.values)) {
-    return;
-  }
-  for (const value of params.values) {
-    if (!params.isDiscordMutableAllowEntry(String(value))) {
-      continue;
-    }
-    const text = String(value).trim();
-    if (!text) {
-      continue;
-    }
-    params.target.add(`${params.source}:${text}`);
-  }
-}
-
-function addZalouserMutableGroupEntries(params: {
-  target: Set<string>;
-  groups: unknown;
-  source: string;
-  isZalouserMutableGroupEntry: (value: string) => boolean;
-}): void {
-  if (!params.groups || typeof params.groups !== "object" || Array.isArray(params.groups)) {
-    return;
-  }
-  for (const key of Object.keys(params.groups as Record<string, unknown>)) {
-    if (!params.isZalouserMutableGroupEntry(key)) {
-      continue;
-    }
-    params.target.add(`${params.source}:${key}`);
-  }
-}
-
-async function collectInvalidTelegramAllowFromEntries(params: {
-  entries: unknown;
-  target: Set<string>;
-}): Promise<void> {
-  if (!Array.isArray(params.entries)) {
-    return;
-  }
-  const { isNumericTelegramUserId, normalizeTelegramAllowFromEntry } =
-    await loadAuditChannelTelegramRuntimeModule();
-  for (const entry of params.entries) {
-    const normalized = normalizeTelegramAllowFromEntry(entry);
-    if (!normalized || normalized === "*") {
-      continue;
-    }
-    if (!isNumericTelegramUserId(normalized)) {
-      params.target.add(normalized);
-    }
-  }
-}
-
+/** Classify free-form channel warnings into audit severities. */
 function classifyChannelWarningSeverity(message: string): SecurityAuditSeverity {
   const s = message.toLowerCase();
   if (
@@ -162,10 +80,11 @@ function formatChannelAccountNote(params: {
     : "";
 }
 
+/** Collect channel-specific security findings across active channel plugins/accounts. */
 export async function collectChannelSecurityFindings(params: {
   cfg: OpenClawConfig;
   sourceConfig?: OpenClawConfig;
-  plugins: ReturnType<typeof listChannelPlugins>;
+  plugins: ChannelPlugin[];
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
   const sourceConfig = params.sourceConfig ?? params.cfg;
@@ -174,13 +93,16 @@ export async function collectChannelSecurityFindings(params: {
     plugin: (typeof params.plugins)[number],
     cfg: OpenClawConfig,
     accountId: string,
-  ) =>
-    plugin.config.inspectAccount?.(cfg, accountId) ??
-    (await inspectReadOnlyChannelAccount({
+  ) => {
+    if (plugin.config.inspectAccount) {
+      return await plugin.config.inspectAccount(cfg, accountId);
+    }
+    return await inspectReadOnlyChannelAccount({
       channelId: plugin.id,
       cfg,
       accountId,
-    }));
+    });
+  };
 
   const asAccountRecord = (value: unknown): Record<string, unknown> | null =>
     value && typeof value === "object" && !Array.isArray(value)
@@ -224,6 +146,9 @@ export async function collectChannelSecurityFindings(params: {
       };
     }
     const useSourceUnavailableAccount = Boolean(
+      // Secret resolution can replace a configured account with an unresolved
+      // placeholder. Use source config when needed so audits still explain the
+      // originally configured credential surface.
       sourceInspectedAccount &&
       hasConfiguredUnavailableCredentialStatus(sourceInspectedAccount) &&
       (!hasResolvedCredentialValue(resolvedAccount) ||
@@ -277,19 +202,6 @@ export async function collectChannelSecurityFindings(params: {
     return { account, enabled, configured, diagnostics };
   };
 
-  const coerceNativeSetting = (value: unknown): boolean | "auto" | undefined => {
-    if (value === true) {
-      return true;
-    }
-    if (value === false) {
-      return false;
-    }
-    if (value === "auto") {
-      return "auto";
-    }
-    return undefined;
-  };
-
   const warnDmPolicy = async (input: {
     label: string;
     provider: ChannelId;
@@ -301,10 +213,13 @@ export async function collectChannelSecurityFindings(params: {
     normalizeEntry?: (raw: string) => string;
   }) => {
     const policyPath = input.policyPath ?? `${input.allowFromPath}policy`;
-    const { hasWildcard, isMultiUserDm } = await resolveDmAllowState({
+    // DM allowlist audit may need channel-specific normalization and async
+    // account ownership checks before classifying open/multi-user exposure.
+    const { hasWildcard, isMultiUserDm } = await resolveDmAllowAuditState({
       provider: input.provider,
       accountId: input.accountId,
       allowFrom: input.allowFrom,
+      dmPolicy: input.dmPolicy,
       normalizeEntry: input.normalizeEntry,
     });
     const dmScope = params.cfg.session?.dmScope ?? "main";
@@ -363,7 +278,7 @@ export async function collectChannelSecurityFindings(params: {
       cfg: sourceConfig,
       accountIds,
     });
-    const orderedAccountIds = Array.from(new Set([defaultAccountId, ...accountIds]));
+    const orderedAccountIds = uniqueStrings([defaultAccountId, ...accountIds]);
 
     for (const accountId of orderedAccountIds) {
       const hasExplicitAccountPath = hasExplicitProviderAccountConfig(
@@ -411,318 +326,6 @@ export async function collectChannelSecurityFindings(params: {
         });
       }
 
-      if (
-        plugin.id === "synology-chat" &&
-        (account as { dangerouslyAllowNameMatching?: unknown } | null)
-          ?.dangerouslyAllowNameMatching === true
-      ) {
-        const accountNote = formatChannelAccountNote({
-          orderedAccountIds,
-          hasExplicitAccountPath,
-          accountId,
-        });
-        findings.push({
-          checkId: "channels.synology-chat.reply.dangerous_name_matching_enabled",
-          severity: "info",
-          title: `Synology Chat dangerous name matching is enabled${accountNote}`,
-          detail:
-            "dangerouslyAllowNameMatching=true re-enables mutable username/nickname matching for reply delivery. This is a break-glass compatibility mode, not a hardened default.",
-          remediation:
-            "Prefer stable numeric Synology Chat user IDs for reply delivery, then disable dangerouslyAllowNameMatching.",
-        });
-      }
-
-      if (plugin.id === "discord") {
-        const { isDiscordMutableAllowEntry } = await loadAuditChannelDiscordRuntimeModule();
-        const { readChannelAllowFromStore } = await loadAuditChannelAllowFromRuntimeModule();
-        const discordCfg =
-          (account as { config?: Record<string, unknown> } | null)?.config ??
-          ({} as Record<string, unknown>);
-        const dangerousNameMatchingEnabled = isDangerousNameMatchingEnabled(discordCfg);
-        const storeAllowFrom = await readChannelAllowFromStore(
-          "discord",
-          process.env,
-          accountId,
-        ).catch(() => []);
-        const discordNameBasedAllowEntries = new Set<string>();
-        const discordPathPrefix =
-          orderedAccountIds.length > 1 || hasExplicitAccountPath
-            ? `channels.discord.accounts.${accountId}`
-            : "channels.discord";
-        addDiscordNameBasedEntries({
-          target: discordNameBasedAllowEntries,
-          values: discordCfg.allowFrom,
-          source: `${discordPathPrefix}.allowFrom`,
-          isDiscordMutableAllowEntry,
-        });
-        addDiscordNameBasedEntries({
-          target: discordNameBasedAllowEntries,
-          values: (discordCfg.dm as { allowFrom?: unknown } | undefined)?.allowFrom,
-          source: `${discordPathPrefix}.dm.allowFrom`,
-          isDiscordMutableAllowEntry,
-        });
-        addDiscordNameBasedEntries({
-          target: discordNameBasedAllowEntries,
-          values: storeAllowFrom,
-          source: "~/.openclaw/credentials/discord-allowFrom.json",
-          isDiscordMutableAllowEntry,
-        });
-        const discordGuildEntries =
-          (discordCfg.guilds as Record<string, unknown> | undefined) ?? {};
-        for (const [guildKey, guildValue] of Object.entries(discordGuildEntries)) {
-          if (!guildValue || typeof guildValue !== "object") {
-            continue;
-          }
-          const guild = guildValue as Record<string, unknown>;
-          addDiscordNameBasedEntries({
-            target: discordNameBasedAllowEntries,
-            values: guild.users,
-            source: `${discordPathPrefix}.guilds.${guildKey}.users`,
-            isDiscordMutableAllowEntry,
-          });
-          const channels = guild.channels;
-          if (!channels || typeof channels !== "object") {
-            continue;
-          }
-          for (const [channelKey, channelValue] of Object.entries(
-            channels as Record<string, unknown>,
-          )) {
-            if (!channelValue || typeof channelValue !== "object") {
-              continue;
-            }
-            const channel = channelValue as Record<string, unknown>;
-            addDiscordNameBasedEntries({
-              target: discordNameBasedAllowEntries,
-              values: channel.users,
-              source: `${discordPathPrefix}.guilds.${guildKey}.channels.${channelKey}.users`,
-              isDiscordMutableAllowEntry,
-            });
-          }
-        }
-        if (discordNameBasedAllowEntries.size > 0) {
-          const examples = Array.from(discordNameBasedAllowEntries).slice(0, 5);
-          const more =
-            discordNameBasedAllowEntries.size > examples.length
-              ? ` (+${discordNameBasedAllowEntries.size - examples.length} more)`
-              : "";
-          findings.push({
-            checkId: "channels.discord.allowFrom.name_based_entries",
-            severity: dangerousNameMatchingEnabled ? "info" : "warn",
-            title: dangerousNameMatchingEnabled
-              ? "Discord allowlist uses break-glass name/tag matching"
-              : "Discord allowlist contains name or tag entries",
-            detail: dangerousNameMatchingEnabled
-              ? "Discord name/tag allowlist matching is explicitly enabled via dangerouslyAllowNameMatching. This mutable-identity mode is operator-selected break-glass behavior and out-of-scope for vulnerability reports by itself. " +
-                `Found: ${examples.join(", ")}${more}.`
-              : "Discord name/tag allowlist matching uses normalized slugs and can collide across users. " +
-                `Found: ${examples.join(", ")}${more}.`,
-            remediation: dangerousNameMatchingEnabled
-              ? "Prefer stable Discord IDs (or <@id>/user:<id>/pk:<id>), then disable dangerouslyAllowNameMatching."
-              : "Prefer stable Discord IDs (or <@id>/user:<id>/pk:<id>) in channels.discord.allowFrom and channels.discord.guilds.*.users, or explicitly opt in with dangerouslyAllowNameMatching=true if you accept the risk.",
-          });
-        }
-        const nativeEnabled = resolveNativeCommandsEnabled({
-          providerId: "discord",
-          providerSetting: coerceNativeSetting(
-            (discordCfg.commands as { native?: unknown } | undefined)?.native,
-          ),
-          globalSetting: params.cfg.commands?.native,
-        });
-        const nativeSkillsEnabled = resolveNativeSkillsEnabled({
-          providerId: "discord",
-          providerSetting: coerceNativeSetting(
-            (discordCfg.commands as { nativeSkills?: unknown } | undefined)?.nativeSkills,
-          ),
-          globalSetting: params.cfg.commands?.nativeSkills,
-        });
-        const slashEnabled = nativeEnabled || nativeSkillsEnabled;
-        if (slashEnabled) {
-          const defaultGroupPolicy = params.cfg.channels?.defaults?.groupPolicy;
-          const groupPolicy =
-            (discordCfg.groupPolicy as string | undefined) ?? defaultGroupPolicy ?? "allowlist";
-          const guildEntries = discordGuildEntries;
-          const guildsConfigured = Object.keys(guildEntries).length > 0;
-          const hasAnyUserAllowlist = Object.values(guildEntries).some((guild) => {
-            if (!guild || typeof guild !== "object") {
-              return false;
-            }
-            const g = guild as Record<string, unknown>;
-            if (Array.isArray(g.users) && g.users.length > 0) {
-              return true;
-            }
-            const channels = g.channels;
-            if (!channels || typeof channels !== "object") {
-              return false;
-            }
-            return Object.values(channels as Record<string, unknown>).some((channel) => {
-              if (!channel || typeof channel !== "object") {
-                return false;
-              }
-              const c = channel as Record<string, unknown>;
-              return Array.isArray(c.users) && c.users.length > 0;
-            });
-          });
-          const dmAllowFromRaw = (discordCfg.dm as { allowFrom?: unknown } | undefined)?.allowFrom;
-          const dmAllowFrom = Array.isArray(dmAllowFromRaw) ? dmAllowFromRaw : [];
-          const ownerAllowFromConfigured =
-            normalizeAllowFromList([...dmAllowFrom, ...storeAllowFrom]).length > 0;
-
-          const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
-          if (
-            !useAccessGroups &&
-            groupPolicy !== "disabled" &&
-            guildsConfigured &&
-            !hasAnyUserAllowlist
-          ) {
-            findings.push({
-              checkId: "channels.discord.commands.native.unrestricted",
-              severity: "critical",
-              title: "Discord slash commands are unrestricted",
-              detail:
-                "commands.useAccessGroups=false disables sender allowlists for Discord slash commands unless a per-guild/channel users allowlist is configured; with no users allowlist, any user in allowed guild channels can invoke /… commands.",
-              remediation:
-                "Set commands.useAccessGroups=true (recommended), or configure channels.discord.guilds.<id>.users (or channels.discord.guilds.<id>.channels.<channel>.users).",
-            });
-          } else if (
-            useAccessGroups &&
-            groupPolicy !== "disabled" &&
-            guildsConfigured &&
-            !ownerAllowFromConfigured &&
-            !hasAnyUserAllowlist
-          ) {
-            findings.push({
-              checkId: "channels.discord.commands.native.no_allowlists",
-              severity: "warn",
-              title: "Discord slash commands have no allowlists",
-              detail:
-                "Discord slash commands are enabled, but neither an owner allowFrom list nor any per-guild/channel users allowlist is configured; /… commands will be rejected for everyone.",
-              remediation:
-                "Add your user id to channels.discord.allowFrom (or approve yourself via pairing), or configure channels.discord.guilds.<id>.users.",
-            });
-          }
-        }
-      }
-
-      if (plugin.id === "zalouser") {
-        const { isZalouserMutableGroupEntry } = await loadAuditChannelZalouserRuntimeModule();
-        const zalouserCfg =
-          (account as { config?: Record<string, unknown> } | null)?.config ??
-          ({} as Record<string, unknown>);
-        const dangerousNameMatchingEnabled = isDangerousNameMatchingEnabled(zalouserCfg);
-        const zalouserPathPrefix =
-          orderedAccountIds.length > 1 || hasExplicitAccountPath
-            ? `channels.zalouser.accounts.${accountId}`
-            : "channels.zalouser";
-        const mutableGroupEntries = new Set<string>();
-        addZalouserMutableGroupEntries({
-          target: mutableGroupEntries,
-          groups: zalouserCfg.groups,
-          source: `${zalouserPathPrefix}.groups`,
-          isZalouserMutableGroupEntry,
-        });
-        if (mutableGroupEntries.size > 0) {
-          const examples = Array.from(mutableGroupEntries).slice(0, 5);
-          const more =
-            mutableGroupEntries.size > examples.length
-              ? ` (+${mutableGroupEntries.size - examples.length} more)`
-              : "";
-          findings.push({
-            checkId: "channels.zalouser.groups.mutable_entries",
-            severity: dangerousNameMatchingEnabled ? "info" : "warn",
-            title: dangerousNameMatchingEnabled
-              ? "Zalouser group routing uses break-glass name matching"
-              : "Zalouser group routing contains mutable group entries",
-            detail: dangerousNameMatchingEnabled
-              ? "Zalouser group-name routing is explicitly enabled via dangerouslyAllowNameMatching. This mutable-identity mode is operator-selected break-glass behavior and out-of-scope for vulnerability reports by itself. " +
-                `Found: ${examples.join(", ")}${more}.`
-              : "Zalouser group auth is ID-only by default, so unresolved group-name or slug entries are ignored for auth and can drift from the intended trusted group. " +
-                `Found: ${examples.join(", ")}${more}.`,
-            remediation: dangerousNameMatchingEnabled
-              ? "Prefer stable Zalo group IDs (for example group:<id> or provider-native g- ids), then disable dangerouslyAllowNameMatching."
-              : "Prefer stable Zalo group IDs in channels.zalouser.groups, or explicitly opt in with dangerouslyAllowNameMatching=true if you accept mutable group-name matching.",
-          });
-        }
-      }
-
-      if (plugin.id === "slack") {
-        const { readChannelAllowFromStore } = await loadAuditChannelAllowFromRuntimeModule();
-        const slackCfg =
-          (account as { config?: Record<string, unknown>; dm?: Record<string, unknown> } | null)
-            ?.config ?? ({} as Record<string, unknown>);
-        const nativeEnabled = resolveNativeCommandsEnabled({
-          providerId: "slack",
-          providerSetting: coerceNativeSetting(
-            (slackCfg.commands as { native?: unknown } | undefined)?.native,
-          ),
-          globalSetting: params.cfg.commands?.native,
-        });
-        const nativeSkillsEnabled = resolveNativeSkillsEnabled({
-          providerId: "slack",
-          providerSetting: coerceNativeSetting(
-            (slackCfg.commands as { nativeSkills?: unknown } | undefined)?.nativeSkills,
-          ),
-          globalSetting: params.cfg.commands?.nativeSkills,
-        });
-        const slashCommandEnabled =
-          nativeEnabled ||
-          nativeSkillsEnabled ||
-          (slackCfg.slashCommand as { enabled?: unknown } | undefined)?.enabled === true;
-        if (slashCommandEnabled) {
-          const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
-          if (!useAccessGroups) {
-            findings.push({
-              checkId: "channels.slack.commands.slash.useAccessGroups_off",
-              severity: "critical",
-              title: "Slack slash commands bypass access groups",
-              detail:
-                "Slack slash/native commands are enabled while commands.useAccessGroups=false; this can allow unrestricted /… command execution from channels/users you didn't explicitly authorize.",
-              remediation: "Set commands.useAccessGroups=true (recommended).",
-            });
-          } else {
-            const allowFromRaw = (
-              account as
-                | { config?: { allowFrom?: unknown }; dm?: { allowFrom?: unknown } }
-                | null
-                | undefined
-            )?.config?.allowFrom;
-            const legacyAllowFromRaw = (
-              account as { dm?: { allowFrom?: unknown } } | null | undefined
-            )?.dm?.allowFrom;
-            const allowFrom = Array.isArray(allowFromRaw)
-              ? allowFromRaw
-              : Array.isArray(legacyAllowFromRaw)
-                ? legacyAllowFromRaw
-                : [];
-            const storeAllowFrom = await readChannelAllowFromStore(
-              "slack",
-              process.env,
-              accountId,
-            ).catch(() => []);
-            const ownerAllowFromConfigured =
-              normalizeAllowFromList([...allowFrom, ...storeAllowFrom]).length > 0;
-            const channels = (slackCfg.channels as Record<string, unknown> | undefined) ?? {};
-            const hasAnyChannelUsersAllowlist = Object.values(channels).some((value) => {
-              if (!value || typeof value !== "object") {
-                return false;
-              }
-              const channel = value as Record<string, unknown>;
-              return Array.isArray(channel.users) && channel.users.length > 0;
-            });
-            if (!ownerAllowFromConfigured && !hasAnyChannelUsersAllowlist) {
-              findings.push({
-                checkId: "channels.slack.commands.slash.no_allowlists",
-                severity: "warn",
-                title: "Slack slash commands have no allowlists",
-                detail:
-                  "Slack slash/native commands are enabled, but neither an owner allowFrom list nor any channels.<id>.users allowlist is configured; /… commands will be rejected for everyone.",
-                remediation:
-                  "Approve yourself via pairing (recommended), or set channels.slack.allowFrom and/or channels.slack.channels.<id>.users.",
-              });
-            }
-          }
-        }
-      }
-
       const dmPolicy = plugin.security.resolveDmPolicy?.({
         cfg: params.cfg,
         accountId,
@@ -748,7 +351,7 @@ export async function collectChannelSecurityFindings(params: {
           account,
         });
         for (const message of warnings ?? []) {
-          const trimmed = String(message).trim();
+          const trimmed = message.trim();
           if (!trimmed) {
             continue;
           }
@@ -760,144 +363,18 @@ export async function collectChannelSecurityFindings(params: {
           });
         }
       }
-
-      if (plugin.id !== "telegram") {
-        continue;
-      }
-
-      const allowTextCommands = params.cfg.commands?.text !== false;
-      if (!allowTextCommands) {
-        continue;
-      }
-
-      const telegramCfg =
-        (account as { config?: Record<string, unknown> } | null)?.config ??
-        ({} as Record<string, unknown>);
-      const defaultGroupPolicy = params.cfg.channels?.defaults?.groupPolicy;
-      const groupPolicy =
-        (telegramCfg.groupPolicy as string | undefined) ?? defaultGroupPolicy ?? "allowlist";
-      const groups = telegramCfg.groups as Record<string, unknown> | undefined;
-      const groupsConfigured = Boolean(groups) && Object.keys(groups ?? {}).length > 0;
-      const groupAccessPossible =
-        groupPolicy === "open" || (groupPolicy === "allowlist" && groupsConfigured);
-      if (!groupAccessPossible) {
-        continue;
-      }
-
-      const { readChannelAllowFromStore } = await loadAuditChannelAllowFromRuntimeModule();
-      const storeAllowFrom = await readChannelAllowFromStore(
-        "telegram",
-        process.env,
-        accountId,
-      ).catch(() => []);
-      const storeHasWildcard = storeAllowFrom.some((value) => String(value).trim() === "*");
-      const invalidTelegramAllowFromEntries = new Set<string>();
-      await collectInvalidTelegramAllowFromEntries({
-        entries: storeAllowFrom,
-        target: invalidTelegramAllowFromEntries,
-      });
-      const groupAllowFrom = Array.isArray(telegramCfg.groupAllowFrom)
-        ? telegramCfg.groupAllowFrom
-        : [];
-      const groupAllowFromHasWildcard = groupAllowFrom.some((v) => String(v).trim() === "*");
-      await collectInvalidTelegramAllowFromEntries({
-        entries: groupAllowFrom,
-        target: invalidTelegramAllowFromEntries,
-      });
-      const dmAllowFrom = Array.isArray(telegramCfg.allowFrom) ? telegramCfg.allowFrom : [];
-      await collectInvalidTelegramAllowFromEntries({
-        entries: dmAllowFrom,
-        target: invalidTelegramAllowFromEntries,
-      });
-      let anyGroupOverride = false;
-      if (groups) {
-        for (const value of Object.values(groups)) {
-          if (!value || typeof value !== "object") {
-            continue;
-          }
-          const group = value as Record<string, unknown>;
-          const allowFrom = Array.isArray(group.allowFrom) ? group.allowFrom : [];
-          if (allowFrom.length > 0) {
-            anyGroupOverride = true;
-            await collectInvalidTelegramAllowFromEntries({
-              entries: allowFrom,
-              target: invalidTelegramAllowFromEntries,
-            });
-          }
-          const topics = group.topics;
-          if (!topics || typeof topics !== "object") {
-            continue;
-          }
-          for (const topicValue of Object.values(topics as Record<string, unknown>)) {
-            if (!topicValue || typeof topicValue !== "object") {
-              continue;
-            }
-            const topic = topicValue as Record<string, unknown>;
-            const topicAllow = Array.isArray(topic.allowFrom) ? topic.allowFrom : [];
-            if (topicAllow.length > 0) {
-              anyGroupOverride = true;
-            }
-            await collectInvalidTelegramAllowFromEntries({
-              entries: topicAllow,
-              target: invalidTelegramAllowFromEntries,
-            });
-          }
+      if (plugin.security.collectAuditFindings) {
+        const auditFindings = await plugin.security.collectAuditFindings({
+          cfg: params.cfg,
+          sourceConfig,
+          accountId,
+          account,
+          orderedAccountIds,
+          hasExplicitAccountPath,
+        });
+        for (const finding of auditFindings ?? []) {
+          findings.push(finding);
         }
-      }
-
-      const hasAnySenderAllowlist =
-        storeAllowFrom.length > 0 || groupAllowFrom.length > 0 || anyGroupOverride;
-
-      if (invalidTelegramAllowFromEntries.size > 0) {
-        const examples = Array.from(invalidTelegramAllowFromEntries).slice(0, 5);
-        const more =
-          invalidTelegramAllowFromEntries.size > examples.length
-            ? ` (+${invalidTelegramAllowFromEntries.size - examples.length} more)`
-            : "";
-        findings.push({
-          checkId: "channels.telegram.allowFrom.invalid_entries",
-          severity: "warn",
-          title: "Telegram allowlist contains non-numeric entries",
-          detail:
-            "Telegram sender authorization requires numeric Telegram user IDs. " +
-            `Found non-numeric allowFrom entries: ${examples.join(", ")}${more}.`,
-          remediation:
-            "Replace @username entries with numeric Telegram user IDs (use setup to resolve), then re-run the audit.",
-        });
-      }
-
-      if (storeHasWildcard || groupAllowFromHasWildcard) {
-        findings.push({
-          checkId: "channels.telegram.groups.allowFrom.wildcard",
-          severity: "critical",
-          title: "Telegram group allowlist contains wildcard",
-          detail:
-            'Telegram group sender allowlist contains "*", which allows any group member to run /… commands and control directives.',
-          remediation:
-            'Remove "*" from channels.telegram.groupAllowFrom and pairing store; prefer explicit numeric Telegram user IDs.',
-        });
-        continue;
-      }
-
-      if (!hasAnySenderAllowlist) {
-        const providerSetting = (telegramCfg.commands as { nativeSkills?: unknown } | undefined)
-          // oxlint-disable-next-line typescript/no-explicit-any
-          ?.nativeSkills as any;
-        const skillsEnabled = resolveNativeSkillsEnabled({
-          providerId: "telegram",
-          providerSetting,
-          globalSetting: params.cfg.commands?.nativeSkills,
-        });
-        findings.push({
-          checkId: "channels.telegram.groups.allowFrom.missing",
-          severity: "critical",
-          title: "Telegram group commands have no sender allowlist",
-          detail:
-            `Telegram group access is enabled but no sender allowlist is configured; this allows any group member to invoke /… commands` +
-            (skillsEnabled ? " (including skill commands)." : "."),
-          remediation:
-            "Approve yourself via pairing (recommended), or set channels.telegram.groupAllowFrom (or per-group groups.<id>.allowFrom).",
-        });
       }
     }
   }

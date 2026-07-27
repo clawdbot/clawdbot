@@ -1,0 +1,665 @@
+import { randomUUID } from "node:crypto";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { mapThinkingLevelForProvider } from "../../agents/embedded-agent-runner/utils.js";
+import type {
+  LocalTurnPlacementClaim,
+  SessionPlacementAdmissionProvider,
+  SessionPlacementTurnParams,
+} from "../../agents/session-placement-admission.js";
+import { convertToLlm } from "../../agents/sessions/messages.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { redactSensitiveText } from "../../logging/redact.js";
+import { parseWorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
+import type {
+  WorkerSessionPlacementRecord,
+  WorkerSessionPlacementStore,
+  WorkerSessionTurnClaim,
+} from "./placement-store.js";
+import type { WorkerEnvironmentService } from "./service.js";
+import { resolveWorkerToolAuthority } from "./worker-tool-authority.js";
+import {
+  claimWorkerTurn,
+  latestDurableWorkspaceConflict,
+  releaseClaimIfOwned,
+  requireActivePlacement,
+  resolvePlacementIdentity,
+  waitForTurnOperation,
+} from "./worker-turn-admission.js";
+import {
+  assertSupportedTurn,
+  assistantText,
+  buildWorkerAgentMeta,
+  fitLaunchDescriptor,
+  parseRuntimeResult,
+  windowInitialMessages,
+} from "./worker-turn-payload.js";
+import {
+  formatWorkspaceConflictSummary,
+  WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
+  WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
+} from "./workspace-conflicts.js";
+import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
+import {
+  createWorkerWorkspaceOperationCoordinator,
+  type WorkerWorkspaceOperationCoordinator,
+} from "./workspace-operation-coordinator.js";
+import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
+import {
+  finalizeWorkspaceResultConflicts,
+  settleStagedWorkspaceResult,
+} from "./workspace-result-finalize.js";
+import { workerWorkspaceResultRef } from "./workspace-result-staging.js";
+
+const WORKER_LAUNCH_SCRIPT = 'exec node "$HOME/.openclaw-worker/$1/openclaw.mjs" worker';
+
+type WorkerTurnEnvironmentService = Pick<
+  WorkerEnvironmentService,
+  | "acknowledgeCredentialDelivery"
+  | "acquireTurnCredential"
+  | "destroy"
+  | "get"
+  | "startTunnel"
+  | "stopTunnel"
+>;
+
+type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }>;
+type ReclaimedWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>;
+
+type WorkerTurnLauncherOptions = {
+  admitNewPlacements?: boolean;
+  environments: WorkerTurnEnvironmentService;
+  placements: WorkerSessionPlacementStore;
+  resolveWorkspacePath: (identity: ReturnType<typeof resolvePlacementIdentity>) => Promise<string>;
+  workspaceOperations?: WorkerWorkspaceOperationCoordinator;
+  redispatchReclaimed?: (placement: ReclaimedWorkerPlacement) => Promise<ActiveWorkerPlacement>;
+};
+
+class WorkerTurnExecutionError extends Error {}
+class WorkerWorkspaceReconciliationError extends Error {}
+
+async function executeLocalTurn<T>(params: {
+  claim: LocalTurnPlacementClaim;
+  placements: WorkerSessionPlacementStore;
+  runLocal: () => Promise<T>;
+}): Promise<T> {
+  const current = params.placements.get(params.claim.sessionId);
+  const turnClaim = params.placements.claimTurn({
+    ...resolvePlacementIdentity(params.claim, current),
+    claimId: randomUUID(),
+    runId: params.claim.runId,
+    owner: { kind: "local" },
+  });
+  try {
+    return await params.runLocal();
+  } finally {
+    releaseClaimIfOwned(params.placements, turnClaim);
+  }
+}
+
+function recoveryError(error: unknown): string {
+  const message = redactSensitiveText(formatErrorMessage(error), { mode: "tools" })
+    .replace(/\s+/gu, " ")
+    .trim();
+  return truncateUtf16Safe(message || "cloud worker turn failed", 1_024);
+}
+
+async function failHandedOffTurn(params: {
+  environments: WorkerTurnEnvironmentService;
+  placements: WorkerSessionPlacementStore;
+  placement: ActiveWorkerPlacement;
+  turnClaim: WorkerSessionTurnClaim;
+  error: unknown;
+}): Promise<void> {
+  const primaryFailure = recoveryError(params.error);
+  const failures = [primaryFailure];
+  let draining: WorkerSessionPlacementRecord;
+  try {
+    draining = params.placements.startDrain({
+      sessionId: params.placement.sessionId,
+      environmentId: params.placement.environmentId,
+      ownerEpoch: params.placement.activeOwnerEpoch,
+      expectedGeneration: params.placement.generation,
+    });
+  } catch {
+    // Exact drain ownership failed. Do not tear down an environment that may
+    // now belong to a newer placement generation.
+    return;
+  }
+  if (draining.state !== "draining") {
+    return;
+  }
+  releaseClaimIfOwned(params.placements, params.turnClaim);
+  try {
+    await params.environments.stopTunnel(
+      params.placement.environmentId,
+      params.placement.activeOwnerEpoch,
+    );
+  } catch (error) {
+    failures.push(`tunnel stop: ${recoveryError(error)}`);
+  }
+  try {
+    await params.environments.destroy(params.placement.environmentId);
+  } catch (error) {
+    failures.push(`environment destroy: ${recoveryError(error)}`);
+  }
+  try {
+    // Both teardown calls returned through the environment queue. Fence stale
+    // worker RPC durably now; failed teardown remains eligible for retry.
+    const reconciling = params.placements.startReconcile({
+      sessionId: draining.sessionId,
+      environmentId: draining.environmentId,
+      ownerEpoch: draining.activeOwnerEpoch,
+      expectedGeneration: draining.generation,
+    });
+    if (reconciling.state !== "reconciling") {
+      return;
+    }
+    params.placements.fail({
+      sessionId: reconciling.sessionId,
+      expectedGeneration: reconciling.generation,
+      recoveryError: truncateUtf16Safe(failures.join("; "), 1_024),
+    });
+  } catch {
+    // Leave the durable draining or reconciling row for startup reconciliation.
+  }
+}
+
+async function executeWorkerTurn(params: {
+  environments: WorkerTurnEnvironmentService;
+  onHandoff: () => void;
+  placement: ActiveWorkerPlacement;
+  placements: WorkerSessionPlacementStore;
+  workspaceOperations: WorkerWorkspaceOperationCoordinator;
+  turn: SessionPlacementTurnParams;
+  turnClaim: WorkerSessionTurnClaim;
+  localWorkspaceDir: string;
+}) {
+  const { placement, turn } = params;
+  const modelRef = assertSupportedTurn(turn);
+  const environment = params.environments.get(placement.environmentId);
+  if (
+    !environment ||
+    environment.state !== "attached" ||
+    environment.ownerEpoch !== placement.activeOwnerEpoch ||
+    environment.bootstrapReceipt?.bundleHash !== placement.workerBundleHash ||
+    environment.attachedSessionIds.length !== 1 ||
+    environment.attachedSessionIds[0] !== placement.sessionId
+  ) {
+    throw new Error("Active worker placement does not match its attached environment");
+  }
+  let manifestAccepted = false;
+  let workspaceConflict:
+    | { paths: string[]; stagedResultRef: string; totalCount: number; summary: string }
+    | undefined;
+  let journalOwner = {
+    sessionId: placement.sessionId,
+    environmentId: placement.environmentId,
+    ownerEpoch: placement.activeOwnerEpoch,
+    placementGeneration: placement.generation,
+  };
+  const journal = {
+    load: () => params.placements.loadWorkspaceReconciliation(journalOwner),
+    begin: (next: Parameters<typeof params.placements.beginWorkspaceReconciliation>[1]) =>
+      params.placements.beginWorkspaceReconciliation(journalOwner, next),
+    commit: (manifestRef: string) => {
+      params.placements.updateWorkspaceBaseManifest({
+        claim: params.turnClaim,
+        manifestRef,
+      });
+      manifestAccepted = true;
+    },
+    abort: () => params.placements.abortWorkspaceReconciliation(journalOwner),
+  };
+  try {
+    await params.workspaceOperations.run(placement.environmentId, async () => {
+      if (!params.placements.validateTurnClaim(params.turnClaim)) {
+        throw new Error("Cloud worker workspace recovery lost its turn claim");
+      }
+      const pending = journal.load();
+      if (pending) {
+        await recoverWorkerWorkspaceReconciliation({
+          root: params.localWorkspaceDir,
+          journal: pending,
+        });
+        journal.abort();
+      }
+    });
+  } catch (error) {
+    throw new WorkerWorkspaceReconciliationError(
+      `Cloud worker workspace recovery could not complete: ${recoveryError(error)}`,
+      { cause: error },
+    );
+  }
+
+  const startedAt = Date.now();
+  turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration });
+  turn.onExecutionPhase?.({ phase: "runner_entered", backend: "cloud-worker" });
+  const manager = SessionManager.open(turn.sessionFile);
+  const userMessageAlreadyPersisted =
+    turn.suppressNextUserMessagePersistence === true ||
+    turn.userTurnTranscriptRecorder?.hasPersisted() === true;
+  const contextMessages = convertToLlm(manager.buildSessionContext().messages);
+  const leaf = manager.getLeafEntry();
+  const initialMessages = windowInitialMessages(
+    userMessageAlreadyPersisted && leaf?.type === "message" && leaf.message.role === "user"
+      ? contextMessages.slice(0, -1)
+      : contextMessages,
+  );
+  let baseLeafId = manager.getLeafId();
+  if (!userMessageAlreadyPersisted) {
+    const persisted = turn.userTurnTranscriptRecorder
+      ? await turn.userTurnTranscriptRecorder.persistApproved({ cwd: params.localWorkspaceDir })
+      : undefined;
+    if (persisted) {
+      baseLeafId = persisted.messageId;
+      turn.userTurnTranscriptRecorder?.markRuntimePersisted(persisted.message);
+      turn.onUserMessagePersisted?.(persisted.message);
+    } else if (turn.userTurnTranscriptRecorder?.hasPersisted()) {
+      baseLeafId = SessionManager.open(turn.sessionFile).getLeafId();
+    } else if (!turn.userTurnTranscriptRecorder) {
+      const message = {
+        role: "user" as const,
+        content: [{ type: "text" as const, text: turn.transcriptPrompt ?? turn.prompt }],
+        timestamp: Date.now(),
+      };
+      baseLeafId = manager.appendMessage(message);
+      turn.onUserMessagePersisted?.(message);
+    } else {
+      throw new Error("Cloud worker turn could not persist its canonical user message");
+    }
+  }
+  turn.onExecutionPhase?.({
+    phase: "model_resolution",
+    backend: "cloud-worker",
+    provider: modelRef.provider,
+    model: modelRef.model,
+  });
+
+  const credential = await params.environments.acquireTurnCredential({
+    environmentId: placement.environmentId,
+    ownerEpoch: placement.activeOwnerEpoch,
+    sessionId: placement.sessionId,
+  });
+  const tunnel = await waitForTurnOperation({
+    operation: params.environments.startTunnel({
+      environmentId: placement.environmentId,
+      ownerEpoch: placement.activeOwnerEpoch,
+    }),
+    ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
+    timeoutMs: turn.timeoutMs,
+  });
+  const reasoning = mapThinkingLevelForProvider(turn.thinkLevel);
+  const toolAuthority = resolveWorkerToolAuthority({ modelRef, turn });
+  const descriptor = fitLaunchDescriptor(
+    (windowedMessages) =>
+      parseWorkerLaunchDescriptor({
+        version: 2,
+        socketPath: tunnel.remoteSocketPath,
+        admission: {
+          environmentId: placement.environmentId,
+          credential: credential.credential,
+          sessionId: placement.sessionId,
+          ownerEpoch: placement.activeOwnerEpoch,
+          rpcSetVersion: credential.rpcSetVersion,
+          handshake: environment.bootstrapReceipt,
+        },
+        assignment: {
+          runId: turn.runId,
+          turnId: randomUUID(),
+          prompt: turn.prompt,
+          suppressPromptTranscript: true,
+          workspaceDir: placement.remoteWorkspaceDir,
+          modelRef,
+          inferenceOptions: reasoning ? { reasoning } : {},
+          ...(turn.extraSystemPrompt === undefined ? {} : { systemPrompt: turn.extraSystemPrompt }),
+          initialMessages: windowedMessages,
+          transcript: {
+            baseLeafId,
+            nextSeq: (placement.lastTranscriptAckCursor ?? 0) + 1,
+          },
+          liveEvents: {
+            ackedSeq: placement.lastLiveEventAckCursor ?? 0,
+            nextSeq: (placement.lastLiveEventAckCursor ?? 0) + 1,
+          },
+          toolAuthority,
+        },
+      }),
+    initialMessages,
+  );
+  turn.userTurnTranscriptRecorder?.markSentToProvider?.();
+  turn.onExecutionPhase?.({ phase: "attempt_dispatch", backend: "cloud-worker" });
+  const handoffAbort = new AbortController();
+  params.onHandoff();
+  const processPromise = tunnel.runWorkspaceCommand({
+    argv: ["sh", "-c", WORKER_LAUNCH_SCRIPT, "openclaw-worker", placement.workerBundleHash],
+    input: JSON.stringify(descriptor),
+    timeoutMs: turn.timeoutMs,
+    signal: turn.abortSignal
+      ? AbortSignal.any([turn.abortSignal, handoffAbort.signal])
+      : handoffAbort.signal,
+  });
+  turn.onExecutionPhase?.({ phase: "process_spawned", backend: "cloud-worker" });
+  let credentialDelivered: boolean;
+  try {
+    credentialDelivered = params.environments.acknowledgeCredentialDelivery(credential);
+  } catch (error) {
+    handoffAbort.abort();
+    await processPromise.catch(() => undefined);
+    throw new Error("Cloud worker credential handoff failed", { cause: error });
+  }
+  if (!credentialDelivered) {
+    handoffAbort.abort();
+    await processPromise.catch(() => undefined);
+    throw new Error("Cloud worker credential owner changed during process handoff");
+  }
+  const processResult = await processPromise;
+  if (processResult.code !== 0 || processResult.signal !== null || processResult.killed) {
+    // Boxes are destroyed on failure, so the redacted stderr tail is the only forensics.
+    const detail = truncateUtf16Safe(
+      redactSensitiveText(processResult.stderr, { mode: "tools" }).replace(/\s+/gu, " ").trim(),
+      400,
+    );
+    throw new Error(
+      detail
+        ? `Cloud worker process failed before completing the turn: ${detail}`
+        : "Cloud worker process failed before completing the turn",
+    );
+  }
+  const runtimeResult = parseRuntimeResult(processResult.stdout);
+  if (runtimeResult.status === "fenced") {
+    throw new Error(`Cloud worker turn was fenced: ${runtimeResult.reason}`);
+  }
+  if (runtimeResult.status === "failed") {
+    throw new WorkerTurnExecutionError("Cloud worker turn failed");
+  }
+
+  const completed = SessionManager.open(turn.sessionFile);
+  const currentPlacement = params.placements.get(placement.sessionId);
+  if (
+    runtimeResult.transcriptLeafId !== completed.getLeafId() ||
+    runtimeResult.transcriptNextSeq !== (currentPlacement?.lastTranscriptAckCursor ?? 0) + 1
+  ) {
+    throw new Error("Cloud worker result does not match its committed transcript acknowledgement");
+  }
+  if (
+    (currentPlacement?.state !== "active" && currentPlacement?.state !== "draining") ||
+    currentPlacement.environmentId !== placement.environmentId ||
+    currentPlacement.activeOwnerEpoch !== placement.activeOwnerEpoch
+  ) {
+    throw new Error("Cloud worker placement changed before workspace reconciliation");
+  }
+  const priorWorkspaceConflict =
+    currentPlacement.workspaceResultConflict ??
+    latestDurableWorkspaceConflict(completed.getBranch());
+  const terminal = runtimeResult.transcriptLeafId
+    ? completed.getEntry(runtimeResult.transcriptLeafId)
+    : undefined;
+  if (!terminal || terminal.type !== "message" || terminal.message.role !== "assistant") {
+    throw new Error("Cloud worker completed without a terminal assistant transcript message");
+  }
+  const pendingWorkspaceResult = params.placements
+    .listPendingWorkspaceResults()
+    .some(
+      (pending) =>
+        pending.sessionId === params.turnClaim.sessionId &&
+        pending.claimId === params.turnClaim.claimId &&
+        pending.runId === params.turnClaim.runId,
+    );
+  if (!pendingWorkspaceResult) {
+    // The terminal live-event ACK and this fence are one SQLite transaction.
+    // Never accept process stdout as a weaker substitute for that durable owner.
+    throw new Error("Cloud worker completed without a durable workspace-result fence");
+  }
+  const text = assistantText(terminal.message);
+  const baseIndex = completed.getBranch().findIndex((entry) => entry.id === baseLeafId);
+  const workerMessages = completed
+    .getBranch()
+    .slice(baseIndex + 1)
+    .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
+  journalOwner = {
+    sessionId: currentPlacement.sessionId,
+    environmentId: currentPlacement.environmentId,
+    ownerEpoch: currentPlacement.activeOwnerEpoch,
+    placementGeneration: currentPlacement.generation,
+  };
+  try {
+    await params.workspaceOperations.run(currentPlacement.environmentId, async () => {
+      if (!params.placements.validateTurnClaim(params.turnClaim)) {
+        throw new Error("Cloud worker workspace result lost its turn claim");
+      }
+      const quiescence = await tunnel.quiesceWorkspace(currentPlacement.remoteWorkspaceDir);
+      let resumed = false;
+      try {
+        const stagedResultRef = workerWorkspaceResultRef(params.turnClaim.claimId);
+        const reconciliation = await tunnel.reconcileWorkspace({
+          localPath: params.localWorkspaceDir,
+          remoteWorkspaceDir: currentPlacement.remoteWorkspaceDir,
+          baseManifestRef: currentPlacement.workspaceBaseManifestRef,
+          journal,
+          stagedResult: {
+            ref: stagedResultRef,
+            record: (ref) => params.placements.recordStagedWorkspaceResult(params.turnClaim, ref),
+          },
+        });
+        const applied = await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
+        if (!manifestAccepted) {
+          throw new Error("Cloud worker workspace reconciliation was not durably accepted");
+        }
+        params.placements.acceptWorkspaceResult(params.turnClaim);
+        const recordedStagedResultRef = params.placements
+          .listPendingWorkspaceResults()
+          .find(
+            (pending) =>
+              pending.sessionId === params.turnClaim.sessionId &&
+              pending.claimId === params.turnClaim.claimId &&
+              pending.runId === params.turnClaim.runId,
+          )?.stagedResultRef;
+        if (applied?.conflictPaths.length && !recordedStagedResultRef) {
+          throw new Error("Cloud workspace conflict has no staged result reference");
+        }
+        const finalized = await finalizeWorkspaceResultConflicts({
+          placements: params.placements,
+          turnClaim: params.turnClaim,
+          conflictPaths: applied?.conflictPaths ?? [],
+          priorConflict: priorWorkspaceConflict,
+          stagedResultRef: recordedStagedResultRef,
+          root: params.localWorkspaceDir,
+          report: async (report) => {
+            if ("cleared" in report) {
+              SessionManager.open(turn.sessionFile).appendCustomMessageEntry(
+                WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
+                "A later cloud workspace result superseded the previous conflict.",
+                false,
+              );
+              return;
+            }
+            workspaceConflict = {
+              ...report,
+              summary: formatWorkspaceConflictSummary(
+                report.paths,
+                report.stagedResultRef,
+                report.totalCount,
+              ),
+            };
+            SessionManager.open(turn.sessionFile).appendCustomMessageEntry(
+              WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
+              workspaceConflict.summary,
+              true,
+              {
+                paths: workspaceConflict.paths,
+                stagedResultRef: workspaceConflict.stagedResultRef,
+                totalCount: workspaceConflict.totalCount,
+              },
+            );
+          },
+        });
+        await settleStagedWorkspaceResult({
+          placements: params.placements,
+          turnClaim: params.turnClaim,
+          root: params.localWorkspaceDir,
+          stagedResultRef: recordedStagedResultRef,
+          conflictRetained: finalized.conflictRetained,
+          reclaim: false,
+          beforeComplete: async () => {
+            await quiescence.resume();
+            resumed = true;
+          },
+        });
+      } finally {
+        if (!resumed) {
+          await quiescence.resume();
+        }
+      }
+    });
+  } catch (error) {
+    throw new WorkerWorkspaceReconciliationError(
+      `Cloud worker finished, but its workspace result could not be reconciled: ${recoveryError(error)}`,
+      { cause: error },
+    );
+  }
+  if (workspaceConflict) {
+    const reportedWorkspaceConflict = workspaceConflict;
+    await Promise.resolve()
+      .then(() =>
+        turn.onAgentEvent?.({
+          stream: "assistant",
+          data: {
+            text: text
+              ? `${text}\n\n${reportedWorkspaceConflict.summary}`
+              : reportedWorkspaceConflict.summary,
+            delta: `${text ? "\n\n" : ""}${reportedWorkspaceConflict.summary}`,
+          },
+        }),
+      )
+      .catch(() => undefined);
+  }
+  const replyText = workspaceConflict
+    ? text
+      ? `${text}\n\n${workspaceConflict.summary}`
+      : workspaceConflict.summary
+    : text;
+  return {
+    ...(replyText ? { payloads: [{ text: replyText }] } : {}),
+    meta: {
+      durationMs: Date.now() - startedAt,
+      agentMeta: {
+        sessionId: placement.sessionId,
+        sessionFile: turn.sessionFile,
+        ...buildWorkerAgentMeta({ messages: workerMessages, modelRef }),
+      },
+      stopReason: terminal.message.stopReason,
+    },
+  };
+}
+
+export function createWorkerSessionTurnPlacementProvider(
+  options: WorkerTurnLauncherOptions,
+): SessionPlacementAdmissionProvider {
+  const workspaceOperations =
+    options.workspaceOperations ?? createWorkerWorkspaceOperationCoordinator();
+  return {
+    async executeLocalTurn<T>(claim: LocalTurnPlacementClaim, runLocal: () => Promise<T>) {
+      if (!options.placements.get(claim.sessionId) && options.admitNewPlacements === false) {
+        return await runLocal();
+      }
+      return await executeLocalTurn({ claim, placements: options.placements, runLocal });
+    },
+    async executeTurn(claim, turn, runLocal) {
+      const current = options.placements.get(claim.sessionId);
+      if (
+        !current &&
+        (options.admitNewPlacements === false ||
+          (turn.modelRun === true && !claim.sessionKey?.trim()))
+      ) {
+        return await runLocal();
+      }
+      if (!current || current.state === "local") {
+        return await executeLocalTurn({ claim, placements: options.placements, runLocal });
+      }
+      let routablePlacement = current;
+      if (routablePlacement.state === "reclaimed") {
+        if (!options.redispatchReclaimed) {
+          throw new Error("Reclaimed worker placement requires redispatch");
+        }
+        emitAgentRunStatusEvent({
+          runId: claim.runId,
+          phase: "provisioning_environment",
+          ...(claim.sessionKey ? { sessionKey: claim.sessionKey } : {}),
+          ...(claim.agentId ? { agentId: claim.agentId } : {}),
+        });
+        routablePlacement = await options.redispatchReclaimed(routablePlacement);
+      }
+      const identity = resolvePlacementIdentity(claim, routablePlacement);
+      let placement = requireActivePlacement(routablePlacement);
+      // The placement owns the managed worktree. Callers can carry a default or stale
+      // workspace path, but remote results must only reconcile into that canonical root.
+      const localWorkspaceDir = await options.resolveWorkspacePath(identity);
+      const admitted = await claimWorkerTurn({
+        placements: options.placements,
+        identity,
+        placement,
+        runId: claim.runId,
+        ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
+      });
+      placement = admitted.placement;
+      const turnClaim = admitted.turnClaim;
+      let handedOff = false;
+      try {
+        const result = await executeWorkerTurn({
+          environments: options.environments,
+          onHandoff: () => {
+            handedOff = true;
+          },
+          placement,
+          placements: options.placements,
+          localWorkspaceDir,
+          workspaceOperations,
+          turn,
+          turnClaim,
+        });
+        return result;
+      } catch (error) {
+        const pendingWorkspaceResult = options.placements
+          .listPendingWorkspaceResults()
+          .some(
+            (pending) =>
+              pending.sessionId === turnClaim.sessionId &&
+              pending.claimId === turnClaim.claimId &&
+              pending.runId === turnClaim.runId,
+          );
+        if (pendingWorkspaceResult) {
+          // A recovery sweep owns the still-live worker claim. Teardown here
+          // could discard the terminal event's durably fenced file results.
+          options.placements.handoffWorkspaceResultRecovery(turnClaim);
+          throw error;
+        }
+        if (error instanceof WorkerWorkspaceReconciliationError && !handedOff) {
+          // Recovery runs before remote launch. Preserve the journal's active
+          // generation; only the new admission claim belongs to this attempt.
+          releaseClaimIfOwned(options.placements, turnClaim);
+          throw error;
+        }
+        if (error instanceof WorkerTurnExecutionError) {
+          if (options.placements.validateTurnClaim(turnClaim)) {
+            options.placements.releaseTurn(turnClaim);
+            throw error;
+          }
+        }
+        if (handedOff) {
+          await failHandedOffTurn({
+            environments: options.environments,
+            placements: options.placements,
+            placement,
+            turnClaim,
+            error,
+          });
+        } else {
+          releaseClaimIfOwned(options.placements, turnClaim);
+        }
+        throw error;
+      }
+    },
+  };
+}

@@ -1,24 +1,61 @@
+/**
+ * Browser CLI inspection commands for screenshots and snapshots.
+ */
+import fs from "node:fs/promises";
 import type { Command } from "commander";
-import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  BROWSER_TAB_REFERENCE_HELP,
+  callBrowserRequest,
+  parseBrowserNonNegativeIntegerValue,
+  parseBrowserPositiveIntegerValue,
+  type BrowserParentOpts,
+} from "./browser-cli-shared.js";
 import {
   danger,
   defaultRuntime,
-  loadConfig,
+  getRuntimeConfig,
   shortenHomePath,
   type SnapshotResult,
 } from "./core-api.js";
 
+function parseOptionalIntegerOption(
+  value: string | undefined,
+  label: string,
+  opts: { min: number },
+): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed =
+    opts.min === 0
+      ? parseBrowserNonNegativeIntegerValue(value)
+      : parseBrowserPositiveIntegerValue(value);
+  if (parsed === undefined || parsed < opts.min) {
+    defaultRuntime.error(danger(`Invalid ${label}: must be an integer >= ${opts.min}`));
+    defaultRuntime.exit(1);
+    return undefined;
+  }
+  return parsed;
+}
+
+/** Registers Browser screenshot and snapshot commands. */
 export function registerBrowserInspectCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
 ) {
   browser
     .command("screenshot")
-    .description("Capture a screenshot (MEDIA:<path>)")
-    .argument("[targetId]", "CDP target id (or unique prefix)")
+    .description("Capture a screenshot (prints the saved path)")
+    .argument("[targetId]", BROWSER_TAB_REFERENCE_HELP)
     .option("--full-page", "Capture full scrollable page", false)
     .option("--ref <ref>", "ARIA ref from ai snapshot")
     .option("--element <selector>", "CSS selector for element screenshot")
+    .option(
+      "--labels",
+      "Overlay role refs on the screenshot (works with --full-page, --ref, and --element)",
+      false,
+    )
     .option("--type <png|jpeg>", "Output type (default: png)", "png")
     .action(async (targetId: string | undefined, opts, cmd) => {
       const parent = parentOpts(cmd);
@@ -31,10 +68,11 @@ export function registerBrowserInspectCommands(
             path: "/screenshot",
             query: profile ? { profile } : undefined,
             body: {
-              targetId: targetId?.trim() || undefined,
+              targetId: normalizeOptionalString(targetId),
               fullPage: Boolean(opts.fullPage),
-              ref: opts.ref?.trim() || undefined,
-              element: opts.element?.trim() || undefined,
+              ref: normalizeOptionalString(opts.ref),
+              element: normalizeOptionalString(opts.element),
+              labels: Boolean(opts.labels),
               type: opts.type === "jpeg" ? "jpeg" : "png",
             },
           },
@@ -44,7 +82,7 @@ export function registerBrowserInspectCommands(
           defaultRuntime.writeJson(result);
           return;
         }
-        defaultRuntime.log(`MEDIA:${shortenHomePath(result.path)}`);
+        defaultRuntime.log(shortenHomePath(result.path));
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
@@ -55,37 +93,50 @@ export function registerBrowserInspectCommands(
     .command("snapshot")
     .description("Capture a snapshot (default: ai; aria is the accessibility tree)")
     .option("--format <aria|ai>", "Snapshot format (default: ai)", "ai")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
-    .option("--limit <n>", "Max nodes (default: 500/800)", (v: string) => Number(v))
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
+    .option("--limit <n>", "Max nodes (default: 500/800)")
     .option("--mode <efficient>", "Snapshot preset (efficient)")
     .option("--efficient", "Use the efficient snapshot preset", false)
     .option("--interactive", "Role snapshot: interactive elements only", false)
     .option("--compact", "Role snapshot: compact output", false)
-    .option("--depth <n>", "Role snapshot: max depth", (v: string) => Number(v))
+    .option("--depth <n>", "Role snapshot: max depth")
     .option("--selector <sel>", "Role snapshot: scope to CSS selector")
     .option("--frame <sel>", "Role snapshot: scope to an iframe selector")
-    .option("--labels", "Include viewport label overlay screenshot", false)
+    .option("--labels", "Include label overlay screenshot with annotations", false)
+    .option("--urls", "Append discovered link URLs to AI snapshots", false)
     .option("--out <path>", "Write snapshot to a file")
-    .action(async (opts, cmd) => {
+    .action(async (opts, cmd: Command) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       const format = opts.format === "aria" ? "aria" : "ai";
+      const formatWasExplicit = cmd.getOptionValueSource("format") === "cli";
       const configMode =
-        format === "ai" && loadConfig().browser?.snapshotDefaults?.mode === "efficient"
+        !formatWasExplicit &&
+        format === "ai" &&
+        getRuntimeConfig().browser?.snapshotDefaults?.mode === "efficient"
           ? "efficient"
           : undefined;
       const mode = opts.efficient === true || opts.mode === "efficient" ? "efficient" : configMode;
+      const limit = parseOptionalIntegerOption(opts.limit, "--limit", { min: 1 });
+      const depth = parseOptionalIntegerOption(opts.depth, "--depth", { min: 0 });
+      if (
+        (opts.limit !== undefined && limit === undefined) ||
+        (opts.depth !== undefined && depth === undefined)
+      ) {
+        return;
+      }
       try {
         const query: Record<string, string | number | boolean | undefined> = {
           format,
-          targetId: opts.targetId?.trim() || undefined,
-          limit: Number.isFinite(opts.limit) ? opts.limit : undefined,
+          targetId: normalizeOptionalString(opts.targetId),
+          limit,
           interactive: opts.interactive ? true : undefined,
           compact: opts.compact ? true : undefined,
-          depth: Number.isFinite(opts.depth) ? opts.depth : undefined,
-          selector: opts.selector?.trim() || undefined,
-          frame: opts.frame?.trim() || undefined,
+          depth,
+          selector: normalizeOptionalString(opts.selector),
+          frame: normalizeOptionalString(opts.frame),
           labels: opts.labels ? true : undefined,
+          urls: opts.urls ? true : undefined,
           mode,
           profile,
         };
@@ -100,7 +151,6 @@ export function registerBrowserInspectCommands(
         );
 
         if (opts.out) {
-          const fs = await import("node:fs/promises");
           if (result.format === "ai") {
             await fs.writeFile(opts.out, result.snapshot, "utf8");
           } else {
@@ -118,7 +168,7 @@ export function registerBrowserInspectCommands(
           } else {
             defaultRuntime.log(shortenHomePath(opts.out));
             if (result.format === "ai" && result.imagePath) {
-              defaultRuntime.log(`MEDIA:${shortenHomePath(result.imagePath)}`);
+              defaultRuntime.log(shortenHomePath(result.imagePath));
             }
           }
           return;
@@ -132,7 +182,7 @@ export function registerBrowserInspectCommands(
         if (result.format === "ai") {
           defaultRuntime.log(result.snapshot);
           if (result.imagePath) {
-            defaultRuntime.log(`MEDIA:${shortenHomePath(result.imagePath)}`);
+            defaultRuntime.log(shortenHomePath(result.imagePath));
           }
           return;
         }

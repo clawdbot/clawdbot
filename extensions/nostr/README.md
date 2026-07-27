@@ -68,7 +68,7 @@ openclaw plugins install @openclaw/nostr
 - **open**: Anyone can message the bot (use with caution)
 - **disabled**: DMs are disabled
 
-Policy enforcement happens before signature verification and NIP-04 decryption.
+Inbound event signatures are verified before policy enforcement and NIP-04 decryption.
 Unknown senders in `pairing` mode can receive a pairing reply, but their original DM body is not
 processed unless approved.
 

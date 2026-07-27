@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Covers outbound identity normalization and configured agent identity/avatar
+// projection.
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveAgentIdentityMock = vi.hoisted(() => vi.fn());
 const resolveAgentAvatarMock = vi.hoisted(() => vi.fn());
@@ -16,9 +18,13 @@ type IdentityModule = typeof import("./identity.js");
 let normalizeOutboundIdentity: IdentityModule["normalizeOutboundIdentity"];
 let resolveAgentOutboundIdentity: IdentityModule["resolveAgentOutboundIdentity"];
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
   ({ normalizeOutboundIdentity, resolveAgentOutboundIdentity } = await import("./identity.js"));
+});
+
+beforeEach(() => {
+  resolveAgentIdentityMock.mockReset();
+  resolveAgentAvatarMock.mockReset();
 });
 
 describe("normalizeOutboundIdentity", () => {

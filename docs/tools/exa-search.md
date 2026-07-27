@@ -4,14 +4,19 @@ read_when:
   - You want to use Exa for web_search
   - You need an EXA_API_KEY
   - You want neural search or content extraction
-title: "Exa Search"
+title: "Exa search"
 ---
 
-# Exa Search
+[Exa AI](https://exa.ai/) is a `web_search` provider with neural, keyword, and
+hybrid search modes plus built-in content extraction (highlights, text,
+summaries).
 
-OpenClaw supports [Exa AI](https://exa.ai/) as a `web_search` provider. Exa
-offers neural, keyword, and hybrid search modes with built-in content
-extraction (highlights, text, summaries).
+## Install plugin
+
+```bash
+openclaw plugins install @openclaw/exa-plugin
+openclaw gateway restart
+```
 
 ## Get an API key
 
@@ -40,6 +45,7 @@ extraction (highlights, text, summaries).
         config: {
           webSearch: {
             apiKey: "exa-...", // optional if EXA_API_KEY is set
+            baseUrl: "https://api.exa.ai", // optional; OpenClaw appends /search
           },
         },
       },
@@ -55,25 +61,51 @@ extraction (highlights, text, summaries).
 }
 ```
 
-**Environment alternative:** set `EXA_API_KEY` in the Gateway environment.
-For a gateway install, put it in `~/.openclaw/.env`.
+**Environment alternative:** set `EXA_API_KEY` in the Gateway environment. For
+a gateway install, put it in `~/.openclaw/.env`. See
+[Env vars](/help/faq#env-vars-and-env-loading).
+
+## Base URL override
+
+Set `plugins.entries.exa.config.webSearch.baseUrl` to route Exa search
+requests through a compatible proxy or alternate endpoint. OpenClaw
+normalizes bare hosts by prepending `https://` and appends `/search` unless
+the path already ends there. The resolved endpoint is part of the search
+cache key, so results from different endpoints are never shared.
 
 ## Tool parameters
 
-| Parameter     | Description                                                                   |
-| ------------- | ----------------------------------------------------------------------------- |
-| `query`       | Search query (required)                                                       |
-| `count`       | Results to return (1-100)                                                     |
-| `type`        | Search mode: `auto`, `neural`, `fast`, `deep`, `deep-reasoning`, or `instant` |
-| `freshness`   | Time filter: `day`, `week`, `month`, or `year`                                |
-| `date_after`  | Results after this date (YYYY-MM-DD)                                          |
-| `date_before` | Results before this date (YYYY-MM-DD)                                         |
-| `contents`    | Content extraction options (see below)                                        |
+<ParamField path="query" type="string" required>
+Search query.
+</ParamField>
+
+<ParamField path="count" type="number" default="5">
+Results to return (1-100, subject to Exa search-type limits).
+</ParamField>
+
+<ParamField path="type" type="'auto' | 'neural' | 'fast' | 'deep' | 'deep-reasoning' | 'instant'">
+Search mode.
+</ParamField>
+
+<ParamField path="freshness" type="'day' | 'week' | 'month' | 'year'">
+Time filter. Cannot be combined with `date_after`/`date_before`.
+</ParamField>
+
+<ParamField path="date_after" type="string">
+Results after this date (`YYYY-MM-DD`).
+</ParamField>
+
+<ParamField path="date_before" type="string">
+Results before this date (`YYYY-MM-DD`).
+</ParamField>
+
+<ParamField path="contents" type="object">
+Content extraction options (see below).
+</ParamField>
 
 ### Content extraction
 
-Exa can return extracted content alongside search results. Pass a `contents`
-object to enable:
+Pass a `contents` object to control extracted content in results:
 
 ```javascript
 await web_search({
@@ -93,6 +125,12 @@ await web_search({
 | `highlights`    | `boolean \| { maxCharacters, query, numSentences, highlightsPerUrl }` | Extract key sentences  |
 | `summary`       | `boolean \| { query }`                                                | AI-generated summary   |
 
+If `contents` is omitted, Exa defaults to `{ highlights: true }` so results
+include key-sentence excerpts. Result descriptions resolve from highlights
+first, then summary, then full text -- whichever is available first. Results
+also preserve the raw `highlightScores` and `summary` fields from the Exa API
+response when available.
+
 ### Search modes
 
 | Mode             | Description                       |
@@ -106,19 +144,11 @@ await web_search({
 
 ## Notes
 
-- If no `contents` option is provided, Exa defaults to `{ highlights: true }`
-  so results include key sentence excerpts
-- Results preserve `highlightScores` and `summary` fields from the Exa API
-  response when available
-- Result descriptions are resolved from highlights first, then summary, then
-  full text — whichever is available
-- `freshness` and `date_after`/`date_before` cannot be combined — use one
-  time-filter mode
-- Up to 100 results can be returned per query (subject to Exa search-type
-  limits)
-- Results are cached for 15 minutes by default (configurable via
-  `cacheTtlMinutes`)
-- Exa is an official API integration with structured JSON responses
+- `count` accepts up to 100, subject to Exa search-type limits.
+- Results are cached for 15 minutes by default. Configure the shared
+  `tools.web.search.cacheTtlMinutes` (minutes) and
+  `tools.web.search.timeoutSeconds` (default 30s) to change caching and
+  request timeout for all `web_search` providers, including Exa.
 
 ## Related
 

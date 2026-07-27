@@ -1,58 +1,47 @@
+import { expectDefined } from "@openclaw/normalization-core";
+// Parses poll command parameters into validated polling options.
 import { readSnakeCaseParamRaw } from "./param-key.js";
 
-export type PollCreationParamKind = "string" | "stringArray" | "number" | "boolean";
+type PollCreationParamKind = "string" | "stringArray" | "positiveInteger" | "boolean";
 
-export type PollCreationParamDef = {
+type PollCreationParamDef = {
   kind: PollCreationParamKind;
 };
 
 const SHARED_POLL_CREATION_PARAM_DEFS = {
   pollQuestion: { kind: "string" },
   pollOption: { kind: "stringArray" },
-  pollDurationHours: { kind: "number" },
+  pollDurationHours: { kind: "positiveInteger" },
   pollMulti: { kind: "boolean" },
 } satisfies Record<string, PollCreationParamDef>;
 
-const TELEGRAM_POLL_CREATION_PARAM_DEFS = {
-  pollDurationSeconds: { kind: "number" },
-  pollAnonymous: { kind: "boolean" },
-  pollPublic: { kind: "boolean" },
-} satisfies Record<string, PollCreationParamDef>;
+export const POLL_CREATION_PARAM_DEFS: Record<string, PollCreationParamDef> =
+  SHARED_POLL_CREATION_PARAM_DEFS;
 
-export const POLL_CREATION_PARAM_DEFS: Record<string, PollCreationParamDef> = {
-  ...SHARED_POLL_CREATION_PARAM_DEFS,
-  ...TELEGRAM_POLL_CREATION_PARAM_DEFS,
-};
+type SharedPollCreationParamName = keyof typeof SHARED_POLL_CREATION_PARAM_DEFS;
 
-export type SharedPollCreationParamName = keyof typeof SHARED_POLL_CREATION_PARAM_DEFS;
-export type TelegramPollCreationParamName = keyof typeof TELEGRAM_POLL_CREATION_PARAM_DEFS;
-export type PollCreationParamName = keyof typeof POLL_CREATION_PARAM_DEFS;
-
-export const POLL_CREATION_PARAM_NAMES = Object.keys(POLL_CREATION_PARAM_DEFS);
 export const SHARED_POLL_CREATION_PARAM_NAMES = Object.keys(
   SHARED_POLL_CREATION_PARAM_DEFS,
 ) as SharedPollCreationParamName[];
-export const TELEGRAM_POLL_CREATION_PARAM_NAMES = Object.keys(
-  TELEGRAM_POLL_CREATION_PARAM_DEFS,
-) as TelegramPollCreationParamName[];
 
 function readPollParamRaw(params: Record<string, unknown>, key: string): unknown {
   return readSnakeCaseParamRaw(params, key);
 }
 
-export function resolveTelegramPollVisibility(params: {
-  pollAnonymous?: boolean;
-  pollPublic?: boolean;
-}): boolean | undefined {
-  if (params.pollAnonymous && params.pollPublic) {
-    throw new Error("pollAnonymous and pollPublic are mutually exclusive");
-  }
-  return params.pollAnonymous ? true : params.pollPublic ? false : undefined;
-}
+// Among the shared poll params, only the content-bearing fields (pollQuestion,
+// pollOption) signal poll intent on their own. The modifier fields
+// (pollDurationHours, pollMulti) and channel-specific metadata
+// (pollDurationSeconds, pollPublic, pollAnonymous) are also exposed on the
+// shared `message` tool schema, so schema-padded plain sends may echo them.
+// Only content fields count here; action="poll" validates modifiers later.
+const CONTENT_BEARING_SHARED_POLL_PARAM_NAMES = ["pollQuestion", "pollOption"] as const;
 
-export function hasPollCreationParams(params: Record<string, unknown>): boolean {
-  for (const key of POLL_CREATION_PARAM_NAMES) {
-    const def = POLL_CREATION_PARAM_DEFS[key];
+function hasContentBearingPollCreationParam(params: Record<string, unknown>): boolean {
+  for (const key of CONTENT_BEARING_SHARED_POLL_PARAM_NAMES) {
+    const def = expectDefined(
+      POLL_CREATION_PARAM_DEFS[key],
+      "poll creation param defs entry at key",
+    );
     const value = readPollParamRaw(params, key);
     if (def.kind === "string" && typeof value === "string" && value.trim().length > 0) {
       return true;
@@ -68,29 +57,10 @@ export function hasPollCreationParams(params: Record<string, unknown>): boolean 
         return true;
       }
     }
-    if (def.kind === "number") {
-      // Treat zero-valued numeric defaults as unset, but preserve any non-zero
-      // numeric value as explicit poll intent so invalid durations still hit
-      // the poll-only validation path.
-      if (typeof value === "number" && Number.isFinite(value) && value !== 0) {
-        return true;
-      }
-      if (typeof value === "string") {
-        const trimmed = value.trim();
-        const parsed = Number(trimmed);
-        if (trimmed.length > 0 && Number.isFinite(parsed) && parsed !== 0) {
-          return true;
-        }
-      }
-    }
-    if (def.kind === "boolean") {
-      if (value === true) {
-        return true;
-      }
-      if (typeof value === "string" && value.trim().toLowerCase() === "true") {
-        return true;
-      }
-    }
   }
   return false;
+}
+
+export function hasPollCreationParams(params: Record<string, unknown>): boolean {
+  return hasContentBearingPollCreationParam(params);
 }

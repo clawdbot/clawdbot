@@ -1,0 +1,60 @@
+name: openclaw-codeql-process-exec-boundary-critical-security
+
+disable-default-queries: true
+
+queries:
+  - uses: security-extended
+
+query-filters:
+  - include:
+      precision:
+        - high
+        - very-high
+      tags contain: security
+      security-severity: /([7-9]|10)\.(\d)+/
+
+paths:
+  - src/process
+  - src/tui/tui-local-shell.ts
+  - src/tui/tui.ts
+  - src/plugin-sdk/windows-spawn.ts
+  - packages/agent-core/src/harness/env
+  - packages/memory-host-sdk/src/host
+  - extensions/acpx/src
+  - extensions/bonjour/src/advertiser.ts
+  - extensions/browser/src/browser/chrome-mcp.ts
+  - extensions/browser/src/browser/chrome.executables.ts
+  - extensions/browser/src/browser/chrome.ts
+  - extensions/codex/src/app-server/sandbox-exec-server
+  - extensions/codex/src/app-server/transport-stdio.ts
+  - extensions/codex/src/node-cli-sessions.ts
+  - extensions/file-transfer/src
+  - extensions/google-meet/src
+  - extensions/imessage/src
+  - extensions/memory-core/src/memory/qmd-manager.ts
+  - extensions/memory-wiki/src/obsidian.ts
+  - extensions/microsoft-foundry/cli.ts
+  - extensions/ollama/src/wsl2-crash-loop-check.ts
+  - extensions/qa-lab/src
+  - extensions/signal/src/daemon.ts
+  - extensions/tts-local-cli/speech-provider.ts
+  - extensions/voice-call/src
+  - scripts
+
+paths-ignore:
+  - "**/node_modules"
+  - "**/coverage"
+  - "**/*.generated.ts"
+  - "**/*.bundle.js"
+  - "**/*-runtime.js"
+  - "**/*.test.ts"
+  - "**/*.test.tsx"
+  - "**/*.spec.ts"
+  - "**/*.spec.tsx"
+  - "**/*.e2e.test.ts"
+  - "**/*.e2e.test.tsx"
+  - "**/*test-support*"
+  - "**/*test-helper*"
+  - "**/*mock*"
+  - "**/*fixture*"
+  - "**/*bench*"

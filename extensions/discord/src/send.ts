@@ -1,3 +1,4 @@
+// Discord plugin module implements send behavior.
 export {
   createChannelDiscord,
   deleteChannelDiscord,
@@ -15,7 +16,9 @@ export {
   addRoleDiscord,
   banMemberDiscord,
   createScheduledEventDiscord,
+  resolveEventCoverImage,
   fetchChannelInfoDiscord,
+  fetchGuildInfoDiscord,
   fetchMemberInfoDiscord,
   fetchRoleInfoDiscord,
   fetchVoiceStatusDiscord,
@@ -28,6 +31,7 @@ export {
 export {
   createThreadDiscord,
   deleteMessageDiscord,
+  DiscordThreadInitialMessageError,
   editMessageDiscord,
   fetchMessageDiscord,
   listPinsDiscord,
@@ -37,22 +41,17 @@ export {
   searchMessagesDiscord,
   unpinMessageDiscord,
 } from "./send.messages.js";
-export {
-  sendMessageDiscord,
-  sendPollDiscord,
-  sendStickerDiscord,
-  sendWebhookMessageDiscord,
-  sendVoiceMessageDiscord,
-} from "./send.outbound.js";
-export {
-  editDiscordComponentMessage,
-  registerBuiltDiscordComponentMessage,
-  sendDiscordComponentMessage,
-} from "./send.components.js";
+export { sendMessageDiscord, sendPollDiscord, sendStickerDiscord } from "./send.outbound.js";
+export { sendWebhookMessageDiscord } from "./send.webhook.js";
+export { sendVoiceMessageDiscord } from "./send.voice.js";
 export { sendTypingDiscord } from "./send.typing.js";
 export {
+  canViewDiscordGuildChannel,
+  canManageGuildRoleDiscord,
+  canManageGuildMemberRoleDiscord,
   fetchChannelPermissionsDiscord,
   hasAllGuildPermissionsDiscord,
+  hasAnyChannelPermissionDiscord,
   hasAnyGuildPermissionDiscord,
   fetchMemberGuildPermissionsDiscord,
 } from "./send.permissions.js";
@@ -71,10 +70,12 @@ export type {
   DiscordMessageEdit,
   DiscordMessageQuery,
   DiscordModerationTarget,
+  DiscordReactionRuntimeContext,
   DiscordPermissionsSummary,
   DiscordReactionSummary,
   DiscordReactionUser,
   DiscordReactOpts,
+  DiscordRuntimeAccountContext,
   DiscordRoleChange,
   DiscordSearchQuery,
   DiscordSendResult,

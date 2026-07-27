@@ -1,6 +1,26 @@
 {
   "id": "discord",
-  "channels": ["discord"],
+  "name": "Discord",
+  "description": "OpenClaw Discord channel plugin for channels, DMs, commands, and app events.",
+  "icon": "https://cdn.simpleicons.org/discord",
+  "skills": [
+    "./skills"
+  ],
+  "activation": {
+    "onStartup": false
+  },
+  "channels": [
+    "discord"
+  ],
+  "contracts": {
+    "tools": [
+      "show_widget",
+      "discord_widget"
+    ],
+    "transcriptSourceProviders": [
+      "discord-voice"
+    ]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

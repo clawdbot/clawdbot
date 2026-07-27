@@ -1,21 +1,22 @@
 #!/usr/bin/env node
 
+// Ensures webhook handlers authenticate before reading request bodies.
 import path from "node:path";
 import ts from "typescript";
+import { bundledPluginCallsite, bundledPluginFile } from "./lib/bundled-plugin-paths.mjs";
 import { runCallsiteGuard } from "./lib/callsite-guard.mjs";
 import { runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mjs";
 
 const sourceRoots = ["extensions"];
 const enforcedFiles = new Set([
-  "extensions/bluebubbles/src/monitor.ts",
-  "extensions/feishu/src/monitor.transport.ts",
-  "extensions/googlechat/src/monitor.ts",
-  "extensions/zalo/src/monitor.webhook.ts",
+  bundledPluginFile("feishu", "src/monitor.transport.ts"),
+  bundledPluginFile("googlechat", "src/monitor.ts"),
+  bundledPluginFile("zalo", "src/monitor.webhook.ts"),
 ]);
 const blockedCallees = new Set(["readJsonBodyWithLimit", "readRequestBodyWithLimit"]);
 const allowedCallsites = new Set([
   // Feishu signs the exact wire body, so this handler must read raw bytes before parsing JSON.
-  "extensions/feishu/src/monitor.transport.ts:199",
+  bundledPluginCallsite("feishu", "src/monitor.transport.ts", 199),
 ]);
 
 function getCalleeName(expression) {
@@ -29,7 +30,10 @@ function getCalleeName(expression) {
   return null;
 }
 
-export function findBlockedWebhookBodyReadLines(content, fileName = "source.ts") {
+/**
+ * Finds request body reads that occur before webhook auth validation.
+ */
+function findBlockedWebhookBodyReadLines(content, fileName = "source.ts") {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   const lines = [];
   const visit = (node) => {
@@ -45,6 +49,9 @@ export function findBlockedWebhookBodyReadLines(content, fileName = "source.ts")
   return lines;
 }
 
+/**
+ * Runs the webhook auth/body-order guard.
+ */
 export async function main() {
   await runCallsiteGuard({
     importMetaUrl: import.meta.url,

@@ -1,9 +1,11 @@
-import type { CommandArgs } from "openclaw/plugin-sdk/command-auth";
-import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
-import { type DiscordChannelConfigResolved, type DiscordGuildEntryResolved } from "./allow-list.js";
+// Discord plugin module implements native command context behavior.
+import type { CommandArgs } from "openclaw/plugin-sdk/command-auth-native";
+import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
+import type { DiscordChannelConfigResolved, DiscordGuildEntryResolved } from "./allow-list.js";
 import { buildDiscordInboundAccessContext } from "./inbound-context.js";
 
-export type BuildDiscordNativeCommandContextParams = {
+type BuildDiscordNativeCommandContextParams = {
   prompt: string;
   commandArgs: CommandArgs;
   sessionKey: string;
@@ -12,6 +14,8 @@ export type BuildDiscordNativeCommandContextParams = {
   interactionId: string;
   channelId: string;
   threadParentId?: string;
+  memberRoleIds?: string[];
+  guildId?: string;
   guildName?: string;
   channelTopic?: string;
   channelConfig?: DiscordChannelConfigResolved | null;
@@ -39,14 +43,15 @@ export function buildDiscordNativeCommandContext(params: BuildDiscordNativeComma
   const conversationLabel = params.isDirectMessage
     ? (params.user.globalName ?? params.user.username)
     : params.channelId;
-  const { groupSystemPrompt, ownerAllowFrom, untrustedContext } = buildDiscordInboundAccessContext({
-    channelConfig: params.channelConfig,
-    guildInfo: params.guildInfo,
-    sender: params.sender,
-    allowNameMatching: params.allowNameMatching,
-    isGuild: params.isGuild,
-    channelTopic: params.channelTopic,
-  });
+  const { groupSystemPrompt, ownerAllowFrom, channelStructuredContext } =
+    buildDiscordInboundAccessContext({
+      channelConfig: params.channelConfig,
+      guildInfo: params.guildInfo,
+      sender: params.sender,
+      allowNameMatching: params.allowNameMatching,
+      isGuild: params.isGuild,
+      channelTopic: params.channelTopic,
+    });
 
   return finalizeInboundContext({
     Body: params.prompt,
@@ -66,8 +71,12 @@ export function buildDiscordNativeCommandContext(params: BuildDiscordNativeComma
     ChatType: params.isDirectMessage ? "direct" : params.isGroupDm ? "group" : "channel",
     ConversationLabel: conversationLabel,
     GroupSubject: params.isGuild ? params.guildName : undefined,
+    GroupSpace: params.isGuild
+      ? (params.guildInfo?.id ?? params.guildInfo?.slug ?? params.guildId)
+      : undefined,
+    MemberRoleIds: params.memberRoleIds,
     GroupSystemPrompt: groupSystemPrompt,
-    UntrustedContext: untrustedContext,
+    ChannelStructuredContext: channelStructuredContext,
     OwnerAllowFrom: ownerAllowFrom,
     SenderName: params.user.globalName ?? params.user.username,
     SenderId: params.user.id,
@@ -80,14 +89,23 @@ export function buildDiscordNativeCommandContext(params: BuildDiscordNativeComma
     MessageThreadId: params.isThreadChannel ? params.channelId : undefined,
     Timestamp: params.timestampMs ?? Date.now(),
     CommandAuthorized: params.commandAuthorized,
+    CommandTurn: {
+      kind: "native" as const,
+      source: "native" as const,
+      authorized: params.commandAuthorized,
+      body: params.prompt,
+    },
     CommandSource: "native" as const,
     // Native slash contexts use To=slash:<user> for interaction routing.
     // For follow-up delivery (for example subagent completion announces),
     // preserve the real Discord target separately.
     OriginatingChannel: "discord" as const,
-    OriginatingTo: params.isDirectMessage
-      ? `user:${params.user.id}`
-      : `channel:${params.channelId}`,
+    OriginatingTo:
+      resolveDiscordConversationIdentity({
+        isDirectMessage: params.isDirectMessage,
+        userId: params.user.id,
+        channelId: params.channelId,
+      }) ?? (params.isDirectMessage ? `user:${params.user.id}` : `channel:${params.channelId}`),
     ThreadParentId: params.isThreadChannel ? params.threadParentId : undefined,
   });
 }

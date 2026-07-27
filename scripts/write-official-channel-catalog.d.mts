@@ -5,12 +5,18 @@ export function buildOfficialChannelCatalog(params?: { repoRoot?: string; cwd?: 
     name: string;
     version?: string;
     description?: string;
+    source?: string;
     openclaw: {
+      plugin?: Record<string, unknown>;
       channel: Record<string, unknown>;
       install: {
-        npmSpec: string;
+        clawhubSpec?: string;
+        npmSpec?: string;
         localPath?: string;
-        defaultChoice?: "npm" | "local";
+        defaultChoice?: "clawhub" | "npm" | "local";
+        minHostVersion?: string;
+        expectedIntegrity?: string;
+        allowInvalidConfigRecovery?: boolean;
       };
     };
   }>;

@@ -1,7 +1,11 @@
+// Voice Call plugin module implements webhook behavior.
 import type { WebhookContext, WebhookVerificationResult } from "../../types.js";
 import { verifyTwilioWebhook } from "../../webhook-security.js";
-import type { TwilioProviderOptions } from "../twilio.js";
+import type { TwilioProviderOptions } from "../twilio.types.js";
 
+// Twilio-specific webhook verification adapter.
+
+/** Verify a Twilio webhook and map SDK verification details to provider result fields. */
 export function verifyTwilioProviderWebhook(params: {
   ctx: WebhookContext;
   authToken: string;
@@ -20,9 +24,6 @@ export function verifyTwilioProviderWebhook(params: {
 
   if (!result.ok) {
     console.warn(`[twilio] Webhook verification failed: ${result.reason}`);
-    if (result.verificationUrl) {
-      console.warn(`[twilio] Verification URL: ${result.verificationUrl}`);
-    }
   }
 
   return {

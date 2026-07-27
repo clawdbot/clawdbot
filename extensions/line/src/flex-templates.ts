@@ -1,3 +1,4 @@
+// Line plugin module implements flex templates behavior.
 export {
   createActionCard,
   createCarousel,
@@ -19,7 +20,6 @@ export {
 export { toFlexMessage } from "./flex-templates/message.js";
 
 export type {
-  Action,
   CardAction,
   FlexBox,
   FlexBubble,

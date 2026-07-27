@@ -1,3 +1,4 @@
+// Openrouter setup module handles plugin onboarding behavior.
 import {
   applyAgentDefaultModelPrimary,
   type OpenClawConfig,

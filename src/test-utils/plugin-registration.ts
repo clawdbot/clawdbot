@@ -1,15 +1,39 @@
+// Test helpers for captured plugin registration and manifest setup.
 import { createCapturedPluginRegistration } from "../plugins/captured-registration.js";
-import type { OpenClawPluginApi, ProviderPlugin } from "../plugins/types.js";
+import type {
+  ImageGenerationProviderPlugin,
+  MediaUnderstandingProviderPlugin,
+  MusicGenerationProviderPlugin,
+  OpenClawPluginApi,
+  ProviderPlugin,
+  RealtimeTranscriptionProviderPlugin,
+  SpeechProviderPlugin,
+  UnifiedModelCatalogProviderPlugin,
+  VideoGenerationProviderPlugin,
+} from "../plugins/types.js";
 
+/** Captured registration helpers for provider plugin tests. */
 export { createCapturedPluginRegistration };
 
 type RegistrablePlugin = {
   register(api: OpenClawPluginApi): void;
 };
 
-export function registerSingleProviderPlugin(params: {
+export type RegisteredProviderCollections = {
+  providers: ProviderPlugin[];
+  realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[];
+  speechProviders: SpeechProviderPlugin[];
+  mediaProviders: MediaUnderstandingProviderPlugin[];
+  imageProviders: ImageGenerationProviderPlugin[];
+  musicProviders: MusicGenerationProviderPlugin[];
+  videoProviders: VideoGenerationProviderPlugin[];
+  modelCatalogProviders: UnifiedModelCatalogProviderPlugin[];
+};
+
+/** Registers one provider plugin callback and returns its first provider. */
+export async function registerSingleProviderPlugin(params: {
   register(api: OpenClawPluginApi): void;
-}): ProviderPlugin {
+}): Promise<ProviderPlugin> {
   const captured = createCapturedPluginRegistration();
   params.register(captured.api);
   const provider = captured.providers[0];
@@ -19,7 +43,32 @@ export function registerSingleProviderPlugin(params: {
   return provider;
 }
 
-export function registerProviderPlugins(...plugins: RegistrablePlugin[]): ProviderPlugin[] {
+export async function registerProviderPlugin(params: {
+  plugin: RegistrablePlugin;
+  id: string;
+  name: string;
+}): Promise<RegisteredProviderCollections> {
+  const captured = createCapturedPluginRegistration({
+    id: params.id,
+    name: params.name,
+    source: "test",
+  });
+  params.plugin.register(captured.api);
+  return {
+    providers: captured.providers,
+    realtimeTranscriptionProviders: captured.realtimeTranscriptionProviders,
+    speechProviders: captured.speechProviders,
+    mediaProviders: captured.mediaUnderstandingProviders,
+    imageProviders: captured.imageGenerationProviders,
+    musicProviders: captured.musicGenerationProviders,
+    videoProviders: captured.videoGenerationProviders,
+    modelCatalogProviders: captured.modelCatalogProviders,
+  };
+}
+
+export async function registerProviderPlugins(
+  ...plugins: RegistrablePlugin[]
+): Promise<ProviderPlugin[]> {
   const captured = createCapturedPluginRegistration();
   for (const plugin of plugins) {
     plugin.register(captured.api);
@@ -27,10 +76,19 @@ export function registerProviderPlugins(...plugins: RegistrablePlugin[]): Provid
   return captured.providers;
 }
 
-export function requireRegisteredProvider(providers: ProviderPlugin[], providerId: string) {
-  const provider = providers.find((entry) => entry.id === providerId);
+function matchesRegisteredProviderId(
+  entry: { id: string; hookAliases?: readonly string[] },
+  id: string,
+) {
+  return entry.id === id || entry.hookAliases?.includes(id) === true;
+}
+
+export function requireRegisteredProvider<
+  T extends { id: string; hookAliases?: readonly string[] },
+>(providers: T[], providerId: string, label = "provider"): T {
+  const provider = providers.find((entry) => matchesRegisteredProviderId(entry, providerId));
   if (!provider) {
-    throw new Error(`provider ${providerId} missing`);
+    throw new Error(`${label} ${providerId} missing`);
   }
   return provider;
 }

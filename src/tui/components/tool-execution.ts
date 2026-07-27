@@ -1,8 +1,10 @@
-import { Box, Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
+// Tool execution component renders tool call status and output in the TUI.
+import { Box, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { formatToolDetail, resolveToolDisplay } from "../../agents/tool-display.js";
 import { markdownTheme, theme } from "../theme/theme.js";
 import { sanitizeRenderableText } from "../tui-formatters.js";
 
+// Rendering model for live tool calls in the chat log.
 type ToolResultContent = {
   type?: string;
   text?: string;
@@ -18,6 +20,7 @@ type ToolResult = {
 
 const PREVIEW_LINES = 12;
 
+// Prefer curated display summaries, then fall back to sanitized JSON args.
 function formatArgs(toolName: string, args: unknown): string {
   const display = resolveToolDisplay({ name: toolName, args });
   const detail = formatToolDetail(display);
@@ -34,6 +37,7 @@ function formatArgs(toolName: string, args: unknown): string {
   }
 }
 
+// Extracts visible text and compact media placeholders from tool result payloads.
 function extractText(result?: ToolResult): string {
   if (!result?.content) {
     return "";
@@ -52,6 +56,7 @@ function extractText(result?: ToolResult): string {
   return lines.join("\n").trim();
 }
 
+/** Displays a running or completed tool call with optional expandable output. */
 export class ToolExecutionComponent extends Container {
   private box: Box;
   private header: Text;
@@ -82,16 +87,19 @@ export class ToolExecutionComponent extends Container {
     this.refresh();
   }
 
+  /** Re-renders tool arguments when streaming tool call input changes. */
   setArgs(args: unknown) {
     this.args = args;
     this.refresh();
   }
 
+  /** Toggles preview/full output rendering for long tool results. */
   setExpanded(expanded: boolean) {
     this.expanded = expanded;
     this.refresh();
   }
 
+  /** Marks the tool call complete and renders final output. */
   setResult(result: ToolResult | undefined, opts?: { isError?: boolean }) {
     this.result = result;
     this.isPartial = false;
@@ -99,6 +107,7 @@ export class ToolExecutionComponent extends Container {
     this.refresh();
   }
 
+  /** Renders partial output while the tool call is still running. */
   setPartialResult(result: ToolResult | undefined) {
     this.result = result;
     this.isPartial = true;

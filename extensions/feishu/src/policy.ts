@@ -1,16 +1,51 @@
+// Feishu plugin module implements policy behavior.
 import {
   normalizeAccountId,
   resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-resolution";
+import {
+  createChannelIngressResolver,
+  defineStableChannelIngressIdentity,
+  type ChannelIngressIdentitySubjectInput,
+  type ResolveChannelMessageIngressParams,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import {
+  resolveScopeKeyCaseInsensitive,
+  resolveScopeToolsPolicy,
+  type ScopeTree,
+} from "openclaw/plugin-sdk/channel-policy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
-import type { AllowlistMatch, ChannelGroupContext, GroupToolPolicyConfig } from "../runtime-api.js";
-import { evaluateSenderGroupAccessForPolicy } from "../runtime-api.js";
-import { normalizeFeishuTarget } from "./targets.js";
-import type { FeishuConfig, FeishuGroupConfig } from "./types.js";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { ChannelGroupContext } from "../runtime-api.js";
+import { detectIdType } from "./targets.js";
+import type { FeishuConfig } from "./types.js";
 
-export type FeishuAllowlistMatch = AllowlistMatch<"wildcard" | "id">;
+type FeishuDmPolicy = "open" | "pairing" | "allowlist" | "disabled";
+type FeishuGroupPolicy = "open" | "allowlist" | "disabled" | "allowall";
+type NormalizedFeishuGroupPolicy = Exclude<FeishuGroupPolicy, "allowall">;
 
-function normalizeFeishuAllowEntry(raw: string): string {
+const FEISHU_PROVIDER_PREFIX_RE = /^(feishu|lark):/i;
+const FEISHU_TYPED_PREFIX_RE = /^(chat|group|channel|user|dm|open_id):/i;
+const FEISHU_ID_KIND = "plugin:feishu-id" as const;
+const feishuIngressIdentity = defineStableChannelIngressIdentity({
+  key: "feishu-id",
+  kind: FEISHU_ID_KIND,
+  normalize: normalizeFeishuAllowEntry,
+  sensitivity: "pii",
+  aliases: [
+    {
+      key: "feishu-alt-id",
+      kind: FEISHU_ID_KIND,
+      normalizeEntry: () => null,
+      normalizeSubject: normalizeFeishuAllowEntry,
+      sensitivity: "pii",
+    },
+  ],
+  isWildcardEntry: (entry) => normalizeFeishuAllowEntry(entry) === "*",
+  resolveEntryId: ({ entryIndex }) => `feishu-entry-${entryIndex + 1}`,
+});
+
+export function normalizeFeishuAllowEntry(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
     return "";
@@ -18,45 +53,185 @@ function normalizeFeishuAllowEntry(raw: string): string {
   if (trimmed === "*") {
     return "*";
   }
-  const withoutProviderPrefix = trimmed.replace(/^feishu:/i, "");
-  const normalized = normalizeFeishuTarget(withoutProviderPrefix) ?? withoutProviderPrefix;
-  return normalized.trim().toLowerCase();
+
+  let withoutProviderPrefix = trimmed;
+  while (FEISHU_PROVIDER_PREFIX_RE.test(withoutProviderPrefix)) {
+    withoutProviderPrefix = withoutProviderPrefix.replace(FEISHU_PROVIDER_PREFIX_RE, "").trim();
+  }
+  if (withoutProviderPrefix === "*") {
+    return "*";
+  }
+  const lowered = normalizeOptionalLowercaseString(withoutProviderPrefix) ?? "";
+  if (!lowered) {
+    return "";
+  }
+  const prefixed = lowered.match(FEISHU_TYPED_PREFIX_RE);
+  if (prefixed?.[1]) {
+    const kind = ["chat", "group", "channel"].includes(prefixed[1]) ? "chat" : "user";
+    const value = withoutProviderPrefix.slice(prefixed[0].length).trim();
+    return value === "*" ? "*" : value ? `${kind}:${value}` : "";
+  }
+
+  const detectedType = detectIdType(withoutProviderPrefix);
+  if (detectedType === "chat_id") {
+    return `chat:${withoutProviderPrefix}`;
+  }
+  if (detectedType === "open_id" || detectedType === "user_id") {
+    return `user:${withoutProviderPrefix}`;
+  }
+
+  return "";
 }
 
-export function resolveFeishuAllowlistMatch(params: {
-  allowFrom: Array<string | number>;
-  senderId: string;
-  senderIds?: Array<string | null | undefined>;
-  senderName?: string | null;
-}): FeishuAllowlistMatch {
-  const allowFrom = params.allowFrom
-    .map((entry) => normalizeFeishuAllowEntry(String(entry)))
-    .filter(Boolean);
-  if (allowFrom.length === 0) {
-    return { allowed: false };
-  }
-  if (allowFrom.includes("*")) {
-    return { allowed: true, matchKey: "*", matchSource: "wildcard" };
-  }
-
-  // Feishu allowlists are ID-based; mutable display names must never grant access.
-  const senderCandidates = [params.senderId, ...(params.senderIds ?? [])]
-    .map((entry) => normalizeFeishuAllowEntry(String(entry ?? "")))
-    .filter(Boolean);
-
-  for (const senderId of senderCandidates) {
-    if (allowFrom.includes(senderId)) {
-      return { allowed: true, matchKey: senderId, matchSource: "id" };
-    }
-  }
-
-  return { allowed: false };
+function normalizeFeishuDmPolicy(policy: string | null | undefined): FeishuDmPolicy {
+  return policy === "open" ||
+    policy === "pairing" ||
+    policy === "allowlist" ||
+    policy === "disabled"
+    ? policy
+    : "pairing";
 }
 
-export function resolveFeishuGroupConfig(params: {
-  cfg?: FeishuConfig;
-  groupId?: string | null;
-}): FeishuGroupConfig | undefined {
+function normalizeFeishuGroupPolicy(policy: FeishuGroupPolicy): NormalizedFeishuGroupPolicy {
+  return policy === "allowall" ? "open" : policy;
+}
+
+function createFeishuIngressSubject(params: {
+  primaryId?: string | null;
+  alternateIds?: Array<string | null | undefined>;
+}): ChannelIngressIdentitySubjectInput {
+  const ids = [params.primaryId, ...(params.alternateIds ?? [])]
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value));
+  return {
+    stableId: ids[0],
+    aliases: {
+      "feishu-alt-id": ids[1],
+    },
+  };
+}
+
+function createFeishuIngressResolver(params: {
+  cfg?: OpenClawConfig;
+  accountId?: string | null;
+  readAllowFromStore?: ResolveChannelMessageIngressParams["readStoreAllowFrom"];
+}) {
+  return createChannelIngressResolver({
+    channelId: "feishu",
+    accountId: normalizeAccountId(params.accountId) ?? "default",
+    identity: feishuIngressIdentity,
+    cfg: params.cfg,
+    ...(params.readAllowFromStore ? { readStoreAllowFrom: params.readAllowFromStore } : {}),
+  });
+}
+
+export async function resolveFeishuDmIngressAccess(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  dmPolicy?: string | null;
+  allowFrom?: Array<string | number> | null;
+  readAllowFromStore?: () => Promise<Array<string | number>>;
+  senderOpenId: string;
+  senderUserId?: string | null;
+  conversationId: string;
+  mayPair: boolean;
+  command?: { hasControlCommand: boolean };
+}) {
+  return await createFeishuIngressResolver({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    readAllowFromStore: params.readAllowFromStore,
+  }).message({
+    subject: createFeishuIngressSubject({
+      primaryId: params.senderOpenId,
+      alternateIds: [params.senderUserId],
+    }),
+    conversation: {
+      kind: "direct",
+      id: params.conversationId,
+    },
+    event: {
+      mayPair: params.mayPair,
+    },
+    dmPolicy: normalizeFeishuDmPolicy(params.dmPolicy),
+    groupPolicy: "disabled",
+    allowFrom: params.allowFrom ?? [],
+    ...(params.command ? { command: params.command } : {}),
+  });
+}
+
+export async function resolveFeishuGroupConversationIngressAccess(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  chatId: string;
+  groupPolicy: FeishuGroupPolicy;
+  groupAllowFrom?: Array<string | number> | null;
+  groupExplicitlyConfigured?: boolean;
+}) {
+  const groupPolicy = normalizeFeishuGroupPolicy(params.groupPolicy);
+  const groupAllowFrom =
+    groupPolicy === "allowlist" && params.groupExplicitlyConfigured
+      ? [...(params.groupAllowFrom ?? []), params.chatId]
+      : (params.groupAllowFrom ?? []);
+  return await createFeishuIngressResolver({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  }).message({
+    subject: createFeishuIngressSubject({
+      primaryId: params.chatId,
+    }),
+    conversation: {
+      kind: "group",
+      id: params.chatId,
+    },
+    dmPolicy: "disabled",
+    groupPolicy,
+    groupAllowFrom,
+  });
+}
+
+export async function resolveFeishuGroupSenderActivationIngressAccess(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  chatId: string;
+  allowFrom?: Array<string | number> | null;
+  senderOpenId: string;
+  senderUserId?: string | null;
+  requireMention: boolean;
+  mentionedBot: boolean;
+  command?: { hasControlCommand: boolean };
+}) {
+  const groupAllowFrom = params.allowFrom ?? [];
+  return await createFeishuIngressResolver({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  }).message({
+    subject: createFeishuIngressSubject({
+      primaryId: params.senderOpenId,
+      alternateIds: [params.senderUserId],
+    }),
+    conversation: {
+      kind: "group",
+      id: params.chatId,
+    },
+    dmPolicy: "disabled",
+    groupPolicy: groupAllowFrom.length > 0 ? "allowlist" : "open",
+    groupAllowFrom,
+    mentionFacts: {
+      canDetectMention: true,
+      wasMentioned: params.mentionedBot,
+    },
+    policy: {
+      activation: {
+        requireMention: params.requireMention,
+        allowTextCommands: false,
+      },
+    },
+    ...(params.command ? { command: params.command } : {}),
+  });
+}
+
+export function resolveFeishuGroupConfig(params: { cfg?: FeishuConfig; groupId?: string | null }) {
   const groups = params.cfg?.groups ?? {};
   const wildcard = groups["*"];
   const groupId = params.groupId?.trim();
@@ -69,43 +244,53 @@ export function resolveFeishuGroupConfig(params: {
     return direct;
   }
 
-  const lowered = groupId.toLowerCase();
-  const matchKey = Object.keys(groups).find((key) => key.toLowerCase() === lowered);
+  const lowered = normalizeOptionalLowercaseString(groupId) ?? "";
+  const matchKey = Object.keys(groups).find(
+    (key) => normalizeOptionalLowercaseString(key) === lowered,
+  );
   if (matchKey) {
     return groups[matchKey];
   }
   return wildcard;
 }
 
-export function resolveFeishuGroupToolPolicy(
-  params: ChannelGroupContext,
-): GroupToolPolicyConfig | undefined {
-  const cfg = params.cfg.channels?.feishu as FeishuConfig | undefined;
+export function hasExplicitFeishuGroupConfig(params: {
+  cfg?: FeishuConfig;
+  groupId?: string | null;
+}): boolean {
+  const groups = params.cfg?.groups ?? {};
+  const groupId = params.groupId?.trim();
+  if (!groupId) {
+    return false;
+  }
+  if (Object.hasOwn(groups, groupId) && groupId !== "*") {
+    return true;
+  }
+
+  const lowered = normalizeOptionalLowercaseString(groupId) ?? "";
+  return Object.keys(groups).some(
+    (key) => key !== "*" && normalizeOptionalLowercaseString(key) === lowered,
+  );
+}
+
+export function resolveFeishuGroupToolPolicy(params: ChannelGroupContext) {
+  // This adapter intentionally reads root channels.feishu without account merge;
+  // reply mention policy merges accounts, and changing that asymmetry is product behavior.
+  const cfg: FeishuConfig | undefined = params.cfg.channels?.feishu;
   if (!cfg) {
     return undefined;
   }
-
-  const groupConfig = resolveFeishuGroupConfig({
-    cfg,
-    groupId: params.groupId,
-  });
-
-  return groupConfig?.tools;
-}
-
-export function isFeishuGroupAllowed(params: {
-  groupPolicy: "open" | "allowlist" | "disabled" | "allowall";
-  allowFrom: Array<string | number>;
-  senderId: string;
-  senderIds?: Array<string | null | undefined>;
-  senderName?: string | null;
-}): boolean {
-  return evaluateSenderGroupAccessForPolicy({
-    groupPolicy: params.groupPolicy === "allowall" ? "open" : params.groupPolicy,
-    groupAllowFrom: params.allowFrom.map((entry) => String(entry)),
-    senderId: params.senderId,
-    isSenderAllowed: () => resolveFeishuAllowlistMatch(params).allowed,
-  }).allowed;
+  const groups: NonNullable<FeishuConfig["groups"]> = cfg.groups ?? {};
+  // Whole-entry selection: a matched group hides every wildcard field.
+  const tree: ScopeTree = {
+    scopes: Object.fromEntries(
+      Object.entries(groups).map(([key, entry]) => [key, { tools: entry?.tools }]),
+    ),
+  };
+  const groupId = params.groupId?.trim();
+  const matchedKey = resolveScopeKeyCaseInsensitive(tree, groupId);
+  const scopeKey = groupId && !matchedKey && Object.hasOwn(tree.scopes, "*") ? "*" : matchedKey;
+  return resolveScopeToolsPolicy({ tree, path: scopeKey ? [scopeKey] : [] });
 }
 
 export function resolveFeishuReplyPolicy(params: {
@@ -124,7 +309,7 @@ export function resolveFeishuReplyPolicy(params: {
     return { requireMention: false };
   }
 
-  const feishuCfg = params.cfg.channels?.feishu as FeishuConfig | undefined;
+  const feishuCfg = params.cfg.channels?.feishu;
   const resolvedCfg = resolveMergedAccountConfig<FeishuConfig>({
     channelConfig: feishuCfg,
     accounts: feishuCfg?.accounts as Record<string, Partial<FeishuConfig>> | undefined,
@@ -143,8 +328,6 @@ export function resolveFeishuReplyPolicy(params: {
         ? groupRequireMention
         : typeof resolvedCfg.requireMention === "boolean"
           ? resolvedCfg.requireMention
-          : params.groupPolicy === "open"
-            ? false
-            : true,
+          : params.groupPolicy !== "open",
   };
 }

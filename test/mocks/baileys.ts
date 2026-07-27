@@ -1,7 +1,8 @@
+// Baileys mock provides a lightweight WhatsApp socket facade for tests.
 import { EventEmitter } from "node:events";
 import { vi } from "vitest";
 
-type BaileysExports = typeof import("@whiskeysockets/baileys");
+type BaileysExports = typeof import("baileys");
 type FetchLatestBaileysVersionFn = BaileysExports["fetchLatestBaileysVersion"];
 type MakeCacheableSignalKeyStoreFn = BaileysExports["makeCacheableSignalKeyStore"];
 type MakeWASocketFn = BaileysExports["makeWASocket"];
@@ -21,10 +22,15 @@ export type MockBaileysSocket = {
   sendPresenceUpdate: ReturnType<typeof vi.fn>;
   sendMessage: ReturnType<typeof vi.fn>;
   readMessages: ReturnType<typeof vi.fn>;
+  groupFetchAllParticipating: ReturnType<typeof vi.fn>;
   user?: { id?: string };
 };
 
-export type MockBaileysModule = {
+type MockBaileysModule = {
+  BufferJSON: {
+    replacer: (key: string, value: unknown) => unknown;
+    reviver: (key: string, value: unknown) => unknown;
+  };
   DisconnectReason: { loggedOut: number };
   extractMessageContent: ReturnType<typeof vi.fn<ExtractMessageContentFn>>;
   fetchLatestBaileysVersion: ReturnType<typeof vi.fn<FetchLatestBaileysVersionFn>>;
@@ -138,6 +144,7 @@ export function createMockBaileys(): {
       sendPresenceUpdate: vi.fn().mockResolvedValue(undefined),
       sendMessage: vi.fn().mockResolvedValue({ key: { id: "msg123" } }),
       readMessages: vi.fn().mockResolvedValue(undefined),
+      groupFetchAllParticipating: vi.fn().mockResolvedValue({}),
       user: { id: "123@s.whatsapp.net" },
     };
     setImmediate(() => ev.emit("connection.update", { connection: "open" }));
@@ -146,6 +153,10 @@ export function createMockBaileys(): {
   });
 
   const mod: MockBaileysModule = {
+    BufferJSON: {
+      replacer: (_key: string, value: unknown) => value,
+      reviver: (_key: string, value: unknown) => value,
+    },
     DisconnectReason: { loggedOut: 401 },
     extractMessageContent: vi.fn<ExtractMessageContentFn>((message) =>
       mockExtractMessageContent(message),

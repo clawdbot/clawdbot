@@ -1,3 +1,4 @@
-import { describeGoogleProviderRuntimeContract } from "../../test/helpers/extensions/provider-runtime-contract.js";
+// Google tests cover provider runtime.contract plugin behavior.
+import { describeGoogleProviderRuntimeContract } from "openclaw/plugin-sdk/provider-test-contracts";
 
-describeGoogleProviderRuntimeContract();
+describeGoogleProviderRuntimeContract(() => import("./index.js"));

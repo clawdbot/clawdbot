@@ -1,13 +1,20 @@
-import { listChannelPlugins } from "../channels/plugins/index.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+/** Built-in and channel-derived command registry data for auto-reply commands. */
+import { listLoadedChannelPlugins } from "../channels/plugins/registry-loaded.js";
+import { getActivePluginChannelRegistryVersionFromState } from "../plugins/runtime-channel-state.js";
 import {
   assertCommandRegistry,
   buildBuiltinChatCommands,
   defineChatCommand,
 } from "./commands-registry.shared.js";
 import type { ChatCommandDefinition } from "./commands-registry.types.js";
+import { listThinkingLevels } from "./thinking.js";
 
-type ChannelPlugin = ReturnType<typeof listChannelPlugins>[number];
+/** Builds and caches the chat-command registry for the current channel-plugin registry version. */
+type ChannelPlugin = ReturnType<typeof listLoadedChannelPlugins>[number];
+
+function supportsNativeCommands(plugin: ChannelPlugin): boolean {
+  return plugin.capabilities?.nativeCommands === true;
+}
 
 function defineDockCommand(plugin: ChannelPlugin): ChatCommandDefinition {
   return defineChatCommand({
@@ -20,15 +27,13 @@ function defineDockCommand(plugin: ChannelPlugin): ChatCommandDefinition {
 }
 
 let cachedCommands: ChatCommandDefinition[] | null = null;
-let cachedRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
-let cachedNativeCommandSurfaces: Set<string> | null = null;
-let cachedNativeRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
+let cachedRegistryVersion = -1;
 
 function buildChatCommands(): ChatCommandDefinition[] {
   const commands: ChatCommandDefinition[] = [
-    ...buildBuiltinChatCommands(),
-    ...listChannelPlugins()
-      .filter((plugin) => plugin.capabilities.nativeCommands)
+    ...buildBuiltinChatCommands({ listThinkingLevels }),
+    ...listLoadedChannelPlugins()
+      .filter(supportsNativeCommands)
       .map((plugin) => defineDockCommand(plugin)),
   ];
 
@@ -36,28 +41,14 @@ function buildChatCommands(): ChatCommandDefinition[] {
   return commands;
 }
 
+/** Returns the current command registry, including dynamic dock commands for native surfaces. */
 export function getChatCommands(): ChatCommandDefinition[] {
-  const registry = getActivePluginRegistry();
-  if (cachedCommands && registry === cachedRegistry) {
+  const registryVersion = getActivePluginChannelRegistryVersionFromState();
+  if (cachedCommands && registryVersion === cachedRegistryVersion) {
     return cachedCommands;
   }
   const commands = buildChatCommands();
   cachedCommands = commands;
-  cachedRegistry = registry;
-  cachedNativeCommandSurfaces = null;
+  cachedRegistryVersion = registryVersion;
   return commands;
-}
-
-export function getNativeCommandSurfaces(): Set<string> {
-  const registry = getActivePluginRegistry();
-  if (cachedNativeCommandSurfaces && registry === cachedNativeRegistry) {
-    return cachedNativeCommandSurfaces;
-  }
-  cachedNativeCommandSurfaces = new Set(
-    listChannelPlugins()
-      .filter((plugin) => plugin.capabilities.nativeCommands)
-      .map((plugin) => plugin.id),
-  );
-  cachedNativeRegistry = registry;
-  return cachedNativeCommandSurfaces;
 }

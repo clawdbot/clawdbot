@@ -1,9 +1,12 @@
-import { createActionGate, jsonResult, readStringParam } from "openclaw/plugin-sdk/agent-runtime";
+// Signal plugin module implements message actions behavior.
 import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
+import { createActionGate, jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-contract";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { removeReactionSignal, sendReactionSignal } from "../reaction-runtime-api.js";
 import { listEnabledSignalAccounts, resolveSignalAccount } from "./accounts.js";
 import { resolveSignalReactionLevel } from "./reaction-level.js";
@@ -20,7 +23,7 @@ function normalizeSignalReactionRecipient(raw: string): string {
   if (!withoutSignal) {
     return withoutSignal;
   }
-  if (withoutSignal.toLowerCase().startsWith("uuid:")) {
+  if (normalizeLowercaseStringOrEmpty(withoutSignal).startsWith("uuid:")) {
     return withoutSignal.slice("uuid:".length).trim();
   }
   return withoutSignal;
@@ -35,7 +38,7 @@ function resolveSignalReactionTarget(raw: string): { recipient?: string; groupId
   if (!withoutSignal) {
     return {};
   }
-  if (withoutSignal.toLowerCase().startsWith(GROUP_PREFIX)) {
+  if (normalizeLowercaseStringOrEmpty(withoutSignal).startsWith(GROUP_PREFIX)) {
     const groupId = withoutSignal.slice(GROUP_PREFIX.length).trim();
     return groupId ? { groupId } : {};
   }
@@ -73,18 +76,17 @@ async function mutateSignalReaction(params: {
 }
 
 export const signalMessageActions: ChannelMessageActionAdapter = {
-  describeMessageTool: ({ cfg }) => {
-    const accounts = listEnabledSignalAccounts(cfg);
-    if (accounts.length === 0) {
-      return null;
-    }
-    const configuredAccounts = accounts.filter((account) => account.configured);
+  describeMessageTool: ({ cfg, accountId }) => {
+    const configuredAccounts = accountId
+      ? [resolveSignalAccount({ cfg, accountId })].filter(
+          (account) => account.enabled && account.configured,
+        )
+      : listEnabledSignalAccounts(cfg).filter((account) => account.configured);
     if (configuredAccounts.length === 0) {
       return null;
     }
 
     const actions = new Set<ChannelMessageActionName>(["send"]);
-
     const reactionsEnabled = configuredAccounts.some((account) =>
       createActionGate(account.config.actions)("reactions"),
     );
@@ -94,7 +96,19 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
 
     return { actions: Array.from(actions) };
   },
-  supportsAction: ({ action }) => action !== "send",
+  supportsAction: ({ action }) => action === "react",
+  prepareSendPayload: ({ ctx, payload, replyToId, replyToIdSource }) => {
+    if (ctx.action !== "send") {
+      return null;
+    }
+    const normalizedReplyToId = replyToId?.trim();
+    if (!normalizedReplyToId) {
+      return payload;
+    }
+    return replyToIdSource === "implicit"
+      ? payload
+      : { ...payload, replyToId: normalizedReplyToId };
+  },
 
   handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
     if (action === "send") {
@@ -102,9 +116,17 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "react") {
+      const account = resolveSignalAccount({ cfg, accountId });
+      if (!account.enabled) {
+        throw new Error(`Signal account "${account.accountId}" is disabled.`);
+      }
+      if (!account.configured) {
+        throw new Error(`Signal account "${account.accountId}" is not configured.`);
+      }
+
       const reactionLevelInfo = resolveSignalReactionLevel({
         cfg,
-        accountId: accountId ?? undefined,
+        accountId: account.accountId,
       });
       if (!reactionLevelInfo.agentReactionsEnabled) {
         throw new Error(
@@ -113,18 +135,15 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
         );
       }
 
-      const actionConfig = resolveSignalAccount({ cfg, accountId }).config.actions;
-      const isActionEnabled = createActionGate(actionConfig);
+      const isActionEnabled = createActionGate(account.config.actions);
       if (!isActionEnabled("reactions")) {
         throw new Error("Signal reactions are disabled via actions.reactions.");
       }
 
-      const recipientRaw =
-        readStringParam(params, "recipient") ??
-        readStringParam(params, "to", {
-          required: true,
-          label: "recipient (UUID, phone number, or group)",
-        });
+      const recipientRaw = readStringParam(params, "to", {
+        required: true,
+        label: "recipient (UUID, phone number, or group)",
+      });
       const target = resolveSignalReactionTarget(recipientRaw);
       if (!target.recipient && !target.groupId) {
         throw new Error("recipient or group required");
@@ -146,8 +165,8 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
       const emoji = readStringParam(params, "emoji", { allowEmpty: true });
       const remove = typeof params.remove === "boolean" ? params.remove : undefined;
 
-      const timestamp = parseInt(messageId, 10);
-      if (!Number.isFinite(timestamp)) {
+      const timestamp = parseStrictNonNegativeInteger(messageId);
+      if (timestamp === undefined) {
         throw new Error(`Invalid messageId: ${messageId}. Expected numeric timestamp.`);
       }
 
@@ -157,7 +176,7 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
         }
         return await mutateSignalReaction({
           cfg,
-          accountId: accountId ?? undefined,
+          accountId: account.accountId,
           target,
           timestamp,
           emoji,
@@ -172,7 +191,7 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
       }
       return await mutateSignalReaction({
         cfg,
-        accountId: accountId ?? undefined,
+        accountId: account.accountId,
         target,
         timestamp,
         emoji,

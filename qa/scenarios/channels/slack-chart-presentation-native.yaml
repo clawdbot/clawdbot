@@ -1,0 +1,19 @@
+title: Slack portable chart renders as a native data visualization
+scenario:
+  id: slack-chart-presentation-native
+  surface: channels
+  coverage:
+    primary:
+      - slack.media-and-rich-content
+  execution:
+    profiles: { "slack:default": 4 }
+    kind: flow
+    channel: slack
+    timeoutMs: 90000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { slackScenarioId: slack-chart-presentation-native }
+flow:
+  module: ./live-transports/slack/scenario-runtime.js
+  call: runSlackChartPresentationNativeScenario
+  args: [{ expr: slackScenarioContext }]

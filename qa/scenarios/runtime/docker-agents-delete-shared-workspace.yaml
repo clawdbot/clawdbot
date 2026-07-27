@@ -1,0 +1,28 @@
+title: Docker agents delete shared workspace
+
+scenario:
+  id: docker-agents-delete-shared-workspace
+  surface: containers
+  category: containers.agent-sandbox-and-tooling
+  coverage:
+    primary:
+      - containers.docker-backed-agent-sandbox-support
+  objective: Verify Docker-hosted agent workspace deletion keeps shared workspace state safe while running against the package-installed image.
+  successCriteria:
+    - The Docker lane starts from an empty OpenClaw state.
+    - The in-container CLI resolves from the installed app image.
+    - "`openclaw agents delete --force --json` preserves the configured shared workspace."
+    - The fixture assertion validates the JSON result and workspace state.
+  docsRefs:
+    - docs/install/docker.md
+    - docs/help/testing.md
+  codeRefs:
+    - scripts/e2e/agents-delete-shared-workspace-docker.sh
+    - scripts/e2e/lib/fixture.mjs
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
+    summary: Runs the existing agents-delete-shared-workspace Docker E2E lane for Docker-hosted agent workspace safety coverage.
+    args:
+      - --lane
+      - agents-delete-shared-workspace

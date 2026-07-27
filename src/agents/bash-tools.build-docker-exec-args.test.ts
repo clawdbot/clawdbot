@@ -1,3 +1,8 @@
+/**
+ * Docker exec argument tests for bash tools.
+ * Covers PATH handling, shell wrapping, workdir flags, and tty arguments used
+ * by sandboxed exec calls.
+ */
 import { describe, expect, it } from "vitest";
 import { buildDockerExecArgs } from "./bash-tools.shared.js";
 

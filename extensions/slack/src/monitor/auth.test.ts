@@ -1,16 +1,21 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Slack tests cover auth plugin behavior.
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SlackMonitorContext } from "./context.js";
 
-const readStoreAllowFromForDmPolicyMock = vi.hoisted(() => vi.fn());
-let clearSlackAllowFromCacheForTest: typeof import("./auth.js").clearSlackAllowFromCacheForTest;
+const readChannelIngressStoreAllowFromForDmPolicyMock = vi.hoisted(() => vi.fn());
+let authorizeSlackBotRoomMessage: typeof import("./auth.js").authorizeSlackBotRoomMessage;
+let authorizeSlackSystemEventSender: typeof import("./auth.js").authorizeSlackSystemEventSender;
 let resolveSlackEffectiveAllowFrom: typeof import("./auth.js").resolveSlackEffectiveAllowFrom;
+let resolveSlackCommandIngress: typeof import("./auth.js").resolveSlackCommandIngress;
 
-vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
+vi.mock("openclaw/plugin-sdk/channel-ingress-runtime", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/channel-ingress-runtime")
+  >("openclaw/plugin-sdk/channel-ingress-runtime");
   return {
     ...actual,
-    readStoreAllowFromForDmPolicy: (...args: unknown[]) =>
-      readStoreAllowFromForDmPolicyMock(...args),
+    readChannelIngressStoreAllowFromForDmPolicy: (...args: unknown[]) =>
+      readChannelIngressStoreAllowFromForDmPolicyMock(...args),
   };
 });
 
@@ -22,60 +27,744 @@ function makeSlackCtx(allowFrom: string[]): SlackMonitorContext {
   } as unknown as SlackMonitorContext;
 }
 
-describe("resolveSlackEffectiveAllowFrom", () => {
-  const prevTtl = process.env.OPENCLAW_SLACK_PAIRING_ALLOWFROM_CACHE_TTL_MS;
+function makeAuthorizeCtx(params?: {
+  allowFrom?: string[];
+  channelsConfig?: Record<string, { users?: string[] }>;
+  dmPolicy?: SlackMonitorContext["dmPolicy"];
+  resolveUserName?: (userId: string) => Promise<{ name?: string }>;
+  resolveChannelName?: (
+    channelId: string,
+  ) => Promise<{ name?: string; type?: "im" | "mpim" | "channel" | "group" }>;
+}) {
+  return {
+    allowFrom: params?.allowFrom ?? [],
+    accountId: "main",
+    dmPolicy: params?.dmPolicy ?? "open",
+    dmEnabled: true,
+    allowNameMatching: false,
+    channelsConfig: params?.channelsConfig ?? {},
+    channelsConfigKeys: Object.keys(params?.channelsConfig ?? {}),
+    defaultRequireMention: true,
+    isChannelAllowed: vi.fn(() => true),
+    resolveUserName: vi.fn(
+      params?.resolveUserName ?? ((_) => Promise.resolve({ name: undefined })),
+    ),
+    resolveChannelName: vi.fn(
+      params?.resolveChannelName ?? ((_) => Promise.resolve({ name: "general", type: "channel" })),
+    ),
+  } as unknown as SlackMonitorContext;
+}
 
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ clearSlackAllowFromCacheForTest, resolveSlackEffectiveAllowFrom } =
+describe("resolveSlackEffectiveAllowFrom", () => {
+  beforeAll(async () => {
+    ({ authorizeSlackSystemEventSender, resolveSlackEffectiveAllowFrom } =
       await import("./auth.js"));
-    readStoreAllowFromForDmPolicyMock.mockReset();
-    clearSlackAllowFromCacheForTest();
-    if (prevTtl === undefined) {
-      delete process.env.OPENCLAW_SLACK_PAIRING_ALLOWFROM_CACHE_TTL_MS;
-    } else {
-      process.env.OPENCLAW_SLACK_PAIRING_ALLOWFROM_CACHE_TTL_MS = prevTtl;
-    }
+  });
+
+  beforeEach(() => {
+    readChannelIngressStoreAllowFromForDmPolicyMock.mockReset();
   });
 
   it("falls back to channel config allowFrom when pairing store throws", async () => {
-    readStoreAllowFromForDmPolicyMock.mockRejectedValueOnce(new Error("boom"));
+    readChannelIngressStoreAllowFromForDmPolicyMock.mockRejectedValueOnce(new Error("boom"));
 
-    const effective = await resolveSlackEffectiveAllowFrom(makeSlackCtx(["u1"]));
+    const effective = await resolveSlackEffectiveAllowFrom(makeSlackCtx(["u1"]), {
+      includePairingStore: true,
+    });
 
-    expect(effective.allowFrom).toEqual(["u1"]);
-    expect(effective.allowFromLower).toEqual(["u1"]);
+    expect(effective).toEqual(["u1"]);
   });
 
   it("treats malformed non-array pairing-store responses as empty", async () => {
-    readStoreAllowFromForDmPolicyMock.mockReturnValueOnce(undefined);
+    readChannelIngressStoreAllowFromForDmPolicyMock.mockReturnValueOnce(undefined);
+
+    const effective = await resolveSlackEffectiveAllowFrom(makeSlackCtx(["u1"]), {
+      includePairingStore: true,
+    });
+
+    expect(effective).toEqual(["u1"]);
+  });
+
+  it("reads pairing-store allowFrom when requested", async () => {
+    readChannelIngressStoreAllowFromForDmPolicyMock.mockResolvedValue(["u2"]);
+    const ctx = makeSlackCtx(["u1"]);
+
+    const effective = await resolveSlackEffectiveAllowFrom(ctx, { includePairingStore: true });
+
+    expect(effective).toEqual(["u1", "u2"]);
+    expect(readChannelIngressStoreAllowFromForDmPolicyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not read pairing-store allowFrom unless requested", async () => {
+    readChannelIngressStoreAllowFromForDmPolicyMock.mockResolvedValue(["u2"]);
 
     const effective = await resolveSlackEffectiveAllowFrom(makeSlackCtx(["u1"]));
 
-    expect(effective.allowFrom).toEqual(["u1"]);
-    expect(effective.allowFromLower).toEqual(["u1"]);
+    expect(effective).toEqual(["u1"]);
+    expect(readChannelIngressStoreAllowFromForDmPolicyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("authorizeSlackSystemEventSender", () => {
+  beforeAll(async () => {
+    ({ authorizeSlackBotRoomMessage, authorizeSlackSystemEventSender } = await import("./auth.js"));
   });
 
-  it("memoizes pairing-store allowFrom reads within TTL", async () => {
-    readStoreAllowFromForDmPolicyMock.mockResolvedValue(["u2"]);
-    const ctx = makeSlackCtx(["u1"]);
-
-    const first = await resolveSlackEffectiveAllowFrom(ctx, { includePairingStore: true });
-    const second = await resolveSlackEffectiveAllowFrom(ctx, { includePairingStore: true });
-
-    expect(first.allowFrom).toEqual(["u1", "u2"]);
-    expect(second.allowFrom).toEqual(["u1", "u2"]);
-    expect(readStoreAllowFromForDmPolicyMock).toHaveBeenCalledTimes(1);
+  beforeEach(() => {
+    readChannelIngressStoreAllowFromForDmPolicyMock.mockReset();
+    delete process.env.OPENCLAW_SLACK_CHANNEL_MEMBERS_CACHE_TTL_MS;
   });
 
-  it("refreshes pairing-store allowFrom when cache TTL is zero", async () => {
-    process.env.OPENCLAW_SLACK_PAIRING_ALLOWFROM_CACHE_TTL_MS = "0";
-    readStoreAllowFromForDmPolicyMock.mockResolvedValue(["u2"]);
-    const ctx = makeSlackCtx(["u1"]);
+  afterEach(() => {
+    delete process.env.OPENCLAW_SLACK_CHANNEL_MEMBERS_CACHE_TTL_MS;
+  });
 
-    await resolveSlackEffectiveAllowFrom(ctx, { includePairingStore: true });
-    await resolveSlackEffectiveAllowFrom(ctx, { includePairingStore: true });
+  it("ignores non-decimal channel member cache ttl env values", async () => {
+    process.env.OPENCLAW_SLACK_CHANNEL_MEMBERS_CACHE_TTL_MS = "0x0";
+    const conversationsMembers = vi.fn(async () => ({
+      members: ["UOWNER"],
+      response_metadata: {},
+    }));
+    const ctx = {
+      allowFrom: [],
+      accountId: "main",
+      allowNameMatching: false,
+      app: { client: { conversations: { members: conversationsMembers } } },
+      botToken: "xoxb-test",
+    } as unknown as SlackMonitorContext;
 
-    expect(readStoreAllowFromForDmPolicyMock).toHaveBeenCalledTimes(2);
+    await expect(
+      authorizeSlackBotRoomMessage({
+        ctx,
+        channelId: "C1",
+        senderId: "U_BOT",
+        allowFromLower: ["uowner"],
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      authorizeSlackBotRoomMessage({
+        ctx,
+        channelId: "C1",
+        senderId: "U_BOT",
+        allowFromLower: ["uowner"],
+      }),
+    ).resolves.toBe(true);
+
+    expect(conversationsMembers).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops cached channel members when the current clock is not a valid date timestamp", async () => {
+    vi.spyOn(Date, "now")
+      .mockReturnValueOnce(1_700_000_000_000)
+      .mockReturnValueOnce(1_700_000_000_000)
+      .mockReturnValueOnce(Number.NaN)
+      .mockReturnValue(1_700_000_000_000);
+    const conversationsMembers = vi.fn(async () => ({
+      members: ["UOWNER"],
+      response_metadata: {},
+    }));
+    const ctx = {
+      allowFrom: [],
+      accountId: "main",
+      allowNameMatching: false,
+      app: { client: { conversations: { members: conversationsMembers } } },
+      botToken: "xoxb-test",
+    } as unknown as SlackMonitorContext;
+
+    await expect(
+      authorizeSlackBotRoomMessage({
+        ctx,
+        channelId: "C1",
+        senderId: "U_BOT",
+        allowFromLower: ["uowner"],
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      authorizeSlackBotRoomMessage({
+        ctx,
+        channelId: "C1",
+        senderId: "U_BOT",
+        allowFromLower: ["uowner"],
+      }),
+    ).resolves.toBe(true);
+
+    expect(conversationsMembers).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache channel members when the expiry timestamp would exceed the valid date range", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    const conversationsMembers = vi.fn(async () => ({
+      members: ["UOWNER"],
+      response_metadata: {},
+    }));
+    const ctx = {
+      allowFrom: [],
+      accountId: "main",
+      allowNameMatching: false,
+      app: { client: { conversations: { members: conversationsMembers } } },
+      botToken: "xoxb-test",
+    } as unknown as SlackMonitorContext;
+
+    await expect(
+      authorizeSlackBotRoomMessage({
+        ctx,
+        channelId: "C1",
+        senderId: "U_BOT",
+        allowFromLower: ["uowner"],
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      authorizeSlackBotRoomMessage({
+        ctx,
+        channelId: "C1",
+        senderId: "U_BOT",
+        allowFromLower: ["uowner"],
+      }),
+    ).resolves.toBe(true);
+
+    expect(conversationsMembers).toHaveBeenCalledTimes(2);
+  });
+
+  it("still coalesces in-flight channel member lookups when durable cache expiry is invalid", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    let resolveMembers: (value: {
+      members: string[];
+      response_metadata: Record<string, never>;
+    }) => void;
+    const membersPromise = new Promise<{
+      members: string[];
+      response_metadata: Record<string, never>;
+    }>((resolve) => {
+      resolveMembers = resolve;
+    });
+    const conversationsMembers = vi.fn(() => membersPromise);
+    const ctx = {
+      allowFrom: [],
+      accountId: "main",
+      allowNameMatching: false,
+      app: { client: { conversations: { members: conversationsMembers } } },
+      botToken: "xoxb-test",
+    } as unknown as SlackMonitorContext;
+
+    const first = authorizeSlackBotRoomMessage({
+      ctx,
+      channelId: "C1",
+      senderId: "U_BOT",
+      allowFromLower: ["uowner"],
+    });
+    const second = authorizeSlackBotRoomMessage({
+      ctx,
+      channelId: "C1",
+      senderId: "U_BOT",
+      allowFromLower: ["uowner"],
+    });
+    resolveMembers!({ members: ["UOWNER"], response_metadata: {} });
+
+    await expect(Promise.all([first, second])).resolves.toEqual([true, true]);
+    expect(conversationsMembers).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps non-interactive channel senders open when only global allowFrom is configured", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({ allowFrom: ["U_OWNER"] }),
+      senderId: "U_ATTACKER",
+      channelId: "C1",
+    });
+
+    expect(result).toEqual({
+      allowed: true,
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+
+  it("does not use pairing-store allowFrom for MPIM system events", async () => {
+    readChannelIngressStoreAllowFromForDmPolicyMock.mockResolvedValue(["U_ATTACKER"]);
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: [],
+        dmPolicy: "pairing",
+        resolveChannelName: async () => ({ name: "group-dm", type: "mpim" }),
+      }),
+      senderId: "U_ATTACKER",
+      channelId: "G_MPIM",
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      reason: "sender-not-allowlisted",
+      channelType: "mpim",
+      channelName: "group-dm",
+    });
+    expect(readChannelIngressStoreAllowFromForDmPolicyMock).not.toHaveBeenCalled();
+  });
+
+  it("allows MPIM system-event senders in the configured allowFrom", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: ["U_OWNER"],
+        resolveChannelName: async () => ({ name: "group-dm", type: "mpim" }),
+      }),
+      senderId: "U_OWNER",
+      channelId: "G_MPIM",
+    });
+
+    expect(result).toEqual({
+      allowed: true,
+      channelType: "mpim",
+      channelName: "group-dm",
+    });
+  });
+
+  it("keeps channel users as the non-interactive gate even when global allowFrom is configured", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: ["U_OWNER"],
+        channelsConfig: {
+          C1: { users: ["U_ALLOWED"] },
+        },
+      }),
+      senderId: "U_OWNER",
+      channelId: "C1",
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      reason: "sender-not-channel-allowed",
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+
+  it("uses the channel denial reason for non-interactive senders who miss a channel users allowlist", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: ["U_OWNER"],
+        channelsConfig: {
+          C1: { users: ["U_ALLOWED"] },
+        },
+      }),
+      senderId: "U_ATTACKER",
+      channelId: "C1",
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      reason: "sender-not-channel-allowed",
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+
+  it("allows channel senders authorized by channel users even when not in global allowFrom", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: ["U_OWNER"],
+        channelsConfig: {
+          C1: { users: ["U_ALLOWED"] },
+        },
+      }),
+      senderId: "U_ALLOWED",
+      channelId: "C1",
+    });
+
+    expect(result).toEqual({
+      allowed: true,
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+
+  it("keeps channel interactions open when no global or channel allowlists are configured", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx(),
+      senderId: "U_ANYONE",
+      channelId: "C1",
+    });
+
+    expect(result).toEqual({
+      allowed: true,
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+
+  it("does not let a wildcard global allowFrom bypass non-interactive channel users restrictions", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: ["*"],
+        channelsConfig: {
+          C1: { users: ["U_ALLOWED"] },
+        },
+      }),
+      senderId: "U_ATTACKER",
+      channelId: "C1",
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      reason: "sender-not-channel-allowed",
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+
+  it("still allows a channel user when the global allowFrom is wildcard", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: ["*"],
+        channelsConfig: {
+          C1: { users: ["U_ALLOWED"] },
+        },
+      }),
+      senderId: "U_ALLOWED",
+      channelId: "C1",
+    });
+
+    expect(result).toEqual({
+      allowed: true,
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+
+  it("does not give non-interactive owner bypass when channel users are configured, even if explicit owners are also listed", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: ["U_OWNER", "*"],
+        channelsConfig: {
+          C1: { users: ["U_ALLOWED"] },
+        },
+      }),
+      senderId: "U_ATTACKER",
+      channelId: "C1",
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      reason: "sender-not-channel-allowed",
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+
+  it("keeps explicit owners behind the non-interactive channel users gate when allowFrom also contains wildcard", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: ["U_OWNER", "*"],
+        channelsConfig: {
+          C1: { users: ["U_ALLOWED"] },
+        },
+      }),
+      senderId: "U_OWNER",
+      channelId: "C1",
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      reason: "sender-not-channel-allowed",
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+
+  it("allows senders without channel context when no allowFrom is configured", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx(),
+      senderId: "U_ANYONE",
+    });
+
+    expect(result).toEqual({
+      allowed: true,
+      channelType: "channel",
+      channelName: undefined,
+    });
+  });
+});
+
+describe("resolveSlackCommandIngress", () => {
+  beforeAll(async () => {
+    ({ resolveSlackCommandIngress } = await import("./auth.js"));
+  });
+
+  it("does not authorize commands when sender denial stops before the command gate", async () => {
+    const result = await resolveSlackCommandIngress({
+      ctx: makeAuthorizeCtx(),
+      senderId: "U_DENIED",
+      channelType: "channel",
+      channelId: "C1",
+      ownerAllowFromLower: ["u_owner"],
+      channelUsers: ["U_ALLOWED"],
+      allowTextCommands: false,
+      hasControlCommand: true,
+      eventKind: "button",
+      modeWhenAccessGroupsOff: "configured",
+    });
+
+    expect(result.ingress.decision).toBe("block");
+    expect(result.commandAccess.authorized).toBe(false);
+    expect(result.commandAccess.shouldBlockControlCommand).toBe(false);
+  });
+
+  it("blocks MPIM senders outside the configured allowFrom", async () => {
+    const result = await resolveSlackCommandIngress({
+      ctx: makeAuthorizeCtx(),
+      senderId: "U_ATTACKER",
+      channelType: "mpim",
+      channelId: "G_MPIM",
+      ownerAllowFromLower: ["u_owner"],
+      allowTextCommands: false,
+      hasControlCommand: false,
+    });
+
+    expect(result.senderAccess.decision).toBe("block");
+    expect(result.senderAccess.gate?.allowed).toBe(false);
+  });
+
+  it("allows MPIM senders in the configured allowFrom", async () => {
+    const result = await resolveSlackCommandIngress({
+      ctx: makeAuthorizeCtx(),
+      senderId: "U_OWNER",
+      channelType: "mpim",
+      channelId: "G_MPIM",
+      ownerAllowFromLower: ["u_owner"],
+      allowTextCommands: false,
+      hasControlCommand: false,
+    });
+
+    expect(result.senderAccess.decision).toBe("allow");
+    expect(result.senderAccess.gate?.allowed).toBe(true);
+  });
+});
+
+describe("authorizeSlackSystemEventSender interactiveEvent", () => {
+  beforeAll(async () => {
+    ({ authorizeSlackSystemEventSender } = await import("./auth.js"));
+  });
+
+  it("rejects interactive events when expectedSenderId is not provided", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({ allowFrom: ["U_OWNER"] }),
+      senderId: "U_OWNER",
+      channelId: "C1",
+      interactiveEvent: true,
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      reason: "missing-expected-sender",
+    });
+  });
+
+  it("allows interactive events when expectedSenderId matches senderId", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({ allowFrom: ["U_OWNER"] }),
+      senderId: "U_OWNER",
+      channelId: "C1",
+      expectedSenderId: "U_OWNER",
+      interactiveEvent: true,
+    });
+
+    expect(result).toEqual({
+      allowed: true,
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+
+  it("allows interactive channel senders who match the global allowFrom even when channel users are configured", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: ["U_OWNER"],
+        channelsConfig: {
+          C1: { users: ["U_ALLOWED"] },
+        },
+      }),
+      senderId: "U_OWNER",
+      channelId: "C1",
+      expectedSenderId: "U_OWNER",
+      interactiveEvent: true,
+    });
+
+    expect(result).toEqual({
+      allowed: true,
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+
+  it("uses a combined denial reason when an interactive sender matches neither global nor channel allowlists", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: ["U_OWNER"],
+        channelsConfig: {
+          C1: { users: ["U_ALLOWED"] },
+        },
+      }),
+      senderId: "U_ATTACKER",
+      channelId: "C1",
+      expectedSenderId: "U_ATTACKER",
+      interactiveEvent: true,
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      reason: "sender-not-authorized",
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+
+  it("keeps interactive channel events open when no allowlists are configured", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx(),
+      senderId: "U_ANYONE",
+      channelId: "C1",
+      expectedSenderId: "U_ANYONE",
+      interactiveEvent: true,
+    });
+
+    expect(result).toEqual({
+      allowed: true,
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+
+  it("preserves explicit owner access for interactive events when allowFrom also contains wildcard", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: ["U_OWNER", "*"],
+        channelsConfig: {
+          C1: { users: ["U_ALLOWED"] },
+        },
+      }),
+      senderId: "U_OWNER",
+      channelId: "C1",
+      expectedSenderId: "U_OWNER",
+      interactiveEvent: true,
+    });
+
+    expect(result).toEqual({
+      allowed: true,
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+
+  it("keeps interactive no-channel events open when no allowFrom is configured", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx(),
+      senderId: "U_ANYONE",
+      expectedSenderId: "U_ANYONE",
+      interactiveEvent: true,
+    });
+
+    expect(result).toEqual({
+      allowed: true,
+      channelType: "channel",
+      channelName: undefined,
+    });
+  });
+
+  it("denies interactive no-channel events when sender is not in allowFrom", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({ allowFrom: ["U_OWNER"] }),
+      senderId: "U_ATTACKER",
+      expectedSenderId: "U_ATTACKER",
+      interactiveEvent: true,
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      reason: "sender-not-allowlisted",
+    });
+  });
+
+  it("allows interactive no-channel events when sender is in allowFrom", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({ allowFrom: ["U_OWNER"] }),
+      senderId: "U_OWNER",
+      expectedSenderId: "U_OWNER",
+      interactiveEvent: true,
+    });
+
+    expect(result).toEqual({
+      allowed: true,
+      channelType: "channel",
+      channelName: undefined,
+    });
+  });
+
+  it("rejects interactive events with ambiguous channel type", async () => {
+    // Channel ID "X1" has no recognized prefix (D, C, G) so the type is ambiguous
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: ["U_OWNER"],
+        resolveChannelName: () => Promise.resolve({ name: "mystery" }),
+      }),
+      senderId: "U_OWNER",
+      channelId: "X1",
+      expectedSenderId: "U_OWNER",
+      interactiveEvent: true,
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      reason: "ambiguous-channel-type",
+      channelType: "channel",
+      channelName: "mystery",
+    });
+  });
+
+  it("allows interactive events when channel type is known from ID prefix", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({ allowFrom: ["U_OWNER"] }),
+      senderId: "U_OWNER",
+      channelId: "C1",
+      expectedSenderId: "U_OWNER",
+      interactiveEvent: true,
+    });
+
+    expect(result).toEqual({
+      allowed: true,
+      channelType: "channel",
+      channelName: "general",
+    });
+  });
+
+  it("allows interactive events when channel type is known from explicit type", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: ["U_OWNER"],
+        resolveChannelName: () => Promise.resolve({ name: "mystery", type: "group" }),
+      }),
+      senderId: "U_OWNER",
+      channelId: "X1",
+      channelType: "group",
+      expectedSenderId: "U_OWNER",
+      interactiveEvent: true,
+    });
+
+    expect(result).toEqual({
+      allowed: true,
+      channelType: "group",
+      channelName: "mystery",
+    });
+  });
+
+  it("does not apply interactiveEvent restrictions to non-interactive events", async () => {
+    // Same scenario as the denying test above, but without interactiveEvent flag
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx(),
+      senderId: "U_ANYONE",
+      channelId: "C1",
+    });
+
+    expect(result).toEqual({
+      allowed: true,
+      channelType: "channel",
+      channelName: "general",
+    });
   });
 });

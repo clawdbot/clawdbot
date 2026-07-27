@@ -1,4 +1,6 @@
-import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+// Whatsapp plugin module implements broadcast behavior.
+import type { AckReactionHandle } from "openclaw/plugin-sdk/channel-feedback";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { buildAgentSessionKey, deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
 import {
@@ -6,24 +8,27 @@ import {
   DEFAULT_MAIN_KEY,
   normalizeAgentId,
 } from "openclaw/plugin-sdk/routing";
+import { resolveWhatsAppGroupSessionRoute } from "../../group-session-key.js";
+import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
+import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { formatError } from "../../session.js";
 import { whatsappInboundLog } from "../loggers.js";
-import type { WebInboundMsg } from "../types.js";
-import type { GroupHistoryEntry } from "./process-message.js";
+import type { GroupHistoryEntry } from "./inbound-context.js";
 
 function buildBroadcastRouteKeys(params: {
-  cfg: ReturnType<typeof loadConfig>;
-  msg: WebInboundMsg;
+  cfg: OpenClawConfig;
+  msg: AdmittedWebInboundMessage;
   route: ReturnType<typeof resolveAgentRoute>;
   peerId: string;
   agentId: string;
 }) {
+  const admission = requireWhatsAppInboundAdmission(params.msg);
   const sessionKey = buildAgentSessionKey({
     agentId: params.agentId,
     channel: "whatsapp",
     accountId: params.route.accountId,
     peer: {
-      kind: params.msg.chatType === "group" ? "group" : "direct",
+      kind: admission.conversation.kind,
       id: params.peerId,
     },
     dmScope: params.cfg.session?.dmScope,
@@ -45,21 +50,27 @@ function buildBroadcastRouteKeys(params: {
 }
 
 export async function maybeBroadcastMessage(params: {
-  cfg: ReturnType<typeof loadConfig>;
-  msg: WebInboundMsg;
+  cfg: OpenClawConfig;
+  msg: AdmittedWebInboundMessage;
   peerId: string;
   route: ReturnType<typeof resolveAgentRoute>;
   groupHistoryKey: string;
   groupHistories: Map<string, GroupHistoryEntry[]>;
   processMessage: (
-    msg: WebInboundMsg,
+    msg: AdmittedWebInboundMessage,
     route: ReturnType<typeof resolveAgentRoute>,
     groupHistoryKey: string,
     opts?: {
       groupHistory?: GroupHistoryEntry[];
       suppressGroupHistoryClear?: boolean;
+      preflightAudioTranscript?: string | null;
+      ackAlreadySent?: boolean;
+      ackReaction?: AckReactionHandle | null;
     },
   ) => Promise<boolean>;
+  preflightAudioTranscript?: string | null;
+  ackAlreadySent?: boolean;
+  ackReaction?: AckReactionHandle | null;
 }) {
   const broadcastAgents = params.cfg.broadcast?.[params.peerId];
   if (!broadcastAgents || !Array.isArray(broadcastAgents)) {
@@ -74,10 +85,11 @@ export async function maybeBroadcastMessage(params: {
 
   const agentIds = params.cfg.agents?.list?.map((agent) => normalizeAgentId(agent.id));
   const hasKnownAgents = (agentIds?.length ?? 0) > 0;
-  const groupHistorySnapshot =
-    params.msg.chatType === "group"
-      ? (params.groupHistories.get(params.groupHistoryKey) ?? [])
-      : undefined;
+  const admission = requireWhatsAppInboundAdmission(params.msg);
+  const isGroupConversation = admission.conversation.kind === "group";
+  const groupHistorySnapshot = isGroupConversation
+    ? (params.groupHistories.get(params.groupHistoryKey) ?? [])
+    : undefined;
 
   const processForAgent = async (agentId: string): Promise<boolean> => {
     const normalizedAgentId = normalizeAgentId(agentId);
@@ -92,17 +104,36 @@ export async function maybeBroadcastMessage(params: {
       peerId: params.peerId,
       agentId: normalizedAgentId,
     });
-    const agentRoute = {
+    const baseAgentRoute = {
       ...params.route,
       agentId: normalizedAgentId,
       ...routeKeys,
     };
+    const agentRoute = isGroupConversation
+      ? resolveWhatsAppGroupSessionRoute(baseAgentRoute)
+      : baseAgentRoute;
 
     try {
-      return await params.processMessage(params.msg, agentRoute, params.groupHistoryKey, {
+      const opts: {
+        groupHistory?: GroupHistoryEntry[];
+        suppressGroupHistoryClear: true;
+        preflightAudioTranscript?: string | null;
+        ackAlreadySent?: boolean;
+        ackReaction?: AckReactionHandle | null;
+      } = {
         groupHistory: groupHistorySnapshot,
         suppressGroupHistoryClear: true,
-      });
+      };
+      if (params.preflightAudioTranscript !== undefined) {
+        opts.preflightAudioTranscript = params.preflightAudioTranscript;
+      }
+      if (params.ackAlreadySent === true) {
+        opts.ackAlreadySent = true;
+      }
+      if (params.ackReaction !== undefined) {
+        opts.ackReaction = params.ackReaction;
+      }
+      return await params.processMessage(params.msg, agentRoute, params.groupHistoryKey, opts);
     } catch (err) {
       whatsappInboundLog.error(`Broadcast agent ${agentId} failed: ${formatError(err)}`);
       return false;
@@ -117,7 +148,7 @@ export async function maybeBroadcastMessage(params: {
     await Promise.allSettled(broadcastAgents.map(processForAgent));
   }
 
-  if (params.msg.chatType === "group") {
+  if (isGroupConversation) {
     params.groupHistories.set(params.groupHistoryKey, []);
   }
 

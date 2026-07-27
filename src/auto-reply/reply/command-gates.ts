@@ -1,8 +1,8 @@
-import type { CommandFlagKey } from "../../config/commands.js";
-import { isCommandFlagEnabled } from "../../config/commands.js";
+// Applies command feature gates before command handlers execute.
+import { isCommandFlagEnabled, type CommandFlagKey } from "../../config/commands.flags.js";
 import { logVerbose } from "../../globals.js";
 import { redactIdentifier } from "../../logging/redact-identifier.js";
-import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
 import type { ReplyPayload } from "../types.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "./commands-types.js";
 
@@ -23,7 +23,7 @@ export function rejectUnauthorizedCommand(
   logVerbose(
     `Ignoring ${commandLabel} from unauthorized sender: ${redactIdentifier(params.command.senderId)}`,
   );
-  if (params.ctx.CommandSource === "native") {
+  if (isNativeCommandTurn(resolveCommandTurnContext(params.ctx))) {
     return buildNativeCommandGateReply("You are not authorized to use this command.");
   }
   return { shouldContinue: false };
@@ -39,13 +39,13 @@ export function rejectNonOwnerCommand(
   logVerbose(
     `Ignoring ${commandLabel} from non-owner sender: ${redactIdentifier(params.command.senderId)}`,
   );
-  if (params.ctx.CommandSource === "native") {
+  if (isNativeCommandTurn(resolveCommandTurnContext(params.ctx))) {
     return buildNativeCommandGateReply("You are not authorized to use this command.");
   }
   return { shouldContinue: false };
 }
 
-export function requireGatewayClientScopeForInternalChannel(
+export function requireGatewayClientScope(
   params: HandleCommandsParams,
   config: {
     label: string;
@@ -53,10 +53,10 @@ export function requireGatewayClientScopeForInternalChannel(
     missingText: string;
   },
 ): CommandHandlerResult | null {
-  if (!isInternalMessageChannel(params.command.channel)) {
+  const scopes = params.ctx.GatewayClientScopes;
+  if (!Array.isArray(scopes)) {
     return null;
   }
-  const scopes = params.ctx.GatewayClientScopes ?? [];
   if (config.allowedScopes.some((scope) => scopes.includes(scope))) {
     return null;
   }

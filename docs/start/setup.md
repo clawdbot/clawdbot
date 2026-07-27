@@ -2,11 +2,9 @@
 summary: "Advanced setup and development workflows for OpenClaw"
 read_when:
   - Setting up a new machine
-  - You want “latest + greatest” without breaking your personal setup
+  - You want "latest + greatest" without breaking your personal setup
 title: "Setup"
 ---
-
-# Setup
 
 <Note>
 If you are setting up for the first time, start with [Getting Started](/start/getting-started).
@@ -15,36 +13,40 @@ For onboarding details, see [Onboarding (CLI)](/start/wizard).
 
 ## TL;DR
 
-- **Tailoring lives outside the repo:** `~/.openclaw/workspace` (workspace) + `~/.openclaw/openclaw.json` (config).
-- **Stable workflow:** install the macOS app; let it run the bundled Gateway.
-- **Bleeding edge workflow:** run the Gateway yourself via `pnpm gateway:watch`, then let the macOS app attach in Local mode.
+Pick a setup workflow based on how often you want updates and whether you want to run the Gateway yourself:
+
+- **Tailoring lives outside the repo:** keep your config and workspace in `~/.openclaw/openclaw.json` and `~/.openclaw/workspace/` so repo updates don't touch them.
+- **Stable workflow (recommended for most):** install the macOS app and let it run the bundled Gateway.
+- **Bleeding edge workflow (dev):** run the Gateway yourself via `pnpm gateway:watch`, then let the macOS app attach in Local mode.
 
 ## Prereqs (from source)
 
-- Node 24 recommended (Node 22 LTS, currently `22.14+`, still supported)
-- `pnpm`
-- Docker (optional; only for containerized setup/e2e — see [Docker](/install/docker))
+- Node 24.15+ recommended (Node 22 LTS, currently `22.22.3+`, still supported)
+- `pnpm` required for source checkouts. OpenClaw loads bundled plugins from the
+  `extensions/*` pnpm workspace packages in dev mode, so root `npm install` does
+  not prepare the full source tree.
+- Docker (optional; only for containerized setup/e2e - see [Docker](/install/docker))
 
 ## Tailoring strategy (so updates do not hurt)
 
-If you want “100% tailored to me” _and_ easy updates, keep your customization in:
+If you want "100% tailored to me" _and_ easy updates, keep your customization in:
 
 - **Config:** `~/.openclaw/openclaw.json` (JSON/JSON5-ish)
 - **Workspace:** `~/.openclaw/workspace` (skills, prompts, memories; make it a private git repo)
 
-Bootstrap once:
+Bootstrap the config/workspace folders once, without running the full onboarding wizard:
 
 ```bash
-openclaw setup
+openclaw setup --baseline
 ```
 
-From inside this repo, use the local CLI entry:
+No global install yet? Run it from this repo instead:
 
 ```bash
-openclaw setup
+pnpm openclaw setup --baseline
 ```
 
-If you don’t have a global install yet, run it via `pnpm openclaw setup`.
+(Bare `openclaw setup`, without `--baseline`, is an alias for `openclaw onboard` and runs the full interactive wizard.)
 
 ## Run the Gateway from this repo
 
@@ -91,11 +93,27 @@ If you also want the macOS app on the bleeding edge:
 
 ```bash
 pnpm install
+# First run only (or after resetting local OpenClaw config/workspace)
+pnpm openclaw setup
 pnpm gateway:watch
 ```
 
-`gateway:watch` runs the gateway in watch mode and reloads on relevant source,
-config, and bundled-plugin metadata changes.
+`gateway:watch` starts or restarts the Gateway watch process in a named tmux
+session (`openclaw-gateway-watch-main`) and auto-attaches from interactive
+terminals. Non-interactive shells stay detached and print
+`tmux attach -t openclaw-gateway-watch-main`; use
+`OPENCLAW_GATEWAY_WATCH_ATTACH=0 pnpm gateway:watch` to keep an interactive run
+detached, or `pnpm gateway:watch:raw` for foreground watch mode. The watcher
+stops the active profile's installed Gateway service before taking over its
+configured/default port, preventing the service supervisor from replacing the
+source process. The service stays installed; run `pnpm openclaw gateway start`
+when you finish watching. The tmux pane remains available after startup failure
+so another terminal or agent can attach or capture its logs. The watcher
+reloads on relevant source, config, and bundled-plugin metadata changes. If the
+watched Gateway exits during startup, `gateway:watch` runs
+`openclaw doctor --fix --non-interactive` once and retries; set
+`OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR=0` to disable that dev-only repair pass.
+`pnpm gateway:watch` does not rebuild `dist/control-ui`, so rerun `pnpm ui:build` after `ui/` changes or use `pnpm ui:dev` while developing the Control UI.
 
 ### 2) Point the macOS app at your running Gateway
 
@@ -106,7 +124,7 @@ In **OpenClaw.app**:
 
 ### 3) Verify
 
-- In-app Gateway status should read **“Using existing gateway …”**
+- In-app Gateway status should read **"Using existing gateway …"**
 - Or via CLI:
 
 ```bash
@@ -117,8 +135,10 @@ openclaw health
 
 - **Wrong port:** Gateway WS defaults to `ws://127.0.0.1:18789`; keep app + CLI on the same port.
 - **Where state lives:**
-  - Credentials: `~/.openclaw/credentials/`
-  - Sessions: `~/.openclaw/agents/<agentId>/sessions/`
+  - Channel/provider state: `~/.openclaw/credentials/`
+  - Model auth profiles: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
+  - Sessions and transcripts: `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
+  - Legacy/archive session artifacts: `~/.openclaw/agents/<agentId>/sessions/`
   - Logs: `/tmp/openclaw/`
 
 ## Credential storage map
@@ -139,14 +159,14 @@ Use this when debugging auth or deciding what to back up:
 
 ## Updating (without wrecking your setup)
 
-- Keep `~/.openclaw/workspace` and `~/.openclaw/` as “your stuff”; don’t put personal prompts/config into the `openclaw` repo.
-- Updating source: `git pull` + `pnpm install` (when lockfile changed) + keep using `pnpm gateway:watch`.
+- Keep `~/.openclaw/workspace` and `~/.openclaw/` as "your stuff"; don't put personal prompts/config into the `openclaw` repo.
+- Updating source: `git pull` + `pnpm install` + keep using `pnpm gateway:watch`.
 
 ## Linux (systemd user service)
 
 Linux installs use a systemd **user** service. By default, systemd stops user
 services on logout/idle, which kills the Gateway. Onboarding attempts to enable
-lingering for you (may prompt for sudo). If it’s still off, run:
+lingering for you (may prompt for sudo). If it's still off, run:
 
 ```bash
 sudo loginctl enable-linger $USER

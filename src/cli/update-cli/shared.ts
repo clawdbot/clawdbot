@@ -1,10 +1,15 @@
+// Shared update command primitives for channel resolution, install roots, and subprocess steps.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
 import { normalizePackageTagInput } from "../../infra/package-tag.js";
+import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { trimLogTail } from "../../infra/restart-sentinel.js";
 import { parseSemver } from "../../infra/runtime-guard.js";
 import { fetchNpmTagVersion } from "../../infra/update-check.js";
@@ -19,8 +24,8 @@ import {
 import type { UpdateStepProgress, UpdateStepResult } from "../../infra/update-runner.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
-import { theme } from "../../terminal/theme.js";
 import { pathExists } from "../../utils.js";
+import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
 
 export type UpdateCommandOptions = {
   json?: boolean;
@@ -30,6 +35,7 @@ export type UpdateCommandOptions = {
   tag?: string;
   timeout?: string;
   yes?: boolean;
+  acknowledgeClawHubRisk?: boolean;
 };
 
 export type UpdateStatusOptions = {
@@ -37,20 +43,35 @@ export type UpdateStatusOptions = {
   timeout?: string;
 };
 
+export type UpdateFinalizeOptions = {
+  json?: boolean;
+  channel?: string;
+  timeout?: string;
+  yes?: boolean;
+  restart?: boolean;
+  acknowledgeClawHubRisk?: boolean;
+};
+
 export type UpdateWizardOptions = {
   timeout?: string;
 };
 
 const INVALID_TIMEOUT_ERROR = "--timeout must be a positive integer (seconds)";
+const MAX_SAFE_TIMEOUT_SECONDS = Math.floor(Number.MAX_SAFE_INTEGER / 1000);
 
+/** Parse a CLI timeout in seconds, exiting through the runtime on invalid input. */
 export function parseTimeoutMsOrExit(timeout?: string): number | undefined | null {
-  const timeoutMs = timeout ? Number.parseInt(timeout, 10) * 1000 : undefined;
-  if (timeoutMs !== undefined && (Number.isNaN(timeoutMs) || timeoutMs <= 0)) {
+  if (timeout === undefined) {
+    return undefined;
+  }
+  const trimmed = timeout.trim();
+  const seconds = parseStrictPositiveInteger(trimmed);
+  if (seconds === undefined || seconds > MAX_SAFE_TIMEOUT_SECONDS) {
     defaultRuntime.error(INVALID_TIMEOUT_ERROR);
     defaultRuntime.exit(1);
     return null;
   }
-  return timeoutMs;
+  return seconds * 1000;
 }
 
 const OPENCLAW_REPO_URL = "https://github.com/openclaw/openclaw.git";
@@ -59,11 +80,12 @@ const MAX_LOG_CHARS = 8000;
 export const DEFAULT_PACKAGE_NAME = "openclaw";
 const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
 
+/** Normalize a CLI tag/version/spec into the npm target form accepted by update flows. */
 export function normalizeTag(value?: string | null): string | null {
   return normalizePackageTagInput(value, ["openclaw", DEFAULT_PACKAGE_NAME]);
 }
 
-export function normalizeVersionTag(tag: string): string | null {
+function normalizeVersionTag(tag: string): string | null {
   const trimmed = tag.trim();
   if (!trimmed) {
     return null;
@@ -74,9 +96,11 @@ export function normalizeVersionTag(tag: string): string | null {
 
 export { readPackageName, readPackageVersion };
 
+/** Resolve an npm dist-tag or explicit version into a concrete package version. */
 export async function resolveTargetVersion(
   tag: string,
   timeoutMs?: number,
+  options: { spec?: string; command?: string; cwd?: string; env?: NodeJS.ProcessEnv } = {},
 ): Promise<string | null> {
   if (!canResolveRegistryVersionForPackageTarget(tag)) {
     return null;
@@ -85,10 +109,18 @@ export async function resolveTargetVersion(
   if (direct) {
     return direct;
   }
-  const res = await fetchNpmTagVersion({ tag, timeoutMs });
+  const res = await fetchNpmTagVersion({
+    tag,
+    timeoutMs,
+    spec: options.spec,
+    command: options.command,
+    cwd: options.cwd,
+    env: options.env,
+  });
   return res.version ?? null;
 }
 
+/** Return true when `root` is a local git checkout directory. */
 export async function isGitCheckout(root: string): Promise<boolean> {
   try {
     await fs.stat(path.join(root, ".git"));
@@ -98,11 +130,12 @@ export async function isGitCheckout(root: string): Promise<boolean> {
   }
 }
 
-export async function isCorePackage(root: string): Promise<boolean> {
+async function isCorePackage(root: string): Promise<boolean> {
   const name = await readPackageName(root);
   return Boolean(name && CORE_PACKAGE_NAMES.has(name));
 }
 
+/** Return true only for existing directories with no entries. */
 export async function isEmptyDir(targetPath: string): Promise<boolean> {
   try {
     const entries = await fs.readdir(targetPath);
@@ -112,6 +145,7 @@ export async function isEmptyDir(targetPath: string): Promise<boolean> {
   }
 }
 
+/** Resolve the checkout path used by source-based self-update. */
 export function resolveGitInstallDir(): string {
   const override = process.env.OPENCLAW_GIT_DIR?.trim();
   if (override) {
@@ -121,31 +155,37 @@ export function resolveGitInstallDir(): string {
 }
 
 function resolveDefaultGitDir(): string {
-  const home = os.homedir();
+  const home = resolveRequiredHomeDir(process.env, os.homedir);
   if (home.startsWith("/")) {
     return path.posix.join(home, "openclaw");
   }
   return path.join(home, "openclaw");
 }
 
+/** Prefer the current Node executable, falling back to `node` when run through another shim. */
 export function resolveNodeRunner(): string {
-  const base = path.basename(process.execPath).toLowerCase();
+  const base = normalizeLowercaseStringOrEmpty(path.basename(process.execPath));
   if (base === "node" || base === "node.exe") {
     return process.execPath;
   }
   return "node";
 }
 
+/** Locate the installed OpenClaw package root that should receive update operations. */
 export async function resolveUpdateRoot(): Promise<string> {
+  // Preserve the lexical package path from the invoking shim. pnpm 11 package
+  // modules realpath into a shared store, which is not the install owner.
+  const invocationRoot = process.argv[1]
+    ? await resolveOpenClawPackageRoot({ cwd: path.dirname(path.resolve(process.argv[1])) })
+    : null;
   return (
-    (await resolveOpenClawPackageRoot({
-      moduleUrl: import.meta.url,
-      argv1: process.argv[1],
-      cwd: process.cwd(),
-    })) ?? process.cwd()
+    invocationRoot ??
+    (await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url, cwd: process.cwd() })) ??
+    process.cwd()
   );
 }
 
+/** Run one update subprocess and report bounded stdout/stderr tails to progress listeners. */
 export async function runUpdateStep(params: {
   name: string;
   argv: string[];
@@ -179,6 +219,9 @@ export async function runUpdateStep(params: {
     durationMs,
     exitCode: res.code,
     stderrTail,
+    signal: res.signal,
+    killed: res.killed,
+    termination: res.termination,
   });
 
   return {
@@ -189,9 +232,13 @@ export async function runUpdateStep(params: {
     exitCode: res.code,
     stdoutTail: trimLogTail(res.stdout, MAX_LOG_CHARS),
     stderrTail,
+    signal: res.signal,
+    killed: res.killed,
+    termination: res.termination,
   };
 }
 
+/** Ensure the configured source-update directory exists and points at an OpenClaw checkout. */
 export async function ensureGitCheckout(params: {
   dir: string;
   timeoutMs: number;
@@ -201,6 +248,7 @@ export async function ensureGitCheckout(params: {
   const gitEnv = params.env ?? (await createGlobalInstallEnv());
   const dirExists = await pathExists(params.dir);
   if (!dirExists) {
+    await fs.mkdir(path.dirname(params.dir), { recursive: true });
     return await runUpdateStep({
       name: "git clone",
       argv: ["git", "clone", OPENCLAW_REPO_URL, params.dir],
@@ -235,6 +283,7 @@ export async function ensureGitCheckout(params: {
   return null;
 }
 
+/** Detect the package manager that owns a global/package OpenClaw install. */
 export async function resolveGlobalManager(params: {
   root: string;
   installKind: "git" | "package" | "unknown";
@@ -257,6 +306,11 @@ export async function resolveGlobalManager(params: {
   return byPresence ?? "npm";
 }
 
+const COMPLETION_CACHE_WRITE_TIMEOUT_MS = 30_000;
+const COMPLETION_CACHE_MANUAL_REFRESH_HINT =
+  "Shell tab-completion may be stale; refresh manually with: openclaw completion --write-state";
+
+/** Best-effort refresh of shell completion state after a successful update. */
 export async function tryWriteCompletionCache(root: string, jsonMode: boolean): Promise<void> {
   const binPath = path.join(root, "openclaw.mjs");
   if (!(await pathExists(binPath))) {
@@ -265,24 +319,42 @@ export async function tryWriteCompletionCache(root: string, jsonMode: boolean): 
 
   const result = spawnSync(resolveNodeRunner(), [binPath, "completion", "--write-state"], {
     cwd: root,
-    env: process.env,
+    env: {
+      ...process.env,
+      [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1",
+    },
     encoding: "utf-8",
+    timeout: COMPLETION_CACHE_WRITE_TIMEOUT_MS,
   });
 
   if (result.error) {
     if (!jsonMode) {
-      defaultRuntime.log(theme.warn(`Completion cache update failed: ${String(result.error)}`));
+      const err = result.error as NodeJS.ErrnoException;
+      const reason =
+        err.code === "ETIMEDOUT"
+          ? `timed out after ${COMPLETION_CACHE_WRITE_TIMEOUT_MS / 1000}s`
+          : String(result.error);
+      defaultRuntime.log(
+        theme.warn(
+          `Completion cache update failed: ${reason}. ${COMPLETION_CACHE_MANUAL_REFRESH_HINT}`,
+        ),
+      );
     }
     return;
   }
 
   if (result.status !== 0 && !jsonMode) {
-    const stderr = (result.stderr ?? "").toString().trim();
+    const stderr = (result.stderr ?? "").trim();
     const detail = stderr ? ` (${stderr})` : "";
-    defaultRuntime.log(theme.warn(`Completion cache update failed${detail}.`));
+    defaultRuntime.log(
+      theme.warn(
+        `Completion cache update failed${detail}. ${COMPLETION_CACHE_MANUAL_REFRESH_HINT}`,
+      ),
+    );
   }
 }
 
+/** Adapter used by global-install detection helpers to execute bounded subprocess probes. */
 export function createGlobalCommandRunner(): CommandRunner {
   return async (argv, options) => {
     const res = await runCommandWithTimeout(argv, options);

@@ -1,7 +1,11 @@
+/**
+ * Shared runtime helper barrel for tool implementations.
+ *
+ * Tools import from this module when they need model auth, fallback, discovery,
+ * sandbox media paths, or workspace helpers without depending on broad agent barrels.
+ */
 export { getApiKeyForModel, requireApiKey } from "../model-auth.js";
 export { runWithImageModelFallback } from "../model-fallback.js";
-export { ensureOpenClawModelsJson } from "../models-config.js";
-export { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 export {
   createSandboxBridgeReadFile,
   resolveSandboxedBridgeMediaPath,

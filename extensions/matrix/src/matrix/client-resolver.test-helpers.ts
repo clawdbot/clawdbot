@@ -1,3 +1,4 @@
+// Matrix helper module supports client resolver helpers behavior.
 import { expect, vi, type Mock } from "vitest";
 import type { MatrixClient } from "./sdk.js";
 
@@ -23,12 +24,28 @@ export const matrixClientResolverMocks: MatrixClientResolverMocks = {
   resolveMatrixAuthContextMock: vi.fn(),
 };
 
+vi.mock("openclaw/plugin-sdk/plugin-config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-config-runtime")>(
+    "openclaw/plugin-sdk/plugin-config-runtime",
+  );
+  return {
+    ...actual,
+    requireRuntimeConfig: vi.fn((cfg: unknown) => {
+      if (cfg) {
+        return cfg;
+      }
+      return matrixClientResolverMocks.loadConfigMock();
+    }),
+  };
+});
+
 export function createMockMatrixClient(): MatrixClient {
   return {
     prepareForOneOff: vi.fn(async () => undefined),
     start: vi.fn(async () => undefined),
     stop: vi.fn(() => undefined),
     stopAndPersist: vi.fn(async () => undefined),
+    stopWithoutPersist: vi.fn(() => undefined),
   } as unknown as MatrixClient;
 }
 
@@ -65,7 +82,7 @@ export function primeMatrixClientResolverMocks(params?: {
   loadConfigMock.mockReturnValue(cfg);
   getMatrixRuntimeMock.mockReturnValue({
     config: {
-      loadConfig: loadConfigMock,
+      current: loadConfigMock,
     },
   });
   getActiveMatrixClientMock.mockReturnValue(null);
@@ -99,7 +116,7 @@ export async function expectOneOffSharedMatrixClient(params?: {
   timeoutMs?: number;
   prepareForOneOffCalls?: number;
   startCalls?: number;
-  releaseMode?: "persist" | "stop";
+  releaseMode?: "persist" | "stop" | "discard";
 }) {
   const {
     getActiveMatrixClientMock,

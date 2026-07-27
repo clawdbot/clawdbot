@@ -1,11 +1,31 @@
-import type { AuthProfileStore } from "../agents/auth-profiles.js";
-import type { OpenClawConfig } from "../config/config.js";
+/** Helpers for selecting image-generation providers and models in live tests. */
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  parseLiveCsvFilter,
+  parseProviderModelMap,
+  redactLiveApiKey,
+  resolveConfiguredLiveProviderModels,
+  resolveLiveAuthStore,
+} from "../media-generation/live-test-helpers.js";
 
-export const DEFAULT_LIVE_IMAGE_MODELS: Record<string, string> = {
+export { parseProviderModelMap, redactLiveApiKey };
+
+// Default provider/model matrix for image live tests. Provider env filters can
+// override these without changing test source.
+export const DEFAULT_LIVE_IMAGE_MODELS: Partial<Record<string, string>> = {
+  deepinfra: "deepinfra/black-forest-labs/FLUX-1-schnell",
+  fal: "fal/fal-ai/flux/dev",
   google: "google/gemini-3.1-flash-image-preview",
-  openai: "openai/gpt-image-1",
+  minimax: "minimax/image-01",
+  openai: "openai/gpt-image-2",
+  openrouter: "openrouter/google/gemini-3.1-flash-image-preview",
+  vydra: "vydra/grok-imagine",
+  xai: "xai/grok-imagine-image",
 };
 
+// Case filters are intentionally lowercased because test case names are local
+// labels, unlike provider ids/models that may be case-sensitive.
 export function parseCaseFilter(raw?: string): Set<string> | null {
   const trimmed = raw?.trim();
   if (!trimmed || trimmed === "all") {
@@ -13,84 +33,22 @@ export function parseCaseFilter(raw?: string): Set<string> | null {
   }
   const values = trimmed
     .split(",")
-    .map((entry) => entry.trim().toLowerCase())
-    .filter(Boolean);
+    .map((entry) => normalizeOptionalLowercaseString(entry))
+    .filter((entry): entry is string => Boolean(entry));
   return values.length > 0 ? new Set(values) : null;
-}
-
-export function redactLiveApiKey(value: string | undefined): string {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return "none";
-  }
-  if (trimmed.length <= 12) {
-    return trimmed;
-  }
-  return `${trimmed.slice(0, 8)}...${trimmed.slice(-4)}`;
 }
 
 export function parseCsvFilter(raw?: string): Set<string> | null {
-  const trimmed = raw?.trim();
-  if (!trimmed || trimmed === "all") {
-    return null;
-  }
-  const values = trimmed
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-  return values.length > 0 ? new Set(values) : null;
-}
-
-export function parseProviderModelMap(raw?: string): Map<string, string> {
-  const entries = new Map<string, string>();
-  for (const token of raw?.split(",") ?? []) {
-    const trimmed = token.trim();
-    if (!trimmed) {
-      continue;
-    }
-    const slash = trimmed.indexOf("/");
-    if (slash <= 0 || slash === trimmed.length - 1) {
-      continue;
-    }
-    entries.set(trimmed.slice(0, slash).trim().toLowerCase(), trimmed);
-  }
-  return entries;
+  return parseLiveCsvFilter(raw, { lowercase: false });
 }
 
 export function resolveConfiguredLiveImageModels(cfg: OpenClawConfig): Map<string, string> {
-  const resolved = new Map<string, string>();
-  const configured = cfg.agents?.defaults?.imageGenerationModel;
-  const add = (value: string | undefined) => {
-    const trimmed = value?.trim();
-    if (!trimmed) {
-      return;
-    }
-    const slash = trimmed.indexOf("/");
-    if (slash <= 0 || slash === trimmed.length - 1) {
-      return;
-    }
-    resolved.set(trimmed.slice(0, slash).trim().toLowerCase(), trimmed);
-  };
-  if (typeof configured === "string") {
-    add(configured);
-    return resolved;
-  }
-  add(configured?.primary);
-  for (const fallback of configured?.fallbacks ?? []) {
-    add(fallback);
-  }
-  return resolved;
+  return resolveConfiguredLiveProviderModels(cfg.agents?.defaults?.mediaModels?.image);
 }
 
 export function resolveLiveImageAuthStore(params: {
   requireProfileKeys: boolean;
   hasLiveKeys: boolean;
-}): AuthProfileStore | undefined {
-  if (params.requireProfileKeys || !params.hasLiveKeys) {
-    return undefined;
-  }
-  return {
-    version: 1,
-    profiles: {},
-  };
+}) {
+  return resolveLiveAuthStore(params);
 }

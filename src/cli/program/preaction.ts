@@ -1,18 +1,24 @@
+// Global Commander pre-action hook: startup presentation, config guard, logging, and plugin preflight.
 import type { Command } from "commander";
+import type { ConfigFileSnapshot } from "../../config/types.js";
 import { setVerbose } from "../../globals.js";
-import { isTruthyEnvValue } from "../../infra/env.js";
-import { routeLogsToStderr } from "../../logging/console.js";
 import type { LogLevel } from "../../logging/levels.js";
-import { loggingState } from "../../logging/state.js";
 import { defaultRuntime } from "../../runtime.js";
-import { getCommandPathWithRootOptions, getVerboseFlag, hasHelpOrVersion } from "../argv.js";
-import { emitCliBanner } from "../banner.js";
+import { resolveCliArgvInvocation } from "../argv-invocation.js";
+import { getVerboseFlag, isHelpOrVersionInvocation } from "../argv.js";
 import { resolveCliName } from "../cli-name.js";
+import {
+  applyCliExecutionStartupPresentation,
+  ensureCliExecutionBootstrap,
+  resolveCliExecutionStartupContext,
+} from "../command-execution-startup.js";
+import { shouldBypassConfigGuardForCommandPath } from "../command-startup-policy.js";
 import {
   resolvePluginInstallInvalidConfigPolicy,
   resolvePluginInstallPreactionRequest,
 } from "../plugin-install-config-policy.js";
 import { isCommandJsonOutputMode } from "./json-mode.js";
+import { isParentDefaultHelpAction } from "./parent-default-help.js";
 
 function setProcessTitleForCommand(actionCommand: Command) {
   let current: Command = actionCommand;
@@ -27,114 +33,99 @@ function setProcessTitleForCommand(actionCommand: Command) {
   process.title = `${cliName}-${name}`;
 }
 
-// Commands that need channel plugins loaded
-const PLUGIN_REQUIRED_COMMANDS = new Set([
-  "message",
-  "channels",
-  "directory",
-  "agents",
-  "configure",
-  "status",
-  "health",
-]);
-const CONFIG_GUARD_BYPASS_COMMANDS = new Set(["backup", "doctor", "completion", "secrets"]);
-let configGuardModulePromise: Promise<typeof import("./config-guard.js")> | undefined;
-let pluginRegistryModulePromise: Promise<typeof import("../plugin-registry.js")> | undefined;
-
-function shouldBypassConfigGuard(commandPath: string[]): boolean {
-  const [primary, secondary] = commandPath;
-  if (!primary) {
-    return false;
-  }
-  if (CONFIG_GUARD_BYPASS_COMMANDS.has(primary)) {
-    return true;
-  }
-  if (primary === "config" && (secondary === "validate" || secondary === "schema")) {
-    return true;
-  }
-  return false;
-}
-
-function loadConfigGuardModule() {
-  configGuardModulePromise ??= import("./config-guard.js");
-  return configGuardModulePromise;
-}
-
-function loadPluginRegistryModule() {
-  pluginRegistryModulePromise ??= import("../plugin-registry.js");
-  return pluginRegistryModulePromise;
-}
-
-function resolvePluginRegistryScope(commandPath: string[]): "channels" | "all" {
-  return commandPath[0] === "status" || commandPath[0] === "health" ? "channels" : "all";
-}
-
-function shouldLoadPluginsForCommand(commandPath: string[], jsonOutputMode: boolean): boolean {
-  const [primary, secondary] = commandPath;
-  if (!primary || !PLUGIN_REQUIRED_COMMANDS.has(primary)) {
-    return false;
-  }
-  if ((primary === "status" || primary === "health") && jsonOutputMode) {
-    return false;
-  }
-  // Setup wizard and channels add should stay manifest-first and load selected plugins on demand.
-  if (primary === "onboard" || (primary === "channels" && secondary === "add")) {
-    return false;
-  }
-  return true;
-}
 function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: string[]): boolean {
   return (
+    commandPath[0] === "update" ||
     resolvePluginInstallInvalidConfigPolicy(
       resolvePluginInstallPreactionRequest({
         actionCommand,
         commandPath,
         argv: process.argv,
       }),
-    ) === "recover-matrix-only"
+    ) === "allow-plugin-recovery"
   );
 }
 
-function getRootCommand(command: Command): Command {
-  let current = command;
+function getActionCommandPath(actionCommand: Command): string[] {
+  const commandPath: string[] = [];
+  let current: Command | null = actionCommand;
   while (current.parent) {
+    commandPath.unshift(current.name());
     current = current.parent;
   }
-  return current;
+  return commandPath;
 }
 
 function getCliLogLevel(actionCommand: Command): LogLevel | undefined {
-  const root = getRootCommand(actionCommand);
-  if (typeof root.getOptionValueSource !== "function") {
+  if (actionCommand.getOptionValueSourceWithGlobals("logLevel") !== "cli") {
     return undefined;
   }
-  if (root.getOptionValueSource("logLevel") !== "cli") {
-    return undefined;
-  }
-  const logLevel = root.opts<Record<string, unknown>>().logLevel;
+  const logLevel = actionCommand.optsWithGlobals<{ logLevel?: unknown }>().logLevel;
   return typeof logLevel === "string" ? (logLevel as LogLevel) : undefined;
 }
 
+function isBareParentDefaultHelpInvocation(actionCommand: Command, argv: string[]): boolean {
+  if (!isParentDefaultHelpAction(actionCommand)) {
+    return false;
+  }
+  const { commandPath } = resolveCliArgvInvocation(argv);
+  const [primary, extra] = commandPath;
+  if (extra !== undefined || !primary) {
+    return false;
+  }
+  return primary === actionCommand.name() || actionCommand.aliases().includes(primary);
+}
+
+function isGuidedConfigAction(actionCommand: Command): boolean {
+  return actionCommand.name() === "config" && !actionCommand.parent?.parent;
+}
+
+function isGuidedConfigCommandPath(commandPath: string[]): boolean {
+  const [primary, secondary, extra] = commandPath;
+  if (primary !== "config" || extra !== undefined) {
+    return false;
+  }
+  return (
+    secondary !== "get" &&
+    secondary !== "set" &&
+    secondary !== "patch" &&
+    secondary !== "unset" &&
+    secondary !== "file" &&
+    secondary !== "schema" &&
+    secondary !== "validate"
+  );
+}
+
+function isGatewayRunAction(actionCommand: Command): boolean {
+  if (actionCommand.name() === "gateway") {
+    return actionCommand.parent?.parent === null;
+  }
+  return (
+    actionCommand.name() === "run" &&
+    actionCommand.parent?.name() === "gateway" &&
+    actionCommand.parent.parent?.parent === null
+  );
+}
+
+/** Register global pre-action bootstrap hooks for every non-help command invocation. */
 export function registerPreActionHooks(program: Command, programVersion: string) {
   program.hook("preAction", async (_thisCommand, actionCommand) => {
     setProcessTitleForCommand(actionCommand);
     const argv = process.argv;
-    if (hasHelpOrVersion(argv)) {
+    if (isHelpOrVersionInvocation(argv) || isBareParentDefaultHelpInvocation(actionCommand, argv)) {
       return;
     }
-    const commandPath = getCommandPathWithRootOptions(argv, 2);
     const jsonOutputMode = isCommandJsonOutputMode(actionCommand, argv);
-    if (jsonOutputMode) {
-      routeLogsToStderr();
-    }
-    const hideBanner =
-      isTruthyEnvValue(process.env.OPENCLAW_HIDE_BANNER) ||
-      commandPath[0] === "update" ||
-      commandPath[0] === "completion" ||
-      (commandPath[0] === "plugins" && commandPath[1] === "update");
-    if (!hideBanner) {
-      emitCliBanner(programVersion);
-    }
+    const { commandPath, startupPolicy } = resolveCliExecutionStartupContext({
+      argv,
+      protocolCommandPath: getActionCommandPath(actionCommand),
+      jsonOutputMode,
+      env: process.env,
+    });
+    await applyCliExecutionStartupPresentation({
+      startupPolicy,
+      version: programVersion,
+    });
     const verbose = getVerboseFlag(argv, { includeDebug: true });
     setVerbose(verbose);
     const cliLogLevel = getCliLogLevel(actionCommand);
@@ -144,31 +135,58 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (!verbose) {
       process.env.NODE_NO_WARNINGS ??= "1";
     }
-    if (shouldBypassConfigGuard(commandPath)) {
+    if (
+      shouldBypassConfigGuardForCommandPath(commandPath) ||
+      isGuidedConfigAction(actionCommand) ||
+      isGuidedConfigCommandPath(commandPath)
+    ) {
       return;
     }
-    const allowInvalid = shouldAllowInvalidConfigForAction(actionCommand, commandPath);
-    const { ensureConfigReady } = await loadConfigGuardModule();
-    await ensureConfigReady({
+    let beforeStateMigrations: ((snapshot?: ConfigFileSnapshot) => Promise<boolean>) | undefined;
+    let skipPristineStartupStateMigrations = false;
+    let skipPristineCoreStateMigrations = false;
+    let allowInvalid = shouldAllowInvalidConfigForAction(actionCommand, commandPath);
+    if (isGatewayRunAction(actionCommand)) {
+      const {
+        prepareGatewayRunBootstrap,
+        recheckGatewayRunBootstrap,
+        wasPreparedGatewayRunCoreStatePristine,
+        wasPreparedGatewayRunStatePristine,
+      } = await import("../gateway-cli/pre-bootstrap.js");
+      const { resolveGatewayRunOptions } = await import("../gateway-cli/run-options.js");
+      const resolvedOptions = resolveGatewayRunOptions(actionCommand.opts(), actionCommand);
+      allowInvalid ||= resolvedOptions.allowUnconfigured === true;
+      const opts = {
+        force: resolvedOptions.force === true,
+        reset: resolvedOptions.reset === true,
+      };
+      const shouldBootstrap = await prepareGatewayRunBootstrap({ opts, runtime: defaultRuntime });
+      if (!shouldBootstrap) {
+        return;
+      }
+      skipPristineStartupStateMigrations = wasPreparedGatewayRunStatePristine();
+      skipPristineCoreStateMigrations = wasPreparedGatewayRunCoreStatePristine();
+      beforeStateMigrations = (snapshot) =>
+        recheckGatewayRunBootstrap({
+          opts,
+          runtime: defaultRuntime,
+          ...(snapshot ? { snapshot } : {}),
+        });
+    }
+    await ensureCliExecutionBootstrap({
       runtime: defaultRuntime,
       commandPath,
-      ...(allowInvalid ? { allowInvalid: true } : {}),
-      ...(jsonOutputMode ? { suppressDoctorStdout: true } : {}),
+      startupPolicy,
+      allowInvalid,
+      ...(beforeStateMigrations ? { beforeStateMigrations } : {}),
+      ...(skipPristineStartupStateMigrations ? { skipPristineStartupStateMigrations: true } : {}),
+      ...(skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),
+      skipConfigGuard: shouldBypassConfigGuardForCommandPath(commandPath),
     });
-    // Load plugins for commands that need channel access.
-    // When --json output is active, temporarily route logs to stderr so plugin
-    // registration messages don't corrupt the JSON payload on stdout.
-    if (shouldLoadPluginsForCommand(commandPath, jsonOutputMode)) {
-      const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
-      const prev = loggingState.forceConsoleToStderr;
-      if (jsonOutputMode) {
-        loggingState.forceConsoleToStderr = true;
-      }
-      try {
-        ensurePluginRegistryLoaded({ scope: resolvePluginRegistryScope(commandPath) });
-      } finally {
-        loggingState.forceConsoleToStderr = prev;
-      }
+    if (beforeStateMigrations) {
+      const { reloadTrustedGatewayRunEnvironment } =
+        await import("../gateway-cli/pre-bootstrap.js");
+      await reloadTrustedGatewayRunEnvironment({ runtime: defaultRuntime });
     }
   });
 }

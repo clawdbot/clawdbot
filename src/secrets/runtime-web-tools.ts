@@ -1,40 +1,73 @@
-import type { OpenClawConfig } from "../config/config.js";
+/** Builds web-tool secret metadata from config, plugins, and provider contracts. */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
-import { listBundledWebSearchPluginIds } from "../plugins/bundled-web-search-ids.js";
-import { resolveBundledWebSearchPluginId } from "../plugins/bundled-web-search-provider-ids.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
 import type {
+  PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
+  WebFetchCredentialResolutionSource,
   WebSearchCredentialResolutionSource,
 } from "../plugins/types.js";
-import { resolveBundledPluginWebSearchProviders } from "../plugins/web-search-providers.js";
-import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
+import { sortWebFetchProvidersForAutoDetect } from "../plugins/web-fetch-providers.shared.js";
+import {
+  resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
+  resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
+} from "../plugins/web-provider-public-artifacts.explicit.js";
 import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
+import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { secretRefKey } from "./ref-contract.js";
+import {
+  describeSecretResolutionError,
+  isProviderScopedSecretResolutionError,
+} from "./resolve-errors.js";
 import { resolveSecretRefValues } from "./resolve.js";
 import {
-  pushInactiveSurfaceWarning,
-  pushWarning,
-  type ResolverContext,
-  type SecretDefaults,
-} from "./runtime-shared.js";
+  associateSecretResolutionErrorOwners,
+  isRetryableSecretDegradationReason,
+  type DegradedSecretOwner,
+  type SecretOwnerRefState,
+} from "./runtime-degraded-state.js";
+import {
+  classifySecretOwnerDegradationState,
+  warnDegradedSecretOwner,
+} from "./runtime-owner-assignments.js";
+import { hasCredentialBearingObjectValue } from "./runtime-secret-scan.js";
+import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
+import { getActiveSecretsRuntimeSnapshot } from "./runtime-state.js";
+import { runtimeWebSecretOwnerId } from "./runtime-web-secret-owner.js";
+import {
+  hasConfiguredSecretRef,
+  isRecord,
+  resolveRuntimeWebProviderSurface,
+  resolveRuntimeWebProviderSelection,
+  type RuntimeWebProviderSelectionResult,
+  type RuntimeWebSecretOwner,
+  type RuntimeWebUnavailableProvider,
+  type SecretResolutionResult,
+} from "./runtime-web-tools.shared.js";
 import type {
   RuntimeWebDiagnostic,
-  RuntimeWebDiagnosticCode,
-  RuntimeWebFetchFirecrawlMetadata,
+  RuntimeWebFetchMetadata,
   RuntimeWebSearchMetadata,
   RuntimeWebToolsMetadata,
 } from "./runtime-web-tools.types.js";
+import { isExpectedResolvedSecretValue } from "./secret-value.js";
 
-type WebSearchProvider = string;
-
-export type {
-  RuntimeWebDiagnostic,
-  RuntimeWebDiagnosticCode,
-  RuntimeWebFetchFirecrawlMetadata,
-  RuntimeWebSearchMetadata,
-  RuntimeWebToolsMetadata,
-};
+const loadRuntimeWebToolsFallbackProviders = createLazyRuntimeSurface(
+  () => import("./runtime-web-tools-fallback.runtime.js"),
+  ({ runtimeWebToolsFallbackProviders }) => runtimeWebToolsFallbackProviders,
+);
+const loadRuntimeWebToolsPublicArtifacts = createLazyRuntimeSurface(
+  () => import("./runtime-web-tools-public-artifacts.runtime.js"),
+  (mod) => mod,
+);
+const loadRuntimeWebToolsManifest = createLazyRuntimeSurface(
+  () => import("./runtime-web-tools-manifest.runtime.js"),
+  (mod) => mod,
+);
 
 type FetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
   ? Web extends { fetch?: infer Fetch }
@@ -42,46 +75,317 @@ type FetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
     : undefined
   : undefined;
 
-type SecretResolutionResult = {
-  value?: string;
-  source: WebSearchCredentialResolutionSource;
-  secretRefConfigured: boolean;
-  unresolvedRefReason?: string;
-  fallbackEnvVar?: string;
-  fallbackUsedAfterRefFailure: boolean;
+type SecretResolutionSource =
+  | WebSearchCredentialResolutionSource
+  | WebFetchCredentialResolutionSource;
+
+function ensureConfigObject(target: Record<string, unknown>, key: string): Record<string, unknown> {
+  const current = target[key];
+  if (isRecord(current)) {
+    return current;
+  }
+  const next: Record<string, unknown> = {};
+  target[key] = next;
+  return next;
+}
+
+type ResolvedRuntimeWebTools = {
+  metadata: RuntimeWebToolsMetadata;
+  degradedOwners: DegradedSecretOwner[];
+  secretOwners: SecretOwnerRefState[];
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+type RuntimeWebProviderFailure = Omit<RuntimeWebUnavailableProvider, "contractDigest"> & {
+  contractDigest?: string;
+};
+type RuntimeWebProviderFailureByRefKey = Map<
+  string,
+  NonNullable<RuntimeWebUnavailableProvider["providerFailure"]>
+>;
+
+function createUnavailableWebProviderOwner(params: {
+  kind: "search" | "fetch";
+  unavailable: Pick<
+    RuntimeWebUnavailableProvider,
+    "providerId" | "path" | "refKey" | "reason" | "providerFailure"
+  >;
+  degradationState?: "cold" | "stale";
+}): DegradedSecretOwner {
+  return {
+    ownerKind: "capability",
+    ownerId: runtimeWebSecretOwnerId(params.kind, params.unavailable.providerId),
+    state: "unavailable",
+    degradationState: params.degradationState ?? "cold",
+    paths: [params.unavailable.path],
+    refKeys: [params.unavailable.refKey],
+    reason: params.unavailable.reason,
+    ...(params.unavailable.providerFailure
+      ? { providerFailures: [params.unavailable.providerFailure] }
+      : {}),
+  };
 }
 
-function normalizeProvider(
-  value: unknown,
-  providers: ReturnType<typeof resolvePluginWebSearchProviders>,
-): WebSearchProvider | undefined {
-  if (typeof value !== "string") {
+function attachWebProviderFailures(
+  unavailableProviders: RuntimeWebProviderFailure[],
+  providerFailuresByRefKey: RuntimeWebProviderFailureByRefKey,
+): void {
+  for (const unavailable of unavailableProviders) {
+    unavailable.providerFailure = providerFailuresByRefKey.get(unavailable.refKey);
+  }
+}
+
+function collectUnavailableWebProviders(params: {
+  kind: "search" | "fetch";
+  result: RuntimeWebProviderSelectionResult;
+  context: ResolverContext;
+  sourceConfig: OpenClawConfig;
+  metadata: RuntimeWebSearchMetadata | RuntimeWebFetchMetadata;
+  degradedOwners: DegradedSecretOwner[];
+}): void {
+  for (const unavailable of params.result.unavailableProviders) {
+    let degradationState = classifySecretOwnerDegradationState({
+      ownerKind: "capability",
+      ownerId: runtimeWebSecretOwnerId(params.kind, unavailable.providerId),
+      refs: [unavailable.ref],
+      config: params.sourceConfig,
+      contractDigest: unavailable.contractDigest,
+    });
+    if (degradationState === "stale") {
+      const active = getActiveSecretsRuntimeSnapshot();
+      const activeOwner = active?.secretOwners?.find(
+        (entry) =>
+          entry.ownerKind === "capability" &&
+          entry.ownerId === runtimeWebSecretOwnerId(params.kind, unavailable.providerId),
+      );
+      const value = activeOwner?.resolvedValues?.find(
+        (entry) => entry.refKey === unavailable.refKey,
+      )?.value;
+      try {
+        if (typeof value !== "string" || !unavailable.restoreResolvedValue) {
+          throw new Error("last-known-good web credential is unavailable");
+        }
+        unavailable.restoreResolvedValue(value);
+        unavailable.resolvedValue = value;
+        const selectedOwner = params.result.secretOwners.find(
+          (entry) =>
+            entry.providerId === unavailable.providerId && entry.refKey === unavailable.refKey,
+        );
+        if (selectedOwner) {
+          selectedOwner.resolvedValue = value;
+        }
+        const activeMetadata =
+          params.kind === "search" ? active?.webTools.search : active?.webTools.fetch;
+        if (!activeMetadata) {
+          throw new Error("last-known-good web metadata is unavailable");
+        }
+        for (const key of Object.keys(params.metadata)) {
+          delete (params.metadata as Record<string, unknown>)[key];
+        }
+        Object.assign(params.metadata, structuredClone(activeMetadata));
+      } catch {
+        degradationState = "cold";
+      }
+    }
+    const owner = createUnavailableWebProviderOwner({
+      kind: params.kind,
+      unavailable,
+      degradationState,
+    });
+    params.degradedOwners.push(owner);
+    warnDegradedSecretOwner(params.context, owner);
+  }
+}
+
+function toWebSecretOwnerRefState(
+  kind: "search" | "fetch",
+  owner: RuntimeWebSecretOwner,
+): SecretOwnerRefState {
+  return {
+    ownerKind: "capability",
+    ownerId: runtimeWebSecretOwnerId(kind, owner.providerId),
+    refKeys: [owner.refKey],
+    contractDigest: owner.contractDigest,
+    ...(owner.resolvedValue
+      ? { resolvedValues: [{ refKey: owner.refKey, value: owner.resolvedValue }] }
+      : {}),
+  };
+}
+
+function associateWebProviderResolutionError(params: {
+  kind: "search" | "fetch";
+  config: OpenClawConfig;
+  error: unknown;
+  unavailableProviders: RuntimeWebProviderFailure[];
+}): void {
+  const failureByRefKey = new Map(
+    params.unavailableProviders.map((unavailable) => [unavailable.refKey, unavailable] as const),
+  );
+  const owners = params.unavailableProviders.map((unavailable) => {
+    const owner = createUnavailableWebProviderOwner({ kind: params.kind, unavailable });
+    return {
+      ...owner,
+      degradationState: classifySecretOwnerDegradationState({
+        ownerKind: owner.ownerKind,
+        ownerId: owner.ownerId,
+        refs: [unavailable.ref],
+        config: params.config,
+        contractDigest: unavailable.contractDigest,
+      }),
+      failureMatched: true,
+      source: "config" as const,
+    };
+  });
+  const ownerIds = new Set(owners.map((owner) => owner.ownerId));
+  const activeCoOwners = (getActiveSecretsRuntimeSnapshot()?.secretOwners ?? []).flatMap(
+    (owner) => {
+      if (
+        owner.ownerKind !== "capability" ||
+        ownerIds.has(owner.ownerId) ||
+        (!owner.ownerId.startsWith("web-search:") && !owner.ownerId.startsWith("web-fetch:"))
+      ) {
+        return [];
+      }
+      const matches = owner.refKeys.flatMap((refKey) => {
+        const unavailable = failureByRefKey.get(refKey);
+        return unavailable ? [unavailable] : [];
+      });
+      const firstMatch = matches[0];
+      if (!firstMatch) {
+        return [];
+      }
+      return [
+        {
+          ownerKind: owner.ownerKind,
+          ownerId: owner.ownerId,
+          state: "unavailable" as const,
+          paths: [],
+          refKeys: [...owner.refKeys],
+          reason: firstMatch.reason,
+          degradationState: classifySecretOwnerDegradationState({
+            ownerKind: owner.ownerKind,
+            ownerId: owner.ownerId,
+            refs: matches.map((match) => match.ref),
+            config: params.config,
+            contractDigest: owner.contractDigest,
+          }),
+          failureMatched: true,
+          source: "config" as const,
+          ...(firstMatch.providerFailure ? { providerFailures: [firstMatch.providerFailure] } : {}),
+        },
+      ];
+    },
+  );
+  associateSecretResolutionErrorOwners(params.error, [...owners, ...activeCoOwners]);
+}
+
+function needsRuntimeWebFetchProviderDiscovery(params: {
+  fetch: FetchConfig;
+  rawProvider: string;
+  hasPluginWebFetchConfig: boolean;
+  defaults: SecretDefaults | undefined;
+}): boolean {
+  if (isRecord(params.fetch) && params.fetch.enabled === false) {
+    return false;
+  }
+  if (params.hasPluginWebFetchConfig) {
+    return true;
+  }
+  if (!isRecord(params.fetch)) {
+    return false;
+  }
+  if (params.rawProvider) {
+    return true;
+  }
+  // Limits-only fetch config must stay on the runtime fast path; credential-shaped values are
+  // the signal that provider discovery and SecretRef resolution are actually needed.
+  return hasCredentialBearingObjectValue(params.fetch, params.defaults);
+}
+
+function hasPluginScopedWebToolConfig(
+  config: OpenClawConfig,
+  key: "webSearch" | "webFetch",
+): boolean {
+  const entries = config.plugins?.entries;
+  if (!entries) {
+    return false;
+  }
+  return Object.values(entries).some((entry) => {
+    if (!isRecord(entry)) {
+      return false;
+    }
+    const pluginConfig = isRecord(entry.config) ? entry.config : undefined;
+    return Boolean(pluginConfig?.[key]);
+  });
+}
+
+function inferSingleBundledPluginScopedWebToolConfigOwner(
+  config: OpenClawConfig,
+  key: "webSearch" | "webFetch",
+): string | undefined {
+  const entries = config.plugins?.entries;
+  if (!entries) {
     return undefined;
   }
-  const normalized = value.trim().toLowerCase();
-  if (providers.some((provider) => provider.id === normalized)) {
-    return normalized;
+  const matches: string[] = [];
+  for (const [pluginId, entry] of Object.entries(entries)) {
+    if (!isRecord(entry) || entry.enabled === false) {
+      continue;
+    }
+    const pluginConfig = isRecord(entry.config) ? entry.config : undefined;
+    if (!isRecord(pluginConfig?.[key])) {
+      continue;
+    }
+    matches.push(pluginId);
+    if (matches.length > 1) {
+      return undefined;
+    }
   }
-  return undefined;
+  return matches[0];
 }
 
-function hasCustomWebSearchPluginRisk(config: OpenClawConfig): boolean {
-  const plugins = config.plugins;
+function inferExactBundledPluginScopedWebToolConfigOwner(params: {
+  config: OpenClawConfig;
+  key: "webSearch" | "webFetch";
+  pluginId: string;
+}): string | undefined {
+  const entry = params.config.plugins?.entries?.[params.pluginId];
+  if (!isRecord(entry) || entry.enabled === false) {
+    return undefined;
+  }
+  const pluginConfig = isRecord(entry.config) ? entry.config : undefined;
+  return isRecord(pluginConfig?.[params.key]) ? params.pluginId : undefined;
+}
+
+type WebProviderContract = "webSearchProviders" | "webFetchProviders";
+
+async function hasCustomWebProviderPluginRisk(params: {
+  contract: WebProviderContract;
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): Promise<boolean> {
+  const installRecords = loadInstalledPluginIndexInstallRecordsSync({ env: params.env });
+  if (Object.keys(installRecords).length > 0) {
+    return true;
+  }
+
+  const plugins = params.config.plugins;
   if (!plugins) {
     return false;
   }
   if (Array.isArray(plugins.load?.paths) && plugins.load.paths.length > 0) {
     return true;
   }
-  if (plugins.installs && Object.keys(plugins.installs).length > 0) {
-    return true;
-  }
-
-  const bundledPluginIds = new Set<string>(listBundledWebSearchPluginIds());
+  const { resolveManifestContractPluginIds } = await loadRuntimeWebToolsManifest();
+  const bundledPluginIds = new Set<string>(
+    resolveManifestContractPluginIds({
+      contract: params.contract,
+      origin: "bundled",
+      config: params.config,
+      env: params.env,
+    }),
+  );
+  // Public artifacts are complete only for bundled providers. Any configured non-bundled
+  // plugin surface has to fall back to manifest/runtime discovery to avoid hiding providers.
   const hasNonBundledPluginId = (pluginId: string) => !bundledPluginIds.has(pluginId.trim());
   if (Array.isArray(plugins.allow) && plugins.allow.some(hasNonBundledPluginId)) {
     return true;
@@ -109,28 +413,19 @@ function readNonEmptyEnvValue(
   return {};
 }
 
-function buildUnresolvedReason(params: {
-  path: string;
-  kind: "unresolved" | "non-string" | "empty";
-  refLabel: string;
-}): string {
-  if (params.kind === "non-string") {
-    return `${params.path} SecretRef resolved to a non-string value.`;
-  }
-  if (params.kind === "empty") {
-    return `${params.path} SecretRef resolved to an empty value.`;
-  }
-  return `${params.path} SecretRef is unresolved (${params.refLabel}).`;
-}
-
 async function resolveSecretInputWithEnvFallback(params: {
+  kind: "search" | "fetch";
+  providerId: string;
   sourceConfig: OpenClawConfig;
   context: ResolverContext;
   defaults: SecretDefaults | undefined;
   value: unknown;
   path: string;
   envVars: string[];
-}): Promise<SecretResolutionResult> {
+  contractDigest: string;
+  providerFailuresByRefKey: RuntimeWebProviderFailureByRefKey;
+  restrictEnvRefsToEnvVars?: boolean;
+}): Promise<SecretResolutionResult<SecretResolutionSource>> {
   const { ref } = resolveSecretInputRef({
     value: params.value,
     defaults: params.defaults,
@@ -143,7 +438,6 @@ async function resolveSecretInputWithEnvFallback(params: {
         value: configValue,
         source: "config",
         secretRefConfigured: false,
-        fallbackUsedAfterRefFailure: false,
       };
     }
     const fallback = readNonEmptyEnvValue(params.context.env, params.envVars);
@@ -153,49 +447,84 @@ async function resolveSecretInputWithEnvFallback(params: {
         source: "env",
         fallbackEnvVar: fallback.envVar,
         secretRefConfigured: false,
-        fallbackUsedAfterRefFailure: false,
       };
     }
     return {
       source: "missing",
       secretRefConfigured: false,
-      fallbackUsedAfterRefFailure: false,
     };
   }
 
-  const refLabel = `${ref.source}:${ref.provider}:${ref.id}`;
   let resolvedFromRef: string | undefined;
-  let unresolvedRefReason: string | undefined;
+  let unresolvedRefReason: SecretResolutionResult<SecretResolutionSource>["unresolvedRefReason"];
 
-  try {
-    const resolved = await resolveSecretRefValues([ref], {
-      config: params.sourceConfig,
-      env: params.context.env,
-      cache: params.context.cache,
-    });
-    const resolvedValue = resolved.get(secretRefKey(ref));
-    if (typeof resolvedValue !== "string") {
-      unresolvedRefReason = buildUnresolvedReason({
-        path: params.path,
-        kind: "non-string",
-        refLabel,
+  if (
+    params.restrictEnvRefsToEnvVars === true &&
+    ref.source === "env" &&
+    !params.envVars.includes(ref.id)
+  ) {
+    throw new Error(`${params.path} SecretRef is not allowed for this provider.`);
+  } else {
+    try {
+      const resolved = await resolveSecretRefValues([ref], {
+        config: params.sourceConfig,
+        env: params.context.env,
+        cache: params.context.cache,
+        manifestRegistry: params.context.manifestRegistry,
       });
-    } else {
+      const resolvedValue = resolved.get(secretRefKey(ref));
+      if (!isExpectedResolvedSecretValue(resolvedValue, "string")) {
+        const error = new Error(`${params.path} resolved to a non-string or empty value.`);
+        associateWebProviderResolutionError({
+          kind: params.kind,
+          config: params.sourceConfig,
+          error,
+          unavailableProviders: [
+            {
+              providerId: params.providerId,
+              path: params.path,
+              ref,
+              refKey: secretRefKey(ref),
+              reason: "resolved secret value was invalid",
+              contractDigest: params.contractDigest,
+            },
+          ],
+        });
+        throw error;
+      }
       resolvedFromRef = normalizeSecretInput(resolvedValue);
-      if (!resolvedFromRef) {
-        unresolvedRefReason = buildUnresolvedReason({
-          path: params.path,
-          kind: "empty",
-          refLabel,
+    } catch (error) {
+      const reason = describeSecretResolutionError(error);
+      if (!reason || !isRetryableSecretDegradationReason(reason)) {
+        // Invalid provider config or resolved values are structural failures. They must fail
+        // activation before publishing an owner degradation that could imply retryability.
+        if (reason) {
+          associateWebProviderResolutionError({
+            kind: params.kind,
+            config: params.sourceConfig,
+            error,
+            unavailableProviders: [
+              {
+                providerId: params.providerId,
+                path: params.path,
+                ref,
+                refKey: secretRefKey(ref),
+                reason,
+                contractDigest: params.contractDigest,
+              },
+            ],
+          });
+        }
+        throw error;
+      }
+      unresolvedRefReason = reason;
+      if (isProviderScopedSecretResolutionError(error)) {
+        params.providerFailuresByRefKey.set(secretRefKey(ref), {
+          source: error.source,
+          provider: error.provider,
         });
       }
     }
-  } catch {
-    unresolvedRefReason = buildUnresolvedReason({
-      path: params.path,
-      kind: "unresolved",
-      refLabel,
-    });
   }
 
   if (resolvedFromRef) {
@@ -203,38 +532,18 @@ async function resolveSecretInputWithEnvFallback(params: {
       value: resolvedFromRef,
       source: "secretRef",
       secretRefConfigured: true,
-      fallbackUsedAfterRefFailure: false,
-    };
-  }
-
-  const fallback = readNonEmptyEnvValue(params.context.env, params.envVars);
-  if (fallback.value) {
-    return {
-      value: fallback.value,
-      source: "env",
-      fallbackEnvVar: fallback.envVar,
-      unresolvedRefReason,
-      secretRefConfigured: true,
-      fallbackUsedAfterRefFailure: true,
+      secretRef: ref,
+      secretRefKey: secretRefKey(ref),
     };
   }
 
   return {
     source: "missing",
+    secretRef: ref,
+    secretRefKey: secretRefKey(ref),
     unresolvedRefReason,
     secretRefConfigured: true,
-    fallbackUsedAfterRefFailure: false,
   };
-}
-
-function ensureObject(target: Record<string, unknown>, key: string): Record<string, unknown> {
-  const current = target[key];
-  if (isRecord(current)) {
-    return current;
-  }
-  const next: Record<string, unknown> = {};
-  target[key] = next;
-  return next;
 }
 
 function setResolvedWebSearchApiKey(params: {
@@ -242,28 +551,137 @@ function setResolvedWebSearchApiKey(params: {
   provider: PluginWebSearchProviderEntry;
   value: string;
 }): void {
-  const tools = ensureObject(params.resolvedConfig as Record<string, unknown>, "tools");
-  const web = ensureObject(tools, "web");
-  const search = ensureObject(web, "search");
   if (params.provider.setConfiguredCredentialValue) {
     params.provider.setConfiguredCredentialValue(params.resolvedConfig, params.value);
+    return;
   }
+  const tools = ensureConfigObject(params.resolvedConfig as Record<string, unknown>, "tools");
+  const web = ensureConfigObject(tools, "web");
+  const search = ensureConfigObject(web, "search");
   params.provider.setCredentialValue(search, params.value);
 }
 
-function setResolvedFirecrawlApiKey(params: {
-  resolvedConfig: OpenClawConfig;
-  value: string;
-}): void {
-  const tools = ensureObject(params.resolvedConfig as Record<string, unknown>, "tools");
-  const web = ensureObject(tools, "web");
-  const fetch = ensureObject(web, "fetch");
-  const firecrawl = ensureObject(fetch, "firecrawl");
-  firecrawl.apiKey = params.value;
+async function resolveBundledWebSearchProviders(params: {
+  sourceConfig: OpenClawConfig;
+  context: ResolverContext;
+  configuredBundledPluginId?: string;
+  onlyPluginIds?: readonly string[];
+  hasCustomWebSearchPluginRisk: boolean;
+}): Promise<PluginWebSearchProviderEntry[]> {
+  const env = { ...process.env, ...params.context.env };
+  const onlyPluginIds =
+    params.configuredBundledPluginId !== undefined
+      ? [params.configuredBundledPluginId]
+      : params.onlyPluginIds && params.onlyPluginIds.length > 0
+        ? sortUniqueStrings(params.onlyPluginIds)
+        : undefined;
+  // Narrow plugin hints can use explicit public artifacts first; broad custom-plugin risk still
+  // routes through runtime discovery because installed or path-loaded providers may participate.
+  if (onlyPluginIds && onlyPluginIds.length > 0) {
+    const bundled = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({ onlyPluginIds });
+    if (bundled && bundled.length > 0) {
+      return bundled;
+    }
+    const { resolvePluginWebSearchProviders } = await loadRuntimeWebToolsFallbackProviders();
+    return resolvePluginWebSearchProviders({
+      config: params.sourceConfig,
+      env,
+      onlyPluginIds,
+      origin: "bundled",
+    });
+  }
+  if (!params.hasCustomWebSearchPluginRisk) {
+    const { resolveBundledWebSearchProvidersFromPublicArtifacts } =
+      await loadRuntimeWebToolsPublicArtifacts();
+    const bundled = resolveBundledWebSearchProvidersFromPublicArtifacts({
+      config: params.sourceConfig,
+      env,
+    });
+    if (bundled && bundled.length > 0) {
+      return bundled;
+    }
+    const { resolvePluginWebSearchProviders } = await loadRuntimeWebToolsFallbackProviders();
+    return resolvePluginWebSearchProviders({
+      config: params.sourceConfig,
+      env,
+      origin: "bundled",
+    });
+  }
+  const { resolvePluginWebSearchProviders } = await loadRuntimeWebToolsFallbackProviders();
+  return resolvePluginWebSearchProviders({
+    config: params.sourceConfig,
+    env,
+  });
 }
 
-function keyPathForProvider(provider: PluginWebSearchProviderEntry): string {
-  return provider.credentialPath;
+async function resolveBundledWebFetchProviders(params: {
+  sourceConfig: OpenClawConfig;
+  context: ResolverContext;
+  configuredBundledPluginId?: string;
+  hasCustomWebFetchPluginRisk: boolean;
+}): Promise<PluginWebFetchProviderEntry[]> {
+  const env = { ...process.env, ...params.context.env };
+  // Web fetch has no keyless auto-detect fallback; a configured bundled owner can be resolved
+  // directly without loading every provider manifest.
+  if (params.configuredBundledPluginId) {
+    const bundled = resolveBundledExplicitWebFetchProvidersFromPublicArtifacts({
+      onlyPluginIds: [params.configuredBundledPluginId],
+    });
+    if (bundled && bundled.length > 0) {
+      return bundled;
+    }
+    const { resolvePluginWebFetchProviders } = await loadRuntimeWebToolsFallbackProviders();
+    return resolvePluginWebFetchProviders({
+      config: params.sourceConfig,
+      env,
+      onlyPluginIds: [params.configuredBundledPluginId],
+      origin: "bundled",
+    });
+  }
+  if (!params.hasCustomWebFetchPluginRisk) {
+    const { resolveBundledWebFetchProvidersFromPublicArtifacts } =
+      await loadRuntimeWebToolsPublicArtifacts();
+    const bundled = resolveBundledWebFetchProvidersFromPublicArtifacts({
+      config: params.sourceConfig,
+      env,
+    });
+    if (bundled && bundled.length > 0) {
+      return bundled;
+    }
+    const { resolvePluginWebFetchProviders } = await loadRuntimeWebToolsFallbackProviders();
+    return resolvePluginWebFetchProviders({
+      config: params.sourceConfig,
+      env,
+      origin: "bundled",
+    });
+  }
+  const { resolvePluginWebFetchProviders } = await loadRuntimeWebToolsFallbackProviders();
+  return resolvePluginWebFetchProviders({
+    config: params.sourceConfig,
+    env,
+    // Runtime credential resolution may load only bundled providers or verified
+    // official installs. Arbitrary external providers must not gain SecretRef access.
+    sandboxed: true,
+  });
+}
+
+function readConfiguredProviderCredential(params: {
+  provider: PluginWebSearchProviderEntry;
+  config: OpenClawConfig;
+  search: Record<string, unknown> | undefined;
+}): unknown {
+  return (
+    params.provider.getConfiguredCredentialValue?.(params.config) ??
+    params.provider.getCredentialValue(params.search)
+  );
+}
+
+function readConfiguredProviderCredentialFallback(params: {
+  provider: PluginWebSearchProviderEntry;
+  config: OpenClawConfig;
+  search: Record<string, unknown> | undefined;
+}): { path: string; value: unknown } | undefined {
+  return params.provider.getConfiguredCredentialFallback?.(params.config);
 }
 
 function inactivePathsForProvider(provider: PluginWebSearchProviderEntry): string[] {
@@ -275,234 +693,246 @@ function inactivePathsForProvider(provider: PluginWebSearchProviderEntry): strin
     : [provider.credentialPath];
 }
 
-function hasConfiguredSecretRef(value: unknown, defaults: SecretDefaults | undefined): boolean {
-  return Boolean(
-    resolveSecretInputRef({
-      value,
-      defaults,
-    }).ref,
+function setResolvedWebFetchApiKey(params: {
+  resolvedConfig: OpenClawConfig;
+  provider: PluginWebFetchProviderEntry;
+  value: string;
+}): void {
+  if (params.provider.setConfiguredCredentialValue) {
+    params.provider.setConfiguredCredentialValue(params.resolvedConfig, params.value);
+    return;
+  }
+  const tools = ensureConfigObject(params.resolvedConfig as Record<string, unknown>, "tools");
+  const web = ensureConfigObject(tools, "web");
+  const fetch = ensureConfigObject(web, "fetch");
+  params.provider.setCredentialValue(fetch, params.value);
+}
+
+function readConfiguredFetchProviderCredential(params: {
+  provider: PluginWebFetchProviderEntry;
+  config: OpenClawConfig;
+  fetch: Record<string, unknown> | undefined;
+}): unknown {
+  return (
+    params.provider.getConfiguredCredentialValue?.(params.config) ??
+    params.provider.getCredentialValue(params.fetch)
   );
 }
 
+function readConfiguredFetchProviderCredentialFallback(params: {
+  provider: PluginWebFetchProviderEntry;
+  config: OpenClawConfig;
+  fetch: Record<string, unknown> | undefined;
+}): { path: string; value: unknown } | undefined {
+  return params.provider.getConfiguredCredentialFallback?.(params.config);
+}
+
+function inactivePathsForFetchProvider(provider: PluginWebFetchProviderEntry): string[] {
+  return provider.inactiveSecretPaths?.length
+    ? provider.inactiveSecretPaths
+    : provider.credentialPath
+      ? [provider.credentialPath]
+      : [];
+}
+
+/**
+ * Resolves runtime web search/fetch provider metadata and writes selected credentials into a
+ * cloned runtime config without mutating the source config.
+ */
+/** Resolves web search/fetch secret metadata from config, plugins, and fallback runtime providers. */
 export async function resolveRuntimeWebTools(params: {
   sourceConfig: OpenClawConfig;
   resolvedConfig: OpenClawConfig;
   context: ResolverContext;
-}): Promise<RuntimeWebToolsMetadata> {
+  allowUnavailableSecretOwners?: boolean;
+}): Promise<ResolvedRuntimeWebTools> {
   const defaults = params.sourceConfig.secrets?.defaults;
   const diagnostics: RuntimeWebDiagnostic[] = [];
+  const degradedOwners: DegradedSecretOwner[] = [];
+  const secretOwners: SecretOwnerRefState[] = [];
+  const providerFailuresByRefKey: RuntimeWebProviderFailureByRefKey = new Map();
+  const finish = (metadata: RuntimeWebToolsMetadata): ResolvedRuntimeWebTools => ({
+    metadata,
+    degradedOwners,
+    secretOwners,
+  });
+  const env = { ...process.env, ...params.context.env };
 
-  const tools = isRecord(params.sourceConfig.tools) ? params.sourceConfig.tools : undefined;
-  const web = isRecord(tools?.web) ? tools.web : undefined;
-  const search = isRecord(web?.search) ? web.search : undefined;
-  const rawProvider =
-    typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
-  const configuredBundledPluginId = resolveBundledWebSearchPluginId(rawProvider);
-
+  const sourceTools = isRecord(params.sourceConfig.tools) ? params.sourceConfig.tools : undefined;
+  const sourceWeb = isRecord(sourceTools?.web) ? sourceTools.web : undefined;
+  let hasCustomWebSearchRisk: Promise<boolean> | undefined;
+  const getHasCustomWebSearchRisk = (): Promise<boolean> => {
+    hasCustomWebSearchRisk ??= hasCustomWebProviderPluginRisk({
+      contract: "webSearchProviders",
+      config: params.sourceConfig,
+      env,
+    });
+    return hasCustomWebSearchRisk;
+  };
+  let hasCustomWebFetchRisk: Promise<boolean> | undefined;
+  const getHasCustomWebFetchRisk = (): Promise<boolean> => {
+    hasCustomWebFetchRisk ??= hasCustomWebProviderPluginRisk({
+      contract: "webFetchProviders",
+      config: params.sourceConfig,
+      env,
+    });
+    return hasCustomWebFetchRisk;
+  };
+  const hasPluginWebSearchConfig = hasPluginScopedWebToolConfig(params.sourceConfig, "webSearch");
+  const hasPluginWebFetchConfig = hasPluginScopedWebToolConfig(params.sourceConfig, "webFetch");
+  if (!sourceWeb && !hasPluginWebSearchConfig && !hasPluginWebFetchConfig) {
+    return finish({
+      search: {
+        providerSource: "none",
+        diagnostics: [],
+      },
+      fetch: {
+        providerSource: "none",
+        diagnostics: [],
+      },
+      diagnostics,
+    });
+  }
+  const search = isRecord(sourceWeb?.search) ? sourceWeb.search : undefined;
+  const fetch = isRecord(sourceWeb?.fetch) ? (sourceWeb.fetch as FetchConfig) : undefined;
+  if (!search && !fetch && !hasPluginWebSearchConfig && !hasPluginWebFetchConfig) {
+    return finish({
+      search: {
+        providerSource: "none",
+        diagnostics: [],
+      },
+      fetch: {
+        providerSource: "none",
+        diagnostics: [],
+      },
+      diagnostics,
+    });
+  }
+  const rawProvider = normalizeLowercaseStringOrEmpty(search?.provider);
+  let configuredBundledWebSearchPluginIdHint: string | undefined;
+  if (hasPluginWebSearchConfig && !(await getHasCustomWebSearchRisk())) {
+    if (rawProvider) {
+      configuredBundledWebSearchPluginIdHint = inferExactBundledPluginScopedWebToolConfigOwner({
+        config: params.sourceConfig,
+        key: "webSearch",
+        pluginId: rawProvider,
+      });
+    }
+    configuredBundledWebSearchPluginIdHint ??= inferSingleBundledPluginScopedWebToolConfigOwner(
+      params.sourceConfig,
+      "webSearch",
+    );
+  }
   const searchMetadata: RuntimeWebSearchMetadata = {
     providerSource: "none",
     diagnostics: [],
   };
-
-  const searchConfigured = Boolean(search);
-  const searchEnabled = searchConfigured && search?.enabled !== false;
-  const providers = sortWebSearchProvidersForAutoDetect(
-    searchConfigured
-      ? configuredBundledPluginId
-        ? resolveBundledPluginWebSearchProviders({
-            config: params.sourceConfig,
-            env: { ...process.env, ...params.context.env },
-            bundledAllowlistCompat: true,
-            onlyPluginIds: [configuredBundledPluginId],
-          })
-        : !hasCustomWebSearchPluginRisk(params.sourceConfig)
-          ? resolveBundledPluginWebSearchProviders({
-              config: params.sourceConfig,
-              env: { ...process.env, ...params.context.env },
-              bundledAllowlistCompat: true,
-            })
-          : resolvePluginWebSearchProviders({
-              config: params.sourceConfig,
-              env: { ...process.env, ...params.context.env },
-              bundledAllowlistCompat: true,
-            })
-      : [],
-  );
-  const configuredProvider = normalizeProvider(rawProvider, providers);
-
-  if (rawProvider && !configuredProvider) {
-    const diagnostic: RuntimeWebDiagnostic = {
-      code: "WEB_SEARCH_PROVIDER_INVALID_AUTODETECT",
-      message: `tools.web.search.provider is "${rawProvider}". Falling back to auto-detect precedence.`,
-      path: "tools.web.search.provider",
-    };
-    diagnostics.push(diagnostic);
-    searchMetadata.diagnostics.push(diagnostic);
-    pushWarning(params.context, {
-      code: "WEB_SEARCH_PROVIDER_INVALID_AUTODETECT",
-      path: "tools.web.search.provider",
-      message: diagnostic.message,
-    });
-  }
-
-  if (configuredProvider) {
-    searchMetadata.providerConfigured = configuredProvider;
-    searchMetadata.providerSource = "configured";
-  }
-
-  if (searchEnabled) {
-    const candidates = configuredProvider
-      ? providers.filter((provider) => provider.id === configuredProvider)
-      : providers;
-    const unresolvedWithoutFallback: Array<{
-      provider: WebSearchProvider;
-      path: string;
-      reason: string;
-    }> = [];
-
-    let selectedProvider: WebSearchProvider | undefined;
-    let selectedResolution: SecretResolutionResult | undefined;
-    let keylessFallbackProvider: PluginWebSearchProviderEntry | undefined;
-
-    for (const provider of candidates) {
-      if (provider.requiresCredential === false) {
-        if (!keylessFallbackProvider) {
-          keylessFallbackProvider = provider;
-        }
-        if (configuredProvider) {
-          selectedProvider = provider.id;
-          break;
-        }
-        continue;
-      }
-      const path = keyPathForProvider(provider);
-      const value =
-        provider.getConfiguredCredentialValue?.(params.sourceConfig) ??
-        provider.getCredentialValue(search);
-      const resolution = await resolveSecretInputWithEnvFallback({
-        sourceConfig: params.sourceConfig,
-        context: params.context,
-        defaults,
-        value,
-        path,
-        envVars: provider.envVars,
-      });
-
-      if (resolution.secretRefConfigured && resolution.fallbackUsedAfterRefFailure) {
-        const diagnostic: RuntimeWebDiagnostic = {
-          code: "WEB_SEARCH_KEY_UNRESOLVED_FALLBACK_USED",
-          message:
-            `${path} SecretRef could not be resolved; using ${resolution.fallbackEnvVar ?? "env fallback"}. ` +
-            (resolution.unresolvedRefReason ?? "").trim(),
-          path,
-        };
-        diagnostics.push(diagnostic);
-        searchMetadata.diagnostics.push(diagnostic);
-        pushWarning(params.context, {
-          code: "WEB_SEARCH_KEY_UNRESOLVED_FALLBACK_USED",
-          path,
-          message: diagnostic.message,
-        });
-      }
-
-      if (resolution.secretRefConfigured && !resolution.value && resolution.unresolvedRefReason) {
-        unresolvedWithoutFallback.push({
-          provider: provider.id,
-          path,
-          reason: resolution.unresolvedRefReason,
-        });
-      }
-
-      if (configuredProvider) {
-        selectedProvider = provider.id;
-        selectedResolution = resolution;
-        if (resolution.value) {
-          setResolvedWebSearchApiKey({
-            resolvedConfig: params.resolvedConfig,
-            provider,
-            value: resolution.value,
-          });
-        }
-        break;
-      }
-
-      if (resolution.value) {
-        selectedProvider = provider.id;
-        selectedResolution = resolution;
-        setResolvedWebSearchApiKey({
-          resolvedConfig: params.resolvedConfig,
+  if (search || hasPluginWebSearchConfig) {
+    const searchSurface = await resolveRuntimeWebProviderSurface({
+      contract: "webSearchProviders",
+      rawProvider,
+      providerPath: "tools.web.search.provider",
+      toolConfig: search,
+      diagnostics,
+      metadataDiagnostics: searchMetadata.diagnostics,
+      invalidAutoDetectCode: "WEB_SEARCH_PROVIDER_INVALID_AUTODETECT",
+      sourceConfig: params.sourceConfig,
+      context: params.context,
+      configuredBundledPluginIdHint: configuredBundledWebSearchPluginIdHint,
+      resolveProviders: async ({ configuredBundledPluginId }) =>
+        resolveBundledWebSearchProviders({
+          sourceConfig: params.sourceConfig,
+          context: params.context,
+          configuredBundledPluginId,
+          hasCustomWebSearchPluginRisk: await getHasCustomWebSearchRisk(),
+        }),
+      sortProviders: sortWebSearchProvidersForAutoDetect,
+      readConfiguredCredential: ({ provider, config, toolConfig }) =>
+        readConfiguredProviderCredential({
           provider,
-          value: resolution.value,
+          config,
+          search: toolConfig,
+        }),
+      readConfiguredCredentialFallback: ({ provider, config, toolConfig }) =>
+        readConfiguredProviderCredentialFallback({
+          provider,
+          config,
+          search: toolConfig,
+        }),
+      ignoreKeylessProvidersForConfiguredSurface: true,
+      emptyProvidersWhenSurfaceMissing: true,
+      normalizeConfiguredProviderAgainstActiveProviders: true,
+    });
+
+    const searchSelection = await resolveRuntimeWebProviderSelection({
+      scopePath: "tools.web.search",
+      toolConfig: search,
+      enabled: searchSurface.enabled,
+      providers: searchSurface.providers,
+      configuredProvider: searchSurface.configuredProvider,
+      metadata: searchMetadata,
+      diagnostics,
+      sourceConfig: params.sourceConfig,
+      resolvedConfig: params.resolvedConfig,
+      context: params.context,
+      defaults,
+      allowKeylessAutoSelect: false,
+      deferKeylessFallback: true,
+      allowUnavailableProviders: params.allowUnavailableSecretOwners,
+      onUnavailableProviders: (error) => {
+        attachWebProviderFailures(error.unavailableProviders, providerFailuresByRefKey);
+        associateWebProviderResolutionError({
+          kind: "search",
+          config: params.sourceConfig,
+          error,
+          unavailableProviders: error.unavailableProviders,
         });
-        break;
-      }
-    }
-
-    if (!selectedProvider && keylessFallbackProvider) {
-      selectedProvider = keylessFallbackProvider.id;
-      selectedResolution = {
-        source: "missing",
-        secretRefConfigured: false,
-        fallbackUsedAfterRefFailure: false,
-      };
-    }
-
-    const failUnresolvedSearchNoFallback = (unresolved: { path: string; reason: string }) => {
-      const diagnostic: RuntimeWebDiagnostic = {
-        code: "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
-        message: unresolved.reason,
-        path: unresolved.path,
-      };
-      diagnostics.push(diagnostic);
-      searchMetadata.diagnostics.push(diagnostic);
-      pushWarning(params.context, {
-        code: "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
-        path: unresolved.path,
-        message: unresolved.reason,
-      });
-      throw new Error(`[WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK] ${unresolved.reason}`);
-    };
-
-    if (configuredProvider) {
-      const unresolved = unresolvedWithoutFallback[0];
-      if (unresolved) {
-        failUnresolvedSearchNoFallback(unresolved);
-      }
-    } else {
-      if (!selectedProvider && unresolvedWithoutFallback.length > 0) {
-        failUnresolvedSearchNoFallback(unresolvedWithoutFallback[0]);
-      }
-
-      if (selectedProvider) {
-        const selectedProviderEntry = providers.find((entry) => entry.id === selectedProvider);
-        const selectedDetails =
-          selectedProviderEntry?.requiresCredential === false
-            ? `tools.web.search auto-detected keyless provider "${selectedProvider}" as the default fallback.`
-            : `tools.web.search auto-detected provider "${selectedProvider}" from available credentials.`;
-        const diagnostic: RuntimeWebDiagnostic = {
-          code: "WEB_SEARCH_AUTODETECT_SELECTED",
-          message: selectedDetails,
-          path: "tools.web.search.provider",
-        };
-        diagnostics.push(diagnostic);
-        searchMetadata.diagnostics.push(diagnostic);
-      }
-    }
-
-    if (selectedProvider) {
-      searchMetadata.selectedProvider = selectedProvider;
-      searchMetadata.selectedProviderKeySource = selectedResolution?.source;
-      if (!configuredProvider) {
-        searchMetadata.providerSource = "auto-detect";
-      }
-      const provider = providers.find((entry) => entry.id === selectedProvider);
-      if (provider?.resolveRuntimeMetadata) {
+      },
+      noFallbackCode: "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
+      autoDetectSelectedCode: "WEB_SEARCH_AUTODETECT_SELECTED",
+      readConfiguredCredential: ({ provider, config, toolConfig }) =>
+        readConfiguredProviderCredential({
+          provider,
+          config,
+          search: toolConfig,
+        }),
+      readConfiguredCredentialFallback: ({ provider, config, toolConfig }) =>
+        readConfiguredProviderCredentialFallback({
+          provider,
+          config,
+          search: toolConfig,
+        }),
+      resolveSecretInput: ({ providerId, value, path, envVars, contractDigest }) =>
+        resolveSecretInputWithEnvFallback({
+          kind: "search",
+          providerId,
+          sourceConfig: params.sourceConfig,
+          context: params.context,
+          defaults,
+          value,
+          path,
+          envVars,
+          contractDigest,
+          providerFailuresByRefKey,
+        }),
+      setResolvedCredential: ({ resolvedConfig, provider, value }) =>
+        setResolvedWebSearchApiKey({
+          resolvedConfig,
+          provider,
+          value,
+        }),
+      inactivePathsForProvider,
+      hasConfiguredSecretRef,
+      mergeRuntimeMetadata: async ({ provider, metadata, toolConfig, selectedResolution }) => {
+        if (!provider.resolveRuntimeMetadata) {
+          return;
+        }
         Object.assign(
-          searchMetadata,
+          metadata,
           await provider.resolveRuntimeMetadata({
             config: params.sourceConfig,
-            searchConfig: search,
-            runtimeMetadata: searchMetadata,
+            searchConfig: toolConfig,
+            runtimeMetadata: metadata,
             resolvedCredential: selectedResolution
               ? {
                   value: selectedResolution.value,
@@ -512,182 +942,165 @@ export async function resolveRuntimeWebTools(params: {
               : undefined,
           }),
         );
-      }
+      },
+    });
+    attachWebProviderFailures(searchSelection.unavailableProviders, providerFailuresByRefKey);
+    collectUnavailableWebProviders({
+      kind: "search",
+      result: searchSelection,
+      context: params.context,
+      sourceConfig: params.sourceConfig,
+      metadata: searchMetadata,
+      degradedOwners,
+    });
+    for (const owner of searchSelection.secretOwners) {
+      secretOwners.push(toWebSecretOwnerRefState("search", owner));
     }
   }
 
-  if (searchEnabled && !configuredProvider && searchMetadata.selectedProvider) {
-    for (const provider of providers) {
-      if (provider.id === searchMetadata.selectedProvider) {
-        continue;
-      }
-      const value =
-        provider.getConfiguredCredentialValue?.(params.sourceConfig) ??
-        provider.getCredentialValue(search);
-      if (!hasConfiguredSecretRef(value, defaults)) {
-        continue;
-      }
-      for (const path of inactivePathsForProvider(provider)) {
-        pushInactiveSurfaceWarning({
-          context: params.context,
-          path,
-          details: `tools.web.search auto-detected provider is "${searchMetadata.selectedProvider}".`,
-        });
-      }
-    }
-  } else if (search && !searchEnabled) {
-    for (const provider of providers) {
-      const value =
-        provider.getConfiguredCredentialValue?.(params.sourceConfig) ??
-        provider.getCredentialValue(search);
-      if (!hasConfiguredSecretRef(value, defaults)) {
-        continue;
-      }
-      for (const path of inactivePathsForProvider(provider)) {
-        pushInactiveSurfaceWarning({
-          context: params.context,
-          path,
-          details: "tools.web.search is disabled.",
-        });
-      }
-    }
-  }
-
-  if (searchEnabled && search && configuredProvider) {
-    for (const provider of providers) {
-      if (provider.id === configuredProvider) {
-        continue;
-      }
-      const value =
-        provider.getConfiguredCredentialValue?.(params.sourceConfig) ??
-        provider.getCredentialValue(search);
-      if (!hasConfiguredSecretRef(value, defaults)) {
-        continue;
-      }
-      for (const path of inactivePathsForProvider(provider)) {
-        pushInactiveSurfaceWarning({
-          context: params.context,
-          path,
-          details: `tools.web.search.provider is "${configuredProvider}".`,
-        });
-      }
-    }
-  }
-
-  const fetch = isRecord(web?.fetch) ? (web.fetch as FetchConfig) : undefined;
-  const firecrawl = isRecord(fetch?.firecrawl) ? fetch.firecrawl : undefined;
-  const fetchEnabled = fetch?.enabled !== false;
-  const firecrawlEnabled = firecrawl?.enabled !== false;
-  const firecrawlActive = Boolean(fetchEnabled && firecrawlEnabled);
-  const firecrawlPath = "tools.web.fetch.firecrawl.apiKey";
-  let firecrawlResolution: SecretResolutionResult = {
-    source: "missing",
-    secretRefConfigured: false,
-    fallbackUsedAfterRefFailure: false,
+  const rawFetchProvider = normalizeLowercaseStringOrEmpty(fetch?.provider);
+  const fetchMetadata: RuntimeWebFetchMetadata = {
+    providerSource: "none",
+    diagnostics: [],
   };
-
-  const firecrawlDiagnostics: RuntimeWebDiagnostic[] = [];
-
-  if (firecrawlActive) {
-    firecrawlResolution = await resolveSecretInputWithEnvFallback({
+  const discoverFetchProviders = needsRuntimeWebFetchProviderDiscovery({
+    fetch,
+    rawProvider: rawFetchProvider,
+    hasPluginWebFetchConfig,
+    defaults,
+  });
+  if (discoverFetchProviders) {
+    const fetchSurface = await resolveRuntimeWebProviderSurface({
+      contract: "webFetchProviders",
+      rawProvider: rawFetchProvider,
+      providerPath: "tools.web.fetch.provider",
+      toolConfig: fetch,
+      diagnostics,
+      metadataDiagnostics: fetchMetadata.diagnostics,
+      invalidAutoDetectCode: "WEB_FETCH_PROVIDER_INVALID_AUTODETECT",
       sourceConfig: params.sourceConfig,
       context: params.context,
-      defaults,
-      value: firecrawl?.apiKey,
-      path: firecrawlPath,
-      envVars: ["FIRECRAWL_API_KEY"],
+      resolveProviders: async ({ configuredBundledPluginId }) =>
+        resolveBundledWebFetchProviders({
+          sourceConfig: params.sourceConfig,
+          context: params.context,
+          configuredBundledPluginId,
+          hasCustomWebFetchPluginRisk: await getHasCustomWebFetchRisk(),
+        }),
+      sortProviders: sortWebFetchProvidersForAutoDetect,
+      readConfiguredCredential: ({ provider, config, toolConfig }) =>
+        readConfiguredFetchProviderCredential({
+          provider,
+          config,
+          fetch: toolConfig,
+        }),
+      readConfiguredCredentialFallback: ({ provider, config, toolConfig }) =>
+        readConfiguredFetchProviderCredentialFallback({
+          provider,
+          config,
+          fetch: toolConfig,
+        }),
     });
 
-    if (firecrawlResolution.value) {
-      setResolvedFirecrawlApiKey({
-        resolvedConfig: params.resolvedConfig,
-        value: firecrawlResolution.value,
-      });
-    }
-
-    if (firecrawlResolution.secretRefConfigured) {
-      if (firecrawlResolution.fallbackUsedAfterRefFailure) {
-        const diagnostic: RuntimeWebDiagnostic = {
-          code: "WEB_FETCH_FIRECRAWL_KEY_UNRESOLVED_FALLBACK_USED",
-          message:
-            `${firecrawlPath} SecretRef could not be resolved; using ${firecrawlResolution.fallbackEnvVar ?? "env fallback"}. ` +
-            (firecrawlResolution.unresolvedRefReason ?? "").trim(),
-          path: firecrawlPath,
-        };
-        diagnostics.push(diagnostic);
-        firecrawlDiagnostics.push(diagnostic);
-        pushWarning(params.context, {
-          code: "WEB_FETCH_FIRECRAWL_KEY_UNRESOLVED_FALLBACK_USED",
-          path: firecrawlPath,
-          message: diagnostic.message,
+    const fetchSelection = await resolveRuntimeWebProviderSelection({
+      scopePath: "tools.web.fetch",
+      toolConfig: fetch,
+      enabled: fetchSurface.enabled,
+      providers: fetchSurface.providers,
+      configuredProvider: fetchSurface.configuredProvider,
+      metadata: fetchMetadata,
+      diagnostics,
+      sourceConfig: params.sourceConfig,
+      resolvedConfig: params.resolvedConfig,
+      context: params.context,
+      defaults,
+      allowKeylessAutoSelect: true,
+      deferKeylessFallback: false,
+      allowUnavailableProviders: params.allowUnavailableSecretOwners,
+      onUnavailableProviders: (error) => {
+        attachWebProviderFailures(error.unavailableProviders, providerFailuresByRefKey);
+        associateWebProviderResolutionError({
+          kind: "fetch",
+          config: params.sourceConfig,
+          error,
+          unavailableProviders: error.unavailableProviders,
         });
-      }
-
-      if (!firecrawlResolution.value && firecrawlResolution.unresolvedRefReason) {
-        const diagnostic: RuntimeWebDiagnostic = {
-          code: "WEB_FETCH_FIRECRAWL_KEY_UNRESOLVED_NO_FALLBACK",
-          message: firecrawlResolution.unresolvedRefReason,
-          path: firecrawlPath,
-        };
-        diagnostics.push(diagnostic);
-        firecrawlDiagnostics.push(diagnostic);
-        pushWarning(params.context, {
-          code: "WEB_FETCH_FIRECRAWL_KEY_UNRESOLVED_NO_FALLBACK",
-          path: firecrawlPath,
-          message: firecrawlResolution.unresolvedRefReason,
-        });
-        throw new Error(
-          `[WEB_FETCH_FIRECRAWL_KEY_UNRESOLVED_NO_FALLBACK] ${firecrawlResolution.unresolvedRefReason}`,
-        );
-      }
-    }
-  } else {
-    if (hasConfiguredSecretRef(firecrawl?.apiKey, defaults)) {
-      pushInactiveSurfaceWarning({
-        context: params.context,
-        path: firecrawlPath,
-        details: !fetchEnabled
-          ? "tools.web.fetch is disabled."
-          : "tools.web.fetch.firecrawl.enabled is false.",
-      });
-      firecrawlResolution = {
-        source: "secretRef",
-        secretRefConfigured: true,
-        fallbackUsedAfterRefFailure: false,
-      };
-    } else {
-      const configuredInlineValue = normalizeSecretInput(firecrawl?.apiKey);
-      if (configuredInlineValue) {
-        firecrawlResolution = {
-          value: configuredInlineValue,
-          source: "config",
-          secretRefConfigured: false,
-          fallbackUsedAfterRefFailure: false,
-        };
-      } else {
-        const envFallback = readNonEmptyEnvValue(params.context.env, ["FIRECRAWL_API_KEY"]);
-        if (envFallback.value) {
-          firecrawlResolution = {
-            value: envFallback.value,
-            source: "env",
-            fallbackEnvVar: envFallback.envVar,
-            secretRefConfigured: false,
-            fallbackUsedAfterRefFailure: false,
-          };
+      },
+      noFallbackCode: "WEB_FETCH_PROVIDER_KEY_UNRESOLVED_NO_FALLBACK",
+      autoDetectSelectedCode: "WEB_FETCH_AUTODETECT_SELECTED",
+      readConfiguredCredential: ({ provider, config, toolConfig }) =>
+        readConfiguredFetchProviderCredential({
+          provider,
+          config,
+          fetch: toolConfig,
+        }),
+      readConfiguredCredentialFallback: ({ provider, config, toolConfig }) =>
+        readConfiguredFetchProviderCredentialFallback({
+          provider,
+          config,
+          fetch: toolConfig,
+        }),
+      resolveSecretInput: ({ providerId, value, path, envVars, contractDigest }) =>
+        resolveSecretInputWithEnvFallback({
+          kind: "fetch",
+          providerId,
+          sourceConfig: params.sourceConfig,
+          context: params.context,
+          defaults,
+          value,
+          path,
+          envVars,
+          contractDigest,
+          providerFailuresByRefKey,
+          restrictEnvRefsToEnvVars: true,
+        }),
+      setResolvedCredential: ({ resolvedConfig, provider, value }) =>
+        setResolvedWebFetchApiKey({
+          resolvedConfig,
+          provider,
+          value,
+        }),
+      inactivePathsForProvider: inactivePathsForFetchProvider,
+      hasConfiguredSecretRef,
+      mergeRuntimeMetadata: async ({ provider, metadata, toolConfig, selectedResolution }) => {
+        if (!provider.resolveRuntimeMetadata) {
+          return;
         }
-      }
+        Object.assign(
+          metadata,
+          await provider.resolveRuntimeMetadata({
+            config: params.sourceConfig,
+            fetchConfig: toolConfig,
+            runtimeMetadata: metadata,
+            resolvedCredential: selectedResolution
+              ? {
+                  value: selectedResolution.value,
+                  source: selectedResolution.source,
+                  fallbackEnvVar: selectedResolution.fallbackEnvVar,
+                }
+              : undefined,
+          }),
+        );
+      },
+    });
+    attachWebProviderFailures(fetchSelection.unavailableProviders, providerFailuresByRefKey);
+    collectUnavailableWebProviders({
+      kind: "fetch",
+      result: fetchSelection,
+      context: params.context,
+      sourceConfig: params.sourceConfig,
+      metadata: fetchMetadata,
+      degradedOwners,
+    });
+    for (const owner of fetchSelection.secretOwners) {
+      secretOwners.push(toWebSecretOwnerRefState("fetch", owner));
     }
   }
 
-  return {
+  return finish({
     search: searchMetadata,
-    fetch: {
-      firecrawl: {
-        active: firecrawlActive,
-        apiKeySource: firecrawlResolution.source,
-        diagnostics: firecrawlDiagnostics,
-      },
-    },
+    fetch: fetchMetadata,
     diagnostics,
-  };
+  });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

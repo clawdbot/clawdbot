@@ -1,3 +1,4 @@
-import { describeOpenAIProviderCatalogContract } from "../../test/helpers/extensions/provider-catalog-contract.js";
+// Openai tests cover provider catalog.contract plugin behavior.
+import { describeOpenAIProviderCatalogContract } from "./test-support/provider-catalog.contract-test-support.js";
 
 describeOpenAIProviderCatalogContract();

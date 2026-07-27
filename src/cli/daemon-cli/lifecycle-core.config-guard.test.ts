@@ -1,4 +1,6 @@
+// Daemon lifecycle config guard tests cover config checks before service lifecycle actions.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { VERSION } from "../../version.js";
 import {
   defaultRuntime,
   resetLifecycleRuntimeLogs,
@@ -9,8 +11,31 @@ import {
 
 const readConfigFileSnapshotMock = vi.fn();
 const loadConfig = vi.fn(() => ({}));
+const newerConfigHints = [
+  "Run the newer openclaw binary on PATH, or reinstall the intended gateway service from the newer install.",
+  "Set OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 only for an intentional downgrade or recovery action.",
+];
+const newerConfigHintItems = newerConfigHints.map((text) => ({ kind: "generic", text }));
+const invalidConfigRecoveryHint = [
+  'Run "openclaw doctor --fix" to repair, then retry.',
+  "If startup is still blocked, inspect the adjacent .bak backup before restoring it manually.",
+].join("\n");
+const pluginPackagingRecoveryHints = [
+  "This is a plugin packaging issue, not a local config problem.",
+  "Update or reinstall the plugin after the publisher ships compiled JavaScript, or disable/uninstall the plugin until then.",
+];
+const pluginPackagingHintItems = pluginPackagingRecoveryHints.map((text) => ({
+  kind: "generic",
+  text,
+}));
+
+function expectLatestRuntimeJson(payload: unknown) {
+  const calls = defaultRuntime.writeJson.mock.calls;
+  expect(calls[calls.length - 1]?.[0]).toEqual(payload);
+}
 
 vi.mock("../../config/config.js", () => ({
+  getRuntimeConfig: () => loadConfig(),
   loadConfig: () => loadConfig(),
   readConfigFileSnapshot: () => readConfigFileSnapshotMock(),
 }));
@@ -31,12 +56,41 @@ function setConfigSnapshot(params: {
   exists: boolean;
   valid: boolean;
   issues?: Array<{ path: string; message: string }>;
+  warnings?: Array<{ path: string; message: string }>;
+  legacyIssues?: Array<{ path: string; message: string }>;
+  lastTouchedVersion?: string;
 }) {
+  const config = params.lastTouchedVersion
+    ? { meta: { lastTouchedVersion: params.lastTouchedVersion } }
+    : {};
   readConfigFileSnapshotMock.mockResolvedValue({
     exists: params.exists,
     valid: params.valid,
-    config: {},
+    config,
+    sourceConfig: config,
     issues: params.issues ?? [],
+    warnings: params.warnings ?? [],
+    legacyIssues: params.legacyIssues ?? [],
+  });
+}
+
+function setPluginPackagingInvalidSnapshot() {
+  setConfigSnapshot({
+    exists: true,
+    valid: false,
+    issues: [
+      {
+        path: "plugins.slots.memory",
+        message: "plugin not found: source-only-pack",
+      },
+    ],
+    warnings: [
+      {
+        path: "plugins",
+        message:
+          "plugin source-only-pack: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js. This is a plugin packaging issue, not a local config problem.",
+      },
+    ],
   });
 }
 
@@ -76,6 +130,46 @@ describe("runServiceRestart config pre-flight (#35862)", () => {
     await expect(runServiceRestart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
 
     expect(service.restart).not.toHaveBeenCalled();
+    expectLatestRuntimeJson({
+      action: "restart",
+      ok: false,
+      error: `Gateway aborted: config is invalid.\nagents.defaults.pdfModel: Unrecognized key\n${invalidConfigRecoveryHint}`,
+      hints: undefined,
+      hintItems: undefined,
+      warnings: undefined,
+    });
+  });
+
+  it("points restart at plugin packaging recovery for packaging-only invalid config", async () => {
+    setPluginPackagingInvalidSnapshot();
+
+    await expect(runServiceRestart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
+
+    expect(service.restart).not.toHaveBeenCalled();
+    expectLatestRuntimeJson({
+      action: "restart",
+      ok: false,
+      error: "Gateway restart blocked: plugins.slots.memory: plugin not found: source-only-pack",
+      hints: pluginPackagingRecoveryHints,
+      hintItems: pluginPackagingHintItems,
+      warnings: undefined,
+    });
+  });
+
+  it("blocks restart from an older binary when config was written by a newer one", async () => {
+    setConfigSnapshot({ exists: true, valid: true, lastTouchedVersion: "9999.1.1" });
+
+    await expect(runServiceRestart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
+
+    expect(service.restart).not.toHaveBeenCalled();
+    expectLatestRuntimeJson({
+      action: "restart",
+      ok: false,
+      error: `Gateway restart blocked: Refusing to restart the gateway service because this OpenClaw binary (${VERSION}) is older than the config last written by OpenClaw 9999.1.1.`,
+      hints: newerConfigHints,
+      hintItems: newerConfigHintItems,
+      warnings: undefined,
+    });
   });
 
   it("proceeds with restart when config is valid", async () => {
@@ -129,7 +223,53 @@ describe("runServiceStart config pre-flight (#35862)", () => {
 
     await expect(runServiceStart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
 
-    expect(service.restart).not.toHaveBeenCalled();
+    expect(service.start).not.toHaveBeenCalled();
+    expectLatestRuntimeJson({
+      action: "start",
+      ok: false,
+      error: `Gateway aborted: config is invalid.\nagents.defaults.pdfModel: Unrecognized key\n${invalidConfigRecoveryHint}`,
+      hints: undefined,
+      hintItems: undefined,
+      warnings: undefined,
+    });
+  });
+
+  it("points start at plugin packaging recovery for packaging-only invalid config", async () => {
+    setPluginPackagingInvalidSnapshot();
+
+    await expect(runServiceStart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
+
+    expect(service.start).not.toHaveBeenCalled();
+    expectLatestRuntimeJson({
+      action: "start",
+      ok: false,
+      error: "Gateway start blocked: plugins.slots.memory: plugin not found: source-only-pack",
+      hints: pluginPackagingRecoveryHints,
+      hintItems: pluginPackagingHintItems,
+      warnings: undefined,
+    });
+  });
+
+  it("aborts before not-loaded start recovery when config is invalid", async () => {
+    const onNotLoaded = vi.fn(async () => ({
+      result: "started" as const,
+      loaded: true,
+    }));
+    setConfigSnapshot({
+      exists: true,
+      valid: false,
+      issues: [{ path: "agents.defaults.pdfModel", message: "Unrecognized key" }],
+    });
+
+    await expect(
+      runServiceStart({
+        ...createServiceRunArgs(),
+        onNotLoaded,
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(onNotLoaded).not.toHaveBeenCalled();
+    expect(service.start).not.toHaveBeenCalled();
   });
 
   it("proceeds with start when config is valid", async () => {
@@ -137,6 +277,43 @@ describe("runServiceStart config pre-flight (#35862)", () => {
 
     await runServiceStart(createServiceRunArgs());
 
-    expect(service.restart).toHaveBeenCalledTimes(1);
+    expect(service.start).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("runServiceStop future-config guard", () => {
+  let runServiceStop: typeof import("./lifecycle-core.js").runServiceStop;
+
+  beforeAll(async () => {
+    ({ runServiceStop } = await import("./lifecycle-core.js"));
+  });
+
+  beforeEach(() => {
+    resetLifecycleRuntimeLogs();
+    readConfigFileSnapshotMock.mockReset();
+    setConfigSnapshot({ exists: true, valid: true });
+    resetLifecycleServiceMocks();
+  });
+
+  it("blocks stop from an older binary when config was written by a newer one", async () => {
+    setConfigSnapshot({ exists: true, valid: true, lastTouchedVersion: "9999.1.1" });
+
+    await expect(
+      runServiceStop({
+        serviceNoun: "Gateway",
+        service,
+        opts: { json: true },
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(service.stop).not.toHaveBeenCalled();
+    expectLatestRuntimeJson({
+      action: "stop",
+      ok: false,
+      error: `Gateway stop blocked: Refusing to stop the gateway service because this OpenClaw binary (${VERSION}) is older than the config last written by OpenClaw 9999.1.1.`,
+      hints: newerConfigHints,
+      hintItems: newerConfigHintItems,
+      warnings: undefined,
+    });
   });
 });

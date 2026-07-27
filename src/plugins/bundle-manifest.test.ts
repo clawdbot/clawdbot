@@ -1,3 +1,4 @@
+/** Tests bundle manifest parsing for Codex, Claude, Cursor, and OpenClaw formats. */
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -13,6 +14,21 @@ import {
   makeTrackedTempDir,
   mkdirSafeDir,
 } from "./test-helpers/fs-fixtures.js";
+
+type BundlePluginManifest = Extract<
+  ReturnType<typeof loadBundleManifest>,
+  { ok: true }
+>["manifest"];
+
+type ReadonlyBundleManifestExpectation = Omit<
+  BundlePluginManifest,
+  "capabilities" | "hooks" | "settingsFiles" | "skills"
+> & {
+  capabilities: readonly string[];
+  hooks: readonly string[];
+  settingsFiles?: readonly string[];
+  skills: readonly string[];
+};
 
 const tempDirs: string[] = [];
 
@@ -112,10 +128,10 @@ function setupClaudeHookFixture(
 function expectBundleManifest(params: {
   rootDir: string;
   bundleFormat: "codex" | "claude" | "cursor";
-  expected: Record<string, unknown>;
+  expected: ReadonlyBundleManifestExpectation;
 }) {
   expect(detectBundleManifestFormat(params.rootDir)).toBe(params.bundleFormat);
-  expect(expectLoadedManifest(params.rootDir, params.bundleFormat)).toMatchObject(params.expected);
+  expect(expectLoadedManifest(params.rootDir, params.bundleFormat)).toEqual(params.expected);
 }
 
 function expectClaudeHookResolution(params: {
@@ -133,6 +149,16 @@ afterEach(() => {
 });
 
 describe("bundle manifest parsing", () => {
+  it("does not treat openclaw.bundle.json as a bundle manifest", () => {
+    const rootDir = makeTempDir();
+    writeBundleManifest(rootDir, "openclaw.bundle.json", {
+      name: "Not Real",
+      skills: ["skills"],
+    });
+
+    expect(detectBundleManifestFormat(rootDir)).toBeNull();
+  });
+
   it.each([
     {
       name: "detects and loads Codex bundle manifests",
@@ -165,10 +191,12 @@ describe("bundle manifest parsing", () => {
         id: "sample-bundle",
         name: "Sample Bundle",
         description: "Codex fixture",
+        version: undefined,
         bundleFormat: "codex",
         skills: ["skills"],
+        settingsFiles: [],
         hooks: ["hooks"],
-        capabilities: expect.arrayContaining(["hooks", "skills", "mcpServers", "apps"]),
+        capabilities: ["skills", "hooks", "mcpServers", "apps"],
       },
     },
     {
@@ -210,20 +238,21 @@ describe("bundle manifest parsing", () => {
         id: "claude-sample",
         name: "Claude Sample",
         description: "Claude fixture",
-        bundleFormat: "claude",
+        version: undefined,
+        bundleFormat: "claude" as const,
         skills: ["skill-packs/starter", "commands-pack", "agents-pack", "styles"],
         settingsFiles: ["settings.json"],
         hooks: ["hooks/hooks.json", "hooks-pack"],
-        capabilities: expect.arrayContaining([
-          "hooks",
+        capabilities: [
           "skills",
           "commands",
           "agents",
+          "hooks",
           "mcpServers",
           "lspServers",
           "outputStyles",
           "settings",
-        ]),
+        ],
       },
     },
     {
@@ -249,17 +278,12 @@ describe("bundle manifest parsing", () => {
         id: "cursor-sample",
         name: "Cursor Sample",
         description: "Cursor fixture",
+        version: undefined,
         bundleFormat: "cursor",
         skills: ["skills", ".cursor/commands"],
+        settingsFiles: [],
         hooks: [],
-        capabilities: expect.arrayContaining([
-          "skills",
-          "commands",
-          "agents",
-          "rules",
-          "hooks",
-          "mcpServers",
-        ]),
+        capabilities: ["skills", "commands", "agents", "hooks", "rules", "mcpServers"],
       },
     },
     {
@@ -276,9 +300,14 @@ describe("bundle manifest parsing", () => {
       },
       expected: (rootDir: string) => ({
         id: path.basename(rootDir).toLowerCase(),
+        name: undefined,
+        description: undefined,
+        version: undefined,
+        bundleFormat: "claude" as const,
         skills: ["skills", "commands"],
         settingsFiles: ["settings.json"],
-        capabilities: expect.arrayContaining(["skills", "commands", "settings"]),
+        hooks: [],
+        capabilities: ["skills", "commands", "settings"],
       }),
     },
   ] as const)("$name", ({ bundleFormat, setup, expected }) => {
@@ -290,6 +319,180 @@ describe("bundle manifest parsing", () => {
       bundleFormat,
       expected: typeof expected === "function" ? expected(rootDir) : expected,
     });
+  });
+
+  it("detects Link-style Codex bundles with skills and MCP servers", () => {
+    const rootDir = makeTempDir();
+    setupBundleFixture({
+      rootDir,
+      dirs: [".codex-plugin", "skills/create-payment-credential"],
+      textFiles: {
+        ".mcp.json": JSON.stringify({
+          mcpServers: {
+            link: {
+              command: "pnpx",
+              args: ["@stripe/link-cli", "--mcp"],
+            },
+          },
+        }),
+      },
+      manifestRelativePath: CODEX_BUNDLE_MANIFEST_RELATIVE_PATH,
+      manifest: {
+        name: "link",
+        version: "0.2.1",
+        description: "Secure, one-time-use payment credentials from Link",
+        homepage: "https://link.com/agents",
+        repository: "https://github.com/stripe/link-cli",
+        skills: "./skills/",
+        mcpServers: "./.mcp.json",
+        interface: {
+          displayName: "Link",
+          category: "Finance",
+        },
+      },
+    });
+
+    expectBundleManifest({
+      rootDir,
+      bundleFormat: "codex",
+      expected: {
+        id: "link",
+        name: "link",
+        version: "0.2.1",
+        description: "Secure, one-time-use payment credentials from Link",
+        bundleFormat: "codex",
+        skills: ["./skills/"],
+        settingsFiles: [],
+        hooks: [],
+        capabilities: expect.arrayContaining(["skills", "mcpServers"]),
+      },
+    });
+  });
+
+  it.each([
+    {
+      name: "accepts JSON5 Codex bundle manifests",
+      bundleFormat: "codex" as const,
+      manifestRelativePath: CODEX_BUNDLE_MANIFEST_RELATIVE_PATH,
+      json5Manifest: `{
+  // Bundle name can include comments and trailing commas.
+  name: "Codex JSON5 Bundle",
+  skills: "skills",
+  hooks: "hooks",
+}`,
+      dirs: ["skills", "hooks"],
+      expected: {
+        id: "codex-json5-bundle",
+        name: "Codex JSON5 Bundle",
+        description: undefined,
+        version: undefined,
+        bundleFormat: "codex",
+        skills: ["skills"],
+        settingsFiles: [],
+        hooks: ["hooks"],
+        capabilities: ["skills", "hooks"],
+      },
+    },
+    {
+      name: "accepts JSON5 Claude bundle manifests",
+      bundleFormat: "claude" as const,
+      manifestRelativePath: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
+      json5Manifest: `{
+  name: "Claude JSON5 Bundle",
+  commands: "commands-pack",
+  hooks: "hooks-pack",
+  outputStyles: "styles",
+}`,
+      dirs: [".claude-plugin", "commands-pack", "hooks-pack", "styles"],
+      expected: {
+        id: "claude-json5-bundle",
+        name: "Claude JSON5 Bundle",
+        description: undefined,
+        version: undefined,
+        bundleFormat: "claude",
+        skills: ["commands-pack", "styles"],
+        settingsFiles: [],
+        hooks: ["hooks-pack"],
+        capabilities: ["skills", "commands", "hooks", "outputStyles"],
+      },
+    },
+    {
+      name: "accepts JSON5 Cursor bundle manifests",
+      bundleFormat: "cursor" as const,
+      manifestRelativePath: CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH,
+      json5Manifest: `{
+  name: "Cursor JSON5 Bundle",
+  commands: ".cursor/commands",
+  mcpServers: "./.mcp.json",
+}`,
+      dirs: [".cursor-plugin", "skills", ".cursor/commands"],
+      textFiles: {
+        ".mcp.json": "{ servers: {}, }",
+      },
+      expected: {
+        id: "cursor-json5-bundle",
+        name: "Cursor JSON5 Bundle",
+        description: undefined,
+        version: undefined,
+        bundleFormat: "cursor",
+        skills: ["skills", ".cursor/commands"],
+        settingsFiles: [],
+        hooks: [],
+        capabilities: ["skills", "commands", "mcpServers"],
+      },
+    },
+  ] as const)(
+    "$name",
+    ({ bundleFormat, manifestRelativePath, json5Manifest, dirs, textFiles, expected }) => {
+      const rootDir = makeTempDir();
+      setupBundleFixture({
+        rootDir,
+        dirs: [path.dirname(manifestRelativePath), ...dirs],
+        textFiles: {
+          [manifestRelativePath]: json5Manifest,
+          ...textFiles,
+        },
+      });
+
+      expectBundleManifest({
+        rootDir,
+        bundleFormat,
+        expected,
+      });
+    },
+  );
+
+  it.each([
+    {
+      name: "rejects JSON5 Codex bundle manifests that parse to non-objects",
+      bundleFormat: "codex" as const,
+      manifestRelativePath: CODEX_BUNDLE_MANIFEST_RELATIVE_PATH,
+    },
+    {
+      name: "rejects JSON5 Claude bundle manifests that parse to non-objects",
+      bundleFormat: "claude" as const,
+      manifestRelativePath: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
+    },
+    {
+      name: "rejects JSON5 Cursor bundle manifests that parse to non-objects",
+      bundleFormat: "cursor" as const,
+      manifestRelativePath: CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH,
+    },
+  ] as const)("$name", ({ bundleFormat, manifestRelativePath }) => {
+    const rootDir = makeTempDir();
+    setupBundleFixture({
+      rootDir,
+      dirs: [path.dirname(manifestRelativePath)],
+      textFiles: {
+        [manifestRelativePath]: "'still not an object'",
+      },
+    });
+
+    const result = loadBundleManifest({ rootDir, bundleFormat });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("plugin manifest must be an object");
+    }
   });
 
   it.each([

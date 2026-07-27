@@ -1,6 +1,6 @@
+// Defines hook-related Zod schema fragments for config parsing.
 import path from "node:path";
 import { z } from "zod";
-import { InstallRecordShape } from "./zod-schema.installs.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 function isSafeRelativeModulePath(raw: string): boolean {
@@ -49,19 +49,10 @@ export const HookMappingSchema = z
     textTemplate: z.string().optional(),
     deliver: z.boolean().optional(),
     allowUnsafeExternalContent: z.boolean().optional(),
-    channel: z
-      .union([
-        z.literal("last"),
-        z.literal("whatsapp"),
-        z.literal("telegram"),
-        z.literal("discord"),
-        z.literal("irc"),
-        z.literal("slack"),
-        z.literal("signal"),
-        z.literal("imessage"),
-        z.literal("msteams"),
-      ])
-      .optional(),
+    // Keep this open-ended so runtime channel plugins (for example feishu) can be
+    // referenced without hard-coding every channel id in the config schema.
+    // Runtime still validates the resolved value against currently registered channels.
+    channel: z.string().trim().min(1).optional(),
     to: z.string().optional(),
     model: z.string().optional(),
     thinking: z.string().optional(),
@@ -77,7 +68,7 @@ export const HookMappingSchema = z
   .strict()
   .optional();
 
-export const InternalHookHandlerSchema = z
+const InternalHookHandlerSchema = z
   .object({
     event: z.string(),
     module: SafeRelativeModulePathSchema,
@@ -95,13 +86,6 @@ const HookConfigSchema = z
   // whole config invalid (which triggers doctor/best-effort loads).
   .passthrough();
 
-const HookInstallRecordSchema = z
-  .object({
-    ...InstallRecordShape,
-    hooks: z.array(z.string()).optional(),
-  })
-  .strict();
-
 export const InternalHooksSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -113,7 +97,6 @@ export const InternalHooksSchema = z
       })
       .strict()
       .optional(),
-    installs: z.record(z.string(), HookInstallRecordSchema).optional(),
   })
   .strict()
   .optional();

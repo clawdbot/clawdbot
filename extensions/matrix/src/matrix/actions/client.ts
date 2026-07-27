@@ -1,8 +1,9 @@
+// Matrix plugin module implements client behavior.
 import { withResolvedRuntimeMatrixClient } from "../client-bootstrap.js";
 import { resolveMatrixRoomId } from "../send.js";
 import type { MatrixActionClient, MatrixActionClientOpts } from "./types.js";
 
-type MatrixActionClientStopMode = "stop" | "persist";
+type MatrixActionClientStopMode = "stop" | "persist" | "discard";
 
 export async function withResolvedActionClient<T>(
   opts: MatrixActionClientOpts,

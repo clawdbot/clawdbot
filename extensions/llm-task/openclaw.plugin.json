@@ -1,21 +1,49 @@
 {
   "id": "llm-task",
+  "activation": {
+    "onStartup": true
+  },
   "name": "LLM Task",
   "description": "Generic JSON-only LLM tool for structured tasks callable from workflows.",
   "configSchema": {
     "type": "object",
-    "additionalProperties": false,
     "properties": {
-      "defaultProvider": { "type": "string" },
-      "defaultModel": { "type": "string" },
-      "defaultAuthProfileId": { "type": "string" },
+      "defaultProvider": {
+        "type": "string"
+      },
+      "defaultModel": {
+        "type": "string"
+      },
+      "defaultAuthProfileId": {
+        "type": "string"
+      },
       "allowedModels": {
         "type": "array",
-        "items": { "type": "string" },
-        "description": "Allowlist of provider/model keys like openai-codex/gpt-5.2."
+        "items": {
+          "type": "string"
+        },
+        "description": "Allowlist of provider/model keys like openai/gpt-5.2."
       },
-      "maxTokens": { "type": "number" },
-      "timeoutMs": { "type": "number" }
+      "maxTokens": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "additionalProperties": false
+  },
+  "version": "2026.5.21",
+  "contracts": {
+    "tools": [
+      "llm-task"
+    ]
+  },
+  "toolMetadata": {
+    "llm-task": {
+      "optional": true
     }
   }
 }

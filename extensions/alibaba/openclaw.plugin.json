@@ -1,0 +1,40 @@
+{
+  "id": "alibaba",
+  "icon": "https://cdn.simpleicons.org/alibabacloud",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "setup": {
+    "providers": [
+      {
+        "id": "alibaba",
+        "envVars": ["MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY", "QWEN_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "alibaba",
+      "method": "api-key",
+      "choiceId": "alibaba-model-studio-api-key",
+      "choiceLabel": "Alibaba Model Studio API key",
+      "groupId": "alibaba",
+      "groupLabel": "Alibaba Model Studio",
+      "groupHint": "DashScope / Model Studio API key",
+      "onboardingScopes": ["image-generation"],
+      "optionKey": "alibabaModelStudioApiKey",
+      "cliFlag": "--alibaba-model-studio-api-key",
+      "cliOption": "--alibaba-model-studio-api-key <key>",
+      "cliDescription": "Alibaba Model Studio API key"
+    }
+  ],
+  "contracts": {
+    "videoGenerationProviders": ["alibaba"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

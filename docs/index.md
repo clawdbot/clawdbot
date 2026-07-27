@@ -9,13 +9,13 @@ title: "OpenClaw"
 
 <p align="center">
     <img
-        src="/assets/openclaw-logo-text-dark.png"
+        src="/assets/openclaw-hero-light.png"
         alt="OpenClaw"
         width="500"
         class="dark:hidden"
     />
     <img
-        src="/assets/openclaw-logo-text.png"
+        src="/assets/openclaw-hero-dark.png"
         alt="OpenClaw"
         width="500"
         class="hidden dark:block"
@@ -25,43 +25,88 @@ title: "OpenClaw"
 > _"EXFOLIATE! EXFOLIATE!"_ — A space lobster, probably
 
 <p align="center">
-  <strong>Any OS gateway for AI agents across WhatsApp, Telegram, Discord, iMessage, and more.</strong><br />
-  Send a message, get an agent response from your pocket. Plugins add Mattermost and more.
+  <strong>Any OS gateway for AI agents across Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more.</strong><br />
+  Send a message, get an agent response from your pocket. Run one Gateway across channel plugins, WebChat, and mobile nodes.<br />
+  Developed in the open by the <a href="https://openclaw.org">OpenClaw Foundation</a>, a non-profit.
 </p>
 
 <Columns>
   <Card title="Get Started" href="/start/getting-started" icon="rocket">
     Install OpenClaw and bring up the Gateway in minutes.
   </Card>
-  <Card title="Run Onboarding" href="/start/wizard" icon="sparkles">
+  <Card title="Run Onboarding" href="/start/wizard" icon="list-checks">
     Guided setup with `openclaw onboard` and pairing flows.
+  </Card>
+  <Card title="Connect a Channel" href="/channels" icon="message-circle">
+    Link Discord, Signal, Telegram, WhatsApp, and more to chat from anywhere.
   </Card>
   <Card title="Open the Control UI" href="/web/control-ui" icon="layout-dashboard">
     Launch the browser dashboard for chat, config, and sessions.
   </Card>
 </Columns>
 
+## Browse docs
+
+Mobile browsers may show the section menu without the full desktop tab bar. Use
+these hub links to reach the same top-level docs areas from the page body.
+
+<Columns>
+  <Card title="Get started" href="/" icon="rocket">
+    Overview, showcase, first steps, and setup guides.
+  </Card>
+  <Card title="Install" href="/install" icon="download">
+    Install paths, updates, containers, hosting, and advanced setup.
+  </Card>
+  <Card title="Channels" href="/channels" icon="messages-square">
+    Messaging channels, pairing, routing, access groups, and channel QA.
+  </Card>
+  <Card title="Agents" href="/concepts/architecture" icon="bot">
+    Architecture, sessions, context, memory, and multi-agent routing.
+  </Card>
+  <Card title="Capabilities" href="/tools" icon="wand-sparkles">
+    Tools, skills, cron, webhooks, and automation capabilities.
+  </Card>
+  <Card title="ClawHub" href="/clawhub" icon="store">
+    Plugin marketplace, publishing, curation, and trust guidance.
+  </Card>
+  <Card title="Models" href="/providers" icon="brain">
+    Providers, model configuration, failover, and local model services.
+  </Card>
+  <Card title="Platforms" href="/platforms" icon="monitor-smartphone">
+    macOS, Windows, iOS, Android, nodes, and web surfaces.
+  </Card>
+  <Card title="Gateway & Ops" href="/gateway" icon="server">
+    Gateway configuration, security, diagnostics, and operations.
+  </Card>
+  <Card title="Reference" href="/cli" icon="terminal">
+    CLI reference, schemas, RPC, release notes, and templates.
+  </Card>
+  <Card title="Help" href="/help" icon="life-buoy">
+    Troubleshooting, FAQs, testing, diagnostics, and environment checks.
+  </Card>
+</Columns>
+
 ## What is OpenClaw?
 
-OpenClaw is a **self-hosted gateway** that connects your favorite chat apps — WhatsApp, Telegram, Discord, iMessage, and more — to AI coding agents like Pi. You run a single Gateway process on your own machine (or a server), and it becomes the bridge between your messaging apps and an always-available AI assistant.
+OpenClaw is a **self-hosted gateway** that connects your favorite chat apps — Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more via channel plugins — to AI coding agents. You run a single Gateway process on your own machine (or a server), and it becomes the bridge between your messaging apps and an always-available AI assistant.
 
 **Who is it for?** Developers and power users who want a personal AI assistant they can message from anywhere — without giving up control of their data or relying on a hosted service.
 
 **What makes it different?**
 
 - **Self-hosted**: runs on your hardware, your rules
-- **Multi-channel**: one Gateway serves WhatsApp, Telegram, Discord, and more simultaneously
+- **Multi-channel**: one Gateway serves every configured channel plugin simultaneously
 - **Agent-native**: built for coding agents with tool use, sessions, memory, and multi-agent routing
 - **Open source**: MIT licensed, community-driven
 
-**What do you need?** Node 24 (recommended), or Node 22 LTS (`22.14+`) for compatibility, an API key from your chosen provider, and 5 minutes. For best quality and security, use the strongest latest-generation model available.
+**What do you need?** Node 24.15+ (recommended), Node 22 LTS (`22.22.3+`) for compatibility, or Node 25.9+, an API key from your chosen provider, and 5 minutes. For best quality and security, use the strongest latest-generation model available.
 
 ## How it works
 
 ```mermaid
 flowchart LR
   A["Chat apps + plugins"] --> B["Gateway"]
-  B --> C["Pi agent"]
+  B --> C["OpenClaw agent"]
   B --> D["CLI"]
   B --> E["Web Control UI"]
   B --> F["macOS app"]
@@ -73,22 +118,22 @@ The Gateway is the single source of truth for sessions, routing, and channel con
 ## Key capabilities
 
 <Columns>
-  <Card title="Multi-channel gateway" icon="network">
-    WhatsApp, Telegram, Discord, and iMessage with a single Gateway process.
+  <Card title="Multi-channel gateway" icon="network" href="/channels">
+    Discord, iMessage, Signal, Slack, Telegram, WhatsApp, WebChat, and more with a single Gateway process.
   </Card>
-  <Card title="Plugin channels" icon="plug">
-    Add Mattermost and more with extension packages.
+  <Card title="Plugin channels" icon="plug" href="/tools/plugin">
+    Channel plugins add Matrix, Nostr, Twitch, Zalo, and more; official plugins install on demand.
   </Card>
-  <Card title="Multi-agent routing" icon="route">
+  <Card title="Multi-agent routing" icon="route" href="/concepts/multi-agent">
     Isolated sessions per agent, workspace, or sender.
   </Card>
-  <Card title="Media support" icon="image">
+  <Card title="Media support" icon="image" href="/nodes/images">
     Send and receive images, audio, and documents.
   </Card>
-  <Card title="Web Control UI" icon="monitor">
+  <Card title="Web Control UI" icon="monitor" href="/web/control-ui">
     Browser dashboard for chat, config, sessions, and nodes.
   </Card>
-  <Card title="Mobile nodes" icon="smartphone">
+  <Card title="Mobile nodes" icon="smartphone" href="/nodes">
     Pair iOS and Android nodes for Canvas, camera, and voice-enabled workflows.
   </Card>
 </Columns>
@@ -135,7 +180,7 @@ Open the browser Control UI after the Gateway starts.
 
 Config lives at `~/.openclaw/openclaw.json`.
 
-- If you **do nothing**, OpenClaw uses the bundled Pi binary in RPC mode with per-sender sessions.
+- If you **do nothing**, OpenClaw uses the bundled OpenClaw agent runtime; DMs share the agent's main session, and each group chat gets its own session.
 - If you want to lock it down, start with `channels.whatsapp.allowFrom` and (for groups) mention rules.
 
 Example:
@@ -165,7 +210,7 @@ Example:
     SSH and tailnet access patterns.
   </Card>
   <Card title="Channels" href="/channels/telegram" icon="message-square">
-    Channel-specific setup for WhatsApp, Telegram, Discord, and more.
+    Channel-specific setup for Discord, Feishu, Microsoft Teams, Telegram, WhatsApp, and more.
   </Card>
   <Card title="Nodes" href="/nodes" icon="smartphone">
     iOS and Android nodes with pairing, Canvas, camera, and device actions.

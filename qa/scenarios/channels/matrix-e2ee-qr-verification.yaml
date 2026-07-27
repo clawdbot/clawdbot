@@ -1,0 +1,35 @@
+title: Matrix E2EE QR verification completes identity scan
+scenario:
+  id: matrix-e2ee-qr-verification
+  surface: channels
+  coverage:
+    primary:
+      - matrix.encryption-setup
+  execution:
+    profiles: { "matrix:all": 79, "matrix:e2ee-deep": 13 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 90000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        encryption: true
+        startupVerification: off
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: true
+            key: e2ee-qr-verification
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA E2EE QR Verification Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-verification.js
+  call: runMatrixQaE2eeQrVerificationScenario
+  args:
+    - expr: "scenarioContext"

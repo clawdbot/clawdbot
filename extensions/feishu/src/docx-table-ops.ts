@@ -61,10 +61,7 @@ function createDescendantTable(
   };
 }
 
-export function calculateAdaptiveColumnWidths(
-  blocks: FeishuDocxBlock[],
-  tableBlockId: string,
-): number[] {
+function calculateAdaptiveColumnWidths(blocks: FeishuDocxBlock[], tableBlockId: string): number[] {
   // Find the table block
   const tableBlock = blocks.find((b) => b.block_id === tableBlockId && b.block_type === 31);
 
@@ -114,13 +111,13 @@ export function calculateAdaptiveColumnWidths(
   // Calculate weighted length (CJK chars count as 2)
   // CJK (Chinese/Japanese/Korean) characters render ~2x wider than ASCII
   function getWeightedLength(text: string): number {
-    return [...text].reduce((sum, char) => {
+    return Array.from(text).reduce((sum, char) => {
       return sum + (char.charCodeAt(0) > 255 ? 2 : 1);
     }, 0);
   }
 
   // Find max content length per column
-  const maxLengths: number[] = new Array(column_size).fill(0);
+  const maxLengths = Array.from({ length: column_size }, () => 0);
 
   for (let row = 0; row < row_size; row++) {
     for (let col = 0; col < column_size; col++) {
@@ -129,7 +126,7 @@ export function calculateAdaptiveColumnWidths(
       if (cellId) {
         const content = getCellText(cellId);
         const length = getWeightedLength(content);
-        maxLengths[col] = Math.max(maxLengths[col], length);
+        maxLengths[col] = Math.max(maxLengths[col] ?? 0, length);
       }
     }
   }
@@ -143,7 +140,7 @@ export function calculateAdaptiveColumnWidths(
       MIN_COLUMN_WIDTH,
       Math.min(MAX_COLUMN_WIDTH, Math.floor(totalWidth / column_size)),
     );
-    return new Array(column_size).fill(equalWidth);
+    return Array.from({ length: column_size }, () => equalWidth);
   }
 
   // Calculate proportional widths
@@ -160,15 +157,23 @@ export function calculateAdaptiveColumnWidths(
   while (remaining > 0) {
     // Find columns that can still grow (not at max)
     const growable = widths.map((w, i) => (w < MAX_COLUMN_WIDTH ? i : -1)).filter((i) => i >= 0);
-    if (growable.length === 0) break;
+    if (growable.length === 0) {
+      break;
+    }
 
     // Distribute evenly among growable columns
     const perColumn = Math.floor(remaining / growable.length);
-    if (perColumn === 0) break;
+    if (perColumn === 0) {
+      break;
+    }
 
     for (const i of growable) {
-      const add = Math.min(perColumn, MAX_COLUMN_WIDTH - widths[i]);
-      widths[i] += add;
+      const width = widths[i];
+      if (width === undefined) {
+        continue;
+      }
+      const add = Math.min(perColumn, MAX_COLUMN_WIDTH - width);
+      widths[i] = width + add;
       remaining -= add;
     }
   }
@@ -221,7 +226,7 @@ export async function insertTableRow(
   client: Lark.Client,
   docToken: string,
   blockId: string,
-  rowIndex: number = -1,
+  rowIndex = -1,
 ) {
   const res = await client.docx.documentBlock.patch({
     path: { document_id: docToken, block_id: blockId },
@@ -237,7 +242,7 @@ export async function insertTableColumn(
   client: Lark.Client,
   docToken: string,
   blockId: string,
-  columnIndex: number = -1,
+  columnIndex = -1,
 ) {
   const res = await client.docx.documentBlock.patch({
     path: { document_id: docToken, block_id: blockId },
@@ -254,7 +259,7 @@ export async function deleteTableRows(
   docToken: string,
   blockId: string,
   rowStart: number,
-  rowCount: number = 1,
+  rowCount = 1,
 ) {
   const res = await client.docx.documentBlock.patch({
     path: { document_id: docToken, block_id: blockId },
@@ -271,7 +276,7 @@ export async function deleteTableColumns(
   docToken: string,
   blockId: string,
   columnStart: number,
-  columnCount: number = 1,
+  columnCount = 1,
 ) {
   const res = await client.docx.documentBlock.patch({
     path: { document_id: docToken, block_id: blockId },

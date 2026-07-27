@@ -1,9 +1,11 @@
+// Configure gateway tests cover interactive gateway auth, port, bind, and remote settings.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   text: vi.fn(),
+  password: vi.fn(),
   select: vi.fn(),
   confirm: vi.fn(),
   resolveGatewayPort: vi.fn(),
@@ -23,11 +25,12 @@ vi.mock("../config/config.js", async (importActual) => {
 
 vi.mock("./configure.shared.js", () => ({
   text: mocks.text,
+  password: mocks.password,
   select: mocks.select,
   confirm: mocks.confirm,
 }));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: mocks.note,
 }));
 
@@ -76,6 +79,7 @@ async function runGatewayPrompt(params: {
     return input.initialValue ?? input.options[0]?.value;
   });
   mocks.text.mockImplementation(async () => params.textQueue.shift());
+  mocks.password.mockImplementation(async () => params.textQueue.shift());
   mocks.randomToken.mockReturnValue(params.randomToken ?? "generated-token");
   mocks.confirm.mockResolvedValue(params.confirmResult ?? true);
   mocks.buildGatewayAuthConfig.mockImplementation((input) =>
@@ -83,7 +87,14 @@ async function runGatewayPrompt(params: {
   );
 
   const result = await promptGatewayConfig(params.baseConfig ?? {}, makeRuntime());
-  const call = mocks.buildGatewayAuthConfig.mock.calls[0]?.[0];
+  const authConfigCall = mocks.buildGatewayAuthConfig.mock.calls[0];
+  if (!authConfigCall) {
+    throw new Error("expected gateway auth config call");
+  }
+  const [call] = authConfigCall;
+  if (!call) {
+    throw new Error("expected gateway auth config input");
+  }
   return { result, call };
 }
 
@@ -107,6 +118,9 @@ describe("promptGatewayConfig", () => {
       authConfigFactory: ({ mode, token, password }) => ({ mode, token, password }),
     });
     expect(result.token).toBe("generated-token");
+    expect(mocks.password).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Gateway token (blank to generate)" }),
+    );
   });
 
   it("does not set password to literal 'undefined' when prompt returns undefined", async () => {
@@ -116,8 +130,14 @@ describe("promptGatewayConfig", () => {
       randomToken: "unused",
       authConfigFactory: ({ mode, token, password }) => ({ mode, token, password }),
     });
-    expect(call?.password).not.toBe("undefined");
-    expect(call?.password).toBe("");
+    expect(call.password).not.toBe("undefined");
+    expect(call.password).toBe("");
+    expect(mocks.password).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Gateway password",
+        validate: expect.any(Function),
+      }),
+    );
   });
 
   it("prompts for trusted-proxy configuration when trusted-proxy mode selected", async () => {
@@ -131,8 +151,8 @@ describe("promptGatewayConfig", () => {
       ],
     });
 
-    expect(call?.mode).toBe("trusted-proxy");
-    expect(call?.trustedProxy).toEqual({
+    expect(call.mode).toBe("trusted-proxy");
+    expect(call.trustedProxy).toEqual({
       userHeader: "x-forwarded-user",
       requiredHeaders: ["x-forwarded-proto", "x-forwarded-host"],
       allowUsers: ["nick@example.com"],
@@ -146,8 +166,8 @@ describe("promptGatewayConfig", () => {
       textQueue: ["18789", "x-remote-user", "", "", "10.0.0.1"],
     });
 
-    expect(call?.mode).toBe("trusted-proxy");
-    expect(call?.trustedProxy).toEqual({
+    expect(call.mode).toBe("trusted-proxy");
+    expect(call.trustedProxy).toEqual({
       userHeader: "x-remote-user",
       // requiredHeaders and allowUsers should be undefined when empty
     });
@@ -174,9 +194,9 @@ describe("promptGatewayConfig", () => {
       confirmResult: true,
       authConfigFactory: ({ mode, token }) => ({ mode, token }),
     });
-    expect(result.config.gateway?.controlUi?.allowedOrigins).toContain(
+    expect(result.config.gateway?.controlUi?.allowedOrigins).toEqual([
       "https://my-host.tail1234.ts.net",
-    );
+    ]);
   });
 
   it("adds Tailscale origin to controlUi.allowedOrigins when tailscale funnel is enabled", async () => {
@@ -188,9 +208,9 @@ describe("promptGatewayConfig", () => {
       confirmResult: true,
       authConfigFactory: ({ mode, password }) => ({ mode, password }),
     });
-    expect(result.config.gateway?.controlUi?.allowedOrigins).toContain(
+    expect(result.config.gateway?.controlUi?.allowedOrigins).toEqual([
       "https://my-host.tail1234.ts.net",
-    );
+    ]);
   });
 
   it("does not add Tailscale origin when getTailnetHostname fails", async () => {
@@ -234,9 +254,9 @@ describe("promptGatewayConfig", () => {
       confirmResult: true,
       authConfigFactory: ({ mode, token }) => ({ mode, token }),
     });
-    expect(result.config.gateway?.controlUi?.allowedOrigins).toContain(
+    expect(result.config.gateway?.controlUi?.allowedOrigins).toEqual([
       "https://[fd7a:115c:a1e0::12]",
-    );
+    ]);
   });
 
   it("stores gateway token as SecretRef when token source is ref", async () => {
@@ -249,7 +269,7 @@ describe("promptGatewayConfig", () => {
         authConfigFactory: ({ mode, token }) => ({ mode, token }),
       });
 
-      expect(call?.token).toEqual({
+      expect(call.token).toEqual({
         source: "env",
         provider: "default",
         id: "OPENCLAW_GATEWAY_TOKEN",

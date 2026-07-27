@@ -1,1 +1,2 @@
-export { getReplyFromConfig } from "../reply.js";
+/** Runtime facade for config-driven reply resolution. */
+export { getReplyFromConfig } from "./get-reply.js";

@@ -1,3 +1,7 @@
+/**
+ * Activity inspection helpers that expose observed page errors, network
+ * requests, and console messages from Playwright page state.
+ */
 import type {
   BrowserConsoleMessage,
   BrowserNetworkRequest,
@@ -5,6 +9,7 @@ import type {
 } from "./pw-session.js";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
 
+/** Returns captured page errors, optionally clearing the per-page buffer. */
 export async function getPageErrorsViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -19,6 +24,7 @@ export async function getPageErrorsViaPlaywright(opts: {
   return { errors };
 }
 
+/** Returns captured network requests, with optional URL substring filtering and clearing. */
 export async function getNetworkRequestsViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -53,6 +59,7 @@ function consolePriority(level: string) {
   }
 }
 
+/** Returns captured console messages at or above the requested priority level. */
 export async function getConsoleMessagesViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;

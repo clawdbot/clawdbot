@@ -1,28 +1,22 @@
+/**
+ * Browser plugin entry. It wires the browser tool, gateway request handler,
+ * node-host command, services, reload policy, and security audit collectors.
+ */
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  createBrowserPluginService,
-  createBrowserTool,
-  definePluginEntry,
-  handleBrowserGatewayRequest,
-  registerBrowserCli,
-  type OpenClawPluginToolContext,
-  type OpenClawPluginToolFactory,
-} from "./runtime-api.js";
+  browserPluginNodeHostCommands,
+  browserPluginReload,
+  browserSecurityAuditCollectors,
+  registerBrowserPlugin,
+} from "./plugin-registration.js";
 
+/** Main Browser plugin entry for runtime registration. */
 export default definePluginEntry({
   id: "browser",
   name: "Browser",
   description: "Default browser tool plugin",
-  register(api) {
-    api.registerTool(((ctx: OpenClawPluginToolContext) =>
-      createBrowserTool({
-        sandboxBridgeUrl: ctx.browser?.sandboxBridgeUrl,
-        allowHostControl: ctx.browser?.allowHostControl,
-        agentSessionKey: ctx.sessionKey,
-      })) as OpenClawPluginToolFactory);
-    api.registerCli(({ program }) => registerBrowserCli(program), { commands: ["browser"] });
-    api.registerGatewayMethod("browser.request", handleBrowserGatewayRequest, {
-      scope: "operator.write",
-    });
-    api.registerService(createBrowserPluginService());
-  },
+  reload: browserPluginReload,
+  nodeHostCommands: browserPluginNodeHostCommands,
+  securityAuditCollectors: [...browserSecurityAuditCollectors],
+  register: registerBrowserPlugin,
 });

@@ -1,3 +1,6 @@
+/**
+ * Tests timeout behavior for gateway HTTP hook request handling.
+ */
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
   createHookRequest,
@@ -9,13 +12,23 @@ const { readJsonBodyMock } = vi.hoisted(() => ({
   readJsonBodyMock: vi.fn(),
 }));
 
-vi.mock("./hooks.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./hooks.js")>();
+vi.mock("./hooks.js", async () => {
+  const actual = await vi.importActual<typeof import("./hooks.js")>("./hooks.js");
   return {
     ...actual,
     readJsonBody: readJsonBodyMock,
   };
 });
+
+function expectRetryAfterHeader(setHeader: ReturnType<typeof vi.fn>): void {
+  const retryAfterCall = setHeader.mock.calls.find(([name]) => name === "Retry-After");
+  if (!retryAfterCall) {
+    throw new Error("Expected Retry-After header call");
+  }
+  const retryAfterValue = retryAfterCall[1];
+  expect(typeof retryAfterValue).toBe("string");
+  expect(Number.parseInt(String(retryAfterValue), 10)).toBeGreaterThan(0);
+}
 
 describe("createHooksRequestHandler timeout status mapping", () => {
   beforeEach(() => {
@@ -62,7 +75,7 @@ describe("createHooksRequestHandler timeout status mapping", () => {
 
     expect(handled).toBe(true);
     expect(mappedRes.statusCode).toBe(429);
-    expect(setHeader).toHaveBeenCalledWith("Retry-After", expect.any(String));
+    expectRetryAfterHeader(setHeader);
   });
 
   test("uses trusted proxy forwarded client ip for hook auth throttling", async () => {
@@ -92,11 +105,11 @@ describe("createHooksRequestHandler timeout status mapping", () => {
 
     expect(handled).toBe(true);
     expect(forwardedRes.statusCode).toBe(429);
-    expect(setHeader).toHaveBeenCalledWith("Retry-After", expect.any(String));
+    expectRetryAfterHeader(setHeader);
   });
 
   test.each(["0.0.0.0", "::"])(
-    "does not throw when bindHost=%s while parsing non-hook request URL",
+    "returns unhandled when bindHost=%s sees a non-hook request URL",
     async (bindHost) => {
       const handler = createHooksHandler({ bindHost });
       const req = createHookRequest({ url: "/" });

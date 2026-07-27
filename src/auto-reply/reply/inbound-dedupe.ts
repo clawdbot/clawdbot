@@ -1,6 +1,13 @@
-import { logVerbose, shouldLogVerbose } from "../../globals.js";
+// Tracks inbound message ids to avoid duplicate reply runs.
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveGlobalDedupeCache, type DedupeCache } from "../../infra/dedupe.js";
+import { channelRouteDedupeKey } from "../../plugin-sdk/channel-route.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { MsgContext } from "../templating.js";
 
 const DEFAULT_INBOUND_DEDUPE_TTL_MS = 20 * 60_000;
@@ -11,22 +18,29 @@ const DEFAULT_INBOUND_DEDUPE_MAX = 5000;
  * message cannot bypass dedupe by entering through a different chunk copy.
  */
 const INBOUND_DEDUPE_CACHE_KEY = Symbol.for("openclaw.inboundDedupeCache");
+const INBOUND_DEDUPE_INFLIGHT_KEY = Symbol.for("openclaw.inboundDedupeInflight");
 
 const inboundDedupeCache: DedupeCache = resolveGlobalDedupeCache(INBOUND_DEDUPE_CACHE_KEY, {
   ttlMs: DEFAULT_INBOUND_DEDUPE_TTL_MS,
   maxSize: DEFAULT_INBOUND_DEDUPE_MAX,
 });
+const inboundDedupeInFlight = resolveGlobalSingleton(
+  INBOUND_DEDUPE_INFLIGHT_KEY,
+  () => new Set<string>(),
+);
 
-const normalizeProvider = (value?: string | null) => value?.trim().toLowerCase() || "";
+type InboundDedupeClaimResult =
+  | { status: "invalid" }
+  | { status: "duplicate"; key: string }
+  | { status: "inflight"; key: string }
+  | { status: "claimed"; key: string };
 
 const resolveInboundPeerId = (ctx: MsgContext) =>
   ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? ctx.SessionKey;
 
 function resolveInboundDedupeSessionScope(ctx: MsgContext): string {
   const sessionKey =
-    (ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey : undefined)?.trim() ||
-    ctx.SessionKey?.trim() ||
-    "";
+    resolveCommandTurnTargetSessionKey(ctx) || normalizeOptionalString(ctx.SessionKey) || "";
   if (!sessionKey) {
     return "";
   }
@@ -39,9 +53,10 @@ function resolveInboundDedupeSessionScope(ctx: MsgContext): string {
   return `agent:${parsed.agentId}`;
 }
 
-export function buildInboundDedupeKey(ctx: MsgContext): string | null {
-  const provider = normalizeProvider(ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface);
-  const messageId = ctx.MessageSid?.trim();
+function buildInboundDedupeKey(ctx: MsgContext): string | null {
+  const provider =
+    normalizeOptionalLowercaseString(ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface) || "";
+  const messageId = normalizeOptionalString(ctx.MessageSid);
   if (!provider || !messageId) {
     return null;
   }
@@ -50,30 +65,52 @@ export function buildInboundDedupeKey(ctx: MsgContext): string | null {
     return null;
   }
   const sessionScope = resolveInboundDedupeSessionScope(ctx);
-  const accountId = ctx.AccountId?.trim() ?? "";
-  const threadId =
-    ctx.MessageThreadId !== undefined && ctx.MessageThreadId !== null
-      ? String(ctx.MessageThreadId)
-      : "";
-  return [provider, accountId, sessionScope, peerId, threadId, messageId].filter(Boolean).join("|");
+  const accountId = normalizeOptionalString(ctx.AccountId) ?? "";
+  const routeKey = channelRouteDedupeKey({
+    channel: provider,
+    to: peerId,
+    accountId,
+    threadId: ctx.MessageThreadId,
+  });
+  return JSON.stringify([sessionScope, routeKey, messageId]);
 }
 
-export function shouldSkipDuplicateInbound(
+export function claimInboundDedupe(
   ctx: MsgContext,
-  opts?: { cache?: DedupeCache; now?: number },
-): boolean {
+  opts?: { cache?: DedupeCache; now?: number; inFlight?: Set<string> },
+): InboundDedupeClaimResult {
   const key = buildInboundDedupeKey(ctx);
   if (!key) {
-    return false;
+    return { status: "invalid" };
   }
   const cache = opts?.cache ?? inboundDedupeCache;
-  const skipped = cache.check(key, opts?.now);
-  if (skipped && shouldLogVerbose()) {
-    logVerbose(`inbound dedupe: skipped ${key}`);
+  if (cache.peek(key, opts?.now)) {
+    return { status: "duplicate", key };
   }
-  return skipped;
+  const inFlight = opts?.inFlight ?? inboundDedupeInFlight;
+  if (inFlight.has(key)) {
+    return { status: "inflight", key };
+  }
+  inFlight.add(key);
+  return { status: "claimed", key };
+}
+
+export function commitInboundDedupe(
+  key: string,
+  opts?: { cache?: DedupeCache; now?: number; inFlight?: Set<string> },
+): void {
+  const cache = opts?.cache ?? inboundDedupeCache;
+  cache.check(key, opts?.now);
+  const inFlight = opts?.inFlight ?? inboundDedupeInFlight;
+  inFlight.delete(key);
+}
+
+export function releaseInboundDedupe(key: string, opts?: { inFlight?: Set<string> }): void {
+  const inFlight = opts?.inFlight ?? inboundDedupeInFlight;
+  inFlight.delete(key);
 }
 
 export function resetInboundDedupe(): void {
   inboundDedupeCache.clear();
+  inboundDedupeInFlight.clear();
 }

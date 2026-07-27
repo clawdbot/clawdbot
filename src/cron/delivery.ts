@@ -1,297 +1,185 @@
-import type { CliDeps } from "../cli/deps.js";
+/** Sends cron announce payloads and best-effort failure notifications. */
+import { sendDurableMessageBatch } from "../channels/message/runtime.js";
+import type { CliDeps } from "../cli/deps.types.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
-import type { CronFailureDestinationConfig } from "../config/types.cron.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { getChildLogger } from "../logging.js";
-import { resolveDeliveryTarget } from "./isolated-agent/delivery-target.js";
-import type { CronDelivery, CronDeliveryMode, CronJob, CronMessageChannel } from "./types.js";
+import { resolveFailureDestination, resolveCronDeliveryPlan } from "./delivery-plan.js";
+import {
+  resolveDeliveryTarget,
+  type DeliveryTargetResolution,
+} from "./isolated-agent/delivery-target.js";
+import { resolveCronNotificationSessionKey } from "./session-target.js";
+import type { CronMessageChannel } from "./types.js";
 
-export type CronDeliveryPlan = {
-  mode: CronDeliveryMode;
-  channel?: CronMessageChannel;
-  to?: string;
-  /** Explicit channel account id from the delivery config, if set. */
-  accountId?: string;
-  source: "delivery" | "payload";
-  requested: boolean;
-};
-
-function normalizeChannel(value: unknown): CronMessageChannel | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim().toLowerCase();
-  if (!trimmed) {
-    return undefined;
-  }
-  return trimmed as CronMessageChannel;
-}
-
-function normalizeTo(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function normalizeAccountId(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
-  const payload = job.payload.kind === "agentTurn" ? job.payload : null;
-  const delivery = job.delivery;
-  const hasDelivery = delivery && typeof delivery === "object";
-  const rawMode = hasDelivery ? (delivery as { mode?: unknown }).mode : undefined;
-  const normalizedMode = typeof rawMode === "string" ? rawMode.trim().toLowerCase() : rawMode;
-  const mode =
-    normalizedMode === "announce"
-      ? "announce"
-      : normalizedMode === "webhook"
-        ? "webhook"
-        : normalizedMode === "none"
-          ? "none"
-          : normalizedMode === "deliver"
-            ? "announce"
-            : undefined;
-
-  const payloadChannel = normalizeChannel(payload?.channel);
-  const payloadTo = normalizeTo(payload?.to);
-  const deliveryChannel = normalizeChannel(
-    (delivery as { channel?: unknown } | undefined)?.channel,
-  );
-  const deliveryTo = normalizeTo((delivery as { to?: unknown } | undefined)?.to);
-  const channel = deliveryChannel ?? payloadChannel ?? "last";
-  const to = deliveryTo ?? payloadTo;
-  const deliveryAccountId = normalizeAccountId(
-    (delivery as { accountId?: unknown } | undefined)?.accountId,
-  );
-  if (hasDelivery) {
-    const resolvedMode = mode ?? "announce";
-    return {
-      mode: resolvedMode,
-      channel: resolvedMode === "announce" ? channel : undefined,
-      to,
-      accountId: deliveryAccountId,
-      source: "delivery",
-      requested: resolvedMode === "announce",
-    };
-  }
-
-  const legacyMode =
-    payload?.deliver === true ? "explicit" : payload?.deliver === false ? "off" : "auto";
-  const hasExplicitTarget = Boolean(to);
-  const requested = legacyMode === "explicit" || (legacyMode === "auto" && hasExplicitTarget);
-
-  return {
-    mode: requested ? "announce" : "none",
-    channel,
-    to,
-    source: "payload",
-    requested,
-  };
-}
-
-export type CronFailureDeliveryPlan = {
-  mode: "announce" | "webhook";
-  channel?: CronMessageChannel;
-  to?: string;
-  accountId?: string;
-};
-
-export type CronFailureDestinationInput = {
-  channel?: CronMessageChannel;
-  to?: string;
-  accountId?: string;
-  mode?: "announce" | "webhook";
-};
-
-function normalizeFailureMode(value: unknown): "announce" | "webhook" | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim().toLowerCase();
-  if (trimmed === "announce" || trimmed === "webhook") {
-    return trimmed;
-  }
-  return undefined;
-}
-
-export function resolveFailureDestination(
-  job: CronJob,
-  globalConfig?: CronFailureDestinationConfig,
-): CronFailureDeliveryPlan | null {
-  const delivery = job.delivery;
-  const jobFailureDest = delivery?.failureDestination as CronFailureDestinationInput | undefined;
-  const hasJobFailureDest = jobFailureDest && typeof jobFailureDest === "object";
-
-  let channel: CronMessageChannel | undefined;
-  let to: string | undefined;
-  let accountId: string | undefined;
-  let mode: "announce" | "webhook" | undefined;
-
-  // Start with global config as base
-  if (globalConfig) {
-    channel = normalizeChannel(globalConfig.channel);
-    to = normalizeTo(globalConfig.to);
-    accountId = normalizeAccountId(globalConfig.accountId);
-    mode = normalizeFailureMode(globalConfig.mode);
-  }
-
-  // Override with job-level values if present
-  if (hasJobFailureDest) {
-    const jobChannel = normalizeChannel(jobFailureDest.channel);
-    const jobTo = normalizeTo(jobFailureDest.to);
-    const jobAccountId = normalizeAccountId(jobFailureDest.accountId);
-    const jobMode = normalizeFailureMode(jobFailureDest.mode);
-    const hasJobChannelField = "channel" in jobFailureDest;
-    const hasJobToField = "to" in jobFailureDest;
-    const hasJobAccountIdField = "accountId" in jobFailureDest;
-
-    // Track if 'to' was explicitly set at job level
-    const jobToExplicitValue = hasJobToField && jobTo !== undefined;
-
-    // Respect explicit clears from partial patches.
-    if (hasJobChannelField) {
-      channel = jobChannel;
-    }
-    if (hasJobToField) {
-      to = jobTo;
-    }
-    if (hasJobAccountIdField) {
-      accountId = jobAccountId;
-    }
-    if (jobMode !== undefined) {
-      // Mode was explicitly overridden - clear inherited 'to' since URL semantics differ
-      // between announce (channel recipient) and webhook (HTTP endpoint)
-      // But preserve explicit 'to' that was set at job level
-      // Treat undefined global mode as "announce" for comparison
-      const globalMode = globalConfig?.mode ?? "announce";
-      if (!jobToExplicitValue && globalMode !== jobMode) {
-        to = undefined;
-      }
-      mode = jobMode;
-    }
-  }
-
-  if (!channel && !to && !accountId && !mode) {
-    return null;
-  }
-
-  const resolvedMode = mode ?? "announce";
-
-  // Webhook mode requires a URL
-  if (resolvedMode === "webhook" && !to) {
-    return null;
-  }
-
-  const result: CronFailureDeliveryPlan = {
-    mode: resolvedMode,
-    channel: resolvedMode === "announce" ? (channel ?? "last") : undefined,
-    to,
-    accountId,
-  };
-
-  if (delivery && isSameDeliveryTarget(delivery, result)) {
-    return null;
-  }
-
-  return result;
-}
-
-function isSameDeliveryTarget(
-  delivery: CronDelivery,
-  failurePlan: CronFailureDeliveryPlan,
-): boolean {
-  const primaryMode = delivery.mode ?? "announce";
-  if (primaryMode === "none") {
-    return false;
-  }
-
-  const primaryChannel = delivery.channel;
-  const primaryTo = delivery.to;
-  const primaryAccountId = delivery.accountId;
-
-  if (failurePlan.mode === "webhook") {
-    return primaryMode === "webhook" && primaryTo === failurePlan.to;
-  }
-
-  const primaryChannelNormalized = primaryChannel ?? "last";
-  const failureChannelNormalized = failurePlan.channel ?? "last";
-
-  return (
-    failureChannelNormalized === primaryChannelNormalized &&
-    failurePlan.to === primaryTo &&
-    failurePlan.accountId === primaryAccountId
-  );
-}
+export { resolveCronDeliveryPlan, resolveFailureDestination };
 
 const FAILURE_NOTIFICATION_TIMEOUT_MS = 30_000;
 const cronDeliveryLogger = getChildLogger({ subsystem: "cron-delivery" });
 
+/** Channel target metadata used for cron announcements and failure notifications. */
+type CronAnnounceTarget = {
+  channel?: string;
+  to?: string;
+  threadId?: string | number;
+  accountId?: string;
+  sessionKey?: string;
+  inheritSessionThread?: boolean;
+};
+
+type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
+
+async function resolveCronAnnounceDelivery(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  jobId: string;
+  target: CronAnnounceTarget;
+}): Promise<
+  | {
+      ok: true;
+      resolvedTarget: SuccessfulDeliveryTarget;
+      session: ReturnType<typeof buildOutboundSessionContext>;
+      identity: ReturnType<typeof resolveAgentOutboundIdentity>;
+    }
+  | { ok: false; error: Error }
+> {
+  // Resolve the target before building outbound identity/session so send errors
+  // report the configured route, not only the cron job id.
+  const targetResolutionOptions =
+    params.target.inheritSessionThread === false ? { inheritSessionThread: false } : undefined;
+  const resolvedTarget = await resolveDeliveryTarget(
+    params.cfg,
+    params.agentId,
+    {
+      channel: params.target.channel as CronMessageChannel | undefined,
+      to: params.target.to,
+      threadId: params.target.threadId,
+      accountId: params.target.accountId,
+      sessionKey: params.target.sessionKey,
+    },
+    targetResolutionOptions,
+  );
+
+  if (!resolvedTarget.ok) {
+    return { ok: false, error: resolvedTarget.error };
+  }
+
+  const identity = resolveAgentOutboundIdentity(params.cfg, params.agentId);
+  const session = buildOutboundSessionContext({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    sessionKey: resolveCronNotificationSessionKey({
+      jobId: params.jobId,
+      sessionKey: params.target.sessionKey,
+    }),
+  });
+
+  return {
+    ok: true,
+    resolvedTarget,
+    session,
+    identity,
+  };
+}
+
+async function deliverCronAnnouncePayload(params: {
+  deps: CliDeps;
+  cfg: OpenClawConfig;
+  delivery: {
+    resolvedTarget: SuccessfulDeliveryTarget;
+    session: ReturnType<typeof buildOutboundSessionContext>;
+    identity: ReturnType<typeof resolveAgentOutboundIdentity>;
+  };
+  message: string;
+  abortSignal: AbortSignal;
+}): Promise<void> {
+  // Cron delivery is durable and non-best-effort for primary announces; partial
+  // channel failure must surface as a cron run failure.
+  const send = await sendDurableMessageBatch({
+    cfg: params.cfg,
+    channel: params.delivery.resolvedTarget.channel,
+    to: params.delivery.resolvedTarget.to,
+    accountId: params.delivery.resolvedTarget.accountId,
+    threadId: params.delivery.resolvedTarget.threadId,
+    payloads: [{ text: params.message }],
+    session: params.delivery.session,
+    identity: params.delivery.identity,
+    bestEffort: false,
+    deps: createOutboundSendDeps(params.deps),
+    signal: params.abortSignal,
+  });
+  if (send.status === "failed" || send.status === "partial_failed") {
+    throw send.error;
+  }
+}
+
+/** Sends a cron announce payload and throws if target resolution or delivery fails. */
+export async function sendCronAnnouncePayloadStrict(params: {
+  deps: CliDeps;
+  cfg: OpenClawConfig;
+  agentId: string;
+  jobId: string;
+  target: CronAnnounceTarget;
+  message: string;
+  abortSignal: AbortSignal;
+}): Promise<void> {
+  const delivery = await resolveCronAnnounceDelivery(params);
+  if (!delivery.ok) {
+    throw delivery.error;
+  }
+  await deliverCronAnnouncePayload({
+    deps: params.deps,
+    cfg: params.cfg,
+    delivery,
+    message: params.message,
+    abortSignal: params.abortSignal,
+  });
+}
+
+/** Sends a best-effort cron failure notification, logging resolution/send failures. */
 export async function sendFailureNotificationAnnounce(
   deps: CliDeps,
   cfg: OpenClawConfig,
   agentId: string,
   jobId: string,
-  target: { channel?: string; to?: string; accountId?: string },
+  target: CronAnnounceTarget,
   message: string,
 ): Promise<void> {
-  const resolvedTarget = await resolveDeliveryTarget(cfg, agentId, {
-    channel: target.channel as CronMessageChannel | undefined,
-    to: target.to,
-    accountId: target.accountId,
-  });
+  const delivery = await resolveCronAnnounceDelivery({ cfg, agentId, jobId, target });
 
-  if (!resolvedTarget.ok) {
+  if (!delivery.ok) {
+    // Failure alerts must not mask the original cron run failure.
     cronDeliveryLogger.warn(
-      { error: resolvedTarget.error.message },
+      { error: delivery.error.message },
       "cron: failed to resolve failure destination target",
     );
     return;
   }
 
-  const identity = resolveAgentOutboundIdentity(cfg, agentId);
-  const session = buildOutboundSessionContext({
-    cfg,
-    agentId,
-    sessionKey: `cron:${jobId}:failure`,
-  });
-
   const abortController = new AbortController();
   const timeout = setTimeout(() => {
+    // Failure notifications are secondary; timeout prevents a stuck channel send
+    // from extending an already-failed cron run.
     abortController.abort();
   }, FAILURE_NOTIFICATION_TIMEOUT_MS);
 
   try {
-    await deliverOutboundPayloads({
+    await deliverCronAnnouncePayload({
+      deps,
       cfg,
-      channel: resolvedTarget.channel,
-      to: resolvedTarget.to,
-      accountId: resolvedTarget.accountId,
-      threadId: resolvedTarget.threadId,
-      payloads: [{ text: message }],
-      session,
-      identity,
-      bestEffort: false,
-      deps: createOutboundSendDeps(deps),
+      delivery,
+      message,
       abortSignal: abortController.signal,
     });
   } catch (err) {
     cronDeliveryLogger.warn(
       {
         err: formatErrorMessage(err),
-        channel: resolvedTarget.channel,
-        to: resolvedTarget.to,
+        channel: delivery.resolvedTarget.channel,
+        to: delivery.resolvedTarget.to,
       },
       "cron: failure destination announce failed",
     );

@@ -1,12 +1,13 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.MainViewModel
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
-import ai.openclaw.app.MainViewModel
 
+/** Chooses onboarding or the authenticated app shell from persisted app state. */
 @Composable
 fun RootScreen(viewModel: MainViewModel) {
   val onboardingCompleted by viewModel.onboardingCompleted.collectAsState()
@@ -16,5 +17,5 @@ fun RootScreen(viewModel: MainViewModel) {
     return
   }
 
-  PostOnboardingTabs(viewModel = viewModel, modifier = Modifier.fillMaxSize())
+  ShellScreen(viewModel = viewModel, modifier = Modifier.fillMaxSize())
 }

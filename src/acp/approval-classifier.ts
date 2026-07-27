@@ -1,0 +1,245 @@
+/** Classifies ACP tool permission requests into auto-approved and prompt-required risk buckets. */
+import { homedir } from "node:os";
+import path from "node:path";
+import { asRecord } from "@openclaw/acp-core/record-shared";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { isKnownCoreToolId } from "../agents/tool-catalog.js";
+import { isMutatingToolCall } from "../agents/tool-mutation.js";
+import { isPathInside } from "../infra/path-guards.js";
+import { readTrimmedStringAlias } from "../utils/string-readers.js";
+
+const SAFE_SEARCH_TOOL_IDS = new Set(["search", "web_search", "memory_search"]);
+const TRUSTED_SAFE_TOOL_ALIASES = new Set(["search"]);
+const EXEC_CAPABLE_TOOL_IDS = new Set([
+  "exec",
+  "spawn",
+  "shell",
+  "bash",
+  "process",
+  "code_execution",
+  "nodes",
+]);
+const CONTROL_PLANE_TOOL_IDS = new Set([
+  "cron",
+  "gateway",
+  "sessions_spawn",
+  "sessions_send",
+  "session_status",
+]);
+
+export type AcpApprovalClass =
+  | "readonly_scoped"
+  | "readonly_search"
+  | "mutating"
+  | "exec_capable"
+  | "control_plane"
+  | "interactive"
+  | "other"
+  | "unknown";
+
+type AcpApprovalClassification = {
+  toolName?: string;
+  approvalClass: AcpApprovalClass;
+  autoApprove: boolean;
+};
+
+type AcpApprovalToolCall = {
+  title?: string | null;
+  _meta?: unknown;
+  rawInput?: unknown;
+  locations?: unknown;
+};
+
+function readFirstStringValue(
+  source: Record<string, unknown> | undefined,
+  keys: string[],
+): string | undefined {
+  if (!source) {
+    return undefined;
+  }
+  return readTrimmedStringAlias(source, keys);
+}
+
+function normalizeToolName(value: string): string | undefined {
+  const normalized = normalizeLowercaseStringOrEmpty(value);
+  if (!normalized || normalized.length > 128) {
+    return undefined;
+  }
+  return /^[a-z0-9._-]+$/.test(normalized) ? normalized : undefined;
+}
+
+function parseToolNameFromTitle(title: string | undefined | null): string | undefined {
+  if (!title) {
+    return undefined;
+  }
+  const head = normalizeOptionalString(title.split(":", 1)[0]);
+  return head ? normalizeToolName(head) : undefined;
+}
+
+function resolveToolNameForPermission(params: {
+  toolCall?: {
+    title?: string | null;
+    _meta?: unknown;
+    rawInput?: unknown;
+  };
+}): string | undefined {
+  const toolCall = params.toolCall;
+  const toolMeta = asRecord(toolCall?.["_meta"]);
+  const rawInput = asRecord(toolCall?.rawInput);
+
+  const fromMeta = readFirstStringValue(toolMeta, ["toolName", "tool_name", "name"]);
+  const fromRawInput = readFirstStringValue(rawInput, ["tool", "toolName", "tool_name", "name"]);
+  const fromTitle = parseToolNameFromTitle(toolCall?.title);
+  const metaName = fromMeta ? normalizeToolName(fromMeta) : undefined;
+  const rawInputName = fromRawInput ? normalizeToolName(fromRawInput) : undefined;
+  const titleName = fromTitle;
+  if ((fromMeta && !metaName) || (fromRawInput && !rawInputName)) {
+    return undefined;
+  }
+  if (metaName && titleName && metaName !== titleName) {
+    return undefined;
+  }
+  if (rawInputName && metaName && rawInputName !== metaName) {
+    return undefined;
+  }
+  if (rawInputName && titleName && rawInputName !== titleName) {
+    return undefined;
+  }
+  return metaName ?? titleName ?? rawInputName;
+}
+
+function extractPathFromToolTitle(
+  toolTitle: string | undefined,
+  toolName: string | undefined,
+): string | undefined {
+  if (!toolTitle) {
+    return undefined;
+  }
+  const separator = toolTitle.indexOf(":");
+  if (separator < 0) {
+    return undefined;
+  }
+  const tail = toolTitle.slice(separator + 1).trim();
+  if (!tail) {
+    return undefined;
+  }
+  const keyedMatch =
+    toolName === "read"
+      ? tail.match(/(?:^|,\s*)(?:path|file_path|filePath)\s*:\s*([^,]+)/)
+      : tail.match(/^(?:path|file_path|filePath)\s*:\s*([^,]+)/);
+  if (keyedMatch?.[1]) {
+    return keyedMatch[1].trim();
+  }
+  return toolName === "read" ? tail : undefined;
+}
+
+function readLocationPaths(locations: unknown): string[] {
+  if (!Array.isArray(locations)) {
+    return [];
+  }
+  const paths: string[] = [];
+  for (const location of locations) {
+    const pathValue = readFirstStringValue(asRecord(location), ["path", "file_path", "filePath"]);
+    if (pathValue) {
+      paths.push(pathValue);
+    }
+  }
+  return paths;
+}
+
+function resolveToolPathCandidates(params: {
+  includeLocations?: boolean;
+  toolCall?: AcpApprovalToolCall;
+  toolName: string | undefined;
+  toolTitle: string | undefined;
+}): string[] {
+  const rawInput = asRecord(params.toolCall?.rawInput);
+  return [
+    readFirstStringValue(rawInput, ["path", "file_path", "filePath"]),
+    extractPathFromToolTitle(params.toolTitle, params.toolName),
+    ...(params.includeLocations ? readLocationPaths(params.toolCall?.locations) : []),
+  ].filter((value): value is string => value !== undefined);
+}
+
+function resolveAbsoluteScopedPath(value: string, cwd: string): string | undefined {
+  let candidate = value.trim();
+  if (!candidate) {
+    return undefined;
+  }
+  if (candidate.startsWith("file://")) {
+    try {
+      const parsed = new URL(candidate);
+      candidate = decodeURIComponent(parsed.pathname || "");
+    } catch {
+      return undefined;
+    }
+  }
+  if (candidate === "~") {
+    candidate = homedir();
+  } else if (candidate.startsWith("~/")) {
+    candidate = path.join(homedir(), candidate.slice(2));
+  }
+  return path.isAbsolute(candidate) ? path.normalize(candidate) : path.resolve(cwd, candidate);
+}
+
+function isToolPathScopedToCwd(rawPath: string, cwd: string): boolean {
+  const absolutePath = resolveAbsoluteScopedPath(rawPath, cwd);
+  if (!absolutePath) {
+    return false;
+  }
+  return isPathInside(path.resolve(cwd), absolutePath);
+}
+
+/** Resolves the ACP approval class for one tool call, failing closed on spoofed tool identity. */
+export function classifyAcpToolApproval(params: {
+  toolCall?: AcpApprovalToolCall;
+  cwd: string;
+}): AcpApprovalClassification {
+  const toolName = resolveToolNameForPermission(params);
+  if (!toolName) {
+    return { toolName: undefined, approvalClass: "unknown", autoApprove: false };
+  }
+
+  const isTrustedToolId = isKnownCoreToolId(toolName) || TRUSTED_SAFE_TOOL_ALIASES.has(toolName);
+  if (toolName === "read" && isTrustedToolId) {
+    const rawPaths = resolveToolPathCandidates({
+      includeLocations: false,
+      toolCall: params.toolCall,
+      toolName,
+      toolTitle: params.toolCall?.title ?? undefined,
+    });
+    const autoApprove =
+      rawPaths.length > 0 &&
+      rawPaths.every((rawPath) => isToolPathScopedToCwd(rawPath, params.cwd));
+    return {
+      toolName,
+      approvalClass: autoApprove ? "readonly_scoped" : "other",
+      autoApprove,
+    };
+  }
+  if (SAFE_SEARCH_TOOL_IDS.has(toolName) && isTrustedToolId) {
+    const rawPaths = resolveToolPathCandidates({
+      includeLocations: true,
+      toolCall: params.toolCall,
+      toolName,
+      toolTitle: params.toolCall?.title ?? undefined,
+    });
+    if (rawPaths.some((rawPath) => !isToolPathScopedToCwd(rawPath, params.cwd))) {
+      return { toolName, approvalClass: "other", autoApprove: false };
+    }
+    return { toolName, approvalClass: "readonly_search", autoApprove: true };
+  }
+  if (EXEC_CAPABLE_TOOL_IDS.has(toolName)) {
+    return { toolName, approvalClass: "exec_capable", autoApprove: false };
+  }
+  if (CONTROL_PLANE_TOOL_IDS.has(toolName)) {
+    return { toolName, approvalClass: "control_plane", autoApprove: false };
+  }
+  if (isMutatingToolCall(toolName, params.toolCall?.rawInput)) {
+    return { toolName, approvalClass: "mutating", autoApprove: false };
+  }
+  return { toolName, approvalClass: "other", autoApprove: false };
+}

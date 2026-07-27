@@ -1,0 +1,97 @@
+import { expectDefined } from "@openclaw/normalization-core";
+// Plugin and hook-pack update selectors for id and npm-spec command inputs.
+import type { HookInstallRecord } from "../config/types.hooks.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import {
+  extractInstalledNpmHookPackageName,
+  extractInstalledNpmPackageName,
+} from "./plugins-install-records.js";
+
+/** Resolve a plugin update target and optional npm spec override from CLI input. */
+export function resolvePluginUpdateSelection(params: {
+  installs: Record<string, PluginInstallRecord>;
+  rawId?: string;
+  all?: boolean;
+}): { pluginIds: string[]; specOverrides?: Record<string, string> } {
+  if (params.all) {
+    return { pluginIds: Object.keys(params.installs) };
+  }
+  if (!params.rawId) {
+    return { pluginIds: [] };
+  }
+
+  if (Object.hasOwn(params.installs, params.rawId)) {
+    return { pluginIds: [params.rawId] };
+  }
+
+  const parsedSpec = parseRegistryNpmSpec(params.rawId);
+  if (!parsedSpec) {
+    return { pluginIds: [params.rawId] };
+  }
+  const matches = Object.entries(params.installs).filter(([, install]) => {
+    return extractInstalledNpmPackageName(install) === parsedSpec.name;
+  });
+  if (matches.length !== 1) {
+    return { pluginIds: [params.rawId] };
+  }
+
+  const [pluginId] = expectDefined(matches[0], "matches capture group 0");
+  if (!pluginId) {
+    return { pluginIds: [params.rawId] };
+  }
+  if (parsedSpec.selectorKind === "none") {
+    return {
+      pluginIds: [pluginId],
+      specOverrides: {
+        [pluginId]: parsedSpec.raw,
+      },
+    };
+  }
+  return {
+    pluginIds: [pluginId],
+    specOverrides: {
+      [pluginId]: parsedSpec.raw,
+    },
+  };
+}
+
+/** Resolve a hook-pack update target and optional npm spec override from CLI input. */
+export function resolveHookPackUpdateSelection(params: {
+  installs: Record<string, HookInstallRecord>;
+  rawId?: string;
+  all?: boolean;
+}): { hookIds: string[]; specOverrides?: Record<string, string> } {
+  if (params.all) {
+    return { hookIds: Object.keys(params.installs) };
+  }
+  if (!params.rawId) {
+    return { hookIds: [] };
+  }
+  if (Object.hasOwn(params.installs, params.rawId)) {
+    return { hookIds: [params.rawId] };
+  }
+
+  const parsedSpec = parseRegistryNpmSpec(params.rawId);
+  if (!parsedSpec || parsedSpec.selectorKind === "none") {
+    return { hookIds: [] };
+  }
+
+  const matches = Object.entries(params.installs).filter(([, install]) => {
+    return extractInstalledNpmHookPackageName(install) === parsedSpec.name;
+  });
+  if (matches.length !== 1) {
+    return { hookIds: [] };
+  }
+
+  const [hookId] = expectDefined(matches[0], "matches capture group 0");
+  if (!hookId) {
+    return { hookIds: [] };
+  }
+  return {
+    hookIds: [hookId],
+    specOverrides: {
+      [hookId]: parsedSpec.raw,
+    },
+  };
+}

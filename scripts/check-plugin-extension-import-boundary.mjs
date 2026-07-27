@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 
+// Inventories core plugin imports that cross into bundled extension files.
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
 import {
   collectTypeScriptInventory,
+  createCachedAsync,
   diffInventoryEntries,
+  formatGroupedInventoryHuman,
   normalizeRepoPath,
   runBaselineInventoryCheck,
   resolveRepoSpecifier,
@@ -27,8 +31,6 @@ const baselinePath = path.join(
   "fixtures",
   "plugin-extension-import-boundary-inventory.json",
 );
-let cachedInventoryPromise = null;
-let cachedExpectedInventoryPromise = null;
 
 const bundledWebSearchProviders = new Set([
   "brave",
@@ -83,7 +85,7 @@ function scanImportBoundaryViolations(sourceFile, filePath) {
 
   visitModuleSpecifiers(ts, sourceFile, ({ kind, specifier, specifierNode }) => {
     const resolvedPath = resolveRepoSpecifier(repoRoot, specifier, filePath);
-    if (!resolvedPath?.startsWith("extensions/")) {
+    if (!resolvedPath?.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
       return;
     }
     pushEntry(entries, {
@@ -157,87 +159,62 @@ function shouldSkipFile(filePath) {
   );
 }
 
-export async function collectPluginExtensionImportBoundaryInventory() {
-  if (cachedInventoryPromise) {
-    return cachedInventoryPromise;
-  }
+/**
+ * Cached inventory of src/plugins imports that cross into bundled extensions.
+ */
+export const collectPluginExtensionImportBoundaryInventory = createCachedAsync(async () => {
+  const files = (await collectTypeScriptFilesFromRoots(scanRoots))
+    .filter((filePath) => !shouldSkipFile(filePath))
+    .toSorted((left, right) =>
+      normalizeRepoPath(repoRoot, left).localeCompare(normalizeRepoPath(repoRoot, right)),
+    );
+  return await collectTypeScriptInventory({
+    ts,
+    files,
+    compareEntries,
+    collectEntries(sourceFile, filePath) {
+      return [
+        ...scanImportBoundaryViolations(sourceFile, filePath),
+        ...scanWebSearchRegistrySmells(sourceFile, filePath),
+      ];
+    },
+  });
+});
 
-  cachedInventoryPromise = (async () => {
-    const files = (await collectTypeScriptFilesFromRoots(scanRoots))
-      .filter((filePath) => !shouldSkipFile(filePath))
-      .toSorted((left, right) =>
-        normalizeRepoPath(repoRoot, left).localeCompare(normalizeRepoPath(repoRoot, right)),
-      );
-    return await collectTypeScriptInventory({
-      ts,
-      files,
-      compareEntries,
-      collectEntries(sourceFile, filePath) {
-        return [
-          ...scanImportBoundaryViolations(sourceFile, filePath),
-          ...scanWebSearchRegistrySmells(sourceFile, filePath),
-        ];
-      },
-    });
-  })();
+/**
+ * Cached expected plugin-extension import inventory baseline.
+ */
+export const readExpectedInventory = createCachedAsync(async () =>
+  JSON.parse(await fs.readFile(baselinePath, "utf8")),
+);
 
-  try {
-    return await cachedInventoryPromise;
-  } catch (error) {
-    cachedInventoryPromise = null;
-    throw error;
-  }
-}
-
-export async function readExpectedInventory() {
-  if (cachedExpectedInventoryPromise) {
-    return cachedExpectedInventoryPromise;
-  }
-
-  cachedExpectedInventoryPromise = fs
-    .readFile(baselinePath, "utf8")
-    .then((contents) => JSON.parse(contents));
-  try {
-    return await cachedExpectedInventoryPromise;
-  } catch (error) {
-    cachedExpectedInventoryPromise = null;
-    throw error;
-  }
-}
-
+/**
+ * Diffs expected and actual plugin-extension boundary inventory entries.
+ */
 export function diffInventory(expected, actual) {
   return diffInventoryEntries(expected, actual, compareEntries);
 }
 
-function formatInventoryHuman(inventory) {
-  if (inventory.length === 0) {
-    return "Rule: src/plugins/** must not import extensions/**\nNo plugin import boundary violations found.";
-  }
-
-  const lines = [
-    "Rule: src/plugins/** must not import extensions/**",
-    "Plugin extension import boundary inventory:",
-  ];
-  let activeFile = "";
-  for (const entry of inventory) {
-    if (entry.file !== activeFile) {
-      activeFile = entry.file;
-      lines.push(activeFile);
-    }
-    lines.push(`  - line ${entry.line} [${entry.kind}] ${entry.reason}`);
-    lines.push(`    specifier: ${entry.specifier}`);
-    lines.push(`    resolved: ${entry.resolvedPath}`);
-  }
-  return lines.join("\n");
-}
+const formatInventoryHuman = (inventory) =>
+  formatGroupedInventoryHuman(
+    {
+      rule: "Rule: src/plugins/** must not import bundled plugin files",
+      cleanMessage: "No plugin import boundary violations found.",
+      inventoryTitle: "Plugin extension import boundary inventory:",
+    },
+    inventory,
+  );
 
 function formatEntry(entry) {
   return `${entry.file}:${entry.line} [${entry.kind}] ${entry.reason} (${entry.specifier} -> ${entry.resolvedPath})`;
 }
 
-export async function runPluginExtensionImportBoundaryCheck(argv = process.argv.slice(2), io) {
+/**
+ * Runs the plugin-extension import boundary baseline check.
+ */
+async function runPluginExtensionImportBoundaryCheck(argv, io) {
   return await runBaselineInventoryCheck({
-    argv,
+    argv: argv ?? process.argv.slice(2),
     io,
     collectActual: collectPluginExtensionImportBoundaryInventory,
     readExpected: readExpectedInventory,
@@ -247,7 +224,10 @@ export async function runPluginExtensionImportBoundaryCheck(argv = process.argv.
   });
 }
 
-export async function main(argv = process.argv.slice(2), io) {
+/**
+ * Entrypoint wrapper for the plugin-extension import boundary check.
+ */
+export async function main(argv, io) {
   const exitCode = await runPluginExtensionImportBoundaryCheck(argv, io);
   if (!io && exitCode !== 0) {
     process.exit(exitCode);

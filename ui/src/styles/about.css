@@ -1,0 +1,306 @@
+/* Settings > System > About — page-specific leftovers on top of settings.css. */
+
+/* Hero: big Clawd, product identity, and community links (iOS About-style). */
+.about-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 16px 26px;
+  text-align: center;
+}
+
+.about-hero__clawd {
+  position: relative;
+  width: 168px;
+  height: 147px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  transition: transform 160ms ease;
+}
+
+.about-hero__clawd::before {
+  content: "";
+  position: absolute;
+  inset: -14% -8% -4%;
+  border-radius: 50%;
+  background: radial-gradient(
+    closest-side,
+    color-mix(in srgb, var(--lob-shell, #c44536) 22%, transparent),
+    transparent 72%
+  );
+  pointer-events: none;
+}
+
+.about-hero__clawd:hover {
+  transform: translateY(-2px) scale(1.02);
+}
+
+.about-hero__clawd:active {
+  transform: translateY(0) scale(0.97);
+}
+
+.about-hero__clawd:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.about-hero__clawd .lobster-pet__svg {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  animation: lobster-pet-breathe 3.4s ease-in-out infinite;
+}
+
+.about-hero__clawd .lob-eye-open {
+  animation: lobster-pet-blink-open 5.2s linear infinite;
+}
+
+.about-hero__clawd .lob-eye-closed {
+  opacity: 0;
+  animation: lobster-pet-blink-closed 5.2s linear infinite;
+}
+
+/* Ambient greeting: mostly idle, waves once per loop; a poke replays it now. */
+.about-hero__clawd .lob-claw--r {
+  animation: about-clawd-wave 11s ease-in-out infinite;
+}
+
+@keyframes about-clawd-wave {
+  0%,
+  82%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  86%,
+  94% {
+    transform: translateY(-7px) rotate(-32deg);
+  }
+  90% {
+    transform: translateY(-7px) rotate(-8deg);
+  }
+}
+
+/* One-shot poke wave: the same gesture without the loop's long idle lead-in.
+   Duration must stay in sync with CLAWD_WAVE_MS in about-page.ts. */
+.about-hero__clawd--wave .lob-claw--r {
+  animation: about-clawd-poke-wave 1.4s ease-in-out;
+}
+
+@keyframes about-clawd-poke-wave {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  20%,
+  80% {
+    transform: translateY(-7px) rotate(-32deg);
+  }
+  50% {
+    transform: translateY(-7px) rotate(-8deg);
+  }
+}
+
+.about-hero__name {
+  margin: 14px 0 0;
+  color: var(--text-strong);
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+
+.about-hero__tagline {
+  max-width: 460px;
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+}
+
+.about-hero__version {
+  margin-top: 12px;
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-elevated) 55%, var(--card) 45%);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.about-hero__links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.about-hero__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 15px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 550;
+  text-decoration: none;
+  transition:
+    transform 140ms ease,
+    background 140ms ease,
+    border-color 140ms ease;
+}
+
+.about-hero__link:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--border) 40%, var(--text) 60%);
+  background: var(--bg-hover);
+  text-decoration: none;
+}
+
+.about-hero__link:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.about-hero__link-icon {
+  display: inline-flex;
+}
+
+.about-hero__link svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.about-hero__link svg.icon--filled {
+  fill: currentColor;
+  stroke: none;
+}
+
+.about-footer {
+  margin: 4px 0 6px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .about-hero__clawd,
+  .about-hero__clawd .lobster-pet__svg,
+  .about-hero__clawd .lob-eye-open,
+  .about-hero__clawd .lob-eye-closed,
+  .about-hero__clawd .lob-claw--r,
+  .about-hero__link {
+    animation: none;
+    transition: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .about-hero__clawd {
+    width: 128px;
+    height: 112px;
+  }
+
+  .about-hero__name {
+    font-size: 25px;
+  }
+}
+
+/* About labels are short, so the shared 120px settings label track leaves an
+   oversized gutter here. Keep the values close while preserving room to wrap. */
+.about-build-grid {
+  grid-template-columns: max-content minmax(0, 1fr);
+}
+
+/* Commit hash, age, and copy button cluster inside the build facts grid. */
+.about-commit {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.about-commit code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+/* Borderless inline copy affordance; kept tiny so the hash stays the focus. */
+.about-commit__copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    opacity var(--duration-fast, 120ms) ease,
+    color var(--duration-fast, 120ms) ease,
+    background var(--duration-fast, 120ms) ease;
+}
+
+.about-commit__copy:hover,
+.about-commit__copy:focus-visible {
+  color: var(--text-strong);
+  background: var(--bg-hover);
+}
+
+.about-commit__copy svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Hover-revealed only where hover exists; touch/keyboard keep it visible
+   (focus-within covers tabbing, coarse pointers never match the media query). */
+@media (hover: hover) and (pointer: fine) {
+  .about-commit .about-commit__copy {
+    opacity: 0;
+  }
+
+  .about-commit:hover .about-commit__copy,
+  .about-commit:focus-within .about-commit__copy {
+    opacity: 1;
+  }
+}
+
+.about-commit__age {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs, 12px);
+  white-space: nowrap;
+}
+
+/* Screen-reader-only live region for copy feedback (no shared utility yet). */
+.about-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

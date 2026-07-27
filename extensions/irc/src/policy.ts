@@ -1,166 +1,68 @@
-import { normalizeIrcAllowlist, resolveIrcAllowlistMatch } from "./normalize.js";
-import type { IrcAccountConfig, IrcChannelConfig } from "./types.js";
-import type { IrcInboundMessage } from "./types.js";
+// Irc plugin module implements policy behavior.
+import {
+  resolveScopeKeyCaseInsensitive,
+  resolveScopeRequireMention,
+  resolveScopeToolsPolicy,
+  type GroupToolPolicyConfig,
+  type ScopeTree,
+} from "openclaw/plugin-sdk/channel-policy";
+import type { IrcChannelConfig } from "./types.js";
 
-export type IrcGroupMatch = {
+type IrcGroupMatch = {
   allowed: boolean;
   groupConfig?: IrcChannelConfig;
   wildcardConfig?: IrcChannelConfig;
   hasConfiguredGroups: boolean;
 };
 
-export type IrcGroupAccessGate = {
-  allowed: boolean;
-  reason: string;
-};
+function resolveIrcGroupScope(params: {
+  groups?: Record<string, IrcChannelConfig>;
+  target: string;
+}) {
+  const { "*": wildcard, ...groups } = params.groups ?? {};
+  // This adapter historically reads tools only; do not widen it to toolsBySender.
+  const project = (entry: IrcChannelConfig) => ({
+    requireMention: entry.requireMention,
+    tools: entry.tools,
+  });
+  const tree: ScopeTree = {
+    defaults: wildcard ? project(wildcard) : undefined,
+    scopes: Object.fromEntries(Object.entries(groups).map(([key, entry]) => [key, project(entry)])),
+  };
+  // Legacy IRC matching checks exact keys before case-insensitive keys;
+  // the canonical helper preserves that order.
+  const key = resolveScopeKeyCaseInsensitive(tree, params.target);
+  return { tree, path: key ? [key] : [] };
+}
 
 export function resolveIrcGroupMatch(params: {
   groups?: Record<string, IrcChannelConfig>;
   target: string;
 }): IrcGroupMatch {
-  const groups = params.groups ?? {};
-  const hasConfiguredGroups = Object.keys(groups).length > 0;
-
-  // IRC channel targets are case-insensitive, but config keys are plain strings.
-  // To avoid surprising drops (e.g. "#TUIRC-DEV" vs "#tuirc-dev"), match
-  // group config keys case-insensitively.
-  const direct = groups[params.target];
-  if (direct) {
-    return {
-      // "allowed" means the target matched an allowlisted key.
-      // Explicit disables are handled later by resolveIrcGroupAccessGate.
-      allowed: true,
-      groupConfig: direct,
-      wildcardConfig: groups["*"],
-      hasConfiguredGroups,
-    };
-  }
-
-  const targetLower = params.target.toLowerCase();
-  const directKey = Object.keys(groups).find((key) => key.toLowerCase() === targetLower);
-  if (directKey) {
-    const matched = groups[directKey];
-    if (matched) {
-      return {
-        // "allowed" means the target matched an allowlisted key.
-        // Explicit disables are handled later by resolveIrcGroupAccessGate.
-        allowed: true,
-        groupConfig: matched,
-        wildcardConfig: groups["*"],
-        hasConfiguredGroups,
-      };
-    }
-  }
-
-  const wildcard = groups["*"];
-  if (wildcard) {
-    return {
-      // "allowed" means the target matched an allowlisted key.
-      // Explicit disables are handled later by resolveIrcGroupAccessGate.
-      allowed: true,
-      wildcardConfig: wildcard,
-      hasConfiguredGroups,
-    };
-  }
+  const { path } = resolveIrcGroupScope(params);
+  const key = path[0];
+  const groupConfig = key ? params.groups?.[key] : undefined;
+  const wildcardConfig = params.groups?.["*"];
   return {
-    allowed: false,
-    hasConfiguredGroups,
+    allowed: Boolean(groupConfig ?? wildcardConfig),
+    groupConfig,
+    wildcardConfig,
+    hasConfiguredGroups: Object.keys(params.groups ?? {}).length > 0,
   };
 }
 
-export function resolveIrcGroupAccessGate(params: {
-  groupPolicy: IrcAccountConfig["groupPolicy"];
-  groupMatch: IrcGroupMatch;
-}): IrcGroupAccessGate {
-  const policy = params.groupPolicy ?? "allowlist";
-  if (policy === "disabled") {
-    return { allowed: false, reason: "groupPolicy=disabled" };
-  }
-
-  // In open mode, unconfigured channels are allowed (mention-gated) but explicit
-  // per-channel/wildcard disables still apply.
-  if (policy === "allowlist") {
-    if (!params.groupMatch.hasConfiguredGroups) {
-      return {
-        allowed: false,
-        reason: "groupPolicy=allowlist and no groups configured",
-      };
-    }
-    if (!params.groupMatch.allowed) {
-      return { allowed: false, reason: "not allowlisted" };
-    }
-  }
-
-  if (
-    params.groupMatch.groupConfig?.enabled === false ||
-    params.groupMatch.wildcardConfig?.enabled === false
-  ) {
-    return { allowed: false, reason: "disabled" };
-  }
-
-  return { allowed: true, reason: policy === "open" ? "open" : "allowlisted" };
-}
-
-export function resolveIrcRequireMention(params: {
-  groupConfig?: IrcChannelConfig;
-  wildcardConfig?: IrcChannelConfig;
+export function resolveIrcGroupRequireMention(params: {
+  groups?: Record<string, IrcChannelConfig>;
+  target: string;
 }): boolean {
-  if (params.groupConfig?.requireMention !== undefined) {
-    return params.groupConfig.requireMention;
-  }
-  if (params.wildcardConfig?.requireMention !== undefined) {
-    return params.wildcardConfig.requireMention;
-  }
-  return true;
+  const { tree, path } = resolveIrcGroupScope(params);
+  return resolveScopeRequireMention({ tree, path });
 }
 
-export function resolveIrcMentionGate(params: {
-  isGroup: boolean;
-  requireMention: boolean;
-  wasMentioned: boolean;
-  hasControlCommand: boolean;
-  allowTextCommands: boolean;
-  commandAuthorized: boolean;
-}): { shouldSkip: boolean; reason: string } {
-  if (!params.isGroup) {
-    return { shouldSkip: false, reason: "direct" };
-  }
-  if (!params.requireMention) {
-    return { shouldSkip: false, reason: "mention-not-required" };
-  }
-  if (params.wasMentioned) {
-    return { shouldSkip: false, reason: "mentioned" };
-  }
-  if (params.hasControlCommand && params.allowTextCommands && params.commandAuthorized) {
-    return { shouldSkip: false, reason: "authorized-command" };
-  }
-  return { shouldSkip: true, reason: "missing-mention" };
-}
-
-export function resolveIrcGroupSenderAllowed(params: {
-  groupPolicy: IrcAccountConfig["groupPolicy"];
-  message: IrcInboundMessage;
-  outerAllowFrom: string[];
-  innerAllowFrom: string[];
-  allowNameMatching?: boolean;
-}): boolean {
-  const policy = params.groupPolicy ?? "allowlist";
-  const inner = normalizeIrcAllowlist(params.innerAllowFrom);
-  const outer = normalizeIrcAllowlist(params.outerAllowFrom);
-
-  if (inner.length > 0) {
-    return resolveIrcAllowlistMatch({
-      allowFrom: inner,
-      message: params.message,
-      allowNameMatching: params.allowNameMatching,
-    }).allowed;
-  }
-  if (outer.length > 0) {
-    return resolveIrcAllowlistMatch({
-      allowFrom: outer,
-      message: params.message,
-      allowNameMatching: params.allowNameMatching,
-    }).allowed;
-  }
-  return policy === "open";
+export function resolveIrcGroupToolPolicy(params: {
+  groups?: Record<string, IrcChannelConfig>;
+  target: string;
+}): GroupToolPolicyConfig | undefined {
+  const { tree, path } = resolveIrcGroupScope(params);
+  return resolveScopeToolsPolicy({ tree, path });
 }

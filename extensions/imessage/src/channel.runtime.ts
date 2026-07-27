@@ -1,14 +1,15 @@
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
-import { PAIRING_APPROVED_MESSAGE, resolveChannelMediaMaxBytes } from "../runtime-api.js";
-import type { ResolvedIMessageAccount } from "./accounts.js";
+// Imessage plugin module implements channel behavior.
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
+import { resolveIMessageDuplicateSourceOwner, type ResolvedIMessageAccount } from "./accounts.js";
+import { PAIRING_APPROVED_MESSAGE, resolveChannelMediaMaxBytes } from "./channel-api.js";
+import type { ChannelPlugin } from "./channel-api.js";
 import { monitorIMessageProvider } from "./monitor.js";
+import { IMESSAGE_LEGACY_OUTBOUND_SEND_DEP_KEYS } from "./outbound-send-deps.js";
 import { probeIMessage } from "./probe.js";
-import { getIMessageRuntime } from "./runtime.js";
+import { sendMessageIMessage } from "./send.js";
 import { imessageSetupWizard } from "./setup-surface.js";
 
-type IMessageSendFn = ReturnType<
-  typeof getIMessageRuntime
->["channel"]["imessage"]["sendMessageIMessage"];
+type IMessageSendFn = typeof sendMessageIMessage;
 
 export async function sendIMessageOutbound(params: {
   cfg: Parameters<typeof import("./accounts.js").resolveIMessageAccount>[0]["cfg"];
@@ -16,13 +17,16 @@ export async function sendIMessageOutbound(params: {
   text: string;
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
+  audioAsVoice?: boolean;
   accountId?: string;
   deps?: { [channelId: string]: unknown };
   replyToId?: string;
+  conversationReadOrigin?: "delegated" | "direct-operator";
 }) {
   const send =
-    resolveOutboundSendDep<IMessageSendFn>(params.deps, "imessage") ??
-    getIMessageRuntime().channel.imessage.sendMessageIMessage;
+    resolveOutboundSendDep<IMessageSendFn>(params.deps, "imessage", {
+      legacyKeys: IMESSAGE_LEGACY_OUTBOUND_SEND_DEP_KEYS,
+    }) ?? sendMessageIMessage;
   const maxBytes = resolveChannelMediaMaxBytes({
     cfg: params.cfg,
     resolveChannelLimitMb: ({ cfg, accountId }) =>
@@ -30,31 +34,46 @@ export async function sendIMessageOutbound(params: {
       cfg.channels?.imessage?.mediaMaxMb,
     accountId: params.accountId,
   });
-  return await send(params.to, params.text, {
+  const result = await send(params.to, params.text, {
     config: params.cfg,
     ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
     ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
+    ...(params.audioAsVoice ? { audioAsVoice: true } : {}),
     maxBytes,
     accountId: params.accountId ?? undefined,
     replyToId: params.replyToId ?? undefined,
+    conversationReadOrigin: params.conversationReadOrigin,
   });
+  const meta = {
+    ...(result as typeof result & { meta?: Record<string, unknown> }).meta,
+    ...(result.guid ? { imessageMessageGuid: result.guid } : {}),
+    ...(result.sentText ? { imessageVisibleText: result.sentText } : {}),
+  };
+  return Object.keys(meta).length > 0 ? { ...result, meta } : result;
 }
 
-export async function notifyIMessageApproval(id: string): Promise<void> {
-  await getIMessageRuntime().channel.imessage.sendMessageIMessage(id, PAIRING_APPROVED_MESSAGE);
+export async function notifyIMessageApproval(params: {
+  cfg: Parameters<typeof import("./accounts.js").resolveIMessageAccount>[0]["cfg"];
+  id: string;
+}): Promise<void> {
+  await sendMessageIMessage(params.id, PAIRING_APPROVED_MESSAGE, { config: params.cfg });
 }
 
-export async function probeIMessageAccount(timeoutMs?: number) {
-  return await probeIMessage(timeoutMs);
+export async function probeIMessageAccount(params?: {
+  timeoutMs?: number;
+  cliPath?: string;
+  dbPath?: string;
+}) {
+  return await probeIMessage(params?.timeoutMs, {
+    cliPath: params?.cliPath,
+    dbPath: params?.dbPath,
+    forceRefresh: true,
+  });
 }
 
 export async function startIMessageGatewayAccount(
   ctx: Parameters<
-    NonNullable<
-      NonNullable<
-        import("../runtime-api.js").ChannelPlugin<ResolvedIMessageAccount>["gateway"]
-      >["startAccount"]
-    >
+    NonNullable<NonNullable<ChannelPlugin<ResolvedIMessageAccount>["gateway"]>["startAccount"]>
   >[0],
 ) {
   const account = ctx.account;
@@ -65,6 +84,23 @@ export async function startIMessageGatewayAccount(
     cliPath,
     dbPath: dbPath ?? null,
   });
+  const ownerAccountId = resolveIMessageDuplicateSourceOwner({ cfg: ctx.cfg, account });
+  if (ownerAccountId) {
+    // openclaw/openclaw#65141: this account shares a local Messages source with
+    // an already-owning account, so spawning a second `imsg rpc` would deliver
+    // every inbound twice. Keep the account enabled for outbound sends, status,
+    // and capability surfaces; just park the watcher slot until shutdown.
+    ctx.log?.info?.(
+      `[${account.accountId}] skipping watcher: duplicate iMessage source; using account "${ownerAccountId}"`,
+    );
+    if (ctx.abortSignal.aborted) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+    });
+    return;
+  }
   ctx.log?.info?.(
     `[${account.accountId}] starting provider (${cliPath}${dbPath ? ` db=${dbPath}` : ""})`,
   );
@@ -73,6 +109,7 @@ export async function startIMessageGatewayAccount(
     config: ctx.cfg,
     runtime: ctx.runtime,
     abortSignal: ctx.abortSignal,
+    channelRuntime: ctx.channelRuntime,
   });
 }
 

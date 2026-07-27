@@ -1,3 +1,4 @@
+// Internal hook tests cover dispatch for command, session, agent, and gateway hooks.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -9,6 +10,7 @@ import {
   isMessageReceivedEvent,
   isMessageSentEvent,
   registerInternalHook,
+  setInternalHooksEnabled,
   triggerInternalHook,
   unregisterInternalHook,
   type AgentBootstrapHookContext,
@@ -22,10 +24,12 @@ const INTERNAL_HOOK_HANDLERS_KEY = Symbol.for("openclaw.internalHookHandlers");
 describe("hooks", () => {
   beforeEach(() => {
     clearInternalHooks();
+    setInternalHooksEnabled(true);
   });
 
   afterEach(() => {
     clearInternalHooks();
+    setInternalHooksEnabled(true);
   });
 
   describe("registerInternalHook", () => {
@@ -141,9 +145,19 @@ describe("hooks", () => {
       expect(successHandler).toHaveBeenCalled();
     });
 
-    it("should not throw if no handlers are registered", async () => {
+    it("resolves when no handlers are registered", async () => {
       const event = createInternalHookEvent("command", "new", "test-session");
-      await expect(triggerInternalHook(event)).resolves.not.toThrow();
+      await expect(triggerInternalHook(event)).resolves.toBeUndefined();
+    });
+
+    it("skips hook execution when internal hooks are disabled", async () => {
+      const handler = vi.fn();
+      registerInternalHook("command:new", handler);
+      setInternalHooksEnabled(false);
+
+      await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"));
+
+      expect(handler).not.toHaveBeenCalled();
     });
 
     it("stores handlers in the global singleton registry", async () => {
@@ -183,7 +197,7 @@ describe("hooks", () => {
     it("should use empty context if not provided", () => {
       const event = createInternalHookEvent("command", "new", "test-session");
 
-      expect(event.context).toEqual({});
+      expect(event.context).toStrictEqual({});
     });
   });
 
@@ -257,6 +271,23 @@ describe("hooks", () => {
         } satisfies MessageSentHookContext),
         expected: false,
       },
+      {
+        name: "returns false when content is missing",
+        event: createInternalHookEvent("message", "received", "test-session", {
+          from: "+1234567890",
+          channelId: "whatsapp",
+        }),
+        expected: false,
+      },
+      {
+        name: "returns false when content is not a string",
+        event: createInternalHookEvent("message", "received", "test-session", {
+          from: "+1234567890",
+          content: 123,
+          channelId: "whatsapp",
+        }),
+        expected: false,
+      },
     ] satisfies Array<{
       name: string;
       event: ReturnType<typeof createInternalHookEvent>;
@@ -298,6 +329,25 @@ describe("hooks", () => {
           content: "Hello world",
           channelId: "whatsapp",
         } satisfies MessageReceivedHookContext),
+        expected: false,
+      },
+      {
+        name: "returns false when content is missing",
+        event: createInternalHookEvent("message", "sent", "test-session", {
+          to: "+1234567890",
+          success: true,
+          channelId: "telegram",
+        }),
+        expected: false,
+      },
+      {
+        name: "returns false when content is not a string",
+        event: createInternalHookEvent("message", "sent", "test-session", {
+          to: "+1234567890",
+          content: false,
+          success: true,
+          channelId: "telegram",
+        }),
         expected: false,
       },
     ] satisfies Array<{
@@ -445,7 +495,7 @@ describe("hooks", () => {
 
     it("should return empty array when no handlers are registered", () => {
       const keys = getRegisteredEventKeys();
-      expect(keys).toEqual([]);
+      expect(keys).toStrictEqual([]);
     });
   });
 
@@ -457,7 +507,7 @@ describe("hooks", () => {
       clearInternalHooks();
 
       const keys = getRegisteredEventKeys();
-      expect(keys).toEqual([]);
+      expect(keys).toStrictEqual([]);
     });
   });
 });

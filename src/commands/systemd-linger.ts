@@ -1,16 +1,20 @@
+// Systemd lingering setup helpers for gateway install/start flows.
+// Lingering keeps user services alive after logout on Linux hosts.
+
+import { note } from "../../packages/terminal-core/src/note.js";
 import {
   enableSystemdUserLinger,
   isSystemdUserServiceAvailable,
   readSystemdUserLingerStatus,
 } from "../daemon/systemd.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { note } from "../terminal/note.js";
 
-export type LingerPrompter = {
+type LingerPrompter = {
   confirm?: (params: { message: string; initialValue?: boolean }) => Promise<boolean>;
   note: (message: string, title?: string) => Promise<void> | void;
 };
 
+/** Ensures systemd user lingering interactively, prompting before sudo when requested. */
 export async function ensureSystemdUserLingerInteractive(params: {
   runtime: RuntimeEnv;
   prompter?: LingerPrompter;
@@ -89,6 +93,7 @@ export async function ensureSystemdUserLingerInteractive(params: {
   await prompter.note(`Run manually: sudo loginctl enable-linger ${status.user}`, title);
 }
 
+/** Best-effort non-interactive lingering enablement for install scripts and CI-like flows. */
 export async function ensureSystemdUserLingerNonInteractive(params: {
   runtime: RuntimeEnv;
   env?: NodeJS.ProcessEnv;

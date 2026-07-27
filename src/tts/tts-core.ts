@@ -1,76 +1,44 @@
-import { rmSync } from "node:fs";
-import { completeSimple, type TextContent } from "@mariozechner/pi-ai";
-import { getApiKeyForModel, requireApiKey } from "../agents/model-auth.js";
+// TTS core coordinates text preparation, provider selection, and speech output.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   buildModelAliasIndex,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
   type ModelRef,
 } from "../agents/model-selection.js";
-import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
-import { prepareModelForSimpleCompletion } from "../agents/simple-completion-transport.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { ResolvedTtsConfig } from "./tts.js";
-
-const TEMP_FILE_CLEANUP_DELAY_MS = 5 * 60 * 1000; // 5 minutes
+import type { OpenClawConfig } from "../config/types.js";
+import type { TextContent } from "../llm/types.js";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+import type { ResolvedTtsConfig } from "./tts-types.js";
+export {
+  normalizeApplyTextNormalization,
+  normalizeLanguageCode,
+  normalizeSeed,
+  requireInRange,
+  resolveSpeechProviderApiKey,
+  scheduleCleanup,
+} from "./tts-provider-helpers.js";
 
 type SummarizeTextDeps = {
-  completeSimple: typeof completeSimple;
-  getApiKeyForModel: typeof getApiKeyForModel;
-  prepareModelForSimpleCompletion: typeof prepareModelForSimpleCompletion;
-  requireApiKey: typeof requireApiKey;
-  resolveModelAsync: typeof resolveModelAsync;
+  completeSimple: typeof import("../llm/stream.js").completeSimple;
+  prepareSimpleCompletionModel: typeof import("../agents/simple-completion-runtime.js").prepareSimpleCompletionModel;
+  requireApiKey: typeof import("../agents/model-auth.js").requireApiKey;
 };
 
-function resolveDefaultSummarizeTextDeps(): SummarizeTextDeps {
-  return {
-    completeSimple,
-    getApiKeyForModel,
-    prepareModelForSimpleCompletion,
+let defaultSummarizeTextDepsPromise: Promise<SummarizeTextDeps> | undefined;
+
+function loadDefaultSummarizeTextDeps(): Promise<SummarizeTextDeps> {
+  // Speech provider imports should not initialize the LLM stack. Load it only
+  // when synthesis actually needs summarization, then reuse the module bindings.
+  return (defaultSummarizeTextDepsPromise ??= Promise.all([
+    import("../llm/stream.js"),
+    import("../agents/simple-completion-runtime.js"),
+    import("../agents/model-auth.js"),
+  ]).then(([stream, completionRuntime, { requireApiKey }]) => ({
+    completeSimple: stream.completeSimple,
+    prepareSimpleCompletionModel: completionRuntime.prepareSimpleCompletionModel,
     requireApiKey,
-    resolveModelAsync,
-  };
-}
-
-export function requireInRange(value: number, min: number, max: number, label: string): void {
-  if (!Number.isFinite(value) || value < min || value > max) {
-    throw new Error(`${label} must be between ${min} and ${max}`);
-  }
-}
-
-export function normalizeLanguageCode(code?: string): string | undefined {
-  const trimmed = code?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const normalized = trimmed.toLowerCase();
-  if (!/^[a-z]{2}$/.test(normalized)) {
-    throw new Error("languageCode must be a 2-letter ISO 639-1 code (e.g. en, de, fr)");
-  }
-  return normalized;
-}
-
-export function normalizeApplyTextNormalization(mode?: string): "auto" | "on" | "off" | undefined {
-  const trimmed = mode?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const normalized = trimmed.toLowerCase();
-  if (normalized === "auto" || normalized === "on" || normalized === "off") {
-    return normalized;
-  }
-  throw new Error("applyTextNormalization must be one of: auto, on, off");
-}
-
-export function normalizeSeed(seed?: number): number | undefined {
-  if (seed == null) {
-    return undefined;
-  }
-  const next = Math.floor(seed);
-  if (!Number.isFinite(next) || next < 0 || next > 4_294_967_295) {
-    throw new Error("seed must be between 0 and 4294967295");
-  }
-  return next;
+  })));
 }
 
 type SummarizeResult = {
@@ -90,7 +58,7 @@ function resolveSummaryModelRef(
   config: ResolvedTtsConfig,
 ): SummaryModelSelection {
   const defaultRef = resolveDefaultModelForAgent({ cfg });
-  const override = config.summaryModel?.trim();
+  const override = normalizeOptionalString(config.summaryModel);
   if (!override) {
     return { ref: defaultRef, source: "default" };
   }
@@ -111,6 +79,7 @@ function isTextContentBlock(block: { type: string }): block is TextContent {
   return block.type === "text";
 }
 
+/** Summarize long text before synthesis using the configured summary model. */
 export async function summarizeText(
   params: {
     text: string;
@@ -119,7 +88,7 @@ export async function summarizeText(
     config: ResolvedTtsConfig;
     timeoutMs: number;
   },
-  deps: SummarizeTextDeps = resolveDefaultSummarizeTextDeps(),
+  deps?: SummarizeTextDeps,
 ): Promise<SummarizeResult> {
   const { text, targetLength, cfg, config, timeoutMs } = params;
   if (targetLength < 100 || targetLength > 10_000) {
@@ -127,23 +96,31 @@ export async function summarizeText(
   }
 
   const startTime = Date.now();
+  const resolvedDeps = deps ?? (await loadDefaultSummarizeTextDeps());
   const { ref } = resolveSummaryModelRef(cfg, config);
-  const resolved = await deps.resolveModelAsync(ref.provider, ref.model, undefined, cfg);
-  if (!resolved.model) {
-    throw new Error(resolved.error ?? `Unknown summary model: ${ref.provider}/${ref.model}`);
+  // Dynamic model discovery precedes the request timeout, matching the established
+  // summarization contract. The timeout below bounds only the completion request.
+  const prepared = await resolvedDeps.prepareSimpleCompletionModel({
+    cfg,
+    provider: ref.provider,
+    modelId: ref.model,
+    useAsyncModelResolution: true,
+  });
+  if ("error" in prepared) {
+    throw new Error(prepared.error);
   }
-  const completionModel = deps.prepareModelForSimpleCompletion({ model: resolved.model, cfg });
-  const apiKey = deps.requireApiKey(
-    await deps.getApiKeyForModel({ model: completionModel, cfg }),
-    ref.provider,
-  );
+  const completionModel = prepared.model;
+  const providerKey = resolvedDeps.requireApiKey(prepared.auth, ref.provider);
 
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
+    const timeout = setTimeout(() => controller.abort(), resolvedTimeoutMs);
 
     try {
-      const res = await deps.completeSimple(
+      // Keep summarization on the simple-completion path so provider auth,
+      // aliases, and timeout behavior match other lightweight model calls.
+      const res = await resolvedDeps.completeSimple(
         completionModel,
         {
           messages: [
@@ -159,7 +136,7 @@ export async function summarizeText(
           ],
         },
         {
-          apiKey,
+          apiKey: providerKey,
           maxTokens: Math.ceil(targetLength / 2),
           temperature: 0.3,
           signal: controller.signal,
@@ -192,18 +169,4 @@ export async function summarizeText(
     }
     throw err;
   }
-}
-
-export function scheduleCleanup(
-  tempDir: string,
-  delayMs: number = TEMP_FILE_CLEANUP_DELAY_MS,
-): void {
-  const timer = setTimeout(() => {
-    try {
-      rmSync(tempDir, { recursive: true, force: true });
-    } catch {
-      // ignore cleanup errors
-    }
-  }, delayMs);
-  timer.unref();
 }

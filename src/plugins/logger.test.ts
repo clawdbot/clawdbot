@@ -1,3 +1,4 @@
+/** Tests plugin logger formatting and diagnostic forwarding behavior. */
 import { describe, expect, it, vi } from "vitest";
 import { createPluginLoaderLogger } from "./logger.js";
 

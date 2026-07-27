@@ -1,3 +1,4 @@
+// Litellm setup module handles plugin onboarding behavior.
 import {
   createDefaultModelPresetAppliers,
   type ModelDefinitionConfig,
@@ -7,8 +8,8 @@ import {
 export const LITELLM_BASE_URL = "http://localhost:4000";
 export const LITELLM_DEFAULT_MODEL_ID = "claude-opus-4-6";
 export const LITELLM_DEFAULT_MODEL_REF = `litellm/${LITELLM_DEFAULT_MODEL_ID}`;
-const LITELLM_DEFAULT_CONTEXT_WINDOW = 128_000;
-const LITELLM_DEFAULT_MAX_TOKENS = 8_192;
+const LITELLM_DEFAULT_CONTEXT_WINDOW = 1_000_000;
+const LITELLM_DEFAULT_MAX_TOKENS = 128_000;
 const LITELLM_DEFAULT_COST = {
   input: 0,
   output: 0,

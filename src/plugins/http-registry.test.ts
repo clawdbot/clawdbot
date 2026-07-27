@@ -1,12 +1,17 @@
+/** Verifies plugin HTTP route registration, collision detection, and metadata capture. */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { registerPluginHttpRoute } from "./http-registry.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { registerPluginHttpRoute, withPluginHttpRouteRegistry } from "./http-registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { createPluginRegistry } from "./registry.js";
 import {
   pinActivePluginHttpRouteRegistry,
   releasePinnedPluginHttpRouteRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "./runtime.js";
+import type { PluginRuntime } from "./runtime/types.js";
+import { createPluginRecord } from "./status.test-fixtures.js";
 
 function expectRouteRegistrationDenied(params: {
   replaceExisting: boolean;
@@ -43,17 +48,19 @@ function expectRegisteredRouteShape(
     handler?: unknown;
     auth: "plugin" | "gateway";
     match?: "exact" | "prefix";
+    pluginId?: string;
+    source?: string;
   },
 ) {
   expect(registry.httpRoutes).toHaveLength(1);
-  expect(registry.httpRoutes[0]).toEqual(
-    expect.objectContaining({
-      path: params.path,
-      auth: params.auth,
-      ...(params.match ? { match: params.match } : {}),
-      ...(params.handler ? { handler: params.handler } : {}),
-    }),
-  );
+  expect(registry.httpRoutes[0]).toEqual({
+    path: params.path,
+    handler: params.handler ?? registry.httpRoutes[0]?.handler,
+    auth: params.auth,
+    match: params.match ?? "exact",
+    pluginId: params.pluginId,
+    source: params.source,
+  });
 }
 
 function createLoggedRouteHarness() {
@@ -107,6 +114,51 @@ describe("registerPluginHttpRoute", () => {
     expect(registry.httpRoutes).toHaveLength(0);
   });
 
+  it("marks gateway method dispatch entitlement only for plugins declaring the contract", () => {
+    const pluginRegistry = createPluginRegistry({
+      logger: {
+        info() {},
+        warn() {},
+        error() {},
+        debug() {},
+      },
+      runtime: {} as PluginRuntime,
+      activateGlobalSideEffects: false,
+    });
+    const config = {} as OpenClawConfig;
+    const plainRecord = createPluginRecord({
+      id: "plain-http",
+      source: "/plugins/plain-http/index.ts",
+    });
+    const adminRecord = createPluginRecord({
+      id: "admin-http",
+      source: "/plugins/admin-http/index.ts",
+      contracts: { gatewayMethodDispatch: ["authenticated-request"] },
+    });
+
+    pluginRegistry.registry.plugins.push(plainRecord, adminRecord);
+    pluginRegistry.createApi(plainRecord, { config }).registerHttpRoute({
+      path: "/plain",
+      auth: "gateway",
+      handler: vi.fn(),
+    });
+    pluginRegistry.createApi(adminRecord, { config }).registerHttpRoute({
+      path: "/admin",
+      auth: "gateway",
+      handler: vi.fn(),
+    });
+
+    const plainRoute = pluginRegistry.registry.httpRoutes.find(
+      (route) => route.pluginId === "plain-http",
+    );
+    const adminRoute = pluginRegistry.registry.httpRoutes.find(
+      (route) => route.pluginId === "admin-http",
+    );
+
+    expect(plainRoute?.gatewayMethodDispatchAllowed).toBeUndefined();
+    expect(adminRoute?.gatewayMethodDispatchAllowed).toBe(true);
+  });
+
   it("returns noop unregister when path is missing", () => {
     const registry = createEmptyPluginRegistry();
     const logs: string[] = [];
@@ -121,7 +173,7 @@ describe("registerPluginHttpRoute", () => {
 
     expect(registry.httpRoutes).toHaveLength(0);
     expect(logs).toEqual(['plugin: webhook path missing for account "default"']);
-    expect(() => unregister()).not.toThrow();
+    unregister();
   });
 
   it("replaces stale route on same path when replaceExisting=true", () => {
@@ -214,18 +266,43 @@ describe("registerPluginHttpRoute", () => {
     setActivePluginRegistry(laterActiveRegistry);
 
     const unregister = registerPluginHttpRoute({
-      path: "/bluebubbles-webhook",
+      path: "/imessage-webhook",
       auth: "plugin",
       handler: vi.fn(),
     });
 
     expectRegisteredRouteShape(startupRegistry, {
-      path: "/bluebubbles-webhook",
+      path: "/imessage-webhook",
       auth: "plugin",
     });
     expect(laterActiveRegistry.httpRoutes).toHaveLength(0);
 
     unregister();
     expect(startupRegistry.httpRoutes).toHaveLength(0);
+  });
+
+  it("prefers the scoped route registry over the process-global pinned registry", () => {
+    const scopedRegistry = createEmptyPluginRegistry();
+    const pinnedRegistry = createEmptyPluginRegistry();
+
+    setActivePluginRegistry(pinnedRegistry);
+    pinActivePluginHttpRouteRegistry(pinnedRegistry);
+
+    const unregister = withPluginHttpRouteRegistry(scopedRegistry, () =>
+      registerPluginHttpRoute({
+        path: "/scoped-webhook",
+        auth: "plugin",
+        handler: vi.fn(),
+      }),
+    );
+
+    expectRegisteredRouteShape(scopedRegistry, {
+      path: "/scoped-webhook",
+      auth: "plugin",
+    });
+    expect(pinnedRegistry.httpRoutes).toHaveLength(0);
+
+    unregister();
+    expect(scopedRegistry.httpRoutes).toHaveLength(0);
   });
 });

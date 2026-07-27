@@ -1,8 +1,3 @@
-export { whatsappPlugin } from "./src/channel.js";
-export { setWhatsAppRuntime } from "./src/runtime.js";
+// Whatsapp API module exposes the plugin public contract.
 export { whatsappOutbound } from "./src/outbound-adapter.js";
-export { deliverWebReply } from "./src/auto-reply/deliver-reply.js";
-export {
-  trackBackgroundTask,
-  updateLastRouteInBackground,
-} from "./src/auto-reply/monitor/last-route.js";
+export { resolveWhatsAppRuntimeGroupPolicy } from "./src/runtime-group-policy.js";

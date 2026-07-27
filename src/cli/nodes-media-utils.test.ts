@@ -1,3 +1,4 @@
+// Nodes media utility tests cover media argument helpers for node CLI commands.
 import { describe, expect, it } from "vitest";
 import {
   asBoolean,
@@ -10,7 +11,7 @@ import {
 describe("cli/nodes-media-utils", () => {
   it("parses primitive helper values", () => {
     expect(asRecord({ a: 1 })).toEqual({ a: 1 });
-    expect(asRecord("x")).toEqual({});
+    expect(asRecord("x")).toStrictEqual({});
     expect(asString("x")).toBe("x");
     expect(asString(1)).toBeUndefined();
     expect(asNumber(1)).toBe(1);

@@ -1,6 +1,6 @@
+/** Interactive stdio ACP client used to connect a terminal session to an OpenClaw ACP server. */
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
-import { homedir } from "node:os";
 import path from "node:path";
 import * as readline from "node:readline";
 import { Readable, Writable } from "node:stream";
@@ -10,334 +10,19 @@ import {
   PROTOCOL_VERSION,
   ndJsonStream,
   type RequestPermissionRequest,
-  type RequestPermissionResponse,
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
-import { isKnownCoreToolId } from "../agents/tool-catalog.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import {
-  materializeWindowsSpawnProgram,
-  resolveWindowsSpawnProgram,
-} from "../plugin-sdk/windows-spawn.js";
-import {
-  listKnownProviderAuthEnvVarNames,
-  omitEnvKeysCaseInsensitive,
-} from "../secrets/provider-env-vars.js";
-import { DANGEROUS_ACP_TOOLS } from "../security/dangerous-tools.js";
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
+  buildAcpClientStripKeys,
+  resolveAcpClientSpawnEnv,
+  resolveAcpClientSpawnInvocation,
+  resolvePermissionRequest,
+  shouldStripProviderAuthEnvVarsForAcpServer,
+} from "./client-helpers.js";
 
-const SAFE_AUTO_APPROVE_TOOL_IDS = new Set(["read", "search", "web_search", "memory_search"]);
-const TRUSTED_SAFE_TOOL_ALIASES = new Set(["search"]);
-const READ_TOOL_PATH_KEYS = ["path", "file_path", "filePath"];
-const TOOL_NAME_MAX_LENGTH = 128;
-const TOOL_NAME_PATTERN = /^[a-z0-9._-]+$/;
-const TOOL_KIND_BY_ID = new Map<string, string>([
-  ["read", "read"],
-  ["search", "search"],
-  ["web_search", "search"],
-  ["memory_search", "search"],
-]);
-
-type PermissionOption = RequestPermissionRequest["options"][number];
-
-type PermissionResolverDeps = {
-  prompt?: (toolName: string | undefined, toolTitle?: string) => Promise<boolean>;
-  log?: (line: string) => void;
-  cwd?: string;
-};
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function readFirstStringValue(
-  source: Record<string, unknown> | undefined,
-  keys: string[],
-): string | undefined {
-  if (!source) {
-    return undefined;
-  }
-  for (const key of keys) {
-    const value = source[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return undefined;
-}
-
-function normalizeToolName(value: string): string | undefined {
-  const normalized = value.trim().toLowerCase();
-  if (!normalized || normalized.length > TOOL_NAME_MAX_LENGTH) {
-    return undefined;
-  }
-  if (!TOOL_NAME_PATTERN.test(normalized)) {
-    return undefined;
-  }
-  return normalized;
-}
-
-function parseToolNameFromTitle(title: string | undefined | null): string | undefined {
-  if (!title) {
-    return undefined;
-  }
-  const head = title.split(":", 1)[0]?.trim();
-  if (!head) {
-    return undefined;
-  }
-  return normalizeToolName(head);
-}
-
-function resolveToolKindForPermission(toolName: string | undefined): string | undefined {
-  if (!toolName) {
-    return undefined;
-  }
-  return TOOL_KIND_BY_ID.get(toolName) ?? "other";
-}
-
-function resolveToolNameForPermission(params: RequestPermissionRequest): string | undefined {
-  const toolCall = params.toolCall;
-  const toolMeta = asRecord(toolCall?._meta);
-  const rawInput = asRecord(toolCall?.rawInput);
-
-  const fromMeta = readFirstStringValue(toolMeta, ["toolName", "tool_name", "name"]);
-  const fromRawInput = readFirstStringValue(rawInput, ["tool", "toolName", "tool_name", "name"]);
-  const fromTitle = parseToolNameFromTitle(toolCall?.title);
-  const metaName = fromMeta ? normalizeToolName(fromMeta) : undefined;
-  const rawInputName = fromRawInput ? normalizeToolName(fromRawInput) : undefined;
-  const titleName = fromTitle;
-  if ((fromMeta && !metaName) || (fromRawInput && !rawInputName)) {
-    return undefined;
-  }
-  if (metaName && titleName && metaName !== titleName) {
-    return undefined;
-  }
-  if (rawInputName && metaName && rawInputName !== metaName) {
-    return undefined;
-  }
-  if (rawInputName && titleName && rawInputName !== titleName) {
-    return undefined;
-  }
-  return metaName ?? titleName ?? rawInputName;
-}
-
-function extractPathFromToolTitle(
-  toolTitle: string | undefined,
-  toolName: string | undefined,
-): string | undefined {
-  if (!toolTitle) {
-    return undefined;
-  }
-  const separator = toolTitle.indexOf(":");
-  if (separator < 0) {
-    return undefined;
-  }
-  const tail = toolTitle.slice(separator + 1).trim();
-  if (!tail) {
-    return undefined;
-  }
-  const keyedMatch = tail.match(/(?:^|,\s*)(?:path|file_path|filePath)\s*:\s*([^,]+)/);
-  if (keyedMatch?.[1]) {
-    return keyedMatch[1].trim();
-  }
-  if (toolName === "read") {
-    return tail;
-  }
-  return undefined;
-}
-
-function resolveToolPathCandidate(
-  params: RequestPermissionRequest,
-  toolName: string | undefined,
-  toolTitle: string | undefined,
-): string | undefined {
-  const rawInput = asRecord(params.toolCall?.rawInput);
-  const fromRawInput = readFirstStringValue(rawInput, READ_TOOL_PATH_KEYS);
-  const fromTitle = extractPathFromToolTitle(toolTitle, toolName);
-  return fromRawInput ?? fromTitle;
-}
-
-function resolveAbsoluteScopedPath(value: string, cwd: string): string | undefined {
-  let candidate = value.trim();
-  if (!candidate) {
-    return undefined;
-  }
-  if (candidate.startsWith("file://")) {
-    try {
-      const parsed = new URL(candidate);
-      candidate = decodeURIComponent(parsed.pathname || "");
-    } catch {
-      return undefined;
-    }
-  }
-  if (candidate === "~") {
-    candidate = homedir();
-  } else if (candidate.startsWith("~/")) {
-    candidate = path.join(homedir(), candidate.slice(2));
-  }
-  const absolute = path.isAbsolute(candidate)
-    ? path.normalize(candidate)
-    : path.resolve(cwd, candidate);
-  return absolute;
-}
-
-function isPathWithinRoot(candidatePath: string, root: string): boolean {
-  const relative = path.relative(root, candidatePath);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-function isReadToolCallScopedToCwd(
-  params: RequestPermissionRequest,
-  toolName: string | undefined,
-  toolTitle: string | undefined,
-  cwd: string,
-): boolean {
-  if (toolName !== "read") {
-    return false;
-  }
-  const rawPath = resolveToolPathCandidate(params, toolName, toolTitle);
-  if (!rawPath) {
-    return false;
-  }
-  const absolutePath = resolveAbsoluteScopedPath(rawPath, cwd);
-  if (!absolutePath) {
-    return false;
-  }
-  return isPathWithinRoot(absolutePath, path.resolve(cwd));
-}
-
-function shouldAutoApproveToolCall(
-  params: RequestPermissionRequest,
-  toolName: string | undefined,
-  toolTitle: string | undefined,
-  cwd: string,
-): boolean {
-  const isTrustedToolId =
-    typeof toolName === "string" &&
-    (isKnownCoreToolId(toolName) || TRUSTED_SAFE_TOOL_ALIASES.has(toolName));
-  if (!toolName || !isTrustedToolId || !SAFE_AUTO_APPROVE_TOOL_IDS.has(toolName)) {
-    return false;
-  }
-  if (toolName === "read") {
-    return isReadToolCallScopedToCwd(params, toolName, toolTitle, cwd);
-  }
-  return true;
-}
-
-function pickOption(
-  options: PermissionOption[],
-  kinds: PermissionOption["kind"][],
-): PermissionOption | undefined {
-  for (const kind of kinds) {
-    const match = options.find((option) => option.kind === kind);
-    if (match) {
-      return match;
-    }
-  }
-  return undefined;
-}
-
-function selectedPermission(optionId: string): RequestPermissionResponse {
-  return { outcome: { outcome: "selected", optionId } };
-}
-
-function cancelledPermission(): RequestPermissionResponse {
-  return { outcome: { outcome: "cancelled" } };
-}
-
-function promptUserPermission(toolName: string | undefined, toolTitle?: string): Promise<boolean> {
-  if (!process.stdin.isTTY || !process.stderr.isTTY) {
-    console.error(`[permission denied] ${toolName ?? "unknown"}: non-interactive terminal`);
-    return Promise.resolve(false);
-  }
-  return new Promise((resolve) => {
-    let settled = false;
-    const rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stderr,
-    });
-
-    const finish = (approved: boolean) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      rl.close();
-      resolve(approved);
-    };
-
-    const timeout = setTimeout(() => {
-      console.error(`\n[permission timeout] denied: ${toolName ?? "unknown"}`);
-      finish(false);
-    }, 30_000);
-
-    const label = toolTitle
-      ? toolName
-        ? `${toolTitle} (${toolName})`
-        : toolTitle
-      : (toolName ?? "unknown tool");
-    rl.question(`\n[permission] Allow "${label}"? (y/N) `, (answer) => {
-      const approved = answer.trim().toLowerCase() === "y";
-      console.error(`[permission ${approved ? "approved" : "denied"}] ${toolName ?? "unknown"}`);
-      finish(approved);
-    });
-  });
-}
-
-export async function resolvePermissionRequest(
-  params: RequestPermissionRequest,
-  deps: PermissionResolverDeps = {},
-): Promise<RequestPermissionResponse> {
-  const log = deps.log ?? ((line: string) => console.error(line));
-  const prompt = deps.prompt ?? promptUserPermission;
-  const cwd = deps.cwd ?? process.cwd();
-  const options = params.options ?? [];
-  const toolTitle = sanitizeTerminalText(params.toolCall?.title ?? "tool");
-  const toolName = resolveToolNameForPermission(params);
-  const toolKind = resolveToolKindForPermission(toolName);
-
-  if (options.length === 0) {
-    log(`[permission cancelled] ${toolName ?? "unknown"}: no options available`);
-    return cancelledPermission();
-  }
-
-  const allowOption = pickOption(options, ["allow_once", "allow_always"]);
-  const rejectOption = pickOption(options, ["reject_once", "reject_always"]);
-  const autoApproveAllowed = shouldAutoApproveToolCall(params, toolName, toolTitle, cwd);
-  const promptRequired = !toolName || !autoApproveAllowed || DANGEROUS_ACP_TOOLS.has(toolName);
-
-  if (!promptRequired) {
-    const option = allowOption ?? options[0];
-    if (!option) {
-      log(`[permission cancelled] ${toolName}: no selectable options`);
-      return cancelledPermission();
-    }
-    log(`[permission auto-approved] ${toolName} (${toolKind ?? "unknown"})`);
-    return selectedPermission(option.optionId);
-  }
-
-  log(
-    `\n[permission requested] ${toolTitle}${toolName ? ` (${toolName})` : ""}${toolKind ? ` [${toolKind}]` : ""}`,
-  );
-  const approved = await prompt(toolName, toolTitle);
-
-  if (approved && allowOption) {
-    return selectedPermission(allowOption.optionId);
-  }
-  if (!approved && rejectOption) {
-    return selectedPermission(rejectOption.optionId);
-  }
-
-  log(
-    `[permission cancelled] ${toolName ?? "unknown"}: missing ${approved ? "allow" : "reject"} option`,
-  );
-  return cancelledPermission();
-}
-
-export type AcpClientOptions = {
+type AcpClientOptions = {
   cwd?: string;
   serverCommand?: string;
   serverArgs?: string[];
@@ -345,7 +30,7 @@ export type AcpClientOptions = {
   verbose?: boolean;
 };
 
-export type AcpClientHandle = {
+type AcpClientHandle = {
   client: ClientSideConnection;
   agent: ChildProcess;
   sessionId: string;
@@ -366,89 +51,6 @@ function buildServerArgs(opts: AcpClientOptions): string[] {
   return args;
 }
 
-type AcpClientSpawnEnvOptions = {
-  stripKeys?: Iterable<string>;
-};
-
-export function resolveAcpClientSpawnEnv(
-  baseEnv: NodeJS.ProcessEnv = process.env,
-  options: AcpClientSpawnEnvOptions = {},
-): NodeJS.ProcessEnv {
-  const env = omitEnvKeysCaseInsensitive(baseEnv, options.stripKeys ?? []);
-  env.OPENCLAW_SHELL = "acp-client";
-  return env;
-}
-
-export function shouldStripProviderAuthEnvVarsForAcpServer(
-  params: {
-    serverCommand?: string;
-    serverArgs?: string[];
-    defaultServerCommand?: string;
-    defaultServerArgs?: string[];
-  } = {},
-): boolean {
-  const serverCommand = params.serverCommand?.trim();
-  if (!serverCommand) {
-    return true;
-  }
-  const defaultServerCommand = params.defaultServerCommand?.trim();
-  if (!defaultServerCommand || serverCommand !== defaultServerCommand) {
-    return false;
-  }
-  const serverArgs = params.serverArgs ?? [];
-  const defaultServerArgs = params.defaultServerArgs ?? [];
-  return (
-    serverArgs.length === defaultServerArgs.length &&
-    serverArgs.every((arg, index) => arg === defaultServerArgs[index])
-  );
-}
-
-export function buildAcpClientStripKeys(params: {
-  stripProviderAuthEnvVars?: boolean;
-  activeSkillEnvKeys?: Iterable<string>;
-}): Set<string> {
-  const stripKeys = new Set<string>(params.activeSkillEnvKeys ?? []);
-  if (params.stripProviderAuthEnvVars) {
-    for (const key of listKnownProviderAuthEnvVarNames()) {
-      stripKeys.add(key);
-    }
-  }
-  return stripKeys;
-}
-
-type AcpSpawnRuntime = {
-  platform: NodeJS.Platform;
-  env: NodeJS.ProcessEnv;
-  execPath: string;
-};
-
-const DEFAULT_ACP_SPAWN_RUNTIME: AcpSpawnRuntime = {
-  platform: process.platform,
-  env: process.env,
-  execPath: process.execPath,
-};
-
-export function resolveAcpClientSpawnInvocation(
-  params: { serverCommand: string; serverArgs: string[] },
-  runtime: AcpSpawnRuntime = DEFAULT_ACP_SPAWN_RUNTIME,
-): { command: string; args: string[]; shell?: boolean; windowsHide?: boolean } {
-  const program = resolveWindowsSpawnProgram({
-    command: params.serverCommand,
-    platform: runtime.platform,
-    env: runtime.env,
-    execPath: runtime.execPath,
-    packageName: "openclaw",
-    allowShellFallback: true,
-  });
-  const resolved = materializeWindowsSpawnProgram(program, params.serverArgs);
-  return {
-    command: resolved.command,
-    args: resolved.argv,
-    shell: resolved.shell,
-    windowsHide: resolved.windowsHide,
-  };
-}
-
 function resolveSelfEntryPath(): string | null {
   // Prefer a path relative to the built module location (dist/acp/client.js -> dist/entry.js).
   try {
@@ -461,7 +63,7 @@ function resolveSelfEntryPath(): string | null {
     // ignore
   }
 
-  const argv1 = process.argv[1]?.trim();
+  const argv1 = normalizeOptionalString(process.argv[1]);
   if (argv1) {
     return path.isAbsolute(argv1) ? argv1 : path.resolve(process.cwd(), argv1);
   }
@@ -470,10 +72,6 @@ function resolveSelfEntryPath(): string | null {
 
 function printSessionUpdate(notification: SessionNotification): void {
   const update = notification.update;
-  if (!("sessionUpdate" in update)) {
-    return;
-  }
-
   switch (update.sessionUpdate) {
     case "agent_message_chunk": {
       if (update.content?.type === "text") {
@@ -496,14 +94,12 @@ function printSessionUpdate(notification: SessionNotification): void {
       if (names) {
         console.log(`\n[commands] ${names}`);
       }
-      return;
     }
     default:
-      return;
   }
 }
 
-export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHandle> {
+async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHandle> {
   const cwd = opts.cwd ?? process.cwd();
   const verbose = Boolean(opts.verbose);
   const log = verbose ? (msg: string) => console.error(`[acp-client] ${msg}`) : () => {};
@@ -516,7 +112,7 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
   const defaultServerArgs = entryPath ? [entryPath, ...serverArgs] : serverArgs;
   const serverCommand = opts.serverCommand ?? defaultServerCommand;
   const effectiveArgs = opts.serverCommand || !entryPath ? serverArgs : defaultServerArgs;
-  const { getActiveSkillEnvKeys } = await import("../agents/skills/env-overrides.runtime.js");
+  const { getActiveSkillEnvKeys } = await import("../skills/runtime/env-overrides.runtime.js");
   const stripProviderAuthEnvVars = shouldStripProviderAuthEnvVarsForAcpServer({
     serverCommand,
     serverArgs: effectiveArgs,
@@ -590,6 +186,7 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
   };
 }
 
+/** Starts the terminal prompt loop for a local ACP client session. */
 export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Promise<void> {
   const { client, agent, sessionId } = await createAcpClient(opts);
 
@@ -603,29 +200,31 @@ export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Prom
   console.log('Type a prompt, or "exit" to quit.\n');
 
   const prompt = () => {
-    rl.question("> ", async (input) => {
-      const text = input.trim();
-      if (!text) {
+    rl.question("> ", (input) => {
+      void (async () => {
+        const text = input.trim();
+        if (!text) {
+          prompt();
+          return;
+        }
+        if (text === "exit" || text === "quit") {
+          agent.kill();
+          rl.close();
+          process.exit(0);
+        }
+
+        try {
+          const response = await client.prompt({
+            sessionId,
+            prompt: [{ type: "text", text }],
+          });
+          console.log(`\n[${response.stopReason}]\n`);
+        } catch (err) {
+          console.error(`\n[error] ${String(err)}\n`);
+        }
+
         prompt();
-        return;
-      }
-      if (text === "exit" || text === "quit") {
-        agent.kill();
-        rl.close();
-        process.exit(0);
-      }
-
-      try {
-        const response = await client.prompt({
-          sessionId,
-          prompt: [{ type: "text", text }],
-        });
-        console.log(`\n[${response.stopReason}]\n`);
-      } catch (err) {
-        console.error(`\n[error] ${String(err)}\n`);
-      }
-
-      prompt();
+      })();
     });
   };
 

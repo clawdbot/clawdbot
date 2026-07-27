@@ -1,11 +1,29 @@
+// Shared sessions_spawn test harness for gateway, registry, and lifecycle mocks.
 import { vi, type Mock } from "vitest";
+import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
+import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 
-type SessionsSpawnTestConfig = ReturnType<(typeof import("../config/config.js"))["loadConfig"]>;
+type SessionsSpawnTestConfig = ReturnType<
+  (typeof import("../config/config.js"))["getRuntimeConfig"]
+>;
+type SessionsSpawnHookRunner = SubagentLifecycleHookRunner | null;
+type CaptureSubagentCompletionReply =
+  (typeof import("./subagent-announce.js"))["captureSubagentCompletionReply"];
+type RunSubagentAnnounceFlow = (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
 type CreateSessionsSpawnTool =
   (typeof import("./tools/sessions-spawn-tool.js"))["createSessionsSpawnTool"];
-export type CreateOpenClawToolsOpts = Parameters<CreateSessionsSpawnTool>[0];
-export type GatewayRequest = { method?: string; params?: unknown };
-export type AgentWaitCall = { runId?: string; timeoutMs?: number };
+type SubagentRegistryTesting = (typeof import("./subagent-registry.test-helpers.js"))["testing"];
+type SubagentSpawnTesting = (typeof import("./subagent-spawn.test-support.js"))["testing"];
+type CreateOpenClawToolsOpts = Parameters<CreateSessionsSpawnTool>[0];
+type GatewayRequest = { method?: string; params?: unknown; timeoutMs?: number };
+type AgentWaitCall = { runId?: string; timeoutMs?: number };
+type TestSessionEntry = {
+  sessionId: string;
+  updatedAt: number;
+  startedAt?: number;
+  endedAt?: number;
+  status?: "running" | "done" | "failed" | "killed" | "timeout";
+};
 type SessionsSpawnGatewayMockOptions = {
   includeSessionsList?: boolean;
   includeChatHistory?: boolean;
@@ -14,34 +32,136 @@ type SessionsSpawnGatewayMockOptions = {
   onSessionsPatch?: (params: unknown) => void;
   onSessionsDelete?: (params: unknown) => void;
   agentWaitResult?: { status: "ok" | "timeout"; startedAt: number; endedAt: number };
+  subagentSessionEntryPatch?: Partial<TestSessionEntry>;
+};
+type EventWaiter = {
+  label: string;
+  predicate: () => boolean;
+  resolve: () => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
 };
 
 const hoisted = vi.hoisted(() => {
+  // Hoisted state backs module mocks that must exist before test imports resolve.
   const callGatewayMock = vi.fn();
+  const sessionStore: Record<string, TestSessionEntry> = {};
+  let nextRunId = 0;
   const defaultConfigOverride = {
     session: {
       mainKey: "main",
       scope: "per-sender",
     },
   } as SessionsSpawnTestConfig;
-  const state = { configOverride: defaultConfigOverride };
-  return { callGatewayMock, defaultConfigOverride, state };
+  let configOverride = defaultConfigOverride;
+  const defaultRunSubagentAnnounceFlow: RunSubagentAnnounceFlow = async (params) => {
+    const statusLabel =
+      params.outcome?.status === "timeout" ? "timed out" : "completed successfully";
+    const requesterSessionKey = resolveRequesterStoreKey(
+      configOverride,
+      params.requesterSessionKey,
+    );
+
+    await callGatewayMock({
+      method: "agent",
+      params: {
+        sessionKey: requesterSessionKey,
+        message: `subagent task ${statusLabel}`,
+        deliver: false,
+      },
+    });
+
+    if (params.label) {
+      await callGatewayMock({
+        method: "sessions.patch",
+        params: {
+          key: params.childSessionKey,
+          label: params.label,
+        },
+      });
+    }
+
+    if (params.cleanup === "delete") {
+      await callGatewayMock({
+        method: "sessions.delete",
+        params: {
+          key: params.childSessionKey,
+          deleteTranscript: true,
+          emitLifecycleHooks: params.spawnMode === "session",
+        },
+      });
+    }
+
+    return true;
+  };
+  const defaultCaptureSubagentCompletionReply: CaptureSubagentCompletionReply = async () =>
+    undefined;
+  const state = {
+    get configOverride() {
+      return configOverride;
+    },
+    set configOverride(next: SessionsSpawnTestConfig) {
+      configOverride = next;
+    },
+    hookRunnerOverride: null as SessionsSpawnHookRunner,
+    defaultCaptureSubagentCompletionReply,
+    captureSubagentCompletionReplyOverride: defaultCaptureSubagentCompletionReply,
+    defaultRunSubagentAnnounceFlow,
+    runSubagentAnnounceFlowOverride: defaultRunSubagentAnnounceFlow,
+  };
+  const eventWaiters: EventWaiter[] = [];
+  const notifyEventWaiters = () => {
+    for (let index = eventWaiters.length - 1; index >= 0; index -= 1) {
+      const waiter = eventWaiters[index];
+      if (!waiter?.predicate()) {
+        continue;
+      }
+      clearTimeout(waiter.timer);
+      eventWaiters.splice(index, 1);
+      waiter.resolve();
+    }
+  };
+  return {
+    callGatewayMock,
+    defaultConfigOverride,
+    eventWaiters,
+    notifyEventWaiters,
+    nextRunId: () => {
+      nextRunId += 1;
+      return `run-${nextRunId}`;
+    },
+    sessionStore,
+    state,
+  };
 });
+
+let cachedCreateSessionsSpawnTool: CreateSessionsSpawnTool | null = null;
+let cachedSubagentRegistryTesting: SubagentRegistryTesting | null = null;
+let cachedSubagentSpawnTesting: SubagentSpawnTesting | null = null;
 
 export function getCallGatewayMock(): Mock {
   return hoisted.callGatewayMock;
 }
 
-export function getGatewayRequests(): Array<GatewayRequest> {
-  return getCallGatewayMock().mock.calls.map((call: unknown[]) => call[0] as GatewayRequest);
-}
-
-export function getGatewayMethods(): Array<string | undefined> {
-  return getGatewayRequests().map((request) => request.method);
-}
-
-export function findGatewayRequest(method: string): GatewayRequest | undefined {
-  return getGatewayRequests().find((request) => request.method === method);
+export async function waitForSessionsSpawnEvent(
+  label: string,
+  predicate: () => boolean,
+  timeoutMs = 5_000,
+): Promise<void> {
+  // Lifecycle assertions wait on explicit predicates instead of fixed sleeps.
+  if (predicate()) {
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const index = hoisted.eventWaiters.findIndex((waiter) => waiter.timer === timer);
+      if (index >= 0) {
+        hoisted.eventWaiters.splice(index, 1);
+      }
+      reject(new Error(`Timed out waiting for ${label}`));
+    }, timeoutMs);
+    hoisted.eventWaiters.push({ label, predicate, resolve, reject, timer });
+  });
 }
 
 export function resetSessionsSpawnConfigOverride(): void {
@@ -52,11 +172,93 @@ export function setSessionsSpawnConfigOverride(next: SessionsSpawnTestConfig): v
   hoisted.state.configOverride = next;
 }
 
+export function resetSessionsSpawnAnnounceFlowOverride(): void {
+  hoisted.state.runSubagentAnnounceFlowOverride = hoisted.state.defaultRunSubagentAnnounceFlow;
+}
+
+export function resetSessionsSpawnHookRunnerOverride(): void {
+  hoisted.state.hookRunnerOverride = null;
+}
+
+export function setSessionsSpawnHookRunnerOverride(next: SessionsSpawnHookRunner): void {
+  hoisted.state.hookRunnerOverride = next;
+}
+
+export function setSessionsSpawnAnnounceFlowOverride(next: RunSubagentAnnounceFlow): void {
+  hoisted.state.runSubagentAnnounceFlowOverride = next;
+}
+
 export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
-  // Dynamic import: ensure harness mocks are installed before tool modules load.
-  vi.resetModules();
-  const { createSessionsSpawnTool } = await import("./tools/sessions-spawn-tool.js");
-  return createSessionsSpawnTool(opts);
+  // Lazily installs test deps before constructing the real sessions_spawn tool.
+  if (!cachedSubagentSpawnTesting || !cachedSubagentRegistryTesting) {
+    const [{ testing: subagentSpawnTesting }, { testing: subagentRegistryTesting }] =
+      await Promise.all([
+        import("./subagent-spawn.test-support.js"),
+        import("./subagent-registry.test-helpers.js"),
+      ]);
+    cachedSubagentSpawnTesting = subagentSpawnTesting;
+    cachedSubagentRegistryTesting = subagentRegistryTesting;
+  }
+  cachedSubagentSpawnTesting.setDepsForTest({
+    callGateway: (optsUnknown) => hoisted.callGatewayMock(optsUnknown),
+    getGlobalHookRunner: () => hoisted.state.hookRunnerOverride,
+    getRuntimeConfig: () => hoisted.state.configOverride,
+    resolveContextEngine: async () => ({
+      info: { id: "test", name: "Test" },
+      assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+      compact: async () => ({ ok: true, compacted: false }),
+      ingest: async () => ({ ingested: false }),
+    }),
+    forkSessionEntryFromParent: async () => ({
+      status: "forked",
+      fork: {
+        sessionId: "forked-session-id",
+        sessionFile: "/tmp/forked-session.jsonl",
+      },
+      parentEntry: {
+        sessionId: "parent-session-id",
+        updatedAt: Date.now(),
+      },
+      sessionEntry: {
+        sessionId: "forked-session-id",
+        sessionFile: "/tmp/forked-session.jsonl",
+        forkedFromParent: true,
+        updatedAt: Date.now(),
+      },
+      decision: {
+        status: "fork",
+        maxTokens: 100_000,
+      },
+    }),
+  });
+  cachedSubagentRegistryTesting.setDepsForTest({
+    callGateway: (optsUnknown) => hoisted.callGatewayMock(optsUnknown),
+    getRuntimeConfig: () => hoisted.state.configOverride,
+    cleanupBrowserSessionsForLifecycleEnd: async () => {},
+    ensureContextEnginesInitialized: () => {},
+    ensureRuntimePluginsLoaded: () => {},
+    persistSubagentRunsToDisk: () => {
+      hoisted.notifyEventWaiters();
+    },
+    persistSubagentRunsToDiskOrThrow: () => {
+      hoisted.notifyEventWaiters();
+    },
+    restoreSubagentRunsFromDisk: () => 0,
+    resolveContextEngine: async () => ({
+      info: { id: "test", name: "Test" },
+      assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+      compact: async () => ({ ok: true, compacted: false }),
+      ingest: async () => ({ ingested: false }),
+    }),
+    captureSubagentCompletionReply: (sessionKey) =>
+      hoisted.state.captureSubagentCompletionReplyOverride(sessionKey),
+    runSubagentAnnounceFlow: (params) => hoisted.state.runSubagentAnnounceFlowOverride(params),
+  });
+  if (!cachedCreateSessionsSpawnTool) {
+    ({ createSessionsSpawnTool: cachedCreateSessionsSpawnTool } =
+      await import("./tools/sessions-spawn-tool.js"));
+  }
+  return cachedCreateSessionsSpawnTool(opts);
 }
 
 export function setupSessionsSpawnGatewayMock(setupOpts: SessionsSpawnGatewayMockOptions): {
@@ -66,13 +268,13 @@ export function setupSessionsSpawnGatewayMock(setupOpts: SessionsSpawnGatewayMoc
 } {
   const calls: Array<GatewayRequest> = [];
   const waitCalls: Array<AgentWaitCall> = [];
-  let agentCallCount = 0;
   let childRunId: string | undefined;
   let childSessionKey: string | undefined;
 
   getCallGatewayMock().mockImplementation(async (optsUnknown: unknown) => {
     const request = optsUnknown as GatewayRequest;
     calls.push(request);
+    hoisted.notifyEventWaiters();
 
     if (request.method === "sessions.list" && setupOpts.includeSessionsList) {
       return {
@@ -87,25 +289,32 @@ export function setupSessionsSpawnGatewayMock(setupOpts: SessionsSpawnGatewayMoc
     }
 
     if (request.method === "agent") {
-      agentCallCount += 1;
-      const runId = `run-${agentCallCount}`;
+      const runId = hoisted.nextRunId();
       const params = request.params as { lane?: string; sessionKey?: string } | undefined;
       // Capture only the subagent run metadata.
       if (params?.lane === "subagent") {
         childRunId = runId;
         childSessionKey = params.sessionKey ?? "";
+        if (childSessionKey) {
+          hoisted.sessionStore[childSessionKey] = {
+            sessionId: `sess-${childSessionKey}`,
+            updatedAt: Date.now(),
+            ...setupOpts.subagentSessionEntryPatch,
+          };
+        }
         setupOpts.onAgentSubagentSpawn?.(params);
       }
       return {
         runId,
         status: "accepted",
-        acceptedAt: 1000 + agentCallCount,
+        acceptedAt: Date.now(),
       };
     }
 
     if (request.method === "agent.wait") {
       const params = request.params as AgentWaitCall | undefined;
       waitCalls.push(params ?? {});
+      hoisted.notifyEventWaiters();
       const waitResult = setupOpts.agentWaitResult ?? {
         status: "ok",
         startedAt: 1000,
@@ -119,11 +328,13 @@ export function setupSessionsSpawnGatewayMock(setupOpts: SessionsSpawnGatewayMoc
 
     if (request.method === "sessions.patch") {
       setupOpts.onSessionsPatch?.(request.params);
+      hoisted.notifyEventWaiters();
       return { ok: true };
     }
 
     if (request.method === "sessions.delete") {
       setupOpts.onSessionsDelete?.(request.params);
+      hoisted.notifyEventWaiters();
       return { ok: true };
     }
 
@@ -156,21 +367,47 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => hoisted.callGatewayMock(opts),
 }));
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: () => hoisted.state.configOverride,
-    resolveGatewayPort: () => 18789,
-  };
-});
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: () => hoisted.state.configOverride,
+  resolveGatewayPort: () => 18789,
+}));
+
+vi.mock("../config/sessions.js", () => ({
+  isConfiguredSessionStoreAgentId: (
+    cfg: { agents?: { list?: Array<{ id?: string }> } },
+    agentId: string,
+  ) => agentId === "main" || cfg.agents?.list?.some((agent) => agent.id === agentId) === true,
+  loadSessionStore: () => hoisted.sessionStore,
+  mergeSessionEntry: (existing: object | undefined, patch: object) => ({
+    ...existing,
+    ...patch,
+  }),
+  resolveAgentIdFromSessionKey: (sessionKey: string) =>
+    sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main",
+  resolveAgentMainSessionKey: (params: {
+    cfg?: { session?: { mainKey?: string } };
+    agentId: string;
+  }) => `agent:${params.agentId}:${params.cfg?.session?.mainKey ?? "main"}`,
+  resolveExistingAgentSessionStoreTargetsSync: () => [],
+  resolveStorePath: () => "/tmp/openclaw-sessions-spawn-test-store.json",
+  updateSessionStore: async (
+    _storePath: string,
+    mutator: (store: typeof hoisted.sessionStore) => void | Promise<void>,
+  ) => {
+    await mutator(hoisted.sessionStore);
+  },
+}));
+
+vi.mock("../tasks/detached-task-runtime.js", () => ({
+  completeTaskRunByRunId: vi.fn(),
+  createRunningTaskRun: vi.fn(),
+  failTaskRunByRunId: vi.fn(),
+  findDetachedTaskRun: vi.fn(() => ({ lookup: "available" as const })),
+  setDetachedTaskDeliveryStatusByRunId: vi.fn(),
+}));
 
 // Same module, different specifier (used by tools under src/agents/tools/*).
-vi.mock("../../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: () => hoisted.state.configOverride,
-    resolveGatewayPort: () => 18789,
-  };
-});
+vi.mock("../../config/config.js", () => ({
+  getRuntimeConfig: () => hoisted.state.configOverride,
+  resolveGatewayPort: () => 18789,
+}));

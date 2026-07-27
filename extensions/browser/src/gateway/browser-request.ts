@@ -1,22 +1,43 @@
+/**
+ * Gateway handler for browser.request, including optional node-host proxy
+ * dispatch and local Browser control route dispatch.
+ */
 import crypto from "node:crypto";
+import { clampTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isBrowserControlHostUnavailableError } from "../browser-node-fallback.js";
+import {
+  BROWSER_PROXY_ERROR_ENVELOPE,
+  parseBrowserProxyFailure,
+  type BrowserProxyEnvelope,
+  type BrowserProxyFile,
+  type BrowserProxySuccess,
+} from "../browser-proxy-envelope.js";
 import {
   ErrorCodes,
   applyBrowserProxyPaths,
   createBrowserControlContext,
   createBrowserRouteDispatcher,
   errorShape,
+  getRuntimeConfig,
+  isBrowserHostLocalRoute,
   isNodeCommandAllowed,
   isPersistentBrowserProfileMutation,
-  loadConfig,
   persistBrowserProxyFiles,
   resolveNodeCommandAllowlist,
+  resolveNodeIdFromList,
   resolveRequestedBrowserProfile,
   respondUnavailableOnNodeInvokeError,
   safeParseJson,
   startBrowserControlServiceFromConfig,
+  withTimeout,
   type GatewayRequestHandlers,
   type NodeSession,
+  type OpenClawConfig,
 } from "../core-api.js";
+
+const logger = createSubsystemLogger("browser");
 
 type BrowserRequestParams = {
   method?: string;
@@ -26,67 +47,23 @@ type BrowserRequestParams = {
   timeoutMs?: number;
 };
 
-type BrowserProxyFile = {
-  path: string;
-  base64: string;
-  mimeType?: string;
-};
-
-type BrowserProxyResult = {
-  result: unknown;
-  files?: BrowserProxyFile[];
-};
-
 function isBrowserNode(node: NodeSession) {
   const caps = Array.isArray(node.caps) ? node.caps : [];
   const commands = Array.isArray(node.commands) ? node.commands : [];
   return caps.includes("browser") || commands.includes("browser.proxy");
 }
 
-function normalizeNodeKey(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "");
-}
-
 function resolveBrowserNode(nodes: NodeSession[], query: string): NodeSession | null {
-  const q = query.trim();
+  const q = normalizeOptionalString(query) ?? "";
   if (!q) {
     return null;
   }
-  const qNorm = normalizeNodeKey(q);
-  const matches = nodes.filter((node) => {
-    if (node.nodeId === q) {
-      return true;
-    }
-    if (typeof node.remoteIp === "string" && node.remoteIp === q) {
-      return true;
-    }
-    const name = typeof node.displayName === "string" ? node.displayName : "";
-    if (name && normalizeNodeKey(name) === qNorm) {
-      return true;
-    }
-    if (q.length >= 6 && node.nodeId.startsWith(q)) {
-      return true;
-    }
-    return false;
-  });
-  if (matches.length === 1) {
-    return matches[0] ?? null;
-  }
-  if (matches.length === 0) {
-    return null;
-  }
-  throw new Error(
-    `ambiguous node: ${q} (matches: ${matches
-      .map((node) => node.displayName || node.remoteIp || node.nodeId)
-      .join(", ")})`,
-  );
+  const nodeId = resolveNodeIdFromList(nodes, q, false, { allowCompactDisplayName: true });
+  return nodes.find((node) => node.nodeId === nodeId) ?? null;
 }
 
 function resolveBrowserNodeTarget(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   nodes: NodeSession[];
 }): NodeSession | null {
   const policy = params.cfg.gateway?.nodes?.browser;
@@ -96,12 +73,12 @@ function resolveBrowserNodeTarget(params: {
   }
   const browserNodes = params.nodes.filter((node) => isBrowserNode(node));
   if (browserNodes.length === 0) {
-    if (policy?.node?.trim()) {
+    if (normalizeOptionalString(policy?.node)) {
       throw new Error("No connected browser-capable nodes.");
     }
     return null;
   }
-  const requested = policy?.node?.trim() || "";
+  const requested = normalizeOptionalString(policy?.node) ?? "";
   if (requested) {
     const resolved = resolveBrowserNode(browserNodes, requested);
     if (!resolved) {
@@ -126,20 +103,18 @@ function applyProxyPaths(result: unknown, mapping: Map<string, string>) {
   applyBrowserProxyPaths(result, mapping);
 }
 
+/** Handles one browser.request gateway call and streams a success/error response. */
 export async function handleBrowserGatewayRequest({
   params,
   respond,
   context,
 }: Parameters<GatewayRequestHandlers["browser.request"]>[0]) {
   const typed = params as BrowserRequestParams;
-  const methodRaw = typeof typed.method === "string" ? typed.method.trim().toUpperCase() : "";
-  const path = typeof typed.path === "string" ? typed.path.trim() : "";
+  const methodRaw = (normalizeOptionalString(typed.method) ?? "").toUpperCase();
+  const path = normalizeOptionalString(typed.path) ?? "";
   const query = typed.query && typeof typed.query === "object" ? typed.query : undefined;
   const body = typed.body;
-  const timeoutMs =
-    typeof typed.timeoutMs === "number" && Number.isFinite(typed.timeoutMs)
-      ? Math.max(1, Math.floor(typed.timeoutMs))
-      : undefined;
+  const timeoutMs = clampTimerTimeoutMs(typed.timeoutMs);
 
   if (!methodRaw || !path) {
     respond(
@@ -157,31 +132,37 @@ export async function handleBrowserGatewayRequest({
     );
     return;
   }
-  if (isPersistentBrowserProfileMutation(methodRaw, path)) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "browser.request cannot mutate persistent browser profiles",
-      ),
-    );
-    return;
-  }
-
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
+  const configuredNode = normalizeOptionalString(cfg.gateway?.nodes?.browser?.node);
+  // System-profile listing and import can only run where the local Keychain and
+  // Chrome profiles live, so they must never route to a browser node. Force
+  // host-local dispatch even when gateway.nodes.browser auto-selects a node.
+  const forceHostLocal = isBrowserHostLocalRoute(methodRaw, path);
   let nodeTarget: NodeSession | null = null;
-  try {
-    nodeTarget = resolveBrowserNodeTarget({
-      cfg,
-      nodes: context.nodeRegistry.listConnected(),
-    });
-  } catch (err) {
-    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
-    return;
+  if (!forceHostLocal) {
+    try {
+      nodeTarget = resolveBrowserNodeTarget({
+        cfg,
+        nodes: context.nodeRegistry.listConnected(),
+      });
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+      return;
+    }
   }
 
   if (nodeTarget) {
+    if (isPersistentBrowserProfileMutation(methodRaw, path)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "browser.request cannot mutate persistent browser profiles over a node proxy",
+        ),
+      );
+      return;
+    }
     const allowlist = resolveNodeCommandAllowlist(cfg, nodeTarget);
     const allowed = isNodeCommandAllowed({
       command: "browser.proxy",
@@ -208,6 +189,7 @@ export async function handleBrowserGatewayRequest({
       body,
       timeoutMs,
       profile: resolveRequestedBrowserProfile({ query, body }),
+      errorEnvelope: BROWSER_PROXY_ERROR_ENVELOPE,
     };
     const res = await context.nodeRegistry.invoke({
       nodeId: nodeTarget.nodeId,
@@ -216,21 +198,43 @@ export async function handleBrowserGatewayRequest({
       timeoutMs,
       idempotencyKey: crypto.randomUUID(),
     });
-    if (!respondUnavailableOnNodeInvokeError(respond, res)) {
+    const allowAutomaticHostFallback =
+      !configuredNode && isBrowserControlHostUnavailableError(res.error);
+    if (allowAutomaticHostFallback && !res.ok) {
+      // This node-host error is raised before route dispatch. Other failures
+      // stay on the node path because retrying could duplicate an action.
+      logger.warn(
+        `browser node ${nodeTarget.displayName ?? nodeTarget.nodeId} control host unavailable; falling back to Gateway host`,
+      );
+    } else {
+      if (!respondUnavailableOnNodeInvokeError(respond, res)) {
+        return;
+      }
+      const payload = res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload;
+      const failure = parseBrowserProxyFailure(payload);
+      if (failure) {
+        const { status, body: errorBody } = failure.error;
+        const code = status >= 500 ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST;
+        respond(false, undefined, errorShape(code, errorBody.error, { details: errorBody }));
+        return;
+      }
+      const proxy =
+        payload && typeof payload === "object" ? (payload as BrowserProxyEnvelope) : null;
+      if (!proxy || !("result" in proxy)) {
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "browser proxy failed"));
+        return;
+      }
+      const success = proxy as BrowserProxySuccess;
+      const mapping = await persistProxyFiles(success.files);
+      applyProxyPaths(success.result, mapping);
+      respond(true, success.result);
       return;
     }
-    const payload = res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload;
-    const proxy = payload && typeof payload === "object" ? (payload as BrowserProxyResult) : null;
-    if (!proxy || !("result" in proxy)) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "browser proxy failed"));
-      return;
-    }
-    const mapping = await persistProxyFiles(proxy.files);
-    applyProxyPaths(proxy.result, mapping);
-    respond(true, proxy.result);
-    return;
   }
 
+  // `browser.request` already requires operator.admin. The owning host may run
+  // profile administration; the node-proxy branch above stays denied because
+  // `browser.proxy` is a separate remote-host authority.
   const ready = await startBrowserControlServiceFromConfig();
   if (!ready) {
     respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "browser control is disabled"));
@@ -245,12 +249,31 @@ export async function handleBrowserGatewayRequest({
     return;
   }
 
-  const result = await dispatcher.dispatch({
-    method: methodRaw,
-    path,
-    query,
-    body,
-  });
+  let result;
+  try {
+    result = timeoutMs
+      ? await withTimeout(
+          (signal) =>
+            dispatcher.dispatch({
+              method: methodRaw,
+              path,
+              query,
+              body,
+              signal,
+            }),
+          timeoutMs,
+          "browser request",
+        )
+      : await dispatcher.dispatch({
+          method: methodRaw,
+          path,
+          query,
+          body,
+        });
+  } catch (err) {
+    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+    return;
+  }
 
   if (result.status >= 400) {
     const message =
@@ -265,6 +288,7 @@ export async function handleBrowserGatewayRequest({
   respond(true, result.body);
 }
 
+/** Gateway request handler map contributed by the Browser plugin. */
 export const browserHandlers: GatewayRequestHandlers = {
   "browser.request": handleBrowserGatewayRequest,
 };

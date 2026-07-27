@@ -1,20 +1,47 @@
 #!/usr/bin/env node
 
+// Profiles peak RSS for built bundled plugin entrypoints and emits a JSON
+// report suitable for extension memory budget review.
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import pMap from "p-map";
+import { ensureExtensionMemoryBuild } from "./ensure-extension-memory-build.mjs";
+import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
+import { formatErrorMessage } from "./lib/error-format.mjs";
 
 const DEFAULT_CONCURRENCY = 6;
 const DEFAULT_TIMEOUT_MS = 90_000;
 const DEFAULT_COMBINED_TIMEOUT_MS = 180_000;
+const DEFAULT_CHILD_SHUTDOWN_GRACE_MS = 1_000;
 const DEFAULT_TOP = 10;
+const OUTPUT_CAPTURE_MAX_CHARS = 128 * 1024;
+const STDERR_PREVIEW_MAX_CHARS = 8 * 1024;
 const RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
+const PARENT_SIGNAL_EXIT_CODES = new Map([
+  ["SIGHUP", 129],
+  ["SIGINT", 130],
+  ["SIGTERM", 143],
+]);
+const activeCaseChildren = new Map();
+const parentSignalHandlers = new Map();
+let parentSignalHandlersInstalled = false;
+let parentSignalShutdownStarted = false;
+
+function defaultJsonReportPath() {
+  return path.join(
+    os.tmpdir(),
+    `openclaw-extension-memory-${process.pid}-${Date.now()}-${randomUUID()}.json`,
+  );
+}
 
 function printHelp() {
   console.log(`Usage: node scripts/profile-extension-memory.mjs [options]
 
-Profiles peak RSS for built extension entrypoints in dist/extensions/*/index.js.
+Profiles peak RSS for built bundled plugin entrypoints.
 Run pnpm build first if you want stats for the latest source changes.
 
 Options:
@@ -36,14 +63,22 @@ Examples:
 }
 
 function parsePositiveInt(raw, flagName) {
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  const text = String(raw ?? "").trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${flagName} must be a positive integer`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new Error(`${flagName} must be a positive integer`);
   }
   return parsed;
 }
 
-function parseArgs(argv) {
+/**
+ * Parses extension memory profiler options after pnpm's optional separator.
+ */
+export function parseArgs(argv) {
+  const args = stripLeadingPackageManagerSeparator(argv);
   const options = {
     extensions: [],
     concurrency: DEFAULT_CONCURRENCY,
@@ -54,15 +89,15 @@ function parseArgs(argv) {
     skipCombined: false,
   };
 
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
+  parseArgv: for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
     switch (arg) {
       case "--":
-        break;
+        break parseArgv;
       case "--extension":
       case "-e": {
-        const next = argv[index + 1];
-        if (!next) {
+        const next = args[index + 1];
+        if (!next || next.startsWith("-")) {
           throw new Error(`${arg} requires a value`);
         }
         options.extensions.push(next);
@@ -70,24 +105,24 @@ function parseArgs(argv) {
         break;
       }
       case "--concurrency":
-        options.concurrency = parsePositiveInt(argv[index + 1], arg);
+        options.concurrency = parsePositiveInt(args[index + 1], arg);
         index += 1;
         break;
       case "--timeout-ms":
-        options.timeoutMs = parsePositiveInt(argv[index + 1], arg);
+        options.timeoutMs = parsePositiveInt(args[index + 1], arg);
         index += 1;
         break;
       case "--combined-timeout-ms":
-        options.combinedTimeoutMs = parsePositiveInt(argv[index + 1], arg);
+        options.combinedTimeoutMs = parsePositiveInt(args[index + 1], arg);
         index += 1;
         break;
       case "--top":
-        options.top = parsePositiveInt(argv[index + 1], arg);
+        options.top = parsePositiveInt(args[index + 1], arg);
         index += 1;
         break;
       case "--json": {
-        const next = argv[index + 1];
-        if (!next) {
+        const next = args[index + 1];
+        if (!next || next.startsWith("-")) {
           throw new Error(`${arg} requires a value`);
         }
         options.jsonPath = path.resolve(next);
@@ -115,49 +150,251 @@ function parseMaxRssMb(stderr) {
   return last ? Number(last[1]) / 1024 : null;
 }
 
-function summarizeStderr(stderr, lines = 8) {
-  return stderr.trim().split("\n").filter(Boolean).slice(0, lines).join("\n");
+function createOutputCapture() {
+  return { text: "", truncatedChars: 0 };
 }
 
-async function runCase({ repoRoot, env, hookPath, name, body, timeoutMs }) {
+function appendBoundedOutput(capture, chunk, maxChars = OUTPUT_CAPTURE_MAX_CHARS) {
+  const nextText = capture.text + String(chunk);
+  if (nextText.length <= maxChars) {
+    return capture.truncatedChars === 0
+      ? { text: nextText, truncatedChars: 0 }
+      : { text: nextText, truncatedChars: capture.truncatedChars };
+  }
+  const truncatedChars = capture.truncatedChars + nextText.length - maxChars;
+  return { text: nextText.slice(-maxChars), truncatedChars };
+}
+
+function formatCapturedOutput(capture) {
+  if (capture.truncatedChars === 0) {
+    return capture.text;
+  }
+  return `[output truncated ${capture.truncatedChars} chars; showing tail]\n${capture.text}`;
+}
+
+function scanMaxRssMb(tail, chunk, current) {
+  const text = `${tail}${String(chunk)}`;
+  const parsed = parseMaxRssMb(text);
+  const lineBreakIndex = Math.max(text.lastIndexOf("\n"), text.lastIndexOf("\r"));
+  const openLine = lineBreakIndex === -1 ? text : text.slice(lineBreakIndex + 1);
+  return {
+    maxRssMb: parsed ?? current,
+    tail: openLine.slice(-(RSS_MARKER.length + 32)),
+  };
+}
+
+function summarizeStderr(stderr, lines = 8, maxChars = STDERR_PREVIEW_MAX_CHARS) {
+  const text = stderr.trim().split("\n").filter(Boolean).slice(0, lines).join("\n");
+  if (text.length <= maxChars) {
+    return text;
+  }
+  const firstLine = text.split("\n", 1)[0] ?? "";
+  const prefix = firstLine.startsWith("[output truncated") ? `${firstLine}\n` : "";
+  return `${prefix}[stderr preview truncated ${text.length - maxChars} chars; showing tail]\n${text.slice(
+    -maxChars,
+  )}`;
+}
+
+/**
+ * Runs one import scenario in a child process and captures bounded output plus RSS.
+ */
+export async function runCase({
+  repoRoot,
+  env,
+  hookPath,
+  name,
+  body,
+  timeoutMs,
+  shutdownGraceMs = DEFAULT_CHILD_SHUTDOWN_GRACE_MS,
+  spawnImpl = spawn,
+}) {
   return await new Promise((resolve) => {
-    const child = spawn(
+    const child = spawnImpl(
       process.execPath,
       ["--import", hookPath, "--input-type=module", "--eval", body],
       {
         cwd: repoRoot,
+        detached: process.platform !== "win32",
         env,
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
+    trackActiveCaseChild(child, shutdownGraceMs);
 
-    let stdout = "";
-    let stderr = "";
+    let stdout = createOutputCapture();
+    let stderr = createOutputCapture();
+    let stderrRssTail = "";
+    let maxRssMb = null;
     let timedOut = false;
+    let settled = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGKILL");
+      signalChildProcessTree(child, "SIGKILL");
     }, timeoutMs);
+    timer.unref?.();
+
+    function settle(result) {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      untrackActiveCaseChild(child);
+      resolve(result);
+    }
 
     child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
+      stdout = appendBoundedOutput(stdout, chunk);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
+      const rssScan = scanMaxRssMb(stderrRssTail, chunk, maxRssMb);
+      stderrRssTail = rssScan.tail;
+      maxRssMb = rssScan.maxRssMb;
+      stderr = appendBoundedOutput(stderr, chunk);
     });
-    child.on("close", (code, signal) => {
-      clearTimeout(timer);
-      resolve({
+    child.on("error", (error) => {
+      const stderrText = formatCapturedOutput(stderr);
+      settle({
         name,
-        code,
-        signal,
+        code: null,
+        signal: null,
         timedOut,
-        stdout,
-        stderr,
-        maxRssMb: parseMaxRssMb(stderr),
+        error: formatErrorMessage(error),
+        stdout: formatCapturedOutput(stdout),
+        stderr: stderrText,
+        maxRssMb: maxRssMb ?? parseMaxRssMb(stderrText),
       });
     });
+    child.on("close", (code, signal) => {
+      void (async () => {
+        if (timedOut) {
+          await waitForChildProcessTreeExit(child, shutdownGraceMs);
+        }
+        const stderrText = formatCapturedOutput(stderr);
+        settle({
+          name,
+          code,
+          signal,
+          timedOut,
+          error: null,
+          stdout: formatCapturedOutput(stdout),
+          stderr: stderrText,
+          maxRssMb: maxRssMb ?? parseMaxRssMb(stderrText),
+        });
+      })();
+    });
   });
+}
+
+function signalChildProcessTree(child, signal) {
+  if (process.platform !== "win32" && typeof child.pid === "number") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      child.kill(signal);
+      return;
+    }
+  }
+  child.kill(signal);
+}
+
+async function waitForChildProcessTreeExit(child, timeoutMs) {
+  if (process.platform === "win32" || typeof child.pid !== "number") {
+    return true;
+  }
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!childProcessTreeIsAlive(child)) {
+      return true;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+  }
+  return !childProcessTreeIsAlive(child);
+}
+
+function childProcessTreeIsAlive(child) {
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+function trackActiveCaseChild(child, shutdownGraceMs) {
+  activeCaseChildren.set(child, shutdownGraceMs);
+  installParentSignalHandlers();
+}
+
+function untrackActiveCaseChild(child) {
+  activeCaseChildren.delete(child);
+  if (activeCaseChildren.size === 0) {
+    removeParentSignalHandlers();
+  }
+}
+
+function installParentSignalHandlers() {
+  if (parentSignalHandlersInstalled) {
+    return;
+  }
+  parentSignalHandlersInstalled = true;
+  for (const signal of PARENT_SIGNAL_EXIT_CODES.keys()) {
+    const handler = () => handleParentSignal(signal);
+    parentSignalHandlers.set(signal, handler);
+    process.on(signal, handler);
+  }
+}
+
+function removeParentSignalHandlers() {
+  if (!parentSignalHandlersInstalled || parentSignalShutdownStarted) {
+    return;
+  }
+  removeInstalledParentSignalHandlers();
+}
+
+function removeInstalledParentSignalHandlers() {
+  if (!parentSignalHandlersInstalled) {
+    return;
+  }
+  parentSignalHandlersInstalled = false;
+  for (const [signal, handler] of parentSignalHandlers) {
+    process.off(signal, handler);
+  }
+  parentSignalHandlers.clear();
+}
+
+function handleParentSignal(signal) {
+  if (parentSignalShutdownStarted) {
+    for (const child of activeCaseChildren.keys()) {
+      signalChildProcessTree(child, "SIGKILL");
+    }
+    return;
+  }
+  parentSignalShutdownStarted = true;
+  void cleanupActiveCaseChildrenForParentSignal(signal);
+}
+
+async function cleanupActiveCaseChildrenForParentSignal(signal) {
+  const children = [...activeCaseChildren.entries()];
+  for (const [child] of children) {
+    signalChildProcessTree(child, signal);
+  }
+  await Promise.all(
+    children.map(([child, shutdownGraceMs]) => waitForChildProcessTreeExit(child, shutdownGraceMs)),
+  );
+  for (const [child] of children) {
+    if (childProcessTreeIsAlive(child)) {
+      signalChildProcessTree(child, "SIGKILL");
+    }
+  }
+  await Promise.all(
+    children.map(([child, shutdownGraceMs]) => waitForChildProcessTreeExit(child, shutdownGraceMs)),
+  );
+  removeInstalledParentSignalHandlers();
+  process.exit(PARENT_SIGNAL_EXIT_CODES.get(signal) ?? 1);
 }
 
 function buildImportBody(entryFiles, label) {
@@ -179,7 +416,7 @@ function findExtensionEntries(repoRoot) {
     .toSorted((a, b) => a.dir.localeCompare(b.dir));
 
   if (entries.length === 0) {
-    throw new Error("No built extension entrypoints found under dist/extensions/*/index.js");
+    throw new Error("No built bundled plugin entrypoints found in the dist plugin tree");
   }
   return entries;
 }
@@ -187,6 +424,10 @@ function findExtensionEntries(repoRoot) {
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const repoRoot = process.cwd();
+  ensureExtensionMemoryBuild({
+    rootDir: repoRoot,
+    requiredExtensionIds: options.extensions,
+  });
   const allEntries = findExtensionEntries(repoRoot);
   const selectedEntries =
     options.extensions.length === 0
@@ -203,14 +444,15 @@ async function main() {
 
   const tmpHome = mkdtempSync(path.join(os.tmpdir(), "openclaw-extension-memory-"));
   const hookPath = path.join(tmpHome, "measure-rss.mjs");
-  const jsonPath = options.jsonPath ?? path.join(os.tmpdir(), "openclaw-extension-memory.json");
+  const jsonPath = options.jsonPath ?? defaultJsonReportPath();
 
   writeFileSync(
     hookPath,
     [
+      "import { writeSync } from 'node:fs';",
       "process.on('exit', () => {",
       "  const usage = typeof process.resourceUsage === 'function' ? process.resourceUsage() : null;",
-      `  if (usage && typeof usage.maxRSS === 'number') console.error('${RSS_MARKER}' + String(usage.maxRSS));`,
+      `  if (usage && typeof usage.maxRSS === 'number') writeSync(2, '${RSS_MARKER}' + String(usage.maxRSS) + '\\n');`,
       "});",
       "",
     ].join("\n"),
@@ -254,15 +496,9 @@ async function main() {
           timeoutMs: options.combinedTimeoutMs,
         });
 
-    const pending = [...selectedEntries];
-    const results = [];
-
-    async function worker() {
-      while (pending.length > 0) {
-        const next = pending.shift();
-        if (next === undefined) {
-          return;
-        }
+    const results = await pMap(
+      selectedEntries,
+      async (next) => {
         const result = await runCase({
           repoRoot,
           env,
@@ -271,7 +507,7 @@ async function main() {
           body: buildImportBody([next.file], "IMPORTED"),
           timeoutMs: options.timeoutMs,
         });
-        results.push({
+        const entry = {
           dir: next.dir,
           file: next.file,
           status: result.timedOut ? "timeout" : result.code === 0 ? "ok" : "fail",
@@ -281,16 +517,14 @@ async function main() {
               ? result.maxRssMb - baseline.maxRssMb
               : null,
           stderrPreview: summarizeStderr(result.stderr),
-        });
+        };
 
         const status = result.timedOut ? "timeout" : result.code === 0 ? "ok" : "fail";
         const rss = result.maxRssMb === null ? "n/a" : `${result.maxRssMb.toFixed(1)} MB`;
         console.log(`[extension-memory] ${next.dir}: ${status} ${rss}`);
-      }
-    }
-
-    await Promise.all(
-      Array.from({ length: Math.min(options.concurrency, selectedEntries.length) }, () => worker()),
+        return entry;
+      },
+      { concurrency: options.concurrency, stopOnError: true },
     );
 
     results.sort((a, b) => a.dir.localeCompare(b.dir));
@@ -331,6 +565,7 @@ async function main() {
       results,
     };
 
+    mkdirSync(path.dirname(jsonPath), { recursive: true });
     writeFileSync(jsonPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
 
     console.log(`[extension-memory] report: ${jsonPath}`);
@@ -346,14 +581,46 @@ async function main() {
         2,
       ),
     );
+
+    const failures = [];
+    if (report.baseline.status !== "ok") {
+      failures.push(`baseline import ${report.baseline.status}`);
+    }
+    if (report.baseline.maxRssMb === null) {
+      failures.push("baseline import did not report RSS");
+    }
+    if (report.combined !== null) {
+      if (report.combined.status !== "ok") {
+        failures.push(`combined import ${report.combined.status}`);
+      }
+      if (report.combined.maxRssMb === null) {
+        failures.push("combined import did not report RSS");
+      }
+    }
+    for (const result of report.results) {
+      if (result.status !== "ok") {
+        failures.push(`${result.dir} import ${result.status}`);
+      }
+      if (result.maxRssMb === null) {
+        failures.push(`${result.dir} import did not report RSS`);
+      }
+    }
+    if (failures.length > 0) {
+      for (const failure of failures) {
+        console.error(`[extension-memory] ${failure}`);
+      }
+      process.exitCode = 1;
+    }
   } finally {
     rmSync(tmpHome, { recursive: true, force: true });
   }
 }
 
-try {
-  await main();
-} catch (error) {
-  console.error(`[extension-memory] ${error instanceof Error ? error.message : String(error)}`);
-  process.exit(1);
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    await main();
+  } catch (error) {
+    console.error(`[extension-memory] ${formatErrorMessage(error)}`);
+    process.exit(1);
+  }
 }

@@ -1,11 +1,12 @@
+// Zalo plugin module implements token behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import type { BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/core";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
-import type { BaseTokenResolution } from "./runtime-api.js";
 import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "./secret-input.js";
 import type { ZaloConfig } from "./types.js";
 
-export type ZaloTokenResolution = BaseTokenResolution & {
+type ZaloTokenResolution = BaseTokenResolution & {
   source: "env" | "config" | "configFile" | "none";
 };
 
@@ -18,16 +19,14 @@ export function resolveZaloToken(
   accountId?: string | null,
   options?: { allowUnresolvedSecretRef?: boolean },
 ): ZaloTokenResolution {
-  const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
+  const resolvedAccountId = normalizeAccountId(accountId ?? config?.defaultAccount);
   const isDefaultAccount = resolvedAccountId === DEFAULT_ACCOUNT_ID;
   const baseConfig = config;
   const accountConfig = resolveAccountEntry(
     baseConfig?.accounts as Record<string, ZaloConfig> | undefined,
     normalizeAccountId(resolvedAccountId),
   );
-  const accountHasBotToken = Boolean(
-    accountConfig && Object.prototype.hasOwnProperty.call(accountConfig, "botToken"),
-  );
+  const accountHasBotToken = Boolean(accountConfig && Object.hasOwn(accountConfig, "botToken"));
 
   if (accountConfig && accountHasBotToken) {
     const token = options?.allowUnresolvedSecretRef

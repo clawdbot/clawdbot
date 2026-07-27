@@ -1,6 +1,10 @@
-import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
-import { lineSetupPlugin } from "./src/channel.setup.js";
+// Line plugin module implements setup entry behavior.
+import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
-export { lineSetupPlugin } from "./src/channel.setup.js";
-
-export default defineSetupPluginEntry(lineSetupPlugin);
+export default defineBundledChannelSetupEntry({
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./api.js",
+    exportName: "lineSetupPlugin",
+  },
+});

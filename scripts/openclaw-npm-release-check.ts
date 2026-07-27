@@ -1,9 +1,25 @@
 #!/usr/bin/env -S node --import tsx
+// Openclaw Npm Release Check script supports OpenClaw repository automation.
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { basename } from "node:path";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { resolveNpmDistTagMirrorAuth as resolveNpmDistTagMirrorAuthBase } from "./lib/npm-publish-plan.mjs";
+import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
+import {
+  LOCAL_BUILD_METADATA_DIST_PATHS,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+  writePackageDistInventory,
+} from "./lib/package-dist-inventory.ts";
+import {
+  compareReleaseVersions as compareReleaseVersionsBase,
+  collectReleaseVersionFloorErrors as collectReleaseVersionFloorErrorsBase,
+  parseReleaseVersion as parseReleaseVersionBase,
+  type ParsedReleaseVersion,
+} from "./lib/release-version.mjs";
+import { WORKSPACE_TEMPLATE_PACK_PATHS } from "./lib/workspace-bootstrap-smoke.mjs";
+import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 type PackageJson = {
   name?: string;
@@ -12,41 +28,146 @@ type PackageJson = {
   license?: string;
   repository?: { url?: string } | string;
   bin?: Record<string, string>;
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
   peerDependenciesMeta?: Record<string, { optional?: boolean }>;
 };
 
-export type ParsedReleaseVersion = {
-  version: string;
-  baseVersion: string;
-  channel: "stable" | "beta";
-  year: number;
-  month: number;
-  day: number;
-  betaNumber?: number;
-  correctionNumber?: number;
-  date: Date;
-};
-
-export type ParsedReleaseTag = {
+type ParsedReleaseTag = {
   version: string;
   packageVersion: string;
   baseVersion: string;
-  channel: "stable" | "beta";
+  channel: "stable" | "alpha" | "beta";
   correctionNumber?: number;
-  date: Date;
 };
 
-const STABLE_VERSION_REGEX = /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)$/;
-const BETA_VERSION_REGEX =
-  /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)-beta\.(?<beta>[1-9]\d*)$/;
-const CORRECTION_VERSION_REGEX =
-  /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)-(?<correction>[1-9]\d*)$/;
+type NpmPublishPlan = {
+  channel: "stable" | "alpha" | "beta";
+  publishTag: "latest" | "alpha" | "beta";
+  mirrorDistTags: ("latest" | "alpha" | "beta")[];
+};
+
+type NpmDistTagMirrorAuth = {
+  hasAuth: boolean;
+  source: "node-auth-token" | "npm-token" | "none";
+};
 const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
-const MAX_CALVER_DISTANCE_DAYS = 2;
-const REQUIRED_PACKED_PATHS = ["dist/control-ui/index.html"];
+const OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE = "node-llama-cpp";
+const FS_SAFE_PACKAGE = "@openclaw/fs-safe";
+const REQUIRED_PACKED_PATHS = [
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+  "dist/control-ui/index.html",
+  ...WORKSPACE_TEMPLATE_PACK_PATHS,
+];
 const CONTROL_UI_ASSET_PREFIX = "dist/control-ui/assets/";
+const FORBIDDEN_PACKED_PATH_RULES = [
+  ...LOCAL_BUILD_METADATA_DIST_PATHS.map((prefix) => ({
+    prefix,
+    describe: (packedPath: string) =>
+      `npm package must not include local build metadata "${packedPath}".`,
+  })),
+  {
+    prefix: "docs/.generated/",
+    describe: (packedPath: string) =>
+      `npm package must not include generated docs artifact "${packedPath}".`,
+  },
+  {
+    prefix: "docs/channels/qa-channel.md",
+    describe: (packedPath: string) =>
+      `npm package must not include private QA channel docs "${packedPath}".`,
+  },
+  {
+    prefix: "dist/extensions/qa-channel/",
+    describe: (packedPath: string) =>
+      `npm package must not include private QA channel artifact "${packedPath}".`,
+  },
+  {
+    prefix: "dist/extensions/qa-lab/",
+    describe: (packedPath: string) =>
+      `npm package must not include private QA lab artifact "${packedPath}".`,
+  },
+  {
+    prefix: "dist/plugin-sdk/extensions/qa-channel/",
+    describe: (packedPath: string) =>
+      `npm package must not include private QA channel type artifact "${packedPath}".`,
+  },
+  {
+    prefix: "dist/plugin-sdk/extensions/qa-lab/",
+    describe: (packedPath: string) =>
+      `npm package must not include private QA lab type artifact "${packedPath}".`,
+  },
+  {
+    prefix: "dist/plugin-sdk/qa-channel.",
+    describe: (packedPath: string) =>
+      `npm package must not include private QA channel SDK artifact "${packedPath}".`,
+  },
+  {
+    prefix: "dist/plugin-sdk/qa-channel-protocol.",
+    describe: (packedPath: string) =>
+      `npm package must not include private QA channel SDK artifact "${packedPath}".`,
+  },
+  {
+    prefix: "dist/qa-runtime-",
+    describe: (packedPath: string) =>
+      `npm package must not include private QA runtime chunk "${packedPath}".`,
+  },
+  {
+    prefix: "qa/",
+    describe: (packedPath: string) =>
+      `npm package must not include private QA suite artifact "${packedPath}".`,
+  },
+] as const;
+const FORBIDDEN_PRIVATE_QA_CONTENT_MARKERS = [
+  "//#region extensions/qa-lab/",
+  "qa-channel/runtime-api.js",
+  "qa-channel.js",
+  "qa-channel-protocol.js",
+  "qa-lab/cli.js",
+  "qa-lab/runtime-api.js",
+] as const;
+const FORBIDDEN_PRIVATE_QA_CONTENT_SCAN_PREFIXES = ["dist/"] as const;
+const PACKED_TEST_CARGO_DIRECTORY_SEGMENTS = new Set([
+  "__snapshots__",
+  "__tests__",
+  "test",
+  "tests",
+]);
+const PACKED_TEST_CARGO_FILE_RE = /(?:^|\/)[^/]+\.(?:test|spec)\.(?:[cm]?[jt]sx?)$/u;
 const NPM_PACK_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+const DEFAULT_RELEASE_CHECK_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
+const skipPackValidationEnv = "OPENCLAW_NPM_RELEASE_SKIP_PACK_CHECK";
+
+type ReleaseCheckCommandInvocation = {
+  command: string;
+  args: string[];
+  windowsVerbatimArguments?: boolean;
+};
+
+function normalizePackedPath(packedPath: string): string {
+  return packedPath.replace(/\\/g, "/");
+}
+function isNodeModulesPackageRoot(segments: string[], index: number): boolean {
+  const parent = segments[index - 1];
+  if (parent === "node_modules") {
+    return true;
+  }
+  return parent !== undefined && parent.startsWith("@") && segments[index - 2] === "node_modules";
+}
+
+function pathContainsPackedTestCargo(packedPath: string): boolean {
+  const normalizedPath = normalizePackedPath(packedPath);
+  if (PACKED_TEST_CARGO_FILE_RE.test(normalizedPath)) {
+    return true;
+  }
+  const segments = normalizedPath.split("/").filter(Boolean);
+  return segments.some(
+    (segment, index) =>
+      index < segments.length - 1 &&
+      PACKED_TEST_CARGO_DIRECTORY_SEGMENTS.has(segment) &&
+      !isNodeModulesPackageRoot(segments, index),
+  );
+}
 
 function normalizeRepoUrl(value: unknown): string {
   if (typeof value !== "string") {
@@ -60,83 +181,83 @@ function normalizeRepoUrl(value: unknown): string {
     .replace(/\/+$/, "");
 }
 
-function parseDateParts(
-  version: string,
-  groups: Record<string, string | undefined>,
-  channel: "stable" | "beta",
-): ParsedReleaseVersion | null {
-  const year = Number.parseInt(groups.year ?? "", 10);
-  const month = Number.parseInt(groups.month ?? "", 10);
-  const day = Number.parseInt(groups.day ?? "", 10);
-  const betaNumber = channel === "beta" ? Number.parseInt(groups.beta ?? "", 10) : undefined;
-
-  if (
-    !Number.isInteger(year) ||
-    !Number.isInteger(month) ||
-    !Number.isInteger(day) ||
-    month < 1 ||
-    month > 12 ||
-    day < 1 ||
-    day > 31
-  ) {
-    return null;
-  }
-  if (channel === "beta" && (!Number.isInteger(betaNumber) || (betaNumber ?? 0) < 1)) {
-    return null;
-  }
-
-  const date = new Date(Date.UTC(year, month - 1, day));
-  if (
-    date.getUTCFullYear() !== year ||
-    date.getUTCMonth() !== month - 1 ||
-    date.getUTCDate() !== day
-  ) {
-    return null;
-  }
-
-  return {
-    version,
-    baseVersion: `${year}.${month}.${day}`,
-    channel,
-    year,
-    month,
-    day,
-    betaNumber,
-    date,
-  };
+function isLocalDependencySpec(value: string | undefined): boolean {
+  return /^(?:file|link|workspace):/u.test(value ?? "");
 }
 
 export function parseReleaseVersion(version: string): ParsedReleaseVersion | null {
-  const trimmed = version.trim();
-  if (!trimmed) {
-    return null;
+  return parseReleaseVersionBase(version);
+}
+
+export function compareReleaseVersions(left: string, right: string): number | null {
+  return compareReleaseVersionsBase(left, right);
+}
+
+export function resolveNpmPublishPlan(
+  version: string,
+  _currentBetaVersion?: string | null,
+  requestedPublishTag?: "latest" | "alpha" | "beta" | null,
+): NpmPublishPlan {
+  const parsedVersion = parseReleaseVersion(version);
+  if (parsedVersion === null) {
+    throw new Error(`Unsupported release version "${version}".`);
   }
 
-  const stableMatch = STABLE_VERSION_REGEX.exec(trimmed);
-  if (stableMatch?.groups) {
-    return parseDateParts(trimmed, stableMatch.groups, "stable");
-  }
+  const publishTag =
+    requestedPublishTag?.trim() === "latest"
+      ? "latest"
+      : requestedPublishTag?.trim() === "alpha"
+        ? "alpha"
+        : "beta";
 
-  const betaMatch = BETA_VERSION_REGEX.exec(trimmed);
-  if (betaMatch?.groups) {
-    return parseDateParts(trimmed, betaMatch.groups, "beta");
-  }
-
-  const correctionMatch = CORRECTION_VERSION_REGEX.exec(trimmed);
-  if (correctionMatch?.groups) {
-    const parsedCorrection = parseDateParts(trimmed, correctionMatch.groups, "stable");
-    const correctionNumber = Number.parseInt(correctionMatch.groups.correction ?? "", 10);
-    if (parsedCorrection === null || !Number.isInteger(correctionNumber) || correctionNumber < 1) {
-      return null;
+  if (parsedVersion.channel === "alpha") {
+    if (publishTag !== "alpha") {
+      throw new Error("Alpha prereleases must publish to the alpha dist-tag.");
     }
-
     return {
-      ...parsedCorrection,
-      correctionNumber,
+      channel: "alpha",
+      publishTag: "alpha",
+      mirrorDistTags: [],
     };
   }
 
-  return null;
+  if (parsedVersion.channel === "beta") {
+    if (publishTag !== "beta") {
+      throw new Error("Beta prereleases must publish to the beta dist-tag.");
+    }
+    return {
+      channel: "beta",
+      publishTag: "beta",
+      mirrorDistTags: [],
+    };
+  }
+
+  return {
+    channel: "stable",
+    publishTag,
+    mirrorDistTags: [],
+  };
+}
+
+export function resolveNpmDistTagMirrorAuth(params?: {
+  nodeAuthToken?: string | null;
+  npmToken?: string | null;
+}): NpmDistTagMirrorAuth {
+  const nodeAuthToken =
+    params && "nodeAuthToken" in params ? params.nodeAuthToken : process.env.NODE_AUTH_TOKEN;
+  const npmToken = params && "npmToken" in params ? params.npmToken : process.env.NPM_TOKEN;
+  return resolveNpmDistTagMirrorAuthBase({
+    nodeAuthToken,
+    npmToken,
+  }) as NpmDistTagMirrorAuth;
+}
+
+export function shouldSkipPackedTarballValidation(env = process.env): boolean {
+  const raw = env[skipPackValidationEnv];
+  if (!raw) {
+    return false;
+  }
+  return !/^(0|false)$/i.test(raw);
 }
 
 export function parseReleaseTagVersion(version: string): ParsedReleaseTag | null {
@@ -152,7 +273,6 @@ export function parseReleaseTagVersion(version: string): ParsedReleaseTag | null
       packageVersion: parsedVersion.version,
       baseVersion: parsedVersion.baseVersion,
       channel: parsedVersion.channel,
-      date: parsedVersion.date,
       correctionNumber: parsedVersion.correctionNumber,
     };
   }
@@ -160,12 +280,46 @@ export function parseReleaseTagVersion(version: string): ParsedReleaseTag | null
   return null;
 }
 
-function startOfUtcDay(date: Date): number {
-  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+export function resolveNpmReleaseCheckCommandTimeoutMs(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  return readPositiveEnvInt(
+    "OPENCLAW_NPM_RELEASE_CHECK_COMMAND_TIMEOUT_MS",
+    env,
+    DEFAULT_RELEASE_CHECK_COMMAND_TIMEOUT_MS,
+  );
 }
 
-export function utcCalendarDayDistance(left: Date, right: Date): number {
-  return Math.round(Math.abs(startOfUtcDay(left) - startOfUtcDay(right)) / 86_400_000);
+export function runNpmReleaseCheckCommand(
+  invocation: ReleaseCheckCommandInvocation,
+  options: {
+    cwd?: string;
+    encoding?: BufferEncoding;
+    env?: NodeJS.ProcessEnv;
+    maxBuffer?: number;
+    stdio: "ignore" | ["ignore", "pipe", "pipe"];
+    timeoutMs?: number;
+  },
+): string {
+  const env = options.env ?? process.env;
+  const execOptions = {
+    cwd: options.cwd,
+    encoding: options.encoding,
+    env,
+    killSignal: "SIGKILL",
+    maxBuffer: options.maxBuffer ?? NPM_PACK_MAX_BUFFER_BYTES,
+    stdio: options.stdio,
+    timeout: options.timeoutMs ?? resolveNpmReleaseCheckCommandTimeoutMs(env),
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+  } as Parameters<typeof execFileSync>[2] & { windowsVerbatimArguments?: boolean };
+  const output = execFileSync(invocation.command, invocation.args, execOptions) as
+    | Buffer
+    | string
+    | null;
+  if (output == null) {
+    return "";
+  }
+  return typeof output === "string" ? output : output.toString("utf8");
 }
 
 export function collectReleasePackageMetadataErrors(pkg: PackageJson): string[] {
@@ -195,15 +349,30 @@ export function collectReleasePackageMetadataErrors(pkg: PackageJson): string[] 
       `package.json bin.openclaw must be "openclaw.mjs"; found "${pkg.bin?.openclaw ?? ""}".`,
     );
   }
-  if (pkg.peerDependencies?.["node-llama-cpp"] !== "3.18.1") {
+  if (pkg.dependencies?.[OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE]) {
     errors.push(
-      `package.json peerDependencies["node-llama-cpp"] must be "3.18.1"; found "${
-        pkg.peerDependencies?.["node-llama-cpp"] ?? ""
-      }".`,
+      `package.json dependencies["${OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE}"] must be omitted; keep it optional.`,
     );
   }
-  if (pkg.peerDependenciesMeta?.["node-llama-cpp"]?.optional !== true) {
-    errors.push('package.json peerDependenciesMeta["node-llama-cpp"].optional must be true.');
+  if (isLocalDependencySpec(pkg.dependencies?.[FS_SAFE_PACKAGE])) {
+    errors.push(
+      `package.json dependencies["${FS_SAFE_PACKAGE}"] must use a published semver range before npm release; found "${pkg.dependencies?.[FS_SAFE_PACKAGE]}".`,
+    );
+  }
+  if (pkg.optionalDependencies?.[OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE]) {
+    errors.push(
+      `package.json optionalDependencies["${OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE}"] must be omitted; keep it operator-installed.`,
+    );
+  }
+  if (pkg.peerDependencies?.[OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE]) {
+    errors.push(
+      `package.json peerDependencies["${OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE}"] must be omitted; keep it optional.`,
+    );
+  }
+  if (pkg.peerDependenciesMeta?.[OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE]) {
+    errors.push(
+      `package.json peerDependenciesMeta["${OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE}"] must be omitted; keep it optional.`,
+    );
   }
 
   return errors;
@@ -214,18 +383,18 @@ export function collectReleaseTagErrors(params: {
   releaseTag: string;
   releaseSha?: string;
   releaseMainRef?: string;
-  now?: Date;
 }): string[] {
   const errors: string[] = [];
   const releaseTag = params.releaseTag.trim();
   const packageVersion = params.packageVersion.trim();
-  const now = params.now ?? new Date();
 
   const parsedVersion = parseReleaseVersion(packageVersion);
   if (parsedVersion === null) {
     errors.push(
-      `package.json version must match YYYY.M.D, YYYY.M.D-N, or YYYY.M.D-beta.N; found "${packageVersion || "<missing>"}".`,
+      `package.json version must match YYYY.M.PATCH, YYYY.M.PATCH-N, YYYY.M.PATCH-alpha.N, or YYYY.M.PATCH-beta.N; found "${packageVersion || "<missing>"}".`,
     );
+  } else {
+    errors.push(...collectReleaseVersionFloorErrorsBase(parsedVersion));
   }
 
   if (!releaseTag.startsWith("v")) {
@@ -236,7 +405,7 @@ export function collectReleaseTagErrors(params: {
   const parsedTag = parseReleaseTagVersion(tagVersion);
   if (parsedTag === null) {
     errors.push(
-      `Release tag must match vYYYY.M.D, vYYYY.M.D-beta.N, or fallback correction tag vYYYY.M.D-N; found "${releaseTag || "<missing>"}".`,
+      `Release tag must match vYYYY.M.PATCH, vYYYY.M.PATCH-alpha.N, vYYYY.M.PATCH-beta.N, or fallback correction tag vYYYY.M.PATCH-N; found "${releaseTag || "<missing>"}".`,
     );
   }
 
@@ -262,22 +431,13 @@ export function collectReleaseTagErrors(params: {
     );
   }
 
-  if (parsedVersion !== null) {
-    const dayDistance = utcCalendarDayDistance(parsedVersion.date, now);
-    if (dayDistance > MAX_CALVER_DISTANCE_DAYS) {
-      const nowLabel = now.toISOString().slice(0, 10);
-      const versionDate = parsedVersion.date.toISOString().slice(0, 10);
-      errors.push(
-        `Release version ${packageVersion} is ${dayDistance} days away from current UTC date ${nowLabel}; release CalVer date ${versionDate} must be within ${MAX_CALVER_DISTANCE_DAYS} days.`,
-      );
-    }
-  }
-
   if (params.releaseSha?.trim() && params.releaseMainRef?.trim()) {
     try {
-      execFileSync(
-        "git",
-        ["merge-base", "--is-ancestor", params.releaseSha, params.releaseMainRef],
+      runNpmReleaseCheckCommand(
+        {
+          command: "git",
+          args: ["merge-base", "--is-ancestor", params.releaseSha, params.releaseMainRef],
+        },
         { stdio: "ignore" },
       );
     } catch {
@@ -295,30 +455,72 @@ function loadPackageJson(): PackageJson {
 }
 
 function isNpmExecPath(value: string): boolean {
-  return /^npm(?:-cli)?(?:\.(?:c?js|cmd|exe))?$/.test(basename(value).toLowerCase());
+  return /^npm(?:-cli)?(?:\.(?:c?js|cmd|exe))?$/.test(portableBasename(value).toLowerCase());
 }
+
+function portableBasename(value: string): string {
+  return value.split(/[/\\]/u).at(-1) ?? value;
+}
+
+type NpmCommandInvocation = {
+  command: string;
+  args: string[];
+  windowsVerbatimArguments?: boolean;
+};
 
 export function resolveNpmCommandInvocation(
   params: {
+    comSpec?: string;
+    npmArgs?: string[];
     npmExecPath?: string;
     nodeExecPath?: string;
     platform?: NodeJS.Platform;
   } = {},
-): { command: string; args: string[] } {
+): NpmCommandInvocation {
+  const npmArgs = params.npmArgs ?? [];
   const npmExecPath = params.npmExecPath ?? process.env.npm_execpath;
   const nodeExecPath = params.nodeExecPath ?? process.execPath;
-  const npmCommand = (params.platform ?? process.platform) === "win32" ? "npm.cmd" : "npm";
+  const platform = params.platform ?? process.platform;
 
   if (typeof npmExecPath === "string" && npmExecPath.length > 0 && isNpmExecPath(npmExecPath)) {
-    return { command: nodeExecPath, args: [npmExecPath] };
+    const name = portableBasename(npmExecPath).toLowerCase();
+    if (platform === "win32" && (name.endsWith(".cmd") || name.endsWith(".bat"))) {
+      return {
+        command: params.comSpec ?? resolveWindowsCmdExePath(),
+        args: ["/d", "/s", "/c", buildCmdExeCommandLine(npmExecPath, npmArgs)],
+        windowsVerbatimArguments: true,
+      };
+    }
+    if (platform === "win32" && name.endsWith(".exe")) {
+      return { command: npmExecPath, args: npmArgs };
+    }
+    if (platform === "win32" && name === "npm") {
+      return {
+        command: params.comSpec ?? resolveWindowsCmdExePath(),
+        args: ["/d", "/s", "/c", buildCmdExeCommandLine(`${npmExecPath}.cmd`, npmArgs)],
+        windowsVerbatimArguments: true,
+      };
+    }
+    if (name.endsWith(".js") || name.endsWith(".cjs") || name.endsWith(".mjs")) {
+      return { command: nodeExecPath, args: [npmExecPath, ...npmArgs] };
+    }
+    return { command: npmExecPath, args: npmArgs };
   }
 
-  return { command: npmCommand, args: [] };
+  if (platform === "win32") {
+    return {
+      command: params.comSpec ?? resolveWindowsCmdExePath(),
+      args: ["/d", "/s", "/c", buildCmdExeCommandLine("npm.cmd", npmArgs)],
+      windowsVerbatimArguments: true,
+    };
+  }
+
+  return { command: "npm", args: npmArgs };
 }
 
 function runNpmCommand(args: string[]): string {
-  const invocation = resolveNpmCommandInvocation();
-  return execFileSync(invocation.command, [...invocation.args, ...args], {
+  const invocation = resolveNpmCommandInvocation({ npmArgs: args });
+  return runNpmReleaseCheckCommand(invocation, {
     encoding: "utf8",
     maxBuffer: NPM_PACK_MAX_BUFFER_BYTES,
     stdio: ["ignore", "pipe", "pipe"],
@@ -416,25 +618,27 @@ export function collectControlUiPackErrors(paths: Iterable<string>): string[] {
 
 function collectPackedTarballErrors(): string[] {
   const errors: string[] = [];
-  let stdout = "";
+  let stdout;
   try {
-    stdout = runNpmCommand(["pack", "--json", "--dry-run"]);
+    stdout = runNpmCommand(["pack", "--json", "--dry-run", "--ignore-scripts"]);
   } catch (error) {
     const message = describeExecFailure(error);
     errors.push(
-      `Failed to inspect npm tarball contents via \`npm pack --json --dry-run\`: ${message}`,
+      `Failed to inspect npm tarball contents via \`npm pack --json --dry-run --ignore-scripts\`: ${message}`,
     );
     return errors;
   }
 
   const packResults = parseNpmPackJsonOutput(stdout);
   if (!packResults) {
-    errors.push("Failed to parse JSON output from `npm pack --json --dry-run`.");
+    errors.push("Failed to parse JSON output from `npm pack --json --dry-run --ignore-scripts`.");
     return errors;
   }
   const firstResult = packResults[0];
   if (!firstResult || !Array.isArray(firstResult.files)) {
-    errors.push("`npm pack --json --dry-run` did not return a files list to validate.");
+    errors.push(
+      "`npm pack --json --dry-run --ignore-scripts` did not return a files list to validate.",
+    );
     return errors;
   }
 
@@ -444,22 +648,105 @@ function collectPackedTarballErrors(): string[] {
       .filter((path): path is string => typeof path === "string" && path.length > 0),
   );
 
-  return collectControlUiPackErrors(packedPaths);
+  return [
+    ...collectControlUiPackErrors(packedPaths),
+    ...collectForbiddenPackedPathErrors(packedPaths),
+    ...collectForbiddenPackedContentErrors(packedPaths),
+    ...collectPackedTestCargoErrors(packedPaths),
+  ];
 }
 
-function main(): number {
+function collectNpmLockErrors(): string[] {
+  try {
+    runNpmReleaseCheckCommand(
+      { command: process.execPath, args: ["scripts/generate-npm-package-lock.mjs"] },
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    return [];
+  } catch (error) {
+    return [`npm package-lock validation failed: ${describeExecFailure(error)}`];
+  }
+}
+
+export function collectForbiddenPackedPathErrors(paths: Iterable<string>): string[] {
+  const errors: string[] = [];
+  for (const packedPath of paths) {
+    const matchedRule = FORBIDDEN_PACKED_PATH_RULES.find((rule) =>
+      packedPath.startsWith(rule.prefix),
+    );
+    if (!matchedRule) {
+      continue;
+    }
+    errors.push(matchedRule.describe(packedPath));
+  }
+  return errors.toSorted((left, right) => left.localeCompare(right));
+}
+
+export function collectForbiddenPackedContentErrors(
+  paths: Iterable<string>,
+  rootDir = process.cwd(),
+): string[] {
+  const textPathPattern = /\.(?:[cm]?js|d\.ts|json|md|mjs|cjs)$/u;
+  const errors: string[] = [];
+  for (const packedPath of paths) {
+    if (
+      !FORBIDDEN_PRIVATE_QA_CONTENT_SCAN_PREFIXES.some((prefix) => packedPath.startsWith(prefix))
+    ) {
+      continue;
+    }
+    if (!textPathPattern.test(packedPath)) {
+      continue;
+    }
+    let content: string;
+    try {
+      content = readFileSync(pathToFileURL(join(rootDir, packedPath)), "utf8");
+    } catch {
+      continue;
+    }
+    const matchedMarker = FORBIDDEN_PRIVATE_QA_CONTENT_MARKERS.find((marker) =>
+      content.includes(marker),
+    );
+    if (!matchedMarker) {
+      continue;
+    }
+    errors.push(
+      `npm package must not include private QA lab marker "${matchedMarker}" in "${packedPath}".`,
+    );
+  }
+  return errors.toSorted((left, right) => left.localeCompare(right));
+}
+
+export function collectPackedTestCargoErrors(paths: Iterable<string>): string[] {
+  const errors: string[] = [];
+  for (const packedPath of paths) {
+    if (!pathContainsPackedTestCargo(packedPath)) {
+      continue;
+    }
+    errors.push(`npm package must not include test cargo "${packedPath}".`);
+  }
+  return errors.toSorted((left, right) => left.localeCompare(right));
+}
+
+async function main(): Promise<number> {
   const pkg = loadPackageJson();
-  const now = new Date();
+  const skipPackValidation = shouldSkipPackedTarballValidation();
   const metadataErrors = collectReleasePackageMetadataErrors(pkg);
   const tagErrors = collectReleaseTagErrors({
     packageVersion: pkg.version ?? "",
     releaseTag: process.env.RELEASE_TAG ?? "",
     releaseSha: process.env.RELEASE_SHA,
     releaseMainRef: process.env.RELEASE_MAIN_REF,
-    now,
   });
-  const tarballErrors = collectPackedTarballErrors();
-  const errors = [...metadataErrors, ...tagErrors, ...tarballErrors];
+  if (!skipPackValidation) {
+    await writePackageDistInventory(process.cwd());
+  }
+  const npmLockErrors = skipPackValidation ? [] : collectNpmLockErrors();
+  const tarballErrors = skipPackValidation ? [] : collectPackedTarballErrors();
+  const errors = [...metadataErrors, ...tagErrors, ...npmLockErrors, ...tarballErrors];
 
   if (errors.length > 0) {
     for (const error of errors) {
@@ -470,14 +757,12 @@ function main(): number {
 
   const parsedVersion = parseReleaseVersion(pkg.version ?? "");
   const channel = parsedVersion?.channel ?? "unknown";
-  const dayDistance =
-    parsedVersion === null ? "unknown" : String(utcCalendarDayDistance(parsedVersion.date, now));
   console.log(
-    `openclaw-npm-release-check: validated ${channel} release ${pkg.version} (${dayDistance} day UTC delta).`,
+    `openclaw-npm-release-check: validated ${channel} release ${pkg.version} (monthly patch version${skipPackValidation ? "; metadata-only" : ""}).`,
   );
   return 0;
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  process.exit(main());
+  process.exit(await main());
 }

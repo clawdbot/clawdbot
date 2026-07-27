@@ -1,3 +1,10 @@
+// Feishu plugin module implements bot sender name behavior.
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createFeishuClient } from "./client.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
@@ -16,15 +23,14 @@ type FeishuContactUserGetResponse = Awaited<
   ReturnType<ReturnType<typeof createFeishuClient>["contact"]["user"]["get"]>
 >;
 
-type FeishuLogger = {
-  (...args: unknown[]): void;
-};
+type FeishuLogger = (...args: unknown[]) => void;
 
 const IGNORED_PERMISSION_SCOPE_TOKENS = ["contact:contact.base:readonly"];
 const FEISHU_SCOPE_CORRECTIONS: Record<string, string> = {
   "contact:contact.base:readonly": "contact:user.base:readonly",
 };
 const SENDER_NAME_TTL_MS = 10 * 60 * 1000;
+const SENDER_NAME_CACHE_MAX_SIZE = 500;
 const senderNameCache = new Map<string, { name: string; expireAt: number }>();
 
 function correctFeishuScopeInUrl(url: string): string {
@@ -37,7 +43,7 @@ function correctFeishuScopeInUrl(url: string): string {
 }
 
 function shouldSuppressPermissionErrorNotice(permissionError: FeishuPermissionError): boolean {
-  const message = permissionError.message.toLowerCase();
+  const message = normalizeLowercaseStringOrEmpty(permissionError.message);
   return IGNORED_PERMISSION_SCOPE_TOKENS.some((token) => message.includes(token));
 }
 
@@ -90,9 +96,13 @@ export async function resolveFeishuSenderName(params: {
   }
 
   const cached = senderNameCache.get(normalizedSenderId);
-  const now = Date.now();
-  if (cached && cached.expireAt > now) {
+  const now = asDateTimestampMs(Date.now());
+  const cachedExpireAt = cached ? asDateTimestampMs(cached.expireAt) : undefined;
+  if (cached && now !== undefined && cachedExpireAt !== undefined && cachedExpireAt > now) {
     return { name: cached.name };
+  }
+  if (cached) {
+    senderNameCache.delete(normalizedSenderId);
   }
 
   try {
@@ -106,7 +116,11 @@ export async function resolveFeishuSenderName(params: {
     const name = user?.name ?? user?.nickname ?? user?.en_name;
 
     if (name) {
-      senderNameCache.set(normalizedSenderId, { name, expireAt: now + SENDER_NAME_TTL_MS });
+      const expireAt = resolveExpiresAtMsFromDurationMs(SENDER_NAME_TTL_MS);
+      if (expireAt !== undefined) {
+        senderNameCache.set(normalizedSenderId, { name, expireAt });
+        pruneMapToMaxSize(senderNameCache, SENDER_NAME_CACHE_MAX_SIZE);
+      }
       return { name };
     }
     return {};

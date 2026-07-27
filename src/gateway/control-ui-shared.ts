@@ -1,11 +1,9 @@
-import {
-  isAvatarHttpUrl,
-  isAvatarImageDataUrl,
-  looksLikeAvatarPath,
-} from "../shared/avatar-policy.js";
+// Control UI shared URL helpers.
+// Normalizes base paths and avatar URLs for browser/gateway surfaces.
 
 const CONTROL_UI_AVATAR_PREFIX = "/avatar";
 
+/** Normalizes a Control UI base path to either "" or a leading-slash path without trailing slash. */
 export function normalizeControlUiBasePath(basePath?: string): string {
   if (!basePath) {
     return "";
@@ -26,43 +24,12 @@ export function normalizeControlUiBasePath(basePath?: string): string {
   return normalized;
 }
 
+/** Builds the gateway-served avatar URL for an agent under the provided base path. */
 export function buildControlUiAvatarUrl(basePath: string, agentId: string): string {
   return basePath
     ? `${basePath}${CONTROL_UI_AVATAR_PREFIX}/${agentId}`
     : `${CONTROL_UI_AVATAR_PREFIX}/${agentId}`;
 }
 
-export function resolveAssistantAvatarUrl(params: {
-  avatar?: string | null;
-  agentId?: string | null;
-  basePath?: string;
-}): string | undefined {
-  const avatar = params.avatar?.trim();
-  if (!avatar) {
-    return undefined;
-  }
-  if (isAvatarHttpUrl(avatar) || isAvatarImageDataUrl(avatar)) {
-    return avatar;
-  }
-
-  const basePath = normalizeControlUiBasePath(params.basePath);
-  const baseAvatarPrefix = basePath
-    ? `${basePath}${CONTROL_UI_AVATAR_PREFIX}/`
-    : `${CONTROL_UI_AVATAR_PREFIX}/`;
-  if (basePath && avatar.startsWith(`${CONTROL_UI_AVATAR_PREFIX}/`)) {
-    return `${basePath}${avatar}`;
-  }
-  if (avatar.startsWith(baseAvatarPrefix)) {
-    return avatar;
-  }
-
-  if (!params.agentId) {
-    return avatar;
-  }
-  if (looksLikeAvatarPath(avatar)) {
-    return buildControlUiAvatarUrl(basePath, params.agentId);
-  }
-  return avatar;
-}
-
+/** URL prefix for gateway-served Control UI avatar assets. */
 export { CONTROL_UI_AVATAR_PREFIX };

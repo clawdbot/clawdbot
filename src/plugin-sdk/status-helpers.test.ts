@@ -1,3 +1,4 @@
+// Status helper tests cover plugin status normalization and user-facing summaries.
 import { describe, expect, it } from "vitest";
 import {
   createAsyncComputedAccountStatusAdapter,
@@ -6,10 +7,65 @@ import {
   buildComputedAccountStatusSnapshot,
   buildRuntimeAccountStatusSnapshot,
   createComputedAccountStatusAdapter,
+  buildWebhookChannelStatusSummary,
   buildTokenChannelStatusSummary,
   collectStatusIssuesFromLastError,
+  createDependentCredentialStatusIssueCollector,
   createDefaultChannelRuntimeState,
+  readAccountStatusSnapshot,
+  standardDmPolicyOpenIssue,
+  standardNotConfiguredIssue,
 } from "./status-helpers.js";
+
+describe("status issue composition", () => {
+  it("coerces only standard and requested account fields", () => {
+    expect(
+      readAccountStatusSnapshot(
+        { accountId: "work", enabled: true, configured: true, mode: "polling", secret: "drop" },
+        ["mode"],
+      ),
+    ).toEqual({
+      accountId: "work",
+      enabled: true,
+      configured: true,
+      running: undefined,
+      connected: undefined,
+      mode: "polling",
+    });
+    expect(readAccountStatusSnapshot(null, ["mode"])).toBeNull();
+  });
+
+  it("builds standard open-policy and missing-auth issues", () => {
+    expect(
+      standardDmPolicyOpenIssue({
+        channel: "zalo",
+        accountId: "default",
+        channelLabel: "Zalo",
+        configPath: "channels.zalo",
+      }),
+    ).toEqual({
+      channel: "zalo",
+      accountId: "default",
+      kind: "config",
+      message: 'Zalo dmPolicy is "open", allowing any user to message the bot without pairing.',
+      fix: 'Set channels.zalo.dmPolicy to "pairing" or "allowlist" to restrict access.',
+    });
+    expect(
+      standardNotConfiguredIssue({
+        channel: "zalouser",
+        accountId: "default",
+        message: "Not authenticated.",
+        fix: "Run login.",
+      }),
+    ).toEqual({
+      channel: "zalouser",
+      accountId: "default",
+      kind: "auth",
+      message: "Not authenticated.",
+      fix: "Run login.",
+    });
+  });
+});
 
 const defaultRuntimeState = {
   running: false,
@@ -160,27 +216,32 @@ describe("createDefaultChannelRuntimeState", () => {
 });
 
 describe("buildBaseChannelStatusSummary", () => {
-  it("defaults missing values", () => {
-    expect(buildBaseChannelStatusSummary({})).toEqual(defaultChannelSummary);
-  });
-
-  it("keeps explicit values", () => {
-    expect(
-      buildBaseChannelStatusSummary({
+  it.each([
+    {
+      name: "defaults missing values",
+      input: {},
+      expected: defaultChannelSummary,
+    },
+    {
+      name: "keeps explicit values",
+      input: {
         configured: true,
         running: true,
         lastStartAt: 1,
         lastStopAt: 2,
         lastError: "boom",
-      }),
-    ).toEqual({
-      ...defaultChannelSummary,
-      configured: true,
-      running: true,
-      lastStartAt: 1,
-      lastStopAt: 2,
-      lastError: "boom",
-    });
+      },
+      expected: {
+        ...defaultChannelSummary,
+        configured: true,
+        running: true,
+        lastStartAt: 1,
+        lastStopAt: 2,
+        lastError: "boom",
+      },
+    },
+  ])("$name", ({ input, expected }) => {
+    expect(buildBaseChannelStatusSummary(input)).toEqual(expected);
   });
 
   it("merges extra fields into the normalized channel summary", () => {
@@ -204,30 +265,32 @@ describe("buildBaseChannelStatusSummary", () => {
 });
 
 describe("buildBaseAccountStatusSnapshot", () => {
-  it("builds account status with runtime defaults", () => {
-    expect(
-      buildBaseAccountStatusSnapshot({
+  it.each([
+    {
+      name: "builds account status with runtime defaults",
+      input: {
         account: { accountId: "default", enabled: true, configured: true },
-      }),
-    ).toEqual(expectedAccountSnapshot({ enabled: true, configured: true }));
-  });
-
-  it("merges extra snapshot fields after the shared account shape", () => {
-    expect(
-      buildBaseAccountStatusSnapshot(
-        {
-          account: { accountId: "default", configured: true },
-        },
-        {
-          connected: true,
-          mode: "polling",
-        },
-      ),
-    ).toEqual({
-      ...expectedAccountSnapshot({ configured: true }),
-      connected: true,
-      mode: "polling",
-    });
+      },
+      extra: undefined,
+      expected: expectedAccountSnapshot({ enabled: true, configured: true }),
+    },
+    {
+      name: "merges extra snapshot fields after the shared account shape",
+      input: {
+        account: { accountId: "default", configured: true },
+      },
+      extra: {
+        connected: true,
+        mode: "polling",
+      },
+      expected: {
+        ...expectedAccountSnapshot({ configured: true }),
+        connected: true,
+        mode: "polling",
+      },
+    },
+  ])("$name", ({ input, extra, expected }) => {
+    expect(buildBaseAccountStatusSnapshot(input, extra)).toEqual(expected);
   });
 });
 
@@ -309,6 +372,54 @@ describe("buildRuntimeAccountStatusSnapshot", () => {
         port: 3978,
       },
     },
+    {
+      name: "preserves runtime connectivity metadata",
+      input: {
+        runtime: {
+          connected: true,
+          restartPending: true,
+          reconnectAttempts: 3,
+          lastConnectedAt: 11,
+          lastDisconnect: { at: 12, error: "boom" },
+          lastEventAt: 13,
+          lastTransportActivityAt: 14,
+          healthState: "healthy",
+          running: true,
+        },
+      },
+      extra: undefined,
+      expected: {
+        ...defaultRuntimeState,
+        running: true,
+        connected: true,
+        restartPending: true,
+        reconnectAttempts: 3,
+        lastConnectedAt: 11,
+        lastDisconnect: { at: 12, error: "boom" },
+        lastEventAt: 13,
+        lastTransportActivityAt: 14,
+        healthState: "healthy",
+        probe: undefined,
+      },
+    },
+    {
+      name: "projects terminalDisconnect when set",
+      input: {
+        runtime: {
+          running: false,
+          healthState: "logged-out",
+          terminalDisconnect: true,
+        },
+      },
+      extra: undefined,
+      expected: {
+        ...defaultRuntimeState,
+        running: false,
+        healthState: "logged-out",
+        terminalDisconnect: true,
+        probe: undefined,
+      },
+    },
   ])("$name", ({ input, extra, expected }) => {
     expect(buildRuntimeAccountStatusSnapshot(input, extra)).toEqual(expected);
   });
@@ -348,6 +459,62 @@ describe("buildTokenChannelStatusSummary", () => {
     },
   ])("$name", ({ input, options, expected }) => {
     expect(buildTokenChannelStatusSummary(input, options)).toEqual(expected);
+  });
+});
+
+describe("buildWebhookChannelStatusSummary", () => {
+  it("defaults mode to webhook and keeps supplied extras", () => {
+    expect(
+      buildWebhookChannelStatusSummary(
+        {
+          configured: true,
+          running: true,
+        },
+        {
+          secretSource: "env",
+        },
+      ),
+    ).toEqual({
+      configured: true,
+      running: true,
+      lastStartAt: null,
+      lastStopAt: null,
+      lastError: null,
+      mode: "webhook",
+      secretSource: "env",
+    });
+  });
+});
+
+describe("createDependentCredentialStatusIssueCollector", () => {
+  it("uses source metadata from sanitized snapshots to pick the missing field", () => {
+    const collect = createDependentCredentialStatusIssueCollector({
+      channel: "line",
+      dependencySourceKey: "tokenSource",
+      missingPrimaryMessage: "LINE channel access token not configured",
+      missingDependentMessage: "LINE channel secret not configured",
+    });
+
+    expect(
+      collect([
+        { accountId: "default", configured: false, tokenSource: "none" },
+        { accountId: "work", configured: false, tokenSource: "env" },
+        { accountId: "ok", configured: true, tokenSource: "env" },
+      ]),
+    ).toEqual([
+      {
+        channel: "line",
+        accountId: "default",
+        kind: "config",
+        message: "LINE channel access token not configured",
+      },
+      {
+        channel: "line",
+        accountId: "work",
+        kind: "config",
+        message: "LINE channel secret not configured",
+      },
+    ]);
   });
 });
 

@@ -1,3 +1,6 @@
+// Memory Host SDK module implements query expansion behavior.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+
 /**
  * Query expansion for FTS-only search mode.
  *
@@ -630,6 +633,7 @@ const STOP_WORDS_ZH = new Set([
   "告诉",
 ]);
 
+/** Returns true for low-value conversational tokens that should not drive FTS matching. */
 export function isQueryStopWordToken(token: string): boolean {
   return (
     STOP_WORDS_EN.has(token) ||
@@ -670,9 +674,10 @@ function isValidKeyword(token: string): boolean {
  * For Chinese, we do character-based splitting since we don't have a proper segmenter.
  * For English, we split on whitespace and punctuation.
  */
-function tokenize(text: string): string[] {
+function tokenize(text: string, opts?: { ftsTokenizer?: "unicode61" | "trigram" }): string[] {
+  const useTrigram = opts?.ftsTokenizer === "trigram";
   const tokens: string[] = [];
-  const normalized = text.toLowerCase().trim();
+  const normalized = normalizeLowercaseStringOrEmpty(text);
 
   // Split into segments (English words, Chinese character sequences, etc.)
   const segments = normalized.split(/[\s\p{P}]+/u).filter(Boolean);
@@ -686,8 +691,10 @@ function tokenize(text: string): string[] {
       for (const part of jpParts) {
         if (/^[\u4e00-\u9fff]+$/.test(part)) {
           tokens.push(part);
-          for (let i = 0; i < part.length - 1; i++) {
-            tokens.push(part[i] + part[i + 1]);
+          if (!useTrigram) {
+            for (let i = 0; i < part.length - 1; i++) {
+              tokens.push(part.slice(i, i + 2));
+            }
           }
         } else {
           tokens.push(part);
@@ -695,13 +702,21 @@ function tokenize(text: string): string[] {
       }
     } else if (/[\u4e00-\u9fff]/.test(segment)) {
       // Check if segment contains CJK characters (Chinese)
-      // For Chinese, extract character n-grams (unigrams and bigrams)
       const chars = Array.from(segment).filter((c) => /[\u4e00-\u9fff]/.test(c));
-      // Add individual characters
-      tokens.push(...chars);
-      // Add bigrams for better phrase matching
-      for (let i = 0; i < chars.length - 1; i++) {
-        tokens.push(chars[i] + chars[i + 1]);
+      if (useTrigram) {
+        // In trigram mode, push the whole contiguous CJK block (mirroring the
+        // Japanese kanji path). SQLite's trigram FTS requires at least 3 characters
+        // per query term — individual characters silently return no results.
+        const block = chars.join("");
+        if (block.length > 0) {
+          tokens.push(block);
+        }
+      } else {
+        // Default mode: unigrams + bigrams for phrase matching
+        tokens.push(...chars);
+        for (let i = 0; i < chars.length - 1; i++) {
+          tokens.push(chars.slice(i, i + 2).join(""));
+        }
       }
     } else if (/[\uac00-\ud7af\u3131-\u3163]/.test(segment)) {
       // For Korean (Hangul syllables and jamo), keep the word as-is unless it is
@@ -732,8 +747,11 @@ function tokenize(text: string): string[] {
  * - "之前讨论的那个方案" → ["讨论", "方案"]
  * - "what was the solution for the bug" → ["solution", "bug"]
  */
-export function extractKeywords(query: string): string[] {
-  const tokens = tokenize(query);
+export function extractKeywords(
+  query: string,
+  opts?: { ftsTokenizer?: "unicode61" | "trigram" },
+): string[] {
+  const tokens = tokenize(query, opts);
   const keywords: string[] = [];
   const seen = new Set<string>();
 
@@ -755,56 +773,4 @@ export function extractKeywords(query: string): string[] {
   }
 
   return keywords;
-}
-
-/**
- * Expand a query for FTS search.
- * Returns both the original query and extracted keywords for OR-matching.
- *
- * @param query - User's original query
- * @returns Object with original query and extracted keywords
- */
-export function expandQueryForFts(query: string): {
-  original: string;
-  keywords: string[];
-  expanded: string;
-} {
-  const original = query.trim();
-  const keywords = extractKeywords(original);
-
-  // Build expanded query: original terms OR extracted keywords
-  // This ensures both exact matches and keyword matches are found
-  const expanded = keywords.length > 0 ? `${original} OR ${keywords.join(" OR ")}` : original;
-
-  return { original, keywords, expanded };
-}
-
-/**
- * Type for an optional LLM-based query expander.
- * Can be provided to enhance keyword extraction with semantic understanding.
- */
-export type LlmQueryExpander = (query: string) => Promise<string[]>;
-
-/**
- * Expand query with optional LLM assistance.
- * Falls back to local extraction if LLM is unavailable or fails.
- */
-export async function expandQueryWithLlm(
-  query: string,
-  llmExpander?: LlmQueryExpander,
-): Promise<string[]> {
-  // If LLM expander is provided, try it first
-  if (llmExpander) {
-    try {
-      const llmKeywords = await llmExpander(query);
-      if (llmKeywords.length > 0) {
-        return llmKeywords;
-      }
-    } catch {
-      // LLM failed, fall back to local extraction
-    }
-  }
-
-  // Fall back to local keyword extraction
-  return extractKeywords(query);
 }

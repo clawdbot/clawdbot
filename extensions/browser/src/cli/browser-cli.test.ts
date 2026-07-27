@@ -1,3 +1,4 @@
+// Browser tests cover browser cli plugin behavior.
 import { Command } from "commander";
 import { describe, expect, it } from "vitest";
 

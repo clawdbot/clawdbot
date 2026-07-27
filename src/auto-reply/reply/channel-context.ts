@@ -1,4 +1,12 @@
-type DiscordSurfaceParams = {
+/** Resolves channel and account context for command handlers. */
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getActivePluginChannelRegistry } from "../../plugins/runtime.js";
+
+type CommandSurfaceParams = {
   ctx: {
     OriginatingChannel?: string;
     Surface?: string;
@@ -10,40 +18,39 @@ type DiscordSurfaceParams = {
   };
 };
 
-type DiscordAccountParams = {
+type ChannelAccountParams = {
+  cfg: OpenClawConfig;
   ctx: {
+    OriginatingChannel?: string;
+    Surface?: string;
+    Provider?: string;
     AccountId?: string;
+  };
+  command: {
+    channel?: string;
   };
 };
 
-export function isDiscordSurface(params: DiscordSurfaceParams): boolean {
-  return resolveCommandSurfaceChannel(params) === "discord";
-}
-
-export function isTelegramSurface(params: DiscordSurfaceParams): boolean {
-  return resolveCommandSurfaceChannel(params) === "telegram";
-}
-
-export function isMatrixSurface(params: DiscordSurfaceParams): boolean {
-  return resolveCommandSurfaceChannel(params) === "matrix";
-}
-
-export function resolveCommandSurfaceChannel(params: DiscordSurfaceParams): string {
+/** Resolves the command surface channel from inbound context and command state. */
+export function resolveCommandSurfaceChannel(params: CommandSurfaceParams): string {
   const channel =
     params.ctx.OriginatingChannel ??
     params.command.channel ??
     params.ctx.Surface ??
     params.ctx.Provider;
-  return String(channel ?? "")
-    .trim()
-    .toLowerCase();
+  return normalizeOptionalLowercaseString(channel) ?? "";
 }
 
-export function resolveDiscordAccountId(params: DiscordAccountParams): string {
-  return resolveChannelAccountId(params);
-}
-
-export function resolveChannelAccountId(params: DiscordAccountParams): string {
-  const accountId = typeof params.ctx.AccountId === "string" ? params.ctx.AccountId.trim() : "";
-  return accountId || "default";
+/** Resolves command account id, falling back to plugin default account config. */
+export function resolveChannelAccountId(params: ChannelAccountParams): string {
+  const accountId = normalizeOptionalString(params.ctx.AccountId) ?? "";
+  if (accountId) {
+    return accountId;
+  }
+  const channel = resolveCommandSurfaceChannel(params);
+  const plugin = getActivePluginChannelRegistry()?.channels.find(
+    (entry) => entry.plugin.id === channel,
+  )?.plugin;
+  const configuredDefault = normalizeOptionalString(plugin?.config.defaultAccountId?.(params.cfg));
+  return configuredDefault || "default";
 }

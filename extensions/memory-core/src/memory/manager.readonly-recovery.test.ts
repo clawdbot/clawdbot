@@ -1,34 +1,28 @@
+// Memory Core tests cover manager.readonly recovery plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetEmbeddingMocks } from "./embedding.test-mocks.js";
-import { MemoryIndexManager } from "./manager.js";
-import { getRequiredMemoryIndexManager } from "./test-manager-helpers.js";
+import { closeMemoryDatabase, openMemoryDatabaseAtPath } from "./manager-db.js";
+import {
+  enqueueMemoryTargetedSessionSync,
+  runMemorySyncWithReadonlyRecovery,
+  type MemoryReadonlyRecoveryState,
+} from "./manager-sync-control.js";
 
-type ReadonlyRecoveryHarness = {
-  closed: boolean;
+type ReadonlyRecoveryHarness = MemoryReadonlyRecoveryState & {
   syncing: Promise<void> | null;
-  queuedSessionFiles: Set<string>;
+  queuedArchiveFiles: Set<string>;
+  queuedSessions: Map<string, unknown>;
   queuedSessionSync: Promise<void> | null;
-  db: DatabaseSync;
-  vectorReady: Promise<boolean> | null;
-  vector: {
-    enabled: boolean;
-    available: boolean | null;
-    loadError?: string;
-    dims?: number;
-  };
-  readonlyRecoveryAttempts: number;
-  readonlyRecoverySuccesses: number;
-  readonlyRecoveryFailures: number;
-  readonlyRecoveryLastError?: string;
+  vectorDegradedWriteWarningShown: boolean;
   ensureProviderInitialized: ReturnType<typeof vi.fn>;
   enqueueTargetedSessionSync: ReturnType<typeof vi.fn>;
   runSync: ReturnType<typeof vi.fn>;
   openDatabase: ReturnType<typeof vi.fn>;
+  closeDatabase: ReturnType<typeof vi.fn>;
+  resetVectorState: ReturnType<typeof vi.fn>;
   ensureSchema: ReturnType<typeof vi.fn>;
   readMeta: ReturnType<typeof vi.fn>;
 };
@@ -36,36 +30,32 @@ type ReadonlyRecoveryHarness = {
 describe("memory manager readonly recovery", () => {
   let workspaceDir = "";
   let indexPath = "";
-  let manager: MemoryIndexManager | null = null;
 
-  function createMemoryConfig(): OpenClawConfig {
+  function createQueuedSyncHarness(syncing: Promise<void>) {
+    const queuedArchiveFiles = new Set<string>();
+    const queuedSessions = new Map<string, never>();
+    let queuedSessionSync: Promise<void> | null = null;
+    const sync = vi.fn(async () => {});
     return {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { path: indexPath, vector: { enabled: false } },
-            cache: { enabled: false },
-            query: { minScore: 0, hybrid: { enabled: false } },
-            sync: { watch: false, onSessionStart: false, onSearch: false },
-          },
-        },
-        list: [{ id: "main", default: true }],
+      queuedArchiveFiles,
+      queuedSessions,
+      get queuedSessionSync() {
+        return queuedSessionSync;
       },
-    } as OpenClawConfig;
+      sync,
+      state: {
+        isClosed: () => false,
+        getSyncing: () => syncing,
+        getQueuedArchiveFiles: () => queuedArchiveFiles,
+        getQueuedSessions: () => queuedSessions,
+        getQueuedSessionSync: () => queuedSessionSync,
+        setQueuedSessionSync: (value: Promise<void> | null) => {
+          queuedSessionSync = value;
+        },
+        sync,
+      },
+    };
   }
-
-  async function createRealManager() {
-    manager = await getRequiredMemoryIndexManager({
-      cfg: createMemoryConfig(),
-      agentId: "main",
-      purpose: "status",
-    });
-    return manager;
-  }
-
   function createReadonlyRecoveryHarness() {
     const reopenedClose = vi.fn();
     const initialClose = vi.fn();
@@ -74,28 +64,32 @@ describe("memory manager readonly recovery", () => {
     const harness: ReadonlyRecoveryHarness = {
       closed: false,
       syncing: null,
-      queuedSessionFiles: new Set<string>(),
+      queuedArchiveFiles: new Set<string>(),
+      queuedSessions: new Map<string, never>(),
       queuedSessionSync: null,
       db: initialDb,
-      vectorReady: null,
       vector: {
-        enabled: false,
-        available: null,
-        loadError: "stale",
         dims: 123,
       },
+      vectorDegradedWriteWarningShown: true,
       readonlyRecoveryAttempts: 0,
       readonlyRecoverySuccesses: 0,
       readonlyRecoveryFailures: 0,
       readonlyRecoveryLastError: undefined,
       ensureProviderInitialized: vi.fn(async () => {}),
       enqueueTargetedSessionSync: vi.fn(async () => {}),
-      runSync: vi.fn(),
+      runSync: vi.fn(async (_params) => undefined) as ReadonlyRecoveryHarness["runSync"],
       openDatabase: vi.fn(() => reopenedDb),
-      ensureSchema: vi.fn(),
+      closeDatabase: vi.fn((db: DatabaseSync) => {
+        db.close();
+      }),
+      resetVectorState: vi.fn(function (this: ReadonlyRecoveryHarness) {
+        this.vector.dims = undefined;
+        this.vectorDegradedWriteWarningShown = false;
+      }) as ReadonlyRecoveryHarness["resetVectorState"],
+      ensureSchema: vi.fn(() => undefined) as ReadonlyRecoveryHarness["ensureSchema"],
       readMeta: vi.fn(() => undefined),
     };
-    Object.setPrototypeOf(harness, MemoryIndexManager.prototype);
     return {
       harness,
       initialDb,
@@ -103,6 +97,13 @@ describe("memory manager readonly recovery", () => {
       reopenedDb,
       reopenedClose,
     };
+  }
+
+  async function runSyncWithReadonlyRecovery(
+    harness: ReadonlyRecoveryHarness,
+    params?: { reason?: string; force?: boolean; archiveFiles?: string[] },
+  ) {
+    return await runMemorySyncWithReadonlyRecovery(harness, params);
   }
 
   function expectReadonlyRecoveryStatus(
@@ -131,18 +132,19 @@ describe("memory manager readonly recovery", () => {
     const { harness, initialClose } = createReadonlyRecoveryHarness();
     harness.runSync.mockRejectedValueOnce(params.firstError).mockResolvedValueOnce(undefined);
 
-    await MemoryIndexManager.prototype.sync.call(harness as unknown as MemoryIndexManager, {
+    await runSyncWithReadonlyRecovery(harness, {
       reason: "test",
     });
 
     expect(harness.runSync).toHaveBeenCalledTimes(2);
     expect(harness.openDatabase).toHaveBeenCalledTimes(1);
+    expect(harness.resetVectorState).toHaveBeenCalledTimes(1);
+    expect(harness.vector.dims).toBe(123);
     expect(initialClose).toHaveBeenCalledTimes(1);
     expectReadonlyRecoveryStatus(harness, params.expectedLastError);
   }
 
   beforeEach(async () => {
-    resetEmbeddingMocks();
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-readonly-"));
     indexPath = path.join(workspaceDir, "index.sqlite");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
@@ -151,10 +153,6 @@ describe("memory manager readonly recovery", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
-    if (manager) {
-      await manager.close();
-      manager = null;
-    }
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 
@@ -177,22 +175,119 @@ describe("memory manager readonly recovery", () => {
     harness.runSync.mockRejectedValueOnce(new Error("embedding timeout"));
 
     await expect(
-      MemoryIndexManager.prototype.sync.call(harness as unknown as MemoryIndexManager, {
+      runSyncWithReadonlyRecovery(harness, {
         reason: "test",
       }),
     ).rejects.toThrow("embedding timeout");
     expect(harness.runSync).toHaveBeenCalledTimes(1);
     expect(harness.openDatabase).not.toHaveBeenCalled();
+    expect(harness.resetVectorState).not.toHaveBeenCalled();
     expect(initialClose).not.toHaveBeenCalled();
   });
 
-  it("sets busy_timeout on memory sqlite connections", async () => {
-    const currentManager = await createRealManager();
-    const db = (currentManager as unknown as { db: DatabaseSync }).db;
+  it("clears the degraded warning latch before retrying", async () => {
+    const { harness } = createReadonlyRecoveryHarness();
+    harness.runSync.mockRejectedValueOnce(new Error("attempt to write a readonly database"));
+
+    await expect(
+      runSyncWithReadonlyRecovery(harness, {
+        reason: "test",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(harness.vectorDegradedWriteWarningShown).toBe(false);
+  });
+
+  it("prefers reopened vector dims when metadata is available", async () => {
+    const { harness } = createReadonlyRecoveryHarness();
+    harness.readMeta.mockReturnValueOnce({ vectorDims: 768 });
+    harness.runSync.mockRejectedValueOnce(new Error("attempt to write a readonly database"));
+
+    await expect(
+      runSyncWithReadonlyRecovery(harness, {
+        reason: "test",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(harness.vector.dims).toBe(768);
+  });
+
+  it("sets busy_timeout on memory sqlite connections", () => {
+    const db = openMemoryDatabaseAtPath(indexPath, false);
     const row = db.prepare("PRAGMA busy_timeout").get() as
       | { busy_timeout?: number; timeout?: number }
       | undefined;
     const busyTimeout = row?.busy_timeout ?? row?.timeout;
     expect(busyTimeout).toBe(5000);
+    closeMemoryDatabase(db);
+  });
+
+  it("queues targeted session files behind an in-flight sync", async () => {
+    let releaseSync = () => {};
+    const pendingSync = new Promise<void>((resolve) => {
+      releaseSync = () => resolve();
+    });
+    const harness = createQueuedSyncHarness(pendingSync);
+
+    const queued = enqueueMemoryTargetedSessionSync(harness.state, {
+      archiveFiles: ["  /tmp/first.jsonl ", "", "/tmp/second.jsonl"],
+    });
+
+    expect(harness.sync).not.toHaveBeenCalled();
+
+    releaseSync();
+    await queued;
+
+    expect(harness.sync).toHaveBeenCalledTimes(1);
+    expect(harness.sync).toHaveBeenCalledWith({
+      reason: "queued-sessions",
+      sessions: [],
+      archiveFiles: ["/tmp/first.jsonl", "/tmp/second.jsonl"],
+    });
+    expect(harness.queuedSessionSync).toBeNull();
+  });
+
+  it("merges repeated queued requests while the active sync is still running", async () => {
+    let releaseSync = () => {};
+    const pendingSync = new Promise<void>((resolve) => {
+      releaseSync = () => resolve();
+    });
+    const harness = createQueuedSyncHarness(pendingSync);
+
+    const first = enqueueMemoryTargetedSessionSync(harness.state, {
+      archiveFiles: ["/tmp/first.jsonl", "/tmp/second.jsonl"],
+    });
+    const second = enqueueMemoryTargetedSessionSync(harness.state, {
+      archiveFiles: ["/tmp/second.jsonl", "/tmp/third.jsonl"],
+    });
+
+    expect(first).toBe(second);
+
+    releaseSync();
+    await second;
+
+    expect(harness.sync).toHaveBeenCalledTimes(1);
+    expect(harness.sync).toHaveBeenCalledWith({
+      reason: "queued-sessions",
+      sessions: [],
+      archiveFiles: ["/tmp/first.jsonl", "/tmp/second.jsonl", "/tmp/third.jsonl"],
+    });
+  });
+
+  it("falls back to the active sync when no usable session files were queued", async () => {
+    let releaseSync = () => {};
+    const pendingSync = new Promise<void>((resolve) => {
+      releaseSync = () => resolve();
+    });
+    const harness = createQueuedSyncHarness(pendingSync);
+
+    const queued = enqueueMemoryTargetedSessionSync(harness.state, {
+      archiveFiles: ["", "   "],
+    });
+
+    expect(queued).toBe(pendingSync);
+    releaseSync();
+    await queued;
+    expect(harness.sync).not.toHaveBeenCalled();
   });
 });

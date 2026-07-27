@@ -1,31 +1,23 @@
+// Slack plugin module implements stream mode behavior.
 import {
   mapStreamingModeToSlackLegacyDraftStreamMode,
   resolveSlackNativeStreaming,
   resolveSlackStreamingMode,
   type SlackLegacyDraftStreamMode,
   type StreamingMode,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "./streaming-compat.js";
 
-export type SlackStreamMode = SlackLegacyDraftStreamMode;
-export type SlackStreamingMode = StreamingMode;
-const DEFAULT_STREAM_MODE: SlackStreamMode = "replace";
-
-export function resolveSlackStreamMode(raw: unknown): SlackStreamMode {
-  if (typeof raw !== "string") {
-    return DEFAULT_STREAM_MODE;
-  }
-  const normalized = raw.trim().toLowerCase();
-  if (normalized === "replace" || normalized === "status_final" || normalized === "append") {
-    return normalized;
-  }
-  return DEFAULT_STREAM_MODE;
-}
+type SlackStreamingMode = StreamingMode;
 
 export function resolveSlackStreamingConfig(params: {
   streaming?: unknown;
   streamMode?: unknown;
   nativeStreaming?: unknown;
-}): { mode: SlackStreamingMode; nativeStreaming: boolean; draftMode: SlackStreamMode } {
+}): {
+  mode: SlackStreamingMode;
+  nativeStreaming: boolean;
+  draftMode: SlackLegacyDraftStreamMode;
+} {
   const mode = resolveSlackStreamingMode(params);
   const nativeStreaming = resolveSlackNativeStreaming(params);
   return {
@@ -67,9 +59,4 @@ export function applyAppendOnlyStreamUpdate(params: {
     source: incoming,
     changed: true,
   };
-}
-
-export function buildStatusFinalPreviewText(updateCount: number): string {
-  const dots = ".".repeat((Math.max(1, updateCount) % 3) + 1);
-  return `Status: thinking${dots}`;
 }

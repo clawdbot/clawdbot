@@ -1,45 +1,60 @@
-import { describe, expect, it } from "vitest";
-import {
-  collectConfigDocBaselineEntries,
-  dedupeConfigDocBaselineEntries,
-  normalizeConfigDocBaselineHelpPath,
-} from "./doc-baseline.js";
+// Verifies generated config documentation baselines stay stable.
+import { describe, expect, it, vi } from "vitest";
+import { renderConfigDocBaselineArtifacts } from "./doc-baseline.js";
+
+vi.mock("./doc-baseline.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./doc-baseline.runtime.js")>();
+  return {
+    ...actual,
+    loadPluginManifestRegistry: () => ({ plugins: [] }),
+    collectChannelSchemaMetadata: () => [],
+    collectPluginSchemaMetadata: () => [],
+    buildConfigSchema: () => ({
+      schema: {
+        type: "object",
+        properties: {
+          tupleValues: {
+            type: "array",
+            items: [
+              { type: "string", enum: ["alpha"] },
+              { type: "number", enum: [42] },
+            ],
+          },
+        },
+      },
+      uiHints: {},
+      version: "test",
+      generatedAt: "test",
+    }),
+  };
+});
 
 describe("config doc baseline", () => {
-  it("normalizes array and record paths to wildcard form", async () => {
-    expect(normalizeConfigDocBaselineHelpPath("agents.list[].skills")).toBe("agents.list.*.skills");
-    expect(normalizeConfigDocBaselineHelpPath("session.sendPolicy.rules[0].match.keyPrefix")).toBe(
-      "session.sendPolicy.rules.*.match.keyPrefix",
-    );
-    expect(normalizeConfigDocBaselineHelpPath(".env.*.")).toBe("env.*");
-  });
+  it("merges tuple item metadata through the public renderer", async () => {
+    const { baseline } = await renderConfigDocBaselineArtifacts();
 
-  it("merges tuple item metadata instead of dropping earlier entries", () => {
-    const entries = dedupeConfigDocBaselineEntries(
-      collectConfigDocBaselineEntries(
-        {
-          type: "array",
-          items: [
-            {
-              type: "string",
-              enum: ["alpha"],
-            },
-            {
-              type: "number",
-              enum: [42],
-            },
-          ],
-        },
-        {},
-        "tupleValues",
-      ),
-    );
-    const tupleEntry = new Map(entries.map((entry) => [entry.path, entry])).get("tupleValues.*");
-
-    expect(tupleEntry).toMatchObject({
-      type: ["number", "string"],
-    });
-    expect(tupleEntry?.enumValues).toEqual(expect.arrayContaining([42, "alpha"]));
-    expect(tupleEntry?.enumValues).toHaveLength(2);
+    expect(baseline.coreEntries).toEqual([
+      {
+        path: "tupleValues",
+        kind: "core",
+        type: "array",
+        required: false,
+        deprecated: false,
+        sensitive: false,
+        tags: [],
+        hasChildren: true,
+      },
+      {
+        path: "tupleValues.*",
+        kind: "core",
+        type: ["number", "string"],
+        required: false,
+        enumValues: ["alpha", 42],
+        deprecated: false,
+        sensitive: false,
+        tags: [],
+        hasChildren: false,
+      },
+    ]);
   });
 });

@@ -1,5 +1,15 @@
+import type { MarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+// Matrix helper module supports formatting behavior.
+import { isVoiceMessageCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
-import { markdownToMatrixHtml } from "../format.js";
+import {
+  markdownToMatrixBody,
+  markdownToMatrixHtml,
+  resolveMatrixMentionsInMarkdown,
+  renderMarkdownToMatrixHtmlWithMentions,
+  type MatrixMentions,
+} from "../format.js";
+import type { MatrixClient } from "../sdk.js";
 import {
   MsgType,
   RelationType,
@@ -8,33 +18,129 @@ import {
   type MatrixRelation,
   type MatrixReplyRelation,
   type MatrixTextContent,
+  type MatrixTextMsgType,
   type MatrixThreadRelation,
 } from "./types.js";
 
 const getCore = () => getMatrixRuntime();
 
-export function buildTextContent(body: string, relation?: MatrixRelation): MatrixTextContent {
-  const content: MatrixTextContent = relation
+async function renderMatrixFormattedContent(params: {
+  client: MatrixClient;
+  markdown?: string | null;
+  includeMentions?: boolean;
+  tableMode?: MarkdownTableMode;
+}): Promise<{ body: string; html?: string; mentions?: MatrixMentions }> {
+  const markdown = params.markdown ?? "";
+  const body = markdownToMatrixBody(markdown);
+  if (params.includeMentions === false) {
+    const html = markdownToMatrixHtml(markdown, { tableMode: params.tableMode }).trimEnd();
+    return { body, html: html || undefined };
+  }
+  const { html, mentions } = await renderMarkdownToMatrixHtmlWithMentions({
+    markdown,
+    client: params.client,
+    tableMode: params.tableMode,
+  });
+  return { body, html, mentions };
+}
+
+export function buildTextContent(
+  body: string,
+  relation?: MatrixRelation,
+  opts: {
+    msgtype?: MatrixTextMsgType;
+  } = {},
+): MatrixTextContent {
+  const msgtype = opts.msgtype ?? MsgType.Text;
+  return relation
     ? {
-        msgtype: MsgType.Text,
+        msgtype,
         body,
         "m.relates_to": relation,
       }
     : {
-        msgtype: MsgType.Text,
+        msgtype,
         body,
       };
-  applyMatrixFormatting(content, body);
-  return content;
 }
 
-export function applyMatrixFormatting(content: MatrixFormattedContent, body: string): void {
-  const formatted = markdownToMatrixHtml(body ?? "");
-  if (!formatted) {
+export async function enrichMatrixFormattedContent(params: {
+  client: MatrixClient;
+  content: MatrixFormattedContent;
+  markdown?: string | null;
+  includeMentions?: boolean;
+  tableMode?: MarkdownTableMode;
+}): Promise<void> {
+  const { body, html, mentions } = await renderMatrixFormattedContent({
+    client: params.client,
+    markdown: params.markdown,
+    includeMentions: params.includeMentions,
+    tableMode: params.tableMode,
+  });
+  params.content.body = body || params.content.body;
+  if (mentions) {
+    params.content["m.mentions"] = mentions;
+  } else {
+    delete params.content["m.mentions"];
+  }
+  if (!html) {
+    delete params.content.format;
+    delete params.content.formatted_body;
     return;
   }
-  content.format = "org.matrix.custom.html";
-  content.formatted_body = formatted;
+  params.content.format = "org.matrix.custom.html";
+  params.content.formatted_body = html;
+}
+
+export async function resolveMatrixMentionsForBody(params: {
+  client: MatrixClient;
+  body: string;
+}): Promise<MatrixMentions> {
+  return await resolveMatrixMentionsInMarkdown({
+    markdown: params.body ?? "",
+    client: params.client,
+  });
+}
+
+function normalizeMentionUserIds(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    : [];
+}
+
+export function extractMatrixMentions(
+  content: Record<string, unknown> | undefined,
+): MatrixMentions {
+  const rawMentions = content?.["m.mentions"];
+  if (!rawMentions || typeof rawMentions !== "object") {
+    return {};
+  }
+  const mentions = rawMentions as { room?: unknown; user_ids?: unknown };
+  const normalized: MatrixMentions = {};
+  const userIds = normalizeMentionUserIds(mentions.user_ids);
+  if (userIds.length > 0) {
+    normalized.user_ids = userIds;
+  }
+  if (mentions.room === true) {
+    normalized.room = true;
+  }
+  return normalized;
+}
+
+export function diffMatrixMentions(
+  current: MatrixMentions,
+  previous: MatrixMentions,
+): MatrixMentions {
+  const previousUserIds = new Set(previous.user_ids ?? []);
+  const newUserIds = (current.user_ids ?? []).filter((userId) => !previousUserIds.has(userId));
+  const delta: MatrixMentions = {};
+  if (newUserIds.length > 0) {
+    delta.user_ids = newUserIds;
+  }
+  if (current.room && !previous.room) {
+    delta.room = true;
+  }
+  return delta;
 }
 
 export function buildReplyRelation(replyToId?: string): MatrixReplyRelation | undefined {
@@ -47,12 +153,16 @@ export function buildReplyRelation(replyToId?: string): MatrixReplyRelation | un
 
 export function buildThreadRelation(threadId: string, replyToId?: string): MatrixThreadRelation {
   const trimmed = threadId.trim();
-  return {
+  const relation: MatrixThreadRelation = {
     rel_type: RelationType.Thread,
     event_id: trimmed,
-    is_falling_back: true,
-    "m.in_reply_to": { event_id: replyToId?.trim() || trimmed },
   };
+  const fallbackReplyToId = replyToId?.trim();
+  if (fallbackReplyToId) {
+    relation.is_falling_back = true;
+    relation["m.in_reply_to"] = { event_id: fallbackReplyToId };
+  }
+  return relation;
 }
 
 export function resolveMatrixMsgType(contentType?: string, _fileName?: string): MatrixMediaMsgType {
@@ -86,7 +196,7 @@ export function resolveMatrixVoiceDecision(opts: {
 function isMatrixVoiceCompatibleAudio(opts: { contentType?: string; fileName?: string }): boolean {
   // Matrix currently shares the core voice compatibility policy.
   // Keep this wrapper as the seam if Matrix policy diverges later.
-  return getCore().media.isVoiceCompatibleAudio({
+  return isVoiceMessageCompatibleAudio({
     contentType: opts.contentType,
     fileName: opts.fileName,
   });

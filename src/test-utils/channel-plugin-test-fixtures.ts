@@ -1,5 +1,7 @@
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+// Fixtures for constructing channel plugins in unit tests.
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 
+/** Builds the smallest direct-message channel plugin shape used by config tests. */
 export function makeDirectPlugin(params: {
   id: string;
   label: string;

@@ -1,8 +1,25 @@
-import type { OpenClawConfig } from "../config/config.js";
+/** Collects core config secret refs during runtime preparation. */
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentEntriesWithSource } from "../agents/agent-scope-config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
+import {
+  resolveConfiguredMediaEntryCapabilities,
+  resolveEffectiveMediaEntryCapabilities,
+} from "../media-understanding/entry-capabilities.js";
+import { buildMediaUnderstandingCapabilityRegistry } from "../media-understanding/provider-capability-registry.js";
+import { collectAgentMemorySearchAssignments } from "./runtime-config-collectors-memory.js";
+import { collectAgentSandboxAssignments } from "./runtime-config-collectors-sandbox.js";
 import { collectTtsApiKeyAssignments } from "./runtime-config-collectors-tts.js";
 import { evaluateGatewayAuthSurfaceStates } from "./runtime-gateway-auth-surfaces.js";
 import {
+  runtimeMediaModelSecretOwnerId,
+  runtimeMediaRequestSecretOwnerId,
+} from "./runtime-media-secret-owner.js";
+import {
   collectSecretInputAssignment,
+  collectRuntimeSecretInputAssignment,
+  type SecretAssignmentOwner,
   type ResolverContext,
   type SecretDefaults,
 } from "./runtime-shared.js";
@@ -11,12 +28,20 @@ import { isRecord } from "./shared.js";
 type ProviderLike = {
   apiKey?: unknown;
   headers?: unknown;
+  request?: unknown;
   enabled?: unknown;
 };
 
 type SkillEntryLike = {
   apiKey?: unknown;
   enabled?: unknown;
+};
+
+type ProviderRequestLike = {
+  headers?: unknown;
+  auth?: unknown;
+  proxy?: unknown;
+  tls?: unknown;
 };
 
 function collectModelProviderAssignments(params: {
@@ -26,7 +51,14 @@ function collectModelProviderAssignments(params: {
 }): void {
   for (const [providerId, provider] of Object.entries(params.providers)) {
     const providerIsActive = provider.enabled !== false;
-    collectSecretInputAssignment({
+    const owner = {
+      ownerKind: "provider",
+      ownerId: normalizeOptionalLowercaseString(providerId) ?? providerId,
+      requiredForGateway: false,
+      disposition: "isolate",
+      contract: provider,
+    } satisfies SecretAssignmentOwner;
+    collectRuntimeSecretInputAssignment({
       value: provider.apiKey,
       path: `models.providers.${providerId}.apiKey`,
       expected: "string",
@@ -34,26 +66,41 @@ function collectModelProviderAssignments(params: {
       context: params.context,
       active: providerIsActive,
       inactiveReason: "provider is disabled.",
+      owner,
       apply: (value) => {
         provider.apiKey = value;
       },
     });
     const headers = isRecord(provider.headers) ? provider.headers : undefined;
-    if (!headers) {
-      continue;
+    if (headers) {
+      for (const [headerKey, headerValue] of Object.entries(headers)) {
+        collectRuntimeSecretInputAssignment({
+          value: headerValue,
+          path: `models.providers.${providerId}.headers.${headerKey}`,
+          expected: "string",
+          defaults: params.defaults,
+          context: params.context,
+          active: providerIsActive,
+          inactiveReason: "provider is disabled.",
+          owner,
+          apply: (value) => {
+            headers[headerKey] = value;
+          },
+        });
+      }
     }
-    for (const [headerKey, headerValue] of Object.entries(headers)) {
-      collectSecretInputAssignment({
-        value: headerValue,
-        path: `models.providers.${providerId}.headers.${headerKey}`,
-        expected: "string",
+
+    const request = isRecord(provider.request) ? provider.request : undefined;
+    if (request) {
+      collectProviderRequestAssignments({
+        request,
+        pathPrefix: `models.providers.${providerId}.request`,
         defaults: params.defaults,
         context: params.context,
         active: providerIsActive,
         inactiveReason: "provider is disabled.",
-        apply: (value) => {
-          headers[headerKey] = value;
-        },
+        collectTransportSecrets: true,
+        owner,
       });
     }
   }
@@ -65,7 +112,7 @@ function collectSkillAssignments(params: {
   context: ResolverContext;
 }): void {
   for (const [skillKey, entry] of Object.entries(params.entries)) {
-    collectSecretInputAssignment({
+    collectRuntimeSecretInputAssignment({
       value: entry.apiKey,
       path: `skills.entries.${skillKey}.apiKey`,
       expected: "string",
@@ -73,96 +120,20 @@ function collectSkillAssignments(params: {
       context: params.context,
       active: entry.enabled !== false,
       inactiveReason: "skill entry is disabled.",
+      // Keep this id aligned with isSkillSecretOwnerUnavailable so a failed key
+      // removes only its owning skill from prompts and runtime env injection.
+      owner: {
+        ownerKind: "capability",
+        ownerId: `skill:${skillKey}`,
+        requiredForGateway: false,
+        disposition: "isolate",
+        contract: entry,
+      },
       apply: (value) => {
         entry.apiKey = value;
       },
     });
   }
-}
-
-function collectAgentMemorySearchAssignments(params: {
-  config: OpenClawConfig;
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-}): void {
-  const agents = params.config.agents as Record<string, unknown> | undefined;
-  if (!isRecord(agents)) {
-    return;
-  }
-  const defaultsConfig = isRecord(agents.defaults) ? agents.defaults : undefined;
-  const defaultsMemorySearch = isRecord(defaultsConfig?.memorySearch)
-    ? defaultsConfig.memorySearch
-    : undefined;
-  const defaultsEnabled = defaultsMemorySearch?.enabled !== false;
-
-  const list = Array.isArray(agents.list) ? agents.list : [];
-  let hasEnabledAgentWithoutOverride = false;
-  for (const rawAgent of list) {
-    if (!isRecord(rawAgent)) {
-      continue;
-    }
-    if (rawAgent.enabled === false) {
-      continue;
-    }
-    const memorySearch = isRecord(rawAgent.memorySearch) ? rawAgent.memorySearch : undefined;
-    if (memorySearch?.enabled === false) {
-      continue;
-    }
-    if (!memorySearch || !Object.prototype.hasOwnProperty.call(memorySearch, "remote")) {
-      hasEnabledAgentWithoutOverride = true;
-      continue;
-    }
-    const remote = isRecord(memorySearch.remote) ? memorySearch.remote : undefined;
-    if (!remote || !Object.prototype.hasOwnProperty.call(remote, "apiKey")) {
-      hasEnabledAgentWithoutOverride = true;
-      continue;
-    }
-  }
-
-  if (defaultsMemorySearch && isRecord(defaultsMemorySearch.remote)) {
-    const remote = defaultsMemorySearch.remote;
-    collectSecretInputAssignment({
-      value: remote.apiKey,
-      path: "agents.defaults.memorySearch.remote.apiKey",
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: defaultsEnabled && (hasEnabledAgentWithoutOverride || list.length === 0),
-      inactiveReason: hasEnabledAgentWithoutOverride
-        ? undefined
-        : "all enabled agents override memorySearch.remote.apiKey.",
-      apply: (value) => {
-        remote.apiKey = value;
-      },
-    });
-  }
-
-  list.forEach((rawAgent, index) => {
-    if (!isRecord(rawAgent)) {
-      return;
-    }
-    const memorySearch = isRecord(rawAgent.memorySearch) ? rawAgent.memorySearch : undefined;
-    if (!memorySearch) {
-      return;
-    }
-    const remote = isRecord(memorySearch.remote) ? memorySearch.remote : undefined;
-    if (!remote || !Object.prototype.hasOwnProperty.call(remote, "apiKey")) {
-      return;
-    }
-    const enabled = rawAgent.enabled !== false && memorySearch.enabled !== false;
-    collectSecretInputAssignment({
-      value: remote.apiKey,
-      path: `agents.list.${index}.memorySearch.remote.apiKey`,
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: enabled,
-      inactiveReason: "agent or memorySearch override is disabled.",
-      apply: (value) => {
-        remote.apiKey = value;
-      },
-    });
-  });
 }
 
 function collectTalkAssignments(params: {
@@ -184,17 +155,37 @@ function collectTalkAssignments(params: {
       talk.apiKey = value;
     },
   });
-  const providers = talk.providers;
-  if (!isRecord(providers)) {
+  collectTalkProviderApiKeyAssignments({
+    providers: talk.providers,
+    pathPrefix: "talk.providers",
+    defaults: params.defaults,
+    context: params.context,
+  });
+  const realtime = isRecord(talk.realtime) ? talk.realtime : undefined;
+  collectTalkProviderApiKeyAssignments({
+    providers: realtime?.providers,
+    pathPrefix: "talk.realtime.providers",
+    defaults: params.defaults,
+    context: params.context,
+  });
+}
+
+function collectTalkProviderApiKeyAssignments(params: {
+  providers: unknown;
+  pathPrefix: string;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+}): void {
+  if (!isRecord(params.providers)) {
     return;
   }
-  for (const [providerId, providerConfig] of Object.entries(providers)) {
+  for (const [providerId, providerConfig] of Object.entries(params.providers)) {
     if (!isRecord(providerConfig)) {
       continue;
     }
     collectSecretInputAssignment({
       value: providerConfig.apiKey,
-      path: `talk.providers.${providerId}.apiKey`,
+      path: `${params.pathPrefix}.${providerId}.apiKey`,
       expected: "string",
       defaults: params.defaults,
       context: params.context,
@@ -222,7 +213,14 @@ function collectGatewayAssignments(params: {
     defaults: params.defaults,
   });
   if (auth) {
-    collectSecretInputAssignment({
+    const ingressAuthOwner = {
+      ownerKind: "gateway",
+      ownerId: "ingress-auth",
+      requiredForGateway: true,
+      disposition: "fail-closed",
+      contract: auth,
+    } satisfies SecretAssignmentOwner;
+    collectRuntimeSecretInputAssignment({
       value: auth.token,
       path: "gateway.auth.token",
       expected: "string",
@@ -230,11 +228,12 @@ function collectGatewayAssignments(params: {
       context: params.context,
       active: gatewaySurfaceStates["gateway.auth.token"].active,
       inactiveReason: gatewaySurfaceStates["gateway.auth.token"].reason,
+      owner: ingressAuthOwner,
       apply: (value) => {
         auth.token = value;
       },
     });
-    collectSecretInputAssignment({
+    collectRuntimeSecretInputAssignment({
       value: auth.password,
       path: "gateway.auth.password",
       expected: "string",
@@ -242,6 +241,7 @@ function collectGatewayAssignments(params: {
       context: params.context,
       active: gatewaySurfaceStates["gateway.auth.password"].active,
       inactiveReason: gatewaySurfaceStates["gateway.auth.password"].reason,
+      owner: ingressAuthOwner,
       apply: (value) => {
         auth.password = value;
       },
@@ -275,21 +275,246 @@ function collectGatewayAssignments(params: {
   }
 }
 
+function collectProviderRequestAssignments(params: {
+  request: ProviderRequestLike;
+  pathPrefix: string;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+  active?: boolean;
+  inactiveReason?: string;
+  collectTransportSecrets?: boolean;
+  owner?: SecretAssignmentOwner;
+}): void {
+  const headers = isRecord(params.request.headers) ? params.request.headers : undefined;
+  if (headers) {
+    for (const [headerKey, headerValue] of Object.entries(headers)) {
+      collectRuntimeSecretInputAssignment({
+        value: headerValue,
+        path: `${params.pathPrefix}.headers.${headerKey}`,
+        expected: "string",
+        defaults: params.defaults,
+        context: params.context,
+        active: params.active,
+        inactiveReason: params.inactiveReason,
+        owner: params.owner,
+        apply: (value) => {
+          headers[headerKey] = value;
+        },
+      });
+    }
+  }
+
+  const auth = isRecord(params.request.auth) ? params.request.auth : undefined;
+  if (auth) {
+    collectRuntimeSecretInputAssignment({
+      value: auth.token,
+      path: `${params.pathPrefix}.auth.token`,
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      active: params.active,
+      inactiveReason: params.inactiveReason,
+      owner: params.owner,
+      apply: (value) => {
+        auth.token = value;
+      },
+    });
+    collectRuntimeSecretInputAssignment({
+      value: auth.value,
+      path: `${params.pathPrefix}.auth.value`,
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      active: params.active,
+      inactiveReason: params.inactiveReason,
+      owner: params.owner,
+      apply: (value) => {
+        auth.value = value;
+      },
+    });
+  }
+
+  const collectTlsAssignments = (tls: Record<string, unknown> | undefined, pathPrefix: string) => {
+    if (!tls) {
+      return;
+    }
+    for (const key of ["ca", "cert", "key", "passphrase"] as const) {
+      collectRuntimeSecretInputAssignment({
+        value: tls[key],
+        path: `${pathPrefix}.${key}`,
+        expected: "string",
+        defaults: params.defaults,
+        context: params.context,
+        active: params.active,
+        inactiveReason: params.inactiveReason,
+        owner: params.owner,
+        apply: (value) => {
+          tls[key] = value;
+        },
+      });
+    }
+  };
+
+  if (params.collectTransportSecrets !== false) {
+    // Transport credentials can live below direct TLS or proxy TLS config; model-provider
+    // request surfaces opt out when those nested transport secrets are owned elsewhere.
+    collectTlsAssignments(
+      isRecord(params.request.tls) ? params.request.tls : undefined,
+      `${params.pathPrefix}.tls`,
+    );
+    const proxy = isRecord(params.request.proxy) ? params.request.proxy : undefined;
+    collectTlsAssignments(
+      isRecord(proxy?.tls) ? proxy.tls : undefined,
+      `${params.pathPrefix}.proxy.tls`,
+    );
+  }
+}
+
+function collectMediaRequestAssignments(params: {
+  config: OpenClawConfig;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+}): void {
+  const tools = isRecord(params.config.tools) ? params.config.tools : undefined;
+  const media = isRecord(tools?.media) ? tools.media : undefined;
+  if (!media) {
+    return;
+  }
+
+  let providerRegistry: ReturnType<typeof buildMediaUnderstandingCapabilityRegistry> | undefined;
+  const getProviderRegistry = () => {
+    providerRegistry ??= buildMediaUnderstandingCapabilityRegistry(params.config);
+    return providerRegistry;
+  };
+  const capabilityKeys = ["audio", "image", "video"] as const;
+  const isCapabilityEnabled = (capability: (typeof capabilityKeys)[number]) =>
+    (isRecord(media[capability]) ? media[capability] : undefined)?.enabled !== false;
+
+  const collectModelAssignments = (
+    models: unknown,
+    pathPrefix: string,
+    resolveOwnerId: (index: number) => string,
+    resolveActivity: (rawModel: Record<string, unknown>) => {
+      active: boolean;
+      inactiveReason: string;
+    },
+  ) => {
+    if (!Array.isArray(models)) {
+      return;
+    }
+    models.forEach((rawModel, index) => {
+      if (!isRecord(rawModel) || !isRecord(rawModel.request)) {
+        return;
+      }
+      const { active, inactiveReason } = resolveActivity(rawModel);
+      collectProviderRequestAssignments({
+        request: rawModel.request,
+        pathPrefix: `${pathPrefix}.${index}.request`,
+        defaults: params.defaults,
+        context: params.context,
+        active,
+        inactiveReason,
+        owner: {
+          ownerKind: "capability",
+          ownerId: resolveOwnerId(index),
+          requiredForGateway: false,
+          disposition: "isolate",
+          contract: rawModel,
+        },
+      });
+    });
+  };
+
+  collectModelAssignments(
+    media.models,
+    "tools.media.models",
+    (index) => runtimeMediaModelSecretOwnerId({ source: "shared", index }),
+    (rawModel) => {
+      const entry = rawModel as MediaUnderstandingModelConfig;
+      const configuredCapabilities = resolveConfiguredMediaEntryCapabilities(entry);
+      // Shared models are active only for enabled capabilities; when the config omits explicit
+      // capabilities, provider metadata is the contract for which media sections can use it.
+      const capabilities =
+        configuredCapabilities ??
+        resolveEffectiveMediaEntryCapabilities({
+          entry,
+          source: "shared",
+          providerRegistry: getProviderRegistry(),
+        });
+      if (!capabilities || capabilities.length === 0) {
+        return {
+          active: false,
+          inactiveReason:
+            "shared media model does not declare capabilities and none could be inferred from its provider.",
+        };
+      }
+      return {
+        active: capabilities.some((capability) => isCapabilityEnabled(capability)),
+        inactiveReason: `all configured media capabilities for this shared model are disabled: ${capabilities.join(", ")}.`,
+      };
+    },
+  );
+
+  for (const capability of capabilityKeys) {
+    const section = isRecord(media[capability]) ? media[capability] : undefined;
+    if (!section || !isRecord(section.request)) {
+      continue;
+    }
+    const active = isCapabilityEnabled(capability);
+    collectProviderRequestAssignments({
+      request: section.request,
+      pathPrefix: `tools.media.${capability}.request`,
+      defaults: params.defaults,
+      context: params.context,
+      active,
+      inactiveReason: `${capability} media understanding is disabled.`,
+      owner: {
+        ownerKind: "capability",
+        ownerId: runtimeMediaRequestSecretOwnerId(capability),
+        requiredForGateway: false,
+        disposition: "isolate",
+        contract: section,
+      },
+    });
+  }
+}
+
 function collectMessagesTtsAssignments(params: {
   config: OpenClawConfig;
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
-  const messages = params.config.messages as Record<string, unknown> | undefined;
-  if (!isRecord(messages) || !isRecord(messages.tts)) {
+  const tts = params.config.tts as Record<string, unknown> | undefined;
+  if (!isRecord(tts)) {
     return;
   }
   collectTtsApiKeyAssignments({
-    tts: messages.tts,
-    pathPrefix: "messages.tts",
+    tts,
+    pathPrefix: "tts",
     defaults: params.defaults,
     context: params.context,
   });
+}
+
+function collectAgentTtsAssignments(params: {
+  config: OpenClawConfig;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+}): void {
+  for (const { entry, source } of listAgentEntriesWithSource(params.config)) {
+    if (!isRecord(entry.tts)) {
+      continue;
+    }
+    collectTtsApiKeyAssignments({
+      tts: entry.tts,
+      pathPrefix:
+        source.kind === "entries"
+          ? `agents.entries.${source.key}.tts`
+          : `agents.list.${source.index}.tts`,
+      defaults: params.defaults,
+      context: params.context,
+    });
+  }
 }
 
 function collectCronAssignments(params: {
@@ -301,102 +526,26 @@ function collectCronAssignments(params: {
   if (!isRecord(cron)) {
     return;
   }
-  collectSecretInputAssignment({
+  collectRuntimeSecretInputAssignment({
     value: cron.webhookToken,
     path: "cron.webhookToken",
     expected: "string",
     defaults: params.defaults,
     context: params.context,
+    owner: {
+      ownerKind: "capability",
+      ownerId: "cron-webhook",
+      requiredForGateway: false,
+      disposition: "isolate",
+      contract: cron,
+    },
     apply: (value) => {
       cron.webhookToken = value;
     },
   });
 }
 
-function collectSandboxSshAssignments(params: {
-  config: OpenClawConfig;
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-}): void {
-  const agents = isRecord(params.config.agents) ? params.config.agents : undefined;
-  if (!agents) {
-    return;
-  }
-  const defaultsAgent = isRecord(agents.defaults) ? agents.defaults : undefined;
-  const defaultsSandbox = isRecord(defaultsAgent?.sandbox) ? defaultsAgent.sandbox : undefined;
-  const defaultsSsh = isRecord(defaultsSandbox?.ssh)
-    ? (defaultsSandbox.ssh as Record<string, unknown>)
-    : undefined;
-  const defaultsBackend =
-    typeof defaultsSandbox?.backend === "string" ? defaultsSandbox.backend : undefined;
-  const defaultsMode = typeof defaultsSandbox?.mode === "string" ? defaultsSandbox.mode : undefined;
-
-  const inheritedDefaultsUsage = {
-    identityData: false,
-    certificateData: false,
-    knownHostsData: false,
-  };
-
-  const list = Array.isArray(agents.list) ? agents.list : [];
-  list.forEach((rawAgent, index) => {
-    const agentRecord = isRecord(rawAgent) ? (rawAgent as Record<string, unknown>) : null;
-    if (!agentRecord || agentRecord.enabled === false) {
-      return;
-    }
-    const sandbox = isRecord(agentRecord.sandbox) ? agentRecord.sandbox : undefined;
-    const ssh = isRecord(sandbox?.ssh) ? sandbox.ssh : undefined;
-    const effectiveBackend =
-      (typeof sandbox?.backend === "string" ? sandbox.backend : undefined) ??
-      defaultsBackend ??
-      "docker";
-    const effectiveMode =
-      (typeof sandbox?.mode === "string" ? sandbox.mode : undefined) ?? defaultsMode ?? "off";
-    const active = effectiveBackend.trim().toLowerCase() === "ssh" && effectiveMode !== "off";
-    for (const key of ["identityData", "certificateData", "knownHostsData"] as const) {
-      if (ssh && Object.prototype.hasOwnProperty.call(ssh, key)) {
-        collectSecretInputAssignment({
-          value: ssh[key],
-          path: `agents.list.${index}.sandbox.ssh.${key}`,
-          expected: "string",
-          defaults: params.defaults,
-          context: params.context,
-          active,
-          inactiveReason: "sandbox SSH backend is not active for this agent.",
-          apply: (value) => {
-            ssh[key] = value;
-          },
-        });
-      } else if (active) {
-        inheritedDefaultsUsage[key] = true;
-      }
-    }
-  });
-
-  if (!defaultsSsh) {
-    return;
-  }
-
-  const defaultsActive =
-    (defaultsBackend?.trim().toLowerCase() === "ssh" && defaultsMode !== "off") ||
-    inheritedDefaultsUsage.identityData ||
-    inheritedDefaultsUsage.certificateData ||
-    inheritedDefaultsUsage.knownHostsData;
-  for (const key of ["identityData", "certificateData", "knownHostsData"] as const) {
-    collectSecretInputAssignment({
-      value: defaultsSsh[key],
-      path: `agents.defaults.sandbox.ssh.${key}`,
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: defaultsActive || inheritedDefaultsUsage[key],
-      inactiveReason: "sandbox SSH backend is not active.",
-      apply: (value) => {
-        defaultsSsh[key] = value;
-      },
-    });
-  }
-}
-
+/** Collects SecretRef assignments from core non-plugin config surfaces. */
 export function collectCoreConfigAssignments(params: {
   config: OpenClawConfig;
   defaults: SecretDefaults | undefined;
@@ -423,7 +572,9 @@ export function collectCoreConfigAssignments(params: {
   collectAgentMemorySearchAssignments(params);
   collectTalkAssignments(params);
   collectGatewayAssignments(params);
-  collectSandboxSshAssignments(params);
+  collectAgentSandboxAssignments(params);
   collectMessagesTtsAssignments(params);
+  collectAgentTtsAssignments(params);
   collectCronAssignments(params);
+  collectMediaRequestAssignments(params);
 }

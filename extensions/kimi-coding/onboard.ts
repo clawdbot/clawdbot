@@ -1,3 +1,4 @@
+// Kimi Coding setup module handles plugin onboarding behavior.
 import {
   createDefaultModelPresetAppliers,
   type OpenClawConfig,
@@ -32,10 +33,6 @@ const kimiCodingPresetAppliers = createDefaultModelPresetAppliers({
     };
   },
 });
-
-export function applyKimiCodeProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return kimiCodingPresetAppliers.applyProviderConfig(cfg);
-}
 
 export function applyKimiCodeConfig(cfg: OpenClawConfig): OpenClawConfig {
   return kimiCodingPresetAppliers.applyConfig(cfg);

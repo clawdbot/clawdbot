@@ -1,6 +1,8 @@
+// Scope script supports OpenClaw repository automation.
 import fs from "node:fs";
 import path from "node:path";
-import { pluginSdkEntrypoints } from "../plugin-sdk-entries.mjs";
+import { BUNDLED_PLUGIN_PATH_PREFIX } from "../bundled-plugin-paths.mjs";
+import { publicPluginSdkEntrypoints } from "../plugin-sdk-entries.mjs";
 import type { ConsumerScope, PublicEntrypoint, TopologyScope, UsageBucket } from "./types.js";
 
 function isTestFile(relPath: string): boolean {
@@ -19,7 +21,7 @@ function isTestFile(relPath: string): boolean {
 }
 
 function classifyScope(relPath: string): ConsumerScope {
-  if (relPath.startsWith("extensions/")) {
+  if (relPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
     return "extension";
   }
   if (relPath.startsWith("packages/")) {
@@ -71,10 +73,11 @@ function extractOwner(relPath: string): string | null {
     case "test":
       return null;
   }
+  throw new Error("Unsupported topology scope");
 }
 
 function extractExtensionId(relPath: string): string | null {
-  if (!relPath.startsWith("extensions/")) {
+  if (!relPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
     return null;
   }
   const parts = relPath.split("/");
@@ -119,11 +122,10 @@ function buildScopeFromEntrypoints(
 }
 
 export function createPluginSdkScope(_repoRoot: string): TopologyScope {
-  const entrypoints = pluginSdkEntrypoints.map((entrypoint) => ({
+  const entrypoints = publicPluginSdkEntrypoints.map((entrypoint) => ({
     entrypoint,
     sourcePath: `src/plugin-sdk/${entrypoint}.ts`,
-    importSpecifier:
-      entrypoint === "index" ? "openclaw/plugin-sdk" : `openclaw/plugin-sdk/${entrypoint}`,
+    importSpecifier: `openclaw/plugin-sdk/${entrypoint}`,
   }));
   return buildScopeFromEntrypoints("plugin-sdk", "OpenClaw plugin-sdk public surface", entrypoints);
 }

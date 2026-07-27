@@ -7,17 +7,18 @@
  * - m.poll.end - Closes a poll
  */
 
-import { normalizePollInput, type PollInput } from "../runtime-api.js";
+import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/poll-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const M_POLL_START = "m.poll.start" as const;
-export const M_POLL_RESPONSE = "m.poll.response" as const;
-export const M_POLL_END = "m.poll.end" as const;
+const M_POLL_RESPONSE = "m.poll.response" as const;
+const M_POLL_END = "m.poll.end" as const;
 
-export const ORG_POLL_START = "org.matrix.msc3381.poll.start" as const;
-export const ORG_POLL_RESPONSE = "org.matrix.msc3381.poll.response" as const;
-export const ORG_POLL_END = "org.matrix.msc3381.poll.end" as const;
+const ORG_POLL_START = "org.matrix.msc3381.poll.start" as const;
+const ORG_POLL_RESPONSE = "org.matrix.msc3381.poll.response" as const;
+const ORG_POLL_END = "org.matrix.msc3381.poll.end" as const;
 
-export const POLL_EVENT_TYPES = [
+const POLL_EVENT_TYPES = [
   M_POLL_START,
   M_POLL_RESPONSE,
   M_POLL_END,
@@ -26,36 +27,32 @@ export const POLL_EVENT_TYPES = [
   ORG_POLL_END,
 ];
 
-export const POLL_START_TYPES = [M_POLL_START, ORG_POLL_START];
-export const POLL_RESPONSE_TYPES = [M_POLL_RESPONSE, ORG_POLL_RESPONSE];
-export const POLL_END_TYPES = [M_POLL_END, ORG_POLL_END];
+const POLL_START_TYPES = [M_POLL_START, ORG_POLL_START];
+const POLL_RESPONSE_TYPES = [M_POLL_RESPONSE, ORG_POLL_RESPONSE];
+const POLL_END_TYPES = [M_POLL_END, ORG_POLL_END];
 
-export type PollKind = "m.poll.disclosed" | "m.poll.undisclosed";
+type PollKind = "m.poll.disclosed" | "m.poll.undisclosed";
 
-export type TextContent = {
+type TextContent = {
   "m.text"?: string;
   "org.matrix.msc1767.text"?: string;
   body?: string;
 };
 
-export type PollAnswer = {
+type PollAnswer = {
   id: string;
 } & TextContent;
 
-export type PollParsedAnswer = {
+type PollParsedAnswer = {
   id: string;
   text: string;
 };
 
-export type PollStartSubtype = {
+type PollStartSubtype = {
   question: TextContent;
   kind?: PollKind;
   max_selections?: number;
   answers: PollAnswer[];
-};
-
-export type LegacyPollStartContent = {
-  "m.poll"?: PollStartSubtype;
 };
 
 export type PollStartContent = {
@@ -66,7 +63,7 @@ export type PollStartContent = {
   "org.matrix.msc1767.text"?: string;
 };
 
-export type PollSummary = {
+type PollSummary = {
   eventId: string;
   roomId: string;
   sender: string;
@@ -77,7 +74,7 @@ export type PollSummary = {
   maxSelections: number;
 };
 
-export type PollResultsSummary = PollSummary & {
+type PollResultsSummary = PollSummary & {
   entries: Array<{
     id: string;
     text: string;
@@ -87,18 +84,18 @@ export type PollResultsSummary = PollSummary & {
   closed: boolean;
 };
 
-export type ParsedPollStart = {
+type ParsedPollStart = {
   question: string;
   answers: PollParsedAnswer[];
   kind: PollKind;
   maxSelections: number;
 };
 
-export type PollResponseSubtype = {
+type PollResponseSubtype = {
   answers: string[];
 };
 
-export type PollResponseContent = {
+type PollResponseContent = {
   [M_POLL_RESPONSE]?: PollResponseSubtype;
   [ORG_POLL_RESPONSE]?: PollResponseSubtype;
   "m.relates_to": {
@@ -111,11 +108,11 @@ export function isPollStartType(eventType: string): boolean {
   return (POLL_START_TYPES as readonly string[]).includes(eventType);
 }
 
-export function isPollResponseType(eventType: string): boolean {
+function isPollResponseType(eventType: string): boolean {
   return (POLL_RESPONSE_TYPES as readonly string[]).includes(eventType);
 }
 
-export function isPollEndType(eventType: string): boolean {
+function isPollEndType(eventType: string): boolean {
   return (POLL_END_TYPES as readonly string[]).includes(eventType);
 }
 
@@ -123,7 +120,7 @@ export function isPollEventType(eventType: string): boolean {
   return (POLL_EVENT_TYPES as readonly string[]).includes(eventType);
 }
 
-export function getTextContent(text?: TextContent): string {
+function getTextContent(text?: TextContent): string {
   if (!text) {
     return "";
   }
@@ -208,7 +205,7 @@ export function resolvePollReferenceEventId(content: unknown): string | null {
   return eventId.length > 0 ? eventId : null;
 }
 
-export function parsePollResponseAnswerIds(content: unknown): string[] | null {
+function parsePollResponseAnswerIds(content: unknown): string[] | null {
   if (!content || typeof content !== "object") {
     return null;
   }
@@ -273,7 +270,7 @@ export function buildPollResultsSummary(params: {
     }
   >();
 
-  const orderedRelationEvents = [...params.relationEvents].sort((left, right) => {
+  const orderedRelationEvents = [...params.relationEvents].toSorted((left, right) => {
     const leftTs =
       typeof left.origin_server_ts === "number" && Number.isFinite(left.origin_server_ts)
         ? left.origin_server_ts
@@ -295,7 +292,7 @@ export function buildPollResultsSummary(params: {
     if (!isPollResponseType(typeof event.type === "string" ? event.type : "")) {
       continue;
     }
-    const senderId = typeof event.sender === "string" ? event.sender.trim() : "";
+    const senderId = normalizeOptionalString(event.sender) ?? "";
     if (!senderId) {
       continue;
     }
@@ -310,7 +307,7 @@ export function buildPollResultsSummary(params: {
     const normalizedAnswers = Array.from(
       new Set(
         rawAnswers
-          .map((answerId) => answerId.trim())
+          .map((answerId) => normalizeOptionalString(answerId) ?? "")
           .filter((answerId) => answerIds.has(answerId))
           .slice(0, parsed.maxSelections),
       ),

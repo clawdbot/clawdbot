@@ -1,7 +1,16 @@
+// Copies bundled plugin metadata into generated runtime locations.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  collectBundledPluginBuildEntries,
+  NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
+} from "./lib/bundled-plugin-build-entries.mjs";
 import { shouldBuildBundledCluster } from "./lib/optional-bundled-clusters.mjs";
+import {
+  mergeGeneratedChannelConfigs,
+  readGeneratedBundledChannelConfigs,
+} from "./lib/plugin-npm-package-manifest.mjs";
 import {
   removeFileIfExists,
   removePathIfExists,
@@ -12,7 +21,17 @@ const GENERATED_BUNDLED_SKILLS_DIR = "bundled-skills";
 const TRANSIENT_COPY_ERROR_CODES = new Set(["EEXIST", "ENOENT", "ENOTEMPTY", "EBUSY"]);
 const COPY_RETRY_DELAYS_MS = [10, 25, 50];
 
-export function rewritePackageExtensions(entries) {
+function shouldCopyBundledPluginMetadata(id, env, buildablePluginDirs) {
+  if (!buildablePluginDirs.has(id)) {
+    return false;
+  }
+  if (!NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(id)) {
+    return true;
+  }
+  return env.OPENCLAW_BUILD_PRIVATE_QA === "1";
+}
+
+function rewritePackageExtensions(entries) {
   if (!Array.isArray(entries)) {
     return undefined;
   }
@@ -24,6 +43,46 @@ export function rewritePackageExtensions(entries) {
       const rewritten = normalized.replace(/\.[^.]+$/u, ".js");
       return `./${rewritten}`;
     });
+}
+
+function collectTopLevelPublicSurfaceEntries(pluginDir) {
+  if (!fs.existsSync(pluginDir)) {
+    return [];
+  }
+
+  return fs
+    .readdirSync(pluginDir, { withFileTypes: true })
+    .flatMap((dirent) => {
+      if (!dirent.isFile()) {
+        return [];
+      }
+
+      if (!/\.(?:[cm]?[jt]s)$/u.test(dirent.name) || dirent.name.endsWith(".d.ts")) {
+        return [];
+      }
+
+      const normalizedName = dirent.name.toLowerCase();
+      if (
+        /^config-api\.(?:[cm]?[jt]s)$/u.test(normalizedName) ||
+        normalizedName.includes(".test.") ||
+        normalizedName.includes(".spec.") ||
+        normalizedName.includes(".fixture.") ||
+        normalizedName.includes(".snap")
+      ) {
+        return [];
+      }
+
+      return [dirent.name];
+    })
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+function isManifestlessBundledRuntimeSupportPackage(params) {
+  const packageName = typeof params.packageJson?.name === "string" ? params.packageJson.name : "";
+  if (packageName !== `@openclaw/${params.dirName}`) {
+    return false;
+  }
+  return params.topLevelPublicSurfaceEntries.length > 0;
 }
 
 function rewritePackageEntry(entry) {
@@ -87,7 +146,7 @@ function resolveBundledSkillTarget(rawPath) {
 
 function isTransientCopyError(error) {
   return (
-    !!error &&
+    Boolean(error) &&
     typeof error === "object" &&
     typeof error.code === "string" &&
     TRANSIENT_COPY_ERROR_CODES.has(error.code)
@@ -143,6 +202,11 @@ function copyDeclaredPluginSkillPaths(params) {
     const shouldExcludeNestedNodeModules = /^node_modules(?:\/|$)/u.test(
       normalizeManifestRelativePath(raw),
     );
+    if (shouldExcludeNestedNodeModules) {
+      removePathIfExists(
+        ensurePathInsideRoot(params.distPluginDir, normalizeManifestRelativePath(raw)),
+      );
+    }
     copySkillPathWithRetry({
       sourcePath,
       targetPath,
@@ -171,6 +235,9 @@ function copyDeclaredPluginSkillPaths(params) {
  *   env?: NodeJS.ProcessEnv;
  * }} [params]
  */
+/**
+ * Copies bundled plugin metadata and package extension files.
+ */
 export function copyBundledPluginMetadata(params = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const env = params.env ?? process.env;
@@ -180,6 +247,10 @@ export function copyBundledPluginMetadata(params = {}) {
     return;
   }
 
+  const buildablePluginDirs = new Set(
+    collectBundledPluginBuildEntries({ cwd: repoRoot, env }).map((entry) => entry.id),
+  );
+  const generatedChannelConfigsByPlugin = readGeneratedBundledChannelConfigs(repoRoot);
   const sourcePluginDirs = new Set();
   for (const dirent of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
     if (!dirent.isDirectory()) {
@@ -193,35 +264,54 @@ export function copyBundledPluginMetadata(params = {}) {
     const packageJson = fs.existsSync(packageJsonPath)
       ? JSON.parse(fs.readFileSync(packageJsonPath, "utf8"))
       : undefined;
+    const topLevelPublicSurfaceEntries = collectTopLevelPublicSurfaceEntries(pluginDir);
+    if (!shouldCopyBundledPluginMetadata(dirent.name, env, buildablePluginDirs)) {
+      removePathIfExists(distPluginDir);
+      continue;
+    }
     if (!shouldBuildBundledCluster(dirent.name, env, { packageJson })) {
       removePathIfExists(distPluginDir);
       continue;
     }
 
+    const isManifestlessSupportPackage =
+      !fs.existsSync(manifestPath) &&
+      isManifestlessBundledRuntimeSupportPackage({
+        dirName: dirent.name,
+        packageJson,
+        topLevelPublicSurfaceEntries,
+      });
+
     sourcePluginDirs.add(dirent.name);
 
     const distManifestPath = path.join(distPluginDir, "openclaw.plugin.json");
     const distPackageJsonPath = path.join(distPluginDir, "package.json");
-    if (!fs.existsSync(manifestPath)) {
+    if (!fs.existsSync(manifestPath) && !isManifestlessSupportPackage) {
       removePathIfExists(distPluginDir);
       continue;
     }
 
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-    // Generated skill assets live under a dedicated dist-owned directory. Also
-    // remove the older bad node_modules tree so release packs cannot pick it up.
-    removePathIfExists(path.join(distPluginDir, GENERATED_BUNDLED_SKILLS_DIR));
-    removePathIfExists(path.join(distPluginDir, "node_modules"));
-    const copiedSkills = copyDeclaredPluginSkillPaths({
-      manifest,
-      pluginDir,
-      distPluginDir,
-      repoRoot,
-    });
-    const bundledManifest = Array.isArray(manifest.skills)
-      ? { ...manifest, skills: copiedSkills }
-      : manifest;
-    writeTextFileIfChanged(distManifestPath, `${JSON.stringify(bundledManifest, null, 2)}\n`);
+    if (fs.existsSync(manifestPath)) {
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      const manifestWithGeneratedChannelConfigs = mergeGeneratedChannelConfigs(
+        manifest,
+        generatedChannelConfigsByPlugin.get(manifest.id),
+      );
+      // Generated skill assets live under a dedicated dist-owned directory.
+      removePathIfExists(path.join(distPluginDir, GENERATED_BUNDLED_SKILLS_DIR));
+      const copiedSkills = copyDeclaredPluginSkillPaths({
+        manifest: manifestWithGeneratedChannelConfigs,
+        pluginDir,
+        distPluginDir,
+        repoRoot,
+      });
+      const bundledManifest = Array.isArray(manifestWithGeneratedChannelConfigs.skills)
+        ? { ...manifestWithGeneratedChannelConfigs, skills: copiedSkills }
+        : manifestWithGeneratedChannelConfigs;
+      writeTextFileIfChanged(distManifestPath, `${JSON.stringify(bundledManifest, null, 2)}\n`);
+    } else {
+      removeFileIfExists(distManifestPath);
+    }
 
     if (!fs.existsSync(packageJsonPath)) {
       removeFileIfExists(distPackageJsonPath);

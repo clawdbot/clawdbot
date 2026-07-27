@@ -1,14 +1,24 @@
+// Sessions access tests cover session-tool visibility policy, sandbox clamps,
+// and agent-to-agent allow rules.
 import { describe, expect, it, vi } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
+  createSessionVisibilityRowChecker,
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxSessionToolsVisibility,
-  resolveSandboxedSessionToolContext,
   resolveSessionToolsVisibility,
-} from "./sessions-access.js";
-import { __testing as sessionsResolutionTesting } from "./sessions-resolution.js";
+} from "../../plugin-sdk/session-visibility.js";
+import {
+  listAmbientGroupWatchTargets,
+  registerMainSessionGroupWatch,
+  registerSessionStateWatch,
+} from "../../sessions/session-state-events.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { resolveSandboxedSessionToolContext } from "./sessions-access.js";
+import { testing as sessionsResolutionTesting } from "./sessions-resolution.test-support.js";
 
 describe("resolveSessionToolsVisibility", () => {
   it("defaults to tree when unset or invalid", () => {
@@ -106,9 +116,365 @@ describe("createAgentToAgentPolicy", () => {
     expect(policy.isAllowed("main", "ops-a")).toBe(true);
     expect(policy.isAllowed("guest", "ops-a")).toBe(false);
   });
+
+  it("matches wildcard patterns case-insensitively", () => {
+    const policy = createAgentToAgentPolicy({
+      tools: {
+        agentToAgent: {
+          enabled: true,
+          allow: ["Ops-*"],
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(policy.matchesAllow("ops-worker")).toBe(true);
+    expect(policy.matchesAllow("OPS-WORKER")).toBe(true);
+    expect(policy.matchesAllow("guest")).toBe(false);
+  });
+
+  it("keeps exact allow patterns case-sensitive", () => {
+    const policy = createAgentToAgentPolicy({
+      tools: {
+        agentToAgent: {
+          enabled: true,
+          allow: ["Ops"],
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(policy.matchesAllow("Ops")).toBe(true);
+    expect(policy.matchesAllow("ops")).toBe(false);
+  });
+
+  it("keeps blank configured allow patterns fail-closed", () => {
+    const policy = createAgentToAgentPolicy({
+      tools: {
+        agentToAgent: {
+          enabled: true,
+          allow: [" "],
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(policy.matchesAllow("ops")).toBe(false);
+    expect(policy.isAllowed("main", "ops")).toBe(false);
+  });
+
+  it("handles interior wildcards", () => {
+    const policy = createAgentToAgentPolicy({
+      tools: {
+        agentToAgent: {
+          enabled: true,
+          allow: ["team-*-prod"],
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(policy.matchesAllow("team-ops-prod")).toBe(true);
+    expect(policy.matchesAllow("team-dev-prod")).toBe(true);
+    expect(policy.matchesAllow("team-ops-staging")).toBe(false);
+    expect(policy.matchesAllow("team-prod")).toBe(false);
+  });
+
+  it("handles multiple wildcards without polynomial backtracking", () => {
+    // Allow patterns use segment matching rather than a greedy regex so
+    // adversarial agent ids cannot cause slow policy checks.
+    const policy = createAgentToAgentPolicy({
+      tools: {
+        agentToAgent: {
+          enabled: true,
+          allow: ["*a*b*c*d*e*"],
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    // Positive match
+    expect(policy.matchesAllow("xaxbxcxdxe")).toBe(true);
+
+    // Negative match with adversarial input that would cause O(n^k)
+    // backtracking with the old `^.*a.*b.*c.*d.*e.*$` regex.
+    const adversarial = "a".repeat(200) + "b".repeat(200) + "c".repeat(200) + "d".repeat(200);
+    const start = performance.now();
+    expect(policy.matchesAllow(adversarial)).toBe(false);
+    const elapsed = performance.now() - start;
+    // The old regex could take seconds; the segment matcher finishes sub-ms.
+    expect(elapsed).toBeLessThan(50);
+  });
+
+  it("rejects when suffix overlaps prefix", () => {
+    const policy = createAgentToAgentPolicy({
+      tools: {
+        agentToAgent: {
+          enabled: true,
+          allow: ["abc*xyz"],
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(policy.matchesAllow("abcxyz")).toBe(true);
+    expect(policy.matchesAllow("abc-middle-xyz")).toBe(true);
+    expect(policy.matchesAllow("ab")).toBe(false);
+  });
+
+  it("treats regex syntax as literal text in wildcard patterns", () => {
+    const policy = createAgentToAgentPolicy({
+      tools: {
+        agentToAgent: {
+          enabled: true,
+          allow: ["ops.[prod]*"],
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(policy.matchesAllow("OPS.[PROD]-worker")).toBe(true);
+    expect(policy.matchesAllow("opsXprod-worker")).toBe(false);
+  });
 });
 
 describe("createSessionVisibilityGuard", () => {
+  it("allows watched group reads under tree while denying unwatched peers", () => {
+    const tempDirs: string[] = [];
+    const stateDir = makeTempDir(tempDirs, "openclaw-session-visibility-");
+    closeOpenClawStateDatabaseForTest();
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    try {
+      const requesterSessionKey = "agent:main:main";
+      const watchedSessionKey = "agent:main:telegram:group:watched";
+      expect(
+        registerMainSessionGroupWatch({
+          sessionKey: watchedSessionKey,
+          agentId: "main",
+          entry: { sessionId: "watched", updatedAt: Date.now(), chatType: "group" },
+          dmScope: "main",
+        }),
+      ).toBe(true);
+      const crossAgentSessionKey = "agent:ops:telegram:group:watched";
+      registerSessionStateWatch({
+        watcherSessionKey: requesterSessionKey,
+        targetSessionKey: crossAgentSessionKey,
+      });
+      const explicitDirectSessionKey = "agent:main:coordinator";
+      registerSessionStateWatch({
+        watcherSessionKey: requesterSessionKey,
+        targetSessionKey: explicitDirectSessionKey,
+      });
+      expect(listAmbientGroupWatchTargets(requesterSessionKey)).toEqual(
+        new Set([watchedSessionKey]),
+      );
+      const guard = createSessionVisibilityRowChecker({
+        action: "history",
+        requesterSessionKey,
+        visibility: "tree",
+        a2aPolicy: createAgentToAgentPolicy({} as OpenClawConfig),
+      });
+
+      expect(guard.check({ key: watchedSessionKey })).toEqual({ allowed: true });
+      expect(guard.check({ key: "agent:main:telegram:group:unwatched" })).toEqual({
+        allowed: false,
+        status: "forbidden",
+        error:
+          "Session history visibility is restricted to the current session tree (tools.sessions.visibility=tree).",
+      });
+      expect(guard.check({ key: explicitDirectSessionKey })).toEqual({
+        allowed: false,
+        status: "forbidden",
+        error:
+          "Session history visibility is restricted to the current session tree (tools.sessions.visibility=tree).",
+      });
+      expect(guard.check({ key: crossAgentSessionKey })).toEqual({
+        allowed: false,
+        status: "forbidden",
+        error:
+          "Session history visibility is restricted. Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access; use tools.agentToAgent.allow to restrict permitted agent pairs.",
+      });
+      const sendGuard = createSessionVisibilityRowChecker({
+        action: "send",
+        requesterSessionKey,
+        visibility: "tree",
+        a2aPolicy: createAgentToAgentPolicy({} as OpenClawConfig),
+      });
+      expect(sendGuard.check({ key: watchedSessionKey })).toEqual({
+        allowed: false,
+        status: "forbidden",
+        error:
+          "Session send visibility is restricted to the current session tree (tools.sessions.visibility=tree).",
+      });
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      vi.unstubAllEnvs();
+      cleanupTempDirs(tempDirs);
+    }
+  });
+
+  it("allows cross-agent spawned child rows in list results with tree visibility", () => {
+    const guard = createSessionVisibilityRowChecker({
+      action: "list",
+      requesterSessionKey: "agent:main:main",
+      visibility: "tree",
+      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+    });
+
+    expect(
+      guard.check({
+        key: "agent:codex:acp:child-1",
+        spawnedBy: "agent:main:main",
+      }),
+    ).toEqual({ allowed: true });
+  });
+
+  it("allows cross-agent spawned child rows in all-visibility list results when a2a is disabled", () => {
+    const guard = createSessionVisibilityRowChecker({
+      action: "list",
+      requesterSessionKey: "agent:main:main",
+      visibility: "all",
+      a2aPolicy: createAgentToAgentPolicy({
+        tools: { agentToAgent: { enabled: false } },
+      } as unknown as OpenClawConfig),
+    });
+
+    expect(
+      guard.check({
+        key: "agent:codex:acp:child-1",
+        spawnedBy: "agent:main:main",
+      }),
+    ).toEqual({ allowed: true });
+  });
+
+  it("keeps agent visibility same-agent-only for cross-agent owned child rows", () => {
+    const guard = createSessionVisibilityRowChecker({
+      action: "list",
+      requesterSessionKey: "agent:main:main",
+      visibility: "agent",
+      a2aPolicy: createAgentToAgentPolicy({
+        tools: { agentToAgent: { enabled: true, allow: ["main", "codex"] } },
+      } as unknown as OpenClawConfig),
+    });
+
+    expect(
+      guard.check({
+        key: "agent:codex:acp:child-1",
+        spawnedBy: "agent:main:main",
+      }),
+    ).toEqual({
+      allowed: false,
+      status: "forbidden",
+      error:
+        "Session list visibility is restricted. Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access; use tools.agentToAgent.allow to restrict permitted agent pairs.",
+    });
+  });
+
+  it("does not do spawned lookup for list visibility without row metadata", async () => {
+    const callGateway = vi.fn(async () => ({
+      sessions: [{ key: "agent:codex:acp:child-1" }],
+    }));
+    sessionsResolutionTesting.setDepsForTest({
+      callGateway: callGateway as never,
+    });
+
+    const guard = await createSessionVisibilityGuard({
+      action: "list",
+      requesterSessionKey: "agent:main:main",
+      visibility: "tree",
+      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+    });
+
+    expect(guard.check("agent:codex:acp:child-1").allowed).toBe(false);
+    expect(callGateway).not.toHaveBeenCalled();
+
+    sessionsResolutionTesting.setDepsForTest();
+  });
+
+  it("allows cross-agent spawned child sessions with tree visibility", async () => {
+    sessionsResolutionTesting.setDepsForTest({
+      callGateway: vi.fn(async (request: { method?: string; params?: { spawnedBy?: string } }) => {
+        if (request.method === "sessions.list") {
+          expect(request.params?.spawnedBy).toBe("agent:main:main");
+          return {
+            sessions: [{ key: "agent:codex:acp:child-1" }],
+          };
+        }
+        return {};
+      }) as never,
+    });
+
+    const guard = await createSessionVisibilityGuard({
+      action: "history",
+      requesterSessionKey: "agent:main:main",
+      visibility: "tree",
+      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+    });
+
+    expect(guard.check("agent:codex:acp:child-1")).toEqual({ allowed: true });
+
+    sessionsResolutionTesting.setDepsForTest();
+  });
+
+  it("keeps self visibility restricted even for spawned child sessions", async () => {
+    const guard = await createSessionVisibilityGuard({
+      action: "history",
+      requesterSessionKey: "agent:main:main",
+      visibility: "self",
+      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+    });
+
+    expect(guard.check("agent:codex:acp:child-1")).toEqual({
+      allowed: false,
+      status: "forbidden",
+      error:
+        "Session history visibility is restricted. Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access; use tools.agentToAgent.allow to restrict permitted agent pairs.",
+    });
+  });
+
+  it("allows cross-agent spawned child sessions before agent-to-agent checks with all visibility", async () => {
+    sessionsResolutionTesting.setDepsForTest({
+      callGateway: vi.fn(async (request: { method?: string; params?: { spawnedBy?: string } }) => {
+        if (request.method === "sessions.list") {
+          expect(request.params?.spawnedBy).toBe("agent:main:main");
+          return {
+            sessions: [{ key: "agent:codex:acp:child-1" }],
+          };
+        }
+        return {};
+      }) as never,
+    });
+
+    const guard = await createSessionVisibilityGuard({
+      action: "send",
+      requesterSessionKey: "agent:main:main",
+      visibility: "all",
+      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+    });
+
+    expect(guard.check("agent:codex:acp:child-1")).toEqual({ allowed: true });
+
+    sessionsResolutionTesting.setDepsForTest();
+  });
+
+  it("allows cross-agent spawned child status before agent-to-agent checks with all visibility", async () => {
+    sessionsResolutionTesting.setDepsForTest({
+      callGateway: vi.fn(async (request: { method?: string; params?: { spawnedBy?: string } }) => {
+        if (request.method === "sessions.list") {
+          expect(request.params?.spawnedBy).toBe("agent:main:main");
+          return {
+            sessions: [{ key: "agent:codex:acp:child-1" }],
+          };
+        }
+        return {};
+      }) as never,
+    });
+
+    const guard = await createSessionVisibilityGuard({
+      action: "status",
+      requesterSessionKey: "agent:main:main",
+      visibility: "all",
+      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+    });
+
+    expect(guard.check("agent:codex:acp:child-1")).toEqual({ allowed: true });
+
+    sessionsResolutionTesting.setDepsForTest();
+  });
+
   it("does not block exact same-agent spawned targets that fall past the spawned list cap", async () => {
     sessionsResolutionTesting.setDepsForTest({
       callGateway: vi.fn(async (request: { method?: string; params?: { key?: string } }) => {
@@ -166,7 +532,7 @@ describe("createSessionVisibilityGuard", () => {
     });
 
     expect(guard.check("agent:main:main")).toEqual({ allowed: true });
-    expect(guard.check("agent:main:telegram:group:1")).toEqual({
+    expect(guard.check("agent:main:forum:group:1")).toEqual({
       allowed: false,
       status: "forbidden",
       error:

@@ -8,6 +8,10 @@
  * - mdl_sel/{model}       - select model (compact fallback when standard is >64 bytes)
  * - mdl_back              - back to providers list
  */
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { fitsTelegramCallbackData } from "./approval-callback-data.js";
 
 export type ButtonRow = Array<{ text: string; callback_data: string }>;
 
@@ -39,7 +43,7 @@ export type ModelsKeyboardParams = {
 };
 
 const MODELS_PAGE_SIZE = 8;
-const MAX_CALLBACK_DATA_BYTES = 64;
+const MODEL_BUTTON_LABEL_MAX_LENGTH = 38;
 const CALLBACK_PREFIX = {
   providers: "mdl_prov",
   back: "mdl_back",
@@ -63,11 +67,11 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
   }
 
   // mdl_list_{provider}_{page}
-  const listMatch = trimmed.match(/^mdl_list_([a-z0-9_-]+)_(\d+)$/i);
+  const listMatch = trimmed.match(/^mdl_list_([a-z0-9_.-]+)_(\d+)$/i);
   if (listMatch) {
     const [, provider, pageStr] = listMatch;
-    const page = Number.parseInt(pageStr ?? "1", 10);
-    if (provider && Number.isFinite(page) && page >= 1) {
+    const page = parseStrictPositiveInteger(pageStr);
+    if (provider && page !== undefined) {
       return { type: "list", provider, page };
     }
   }
@@ -108,13 +112,11 @@ export function buildModelSelectionCallbackData(params: {
   model: string;
 }): string | null {
   const fullCallbackData = `${CALLBACK_PREFIX.selectStandard}${params.provider}/${params.model}`;
-  if (Buffer.byteLength(fullCallbackData, "utf8") <= MAX_CALLBACK_DATA_BYTES) {
+  if (fitsTelegramCallbackData(fullCallbackData)) {
     return fullCallbackData;
   }
   const compactCallbackData = `${CALLBACK_PREFIX.selectCompact}${params.model}`;
-  return Buffer.byteLength(compactCallbackData, "utf8") <= MAX_CALLBACK_DATA_BYTES
-    ? compactCallbackData
-    : null;
+  return fitsTelegramCallbackData(compactCallbackData) ? compactCallbackData : null;
 }
 
 export function resolveModelSelection(params: {
@@ -135,7 +137,7 @@ export function resolveModelSelection(params: {
   if (matchingProviders.length === 1) {
     return {
       kind: "resolved",
-      provider: matchingProviders[0],
+      provider: expectDefined(matchingProviders.at(0), "single matching model provider"),
       model: params.callback.model,
     };
   }
@@ -144,6 +146,20 @@ export function resolveModelSelection(params: {
     model: params.callback.model,
     matchingProviders,
   };
+}
+
+function isCurrentModelSelection(params: {
+  currentModel?: string;
+  provider: string;
+  model: string;
+}): boolean {
+  const currentModel = params.currentModel?.trim();
+  if (!currentModel) {
+    return false;
+  }
+  return currentModel.includes("/")
+    ? currentModel === `${params.provider}/${params.model}`
+    : currentModel === params.model;
 }
 
 /**
@@ -197,11 +213,6 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
   const endIndex = Math.min(startIndex + pageSize, models.length);
   const pageModels = models.slice(startIndex, endIndex);
 
-  // Model buttons - one per row
-  const currentModelId = currentModel?.includes("/")
-    ? currentModel.split("/").slice(1).join("/")
-    : currentModel;
-
   for (const model of pageModels) {
     const callbackData = buildModelSelectionCallbackData({ provider, model });
     // Skip models that still exceed Telegram's callback_data limit.
@@ -209,9 +220,10 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
       continue;
     }
 
-    const isCurrentModel = model === currentModelId;
-    const displayLabel = modelNames?.get(`${provider}/${model}`) ?? model;
-    const displayText = truncateModelId(displayLabel, 38);
+    const isCurrentModel = isCurrentModelSelection({ currentModel, provider, model });
+    const fallbackLabel = model.includes("/") ? `${provider}/${model}` : model;
+    const displayLabel = modelNames?.get(`${provider}/${model}`) ?? fallbackLabel;
+    const displayText = truncateModelLabel(displayLabel, MODEL_BUTTON_LABEL_MAX_LENGTH);
     const text = isCurrentModel ? `${displayText} ✓` : displayText;
 
     rows.push([
@@ -262,14 +274,13 @@ export function buildBrowseProvidersButton(): ButtonRow[] {
 }
 
 /**
- * Truncate model ID for display, preserving end if too long.
+ * Truncate a model label for display, preserving its end if too long.
  */
-function truncateModelId(modelId: string, maxLen: number): string {
-  if (modelId.length <= maxLen) {
-    return modelId;
+function truncateModelLabel(modelLabel: string, maxLen: number): string {
+  if (modelLabel.length <= maxLen) {
+    return modelLabel;
   }
-  // Show last part with ellipsis prefix
-  return `…${modelId.slice(-(maxLen - 1))}`;
+  return `…${sliceUtf16Safe(modelLabel, -(maxLen - 1))}`;
 }
 
 /**

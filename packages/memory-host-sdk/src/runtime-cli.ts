@@ -1,11 +1,11 @@
 // Focused runtime contract for memory CLI/UI helpers.
 
-export { formatErrorMessage, withManager } from "../../../src/cli/cli-utils.js";
-export { formatHelpExamples } from "../../../src/cli/help-format.js";
-export { resolveCommandSecretRefsViaGateway } from "../../../src/cli/command-secret-gateway.js";
-export { withProgress, withProgressTotals } from "../../../src/cli/progress.js";
-export { defaultRuntime } from "../../../src/runtime.js";
-export { formatDocsLink } from "../../../src/terminal/links.js";
-export { colorize, isRich, theme } from "../../../src/terminal/theme.js";
-export { isVerbose, setVerbose } from "../../../src/globals.js";
-export { shortenHomeInString, shortenHomePath } from "../../../src/utils.js";
+export { formatErrorMessage, withManager } from "./host/openclaw-runtime-cli.js";
+export { formatHelpExamples } from "./host/openclaw-runtime-cli.js";
+export { resolveCommandSecretRefsViaGateway } from "./host/openclaw-runtime-cli.js";
+export { withProgress, withProgressTotals } from "./host/openclaw-runtime-cli.js";
+export { defaultRuntime } from "./host/openclaw-runtime-cli.js";
+export { formatDocsLink } from "./host/openclaw-runtime-cli.js";
+export { colorize, isRich, theme } from "./host/openclaw-runtime-cli.js";
+export { isVerbose, setVerbose } from "./host/openclaw-runtime-cli.js";
+export { shortenHomeInString, shortenHomePath } from "./host/openclaw-runtime-cli.js";

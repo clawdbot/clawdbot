@@ -1,3 +1,5 @@
+// Assembles streamed backend events into TUI-visible messages.
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
   composeThinkingAndContent,
   extractContentFromMessage,
@@ -5,6 +7,9 @@ import {
   resolveFinalAssistantText,
 } from "./tui-formatters.js";
 
+const MAX_TRACKED_STREAM_RUNS = 200;
+
+// Per-run state used to merge streaming deltas with final assistant messages.
 type RunStreamState = {
   thinkingText: string;
   contentText: string;
@@ -15,6 +20,7 @@ type RunStreamState = {
 
 type BoundaryDropMode = "off" | "streamed-only" | "streamed-or-incoming";
 
+// Pull text blocks out of provider-style content arrays while remembering non-text blocks.
 function extractTextBlocksAndSignals(message: unknown): {
   textBlocks: string[];
   sawNonTextContentBlocks: boolean;
@@ -57,6 +63,7 @@ function extractTextBlocksAndSignals(message: unknown): {
   return { textBlocks, sawNonTextContentBlocks };
 }
 
+// Detects final messages that dropped streamed boundary text around a non-text block.
 function isDroppedBoundaryTextBlockSubset(params: {
   streamedTextBlocks: string[];
   finalTextBlocks: string[];
@@ -77,6 +84,7 @@ function isDroppedBoundaryTextBlockSubset(params: {
   return finalTextBlocks.every((block, index) => streamedTextBlocks[suffixStart + index] === block);
 }
 
+// Some providers omit text adjacent to images/files in the final message; preserve streamed text.
 function shouldPreserveBoundaryDroppedText(params: {
   boundaryDropMode: BoundaryDropMode;
   streamedSawNonTextContentBlocks: boolean;
@@ -100,21 +108,32 @@ function shouldPreserveBoundaryDroppedText(params: {
   });
 }
 
+/** Assembles assistant stream deltas and final messages into stable TUI display text. */
 export class TuiStreamAssembler {
   private runs = new Map<string, RunStreamState>();
 
-  private getOrCreateRun(runId: string): RunStreamState {
-    let state = this.runs.get(runId);
-    if (!state) {
-      state = {
-        thinkingText: "",
-        contentText: "",
-        contentBlocks: [],
-        sawNonTextContentBlocks: false,
-        displayText: "",
-      };
-      this.runs.set(runId, state);
+  private createRunState(): RunStreamState {
+    return {
+      thinkingText: "",
+      contentText: "",
+      contentBlocks: [],
+      sawNonTextContentBlocks: false,
+      displayText: "",
+    };
+  }
+
+  private getTrackedRun(runId: string): RunStreamState {
+    const existing = this.runs.get(runId);
+    if (existing) {
+      // Keep a still-streaming older run ahead of abandoned runs in eviction order.
+      this.runs.delete(runId);
+      this.runs.set(runId, existing);
+      return existing;
     }
+
+    const state = this.createRunState();
+    this.runs.set(runId, state);
+    pruneMapToMaxSize(this.runs, MAX_TRACKED_STREAM_RUNS);
     return state;
   }
 
@@ -160,8 +179,9 @@ export class TuiStreamAssembler {
     state.displayText = displayText;
   }
 
+  /** Ingests a streaming delta and returns updated display text only when it changed. */
   ingestDelta(runId: string, message: unknown, showThinking: boolean): string | null {
-    const state = this.getOrCreateRun(runId);
+    const state = this.getTrackedRun(runId);
     const previousDisplayText = state.displayText;
     this.updateRunState(state, message, showThinking, {
       boundaryDropMode: "streamed-or-incoming",
@@ -174,8 +194,10 @@ export class TuiStreamAssembler {
     return state.displayText;
   }
 
+  /** Finalizes a run, combines any error text, and drops stored stream state. */
   finalize(runId: string, message: unknown, showThinking: boolean, errorMessage?: string): string {
-    const state = this.getOrCreateRun(runId);
+    // Late finals must not insert an evicted run and displace a live stream.
+    const state = this.runs.get(runId) ?? this.createRunState();
     const streamedDisplayText = state.displayText;
     const streamedTextBlocks = [...state.contentBlocks];
     const streamedSawNonTextContentBlocks = state.sawNonTextContentBlocks;
@@ -199,6 +221,7 @@ export class TuiStreamAssembler {
     return finalText;
   }
 
+  /** Drops stored stream state for an aborted or discarded run. */
   drop(runId: string) {
     this.runs.delete(runId);
   }

@@ -1,12 +1,18 @@
-import { createHash } from "node:crypto";
-import type { ChannelId } from "../channels/plugins/types.js";
+/** Types and normalization helpers for configured channel-to-ACP persistent bindings. */
+import { normalizeText } from "@openclaw/acp-core/normalize-text";
+import type { AcpRuntimeSessionMode } from "@openclaw/acp-core/runtime/types";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import type { ChannelId } from "../channels/plugins/types.public.js";
+import { sha256HexPrefix } from "../infra/crypto-digest.js";
 import type { SessionBindingRecord } from "../infra/outbound/session-binding-service.js";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
-import type { AcpRuntimeSessionMode } from "./runtime/types.js";
+
+export { normalizeText } from "@openclaw/acp-core/normalize-text";
 
 export type ConfiguredAcpBindingChannel = ChannelId;
 
+/** Normalized configured binding that maps one channel conversation to one ACP session. */
 export type ConfiguredAcpBindingSpec = {
   channel: ConfiguredAcpBindingChannel;
   accountId: string;
@@ -27,26 +33,20 @@ export type ResolvedConfiguredAcpBinding = {
   record: SessionBindingRecord;
 };
 
-export type AcpBindingConfigShape = {
+type AcpBindingConfigShape = {
   mode?: string;
   cwd?: string;
   backend?: string;
   label?: string;
 };
 
-export function normalizeText(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
-
+/** Normalizes binding mode, defaulting to persistent sessions. */
 export function normalizeMode(value: unknown): AcpRuntimeSessionMode {
-  const raw = normalizeText(value)?.toLowerCase();
+  const raw = normalizeOptionalLowercaseString(value);
   return raw === "oneshot" ? "oneshot" : "persistent";
 }
 
+/** Extracts supported ACP binding config keys from unknown plugin config. */
 export function normalizeBindingConfig(raw: unknown): AcpBindingConfigShape {
   if (!raw || typeof raw !== "object") {
     return {};
@@ -66,12 +66,10 @@ function buildBindingHash(params: {
   accountId: string;
   conversationId: string;
 }): string {
-  return createHash("sha256")
-    .update(`${params.channel}:${params.accountId}:${params.conversationId}`)
-    .digest("hex")
-    .slice(0, 16);
+  return sha256HexPrefix(`${params.channel}:${params.accountId}:${params.conversationId}`, 16);
 }
 
+/** Builds the stable generated ACP session key for a configured binding. */
 export function buildConfiguredAcpSessionKey(spec: ConfiguredAcpBindingSpec): string {
   const hash = buildBindingHash({
     channel: spec.channel,
@@ -81,6 +79,7 @@ export function buildConfiguredAcpSessionKey(spec: ConfiguredAcpBindingSpec): st
   return `agent:${sanitizeAgentId(spec.agentId)}:acp:binding:${spec.channel}:${spec.accountId}:${hash}`;
 }
 
+/** Converts a configured ACP binding spec into an outbound session binding record. */
 export function toConfiguredAcpBindingRecord(spec: ConfiguredAcpBindingSpec): SessionBindingRecord {
   return {
     bindingId: `config:acp:${spec.channel}:${spec.accountId}:${spec.conversationId}`,
@@ -106,6 +105,7 @@ export function toConfiguredAcpBindingRecord(spec: ConfiguredAcpBindingSpec): Se
   };
 }
 
+/** Parses generated configured-binding session keys back to channel/account identity. */
 export function parseConfiguredAcpSessionKey(
   sessionKey: string,
 ): { channel: ConfiguredAcpBindingChannel; accountId: string } | null {
@@ -122,7 +122,7 @@ export function parseConfiguredAcpSessionKey(
   if (tokens.length !== 5 || tokens[0] !== "acp" || tokens[1] !== "binding") {
     return null;
   }
-  const channel = tokens[2]?.trim().toLowerCase();
+  const channel = normalizeOptionalLowercaseString(tokens[2]);
   if (!channel) {
     return null;
   }

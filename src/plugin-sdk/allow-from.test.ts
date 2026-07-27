@@ -1,9 +1,15 @@
+/**
+ * Tests allow-from parsing and normalization helpers.
+ */
 import { describe, expect, it } from "vitest";
 import {
   formatAllowFromLowercase,
   formatNormalizedAllowFromEntries,
   isAllowedParsedChatSender,
   isNormalizedSenderAllowed,
+  mapAllowlistResolutionInputs,
+  parseAllowFromEntries,
+  resolveBasicAllowFromEntries,
 } from "./allow-from.js";
 
 function parseAllowTarget(
@@ -63,17 +69,67 @@ describe("isAllowedParsedChatSender", () => {
       expected: true,
     },
     {
-      name: "matches chat IDs when provided",
-      input: {
-        allowFrom: ["chat_id:42"],
-        sender: "+15551234567",
-        chatId: 42,
-        normalizeSender: (sender: string) => sender,
-        parseAllowTarget,
-      },
-      expected: true,
+      name: "does not match conversation targets by default",
+      input: [
+        {
+          allowFrom: ["chat_id:42"],
+          sender: "+15551234567",
+          chatId: 42,
+          normalizeSender: (sender: string) => sender,
+          parseAllowTarget,
+        },
+        {
+          allowFrom: ["chat_guid:thread-42"],
+          sender: "+15551234567",
+          chatGuid: "thread-42",
+          normalizeSender: (sender: string) => sender,
+          parseAllowTarget,
+        },
+        {
+          allowFrom: ["chat_identifier:team"],
+          sender: "+15551234567",
+          chatIdentifier: "team",
+          normalizeSender: (sender: string) => sender,
+          parseAllowTarget,
+        },
+      ],
+      expected: [false, false, false],
+    },
+    {
+      name: "matches conversation targets when they are enabled",
+      input: [
+        {
+          allowFrom: ["chat_id:42"],
+          sender: "+15551234567",
+          chatId: 42,
+          allowConversationTargets: true,
+          normalizeSender: (sender: string) => sender,
+          parseAllowTarget,
+        },
+        {
+          allowFrom: ["chat_guid:thread-42"],
+          sender: "+15551234567",
+          chatGuid: "thread-42",
+          allowConversationTargets: true,
+          normalizeSender: (sender: string) => sender,
+          parseAllowTarget,
+        },
+        {
+          allowFrom: ["chat_identifier:team"],
+          sender: "+15551234567",
+          chatIdentifier: "team",
+          allowConversationTargets: true,
+          normalizeSender: (sender: string) => sender,
+          parseAllowTarget,
+        },
+      ],
+      expected: [true, true, true],
     },
   ])("$name", ({ input, expected }) => {
+    if (Array.isArray(input)) {
+      expect(input.map((entry) => isAllowedParsedChatSender(entry))).toEqual(expected);
+      return;
+    }
     expect(isAllowedParsedChatSender(input)).toBe(expected);
   });
 });
@@ -142,5 +198,58 @@ describe("formatNormalizedAllowFromEntries", () => {
     },
   ])("$name", ({ input, expected }) => {
     expect(formatNormalizedAllowFromEntries(input)).toEqual(expected);
+  });
+});
+
+describe("parseAllowFromEntries", () => {
+  it("preserves wildcard entries and returns the first parser error", () => {
+    const parse = (raw: string) =>
+      parseAllowFromEntries(raw, (entry) =>
+        entry === "bad" ? { error: "invalid" } : { value: entry.toLowerCase() },
+      );
+
+    expect(parse(" Alice, *, alice ")).toEqual({ entries: ["alice", "*"] });
+    expect(parse("ok; bad; later")).toEqual({ entries: [], error: "invalid" });
+  });
+});
+
+describe("resolveBasicAllowFromEntries", () => {
+  it("uses unresolved records without a token and canonicalizes resolved ids", async () => {
+    const resolveEntries = async ({ entries }: { token: string; entries: string[] }) =>
+      entries.map((input) => ({
+        input,
+        resolved: true,
+        id: input === "missing" ? undefined : "1",
+      }));
+
+    await expect(
+      resolveBasicAllowFromEntries({ entries: ["alice"], resolveEntries }),
+    ).resolves.toEqual([{ input: "alice", resolved: false, id: null }]);
+    await expect(
+      resolveBasicAllowFromEntries({
+        token: " token ",
+        entries: ["alice", "missing"],
+        resolveEntries,
+      }),
+    ).resolves.toEqual([
+      { input: "alice", resolved: true, id: "1" },
+      { input: "missing", resolved: true, id: null },
+    ]);
+  });
+});
+
+describe("mapAllowlistResolutionInputs", () => {
+  it("maps inputs sequentially and preserves order", async () => {
+    const visited: string[] = [];
+    const result = await mapAllowlistResolutionInputs({
+      inputs: ["one", "two", "three"],
+      mapInput: async (input) => {
+        visited.push(input);
+        return input.toUpperCase();
+      },
+    });
+
+    expect(visited).toEqual(["one", "two", "three"]);
+    expect(result).toEqual(["ONE", "TWO", "THREE"]);
   });
 });

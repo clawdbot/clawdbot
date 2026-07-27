@@ -1,12 +1,12 @@
+// Normalizes queue config values from user and persisted settings.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { QueueDropPolicy, QueueMode } from "./types.js";
 
+/** Normalizes user-entered queue mode aliases from directives/config. */
 export function normalizeQueueMode(raw?: string): QueueMode | undefined {
-  if (!raw) {
+  const cleaned = normalizeOptionalLowercaseString(raw);
+  if (!cleaned) {
     return undefined;
-  }
-  const cleaned = raw.trim().toLowerCase();
-  if (cleaned === "queue" || cleaned === "queued") {
-    return "steer";
   }
   if (cleaned === "interrupt" || cleaned === "interrupts" || cleaned === "abort") {
     return "interrupt";
@@ -20,17 +20,31 @@ export function normalizeQueueMode(raw?: string): QueueMode | undefined {
   if (cleaned === "collect" || cleaned === "coalesce") {
     return "collect";
   }
+  return undefined;
+}
+
+/** Normalizes persisted legacy queue mode aliases into current queue modes. */
+export function normalizePersistedQueueMode(raw?: string): QueueMode | undefined {
+  const normalized = normalizeQueueMode(raw);
+  if (normalized) {
+    return normalized;
+  }
+  const cleaned = normalizeOptionalLowercaseString(raw);
+  if (cleaned === "queue" || cleaned === "queued") {
+    return "steer";
+  }
   if (cleaned === "steer+backlog" || cleaned === "steer-backlog" || cleaned === "steer_backlog") {
-    return "steer-backlog";
+    return "followup";
   }
   return undefined;
 }
 
+/** Normalizes queue drop policy aliases from directives/config. */
 export function normalizeQueueDropPolicy(raw?: string): QueueDropPolicy | undefined {
-  if (!raw) {
+  const cleaned = normalizeOptionalLowercaseString(raw);
+  if (!cleaned) {
     return undefined;
   }
-  const cleaned = raw.trim().toLowerCase();
   if (cleaned === "old" || cleaned === "oldest") {
     return "old";
   }

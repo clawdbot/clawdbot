@@ -1,20 +1,26 @@
-import { formatRemainingShort } from "../../agents/auth-health.js";
+/** Builds provider auth summaries for model-list/status output. */
+import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
 import {
-  type AuthProfileStore,
-  listProfilesForProvider,
-  resolveAuthProfileDisplayLabel,
-  resolveAuthStorePathForDisplay,
-  resolveProfileUnusableUntilForDisplay,
-} from "../../agents/auth-profiles.js";
-import { isNonSecretApiKeyMarker } from "../../agents/model-auth-markers.js";
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { formatRemainingShort } from "../../agents/auth-health.js";
+import { resolveAuthProfileDisplayLabel } from "../../agents/auth-profiles/display.js";
+import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
+import { loadPersistedAuthProfileStore } from "../../agents/auth-profiles/persisted.js";
+import { listProfilesForProvider } from "../../agents/auth-profiles/profiles.js";
+import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
+import { isNonSecretApiKeyMarker, isOAuthApiKeyMarker } from "../../agents/model-auth-markers.js";
 import {
   getCustomProviderApiKey,
   resolveEnvApiKey,
   resolveUsableCustomProviderApiKey,
 } from "../../agents/model-auth.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ProviderAuthEvidence } from "../../secrets/provider-env-vars.js";
+import { maskApiKey } from "../../security/secret-mask.js";
 import { shortenHomePath } from "../../utils.js";
-import { maskApiKey } from "./list.format.js";
 import type { ProviderAuthOverview } from "./list.types.js";
 
 function formatMarkerOrSecret(value: string): string {
@@ -28,7 +34,7 @@ function formatProfileSecretLabel(params: {
   ref: { source: string; id: string } | undefined;
   kind: "api-key" | "token";
 }): string {
-  const value = typeof params.value === "string" ? params.value.trim() : "";
+  const value = normalizeOptionalString(params.value) ?? "";
   if (value) {
     const display = formatMarkerOrSecret(value);
     return params.kind === "token" ? `token:${display}` : display;
@@ -40,11 +46,35 @@ function formatProfileSecretLabel(params: {
   return params.kind === "token" ? "token:missing" : "missing";
 }
 
+function resolveProfileSourceAgentDir(params: {
+  agentDir?: string;
+  profileIds: string[];
+}): string | undefined {
+  if (!params.agentDir || params.profileIds.length === 0) {
+    return params.agentDir;
+  }
+  const localStore = loadPersistedAuthProfileStore(params.agentDir);
+  if (params.profileIds.some((profileId) => Boolean(localStore?.profiles[profileId]))) {
+    return params.agentDir;
+  }
+  const mainStore = loadPersistedAuthProfileStore(undefined);
+  return params.profileIds.every((profileId) => Boolean(mainStore?.profiles[profileId]))
+    ? undefined
+    : params.agentDir;
+}
+
+/** Resolves the effective auth source and profile counts for a provider. */
 export function resolveProviderAuthOverview(params: {
   provider: string;
   cfg: OpenClawConfig;
   store: AuthProfileStore;
   modelsPath: string;
+  agentDir?: string;
+  workspaceDir?: string;
+  syntheticAuth?: { value: string; source: string };
+  aliasMap?: Readonly<Record<string, string>>;
+  envCandidateMap?: Readonly<Record<string, readonly string[]>>;
+  authEvidenceMap?: Readonly<Record<string, readonly ProviderAuthEvidence[]>>;
 }): ProviderAuthOverview {
   const { provider, cfg, store } = params;
   const now = Date.now();
@@ -100,21 +130,46 @@ export function resolveProviderAuthOverview(params: {
   const oauthCount = profiles.filter((id) => store.profiles[id]?.type === "oauth").length;
   const tokenCount = profiles.filter((id) => store.profiles[id]?.type === "token").length;
   const apiKeyCount = profiles.filter((id) => store.profiles[id]?.type === "api_key").length;
+  const normalizedProvider = normalizeProviderIdForAuth(provider);
+  const authLookupProvider = params.aliasMap?.[normalizedProvider] ?? normalizedProvider;
+  const hasPrecomputedCandidates =
+    params.envCandidateMap !== undefined &&
+    Object.hasOwn(params.envCandidateMap, authLookupProvider);
+  const hasPrecomputedEvidence =
+    params.authEvidenceMap !== undefined &&
+    Object.hasOwn(params.authEvidenceMap, authLookupProvider);
 
-  const envKey = resolveEnvApiKey(provider);
+  const envKey = resolveEnvApiKey(provider, process.env, {
+    config: cfg,
+    workspaceDir: params.workspaceDir,
+    aliasMap: params.aliasMap,
+    candidateMap: params.envCandidateMap,
+    authEvidenceMap: params.authEvidenceMap,
+    skipSetupProviderFallback: hasPrecomputedCandidates || hasPrecomputedEvidence,
+  });
   const customKey = getCustomProviderApiKey(cfg, provider);
   const usableCustomKey = resolveUsableCustomProviderApiKey({ cfg, provider });
 
   const effective: ProviderAuthOverview["effective"] = (() => {
     if (profiles.length > 0) {
+      // Profiles win over env/config markers because runtime auth selection uses
+      // the profile store before provider-wide fallback material.
       return {
         kind: "profiles",
-        detail: shortenHomePath(resolveAuthStorePathForDisplay()),
+        detail: shortenHomePath(
+          resolveAuthStorePathForDisplay(
+            resolveProfileSourceAgentDir({
+              agentDir: params.agentDir,
+              profileIds: profiles,
+            }),
+          ),
+        ),
       };
     }
     if (envKey) {
+      const normalizedSource = normalizeLowercaseStringOrEmpty(envKey.source);
       const isOAuthEnv =
-        envKey.source.includes("OAUTH_TOKEN") || envKey.source.toLowerCase().includes("oauth");
+        envKey.source.includes("OAUTH_TOKEN") || normalizedSource.includes("oauth");
       return {
         kind: "env",
         detail: isOAuthEnv ? "OAuth (env)" : maskApiKey(envKey.apiKey),
@@ -122,6 +177,12 @@ export function resolveProviderAuthOverview(params: {
     }
     if (usableCustomKey) {
       return { kind: "models.json", detail: formatMarkerOrSecret(usableCustomKey.apiKey) };
+    }
+    if (params.syntheticAuth) {
+      return { kind: "synthetic", detail: params.syntheticAuth.source };
+    }
+    if (customKey && isOAuthApiKeyMarker(customKey)) {
+      return { kind: "models.json", detail: formatMarkerOrSecret(customKey) };
     }
     return { kind: "missing", detail: "missing" };
   })();
@@ -139,10 +200,12 @@ export function resolveProviderAuthOverview(params: {
     ...(envKey
       ? {
           env: {
-            value:
-              envKey.source.includes("OAUTH_TOKEN") || envKey.source.toLowerCase().includes("oauth")
+            value: (() => {
+              const normalizedSource = normalizeLowercaseStringOrEmpty(envKey.source);
+              return envKey.source.includes("OAUTH_TOKEN") || normalizedSource.includes("oauth")
                 ? "OAuth (env)"
-                : maskApiKey(envKey.apiKey),
+                : maskApiKey(envKey.apiKey);
+            })(),
             source: envKey.source,
           },
         }
@@ -152,6 +215,17 @@ export function resolveProviderAuthOverview(params: {
           modelsJson: {
             value: formatMarkerOrSecret(customKey),
             source: `models.json: ${shortenHomePath(params.modelsPath)}`,
+          },
+        }
+      : {}),
+    // Re-project instead of passing the caller's object through: status callers
+    // hand richer runtime shapes that also carry the raw synthetic credential,
+    // and structural typing would let it leak into `--json` output verbatim.
+    ...(params.syntheticAuth
+      ? {
+          syntheticAuth: {
+            value: params.syntheticAuth.value,
+            source: params.syntheticAuth.source,
           },
         }
       : {}),

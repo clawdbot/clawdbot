@@ -1,40 +1,50 @@
 ---
-title: "Together AI"
 summary: "Together AI setup (auth + model selection)"
+title: "Together AI"
 read_when:
   - You want to use Together AI with OpenClaw
   - You need the API key env var or CLI auth choice
 ---
 
-# Together AI
+[Together AI](https://together.ai) provides access to leading open-source
+models including Llama, DeepSeek, Kimi, and more through a unified API.
+OpenClaw bundles it as the `together` provider.
 
-The [Together AI](https://together.ai) provides access to leading open-source models including Llama, DeepSeek, Kimi, and more through a unified API.
+| Property | Value                         |
+| -------- | ----------------------------- |
+| Provider | `together`                    |
+| Auth     | `TOGETHER_API_KEY`            |
+| API      | OpenAI-compatible             |
+| Base URL | `https://api.together.xyz/v1` |
 
-- Provider: `together`
-- Auth: `TOGETHER_API_KEY`
-- API: OpenAI-compatible
+## Getting started
 
-## Quick start
+<Steps>
+  <Step title="Get an API key">
+    Create an API key at
+    [api.together.ai/settings/api-keys](https://api.together.ai/settings/api-keys).
+  </Step>
+  <Step title="Run onboarding">
+    ```bash
+    openclaw onboard --auth-choice together-api-key
+    ```
+  </Step>
+  <Step title="Set a default model">
+    ```json5
+    {
+      agents: {
+        defaults: {
+          model: {
+            primary: "together/moonshotai/Kimi-K2.6",
+          },
+        },
+      },
+    }
+    ```
+  </Step>
+</Steps>
 
-1. Set the API key (recommended: store it for the Gateway):
-
-```bash
-openclaw onboard --auth-choice together-api-key
-```
-
-2. Set a default model:
-
-```json5
-{
-  agents: {
-    defaults: {
-      model: { primary: "together/moonshotai/Kimi-K2.5" },
-    },
-  },
-}
-```
-
-## Non-interactive example
+### Non-interactive example
 
 ```bash
 openclaw onboard --non-interactive \
@@ -43,24 +53,90 @@ openclaw onboard --non-interactive \
   --together-api-key "$TOGETHER_API_KEY"
 ```
 
-This will set `together/moonshotai/Kimi-K2.5` as the default model.
+<Note>
+Onboarding sets Together's recommended chat model,
+`together/moonshotai/Kimi-K2.6`, as the default.
+</Note>
 
-## Environment note
+## Built-in catalog
 
-If the Gateway runs as a daemon (launchd/systemd), make sure `TOGETHER_API_KEY`
-is available to that process (for example, in `~/.openclaw/.env` or via
-`env.shellEnv`).
+Cost is USD per million tokens.
 
-## Available models
+| Model ref                                          | Name                         | Input       | Context | Max output | Cost (in/out) | Notes           |
+| -------------------------------------------------- | ---------------------------- | ----------- | ------- | ---------- | ------------- | --------------- |
+| `together/meta-llama/Llama-3.3-70B-Instruct-Turbo` | Llama 3.3 70B Instruct Turbo | text        | 131,072 | 8,192      | 1.04 / 1.04   | General model   |
+| `together/moonshotai/Kimi-K2.6`                    | Kimi K2.6 FP4                | text, image | 262,144 | 32,768     | 1.20 / 4.50   | Default model   |
+| `together/deepseek-ai/DeepSeek-V4-Pro`             | DeepSeek V4 Pro              | text        | 512,000 | 384,000    | 1.74 / 3.48   | Reasoning model |
+| `together/zai-org/GLM-5.2`                         | GLM 5.2 FP4                  | text        | 262,144 | 131,072    | 1.40 / 4.40   | Reasoning model |
 
-Together AI provides access to many popular open-source models:
+## Video generation
 
-- **GLM 4.7 Fp8** - Default model with 200K context window
-- **Llama 3.3 70B Instruct Turbo** - Fast, efficient instruction following
-- **Llama 4 Scout** - Vision model with image understanding
-- **Llama 4 Maverick** - Advanced vision and reasoning
-- **DeepSeek V3.1** - Powerful coding and reasoning model
-- **DeepSeek R1** - Advanced reasoning model
-- **Kimi K2 Instruct** - High-performance model with 262K context window
+The bundled `together` plugin also registers video generation through the
+shared `video_generate` tool.
 
-All models support standard chat completions and are OpenAI API compatible.
+| Property             | Value                                                                                     |
+| -------------------- | ----------------------------------------------------------------------------------------- |
+| Default video model  | `Wan-AI/Wan2.2-T2V-A14B`                                                                  |
+| Other models         | `Wan-AI/Wan2.2-I2V-A14B`, `minimax/hailuo-02`, `kwaivgI/kling-2.1-master`                 |
+| Modes                | text-to-video; image-to-video only with `Wan-AI/Wan2.2-I2V-A14B` (single reference image) |
+| Duration             | 1-10 seconds                                                                              |
+| Supported parameters | `size` (parsed as `<width>x<height>`); `aspectRatio`/`resolution` are not read            |
+
+To use Together as the default video provider:
+
+```json5
+{
+  agents: {
+    defaults: {
+      videoGenerationModel: {
+        primary: "together/Wan-AI/Wan2.2-T2V-A14B",
+      },
+    },
+  },
+}
+```
+
+<Tip>
+See [Video generation](/tools/video-generation) for the shared tool parameters,
+provider selection, and failover behavior.
+</Tip>
+
+<AccordionGroup>
+  <Accordion title="Environment note">
+    If the Gateway runs as a daemon (launchd/systemd), make sure
+    `TOGETHER_API_KEY` is available to that process (for example, in
+    `~/.openclaw/.env` or via `env.shellEnv`).
+
+    <Warning>
+    Keys set only in your interactive shell are not visible to daemon-managed
+    gateway processes. Use `~/.openclaw/.env` or `env.shellEnv` config for
+    persistent availability.
+    </Warning>
+
+  </Accordion>
+
+  <Accordion title="Troubleshooting">
+    - Verify your key works: `openclaw models list --provider together`
+    - If models are not appearing, confirm the API key is set in the correct
+      environment for your Gateway process.
+    - Model refs use the form `together/<model-id>`.
+
+  </Accordion>
+</AccordionGroup>
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Model providers" href="/concepts/model-providers" icon="layers">
+    Provider rules, model refs, and failover behavior.
+  </Card>
+  <Card title="Video generation" href="/tools/video-generation" icon="video">
+    Shared video generation tool parameters and provider selection.
+  </Card>
+  <Card title="Configuration reference" href="/gateway/configuration-reference" icon="gear">
+    Full config schema including provider settings.
+  </Card>
+  <Card title="Together AI" href="https://together.ai" icon="arrow-up-right-from-square">
+    Together AI dashboard, API docs, and pricing.
+  </Card>
+</CardGroup>

@@ -1,3 +1,6 @@
+/**
+ * Tests device-pair approval superseding behavior in the gateway server.
+ */
 import { describe, expect, test } from "vitest";
 import {
   approveDevicePairing,
@@ -36,7 +39,8 @@ describe("gateway device.pair.approve superseded request ids", () => {
     expect(latestApprove?.status).toBe("approved");
 
     const paired = await getPairedDevice("supersede-device-1");
-    expect(paired?.roles).toEqual(expect.arrayContaining(["node", "operator"]));
-    expect(paired?.scopes).toEqual(expect.arrayContaining(["operator.admin"]));
+    expect(paired?.roles).toContain("node");
+    expect(paired?.roles).toContain("operator");
+    expect(paired?.scopes).toContain("operator.admin");
   });
 });

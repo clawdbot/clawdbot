@@ -1,3 +1,4 @@
+// Provides shared JSON schema helpers for generated config metadata.
 type JsonSchemaObject = {
   type?: string | string[];
   properties?: Record<string, JsonSchemaObject>;
@@ -8,20 +9,20 @@ type JsonSchemaObject = {
   oneOf?: JsonSchemaObject[];
 };
 
+/** Deep-clone schema payloads before callers mutate plugin or base schema fragments. */
 export function cloneSchema<T>(value: T): T {
-  if (typeof structuredClone === "function") {
-    return structuredClone(value);
-  }
-  return JSON.parse(JSON.stringify(value)) as T;
+  return structuredClone(value);
 }
 
-export function asSchemaObject<T extends object>(value: unknown): T | null {
+/** Narrow unknown JSON-schema fragments to non-array objects. */
+export function asSchemaObject(value: unknown): object | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
-  return value as T;
+  return value;
 }
 
+/** Return whether a schema node exposes nested fields through properties, items, or unions. */
 export function schemaHasChildren(schema: JsonSchemaObject): boolean {
   if (schema.properties && Object.keys(schema.properties).length > 0) {
     return true;
@@ -40,6 +41,7 @@ export function schemaHasChildren(schema: JsonSchemaObject): boolean {
   return Boolean(schema.items && typeof schema.items === "object");
 }
 
+/** Find the most specific wildcard UI hint that matches a concrete config path. */
 export function findWildcardHintMatch<T>(params: {
   uiHints: Record<string, T>;
   path: string;
@@ -79,6 +81,7 @@ export function findWildcardHintMatch<T>(params: {
     if (!matches) {
       continue;
     }
+    // Fewer wildcards means the hint is closer to the concrete path and should win.
     if (!bestMatch || wildcardCount < bestMatch.wildcardCount) {
       bestMatch = { path: hintPath, hint, wildcardCount };
     }

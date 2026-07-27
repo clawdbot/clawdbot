@@ -1,3 +1,4 @@
+/** Convert Node's optional env values into the concrete string map spawn adapters expect. */
 export function toStringEnv(env?: NodeJS.ProcessEnv): Record<string, string> {
   if (!env) {
     return {};
@@ -7,7 +8,7 @@ export function toStringEnv(env?: NodeJS.ProcessEnv): Record<string, string> {
     if (value === undefined) {
       continue;
     }
-    out[key] = String(value);
+    out[key] = value;
   }
   return out;
 }

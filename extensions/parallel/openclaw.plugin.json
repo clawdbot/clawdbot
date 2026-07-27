@@ -1,0 +1,47 @@
+{
+  "id": "parallel",
+  "activation": {
+    "onStartup": false
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "parallel",
+        "envVars": ["PARALLEL_API_KEY"]
+      }
+    ]
+  },
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "Parallel API Key",
+      "help": "Parallel Search API key (fallback: PARALLEL_API_KEY env var).",
+      "sensitive": true,
+      "placeholder": "par-..."
+    },
+    "webSearch.baseUrl": {
+      "label": "Parallel Search Base URL",
+      "help": "Optional Parallel API base URL override. OpenClaw appends /v1/search when the URL does not already end there."
+    }
+  },
+  "contracts": {
+    "webSearchProviders": ["parallel", "parallel-free"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          },
+          "baseUrl": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,5 +1,7 @@
+/** Inspects installed platform services for extra OpenClaw or legacy gateway jobs. */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,
@@ -9,13 +11,14 @@ import {
 } from "./constants.js";
 import { resolveHomeDir } from "./paths.js";
 import { execSchtasks } from "./schtasks-exec.js";
+import { parseSystemdExecStart } from "./systemd-unit.js";
 
 export type ExtraGatewayService = {
   platform: "darwin" | "linux" | "win32";
   label: string;
   detail: string;
   scope: "user" | "system";
-  marker?: "openclaw" | "clawdbot" | "moltbot";
+  marker?: "openclaw" | "clawdbot";
   legacy?: boolean;
 };
 
@@ -23,7 +26,20 @@ export type FindExtraGatewayServicesOptions = {
   deep?: boolean;
 };
 
-const EXTRA_MARKERS = ["openclaw", "clawdbot", "moltbot"] as const;
+const EXTRA_MARKERS = ["openclaw", "clawdbot"] as const;
+const SYSTEMD_REFERENCE_ONLY_KEYS = new Set([
+  "after",
+  "before",
+  "bindsto",
+  "conflicts",
+  "partof",
+  "propagatesreloadto",
+  "reloadpropagatedfrom",
+  "requisite",
+  "requires",
+  "upholds",
+  "wants",
+]);
 
 export function renderGatewayServiceCleanupHints(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
@@ -52,25 +68,43 @@ export function renderGatewayServiceCleanupHints(
 
 type Marker = (typeof EXTRA_MARKERS)[number];
 
-function detectMarker(content: string): Marker | null {
-  const lower = content.toLowerCase();
-  for (const marker of EXTRA_MARKERS) {
-    if (lower.includes(marker)) {
-      return marker;
-    }
-  }
-  return null;
+function hasGatewaySubcommandArg(args: string[]): boolean {
+  return args.some((arg) => {
+    const normalized = normalizeLowercaseStringOrEmpty(arg);
+    return normalized === "gateway" || /(^|\s)gateway(\s|$)/.test(normalized);
+  });
 }
 
 export function detectMarkerLineWithGateway(contents: string): Marker | null {
-  // Join line continuations (trailing backslash) into single lines
-  const lower = contents.replace(/\\\r?\n\s*/g, " ").toLowerCase();
+  // Join line continuations before scanning systemd ExecStart commands; marker
+  // detection must ignore relationship-only unit keys.
+  const lower = normalizeLowercaseStringOrEmpty(contents.replace(/\\\r?\n\s*/g, " "));
   for (const line of lower.split(/\r?\n/)) {
-    if (!line.includes("gateway")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith(";")) {
+      continue;
+    }
+    const assignment = trimmed.indexOf("=");
+    if (assignment > 0) {
+      const key = trimmed.slice(0, assignment).trim();
+      if (SYSTEMD_REFERENCE_ONLY_KEYS.has(key)) {
+        continue;
+      }
+      if (
+        key === "execstart" &&
+        !hasGatewaySubcommandArg(parseSystemdExecStart(trimmed.slice(assignment + 1).trim()))
+      ) {
+        continue;
+      }
+      if (key !== "execstart") {
+        continue;
+      }
+    }
+    if (!trimmed.includes("gateway")) {
       continue;
     }
     for (const marker of EXTRA_MARKERS) {
-      if (line.includes(marker)) {
+      if (trimmed.includes(marker)) {
         return marker;
       }
     }
@@ -79,10 +113,10 @@ export function detectMarkerLineWithGateway(contents: string): Marker | null {
 }
 
 function hasGatewayServiceMarker(content: string): boolean {
-  const lower = content.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(content);
   const markerKeys = ["openclaw_service_marker"];
   const kindKeys = ["openclaw_service_kind"];
-  const markerValues = [GATEWAY_SERVICE_MARKER.toLowerCase()];
+  const markerValues = [normalizeLowercaseStringOrEmpty(GATEWAY_SERVICE_MARKER)];
   const hasMarkerKey = markerKeys.some((key) => lower.includes(key));
   const hasKindKey = kindKeys.some((key) => lower.includes(key));
   const hasMarkerValue = markerValues.some((value) => lower.includes(value));
@@ -90,16 +124,65 @@ function hasGatewayServiceMarker(content: string): boolean {
     hasMarkerKey &&
     hasKindKey &&
     hasMarkerValue &&
-    lower.includes(GATEWAY_SERVICE_KIND.toLowerCase())
+    lower.includes(normalizeLowercaseStringOrEmpty(GATEWAY_SERVICE_KIND))
   );
+}
+
+function extractPlistKeyBlock(
+  contents: string,
+  key: string,
+  tag: "array" | "string",
+): string | null {
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(
+    `<key>${escapedKey}<\\/key>\\s*<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`,
+    "i",
+  );
+  const match = contents.match(pattern);
+  return match?.[1]?.trim() || null;
+}
+
+function extractPlistStringValues(
+  contents: string,
+  key: string,
+  tag: "array" | "string",
+): string[] {
+  const block = extractPlistKeyBlock(contents, key, tag);
+  if (!block) {
+    return [];
+  }
+  if (tag === "string") {
+    return [block];
+  }
+  return Array.from(block.matchAll(/<string>([\s\S]*?)<\/string>/gi))
+    .map((match) => match[1]?.trim() ?? "")
+    .filter(Boolean);
+}
+
+function detectLaunchdGatewayExecutionMarker(contents: string): Marker | null {
+  const program = extractPlistStringValues(contents, "Program", "string");
+  const programArguments = extractPlistStringValues(contents, "ProgramArguments", "array");
+  if (!hasGatewaySubcommandArg(programArguments)) {
+    return null;
+  }
+  // Only execution command fields identify gateway jobs; labels alone catch too
+  // many unrelated helper jobs.
+  const launchCommand = normalizeLowercaseStringOrEmpty(
+    [...program, ...programArguments].filter(Boolean).join("\n"),
+  );
+  for (const marker of EXTRA_MARKERS) {
+    if (launchCommand.includes(marker)) {
+      return marker;
+    }
+  }
+  return null;
 }
 
 function isOpenClawGatewayLaunchdService(label: string, contents: string): boolean {
   if (hasGatewayServiceMarker(contents)) {
     return true;
   }
-  const lowerContents = contents.toLowerCase();
-  if (!lowerContents.includes("gateway")) {
+  if (detectLaunchdGatewayExecutionMarker(contents) !== "openclaw") {
     return false;
   }
   return label.startsWith("ai.openclaw.");
@@ -112,16 +195,21 @@ function isOpenClawGatewaySystemdService(name: string, contents: string): boolea
   if (!name.startsWith("openclaw-gateway")) {
     return false;
   }
-  return contents.toLowerCase().includes("gateway");
+  return normalizeLowercaseStringOrEmpty(contents).includes("gateway");
 }
 
 function isOpenClawGatewayTaskName(name: string): boolean {
-  const normalized = name.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(name);
   if (!normalized) {
     return false;
   }
-  const defaultName = resolveGatewayWindowsTaskName().toLowerCase();
-  return normalized === defaultName || normalized.startsWith("openclaw gateway");
+  // Windows schtasks /Query returns task names prefixed with \ (e.g.
+  // \OpenClaw Gateway for root-folder tasks). Strip the leading
+  // backslash so the configured name matches correctly and the live
+  // gateway task is not misidentified as an extra gateway service.
+  const stripped = normalized.replace(/^\\+/, "");
+  const defaultName = normalizeLowercaseStringOrEmpty(resolveGatewayWindowsTaskName());
+  return stripped === defaultName || /^openclaw gateway \(.+\)$/.test(stripped);
 }
 
 function tryExtractPlistLabel(contents: string): string | null {
@@ -141,8 +229,8 @@ function isIgnoredSystemdName(name: string): boolean {
 }
 
 function isLegacyLabel(label: string): boolean {
-  const lower = label.toLowerCase();
-  return lower.includes("clawdbot") || lower.includes("moltbot");
+  const lower = normalizeLowercaseStringOrEmpty(label);
+  return lower.includes("clawdbot");
 }
 
 async function readDirEntries(dir: string): Promise<string[]> {
@@ -205,23 +293,20 @@ async function scanLaunchdDir(params: {
   });
 
   for (const { name: labelFromName, fullPath, contents } of candidates) {
-    const marker = detectMarker(contents);
     const label = tryExtractPlistLabel(contents) ?? labelFromName;
+    const legacyLabel = isLegacyLabel(labelFromName) || isLegacyLabel(label);
+    const executionMarker = detectLaunchdGatewayExecutionMarker(contents);
+    const marker =
+      hasGatewayServiceMarker(contents) || executionMarker === "openclaw"
+        ? "openclaw"
+        : executionMarker === "clawdbot" || legacyLabel
+          ? "clawdbot"
+          : null;
     if (!marker) {
-      const legacyLabel = isLegacyLabel(labelFromName) || isLegacyLabel(label);
-      if (!legacyLabel) {
-        continue;
-      }
-      results.push({
-        platform: "darwin",
-        label,
-        detail: `plist: ${fullPath}`,
-        scope: params.scope,
-        marker: isLegacyLabel(label) ? "clawdbot" : "moltbot",
-        legacy: true,
-      });
       continue;
     }
+    // Managed current services are expected; this scan reports extra jobs that
+    // can compete for ports or survive old installs.
     if (isIgnoredLaunchdLabel(label)) {
       continue;
     }
@@ -244,20 +329,27 @@ async function scanLaunchdDir(params: {
 async function scanSystemdDir(params: {
   dir: string;
   scope: "user" | "system";
+  includeManagedOpenClaw?: boolean;
 }): Promise<ExtraGatewayService[]> {
   const results: ExtraGatewayService[] = [];
   const candidates = await collectServiceFiles({
     dir: params.dir,
     extension: ".service",
-    isIgnoredName: isIgnoredSystemdName,
+    isIgnoredName: params.includeManagedOpenClaw ? () => false : isIgnoredSystemdName,
   });
 
   for (const { entry, name, fullPath, contents } of candidates) {
-    const marker = detectMarkerLineWithGateway(contents);
+    const marker = hasGatewayServiceMarker(contents)
+      ? "openclaw"
+      : detectMarkerLineWithGateway(contents);
     if (!marker) {
       continue;
     }
-    if (marker === "openclaw" && isOpenClawGatewaySystemdService(name, contents)) {
+    if (
+      !params.includeManagedOpenClaw &&
+      marker === "openclaw" &&
+      isOpenClawGatewaySystemdService(name, contents)
+    ) {
       continue;
     }
     results.push({
@@ -268,6 +360,29 @@ async function scanSystemdDir(params: {
       marker,
       legacy: marker !== "openclaw",
     });
+  }
+
+  return results;
+}
+
+export async function findSystemGatewayServices(): Promise<ExtraGatewayService[]> {
+  if (process.platform !== "linux") {
+    return [];
+  }
+
+  const results: ExtraGatewayService[] = [];
+  try {
+    for (const dir of ["/etc/systemd/system", "/usr/lib/systemd/system", "/lib/systemd/system"]) {
+      results.push(
+        ...(await scanSystemdDir({
+          dir,
+          scope: "system",
+          includeManagedOpenClaw: true,
+        })),
+      );
+    }
+  } catch {
+    return [];
   }
 
   return results;
@@ -295,7 +410,7 @@ function parseSchtasksList(output: string): ScheduledTaskInfo[] {
     if (idx <= 0) {
       continue;
     }
-    const key = line.slice(0, idx).trim().toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(line.slice(0, idx));
     const value = line.slice(idx + 1).trim();
     if (!value) {
       continue;
@@ -413,8 +528,8 @@ export async function findExtraGatewayServices(
       if (isOpenClawGatewayTaskName(name)) {
         continue;
       }
-      const lowerName = name.toLowerCase();
-      const lowerCommand = task.taskToRun?.toLowerCase() ?? "";
+      const lowerName = normalizeLowercaseStringOrEmpty(name);
+      const lowerCommand = normalizeLowercaseStringOrEmpty(task.taskToRun ?? "");
       let marker: Marker | null = null;
       for (const candidate of EXTRA_MARKERS) {
         if (lowerName.includes(candidate) || lowerCommand.includes(candidate)) {

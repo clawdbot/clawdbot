@@ -1,5 +1,7 @@
+// Defines gateway runtime and networking configuration types.
 import type { SecretInput } from "./types.secrets.js";
 
+/** Gateway bind-address policy for local server startup. */
 export type GatewayBindMode = "auto" | "lan" | "loopback" | "custom" | "tailnet";
 
 export type GatewayTlsConfig = {
@@ -16,11 +18,11 @@ export type GatewayTlsConfig = {
 };
 
 export type WideAreaDiscoveryConfig = {
-  enabled?: boolean;
   /** Optional unicast DNS-SD domain (e.g. "openclaw.internal"). */
   domain?: string;
 };
 
+/** mDNS/Bonjour metadata exposure level for local gateway discovery. */
 export type MdnsDiscoveryMode = "off" | "minimal" | "full";
 
 export type MdnsDiscoveryConfig = {
@@ -34,33 +36,48 @@ export type MdnsDiscoveryConfig = {
 };
 
 export type DiscoveryConfig = {
+  /** Wide-area DNS-SD discovery settings. */
   wideArea?: WideAreaDiscoveryConfig;
+  /** Local mDNS/Bonjour discovery settings. */
   mdns?: MdnsDiscoveryConfig;
 };
 
-export type CanvasHostConfig = {
-  enabled?: boolean;
-  /** Directory to serve (default: ~/.openclaw/workspace/canvas). */
-  root?: string;
-  /** HTTP port to listen on (default: 18793). */
-  port?: number;
-  /** Enable live-reload file watching + WS reloads (default: true). */
-  liveReload?: boolean;
-};
-
 export type TalkProviderConfig = {
-  /** Default voice ID for the provider's Talk mode implementation. */
-  voiceId?: string;
-  /** Optional voice name -> provider voice ID map. */
-  voiceAliases?: Record<string, string>;
-  /** Default provider model ID for Talk mode. */
-  modelId?: string;
-  /** Default provider output format (for example pcm_44100). */
-  outputFormat?: string;
   /** Provider API key (optional; provider-specific env fallback may apply). */
   apiKey?: SecretInput;
-  /** Provider-specific extensions. */
+  /** Provider-owned Talk config fields. */
   [key: string]: unknown;
+};
+
+export type TalkRealtimeConfig = {
+  /** Active realtime voice provider. */
+  provider?: string;
+  /** Provider-specific realtime voice config keyed by provider id. */
+  providers?: Record<string, TalkProviderConfig>;
+  /** Provider model override for realtime sessions. */
+  model?: string;
+  /** Provider speaker voice name override for realtime sessions. */
+  speakerVoice?: string;
+  /** Provider speaker voice id override for realtime sessions. */
+  speakerVoiceId?: string;
+  /** Additional system instructions appended to realtime Talk sessions. */
+  instructions?: string;
+  /** Realtime execution mode. */
+  mode?: "realtime" | "stt-tts" | "transcription";
+  /** Byte/session transport. */
+  transport?: "webrtc" | "provider-websocket" | "gateway-relay" | "managed-room";
+  /** Voice activity detection threshold from 0 (most sensitive) to 1 (least sensitive). */
+  vadThreshold?: number;
+  /** Milliseconds of silence before the current user turn is committed. */
+  silenceDurationMs?: number;
+  /** Milliseconds of audio retained before detected speech begins. */
+  prefixPaddingMs?: number;
+  /** Provider-specific realtime reasoning effort. */
+  reasoningEffort?: string;
+  /** Tool/agent strategy for realtime sessions. */
+  brain?: "agent-consult" | "direct-tools" | "none";
+  /** How Gateway relay handles final user transcripts when the provider skips a consult. */
+  consultRouting?: "provider-direct" | "force-agent-consult";
 };
 
 export type ResolvedTalkConfig = {
@@ -71,24 +88,33 @@ export type ResolvedTalkConfig = {
 };
 
 export type TalkConfig = {
-  /** Active Talk TTS provider (for example "elevenlabs"). */
+  /** Agent that owns Talk sessions created without an agent-scoped session key. */
+  agentId?: string;
+  /** Active Talk TTS provider (for example "acme-speech"). */
   provider?: string;
   /** Provider-specific Talk config keyed by provider id. */
   providers?: Record<string, TalkProviderConfig>;
+  /** Realtime Talk provider, model, voice, mode, transport, and brain config. */
+  realtime?: TalkRealtimeConfig;
+  /** Optional thinking level override for the agent run behind Talk realtime consults. */
+  consultThinkingLevel?:
+    | "off"
+    | "minimal"
+    | "low"
+    | "medium"
+    | "high"
+    | "xhigh"
+    | "adaptive"
+    | "max"
+    | "ultra";
+  /** Optional fast mode override for the agent run behind Talk realtime consults. */
+  consultFastMode?: boolean;
+  /** BCP 47 locale id used for Talk speech recognition on device nodes. */
+  speechLocale?: string;
   /** Stop speaking when user starts talking (default: true). */
   interruptOnSpeech?: boolean;
   /** Milliseconds of user silence before Talk mode sends the transcript after a pause. */
   silenceTimeoutMs?: number;
-
-  /**
-   * Legacy ElevenLabs compatibility fields.
-   * Kept during rollout while older clients migrate to provider/providers.
-   */
-  voiceId?: string;
-  voiceAliases?: Record<string, string>;
-  modelId?: string;
-  outputFormat?: string;
-  apiKey?: SecretInput;
 };
 
 export type TalkConfigResponse = TalkConfig & {
@@ -97,12 +123,40 @@ export type TalkConfigResponse = TalkConfig & {
 };
 
 export type GatewayControlUiConfig = {
+  /** @deprecated Doctor-only legacy input. */
+  chatMessageMaxWidth?: string;
+  /**
+   * @deprecated Upgrade-only transport input. Retained so releases that shipped
+   * this break-glass flag can migrate an unpaired browser safely.
+   */
+  dangerouslyDisableDeviceAuth?: boolean;
   /** If false, the Gateway will not serve the Control UI (default /). */
   enabled?: boolean;
   /** Optional base path prefix for the Control UI (e.g. "/openclaw"). */
   basePath?: string;
   /** Optional filesystem root for Control UI assets (defaults to dist/control-ui). */
   root?: string;
+  /**
+   * Opt-in AI purpose titles for tool calls in Control UI chat (default false).
+   * When enabled, chat.toolTitles generates short titles through standard
+   * utility-model routing and caches them per agent.
+   */
+  toolTitles?: boolean;
+  /** Produce utility-model session status digests for subscribed Control UI clients (default true). */
+  sessionObserver?: boolean;
+  /**
+   * Embed sandbox mode for hosted Control UI previews.
+   * - strict: no script execution inside embeds
+   * - scripts: allow scripts while keeping embeds origin-isolated (default)
+   * - trusted: allow scripts and same-origin privileges
+   */
+  embedSandbox?: "strict" | "scripts" | "trusted";
+  /**
+   * DANGEROUS: Allow hosted embeds to load absolute external http(s) URLs.
+   * Default off; prefer hosted /__openclaw__/canvas or /__openclaw__/a2ui content.
+   */
+  allowExternalEmbedUrls?: boolean;
+  /** Optional max-width for grouped Control UI chat messages (default: min(900px, 68%)). */
   /** Allowed browser origins for Control UI/WebChat websocket connections. */
   allowedOrigins?: string[];
   /**
@@ -110,16 +164,9 @@ export type GatewayControlUiConfig = {
    * Supported long-term for deployments that intentionally rely on this policy.
    */
   dangerouslyAllowHostHeaderOriginFallback?: boolean;
-  /**
-   * Insecure-auth toggle.
-   * Control UI still requires secure context + device identity unless
-   * dangerouslyDisableDeviceAuth is enabled.
-   */
-  allowInsecureAuth?: boolean;
-  /** DANGEROUS: Disable device identity checks for the Control UI (default: false). */
-  dangerouslyDisableDeviceAuth?: boolean;
 };
 
+/** Gateway authentication strategy for WebSocket and HTTP clients. */
 export type GatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
 
 /**
@@ -145,6 +192,28 @@ export type GatewayTrustedProxyConfig = {
    * Example: ["nick@example.com", "admin@company.org"]
    */
   allowUsers?: string[];
+  /**
+   * Allow loopback proxy sources (127.0.0.1, ::1) in trusted-proxy mode.
+   * Default false; enable only when a same-host reverse proxy is the intended
+   * trust boundary and direct Gateway access is otherwise locked down.
+   */
+  allowLoopback?: boolean;
+  /**
+   * Automatically approve new browser device identities after trusted-proxy
+   * authentication. Disabled by default; existing-device upgrades stay manual.
+   */
+  deviceAutoApprove?: {
+    /** Enable automatic approval for new browser devices. @default false */
+    enabled?: boolean;
+    /**
+     * Maximum operator scopes granted by automatic approval. Listing
+     * operator.admin explicitly lets every proxy-authenticated user request
+     * automatic full-admin device grants. Requests without scopes receive the
+     * configured maximum. @default operator.read, operator.write,
+     * operator.approvals
+     */
+    scopes?: string[];
+  };
 };
 
 export type GatewayAuthConfig = {
@@ -176,6 +245,7 @@ export type GatewayAuthRateLimitConfig = {
   exemptLoopback?: boolean;
 };
 
+/** Tailscale exposure mode for gateway HTTP/WebSocket surfaces. */
 export type GatewayTailscaleMode = "off" | "serve" | "funnel";
 
 export type GatewayTailscaleConfig = {
@@ -183,15 +253,24 @@ export type GatewayTailscaleConfig = {
   mode?: GatewayTailscaleMode;
   /** Reset serve/funnel configuration on shutdown. */
   resetOnExit?: boolean;
+  /** Optional Tailscale Service name, such as `svc:openclaw`, for Serve mode. */
+  serviceName?: string;
+  /**
+   * When `mode="serve"` and an externally configured Tailscale Funnel route
+   * already covers the gateway port, skip re-applying `tailscale serve` on
+   * startup. Lets operators manage Funnel exposure outside OpenClaw without
+   * losing it across gateway restarts.
+   */
+  preserveFunnel?: boolean;
 };
 
 export type GatewayRemoteConfig = {
-  /** Whether remote gateway surfaces are enabled. Default: true when absent. */
-  enabled?: boolean;
   /** Remote Gateway WebSocket URL (ws:// or wss://). */
   url?: string;
   /** Transport for macOS remote connections (ssh tunnel or direct WS). */
   transport?: "ssh" | "direct";
+  /** Gateway port on the remote SSH host. Defaults to 18789. */
+  remotePort?: number;
   /** Token for remote auth (when the gateway requires token auth). */
   token?: SecretInput;
   /** Password for remote auth (when the gateway requires password auth). */
@@ -202,22 +281,42 @@ export type GatewayRemoteConfig = {
   sshTarget?: string;
   /** SSH identity file path for tunneling remote Gateway. */
   sshIdentity?: string;
+  /** macOS SSH host-key policy. Defaults to strict; openssh delegates to effective SSH config. */
+  sshHostKeyPolicy?: "strict" | "openssh";
 };
 
+/**
+ * Operator terminal surface served to Control UI and mobile clients.
+ *
+ * The terminal opens a PTY-backed shell on the gateway host, gated to
+ * admin-scope operator sessions. It starts in the target agent's workspace; if
+ * that agent is fully sandboxed (`sandbox.mode: "all"`) the terminal is refused
+ * rather than handed an unconfined host shell (workspace isolation is
+ * fail-closed). Under "non-main" the agent's main session runs on the host, so a
+ * host terminal is allowed.
+ */
+export type GatewayTerminalConfig = {
+  /** Master switch for the operator terminal. Default: true; set false to opt out. */
+  enabled?: boolean;
+  /**
+   * Shell executable to launch. When unset the host login shell is used
+   * ($SHELL on Unix, %ComSpec% on Windows).
+   */
+  shell?: string;
+  /**
+   * How long (seconds) a session survives after its connection drops, staying
+   * reattachable via terminal.attach. 0 kills sessions on disconnect
+   * immediately. Default: 300.
+   */
+  detachedSessionTimeoutSeconds?: number;
+};
+
+/** Gateway config reload strategy for managed installs. */
 export type GatewayReloadMode = "off" | "restart" | "hot" | "hybrid";
 
 export type GatewayReloadConfig = {
   /** Reload strategy for config changes (default: hybrid). */
   mode?: GatewayReloadMode;
-  /** Debounce window for config reloads (ms). Default: 300. */
-  debounceMs?: number;
-  /**
-   * Maximum time (ms) to wait for in-flight operations to complete before
-   * forcing a SIGUSR1 restart. Default: 300000 (5 minutes).
-   * Lower values risk aborting active subagent LLM calls.
-   * @see https://github.com/openclaw/openclaw/issues/47711
-   */
-  deferralTimeoutMs?: number;
 };
 
 export type GatewayHttpChatCompletionsConfig = {
@@ -226,21 +325,6 @@ export type GatewayHttpChatCompletionsConfig = {
    * Default: false when absent.
    */
   enabled?: boolean;
-  /**
-   * Max request body size in bytes for `/v1/chat/completions`.
-   * Default: 20MB.
-   */
-  maxBodyBytes?: number;
-  /**
-   * Max number of `image_url` parts processed from the latest user message.
-   * Default: 8.
-   */
-  maxImageParts?: number;
-  /**
-   * Max cumulative decoded image bytes for all `image_url` parts in one request.
-   * Default: 20MB.
-   */
-  maxTotalImageBytes?: number;
   /** Image input controls for `image_url` parts. */
   images?: GatewayHttpChatCompletionsImagesConfig;
 };
@@ -269,11 +353,6 @@ export type GatewayHttpResponsesConfig = {
    * Default: false when absent.
    */
   enabled?: boolean;
-  /**
-   * Max request body size in bytes for `/v1/responses`.
-   * Default: 20MB.
-   */
-  maxBodyBytes?: number;
   /**
    * Max number of URL-based `input_file` + `input_image` parts per request.
    * Default: 8.
@@ -335,7 +414,9 @@ export type GatewayHttpResponsesImagesConfig = {
 };
 
 export type GatewayHttpEndpointsConfig = {
+  /** OpenAI-compatible chat completions endpoint controls. */
   chatCompletions?: GatewayHttpChatCompletionsConfig;
+  /** OpenResponses-compatible responses endpoint controls. */
   responses?: GatewayHttpResponsesConfig;
 };
 
@@ -350,7 +431,9 @@ export type GatewayHttpSecurityHeadersConfig = {
 };
 
 export type GatewayHttpConfig = {
+  /** Per-endpoint HTTP API controls. */
   endpoints?: GatewayHttpEndpointsConfig;
+  /** HTTP security header overrides. */
   securityHeaders?: GatewayHttpSecurityHeadersConfig;
 };
 
@@ -362,14 +445,51 @@ export type GatewayPushApnsRelayConfig = {
 };
 
 export type GatewayPushApnsConfig = {
+  /** External APNs relay used by iOS/mobile notification flows. */
   relay?: GatewayPushApnsRelayConfig;
 };
 
 export type GatewayPushConfig = {
+  /** Apple Push Notification Service settings. */
   apns?: GatewayPushApnsConfig;
 };
 
+export type GatewayNodePairingConfig = {
+  /**
+   * Opt-in CIDR/IP allowlist for auto-approving first-time node-role pairing.
+   * Only applies to fresh node pairing requests with no requested scopes.
+   * Default: unset/disabled.
+   */
+  autoApproveCidrs?: string[];
+  /**
+   * SSH-verified auto-approval for first-time node-role pairing (default: enabled).
+   * The gateway connects back to the pairing host over SSH (BatchMode, strict
+   * host keys) and approves only when the remote `openclaw node identity`
+   * output matches the pending request's device key. Set false to disable SSH
+   * verification; this is independent of autoApproveCidrs, so unset that too for
+   * manual-only node pairing. The object form tunes the probe:
+   * - user: remote user (default: gateway process user)
+   * - identity: SSH identity file (default: standard SSH resolution)
+   * - timeoutMs: probe timeout (default: 7000)
+   * - cidrs: CIDRs/IPs eligible for probing (default: private/CGNAT ranges)
+   */
+  sshVerify?:
+    | boolean
+    | {
+        user?: string;
+        identity?: string;
+        timeoutMs?: number;
+        cidrs?: string[];
+      };
+};
+
 export type GatewayNodesConfig = {
+  /** @deprecated Doctor-only legacy input. */
+  skills?: { enabled?: boolean };
+  /** @deprecated Doctor-only legacy input. */
+  allowCommands?: string[];
+  /** @deprecated Doctor-only legacy input. */
+  denyCommands?: string[];
   /** Browser routing policy for node-hosted browser proxies. */
   browser?: {
     /** Routing mode (default: auto). */
@@ -377,10 +497,21 @@ export type GatewayNodesConfig = {
     /** Pin to a specific node id/name (optional). */
     node?: string;
   };
-  /** Additional node.invoke commands to allow on the gateway. */
-  allowCommands?: string[];
-  /** Commands to deny even if they appear in the defaults or node claims. */
-  denyCommands?: string[];
+  /** Pairing policy for node-role gateway clients. */
+  pairing?: GatewayNodePairingConfig;
+  /** Controls whether paired nodes may publish agent-visible plugin tools (default: true). */
+  pluginTools?: {
+    /** Accept node-published plugin tool descriptors (default: true). */
+    enabled?: boolean;
+  };
+  /** Accept node-published skill descriptors (default: true). */
+  allowSkills?: boolean;
+  commands?: {
+    /** Additional node.invoke commands to allow on the gateway. */
+    allow?: string[];
+    /** Commands to deny even if they appear in the defaults or node claims. */
+    deny?: string[];
+  };
 };
 
 export type GatewayToolsConfig = {
@@ -401,16 +532,18 @@ export type GatewayConfig = {
   /**
    * Bind address policy for the Gateway WebSocket + Control UI HTTP server.
    * - auto: Loopback (127.0.0.1) if available, else 0.0.0.0 (fallback to all interfaces)
-   * - lan: 0.0.0.0 (all interfaces, no fallback)
+   * - lan: 0.0.0.0 (all interfaces, no fallback, current BYOH path is IPv4-only)
    * - loopback: 127.0.0.1 (local-only)
-   * - tailnet: Tailnet IPv4 if available (100.64.0.0/10), else loopback
-   * - custom: User-specified IP, fallback to 0.0.0.0 if unavailable (requires customBindHost)
+   * - tailnet: Tailnet IPv4 plus 127.0.0.1 if available, else loopback only
+   * - custom: User-specified IPv4 address (requires customBindHost); specific IPv4s also bind 127.0.0.1
+   * IPv6-only BYOH is not natively supported on this path today. Use an IPv4 sidecar or proxy.
    * Default: loopback (127.0.0.1).
    */
   bind?: GatewayBindMode;
-  /** Custom IP address for bind="custom" mode. Fallback: 0.0.0.0. */
+  /** Custom IPv4 address for bind="custom" mode. IPv6-only BYOH requires an IPv4 sidecar or proxy. */
   customBindHost?: string;
   controlUi?: GatewayControlUiConfig;
+  terminal?: GatewayTerminalConfig;
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;
   remote?: GatewayRemoteConfig;
@@ -432,22 +565,4 @@ export type GatewayConfig = {
   allowRealIpFallback?: boolean;
   /** Tool access restrictions for HTTP /tools/invoke endpoint. */
   tools?: GatewayToolsConfig;
-  /**
-   * Channel health monitor interval in minutes.
-   * Periodically checks channel health and restarts unhealthy channels.
-   * Set to 0 to disable. Default: 5.
-   */
-  channelHealthCheckMinutes?: number;
-  /**
-   * Stale event threshold in minutes for the channel health monitor.
-   * A connected channel that receives no events for this duration is treated
-   * as a stale socket and restarted. Default: 30.
-   */
-  channelStaleEventThresholdMinutes?: number;
-  /**
-   * Maximum number of health-monitor-initiated channel restarts per hour.
-   * Once this limit is reached, the monitor skips further restarts until
-   * the rolling window expires. Default: 10.
-   */
-  channelMaxRestartsPerHour?: number;
 };

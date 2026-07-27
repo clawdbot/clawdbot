@@ -1,3 +1,4 @@
+// Huggingface API module exposes the plugin public contract.
 export {
   buildHuggingfaceModelDefinition,
   discoverHuggingfaceModels,

@@ -1,0 +1,18 @@
+{
+  "language": "ja",
+  "tabs": [
+    {
+      "tab": "はじめに",
+      "groups": [
+        {
+          "group": "概要",
+          "pages": ["ja-JP/index"]
+        },
+        {
+          "group": "初回セットアップ",
+          "pages": ["ja-JP/start/getting-started", "ja-JP/start/wizard"]
+        }
+      ]
+    }
+  ]
+}

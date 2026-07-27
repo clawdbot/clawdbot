@@ -1,0 +1,518 @@
+// Control UI tests cover usage metrics behavior.
+import { render } from "lit";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  buildPeakErrorHours,
+  formatTokens,
+  renderUsageMosaic,
+  sessionTouchesSelectedHours,
+} from "./metrics.ts";
+import type { UsageSessionEntry } from "./types.ts";
+
+/**
+ * Helper: build a minimal UsageSessionEntry with utcQuarterHourMessageCounts
+ * using the new UTC quarter-hour bucket format.
+ */
+function makeSessionWithQuarterHourly(
+  buckets: Array<{
+    date: string;
+    quarterIndex: number;
+    total: number;
+    errors: number;
+  }>,
+): UsageSessionEntry {
+  return {
+    key: "test-session",
+    usage: {
+      totalTokens: 100,
+      totalCost: 0.01,
+      input: 50,
+      output: 50,
+      cacheRead: 0,
+      cacheWrite: 0,
+      inputCost: 0,
+      outputCost: 0,
+      cacheReadCost: 0,
+      cacheWriteCost: 0,
+      missingCostEntries: 0,
+      firstActivity: Date.now() - 3600_000,
+      lastActivity: Date.now(),
+      messageCounts: {
+        total: buckets.reduce((sum, b) => sum + b.total, 0),
+        user: 0,
+        assistant: 0,
+        toolCalls: 0,
+        toolResults: 0,
+        errors: buckets.reduce((sum, b) => sum + b.errors, 0),
+      },
+      utcQuarterHourMessageCounts: buckets.map((b) => ({
+        date: b.date,
+        quarterIndex: b.quarterIndex,
+        total: b.total,
+        user: 0,
+        assistant: 0,
+        toolCalls: 0,
+        toolResults: 0,
+        errors: b.errors,
+      })),
+    },
+  } as unknown as UsageSessionEntry;
+}
+
+function peakErrorSummaries(result: ReturnType<typeof buildPeakErrorHours>) {
+  return result.map(({ value, sub }) => ({ value, sub }));
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("buildPeakErrorHours", () => {
+  it("maps UTC quarter-hour buckets to correct hours in UTC mode", () => {
+    // quarterIndex 0  → 00:00-00:14 UTC → hour 0
+    // quarterIndex 4  → 01:00-01:14 UTC → hour 1
+    // quarterIndex 36 → 09:00-09:14 UTC → hour 9
+    // quarterIndex 95 → 23:45-23:59 UTC → hour 23
+    const session = makeSessionWithQuarterHourly([
+      { date: "2026-03-15", quarterIndex: 0, total: 10, errors: 5 },
+      { date: "2026-03-15", quarterIndex: 4, total: 20, errors: 2 },
+      { date: "2026-03-15", quarterIndex: 36, total: 15, errors: 3 },
+      { date: "2026-03-15", quarterIndex: 95, total: 8, errors: 4 },
+    ]);
+
+    const result = buildPeakErrorHours([session], "utc");
+
+    // hour 0: 5/10 = 50%, hour 23: 4/8 = 50%, hour 9: 3/15 = 20%, hour 1: 2/20 = 10%
+    expect(peakErrorSummaries(result)).toStrictEqual([
+      { value: "50.00%", sub: "5 errors · 10 msgs" },
+      { value: "50.00%", sub: "4 errors · 8 msgs" },
+      { value: "20.00%", sub: "3 errors · 15 msgs" },
+      { value: "10.00%", sub: "2 errors · 20 msgs" },
+    ]);
+  });
+
+  it("aggregates multiple quarter-hour buckets into the same hour in UTC mode", () => {
+    // quarterIndex 0 (00:00) and quarterIndex 3 (00:45) both map to hour 0
+    const session = makeSessionWithQuarterHourly([
+      { date: "2026-03-15", quarterIndex: 0, total: 10, errors: 2 },
+      { date: "2026-03-15", quarterIndex: 3, total: 5, errors: 3 },
+    ]);
+
+    const result = buildPeakErrorHours([session], "utc");
+    // Aggregated: 5 errors / 15 total = 33.33%
+    expect(peakErrorSummaries(result)).toStrictEqual([
+      { value: "33.33%", sub: "5 errors · 15 msgs" },
+    ]);
+  });
+
+  it("shifts UTC quarter-hour buckets to local timezone in local mode", () => {
+    // Simulate UTC+5: UTC hour 0 → local hour 5, UTC hour 10 → local hour 15
+    vi.spyOn(Date.prototype, "getHours").mockImplementation(function (this: Date) {
+      return (this.getUTCHours() + 5) % 24;
+    });
+
+    // quarterIndex 0 → UTC 00:00 → local 05:00
+    // quarterIndex 40 → UTC 10:00 → local 15:00
+    const session = makeSessionWithQuarterHourly([
+      { date: "2026-03-15", quarterIndex: 0, total: 10, errors: 3 },
+      { date: "2026-03-15", quarterIndex: 40, total: 20, errors: 4 },
+    ]);
+
+    const result = buildPeakErrorHours([session], "local");
+
+    expect(peakErrorSummaries(result)).toStrictEqual([
+      { value: "30.00%", sub: "3 errors · 10 msgs" }, // local hour 5
+      { value: "20.00%", sub: "4 errors · 20 msgs" }, // local hour 15
+    ]);
+  });
+
+  it("wraps correctly for negative local timezone (UTC-8)", () => {
+    // Simulate UTC-8: UTC hour 0 → local hour 16 (previous day)
+    vi.spyOn(Date.prototype, "getHours").mockImplementation(function (this: Date) {
+      return (this.getUTCHours() - 8 + 24) % 24;
+    });
+
+    // quarterIndex 0 → UTC 00:00 → local 16:00
+    const session = makeSessionWithQuarterHourly([
+      { date: "2026-03-15", quarterIndex: 0, total: 10, errors: 5 },
+    ]);
+
+    const result = buildPeakErrorHours([session], "local");
+    expect(peakErrorSummaries(result)).toStrictEqual([
+      { value: "50.00%", sub: "5 errors · 10 msgs" },
+    ]);
+  });
+
+  it("wraps correctly for positive local timezone near midnight (UTC+8, late quarter)", () => {
+    // Simulate UTC+8: UTC hour 17 → local hour 1 (next day)
+    vi.spyOn(Date.prototype, "getHours").mockImplementation(function (this: Date) {
+      return (this.getUTCHours() + 8) % 24;
+    });
+
+    // quarterIndex 68 → UTC 17:00 → local 01:00 (next day)
+    const session = makeSessionWithQuarterHourly([
+      { date: "2026-03-15", quarterIndex: 68, total: 12, errors: 6 },
+    ]);
+
+    const result = buildPeakErrorHours([session], "local");
+    expect(peakErrorSummaries(result)).toStrictEqual([
+      { value: "50.00%", sub: "6 errors · 12 msgs" },
+    ]);
+  });
+
+  it("returns empty array when no sessions have errors", () => {
+    const session = makeSessionWithQuarterHourly([
+      { date: "2026-03-15", quarterIndex: 10, total: 50, errors: 0 },
+    ]);
+
+    const result = buildPeakErrorHours([session], "utc");
+    expect(result).toStrictEqual([]);
+  });
+
+  it("returns empty array when sessions have no message counts", () => {
+    const session: UsageSessionEntry = {
+      key: "empty",
+      usage: {
+        totalTokens: 0,
+        totalCost: 0,
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+        messageCounts: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
+      },
+    } as unknown as UsageSessionEntry;
+
+    const result = buildPeakErrorHours([session], "utc");
+    expect(result).toStrictEqual([]);
+  });
+
+  it("limits results to at most 5 entries sorted by error rate", () => {
+    // Create 8 different hours with errors
+    const buckets = Array.from({ length: 8 }, (_, i) => ({
+      date: "2026-03-15",
+      quarterIndex: i * 8, // hours 0,2,4,6,8,10,12,14
+      total: 100,
+      errors: (i + 1) * 2, // increasing error counts
+    }));
+    const session = makeSessionWithQuarterHourly(buckets);
+
+    const result = buildPeakErrorHours([session], "utc");
+
+    // Should be sorted by rate descending — highest rate first
+    expect(peakErrorSummaries(result)).toStrictEqual([
+      { value: "16.00%", sub: "16 errors · 100 msgs" },
+      { value: "14.00%", sub: "14 errors · 100 msgs" },
+      { value: "12.00%", sub: "12 errors · 100 msgs" },
+      { value: "10.00%", sub: "10 errors · 100 msgs" },
+      { value: "8.00%", sub: "8 errors · 100 msgs" },
+    ]);
+  });
+
+  it("aggregates across multiple sessions", () => {
+    const session1 = makeSessionWithQuarterHourly([
+      { date: "2026-03-15", quarterIndex: 20, total: 10, errors: 3 },
+    ]);
+    const session2 = makeSessionWithQuarterHourly([
+      { date: "2026-03-16", quarterIndex: 20, total: 20, errors: 7 },
+    ]);
+
+    const result = buildPeakErrorHours([session1, session2], "utc");
+    // quarterIndex 20 → hour 5: aggregated 10 errors / 30 msgs = 33.33%
+    expect(peakErrorSummaries(result)).toStrictEqual([
+      { value: "33.33%", sub: "10 errors · 30 msgs" },
+    ]);
+  });
+
+  it("falls back to proportional allocation when utcQuarterHourMessageCounts is absent", () => {
+    // Session without utcQuarterHourMessageCounts should use forEachSessionHourSlice
+    const session: UsageSessionEntry = {
+      key: "fallback-session",
+      updatedAt: Date.parse("2026-03-15T10:30:00.000Z"),
+      usage: {
+        totalTokens: 100,
+        totalCost: 0.01,
+        input: 50,
+        output: 50,
+        cacheRead: 0,
+        cacheWrite: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+        firstActivity: Date.parse("2026-03-15T10:00:00.000Z"),
+        lastActivity: Date.parse("2026-03-15T10:30:00.000Z"),
+        messageCounts: {
+          total: 10,
+          user: 5,
+          assistant: 5,
+          toolCalls: 0,
+          toolResults: 0,
+          errors: 3,
+        },
+        // No utcQuarterHourMessageCounts -> fallback path
+      },
+    } as unknown as UsageSessionEntry;
+
+    const result = buildPeakErrorHours([session], "utc");
+    expect(peakErrorSummaries(result)).toStrictEqual([
+      { value: "30.00%", sub: "3 errors · 10 msgs" },
+    ]);
+  });
+
+  it("keeps zero-duration fallback sessions in their activity hour", () => {
+    const instant = Date.parse("2026-03-15T10:00:00.000Z");
+    const session: UsageSessionEntry = {
+      key: "instant-fallback-session",
+      updatedAt: instant,
+      usage: {
+        totalTokens: 100,
+        totalCost: 0.01,
+        input: 50,
+        output: 50,
+        cacheRead: 0,
+        cacheWrite: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+        firstActivity: instant,
+        lastActivity: instant,
+        messageCounts: {
+          total: 10,
+          user: 5,
+          assistant: 5,
+          toolCalls: 0,
+          toolResults: 0,
+          errors: 3,
+        },
+      },
+    } as unknown as UsageSessionEntry;
+
+    const result = buildPeakErrorHours([session], "utc");
+    expect(peakErrorSummaries(result)).toStrictEqual([
+      { value: "30.00%", sub: "3 errors · 10 msgs" },
+    ]);
+  });
+});
+
+describe("usage mosaic token buckets", () => {
+  const makeSessionWithTokenBuckets = (
+    buckets: Array<{
+      date: string;
+      quarterIndex: number;
+      totalTokens: number;
+      input?: number;
+      output?: number;
+      cacheRead?: number;
+      cacheWrite?: number;
+    }>,
+  ): UsageSessionEntry =>
+    ({
+      key: "token-bucket-session",
+      usage: {
+        totalTokens: buckets.reduce((sum, bucket) => sum + bucket.totalTokens, 0),
+        totalCost: 0,
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+        firstActivity: Date.parse("2026-02-01T10:00:00.000Z"),
+        lastActivity: Date.parse("2026-02-01T12:00:00.000Z"),
+        utcQuarterHourTokenUsage: buckets.map((bucket) => ({
+          date: bucket.date,
+          quarterIndex: bucket.quarterIndex,
+          input: bucket.input ?? 0,
+          output: bucket.output ?? bucket.totalTokens,
+          cacheRead: bucket.cacheRead ?? 0,
+          cacheWrite: bucket.cacheWrite ?? 0,
+          totalTokens: bucket.totalTokens,
+          totalCost: 0,
+        })),
+      },
+    }) as unknown as UsageSessionEntry;
+
+  it("renders precise quarter-hour buckets in the correct UTC hour", () => {
+    const session = makeSessionWithTokenBuckets([
+      { date: "2026-02-01", quarterIndex: 40, totalTokens: 10_000 },
+    ]);
+    const container = document.createElement("div");
+    render(renderUsageMosaic([session], "utc", [], vi.fn()), container);
+
+    const cells = container.querySelectorAll<HTMLElement>(".usage-hour-cell");
+    expect(cells).toHaveLength(24);
+    expect(cells[10]?.title).toContain("10.0K");
+    expect(cells[11]?.title).toContain("0");
+    expect(container.querySelector(".usage-mosaic-total")?.textContent).toContain("10.0K");
+  });
+
+  it("renders precise UTC buckets in their local hour", () => {
+    vi.spyOn(Date.prototype, "getHours").mockImplementation(function (this: Date) {
+      return (this.getUTCHours() + 8) % 24;
+    });
+    vi.spyOn(Date.prototype, "getDay").mockReturnValue(1);
+    const session = makeSessionWithTokenBuckets([
+      { date: "2026-02-01", quarterIndex: 68, totalTokens: 10_000 },
+    ]);
+    const container = document.createElement("div");
+    render(renderUsageMosaic([session], "local", [], vi.fn()), container);
+
+    const cells = container.querySelectorAll<HTMLElement>(".usage-hour-cell");
+    expect(cells[1]?.title).toContain("10.0K");
+    expect(cells[17]?.title).toContain("0");
+  });
+
+  it("ignores invalid quarter-hour coordinates in the rendered mosaic", () => {
+    const session = makeSessionWithTokenBuckets([
+      { date: "2026-02-01", quarterIndex: 40, totalTokens: 10_000 },
+      { date: "2026-13-01", quarterIndex: 40, totalTokens: 90_000 },
+      { date: "2026-02-01", quarterIndex: 96, totalTokens: 80_000 },
+    ]);
+    if (session.usage) {
+      session.usage.totalTokens = 10_000;
+    }
+    const container = document.createElement("div");
+    render(renderUsageMosaic([session], "utc", [], vi.fn()), container);
+
+    const cells = container.querySelectorAll<HTMLElement>(".usage-hour-cell");
+    expect(cells[10]?.title).toContain("10.0K");
+    expect([...cells].filter((cell) => !cell.title.includes("0 tokens"))).toHaveLength(1);
+    expect(container.querySelector(".usage-mosaic-total")?.textContent).toContain("10.0K");
+  });
+
+  it("filters selected hours by precise token buckets before falling back to session span", () => {
+    const session = makeSessionWithTokenBuckets([
+      { date: "2026-02-01", quarterIndex: 40, totalTokens: 10_000 },
+    ]);
+
+    expect(sessionTouchesSelectedHours(session, [10], "utc")).toBe(true);
+    expect(sessionTouchesSelectedHours(session, [11], "utc")).toBe(false);
+  });
+
+  it("renders zero-duration fallback sessions in their activity hour", () => {
+    const instant = Date.parse("2026-02-01T11:00:00.000Z");
+    const session = {
+      key: "instant-token-fallback-session",
+      updatedAt: instant,
+      usage: {
+        totalTokens: 10_000,
+        totalCost: 0,
+        input: 0,
+        output: 10_000,
+        cacheRead: 0,
+        cacheWrite: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+        firstActivity: instant,
+        lastActivity: instant,
+      },
+    } as unknown as UsageSessionEntry;
+    const container = document.createElement("div");
+    render(renderUsageMosaic([session], "utc", [], vi.fn()), container);
+
+    const cells = container.querySelectorAll<HTMLElement>(".usage-hour-cell");
+    expect(cells[11]?.title).toContain("10.0K");
+    expect(cells[10]?.title).toContain("0 tokens");
+    expect(container.querySelector(".usage-mosaic-total")?.textContent).toContain("10.0K");
+  });
+
+  it("preserves legacy session-span hour filtering when token buckets are absent", () => {
+    const session = {
+      key: "legacy-span-session",
+      usage: {
+        totalTokens: 100,
+        totalCost: 0,
+        input: 0,
+        output: 100,
+        cacheRead: 0,
+        cacheWrite: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+        firstActivity: Date.parse("2026-02-01T10:00:00.000Z"),
+        lastActivity: Date.parse("2026-02-01T11:00:00.000Z"),
+      },
+    } as unknown as UsageSessionEntry;
+
+    expect(sessionTouchesSelectedHours(session, [10], "utc")).toBe(true);
+    expect(sessionTouchesSelectedHours(session, [11], "utc")).toBe(true);
+    expect(sessionTouchesSelectedHours(session, [12], "utc")).toBe(false);
+  });
+
+  it("falls back to session span when token buckets contain no valid positive tokens", () => {
+    const session = {
+      key: "empty-token-bucket-session",
+      usage: {
+        totalTokens: 100,
+        totalCost: 0,
+        input: 0,
+        output: 100,
+        cacheRead: 0,
+        cacheWrite: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+        firstActivity: Date.parse("2026-02-01T11:00:00.000Z"),
+        lastActivity: Date.parse("2026-02-01T11:00:00.000Z"),
+        utcQuarterHourTokenUsage: [
+          {
+            date: "2026-02-01",
+            quarterIndex: 40,
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            totalCost: 0,
+          },
+        ],
+      },
+    } as unknown as UsageSessionEntry;
+
+    expect(sessionTouchesSelectedHours(session, [11], "utc")).toBe(true);
+  });
+});
+
+describe("formatTokens", () => {
+  it("formats values below 1,000 verbatim", () => {
+    expect(formatTokens(0)).toBe("0");
+    expect(formatTokens(999)).toBe("999");
+  });
+
+  it("formats thousands with one decimal and a K suffix", () => {
+    expect(formatTokens(1_000)).toBe("1.0K");
+    expect(formatTokens(12_500)).toBe("12.5K");
+    expect(formatTokens(999_949)).toBe("999.9K");
+  });
+
+  it("rolls 999,950-999,999 over to the M branch instead of '1000.0K'", () => {
+    // These values round up to "1000.0" at one-decimal thousands precision.
+    // Without the rollover guard they render the nonsensical "1000.0K".
+    expect(formatTokens(999_950)).toBe("1.0M");
+    expect(formatTokens(999_999)).toBe("1.0M");
+  });
+
+  it("formats millions with one decimal and an M suffix", () => {
+    expect(formatTokens(1_000_000)).toBe("1.0M");
+    expect(formatTokens(2_500_000)).toBe("2.5M");
+  });
+});

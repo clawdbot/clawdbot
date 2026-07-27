@@ -1,10 +1,16 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+// Discord plugin module implements runtime behavior.
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import { createDiscordActionGate } from "../accounts.js";
 import { readStringParam, type OpenClawConfig } from "../runtime-api.js";
 import { handleDiscordGuildAction } from "./runtime.guild.js";
 import { handleDiscordMessagingAction } from "./runtime.messaging.js";
 import { handleDiscordModerationAction } from "./runtime.moderation.js";
 import { handleDiscordPresenceAction } from "./runtime.presence.js";
+
+type ConversationReadInvocationOrigin = NonNullable<
+  ChannelMessageActionContext["conversationReadOrigin"]
+>;
 
 const messagingActions = new Set([
   "react",
@@ -58,7 +64,19 @@ export async function handleDiscordAction(
   params: Record<string, unknown>,
   cfg: OpenClawConfig,
   options?: {
+    mediaAccess?: {
+      localRoots?: readonly string[];
+      readFile?: (filePath: string) => Promise<Buffer>;
+      workspaceDir?: string;
+    };
     mediaLocalRoots?: readonly string[];
+    mediaReadFile?: (filePath: string) => Promise<Buffer>;
+    conversationReadOrigin?: ConversationReadInvocationOrigin;
+    readContext?: {
+      requesterAccountId?: string | null;
+      currentChannelProvider?: string | null;
+      currentChannelId?: string | null;
+    };
   },
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
@@ -66,13 +84,13 @@ export async function handleDiscordAction(
   const isActionEnabled = createDiscordActionGate({ cfg, accountId });
 
   if (messagingActions.has(action)) {
-    return await handleDiscordMessagingAction(action, params, isActionEnabled, options, cfg);
+    return await handleDiscordMessagingAction(action, params, isActionEnabled, cfg, options);
   }
   if (guildActions.has(action)) {
-    return await handleDiscordGuildAction(action, params, isActionEnabled);
+    return await handleDiscordGuildAction(action, params, isActionEnabled, cfg, options);
   }
   if (moderationActions.has(action)) {
-    return await handleDiscordModerationAction(action, params, isActionEnabled);
+    return await handleDiscordModerationAction(action, params, isActionEnabled, cfg);
   }
   if (presenceActions.has(action)) {
     return await handleDiscordPresenceAction(action, params, isActionEnabled);

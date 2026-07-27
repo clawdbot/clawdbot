@@ -19,7 +19,7 @@ verify_installed_cli() {
   fi
 
   if [[ -z "$cmd_path" ]]; then
-    npm_root="$(npm root -g 2>/dev/null || true)"
+    npm_root="$(quiet_npm root -g 2>/dev/null || true)"
     if [[ -n "$npm_root" && -f "$npm_root/$package_name/dist/entry.js" ]]; then
       entry_path="$npm_root/$package_name/dist/entry.js"
     fi

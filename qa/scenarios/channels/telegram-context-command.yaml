@@ -1,0 +1,55 @@
+title: Telegram context command reply
+
+scenario:
+  id: telegram-context-command
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
+  coverage:
+    primary:
+      - channels.channel-native-commands
+  objective: Verify Telegram context help reaches native command routing.
+  successCriteria:
+    - The context command returns the context list shortcut.
+    - The reply explains the inline shortcut.
+  codeRefs:
+    - src/auto-reply/reply/commands-context.ts
+    - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
+  execution:
+    profiles:
+      {
+        "telegram:adapter": 9,
+        "telegram:all": 8,
+        "telegram:mock-release": 8,
+        "telegram:release": 8,
+      }
+    kind: flow
+    channel: telegram
+    summary: Run Telegram context help and verify the list shortcut.
+    config:
+      expectedAny: [/context list, Inline shortcut]
+
+flow:
+  steps:
+    - name: context returns shortcut help
+      actions:
+        - resetTransport: true
+        - set: startIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation: { id: telegram-command-room, kind: channel }
+            senderId: qa-command-operator
+            senderName: QA Command Operator
+            text:
+              expr: "transport.id === 'telegram' ? '/context@openclaw' : '/context'"
+        - waitForOutbound:
+            conversation: { id: telegram-command-room, kind: channel }
+            sinceIndex: { ref: startIndex }
+            textIncludes: /context list
+            timeoutMs: 60000
+          saveAs: reply
+        - assert:
+            expr: "config.expectedAny.every((needle) => reply.text.includes(needle))"
+            message:
+              expr: "`context reply missing expected text: ${reply.text}`"
+      detailsExpr: reply.text

@@ -1,20 +1,25 @@
-import fs from "node:fs/promises";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+// Non-interactive onboarding test helpers build runtime stubs that throw instead of exiting.
 import type { RuntimeEnv } from "../runtime.js";
 
 type RuntimeLike = Pick<RuntimeEnv, "log" | "error" | "exit">;
 
-export type NonInteractiveRuntime = {
+type NonInteractiveRuntime = {
   log: RuntimeLike["log"];
   error: RuntimeLike["error"];
   exit: RuntimeLike["exit"];
 };
 
-const NON_INTERACTIVE_DEFAULT_OPTIONS = {
-  nonInteractive: true,
-  skipHealth: true,
-  skipChannels: true,
-  json: true,
-} as const;
+export type WaitForGatewayReachableMock =
+  | ((params: {
+      url: string;
+      token?: string;
+      password?: string;
+      deadlineMs?: number;
+      probeTimeoutMs?: number;
+    }) => Promise<{ ok: boolean; detail?: string }>)
+  | undefined;
 
 export function createThrowingRuntime(): NonInteractiveRuntime {
   return {
@@ -28,27 +33,25 @@ export function createThrowingRuntime(): NonInteractiveRuntime {
   };
 }
 
-export async function runNonInteractiveSetup(
-  options: Record<string, unknown>,
-  runtime: NonInteractiveRuntime,
-): Promise<void> {
-  const { runNonInteractiveSetup: run } = await import("./onboard-non-interactive.js");
-  await run(options, runtime);
-}
-
-export async function runNonInteractiveSetupWithDefaults(
-  runtime: NonInteractiveRuntime,
-  options: Record<string, unknown>,
-): Promise<void> {
-  await runNonInteractiveSetup(
-    {
-      ...NON_INTERACTIVE_DEFAULT_OPTIONS,
-      ...options,
+export async function mockOnboardingAgent(params: { config: OpenClawConfig; workspace: string }) {
+  const roster = listAgentEntries(params.config);
+  const existing = roster.find((entry) => entry.default === true) ?? roster[0];
+  if (existing) {
+    return {
+      config: params.config,
+      agentId: existing.id,
+      bootstrapPending: false,
+    };
+  }
+  return {
+    config: {
+      ...params.config,
+      agents: {
+        ...params.config.agents,
+        entries: { main: { name: "main", workspace: params.workspace, default: true } },
+      },
     },
-    runtime,
-  );
-}
-
-export async function readJsonFile<T>(filePath: string): Promise<T> {
-  return JSON.parse(await fs.readFile(filePath, "utf8")) as T;
+    agentId: "main",
+    bootstrapPending: true,
+  };
 }

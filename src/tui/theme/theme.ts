@@ -1,13 +1,14 @@
+// TUI theme defines shared colors and text styles for Pi TUI components.
 import type {
   EditorTheme,
   MarkdownTheme,
   SelectListTheme,
   SettingsListTheme,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
+import { expectDefined } from "@openclaw/normalization-core";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import chalk from "chalk";
-import { highlight, supportsLanguage } from "cli-highlight";
 import type { SearchableSelectListTheme } from "../components/searchable-select-list.js";
-import { createSyntaxTheme } from "./syntax-theme.js";
 
 const DARK_TEXT = "#E8E3D5";
 const LIGHT_TEXT = "#1E1E1E";
@@ -46,7 +47,7 @@ function pickHigherContrastText(r: number, g: number, b: number): boolean {
 }
 
 function isLightBackground(): boolean {
-  const explicit = process.env.OPENCLAW_THEME?.toLowerCase();
+  const explicit = normalizeOptionalLowercaseString(process.env.OPENCLAW_THEME);
   if (explicit === "light") {
     return true;
   }
@@ -66,19 +67,27 @@ function isLightBackground(): boolean {
         return bg >= 244;
       }
       const cubeIndex = bg - 16;
-      const bVal = XTERM_LEVELS[cubeIndex % 6];
-      const gVal = XTERM_LEVELS[Math.floor(cubeIndex / 6) % 6];
-      const rVal = XTERM_LEVELS[Math.floor(cubeIndex / 36)];
+      const bVal = expectDefined(
+        XTERM_LEVELS[cubeIndex % 6],
+        "xterm levels entry at cube index % 6",
+      );
+      const gVal = expectDefined(
+        XTERM_LEVELS[Math.floor(cubeIndex / 6) % 6],
+        "xterm levels entry at math.floor(cube index / 6) % 6",
+      );
+      const rVal = expectDefined(
+        XTERM_LEVELS[Math.floor(cubeIndex / 36)],
+        "xterm levels entry at math.floor(cube index / 36)",
+      );
       return pickHigherContrastText(rVal, gVal, bVal);
     }
   }
   return false;
 }
 
-/** Whether the terminal has a light background. Exported for testing only. */
-export const lightMode = isLightBackground();
+const lightMode = isLightBackground();
 
-export const darkPalette = {
+const darkPalette = {
   text: "#E8E3D5",
   dim: "#7B7F87",
   accent: "#F6C453",
@@ -95,14 +104,13 @@ export const darkPalette = {
   quote: "#8CC8FF",
   quoteBorder: "#3B4D6B",
   code: "#F0C987",
-  codeBlock: "#1E232A",
   codeBorder: "#343A45",
   link: "#7DD3A5",
   error: "#F97066",
   success: "#7DD3A5",
 } as const;
 
-export const lightPalette = {
+const lightPalette = {
   text: "#1E1E1E",
   dim: "#5B6472",
   accent: "#B45309",
@@ -119,39 +127,23 @@ export const lightPalette = {
   quote: "#1D4ED8",
   quoteBorder: "#2563EB",
   code: "#92400E",
-  codeBlock: "#F9FAFB",
   codeBorder: "#92400E",
   link: "#047857",
   error: "#DC2626",
   success: "#047857",
 } as const;
 
-export const palette = lightMode ? lightPalette : darkPalette;
+const palette = lightMode ? lightPalette : darkPalette;
 
 const fg = (hex: string) => (text: string) => chalk.hex(hex)(text);
 const bg = (hex: string) => (text: string) => chalk.bgHex(hex)(text);
 
-const syntaxTheme = createSyntaxTheme(fg(palette.code), lightMode);
-
 /**
- * Highlight code with syntax coloring.
+ * Render code blocks with the theme code color without pulling a parser into the base TUI path.
  * Returns an array of lines with ANSI escape codes.
  */
-function highlightCode(code: string, lang?: string): string[] {
-  try {
-    // Auto-detect can be slow for very large blocks; prefer explicit language when available.
-    // Check if language is supported, fall back to auto-detect
-    const language = lang && supportsLanguage(lang) ? lang : undefined;
-    const highlighted = highlight(code, {
-      language,
-      theme: syntaxTheme,
-      ignoreIllegals: true,
-    });
-    return highlighted.split("\n");
-  } catch {
-    // If highlighting fails, return plain code
-    return code.split("\n").map((line) => fg(palette.code)(line));
-  }
+function highlightCode(code: string): string[] {
+  return code.split("\n").map((line) => fg(palette.code)(line));
 }
 
 export const theme = {

@@ -1,0 +1,17 @@
+{
+  "id": "web-readability",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "name": "Web Readability Extraction",
+  "description": "Extract readable article content from local HTML web fetch responses.",
+  "contracts": {
+    "webContentExtractors": ["readability"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

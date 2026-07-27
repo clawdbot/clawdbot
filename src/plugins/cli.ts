@@ -1,108 +1,143 @@
+// Registers plugin-related CLI commands.
 import type { Command } from "commander";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig } from "../config/config.js";
-import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
-import type { OpenClawPluginCliCommandDescriptor } from "./types.js";
-import type { PluginLogger } from "./types.js";
+import { getRuntimeConfig, readConfigFileSnapshot } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  createPluginCliLogger,
+  loadPluginCliDescriptors,
+  loadPluginCliRegistrationEntriesWithDefaults,
+  type PluginCliLoaderOptions,
+} from "./cli-registry-loader.js";
+import { registerPluginCliCommandGroups } from "./register-plugin-cli-command-groups.js";
+import type { OpenClawPluginCliCommandDescriptor, PluginLogger } from "./types.js";
 
-const log = createSubsystemLogger("plugins");
+type PluginCliRegistrationMode = "eager" | "lazy";
 
-function loadPluginCliRegistry(
-  cfg?: OpenClawConfig,
-  env?: NodeJS.ProcessEnv,
-  loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
-) {
-  const config = cfg ?? loadConfig();
-  const resolvedConfig = applyPluginAutoEnable({ config, env: env ?? process.env }).config;
-  const workspaceDir = resolveAgentWorkspaceDir(
-    resolvedConfig,
-    resolveDefaultAgentId(resolvedConfig),
-  );
-  const logger: PluginLogger = {
-    info: (msg: string) => log.info(msg),
-    warn: (msg: string) => log.warn(msg),
-    error: (msg: string) => log.error(msg),
-    debug: (msg: string) => log.debug(msg),
-  };
-  return {
-    config: resolvedConfig,
-    workspaceDir,
-    logger,
-    registry: loadOpenClawPlugins({
-      config: resolvedConfig,
-      workspaceDir,
-      env,
-      logger,
-      ...loaderOptions,
-    }),
+type RegisterPluginCliOptions = {
+  mode?: PluginCliRegistrationMode;
+  primary?: string | null;
+};
+
+type PluginCliRegistrationEntries = Awaited<
+  ReturnType<typeof loadPluginCliRegistrationEntriesWithDefaults>
+>;
+
+const PLUGIN_CLI_ENTRIES_CACHE_KEY = Symbol.for("openclaw.plugin-cli-registration-entries-cache");
+
+interface ProgramWithEntriesCache {
+  [PLUGIN_CLI_ENTRIES_CACHE_KEY]?: {
+    primary: string | undefined;
+    inputKey: string;
+    entries: PluginCliRegistrationEntries;
   };
 }
 
-export function getPluginCliCommandDescriptors(
-  cfg?: OpenClawConfig,
-  env?: NodeJS.ProcessEnv,
-): OpenClawPluginCliCommandDescriptor[] {
+const logger = createPluginCliLogger();
+const loaderOptionIds = new WeakMap<object, number>();
+let nextLoaderOptionId = 1;
+
+const quietDescriptorLogger = {
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+  debug: () => {},
+} satisfies PluginLogger;
+
+function stableJsonKey(value: unknown): string {
+  if (value === undefined) {
+    return "undefined";
+  }
   try {
-    const { registry } = loadPluginCliRegistry(cfg, env);
-    const seen = new Set<string>();
-    const descriptors: OpenClawPluginCliCommandDescriptor[] = [];
-    for (const entry of registry.cliRegistrars) {
-      for (const descriptor of entry.descriptors) {
-        if (seen.has(descriptor.name)) {
-          continue;
-        }
-        seen.add(descriptor.name);
-        descriptors.push(descriptor);
+    return JSON.stringify(value, (_key, entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return entry;
       }
-    }
-    return descriptors;
+      return Object.fromEntries(
+        Object.entries(entry).toSorted(([left], [right]) => left.localeCompare(right)),
+      );
+    });
   } catch {
-    return [];
+    return "unserializable";
   }
 }
 
-export function registerPluginCliCommands(
+function loaderOptionsKey(loaderOptions: PluginCliLoaderOptions | undefined): string {
+  if (!loaderOptions) {
+    return "undefined";
+  }
+  const existing = loaderOptionIds.get(loaderOptions);
+  if (existing) {
+    return String(existing);
+  }
+  const id = nextLoaderOptionId;
+  nextLoaderOptionId += 1;
+  loaderOptionIds.set(loaderOptions, id);
+  return String(id);
+}
+
+export const loadValidatedConfigForPluginRegistration =
+  async (): Promise<OpenClawConfig | null> => {
+    const snapshot = await readConfigFileSnapshot();
+    if (!snapshot.valid) {
+      return null;
+    }
+    return getRuntimeConfig();
+  };
+
+export async function getPluginCliCommandDescriptors(
+  cfg?: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+  loaderOptions?: PluginCliLoaderOptions,
+): Promise<OpenClawPluginCliCommandDescriptor[]> {
+  return loadPluginCliDescriptors({ cfg, env, loaderOptions, logger: quietDescriptorLogger });
+}
+
+export async function registerPluginCliCommands(
   program: Command,
   cfg?: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
-  loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
+  loaderOptions?: PluginCliLoaderOptions,
+  options?: RegisterPluginCliOptions,
 ) {
-  const { config, workspaceDir, logger, registry } = loadPluginCliRegistry(cfg, env, loaderOptions);
+  const mode = options?.mode ?? "eager";
+  const primary = options?.primary ?? undefined;
+  const inputKey = [stableJsonKey(cfg), stableJsonKey(env), loaderOptionsKey(loaderOptions)].join(
+    "\0",
+  );
 
-  const existingCommands = new Set(program.commands.map((cmd) => cmd.name()));
-
-  for (const entry of registry.cliRegistrars) {
-    if (entry.commands.length > 0) {
-      const overlaps = entry.commands.filter((command) => existingCommands.has(command));
-      if (overlaps.length > 0) {
-        log.debug(
-          `plugin CLI register skipped (${entry.pluginId}): command already registered (${overlaps.join(
-            ", ",
-          )})`,
-        );
-        continue;
-      }
-    }
-    try {
-      const result = entry.register({
-        program,
-        config,
-        workspaceDir,
-        logger,
-      });
-      if (result && typeof result.then === "function") {
-        void result.catch((err) => {
-          log.warn(`plugin CLI register failed (${entry.pluginId}): ${String(err)}`);
-        });
-      }
-      for (const command of entry.commands) {
-        existingCommands.add(command);
-      }
-    } catch (err) {
-      log.warn(`plugin CLI register failed (${entry.pluginId}): ${String(err)}`);
-    }
+  const programWithCache = program as Command & ProgramWithEntriesCache;
+  const cached = programWithCache[PLUGIN_CLI_ENTRIES_CACHE_KEY];
+  let entries: PluginCliRegistrationEntries;
+  if (cached && cached.primary === primary && cached.inputKey === inputKey) {
+    entries = cached.entries;
+  } else {
+    entries = await loadPluginCliRegistrationEntriesWithDefaults({
+      cfg,
+      env,
+      loaderOptions,
+      primaryCommand: primary,
+    });
+    programWithCache[PLUGIN_CLI_ENTRIES_CACHE_KEY] = { primary, inputKey, entries };
   }
+
+  await registerPluginCliCommandGroups(program, entries, {
+    mode,
+    primary,
+    existingCommands: new Set(program.commands.map((cmd) => cmd.name())),
+    logger,
+  });
+}
+
+export async function registerPluginCliCommandsFromValidatedConfig(
+  program: Command,
+  env?: NodeJS.ProcessEnv,
+  loaderOptions?: PluginCliLoaderOptions,
+  options?: RegisterPluginCliOptions,
+): Promise<OpenClawConfig | null> {
+  const config = await loadValidatedConfigForPluginRegistration();
+  if (!config) {
+    return null;
+  }
+  await registerPluginCliCommands(program, config, env, loaderOptions, options);
+  return config;
 }

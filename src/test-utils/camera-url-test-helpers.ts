@@ -1,11 +1,11 @@
+// Test helpers for camera URL fixtures and temporary media files.
 import * as fs from "node:fs/promises";
 import { vi } from "vitest";
+import { withFetchPreconnect } from "./fetch-mock.js";
 
+/** Stubs fetch with the preconnect marker expected by camera URL tests. */
 export function stubFetchResponse(response: Response) {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () => response),
-  );
+  vi.stubGlobal("fetch", withFetchPreconnect(vi.fn(async () => response)));
 }
 
 export function stubFetchTextResponse(text: string, init?: ResponseInit) {

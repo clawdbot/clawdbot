@@ -1,10 +1,15 @@
+// Synology Chat plugin module implements gateway runtime behavior.
 import { DEFAULT_ACCOUNT_ID, type OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
-import { waitUntilAbort } from "openclaw/plugin-sdk/channel-lifecycle";
 import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
 import { listAccountIds, resolveAccount } from "./accounts.js";
-import { dispatchSynologyChatInboundTurn } from "./inbound-turn.js";
+import { dispatchSynologyChatInboundEvent } from "./inbound-event.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
-import { createWebhookHandler, type WebhookHandlerDeps } from "./webhook-handler.js";
+import {
+  createWebhookHandler,
+  processSynologyWebhookIngressEvent,
+  type WebhookHandlerDeps,
+} from "./webhook-handler.js";
+import { createSynologyIngressMonitor } from "./webhook-ingress.js";
 
 const CHANNEL_ID = "synology-chat";
 
@@ -17,6 +22,7 @@ type SynologyGatewayStartupIssueCode =
   | "disabled"
   | "missing-credentials"
   | "empty-allowlist"
+  | "empty-open-allowlist"
   | "inherited-shared-webhook-path"
   | "duplicate-webhook-path";
 type SynologyGatewayStartupIssue = {
@@ -25,7 +31,7 @@ type SynologyGatewayStartupIssue = {
   message: string;
 };
 
-const activeRouteUnregisters = new Map<string, () => void>();
+const activeRouteCleanups = new Map<string, () => Promise<void>>();
 
 function buildStartupIssue(
   code: SynologyGatewayStartupIssueCode,
@@ -59,14 +65,17 @@ function createUnknownArgsLogAdapter(
   if (!log) {
     return undefined;
   }
+  const formatArg = (value: unknown): string =>
+    typeof value === "string" ? value : value instanceof Error ? value.message : "";
+  const formatArgs = (args: unknown[]): string => args.map(formatArg).filter(Boolean).join(": ");
   return {
-    info: (...args) => log.info?.(String(args[0] ?? "")),
-    warn: (...args) => log.warn?.(String(args[0] ?? "")),
-    error: (...args) => log.error?.(String(args[0] ?? "")),
+    info: (...args) => log.info?.(formatArgs(args)),
+    warn: (...args) => log.warn?.(formatArgs(args)),
+    error: (...args) => log.error?.(formatArgs(args)),
   };
 }
 
-export function collectSynologyGatewayStartupIssues(params: {
+function collectSynologyGatewayStartupIssues(params: {
   cfg: OpenClawConfig;
   account: ResolvedSynologyChatAccount;
   accountId: string;
@@ -93,6 +102,14 @@ export function collectSynologyGatewayStartupIssues(params: {
       buildStartupIssue(
         "empty-allowlist",
         `account ${accountId} has dmPolicy=allowlist but empty allowedUserIds; refusing to start route`,
+      ),
+    );
+  }
+  if (account.dmPolicy === "open" && account.allowedUserIds.length === 0) {
+    issues.push(
+      buildStartupIssue(
+        "empty-open-allowlist",
+        `account ${accountId} has dmPolicy=open but empty allowedUserIds; add allowedUserIds=["*"] for public DMs or set explicit user IDs`,
       ),
     );
   }
@@ -162,41 +179,85 @@ export function validateSynologyGatewayAccountStartup(params: {
   return { ok: true };
 }
 
-export function registerSynologyWebhookRoute(params: {
+export async function registerSynologyWebhookRoute(params: {
+  cfg: OpenClawConfig;
   account: ResolvedSynologyChatAccount;
   accountId: string;
   log?: SynologyGatewayLog;
-}): () => void {
-  const { account, log } = params;
+  abortSignal?: AbortSignal;
+}): Promise<() => Promise<void>> {
+  const { cfg, account, log } = params;
   const routeKey = getRouteKey(account);
-  const prevUnregister = activeRouteUnregisters.get(routeKey);
-  if (prevUnregister) {
+  const previousCleanup = activeRouteCleanups.get(routeKey);
+  if (previousCleanup) {
     log?.info?.(`Deregistering stale route before re-registering: ${account.webhookPath}`);
-    prevUnregister();
-    activeRouteUnregisters.delete(routeKey);
+    await previousCleanup();
   }
 
+  const logAdapter = createUnknownArgsLogAdapter(log);
+  const ingress = createSynologyIngressMonitor({
+    accountId: account.accountId,
+    runtime: {
+      error: (message) => log?.error?.(message),
+    },
+    ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
+    dispatch: async (rawEvent, lifecycle) => {
+      await processSynologyWebhookIngressEvent({
+        account,
+        rawEvent,
+        lifecycle,
+        log: logAdapter,
+        deliver: async (msg, turnAdoptionLifecycle) => {
+          await dispatchSynologyChatInboundEvent({
+            account,
+            msg,
+            log: logAdapter,
+            turnAdoptionLifecycle,
+          });
+        },
+      });
+    },
+  });
+  ingress.start();
   const handler = createWebhookHandler({
     account,
-    deliver: async (msg) =>
-      await dispatchSynologyChatInboundTurn({
-        account,
-        msg,
-        log: createUnknownArgsLogAdapter(log),
-      }),
-    log: createUnknownArgsLogAdapter(log),
+    trustedProxies: cfg.gateway?.trustedProxies,
+    allowRealIpFallback: cfg.gateway?.allowRealIpFallback === true,
+    receive: ingress.receive,
+    log: logAdapter,
   });
-  const unregister = registerPluginHttpRoute({
-    path: account.webhookPath,
-    auth: "plugin",
-    pluginId: CHANNEL_ID,
-    accountId: account.accountId,
-    log: (msg: string) => log?.info?.(msg),
-    handler,
-  });
-  activeRouteUnregisters.set(routeKey, unregister);
-  return () => {
-    unregister();
-    activeRouteUnregisters.delete(routeKey);
+  let unregister: () => void;
+  try {
+    unregister = registerPluginHttpRoute({
+      path: account.webhookPath,
+      auth: "plugin",
+      pluginId: CHANNEL_ID,
+      accountId: account.accountId,
+      log: (msg: string) => log?.info?.(msg),
+      handler,
+    });
+  } catch (error) {
+    await ingress.stop();
+    throw error;
+  }
+  let cleanupPromise: Promise<void> | undefined;
+  const cleanup = (): Promise<void> => {
+    cleanupPromise ??= (async () => {
+      try {
+        unregister();
+      } finally {
+        try {
+          await ingress.stop();
+        } finally {
+          // A replacement route may already own this key; never delete its cleanup.
+          if (activeRouteCleanups.get(routeKey) === cleanup) {
+            activeRouteCleanups.delete(routeKey);
+          }
+        }
+      }
+    })();
+    return cleanupPromise;
   };
+  activeRouteCleanups.set(routeKey, cleanup);
+  return cleanup;
 }

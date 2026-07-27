@@ -5,6 +5,8 @@ import Testing
 struct SessionDataTests {
     @Test func `session kind from key detects common kinds`() {
         #expect(SessionKind.from(key: "global") == .global)
+        #expect(SessionKind.from(key: "cron:daily") == .cron)
+        #expect(SessionKind.from(key: "agent:main:cron:daily") == .cron)
         #expect(SessionKind.from(key: "discord:group:engineering") == .group)
         #expect(SessionKind.from(key: "unknown") == .unknown)
         #expect(SessionKind.from(key: "user@example.com") == .direct)

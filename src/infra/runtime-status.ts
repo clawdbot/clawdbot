@@ -1,3 +1,6 @@
+// Normalizes runtime status values for CLI and gateway reporting.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+
 type RuntimeStatusFormatInput = {
   status?: string;
   pid?: number;
@@ -5,6 +8,7 @@ type RuntimeStatusFormatInput = {
   details?: string[];
 };
 
+/** Formats runtime health/status text with optional pid, state, and extra diagnostic details. */
 export function formatRuntimeStatusWithDetails({
   status,
   pid,
@@ -17,7 +21,13 @@ export function formatRuntimeStatusWithDetails({
     fullDetails.push(`pid ${pid}`);
   }
   const normalizedState = state?.trim();
-  if (normalizedState && normalizedState.toLowerCase() !== runtimeStatus.toLowerCase()) {
+  if (
+    normalizedState &&
+    // State often mirrors status from different process managers; suppressing
+    // case-only duplicates keeps restart/status output readable.
+    normalizeLowercaseStringOrEmpty(normalizedState) !==
+      normalizeLowercaseStringOrEmpty(runtimeStatus)
+  ) {
     fullDetails.push(`state ${normalizedState}`);
   }
   for (const detail of details) {

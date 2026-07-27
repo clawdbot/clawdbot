@@ -1,3 +1,4 @@
+// Shared scanner for guard scripts that reject disallowed source callsites.
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import {
@@ -6,6 +7,7 @@ import {
   resolveSourceRoots,
 } from "./ts-guard-utils.mjs";
 
+/** Run a callsite guard over TypeScript roots and exit non-zero on violations. */
 export async function runCallsiteGuard(params) {
   const repoRoot = resolveRepoRoot(params.importMetaUrl);
   const sourceRoots = resolveSourceRoots(repoRoot, params.sourceRoots);

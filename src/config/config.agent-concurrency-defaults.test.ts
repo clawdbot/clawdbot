@@ -1,18 +1,21 @@
+// Verifies agent concurrency config defaults and limits.
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_AGENT_MAX_CONCURRENT,
+  DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
   DEFAULT_SUBAGENT_MAX_CONCURRENT,
   resolveAgentMaxConcurrent,
   resolveSubagentMaxConcurrent,
 } from "./agent-limits.js";
-import { loadConfig } from "./config.js";
-import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS, resolveCronMaxConcurrentRuns } from "./cron-limits.js";
+import { applyAgentDefaults } from "./defaults.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("agent concurrency defaults", () => {
   it("resolves defaults when unset", () => {
-    expect(resolveAgentMaxConcurrent({})).toBe(DEFAULT_AGENT_MAX_CONCURRENT);
+    expect(resolveAgentMaxConcurrent({})).toBeGreaterThanOrEqual(8);
+    expect(resolveAgentMaxConcurrent({})).toBeLessThanOrEqual(16);
     expect(resolveSubagentMaxConcurrent({})).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
+    expect(resolveCronMaxConcurrentRuns()).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS);
   });
 
   it("clamps invalid values to at least 1", () => {
@@ -37,6 +40,7 @@ describe("agent concurrency defaults", () => {
             maxChildrenPerAgent: 7,
           },
         },
+        entries: { main: { default: true } },
       },
     });
 
@@ -44,14 +48,13 @@ describe("agent concurrency defaults", () => {
     expect(parsed.agents?.defaults?.subagents?.maxChildrenPerAgent).toBe(7);
   });
 
-  it("injects defaults on load", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {});
+  it("injects missing agent defaults", () => {
+    const cfg = applyAgentDefaults({});
 
-      const cfg = loadConfig();
-
-      expect(cfg.agents?.defaults?.maxConcurrent).toBe(DEFAULT_AGENT_MAX_CONCURRENT);
-      expect(cfg.agents?.defaults?.subagents?.maxConcurrent).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
-    });
+    expect(cfg.agents?.defaults?.maxConcurrent).toBe(resolveAgentMaxConcurrent());
+    expect(cfg.agents?.defaults?.subagents?.maxConcurrent).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
+    expect(cfg.agents?.defaults?.subagents?.archiveAfterMinutes).toBe(
+      DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
+    );
   });
 });

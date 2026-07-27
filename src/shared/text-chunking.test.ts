@@ -1,9 +1,10 @@
+// Text chunking tests cover splitting text into bounded model-safe chunks.
 import { describe, expect, it } from "vitest";
 import { chunkTextByBreakResolver } from "./text-chunking.js";
 
 describe("shared/text-chunking", () => {
   it("returns empty for blank input and the full text when under limit", () => {
-    expect(chunkTextByBreakResolver("", 10, () => 5)).toEqual([]);
+    expect(chunkTextByBreakResolver("", 10, () => 5)).toStrictEqual([]);
     expect(chunkTextByBreakResolver("hello", 10, () => 2)).toEqual(["hello"]);
     expect(chunkTextByBreakResolver("hello", 0, () => 2)).toEqual(["hello"]);
   });

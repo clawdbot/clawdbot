@@ -1,7 +1,72 @@
-import { describe, expect, it } from "vitest";
+// Verifies sandbox context resolution, backend registration, and main-session bypass.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { SkillUsagePath } from "../skills/types.js";
 import { registerSandboxBackend } from "./sandbox/backend.js";
 import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
+
+const updateRegistryMock = vi.hoisted(() => vi.fn());
+const syncSkillsToWorkspaceMock = vi.hoisted(() =>
+  vi.fn<() => Promise<SkillUsagePath[]>>(async () => []),
+);
+const ensureSandboxBrowserMock = vi.hoisted(() => vi.fn(async () => null));
+const resolveNodeExecEligibilityMock = vi.hoisted(() => vi.fn(() => ({ canExec: false })));
+const browserControlAuthMock = vi.hoisted(() => ({
+  ensureBrowserControlAuth: vi.fn(async () => ({ auth: { token: "test-browser-token" } })),
+  resolveBrowserControlAuth: vi.fn(() => ({ token: "test-browser-token" })),
+}));
+const browserProfilesMock = vi.hoisted(() => ({
+  DEFAULT_BROWSER_EVALUATE_ENABLED: true,
+  resolveBrowserConfig: vi.fn(() => ({
+    evaluateEnabled: true,
+    ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+  })),
+}));
+
+vi.mock("./sandbox/registry.js", () => ({
+  updateRegistry: updateRegistryMock,
+}));
+
+vi.mock("./sandbox/browser.js", () => ({
+  ensureSandboxBrowser: ensureSandboxBrowserMock,
+}));
+
+vi.mock("../plugin-sdk/browser-control-auth.js", () => browserControlAuthMock);
+
+vi.mock("../plugin-sdk/browser-profiles.js", () => browserProfilesMock);
+
+vi.mock("./exec-defaults.js", () => ({
+  resolveNodeExecEligibility: resolveNodeExecEligibilityMock,
+}));
+
+vi.mock("../skills/runtime/remote.js", () => ({
+  getRemoteSkillEligibility: vi.fn(() => ({ note: "test-remote" })),
+}));
+
+vi.mock("../skills/loading/workspace.js", () => ({
+  syncSkillsToWorkspace: syncSkillsToWorkspaceMock,
+}));
+
+let sandboxFixtureRoot = "";
+let sandboxFixtureCount = 0;
+
+async function createSandboxFixtureDir(prefix: string): Promise<string> {
+  // Shared fixture root avoids repeated temp-dir setup across sandbox context cases.
+  const dir = path.join(sandboxFixtureRoot, `${prefix}-${sandboxFixtureCount++}`);
+  await fs.mkdir(dir, { recursive: true });
+  return dir;
+}
+
+beforeAll(async () => {
+  sandboxFixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-context-"));
+});
+
+afterAll(async () => {
+  await fs.rm(sandboxFixtureRoot, { recursive: true, force: true });
+});
 
 describe("resolveSandboxContext", () => {
   it("does not sandbox the agent main session in non-main mode", async () => {
@@ -40,6 +105,59 @@ describe("resolveSandboxContext", () => {
     });
 
     expect(result).toBeNull();
+  }, 15_000);
+
+  it("does not touch sandbox backends for cron or sub-agent sessions when sandbox mode is off", async () => {
+    // Mode=off should short-circuit before resolving any backend implementation.
+    const backendFactory = vi.fn(async () => ({
+      id: "test-off-backend",
+      runtimeId: "unexpected-runtime",
+      runtimeLabel: "Unexpected Runtime",
+      workdir: "/workspace",
+      buildExecSpec: async () => ({
+        argv: ["unexpected"],
+        env: process.env,
+        stdinMode: "pipe-closed" as const,
+      }),
+      runShellCommand: async () => ({
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+        code: 0,
+      }),
+    }));
+    const restore = registerSandboxBackend("test-off-backend", backendFactory);
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "off",
+              backend: "test-off-backend",
+              scope: "session",
+            },
+          },
+        },
+      };
+
+      await expect(
+        resolveSandboxContext({
+          config: cfg,
+          sessionKey: "agent:main:cron:job:run:uuid",
+          workspaceDir: "/tmp/openclaw-test",
+        }),
+      ).resolves.toBeNull();
+      await expect(
+        resolveSandboxContext({
+          config: cfg,
+          sessionKey: "agent:main:subagent:child",
+          workspaceDir: "/tmp/openclaw-test",
+        }),
+      ).resolves.toBeNull();
+
+      expect(backendFactory).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
   }, 15_000);
 
   it("treats main session aliases as main in non-main mode", async () => {
@@ -87,13 +205,79 @@ describe("resolveSandboxContext", () => {
   }, 15_000);
 
   it("resolves a registered non-docker backend", async () => {
-    const restore = registerSandboxBackend("test-backend", async () => ({
-      id: "test-backend",
-      runtimeId: "test-runtime",
-      runtimeLabel: "Test Runtime",
+    resolveNodeExecEligibilityMock.mockClear();
+    const restore = registerSandboxBackend("test-backend", {
+      factory: async () => ({
+        id: "test-backend",
+        runtimeId: "test-runtime",
+        runtimeLabel: "Test Runtime",
+        workdir: "/runtime/workspace",
+        buildExecSpec: async () => ({
+          argv: ["test-backend", "exec"],
+          env: process.env,
+          stdinMode: "pipe-closed",
+        }),
+        runShellCommand: async () => ({
+          stdout: Buffer.alloc(0),
+          stderr: Buffer.alloc(0),
+          code: 0,
+        }),
+      }),
+      resolveWorkdir: () => "/runtime/workspace",
+    });
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "test-backend",
+              scope: "session",
+              workspaceAccess: "rw",
+              prune: { idleHours: 0, maxAgeDays: 0 },
+            },
+          },
+        },
+      };
+
+      const result = await resolveSandboxContext({
+        config: cfg,
+        execOverrides: { host: "node", node: "build-node", security: "allowlist" },
+        sessionKey: "agent:worker:task",
+        workspaceDir: "/tmp/openclaw-test",
+      });
+
+      expect(result?.backendId).toBe("test-backend");
+      expect(result?.runtimeId).toBe("test-runtime");
+      expect(result?.containerName).toBe("test-runtime");
+      expect(result?.backend?.id).toBe("test-backend");
+      expect(resolveNodeExecEligibilityMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          execOverrides: { host: "node", node: "build-node", security: "allowlist" },
+        }),
+      );
+
+      const workspace = await ensureSandboxWorkspaceForSession({
+        config: cfg,
+        sessionKey: "agent:worker:task",
+        workspaceDir: "/tmp/openclaw-test",
+      });
+      expect(workspace?.containerWorkdir).toBe("/runtime/workspace");
+    } finally {
+      restore();
+    }
+  }, 15_000);
+
+  it("passes the resolved browser SSRF policy to sandbox browser setup", async () => {
+    ensureSandboxBrowserMock.mockClear();
+    const restore = registerSandboxBackend("test-browser-backend", async () => ({
+      id: "test-browser-backend",
+      runtimeId: "test-browser-runtime",
+      runtimeLabel: "Test Browser Runtime",
       workdir: "/workspace",
+      capabilities: { browser: true },
       buildExecSpec: async () => ({
-        argv: ["test-backend", "exec"],
+        argv: ["test-browser-backend", "exec"],
         env: process.env,
         stdinMode: "pipe-closed",
       }),
@@ -105,25 +289,264 @@ describe("resolveSandboxContext", () => {
     }));
     try {
       const cfg: OpenClawConfig = {
+        browser: {
+          ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+        },
         agents: {
           defaults: {
-            sandbox: { mode: "all", backend: "test-backend", scope: "session" },
+            sandbox: {
+              mode: "all",
+              backend: "test-browser-backend",
+              scope: "session",
+              workspaceAccess: "rw",
+              prune: { idleHours: 0, maxAgeDays: 0 },
+              browser: { enabled: true },
+            },
           },
         },
       };
 
-      const result = await resolveSandboxContext({
+      await resolveSandboxContext({
         config: cfg,
-        sessionKey: "agent:worker:task",
+        sessionKey: "agent:worker:browser",
         workspaceDir: "/tmp/openclaw-test",
       });
 
-      expect(result?.backendId).toBe("test-backend");
-      expect(result?.runtimeId).toBe("test-runtime");
-      expect(result?.containerName).toBe("test-runtime");
-      expect(result?.backend?.id).toBe("test-backend");
+      const browserCalls = ensureSandboxBrowserMock.mock.calls as unknown as Array<
+        [{ ssrfPolicy?: unknown }]
+      >;
+      const [browserOptions] = browserCalls[0] ?? [];
+      expect(browserOptions?.ssrfPolicy).toEqual({ dangerouslyAllowPrivateNetwork: true });
     } finally {
       restore();
     }
+  }, 15_000);
+
+  it("requests skill sync for read-only sandbox workspaces", async () => {
+    syncSkillsToWorkspaceMock.mockClear();
+    const bundledDir = await createSandboxFixtureDir("bundled");
+    const workspaceDir = await createSandboxFixtureDir("workspace");
+    const skillUsagePaths = [
+      {
+        readPath: path.join(bundledDir, "sandboxes", "skills", "demo", "SKILL.md"),
+        skillFile: path.join(workspaceDir, "skills", "demo", "SKILL.md"),
+        skillName: "demo",
+        skillSource: "workspace" as const,
+      },
+    ];
+    syncSkillsToWorkspaceMock.mockResolvedValueOnce(skillUsagePaths);
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            scope: "session",
+            workspaceAccess: "ro",
+            workspaceRoot: path.join(bundledDir, "sandboxes"),
+          },
+        },
+      },
+    };
+
+    const result = await ensureSandboxWorkspaceForSession({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      workspaceDir,
+    });
+
+    if (!result) {
+      throw new Error("expected sandbox workspace resolution");
+    }
+    expect(typeof result.workspaceDir).toBe("string");
+    const syncCalls = syncSkillsToWorkspaceMock.mock.calls as unknown as Array<
+      [
+        {
+          sourceWorkspaceDir?: string;
+          targetWorkspaceDir?: string;
+          config?: OpenClawConfig;
+          agentId?: string;
+          eligibility?: unknown;
+        },
+      ]
+    >;
+    const [syncOptions] = syncCalls[0] ?? [];
+    expect(syncOptions?.sourceWorkspaceDir).toBe(workspaceDir);
+    expect(syncOptions?.targetWorkspaceDir).toBe(result.workspaceDir);
+    expect(syncOptions?.config).toBe(cfg);
+    expect(syncOptions?.agentId).toBe("main");
+    expect(syncOptions?.eligibility).toEqual({
+      nodeSkills: { canExec: false },
+      remote: { note: "test-remote" },
+    });
+    expect(result.skillUsagePaths).toEqual(skillUsagePaths);
+  }, 15_000);
+
+  it("materializes skills into a hidden read-only workspace for writable sandboxes", async () => {
+    syncSkillsToWorkspaceMock.mockClear();
+    const workspaceDir = await createSandboxFixtureDir("workspace");
+    const userOwnedSandboxSkillsDir = path.join(
+      workspaceDir,
+      ".openclaw",
+      "sandbox-skills",
+      "skills",
+      "user-owned",
+    );
+    await fs.mkdir(userOwnedSandboxSkillsDir, { recursive: true });
+    await fs.writeFile(path.join(userOwnedSandboxSkillsDir, "SKILL.md"), "# User owned\n");
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            scope: "session",
+            workspaceAccess: "rw",
+            workspaceRoot: path.join(workspaceDir, ".openclaw", "sandboxes"),
+          },
+        },
+      },
+    };
+
+    const result = await ensureSandboxWorkspaceForSession({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      workspaceDir,
+    });
+
+    expect(result?.workspaceDir).toBe(workspaceDir);
+    const syncCalls = syncSkillsToWorkspaceMock.mock.calls as unknown as Array<
+      [
+        {
+          sourceWorkspaceDir?: string;
+          targetWorkspaceDir?: string;
+          config?: OpenClawConfig;
+          agentId?: string;
+          eligibility?: unknown;
+        },
+      ]
+    >;
+    const [syncOptions] = syncCalls[0] ?? [];
+    expect(syncOptions?.sourceWorkspaceDir).toBe(workspaceDir);
+    expect(syncOptions?.targetWorkspaceDir).toContain(
+      path.join(".openclaw", "sandbox", "skills-workspaces"),
+    );
+    expect(syncOptions?.targetWorkspaceDir).toMatch(
+      /[\\/]agent-main-main-[a-f0-9]{8}[\\/]\.openclaw[\\/]sandbox-skills$/,
+    );
+    expect(syncOptions?.targetWorkspaceDir).not.toBe(
+      path.join(workspaceDir, ".openclaw", "sandbox-skills"),
+    );
+    expect(syncOptions?.targetWorkspaceDir?.startsWith(path.join(workspaceDir, ".openclaw"))).toBe(
+      false,
+    );
+    expect(syncOptions?.config).toBe(cfg);
+    expect(syncOptions?.agentId).toBe("main");
+    expect(syncOptions?.eligibility).toEqual({
+      nodeSkills: { canExec: false },
+      remote: { note: "test-remote" },
+    });
+    expect(result?.skillsWorkspaceDir).toBe(syncOptions?.targetWorkspaceDir);
+    expect(result?.workspaceAccess).toBe("rw");
+    expect(result?.skillsEligibility).toEqual({
+      nodeSkills: { canExec: false },
+      remote: { note: "test-remote" },
+    });
+    await expect(
+      fs.readFile(path.join(userOwnedSandboxSkillsDir, "SKILL.md"), "utf8"),
+    ).resolves.toBe("# User owned\n");
+  }, 15_000);
+
+  it("uses the SSH backend remote workspace for sandbox workspace info", async () => {
+    syncSkillsToWorkspaceMock.mockClear();
+    const workspaceDir = await createSandboxFixtureDir("ssh-workspace");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            backend: "ssh",
+            scope: "session",
+            workspaceAccess: "rw",
+            ssh: {
+              target: "ssh.example.test",
+              workspaceRoot: "/remote/openclaw",
+            },
+          },
+        },
+      },
+    };
+
+    const result = await ensureSandboxWorkspaceForSession({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      workspaceDir,
+    });
+
+    expect(result?.workspaceDir).toBe(workspaceDir);
+    expect(result?.containerWorkdir).toMatch(
+      /^\/remote\/openclaw\/openclaw-ssh-agent-main-main-[a-f0-9]{8}\/workspace$/,
+    );
+    expect(result?.containerWorkdir).not.toBe("/workspace");
+    expect(result?.skillsWorkspaceDir).toContain(
+      path.join(".openclaw", "sandbox", "skills-workspaces"),
+    );
+  }, 15_000);
+
+  it("materializes skills for shared writable sandboxes even when roots match", async () => {
+    syncSkillsToWorkspaceMock.mockClear();
+    const workspaceDir = await createSandboxFixtureDir("shared-workspace");
+    const userOwnedSandboxSkillsDir = path.join(
+      workspaceDir,
+      ".openclaw",
+      "sandbox-skills",
+      "skills",
+      "user-owned",
+    );
+    await fs.mkdir(userOwnedSandboxSkillsDir, { recursive: true });
+    await fs.writeFile(path.join(userOwnedSandboxSkillsDir, "SKILL.md"), "# User owned\n");
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            scope: "shared",
+            workspaceAccess: "rw",
+            workspaceRoot: workspaceDir,
+          },
+        },
+      },
+    };
+
+    const result = await ensureSandboxWorkspaceForSession({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      workspaceDir,
+    });
+
+    expect(result?.workspaceDir).toBe(workspaceDir);
+    const syncCalls = syncSkillsToWorkspaceMock.mock.calls as unknown as Array<
+      [
+        {
+          sourceWorkspaceDir?: string;
+          targetWorkspaceDir?: string;
+        },
+      ]
+    >;
+    const [syncOptions] = syncCalls[0] ?? [];
+    expect(syncOptions?.sourceWorkspaceDir).toBe(workspaceDir);
+    expect(syncOptions?.targetWorkspaceDir).toContain(
+      path.join(".openclaw", "sandbox", "skills-workspaces"),
+    );
+    expect(syncOptions?.targetWorkspaceDir).toMatch(
+      /[\\/]shared-[a-f0-9]{8}[\\/]\.openclaw[\\/]sandbox-skills$/,
+    );
+    expect(syncOptions?.targetWorkspaceDir).not.toBe(
+      path.join(workspaceDir, ".openclaw", "sandbox-skills"),
+    );
+    await expect(
+      fs.readFile(path.join(userOwnedSandboxSkillsDir, "SKILL.md"), "utf8"),
+    ).resolves.toBe("# User owned\n");
   }, 15_000);
 });

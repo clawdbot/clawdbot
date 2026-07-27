@@ -1,3 +1,4 @@
+// Feishu tests cover external keys plugin behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 
