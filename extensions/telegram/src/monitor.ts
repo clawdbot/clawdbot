@@ -293,8 +293,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           network: account.config.network,
           ...(account.config.spooledUpdateHandlerTimeoutMs !== undefined
             ? {
-                spooledUpdateHandlerTimeoutMs:
-                  account.config.spooledUpdateHandlerTimeoutMs,
+                spooledUpdateHandlerTimeoutMs: account.config.spooledUpdateHandlerTimeoutMs,
               }
             : {}),
         },

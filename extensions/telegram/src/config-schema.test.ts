@@ -592,7 +592,10 @@ describe("telegram webhook schema", () => {
   });
 
   it("rejects non-positive spooledUpdateHandlerTimeoutMs", () => {
-    expectTelegramConfigIssue({ spooledUpdateHandlerTimeoutMs: 0 }, "spooledUpdateHandlerTimeoutMs");
+    expectTelegramConfigIssue(
+      { spooledUpdateHandlerTimeoutMs: 0 },
+      "spooledUpdateHandlerTimeoutMs",
+    );
     expectTelegramConfigIssue(
       { spooledUpdateHandlerTimeoutMs: -1000 },
       "spooledUpdateHandlerTimeoutMs",
