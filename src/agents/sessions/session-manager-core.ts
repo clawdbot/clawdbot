@@ -71,22 +71,26 @@ export class SessionManagerCore {
     target: SessionManagerPersistenceTarget | undefined,
     entries: FileEntry[],
   ): void {
-    this.persistenceTarget = target ? { ...target } : undefined;
     const partitioned = partitionSessionFileEntries(entries);
     if (partitioned.fileEntries.length === 0) {
+      this.persistenceTarget = target ? { ...target } : undefined;
       this.initializeSession({ id: target?.sessionId });
       return;
     }
+    const header = partitioned.fileEntries.find((entry) => entry.type === "session");
+    if (target && (header?.version ?? 1) < CURRENT_SESSION_VERSION) {
+      throw new Error(
+        "Persisted legacy session transcripts require doctor/import migration before runtime use",
+      );
+    }
+    this.persistenceTarget = target ? { ...target } : undefined;
     this.fileEntries = partitioned.fileEntries;
     this.opaqueFileEntries = partitioned.opaqueEntries;
-    const header = this.fileEntries.find((entry) => entry.type === "session");
     this.sessionId = header?.id ?? target?.sessionId ?? createSessionId();
     this.migrated = migrateToCurrentVersion(
       this.fileEntries,
       partitioned.fileEntriesByOriginalIndex,
     );
-    // Runtime migration is an in-memory projection. Doctor/import owns durable
-    // legacy-shape migration before canonical SQLite runtime access.
     this.buildIndex();
   }
 

@@ -355,8 +355,8 @@ export function resolveAdmittedRunSessionFile(params: {
   sessionKey?: string;
   storePath?: string;
 }): string | undefined {
-  if (params.storePath) {
-    return params.sessionKey;
+  if (params.storePath && params.sessionKey?.trim()) {
+    return params.sessionKey.trim();
   }
   return params.sessionFile;
 }

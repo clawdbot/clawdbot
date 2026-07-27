@@ -105,6 +105,23 @@ describe("SQLite trajectory runtime store", () => {
     expect(rows.map((row) => row.seq)).toEqual([1, 2]);
   });
 
+  it("applies maxEvents to a trailing window", () => {
+    appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
+      createTrajectoryEvent({ type: "event-1" }),
+      createTrajectoryEvent({ type: "event-2" }),
+      createTrajectoryEvent({ type: "event-3" }),
+    ]);
+
+    const rows = loadSqliteTrajectoryRuntimeEventRowsSync({
+      sessionId: "session-1",
+      storePath,
+      tailEvents: 3,
+      maxEvents: 1,
+    });
+
+    expect(rows.map((row) => row.event.type)).toEqual(["event-3"]);
+  });
+
   it("drops old runs while retaining recent runs", async () => {
     const now = Date.parse("2026-07-26T00:00:00.000Z");
     vi.useFakeTimers();

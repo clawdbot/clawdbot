@@ -164,6 +164,32 @@ describe("SessionManager.open", () => {
     );
   });
 
+  it("rejects persisted legacy transcripts until doctor or import migrates them", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "legacy-persisted-session";
+    const sessionKey = "agent:main:legacy-persisted-session";
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await upsertSessionEntry(scope, { sessionId, updatedAt: 1 });
+    replaceTranscriptEventsSync(scope, [
+      {
+        type: "session",
+        version: 1,
+        id: sessionId,
+        timestamp: "2026-01-01T00:00:00.000Z",
+        cwd: dir,
+      },
+      {
+        type: "message",
+        message: { role: "user", content: "legacy message" },
+      },
+    ]);
+
+    expect(() => SessionManager.open(scope, dir)).toThrow(
+      "require doctor/import migration before runtime use",
+    );
+  });
+
   it("skips malformed null rows while opening a persisted transcript", async () => {
     const dir = await makeTempDir();
     const scope = {

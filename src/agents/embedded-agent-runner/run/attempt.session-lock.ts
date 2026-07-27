@@ -218,7 +218,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     reacquireAfterPrompt: async () =>
       await serializeLifecycle(async () => {
         try {
-          if (disposed || promptAborted) {
+          if (disposed || promptAborted || cleanupStarted) {
             return;
           }
           await reloadPromptReleasedState();

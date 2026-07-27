@@ -6,6 +6,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import {
   buildHistoryContext,
   buildHistoryContextFromEntries,
@@ -482,6 +484,40 @@ describe("incrementCompactionCount", () => {
     expect(
       expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").compactionCount,
     ).toBe(3);
+  });
+
+  it("persists incognito compaction metadata only in the scoped store", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-incognito-compact-"));
+    tempDirs.push(tmp);
+    const durableStorePath = path.join(tmp, "sessions.json");
+    const sessionKey = "agent:main:dashboard:incognito-compaction";
+    const scopedStorePath = resolveSessionStorePathForScope({
+      agentId: "main",
+      sessionKey,
+      storePath: durableStorePath,
+    });
+    const durableDatabasePath = resolveSqliteTargetFromSessionStorePath(durableStorePath, {
+      agentId: "main",
+    }).path;
+    const entry = { sessionId: "incognito-session", updatedAt: 1 } as SessionEntry;
+    const sessionStore = { [sessionKey]: entry };
+    await seedSessionStore({ storePath: scopedStorePath, sessionKey, entry });
+
+    await incrementCompactionCount({
+      agentId: "main",
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath: durableStorePath,
+    });
+
+    expect((await loadStoredEntry(scopedStorePath, sessionKey)).compactionCount).toBe(1);
+    expect(durableDatabasePath).toBeDefined();
+    await expect(
+      fs.stat(expectDefined(durableDatabasePath, "durable database path")),
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("updates totalTokens when tokensAfter is provided", async () => {

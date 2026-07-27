@@ -505,6 +505,8 @@ describe("createEmbeddedAttemptSessionLockController", () => {
     await controller.releaseForPrompt();
     await expect(controller.acquireForCleanup()).resolves.toBeDefined();
     expect(reloadPromptReleasedSessionFile).toHaveBeenCalledOnce();
+    await expect(controller.reacquireAfterPrompt()).resolves.toBeUndefined();
+    expect(reloadPromptReleasedSessionFile).toHaveBeenCalledOnce();
     await expect(controller.releaseForPrompt()).rejects.toThrow(
       "attempt cleanup started before prompt submission",
     );

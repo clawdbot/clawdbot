@@ -156,7 +156,16 @@ export function loadSqliteTrajectoryRuntimeEventRowsSync(
   if (afterSeq !== undefined && Number.isFinite(afterSeq)) {
     query = query.where("seq", ">", Math.floor(afterSeq));
   }
-  const maxEvents = tailEvents ?? scope.maxEvents;
+  const normalizedMaxEvents =
+    scope.maxEvents !== undefined && Number.isFinite(scope.maxEvents)
+      ? Math.max(0, Math.floor(scope.maxEvents))
+      : undefined;
+  const maxEvents =
+    tailEvents === undefined
+      ? normalizedMaxEvents
+      : normalizedMaxEvents === undefined
+        ? tailEvents
+        : Math.min(tailEvents, normalizedMaxEvents);
   if (maxEvents !== undefined && Number.isFinite(maxEvents)) {
     query = query.limit(Math.max(0, Math.floor(maxEvents)));
   }

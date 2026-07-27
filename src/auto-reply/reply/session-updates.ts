@@ -369,9 +369,12 @@ export async function incrementCompactionCount(params: {
   }
   const nextEntry = projectCanonicalSessionEntryShape({ ...entry, ...updates });
   sessionStore[sessionKey] = nextEntry;
-  if (storePath) {
+  const effectiveStorePath = storePath
+    ? resolveSessionStorePathForScope({ agentId, sessionKey, storePath })
+    : undefined;
+  if (effectiveStorePath) {
     const persistedEntry = await patchSessionEntry(
-      { ...(agentId ? { agentId } : {}), storePath, sessionKey },
+      { ...(agentId ? { agentId } : {}), storePath: effectiveStorePath, sessionKey },
       () => updates,
       { fallbackEntry: nextEntry },
     );
@@ -384,7 +387,7 @@ export async function incrementCompactionCount(params: {
       agentId,
       cfg,
       sessionKey,
-      storePath,
+      storePath: effectiveStorePath,
       previousEntry: entry,
       nextEntry: sessionStore[sessionKey],
     });
