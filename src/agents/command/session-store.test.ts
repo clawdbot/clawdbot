@@ -324,6 +324,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       const sessionStore: Record<string, SessionEntry> = {
         [sessionKey]: {
           sessionId,
+          sessionFile: path.join(path.dirname(storePath), "legacy-predecessor.jsonl"),
           updatedAt: 1,
         },
       };
@@ -2809,9 +2810,11 @@ describe("recordCliCompactionInStore", () => {
       expect(sessionStore[sessionKey]?.sessionId).toBe(nextSessionId);
       expect(sessionStore[sessionKey]?.usageFamilyKey).toBe(sessionKey);
       expect(sessionStore[sessionKey]?.usageFamilySessionIds).toEqual([sessionId, nextSessionId]);
+      expect(sessionStore[sessionKey]).not.toHaveProperty("sessionFile");
 
       const persisted = loadPersistedSessionStore(storePath);
       expect(persisted[sessionKey]?.sessionId).toBe(nextSessionId);
+      expect(persisted[sessionKey]).not.toHaveProperty("sessionFile");
     });
   });
 
