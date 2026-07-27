@@ -41,6 +41,8 @@ export function applyAgentCompactionSettingsFromConfig(params: {
   const currentReserveTokens = params.settingsManager.getCompactionReserveTokens();
   const currentKeepRecentTokens = params.settingsManager.getCompactionKeepRecentTokens();
   const compactionCfg = params.cfg?.agents?.defaults?.compaction;
+  // Omission preserves embedded/project settings. OpenClaw config reloads create a new
+  // prepared manager; same-manager resource reloads reuse cfg and reapply explicit values.
   const configuredEnabled = compactionCfg?.enabled;
 
   const configuredKeepRecentTokens = toPositiveInt(compactionCfg?.keepRecentTokens);

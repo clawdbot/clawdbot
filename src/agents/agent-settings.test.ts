@@ -39,6 +39,22 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     },
   );
 
+  it("preserves the embedded project setting when compaction.enabled is omitted", () => {
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: false, reserveTokens: 20_000 },
+    });
+    const setCompactionEnabled = vi.spyOn(settingsManager, "setCompactionEnabled");
+
+    const result = applyAgentCompactionSettingsFromConfig({
+      settingsManager,
+      cfg: { agents: { defaults: { compaction: {} } } },
+    });
+
+    expect(result.didOverride).toBe(false);
+    expect(settingsManager.getCompactionEnabled()).toBe(false);
+    expect(setCompactionEnabled).not.toHaveBeenCalled();
+  });
+
   it("bumps reserveTokens when below floor", () => {
     const settingsManager = SettingsManager.inMemory();
     const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
