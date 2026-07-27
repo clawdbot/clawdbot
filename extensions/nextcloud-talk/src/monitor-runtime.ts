@@ -7,11 +7,11 @@ import { handleNextcloudTalkInbound } from "./inbound.js";
 import { createNextcloudTalkWebhookServer } from "./monitor.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import type { CoreConfig, NextcloudTalkInboundMessage } from "./types.js";
-import { resolveNextcloudTalkWebhookListenerConfig } from "./webhook-url.js";
 import {
   createNextcloudTalkWebhookSpool,
   type NextcloudTalkIngressLifecycle,
 } from "./webhook-spool.js";
+import { resolveNextcloudTalkWebhookListenerConfig } from "./webhook-url.js";
 
 function normalizeOrigin(value: string): string | null {
   try {

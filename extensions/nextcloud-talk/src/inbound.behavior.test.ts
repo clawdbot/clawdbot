@@ -54,11 +54,8 @@ function installRuntime(params?: {
   matchesMentionPatterns?: (body: string, regexes: RegExp[]) => boolean;
   shouldHandleTextCommands?: () => boolean;
 }) {
-  const runtime = {
+  const runtime = createPluginRuntimeMock({
     channel: {
-      inbound: {
-        dispatchReply: vi.fn(async () => undefined),
-      },
       pairing: {
         readAllowFromStore: vi.fn(async () => []),
         upsertPairingRequest: vi.fn(async () => ({ code: "123456", created: true })),
@@ -74,7 +71,7 @@ function installRuntime(params?: {
         matchesMentionPatterns: params?.matchesMentionPatterns ?? vi.fn(() => false),
       },
     },
-  };
+  });
   setNextcloudTalkRuntime(runtime as unknown as PluginRuntime);
   return runtime;
 }
@@ -553,7 +550,16 @@ describe("nextcloud-talk inbound behavior", () => {
       messages: {
         groupChat: { visibleReplies: "message_tool" },
       },
-      channels: { "nextcloud-talk": {} },
+      channels: {
+        "nextcloud-talk": {
+          rooms: {
+            "room-group": {
+              allowFrom: ["user-1"],
+              requireMention: false,
+            },
+          },
+        },
+      },
     } as CoreConfig;
 
     await handleNextcloudTalkInbound({

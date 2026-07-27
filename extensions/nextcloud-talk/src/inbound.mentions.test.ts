@@ -3,7 +3,7 @@ import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import {
   parseStructuredNextcloudTalkBody,
   resolveExplicitNextcloudTalkMention,
-} from "./inbound.js";
+} from "./structured-body.js";
 
 // ---------------------------------------------------------------------------
 // parseStructuredNextcloudTalkBody
