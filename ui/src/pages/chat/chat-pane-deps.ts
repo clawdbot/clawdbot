@@ -63,7 +63,9 @@ export {
 export { loadSettings, patchSettings } from "../../app/settings.ts";
 export {
   readPresenceEntries,
+  resolveActorIdentityUsers,
   resolveCurrentSelfUser,
+  type ActorIdentityUser,
   type PresencePayload,
 } from "../../app/user-profile.ts";
 export {
