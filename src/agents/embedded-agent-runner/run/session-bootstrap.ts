@@ -90,7 +90,7 @@ export function buildContextEngineCompactionSessionTarget(params: {
     ? targetSessionKey
     : marker
       ? markerSessionKey
-      : (targetSessionKey ?? suppliedSessionKey ?? params.sessionId);
+      : (targetSessionKey ?? suppliedSessionKey ?? targetSessionId ?? params.sessionId);
   const agentId =
     targetAgentId ??
     marker?.agentId ??

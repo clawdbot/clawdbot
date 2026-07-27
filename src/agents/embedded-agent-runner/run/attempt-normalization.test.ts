@@ -46,6 +46,25 @@ describe("buildContextEngineCompactionSessionTarget", () => {
       storePath: "/tmp/worker/sessions.json",
     });
   });
+
+  it("uses an adopted target session id when no session key is available", () => {
+    expect(
+      buildContextEngineCompactionSessionTarget({
+        sessionFile: "",
+        sessionId: "previous-session",
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "adopted-session",
+          storePath: "/tmp/sessions.json",
+        },
+      }),
+    ).toMatchObject({
+      agentId: "main",
+      sessionId: "adopted-session",
+      sessionKey: "adopted-session",
+      storePath: "/tmp/sessions.json",
+    });
+  });
 });
 
 function promptState(storePath = "/tmp/sessions.json") {

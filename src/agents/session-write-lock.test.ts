@@ -7,6 +7,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { SessionWriteLockStaleError } from "./session-write-lock-error.js";
 
 const FAKE_STARTTIME = 12345;
@@ -296,6 +299,35 @@ describe("acquireSessionWriteLock", () => {
     });
 
     await Promise.all([first.release(), second.release()]);
+  });
+
+  it("keeps a transcript-target lease shared across different state roots", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-target-store-"));
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    let first: Awaited<ReturnType<typeof acquireSessionWriteLock>> | undefined;
+    try {
+      const sessionFile = resolveSessionWriteLockTargetKey({
+        agentId: "main",
+        sessionId: "shared-session",
+        sessionKey: "agent:main:shared",
+        storePath: path.join(root, "shared.sqlite"),
+      });
+      setTestEnvValue("OPENCLAW_STATE_DIR", path.join(root, "state-a"));
+      first = await acquireSessionWriteLock({ sessionFile, targetKind: "session-key" });
+
+      setTestEnvValue("OPENCLAW_STATE_DIR", path.join(root, "state-b"));
+      // Reentrancy is disabled, so the process-local held map cannot reject this;
+      // only the lease row in the shared transcript database can fence it.
+      await expect(
+        acquireSessionWriteLock({ sessionFile, targetKind: "session-key", timeoutMs: 5 }),
+      ).rejects.toThrow(/session file locked/);
+    } finally {
+      await first?.release();
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      envSnapshot.restore();
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("uses one lease key for aliases of the same session incarnation", () => {
