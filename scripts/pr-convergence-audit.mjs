@@ -40,7 +40,7 @@ import { hasClawSweeperExactHeadProof } from "./github/real-behavior-proof-polic
  * @property {string | null} conclusion
  * @property {string} headSha
  * @property {string} url
- * @property {boolean} required
+ * @property {boolean | null} required
  */
 
 /**
@@ -55,6 +55,7 @@ import { hasClawSweeperExactHeadProof } from "./github/real-behavior-proof-polic
  * @property {NormalizedEvidenceItem[]} issueComments
  * @property {string[]} requestedReviewers
  * @property {NormalizedCheckRun[]} checkRuns
+ * @property {"resolved" | "unknown"} requiredCheckPolicy
  * @property {Record<string, { complete: boolean; count: number }>} surfaceCoverage
  * @property {string[]} errors
  */
@@ -99,6 +100,7 @@ import { hasClawSweeperExactHeadProof } from "./github/real-behavior-proof-polic
  * @property {(params: { repo: string; headSha: string }) => Promise<{
  *   items: Record<string, unknown>[];
  *   complete: boolean;
+ *   requiredPolicy?: "resolved" | "unknown";
  * }>} fetchCheckRuns
  */
 
@@ -258,8 +260,9 @@ export function normalizeIssueComment(comment, repo, pr) {
   };
 }
 
-function normalizeCheckRun(check, required = true) {
+function normalizeCheckRun(check) {
   const id = String(check?.id ?? check?.name ?? "");
+  const required = typeof check?.required === "boolean" ? check.required : null;
   return {
     id,
     name: String(check?.name ?? id),
@@ -383,10 +386,25 @@ function summarizeFindingCounts(findings) {
   return counts;
 }
 
-function requiredChecksSatisfied(checkRuns, headSha) {
-  const required = checkRuns.filter((check) => check.required && check.headSha === headSha);
+function requiredChecksSatisfied(checkRuns, headSha, requiredCheckPolicy) {
+  if (requiredCheckPolicy !== "resolved") {
+    return {
+      ok: false,
+      unknown: true,
+      reason: "Required checks were not resolved from the target branch protection or ruleset policy.",
+    };
+  }
+  const exactHeadChecks = checkRuns.filter((check) => check.headSha === headSha);
+  if (exactHeadChecks.some((check) => check.required === null)) {
+    return {
+      ok: false,
+      unknown: true,
+      reason: "Required-check status is ambiguous for the exact head.",
+    };
+  }
+  const required = exactHeadChecks.filter((check) => check.required === true);
   if (required.length === 0) {
-    return { ok: true, reason: "No required checks were reported for the exact head." };
+    return { ok: true, reason: "The target branch policy resolved no required checks for the exact head." };
   }
   const pending = required.filter((check) => check.status !== "completed");
   if (pending.length > 0) {
@@ -533,8 +551,20 @@ export function decidePrConvergence({
     };
   }
 
-  const checks = requiredChecksSatisfied(evidence.checkRuns, headSha);
+  const checks = requiredChecksSatisfied(
+    evidence.checkRuns,
+    headSha,
+    evidence.requiredCheckPolicy,
+  );
   if (!checks.ok) {
+    if (checks.unknown) {
+      return {
+        decision: CONVERGENCE_DECISIONS.UNKNOWN,
+        reason: checks.reason,
+        nextAction:
+          "Resolve required checks from target-branch protection or rulesets, then re-run the convergence audit.",
+      };
+    }
     if (checks.pending) {
       return {
         decision: CONVERGENCE_DECISIONS.UNKNOWN,
@@ -622,6 +652,7 @@ function buildProviderFailureAuditResult({
       issueComments: [],
       requestedReviewers: [],
       checkRuns: [],
+      requiredCheckPolicy: "unknown",
       surfaceCoverage: {},
       errors: [failureReason],
     },
@@ -727,8 +758,9 @@ export async function auditPrConvergence({ repo, pr, provider }) {
     .map((item) => normalizeIssueComment(item, repo, pr))
     .toSorted((left, right) => compareStrings(left.createdAt, right.createdAt));
   const requestedReviewers = [...(requestedReviewersResult.logins ?? [])].toSorted(compareStrings);
+  const requiredCheckPolicy = checkRunsResult.requiredPolicy === "resolved" ? "resolved" : "unknown";
   const checkRuns = (checkRunsResult.items ?? [])
-    .map((item) => normalizeCheckRun(item, item?.required !== false))
+    .map((item) => normalizeCheckRun(item))
     .toSorted((left, right) => compareStrings(left.name, right.name));
 
   const evidence = {
@@ -742,6 +774,7 @@ export async function auditPrConvergence({ repo, pr, provider }) {
     issueComments,
     requestedReviewers,
     checkRuns,
+    requiredCheckPolicy,
     surfaceCoverage: {
       formal_reviews: {
         complete: formalReviewsResult.complete,

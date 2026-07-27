@@ -38,7 +38,7 @@ export type NormalizedCheckRun = {
   conclusion: string | null;
   headSha: string;
   url: string;
-  required: boolean;
+  required: boolean | null;
 };
 
 export type EvidenceCollection = {
@@ -52,6 +52,7 @@ export type EvidenceCollection = {
   issueComments: NormalizedEvidenceItem[];
   requestedReviewers: string[];
   checkRuns: NormalizedCheckRun[];
+  requiredCheckPolicy: "resolved" | "unknown";
   surfaceCoverage: Record<string, { complete: boolean; count: number }>;
   errors: string[];
 };
@@ -94,6 +95,7 @@ export type PrConvergenceProvider = {
   fetchCheckRuns: (params: { repo: string; headSha: string }) => Promise<{
     items: Record<string, unknown>[];
     complete: boolean;
+    requiredPolicy?: "resolved" | "unknown";
   }>;
 };
 

@@ -20,6 +20,7 @@ type ProviderOptions = {
   issueComments?: Record<string, unknown>[];
   requestedReviewers?: string[];
   checkRuns?: Record<string, unknown>[];
+  requiredCheckPolicy?: "resolved" | "unknown";
   completeness?: Partial<Record<string, boolean>>;
   headShaInitial?: string;
   headShaFinal?: string;
@@ -110,6 +111,7 @@ function createProvider(options: ProviderOptions = {}) {
             successfulCheck("Workflow Sanity", 2),
           ],
           complete: completeness.check_runs,
+          requiredPolicy: options.requiredCheckPolicy ?? "resolved",
         };
       },
     },
@@ -202,6 +204,43 @@ describe("pr-convergence-audit", () => {
     expect(result.findingCounts).toEqual({});
     expect(result.evidence.issueComments).toHaveLength(2);
     expect(result.reason).toContain("no unresolved blockers");
+  });
+
+  it("returns UNKNOWN when target-branch required-check policy is unavailable", async () => {
+    const passBody = `<!-- clawsweeper-verdict:pass item=${pr} sha=${headSha} confidence=high -->`;
+    const { provider } = createProvider({
+      issueComments: [clawsweeperComment({ id: 9150, body: passBody })],
+      requiredCheckPolicy: "unknown",
+    });
+
+    const result = await auditPrConvergence({ repo, pr, provider });
+
+    expect(result.decision).toBe(CONVERGENCE_DECISIONS.UNKNOWN);
+    expect(result.reason).toMatch(/target branch protection or ruleset policy/i);
+    expect(result.nextAction).toMatch(/Resolve required checks/i);
+  });
+
+  it("returns UNKNOWN when a check run omits authoritative requiredness", async () => {
+    const passBody = `<!-- clawsweeper-verdict:pass item=${pr} sha=${headSha} confidence=high -->`;
+    const { provider } = createProvider({
+      issueComments: [clawsweeperComment({ id: 9160, body: passBody })],
+      checkRuns: [
+        {
+          id: 1,
+          name: "CI",
+          status: "completed",
+          conclusion: "success",
+          head_sha: headSha,
+          html_url: `${prUrl}/actions/runs/1`,
+        },
+      ],
+    });
+
+    const result = await auditPrConvergence({ repo, pr, provider });
+
+    expect(result.decision).toBe(CONVERGENCE_DECISIONS.UNKNOWN);
+    expect(result.reason).toMatch(/ambiguous/i);
+    expect(result.evidence.checkRuns[0]?.required).toBeNull();
   });
 
   it("returns BLOCKED when required checks failed on the exact head", async () => {
@@ -314,6 +353,7 @@ describe("pr-convergence-audit", () => {
       issueComments: [],
       requestedReviewers: [],
       checkRuns: [successfulCheck("CI", 1)],
+      requiredCheckPolicy: "resolved",
       surfaceCoverage: {
         formal_reviews: { complete: true, count: 1 },
         inline_review_comments: { complete: true, count: 0 },
