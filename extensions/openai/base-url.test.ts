@@ -97,6 +97,7 @@ describe("openai base URL helpers", () => {
     for (const invalid of [
       "http://127.0.0.1",
       "http://127.0.0.1/backend-api",
+      "http://127.0.0.1:7862/backend-api/CODEX",
       "http://localhost:7862/codex",
       "http://127.0.0.2:7862/codex",
       "https://proxy.example.test/codex",
