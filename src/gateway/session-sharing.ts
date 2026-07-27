@@ -27,7 +27,10 @@ import {
   loadCachedSessionSharingSnapshot,
   type SessionSharingSnapshot,
 } from "./session-sharing-snapshot-cache.js";
-import type { GatewaySessionStoreCache } from "./session-utils-store-lookup.js";
+import type {
+  GatewaySessionStoreCache,
+  GatewaySessionStoreDiscoveryCache,
+} from "./session-utils-store-lookup.js";
 import {
   resolveFreshestSessionStoreMatchFromStoreKeys,
   resolveGatewaySessionStoreTargetWithStore,
@@ -103,13 +106,16 @@ export function resolveSessionSharingTarget(params: {
   agentId?: string;
   projection?: "full" | "list";
   storeCache?: GatewaySessionStoreCache;
+  targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
 }): SessionSharingTarget | null {
   const target = resolveGatewaySessionStoreTargetWithStore({
     cfg: params.cfg,
     key: params.sessionKey,
     agentId: params.agentId,
+    clone: false,
     ...(params.projection ? { projection: params.projection } : {}),
     ...(params.storeCache ? { storeCache: params.storeCache } : {}),
+    ...(params.targetDiscoveryCache ? { targetDiscoveryCache: params.targetDiscoveryCache } : {}),
   });
   const match = resolveFreshestSessionStoreMatchFromStoreKeys(target.store, target.storeKeys);
   return match

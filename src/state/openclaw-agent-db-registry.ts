@@ -43,6 +43,14 @@ type AgentDatabasePathIdentity = {
 };
 
 const missingSuffixAliasCache = new Map<string, boolean>();
+// Registry metadata is process-stable: this module owns writes and invalidates after each commit;
+// other-process changes take effect on restart. Polling here puts schema probes back on hot reads.
+let registeredAgentDatabasesMemo:
+  | {
+      pathname: string;
+      entries: readonly OpenClawRegisteredAgentDatabase[];
+    }
+  | undefined;
 const MAX_DANGLING_SYMLINK_HOPS = 64;
 const PROBE_NAME_LENGTH = 6;
 const PROBE_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -623,6 +631,7 @@ export function registerOpenClawAgentDatabase(params: {
     },
     { env: params.env },
   );
+  invalidateRegisteredAgentDatabasesMemo({ env: params.env });
 }
 
 export function unregisterOpenClawAgentDatabase(params: {
@@ -643,6 +652,24 @@ export function unregisterOpenClawAgentDatabase(params: {
     },
     { env: params.env },
   );
+  invalidateRegisteredAgentDatabasesMemo({ env: params.env });
+}
+
+function resolveAgentDatabaseRegistryPath(options: OpenClawStateDatabaseOptions): string {
+  return path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
+}
+
+function invalidateRegisteredAgentDatabasesMemo(options: OpenClawStateDatabaseOptions): void {
+  const pathname = resolveAgentDatabaseRegistryPath(options);
+  if (registeredAgentDatabasesMemo?.pathname === pathname) {
+    registeredAgentDatabasesMemo = undefined;
+  }
+}
+
+function cloneRegisteredAgentDatabases(
+  entries: readonly OpenClawRegisteredAgentDatabase[],
+): OpenClawRegisteredAgentDatabase[] {
+  return entries.map((entry) => ({ ...entry }));
 }
 
 function hasUnavailableMissingSqlitePath(pathname: string): boolean {
@@ -686,19 +713,21 @@ function hasUnavailableMissingSqlitePath(pathname: string): boolean {
 export function listOpenClawRegisteredAgentDatabases(
   options: OpenClawStateDatabaseOptions = {},
 ): OpenClawRegisteredAgentDatabase[] {
-  const pathname = path.resolve(
-    options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env),
-  );
+  const pathname = resolveAgentDatabaseRegistryPath(options);
+  if (registeredAgentDatabasesMemo?.pathname === pathname) {
+    return cloneRegisteredAgentDatabases(registeredAgentDatabasesMemo.entries);
+  }
   if (!existsSync(pathname)) {
     if (hasUnavailableMissingSqlitePath(pathname)) {
       throw new Error(`OpenClaw state database ${pathname} is unavailable.`);
     }
+    registeredAgentDatabasesMemo = { pathname, entries: [] };
     return [];
   }
   // Discovery runs per row in list hot paths, so the legacy-schema gate and the
   // query share one process-held state handle instead of opening two
   // connections per call.
-  return withOpenClawStateDatabaseReadOnly(({ db: database }) => {
+  const entries = withOpenClawStateDatabaseReadOnly(({ db: database }) => {
     if (detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(database, pathname).length > 0) {
       throw new Error(
         `OpenClaw state database ${pathname} has a legacy agent database registry schema; run openclaw doctor --fix to migrate it.`,
@@ -730,4 +759,6 @@ export function listOpenClawRegisteredAgentDatabases(
       sizeBytes: row.size_bytes,
     }));
   }, options);
+  registeredAgentDatabasesMemo = { pathname, entries };
+  return cloneRegisteredAgentDatabases(entries);
 }

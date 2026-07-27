@@ -3,7 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { Insertable, Selectable } from "kysely";
+import { sql, type Insertable, type Selectable } from "kysely";
 import { getRuntimeConfig } from "../../config/config.js";
 import { patchSessionEntryWithKey } from "../../config/sessions/session-accessor.js";
 import {
@@ -227,6 +227,66 @@ export function readAcpSessionMetaForEntry(params: {
     return undefined;
   }
   return rowToAcpSessionMeta(row);
+}
+
+export function readAcpSessionMetaBatch(params: {
+  entries: ReadonlyArray<{
+    sessionKey: string;
+    entry: SessionEntry;
+  }>;
+  env?: NodeJS.ProcessEnv;
+  databasePath?: string;
+}): Map<SessionEntry, SessionAcpMeta | undefined> {
+  const result = new Map<SessionEntry, SessionAcpMeta | undefined>();
+  const entriesByKey = new Map<string, SessionEntry[]>();
+  for (const item of params.entries) {
+    const sessionKey = item.sessionKey.trim();
+    if (!sessionKey) {
+      continue;
+    }
+    if (item.entry?.acp) {
+      result.set(item.entry, item.entry.acp);
+      continue;
+    }
+    const entries = entriesByKey.get(sessionKey) ?? [];
+    entries.push(item.entry);
+    entriesByKey.set(sessionKey, entries);
+  }
+  if (entriesByKey.size === 0) {
+    return result;
+  }
+
+  const database = openOpenClawStateDatabase({
+    env: params.env,
+    path: params.databasePath,
+  });
+  // SQLite's JSON table keeps this to one SELECT and one bind even for caller-requested
+  // list limits above the engine's variable cap; splitting it would restore per-batch latency.
+  const db = getAcpSessionKysely(database.db);
+  const requestedKeys = db
+    .selectFrom(
+      sql<{ value: string }>`json_each(${JSON.stringify([...entriesByKey.keys()])})`.as(
+        "requested_keys",
+      ),
+    )
+    .select("requested_keys.value");
+  const rows = executeSqliteQuerySync(
+    database.db,
+    db.selectFrom("acp_sessions").selectAll().where("session_key", "in", requestedKeys),
+  ).rows;
+  const rowsByKey = new Map(rows.map((row) => [row.session_key, row]));
+  for (const [sessionKey, entries] of entriesByKey) {
+    for (const entry of entries) {
+      const row = resolveReadableAcpSessionRow({
+        row: rowsByKey.get(sessionKey),
+        entry,
+        env: params.env,
+        databasePath: params.databasePath,
+      });
+      result.set(entry, row ? rowToAcpSessionMeta(row) : undefined);
+    }
+  }
+  return result;
 }
 
 function selectAcpSessionRows(options: OpenClawStateDatabaseOptions = {}): AcpSessionRow[] {
