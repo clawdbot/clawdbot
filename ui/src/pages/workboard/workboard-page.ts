@@ -377,6 +377,7 @@ class WorkboardPage extends OpenClawLightDomElement {
         pluginEnablementError:
           !config.configSnapshot && !config.configLoading ? config.lastError : null,
         agentsList: context.agents.state.agentsList,
+        defaultAgentId: gateway.assistantAgentId,
         sessions: context.sessions.state.result?.sessions ?? [],
         scopeAgentId: context.agentSelection.state.scopeId,
         showAgentFilter: context.agentSelection.state.scopeId === null,

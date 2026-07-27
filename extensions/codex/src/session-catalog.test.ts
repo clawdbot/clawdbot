@@ -1388,6 +1388,29 @@ describe("Codex supervision catalog", () => {
     expect(runtime.nodes.list).not.toHaveBeenCalled();
   });
 
+  it("prefers the request node snapshot and retains the plugin runtime fallback", async () => {
+    const control = createControl();
+    const { runtime } = createRuntime();
+    const { api, getProvider } = createGatewayApi(runtime);
+    registerCodexSessionCatalog({
+      api,
+      bindingStore: createCodexTestBindingStore(),
+      control,
+      getRuntimeConfig: () => config,
+    });
+    const provider = getProvider();
+    const requestListNodes = vi.fn(async () => ({ nodes: [] }));
+
+    await expect(
+      provider?.list({ hostIds: ["node:missing"], listNodes: requestListNodes }),
+    ).resolves.toEqual([]);
+    expect(requestListNodes).toHaveBeenCalledOnce();
+    expect(runtime.nodes.list).not.toHaveBeenCalled();
+
+    await expect(provider?.list({ hostIds: ["node:missing"] })).resolves.toEqual([]);
+    expect(runtime.nodes.list).toHaveBeenCalledOnce();
+  });
+
   it("enriches only the local source row with its adopted OpenClaw session", async () => {
     const control = createControl({
       listPage: vi.fn(async () => ({

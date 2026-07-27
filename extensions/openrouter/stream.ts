@@ -2,7 +2,10 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
-import { createPayloadPatchStreamWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
+import {
+  createPayloadPatchStreamWrapper,
+  normalizeOpenAICompatibleReasoningReplay,
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { isOpenRouterDeepSeekV4ModelId } from "./models.js";
 import {
@@ -165,37 +168,6 @@ function isOpenRouterReasoningPayloadEnabled(payload: Record<string, unknown>): 
   );
 }
 
-function stripOpenRouterDeepSeekV4ReasoningContent(payload: Record<string, unknown>): void {
-  if (!Array.isArray(payload.messages)) {
-    return;
-  }
-  for (const message of payload.messages) {
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-    delete (message as Record<string, unknown>).reasoning_content;
-  }
-}
-
-function backfillOpenRouterDeepSeekV4ReasoningContent(payload: Record<string, unknown>): void {
-  if (!Array.isArray(payload.messages)) {
-    return;
-  }
-  for (const message of payload.messages) {
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-    const record = message as Record<string, unknown>;
-    if (
-      record.role === "assistant" &&
-      !assistantMessageHasOpenAIToolCalls(record) &&
-      !("reasoning_content" in record)
-    ) {
-      record.reasoning_content = "";
-    }
-  }
-}
-
 function injectOpenRouterRouting(
   baseStreamFn: StreamFn | undefined,
   providerRouting?: Record<string, unknown>,
@@ -291,11 +263,10 @@ function createOpenRouterDeepSeekV4ReplayWrapper(
     ({ payload }) => {
       delete payload.thinking;
       delete payload.reasoning_effort;
-      if (!applyOpenRouterDeepSeekV4ReasoningEffort(payload, thinkingLevel)) {
-        stripOpenRouterDeepSeekV4ReasoningContent(payload);
-        return;
-      }
-      backfillOpenRouterDeepSeekV4ReasoningContent(payload);
+      normalizeOpenAICompatibleReasoningReplay(payload, {
+        thinkingEnabled: applyOpenRouterDeepSeekV4ReasoningEffort(payload, thinkingLevel),
+        shouldBackfillAssistantMessage: (message) => !assistantMessageHasOpenAIToolCalls(message),
+      });
     },
     {
       shouldPatch: ({ model }) => shouldPatchDeepSeekV4OpenRouterPayload(model),

@@ -124,6 +124,74 @@ describe.runIf(process.platform !== "win32")("exec auto-review shell stress", ()
   it.each<[string, string[], boolean]>([
     ["Fish short initializer", ["fish", "-C", "echo startup", "-c", "echo payload"], true],
     ["Fish long initializer", ["fish", "--init-command=echo startup", "-c", "echo payload"], true],
+    ["Windows cmd default AutoRun", ["cmd", "/c", "echo safe"], true],
+    ["Windows cmd.exe default AutoRun", ["cmd.exe", "/c", "echo safe"], true],
+    ["Windows cmd uppercase default AutoRun", ["CMD.EXE", "/C", "echo safe"], true],
+    ["Windows cmd hyphenated default AutoRun", ["cmd", "-c", "echo safe"], true],
+    ["Windows cmd persistent interactive shell", ["cmd", "/k", "echo safe"], true],
+    [
+      "Windows cmd persistent shell despite disabled AutoRun",
+      ["cmd", "/d", "/k", "echo safe"],
+      true,
+    ],
+    ["Windows cmd switch-only interactive shell", ["cmd", "/d"], true],
+    ["Windows cmd bare interactive shell", ["cmd.exe"], true],
+    ["Windows cmd missing inline payload", ["cmd", "/d", "/c"], true],
+    ["Windows cmd help still enables AutoRun", ["cmd", "/?"], true],
+    ["Windows cmd help cannot bind a later command", ["cmd", "/?", "/c", "echo safe"], true],
+    ["Windows cmd disabled AutoRun help still has no bound payload", ["cmd", "/d", "/?"], true],
+    [
+      "Windows cmd /r binds before a later AutoRun switch",
+      ["cmd", "/r", "/d", "/c", "echo safe"],
+      true,
+    ],
+    [
+      "Windows cmd /r after disabled AutoRun is not a bound /c",
+      ["cmd", "/d", "/r", "/c", "echo safe"],
+      true,
+    ],
+    [
+      "Windows cmd unknown switches cannot hide startup",
+      ["cmd", "/unknown", "/d", "/c", "echo safe"],
+      true,
+    ],
+    [
+      "Windows cmd color option cannot smuggle /k",
+      ["cmd", "/t:0f/k", "/d", "/c", "echo safe"],
+      true,
+    ],
+    [
+      "Windows cmd extension option cannot smuggle /k",
+      ["cmd", "/e:on/k", "/d", "/c", "echo safe"],
+      true,
+    ],
+    [
+      "Windows cmd expansion option cannot smuggle /r",
+      ["cmd", "/v:on/r", "/d", "/c", "echo safe"],
+      true,
+    ],
+    ["Windows cmd payload cannot disable prior AutoRun", ["cmd", "/c", "echo", "/d"], true],
+    ["Windows cmd profile-free command", ["cmd", "/d", "/c", "echo safe"], false],
+    [
+      "Windows cmd documented quiet and quote switches",
+      ["cmd", "/d", "/s", "/q", "/c", "echo safe"],
+      false,
+    ],
+    [
+      "Windows cmd documented configuration switches",
+      ["cmd", "/d", "/e:on", "/f:off", "/v:on", "/t:0f", "/c", "echo safe"],
+      false,
+    ],
+    [
+      "Windows cmd uppercase profile-free command",
+      ["CMD.EXE", "/D", "/S", "/C", "echo safe"],
+      false,
+    ],
+    [
+      "Windows cmd hyphenated switches do not disable AutoRun",
+      ["cmd", "-d", "-c", "echo safe"],
+      true,
+    ],
     ["PowerShell encoded flag", ["pwsh", "-EncodedCommand", "ZQBjAGgAbwA="], true],
     ["PowerShell encoded abbreviation", ["pwsh", "/ec", "ZQBjAGgAbwA="], true],
     ["PowerShell encoded prefix", ["pwsh", "-en", "ZQBjAGgAbwA="], true],
@@ -273,6 +341,53 @@ describe.runIf(process.platform !== "win32")("exec auto-review shell stress", ()
     }
   });
 
+  it("fails closed for 16,384 seeded Windows cmd startup wrapper chains", () => {
+    const random = createSeededRandom(0x20260728);
+    const opaqueShells = [
+      ["cmd", "/c", "echo safe"],
+      ["cmd.exe", "/C", "echo safe"],
+      ["CMD.EXE", "-c", "echo safe"],
+      ["cmd", "/k", "echo safe"],
+      ["cmd.exe", "/d", "/k", "echo safe"],
+      ["cmd", "/D", "/S", "/K", "echo safe"],
+      ["cmd", "-d", "-c", "echo safe"],
+      ["cmd", "/?"],
+      ["cmd", "/?", "/c", "echo safe"],
+      ["cmd.exe", "/d", "/?"],
+      ["cmd", "/r", "/d", "/c", "echo safe"],
+      ["cmd", "/d", "/r", "/c", "echo safe"],
+      ["cmd", "/unknown", "/d", "/c", "echo safe"],
+      ["cmd", "/t:0f/k", "/d", "/c", "echo safe"],
+      ["cmd", "/e:on/k", "/d", "/c", "echo safe"],
+      ["cmd", "/v:on/r", "/d", "/c", "echo safe"],
+      ["cmd.exe", "/d", "/c"],
+      ["cmd", "/c", "echo", "/d"],
+      ["cmd.exe"],
+    ] as const;
+    const dispatchWrappers = [
+      ["env", "--"],
+      ["nice", "-n", "5"],
+      ["nohup", "--"],
+      ["timeout", "5s"],
+      ["stdbuf", "-o", "L"],
+      ["time", "-p"],
+    ] as const;
+
+    for (let index = 0; index < 16_384; index += 1) {
+      const argv: string[] = [...chooseSeeded(random, opaqueShells)];
+      const wrapperDepth = Math.floor(random() * 7);
+      for (let depth = 0; depth < wrapperDepth; depth += 1) {
+        argv.unshift(...chooseSeeded(random, dispatchWrappers));
+      }
+
+      const trustPlan = resolveDispatchWrapperTrustPlan(argv);
+      expect(
+        trustPlan.policyBlocked || isBlockedShellWrapperCommand(trustPlan.argv),
+        `Windows cmd startup escaped at seed 0x20260728, case ${index}: ${JSON.stringify(argv)}`,
+      ).toBe(true);
+    }
+  });
+
   it.each([
     ["bash combined login", "bash -lc 'echo startup'"],
     ["bash reversed login flags", "bash -cl 'echo startup'"],
@@ -299,6 +414,31 @@ describe.runIf(process.platform !== "win32")("exec auto-review shell stress", ()
     ["timeout carrier", "timeout 5s bash -lc 'echo startup'"],
     ["nested carriers", "nohup -- nice -n 5 env -- bash -lc 'echo startup'"],
     ["opaque privileged carrier", "sudo bash -lc 'echo startup'"],
+    ["Windows cmd default AutoRun", "cmd /c echo safe"],
+    ["Windows cmd.exe default AutoRun", "cmd.exe /c echo safe"],
+    ["Windows cmd uppercase default AutoRun", "CMD.EXE /C echo safe"],
+    ["Windows cmd hyphenated default AutoRun", "cmd -c echo safe"],
+    ["Windows cmd hyphenated switches do not disable AutoRun", "cmd -d -c echo safe"],
+    ["Windows cmd persistent interactive shell", "cmd /k echo safe"],
+    ["Windows cmd persistent shell despite disabled AutoRun", "cmd /d /k echo safe"],
+    ["Windows cmd switch-only interactive shell", "cmd /d"],
+    ["Windows cmd bare interactive shell", "cmd.exe"],
+    ["Windows cmd missing inline payload", "cmd /d /c"],
+    ["Windows cmd help still enables AutoRun", "cmd /?"],
+    ["Windows cmd help cannot bind a later command", "cmd /? /c echo safe"],
+    ["Windows cmd disabled AutoRun help still has no bound payload", "cmd /d /?"],
+    ["Windows cmd /r binds before a later AutoRun switch", "cmd /r /d /c echo safe"],
+    ["Windows cmd /r after disabled AutoRun is not a bound /c", "cmd /d /r /c echo safe"],
+    ["Windows cmd unknown switches cannot hide startup", "cmd /unknown /d /c echo safe"],
+    ["Windows cmd color option cannot smuggle /k", "cmd /t:0f/k /d /c echo safe"],
+    ["Windows cmd extension option cannot smuggle /k", "cmd /e:on/k /d /c echo safe"],
+    ["Windows cmd expansion option cannot smuggle /r", "cmd /v:on/r /d /c echo safe"],
+    ["Windows cmd payload cannot disable prior AutoRun", "cmd /c echo /d"],
+    ["Windows cmd AutoRun inside transparent carrier", "env -- cmd.exe /c echo safe"],
+    [
+      "Windows cmd persistent shell inside nested carriers",
+      "nohup -- nice -n 5 env -- cmd.exe /d /k echo safe",
+    ],
     ["PowerShell default profile", "pwsh -Command 'Write-Output safe'"],
     ["Windows PowerShell default profile", "powershell -Command 'Write-Output safe'"],
     ["PowerShell positional script profile", "pwsh ./safe.ps1"],
@@ -460,6 +600,11 @@ describe.runIf(process.platform !== "win32")("exec auto-review shell stress", ()
     "node --version",
     "git status",
     "printf safe",
+    "cmd /d /c echo safe",
+    "cmd.exe /d /s /c echo safe",
+    "CMD.EXE /D /S /C echo safe",
+    "cmd /d /s /q /c echo safe",
+    "cmd /d /e:on /f:off /v:on /t:0f /c echo safe",
     "pwsh -NoProfile -Command 'Write-Output safe'",
     "pwsh -nop -c 'Write-Output safe'",
     "pwsh /NoProfile /c 'Write-Output safe'",

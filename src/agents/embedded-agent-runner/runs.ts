@@ -1010,7 +1010,7 @@ export function setActiveEmbeddedRun(
     state: "processing",
     reason: wasActive ? "run_replaced" : "run_started",
   });
-  markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
+  markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId: handle.runId });
   if (!sessionId.startsWith("probe-")) {
     diag.debug(`run registered: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
   }
