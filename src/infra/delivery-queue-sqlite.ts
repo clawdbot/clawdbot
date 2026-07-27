@@ -39,6 +39,8 @@ export type DeliveryQueueEntryState = {
   enqueuedAt: number;
   retryCount: number;
   availableAt?: number;
+  /** Only explicit reusable producers retain a platform-send ownership lease. */
+  requiresProducerClaim?: boolean;
   producerClaimId?: string;
   /** Durable delivery-call count reserved before invoking the provider path. */
   attemptCount?: number;

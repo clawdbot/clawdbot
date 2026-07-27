@@ -15,6 +15,8 @@ type PlatformClaimParams = {
   reconciledPlatformSendStartedAt?: number;
 };
 
+const PLATFORM_SEND_OWNER_LEASE_MS = 30_000;
+
 /** Runs an existing queue mutation only while its exact platform owner survives. */
 export function transitionOwnedDeliveryQueueEntry(
   params: {
@@ -117,7 +119,7 @@ export function claimDeliveryQueueEntryPlatformSend(
     }
     return {
       ...entry,
-      availableAt: now + 30_000,
+      availableAt: now + PLATFORM_SEND_OWNER_LEASE_MS,
       producerClaimId: claimId,
       platformSendAttemptId: undefined,
       platformSendStartedAt: undefined,
@@ -142,7 +144,10 @@ export function promoteDeliveryQueueEntryPlatformSend(
     entry.availableAt > now
       ? {
           ...entry,
-          availableAt: undefined,
+          // Only an explicitly reusable owner keeps its cross-process fence;
+          // legacy recovery must remain immediately eligible after a crash.
+          availableAt:
+            entry.requiresProducerClaim === true ? now + PLATFORM_SEND_OWNER_LEASE_MS : undefined,
           producerClaimId: undefined,
           platformSendAttemptId: params.claimId,
           platformSendStartedAt: now,

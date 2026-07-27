@@ -136,8 +136,11 @@ function needsUnknownSendReconciliation(entry: QueuedDelivery): boolean {
 
 function hasActiveStableDeliveryOwner(entry: QueuedDelivery, now: number): boolean {
   return (
-    (typeof entry.completionRetention === "object" || entry.completionRetention === "permanent") &&
-    entry.recoveryState === "producer_claimed" &&
+    (typeof entry.completionRetention === "object" ||
+      entry.completionRetention === "permanent" ||
+      entry.requiresProducerClaim === true) &&
+    (entry.recoveryState === "producer_claimed" ||
+      entry.recoveryState === "send_attempt_started") &&
     typeof entry.availableAt === "number" &&
     entry.availableAt > now
   );
@@ -663,12 +666,7 @@ async function drainQueuedEntry(opts: {
         if (entry.deliveryCompletion) {
           completeDurableDelivery(entry.deliveryCompletion, result);
         }
-        await ackRecoveredDelivery(
-          entry,
-          opts.stateDir,
-          undefined,
-          typeof entry.completionRetention === "object" ? entry.platformSendAttemptId : undefined,
-        );
+        await ackRecoveredDelivery(entry, opts.stateDir, undefined, entry.platformSendAttemptId);
         await runReconciledSentCommitHooks({
           entry,
           cfg: opts.cfg,
@@ -698,7 +696,7 @@ async function drainQueuedEntry(opts: {
             entry,
             errMsg,
             opts.stateDir,
-            typeof entry.completionRetention === "object" ? entry.platformSendAttemptId : undefined,
+            entry.platformSendAttemptId,
           );
           return "failed";
         } catch (failErr) {
@@ -844,7 +842,7 @@ async function drainQueuedEntry(opts: {
     });
     const results = isOutboundDeliveryResultArray(result) ? result : [];
     if (
-      typeof entry.completionRetention === "object" &&
+      producerClaimId !== undefined &&
       payloadOutcomes.some(
         (outcome) =>
           outcome.status === "suppressed" && outcome.reason === "adapter_returned_no_identity",

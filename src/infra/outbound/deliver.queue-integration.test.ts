@@ -328,43 +328,54 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     ).toBe("completed");
   });
 
-  it("never completes recovered Matrix sends that return no platform identity", async () => {
-    process.env.OPENCLAW_STATE_DIR = tmpDir;
-    const deliveryIntentId = "cron-direct-delivery:v1:recovered-matrix-no-identity";
-    await enqueueDeliveryOnce(
-      {
-        channel: "matrix",
-        to: "!room:example",
-        payloads: [{ text: "recovery must not assume a platform send succeeded" }],
-        queuePolicy: "required",
-        completionRetention: boundedCronCompletionRetention,
-      },
-      deliveryIntentId,
-      tmpDir,
-    );
-    const sendMatrix = vi.fn().mockResolvedValue({});
-    const deliver = vi.fn<DeliverFn>(async (params) =>
-      deliverOutboundPayloads({ ...params, deps: { matrix: sendMatrix } }),
-    );
+  it.each([
+    [
+      "bounded",
+      "cron-direct-delivery:v1:recovered-matrix-no-identity",
+      boundedCronCompletionRetention,
+      false,
+    ],
+    ["permanent", "permanent-recovered-matrix-no-identity", "permanent" as const, true],
+  ])(
+    "never completes %s recovered Matrix sends without a platform identity",
+    async (_retention, deliveryIntentId, completionRetention, requiresProducerClaim) => {
+      process.env.OPENCLAW_STATE_DIR = tmpDir;
+      await enqueueDeliveryOnce(
+        {
+          channel: "matrix",
+          to: "!room:example",
+          payloads: [{ text: "recovery must not assume a platform send succeeded" }],
+          queuePolicy: "required",
+          completionRetention,
+          ...(requiresProducerClaim ? { requiresProducerClaim: true } : {}),
+        },
+        deliveryIntentId,
+        tmpDir,
+      );
+      const sendMatrix = vi.fn().mockResolvedValue({});
+      const deliver = vi.fn<DeliverFn>(async (params) =>
+        deliverOutboundPayloads({ ...params, deps: { matrix: sendMatrix } }),
+      );
 
-    await drainMatrixReconnect({ deliver, stateDir: tmpDir });
+      await drainMatrixReconnect({ deliver, stateDir: tmpDir });
 
-    expect(sendMatrix).toHaveBeenCalledOnce();
-    expect(
-      getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
-    ).toBe("pending");
-    expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
-      id: deliveryIntentId,
-      recoveryState: "unknown_after_send",
-      retryCount: 1,
-    });
+      expect(sendMatrix).toHaveBeenCalledOnce();
+      expect(
+        getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
+      ).toBe("pending");
+      expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
+        id: deliveryIntentId,
+        recoveryState: "unknown_after_send",
+        retryCount: 1,
+      });
 
-    await drainMatrixReconnect({ deliver, stateDir: tmpDir });
-    expect(sendMatrix).toHaveBeenCalledOnce();
-    expect(
-      getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
-    ).not.toBe("completed");
-  });
+      await drainMatrixReconnect({ deliver, stateDir: tmpDir });
+      expect(sendMatrix).toHaveBeenCalledOnce();
+      expect(
+        getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
+      ).not.toBe("completed");
+    },
+  );
 
   it("never completes recovered Matrix batches when any platform send lacks an identity", async () => {
     process.env.OPENCLAW_STATE_DIR = tmpDir;
