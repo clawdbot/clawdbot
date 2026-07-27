@@ -7,6 +7,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionRunStatus } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import type { BoardFace } from "../lib/board/settings.ts";
 import {
   normalizeCatalogProjectGrouping,
   type CatalogProjectGrouping,
@@ -73,6 +74,7 @@ export type SidebarRecentSession = {
   draftOwnedBySelf?: boolean;
   icon?: string;
   category?: string;
+  boardFace?: BoardFace;
   channel?: string;
   channelSession?: boolean;
   workSession?: boolean;

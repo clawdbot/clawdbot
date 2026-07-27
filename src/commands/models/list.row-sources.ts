@@ -94,7 +94,8 @@ export async function appendAllModelRowSources(
     if (
       catalogRows === 0 &&
       params.rows.length === 0 &&
-      params.sourcePlan.fallbackToRegistryWhenEmpty
+      (params.sourcePlan.kind === "provider-runtime-static" ||
+        params.sourcePlan.kind === "provider-runtime-scoped")
     ) {
       // Provider-scoped static sources can be empty when a plugin exposes only
       // runtime discovery; tell the caller to load the registry and retry.

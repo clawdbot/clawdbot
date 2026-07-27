@@ -11,6 +11,7 @@ import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/
 import type { ChatType } from "../../channels/chat-type.js";
 import type { CronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
+import type { SessionBoardFace } from "../../shared/session-types.js";
 import type { Skill } from "../../skills/loading/skill-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
@@ -534,6 +535,8 @@ export type SessionEntry = SessionRestartRecoveryState &
     label?: string;
     /** User-defined organization bucket for session lists; unrelated to chat groupId/groupChannel. */
     category?: string;
+    /** Preferred Control UI face when a caller opens this session without explicit face intent. */
+    boardFace?: SessionBoardFace;
     displayName?: string;
     /** Canonical delivery state. Legacy delivery fields are migrated by `openclaw doctor --fix`. */
     delivery?: SessionDeliveryState;

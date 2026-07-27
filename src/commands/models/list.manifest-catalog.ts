@@ -2,7 +2,10 @@
 import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { planEffectiveModelCatalogRows } from "../../model-catalog/index.js";
+import {
+  planEffectiveModelCatalogRows,
+  type ManifestModelCatalogRowSelection,
+} from "../../model-catalog/index.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -13,14 +16,10 @@ import {
   type PluginRegistrySnapshot,
 } from "../../plugins/plugin-registry.js";
 
-type ManifestCatalogRowsForListMode = "static-authoritative" | "supplemental";
-
 function loadManifestCatalogRowsForPluginIds(params: {
   cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  index: PluginRegistrySnapshot;
   registry: PluginManifestRegistry;
-  mode: ManifestCatalogRowsForListMode;
+  mode: ManifestModelCatalogRowSelection;
   pluginIds?: readonly string[];
   providerFilter?: string;
 }): readonly NormalizedModelCatalogRow[] {
@@ -34,35 +33,12 @@ function loadManifestCatalogRowsForPluginIds(params: {
         plugins: params.registry.plugins.filter((plugin) => pluginIdSet.has(plugin.id)),
       }
     : params.registry;
-  const plan = planEffectiveModelCatalogRows({
+  return planEffectiveModelCatalogRows({
     registry,
     config: params.cfg,
     ...(params.providerFilter ? { providerFilter: params.providerFilter } : {}),
-  });
-  const eligibleProviders = new Set(
-    plan.entries
-      .filter((entry) =>
-        params.mode === "static-authoritative"
-          ? entry.discovery === "static"
-          : entry.discovery !== "runtime",
-      )
-      .map((entry) => entry.provider),
-  );
-  const runtimeRefreshProviders = new Set(
-    params.mode === "supplemental"
-      ? plan.entries.filter((entry) => entry.discovery === "runtime").map((entry) => entry.provider)
-      : [],
-  );
-  if (eligibleProviders.size === 0 && runtimeRefreshProviders.size === 0) {
-    return [];
-  }
-  // Runtime-owned providers still discover authoritative models live; only
-  // validated remote-refresh rows may supplement that provider catalog.
-  return plan.rows.filter(
-    (row) =>
-      eligibleProviders.has(row.provider) ||
-      (runtimeRefreshProviders.has(row.provider) && row.source === "runtime-refresh"),
-  );
+    selection: params.mode,
+  }).rows;
 }
 
 function resolveConventionModelCatalogPluginIds(params: {
@@ -104,13 +80,13 @@ function loadManifestCatalogRowsForList(params: {
   cfg: OpenClawConfig;
   providerFilter?: string;
   env?: NodeJS.ProcessEnv;
-  mode?: ManifestCatalogRowsForListMode;
+  mode?: ManifestModelCatalogRowSelection;
   metadataSnapshot?: PluginMetadataSnapshot;
 }): readonly NormalizedModelCatalogRow[] {
   const providerFilter = params.providerFilter
     ? normalizeModelCatalogProviderId(params.providerFilter)
     : undefined;
-  const mode = params.mode ?? "static-authoritative";
+  const mode = params.mode ?? "static";
   const snapshot =
     params.metadataSnapshot ??
     loadManifestMetadataSnapshot({
@@ -121,16 +97,12 @@ function loadManifestCatalogRowsForList(params: {
   if (!providerFilter) {
     return loadManifestCatalogRowsForPluginIds({
       cfg: params.cfg,
-      env: params.env,
-      index,
       registry: snapshot.manifestRegistry,
       mode,
     });
   }
   const conventionRows = loadManifestCatalogRowsForPluginIds({
     cfg: params.cfg,
-    env: params.env,
-    index,
     registry: snapshot.manifestRegistry,
     mode,
     pluginIds: resolveConventionModelCatalogPluginIds({
@@ -145,8 +117,6 @@ function loadManifestCatalogRowsForList(params: {
   }
   return loadManifestCatalogRowsForPluginIds({
     cfg: params.cfg,
-    env: params.env,
-    index,
     registry: snapshot.manifestRegistry,
     mode,
     pluginIds: resolveDeclaredModelCatalogPluginIds({
@@ -167,7 +137,7 @@ export function loadStaticManifestCatalogRowsForList(params: {
 }): readonly NormalizedModelCatalogRow[] {
   return loadManifestCatalogRowsForList({
     ...params,
-    mode: "static-authoritative",
+    mode: "static",
   });
 }
 
