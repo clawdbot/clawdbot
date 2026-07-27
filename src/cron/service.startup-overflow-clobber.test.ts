@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { setupCronServiceSuite } from "./service.test-harness.js";
-import { start, status } from "./service/ops.js";
+import { start } from "./service/ops-lifecycle.js";
+import { status } from "./service/ops-read.js";
 import { createCronServiceState } from "./service/state.js";
 import { onTimer } from "./service/timer.test-support.js";
 import { saveCronStore } from "./store.js";

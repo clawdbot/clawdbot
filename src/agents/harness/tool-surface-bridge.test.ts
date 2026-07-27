@@ -209,6 +209,48 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     }
   });
 
+  it.each([
+    {
+      name: "auto engages a catalog-preferred model",
+      codeMode: "auto",
+      codeModeTier: "preferred",
+      engaged: true,
+    },
+    {
+      name: "auto falls back to tool search for an unflagged model",
+      codeMode: "auto",
+      codeModeTier: undefined,
+      engaged: false,
+    },
+    {
+      name: "true engages an unflagged model",
+      codeMode: true,
+      codeModeTier: undefined,
+      engaged: true,
+    },
+    {
+      name: "false never engages a preferred model",
+      codeMode: false,
+      codeModeTier: "preferred",
+      engaged: false,
+    },
+  ] as const)("$name", ({ codeMode, codeModeTier, engaged }) => {
+    const runtime = createAgentHarnessToolSurfaceRuntime({
+      config: { tools: { codeMode, toolSearch: true } },
+      executeTool: async () => ({ content: [], details: {} }),
+      model: codeModeTier ? { compat: { codeMode: codeModeTier } } : { compat: {} },
+      modelToolsEnabled: true,
+    });
+
+    try {
+      expect(runtime.codeModeControlsEnabled).toBe(engaged);
+      // Code mode and tool search stay mutually exclusive for one run.
+      expect(runtime.toolSearchControlsEnabled).toBe(!engaged);
+    } finally {
+      runtime.cleanup();
+    }
+  });
+
   it("preserves explicit code-mode compaction for lean runs", () => {
     testing.setToolSearchCodeModeSupportedForTest(true);
     try {

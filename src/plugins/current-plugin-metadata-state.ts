@@ -13,11 +13,17 @@ export const currentPluginMetadataConfigIdentityCache = {
   add(config: OpenClawConfig): void {
     currentPluginMetadataConfigIdentities.add(config);
   },
+  capture(): WeakSet<OpenClawConfig> {
+    return currentPluginMetadataConfigIdentities;
+  },
   clear(): void {
     currentPluginMetadataConfigIdentities = new WeakSet();
   },
   has(config: OpenClawConfig): boolean {
     return currentPluginMetadataConfigIdentities.has(config);
+  },
+  restore(identities: WeakSet<OpenClawConfig>): void {
+    currentPluginMetadataConfigIdentities = identities;
   },
 };
 

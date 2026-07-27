@@ -18,6 +18,7 @@ import {
   type ExecAutoReviewInput,
   type ExecAutoReviewer,
 } from "../infra/exec-auto-review.js";
+import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import { DEFAULT_EXEC_REVIEWER_SYSTEM_PROMPT } from "./exec-auto-reviewer.prompt.js";
 import {
   completeWithPreparedSimpleCompletionModel,
@@ -327,6 +328,7 @@ async function raceWithReviewerTimeout<T>(
   params: {
     timeoutMs: number;
     onTimeout?: () => void;
+    signal?: AbortSignal;
   },
 ): Promise<T | typeof EXEC_REVIEWER_TIMEOUT> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -337,7 +339,8 @@ async function raceWithReviewerTimeout<T>(
     }, params.timeoutMs);
   });
   try {
-    return await Promise.race([promise, timeout]);
+    const pending = Promise.race([promise, timeout]);
+    return params.signal ? await abortable(params.signal, pending) : await pending;
   } finally {
     if (timer) {
       clearTimeout(timer);
@@ -351,6 +354,7 @@ export function createModelExecAutoReviewer(params: {
   agentId?: string;
   reviewer?: ExecReviewerConfig;
   deps?: ExecReviewerDeps;
+  signal?: AbortSignal;
 }): ExecAutoReviewer {
   const cfg = params.cfg;
   const agentId = params.agentId ?? "main";
@@ -367,6 +371,7 @@ export function createModelExecAutoReviewer(params: {
   return async (input) => {
     let completionController: AbortController | undefined;
     try {
+      params.signal?.throwIfAborted();
       if (hasReviewerDirective(input)) {
         return {
           decision: "ask",
@@ -381,7 +386,7 @@ export function createModelExecAutoReviewer(params: {
           modelRef,
           allowMissingApiKeyModes: ["aws-sdk"],
         }),
-        { timeoutMs },
+        { timeoutMs, signal: params.signal },
       );
       if (prepared === EXEC_REVIEWER_TIMEOUT) {
         return buildReviewerTimeoutDecision(timeoutMs);
@@ -413,11 +418,14 @@ export function createModelExecAutoReviewer(params: {
           options: {
             maxTokens: EXEC_REVIEWER_MAX_TOKENS,
             temperature: 0,
-            signal: completionController.signal,
+            signal: params.signal
+              ? AbortSignal.any([completionController.signal, params.signal])
+              : completionController.signal,
           },
         }),
         {
           timeoutMs,
+          signal: params.signal,
           // Abort the provider request after the local timeout wins the race.
           onTimeout: () => completionController?.abort(),
         },
@@ -435,6 +443,7 @@ export function createModelExecAutoReviewer(params: {
       }
       return parseExecAutoReviewResponse(extractTextContent(result));
     } catch (err) {
+      params.signal?.throwIfAborted();
       if (completionController?.signal.aborted) {
         return buildReviewerTimeoutDecision(timeoutMs);
       }

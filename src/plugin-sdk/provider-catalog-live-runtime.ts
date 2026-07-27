@@ -207,7 +207,7 @@ async function readLiveModelCatalogJson(response: Response, timeoutMs: number): 
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`Live model catalog response stalled: no data received for ${chunkTimeoutMs}ms`),
   });
-  return JSON.parse(new TextDecoder().decode(buffer));
+  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer));
 }
 
 function readLiveModelCatalogString(value: unknown): string | undefined {

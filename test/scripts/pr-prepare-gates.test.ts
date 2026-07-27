@@ -535,6 +535,50 @@ describe("lease-retry gate stamp refresh", () => {
   });
 });
 
+describe("prepare review readiness", () => {
+  it("rejects invalid review artifacts before any preparation side effects", () => {
+    const repoDir = makeTempDir("openclaw-pr-prepare-invalid-review-");
+    mkdirSync(join(repoDir, ".local"));
+    const result = runGatesBash(
+      [
+        "review_validate_artifacts() { echo 'invalid review artifacts'; return 1; }",
+        "require_ready_review_recommendation() { touch .local/readiness-called; }",
+        "mark_pr_operation_side_effects_started() { touch .local/side-effects; }",
+        "enter_worktree() { touch .local/worktree-entered; }",
+        "prepare_init 4242",
+      ].join("\n"),
+      { cwd: repoDir, sourcePrepareCore: true },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("invalid review artifacts");
+    expect(existsSync(join(repoDir, ".local", "readiness-called"))).toBe(false);
+    expect(existsSync(join(repoDir, ".local", "side-effects"))).toBe(false);
+    expect(existsSync(join(repoDir, ".local", "worktree-entered"))).toBe(false);
+  });
+
+  it("rejects a non-ready review before taking the operation lock past validation", () => {
+    const repoDir = makeTempDir("openclaw-pr-prepare-not-ready-");
+    mkdirSync(join(repoDir, ".local"));
+    const result = runGatesBash(
+      [
+        "review_validate_artifacts() { touch .local/review-validated; }",
+        "require_ready_review_recommendation() { echo 'review is not ready'; return 1; }",
+        "mark_pr_operation_side_effects_started() { touch .local/side-effects; }",
+        "enter_worktree() { touch .local/worktree-entered; }",
+        "prepare_init 4242",
+      ].join("\n"),
+      { cwd: repoDir, sourcePrepareCore: true },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("review is not ready");
+    expect(existsSync(join(repoDir, ".local", "review-validated"))).toBe(true);
+    expect(existsSync(join(repoDir, ".local", "side-effects"))).toBe(false);
+    expect(existsSync(join(repoDir, ".local", "worktree-entered"))).toBe(false);
+  });
+});
+
 describe("prepare sync-head transitions", () => {
   it("publishes only appended fixups when main advances", () => {
     const repoDir = makeSyncRepo({ needsRebase: true });

@@ -34,6 +34,27 @@ describe("reduceInteractiveReply", () => {
 });
 
 describe("presentation capability limits", () => {
+  it("drops model-picker actions until a channel integration opts in", () => {
+    const buttons = applyPresentationActionLimits(
+      [
+        {
+          label: "Model",
+          action: {
+            type: "model-picker",
+            version: 1,
+            snapshotToken: "snapshot_1",
+            intent: "choose-model",
+            providerToken: "provider_1",
+            modelToken: "model_1",
+          },
+        },
+      ],
+      { buttons: true },
+    );
+
+    expect(buttons).toEqual([]);
+  });
+
   it("keeps highest-priority buttons inside action capacity", () => {
     const buttons = applyPresentationActionLimits(
       [

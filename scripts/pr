@@ -177,8 +177,10 @@ Usage:
   scripts/pr prepare-run <PR>
   scripts/pr ci-dispatch <PR>
   scripts/pr merge-verify <PR>
-  scripts/pr merge-run <PR>
+  scripts/pr merge-run <PR> [--auto-merge]
     OPENCLAW_PR_MERGE_METHOD=merge|rebase preserves the PR commit series.
+    --auto-merge enables pinned squash auto-merge for a verified BEHIND head.
+    OPENCLAW_PR_AUTO_MERGE=1 is equivalent.
 
   --dev-wrapper permits a mismatched local wrapper only for subcommands
   classified advisory. OPENCLAW_PR_DEV_WRAPPER=1 is equivalent.
@@ -268,7 +270,14 @@ main() {
     review-tests)
       [ "$#" -ge 2 ] || { usage; exit 2; }
       ;;
-    review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | ci-dispatch | merge-verify | merge-run)
+    merge-run)
+      [ "$#" -ge 1 ] && [ "$#" -le 2 ] || { usage; exit 2; }
+      if [ "$#" -eq 2 ] && [ "$2" != "--auto-merge" ]; then
+        usage
+        exit 2
+      fi
+      ;;
+    review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | ci-dispatch | merge-verify)
       [ "$#" -ge 1 ] || { usage; exit 2; }
       ;;
     *)
@@ -388,7 +397,11 @@ main() {
     merge-run)
       local pr="${1-}"
       [ -n "$pr" ] || { usage; exit 2; }
-      merge_run "$pr"
+      local auto_merge=false
+      if [ "${2-}" = "--auto-merge" ] || [ "${OPENCLAW_PR_AUTO_MERGE:-}" = "1" ]; then
+        auto_merge=true
+      fi
+      merge_run "$pr" "$auto_merge"
       ;;
     *)
       usage

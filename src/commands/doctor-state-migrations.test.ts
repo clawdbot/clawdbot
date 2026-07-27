@@ -2997,6 +2997,64 @@ describe("doctor legacy state migrations", () => {
     });
   });
 
+  it("reports completed transcript migration when a custom agent owns session state", async () => {
+    const root = await makeTempRoot();
+    const sessionId = "custom-agent-review";
+    const sourceDir = path.join(root, "transcripts", "2026-07-01", sessionId);
+    fs.mkdirSync(sourceDir, { recursive: true });
+    writeJson5(path.join(sourceDir, "metadata.json"), {
+      sessionId,
+      title: "Design review",
+      source: {
+        providerId: "manual-transcript",
+        meetingUrl: "https://meet.example.invalid/room",
+      },
+      startedAt: "2026-07-01T10:00:00.000Z",
+      stoppedAt: "2026-07-01T10:30:00.000Z",
+    });
+    const utterances = [
+      { id: "u-1", sessionId, speaker: { label: "Alex" }, text: "First line", final: true },
+      { id: "u-2", sessionId, speaker: { label: "Sam" }, text: "Second line", final: true },
+    ];
+    fs.writeFileSync(
+      path.join(sourceDir, "transcript.jsonl"),
+      `${utterances.map((utterance) => JSON.stringify(utterance)).join("\n")}\n`,
+    );
+    writeJson5(path.join(sourceDir, "summary.json"), {
+      sessionId,
+      title: "Design review",
+      generatedAt: "2026-07-01T10:31:00.000Z",
+      overview: "First line. Second line.",
+      transcript: ["Alex: First line", "Sam: Second line"],
+      decisions: [],
+      actionItems: [],
+      risks: [],
+      utteranceCount: 2,
+    });
+    fs.writeFileSync(path.join(sourceDir, "summary.md"), "# Design review\n\nFirst line.\n");
+    const env = {
+      OPENCLAW_STATE_DIR: root,
+      OPENCLAW_AGENT_DIR: path.join(root, "custom-agent"),
+    } as NodeJS.ProcessEnv;
+
+    const result = await autoMigrateLegacyState({
+      cfg: {},
+      doctorOnlyStateMigrations: true,
+      env,
+      log: { info: vi.fn(), warn: vi.fn() },
+      now: () => Date.parse("2026-07-02T00:00:00.000Z"),
+    });
+
+    expect(result).toMatchObject({ migrated: true, skipped: true, warnings: [] });
+    expect(result.changes.join("\n")).not.toMatch(/meeting transcript|utterance/i);
+    expect(fs.existsSync(sourceDir)).toBe(false);
+    expect(
+      openOpenClawStateDatabase({ env })
+        .db.prepare("SELECT COUNT(*) AS count FROM meeting_transcript_sessions")
+        .get(),
+    ).toEqual({ count: 1 });
+  });
+
   it("never imports default exec approvals into a custom state dir", async () => {
     // Regression: every custom state root is an independent trust scope.
     // Even direct doctor repair must not copy or archive default approvals.

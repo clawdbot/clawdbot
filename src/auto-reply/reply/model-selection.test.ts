@@ -12,7 +12,7 @@ import {
   loadManifestModelCatalog,
   loadPreparedModelCatalog as loadModelCatalogLocal,
 } from "../../agents/model-catalog.runtime.js";
-import { resolveModelCandidateChain } from "../../agents/model-fallback.js";
+import { resolveModelCandidateChain } from "../../agents/model-fallback-candidates.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";

@@ -113,6 +113,19 @@ describe("cli json stdout contract", () => {
     );
   });
 
+  it("rejects an explicitly empty update status timeout before emitting JSON", async () => {
+    await withTempHome(
+      async (tempHome) => {
+        const result = runSourceCli(tempHome, ["update", "status", "--json", "--timeout", ""]);
+
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toContain("--timeout must be a positive integer (seconds)");
+      },
+      { prefix: "openclaw-update-empty-timeout-e2e-" },
+    );
+  });
+
   it("keeps `config schema` stdout parseable at debug log level", async () => {
     await withTempHome(
       async (tempHome) => {

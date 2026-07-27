@@ -126,6 +126,21 @@ describe("headless Code Mode", () => {
       code: 'return /import.meta/.test("import.meta");',
       value: true,
     },
+    {
+      name: "ordinary import method",
+      code: "const api = { import(value) { return value; } }; return api.import(42);",
+      value: 42,
+    },
+    {
+      name: "ordinary require method",
+      code: "const api = { require(value) { return value; } }; return api.require(42);",
+      value: 42,
+    },
+    {
+      name: "ordinary import metadata property",
+      code: "const api = { import: { meta: 42 } }; return api.import.meta;",
+      value: 42,
+    },
   ])("executes harmless $name in a headless guest worker", async ({ code, value }) => {
     const result = expectCompleted(
       await runCodeModeScriptHeadless({
@@ -152,6 +167,13 @@ describe("headless Code Mode", () => {
   });
 
   it.each([
+    String.raw`return r\u0065quire('node:fs');`,
+    "return require?.('node:fs');",
+    "return (require)('node:fs');",
+    "return (0, require)('node:fs');",
+    "const load = require; return load('node:fs');",
+    "return module.require('node:fs');",
+    "return process.getBuiltinModule('node:fs');",
     "return `${import('node:fs')}`;",
     "return `${require('node:fs')}`;",
     "return `${`nested ${import('node:fs')}`}`;",
