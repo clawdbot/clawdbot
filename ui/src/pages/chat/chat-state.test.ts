@@ -1419,7 +1419,9 @@ describe("loadPageAssistantIdentity", () => {
 describe("refreshChatMetadata", () => {
   function createMetadataState(
     request: ReturnType<typeof vi.fn>,
-    overrides: Partial<ChatPageHost> = {},
+    overrides: Partial<Omit<ChatPageHost, "hello">> & {
+      hello?: { features: { methods: string[] } };
+    } = {},
   ): ChatPageHost {
     return {
       agentsList: null,
@@ -1615,7 +1617,7 @@ describe("refreshChatMetadata", () => {
       chatMetadataRequestVersion: 2,
       chatModelCatalog: [{ id: "stale-model", name: "Stale Model", provider: "openai" }],
       chatModelsLoading: true,
-      hello: { features: { methods: [] } } as ChatPageHost["hello"],
+      hello: { features: { methods: [] } },
       sessionKey: "agent:main:main",
     });
 
@@ -1641,7 +1643,7 @@ describe("refreshChatMetadata", () => {
       chatMetadataRequestVersion: 4,
       chatModelCatalog: startupCatalog,
       chatModelsLoading: true,
-      hello: { features: { methods: ["chat.startup"] } } as ChatPageHost["hello"],
+      hello: { features: { methods: ["chat.startup"] } },
     });
 
     await refreshChatMetadata(state, { preserveModelCatalogOnFallback: true });
@@ -1660,7 +1662,7 @@ describe("refreshChatMetadata", () => {
     const state = createMetadataState(request, {
       agentsList: { defaultId: "main" } as ChatPageHost["agentsList"],
       chatModelCatalog: [{ id: "stale-model", name: "Stale Model", provider: "openai" }],
-      hello: { features: { methods: [] } } as ChatPageHost["hello"],
+      hello: { features: { methods: [] } },
     });
 
     await refreshChatMetadata(state);
@@ -1715,7 +1717,7 @@ describe("refreshChatMetadata", () => {
     });
     const state = createMetadataState(request, {
       agentsList: { defaultId: "main" } as ChatPageHost["agentsList"],
-      hello: { features: { methods: [] } } as ChatPageHost["hello"],
+      hello: { features: { methods: [] } },
     });
 
     const refresh = refreshChatMetadata(state);
