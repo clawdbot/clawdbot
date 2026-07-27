@@ -12,7 +12,6 @@ import {
 import {
   createWhatsAppDurableInboundMessageId,
   createWhatsAppIngressMonitor,
-  enqueueWhatsAppDurableInbound,
   type WhatsAppDurableInboundPayload,
 } from "./durable-receive.js";
 
@@ -153,8 +152,8 @@ describe("createWhatsAppIngressMonitor", () => {
       const monitor = createWhatsAppIngressMonitor({
         queue,
         pollIntervalMs: 10,
-        dispatch: async (inbound, _payload, lifecycle) => {
-          const id = inbound.key.id;
+        dispatch: async (inbound, lifecycle) => {
+          const id = inbound.message.key.id;
           if (!id) {
             throw new Error("expected transport id");
           }
@@ -202,7 +201,7 @@ describe("WhatsApp durable message serialization", () => {
     expect(deserializeWhatsAppDurableInboundMessage(serialized).messageTimestamp).toBe(timestamp);
   });
 
-  it("persists receive-time skip decisions", async () => {
+  it("carries receive-time skip decisions through admission and replay", async () => {
     await withTempState(async (stateDir) => {
       const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
         channelId: "whatsapp",
@@ -210,24 +209,46 @@ describe("WhatsApp durable message serialization", () => {
         stateDir,
       });
 
-      await enqueueWhatsAppDurableInbound({
+      const dispatched: Array<{
+        upsertType?: string;
+        skipStaleAppend?: boolean;
+        skipRecentOutboundEcho?: boolean;
+        receiveOrder?: number;
+      }> = [];
+      const monitor = createWhatsAppIngressMonitor({
         queue,
-        message: message("stale-append"),
-        upsertType: "append",
-        skipStaleAppend: true,
-        skipRecentOutboundEcho: true,
-        receivedAt: 1,
+        pollIntervalMs: 10,
+        dispatch: async (admission) => {
+          dispatched.push(admission);
+          return { kind: "completed" };
+        },
       });
-
-      await expect(queue.listPending()).resolves.toMatchObject([
-        {
-          payload: {
+      monitor.start();
+      await expect(
+        monitor.admit(
+          {
+            message: message("stale-append"),
             upsertType: "append",
             skipStaleAppend: true,
             skipRecentOutboundEcho: true,
+            receivedAt: 1,
+            receiveOrder: 7,
           },
-        },
+          { receivedAt: 1 },
+        ),
+      ).resolves.toMatchObject({ kind: "durable", queueResult: { kind: "accepted" } });
+      await monitor.waitForIdle();
+
+      expect(dispatched).toEqual([
+        expect.objectContaining({
+          upsertType: "append",
+          skipStaleAppend: true,
+          skipRecentOutboundEcho: true,
+          receivedAt: 1,
+          receiveOrder: 7,
+        }),
       ]);
+      await monitor.stop();
     });
   });
 });
