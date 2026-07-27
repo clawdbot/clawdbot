@@ -609,7 +609,7 @@ describe("basic browser routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(isTransportAvailable).toHaveBeenCalledTimes(1);
-    expect(isTransportAvailable).toHaveBeenCalledWith(5_000);
+    expect(isTransportAvailable).toHaveBeenCalledWith(5_000, expect.any(AbortSignal));
     const [timeoutMs, reachabilityOptions] = readFirstReachabilityCall(isReachable);
     expect(timeoutMs).toBeGreaterThan(0);
     expect(timeoutMs).toBeLessThanOrEqual(7_000);

@@ -150,6 +150,7 @@ async function buildBrowserStatus(
         const statusStartedAtMs = Date.now();
         const transportReady = await profileCtx.isTransportAvailable(
           STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS,
+          signal,
         );
         if (!transportReady) {
           return [false, false, false] as const;
@@ -165,8 +166,8 @@ async function buildBrowserStatus(
       })()
     : await (async () => {
         const [http, ready] = await Promise.all([
-          profileCtx.isHttpReachable(STATUS_CDP_HTTP_TIMEOUT_MS),
-          profileCtx.isTransportAvailable(STATUS_CDP_TRANSPORT_TIMEOUT_MS),
+          profileCtx.isHttpReachable(STATUS_CDP_HTTP_TIMEOUT_MS, signal),
+          profileCtx.isTransportAvailable(STATUS_CDP_TRANSPORT_TIMEOUT_MS, signal),
         ]);
         // For managed CDP profiles, the transport check already includes a WS
         // handshake against the page, so pageReady mirrors cdpReady.
