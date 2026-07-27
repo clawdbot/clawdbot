@@ -843,8 +843,6 @@ export async function configureOllamaNonInteractive(params: {
     return params.nextConfig;
   }
 
-  await storeOllamaCredential(params.agentDir);
-
   const enrichedModels = await enrichOllamaModelsWithContext(
     baseUrl,
     models.slice(0, OLLAMA_CONTEXT_ENRICH_LIMIT),
@@ -905,6 +903,9 @@ export async function configureOllamaNonInteractive(params: {
       `Ollama model ${requestedDefaultModelId} was not available; using ${defaultModelId} instead.`,
     );
   }
+
+  // Failed setup must not leave a durable local profile behind.
+  await storeOllamaCredential(params.agentDir);
 
   const config = applyOllamaProviderConfig(
     params.nextConfig,
