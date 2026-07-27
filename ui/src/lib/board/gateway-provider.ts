@@ -315,7 +315,6 @@ export class GatewayBoardProvider implements BoardProvider {
         this.refreshRequested = false;
         return;
       }
-      this.refreshRequested = false;
       const changedWidgets = new Set(this.changedWidgets);
       this.changedWidgets.clear();
       const client = this.client;
@@ -338,6 +337,13 @@ export class GatewayBoardProvider implements BoardProvider {
           }
           continue;
         }
+        for (const name of this.changedWidgets) {
+          changedWidgets.add(name);
+        }
+        this.changedWidgets.clear();
+        // Requests made while board.get was in flight are satisfied by this
+        // fresh snapshot. A state-generation change above still forces a reread.
+        this.refreshRequested = false;
         this.setSnapshot(snapshot, changedWidgets);
         retry.delayMs = 1_000;
       } catch {
