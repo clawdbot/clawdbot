@@ -275,6 +275,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         if (cleanupStarted) {
           throw new Error("attempt cleanup started before prompt submission");
         }
+        assertInitialLockOwned();
         // The SQLite lease spans the provider prompt. Its stale deadline never
         // permits takeover from a live process owner.
         promptAborted = false;

@@ -197,7 +197,12 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       if (!result.ok) {
         throw new Error(result.reason);
       }
-      expect(result.sessionFile).toBe(configuredSessionKey);
+      expect(result.target).toEqual({
+        agentId: "main",
+        sessionId: "configured-session-id",
+        sessionKey: configuredSessionKey,
+        storePath,
+      });
       await expect(
         loadTranscriptEvents({
           agentId: "main",
@@ -255,7 +260,12 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       if (!result.ok) {
         throw new Error(result.reason);
       }
-      expect(result.sessionFile).toBe(configuredSessionKey);
+      expect(result.target).toEqual({
+        agentId: "worker",
+        sessionId: "worker-session-id",
+        sessionKey: configuredSessionKey,
+        storePath,
+      });
       await expect(
         loadTranscriptEvents({
           agentId: "worker",
@@ -291,7 +301,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
-  it("creates a SQLite transcript marker and appends message for valid session", async () => {
+  it("appends a message for a valid SQLite session target", async () => {
     await writeTranscriptStore();
 
     const result = await appendAssistantMessageToSessionTranscript({
@@ -302,7 +312,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.sessionFile).toBe(sessionKey);
+      expect(result.target).toEqual(createFixtureTranscriptScope());
       const events = await loadFixtureMessages();
       expect(events).toContainEqual(
         expect.objectContaining({
@@ -576,7 +586,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
-  it("uses the SQLite transcript marker for malformed persisted sessionFile metadata", async () => {
+  it("uses SQLite identity for malformed persisted sessionFile metadata", async () => {
     await writeTranscriptStore({
       sessionFile: { path: "../../escaped.jsonl" } as unknown as string,
       updatedAt: Date.now(),
@@ -590,7 +600,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.sessionFile).toBe(sessionKey);
+      expect(result.target).toEqual(createFixtureTranscriptScope());
       await expect(loadFixtureMessages()).resolves.toContainEqual(
         expect.objectContaining({
           message: expect.objectContaining({
@@ -1454,7 +1464,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
 
     await expect(
-      readTailAssistantTextFromSessionTranscript(toolOnlyResult.sessionFile, {
+      readTailAssistantTextFromSessionTranscript(toolOnlyResult.target, {
         excludeTranscriptOnlyOpenClawAssistant: true,
       }),
     ).resolves.toBeUndefined();

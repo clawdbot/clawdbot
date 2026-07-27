@@ -57,8 +57,15 @@ import {
 } from "./transcript-tree.js";
 import type { SessionEntry } from "./types.js";
 
+export type SessionTranscriptAppendTarget = {
+  agentId?: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+};
+
 export type SessionTranscriptAppendResult =
-  | { ok: true; sessionFile: string; messageId: string }
+  | { ok: true; target: SessionTranscriptAppendTarget; messageId: string }
   | {
       ok: false;
       reason: string;
@@ -603,9 +610,8 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     return { ok: false, reason: `unknown sessionKey: ${sessionKey}` };
   }
 
-  const appendToSessionFile = async (
+  const appendToSession = async (
     currentEntry: NonNullable<typeof entry>,
-    sessionFile?: string,
   ): Promise<SessionTranscriptAppendResult> => {
     const explicitIdempotencyKey =
       params.idempotencyKey ??
@@ -632,6 +638,12 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     }
     const identifiedDeliveryMirror =
       Boolean(explicitIdempotencyKey) && isIdentifiedDeliveryMirror(params.message);
+    const target: SessionTranscriptAppendTarget = {
+      ...(transcriptAgentId ? { agentId: transcriptAgentId } : {}),
+      sessionId: currentEntry.sessionId,
+      sessionKey: resolved.normalizedKey,
+      storePath,
+    };
     let latestEquivalentAssistantId: string | undefined;
     // Identified delivery mirrors, including suppressed finals, dedupe only by
     // key so same-text markers from different source ids remain separate rows.
@@ -640,7 +652,6 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         sessionId: currentEntry.sessionId,
         sessionKey: resolved.normalizedKey,
         storePath,
-        ...(sessionFile ? { sessionFile } : {}),
         ...(transcriptAgentId ? { agentId: transcriptAgentId } : {}),
       },
       {
@@ -699,7 +710,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     if (latestEquivalentAssistantId) {
       return {
         ok: true,
-        sessionFile: resolved.normalizedKey,
+        target,
         messageId: latestEquivalentAssistantId,
       };
     }
@@ -727,16 +738,9 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         };
       }
     }
-    return { ok: true, sessionFile: resolved.normalizedKey, messageId };
+    return { ok: true, target, messageId };
   };
-
-  let result: SessionTranscriptAppendResult;
-  if (params.expectedSessionId) {
-    result = await appendToSessionFile(entry);
-  } else {
-    result = await appendToSessionFile(entry);
-  }
-  return result;
+  return await appendToSession(entry);
 }
 
 async function touchSqliteAssistantAppendSessionEntry(params: {

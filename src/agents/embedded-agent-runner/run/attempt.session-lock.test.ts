@@ -72,6 +72,26 @@ describe("createEmbeddedAttemptSessionLockController", () => {
     expect(controller.hasSessionTakeover()).toBe(true);
   });
 
+  it("blocks prompt submission after the SQLite session lease is lost", async () => {
+    const leaseError = new SessionWriteLockStaleError({
+      lockPath: "sqlite:session-write:agent:main:main",
+      owner: "replacement",
+      staleReasons: ["lease-lost"],
+    });
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({
+        assertOwned: () => {
+          throw leaseError;
+        },
+        release: async () => undefined,
+      })),
+      lockOptions: { sessionFile: "agent:main:main" },
+    });
+
+    await expect(controller.releaseForPrompt()).rejects.toBe(leaseError);
+    expect(controller.hasSessionTakeover()).toBe(true);
+  });
+
   it("allows nested writes to reuse the active lifecycle owner", async () => {
     const events: string[] = [];
     const controller = await createEmbeddedAttemptSessionLockController({

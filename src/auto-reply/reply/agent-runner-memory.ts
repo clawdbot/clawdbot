@@ -404,6 +404,8 @@ function resolveSessionLogPath(
   _sessionKey?: string,
   _opts?: { agentId?: string; storePath?: string },
 ): string | undefined {
+  // Runtime session rows carry SQLite identity only. Tests may inject an artifact
+  // resolver to cover explicit exported JSONL inputs, but runtime never infers one.
   return undefined;
 }
 
