@@ -890,11 +890,12 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     setNoAbort();
     // A contentful routed final that reports ok+suppressed was never visible;
     // admission-based gating used to end this turn silently (#114768 corner 1).
-    mocks.routeReply.mockImplementation(async (params: { payload?: { text?: string } }) =>
-      params.payload?.text === NO_VISIBLE_REPLY_FALLBACK_TEXT
+    mocks.routeReply.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as { payload?: { text?: string } };
+      return params.payload?.text === NO_VISIBLE_REPLY_FALLBACK_TEXT
         ? { ok: true, messageId: "fallback-1" }
-        : { ok: true, suppressed: true },
-    );
+        : { ok: true, suppressed: true };
+    });
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "real answer" }));
     const ctx = buildTestCtx({
@@ -968,7 +969,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     dispatcher.markComplete();
     await dispatcher.waitForIdle();
 
-    const deliveredTexts = deliver.mock.calls.map((call) => (call[0] as { text?: string }).text);
+    const deliveredTexts = deliver.mock.calls.map((call) => call[0].text);
     expect(deliveredTexts).toContain(NO_VISIBLE_REPLY_FALLBACK_TEXT);
     expect(result.noVisibleReplyFallbackDelivered).toBe(true);
   });
@@ -1015,7 +1016,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("delivers fallback when a beforeDeliver hook cancels the model final", async () => {
     setNoAbort();
-    const deliver = vi.fn(async () => {});
+    const deliver = vi.fn(async (_payload: ReplyPayload) => {});
     const dispatcher = createReplyDispatcher({
       deliver,
       beforeDeliver: async (payload) =>
@@ -1046,7 +1047,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     dispatcher.markComplete();
     await dispatcher.waitForIdle();
 
-    const deliveredTexts = deliver.mock.calls.map((call) => (call[0] as { text?: string }).text);
+    const deliveredTexts = deliver.mock.calls.map((call) => call[0].text);
     expect(deliveredTexts).toEqual([NO_VISIBLE_REPLY_FALLBACK_TEXT]);
     expect(result.noVisibleReplyFallbackDelivered).toBe(true);
   });
