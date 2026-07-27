@@ -17,7 +17,7 @@ function deferred<T>() {
 describe("chat pane session hydration", () => {
   it("starts secondary RPCs together only after the transcript commit", async () => {
     const secondaryResponse = new Promise<never>(() => {});
-    const request = vi.fn(() => secondaryResponse);
+    const request = vi.fn((_method: string, _params?: unknown) => secondaryResponse);
     const listBranches = vi.fn(() => secondaryResponse);
     const sessions = {
       capturePullRequestEpoch: vi.fn(() => Symbol("pull-requests")),
@@ -67,7 +67,7 @@ describe("chat pane session hydration", () => {
   });
 
   it("drops a previous session's deferred hydration before it reaches commit", async () => {
-    const request = vi.fn(() => new Promise<never>(() => {}));
+    const request = vi.fn((_method: string, _params?: unknown) => new Promise<never>(() => {}));
     const { pane, state } = createTestChatPane({
       client: { request } as unknown as GatewayBrowserClient,
       sessions: {} as SessionCapability,
