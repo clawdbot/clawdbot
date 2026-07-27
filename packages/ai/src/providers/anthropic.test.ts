@@ -1776,10 +1776,10 @@ describe("Anthropic provider", () => {
 
     expect(eventTypes).toEqual(["error"]);
     expect(result.stopReason).toBe("error");
-    // Must be a usable diagnostic, not just "a string" — an empty message would
-    // still leave the operator with nothing to act on.
+    // Keep salient transport fields while replacing the cycle, so the terminal
+    // diagnostic remains actionable without stranding the stream.
     expect(result.errorMessage).toBeTruthy();
-    expect(result.errorMessage).toBe("[object Object]");
+    expect(result.errorMessage).toBe('{"code":"ECONNRESET","self":"[Circular]"}');
   });
 
   it("keeps the message for Anthropic errors that carry no HTTP body", async () => {
