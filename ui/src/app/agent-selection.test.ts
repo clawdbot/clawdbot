@@ -138,6 +138,165 @@ describe("agent selection", () => {
     expect(selection.state).toEqual({ selectedId: "research", scopeId: "research" });
   });
 
+  it("adopts a changed default after the reconnect null phase", () => {
+    const harness = createGateway("Main");
+    const roster = createRoster();
+    const selection = createAgentSelectionCapability(harness.gateway, roster.roster);
+    roster.publish({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main", kind: "agent" }],
+    });
+    const client = { request() {} } as unknown as GatewayBrowserClient;
+
+    harness.publish({ client, assistantAgentId: null });
+    expect(selection.state).toEqual({ selectedId: "main", scopeId: "main" });
+    harness.publish({ client, assistantAgentId: "Ops" });
+    expect(selection.state).toEqual({ selectedId: "main", scopeId: "main" });
+    roster.publish({
+      defaultId: "ops",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [
+        { id: "main", kind: "agent" },
+        { id: "ops", kind: "agent" },
+      ],
+    });
+
+    expect(selection.state).toEqual({ selectedId: "ops", scopeId: "ops" });
+  });
+
+  it("keeps following hello after the roster repairs an invalid startup default", () => {
+    const harness = createGateway("Stale");
+    const roster = createRoster();
+    roster.publish({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main", kind: "agent" }],
+    });
+    const selection = createAgentSelectionCapability(harness.gateway, roster.roster);
+    const client = { request() {} } as unknown as GatewayBrowserClient;
+
+    expect(selection.state).toEqual({ selectedId: "main", scopeId: "main" });
+    harness.publish({ client, assistantAgentId: "Ops" });
+    roster.publish({
+      defaultId: "ops",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [
+        { id: "main", kind: "agent" },
+        { id: "ops", kind: "agent" },
+      ],
+    });
+
+    expect(selection.state).toEqual({ selectedId: "ops", scopeId: "ops" });
+  });
+
+  it("preserves an explicit owner through reconnect and a changed default", () => {
+    const harness = createGateway("Main");
+    const selection = createAgentSelectionCapability(harness.gateway, createRoster().roster);
+    selection.set("Research");
+    const client = { request() {} } as unknown as GatewayBrowserClient;
+
+    harness.publish({ client, assistantAgentId: null });
+    harness.publish({ client, assistantAgentId: "Ops" });
+
+    expect(selection.state).toEqual({ selectedId: "research", scopeId: "research" });
+  });
+
+  it("establishes explicit ownership before notifying selection subscribers", () => {
+    const harness = createGateway("Main");
+    const selection = createAgentSelectionCapability(harness.gateway, createRoster().roster);
+    const client = { request() {} } as unknown as GatewayBrowserClient;
+    selection.subscribe((state) => {
+      if (state.selectedId === "research") {
+        harness.publish({ client, assistantAgentId: "Ops" });
+      }
+    });
+
+    selection.set("Research");
+
+    expect(selection.state).toEqual({ selectedId: "research", scopeId: "research" });
+  });
+
+  it("follows hello again after the roster removes an explicit owner", () => {
+    const harness = createGateway("Main");
+    const roster = createRoster();
+    roster.publish({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [
+        { id: "main", kind: "agent" },
+        { id: "research", kind: "agent" },
+      ],
+    });
+    const selection = createAgentSelectionCapability(harness.gateway, roster.roster);
+    selection.set("Research");
+
+    roster.publish({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main", kind: "agent" }],
+    });
+    expect(selection.state).toEqual({ selectedId: "main", scopeId: "main" });
+
+    const client = { request() {} } as unknown as GatewayBrowserClient;
+    harness.publish({ client, assistantAgentId: null });
+    harness.publish({ client, assistantAgentId: "Ops" });
+    roster.publish({
+      defaultId: "ops",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [
+        { id: "main", kind: "agent" },
+        { id: "ops", kind: "agent" },
+      ],
+    });
+
+    expect(selection.state).toEqual({ selectedId: "ops", scopeId: "ops" });
+  });
+
+  it("preserves a reentrant explicit owner during roster fallback", () => {
+    const harness = createGateway("Main");
+    const roster = createRoster();
+    roster.publish({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [
+        { id: "main", kind: "agent" },
+        { id: "ops", kind: "agent" },
+        { id: "research", kind: "agent" },
+      ],
+    });
+    const selection = createAgentSelectionCapability(harness.gateway, roster.roster);
+    selection.set("Research");
+    selection.subscribe((state) => {
+      if (state.selectedId === "main") {
+        selection.set("Ops");
+      }
+    });
+
+    roster.publish({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [
+        { id: "main", kind: "agent" },
+        { id: "ops", kind: "agent" },
+      ],
+    });
+    const client = { request() {} } as unknown as GatewayBrowserClient;
+    harness.publish({ client, assistantAgentId: null });
+    harness.publish({ client, assistantAgentId: "Main" });
+
+    expect(selection.state).toEqual({ selectedId: "ops", scopeId: "ops" });
+  });
+
   it("self-heals an unknown cold-load selection to the roster default", () => {
     const gateway = createGateway("Main");
     const roster = createRoster();

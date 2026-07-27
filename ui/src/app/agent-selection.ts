@@ -75,6 +75,9 @@ export function createAgentSelectionCapability(
     scopeId: resolveScopeId(initialSelectedId),
   };
   let assistantAgentId = initialId;
+  // Construction has no explicit-selection input: a roster repair still follows
+  // hello until a navigation or picker action establishes explicit ownership.
+  let followsGatewayDefault = true;
   const listeners = new Set<(next: AgentSelectionState) => void>();
 
   const publish = (next: AgentSelectionState) => {
@@ -97,13 +100,25 @@ export function createAgentSelectionCapability(
       ? normalizeAgentId(next.assistantAgentId)
       : null;
     const assistantChanged = nextAssistantAgentId !== assistantAgentId;
-    const followedPreviousDefault = state.selectedId === assistantAgentId;
     assistantAgentId = nextAssistantAgentId;
-    if (assistantChanged && (!state.selectedId || followedPreviousDefault)) {
+    // A reconnect publishes a transient null before hello. Keep the last
+    // implicit default selected until the next authoritative default arrives.
+    if (assistantChanged && followsGatewayDefault && nextAssistantAgentId) {
       publish({ selectedId: nextAssistantAgentId, scopeId: nextAssistantAgentId });
     }
   });
-  roster.subscribe(() => publish(state));
+  roster.subscribe(() => {
+    // Re-enable implicit ownership before publishing the roster fallback. A
+    // synchronous subscriber may establish a new explicit owner during publish.
+    if (!followsGatewayDefault && reconcileSelectedId(state.selectedId) !== state.selectedId) {
+      followsGatewayDefault = true;
+    }
+    if (followsGatewayDefault && assistantAgentId) {
+      publish({ selectedId: assistantAgentId, scopeId: assistantAgentId });
+    } else {
+      publish(state);
+    }
+  });
 
   return {
     get state() {
@@ -114,6 +129,8 @@ export function createAgentSelectionCapability(
       // A chip/chat switch establishes a new global page scope. The separate
       // scope field lets page controls expose all agents without losing the
       // concrete agent required by chat and new-session flows.
+      // Establish ownership before publish notifies synchronous subscribers.
+      followsGatewayDefault = reconcileSelectedId(selectedId) !== selectedId;
       publish({ selectedId, scopeId: selectedId });
     },
     setScope(agentId) {
