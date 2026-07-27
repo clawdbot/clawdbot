@@ -350,6 +350,11 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(run).toContain('"$toolchain_dir/pnpm" build');
     expect(run).toContain("sudo -u mantis-builder env -i");
     expect(run).toContain('sudo chown -R mantis-builder:mantis-builder "$candidate_root"');
+    expect(run).toContain(
+      'candidate_home="/tmp/mantis-candidate-home-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"',
+    );
+    expect(run).toContain("sudo setfacl -m u:mantis-builder:--x");
+    expect(run).toContain('[ "$candidate_parent" = "/home/runner" ] && break');
     expect(run).toContain('test "$(cat "$candidate_root/.git")" = "$candidate_git_link"');
     expect(run).toContain('git -C "$candidate_root" diff --exit-code');
     expect(run).not.toContain("GH_TOKEN");

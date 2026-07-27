@@ -371,11 +371,17 @@ jobs:
 
           prepare_worktree "$baseline_root" "${RUNNER_TEMP}/mantis-baseline-home"
           sudo useradd --system --no-create-home --shell /usr/sbin/nologin mantis-builder
-          candidate_home="${RUNNER_TEMP}/mantis-candidate-home"
-          candidate_corepack_home="${RUNNER_TEMP}/mantis-candidate-corepack"
+          candidate_home="/tmp/mantis-candidate-home-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          candidate_corepack_home="/tmp/mantis-candidate-corepack-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           sudo install -d -m 0700 -o mantis-builder -g mantis-builder "$candidate_home"
           sudo install -d -m 0700 -o mantis-builder -g mantis-builder "$candidate_corepack_home"
           sudo chown -R mantis-builder:mantis-builder "$candidate_root"
+          candidate_parent="$(dirname "$candidate_root")"
+          while [ "$candidate_parent" != "/" ]; do
+            sudo setfacl -m u:mantis-builder:--x "$candidate_parent"
+            [ "$candidate_parent" = "/home/runner" ] && break
+            candidate_parent="$(dirname "$candidate_parent")"
+          done
           sudo -u mantis-builder env -i \
             CI=1 \
             COREPACK_HOME="$candidate_corepack_home" \
