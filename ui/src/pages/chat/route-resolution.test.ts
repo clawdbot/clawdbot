@@ -332,9 +332,11 @@ describe("gateway-backed session route resolution", () => {
     if (!("kind" in loaded) || loaded.kind !== "ambiguous") {
       throw new Error("expected slug disambiguation");
     }
+    // Slug ties reuse the short-id disambiguation prefix instead of a full uuid, so the
+    // offered links stay as short as uniqueness allows.
     expect(loaded.candidates.map((candidate) => candidate.href)).toEqual([
-      "/chat/roboclaw/default-mode-with-rare-surprises-123456780aaa40008000000000000001",
-      "/chat/research/default-mode-with-rare-surprises-123456780bbb40008000000000000002",
+      "/chat/roboclaw/default-mode-with-rare-surprises-123456780a",
+      "/chat/research/default-mode-with-rare-surprises-123456780b",
     ]);
   });
 

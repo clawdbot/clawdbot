@@ -354,7 +354,6 @@ function candidatesForResolution(
   resolution: Extract<SessionReferenceResolution, { kind: "ambiguous" }>,
   draft: string | undefined,
   preferenceDerived: boolean,
-  fullId: boolean,
 ): SessionCandidate[] {
   const resolvedRows = resolution.sessions.flatMap((row) => {
     const uuid = sessionKeyUuid(row.key);
@@ -362,7 +361,7 @@ function candidatesForResolution(
   });
   const uuids = resolvedRows.map(({ uuid }) => uuid);
   return resolvedRows.flatMap(({ row, uuid }) => {
-    const prefix = fullId ? uuid : uniqueShortIdPrefix(uuid, uuids, resolution.truncated);
+    const prefix = uniqueShortIdPrefix(uuid, uuids, resolution.truncated);
     if (!prefix) {
       return [];
     }
@@ -548,7 +547,6 @@ export async function loadChatRoute(
               slugResolution,
               draftFromLocation(routeLocation),
               preferenceDerived,
-              true,
             ),
             truncated: slugResolution.truncated,
             face,
@@ -609,7 +607,6 @@ export async function loadChatRoute(
         resolution,
         draftFromLocation(routeLocation),
         preferenceDerived,
-        false,
       ),
       truncated: resolution.truncated,
       face,
