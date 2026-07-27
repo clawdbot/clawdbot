@@ -51,22 +51,6 @@ function normalizeNonNegativeInteger(value: unknown): number | undefined {
   return value;
 }
 
-function buildLegacyTalkProviderCompat(
-  value: Record<string, unknown>,
-): TalkProviderConfig | undefined {
-  const provider: TalkProviderConfig = {};
-  for (const key of ["voiceId", "voiceAliases", "modelId", "outputFormat"] as const) {
-    if (value[key] !== undefined) {
-      provider[key] = value[key];
-    }
-  }
-  const apiKey = normalizeTalkSecretInput(value.apiKey);
-  if (apiKey !== undefined) {
-    provider.apiKey = apiKey;
-  }
-  return Object.keys(provider).length > 0 ? provider : undefined;
-}
-
 function normalizeTalkProviderConfig(value: unknown): TalkProviderConfig | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -300,8 +284,7 @@ export function buildTalkConfigResponse(value: unknown): TalkConfigResponse | un
     return undefined;
   }
   const normalized = normalizeTalkSection(value as TalkConfig);
-  const legacyCompat = buildLegacyTalkProviderCompat(value);
-  if (!normalized && !legacyCompat) {
+  if (!normalized) {
     return undefined;
   }
 
@@ -331,11 +314,7 @@ export function buildTalkConfigResponse(value: unknown): TalkConfigResponse | un
     payload.realtime = normalized.realtime;
   }
 
-  // Keep legacy flat ElevenLabs fields readable for clients while migration moves writes to
-  // talk.provider/providers; normalizeTalkSection intentionally excludes those provider details.
-  const resolved =
-    resolveActiveTalkProviderConfig(normalized) ??
-    (legacyCompat ? { provider: "elevenlabs", config: legacyCompat } : undefined);
+  const resolved = resolveActiveTalkProviderConfig(normalized);
   const activeProvider = resolved?.provider;
   if (activeProvider) {
     payload.provider = activeProvider;
