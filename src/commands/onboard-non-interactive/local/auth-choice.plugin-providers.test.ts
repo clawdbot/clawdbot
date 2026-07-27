@@ -636,4 +636,59 @@ describe("applyNonInteractivePluginProviderChoice", () => {
 
     expect(offerPostInstallMigrations).not.toHaveBeenCalled();
   });
+
+  it.each(["ollama/kimi-k2.5:cloud", "ollama/gpt-oss:120b-cloud"])(
+    "does not enable local-model lean when Ollama selects hosted model %s",
+    async (modelRef) => {
+      const result = await applyProviderModelChoice({ providerId: "ollama", modelRef });
+
+      expect(result?.agents?.defaults?.model).toEqual({ primary: modelRef });
+      expect(result?.agents?.defaults?.experimental?.localModelLean).toBeUndefined();
+      expect(result?.wizard?.localModelLeanAutoModel).toBeUndefined();
+    },
+  );
+
+  it.each(["ollama/kimi-k2.5:cloud", "ollama/gpt-oss:120b-cloud"])(
+    "lifts onboarding-owned lean when Ollama switches to hosted model %s",
+    async (modelRef) => {
+      const previousModel = "ollama/qwen3:8b";
+      const result = await applyProviderModelChoice({
+        providerId: "ollama",
+        modelRef,
+        nextConfig: {
+          wizard: { localModelLeanAutoModel: previousModel },
+          agents: {
+            defaults: {
+              model: { primary: previousModel },
+              experimental: { localModelLean: true },
+            },
+          },
+        },
+      });
+
+      expect(result?.agents?.defaults?.model).toEqual({ primary: modelRef });
+      expect(result?.agents?.defaults?.experimental?.localModelLean).toBeUndefined();
+      expect(result?.wizard?.localModelLeanAutoModel).toBeUndefined();
+    },
+  );
+
+  it.each([false, true])(
+    "preserves explicit local-model lean=%s when Ollama selects a hosted model",
+    async (localModelLean) => {
+      const result = await applyProviderModelChoice({
+        providerId: "ollama",
+        modelRef: "ollama/kimi-k2.5:cloud",
+        nextConfig: {
+          agents: {
+            defaults: {
+              experimental: { localModelLean },
+            },
+          },
+        },
+      });
+
+      expect(result?.agents?.defaults?.experimental?.localModelLean).toBe(localModelLean);
+      expect(result?.wizard?.localModelLeanAutoModel).toBeUndefined();
+    },
+  );
 });
