@@ -1,4 +1,7 @@
-// Server ui.prefs is canonical; pending local intent shadows snapshots until hash-free LWW ack.
+// Server-side operator display prefs (config ui.prefs) are canonical: agents change them through
+// the approval gate and other devices pick them up. The localStorage mirror gives instant boot and
+// stays authoritative when this client cannot write config (viewer scope, offline). Pending local
+// intent shadows server snapshots until the hash-free LWW ack; failed pushes degrade device-local.
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { normalizeSidebarEntries } from "../app-navigation.ts";
@@ -28,10 +31,18 @@ function prefValuesEqual(left: unknown, right: unknown): boolean {
   }
   return left === right;
 }
+/**
+ * One descriptor per synced pref — the single source of truth for what syncs
+ * through config ui.prefs. Each key defines server validation, local normalization,
+ * and applicability; `clearable` keys push an explicit JSON null when unset locally
+ * so the merge patch removes them server-side.
+ */
 const SYNCED_PREFS = {
   theme: prefSpec<ThemeName>({
     extract: (value) => (THEMES.has(value as ThemeName) ? (value as ThemeName) : undefined),
     local: (settings) => settings.theme,
+    // A server "custom" theme is only honorable once this browser imported one;
+    // the imported palette itself is too large to live in config.
     canApply: (value, settings) => value !== "custom" || Boolean(settings.customTheme),
   }),
   themeMode: prefSpec<ThemeMode>({
@@ -64,6 +75,8 @@ const SYNCED_PREFS = {
   chatFollowUpMode: prefSpec<ChatFollowUpMode>({
     extract: (value) => normalizeChatFollowUpModeOverride(value),
     local: (settings) => normalizeChatFollowUpModeOverride(settings.chatFollowUpMode),
+    // Unset means "use the server-configured queue mode"; clearing must propagate,
+    // so the push serializes an explicit null removal.
     clearable: true,
   }),
   sidebarEntries: prefSpec<string[]>({
@@ -106,6 +119,8 @@ function serverPrefsLocalPatch(
     if (serverValue === undefined) {
       continue;
     }
+    // Null marks a server-side removal of a clearable key: drop the local override
+    // so this device falls back to the server-configured behavior.
     if (serverValue === null) {
       if (specification.clearable && specification.local(settings) !== undefined) {
         (patch as Record<string, unknown>)[key] = undefined;
@@ -139,6 +154,7 @@ export function changedServerUiPrefs(previous: UiSettings, next: UiSettings): Se
       continue;
     }
     if (nextValue === undefined) {
+      // JSON merge patch removes keys via explicit null.
       if (specification.clearable) {
         (prefs as Record<string, unknown>)[key] = null;
       }
@@ -148,7 +164,12 @@ export function changedServerUiPrefs(previous: UiSettings, next: UiSettings): Se
   }
   return Object.keys(prefs).length > 0 ? prefs : null;
 }
+// Last server value this client reconciled against, persisted per gateway scope. Applying only on
+// a server delta keeps an unpushable local edit (viewer scope) from being reverted by every later
+// snapshot, including the first snapshot after reload or reconnect carrying the same old value.
 const LAST_SEEN_KEY = "openclaw.control.serverPrefs.v1";
+// Pending keys are local edits not yet acknowledged by the gateway. They shadow reconciliation so
+// snapshots cannot revert unacked edits, and persist so offline edits replay after reload/reconnect.
 const PENDING_KEY = "openclaw.control.serverPrefs.pending.v1";
 let applyingServerPrefs = false;
 let pendingScope = "";
@@ -173,7 +194,9 @@ function writeStorage(root: string, scope: string, value: string | null): void {
     } else {
       globalThis.localStorage?.setItem(key, value);
     }
-  } catch {}
+  } catch {
+    // Quota/security failures degrade to in-memory tracking for this session.
+  }
 }
 function parseStoredPrefs(raw: string | null): ServerUiPrefs | null {
   try {
@@ -217,6 +240,8 @@ export function applyServerUiPrefs(
   }
   const lastSeen = parseStoredPrefs(lastSeenRaw) ?? {};
   const changed: ServerUiPrefs = {};
+  // Apply per field: only keys whose server value changed since last seen. Reapplying unchanged
+  // fields would revert unpushable local edits whenever any other server field moves.
   for (const prefKey of Object.keys(prefs) as Array<keyof ServerUiPrefs>) {
     if (
       !(shadowPrefs && prefKey in shadowPrefs) &&
@@ -319,6 +344,8 @@ async function drainPendingPrefs(client: GatewayBrowserClient, epoch: number): P
         if (conflict || !client.connected) {
           return;
         }
+        // Connected viewer-scope or validation failures degrade silently to device-local state;
+        // connection loss and CAS conflicts retain pending intent for replay.
         removeBatch(batch);
         persistPendingPrefs();
         return;
