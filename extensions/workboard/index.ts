@@ -4,6 +4,7 @@ import { registerWorkboardGatewayMethods } from "./runtime-api.js";
 import { createWorkboardChangeEventService } from "./src/change-events.js";
 import { registerWorkboardCommand } from "./src/command.js";
 import { cleanupWorkboardRunWorktree } from "./src/dispatcher-workspace.js";
+import { registerWorkboardReplyMarker } from "./src/reply-marker.js";
 import { WorkboardStore } from "./src/store.js";
 import { createWorkboardTools } from "./src/tools.js";
 import {
@@ -30,6 +31,7 @@ export default definePluginEntry({
       requiredScopes: ["operator.read"],
     });
     registerWorkboardGatewayMethods({ api, store });
+    registerWorkboardReplyMarker({ api, store });
     registerWorkboardCommand({ api, store });
     api.registerService(createWorkboardChangeEventService(store));
     api.on("subagent_ended", async (event) => {

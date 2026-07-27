@@ -82,6 +82,12 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       typeof input.ttlSeconds === "number" && Number.isFinite(input.ttlSeconds)
         ? Math.max(1, Math.trunc(input.ttlSeconds))
         : undefined;
+    const sessionKey = normalizeBoundedString(
+      input.sessionKey,
+      undefined,
+      240,
+      "claim session key",
+    );
     const token =
       normalizeBoundedString(input.token, undefined, 160, "claim token") ?? randomUUID();
     return await this.enqueueMutation(async () => {
@@ -129,6 +135,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           : guarded;
       const metadata = clearDiagnostics(claimable.metadata, ["stranded_ready"]);
       const card = await this.updateCard(id, {
+        ...(sessionKey ? { sessionKey } : {}),
         metadata: {
           ...metadata,
           claim: { ownerId, token, claimedAt: now, lastHeartbeatAt: now, expiresAt },

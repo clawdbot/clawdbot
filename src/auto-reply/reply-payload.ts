@@ -28,6 +28,8 @@ export type ReplyPayload = {
   presentationTextMode?: "fallback";
   /** Channel-agnostic delivery preferences, e.g. pin the sent message when supported. */
   delivery?: ReplyPayloadDelivery;
+  /** Suppress the Workboard card marker for exact machine-readable output. */
+  workboardMarker?: "omit";
   /**
    * @deprecated Use presentation.
    *
