@@ -259,16 +259,22 @@ describe("resolveExplicitNextcloudTalkMention", () => {
     expect(result).toBe(false);
   });
 
-  it("matches the configured API user case-insensitively", () => {
+  it("matches the canonical webhook bot actor id case-insensitively", () => {
     const result = resolveExplicitNextcloudTalkMention({
-      mentionEntries: [{ key: "m0", type: "user", id: "AGENT" }],
+      mentionEntries: [
+        {
+          key: "m0",
+          type: "user",
+          id: "BOT-CD7930A4F9F485D9DC0606A8A42A9D705376CBCF",
+        },
+      ],
       account: makeAccount({
         config: {
           dmPolicy: "pairing",
           allowFrom: [],
           groupPolicy: "allowlist",
           groupAllowFrom: [],
-          apiUser: "agent",
+          webhookPublicUrl: "https://bot.example.com/nextcloud-talk-webhook",
         },
       }),
     });
@@ -299,7 +305,7 @@ describe("resolveExplicitNextcloudTalkMention", () => {
     expect(result).toBe(false);
   });
 
-  it("matches via mentionId (email local part) when apiUser is set", () => {
+  it("does not treat the room-lookup API user as the bot identity", () => {
     const result = resolveExplicitNextcloudTalkMention({
       mentionEntries: [{ key: "m0", type: "user", mentionId: "bot@cloud.example.com" }],
       account: makeAccount({
@@ -312,7 +318,7 @@ describe("resolveExplicitNextcloudTalkMention", () => {
         },
       }),
     });
-    expect(result).toBe(true);
+    expect(result).toBe(false);
   });
 
   it("does not infer a user id from the API user's email local part", () => {
