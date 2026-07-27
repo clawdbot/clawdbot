@@ -4,7 +4,6 @@ import {
   resolveSessionTranscriptRuntimeTarget,
   type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 
@@ -18,8 +17,7 @@ export type AgentRunSessionTarget = {
 };
 
 /** File-backed target resolved from the storage-neutral run identity. */
-type ResolvedAgentRunSessionTarget = SessionTranscriptRuntimeTarget &
-  Pick<AgentRunSessionTarget, "storePath" | "threadId">;
+type ResolvedAgentRunSessionTarget = SessionTranscriptRuntimeTarget;
 
 /** Resolves the active runtime target used by current run/session internals. */
 export async function resolveAgentRunSessionTarget(params: {
@@ -28,15 +26,10 @@ export async function resolveAgentRunSessionTarget(params: {
   sessionFile?: string;
   sessionId: string;
   sessionKey?: string;
-  fallbackSessionTarget?: AgentRunSessionTarget;
   sessionTarget?: AgentRunSessionTarget;
 }): Promise<ResolvedAgentRunSessionTarget> {
   const sessionTarget = params.sessionTarget;
-  const fallbackSessionTarget = params.fallbackSessionTarget;
-  const agentId =
-    normalizeOptionalString(sessionTarget?.agentId) ??
-    normalizeOptionalString(fallbackSessionTarget?.agentId) ??
-    params.agentId;
+  const agentId = normalizeOptionalString(sessionTarget?.agentId) ?? params.agentId;
   const sessionId = normalizeOptionalString(sessionTarget?.sessionId) ?? params.sessionId;
   const sessionKey = normalizeOptionalString(sessionTarget?.sessionKey) ?? params.sessionKey;
   const effectiveAgentId = agentId ?? resolveAgentIdFromSessionKey(sessionKey);
@@ -46,60 +39,35 @@ export async function resolveAgentRunSessionTarget(params: {
   if (sessionTarget && sessionKey) {
     const storePath =
       normalizeOptionalString(sessionTarget.storePath) ??
-      normalizeOptionalString(fallbackSessionTarget?.storePath) ??
       resolveStorePath(params.config?.session?.store, { agentId: effectiveAgentId });
-    const threadId = sessionTarget.threadId ?? fallbackSessionTarget?.threadId;
-    const resolved = await resolveSessionTranscriptRuntimeTarget({
+    return await resolveSessionTranscriptRuntimeTarget({
       ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),
       sessionId,
       sessionKey,
       storePath,
-      ...(threadId !== undefined ? { threadId } : {}),
+      ...(sessionTarget.threadId !== undefined ? { threadId: sessionTarget.threadId } : {}),
     });
-    return {
-      ...resolved,
-      storePath,
-      ...(threadId !== undefined ? { threadId } : {}),
-    };
   }
 
   const sessionFile = normalizeOptionalString(params.sessionFile);
   if (sessionFile) {
-    const sqliteMarker = parseSqliteSessionFileMarker(sessionFile);
-    const targetAgentId = sqliteMarker?.agentId ?? effectiveAgentId ?? "";
     return {
-      agentId: targetAgentId,
+      agentId: effectiveAgentId ?? "",
       sessionFile,
-      sessionId: sqliteMarker?.sessionId ?? sessionId,
+      sessionId,
       sessionKey: sessionKey ?? "",
-      storePath:
-        sqliteMarker?.storePath ??
-        normalizeOptionalString(fallbackSessionTarget?.storePath) ??
-        resolveStorePath(params.config?.session?.store, { agentId: targetAgentId }),
-      ...(fallbackSessionTarget?.threadId !== undefined
-        ? { threadId: fallbackSessionTarget.threadId }
-        : {}),
     };
   }
   if (!sessionKey) {
     throw new Error(`Cannot resolve run session target without a session key: ${sessionId}`);
   }
-  const storePath =
-    normalizeOptionalString(fallbackSessionTarget?.storePath) ??
-    resolveStorePath(params.config?.session?.store, { agentId: effectiveAgentId });
-  const resolved = await resolveSessionTranscriptRuntimeTarget({
+  const storePath = resolveStorePath(params.config?.session?.store, { agentId: effectiveAgentId });
+  return await resolveSessionTranscriptRuntimeTarget({
     ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),
     sessionId,
     sessionKey,
     storePath,
   });
-  return {
-    ...resolved,
-    storePath,
-    ...(fallbackSessionTarget?.threadId !== undefined
-      ? { threadId: fallbackSessionTarget.threadId }
-      : {}),
-  };
 }
 
 /** Applies identity fields from the explicit target before legacy backfills run. */

@@ -33,6 +33,7 @@ import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.j
 import { createCompactionDiagId } from "./helpers.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import {
+  buildContextEngineCompactionSessionTarget,
   isNoRealConversationCompactionNoop,
   resetNoRealConversationTokenSnapshot,
 } from "./session-bootstrap.js";
@@ -277,7 +278,14 @@ export async function recoverEmbeddedRunOverflow(input: {
           sessionId: sessionBeforeCompaction.id,
           sessionKey: input.resolvedSessionKey,
           agentId: input.sessionAgentId,
-          sessionTarget: sessionBeforeCompaction.target,
+          sessionTarget: buildContextEngineCompactionSessionTarget({
+            agentId: input.sessionAgentId,
+            config: runParams.config,
+            sessionFile: sessionBeforeCompaction.file,
+            sessionId: sessionBeforeCompaction.id,
+            sessionKey: input.resolvedSessionKey,
+            sessionTarget: sessionBeforeCompaction.target,
+          }),
           tokenBudget: input.contextTokenBudget,
           ...(overflowTokenCountForCompaction !== undefined
             ? { currentTokenCount: overflowTokenCountForCompaction }
