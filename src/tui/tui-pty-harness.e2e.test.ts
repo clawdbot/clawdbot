@@ -668,6 +668,31 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
+    "preserves Unicode prompts during fragmented terminal input",
+    async () => {
+      const fragmentedFixture = await startTuiFixture({
+        env: {
+          OPENCLAW_TUI_PTY_TYPE_CHUNK_SIZE: "1",
+          OPENCLAW_TUI_PTY_TYPE_DELAY_MS: "1",
+        },
+      });
+
+      try {
+        await fragmentedFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+        await fragmentedFixture.run.write("hello 👋 from pty\r");
+        await fragmentedFixture.run.waitForOutput("PTY_RESPONSE: hello 👋 from pty");
+        await fragmentedFixture.waitForLogEntry(
+          (entry) =>
+            entry.method === "sendChat" && objectFieldEquals(entry, "message", "hello 👋 from pty"),
+        );
+      } finally {
+        await fragmentedFixture.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
+
+  it(
     "deletes forward with Ctrl+D without exiting a nonempty terminal editor",
     async () => {
       await fixture.run.write("keepXword", { delay: false });
@@ -709,7 +734,9 @@ describe.sequential("TUI PTY harness", () => {
 
   it.each([
     { cols: 64, rows: 18 },
+    { cols: 68, rows: 18 },
     { cols: 72, rows: 20 },
+    { cols: 80, rows: 20 },
   ])(
     "presents and resolves workspace skill approval in a $cols×$rows terminal",
     async ({ cols, rows }) => {
