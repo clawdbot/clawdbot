@@ -60,7 +60,13 @@ type InstalledBundledExtensionManifestRecord = {
 const MAX_BUNDLED_EXTENSION_MANIFEST_BYTES = 1024 * 1024;
 const LEGACY_CONTEXT_ENGINE_UNRESOLVED_RUNTIME_MARKER =
   "Failed to load legacy context engine runtime.";
-const PACKAGED_BUNDLED_PLUGIN_ARTIFACTS = new Set(listBundledPluginPackArtifacts());
+// Package verification always covers the complete published inventory, even
+// when the invoking build inherited a plugin-selection filter.
+const PACKAGED_BUNDLED_PLUGIN_ARTIFACTS = new Set(
+  listBundledPluginPackArtifacts({
+    env: { ...process.env, OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: undefined },
+  }),
+);
 const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = BUNDLED_RUNTIME_SIDECAR_PATHS.filter(
   (relativePath) => PACKAGED_BUNDLED_PLUGIN_ARTIFACTS.has(relativePath),
 );

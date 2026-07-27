@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { generateKeyPairSync, sign } from "node:crypto";
 // OpenClaw npm postpublish tests validate postpublish verification behavior.
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -669,6 +670,50 @@ describe("collectInstalledPackageErrors", () => {
 
       expect(filteredErrors).toStrictEqual(expectedErrors);
       expect(filteredErrors).toEqual(
+        expect.arrayContaining(
+          ["ollama", "lmstudio"].map(
+            (providerId) =>
+              `installed bundled extension manifest missing: ${join(
+                packageRoot,
+                "dist",
+                "extensions",
+                providerId,
+                "package.json",
+              )}.`,
+          ),
+        ),
+      );
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("verifies every bundled manifest when the build filter exists before module initialization", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      const probe = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          "--eval",
+          [
+            'import { collectInstalledBundledExtensionManifestErrors } from "./scripts/openclaw-npm-postpublish-verify.ts";',
+            `process.stdout.write(JSON.stringify(collectInstalledBundledExtensionManifestErrors(${JSON.stringify(packageRoot)})));`,
+          ].join("\n"),
+        ],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: { ...process.env, OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "ollama" },
+          timeout: 30_000,
+        },
+      );
+
+      expect(probe.error).toBeUndefined();
+      expect(probe.status, probe.stderr).toBe(0);
+      expect(JSON.parse(probe.stdout)).toEqual(
         expect.arrayContaining(
           ["ollama", "lmstudio"].map(
             (providerId) =>
