@@ -1569,10 +1569,11 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const abortError = Object.assign(new Error("This operation was aborted"), {
       name: "AbortError",
     });
+    const lateSummarizationError = new Error("transport failed after cancellation");
     mockSummarizeInStages
       .mockImplementationOnce(async () => {
-        controller.abort();
-        throw abortError;
+        controller.abort(abortError);
+        throw lateSummarizationError;
       })
       .mockResolvedValue(summaryResult("later summary must not run"));
 

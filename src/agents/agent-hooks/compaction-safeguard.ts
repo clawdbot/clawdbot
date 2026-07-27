@@ -1323,7 +1323,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                 });
               } catch (droppedError) {
                 if (signal?.aborted) {
-                  throw droppedError;
+                  signal.throwIfAborted();
                 }
                 throw new Error("Failed to summarize dropped messages.", {
                   cause: droppedError,
@@ -1505,7 +1505,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       // Caller cancellation is terminal, not a safeguard failure. Preserve the
       // original abort so the runner can classify it without a false data-loss warning.
       if (signal?.aborted) {
-        throw error;
+        signal.throwIfAborted();
       }
       const message = formatErrorMessage(error);
       log.warn(
