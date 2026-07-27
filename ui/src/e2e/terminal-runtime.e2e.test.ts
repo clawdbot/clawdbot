@@ -55,20 +55,15 @@ describeControlUiE2e("Control UI terminal runtime isolation", () => {
 
     try {
       await page.goto(server.baseUrl);
-      await page.addScriptTag({
-        content: `globalThis.openclawTerminalRuntimeModule = import(${JSON.stringify(moduleUrl)});`,
-        type: "module",
-      });
       const sentinel = "CLOSE_RESET_SENTINEL";
       const result = await page.evaluate(
-        async ({ staleText }) => {
-          const runtimeModule = await (
-            window as unknown as Window & {
-              openclawTerminalRuntimeModule: Promise<{
-                createIsolatedGhosttyTerminal: BrowserTerminalFactory;
-              }>;
-            }
-          ).openclawTerminalRuntimeModule;
+        async ({ moduleUrl, staleText }) => {
+          const importBrowserModule = new Function("moduleUrl", "return import(moduleUrl)") as (
+            url: string,
+          ) => Promise<{
+            createIsolatedGhosttyTerminal: BrowserTerminalFactory;
+          }>;
+          const runtimeModule = await importBrowserModule(moduleUrl);
           const createTerminal = async () => {
             const host = document.createElement("div");
             host.style.height = "400px";
@@ -105,7 +100,7 @@ describeControlUiE2e("Control UI terminal runtime isolation", () => {
           second.host.remove();
           return { finalSecondLine, firstLine, initialSecondLine };
         },
-        { staleText: sentinel },
+        { moduleUrl, staleText: sentinel },
       );
 
       expect(result.firstLine).toContain(sentinel);
