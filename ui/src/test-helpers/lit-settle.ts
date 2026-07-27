@@ -15,6 +15,12 @@ type UpdatingElement = { updateComplete: Promise<boolean> };
 // Keep an unconditional floor of turns for those, and treat the settled check as the part
 // that extends past it, so this drains at least as far as any fixed pump and further when
 // the work needs it.
+//
+// Bounded on purpose, and not a proof of quiescence: a chain deeper than MAX_UPDATE_CYCLES
+// microtask turns that only marks the element dirty at its end can still outlive this. A
+// macrotask yield would drain any depth, but callers here run on fake timers where one
+// never fires. When a test asserts on work of unknown depth, wait for the condition with
+// vi.waitFor/expect.poll rather than reaching for a bigger settle.
 const MIN_DRAIN_ROUNDS = 5;
 const MAX_UPDATE_CYCLES = 50;
 const SETTLED_ROUNDS_REQUIRED = 2;

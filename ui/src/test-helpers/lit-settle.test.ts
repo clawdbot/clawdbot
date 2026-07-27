@@ -62,7 +62,8 @@ describe("settleLitElement", () => {
   it("drains a deep promise chain that only schedules a render at its end", async () => {
     // The shape the settled check alone cannot see: four inert microtask turns, then work
     // that marks the element dirty. A pump that stopped at the first settled rounds would
-    // return before it.
+    // return before it. Chains deeper than the cycle cap are out of reach by design; see
+    // the note in lit-settle.ts.
     let pendingRender = false;
     let rendered = false;
     const element = {
