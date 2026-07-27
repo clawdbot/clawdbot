@@ -217,6 +217,51 @@ describe("mock gateway stateful sessions", () => {
     socket.close();
   });
 
+  it("does not publish a rejected session creation to sessions.list", async () => {
+    const sessionKey = "agent:main:rejected-session";
+    const script = createControlUiMockGatewayInitScript({
+      methodResponses: {
+        "sessions.create": {
+          __mockError: { code: "INVALID_REQUEST", message: "session creation rejected" },
+        },
+      },
+    });
+    window.sessionStorage.clear();
+    // oxlint-disable-next-line typescript/no-implied-eval -- Executes the generated init script standalone, proving it captures no module closures.
+    new Function(script)();
+
+    const socket = new WebSocket("ws://mock-gateway");
+    const frames: ResponseFrame[] = [];
+    socket.addEventListener("message", (event) => {
+      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    });
+    await flushMockTimers();
+
+    socket.send(
+      JSON.stringify({
+        type: "req",
+        id: "rejected-create",
+        method: "sessions.create",
+        params: { agentId: "main", key: sessionKey },
+      }),
+    );
+    await flushMockTimers();
+    socket.send(
+      JSON.stringify({
+        type: "req",
+        id: "list-after-rejection",
+        method: "sessions.list",
+        params: { agentId: "main", search: "rejected-session" },
+      }),
+    );
+    await flushMockTimers();
+
+    const listed = frames.find((frame) => frame.id === "list-after-rejection")?.payload;
+    expect(listed).toMatchObject({ count: 1, sessions: [{ key: "main" }] });
+    expect(JSON.stringify(listed)).not.toContain(sessionKey);
+    socket.close();
+  });
+
   it("cycles subscription-scoped session events and stops after unsubscribe", async () => {
     const sessionKey = "agent:main:sidebar-narration-demo";
     const script = createControlUiMockGatewayInitScript({
