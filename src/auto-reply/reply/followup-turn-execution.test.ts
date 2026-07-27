@@ -404,8 +404,10 @@ describe("executeFollowupTurn", () => {
 
   it("preserves detached progress delivery failures for the drain", async () => {
     const failure = new Error("progress delivery failed");
+    let detachedProgress!: Promise<unknown>;
     state.execute.mockImplementation(async (params: AgentTurnParams) => {
-      void params.opts?.onItemEvent?.({ progressText: "working" });
+      detachedProgress = Promise.resolve(params.opts?.onItemEvent?.({ progressText: "working" }));
+      void detachedProgress.catch(() => undefined);
       return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
     });
     const result = await executeFollowupTurn({
@@ -414,14 +416,17 @@ describe("executeFollowupTurn", () => {
         typing: createTypingController(),
         typingMode: "never",
         defaultModel: "claude",
-        opts: { onItemEvent: async () => Promise.reject(failure) },
+        opts: {
+          onItemEvent: async () => {
+            throw failure;
+          },
+        },
       },
       onToolResult: vi.fn(async () => {}),
       onCompactionNoticePayload: vi.fn(async () => {}),
     });
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await expect(detachedProgress).rejects.toBe(failure);
     await expect(result.progress.drain()).rejects.toBe(failure);
   });
 

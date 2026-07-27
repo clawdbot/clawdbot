@@ -233,7 +233,11 @@ describe("admitFollowupTurn", () => {
       admitFollowupTurn({
         queued: createRun(),
         defaults: createDefaults({
-          opts: { onQueuedFollowupAdmitted: vi.fn(async () => Promise.reject(failure)) },
+          opts: {
+            onQueuedFollowupAdmitted: vi.fn(async () => {
+              throw failure;
+            }),
+          },
         }),
       }),
     ).rejects.toBe(failure);
@@ -731,7 +735,9 @@ describe("admitFollowupTurn", () => {
       admitFollowupTurn({
         queued: createRun(),
         defaults: createDefaults({ sessionEntry: initialEntry }),
-        onCompactionNoticePayload: vi.fn(async () => Promise.reject(failure)),
+        onCompactionNoticePayload: vi.fn(async () => {
+          throw failure;
+        }),
       }),
     ).rejects.toBe(failure);
     expect(operation.complete).toHaveBeenCalledOnce();
