@@ -153,6 +153,7 @@ function repairProviderlessCodexSessionOverride(
   }
 
   entry.providerOverride = "openai";
+  entry.modelOverrideRouteResolution = "resolved";
   if (entry.model !== undefined || entry.modelProvider !== undefined) {
     delete entry.model;
     delete entry.modelProvider;
@@ -190,6 +191,9 @@ function repairCodexSessionStoreRoutes(params: {
       modelKey: "modelOverride",
       blockedModelIdentities: params.blockedModelIdentities,
     });
+    if (changedOverrideModelRoute) {
+      entry.modelOverrideRouteResolution = "resolved";
+    }
     const changedProviderlessOverride = repairProviderlessCodexSessionOverride(
       entry,
       params.blockedModelIdentities,

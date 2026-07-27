@@ -327,7 +327,6 @@ packages/ai/src/providers/openai-chatgpt-responses.ts
 packages/ai/src/providers/openai-completions.test.ts
 packages/ai/src/providers/openai-completions.ts
 packages/ai/src/providers/openai-responses-shared.test.ts
-packages/ai/src/providers/openai-responses-shared.ts
 packages/ai/src/transports/anthropic-transport-stream.test.ts
 packages/ai/src/transports/anthropic-transport-stream.ts
 packages/ai/src/transports/openai-completions-transport.ts
@@ -501,7 +500,6 @@ src/agents/tool-loop-detection.test.ts
 src/agents/tool-search.test.ts
 src/agents/tools/computer-tool.ts
 src/agents/tools/cron-tool.test.ts
-src/agents/tools/cron-tool.ts
 src/agents/tools/image-generate-tool.test.ts
 src/agents/tools/image-generate-tool.ts
 src/agents/tools/image-tool.test.ts
@@ -654,7 +652,6 @@ src/commands/models/auth.test.ts
 src/commands/models/auth.ts
 src/commands/models/list.list-command.forward-compat.test.ts
 src/commands/models/list.probe.ts
-src/commands/models/list.rows.ts
 src/commands/models/list.status-command.ts
 src/commands/models/list.status.test.ts
 src/commands/onboard-channels.e2e.test.ts
@@ -688,14 +685,11 @@ src/config/zod-schema.core.ts
 src/context-engine/context-engine.test.ts
 src/context-engine/registry.ts
 src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts
-src/cron/isolated-agent/delivery-dispatch.ts
 src/cron/isolated-agent/delivery-target.test.ts
 src/cron/isolated-agent/run-executor.ts
 src/cron/isolated-agent/run.message-tool-policy.test.ts
 src/cron/isolated-agent/run.test-harness.ts
-src/cron/isolated-agent/run.ts
 src/cron/service.jobs.test.ts
-src/cron/service/jobs.ts
 src/cron/service/ops.test.ts
 src/cron/service/timer.regression.test.ts
 src/cron/store.test.ts

@@ -1436,7 +1436,7 @@ describe("registerPolicyDoctorChecks", () => {
       "utf-8",
     );
     await fs.writeFile(
-      join(workspaceDir, "TOOLS.md"),
+      join(workspaceDir, "AGENTS.md"),
       "## Tools\n\n### deploy risk:critical sensitivity:secret\n",
       "utf-8",
     );
@@ -1449,8 +1449,8 @@ describe("registerPolicyDoctorChecks", () => {
       expect.objectContaining({
         checkId: "policy/tools-unknown-sensitivity-token",
         severity: "error",
-        path: "TOOLS.md",
-        ocPath: "oc://TOOLS.md/tools/deploy",
+        path: "AGENTS.md",
+        ocPath: "oc://AGENTS.md/tools/deploy",
       }),
     ]);
   });

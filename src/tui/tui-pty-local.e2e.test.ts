@@ -141,37 +141,18 @@ async function waitForOutputAfter(run: PtyRun, needle: string, offset: number) {
 }
 
 async function createFreshSession(run: PtyRun, newSessionPrefix: string) {
-  const deadline = Date.now() + LOCAL_STARTUP_TIMEOUT_MS;
-  let attempts = 0;
-  let outputOffset = run.output().length;
-  while (Date.now() < deadline) {
-    attempts += 1;
-    await run.write("/new\r", { delay: false });
-    const outcome = await waitFor({
-      timeoutMs: Math.max(1, deadline - Date.now()),
-      read: () => {
-        const output = run.output();
-        if (output.includes(newSessionPrefix, outputOffset)) {
-          return "created";
-        }
-        return output.includes(SESSION_ROLLOVER_BUSY_MESSAGE, outputOffset) ? "busy" : null;
-      },
-      onTimeout: () =>
-        new Error(`timed out creating a fresh session after ${attempts} attempts\n${run.output()}`),
-    });
-    if (outcome === "created") {
-      return;
-    }
-
-    // Redraws can repeat an old rejection after this attempt's offset. Keep
-    // watching that attempt through settle so an accepted /new is not retried.
-    await sleep(SUBMISSION_SETTLE_MS);
-    if (run.output().includes(newSessionPrefix, outputOffset)) {
-      return;
-    }
-    outputOffset = run.output().length;
-  }
-  throw new Error(`timed out creating a fresh session after ${attempts} attempts\n${run.output()}`);
+  const outputOffset = run.output().length;
+  await run.write("/new\r", { delay: false });
+  await waitFor({
+    timeoutMs: LOCAL_STARTUP_TIMEOUT_MS,
+    read: () => (run.output().includes(newSessionPrefix, outputOffset) ? true : null),
+    onTimeout: () =>
+      new Error(`timed out creating a fresh session after one submission\n${run.output()}`),
+  });
+  const newSessionOffset = run.output().lastIndexOf(newSessionPrefix);
+  // Wait for the accepted session's own idle redraw; older PTY frames can
+  // replay busy messages and must never cause a second session creation.
+  await waitForOutputAfter(run, "| idle", newSessionOffset);
 }
 
 async function readRequestBody(req: IncomingMessage): Promise<string> {
@@ -835,6 +816,42 @@ describe("TUI PTY real backends", () => {
     await expect(cleanupSharedGatewayFixture(Promise.resolve(fixture))).rejects.toBe(cleanupError);
   });
 
+  it("does not replay a session rollover when an old busy notice is redrawn", async () => {
+    const newSessionPrefix = "new session: agent:main:tui-";
+    const acceptedSession = createDeferred();
+    const writes: string[] = [];
+    let output = "";
+    let acceptanceTimer: ReturnType<typeof setTimeout> | undefined;
+    const run = {
+      output: () => output,
+      write: async (data: string) => {
+        writes.push(data);
+        if (writes.length === 1) {
+          output += `${SESSION_ROLLOVER_BUSY_MESSAGE}\n`;
+          acceptanceTimer = setTimeout(() => {
+            output += `${newSessionPrefix}accepted\nlocal ready | idle\n`;
+            acceptedSession.resolve();
+          }, SUBMISSION_SETTLE_MS + 50);
+          return;
+        }
+        output += `${newSessionPrefix}duplicate\nlocal ready | idle\n`;
+      },
+      waitForOutput: async () => output,
+      waitForExit: async () => ({ exitCode: 0, signal: 0 }),
+      dispose: async () => {},
+    } satisfies PtyRun;
+
+    try {
+      await createFreshSession(run, newSessionPrefix);
+      await acceptedSession.promise;
+      expect(writes).toEqual(["/new\r"]);
+    } finally {
+      if (acceptanceTimer) {
+        clearTimeout(acceptanceTimer);
+      }
+    }
+  });
+
   it(
     "drives the real local backend with a mocked model endpoint",
     async ({ onTestFinished }) => {
@@ -869,6 +886,8 @@ describe("TUI PTY real backends", () => {
         expect(request?.body.model).toBe("gpt-5.5");
         await fixture.run.waitForOutput("LOCAL_PTY_RESPONSE");
 
+        const responseOffset = fixture.run.output().lastIndexOf("LOCAL_PTY_RESPONSE");
+        await waitForOutputAfter(fixture.run, "| idle", responseOffset);
         await createFreshSession(fixture.run, "new session: agent:main:tui-");
         await fixture.run.write("send after local new\r");
         await waitFor({
@@ -1159,6 +1178,8 @@ describe("TUI PTY real backends", () => {
         await fixture.run.write("seed gateway session\r");
         await fixture.run.waitForOutput("FIRST_RUN_ACTIVE");
 
+        const responseOffset = fixture.run.output().lastIndexOf("FIRST_RUN_ACTIVE");
+        await waitForOutputAfter(fixture.run, "| idle", responseOffset);
         const newSessionPrefix = `new session: agent:${fixture.agentId}:tui-`;
         await createFreshSession(fixture.run, newSessionPrefix);
         const newSessionKey = fixture.run

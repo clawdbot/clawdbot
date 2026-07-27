@@ -58,7 +58,11 @@ describe("AppSidebar session indicators", () => {
         rateLimited: false,
       }),
     );
-    const gatewayHarness = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+    const gatewayHarness = createGatewayHarness({
+      request,
+      requestSessionPullRequests: (params: { sessionKey: string }) =>
+        request("controlUi.sessionPullRequests", params),
+    } as unknown as GatewayBrowserClient);
     gatewayHarness.publish({
       hello: {
         features: { methods: ["controlUi.sessionPullRequests"] },

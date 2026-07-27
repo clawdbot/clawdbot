@@ -8,6 +8,7 @@ import {
   resolveDefaultModelForAgent,
   resolveThinkingDefaultWithRuntimeCatalog,
 } from "openclaw/plugin-sdk/agent-runtime";
+import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
 import {
@@ -1650,38 +1651,52 @@ export const registerTelegramNativeCommands = ({
           OriginatingChannel: "telegram" as const,
           OriginatingTo: originatingTo,
         });
-        await nativeCommandRuntime.recordInboundSessionMetaSafe({
-          cfg: runtimeCfg,
-          agentId: route.agentId,
-          sessionKey: commandTargetSessionKey,
-          ctx: ctxPayload,
-          onError: (err) =>
-            runtime.error?.(danger(`telegram slash: failed updating session meta: ${String(err)}`)),
-        });
-
         const disableBlockStreaming =
           resolveTelegramNativeCommandDisableBlockStreaming(runtimeTelegramCfg);
         const deliveryState = {
           delivered: false,
+          intentionallySuppressed: false,
           skippedNonSilent: 0,
         };
 
-        const { createChannelMessageReplyPipeline, deliverReplies } =
-          await loadTelegramNativeCommandDeliveryRuntime();
-        const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
+        const { deliverReplies } = await loadTelegramNativeCommandDeliveryRuntime();
+        let recordSessionMetaTask: Promise<unknown> | undefined;
+
+        const turnPlan: ChannelInboundTurnPlan<"provider_message_sending"> = {
           cfg: runtimeCfg,
-          agentId: route.agentId,
           channel: "telegram",
           accountId: route.accountId,
-        });
-
-        await telegramDeps.dispatchReplyWithBufferedBlockDispatcher({
-          ctx: ctxPayload,
-          cfg: runtimeCfg,
+          route: {
+            agentId: route.agentId,
+            sessionKey: commandSessionKey,
+          },
+          ctxPayload,
+          record: {
+            sessionKey: commandTargetSessionKey,
+            trackSessionMetaTask: (task) => {
+              recordSessionMetaTask = task;
+            },
+            onRecordError: (err) =>
+              runtime.error?.(
+                danger(`telegram slash: failed updating session meta: ${String(err)}`),
+              ),
+          },
+          // Native commands historically persisted target metadata before dispatch.
+          // Preserve that ordering while the shared recorder owns the write.
+          afterRecord: async () => {
+            await recordSessionMetaTask;
+          },
+          replyPipeline: {},
           dispatcherOptions: {
-            ...replyPipeline,
             beforeDeliver: async (payload) => payload,
-            deliver: async (payload, _info) => {
+            onSkip: (_payload, info) => {
+              if (info.reason !== "silent") {
+                deliveryState.skippedNonSilent += 1;
+              }
+            },
+          },
+          delivery: {
+            deliverWithProviderMessageSending: async (payload) => {
               if (
                 shouldSuppressLocalTelegramExecApprovalPrompt({
                   cfg: runtimeCfg,
@@ -1690,7 +1705,10 @@ export const registerTelegramNativeCommands = ({
                 })
               ) {
                 deliveryState.delivered = true;
-                return;
+                return {
+                  visibleReplySent: false,
+                  suppression: { reason: "no_visible_result" },
+                };
               }
               const result = await deliverReplies({
                 replies: [
@@ -1707,10 +1725,20 @@ export const registerTelegramNativeCommands = ({
               if (result.delivered) {
                 deliveryState.delivered = true;
               }
+              return result.delivered
+                ? { visibleReplySent: true }
+                : {
+                    visibleReplySent: false,
+                    suppression: { reason: "no_visible_result" as const },
+                  };
             },
-            onSkip: (_payload, info) => {
-              if (info.reason !== "silent") {
-                deliveryState.skippedNonSilent += 1;
+            onDelivered: (_payload, _info, result) => {
+              const reason = result?.suppression?.reason;
+              if (
+                reason === "cancelled_by_reply_payload_sending_hook" ||
+                reason === "empty_after_reply_payload_sending_hook"
+              ) {
+                deliveryState.intentionallySuppressed = true;
               }
             },
             onError: (err, info) => {
@@ -1720,10 +1748,17 @@ export const registerTelegramNativeCommands = ({
           replyOptions: {
             skillFilter,
             disableBlockStreaming,
-            onModelSelected,
           },
-        });
-        if (!deliveryState.delivered && deliveryState.skippedNonSilent > 0) {
+        };
+        await (
+          telegramDeps.dispatchChannelInboundTurn ??
+          defaultTelegramNativeCommandDeps.dispatchChannelInboundTurn
+        )(turnPlan);
+        if (
+          !deliveryState.delivered &&
+          !deliveryState.intentionallySuppressed &&
+          deliveryState.skippedNonSilent > 0
+        ) {
           await deliverReplies({
             replies: [{ text: EMPTY_RESPONSE_FALLBACK }],
             ...deliveryBaseOptions,

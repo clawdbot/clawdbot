@@ -749,6 +749,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   [".github/workflows/clawsweeper-dispatch.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
   [".github/workflows/labeler.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
   [".github/workflows/real-behavior-proof.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
+  [".github/workflows/stale.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
   [
     ".github/workflows/security-sensitive-guard.yml",
     ["test/scripts/security-sensitive-guard-workflow.test.ts"],

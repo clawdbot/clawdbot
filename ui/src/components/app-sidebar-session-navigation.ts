@@ -12,7 +12,10 @@ import {
   filterVisibleSessionRows,
   sessionMatchesArchivedFilter,
 } from "../lib/sessions/index.ts";
-import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
+import {
+  resolveSessionPreferredFace,
+  sessionNavigationTarget,
+} from "../lib/sessions/route-navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
@@ -282,8 +285,9 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   readonly selectSession = (sessionKey: string) => {
+    const face = resolveSessionPreferredFace(this.findSidebarSessionByKey(sessionKey));
     const target = sessionNavigationTarget({
-      face: "chat",
+      face,
       sessionKey,
       fallbackAgentId: this.selectedAgentIdForSessions(),
       basePath: this.basePath,
@@ -291,7 +295,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       mainKey: this.sessionMainKey(),
     });
     this.context?.gateway.setSessionKey(sessionKey);
-    this.onNavigate?.("chat", target.options);
+    this.onNavigate?.(face, target.options);
   };
 
   /** Collapsed zones keep full rows for true header counts and status dots. */
@@ -420,8 +424,9 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   readonly replaceCurrentSession = (sessionKey: string) => {
+    const face = resolveSessionPreferredFace(this.findSidebarSessionByKey(sessionKey));
     const target = sessionNavigationTarget({
-      face: "chat",
+      face,
       sessionKey,
       fallbackAgentId: this.selectedAgentIdForSessions(),
       basePath: this.basePath,
@@ -430,7 +435,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     });
     this.context?.gateway.setSessionKey(sessionKey);
     if (isSessionRouteId(this.activeRouteId)) {
-      this.onNavigate?.("chat", target.options);
+      this.onNavigate?.(face, target.options);
     }
   };
 

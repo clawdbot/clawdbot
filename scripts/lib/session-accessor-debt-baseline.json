@@ -6,8 +6,7 @@
     "src/agents/subagent-announce.test-support.ts": 2,
     "src/agents/tools/transcripts-tool.ts": 2,
     "src/auto-reply/reply/commands-session-store.ts": 2,
-    "src/config/sessions/session-accessor.entry.ts": 2,
-    "src/config/sessions/transcript.ts": 2
+    "src/config/sessions/session-accessor.entry.ts": 2
   },
   "sessionAccessorWrite": {
     "src/agents/subagent-spawn.test-helpers.ts": 1,

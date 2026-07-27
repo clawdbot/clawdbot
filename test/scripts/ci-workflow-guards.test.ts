@@ -48,6 +48,7 @@ const MATURITY_GENERATED_PR_PATHS = [
 
 type WorkflowStep = {
   env?: Record<string, unknown>;
+  id?: string;
   if?: string;
   name?: string;
   run?: string;
@@ -790,6 +791,75 @@ describe("ci workflow guards", () => {
     });
   });
 
+  it("routes stale bug issues through ClawSweeper instead of Barnacle closure", () => {
+    const staleWorkflow = readWorkflow(".github/workflows/stale.yml");
+    const staleSteps = staleWorkflow.jobs.stale.steps as WorkflowStep[];
+    const stepNamed = (name: string) =>
+      expectDefined(
+        staleSteps.find((step) => step.name === name),
+        name,
+      );
+
+    for (const name of [
+      "Mark stale unassigned issues and pull requests (primary)",
+      "Mark stale assigned issues (primary)",
+      "Mark stale unassigned issues and pull requests (fallback)",
+      "Mark stale assigned issues (fallback)",
+    ]) {
+      const exemptLabels = String(stepNamed(name).with?.["exempt-issue-labels"])
+        .split(",")
+        .map((label) => label.trim());
+      expect(exemptLabels, name).toContain("bug");
+    }
+
+    const bugJob = staleWorkflow.jobs["stale-bug-verification"];
+    expect(bugJob.permissions).toEqual({ issues: "write" });
+    expect(bugJob["runs-on"]).toBe("ubuntu-24.04");
+    const bugScript = String(
+      (bugJob.steps as WorkflowStep[]).find(
+        (step) => step.name === "Mark inactive bugs for ClawSweeper verification",
+      )?.with?.script,
+    );
+    expect(bugScript).toContain("const maxMarks = 25;");
+    expect(bugScript).toContain('labels: "bug"');
+    expect(bugScript).toContain("github.rest.issues.addLabels");
+    expect(bugScript).toContain("github.rest.issues.removeLabel");
+    expect(bugScript).toContain("Inactivity alone will not close a bug report.");
+    expect(bugScript).toContain("requires separate backfill approval");
+    expect(bugScript).toContain("slice(staleEventIndex + 1)");
+    expect(bugScript).toContain("updatedAtMs > lastAutomationAtMs");
+    expect(bugScript).toContain('item.state !== "open"');
+    expect(bugScript).not.toContain("15_000");
+    expect(bugScript).not.toContain("github.rest.issues.update");
+
+    const backfillScript = String(
+      (staleWorkflow.jobs["backfill-stale-closures"].steps as WorkflowStep[]).find(
+        (step) => step.name === "Backfill stale closures",
+      )?.with?.script,
+    );
+    expect(backfillScript).toMatch(/issueExemptLabels[\s\S]*"bug"/);
+
+    const dispatchWorkflow = readWorkflow(".github/workflows/clawsweeper-dispatch.yml");
+    const dispatchCondition = String(dispatchWorkflow.jobs.dispatch.if);
+    expect(dispatchCondition).toContain("github.event.label.name == 'stale'");
+    expect(dispatchCondition).toContain("contains(github.event.issue.labels.*.name, 'bug')");
+    expect(dispatchCondition).toContain("github.actor_id == '257215752'");
+    expect(dispatchCondition).toContain("github.actor_id == '264559031'");
+
+    const auditJob = staleWorkflow.jobs["audit-bug-closure-reasons"];
+    expect(auditJob.permissions).toEqual({ issues: "read" });
+    const auditScript = String((auditJob.steps as WorkflowStep[])[0]?.with?.script);
+    expect(auditScript).toContain('item.state_reason !== "not_planned"');
+    expect(auditScript).toContain("github.rest.issues.listEventsForTimeline");
+    expect(auditScript).toContain("github.paginate.iterator(");
+    expect(auditScript).toContain("new Set([257215752, 264559031])");
+    expect(auditScript).toContain("escapeSummaryCell(violation.title)");
+    expect(auditScript).toContain('.replaceAll("<", "&lt;")');
+    expect(auditScript).toContain("core.setFailed(");
+    expect(auditScript).not.toContain("github.rest.issues.update");
+    expect(auditScript).not.toContain("github.rest.issues.createComment");
+  });
+
   it("makes the hosted release-gate fallback explicit and exact-SHA only", () => {
     const workflow = readCiWorkflow();
     const releaseGate = workflow.on.workflow_dispatch.inputs.release_gate;
@@ -888,6 +958,13 @@ describe("ci workflow guards", () => {
   it("keeps Testbox pull request validation off leased runner capacity", () => {
     const workflow = readTestboxWorkflow();
 
+    expect(workflow.on.pull_request).toEqual({
+      types: ["opened", "reopened", "synchronize", "ready_for_review"],
+      paths: [".github/workflows/**"],
+    });
+    expect(workflow.jobs.check.if).toBe(
+      "${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}",
+    );
     expect(workflow.jobs.check["runs-on"]).toBe(
       "${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}",
     );

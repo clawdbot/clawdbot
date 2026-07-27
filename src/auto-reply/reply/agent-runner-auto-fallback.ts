@@ -8,6 +8,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolvePersistedOverrideModelRef } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSessionModelOverrideRouteResolution } from "../../config/sessions/model-override-provenance.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
@@ -47,6 +48,9 @@ export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
       ...params.run,
       provider: entryRef?.provider ?? params.run.provider,
       model: entryRef?.model ?? params.run.model,
+      requestedRouteResolution: entryRef
+        ? resolveSessionModelOverrideRouteResolution(params.entry)
+        : params.run.requestedRouteResolution,
       autoFallbackPrimaryProbe: undefined,
     };
     if (hasEntryModelOverride) {
@@ -88,6 +92,7 @@ export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
     ...params.run,
     provider: refreshedProbe.provider,
     model: refreshedProbe.model,
+    requestedRouteResolution: "resolved",
     autoFallbackPrimaryProbe: refreshedProbe,
   };
 }
@@ -144,6 +149,7 @@ export async function clearRecoveredAutoFallbackPrimaryProbeSelection(params: {
         providerOverride: undefined,
         modelOverride: undefined,
         modelOverrideSource: undefined,
+        modelOverrideRouteResolution: undefined,
         modelOverrideFallbackOriginProvider: undefined,
         modelOverrideFallbackOriginModel: undefined,
         ...(shouldClearAuthProfile

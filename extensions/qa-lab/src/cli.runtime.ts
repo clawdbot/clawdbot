@@ -46,6 +46,10 @@ import { startQaLabServer } from "./lab-server.js";
 import { listLiveTransportQaAdapterFactories } from "./live-transports/cli.js";
 import { runQaManualLane } from "./manual-lane.runtime.js";
 import { runQaMultipass } from "./multipass.runtime.js";
+import {
+  resolveQaRunProfileExecutionSelection,
+  resolveQaRunProfileMembership,
+} from "./profile-planning.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
 import {
   QA_FRONTIER_PARITY_BASELINE_LABEL,
@@ -68,6 +72,10 @@ import {
   type QaProviderMode,
   type QaProviderModeInput,
 } from "./run-config.js";
+import {
+  resolveQaRuntimePairLaneScenarioIds,
+  resolveQaRuntimePairScenarioSupport,
+} from "./runtime-pair-lane-selection.js";
 import type { RuntimeId } from "./runtime-parity.js";
 import {
   QA_RUNTIME_PAIR_LANES,
@@ -80,7 +88,6 @@ import { attachQaProfileScorecardEvidenceToFile } from "./scorecard-evidence.js"
 import {
   qaScorecardChannelDriverSchema,
   readQaScorecardTaxonomyReport,
-  type QaScorecardCategoryCoverageReport,
   type QaScorecardChannelDriver,
   type QaScorecardEvidenceMode,
 } from "./scorecard-taxonomy.js";
@@ -311,76 +318,6 @@ function parseQaRuntimePairLaneFilters(input: string[] | undefined): QaRuntimePa
   return rawValues as QaRuntimePairLane[];
 }
 
-function resolveQaRuntimePairLaneScenarioIds(params: {
-  channelDriver?: QaScorecardChannelDriver | null;
-  claudeCliAuthMode?: QaCliBackendAuthMode;
-  primaryModel: string;
-  providerMode: QaProviderMode;
-  scenarioIds: string[];
-  runtimePairLanes: readonly QaRuntimePairLane[];
-  runtimePair: boolean;
-}): {
-  scenarioIds: string[];
-  excludedLaneScenarios: string[];
-  excludedNonFlowScenarios: string[];
-} {
-  if (params.runtimePairLanes.length === 0) {
-    return {
-      scenarioIds: params.scenarioIds,
-      excludedLaneScenarios: [],
-      excludedNonFlowScenarios: [],
-    };
-  }
-  const laneSet = new Set(params.runtimePairLanes);
-  const matchingScenarios = readQaScenarioPack().scenarios.filter(
-    (scenario) => scenario.runtimePairLane && laneSet.has(scenario.runtimePairLane),
-  );
-  if (matchingScenarios.length === 0) {
-    throw new Error(
-      `--runtime-pair-lane matched no scenarios for ${params.runtimePairLanes.join(", ")}.`,
-    );
-  }
-  const compatibleScenarios = params.runtimePair
-    ? matchingScenarios.filter((scenario) => scenario.execution.kind === "flow")
-    : matchingScenarios;
-  const laneCompatibleScenarios = compatibleScenarios.filter((scenario) =>
-    scenarioMatchesQaProviderLane({
-      scenario,
-      providerMode: params.providerMode,
-      primaryModel: params.primaryModel,
-      channelDriver: params.channelDriver,
-      channel: scenario.execution.channel,
-      claudeCliAuthMode: params.claudeCliAuthMode,
-    }),
-  );
-  const excludedLaneScenarios = compatibleScenarios
-    .filter((scenario) => !laneCompatibleScenarios.includes(scenario))
-    .map((scenario) => scenario.id);
-  const excludedNonFlowScenarios = params.runtimePair
-    ? matchingScenarios
-        .filter((scenario) => scenario.execution.kind !== "flow")
-        .map((scenario) => `${scenario.id} (${scenario.execution.kind})`)
-    : [];
-  if (compatibleScenarios.length === 0) {
-    throw new Error(
-      `--runtime-pair-lane matched no execution.kind: flow scenarios for ${params.runtimePairLanes.join(", ")}; incompatible scenario(s): ${excludedNonFlowScenarios.join(", ")}.`,
-    );
-  }
-  if (params.scenarioIds.length === 0 && laneCompatibleScenarios.length === 0) {
-    throw new Error(
-      `--runtime-pair-lane matched no scenarios for provider mode ${params.providerMode}; incompatible scenario(s): ${excludedLaneScenarios.join(", ")}.`,
-    );
-  }
-  return {
-    scenarioIds: uniqueStrings([
-      ...params.scenarioIds,
-      ...laneCompatibleScenarios.map((scenario) => scenario.id),
-    ]),
-    excludedLaneScenarios,
-    excludedNonFlowScenarios,
-  };
-}
-
 function rejectNonFlowScenarioIds(params: {
   option: "--runner multipass" | "--runtime-pair";
   scenarioIds: readonly string[];
@@ -392,12 +329,13 @@ function rejectNonFlowScenarioIds(params: {
   const scenarioById = new Map(
     readQaScenarioPack().scenarios.map((scenario) => [scenario.id, scenario]),
   );
-  const nonFlowScenarios = scenarioIds.flatMap((scenarioId) => {
+  const selectedScenarios = scenarioIds.flatMap((scenarioId) => {
     const scenario = scenarioById.get(scenarioId);
-    return scenario && scenario.execution.kind !== "flow"
-      ? [`${scenario.id} (${scenario.execution.kind})`]
-      : [];
+    return scenario ? [scenario] : [];
   });
+  const nonFlowScenarios = resolveQaRuntimePairScenarioSupport(
+    selectedScenarios,
+  ).excludedScenarios.map((scenario) => `${scenario.id} (${scenario.execution.kind})`);
   if (nonFlowScenarios.length > 0) {
     throw new Error(
       `${params.option} requires execution.kind: flow scenarios; unsupported scenario(s): ${nonFlowScenarios.join(", ")}`,
@@ -742,43 +680,30 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
   if (!profileReport) {
     throw new Error(`taxonomy.yaml does not define QA run profile ${profile}.`);
   }
-  const categories = scorecardReport.categories.filter((category) =>
-    qaScorecardCategoryMatchesRunProfile(category, {
+  const membership = resolveQaRunProfileMembership(
+    {
       profile,
       surface: opts.surface,
       category: opts.category,
-    }),
+      scenarioIds: opts.scenarioIds,
+    },
+    { scenarios: scenarioPack.scenarios, scorecardReport },
   );
+  const categories = membership.categories;
   if (categories.length === 0) {
     throw new Error(formatQaRunProfileNoMatchMessage(opts));
   }
 
-  const scenarioBySourcePath = new Map(
-    scenarioPack.scenarios.map((scenario) => [scenario.sourcePath, scenario] as const),
-  );
-  const taxonomyScenariosForCategories = uniqueStrings(
-    categories.flatMap((category) => category.scenarioRefs),
-  )
-    .map((scenarioRef) => scenarioBySourcePath.get(scenarioRef))
-    .filter((scenario): scenario is NonNullable<typeof scenario> => scenario !== undefined);
   const requestedScenarioIds = uniqueStrings(
     (opts.scenarioIds ?? []).map((scenarioId) => scenarioId.trim()).filter(Boolean),
   );
-  const taxonomyScenarios =
-    requestedScenarioIds.length === 0
-      ? taxonomyScenariosForCategories
-      : taxonomyScenariosForCategories.filter((scenario) =>
-          requestedScenarioIds.includes(scenario.id),
-        );
+  const taxonomyScenarios = membership.selectedScenarios;
   if (requestedScenarioIds.length > 0 && taxonomyScenarios.length === 0) {
     throw new Error(
       `qa run did not find taxonomy scenarios for ${formatQaRunProfileFilterList(opts)} --scenario ${requestedScenarioIds.join(",")}.`,
     );
   }
-  const matchedScenarioIds = new Set(taxonomyScenarios.map((scenario) => scenario.id));
-  const missingScenarioIds = requestedScenarioIds.filter(
-    (scenarioId) => !matchedScenarioIds.has(scenarioId),
-  );
+  const missingScenarioIds = membership.excludedScenarioIds;
   if (missingScenarioIds.length > 0) {
     throw new Error(
       `qa run did not find taxonomy scenarios for ${formatQaRunProfileFilterList(opts)} --scenario ${missingScenarioIds.join(",")}.`,
@@ -787,29 +712,23 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
   const providerMode = opts.providerMode ?? defaultQaRunProfileProviderMode(profile);
   const normalizedProviderMode = normalizeQaProviderMode(providerMode);
   const primaryModel = opts.primaryModel?.trim() || defaultQaModelForMode(normalizedProviderMode);
-  const scenarios = taxonomyScenarios.filter((scenario) => {
-    // qa-channel is the built-in harness channel, so another driver cannot implement it.
-    if (
-      scenario.execution.channel === "qa-channel" &&
-      profileReport.channelDriver !== "qa-channel"
-    ) {
-      return false;
-    }
-    const channel =
-      profileReport.channelDriver === "qa-channel"
-        ? "qa-channel"
-        : (scenario.execution.channel ??
-          (profileReport.channelDriver === "crabline"
-            ? OPENCLAW_CRABLINE_DEFAULT_CHANNEL
-            : undefined));
-    return scenarioMatchesQaProviderLane({
-      scenario,
-      providerMode: normalizedProviderMode,
-      primaryModel,
-      channelDriver: profileReport.channelDriver,
-      channel,
-    });
+  const executionSelection = resolveQaRunProfileExecutionSelection({
+    scenarios: taxonomyScenarios,
+    providerMode: normalizedProviderMode,
+    primaryModel,
+    channelDriver: profileReport.channelDriver,
+    defaultChannel:
+      profileReport.channelDriver === "crabline" ? OPENCLAW_CRABLINE_DEFAULT_CHANNEL : undefined,
   });
+  if (requestedScenarioIds.length > 0 && executionSelection.excludedScenarios.length > 0) {
+    const exclusions = executionSelection.excludedScenarios
+      .map(({ scenario, reasons }) => `${scenario.id} (${reasons.join(", ")})`)
+      .join(", ");
+    throw new Error(
+      `qa run --qa-profile ${profile} cannot run explicitly selected scenario(s): ${exclusions}.`,
+    );
+  }
+  const scenarios = executionSelection.selectedScenarios;
   if (scenarios.length === 0) {
     throw new Error(
       `qa run --qa-profile ${profile} did not resolve any executable QA scenarios for provider mode ${normalizedProviderMode}.`,
@@ -898,25 +817,6 @@ function defaultQaRunProfileProviderMode(profile: string): QaProviderModeInput {
   return profile === "smoke-ci" ? "mock-openai" : DEFAULT_QA_LIVE_PROVIDER_MODE;
 }
 
-function qaScorecardCategoryMatchesRunProfile(
-  category: QaScorecardCategoryCoverageReport,
-  opts: { profile: string; surface?: string; category?: string },
-): boolean {
-  if (!category.profiles.includes(opts.profile)) {
-    return false;
-  }
-  if (opts.surface?.trim()) {
-    const surface = opts.surface.trim();
-    if (category.taxonomySurfaceId !== surface && !category.id.startsWith(`${surface}.`)) {
-      return false;
-    }
-  }
-  if (opts.category?.trim() && category.id !== opts.category.trim()) {
-    return false;
-  }
-  return true;
-}
-
 function formatQaRunProfileNoMatchMessage(
   opts: Pick<QaProfileCommandOptions, "profile" | "surface" | "category">,
 ) {
@@ -967,8 +867,10 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   });
   const runtimePairLanes = parseQaRuntimePairLaneFilters(opts.runtimePairLane);
   const runtimePairLaneSelection = resolveQaRuntimePairLaneScenarioIds({
+    channel: opts.channel,
     channelDriver,
     claudeCliAuthMode,
+    defaultChannel: channelDriver === "crabline" ? OPENCLAW_CRABLINE_DEFAULT_CHANNEL : undefined,
     primaryModel: primaryModel ?? defaultQaModelForMode(providerMode),
     providerMode,
     scenarioIds: explicitScenarioIds,
@@ -981,12 +883,12 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   }
   if (runtimePairLaneSelection.excludedNonFlowScenarios.length > 0) {
     process.stderr.write(
-      `QA runtime-pair lane selection excluded incompatible non-flow scenario(s): ${runtimePairLaneSelection.excludedNonFlowScenarios.join(", ")}\n`,
+      `QA runtime-pair lane selection excluded incompatible non-flow scenario(s): ${runtimePairLaneSelection.excludedNonFlowScenarios.map((scenario) => `${scenario.id} (${scenario.execution.kind})`).join(", ")}\n`,
     );
   }
   if (runtimePairLaneSelection.excludedLaneScenarios.length > 0) {
     process.stderr.write(
-      `QA runtime-pair lane selection excluded lane-incompatible scenario(s): ${runtimePairLaneSelection.excludedLaneScenarios.join(", ")}\n`,
+      `QA runtime-pair lane selection excluded lane-incompatible scenario(s): ${runtimePairLaneSelection.excludedLaneScenarios.map((scenario) => scenario.id).join(", ")}\n`,
     );
   }
   const allowFailures = opts.allowFailures === true;
@@ -1063,9 +965,6 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   }
   if (runner === "multipass" && liveChannelId) {
     throw new Error("--channel-driver live with --channel requires --runner host.");
-  }
-  if (runtimePair && liveChannelId) {
-    throw new Error("--runtime-pair is not supported with a live QA adapter.");
   }
   if (runner === "multipass") {
     rejectNonFlowScenarioIds({ option: "--runner multipass", scenarioIds });

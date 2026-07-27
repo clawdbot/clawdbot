@@ -3,6 +3,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   channelSupportsThreadDelivery,
+  getLoadedChannelThreadingAdapter,
   resolveChannelThreadAddressing,
 } from "./thread-addressing.js";
 
@@ -35,6 +36,7 @@ describe("resolveChannelThreadAddressing", () => {
     );
 
     expect(resolveChannelThreadAddressing("messagechat")).toBe("message");
+    expect(getLoadedChannelThreadingAdapter("messagechat")?.threadAddressing).toBe("message");
   });
 });
 

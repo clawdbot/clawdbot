@@ -11,10 +11,12 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
   saveAuthProfileStore,
 } from "../auth-profiles.js";
-import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "../plugin-model-catalog.js";
+import {
+  encodePluginModelCatalogRelativePath,
+  PLUGIN_MODEL_CATALOG_GENERATED_BY,
+  replacePersistedPluginModelCatalogs,
+} from "../plugin-model-catalog.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
-
-const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";
 
 const resolveBundledStaticCatalogModelMock = vi.hoisted(() => vi.fn());
 const resolveBundledProviderStaticCatalogModelMock = vi.hoisted(() => vi.fn());
@@ -536,15 +538,15 @@ describe("resolveModel", () => {
     const first = await resolveModelAsync("zai", "glm-5.1", agentDir, undefined, {
       runtimeHooks: createRuntimeHooks(),
     });
-    const catalogPath = path.join(agentDir, "plugins", "zai", PLUGIN_MODEL_CATALOG_FILE);
-    fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
-    fs.writeFileSync(
-      catalogPath,
-      JSON.stringify({
-        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-        providers: {},
-      }),
-    );
+    replacePersistedPluginModelCatalogs({
+      agentDir,
+      pluginCatalogWrites: {
+        [encodePluginModelCatalogRelativePath("zai")]: JSON.stringify({
+          generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+          providers: {},
+        }),
+      },
+    });
     const second = await resolveModelAsync("zai", "glm-5.1", agentDir, undefined, {
       runtimeHooks: createRuntimeHooks(),
     });
