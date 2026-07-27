@@ -225,7 +225,7 @@ export async function launchChromeMeet(params: {
     MeetingPlatformAdapter.isTalkBackMode(params.mode) &&
     result.browser?.inCall === true &&
     result.browser.micMuted === false &&
-    result.browser.manualActionRequired !== true;
+    result.browser.manualAction === undefined;
   const audioBridge = shouldStartRealtimeBridge ? await startRealtimeAudioBridge() : undefined;
   return { ...result, audioBridge };
 }
@@ -525,7 +525,7 @@ export async function launchChromeMeetOnNode(params: {
     MeetingPlatformAdapter.isTalkBackMode(params.mode) &&
     (browserControl.browser?.inCall !== true ||
       browserControl.browser.micMuted !== false ||
-      browserControl.browser.manualActionRequired === true)
+      browserControl.browser.manualAction)
   ) {
     return {
       nodeId,
