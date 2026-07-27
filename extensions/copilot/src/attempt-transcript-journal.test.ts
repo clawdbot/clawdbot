@@ -720,6 +720,34 @@ describe("Copilot attempt transcript journal", () => {
     });
   });
 
+  it("rejects cumulative assistant snapshots without an API call id", async () => {
+    const { bridge, journal, session, target } = await createFixture();
+    await journal.persistInitialUser();
+    session.emit(event("user.message", "initial-user", { content: "inspect" }));
+    session.emit(
+      event("assistant.message", "assistant-snapshot-a", {
+        content: "checking",
+        messageId: "assistant-snapshot",
+      }),
+    );
+    session.emit(
+      event("assistant.message", "assistant-snapshot-b", {
+        content: "checking now",
+        messageId: "assistant-snapshot",
+      }),
+    );
+    bridge.flushTranscriptProjection();
+    await journal.barrier("cumulative assistant snapshot without API call id");
+
+    const rows = transcriptMessages(await readSessionTranscriptEvents(target));
+    expect(rows.map((row) => row.message.role)).toEqual(["user", "assistant"]);
+    expect(rows.at(-1)?.message).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "checking" }],
+    });
+    expect(journal.snapshot().replayInvalid).toBe(true);
+  });
+
   it("keeps ephemeral deltas out of the durable assistant row", async () => {
     const { journal, session, target } = await createFixture();
     await journal.persistInitialUser();

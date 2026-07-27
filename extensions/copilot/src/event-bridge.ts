@@ -137,6 +137,7 @@ export function attachEventBridge(
   let usage: AssistantUsageSnapshot | undefined;
   const usageByApiCallId = new Map<string, AssistantUsageSnapshot>();
   const handledAssistantEventIds = new Set<string>();
+  const projectedAssistantMessageIdsWithoutApiCall = new Set<string>();
   let pendingAssistantProjection: AssistantProjectionGroup | undefined;
   let lastAssistantProjection: AssistantProjectionGroup | undefined;
   let streamError: Error | undefined;
@@ -658,6 +659,11 @@ export function attachEventBridge(
     };
     const apiCallId = readString(event.data.apiCallId);
     if (!apiCallId) {
+      if (projectedAssistantMessageIdsWithoutApiCall.has(event.data.messageId)) {
+        options.transcriptProjection?.journal.markReplayIncomplete();
+        return;
+      }
+      projectedAssistantMessageIdsWithoutApiCall.add(event.data.messageId);
       flushPendingAssistantProjection();
       const group = { chunks: [chunk] } satisfies AssistantProjectionGroup;
       lastAssistantProjection = group;
