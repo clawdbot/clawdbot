@@ -216,6 +216,25 @@ const makeContext = (): GatewayRequestContext =>
     getRuntimeConfig: () => ({}),
   }) as unknown as GatewayRequestContext;
 
+async function invokeGatewayMessageMethod(params: {
+  method: "message.action" | "poll" | "send";
+  request: Record<string, unknown>;
+  respond: ReturnType<typeof vi.fn>;
+  context: GatewayRequestContext;
+}) {
+  await expectDefined(
+    sendHandlers[params.method],
+    `sendHandlers.${params.method} test invariant`,
+  )({
+    params: params.request as never,
+    respond: params.respond as never,
+    context: params.context,
+    req: { type: "req", id: "1", method: params.method },
+    client: null as never,
+    isWebchatConnect: () => false,
+  });
+}
+
 async function runSend(params: Record<string, unknown>) {
   return await runSendWithClient(params);
 }
@@ -628,6 +647,19 @@ function runDiscordChannelInfo(
       getRuntimeConfig: () => sourceConfig,
     } as unknown as GatewayRequestContext,
   );
+}
+
+function mockMutableMessageRouteAccounts(resolveDefaultAccountId: (channel: string) => string) {
+  mocks.getChannelPlugin.mockImplementation((channel: string) => ({
+    id: channel,
+    actions: { handleAction: true },
+    outbound: { sendPoll: mocks.sendPoll },
+    config: {
+      listAccountIds: () => ["primary", "secondary"],
+      defaultAccountId: () => resolveDefaultAccountId(channel),
+      resolveAccount: (_cfg: unknown, accountId: string) => ({ accountId, enabled: true }),
+    },
+  }));
 }
 
 describe("gateway send mirroring", () => {
@@ -1174,6 +1206,36 @@ describe("gateway send mirroring", () => {
     expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
   });
 
+  it("replays an omitted message.action account after the default account changes", async () => {
+    let defaultAccountId = "primary";
+    mockMutableMessageRouteAccounts(() => defaultAccountId);
+    const context = makeContext();
+    const invoke = async (respond: ReturnType<typeof vi.fn>) => {
+      await invokeGatewayMessageMethod({
+        method: "message.action",
+        request: {
+          channel: "slack",
+          action: "send",
+          params: { target: "channel:current", message: "hi" },
+          idempotencyKey: "idem-action-default-account-reload",
+        },
+        respond,
+        context,
+      });
+    };
+
+    const firstRespond = vi.fn();
+    await invoke(firstRespond);
+    defaultAccountId = "secondary";
+    const retryRespond = vi.fn();
+    await invoke(retryRespond);
+
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
+    expect(firstRespondCall(firstRespond)?.[0]).toBe(true);
+    expect(firstRespondCall(retryRespond)?.[0]).toBe(true);
+    expect(firstRespondCall(retryRespond)?.[3]?.cached).toBe(true);
+  });
+
   it("keeps an agent runtime delegated even with a direct-operator marker", async () => {
     const sessionKey = "agent:main:slack:channel:C1";
     mocks.dispatchChannelMessageAction.mockResolvedValueOnce({
@@ -1272,6 +1334,44 @@ describe("gateway send mirroring", () => {
     expect([firstCall?.[3]?.cached, secondCall?.[3]?.cached].filter(Boolean)).toHaveLength(1);
   });
 
+  it("replays an omitted send route after channel and account defaults change", async () => {
+    let defaultChannel = "slack";
+    const defaultAccounts: Record<string, string> = {
+      discord: "secondary",
+      slack: "primary",
+    };
+    mocks.resolveMessageChannelSelection.mockImplementation(async () => ({
+      channel: defaultChannel,
+      configured: [defaultChannel],
+    }));
+    mockMutableMessageRouteAccounts((channel) => defaultAccounts[channel] ?? "primary");
+    const context = makeContext();
+    const invoke = async (respond: ReturnType<typeof vi.fn>) => {
+      await invokeGatewayMessageMethod({
+        method: "send",
+        request: {
+          to: "channel:C1",
+          message: "hi",
+          idempotencyKey: "idem-send-default-route-reload",
+        },
+        respond,
+        context,
+      });
+    };
+
+    const firstRespond = vi.fn();
+    await invoke(firstRespond);
+    defaultChannel = "discord";
+    defaultAccounts.slack = "secondary";
+    const retryRespond = vi.fn();
+    await invoke(retryRespond);
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(firstRespondCall(firstRespond)?.[0]).toBe(true);
+    expect(firstRespondCall(retryRespond)?.[0]).toBe(true);
+    expect(firstRespondCall(retryRespond)?.[3]?.cached).toBe(true);
+  });
+
   it("dedupes omitted and explicit default poll routes", async () => {
     const context = makeContext();
     const firstRespond = vi.fn();
@@ -1340,6 +1440,104 @@ describe("gateway send mirroring", () => {
     expect(secondCall?.[2]).toBeUndefined();
     expect(secondCall?.[3]?.channel).toBe("slack");
     expect([firstCall?.[3]?.cached, secondCall?.[3]?.cached].filter(Boolean)).toHaveLength(1);
+  });
+
+  it("replays an omitted poll account after the default account changes", async () => {
+    let defaultAccountId = "primary";
+    mockMutableMessageRouteAccounts(() => defaultAccountId);
+    const context = makeContext();
+    const invoke = async (respond: ReturnType<typeof vi.fn>) => {
+      await invokeGatewayMessageMethod({
+        method: "poll",
+        request: {
+          to: "channel:C1",
+          question: "Q?",
+          options: ["A", "B"],
+          channel: "slack",
+          idempotencyKey: "idem-poll-default-account-reload",
+        },
+        respond,
+        context,
+      });
+    };
+
+    const firstRespond = vi.fn();
+    await invoke(firstRespond);
+    defaultAccountId = "secondary";
+    const retryRespond = vi.fn();
+    await invoke(retryRespond);
+
+    expect(mocks.sendPoll).toHaveBeenCalledTimes(1);
+    expect(firstRespondCall(firstRespond)?.[0]).toBe(true);
+    expect(firstRespondCall(retryRespond)?.[0]).toBe(true);
+    expect(firstRespondCall(retryRespond)?.[3]?.cached).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "message.action",
+      method: "message.action" as const,
+      request: {
+        channel: "slack",
+        action: "send",
+        params: { target: "channel:current", message: "hi" },
+        accountId: "primary",
+        idempotencyKey: "idem-action-explicit-route-reload",
+      },
+      providerCall: mocks.dispatchChannelMessageAction,
+    },
+    {
+      name: "send",
+      method: "send" as const,
+      request: {
+        to: "channel:C1",
+        message: "hi",
+        channel: "slack",
+        accountId: "primary",
+        idempotencyKey: "idem-send-explicit-route-reload",
+      },
+      providerCall: mocks.deliverOutboundPayloads,
+    },
+    {
+      name: "poll",
+      method: "poll" as const,
+      request: {
+        to: "channel:C1",
+        question: "Q?",
+        options: ["A", "B"],
+        channel: "slack",
+        accountId: "primary",
+        idempotencyKey: "idem-poll-explicit-route-reload",
+      },
+      providerCall: mocks.sendPoll,
+    },
+  ])("replays a cached $name result after its explicit route is removed", async (testCase) => {
+    mockMutableMessageRouteAccounts(() => "primary");
+    mocks.deliverOutboundPayloads.mockResolvedValue([
+      { messageId: "explicit-route-message", channel: "slack" },
+    ]);
+    const context = makeContext();
+    const firstRespond = vi.fn();
+    await invokeGatewayMessageMethod({
+      method: testCase.method,
+      request: testCase.request,
+      respond: firstRespond,
+      context,
+    });
+
+    mocks.getChannelPlugin.mockReturnValue(undefined);
+    const retryRespond = vi.fn();
+    await invokeGatewayMessageMethod({
+      method: testCase.method,
+      request: testCase.request,
+      respond: retryRespond,
+      context,
+    });
+
+    expect(testCase.providerCall).toHaveBeenCalledTimes(1);
+    expect(firstRespondCall(firstRespond)?.[0]).toBe(true);
+    expect(firstRespondCall(retryRespond)?.[0]).toBe(true);
+    expect(firstRespondCall(retryRespond)?.[3]?.cached).toBe(true);
   });
 
   it("accepts media-only sends without message", async () => {

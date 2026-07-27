@@ -58,7 +58,11 @@ import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { normalizePollInput } from "../../polls.js";
-import { normalizeAccountId, normalizeAgentId } from "../../routing/session-key.js";
+import {
+  normalizeAccountId,
+  normalizeAgentId,
+  normalizeOptionalAccountId,
+} from "../../routing/session-key.js";
 import {
   isAgentHarnessSessionKey,
   resolveMissingAgentHarnessSessionError,
@@ -83,6 +87,18 @@ import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from ".
 import { assertValidParams } from "./validation.js";
 
 type MessageActionToolContext = Omit<ChannelThreadingToolContext, "currentChatType">;
+type MessageOperationPrefix = "message.action" | "poll" | "send";
+
+type MessageOperationRoute = {
+  channel: string;
+  accountId: string;
+  requestScope: string;
+};
+
+type MessageOperationRouteBinding = {
+  key: string;
+  reservedRoute?: MessageOperationRoute;
+};
 
 function resolveTrustedMessageActionToolContext(params: {
   client: Parameters<GatewayRequestHandlers["message.action"]>[0]["client"];
@@ -158,9 +174,18 @@ function resolveTrustedMessageActionToolContext(params: {
   };
 }
 
+function resolveMessageOperationAuthorityScope(params: {
+  prefix: MessageOperationPrefix;
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
+}): string {
+  return params.prefix === "message.action"
+    ? `:${params.conversationReadOrigin ?? "delegated"}`
+    : "";
+}
+
 function resolveGatewayInflightRequest(params: {
   context: GatewayRequestContext;
-  prefix: "message.action" | "poll" | "send";
+  prefix: MessageOperationPrefix;
   idempotencyKey: string;
   respond: RespondFn;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
@@ -177,8 +202,7 @@ function resolveGatewayInflightRequest(params: {
       done: Promise<void>;
     } {
   const idem = params.idempotencyKey;
-  const authorityScope =
-    params.prefix === "message.action" ? `:${params.conversationReadOrigin ?? "delegated"}` : "";
+  const authorityScope = resolveMessageOperationAuthorityScope(params);
   const requestScope = params.requestScope ? `:${params.requestScope}` : "";
   const dedupeKey = `${params.prefix}${authorityScope}${requestScope}:${idem}`;
   return resolveIdempotentGatewayRequest({
@@ -187,6 +211,134 @@ function resolveGatewayInflightRequest(params: {
     idempotencyKey: idem,
     respond: params.respond,
   });
+}
+
+function parseMessageOperationRoute(
+  requestScope: string | undefined,
+): MessageOperationRoute | undefined {
+  if (!requestScope) {
+    return undefined;
+  }
+  try {
+    const parsed: unknown = JSON.parse(requestScope);
+    if (
+      !Array.isArray(parsed) ||
+      parsed.length !== 2 ||
+      typeof parsed[0] !== "string" ||
+      typeof parsed[1] !== "string"
+    ) {
+      return undefined;
+    }
+    const channel = normalizeMessageChannel(parsed[0]);
+    const accountId = normalizeOptionalAccountId(parsed[1]);
+    if (!channel || channel !== parsed[0] || !accountId || accountId !== parsed[1]) {
+      return undefined;
+    }
+    return { channel, accountId, requestScope };
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveMessageOperationRouteBinding(params: {
+  context: GatewayRequestContext;
+  prefix: MessageOperationPrefix;
+  idempotencyKey: string;
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
+  requestChannel: unknown;
+  accountIds: readonly unknown[];
+}): MessageOperationRouteBinding | undefined {
+  const rawChannel = readStringValue(params.requestChannel);
+  const channel = rawChannel ? normalizeMessageChannel(rawChannel) : undefined;
+  if (rawChannel && !channel) {
+    return undefined;
+  }
+  const providedAccountIds = params.accountIds.filter(
+    (value) => value !== undefined && value !== null && (typeof value !== "string" || value.trim()),
+  );
+  const normalizedAccountIds = providedAccountIds.map((value) =>
+    typeof value === "string" ? normalizeOptionalAccountId(value) : undefined,
+  );
+  if (normalizedAccountIds.some((accountId) => !accountId)) {
+    return undefined;
+  }
+  const distinctAccountIds = [...new Set(normalizedAccountIds as string[])];
+  if (distinctAccountIds.length > 1) {
+    return undefined;
+  }
+  const accountId = distinctAccountIds[0];
+  const authorityScope = resolveMessageOperationAuthorityScope(params);
+  const explicitRouteScope = JSON.stringify([channel ?? null, accountId ?? null]);
+  const key = `${params.prefix}${authorityScope}:route-binding:${explicitRouteScope}:${params.idempotencyKey}`;
+  return {
+    key,
+    reservedRoute: parseMessageOperationRoute(params.context.dedupe.get(key)?.requestIdentity),
+  };
+}
+
+function bindMessageOperationRoute(params: {
+  context: GatewayRequestContext;
+  binding: MessageOperationRouteBinding | undefined;
+  requestScope: string;
+}): boolean {
+  if (!params.binding) {
+    return true;
+  }
+  const existing = params.context.dedupe.get(params.binding.key);
+  if (existing) {
+    if (existing.requestIdentity !== params.requestScope) {
+      return false;
+    }
+    params.context.dedupe.set(params.binding.key, { ...existing, ts: Date.now() });
+    return true;
+  }
+  // Bind the canonical route before dispatch so retries can replay without
+  // consulting mutable defaults or plugin/account configuration.
+  params.context.dedupe.set(params.binding.key, {
+    ts: Date.now(),
+    ok: true,
+    requestIdentity: params.requestScope,
+  });
+  return true;
+}
+
+function refreshMessageOperationRouteBinding(params: {
+  context: GatewayRequestContext;
+  binding: MessageOperationRouteBinding | undefined;
+  requestScope: string;
+}): void {
+  if (!params.binding) {
+    return;
+  }
+  const existing = params.context.dedupe.get(params.binding.key);
+  if (existing?.requestIdentity === params.requestScope) {
+    params.context.dedupe.set(params.binding.key, { ...existing, ts: Date.now() });
+  }
+}
+
+function replayReservedMessageOperationRoute(params: {
+  context: GatewayRequestContext;
+  binding: MessageOperationRouteBinding | undefined;
+  prefix: MessageOperationPrefix;
+  idempotencyKey: string;
+  respond: RespondFn;
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
+}): Promise<void> | undefined {
+  if (!params.binding?.reservedRoute) {
+    return undefined;
+  }
+  const inflight = resolveGatewayInflightRequest({
+    context: params.context,
+    prefix: params.prefix,
+    idempotencyKey: params.idempotencyKey,
+    respond: params.respond,
+    conversationReadOrigin: params.conversationReadOrigin,
+    requestScope: params.binding.reservedRoute.requestScope,
+  });
+  if (inflight.kind === "ready") {
+    return undefined;
+  }
+  return inflight.done;
 }
 
 function resolveMessageOperationAccountRoute(params: {
@@ -543,8 +695,28 @@ export const sendHandlers: GatewayRequestHandlers = {
       client,
       requestedOrigin: request.conversationReadOrigin,
     });
-    const resolvedChannel = await resolveRequestedChannel({
+    const routeBinding = resolveMessageOperationRouteBinding({
+      context,
+      prefix: "message.action",
+      idempotencyKey: request.idempotencyKey,
+      conversationReadOrigin,
       requestChannel: request.channel,
+      accountIds: [request.accountId, request.params.accountId],
+    });
+    const reservedReplay = replayReservedMessageOperationRoute({
+      context,
+      binding: routeBinding,
+      prefix: "message.action",
+      idempotencyKey: request.idempotencyKey,
+      respond,
+      conversationReadOrigin,
+    });
+    if (reservedReplay) {
+      await reservedReplay;
+      return;
+    }
+    const resolvedChannel = await resolveRequestedChannel({
+      requestChannel: routeBinding?.reservedRoute?.channel ?? request.channel,
       unsupportedMessage: (input) => `unsupported channel: ${input}`,
       context,
       rejectWebchatAsInternalOnly: true,
@@ -573,11 +745,29 @@ export const sendHandlers: GatewayRequestHandlers = {
         cfg,
         channel,
         plugin,
-        accountIds: [request.accountId, request.params.accountId],
+        accountIds: [
+          request.accountId,
+          request.params.accountId,
+          routeBinding?.reservedRoute?.accountId,
+        ],
         conflictMessage: "message.action accountId does not match params.accountId",
       });
     } catch (error) {
       respondGatewayInvalidRequest({ respond, channel, error });
+      return;
+    }
+    if (
+      !bindMessageOperationRoute({
+        context,
+        binding: routeBinding,
+        requestScope: accountRoute.requestScope,
+      })
+    ) {
+      respondGatewayInvalidRequest({
+        respond,
+        channel,
+        error: "idempotency key is already bound to a different message route",
+      });
       return;
     }
     const inflight = resolveGatewayInflightRequest({
@@ -694,7 +884,13 @@ export const sendHandlers: GatewayRequestHandlers = {
       } catch (err) {
         return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });
       }
-    })();
+    })().finally(() => {
+      refreshMessageOperationRouteBinding({
+        context,
+        binding: routeBinding,
+        requestScope: accountRoute.requestScope,
+      });
+    });
 
     await runGatewayInflightWork({ inflightMap, dedupeKey, work, respond });
   },
@@ -744,7 +940,28 @@ export const sendHandlers: GatewayRequestHandlers = {
     const requestedAccountId = normalizeOptionalString(request.accountId);
     const replyToId = normalizeOptionalString(request.replyToId);
     const threadId = normalizeOptionalString(request.threadId);
-    const resolvedChannel = await resolveInternalDeliveryChannel(request.channel, context);
+    const routeBinding = resolveMessageOperationRouteBinding({
+      context,
+      prefix: "send",
+      idempotencyKey: request.idempotencyKey,
+      requestChannel: request.channel,
+      accountIds: [request.accountId],
+    });
+    const reservedReplay = replayReservedMessageOperationRoute({
+      context,
+      binding: routeBinding,
+      prefix: "send",
+      idempotencyKey: request.idempotencyKey,
+      respond,
+    });
+    if (reservedReplay) {
+      await reservedReplay;
+      return;
+    }
+    const resolvedChannel = await resolveInternalDeliveryChannel(
+      routeBinding?.reservedRoute?.channel ?? request.channel,
+      context,
+    );
     if (resolvedChannel.kind !== "ready") {
       const result = resolvedChannel.result;
       respond(result.ok, result.payload, result.error, result.meta);
@@ -767,11 +984,25 @@ export const sendHandlers: GatewayRequestHandlers = {
         cfg,
         channel,
         plugin,
-        accountIds: [requestedAccountId],
+        accountIds: [requestedAccountId, routeBinding?.reservedRoute?.accountId],
         conflictMessage: "send account selections do not match",
       });
     } catch (error) {
       respondGatewayInvalidRequest({ respond, channel, error });
+      return;
+    }
+    if (
+      !bindMessageOperationRoute({
+        context,
+        binding: routeBinding,
+        requestScope: accountRoute.requestScope,
+      })
+    ) {
+      respondGatewayInvalidRequest({
+        respond,
+        channel,
+        error: "idempotency key is already bound to a different message route",
+      });
       return;
     }
     const accountId = accountRoute.accountId;
@@ -965,7 +1196,13 @@ export const sendHandlers: GatewayRequestHandlers = {
       } catch (err) {
         return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });
       }
-    })();
+    })().finally(() => {
+      refreshMessageOperationRouteBinding({
+        context,
+        binding: routeBinding,
+        requestScope: accountRoute.requestScope,
+      });
+    });
 
     await runGatewayInflightWork({ inflightMap, dedupeKey, work, respond });
   },
@@ -988,8 +1225,26 @@ export const sendHandlers: GatewayRequestHandlers = {
       accountId?: string;
       idempotencyKey: string;
     };
-    const resolvedChannel = await resolveRequestedChannel({
+    const routeBinding = resolveMessageOperationRouteBinding({
+      context,
+      prefix: "poll",
+      idempotencyKey: request.idempotencyKey,
       requestChannel: request.channel,
+      accountIds: [request.accountId],
+    });
+    const reservedReplay = replayReservedMessageOperationRoute({
+      context,
+      binding: routeBinding,
+      prefix: "poll",
+      idempotencyKey: request.idempotencyKey,
+      respond,
+    });
+    if (reservedReplay) {
+      await reservedReplay;
+      return;
+    }
+    const resolvedChannel = await resolveRequestedChannel({
+      requestChannel: routeBinding?.reservedRoute?.channel ?? request.channel,
       unsupportedMessage: (input) => `unsupported poll channel: ${input}`,
       context,
     });
@@ -1038,11 +1293,25 @@ export const sendHandlers: GatewayRequestHandlers = {
         cfg,
         channel,
         plugin,
-        accountIds: [request.accountId],
+        accountIds: [request.accountId, routeBinding?.reservedRoute?.accountId],
         conflictMessage: "poll account selections do not match",
       });
     } catch (error) {
       respondGatewayInvalidRequest({ respond, channel, error });
+      return;
+    }
+    if (
+      !bindMessageOperationRoute({
+        context,
+        binding: routeBinding,
+        requestScope: accountRoute.requestScope,
+      })
+    ) {
+      respondGatewayInvalidRequest({
+        respond,
+        channel,
+        error: "idempotency key is already bound to a different message route",
+      });
       return;
     }
     const accountId = accountRoute.accountId;
@@ -1106,7 +1375,13 @@ export const sendHandlers: GatewayRequestHandlers = {
         });
         return { ok: false, error, meta: { channel, error: formatForLog(err) } };
       }
-    })();
+    })().finally(() => {
+      refreshMessageOperationRouteBinding({
+        context,
+        binding: routeBinding,
+        requestScope: accountRoute.requestScope,
+      });
+    });
 
     await runGatewayInflightWork({ inflightMap, dedupeKey, work, respond });
   },
