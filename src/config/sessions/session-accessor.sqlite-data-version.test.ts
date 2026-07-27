@@ -198,7 +198,7 @@ describe("SQLite session entry cache", () => {
     expect(parseSessionEntryCalls).toHaveBeenCalledTimes(2);
   });
 
-  it("writes through a same-process upsert without reloading the store", async () => {
+  it("reloads after a tracked same-process upsert", async () => {
     const scope = createSessionScope("write-through");
     await upsertSessionEntry(scope, { label: "before", sessionId: "write-through", updatedAt: 1 });
     listSessionEntries(scope);
@@ -207,7 +207,7 @@ describe("SQLite session entry cache", () => {
     parseSessionEntryCalls.mockClear();
 
     expect(listSessionEntries(scope)[0]?.entry.label).toBe("after");
-    expect(parseSessionEntryCalls).not.toHaveBeenCalled();
+    expect(parseSessionEntryCalls).toHaveBeenCalledTimes(1);
   });
 
   it("does not let a tracked write mask an earlier raw connection write", async () => {
