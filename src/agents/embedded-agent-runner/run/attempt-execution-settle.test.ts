@@ -344,6 +344,34 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     );
   });
 
+  it("reports a backend cleanup failure after releasing a successful run", async () => {
+    const fixture = createFixture();
+    const failure = new Error("backend detach failed");
+    fixture.detachBackend.mockImplementationOnce(() => {
+      fixture.order.push("detach-backend");
+      throw failure;
+    });
+
+    await expect(runEmbeddedAttemptSettledPhase(fixture.input)).rejects.toBe(failure);
+
+    expect(mocks.clearActiveEmbeddedRun).toHaveBeenCalledOnce();
+    expect(fixture.removeAbortSignalListener).toHaveBeenCalledOnce();
+  });
+
+  it("reports active-run cleanup failure after releasing the abort listener", async () => {
+    const fixture = createFixture();
+    const failure = new Error("active run cleanup failed");
+    mocks.clearActiveEmbeddedRun.mockImplementationOnce(() => {
+      fixture.order.push("clear-active-run");
+      throw failure;
+    });
+
+    await expect(runEmbeddedAttemptSettledPhase(fixture.input)).rejects.toBe(failure);
+
+    expect(fixture.detachBackend).toHaveBeenCalledOnce();
+    expect(fixture.removeAbortSignalListener).toHaveBeenCalledOnce();
+  });
+
   it("re-arms delivered children only after a yielded requester becomes idle", async () => {
     const fixture = createFixture();
     mocks.completeResult.mockImplementationOnce(() => {
