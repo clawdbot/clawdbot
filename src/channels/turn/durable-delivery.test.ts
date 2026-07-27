@@ -9,8 +9,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../agents/model-spend-alerts.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/model-spend-alerts.js")>()),
-  preparePrivateOwnerModelSpendAlertBestEffort:
-    mocks.preparePrivateOwnerModelSpendAlertBestEffort,
+  preparePrivateOwnerModelSpendAlertBestEffort: mocks.preparePrivateOwnerModelSpendAlertBestEffort,
 }));
 
 vi.mock("../../infra/outbound/deliver.js", async (importOriginal) => {

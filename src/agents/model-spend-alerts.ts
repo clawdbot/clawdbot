@@ -45,7 +45,7 @@ type PendingModelSpendAlert = {
   trackingIncomplete: boolean;
 };
 
-export type PreparedModelSpendAlert = {
+type PreparedModelSpendAlert = {
   text: string;
 };
 
@@ -148,8 +148,7 @@ export function recordConfiguredModelSpendCall(params: {
     if (!Number.isSafeInteger(nextSpend)) {
       throw new Error("model-spend daily total exceeded the supported integer range");
     }
-    const trackingIncomplete =
-      current?.tracking_incomplete === 1 || !cost.trackingComplete ? 1 : 0;
+    const trackingIncomplete = current?.tracking_incomplete === 1 || !cost.trackingComplete ? 1 : 0;
     executeSqliteQuerySync(
       database.db,
       db
@@ -239,8 +238,7 @@ function preparePendingModelSpendAlert(params: {
       .map((row): PendingModelSpendAlert | undefined => {
         const highestThresholdMicroUsd =
           Math.floor(row.spend_microusd / thresholdMicroUsd) * thresholdMicroUsd;
-        const thresholdPending =
-          highestThresholdMicroUsd > row.last_alerted_threshold_microusd;
+        const thresholdPending = highestThresholdMicroUsd > row.last_alerted_threshold_microusd;
         const trackingIncomplete =
           row.tracking_incomplete === 1 && row.tracking_incomplete_alerted === 0;
         if (!thresholdPending && !trackingIncomplete) {
@@ -250,11 +248,13 @@ function preparePendingModelSpendAlert(params: {
           ? (Math.floor(row.last_alerted_threshold_microusd / thresholdMicroUsd) + 1) *
             thresholdMicroUsd
           : undefined;
+        if (firstThresholdMicroUsd === undefined) {
+          return { row, trackingIncomplete };
+        }
         return {
           row,
-          ...(firstThresholdMicroUsd !== undefined
-            ? { firstThresholdMicroUsd, highestThresholdMicroUsd }
-            : {}),
+          firstThresholdMicroUsd,
+          highestThresholdMicroUsd,
           trackingIncomplete,
         };
       })
@@ -287,7 +287,7 @@ function preparePendingModelSpendAlert(params: {
 }
 
 /** Best-effort hot-path wrapper: spend alerts must never block a visible reply. */
-export function preparePendingModelSpendAlertBestEffort(
+function preparePendingModelSpendAlertBestEffort(
   params: Parameters<typeof preparePendingModelSpendAlert>[0],
 ): PreparedModelSpendAlert | undefined {
   try {

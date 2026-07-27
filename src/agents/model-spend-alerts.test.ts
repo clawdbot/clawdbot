@@ -9,7 +9,6 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnv } from "../test-utils/env.js";
 import {
-  preparePendingModelSpendAlertBestEffort as preparePendingModelSpendAlert,
   preparePrivateOwnerModelSpendAlertBestEffort,
   recordConfiguredModelSpendCall,
 } from "./model-spend-alerts.js";
@@ -91,6 +90,23 @@ function record(params: { total: number; cfg?: OpenClawConfig; nowMs?: number })
   });
 }
 
+function preparePendingModelSpendAlert(params: { cfg: OpenClawConfig; agentId: string }) {
+  const cfg: OpenClawConfig = {
+    ...params.cfg,
+    commands: {
+      ...params.cfg.commands,
+      ownerAllowFrom: ["telegram:model-spend-test-owner"],
+    },
+  };
+  return preparePrivateOwnerModelSpendAlertBestEffort({
+    cfg,
+    agentId: params.agentId,
+    channel: "telegram",
+    to: "model-spend-test-owner",
+    chatType: "direct",
+  });
+}
+
 describe("model spend alerts", () => {
   it("prefers provider-billed totals and rounds calculated pricing upward to micro-USD", () => {
     expect(
@@ -140,9 +156,9 @@ describe("model spend alerts", () => {
     withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
       const precise = config({ everyUsd: 1.000_007 });
       record({ total: 1.000_006_1, cfg: precise, nowMs: 1_000 });
-      expect(
-        preparePendingModelSpendAlert({ cfg: precise, agentId: "main" })?.text,
-      ).toContain("crossed $1.000007");
+      expect(preparePendingModelSpendAlert({ cfg: precise, agentId: "main" })?.text).toContain(
+        "crossed $1.000007",
+      );
 
       const changed = config({ everyUsd: 2 });
       record({ total: 1, cfg: changed, nowMs: 2_000 });
@@ -198,9 +214,9 @@ describe("model spend alerts", () => {
       record({ total: 0.5, nowMs });
       closeOpenClawAgentDatabasesForTest();
 
-      expect(
-        preparePendingModelSpendAlert({ cfg: config(), agentId: "main" })?.text,
-      ).toContain("reached $1.50");
+      expect(preparePendingModelSpendAlert({ cfg: config(), agentId: "main" })?.text).toContain(
+        "reached $1.50",
+      );
     });
   });
 
@@ -251,9 +267,7 @@ describe("model spend alerts", () => {
 
       expect(
         openOpenClawAgentDatabase({ agentId: "main" })
-          .db.prepare(
-            "SELECT day_key FROM model_spend_daily WHERE day_key = ? AND provider = ?",
-          )
+          .db.prepare("SELECT day_key FROM model_spend_daily WHERE day_key = ? AND provider = ?")
           .get("2020-01-01", "deepseek"),
       ).toBeUndefined();
     });
