@@ -227,6 +227,7 @@ export interface CoreGatewayContext {
   account: GatewayAccount;
   abortSignal: AbortSignal;
   cfg: OpenClawConfig;
+  getCurrentConfig: () => OpenClawConfig;
   onReady?: (data: unknown) => void;
   /**
    * Invoked when a RESUMED event is received after reconnect.
