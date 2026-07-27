@@ -51,6 +51,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Gateway first-boot loopback auth:** prepare same-user CLI device credentials before a runtime-token loopback Gateway reports ready, so immediate `openclaw agent` calls no longer fail intermittently for missing credentials while generated auth remains out of config. Fixes #114354.
 - **Codex native controls:** stop misclassifying valid thinking/fast runtime controls as provider overrides so Codex routes keep their native controls, while provider-native objects and invalid values stay fail-closed. Thanks @VACInc. (#107588)
 - **State snapshot verification:** run SQLite snapshot verification in a separate process so worker-thread file closes no longer drop the Gateway's POSIX WAL locks, eliminating spurious WAL misses and I/O errors. Thanks @VACInc. (#114016)
 - **Reply latency with model policies:** reuse one immutable plugin-metadata snapshot per model-selection run instead of repeating plugin discovery, cutting reply delay when a model policy is configured. Thanks @VACInc. (#114117)
