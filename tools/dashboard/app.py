@@ -6697,12 +6697,50 @@ def backup_recovery_run(backup_type):
 
 
 
+def system_connectivity_panel_html(drift, ollama):
+    output = "<div class='panel'><h2>System Connectivity Check</h2>"
+    warnings = drift.get("warnings", []) if drift else []
+    if warnings:
+        warning_info = classify_warning(warnings[0])
+        output += f"""
+<div class="warning-box" style="background-color:{warning_info['color']};">
+{warning_info['title']}<br><br>{warning_info['details']}
+</div>
+<div class="output">System Check
+Latest summary: {html_module.escape(str(drift.get('file', 'unknown')))}
+
+Status:
+"""
+        for warning in warnings:
+            output += f"- {html_module.escape(str(warning))}\n"
+        output += "</div>"
+    elif not ollama.get("connected"):
+        output += f"""
+<div class="warning-box" style="background-color:#991b1b;">
+AI model server connectivity warning<br><br>
+The configured Ollama API did not respond successfully.
+</div>
+<div class="output">Model server check
+Endpoint: {html_module.escape(str(ollama.get('endpoint', 'unknown')))}
+Status: Offline
+Reason: {html_module.escape(str(ollama.get('error', 'Unknown connection error')))}
+</div>
+"""
+    else:
+        output += """
+<div class="warning-box" style="background-color:green;">
+All monitored OpenClaw services are connected.
+</div>
+"""
+    return output + "</div>"
+
+
 @app.route("/")
 def home():
     backup_success = request.args.get("backup")
     drift = check_ai_drift()
-
     services = build_system_health()
+    m4 = get_m4_ollama_status()
 
     html = """
 <html>
@@ -6730,36 +6768,11 @@ __OPENCLAW_SHARED_NAVIGATION__
         1,
     )
 
-    html += "<div class='panel'><h2>System Connectivity Check</h2>"
-
-    if drift and drift.get("warnings", []):
-        warning_info = classify_warning(drift["warnings"][0])
-        html += f"""
-<div class="warning-box" style="background-color:{warning_info['color']};">
-{warning_info['title']}<br><br>{warning_info['details']}
-</div>
-<div class="output">System Check
-Latest summary: {drift['file']}
-
-Status:
-"""
-        for w in drift["warnings"]:
-            html += f"- {w}\n"
-        html += "</div>"
-    else:
-        html += """
-<div class="warning-box" style="background-color:green;">
-All monitored OpenClaw services are connected.
-</div>
-"""
-
-    html += "</div>"
+    html += system_connectivity_panel_html(drift, m4)
 
     # -------------------------------------------------------
     # M4 OLLAMA CONNECTIVITY PANEL
     # -------------------------------------------------------
-    m4 = get_m4_ollama_status()
-
     if m4["connected"]:
         html += f"""
         <div class='panel'>
