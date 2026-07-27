@@ -29,10 +29,10 @@ import {
   describeImagesWithModel,
   type MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
-import { resolveModelAwareImageCompressionPolicy } from "../image-compression-policy.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { resolveBundledStaticCatalogModel } from "../embedded-agent-runner/model.static-catalog.js";
+import { resolveModelAwareImageCompressionPolicy } from "../image-compression-policy.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import {
   resolveImageFallbackCandidates,
