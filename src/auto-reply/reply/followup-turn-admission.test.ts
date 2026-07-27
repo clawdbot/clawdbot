@@ -1,0 +1,468 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../../config/sessions.js";
+import type { FollowupRun } from "./queue.js";
+
+const state = vi.hoisted(() => ({
+  admitLifecycle: vi.fn(),
+  admitReply: vi.fn(),
+  buildPreflightFailureText: vi.fn(),
+  loadEntry: vi.fn(),
+  preflight: vi.fn(),
+  recheckFallbackProbe: vi.fn(),
+  refreshGoal: vi.fn(),
+  resolveConfig: vi.fn(),
+  resolveSendPolicy: vi.fn(),
+  sendPolicy: "allow" as "allow" | "deny",
+}));
+
+vi.mock("./agent-runner-auto-fallback.js", () => ({
+  resolveRunAfterAutoFallbackPrimaryProbeRecheck: (...args: unknown[]) =>
+    state.recheckFallbackProbe(...args),
+}));
+
+vi.mock("./agent-runner-memory.js", () => ({
+  runPreflightCompactionIfNeeded: (...args: unknown[]) => state.preflight(...args),
+}));
+
+vi.mock("./agent-runner-utils.js", () => ({
+  resolveQueuedReplyExecutionConfig: (...args: unknown[]) => state.resolveConfig(...args),
+  resolveQueuedReplyRuntimeConfig: (config: unknown) => config,
+}));
+
+vi.mock("./reply-turn-admission.js", () => ({
+  admitReplyTurn: (...args: unknown[]) => state.admitReply(...args),
+}));
+
+vi.mock("./queue.js", () => ({
+  admitFollowupRunLifecycle: (...args: unknown[]) => state.admitLifecycle(...args),
+  isFollowupRunAborted: (run: FollowupRun) =>
+    run.abortSignal?.aborted === true || run.queueAbortSignal?.aborted === true,
+  resolveFollowupAbortSignal: (run: FollowupRun) => run.abortSignal ?? run.queueAbortSignal,
+}));
+
+vi.mock("../../config/sessions/session-accessor.js", () => ({
+  loadSessionEntry: (...args: unknown[]) => state.loadEntry(...args),
+}));
+
+vi.mock("../../sessions/send-policy.js", () => ({
+  resolveSendPolicy: (...args: unknown[]) => state.resolveSendPolicy(...args),
+}));
+
+vi.mock("./inbound-meta.js", () => ({
+  refreshActiveGoalContext: (...args: unknown[]) => state.refreshGoal(...args),
+}));
+
+vi.mock("./compaction-notice.js", () => ({
+  createCompactionNoticePayload: ({ phase }: { phase: string }) => ({ text: phase }),
+  shouldNotifyUserAboutCompaction: () => false,
+}));
+
+vi.mock("./agent-runner-failure-reply.js", () => ({
+  buildPreflightCompactionFailureText: (...args: unknown[]) =>
+    state.buildPreflightFailureText(...args),
+}));
+
+const { admitFollowupTurn } = await import("./followup-turn-admission.js");
+
+function createRun(overrides: Partial<FollowupRun> = {}): FollowupRun {
+  return {
+    prompt: "queued prompt",
+    enqueuedAt: 1,
+    run: {
+      agentId: "agent",
+      agentDir: "/tmp/agent",
+      sessionId: "queued-session",
+      sessionKey: "main",
+      sessionFile: "/tmp/queued.jsonl",
+      workspaceDir: "/tmp",
+      config: {},
+      provider: "anthropic",
+      model: "claude",
+      timeoutMs: 1_000,
+      blockReplyBreak: "message_end",
+    },
+    ...overrides,
+  };
+}
+
+function createOperation(sessionId = "queued-session") {
+  return {
+    sessionId,
+    retainFailureUntilComplete: vi.fn(),
+    fail: vi.fn(),
+    complete: vi.fn(),
+    updateSessionId: vi.fn(),
+  };
+}
+
+function createDefaults(overrides: Record<string, unknown> = {}) {
+  return {
+    typing: {} as never,
+    typingMode: "never" as const,
+    defaultModel: "claude",
+    sessionKey: "main",
+    ...overrides,
+  };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  state.sendPolicy = "allow";
+  state.resolveSendPolicy.mockImplementation(() => state.sendPolicy);
+  state.resolveConfig.mockImplementation(async (config) => config);
+  state.buildPreflightFailureText.mockReturnValue("preflight failed");
+  state.preflight.mockImplementation(async ({ sessionEntry }) => sessionEntry);
+  state.recheckFallbackProbe.mockImplementation(({ run }) => run);
+  state.admitLifecycle.mockResolvedValue(undefined);
+  state.refreshGoal.mockImplementation((context) => context);
+});
+
+describe("admitFollowupTurn", () => {
+  it("returns a closed deferral without adopting the queued source", async () => {
+    state.admitReply.mockResolvedValue({ status: "skipped", reason: "active-run" });
+
+    await expect(
+      admitFollowupTurn({ queued: createRun(), defaults: createDefaults() }),
+    ).resolves.toEqual({ kind: "deferred", reason: "active-run" });
+    expect(state.admitLifecycle).not.toHaveBeenCalled();
+  });
+
+  it("stops after asynchronous source adoption aborts the aggregate owner", async () => {
+    const controller = new AbortController();
+    const operation = createOperation();
+    state.admitReply.mockResolvedValue({ status: "owned", operation });
+    state.admitLifecycle.mockImplementation(async () => controller.abort());
+
+    await expect(
+      admitFollowupTurn({
+        queued: createRun({ queueAbortSignal: controller.signal }),
+        defaults: createDefaults(),
+      }),
+    ).resolves.toMatchObject({ kind: "skipped", reason: "aborted", operation });
+    expect(state.preflight).not.toHaveBeenCalled();
+  });
+
+  it("uses admission-time session generation, model lock, policy, and goal context", async () => {
+    const operation = createOperation("admitted-session");
+    const queuedEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
+    const admittedEntry: SessionEntry = {
+      sessionId: "admitted-session",
+      sessionFile: "/tmp/admitted.jsonl",
+      modelSelectionLocked: true,
+      updatedAt: 2,
+    };
+    const sessionStore = { main: queuedEntry };
+    const onQueuedFollowupAdmitted = vi.fn(async () => {});
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: admittedEntry });
+    state.loadEntry.mockReturnValue(admittedEntry);
+    state.sendPolicy = "deny";
+    state.refreshGoal.mockReturnValue({ text: "fresh goal" });
+    state.preflight.mockImplementation(async ({ sessionEntry }) => sessionEntry);
+
+    const result = await admitFollowupTurn({
+      queued: createRun({
+        currentInboundContext: { text: "stale goal" },
+        originatingChatType: "group",
+      }),
+      defaults: createDefaults({
+        sessionEntry: queuedEntry,
+        sessionStore,
+        storePath: "/tmp/sessions.json",
+        opts: { onQueuedFollowupAdmitted },
+      }),
+    });
+
+    expect(result.kind).toBe("admitted");
+    if (result.kind === "admitted") {
+      expect(result.turn.queued.run).toMatchObject({
+        sessionId: "admitted-session",
+        sessionFile: "sqlite:agent:admitted-session:/tmp/sessions.json",
+        modelSelectionLocked: true,
+      });
+      expect(result.turn.currentInboundContext).toEqual({ text: "fresh goal" });
+      expect(result.turn.sendPolicy).toBe("deny");
+      expect(result.turn.session.current()).toBe(admittedEntry);
+    }
+    expect(onQueuedFollowupAdmitted).toHaveBeenCalledOnce();
+    expect(operation.retainFailureUntilComplete).toHaveBeenCalledOnce();
+    expect(state.resolveSendPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({ chatType: "group" }),
+    );
+  });
+
+  it("clears queued generation facts when only the lifecycle revision advances", async () => {
+    const operation = createOperation();
+    const queuedEntry: SessionEntry = {
+      sessionId: "queued-session",
+      lifecycleRevision: "queued-revision",
+      updatedAt: 1,
+    };
+    const admittedEntry: SessionEntry = {
+      ...queuedEntry,
+      lifecycleRevision: "admitted-revision",
+      updatedAt: 2,
+    };
+    const sessionStore = { main: queuedEntry };
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: admittedEntry });
+    state.loadEntry.mockReturnValue(admittedEntry);
+    const queued = createRun();
+    queued.run.cliSessionBindingFacts = { provider: "claude-cli" } as never;
+    queued.run.autoFallbackPrimaryProbe = { provider: "anthropic", model: "claude" } as never;
+
+    const result = await admitFollowupTurn({
+      queued,
+      defaults: createDefaults({ sessionEntry: queuedEntry, sessionStore }),
+    });
+
+    expect(result.kind).toBe("admitted");
+    if (result.kind === "admitted") {
+      expect(result.turn.queued.run.cliSessionBindingFacts).toBeUndefined();
+      expect(result.turn.queued.run.autoFallbackPrimaryProbe).toBeUndefined();
+    }
+  });
+
+  it("releases the reply operation when post-admission dispatcher setup fails", async () => {
+    const operation = createOperation();
+    const failure = new Error("dispatcher reset failed");
+    state.admitReply.mockResolvedValue({ status: "owned", operation });
+
+    await expect(
+      admitFollowupTurn({
+        queued: createRun(),
+        defaults: createDefaults({
+          opts: { onQueuedFollowupAdmitted: vi.fn(async () => Promise.reject(failure)) },
+        }),
+      }),
+    ).rejects.toBe(failure);
+    expect(operation.complete).toHaveBeenCalledOnce();
+  });
+
+  it("does not pass stale enqueue-time state into a rotated session generation", async () => {
+    const operation = createOperation("rotated-session");
+    const staleEntry: SessionEntry = {
+      sessionId: "queued-session",
+      modelSelectionLocked: true,
+      updatedAt: 1,
+    };
+    const sessionStore = { main: staleEntry };
+    state.admitReply.mockResolvedValue({ status: "owned", operation });
+    state.loadEntry.mockReturnValue(undefined);
+
+    const result = await admitFollowupTurn({
+      queued: createRun(),
+      defaults: createDefaults({ sessionEntry: staleEntry, sessionStore }),
+    });
+
+    expect(result.kind).toBe("admitted");
+    if (result.kind === "admitted") {
+      expect(result.turn.queued.run.modelSelectionLocked).toBe(false);
+    }
+    expect(state.preflight).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionEntry: undefined }),
+    );
+    const preflightParams = state.preflight.mock.calls[0]?.[0] as {
+      sessionStore?: Record<string, SessionEntry>;
+    };
+    expect(preflightParams.sessionStore?.main).toBeUndefined();
+    expect(state.refreshGoal).toHaveBeenCalledWith(undefined, undefined);
+  });
+
+  it("advances the owned lifecycle generation only through explicit adoption", async () => {
+    const operation = createOperation();
+    const initialEntry: SessionEntry = {
+      sessionId: "queued-session",
+      lifecycleRevision: "revision-a",
+      updatedAt: 1,
+    };
+    const sessionStore = { main: initialEntry };
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
+    state.loadEntry.mockReturnValue(initialEntry);
+    const result = await admitFollowupTurn({
+      queued: createRun(),
+      defaults: createDefaults({ sessionEntry: initialEntry, sessionStore }),
+    });
+
+    expect(result.kind).toBe("admitted");
+    if (result.kind === "admitted") {
+      const replacement = {
+        ...initialEntry,
+        lifecycleRevision: "revision-b",
+        updatedAt: 2,
+      };
+      result.turn.session.adopt(replacement);
+      result.turn.session.publish(initialEntry);
+      expect(result.turn.session.current()).toBe(replacement);
+      const concurrentEntry = {
+        ...initialEntry,
+        lifecycleRevision: "revision-c",
+        updatedAt: 3,
+      };
+      sessionStore.main = concurrentEntry;
+      result.turn.session.publish(replacement);
+      expect(sessionStore.main).toBe(concurrentEntry);
+
+      const newerSameGeneration = {
+        ...replacement,
+        updatedAt: 4,
+      };
+      result.turn.session.adopt(newerSameGeneration);
+      result.turn.session.publish(replacement);
+      expect(result.turn.session.current()).toBe(newerSameGeneration);
+      sessionStore.main = replacement;
+      expect(result.turn.session.current()).toBe(newerSameGeneration);
+    }
+  });
+
+  it("does not treat an absent admitted lifecycle revision as a wildcard", async () => {
+    const operation = createOperation();
+    const initialEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
+    const sessionStore = { main: initialEntry };
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
+    state.loadEntry.mockReturnValue(initialEntry);
+
+    const result = await admitFollowupTurn({
+      queued: createRun(),
+      defaults: createDefaults({ sessionEntry: initialEntry, sessionStore }),
+    });
+
+    expect(result.kind).toBe("admitted");
+    if (result.kind === "admitted") {
+      sessionStore.main = {
+        ...initialEntry,
+        lifecycleRevision: "replacement",
+        updatedAt: 2,
+      };
+      expect(result.turn.session.current()).toBe(initialEntry);
+    }
+  });
+
+  it("creates an owned session-store view when only persisted state is available", async () => {
+    const operation = createOperation();
+    const admittedEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: admittedEntry });
+    state.loadEntry.mockReturnValue(admittedEntry);
+
+    const result = await admitFollowupTurn({
+      queued: createRun(),
+      defaults: createDefaults({ storePath: "/tmp/sessions.json" }),
+    });
+
+    expect(result.kind).toBe("admitted");
+    if (result.kind === "admitted") {
+      expect(result.turn.sessionStore?.main).toBe(admittedEntry);
+      const updated = { ...admittedEntry, compactionCount: 1, updatedAt: 2 };
+      result.turn.sessionStore!.main = updated;
+      expect(result.turn.session.current()).toBe(updated);
+    }
+  });
+
+  it("synchronizes a fresh admitted snapshot over same-generation stale memory", async () => {
+    const operation = createOperation();
+    const staleEntry: SessionEntry = {
+      sessionId: "queued-session",
+      lifecycleRevision: "revision-a",
+      verboseLevel: "off",
+      updatedAt: 1,
+    };
+    const freshEntry: SessionEntry = {
+      ...staleEntry,
+      verboseLevel: "full",
+      updatedAt: 2,
+    };
+    const sessionStore = { main: staleEntry };
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: freshEntry });
+    state.loadEntry.mockReturnValue(freshEntry);
+
+    const result = await admitFollowupTurn({
+      queued: createRun(),
+      defaults: createDefaults({ sessionStore, sessionEntry: staleEntry }),
+    });
+
+    expect(result.kind).toBe("admitted");
+    if (result.kind === "admitted") {
+      expect(result.turn.session.current()).toBe(freshEntry);
+      expect(sessionStore.main).toBe(freshEntry);
+    }
+    expect(state.refreshGoal).toHaveBeenCalledWith(undefined, freshEntry);
+    expect(state.recheckFallbackProbe).toHaveBeenCalledWith(
+      expect.objectContaining({ entry: freshEntry, sessionKey: "main" }),
+    );
+  });
+
+  it("adopts a session generation rotated by owned preflight compaction", async () => {
+    const operation = createOperation();
+    const initialEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
+    const rotatedEntry: SessionEntry = {
+      sessionId: "compacted-session",
+      updatedAt: 2,
+    };
+    const sessionStore = { main: initialEntry };
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
+    state.loadEntry.mockReturnValue(initialEntry);
+    state.preflight.mockResolvedValue(rotatedEntry);
+
+    const queued = createRun();
+    queued.run.cliSessionBindingFacts = { provider: "claude-cli" } as never;
+    queued.run.autoFallbackPrimaryProbe = { provider: "anthropic", model: "claude" } as never;
+    queued.run.modelSelectionLocked = true;
+    const result = await admitFollowupTurn({
+      queued,
+      defaults: createDefaults({ sessionStore, sessionEntry: initialEntry }),
+    });
+
+    expect(result.kind).toBe("admitted");
+    if (result.kind === "admitted") {
+      expect(result.turn.session.current()).toBe(rotatedEntry);
+      expect(result.turn.queued.run).toMatchObject({
+        sessionId: "compacted-session",
+        modelSelectionLocked: false,
+      });
+      expect(result.turn.queued.run.sessionFile).toContain("compacted-session");
+      expect(result.turn.queued.run.sessionFile).not.toBe("/tmp/session.jsonl");
+      expect(result.turn.queued.run.cliSessionBindingFacts).toBeUndefined();
+      expect(result.turn.queued.run.autoFallbackPrimaryProbe).toBeUndefined();
+      expect(result.turn.preflightCompactionApplied).toBe(true);
+    }
+    expect(operation.updateSessionId).toHaveBeenCalledWith("compacted-session");
+  });
+
+  it("returns a source-suppression-deliverable preflight failure", async () => {
+    const operation = createOperation();
+    state.admitReply.mockResolvedValue({ status: "owned", operation });
+    state.preflight.mockRejectedValue(new Error("preflight failed"));
+
+    const result = await admitFollowupTurn({
+      queued: createRun(),
+      defaults: createDefaults(),
+    });
+
+    expect(result).toMatchObject({
+      kind: "admitted",
+      turn: { preflightFailurePayload: { text: "preflight failed" } },
+    });
+    expect(operation.fail).toHaveBeenCalledWith("run_failed", expect.any(Error));
+  });
+
+  it("uses admitted verbosity when formatting a preflight failure", async () => {
+    const operation = createOperation();
+    const admittedEntry: SessionEntry = {
+      sessionId: "queued-session",
+      updatedAt: 2,
+      verboseLevel: "off",
+    };
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: admittedEntry });
+    state.loadEntry.mockReturnValue(admittedEntry);
+    state.preflight.mockRejectedValue(new Error("preflight failed"));
+    const queued = createRun();
+    queued.run.verboseLevel = "full";
+
+    await admitFollowupTurn({
+      queued,
+      defaults: createDefaults({ sessionEntry: admittedEntry }),
+    });
+
+    expect(state.buildPreflightFailureText).toHaveBeenCalledWith("preflight failed", {
+      includeDetails: false,
+    });
+  });
+});

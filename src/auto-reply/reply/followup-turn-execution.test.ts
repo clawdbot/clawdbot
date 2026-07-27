@@ -1,0 +1,447 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentTurnParams } from "./agent-runner-execution.types.js";
+import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
+
+const state = vi.hoisted(() => ({
+  execute: vi.fn(),
+  loadEntryReadOnly: vi.fn(),
+  reset: vi.fn(),
+}));
+
+vi.mock("./agent-runner-execution.js", () => ({
+  executeAgentTurn: (...args: unknown[]) => state.execute(...args),
+}));
+
+vi.mock("./agent-runner-session-reset.js", () => ({
+  resetReplyRunSession: (...args: unknown[]) => state.reset(...args),
+}));
+
+vi.mock("../../config/sessions/session-accessor.js", () => ({
+  loadSessionEntryReadOnly: (...args: unknown[]) => state.loadEntryReadOnly(...args),
+}));
+
+const { executeFollowupTurn } = await import("./followup-turn-execution.js");
+
+function createTypingController() {
+  return {
+    onReplyStart: vi.fn(async () => {}),
+    startTypingLoop: vi.fn(async () => {}),
+    startTypingOnText: vi.fn(async () => {}),
+    refreshTypingTtl: vi.fn(),
+    isActive: vi.fn(() => false),
+    markRunComplete: vi.fn(),
+    markDispatchIdle: vi.fn(),
+    cleanup: vi.fn(),
+  };
+}
+
+function createTurn(overrides: Partial<AdmittedFollowupTurn> = {}): AdmittedFollowupTurn {
+  return {
+    runId: "run-1",
+    queued: {
+      prompt: "queued prompt",
+      transcriptPrompt: "queued transcript",
+      enqueuedAt: 1,
+      messageId: "message-1",
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingThreadId: "thread-1",
+      originatingAccountId: "acct-1",
+      originatingChatType: "group",
+      media: [{ kind: "audio", contentType: "audio/ogg" }],
+      run: {
+        agentId: "agent",
+        agentDir: "/tmp/agent",
+        sessionId: "session",
+        sessionKey: "main",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        provider: "anthropic",
+        model: "claude",
+        messageProvider: "slack",
+        senderId: "user-1",
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    },
+    operation: { abortSignal: new AbortController().signal } as AdmittedFollowupTurn["operation"],
+    config: {},
+    session: {
+      kind: "session",
+      key: "main",
+      current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel: "on" }),
+      publish: () => undefined,
+      adopt: () => undefined,
+    },
+    sendPolicy: "allow",
+    preflightCompactionApplied: false,
+    ...overrides,
+  };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  state.loadEntryReadOnly.mockReturnValue(undefined);
+  state.execute.mockResolvedValue({
+    runId: "run-1",
+    outcome: { kind: "rejected", payload: { text: "done" } },
+  });
+});
+
+describe("executeFollowupTurn", () => {
+  it("normalizes queued route facts into the canonical execution call", async () => {
+    const turn = createTurn();
+    const typing = createTypingController();
+
+    await executeFollowupTurn({
+      turn,
+      defaults: { typing, typingMode: "instant", defaultModel: "claude" },
+      onToolResult: vi.fn(async () => {}),
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+
+    const call = state.execute.mock.calls[0]?.[0] as AgentTurnParams;
+    expect(call).toMatchObject({
+      commandBody: "queued prompt",
+      transcriptCommandBody: "queued transcript",
+      followupRun: turn.queued,
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      sessionKey: "main",
+    });
+    expect(call.opts?.runId).toBe("run-1");
+    expect(call.sessionCtx).toMatchObject({
+      Provider: "slack",
+      Surface: "discord",
+      OriginatingTo: "channel:C1",
+      MessageThreadId: "thread-1",
+      MessageSid: "message-1",
+      SenderId: "user-1",
+    });
+    expect(call.sessionCtx.media).toEqual([{ kind: "audio", contentType: "audio/ogg" }]);
+  });
+
+  it("ignores verbosity loaded from a replacement session generation", async () => {
+    const currentEntry = {
+      sessionId: "session",
+      lifecycleRevision: "owned",
+      updatedAt: 1,
+      verboseLevel: "off" as const,
+    };
+    const turn = createTurn({
+      session: {
+        kind: "session",
+        key: "main",
+        storePath: "/tmp/sessions.json",
+        current: () => currentEntry,
+        publish: () => undefined,
+        adopt: () => undefined,
+      },
+    });
+    state.loadEntryReadOnly.mockReturnValue({
+      ...currentEntry,
+      lifecycleRevision: "replacement",
+      verboseLevel: "full",
+    });
+
+    await executeFollowupTurn({
+      turn,
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+      },
+      onToolResult: vi.fn(async () => {}),
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+
+    const call = state.execute.mock.calls[0]?.[0] as AgentTurnParams;
+    expect(call.resolvedVerboseLevel).toBe("off");
+  });
+
+  it("ignores older verbosity from the admitted session generation", async () => {
+    const currentEntry = {
+      sessionId: "session",
+      lifecycleRevision: "owned",
+      updatedAt: 2,
+      verboseLevel: "off" as const,
+    };
+    const turn = createTurn({
+      session: {
+        kind: "session",
+        key: "main",
+        storePath: "/tmp/sessions.json",
+        current: () => currentEntry,
+        publish: () => undefined,
+        adopt: () => undefined,
+      },
+    });
+    state.loadEntryReadOnly.mockReturnValue({
+      ...currentEntry,
+      updatedAt: 1,
+      verboseLevel: "full",
+    });
+
+    await executeFollowupTurn({
+      turn,
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+      },
+      onToolResult: vi.fn(async () => {}),
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+
+    const call = state.execute.mock.calls[0]?.[0] as AgentTurnParams;
+    expect(call.resolvedVerboseLevel).toBe("off");
+  });
+
+  it("keeps room-event progress, tool summaries, and typing silent", async () => {
+    const turn = createTurn({
+      queued: { ...createTurn().queued, currentInboundEventKind: "room_event" },
+    });
+    const typing = createTypingController();
+    const onToolResult = vi.fn(async () => {});
+    const onCompactionStart = vi.fn(async () => {});
+    const onCompactionEnd = vi.fn(async () => {});
+    const onReasoningEnd = vi.fn(async () => {});
+    const onNarrationUpdate = vi.fn(async () => {});
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      await params.typingSignals.signalRunStart();
+      await params.opts?.onToolResult?.({ text: "private progress" });
+      await params.opts?.onCompactionStart?.();
+      await params.opts?.onCompactionEnd?.();
+      await params.opts?.onReasoningEnd?.();
+      await params.opts?.onNarrationUpdate?.({ text: "private narration" });
+      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+    });
+
+    const result = await executeFollowupTurn({
+      turn,
+      defaults: {
+        typing,
+        typingMode: "instant",
+        defaultModel: "claude",
+        opts: { onCompactionStart, onCompactionEnd, onReasoningEnd, onNarrationUpdate },
+      },
+      onToolResult,
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+    await result.progress.drain();
+
+    expect(typing.startTypingLoop).not.toHaveBeenCalled();
+    expect(typing.startTypingOnText).not.toHaveBeenCalled();
+    expect(onToolResult).not.toHaveBeenCalled();
+    expect(onCompactionStart).not.toHaveBeenCalled();
+    expect(onCompactionEnd).not.toHaveBeenCalled();
+    expect(onReasoningEnd).not.toHaveBeenCalled();
+    expect(onNarrationUpdate).not.toHaveBeenCalled();
+  });
+
+  it("allows explicitly opted-in tool lifecycle while ordinary progress is hidden", async () => {
+    const onToolStart = vi.fn(async () => {});
+    const turn = createTurn({
+      session: {
+        kind: "session",
+        key: "main",
+        current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel: "off" }),
+        publish: () => undefined,
+        adopt: () => undefined,
+      },
+    });
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      await params.opts?.onToolStart?.({ name: "read", phase: "start" });
+      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+    });
+
+    const result = await executeFollowupTurn({
+      turn,
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+        opts: { onToolStart, allowToolLifecycleWhenProgressHidden: true },
+      },
+      onToolResult: vi.fn(async () => {}),
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+    await result.progress.drain();
+
+    expect(onToolStart).toHaveBeenCalledOnce();
+  });
+
+  it("tracks a visible failed item before suppressing duplicate default warnings", async () => {
+    const onItemEvent = vi.fn(async () => true);
+    let warningSuppressed: boolean | undefined;
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      await params.opts?.onItemEvent?.({ phase: "end", status: "failed" });
+      warningSuppressed = params.opts?.shouldSuppressToolErrorWarnings?.();
+      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+    });
+
+    const result = await executeFollowupTurn({
+      turn: createTurn(),
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+        opts: { onItemEvent },
+      },
+      onToolResult: vi.fn(async () => {}),
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+    await result.progress.drain();
+
+    expect(onItemEvent).toHaveBeenCalledOnce();
+    expect(warningSuppressed).toBe(true);
+  });
+
+  it("drains detached progress before the caller can project a final", async () => {
+    const order: string[] = [];
+    let releaseProgress!: () => void;
+    const progressBarrier = new Promise<void>((resolve) => {
+      releaseProgress = resolve;
+    });
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      void params.opts?.onItemEvent?.({ progressText: "working" });
+      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+    });
+    const result = await executeFollowupTurn({
+      turn: createTurn(),
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+        opts: {
+          onItemEvent: async () => {
+            await progressBarrier;
+            order.push("progress");
+          },
+        },
+      },
+      onToolResult: vi.fn(async () => {}),
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+    const drain = result.progress.drain().then(() => order.push("drained"));
+    await Promise.resolve();
+    expect(order).toEqual([]);
+    releaseProgress();
+    await drain;
+    expect(order).toEqual(["progress", "drained"]);
+  });
+
+  it("preserves detached progress delivery failures for the drain", async () => {
+    const failure = new Error("progress delivery failed");
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      void params.opts?.onItemEvent?.({ progressText: "working" });
+      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+    });
+    const result = await executeFollowupTurn({
+      turn: createTurn(),
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+        opts: { onItemEvent: async () => Promise.reject(failure) },
+      },
+      onToolResult: vi.fn(async () => {}),
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    await expect(result.progress.drain()).rejects.toBe(failure);
+  });
+
+  it("preserves numeric thread ids during canonical role-ordering recovery", async () => {
+    const turn = createTurn({
+      queued: { ...createTurn().queued, originatingThreadId: 42 },
+    });
+    state.reset.mockResolvedValue(true);
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      await params.resetSessionAfterRoleOrderingConflict("invalid history");
+      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+    });
+
+    await executeFollowupTurn({
+      turn,
+      defaults: { typing: createTypingController(), typingMode: "never", defaultModel: "claude" },
+      onToolResult: vi.fn(async () => {}),
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+
+    expect(state.reset).toHaveBeenCalledWith(expect.objectContaining({ messageThreadId: "42" }));
+  });
+
+  it("drains detached progress before propagating execution failure", async () => {
+    const order: string[] = [];
+    let releaseProgress!: () => void;
+    const progressBarrier = new Promise<void>((resolve) => {
+      releaseProgress = resolve;
+    });
+    const failure = new Error("execution failed");
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      void params.opts?.onItemEvent?.({ progressText: "working" });
+      throw failure;
+    });
+    const pending = executeFollowupTurn({
+      turn: createTurn(),
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+        opts: {
+          onItemEvent: async () => {
+            await progressBarrier;
+            order.push("progress");
+          },
+        },
+      },
+      onToolResult: vi.fn(async () => {}),
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+    await Promise.resolve();
+    expect(order).toEqual([]);
+    releaseProgress();
+    await expect(pending).rejects.toBe(failure);
+    expect(order).toEqual(["progress"]);
+  });
+
+  it("waits for every pending task before propagating a drain failure", async () => {
+    const failure = new Error("tool task failed");
+    let releaseSlowTask!: () => void;
+    const slowBarrier = new Promise<void>((resolve) => {
+      releaseSlowTask = resolve;
+    });
+    const order: string[] = [];
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      const failedTask = Promise.reject(failure).finally(() => {
+        params.pendingToolTasks.delete(failedTask);
+      });
+      const slowTask = slowBarrier
+        .then(() => {
+          order.push("slow-finished");
+        })
+        .finally(() => {
+          params.pendingToolTasks.delete(slowTask);
+        });
+      params.pendingToolTasks.add(failedTask);
+      params.pendingToolTasks.add(slowTask);
+      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+    });
+    const result = await executeFollowupTurn({
+      turn: createTurn(),
+      defaults: { typing: createTypingController(), typingMode: "never", defaultModel: "claude" },
+      onToolResult: vi.fn(async () => {}),
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+
+    const drain = result.progress.drain();
+    await Promise.resolve();
+    releaseSlowTask();
+    await expect(drain).rejects.toBe(failure);
+    expect(order).toEqual(["slow-finished"]);
+  });
+});
