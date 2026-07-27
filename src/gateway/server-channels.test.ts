@@ -2,8 +2,12 @@
  * Server channel lifecycle tests.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelGatewayContext } from "../channels/plugins/types.adapters.js";
+import type {
+  ChannelAccountLinkState,
+  ChannelGatewayContext,
+} from "../channels/plugins/types.adapters.js";
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.public.js";
+import { formatGatewayChannelsStatusLines } from "../commands/channels/status.js";
 import {
   createSubsystemLogger,
   type SubsystemLogger,
@@ -90,6 +94,10 @@ function createTestPlugin(params?: {
   describeAccount?: ChannelPlugin<TestAccount>["config"]["describeAccount"];
   resolveAccount?: ChannelPlugin<TestAccount>["config"]["resolveAccount"];
   isConfigured?: ChannelPlugin<TestAccount>["config"]["isConfigured"];
+  isLinked?: ChannelPlugin<TestAccount>["config"]["isLinked"];
+  disabledReason?: ChannelPlugin<TestAccount>["config"]["disabledReason"];
+  unconfiguredReason?: ChannelPlugin<TestAccount>["config"]["unconfiguredReason"];
+  unlinkedReason?: ChannelPlugin<TestAccount>["config"]["unlinkedReason"];
 }): ChannelPlugin<TestAccount> {
   const id = params?.id ?? "discord";
   const account = params?.account ?? { enabled: true, configured: true };
@@ -99,6 +107,10 @@ function createTestPlugin(params?: {
     resolveAccount: params?.resolveAccount ?? (() => account),
     isEnabled: (resolved) => resolved.enabled !== false,
     ...(params?.isConfigured ? { isConfigured: params.isConfigured } : {}),
+    ...(params?.isLinked ? { isLinked: params.isLinked } : {}),
+    ...(params?.disabledReason ? { disabledReason: params.disabledReason } : {}),
+    ...(params?.unconfiguredReason ? { unconfiguredReason: params.unconfiguredReason } : {}),
+    ...(params?.unlinkedReason ? { unlinkedReason: params.unlinkedReason } : {}),
   };
   if (includeDescribeAccount) {
     config.describeAccount =
@@ -1219,6 +1231,69 @@ describe("server-channels auto restart", () => {
     expect(account?.configured).toBe(true);
   });
 
+  it("retains an async configuration result when descriptors omit it", async () => {
+    const startAccount = vi.fn(async () => {});
+    installTestRegistry(
+      createTestPlugin({
+        includeDescribeAccount: false,
+        isConfigured: async () => false,
+        startAccount,
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+
+    expect(startAccount).not.toHaveBeenCalled();
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.default).toMatchObject({
+      configured: false,
+      running: false,
+      stateReason: "not configured",
+      lastError: null,
+    });
+  });
+
+  it("preserves runtime linkage when the plugin has no link resolver", async () => {
+    const account = { enabled: true, configured: true };
+    const startAccount = vi.fn(
+      async ({ abortSignal }: ChannelGatewayContext<TestAccount>) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    const plugin = createTestPlugin({ account, startAccount });
+    plugin.status = {
+      defaultRuntime: {
+        accountId: DEFAULT_ACCOUNT_ID,
+        linked: true,
+        running: false,
+        lastError: null,
+      },
+    };
+    installTestRegistry(plugin);
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.default?.linked).toBe(true);
+    manager.markChannelLoggedOut("discord", true);
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.default).toMatchObject({
+      linked: false,
+      running: false,
+      lastError: "logged out",
+    });
+    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+
+    account.enabled = false;
+    await manager.startChannel("discord");
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.default?.linked).toBe(false);
+
+    account.enabled = true;
+    await manager.startChannel("discord");
+    expect(startAccount).toHaveBeenCalledOnce();
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.default?.linked).toBe(false);
+  });
+
   it("applies described config fields into runtime snapshots", () => {
     installTestRegistry(
       createTestPlugin({
@@ -1235,6 +1310,168 @@ describe("server-channels auto restart", () => {
     const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
     expect(account?.configured).toBe(false);
     expect(account?.mode).toBe("webhook");
+  });
+
+  it("applies described linkage before startup and into runtime snapshots", async () => {
+    const startAccount = vi.fn(async () => {});
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        describeAccount: () => ({
+          accountId: DEFAULT_ACCOUNT_ID,
+          configured: true,
+          linked: false,
+        }),
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.default;
+
+    expect(startAccount).not.toHaveBeenCalled();
+    expect(account).toMatchObject({
+      configured: true,
+      linked: false,
+      stateReason: "not linked",
+    });
+  });
+
+  it("cannot retain an unlinked explanation after a successful linked start", async () => {
+    let linkState: ChannelAccountLinkState = "not-linked";
+    const startAccount = vi.fn(
+      async ({ abortSignal }: ChannelGatewayContext<TestAccount>) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    installTestRegistry(
+      createTestPlugin({
+        id: "whatsapp",
+        startAccount,
+        isConfigured: () => true,
+        isLinked: () => linkState,
+        unlinkedReason: () => "not authenticated",
+      }),
+    );
+    const manager = createManager({ channelIds: ["whatsapp"] });
+
+    await manager.startChannel("whatsapp");
+    const unlinkedAccount = manager.getRuntimeSnapshot().channelAccounts.whatsapp?.default;
+    expect(unlinkedAccount).toMatchObject({
+      configured: true,
+      linked: false,
+      running: false,
+      stateReason: "not authenticated",
+      lastError: null,
+    });
+    expect(
+      formatGatewayChannelsStatusLines({
+        channelAccounts: { whatsapp: unlinkedAccount ? [unlinkedAccount] : [] },
+      }).join("\n"),
+    ).toContain("reason:not authenticated");
+
+    linkState = "linked";
+    await manager.startChannel("whatsapp");
+    const snapshot = manager.getRuntimeSnapshot();
+    const account = snapshot.channelAccounts.whatsapp?.default;
+    const output = formatGatewayChannelsStatusLines({
+      channelAccounts: { whatsapp: account ? [account] : [] },
+    }).join("\n");
+    expect(startAccount).toHaveBeenCalledOnce();
+    expect(account).toMatchObject({
+      configured: true,
+      linked: true,
+      running: true,
+      lastError: null,
+    });
+    expect(account).not.toHaveProperty("stateReason");
+    expect(output).toContain("configured, linked, running");
+    expect(output).not.toContain("error:not linked");
+  });
+
+  it("keeps configured true when the linkage read is indeterminate", async () => {
+    const startAccount = vi.fn(async () => {});
+    installTestRegistry(
+      createTestPlugin({
+        id: "whatsapp",
+        startAccount,
+        isConfigured: () => true,
+        isLinked: () => "unknown",
+        describeAccount: () => ({
+          accountId: DEFAULT_ACCOUNT_ID,
+          configured: true,
+          linked: false,
+        }),
+      }),
+    );
+    const manager = createManager({ channelIds: ["whatsapp"] });
+
+    await manager.startChannel("whatsapp");
+
+    expect(startAccount).not.toHaveBeenCalled();
+    expect(manager.getRuntimeSnapshot().channelAccounts.whatsapp?.default).toMatchObject({
+      configured: true,
+      running: false,
+      lastError: null,
+    });
+    expect(manager.getRuntimeSnapshot().channelAccounts.whatsapp?.default).not.toHaveProperty(
+      "linked",
+    );
+  });
+
+  it.each([
+    "telegram",
+    "slack",
+    "discord",
+    "imessage",
+    "signal",
+    "msteams",
+    "mattermost",
+    "feishu",
+    "irc",
+    "tlon",
+    "zalo",
+    "zalouser",
+    "nextcloud-talk",
+    "sms",
+  ] as const)("does not retain a stale derived reason for %s", async (channelId) => {
+    const account = { enabled: true, configured: false };
+    const startAccount = vi.fn(
+      async ({ abortSignal }: ChannelGatewayContext<TestAccount>) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    installTestRegistry(
+      createTestPlugin({
+        id: channelId,
+        account,
+        startAccount,
+        isConfigured: (resolved) => resolved.configured === true,
+        unconfiguredReason: () => `${channelId} not configured`,
+      }),
+    );
+    const manager = createManager({ channelIds: [channelId] });
+
+    await manager.startChannel(channelId);
+    expect(manager.getRuntimeSnapshot().channelAccounts[channelId]?.default).toMatchObject({
+      stateReason: `${channelId} not configured`,
+      lastError: null,
+    });
+
+    account.configured = true;
+    await manager.startChannel(channelId);
+
+    expect(startAccount).toHaveBeenCalledOnce();
+    expect(manager.getRuntimeSnapshot().channelAccounts[channelId]?.default).toMatchObject({
+      configured: true,
+      running: true,
+      lastError: null,
+    });
+    expect(manager.getRuntimeSnapshot().channelAccounts[channelId]?.default).not.toHaveProperty(
+      "stateReason",
+    );
   });
 
   it("passes channelRuntime through channel gateway context when provided", async () => {
