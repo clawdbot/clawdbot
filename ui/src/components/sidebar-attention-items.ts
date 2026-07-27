@@ -6,6 +6,7 @@ import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import { t } from "../i18n/index.ts";
 import { isCronJobActiveFailure } from "../lib/cron-status.ts";
+import { clampText } from "../lib/format.ts";
 import { isMonitoredAuthProvider } from "../lib/model-auth.ts";
 import type { IconName } from "./icons.ts";
 import type { SidebarAttentionKind } from "./sidebar-attention-dismissals.ts";
@@ -13,6 +14,7 @@ import type { SidebarAttentionKind } from "./sidebar-attention-dismissals.ts";
 // A cron job counts as overdue when its next planned run is this far in the
 // past; mirrors the threshold the Overview attention list used.
 const CRON_OVERDUE_GRACE_MS = 300_000;
+// Per-job cap so a stack-trace-sized lastError cannot balloon the tooltip.
 const CRON_ERROR_MAX_LENGTH = 200;
 
 type SidebarAttentionAction =
@@ -76,11 +78,7 @@ export function buildSidebarAttentionItems(params: {
             .map((value) => value?.trim())
             .find((value): value is string => Boolean(value));
           const resolvedError = errorText ?? t("attention.cronErrorUnknown");
-          const cappedError =
-            resolvedError.length > CRON_ERROR_MAX_LENGTH
-              ? `${resolvedError.slice(0, CRON_ERROR_MAX_LENGTH - 1)}…`
-              : resolvedError;
-          return `${cronJobName(job)}: ${cappedError}`;
+          return `${cronJobName(job)}: ${clampText(resolvedError, CRON_ERROR_MAX_LENGTH)}`;
         })
         .join("\n"),
       action: { kind: "navigate", routeId: "cron" },
