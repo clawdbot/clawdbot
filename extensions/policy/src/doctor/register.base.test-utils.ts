@@ -316,6 +316,7 @@ describe("registerPolicyDoctorChecks", () => {
       "policy/exec-approvals-auto-allow-skills-enabled",
       "policy/exec-approvals-allowlist-missing",
       "policy/exec-approvals-allowlist-unexpected",
+      "policy/tools-md-migration-required",
       "policy/tools-missing-risk-level",
       "policy/tools-unknown-risk-level",
       "policy/tools-missing-sensitivity-token",

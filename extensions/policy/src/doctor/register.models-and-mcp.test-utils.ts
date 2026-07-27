@@ -289,6 +289,46 @@ describe("registerPolicyDoctorChecks", () => {
     );
   });
 
+  it("blocks governed tool evaluation until TOOLS.md is migrated into AGENTS.md", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ tools: { requireMetadata: ["risk"] } }),
+      "utf-8",
+    );
+    await fs.writeFile(join(workspaceDir, "TOOLS.md"), "### deploy\n", "utf-8");
+
+    const beforeMigration = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
+      checks: registerChecks(),
+    });
+
+    expect(beforeMigration.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/tools-md-migration-required",
+        severity: "error",
+        message:
+          "TOOLS.md contains unmigrated governed tool declarations; run `openclaw doctor --fix` to migrate them into the AGENTS.md `## Tools` section before policy evaluation can pass.",
+        path: "TOOLS.md",
+      }),
+    ]);
+
+    await fs.writeFile(join(workspaceDir, "AGENTS.md"), "## Tools\n\n### deploy\n", "utf-8");
+    await fs.rm(join(workspaceDir, "TOOLS.md"));
+
+    const afterMigration = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
+      checks: registerChecks(),
+    });
+
+    expect(afterMigration.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/tools-missing-risk-level",
+        path: "AGENTS.md",
+        ocPath: "oc://AGENTS.md/tools/deploy",
+      }),
+    ]);
+  });
+
   it("runs required metadata checks for a tool literally named tools", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     await fs.writeFile(configPath, "{}", "utf-8");

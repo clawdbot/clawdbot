@@ -145,6 +145,15 @@ export function createPolicyToolMetadataChecks(
 ): readonly HealthCheck[] {
   const { evaluatePolicy, findingsForCheck } = deps;
 
+  const policyUnmigratedToolsFileCheck: HealthCheck = {
+    id: CHECK_IDS.policyUnmigratedToolsFile,
+    kind: "plugin",
+    description: "Governed tool declarations have been migrated from TOOLS.md into AGENTS.md.",
+    source: "policy",
+    async detect(ctx) {
+      return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyUnmigratedToolsFile);
+    },
+  };
   const policyToolsMissingRiskCheck: HealthCheck = {
     id: CHECK_IDS.policyMissingToolRisk,
     kind: "plugin",
@@ -192,6 +201,7 @@ export function createPolicyToolMetadataChecks(
   };
 
   return [
+    policyUnmigratedToolsFileCheck,
     policyToolsMissingRiskCheck,
     policyToolsUnknownRiskCheck,
     policyToolsMissingSensitivityCheck,
