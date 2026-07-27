@@ -26,7 +26,7 @@ export function resolveToolsMdMigrationWorkspaceTargets(
   return [...targets.values()];
 }
 
-export function describeToolsMdMergedBootstrapLimit(params: {
+function describeToolsMdMergedBootstrapLimit(params: {
   cfg: OpenClawConfig;
   agentId: string;
   mergedChars: number;
