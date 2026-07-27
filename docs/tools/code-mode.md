@@ -565,6 +565,23 @@ type ToolCatalog = {
 };
 ```
 
+Paired Gateway nodes are available through the `nodes` global:
+
+```typescript
+const available = await nodes.list();
+const node = await nodes.get(available[0].id);
+const status = await node.invoke("device.status");
+```
+
+`nodes.list()` returns paired node ids, names, platforms, connection state, and
+advertised commands. `nodes.get(idOrName)` resolves an exact id before a display
+name and returns a handle with `id`, `name`, and `invoke(command, params?)`.
+Invocation uses the normal `nodes` tool path, so pairing, command policy, scopes,
+approvals, timeouts, hooks, and telemetry are unchanged. A handle includes
+`listDir(path)` only when the node advertises `fs.listDir`. It does not include
+`exec`: the generic nodes surface reserves `system.run` for the normal shell
+`exec` tool with a node host.
+
 Convenience tool functions are installed only for unambiguous safe names:
 
 ```typescript

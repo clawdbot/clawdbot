@@ -1,6 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { NODE_FS_LIST_DIR_COMMAND } from "../infra/node-commands.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import { parseNodeList } from "../shared/node-list-parse.js";
+import type { NodeListNode } from "../shared/node-list-types.js";
 import { toCodeModeJsonSafe } from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import {
@@ -23,6 +26,7 @@ import {
   type CollectorCompletionResult,
 } from "./tools/agents-wait-tool.js";
 import { ToolInputError } from "./tools/common.js";
+import { resolveEligibleNodeFromList } from "./tools/nodes-utils.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
 type CodeModeSwarmDeps = {
@@ -38,6 +42,124 @@ const defaultCodeModeSwarmDeps: CodeModeSwarmDeps = {
   initSubagentRegistry,
   waitForCollectorCompletion,
 };
+
+const CODE_MODE_NODES_TOOL_ID = "openclaw:core:nodes";
+
+type CodeModeNode = {
+  id: string;
+  name: string;
+  platform?: string;
+  connected: boolean;
+  commands: string[];
+};
+
+function projectCodeModeNode(node: NodeListNode): CodeModeNode {
+  return {
+    id: node.nodeId,
+    name: node.displayName?.trim() || node.nodeId,
+    ...(node.platform ? { platform: node.platform } : {}),
+    connected: node.connected === true,
+    commands: Array.isArray(node.commands)
+      ? node.commands.filter((command): command is string => typeof command === "string")
+      : [],
+  };
+}
+
+async function callNodesTool(params: {
+  runtime: ToolSearchRuntime;
+  parentToolCallId: string;
+  signal?: AbortSignal;
+  onUpdate?: AgentToolUpdateCallback;
+  input: Record<string, unknown>;
+}): Promise<unknown> {
+  return await params.runtime.callValue(CODE_MODE_NODES_TOOL_ID, params.input, {
+    includeMcp: false,
+    parentToolCallId: params.parentToolCallId,
+    signal: params.signal,
+    onUpdate: params.onUpdate,
+    recoverySurface: "tools",
+  });
+}
+
+async function listCodeModeNodes(params: {
+  runtime: ToolSearchRuntime;
+  parentToolCallId: string;
+  signal?: AbortSignal;
+  onUpdate?: AgentToolUpdateCallback;
+}): Promise<NodeListNode[]> {
+  return parseNodeList(
+    await callNodesTool({
+      ...params,
+      input: { action: "status" },
+    }),
+  );
+}
+
+async function runNodesBridge(params: {
+  runtime: ToolSearchRuntime;
+  parentToolCallId: string;
+  request: PendingBridgeRequest;
+  signal?: AbortSignal;
+  onUpdate?: AgentToolUpdateCallback;
+}): Promise<unknown> {
+  const values = params.request.args;
+  const action = values[0];
+  if (action === "list") {
+    return (await listCodeModeNodes(params))
+      .filter((node) => node.paired === true)
+      .map(projectCodeModeNode);
+  }
+  if (action === "get") {
+    const query = values[1];
+    if (typeof query !== "string" || !query.trim()) {
+      throw new ToolInputError("nodes.get id or name must be a non-empty string.");
+    }
+    const node = resolveEligibleNodeFromList(
+      await listCodeModeNodes(params),
+      query,
+      (candidate) => candidate.paired === true,
+      {
+        ineligibleExact: (id, eligibleIds) =>
+          `node "${id}" is not paired (paired node ids: ${eligibleIds})`,
+        nameResolveFailed: (reason, eligibleIds) => `${reason} (paired node ids: ${eligibleIds})`,
+        noneEligible: () => "no paired nodes",
+        multipleEligible: (eligible) =>
+          `multiple nodes paired: ${eligible
+            .map((candidate) => candidate.nodeId)
+            .toSorted()
+            .join(", ")}`,
+      },
+    );
+    const projected = projectCodeModeNode(node);
+    return {
+      id: projected.id,
+      name: projected.name,
+      ...(projected.commands.includes(NODE_FS_LIST_DIR_COMMAND)
+        ? { listDirCommand: NODE_FS_LIST_DIR_COMMAND }
+        : {}),
+    };
+  }
+  if (action === "invoke") {
+    const node = values[1];
+    const command = values[2];
+    if (typeof node !== "string" || !node.trim()) {
+      throw new ToolInputError("nodes.invoke node id must be a non-empty string.");
+    }
+    if (typeof command !== "string" || !command.trim()) {
+      throw new ToolInputError("nodes.invoke command must be a non-empty string.");
+    }
+    return await callNodesTool({
+      ...params,
+      input: {
+        action: "invoke",
+        node,
+        invokeCommand: command,
+        invokeParamsJson: JSON.stringify(values[3] ?? {}),
+      },
+    });
+  }
+  throw new ToolInputError("unsupported nodes bridge action.");
+}
 
 let codeModeSwarmDeps = defaultCodeModeSwarmDeps;
 
@@ -322,6 +444,10 @@ export async function runBridgeRequest(params: {
           onUpdate: params.onUpdate,
           recoverySurface: "tools",
         });
+        break;
+      }
+      case "nodes": {
+        value = await runNodesBridge(params);
         break;
       }
       case "yield": {
