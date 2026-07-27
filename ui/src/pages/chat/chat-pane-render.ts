@@ -237,6 +237,8 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       activeRunIds: selectedSession?.activeRunIds,
       queue: state.chatQueue,
     });
+    const attachmentReads = this.chatState.attachmentReads;
+    const attachmentReadSignal = attachmentReads.readSignal;
     const props: ChatProps = {
       transcript: this.transcript,
       paneId: this.paneId,
@@ -470,6 +472,10 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       onScrollToBottom: state.scrollToBottom,
       attachments: state.chatAttachments,
       getAttachments: () => state.chatAttachments,
+      pendingAttachmentReads: attachmentReads.pendingReads,
+      getPendingAttachmentReads: () => attachmentReads.pendingReads,
+      readSignal: attachmentReadSignal,
+      onPendingReadsChange: (delta) => attachmentReads.updatePending(attachmentReadSignal, delta),
       onAttachmentsChange: (next) => {
         state.chatAttachments = next;
         state.requestUpdate?.();
