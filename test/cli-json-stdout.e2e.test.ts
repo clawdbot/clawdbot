@@ -24,6 +24,7 @@ function runSourceCli(tempHome: string, args: string[], envOverrides: NodeJS.Pro
     env,
     encoding: "utf8",
     maxBuffer: 10 * 1024 * 1024,
+    timeout: 60_000,
   });
 }
 
@@ -43,6 +44,9 @@ describe("cli json stdout contract", () => {
 
         expect(result.status, result.stderr).toBe(0);
         expect(result.stdout.trim()).toBe(path.join(tempHome, ".openclaw-work", "openclaw.json"));
+        await expect(fs.access(path.join(tempHome, ".openclaw-work"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
       },
       { prefix: "openclaw-profile-isolation-e2e-" },
     );
@@ -71,6 +75,9 @@ describe("cli json stdout contract", () => {
         });
         await expect(
           fs.access(path.join(scratchStateDir, "exec-approvals.json")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(
+          fs.access(path.join(scratchStateDir, "state", "openclaw.sqlite")),
         ).rejects.toMatchObject({ code: "ENOENT" });
       },
       { prefix: "openclaw-read-only-state-e2e-" },

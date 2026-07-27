@@ -104,6 +104,20 @@ function sessionCaptureStatus(session: GatewaySessionRow): WorkboardStatus {
   return "todo";
 }
 
+function findCapturedSessionCard(cards: WorkboardCard[], sessionKey: string): WorkboardCard | null {
+  let archived: WorkboardCard | undefined;
+  for (const card of cards) {
+    if (workboardCardSessionKey(card) !== sessionKey) {
+      continue;
+    }
+    if (!card.metadata?.archivedAt) {
+      return card;
+    }
+    archived ??= card;
+  }
+  return archived ?? null;
+}
+
 async function loadSessionCaptureHistory(params: {
   client: GatewayBrowserClient;
   sessionKey: string;
@@ -146,7 +160,7 @@ export async function captureSessionToWorkboard(params: {
     return null;
   }
   if (state.capturingSessionKeys.has(params.session.key)) {
-    return state.cards.find((card) => workboardCardSessionKey(card) === params.session.key) ?? null;
+    return findCapturedSessionCard(state.cards, params.session.key);
   }
   state.error = null;
   let captureStarted = false;
@@ -164,16 +178,12 @@ export async function captureSessionToWorkboard(params: {
       return null;
     }
     if (state.capturingSessionKeys.has(params.session.key)) {
-      return (
-        state.cards.find((card) => workboardCardSessionKey(card) === params.session.key) ?? null
-      );
+      return findCapturedSessionCard(state.cards, params.session.key);
     }
     state.capturingSessionKeys.add(params.session.key);
     captureStarted = true;
     params.requestUpdate?.();
-    const existing = state.cards.find(
-      (card) => workboardCardSessionKey(card) === params.session.key,
-    );
+    const existing = findCapturedSessionCard(state.cards, params.session.key);
     if (existing) {
       if (existing.metadata?.archivedAt) {
         invalidateWorkboardLoads(params.host);

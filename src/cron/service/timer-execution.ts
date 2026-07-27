@@ -109,6 +109,11 @@ export async function executeJobCore(
       streamBatch: options?.streamBatch,
       abortSignal,
     });
+    // Trigger scripts may settle after cancellation; never start payload work
+    // or persist trigger results for a run that has already been aborted.
+    if (abortSignal?.aborted) {
+      return resolveAbortError();
+    }
     if (evaluation.kind === "busy") {
       state.deps.log.debug({ jobId: job.id }, "cron: trigger evaluation skipped while busy");
       return {

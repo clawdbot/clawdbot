@@ -59,7 +59,7 @@ type DiagnosticLike = { level: string; code: string; path: string; message: stri
 const CLAW_AGENT_RELOAD_TIMEOUT_MS = 15_000;
 const CLAW_AGENT_RELOAD_POLL_MS = 100;
 
-async function waitUntilGatewayConfigApplied(): Promise<void> {
+export async function waitUntilGatewayConfigApplied(): Promise<void> {
   const deadline = Date.now() + CLAW_AGENT_RELOAD_TIMEOUT_MS;
   let lastError: unknown;
   while (Date.now() < deadline) {
