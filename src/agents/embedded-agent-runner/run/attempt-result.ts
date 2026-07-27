@@ -347,6 +347,7 @@ export function completeEmbeddedAttemptResult(
     (silentToolResultReplyPayload ? 1 : 0);
   const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
     allowEmptyAssistantReplyAsSilent: attempt.allowEmptyAssistantReplyAsSilent,
+    terminalReplyExpectation: attempt.terminalReplyExpectation,
     payloadCount: 0,
     aborted: terminal.aborted,
     timedOut: terminal.timedOut,
