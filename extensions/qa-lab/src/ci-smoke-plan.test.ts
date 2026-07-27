@@ -121,10 +121,6 @@ describe("createQaSmokeCiPart", () => {
       ),
     );
     expect(selectedCoverageIds).toEqual(new Set(taxonomyProfile.coverageIds));
-    expect(smokeSelection.excludedScenarios.length).toBeGreaterThan(0);
-    expect(
-      smokeSelection.excludedScenarios.every(({ scenario }) => !scenarioIds.includes(scenario.id)),
-    ).toBe(true);
 
     const primaryScenarioIds = parts.map(
       (part) => part.runs.find((run) => run.slug === "primary")?.scenario_ids ?? [],

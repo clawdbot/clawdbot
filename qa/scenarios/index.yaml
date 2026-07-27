@@ -23,6 +23,9 @@ title: OpenClaw QA Scenario Pack
 # - taxonomy feature coverage IDs are exact proof targets, not aliases
 # - scenario primary can list multiple IDs only when this scenario is primary
 #   proof for each
+# - when a taxonomy profile coverage ID has multiple primary owners, exactly one
+#   owner uses `coverage.representative` for that ID; this is coverage semantics,
+#   not named-profile membership or execution order
 # - prefer reusing an existing coverage ID over minting a scenario-shaped ID
 # - avoid copying the scenario title into coverage IDs
 # - use `pnpm openclaw qa coverage` to render the current inventory

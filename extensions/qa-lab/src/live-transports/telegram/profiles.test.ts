@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { listTelegramQaScenarios, resolveTelegramQaScenarioIds } from "./profiles.js";
+import { listTelegramQaScenarios, resolveTelegramQaScenarioIds } from "./scenario-selection.js";
 
 describe("Telegram QA profiles", () => {
   it("derives release membership from taxonomy and provider eligibility", () => {
@@ -44,12 +44,13 @@ describe("Telegram QA profiles", () => {
     ).toThrow("cannot run ineligible scenario(s)");
   });
 
-  it("lists the YAML catalog with provider-specific release defaults", () => {
+  it("lists catalog-eligible scenarios with provider-specific release defaults", () => {
     const scenarios = listTelegramQaScenarios("mock-openai");
+    const defaultIds = new Set(resolveTelegramQaScenarioIds({ providerMode: "mock-openai" }));
 
-    expect(scenarios.map(({ id }) => id)).toEqual(
-      resolveTelegramQaScenarioIds({ providerMode: "mock-openai", profile: "all" }),
-    );
+    expect(
+      new Set(scenarios.filter(({ defaultEnabled }) => defaultEnabled).map(({ id }) => id)),
+    ).toEqual(defaultIds);
     expect(
       scenarios.find(({ id }) => id === "telegram-long-final-reuses-preview")?.defaultEnabled,
     ).toBe(true);

@@ -6,6 +6,8 @@ scenario:
   coverage:
     primary:
       - observability.otlp-http-traces-otel
+    representative:
+      - observability.otlp-http-traces-otel
     secondary:
       - observability.otlp-http-traces-qa-lab
   objective: Verify a QA-lab gateway run emits bounded OpenTelemetry traces, metrics, and logs through the diagnostics-otel plugin.

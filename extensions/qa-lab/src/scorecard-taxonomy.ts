@@ -581,6 +581,46 @@ function scenarioCoverageIds(scenario: QaSeedScenarioWithSource) {
   return [...(scenario.coverage?.primary ?? []), ...(scenario.coverage?.secondary ?? [])];
 }
 
+export function selectQaScorecardProfileScenarios(params: {
+  coverageIds: readonly string[];
+  profileId: string;
+  scenarios: readonly QaSeedScenarioWithSource[];
+}) {
+  if (params.coverageIds.length === 0) {
+    return [...params.scenarios];
+  }
+  const selected: QaSeedScenarioWithSource[] = [];
+  const selectedIds = new Set<string>();
+  for (const coverageId of params.coverageIds) {
+    const candidates = params.scenarios.filter((scenario) =>
+      scenario.coverage?.primary.includes(coverageId),
+    );
+    const representatives = candidates.filter((scenario) =>
+      scenario.coverage?.representative?.includes(coverageId),
+    );
+    const representative =
+      representatives.length === 1
+        ? representatives[0]
+        : representatives.length === 0 && candidates.length === 1
+          ? candidates[0]
+          : undefined;
+    if (!representative) {
+      const detail =
+        candidates.length === 0
+          ? "no primary owner"
+          : representatives.length > 1
+            ? `multiple representatives: ${representatives.map((scenario) => scenario.id).join(", ")}`
+            : `multiple primary owners without a representative: ${candidates.map((scenario) => scenario.id).join(", ")}`;
+      throw new Error(`${params.profileId} profile coverage ${coverageId} has ${detail}.`);
+    }
+    if (!selectedIds.has(representative.id)) {
+      selectedIds.add(representative.id);
+      selected.push(representative);
+    }
+  }
+  return selected;
+}
+
 type ScenarioInventoryRef = {
   sourcePath: string;
   kind: QaScorecardEvidenceKind;
@@ -1051,11 +1091,22 @@ function buildQaScorecardTaxonomyReport(params: {
         }
       }
       const validCoverageIds = uniqueSorted(selectedCoverageIds);
-      const scenarioRefs = uniqueSorted(
-        validCoverageIds.flatMap((coverageId) =>
-          (primaryInventoryRefsByCoverageId.get(coverageId) ?? []).map((ref) => ref.sourcePath),
-        ),
-      );
+      const scenarioRefs =
+        profile.coverageIds.length > 0
+          ? selectQaScorecardProfileScenarios({
+              coverageIds: validCoverageIds,
+              profileId: profile.id,
+              scenarios: params.scenarios,
+            })
+              .map((scenario) => scenario.sourcePath)
+              .toSorted()
+          : uniqueSorted(
+              validCoverageIds.flatMap((coverageId) =>
+                (primaryInventoryRefsByCoverageId.get(coverageId) ?? []).map(
+                  (ref) => ref.sourcePath,
+                ),
+              ),
+            );
       return {
         id: profile.id,
         evidenceMode: profile.evidenceMode ?? "full",

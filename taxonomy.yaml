@@ -8,12 +8,13 @@ snapshot:
 profiles:
   - id: smoke-ci
     description: Deterministic PR and merge proof with mock model providers and the
-      Crabline-backed channel driver; coverage IDs resolve to their primary scenario owners.
+      Crabline-backed channel driver; coverage IDs resolve to one canonical primary owner.
     evidenceMode: slim
     channelDriver: crabline
     coverageIds:
       - agent-runtime.runtime-override-switching
       - agent-runtime.subagent-turns-delivery
+      - agent-runtime.tool-fs-read
       - agent-runtime.tool-fs-write
       - agent-runtime.tool-task-followthrough
       - channels.outbound-group-reply

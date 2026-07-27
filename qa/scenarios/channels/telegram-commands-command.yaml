@@ -7,6 +7,8 @@ scenario:
   coverage:
     primary:
       - channels.channel-native-commands
+    representative:
+      - channels.channel-native-commands
   objective: Verify Telegram renders the full native command catalog.
   successCriteria:
     - The command list is returned through the Telegram group command path.

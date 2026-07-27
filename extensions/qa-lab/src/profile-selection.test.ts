@@ -6,18 +6,34 @@ import { readQaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
 
 describe("taxonomy profile scenario selection", () => {
   it("resolves smoke membership from primary coverage owners only", () => {
+    const catalog = readQaScenarioPack().scenarios;
     const selection = resolveQaProfileScenarios({
       profile: "smoke-ci",
       providerMode: "mock-openai",
     });
     const selectedCoverageIds = new Set(selection.profile.coverageIds);
+    const selectedScenarioIds = new Set(selection.scenarios.map((scenario) => scenario.id));
 
     expect(selection.scenarios.length).toBeGreaterThan(0);
-    expect(selection.scenarios).not.toContainEqual(
-      expect.objectContaining({ id: "system-agent-ring-zero-setup" }),
-    );
     for (const scenario of selection.scenarios) {
       expect(scenario.coverage?.primary.some((id) => selectedCoverageIds.has(id))).toBe(true);
+    }
+    for (const coverageId of selectedCoverageIds) {
+      const primaryOwners = catalog.filter((scenario) =>
+        scenario.coverage?.primary.includes(coverageId),
+      );
+      const representatives = primaryOwners.filter((scenario) =>
+        scenario.coverage?.representative?.includes(coverageId),
+      );
+      const selectedOwners = primaryOwners.filter((scenario) =>
+        selectedScenarioIds.has(scenario.id),
+      );
+
+      expect(selectedOwners).toHaveLength(1);
+      if (primaryOwners.length > 1) {
+        expect(representatives).toHaveLength(1);
+        expect(selectedOwners[0]?.id).toBe(representatives[0]?.id);
+      }
     }
   });
 

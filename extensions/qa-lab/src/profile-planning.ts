@@ -164,7 +164,7 @@ export function resolveQaRunProfileExecutionSelection(params: {
   return { excludedScenarios, selectedScenarios };
 }
 
-function scenarioDeclaresChannel(scenario: QaSeedScenarioWithSource, channel: string) {
+export function scenarioDeclaresQaChannel(scenario: QaSeedScenarioWithSource, channel: string) {
   const normalizedChannel = channel.trim().toLowerCase();
   if (scenario.execution.channel === normalizedChannel) {
     return true;
@@ -202,7 +202,7 @@ export function resolveQaProfileScenarios(params: {
   );
   const evaluatedCandidates = membership.selectedScenarios.map((scenario) => {
     const reasons: string[] = [];
-    if (params.requireDeclaredChannel && channel && !scenarioDeclaresChannel(scenario, channel)) {
+    if (params.requireDeclaredChannel && channel && !scenarioDeclaresQaChannel(scenario, channel)) {
       reasons.push(`does not declare channel ${channel}`);
     }
     if (eligibleChannels.size > 0) {

@@ -67,7 +67,9 @@ fulfills matching IDs, while secondary coverage stays advisory. Every coverage
 ID is exactly `taxonomy-surface.feature`, using the short surface ID from
 `taxonomy.yaml`. A scenario's separate `surface` field is an execution/reporting
 label (for example, `channel` or `runtime-tool`); it does not define taxonomy
-ownership.
+ownership. When an explicit profile coverage ID has multiple primary owners,
+one owner declares `coverage.representative` for that ID. The marker chooses the
+canonical proof without naming a profile or imposing execution order.
 
 Slim evidence omits per-entry `execution` and sets `evidenceMode: "slim"`;
 `smoke-ci` defaults to slim, and `--evidence-mode full` restores full entries:
