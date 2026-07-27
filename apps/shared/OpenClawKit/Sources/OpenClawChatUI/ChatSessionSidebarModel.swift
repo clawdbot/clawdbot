@@ -274,6 +274,16 @@ public enum ChatSessionSidebarModel {
             adoptOwnerless: false)
     }
 
+    static func sessionMatchesActiveAgent(
+        sessionKey: String?,
+        agentId: String?,
+        activeAgentId: String?) -> Bool
+    {
+        guard self.normalized(sessionKey)?.lowercased() == "global" else { return true }
+        guard let owner = self.normalized(agentId)?.lowercased() else { return false }
+        return owner == self.normalized(activeAgentId)?.lowercased()
+    }
+
     private static func reconcilingGlobalObserverDigestOwner(
         in sessions: [OpenClawChatSessionEntry],
         activeAgentId: String?,
@@ -308,10 +318,14 @@ public enum ChatSessionSidebarModel {
     {
         let digest = change.observerDigest
         let present = change.observerDigestPresent
-        let key = change.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard key == "global" else { return (digest, present) }
-        guard let owner = self.normalized(change.agentId)?.lowercased(),
-              owner == self.normalized(activeAgentId)?.lowercased()
+        guard self.normalized(change.sessionKey)?.lowercased() == "global" else {
+            return (digest, present)
+        }
+        guard self.sessionMatchesActiveAgent(
+            sessionKey: change.sessionKey,
+            agentId: change.agentId,
+            activeAgentId: activeAgentId),
+            let owner = self.normalized(change.agentId)?.lowercased()
         else { return nil }
         guard let digest else { return (nil, present) }
         let digestOwner = self.normalized(digest.agentId)?.lowercased()
