@@ -75,7 +75,7 @@ describe("protocol export registries", () => {
   it("re-exports every runtime registry symbol by identity", () => {
     for (const registry of [schemaExportRegistry, validatorRegistry]) {
       for (const [name, value] of Object.entries(registry)) {
-        expect(protocol[name as keyof typeof protocol], name).toBe(value);
+        expect((protocol as Record<string, unknown>)[name], name).toBe(value);
       }
     }
   });
