@@ -3,6 +3,7 @@
  * namespaced tool scopes here; code mode receives descriptors, virtual API
  * files, and a guarded invocation runtime.
  */
+import { tokTypes } from "acorn";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { toCodeModeJsonSafe } from "./code-mode-json.js";
 
@@ -34,6 +35,12 @@ const RESERVED_NAMESPACE_GLOBALS = new Set([
   "text",
   "tools",
   "yield_control",
+]);
+// API declarations use function names, so JS keywords and TypeScript's `enum`
+// must be escaped even though those words are valid MCP tool identifiers.
+const RESERVED_NAMESPACE_FUNCTION_IDENTIFIERS = new Set([
+  ...Object.values(tokTypes).flatMap((token) => (token.keyword ? [token.keyword] : [])),
+  "enum",
 ]);
 
 /** Object installed into a code-mode namespace global. */
@@ -178,6 +185,7 @@ function uniqueIdentifier(base: string, used: Set<string>): string {
   while (
     used.has(candidate) ||
     RESERVED_NAMESPACE_GLOBALS.has(candidate) ||
+    RESERVED_NAMESPACE_FUNCTION_IDENTIFIERS.has(candidate) ||
     FORBIDDEN_NAMESPACE_PATH_SEGMENTS.has(candidate)
   ) {
     candidate = `${base}${index}`;
