@@ -361,6 +361,29 @@ function createMeetingPlatformAdapter<
   };
 }
 
+function isMeetingTalkBackMode(mode: string): boolean {
+  return mode === "agent" || mode === "bidi";
+}
+
+function isMeetingRealtimeRouteReady(
+  mode: string,
+  health:
+    | (MeetingBrowserHealth & {
+        audioInputRouted?: boolean;
+        audioOutputRouted?: boolean;
+      })
+    | undefined,
+): boolean {
+  return (
+    isMeetingTalkBackMode(mode) &&
+    health?.inCall === true &&
+    health.micMuted === false &&
+    health.audioInputRouted === true &&
+    health.audioOutputRouted === true &&
+    health.manualActionRequired !== true
+  );
+}
+
 export const MeetingPlatformAdapter = {
   create: createMeetingPlatformAdapter,
   createChromeTransport: createMeetingChromeTransport,
@@ -369,4 +392,6 @@ export const MeetingPlatformAdapter = {
   createPluginEntry: createMeetingPluginEntryOptions,
   createStatusCallSource: createMeetingStatusCallSource,
   createStatusPreludeSource: createMeetingStatusPreludeSource,
+  isRealtimeRouteReady: isMeetingRealtimeRouteReady,
+  isTalkBackMode: isMeetingTalkBackMode,
 };

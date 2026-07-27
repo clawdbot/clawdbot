@@ -40,7 +40,7 @@ const probes = MeetingPlatformAdapter.createRuntimeProbes<
   invalidRequest: zoomMeetingsInvalidRequest,
   resolveTimeoutMs: resolveZoomMeetingsProbeTimeoutMs,
   shouldWaitForListening: (session) => Boolean(session.chrome?.browserTab?.targetId),
-  talkBackMode: (mode) => mode === "agent" || mode === "bidi",
+  talkBackMode: MeetingPlatformAdapter.isTalkBackMode,
 });
 
 export const testZoomMeetingListening: (
