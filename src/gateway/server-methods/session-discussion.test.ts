@@ -253,7 +253,10 @@ describe("session discussion gateway methods", () => {
     expect(registered.open).toHaveBeenCalledOnce();
     expect(mocks.emitSessionsChanged).not.toHaveBeenCalled();
     releaseGeneration?.(null);
-    await vi.runAllTimersAsync();
+    // Bounded flush: eviction settles via microtasks, so advancing 0ms is
+    // enough. runAllTimersAsync livelocks (10000-timer abort) when any other
+    // suite in a shared shard worker schedules an interval into this fake clock.
+    await vi.advanceTimersByTimeAsync(0);
   });
 
   it("never generates a title for discussion info", async () => {
