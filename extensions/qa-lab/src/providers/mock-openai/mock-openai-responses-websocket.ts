@@ -142,7 +142,7 @@ export function attachQaMockResponsesWebSocketServer(params: {
           delete inheritedRequest.previous_response_id;
           delete inheritedRequest.generate;
           delete inheritedRequest.input;
-          const body = {
+          const body: Record<string, unknown> & { input: ResponsesInputItem[] } = {
             ...inheritedRequest,
             ...request,
             input: [...previousInput, ...nextInput],
