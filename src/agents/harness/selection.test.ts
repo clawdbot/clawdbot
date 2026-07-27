@@ -1503,6 +1503,35 @@ describe("selectAgentHarness", () => {
     },
   );
 
+  it("keeps native model run controls compatible with Codex", () => {
+    expect(
+      buildAgentHarnessSupportContext({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        modelProvider: {
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          requestTransportOverrides: "none",
+        },
+        requestedRuntime: "codex",
+        config: {
+          agents: {
+            defaults: {
+              models: {
+                "openai/gpt-5.6-sol": {
+                  params: { thinking: "xhigh", fastMode: true, fastAutoOnSeconds: 30 },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+      }).modelProvider,
+    ).toMatchObject({
+      requestTransportOverrides: "none",
+      runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+    });
+  });
+
   it("rejects explicit Codex when agent request params cannot be reproduced", () => {
     const supports = vi.fn((ctx: Parameters<AgentHarness["supports"]>[0]) =>
       ctx.modelProvider?.requestTransportOverrides === "present"
