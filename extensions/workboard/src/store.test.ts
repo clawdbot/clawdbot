@@ -276,6 +276,42 @@ describe("WorkboardStore", () => {
     }
   });
 
+  it("creates the additive status transitions table without advancing the schema boundary", () => {
+    const dir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-workboard-additive-status-transitions-"),
+    );
+    const dbPath = path.join(dir, "workboard.sqlite");
+    try {
+      const stores = createWorkboardSqliteStores({ dbPath });
+      stores.close();
+
+      const db = new DatabaseSync(dbPath, { readOnly: true });
+      try {
+        expect(
+          db
+            .prepare(
+              "SELECT 1 AS found FROM pragma_table_list WHERE name = 'workboard_card_status_transitions'",
+            )
+            .get(),
+        ).toEqual({ found: 1 });
+        expect(
+          db
+            .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = 'schema-3'")
+            .get(),
+        ).toEqual({ found: 1 });
+        expect(
+          db
+            .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = 'schema-4'")
+            .get(),
+        ).toBeUndefined();
+      } finally {
+        db.close();
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("migrates a version 2 workboard table to STRICT without losing rows", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-strict-migration-"));
     const dbPath = path.join(dir, "workboard.sqlite");
