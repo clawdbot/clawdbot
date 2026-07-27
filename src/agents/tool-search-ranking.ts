@@ -126,6 +126,31 @@ function stem(token: string): string {
   return current;
 }
 
+/** Suffixes whose stripping can expose a consonant doubled only by inflection. */
+const UNDOUBLING_SUFFIXES = new Set(["ing", "ed", "er"]);
+/** Doubles that belong to the root ("call", "process", "off", "buzz"). */
+const KEPT_DOUBLE_CONSONANTS = new Set(["l", "s", "f", "z"]);
+
+/**
+ * "running" strips to "runn", which would never meet "run". English doubles the
+ * final consonant before these suffixes, so undo that — otherwise the stemmer
+ * makes common pairs (run/running, stop/stopping, log/logging) unreachable, a
+ * regression the old substring scorer did not have.
+ */
+function undoubleFinalConsonant(token: string): string {
+  const last = token.at(-1);
+  if (
+    !last ||
+    last !== token.at(-2) ||
+    KEPT_DOUBLE_CONSONANTS.has(last) ||
+    "aeiou".includes(last) ||
+    token.length <= 3
+  ) {
+    return token;
+  }
+  return token.slice(0, -1);
+}
+
 function stripOneSuffix(token: string): string {
   if (token.length <= 3) {
     return token;
@@ -138,16 +163,24 @@ function stripOneSuffix(token: string): string {
     if (suffix === "s" && token.endsWith("ss")) {
       continue;
     }
-    return suffix === "ies" ? `${token.slice(0, -3)}i` : token.slice(0, -suffix.length);
+    if (suffix === "ies") {
+      return `${token.slice(0, -3)}i`;
+    }
+    const stripped = token.slice(0, -suffix.length);
+    return UNDOUBLING_SUFFIXES.has(suffix) ? undoubleFinalConsonant(stripped) : stripped;
   }
   return token;
 }
 
 /**
  * Splits on anything that is not a word character, which keeps `_`-joined tool
- * names addressable as whole tokens while still emitting their parts. Unicode
- * letters survive so a catalog naming tools in another script stays searchable,
- * even though `tool_search` asks the model to query in English.
+ * names addressable as whole tokens while still emitting their parts.
+ *
+ * Unicode letters survive rather than being rejected: a catalog is allowed to
+ * name or describe tools in another script, and dropping those would make them
+ * permanently unreachable. What makes non-English queries fruitless in practice
+ * is that catalogs are written in English, which is why `tool_search` asks the
+ * model to query in English rather than this function refusing the input.
  */
 function splitWords(input: string): string[] {
   const words: string[] = [];

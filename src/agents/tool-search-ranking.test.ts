@@ -53,6 +53,21 @@ describe("tokenizeQuery", () => {
     expect(tokenizeQuery("reminders")).toContain("remind");
   });
 
+  it.each([
+    ["running", "run"],
+    ["stopping", "stop"],
+    ["logging", "log"],
+    ["planning", "plan"],
+    ["runner", "run"],
+  ])("undoes the consonant English doubles before a suffix: %s", (inflected, root) => {
+    // Without undoubling, "running" stems to "runn" and can never meet "run".
+    expect(tokenizeDocument(inflected)).toEqual(tokenizeDocument(root));
+  });
+
+  it.each(["call", "process", "off"])("keeps doubles that belong to the root: %s", (word) => {
+    expect(tokenizeDocument(`${word}ing`)).toEqual(tokenizeDocument(word));
+  });
+
   it("drops stopwords so they cannot carry a match", () => {
     expect(tokenizeQuery("the and with")).toEqual([]);
   });
@@ -74,10 +89,19 @@ describe("scoreLexical", () => {
   it("returns nothing for a query with no usable terms", () => {
     const index = buildLexicalIndex([{ value: "a", terms: tokenizeDocument("search the web") }]);
 
-    // A non-English query tokenizes to nothing. Returning the whole catalog
-    // unranked would read as a ranked answer without being one.
-    expect(scoreLexical(index, tokenizeQuery("価格を調べて"))).toEqual([]);
+    // Returning the whole catalog unranked would read as a ranked answer
+    // without being one, which is what the previous scorer did here.
+    expect(scoreLexical(index, tokenizeQuery("the and with"))).toEqual([]);
     expect(scoreLexical(index, [])).toEqual([]);
+  });
+
+  it("indexes non-Latin text rather than discarding it", () => {
+    // The English-query instruction is guidance for the model, not a filter: a
+    // catalog may legitimately describe a tool in another script, and dropping
+    // those terms would make it permanently unreachable.
+    const index = buildLexicalIndex([{ value: "jp", terms: tokenizeDocument("価格 lookup") }]);
+
+    expect(scoreLexical(index, tokenizeQuery("価格")).map((hit) => hit.value)).toEqual(["jp"]);
   });
 
   it("ranks a rare term above one shared across the catalog", () => {
@@ -151,7 +175,9 @@ describe("ToolSearchRuntime.search", () => {
     expect(names).not.toContain("spreadsheet_open");
   });
 
-  it("returns nothing rather than an unranked catalog for a non-English query", async () => {
+  it("returns nothing rather than an unranked catalog for a query the catalog cannot answer", async () => {
+    // The catalog is described in English, so this matches nothing. The old
+    // scorer returned every tool in id order for exactly this input.
     expect(await runtime().search("価格を調べて")).toEqual([]);
   });
 });
