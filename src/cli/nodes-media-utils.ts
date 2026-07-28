@@ -21,24 +21,26 @@ function normalizeMediaExtension(value: string): string | undefined {
 }
 
 /**
- * Returns `filePath` carrying the extension that matches `format`.
+ * True when `filePath` does not contradict media encoded as `format`.
  *
  * Callers choose an output path before the node reports how it encoded the
- * media, so the requested name can disagree with the bytes. Everything that
- * dispatches on extension — viewers, uploads, content-type headers, channel
- * attachment handling — mislabels the artifact when that happens. An
- * unrecognizable format leaves the caller's path untouched.
+ * media, so the name can end up describing bytes it never received. Everything
+ * that dispatches on extension — viewers, uploads, content-type headers,
+ * channel attachment handling — is misled when that happens. A path with no
+ * extension claims nothing and is therefore accepted.
+ *
+ * This only compares; it never rewrites the path. Output paths reach the media
+ * writers already workspace-guarded, and that guard alias-checks the exact
+ * final segment, so swapping the extension afterwards would write to a name
+ * nothing validated.
  */
-export function withMediaFileExtension(filePath: string, format: string): string {
-  const desired = normalizeMediaExtension(format);
-  if (!desired) {
-    return filePath;
-  }
+export function mediaPathMatchesFormat(filePath: string, format: string): boolean {
   const current = extnameFromAnyPath(filePath);
-  if (normalizeMediaExtension(current) === desired) {
-    return filePath;
+  if (!current) {
+    return true;
   }
-  return `${filePath.slice(0, filePath.length - current.length)}${desired}`;
+  const desired = normalizeMediaExtension(format);
+  return !desired || normalizeMediaExtension(current) === desired;
 }
 
 export function resolveTempPathParts(opts: { ext: string; tmpDir?: string; id?: string }): {

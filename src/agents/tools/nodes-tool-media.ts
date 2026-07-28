@@ -4,6 +4,7 @@
  * Captures camera/photos/screen media from paired nodes and formats media-safe tool results.
  */
 import crypto from "node:crypto";
+import { extnameFromAnyPath } from "@openclaw/media-core/file-name";
 import { imageMimeFromFormat } from "@openclaw/media-core/mime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -18,11 +19,12 @@ import {
   writeCameraClipPayloadToFile,
   writeCameraPayloadToFile,
 } from "../../cli/nodes-camera.js";
-import { withMediaFileExtension } from "../../cli/nodes-media-utils.js";
+import { mediaPathMatchesFormat } from "../../cli/nodes-media-utils.js";
 import {
   parseScreenRecordPayload,
   parseScreenSnapshotPayload,
   screenRecordTempPath,
+  screenSnapshotFormatForPath,
   screenSnapshotTempPath,
   writeScreenRecordToFile,
   writeScreenSnapshotToFile,
@@ -418,7 +420,8 @@ async function executeScreenRecord({
   const payload = parseScreenRecordPayload(raw?.payload);
   const ext = payload.format || "mp4";
   const outPath = normalizeOptionalString(params.outPath);
-  const filePath = outPath ? withMediaFileExtension(outPath, ext) : screenRecordTempPath({ ext });
+  assertMediaOutPathFormat({ command: "screen.record", outPath, format: ext });
+  const filePath = outPath ?? screenRecordTempPath({ ext });
   const written = await writeScreenRecordToFile(filePath, payload.base64);
   return {
     content: [{ type: "text", text: `FILE:${written.path}` }],
@@ -440,10 +443,14 @@ async function executeScreenSnapshot({
   const nodeId = await resolveNodeId(gatewayOpts, node);
   const screenIndex = readNonNegativeIntegerParam(params, "screenIndex") ?? 0;
   const maxWidth = readPositiveIntegerParam(params, "maxWidth");
+  const outPath = normalizeOptionalString(params.outPath);
+  // The node owns the encoding choice, so ask for the one the caller's filename
+  // already promises instead of letting the default contradict it.
+  const requestedFormat = outPath ? screenSnapshotFormatForPath(outPath) : undefined;
   const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
     nodeId,
     command: "screen.snapshot",
-    params: { screenIndex, maxWidth },
+    params: { screenIndex, maxWidth, format: requestedFormat },
     idempotencyKey: crypto.randomUUID(),
   });
   const payload = parseScreenSnapshotPayload(raw?.payload);
@@ -452,10 +459,8 @@ async function executeScreenSnapshot({
     throw new Error(`unsupported screen.snapshot format: ${payload.format}`);
   }
   const ext = normalizedFormat === "png" ? "png" : "jpg";
-  // The node picks the encoding, so a caller-chosen `outPath` extension can
-  // disagree with the bytes; name the artifact after what actually arrived.
-  const outPath = normalizeOptionalString(params.outPath);
-  const filePath = outPath ? withMediaFileExtension(outPath, ext) : screenSnapshotTempPath({ ext });
+  assertMediaOutPathFormat({ command: "screen.snapshot", outPath, format: ext });
+  const filePath = outPath ?? screenSnapshotTempPath({ ext });
   const written = await writeScreenSnapshotToFile(filePath, payload.base64);
   return {
     content: [{ type: "text", text: `FILE:${written.path}` }],
@@ -471,6 +476,26 @@ async function executeScreenSnapshot({
       },
     },
   };
+}
+
+/**
+ * Refuses to write media whose bytes contradict the caller's filename.
+ *
+ * `outPath` is workspace-guarded before this tool runs and that guard
+ * alias-checks the exact final segment, so the extension cannot be corrected
+ * here; the caller has to name the artifact for what it is.
+ */
+function assertMediaOutPathFormat(params: {
+  command: string;
+  outPath?: string;
+  format: string;
+}): void {
+  if (!params.outPath || mediaPathMatchesFormat(params.outPath, params.format)) {
+    return;
+  }
+  throw new Error(
+    `${params.command} returned ${params.format}; outPath must use a matching extension (got ${extnameFromAnyPath(params.outPath)})`,
+  );
 }
 
 function requireString(params: Record<string, unknown>, key: string): string {
