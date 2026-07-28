@@ -10,11 +10,11 @@ import type {
 
 const QA_DOCKER_E2E_LANE_SCRIPT = "test/e2e/qa-lab/runtime/docker-e2e-lane.ts";
 
-export type QaDockerScenario = QaSeedScenarioWithSource & {
+type QaDockerScenario = QaSeedScenarioWithSource & {
   execution: Extract<QaSeedScenarioWithSource["execution"], { kind: "script" }>;
 };
 
-export type QaDockerBatchResult = {
+type QaDockerBatchResult = {
   durationMs: number;
   failureMessage?: string;
   logPath: string;
