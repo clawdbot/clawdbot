@@ -2614,6 +2614,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Recall: two lanes
   - H3: Lane 1: always on, zero model calls
   - H3: Lane 2: escalation
+  - H2: Project-scoped memory
   - H2: The user model
   - H2: Standing intents: prospective memory
   - H2: The security model
