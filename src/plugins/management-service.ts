@@ -68,7 +68,11 @@ import {
 } from "./official-external-plugin-catalog.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
-import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import {
+  loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot,
+  type PluginMetadataSnapshot,
+} from "./plugin-metadata-snapshot.js";
 import { resolveManifestProviderAuthChoices } from "./provider-auth-choices.js";
 import { listRecommendedToolInstalls } from "./recommended-tool-installs.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
@@ -526,7 +530,6 @@ function resolveOfficialCatalogIconUrl(
   return resolveCatalogEntryIcon(entry);
 }
 
-type PluginMetadataSnapshot = ReturnType<typeof loadPluginMetadataSnapshot>;
 type PluginIndexRecord = PluginMetadataSnapshot["index"]["plugins"][number];
 
 function resolveInstalledHostedOfficialEntry(params: {
@@ -643,7 +646,7 @@ export async function resolveManagedPluginIconUrl(params: {
   officialCatalog?: OfficialCatalogResult;
 }): Promise<string | undefined> {
   const env = params.env ?? process.env;
-  const metadata = loadPluginMetadataSnapshot({ config: params.config, env });
+  const metadata = resolvePluginMetadataSnapshot({ config: params.config, env });
   const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog());
   return resolvePluginIconUrlFromCatalogFacts({
     metadata,
@@ -700,7 +703,7 @@ export async function listManagedPlugins(params: {
   officialCatalog?: OfficialCatalogResult;
 }): Promise<ManagedPluginCatalog> {
   const env = params.env ?? process.env;
-  const metadata = loadPluginMetadataSnapshot({ config: params.config, env });
+  const metadata = resolvePluginMetadataSnapshot({ config: params.config, env });
   const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog());
   const bundledOfficialEntries = listOfficialExternalPluginCatalogEntries();
   const plugins = metadata.index.plugins.map((record): ManagedPluginCatalogEntry => {

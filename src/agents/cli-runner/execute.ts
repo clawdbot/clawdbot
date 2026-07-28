@@ -292,6 +292,9 @@ export async function executePreparedCliRun(
   };
   const executeAttempt = async (): Promise<CliOutput> => {
     await context.preparedBackend.beforeExecution?.();
+    if (params.abortSignal?.aborted) {
+      throw createCliAbortError();
+    }
     const cliTurnStartedAt = Date.now();
     const restoreSkillEnv = params.skillsSnapshot
       ? applySkillEnvOverridesFromSnapshot({
@@ -516,6 +519,9 @@ export async function executePreparedCliRun(
   };
   try {
     completedOutput = await enqueueCliRun(queueKey, async () => {
+      if (params.abortSignal?.aborted) {
+        throw createCliAbortError();
+      }
       if (params.lifecycleGeneration) {
         assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       }

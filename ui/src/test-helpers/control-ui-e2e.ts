@@ -6,7 +6,7 @@ import { createServer as createNetServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import type { ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
@@ -35,6 +35,65 @@ export function controlUiSessionUrl(baseUrl: string, sessionKey: string): string
   url.search = "";
   url.hash = "";
   return url.toString();
+}
+
+type ControlUiRouteTarget = {
+  hash?: string;
+  pathname?: string;
+  pathnamePrefix?: string;
+  routeId: string;
+  search?: string;
+};
+
+/**
+ * Wait for the browser router to commit a route, not merely update the URL.
+ * Browser-local polling keeps readiness independent of host-side CDP scheduling.
+ */
+export async function waitForControlUiRoute(page: Page, target: ControlUiRouteTarget) {
+  const handle = await page.waitForFunction(
+    (expected) => {
+      const app = document.querySelector("openclaw-app") as HTMLElement & {
+        runtime?: {
+          router: {
+            getState: () => {
+              status: string;
+              resolvedLocation: { pathname: string } | null;
+              matches: { routeId: string }[];
+              pendingMatches: unknown[];
+            };
+          };
+        };
+      };
+      const state = app.runtime?.router.getState();
+      const pathname = window.location.pathname;
+      return (
+        state?.status === "success" &&
+        state.matches[0]?.routeId === expected.routeId &&
+        state.resolvedLocation?.pathname === pathname &&
+        state.pendingMatches.length === 0 &&
+        (expected.pathname === undefined || pathname === expected.pathname) &&
+        (expected.pathnamePrefix === undefined || pathname.startsWith(expected.pathnamePrefix)) &&
+        (expected.search === undefined || window.location.search === expected.search) &&
+        (expected.hash === undefined || window.location.hash === expected.hash)
+      );
+    },
+    target,
+    { timeout: 30_000 },
+  );
+  await handle.dispose();
+}
+
+export async function waitForControlUiSettingsTakeover(
+  page: Page,
+  pathname = "/settings/general",
+): Promise<{ search: Locator; sidebar: Locator }> {
+  await waitForControlUiRoute(page, { pathname, routeId: "config" });
+  const appSidebar = page.locator("openclaw-app-sidebar");
+  const sidebar = page.locator(".settings-sidebar");
+  const search = sidebar.getByRole("searchbox", { name: "Search settings" });
+  await appSidebar.waitFor({ state: "detached" });
+  await search.waitFor({ state: "visible" });
+  return { search, sidebar };
 }
 
 const require = createRequire(import.meta.url);

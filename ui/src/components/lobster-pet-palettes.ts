@@ -1,15 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { LobsterPetLook, LobsterPetPalette } from "./lobster-pet-contract.ts";
 
-// Rarity ladder loosely mirrors real lobster genetics. The stranger technical
-// variants are our terminal fantasies; geometry and styling key off each id.
+// Rarity ladder loosely mirrors real lobster genetics: blue and gold lead into
+// terminal fantasies whose geometry and styling key off each id.
 export const LOBSTER_PALETTE_WEIGHTS: Array<[LobsterPetPalette, number]> = [
   [{ id: "crimson", shell: "#ff4f40", claw: "#ff775f" }, 26],
   [{ id: "blue", shell: "#4a7dfc", claw: "#7fa4ff" }, 7],
   [{ id: "gold", shell: "#f4b840", claw: "#f9d47a" }, 5],
-  [{ id: "tangerine", shell: "#ff8c2e", claw: "#ffab5c" }, 4],
-  [{ id: "calico", shell: "#d97a3d", claw: "#e89a63" }, 3],
-  [{ id: "abyss", shell: "#2c3b68", claw: "#465b96" }, 2],
   [{ id: "lumen", shell: "#1d2f4e", claw: "#2e4a77" }, 2],
   [{ id: "magma", shell: "#241214", claw: "#3a1d18" }, 2],
   [{ id: "oilslick", shell: "#15171d", claw: "#23262e" }, 2],
@@ -30,6 +27,7 @@ export const LOBSTER_PALETTE_WEIGHTS: Array<[LobsterPetPalette, number]> = [
   [{ id: "sourdough", shell: "#d9a662", claw: "#e6bc82" }, 1],
   [{ id: "zombie", shell: "#9db08a", claw: "#86a17a" }, 1],
   [{ id: "plush", shell: "#e8967a", claw: "#f2b09a" }, 1],
+  [{ id: "balloon", shell: "#ff5c8a", claw: "#ff7ea1" }, 1],
   [{ id: "cryptid", shell: "#6e6257", claw: "#7d7263" }, 0.9],
   [{ id: "flatpack", shell: "#d9c9a8", claw: "#d9c9a8" }, 0.9],
   [{ id: "tinfoil", shell: "#9aa4ad", claw: "#a8b2bb" }, 0.9],
@@ -40,6 +38,13 @@ export const LOBSTER_PALETTE_WEIGHTS: Array<[LobsterPetPalette, number]> = [
   [{ id: "pixel", shell: "#d84c3e", claw: "#ef8f6a" }, 0.7],
   [{ id: "blueprint", shell: "#123a66", claw: "#123a66" }, 0.7],
   [{ id: "phosphor", shell: "#0d2415", claw: "#0f2b19" }, 0.7],
+  // Terminal ink rides a theme var so the glyph art stays legible on light
+  // cards; the CSS contract passes var() values through untouched (mood).
+  [
+    { id: "ascii", shell: "var(--lob-ascii-ink, #d8dee6)", claw: "var(--lob-ascii-ink, #d8dee6)" },
+    0.7,
+  ],
+  [{ id: "portal", shell: "#4a9df8", claw: "#ff9a2e" }, 0.7],
   [{ id: "notexture", shell: "#ff00dc", claw: "#111111" }, 0.65],
   [{ id: "loading", shell: "#3a4150", claw: "#454d5e" }, 0.65],
   [{ id: "eclipse", shell: "#14161d", claw: "#1d2026" }, 0.65],
@@ -54,13 +59,13 @@ export const LOBSTER_PET_PALETTES: readonly LobsterPetPalette[] = LOBSTER_PALETT
   ([palette]) => palette,
 );
 
-const CHIMERA_DONOR_IDS = ["crimson", "blue", "gold", "tangerine", "banana"] as const;
+const CHIMERA_DONOR_IDS = ["crimson", "blue", "gold", "banana", "watermelon"] as const;
 
 export const CANONICAL_CHIMERA_PARTS: NonNullable<LobsterPetLook["chimeraParts"]> = {
   body: "#ff4f40",
   clawLeft: "#4a7dfc",
   clawRight: "#f4b840",
-  antennae: "#ff8c2e",
+  antennae: "#3f9d63",
 };
 
 export function rollChimeraParts(rng: () => number): NonNullable<LobsterPetLook["chimeraParts"]> {
