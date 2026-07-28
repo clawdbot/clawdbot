@@ -189,7 +189,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: logger file-transport flush for graceful shutdown drains.
       // +1: process-local sessions.changed plugin notification payload.
       // +1: loopback-only host classifier for plugin local-machine boundaries.
-      4740,
+      // +4: reply payload metadata and delivery-outcome observer contracts.
+      4744,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -219,7 +220,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: authoritative model-picker session-apply operation.
       // +1: logger file-transport flush for graceful shutdown drains.
       // +1: loopback-only host classifier for plugin local-machine boundaries.
-      2869,
+      // +3: reply payload metadata and delivery-outcome observer helpers.
+      2872,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
