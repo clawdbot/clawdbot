@@ -1420,7 +1420,6 @@ export const en: TranslationMap = {
     open: "Open",
     applying: "Applying…",
     autoSaveSaving: "Saving…",
-    autoSaveSaved: "Saved",
     autoSaveFailed: "Save failed",
     autoSaveConflict: "Settings changed elsewhere",
     retry: "Retry",

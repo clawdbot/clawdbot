@@ -408,7 +408,7 @@ describe("config view", () => {
     expect(container.querySelector(".config-toolbar__status .settings-status")).toBeNull();
   });
 
-  it("renders the inline autosave status and retries failed saves", () => {
+  it("renders active and failed autosave status while keeping success quiet", () => {
     const onSave = vi.fn();
     const { container } = renderConfigView({ autoSaveStatus: "saving", onSave });
     const status = queryRequired(container, ".config-toolbar__status", HTMLElement);
@@ -418,11 +418,8 @@ describe("config view", () => {
     ).toBe(true);
 
     const saved = renderConfigView({ autoSaveStatus: "saved" });
-    expect([
-      ...queryRequired(saved.container, ".config-toolbar__status .settings-status", HTMLElement)
-        .classList,
-    ]).toContain("settings-status--ok");
-    expect(saved.container.textContent).toContain("Saved");
+    expect(saved.container.querySelector(".config-toolbar__status .settings-status")).toBeNull();
+    expect(saved.container.textContent).not.toContain("Saved");
 
     const failed = renderConfigView({ autoSaveStatus: "error", onSave });
     const failedStatus = queryRequired(failed.container, ".config-toolbar__status", HTMLElement);
@@ -712,15 +709,15 @@ describe("config view", () => {
     const onWebPushSubscribe = vi.fn();
     const { container } = renderConfigView({
       activeSection: "__notifications__",
-      includeSections: ["channels", "messages", "__notifications__"],
+      autoSaveStatus: "saved",
+      includeSections: ["__notifications__"],
       includeVirtualSections: true,
+      showModeToggle: false,
+      showRootTab: false,
       onWebPushSubscribe,
       schema: {
         type: "object",
-        properties: {
-          channels: { type: "object", properties: {} },
-          messages: { type: "object", properties: {} },
-        },
+        properties: {},
       },
       webPush: {
         supported: true,
@@ -731,6 +728,8 @@ describe("config view", () => {
     });
 
     const card = queryRequired(container, "#settings-communications-notifications", HTMLElement);
+    expect(container.querySelector(".config-toolbar")).toBeNull();
+    expect(container.textContent).not.toContain("Saved");
     expect(
       card.querySelector(".settings-section__actions .settings-status")?.textContent?.trim(),
     ).toBe("Ready");
