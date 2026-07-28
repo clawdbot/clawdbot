@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  isCrablineServerChannel,
   OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
   resolveOpenClawCrablineChannelDriverSelection,
 } from "@openclaw/crabline";
@@ -720,6 +721,8 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
     channelDriver: profileReport.channelDriver,
     defaultChannel:
       profileReport.channelDriver === "crabline" ? OPENCLAW_CRABLINE_DEFAULT_CHANNEL : undefined,
+    supportsChannel:
+      profileReport.channelDriver === "crabline" ? isCrablineServerChannel : undefined,
   });
   if (requestedScenarioIds.length > 0 && executionSelection.excludedScenarios.length > 0) {
     const exclusions = executionSelection.excludedScenarios

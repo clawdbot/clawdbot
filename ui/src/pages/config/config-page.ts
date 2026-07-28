@@ -85,6 +85,8 @@ type ConfigPageSetting =
 // sensible instead of silently opening the old page's default section.
 const MOVED_SECTION_ROUTES: Record<string, { routeId: RouteId; keepSection: boolean }> = {
   "communications:__notifications__": { routeId: "notifications", keepSection: false },
+  "communications:channels": { routeId: "channels", keepSection: false },
+  "communications:broadcast": { routeId: "advanced", keepSection: true },
   "automation:approvals": { routeId: "security", keepSection: true },
   "ai-agents:memory": { routeId: "memory", keepSection: true },
 };

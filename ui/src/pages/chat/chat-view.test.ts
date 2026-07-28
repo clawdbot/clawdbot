@@ -5027,6 +5027,7 @@ describe("chat model controls", () => {
       ),
       refresh: async () => {},
       setModelOverride: vi.fn(),
+      patchRowLocal: vi.fn(),
     };
     const host = {
       client: {},
@@ -5096,6 +5097,7 @@ describe("chat model controls", () => {
       ),
       refresh: async () => {},
       setModelOverride: vi.fn(),
+      patchRowLocal: vi.fn(),
     };
     const host = {
       client: {},
@@ -5148,6 +5150,7 @@ describe("chat model controls", () => {
       ),
       refresh: async () => {},
       setModelOverride: vi.fn(),
+      patchRowLocal: vi.fn(),
     };
     const host = {
       client: {},
@@ -5213,6 +5216,7 @@ describe("chat model controls", () => {
           });
         },
         refresh: async () => {},
+        patchRowLocal: () => {},
       },
     } as unknown as Parameters<typeof switchChatFastMode>[0];
 

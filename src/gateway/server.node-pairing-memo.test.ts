@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { listDevicePairing } from "../infra/device-pairing.js";
 import { requestNodePairing } from "../infra/node-pairing.js";
 import { configureSqliteConnectionPragmas } from "../infra/sqlite-wal.js";
@@ -44,23 +45,25 @@ describe("gateway node pairing memoization", () => {
         });
         await seedNodeDevice("node-list-memo-scan-count");
         const database = openOpenClawStateDatabase();
-        const originalPrepare = database.db.prepare.bind(database.db);
-        const tableSelects = { paired: 0, pending: 0 };
-        const prepareSpy = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
-          if (sql.includes('from "device_pairing_pending"')) {
-            tableSelects.pending += 1;
-          }
-          if (sql.includes('from "device_pairing_paired"')) {
-            tableSelects.paired += 1;
-          }
-          return originalPrepare(sql);
-        });
+        const { counts: tableSelects, restore } = trackSqliteStatementExecutions(
+          database.db,
+          ["paired", "pending"],
+          (sql) => {
+            if (sql.includes('from "device_pairing_pending"')) {
+              return "pending";
+            }
+            if (sql.includes('from "device_pairing_paired"')) {
+              return "paired";
+            }
+            return null;
+          },
+        );
         try {
           expect((await rpcReq(ws, "node.list", {})).ok).toBe(true);
           expect((await rpcReq(ws, "node.list", {})).ok).toBe(true);
           expect(tableSelects).toEqual({ paired: 1, pending: 1 });
         } finally {
-          prepareSpy.mockRestore();
+          restore();
         }
       } finally {
         ws.close();

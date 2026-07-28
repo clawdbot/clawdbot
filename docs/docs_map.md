@@ -4131,9 +4131,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /gateway/security/secure-file-operations
 - Headings:
-  - H2: Default: no Python helper
-  - H2: What stays protected without Python
-  - H2: What Python adds
+  - H2: Default: JavaScript fallback
+  - H2: What stays protected without native acceleration
+  - H2: What native acceleration adds
   - H2: Plugin and core guidance
 
 ## gateway/tailscale.md
@@ -9908,7 +9908,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What it does
   - H2: Why use it
   - H2: Quickstart
-  - H3: Enable Code Mode
+  - H3: Defaults and overrides
   - H3: What the model does
   - H3: Verify the active surface
   - H2: Use Swarm for agent fan-out

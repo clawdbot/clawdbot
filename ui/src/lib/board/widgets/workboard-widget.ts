@@ -15,6 +15,108 @@ import {
 } from "../../workboard/types.ts";
 import type { BoardViewWidget } from "../view-types.ts";
 
+type SharedWorkboardWidgetRuntime = {
+  host: WorkboardHost;
+  listeners: Set<(snapshot: ReturnType<typeof normalizeCardsPayload>) => void>;
+  loadPromise?: Promise<ReturnType<typeof normalizeCardsPayload>>;
+};
+
+type SharedWorkboardWidgetSubscription = {
+  listeners: Set<() => void>;
+  unsubscribe: () => void;
+};
+
+const sharedWorkboardWidgetRuntimes = new WeakMap<
+  GatewayBrowserClient,
+  SharedWorkboardWidgetRuntime
+>();
+const sharedWorkboardWidgetSubscriptions = new WeakMap<
+  ApplicationContext["gateway"],
+  SharedWorkboardWidgetSubscription
+>();
+
+function acquireWorkboardWidgetRuntime(
+  client: GatewayBrowserClient,
+  listener: (snapshot: ReturnType<typeof normalizeCardsPayload>) => void,
+): SharedWorkboardWidgetRuntime {
+  let runtime = sharedWorkboardWidgetRuntimes.get(client);
+  if (!runtime) {
+    runtime = { host: {}, listeners: new Set() };
+    sharedWorkboardWidgetRuntimes.set(client, runtime);
+  }
+  runtime.listeners.add(listener);
+  return runtime;
+}
+
+function releaseWorkboardWidgetRuntime(
+  client: GatewayBrowserClient,
+  runtime: SharedWorkboardWidgetRuntime,
+  listener: (snapshot: ReturnType<typeof normalizeCardsPayload>) => void,
+): void {
+  runtime.listeners.delete(listener);
+  if (runtime.listeners.size === 0 && sharedWorkboardWidgetRuntimes.get(client) === runtime) {
+    sharedWorkboardWidgetRuntimes.delete(client);
+  }
+}
+
+function loadSharedWorkboardCards(
+  client: GatewayBrowserClient,
+  runtime: SharedWorkboardWidgetRuntime,
+): Promise<ReturnType<typeof normalizeCardsPayload>> {
+  if (runtime.loadPromise) {
+    return runtime.loadPromise;
+  }
+  // Every widget on a Gateway shares one in-flight snapshot; a board change
+  // must not multiply full-card-list requests by the visible widget count.
+  const load = client.request("workboard.cards.list", {}).then(normalizeCardsPayload);
+  runtime.loadPromise = load;
+  const releaseLoad = () => {
+    if (runtime.loadPromise === load) {
+      runtime.loadPromise = undefined;
+    }
+  };
+  void load.then((snapshot) => {
+    releaseLoad();
+    // A change can arrive after another widget started its snapshot request.
+    // Broadcast the eventual post-change reload so idle widgets cannot stay stale.
+    for (const listener of runtime.listeners) {
+      listener(snapshot);
+    }
+  }, releaseLoad);
+  return load;
+}
+
+function subscribeToSharedWorkboardChanges(
+  gateway: ApplicationContext["gateway"],
+  listener: () => void,
+): () => void {
+  let subscription = sharedWorkboardWidgetSubscriptions.get(gateway);
+  if (!subscription) {
+    const listeners = new Set<() => void>();
+    const unsubscribe = gateway.subscribeEvents((event) => {
+      if (event.event !== WORKBOARD_CHANGED_EVENT || gateway.snapshot.phase !== "connected") {
+        return;
+      }
+      for (const onChange of listeners) {
+        onChange();
+      }
+    });
+    subscription = { listeners, unsubscribe };
+    sharedWorkboardWidgetSubscriptions.set(gateway, subscription);
+  }
+  subscription.listeners.add(listener);
+  return () => {
+    subscription.listeners.delete(listener);
+    if (
+      subscription.listeners.size === 0 &&
+      sharedWorkboardWidgetSubscriptions.get(gateway) === subscription
+    ) {
+      subscription.unsubscribe();
+      sharedWorkboardWidgetSubscriptions.delete(gateway);
+    }
+  };
+}
+
 export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   protected context?: ApplicationContext;
@@ -34,19 +136,28 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
   private allCards: WorkboardCard[] = [];
   private workboardHost: WorkboardHost = {};
   private client: GatewayBrowserClient | null = null;
+  private sharedRuntime: SharedWorkboardWidgetRuntime | null = null;
   private refreshGeneration = 0;
   private refreshPromise: Promise<void> | null = null;
   private refreshPending = false;
+  private readonly applySharedSnapshot = (
+    snapshot: ReturnType<typeof normalizeCardsPayload>,
+  ): void => {
+    this.allCards = snapshot.cards;
+    this.cards = snapshot.cards.filter(isActiveWorkboardCard);
+    this.statuses = snapshot.statuses;
+    this.loaded = true;
+    this.error = "";
+    this.requestRender();
+  };
   private readonly subscriptions = new SubscriptionsController(this).effect(
     () => this.context?.gateway,
     (gateway) => {
       const sync = () => this.syncGateway(gateway.snapshot);
       sync();
       const unsubscribeSnapshot = gateway.subscribe(sync);
-      const unsubscribeEvents = gateway.subscribeEvents((event) => {
-        if (event.event === WORKBOARD_CHANGED_EVENT && gateway.snapshot.phase === "connected") {
-          void this.refresh(true);
-        }
+      const unsubscribeEvents = subscribeToSharedWorkboardChanges(gateway, () => {
+        void this.refresh(true);
       });
       return () => {
         unsubscribeSnapshot();
@@ -67,10 +178,14 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback(): void {
+    if (this.client && this.sharedRuntime) {
+      releaseWorkboardWidgetRuntime(this.client, this.sharedRuntime, this.applySharedSnapshot);
+    }
     this.refreshGeneration += 1;
     this.refreshPromise = null;
     this.refreshPending = false;
     this.client = null;
+    this.sharedRuntime = null;
     this.allCards = [];
     this.cards = [];
     this.workboardHost = {};
@@ -130,10 +245,16 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
     if (this.client === nextClient) {
       return;
     }
+    if (this.client && this.sharedRuntime) {
+      releaseWorkboardWidgetRuntime(this.client, this.sharedRuntime, this.applySharedSnapshot);
+    }
     this.client = nextClient;
     // Pending mutation state belongs to its connection; never let its completion
     // block or replace cards loaded through the next Gateway client.
-    this.workboardHost = {};
+    this.sharedRuntime = nextClient
+      ? acquireWorkboardWidgetRuntime(nextClient, this.applySharedSnapshot)
+      : null;
+    this.workboardHost = this.sharedRuntime?.host ?? {};
     this.allCards = [];
     this.cards = [];
     this.refreshGeneration += 1;
@@ -151,7 +272,8 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
 
   private async refresh(force = false): Promise<void> {
     const client = this.client;
-    if (!client || (!force && this.loaded)) {
+    const sharedRuntime = this.sharedRuntime;
+    if (!client || !sharedRuntime || (!force && this.loaded)) {
       return;
     }
     if (this.refreshPromise) {
@@ -167,14 +289,7 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
     this.requestRender();
     const refresh = (async () => {
       try {
-        const normalized = normalizeCardsPayload(await client.request("workboard.cards.list", {}));
-        if (generation !== this.refreshGeneration || client !== this.client) {
-          return;
-        }
-        this.allCards = normalized.cards;
-        this.cards = normalized.cards.filter(isActiveWorkboardCard);
-        this.statuses = normalized.statuses;
-        this.loaded = true;
+        await loadSharedWorkboardCards(client, sharedRuntime);
       } catch (error) {
         if (generation === this.refreshGeneration && client === this.client) {
           this.error = error instanceof Error ? error.message : String(error);

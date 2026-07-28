@@ -354,7 +354,6 @@ function normalizeSandboxRegistryEntry(entry: SandboxRegistryEntry): SandboxRegi
 async function withRegistryLock<T>(registryPath: string, fn: () => Promise<T>): Promise<T> {
   const lock = await acquireSessionWriteLock({
     sessionFile: registryPath,
-    allowReentrant: false,
     timeoutMs: 60_000,
   });
   try {

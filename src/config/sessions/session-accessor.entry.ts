@@ -10,6 +10,7 @@ import { resolveAgentMainSessionKey } from "./main-session.js";
 import { resolveStorePath } from "./paths.js";
 import { clearPluginOwnedSessionState } from "./plugin-host-cleanup.js";
 import {
+  listSqliteSessionChildEntriesReadOnly as listSessionChildEntriesReadOnly,
   listSqliteSessionEntries,
   listSqliteSessionEntriesReadOnly as listSessionEntriesReadOnly,
   listSqliteSessionEntryKeysReadOnly as listSessionEntryKeysReadOnly,
@@ -51,6 +52,7 @@ export { clearPluginOwnedSessionState };
 // SQLite is the only runtime session store. Re-export its canonical entry
 // operations directly instead of maintaining a second pass-through layer.
 export {
+  listSessionChildEntriesReadOnly,
   listSessionEntriesReadOnly,
   listSessionEntryKeysReadOnly,
   loadExactSessionEntry,

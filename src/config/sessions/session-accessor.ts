@@ -121,6 +121,7 @@ export type {
 } from "./session-accessor.entry-mutation.js";
 export {
   clearPluginOwnedSessionState,
+  listSessionChildEntriesReadOnly,
   listSessionEntries,
   listSessionEntriesReadOnly,
   listSessionEntryKeysReadOnly,

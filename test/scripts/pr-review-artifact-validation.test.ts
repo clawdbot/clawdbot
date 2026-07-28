@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -141,25 +141,6 @@ function runValidation(
 }
 
 function runReviewShellFunction(fixtureRoot: string, invocation: string) {
-  const bin = join(fixtureRoot, "bin");
-  mkdirSync(bin);
-  writeFileSync(
-    join(bin, "rg"),
-    `#!/usr/bin/env node
-const { readFileSync } = require("node:fs");
-const args = process.argv.slice(2);
-const operands = args.filter((arg) => !arg.startsWith("-"));
-const pattern = operands[0];
-const input = operands[1] ? readFileSync(operands[1], "utf8") : readFileSync(0, "utf8");
-const flags = args.includes("-i") ? "i" : "";
-const matched = args.includes("-F")
-  ? (flags ? input.toLowerCase().includes(pattern.toLowerCase()) : input.includes(pattern))
-  : new RegExp(pattern, flags).test(input);
-process.exit(matched ? 0 : 1);
-`,
-  );
-  chmodSync(join(bin, "rg"), 0o755);
-
   return spawnSync(
     "bash",
     [
@@ -179,10 +160,7 @@ process.exit(matched ? 0 : 1);
       reviewScript,
       fixtureRoot,
     ],
-    {
-      encoding: "utf8",
-      env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH ?? ""}` },
-    },
+    { encoding: "utf8" },
   );
 }
 

@@ -1088,9 +1088,9 @@ export const en: TranslationMap = {
         label: "Broadcast",
         description: "Broadcast and notification settings",
       },
-      audio: {
-        label: "Audio",
-        description: "Audio input/output settings",
+      tts: {
+        label: "Voice",
+        description: "Text-to-speech output, voices, and personas",
       },
       session: {
         label: "Session",
@@ -1100,17 +1100,9 @@ export const en: TranslationMap = {
         label: "Cron",
         description: "Scheduled tasks and automation",
       },
-      web: {
-        label: "Web",
-        description: "Web server and API settings",
-      },
       discovery: {
         label: "Discovery",
         description: "Service discovery and networking",
-      },
-      canvasHost: {
-        label: "Canvas Host",
-        description: "Canvas rendering and display",
       },
       talk: {
         label: "Talk",
@@ -1277,7 +1269,7 @@ export const en: TranslationMap = {
       broadcast: "Broadcast",
       notifications: "Notifications",
       talk: "Talk",
-      audio: "Audio",
+      tts: "Voice",
       commands: "Commands",
       hooks: "Hooks",
       bindings: "Bindings",
@@ -1286,12 +1278,9 @@ export const en: TranslationMap = {
       security: "Security Policy",
       plugins: "Plugins",
       gateway: "Gateway",
-      web: "Web",
       browser: "Browser",
       nodeHost: "Node Host",
-      canvasHost: "Canvas Host",
       discovery: "Discovery",
-      media: "Media",
       acp: "ACP",
       mcp: "MCP",
       theme: "Theme",
@@ -1844,13 +1833,13 @@ export const en: TranslationMap = {
     custodian: "System setup and care.",
     config: "Model defaults, language, and gateway host.",
     profile: "Your agent's stats, streaks, and life in the reef.",
-    communications: "Channels, messages, and audio settings.",
+    communications: "Messages, talk, and voice settings.",
     appearance: "Theme, UI, and setup wizard settings.",
     lobsterdex: "Every lobster palette that has visited this browser.",
     automation: "Commands, hooks, cron, and plugins.",
     mcp: "MCP servers, auth, tools, and diagnostics.",
     memory: "Memory engine, backend, search, and dreaming.",
-    infrastructure: "Gateway, web, browser, and media settings.",
+    infrastructure: "Gateway, browser, node host, discovery, and ACP settings.",
     labs: "Experimental agent and tool capabilities.",
     about: "Control UI and connected Gateway build identity.",
     aiAgents: "Global agent defaults: models, skills, tools, memory, session.",
@@ -2406,7 +2395,8 @@ export const en: TranslationMap = {
     saveFailed: "The feature setting could not be saved.",
     codeMode: {
       title: "Code Mode",
-      description: "Let agents combine tools in compact, sandboxed JavaScript workflows.",
+      description:
+        "Let agents combine tools in compact, sandboxed JavaScript workflows. Auto engages code mode only for models evaluated as strong code-mode performers.",
     },
     swarm: {
       title: "Swarm",
@@ -3962,8 +3952,8 @@ export const en: TranslationMap = {
     startupStatus: {
       preparingWorkspace: "Preparing workspace…",
       provisioningEnvironment: "Provisioning environment…",
-      preparingContext: "Preparing context…",
-      startingModel: "Starting model…",
+      preparingContext: "Preparing this turn…",
+      startingModel: "Waiting for a response…",
     },
     outputTokens: "{count} output tokens",
     archivedSessionDisabled: "This session is archived. Unarchive it to continue the conversation.",
