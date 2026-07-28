@@ -21,6 +21,15 @@ describe("NVIDIA audio transcription provider", () => {
         providerConfig: {},
       }),
     ).toBeUndefined();
+
+    expect(
+      nvidiaMediaUnderstandingProvider.resolveAuth?.({
+        provider: "nvidia",
+        providerConfig: {
+          baseUrl: "https://1598d209-5e27-4d3c-8079-4751568b1081.invocation.api.nvcf.nvidia.com/v1",
+        },
+      }),
+    ).toBeUndefined();
   });
 
   it("allows keyless authentication only for a configured custom ASR origin", () => {
@@ -36,6 +45,13 @@ describe("NVIDIA audio transcription provider", () => {
       nvidiaMediaUnderstandingProvider.resolveAuth?.({
         provider: "nvidia",
         providerConfig: {},
+      }),
+    ).toEqual({ kind: "none", source: "nvidia-self-hosted" });
+
+    expect(
+      nvidiaMediaUnderstandingProvider.resolveAuth?.({
+        provider: "nvidia",
+        providerConfig: { baseUrl: "https://integrate.api.nvidia.com/v1" },
       }),
     ).toEqual({ kind: "none", source: "nvidia-self-hosted" });
   });

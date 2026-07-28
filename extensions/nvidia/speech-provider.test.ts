@@ -121,6 +121,26 @@ describe("NVIDIA Magpie speech provider", () => {
     expect(result.voiceCompatible).toBe(false);
   });
 
+  it("uses shared credentials for the hosted Magpie /v1 base URL", async () => {
+    delete process.env.NVIDIA_API_KEY;
+    resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "profile-key" });
+    const providerConfig = {
+      baseUrl: "https://877104f7-e885-42b9-8de8-f6e4c6303969.invocation.api.nvcf.nvidia.com/v1",
+    };
+
+    await provider.synthesize({
+      text: "hello",
+      cfg: {},
+      providerConfig,
+      target: "audio-file",
+      timeoutMs: 5_000,
+    });
+
+    expect(magpieSynthesizeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: "profile-key", baseUrl: providerConfig.baseUrl }),
+    );
+  });
+
   it("allows a keyless self-hosted Magpie endpoint", async () => {
     process.env.NVIDIA_API_KEY = "hosted-secret";
     resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "profile-secret" });

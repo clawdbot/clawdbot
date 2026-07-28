@@ -13,6 +13,7 @@ import {
   NVIDIA_DEFAULT_TTS_MODEL,
   NVIDIA_DEFAULT_VOICE,
   NVIDIA_TTS_BASE_URL,
+  isNvidiaHostedTtsBaseUrl,
   normalizeNvidiaTtsConfig,
 } from "./nvidia-speech-config.js";
 
@@ -47,7 +48,7 @@ export function buildNvidiaSpeechProvider(): SpeechProviderPlugin {
       const config = normalizeNvidiaTtsConfig(providerConfig);
       return (
         Boolean(config.apiKey) ||
-        config.baseUrl !== NVIDIA_TTS_BASE_URL ||
+        !isNvidiaHostedTtsBaseUrl(config.baseUrl) ||
         Boolean(trimToUndefined(process.env.NVIDIA_API_KEY)) ||
         isProviderAuthProfileConfigured({ provider: "nvidia", cfg })
       );
@@ -88,7 +89,7 @@ async function resolveNvidiaSpeechApiKey(
   if (explicit) {
     return explicit;
   }
-  if (baseUrl !== NVIDIA_TTS_BASE_URL) {
+  if (!isNvidiaHostedTtsBaseUrl(baseUrl)) {
     return undefined;
   }
   const envKey = trimToUndefined(process.env.NVIDIA_API_KEY);

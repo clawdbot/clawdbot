@@ -12,11 +12,15 @@ export const nvidiaMediaUnderstandingProvider: MediaUnderstandingProvider = {
   resolveAuth: ({ providerConfig }) => {
     const configuredBaseUrl = providerConfig?.baseUrl;
     const envBaseUrl = process.env.NVIDIA_ASR_BASE_URL?.trim();
-    const customBaseUrl =
-      (typeof configuredBaseUrl === "string" && configuredBaseUrl.trim()
+    const customConfiguredBaseUrl =
+      typeof configuredBaseUrl === "string" &&
+      configuredBaseUrl.trim() &&
+      !isNvidiaHostedAsrBaseUrl(configuredBaseUrl)
         ? configuredBaseUrl
-        : undefined) ?? envBaseUrl;
-    return customBaseUrl && !isNvidiaHostedAsrBaseUrl(customBaseUrl)
+        : undefined;
+    const customEnvBaseUrl =
+      envBaseUrl && !isNvidiaHostedAsrBaseUrl(envBaseUrl) ? envBaseUrl : undefined;
+    return customConfiguredBaseUrl || customEnvBaseUrl
       ? { kind: "none", source: "nvidia-self-hosted" }
       : undefined;
   },

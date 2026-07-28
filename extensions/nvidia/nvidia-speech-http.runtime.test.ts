@@ -186,6 +186,15 @@ describe("NVIDIA speech HTTP runtime", () => {
     await transcribeNvidiaAudio(transcriptionRequest());
     const headers = mocks.postTranscriptionRequest.mock.calls[0]?.[0]?.headers as Headers;
     expect(headers.get("authorization")).toBe("Bearer nvapi-test");
+
+    mocks.postTranscriptionRequest.mockClear();
+    await transcribeNvidiaAudio(
+      transcriptionRequest({
+        baseUrl: "https://1598d209-5e27-4d3c-8079-4751568b1081.invocation.api.nvcf.nvidia.com/v1",
+      }),
+    );
+    const versionedHeaders = mocks.postTranscriptionRequest.mock.calls[0]?.[0]?.headers as Headers;
+    expect(versionedHeaders.get("authorization")).toBe("Bearer nvapi-test");
   });
 
   it("uses an explicit ASR base URL without falling back to a hosted endpoint", async () => {

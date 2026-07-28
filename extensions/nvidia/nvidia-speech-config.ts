@@ -54,5 +54,16 @@ export function normalizeNvidiaTtsConfig(rawConfig: Record<string, unknown>): Nv
 
 export function isNvidiaHostedAsrBaseUrl(value: string): boolean {
   const normalized = normalizeNvidiaBaseUrl(value);
-  return normalized === NVIDIA_CHAT_BASE_URL || normalized === NVIDIA_ASR_BASE_URL;
+  return (
+    isHostedApiBaseUrl(normalized, NVIDIA_CHAT_BASE_URL) ||
+    isHostedApiBaseUrl(normalized, NVIDIA_ASR_BASE_URL)
+  );
+}
+
+export function isNvidiaHostedTtsBaseUrl(value: string): boolean {
+  return isHostedApiBaseUrl(normalizeNvidiaBaseUrl(value), NVIDIA_TTS_BASE_URL);
+}
+
+function isHostedApiBaseUrl(value: string, hostedBaseUrl: string): boolean {
+  return value === hostedBaseUrl || value === `${hostedBaseUrl}/v1`;
 }
