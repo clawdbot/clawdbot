@@ -4,7 +4,7 @@ import { state } from "lit/decorators.js";
 import type { AgentsListResult, CronJob } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import {
@@ -59,7 +59,7 @@ class CronPage extends OpenClawLightDomElement {
   private modelSuggestionsState: CronState | null = null;
   private gatewaySource?: ApplicationContext["gateway"];
   private get canManageCron(): boolean {
-    return hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null);
+    return readGatewayOperatorAccess(this.context.gateway.snapshot).canAdmin;
   }
 
   private readonly subscriptions = new SubscriptionsController(this)

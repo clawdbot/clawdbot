@@ -1,11 +1,17 @@
-// Controller for the curated Memory settings page. Owns the plugin catalog read
-// used for the exclusive engine choice and the two config writes above the
-// embedded schema editor; the tab lives in the URL, not here.
+// Controller for the Memory destination page. The URL owns the active tab;
+// this element owns the shared agent selection, Overview status, and global
+// configuration controllers used by Settings.
 import { consume } from "@lit/context";
-import { html, type TemplateResult } from "lit";
+import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
+import { html, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
+import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import type { AgentSelectOption } from "../../components/agent-select.ts";
 import { t } from "../../i18n/index.ts";
+import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
+import { currentConfigObject } from "../../lib/config/index.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   loadPluginCatalog,
   setPluginEnabled,
@@ -13,7 +19,15 @@ import {
 } from "../../lib/plugins/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import {
+  resolveConfiguredDreaming,
+  resolveDreamingConfigPathSupport,
+  type DreamingConfigPathSupport,
+} from "../agents/memory/dreaming.ts";
 import "./memory-dreaming-page.ts";
+import "./memory-memories.ts";
+import { renderDreamingSettings, renderDreamingUnsupported } from "./memory-dreaming.ts";
+import { renderMemoryOverview, type MemoryOverviewStatus } from "./memory-overview.ts";
 import {
   memorySchemaKeysForTab,
   resolveMemoryBackend,
@@ -29,9 +43,6 @@ import {
   type MemoryPluginState,
 } from "./memory.ts";
 
-// Curated presentation list. These bundled plugins declare no manifest `kind`,
-// so nothing in plugin metadata marks them as memory add-ons; the exclusive
-// engine below is still resolved through `plugins.slots.memory`, never by id.
 const MEMORY_ADDON_PLUGINS = [
   { id: "active-memory", labelKey: "memoryPage.addons.activeMemory.title" },
   { id: "memory-wiki", labelKey: "memoryPage.addons.memoryWiki.title" },
@@ -39,27 +50,16 @@ const MEMORY_ADDON_PLUGINS = [
 
 /** Explicit-off sentinel; resolveSlotSelection maps it to an `off` selection. */
 const MEMORY_SLOT_OFF = "none";
-
 const MEMORY_SLOT_PATH = ["plugins", "slots", "memory"];
 
 type GatewayClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
 
-/**
- * One gateway connection phase. `syncCatalog` mints a fresh object per (client,
- * connected) transition and an in-flight load carries it, so the object identity
- * is the request generation: a completion that started under an older phase is
- * dropped instead of repopulating a disconnected page or clobbering a newer read.
- */
+/** Object identity is the connection generation for both catalog and status reads. */
 type CatalogConnection = {
   client: GatewayClient | null;
   connected: boolean;
 };
 
-/**
- * What the page knows about the plugin catalog. Absence of an entry only means
- * "not enabled" inside `ready`; every other state is genuinely unknown and must
- * not be rendered as a decided value.
- */
 type MemoryCatalog =
   | { kind: "loading" }
   | { kind: "unavailable" }
@@ -69,9 +69,7 @@ type MemoryPageProps = {
   configObject: Record<string, unknown>;
   pluginsHref: string;
   memoryImportHref: string;
-  /** The `?tab=` the URL currently describes; the page holds no tab state of its own. */
   tab: MemoryTab | null;
-  /** Builds the embedded schema editor over the given `memory.*` children. */
   buildEditor: (keys: readonly string[]) => TemplateResult;
 };
 
@@ -110,36 +108,90 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   @state() private catalog: MemoryCatalog = { kind: "unavailable" };
   @state() private engineBusy = false;
   @state() private engineError: string | null = null;
+  @state() private selectedAgentId: string | null = null;
+  @state() private overviewStatus: MemoryOverviewStatus = { kind: "idle" };
+  @state() private support: DreamingConfigPathSupport = "unknown";
 
   private connection: CatalogConnection | null = null;
-  private readonly subscriptions = new SubscriptionsController(this).watch(
-    () => this.context?.gateway,
-    (gateway, notify) => gateway.subscribe(notify),
-    (gateway) => this.syncCatalog(gateway.snapshot.client, gateway.snapshot.phase === "connected"),
-  );
+  private overviewRequest: { connection: CatalogConnection; agentId: string } | null = null;
+  private supportPluginId: string | null = null;
+  private supportProbe: { pluginId: string } | null = null;
+
+  private readonly subscriptions = new SubscriptionsController(this)
+    .watch(
+      () => this.context?.gateway,
+      (gateway, notify) => gateway.subscribe(notify),
+      (gateway) =>
+        this.syncGateway(gateway.snapshot.client, gateway.snapshot.phase === "connected"),
+    )
+    .watch(
+      () => this.context?.runtimeConfig,
+      (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
+      (runtimeConfig) => this.syncSupport(runtimeConfig),
+    )
+    .watch(
+      () => this.context?.agents,
+      (agents, notify) => agents.subscribe(notify),
+      (agents) => {
+        if (!agents.state.agentsList && !agents.state.agentsLoading) {
+          void agents.ensureList().catch(() => undefined);
+        }
+        void this.loadOverviewStatus();
+      },
+    );
 
   override disconnectedCallback() {
     this.subscriptions.clear();
     this.connection = null;
+    this.overviewRequest = null;
     this.catalog = { kind: "unavailable" };
+    this.supportPluginId = null;
+    this.supportProbe = null;
     super.disconnectedCallback();
   }
 
-  private syncCatalog(client: GatewayClient | null, connected: boolean) {
-    // The connecting -> connected transition keeps the same client object, so
-    // keying only on client identity would strand the catalog empty for a page
-    // mounted before the handshake finished.
+  protected override updated(changed: PropertyValues<this>) {
+    if (changed.has("tab")) {
+      const previous = (changed.get("tab") as MemoryTab | null | undefined) ?? "overview";
+      const current = this.tab ?? "overview";
+      if (previous !== current) {
+        this.overviewRequest = null;
+        void this.loadOverviewStatus();
+      }
+    }
+    if (changed.has("configObject")) {
+      const previous = changed.get("configObject") as Record<string, unknown> | undefined;
+      const previousEngine = previous
+        ? selectedEngineId(resolveMemoryEngineSelection(previous))
+        : null;
+      const currentEngine = selectedEngineId(resolveMemoryEngineSelection(this.configObject));
+      if (previous && previousEngine !== currentEngine) {
+        this.overviewRequest = null;
+        void this.loadOverviewStatus();
+      }
+    }
+  }
+
+  private syncGateway(client: GatewayClient | null, connected: boolean) {
     if (this.connection?.client === client && this.connection.connected === connected) {
       return;
     }
     const connection: CatalogConnection = { client, connected };
     this.connection = connection;
+    this.overviewRequest = null;
     if (!client || !connected) {
       this.catalog = { kind: "unavailable" };
+      if ((this.tab ?? "overview") === "overview") {
+        this.overviewStatus = {
+          kind: "error",
+          message: t("memoryPage.overview.hero.gatewayOffline"),
+        };
+      }
       return;
     }
     this.catalog = { kind: "loading" };
     void this.loadCatalog(client, connection);
+    void this.loadOverviewStatus();
   }
 
   private async loadCatalog(client: GatewayClient, connection: CatalogConnection) {
@@ -147,8 +199,6 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       const result = await loadPluginCatalog(client);
       this.applyCatalog(connection, { kind: "ready", plugins: result.plugins });
     } catch {
-      // The catalog is a convenience for the engine picker; the page still
-      // renders the configured slot id when it cannot be read.
       this.applyCatalog(connection, { kind: "unavailable" });
     }
   }
@@ -158,6 +208,82 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       return;
     }
     this.catalog = catalog;
+  }
+
+  private resolveAgentId(): string | null {
+    const agentsList = this.context.agents.state.agentsList;
+    const selectable = listSelectableAgents(agentsList?.agents ?? []);
+    if (this.selectedAgentId && selectable.some((agent) => agent.id === this.selectedAgentId)) {
+      return this.selectedAgentId;
+    }
+    return agentsList?.defaultId ?? selectable[0]?.id ?? null;
+  }
+
+  private agentOptions(): AgentSelectOption[] {
+    return listSelectableAgents(this.context.agents.state.agentsList?.agents ?? []).map(
+      (agent) => ({
+        value: agent.id,
+        label: normalizeAgentLabel(agent),
+        agent,
+      }),
+    );
+  }
+
+  private selectAgent(agentId: string | null) {
+    if (this.selectedAgentId === agentId) {
+      return;
+    }
+    this.selectedAgentId = agentId;
+    this.overviewRequest = null;
+    void this.loadOverviewStatus();
+  }
+
+  private async loadOverviewStatus(force = false) {
+    if ((this.tab ?? "overview") !== "overview") {
+      return;
+    }
+    if (resolveMemoryEngineSelection(this.configObject).kind === "off") {
+      this.overviewRequest = null;
+      this.overviewStatus = { kind: "idle" };
+      return;
+    }
+    const connection = this.connection;
+    const client = connection?.connected ? connection.client : null;
+    const agentId = this.resolveAgentId();
+    if (!connection || !client) {
+      this.overviewStatus = {
+        kind: "error",
+        message: t("memoryPage.overview.hero.gatewayOffline"),
+      };
+      return;
+    }
+    if (!agentId) {
+      return;
+    }
+    if (
+      !force &&
+      this.overviewRequest?.connection === connection &&
+      this.overviewRequest.agentId === agentId
+    ) {
+      return;
+    }
+    const request = { connection, agentId };
+    this.overviewRequest = request;
+    this.overviewStatus = { kind: "loading" };
+    try {
+      const payload = await client.request<DoctorMemoryStatusPayload>("doctor.memory.status", {
+        agentId,
+      });
+      if (!this.isConnected || this.overviewRequest !== request) {
+        return;
+      }
+      this.overviewStatus = { kind: "ready", payload };
+    } catch (error) {
+      if (!this.isConnected || this.overviewRequest !== request) {
+        return;
+      }
+      this.overviewStatus = { kind: "error", message: errorMessage(error) };
+    }
   }
 
   private engineOptions(): MemoryEngineOption[] {
@@ -170,7 +296,6 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       .toSorted((left, right) => left.label.localeCompare(right.label));
   }
 
-  /** Catalog verdict on the plugin the slot names; `off` has no owner to report. */
   private engineState(selection: MemoryEngineSelection): MemoryPluginState {
     const engineId = selectedEngineId(selection);
     if (engineId === null) {
@@ -200,20 +325,10 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     });
   }
 
-  /**
-   * Picking an engine goes through plugins.setEnabled so the gateway's exclusive
-   * slot policy (applySlotSelectionForPlugin) stays the single owner of pinning.
-   * That RPC only writes plugin enablement, so Off has to write the slot itself:
-   * disabling the current owner would leave a pinned slot behind, and re-enabling
-   * that plugin anywhere else would silently switch memory back on.
-   */
   private async changeEngine(engineId: string | null, currentSelection: MemoryEngineSelection) {
     if (this.engineBusy) {
       return;
     }
-    // Re-picking the current selection is a no-op only when it is already in
-    // effect: Off always is, but a named owner the catalog reports as disabled
-    // is not, and re-picking it is the one path that turns it back on.
     if (engineId === selectedEngineId(currentSelection)) {
       if (engineId === null || this.engineState(currentSelection) === "enabled") {
         return;
@@ -234,33 +349,99 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     try {
       await setPluginEnabled(client, engineId, true);
       await this.context.runtimeConfig.refresh();
-      // Reuses the same generation guard: a connection change mid-write drops
-      // the reload instead of writing a catalog the page no longer owns.
       await this.loadCatalog(client, connection);
     } catch (error) {
-      // Without this the selector just snaps back to the old engine and the
-      // operator has no idea the gateway rejected the change.
       this.engineError = errorMessage(error);
     } finally {
       this.engineBusy = false;
     }
   }
 
+  private configObjectFromController(): Record<string, unknown> | null {
+    return currentConfigObject(this.context.runtimeConfig.state);
+  }
+
+  private dreamingPluginId(): string {
+    return resolveConfiguredDreaming(this.configObjectFromController()).pluginId;
+  }
+
+  private dreamingConfig(): Record<string, unknown> | null {
+    const plugins = asConfigRecord(this.configObjectFromController()?.plugins);
+    const entry = asConfigRecord(asConfigRecord(plugins?.entries)?.[this.dreamingPluginId()]);
+    return asConfigRecord(asConfigRecord(entry?.config)?.dreaming);
+  }
+
+  private syncSupport(runtimeConfig: ApplicationContext["runtimeConfig"]) {
+    const pluginId = resolveConfiguredDreaming(currentConfigObject(runtimeConfig.state)).pluginId;
+    if (pluginId !== this.supportPluginId) {
+      this.supportPluginId = pluginId;
+      this.support = "unknown";
+    }
+    const connected = runtimeConfig.state.connected;
+    if (this.supportProbe && (this.supportProbe.pluginId !== pluginId || !connected)) {
+      this.supportProbe = null;
+    }
+    if (this.support !== "unknown" || this.supportProbe || !connected) {
+      return;
+    }
+    const probe = { pluginId };
+    this.supportProbe = probe;
+    void resolveDreamingConfigPathSupport(runtimeConfig, pluginId).then((support) => {
+      if (this.supportProbe !== probe) {
+        return;
+      }
+      this.supportProbe = null;
+      if (this.isConnected) {
+        this.support = support;
+      }
+    });
+  }
+
+  private patchDreaming(path: readonly string[], value: unknown) {
+    const runtimeConfig = this.context.runtimeConfig;
+    const writePath = [
+      "plugins",
+      "entries",
+      this.dreamingPluginId(),
+      "config",
+      "dreaming",
+      ...path,
+    ];
+    if (value === undefined) {
+      runtimeConfig.removeFormValue(writePath);
+      return;
+    }
+    runtimeConfig.patchForm(writePath, value);
+  }
+
+  private renderDreamingControls() {
+    const pluginId = this.dreamingPluginId();
+    return html`
+      <p class="settings-page__intro">${t("memoryPage.dreaming.intro", { plugin: pluginId })}</p>
+      ${this.support === "unsupported"
+        ? renderDreamingUnsupported(pluginId)
+        : renderDreamingSettings({
+            dreaming: this.dreamingConfig(),
+            onPatch: (path, value) => this.patchDreaming(path, value),
+          })}
+    `;
+  }
+
+  private navigateTab(tab: MemoryTab) {
+    this.context.navigate("memory", tab === "overview" ? undefined : { search: `?tab=${tab}` });
+  }
+
   override render() {
     const runtimeConfig = this.context.runtimeConfig;
-    const options = this.engineOptions();
     const engineSelection = resolveMemoryEngineSelection(this.configObject);
     const backend = resolveMemoryBackend(this.configObject);
     const activeTab = this.tab ?? "overview";
+    const agentId = this.resolveAgentId();
+    const agents = this.agentOptions();
     return renderMemory({
       activeTab,
-      // The URL is the only tab state, so every arrival honors its `?tab=` —
-      // including a repeat of one the user has since navigated away from — and
-      // history back/forward restores the tab the URL describes.
-      onTabChange: (tab) => {
-        this.context.navigate("memory", tab === "overview" ? undefined : { search: `?tab=${tab}` });
-      },
-      engineOptions: options,
+      onTabChange: (tab) => this.navigateTab(tab),
+      engineOptions: this.engineOptions(),
       engineSelection,
       engineState: this.engineState(engineSelection),
       engineBusy: this.engineBusy,
@@ -272,8 +453,41 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       addons: this.addonRows(),
       pluginsHref: this.pluginsHref,
       memoryImportHref: this.memoryImportHref,
-      editor: this.buildEditor(memorySchemaKeysForTab(activeTab, backend)),
-      dreaming: html`<openclaw-memory-dreaming></openclaw-memory-dreaming>`,
+      overview: renderMemoryOverview({
+        agentId,
+        agents,
+        engineSelection,
+        engineDisabled: this.engineState(engineSelection) === "disabled",
+        status: this.overviewStatus,
+        onAgentChange: (next) => this.selectAgent(next),
+        onRefresh: () => void this.loadOverviewStatus(true),
+        onNavigate: (tab) => this.navigateTab(tab),
+      }),
+      memories: html`
+        <openclaw-memory-memories
+          .client=${this.context.gateway.snapshot.client}
+          .connected=${this.context.gateway.snapshot.phase === "connected"}
+          .methodAdvertised=${isGatewayMethodAdvertised(
+            this.context.gateway.snapshot,
+            "memory.search",
+          ) === true}
+          .agentId=${agentId}
+          .agents=${agents}
+          .onAgentChange=${(next: string | null) => this.selectAgent(next)}
+        ></openclaw-memory-memories>
+      `,
+      dreams: html`
+        <openclaw-memory-dreaming
+          .agentId=${agentId}
+          .agents=${agents}
+          .onAgentChange=${(next: string | null) => this.selectAgent(next)}
+        ></openclaw-memory-dreaming>
+      `,
+      editor:
+        activeTab === "settings"
+          ? this.buildEditor(memorySchemaKeysForTab("settings", backend))
+          : html``,
+      dreamingSettings: activeTab === "settings" ? this.renderDreamingControls() : html``,
     });
   }
 }

@@ -243,7 +243,7 @@ describe("settings sidebar search", () => {
     expect(labels()).toEqual(["Appearance"]);
 
     enterQuery("connections");
-    expect(labels()).toEqual(["Gateway", "Channels", "Communications", "Devices"]);
+    expect(labels()).toEqual(["Gateway", "Channels", "Communications", "Talk", "Devices"]);
 
     enterQuery("does-not-exist");
     expect(labels()).toEqual([]);

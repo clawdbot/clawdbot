@@ -203,6 +203,8 @@ describe("createCodexNativeWebSearchWrapper", () => {
         tools: [
           { name: "exec", description: "", parameters: {} },
           { name: "wait", description: "", parameters: {} },
+          { name: "sessions_yield", description: "", parameters: {} },
+          { name: "structured_output", description: "", parameters: {} },
         ],
       },
       {
@@ -212,6 +214,8 @@ describe("createCodexNativeWebSearchWrapper", () => {
             { type: "function", name: "computer" },
             { type: "function", name: "image" },
             { type: "function", name: "message" },
+            { type: "function", name: "sessions_yield" },
+            { type: "function", name: "structured_output" },
             {
               type: "function",
               get function(): { name: string } {
@@ -229,9 +233,8 @@ describe("createCodexNativeWebSearchWrapper", () => {
     expect(nextPayload).toEqual({
       tools: [
         { type: "function", name: "exec" },
-        { type: "function", name: "computer" },
-        { type: "function", name: "image" },
-        { type: "function", name: "message" },
+        { type: "function", name: "sessions_yield" },
+        { type: "function", name: "structured_output" },
         { type: "function", name: "wait" },
       ],
     });
@@ -279,6 +282,8 @@ describe("createCodexNativeWebSearchWrapper", () => {
         tools: [
           { type: "function", name: "exec" },
           { type: "function", name: "wait" },
+          { type: "function", name: "sessions_yield" },
+          { type: "function", name: "structured_output" },
           { type: "function", name: "computer" },
           { type: "function", name: "image" },
           { type: "function", name: "message" },
@@ -304,6 +309,8 @@ describe("createCodexNativeWebSearchWrapper", () => {
         tools: [
           { name: "exec", description: "", parameters: {} },
           { name: "wait", description: "", parameters: {} },
+          { name: "sessions_yield", description: "", parameters: {} },
+          { name: "structured_output", description: "", parameters: {} },
         ],
       },
       {},
@@ -313,9 +320,8 @@ describe("createCodexNativeWebSearchWrapper", () => {
     expect(payloads[0]?.tools).toEqual([
       { type: "function", name: "exec" },
       { type: "function", name: "wait" },
-      { type: "function", name: "computer" },
-      { type: "function", name: "image" },
-      { type: "function", name: "message" },
+      { type: "function", name: "sessions_yield" },
+      { type: "function", name: "structured_output" },
     ]);
   });
 
@@ -328,6 +334,8 @@ describe("createCodexNativeWebSearchWrapper", () => {
           {
             functionDeclarations: [
               { name: "exec", description: "Run code" },
+              { name: "sessions_yield", description: "Yield the current session" },
+              { name: "structured_output", description: "Return a structured response" },
               { name: "computer", description: "Control a desktop" },
               { name: "image", description: "Read an image" },
               { name: "message", description: "Deliver the response" },
@@ -357,6 +365,8 @@ describe("createCodexNativeWebSearchWrapper", () => {
         tools: [
           { name: "exec", description: "", parameters: {} },
           { name: "wait", description: "", parameters: {} },
+          { name: "sessions_yield", description: "", parameters: {} },
+          { name: "structured_output", description: "", parameters: {} },
         ],
       },
       {},
@@ -366,9 +376,8 @@ describe("createCodexNativeWebSearchWrapper", () => {
       {
         functionDeclarations: [
           { name: "exec", description: "Run code" },
-          { name: "computer", description: "Control a desktop" },
-          { name: "image", description: "Read an image" },
-          { name: "message", description: "Deliver the response" },
+          { name: "sessions_yield", description: "Yield the current session" },
+          { name: "structured_output", description: "Return a structured response" },
           { name: "wait", description: "Resume code" },
         ],
       },

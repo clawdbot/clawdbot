@@ -283,6 +283,31 @@ export function createLobsterPetLook(seed: number, now: Date = new Date()): Lobs
 
 // Same species as icons.lobster / the dreams-scene sleeper: smooth dome body
 // with stubby legs, side claws, antennae, and teal-glint eyes.
+const READING_BOOK = svg`
+  <g class="lob-reading-book" transform="translate(0 2)">
+    <path
+      d="M25 62 Q43 56 59 66 L59 92 Q43 82 25 86 Z M61 66 Q77 56 95 62 L95 86 Q77 82 61 92 Z"
+      fill="var(--lob-claw)"
+      stroke="color-mix(in srgb, var(--lob-claw) 72%, #0a1014)"
+      stroke-width="2.5"
+      stroke-linejoin="round"
+    />
+    <path d="M29 62 Q44 58 59 68 L59 88 Q44 79 29 82 Z" fill="#fffaf0" />
+    <path d="M61 68 Q76 58 91 62 L91 82 Q76 79 61 88 Z" fill="#fffaf0" />
+    <path d="M60 67 L60 89" stroke="#d7cfc0" stroke-width="1.5" />
+    <g stroke="#b8b0a3" stroke-width="1.25" stroke-linecap="round" opacity="0.58">
+      <path d="M34 67 L51 71" /><path d="M34 72 L50 75" /><path d="M67 71 L85 67" />
+      <path d="M68 76 L85 72" /><path d="M70 80 L83 77" />
+    </g>
+    <path
+      class="lob-reading-book__page-glow"
+      d="M31 62 Q45 59 57 68 L57 72 Q44 65 31 67 Z"
+      fill="#ffffff"
+      opacity="0"
+    />
+  </g>
+`;
+
 export function renderLobsterSvg(
   look: LobsterPetLook,
   options: {
@@ -292,6 +317,7 @@ export function renderLobsterSvg(
     standalone?: boolean;
     bindle?: boolean;
     sailorCap?: boolean;
+    reading?: boolean;
   } = {},
 ) {
   const isPixel = look.palette.id === "pixel";
@@ -303,9 +329,13 @@ export function renderLobsterSvg(
   const isPortal = look.palette.id === "portal";
   const isNewReplacementGeometry = isBalloon || isAscii || isPortal;
   const hasRetroGeometry = RETRO_GEOMETRY_PALETTES.has(look.palette.id);
-  const openEyeStyle = options.shell || options.sleeping ? "display:none" : "";
-  const closedEyeStyle =
-    options.shell || options.sleeping ? "opacity:1" : options.standalone ? "display:none" : "";
+  const eyesClosed = options.shell || (options.sleeping && !options.reading);
+  const openEyeStyle = eyesClosed ? "display:none" : "";
+  const closedEyeStyle = eyesClosed
+    ? "opacity:1"
+    : options.standalone || options.reading
+      ? "display:none"
+      : "";
   const selenePhase = Math.round(moonPhaseFraction(new Date()) * 8) % 8;
   return svg`
     <svg
@@ -360,7 +390,7 @@ export function renderLobsterSvg(
                 <circle cx="76.5" cy="30.5" r="2.2" fill="var(--lob-glint, #00e5cc)" />
               </g>
               ${
-                options.sleeping
+                options.sleeping && !options.reading
                   ? svg`<g class="lob-eye-peek"><circle cx="45" cy="32" r="4" fill="#0a1014" /><circle cx="46" cy="30.8" r="1.6" fill="var(--lob-glint, #00e5cc)" /></g>`
                   : nothing
               }
@@ -407,6 +437,7 @@ export function renderLobsterSvg(
           ? SAILOR_CAP
           : nothing
       }
+      ${options.reading ? READING_BOOK : nothing}
       </g>
     </svg>
   `;

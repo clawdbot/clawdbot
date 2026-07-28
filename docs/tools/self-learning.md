@@ -142,6 +142,15 @@ The foreground answer is never delayed for learning. A failed or ineligible
 turn does not start experience review, although direct user corrections can
 still be offered as a suggestion when autonomy is disabled.
 
+## Runtime support
+
+Delayed experience review requires the runtime to report its resolved model and
+actual `skill_workshop` availability. The embedded runner and the Codex
+app-server harness provide those facts; Codex also reports its exact model
+iteration count. Other CLI-backed runtimes fail closed until they provide the
+same runtime facts. Deterministic correction capture and `/learn` still work on
+those runtimes.
+
 ## What the reviewer receives
 
 The background reviewer receives only the current turn, starting at its most

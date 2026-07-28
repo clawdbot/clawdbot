@@ -13,17 +13,18 @@ import "../components/gateway-url-confirmation.ts";
 import "../components/github-link-hovercard-registration.ts";
 import "../components/login-gate.ts";
 import "../components/macos-titlebar-controls.ts";
+import "../components/modal-dialog.ts";
+import {
+  formatDocumentTitle,
+  isSettingsNavigationRoute,
+  titleForRoute,
+} from "../app-navigation.ts";
 import "../components/onboarding-memory-import.ts";
 import "../components/openclaw-mascot.ts";
 import "../components/resizable-divider.ts";
 import "../components/sidebar-update-card.ts";
 import "../components/tooltip.ts";
 import "../components/update-banner.ts";
-import {
-  formatDocumentTitle,
-  isSettingsNavigationRoute,
-  titleForRoute,
-} from "../app-navigation.ts";
 import { isSessionRouteId, workboardBoardIdFromPath } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS, isRouteId, type RouteId } from "../app-routes.ts";
 import {
@@ -42,6 +43,7 @@ import {
   type ShellNavDrawerToggleDetail,
 } from "../components/command-palette-contract.ts";
 import { icons } from "../components/icons.ts";
+import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   CUSTODIAN_PANEL_TOGGLE_EVENT,
@@ -112,7 +114,7 @@ import {
 } from "./native-web-chrome.ts";
 import { navigationSurfaceIsHidden, renderFloatingUpdateCard } from "./navigation-surface.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
-import { hasOperatorAdminAccess } from "./operator-access.ts";
+import { hasOperatorAdminAccess, readGatewayOperatorAccess } from "./operator-access.ts";
 import { controlUiPublicAssetPath } from "./public-assets.ts";
 import {
   applyServerUiPrefs,
@@ -515,6 +517,7 @@ class OpenClawShell extends OpenClawLightDomElement {
   @property({ attribute: false }) onboarding = false;
 
   @state() private navDrawerOpen = false;
+  @state() private desktopNavigationExpanded = false;
   @state() private activeSessionKey = "";
   @state() private settingsSearchQuery = "";
   @state() private routeState: ShellRouteState = {};
@@ -529,6 +532,12 @@ class OpenClawShell extends OpenClawLightDomElement {
   private approvalOverlay?: HTMLElement & { show(): void };
   private commandPaletteTarget?: CommandPaletteTargetDetail;
   private navDrawerTrigger: HTMLElement | null = null;
+  // Desktop and modal navigation are two slots for the same live sidebar.
+  // Moving its element preserves session controllers and the resident pet
+  // instead of resetting their lifecycle at every responsive breakpoint.
+  private readonly navigationSidebar = document.createElement(
+    "openclaw-app-sidebar",
+  ) as AppSidebarElement;
   // Where "Back to app" / Escape leaves the settings takeover; falls back to
   // chat (the app default route) when settings was the entry point.
   private lastWorkspaceLocation: { routeId: RouteId; pathname: string; search: string } | null =
@@ -799,6 +808,7 @@ class OpenClawShell extends OpenClawLightDomElement {
 
   private resetShellEpochState() {
     this.navDrawerOpen = false;
+    this.desktopNavigationExpanded = false;
     this.navDrawerTrigger = null;
     this.lastWorkspaceLocation = null;
     this.activeSessionKey = "";
@@ -891,6 +901,7 @@ class OpenClawShell extends OpenClawLightDomElement {
       return;
     }
     if (command.kind === "sidebar") {
+      this.desktopNavigationExpanded = false;
       context.navigation.update({ navCollapsed: !command.visible });
       return;
     }
@@ -1056,9 +1067,12 @@ class OpenClawShell extends OpenClawLightDomElement {
       this.navDrawerOpen = true;
       return;
     }
-    // A drawer that survived a breakpoint change is visually expanded even
-    // when the persisted desktop preference says collapsed.
-    const nextNavCollapsed = this.navDrawerOpen || !context.navigation.snapshot.navCollapsed;
+    // A responsive drawer handoff can expand this shell without rewriting the
+    // stored desktop preference; toggle the surface the user actually sees.
+    const nextNavCollapsed =
+      this.navDrawerOpen ||
+      !(context.navigation.snapshot.navCollapsed && !this.desktopNavigationExpanded);
+    this.desktopNavigationExpanded = false;
     if (nextNavCollapsed) {
       this.dismissSidebarTransientMenus();
     }
@@ -1095,6 +1109,15 @@ class OpenClawShell extends OpenClawLightDomElement {
       this.dismissSidebarTransientMenus();
     }
     const trigger = options.restoreFocus ? this.navDrawerTrigger : null;
+    const returnFocusTarget =
+      options.restoreFocus && trigger?.isConnected && trigger.checkVisibility()
+        ? trigger
+        : options.restoreFocus
+          ? this.querySelector<HTMLElement>(".content")
+          : null;
+    this.querySelector<OpenClawModalDialog>(
+      "openclaw-modal-dialog.nav-drawer",
+    )?.setReturnFocusTarget(returnFocusTarget ?? null);
     this.navDrawerOpen = false;
     this.navDrawerTrigger = null;
     if (!options.restoreFocus) {
@@ -1164,9 +1187,22 @@ class OpenClawShell extends OpenClawLightDomElement {
   };
 
   private readonly handleWindowResize = () => {
+    const mobileNavLayout = isMobileNavLayout();
+    // Clean up the old navigation surface before the shared sidebar moves;
+    // otherwise menus survive the breakpoint or the closed drawer reopens.
+    const dismissedSidebarMenus =
+      mobileNavLayout && !this.navDrawerOpen && this.dismissSidebarTransientMenus();
+    if (mobileNavLayout) {
+      this.desktopNavigationExpanded = false;
+    } else if (this.navDrawerOpen) {
+      this.closeNavDrawer({ restoreFocus: false });
+      // Keep the drawer visibly expanded in this shell without changing the
+      // user's persisted desktop-collapse preference.
+      this.desktopNavigationExpanded = this.context?.navigation.snapshot.navCollapsed ?? false;
+    }
     this.requestUpdate();
     void this.updateComplete.then(() => {
-      if (isMobileNavLayout() && !this.navDrawerOpen && this.dismissSidebarTransientMenus()) {
+      if (isMobileNavLayout() && !this.navDrawerOpen && dismissedSidebarMenus) {
         requestAnimationFrame(() => {
           this.restoreFocusTo(this.visibleNavDrawerToggle());
         });
@@ -1202,14 +1238,6 @@ class OpenClawShell extends OpenClawLightDomElement {
       false
     );
   }
-
-  private readonly handleShellKeydown = (event: KeyboardEvent) => {
-    if (event.defaultPrevented || event.key !== "Escape" || !this.navDrawerOpen) {
-      return;
-    }
-    event.preventDefault();
-    this.closeNavDrawer({ restoreFocus: true });
-  };
 
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
     if (!this.commandPalette && isCommandPaletteShortcut(event)) {
@@ -1408,7 +1436,9 @@ class OpenClawShell extends OpenClawLightDomElement {
       this.onboardingMode ||
       mobileNavLayout ||
       (this.isSettingsTakeover() && !mobileNavLayout) ||
-      (!this.navDrawerOpen && (this.context?.navigation.snapshot.navCollapsed ?? false))
+      (!this.navDrawerOpen &&
+        !this.desktopNavigationExpanded &&
+        (this.context?.navigation.snapshot.navCollapsed ?? false))
     );
   }
 
@@ -1727,6 +1757,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     }
     const gatewaySnapshot = context.gateway.snapshot;
     const gatewayConnected = gatewaySnapshot.phase === "connected";
+    const operatorAccess = readGatewayOperatorAccess(gatewaySnapshot);
     const outboxScopeHost = this.storedOutboxScopeHost(context);
     const outboxStoreRuntime = this.outboxStoreRuntime;
     const storedOutboxes = outboxStoreRuntime
@@ -1780,7 +1811,11 @@ class OpenClawShell extends OpenClawLightDomElement {
     // Drawer navigation always opens expanded; the desktop collapse preference
     // stays persisted for when the viewport returns to the desktop layout.
     // The settings sidebar has a fixed width, so the collapse state pauses too.
-    const navCollapsed = navigationSnapshot.navCollapsed && !navDrawerOpen && !settingsTakeover;
+    const navCollapsed =
+      navigationSnapshot.navCollapsed &&
+      !this.desktopNavigationExpanded &&
+      !navDrawerOpen &&
+      !settingsTakeover;
     const navigationSurfaceHidden = navigationSurfaceIsHidden({
       navCollapsed,
       navDrawerOpen,
@@ -1802,6 +1837,77 @@ class OpenClawShell extends OpenClawLightDomElement {
     const inlineApproval = isSessionRouteId(activeRoute)
       ? findInlineApproval(overlaySnapshot.approvalQueue, this.activeSessionKey)
       : null;
+    if (!settingsTakeover) {
+      Object.assign(this.navigationSidebar, {
+        basePath: context.basePath,
+        activeRouteId: activeRoute,
+        activePluginTabId,
+        enabledRouteIds: this.enabledRouteIds(),
+        activeWorkboardBoardId:
+          workboardBoardIdFromPath(this.routeState.location?.pathname ?? "", context.basePath) ??
+          "",
+        sessionKey: this.activeSessionKey,
+        connected: gatewayConnected,
+        offline: gatewaySnapshot.offlineStable,
+        outboxCountForSession,
+        terminalAvailable,
+        catalogOpenTarget: normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget),
+        canPairDevice: gatewayConnected && (operatorAccess.canAdmin || operatorAccess.canPair),
+        sidebarEntries: navigationSnapshot.sidebarEntries,
+        workboardBoards: this.sidebarWorkboardSnapshot.boards,
+        workboardBoardsReady: this.sidebarWorkboardSnapshot.ready,
+        workboardRenderers: this.sidebarWorkboardRenderers,
+        sidebarLiveActivity: uiSettings.sidebarLiveActivity !== false,
+        pinnedAgentIds: navigationSnapshot.pinnedAgentIds,
+        themeMode: context.theme.mode,
+        lobsterPetVisits: uiSettings.lobsterPetVisits !== false,
+        lobsterPetSounds: uiSettings.lobsterPetSounds === true,
+        gatewayVersion:
+          context.config.current.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? null,
+        devGitBranch: context.config.current.devGitBranch,
+        updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
+        updateRunning: overlaySnapshot.updateRunning,
+        onUpdate: () => void context.overlays.runUpdate(),
+        onOpenApprovals: this.openApprovals,
+        onRetryConnect: () => context.gateway.connect(),
+        onOpenNewSession: (agentId: string, target?: NewSessionTarget) =>
+          this.openNewSession(agentId, target),
+        draftSessionAgentId: this.draftSessionAgentId(),
+        onUpdateSidebarEntries: (entries: string[]) =>
+          context.navigation.update({ sidebarEntries: entries }),
+        onPairMobile: () => void context.overlays.openDevicePairSetup(),
+        onNavigate: (routeId: string, options?: ApplicationNavigationOptions) =>
+          this.navigate(routeId, options),
+        onPreloadRoute: (routeId: string) =>
+          isRouteId(routeId) ? context.preload(routeId) : Promise.resolve(),
+      });
+    }
+    const navigationContent = settingsTakeover
+      ? renderSettingsSidebar({
+          basePath: context.basePath,
+          activeRouteId: activeRoute,
+          activeSearch: this.routeState.location?.search ?? "",
+          activeHash: this.routeState.location?.hash ?? "",
+          offline: gatewaySnapshot.offlineStable,
+          queuedOutboxCount: storedOutboxes?.total ?? 0,
+          lastError: gatewaySnapshot.lastError,
+          version:
+            context.config.current.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? "",
+          updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
+          updateRunning: overlaySnapshot.updateRunning,
+          onUpdate: () => void context.overlays.runUpdate(),
+          searchQuery: this.settingsSearchQuery,
+          searchBlockMatches: settingsSearchBlocks,
+          onExit: () => this.exitSettings(),
+          onRetryConnect: () => context.gateway.connect(),
+          onNavigate: (routeId, options) => this.navigate(routeId, options),
+          onPreload: (routeId) => context.preload(routeId),
+          onSearchQueryChange: (nextQuery) => {
+            void this.handleSettingsSearchQueryChange(nextQuery);
+          },
+          preloadTimers: this.settingsPreloadTimers,
+        })
+      : this.navigationSidebar;
     // Optional tags stay mounted before definition. Lit replays their properties on upgrade,
     // and the upgraded panels catch the first toggle instead of dropping the event.
     return html`
@@ -1821,17 +1927,9 @@ class OpenClawShell extends OpenClawLightDomElement {
           ? "shell--onboarding"
           : ""} ${settingsTakeover ? "shell--settings" : ""}"
         style=${`--shell-nav-expanded-width: ${navigationSnapshot.navWidth}px`}
-        @keydown=${this.handleShellKeydown}
         @theme-change=${this.handleThemeChange}
       >
         <a class="shell-skip-link" href="#control-ui-main"> ${t("common.skipToMainContent")} </a>
-        <button
-          type="button"
-          class="shell-nav-backdrop"
-          aria-label=${t("nav.close")}
-          ?inert=${!mobileNavLayout || !navDrawerOpen}
-          @click=${() => this.closeNavDrawer({ restoreFocus: true })}
-        ></button>
         ${isNativeWebChromeHost() && !onboarding
           ? html`
               <openclaw-macos-titlebar-controls
@@ -1902,79 +2000,18 @@ class OpenClawShell extends OpenClawLightDomElement {
             `
           : nothing}
         <div class="shell-nav" ?inert=${navigationSurfaceHidden}>
-          ${settingsTakeover
-            ? renderSettingsSidebar({
-                basePath: context.basePath,
-                activeRouteId: activeRoute,
-                activeSearch: this.routeState.location?.search ?? "",
-                activeHash: this.routeState.location?.hash ?? "",
-                offline: gatewaySnapshot.offlineStable,
-                queuedOutboxCount: storedOutboxes?.total ?? 0,
-                lastError: gatewaySnapshot.lastError,
-                version:
-                  context.config.current.serverVersion ??
-                  gatewaySnapshot.hello?.server?.version ??
-                  "",
-                updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
-                updateRunning: overlaySnapshot.updateRunning,
-                onUpdate: () => void context.overlays.runUpdate(),
-                searchQuery: this.settingsSearchQuery,
-                searchBlockMatches: settingsSearchBlocks,
-                onExit: () => this.exitSettings(),
-                onRetryConnect: () => context.gateway.connect(),
-                onNavigate: (routeId, options) => this.navigate(routeId, options),
-                onPreload: (routeId) => context.preload(routeId),
-                onSearchQueryChange: (nextQuery) => {
-                  void this.handleSettingsSearchQueryChange(nextQuery);
-                },
-                preloadTimers: this.settingsPreloadTimers,
-              })
-            : html`<openclaw-app-sidebar
-                .basePath=${context.basePath}
-                .activeRouteId=${activeRoute}
-                .activePluginTabId=${activePluginTabId}
-                .enabledRouteIds=${this.enabledRouteIds()}
-                .activeWorkboardBoardId=${workboardBoardIdFromPath(
-                  this.routeState.location?.pathname ?? "",
-                  context.basePath,
-                ) ?? ""}
-                .sessionKey=${this.activeSessionKey}
-                .connected=${gatewayConnected}
-                .offline=${gatewaySnapshot.offlineStable}
-                .outboxCountForSession=${outboxCountForSession}
-                .terminalAvailable=${terminalAvailable}
-                .catalogOpenTarget=${normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget)}
-                .canPairDevice=${gatewayConnected &&
-                hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null)}
-                .sidebarEntries=${navigationSnapshot.sidebarEntries}
-                .workboardBoards=${this.sidebarWorkboardSnapshot.boards}
-                .workboardBoardsReady=${this.sidebarWorkboardSnapshot.ready}
-                .workboardRenderers=${this.sidebarWorkboardRenderers}
-                .sidebarLiveActivity=${uiSettings.sidebarLiveActivity !== false}
-                .pinnedAgentIds=${navigationSnapshot.pinnedAgentIds}
-                .themeMode=${context.theme.mode}
-                .lobsterPetVisits=${uiSettings.lobsterPetVisits !== false}
-                .lobsterPetSounds=${uiSettings.lobsterPetSounds === true}
-                .gatewayVersion=${context.config.current.serverVersion ??
-                gatewaySnapshot.hello?.server?.version ??
-                null}
-                .devGitBranch=${context.config.current.devGitBranch}
-                .updateAvailable=${navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable}
-                .updateRunning=${overlaySnapshot.updateRunning}
-                .onUpdate=${() => void context.overlays.runUpdate()}
-                .onOpenApprovals=${this.openApprovals}
-                .onRetryConnect=${() => context.gateway.connect()}
-                .onOpenNewSession=${(agentId: string, target?: NewSessionTarget) =>
-                  this.openNewSession(agentId, target)}
-                .draftSessionAgentId=${this.draftSessionAgentId()}
-                .onUpdateSidebarEntries=${(entries: string[]) =>
-                  context.navigation.update({ sidebarEntries: entries })}
-                .onPairMobile=${() => void context.overlays.openDevicePairSetup()}
-                .onNavigate=${(routeId: string, options?: ApplicationNavigationOptions) =>
-                  this.navigate(routeId, options)}
-                .onPreloadRoute=${(routeId: string) =>
-                  isRouteId(routeId) ? context.preload(routeId) : Promise.resolve()}
-              ></openclaw-app-sidebar>`}
+          ${mobileNavLayout
+            ? html`<openclaw-modal-dialog
+                class="drawer nav-drawer"
+                .open=${navDrawerOpen}
+                .label=${t("palette.categories.navigation")}
+                @modal-cancel=${() => this.closeNavDrawer({ restoreFocus: true })}
+              >
+                <div class="shell-nav-modal__content" tabindex="-1" autofocus>
+                  ${navigationContent}
+                </div>
+              </openclaw-modal-dialog>`
+            : navigationContent}
         </div>
         ${!navCollapsed && !onboarding && !settingsTakeover
           ? html`

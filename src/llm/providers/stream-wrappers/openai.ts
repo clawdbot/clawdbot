@@ -162,27 +162,39 @@ function readPayloadToolName(tool: unknown): string | undefined {
   return typeof fnName === "string" ? fnName : undefined;
 }
 
-function isCodeModePayloadToolName(name: string | undefined): boolean {
-  return typeof name === "string" && isCodeModeModelVisibleToolName(name);
+function isCodeModePayloadToolName(
+  name: string | undefined,
+  visibleToolNames: ReadonlySet<string>,
+): boolean {
+  return typeof name === "string" && isCodeModeModelVisibleToolName(name, visibleToolNames);
 }
 
-function filterCodeModeToolDeclarations(declarations: unknown): unknown[] | undefined {
+function filterCodeModeToolDeclarations(
+  declarations: unknown,
+  visibleToolNames: ReadonlySet<string>,
+): unknown[] | undefined {
   if (!Array.isArray(declarations)) {
     return undefined;
   }
   return declarations.filter((declaration) =>
-    isCodeModePayloadToolName(readPayloadToolName(declaration)),
+    isCodeModePayloadToolName(readPayloadToolName(declaration), visibleToolNames),
   );
 }
 
-function filterCodeModeGroupedToolDeclarations(tool: unknown): Record<string, unknown> | undefined {
+function filterCodeModeGroupedToolDeclarations(
+  tool: unknown,
+  visibleToolNames: ReadonlySet<string>,
+): Record<string, unknown> | undefined {
   if (!tool || typeof tool !== "object" || Array.isArray(tool)) {
     return undefined;
   }
   const record = tool as Record<string, unknown>;
   const filteredGroups: Record<string, unknown> = {};
   for (const key of ["functionDeclarations", "function_declarations"] as const) {
-    const filtered = filterCodeModeToolDeclarations(readPayloadToolField(record, key));
+    const filtered = filterCodeModeToolDeclarations(
+      readPayloadToolField(record, key),
+      visibleToolNames,
+    );
     if (filtered === undefined) {
       continue;
     }
@@ -193,7 +205,7 @@ function filterCodeModeGroupedToolDeclarations(tool: unknown): Record<string, un
   return Object.keys(filteredGroups).length > 0 ? filteredGroups : undefined;
 }
 
-function filterCodeModePayloadTools(payload: unknown): void {
+function filterCodeModePayloadTools(payload: unknown, visibleToolNames: ReadonlySet<string>): void {
   if (!payload || typeof payload !== "object") {
     return;
   }
@@ -203,26 +215,36 @@ function filterCodeModePayloadTools(payload: unknown): void {
   }
   record.tools = record.tools.flatMap((tool) => {
     const name = readPayloadToolName(tool);
-    if (isCodeModePayloadToolName(name)) {
+    if (isCodeModePayloadToolName(name, visibleToolNames)) {
       return [tool];
     }
-    const grouped = filterCodeModeGroupedToolDeclarations(tool);
+    const grouped = filterCodeModeGroupedToolDeclarations(tool, visibleToolNames);
     return grouped ? [grouped] : [];
   });
 }
 
-function filterCodeModePayloadHookResult(payload: unknown, nextPayload: unknown): unknown {
+function filterCodeModePayloadHookResult(
+  payload: unknown,
+  nextPayload: unknown,
+  visibleToolNames: ReadonlySet<string>,
+): unknown {
   const finalPayload = nextPayload === undefined ? payload : nextPayload;
-  filterCodeModePayloadTools(finalPayload);
+  filterCodeModePayloadTools(finalPayload, visibleToolNames);
   return nextPayload === undefined ? undefined : finalPayload;
 }
 
-function hasCodeModeVisibleTools(context: { tools?: unknown }): boolean {
+function resolveCodeModeVisibleToolNames(context: {
+  tools?: unknown;
+}): ReadonlySet<string> | undefined {
   if (!Array.isArray(context.tools)) {
-    return false;
+    return undefined;
   }
-  const names = new Set(context.tools.map(readPayloadToolName).filter(Boolean));
-  return names.has("exec") && names.has("wait");
+  const names = new Set(
+    context.tools
+      .map(readPayloadToolName)
+      .filter((name): name is string => typeof name === "string"),
+  );
+  return names.has("exec") && names.has("wait") ? names : undefined;
 }
 
 function shouldApplyOpenAIReasoningCompatibility(model: {
@@ -703,11 +725,12 @@ export function createCodexNativeWebSearchWrapper(
     // provider-family wrapper stays aligned for the same request.
     const codeModeSurfaceFromOptions =
       (options as OpenClawSimpleStreamOptions | undefined)?.openclawCodeModeToolSurface === true;
+    const codeModeVisibleToolNames = resolveCodeModeVisibleToolNames(context);
     if (
       (params.codeModeToolSurfaceEnabled === true ||
         codeModeSurfaceFromOptions ||
         isCodeModeEnabled(params.config)) &&
-      hasCodeModeVisibleTools(context)
+      codeModeVisibleToolNames
     ) {
       emitModelTransportDebug(
         log,
@@ -720,14 +743,14 @@ export function createCodexNativeWebSearchWrapper(
         ...options,
         openclawCodeModeToolSurface: true,
         onPayload: (payload) => {
-          filterCodeModePayloadTools(payload);
+          filterCodeModePayloadTools(payload, codeModeVisibleToolNames);
           const nextPayload = originalOnPayload?.(payload, model);
           if (isPromiseLike(nextPayload)) {
             return Promise.resolve(nextPayload).then((resolvedPayload) =>
-              filterCodeModePayloadHookResult(payload, resolvedPayload),
+              filterCodeModePayloadHookResult(payload, resolvedPayload, codeModeVisibleToolNames),
             );
           }
-          return filterCodeModePayloadHookResult(payload, nextPayload);
+          return filterCodeModePayloadHookResult(payload, nextPayload, codeModeVisibleToolNames);
         },
       };
       return underlying(model, context, codeModeOptions);

@@ -20,6 +20,7 @@ import {
 } from "./model.compat.js";
 import {
   buildInlineProviderModels,
+  type InlineModelEntry,
   type InlineProviderConfig,
   normalizeResolvedTransportApi,
   resolveProviderModelInput,
@@ -125,6 +126,7 @@ function matchesProviderScopedModelId(params: {
 
 export function findInlineModelMatch(params: {
   providers: Record<string, InlineProviderConfig>;
+  preparedModels?: readonly InlineModelEntry[];
   provider: string;
   modelId: string;
 }) {
@@ -134,7 +136,7 @@ export function findInlineModelMatch(params: {
       provider: entry.provider,
       modelId: params.modelId,
     });
-  const inlineModels = buildInlineProviderModels(params.providers);
+  const inlineModels = params.preparedModels ?? buildInlineProviderModels(params.providers);
   const exact = inlineModels.find(
     (entry) => entry.provider === params.provider && matchesModelId(entry),
   );

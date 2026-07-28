@@ -22,7 +22,6 @@
     "src/agents/embedded-agent-runner/compaction-hooks.ts": 2,
     "src/agents/embedded-agent-runner/thinking-replay-repair.ts": 2,
     "src/agents/embedded-agent-runner/tool-result-truncation.ts": 2,
-    "src/agents/embedded-agent-runner/transcript-rewrite.ts": 2,
     "src/config/sessions/session-accessor.sqlite-events.ts": 3,
     "src/config/sessions/session-accessor.transcript.ts": 2
   }

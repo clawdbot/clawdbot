@@ -8,7 +8,7 @@
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveSlotSelection } from "../../../../src/plugins/slots.ts";
 
-export type MemoryTab = "overview" | "search" | "dreaming";
+export type MemoryTab = "overview" | "memories" | "dreams" | "settings";
 
 export type MemoryBackend = "builtin" | "qmd";
 
@@ -23,14 +23,38 @@ export type MemoryEngineSelection =
   | { kind: "off" }
   | { kind: "pinned"; engineId: string };
 
-/** Scroll target for `memory.backend`, which Overview curates out of the editor. */
+/** Scroll target for `memory.backend`, which Settings curates out of the editor. */
 export const MEMORY_BACKEND_ANCHOR_ID = "memory-backend";
 
-const MEMORY_TABS: readonly MemoryTab[] = ["overview", "search", "dreaming"];
+const MEMORY_TABS: readonly MemoryTab[] = ["overview", "memories", "dreams", "settings"];
 
 /** Reads a `?tab=` value from a settings-search destination or a shared link. */
-export function normalizeMemoryTab(value: string | null | undefined): MemoryTab | null {
+function normalizeMemoryTab(value: string | null | undefined): MemoryTab | null {
+  if (value === "search") {
+    return "settings";
+  }
+  if (value === "dreaming") {
+    return "dreams";
+  }
   return MEMORY_TABS.find((tab) => tab === value) ?? null;
+}
+
+/** Old settings-search URLs had a memory section/hash but no tab. */
+export function memoryTabForRoute(route: {
+  tab?: string | null;
+  section?: string | null;
+  targetBlockId?: string | null;
+}): MemoryTab | null {
+  const tab = normalizeMemoryTab(route.tab);
+  if (tab) {
+    return tab;
+  }
+  const target = route.targetBlockId ?? "";
+  return route.section === "memory" ||
+    target === MEMORY_BACKEND_ANCHOR_ID ||
+    target.startsWith("config-section-memory")
+    ? "settings"
+    : null;
 }
 
 /** The plugin that currently owns the slot, or null when nothing does. */
@@ -116,14 +140,7 @@ export function narrowMemorySchema(schema: unknown, keys: readonly string[]): un
 }
 
 /**
- * The `memory.*` children only the Search tab renders; every other child of the
- * section belongs to Overview. Settings search routes deep links through this so
- * a match cannot land on a tab whose editor omits the field it matched.
- */
-export const MEMORY_SEARCH_TAB_SCHEMA_KEYS: readonly string[] = ["search"];
-
-/**
- * The `memory.*` children Overview renders as curated rows instead of through
+ * The `memory.*` children Settings renders as curated rows instead of through
  * the embedded editor. They have no `#config-section-*` id, so settings search
  * routes their deep links to MEMORY_BACKEND_ANCHOR_ID.
  */
@@ -134,22 +151,22 @@ export function memorySchemaKeysForTab(
   tab: MemoryTab,
   backend: MemoryBackend | null,
 ): readonly string[] {
-  if (tab === "search") {
-    return MEMORY_SEARCH_TAB_SCHEMA_KEYS;
+  if (tab !== "settings") {
+    return [];
   }
-  // `backend` is a curated row above the editor; qmd's sub-config only matters
-  // once qmd is the selected backend.
-  return backend === "qmd" ? ["citations", "qmd"] : ["citations"];
+  // Keep the old Overview fields before the old Search slice while rendering
+  // one editor, which in turn keeps one autosave status and apply banner.
+  return backend === "qmd" ? ["citations", "qmd", "search"] : ["citations", "search"];
 }
 
 /**
- * Every `memory.*` child the page surfaces for a config: both editor slices plus
- * `backend`, which Overview renders as a curated row rather than through the
+ * Every `memory.*` child the page surfaces for a config: the merged editor plus
+ * `backend`, which Settings renders as a curated row rather than through the
  * editor. `qmd` and `backend` disappear with the backend/engine choice, so
  * settings search filters the section through this before matching — otherwise a
- * `memory.qmd` hit routes to an Overview whose editor omits it.
+ * `memory.qmd` hit routes to Settings while its editor omits the matched field.
  */
 export function memoryVisibleSchemaKeys(backend: MemoryBackend | null): readonly string[] {
-  const editor = [...MEMORY_SEARCH_TAB_SCHEMA_KEYS, ...memorySchemaKeysForTab("overview", backend)];
+  const editor = memorySchemaKeysForTab("settings", backend);
   return backend === null ? editor : [...editor, "backend"];
 }

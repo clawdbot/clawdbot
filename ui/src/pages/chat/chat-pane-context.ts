@@ -33,6 +33,8 @@ import {
   type ApplicationGatewaySnapshot,
 } from "./chat-pane-deps.ts";
 import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
+import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
+import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
 
 export abstract class ChatPaneContext extends ChatPaneLifecycle {
   protected applySessionsState(stateValue: ApplicationContext["sessions"]["state"]) {
@@ -137,6 +139,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     ) {
       return;
     }
+    if (rootsChanged) {
+      releaseChatMediaResourceSubscriber(state.requestUpdate);
+    }
     state.localMediaPreviewRoots = config.localMediaPreviewRoots;
     state.embedSandboxMode = config.embedSandboxMode;
     state.allowExternalEmbedUrls = config.allowExternalEmbedUrls;
@@ -148,6 +153,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (!state) {
       return;
     }
+    const previousMediaAuthToken = resolveAssistantAttachmentAuthToken(state);
     const wasConnected = state.connected;
     const previousSidebarSessionKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);
     const sourceChanged =
@@ -160,6 +166,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.presencePayload = presence ? { presence } : undefined;
     }
     if (sourceChanged) {
+      releaseChatMediaResourceSubscriber(state.requestUpdate);
       // A reconnect can retain the browser client. Keep async ownership tied
       // to the logical connection, not only the transport object identity.
       this.connectionGeneration += 1;
@@ -193,6 +200,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.connected = snapshot.phase === "connected";
     state.connectionEpoch = this.connectionGeneration;
     state.hello = snapshot.hello;
+    if (!sourceChanged && previousMediaAuthToken !== resolveAssistantAttachmentAuthToken(state)) {
+      releaseChatMediaResourceSubscriber(state.requestUpdate);
+    }
     state.canvasPluginSurfaceUrl = snapshot.canvasPluginSurfaceUrl;
     const sidebarSessionKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);
     const sidebarKeyChanged = sidebarSessionKey !== previousSidebarSessionKey;

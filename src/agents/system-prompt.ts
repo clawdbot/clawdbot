@@ -62,6 +62,10 @@ import type {
   ProviderSystemPromptSectionId,
 } from "./system-prompt-contribution.js";
 import type { PromptMode, SilentReplyPromptMode } from "./system-prompt.types.js";
+import {
+  buildWatchedSessionsPromptLines,
+  type PreparedWatchedSessionsPrompt,
+} from "./watched-sessions-prompt.js";
 
 /**
  * Controls which hardcoded sections are included in the system prompt.
@@ -812,6 +816,8 @@ export function buildAgentSystemPrompt(params: {
   memoryCitationsMode?: MemoryCitationsMode;
   /** Immutable memory state prepared before synchronous prompt assembly. */
   preparedMemoryPrompt?: PreparedMemoryPromptSection;
+  /** Watched same-agent group sessions prepared before synchronous prompt assembly. */
+  preparedWatchedSessions?: PreparedWatchedSessionsPrompt;
   promptContribution?: ProviderSystemPromptContribution;
 }) {
   const acpEnabled = params.acpEnabled === true;
@@ -850,8 +856,8 @@ export function buildAgentSystemPrompt(params: {
     agents_list: acpSpawnRuntimeEnabled
       ? "List allowed OpenClaw subagent ids; not ACP ids"
       : "List allowed subagent ids",
-    sessions_list: "List other sessions/subagents; filters/last",
-    sessions_history: "Read other session/subagent history",
+    sessions_list: "List visible sessions; filters/last",
+    sessions_history: "Read visible session/subagent history",
     sessions_search: "Search past sessions; use sessionKey with sessions_history",
     sessions_send: "Message other session/subagent",
     sessions_spawn: acpSpawnRuntimeEnabled
@@ -1178,6 +1184,12 @@ export function buildAgentSystemPrompt(params: {
               : "Never loop-poll `subagents list`/`sessions_list`; status only on-demand/intervention/debug/request.",
           ]
         : []),
+      ...(renderOpenClawToolWorkflowHints &&
+      (availableTools.has("sessions_search") || availableTools.has("sessions_list"))
+        ? [
+            "Asked about another chat/group/session not in context: check `sessions_list`/`sessions_search` before claiming no access.",
+          ]
+        : []),
       "",
       ...buildProactiveSubagentOrchestrationSection({
         enabled: proactiveSubagentOrchestration,
@@ -1422,6 +1434,10 @@ export function buildAgentSystemPrompt(params: {
   if (providerDynamicSuffix) {
     lines.push(providerDynamicSuffix, "");
   }
+
+  // Watched sessions change rarely but per-session; keep them below the cache
+  // boundary so the shared stable prefix stays byte-identical across sessions.
+  lines.push(...buildWatchedSessionsPromptLines(params.preparedWatchedSessions));
 
   lines.push(...buildHeartbeatSection({ isMinimal, heartbeatPrompt }));
 

@@ -83,14 +83,11 @@ export function supportsModelTools(model: { compat?: unknown }): boolean {
   return compat?.supportsTools !== false;
 }
 
-export function isCodeModeModelVisibleToolName(name: string): boolean {
-  return (
-    name === "exec" ||
-    name === "wait" ||
-    name === "computer" ||
-    name === "image" ||
-    name === "message"
-  );
+export function isCodeModeModelVisibleToolName(
+  name: string,
+  visibleToolNames: ReadonlySet<string>,
+): boolean {
+  return visibleToolNames.has(name);
 }
 
 function isGoogleGemini3Model(modelId: string, family: "flash" | "pro"): boolean {

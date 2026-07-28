@@ -116,6 +116,9 @@ function setupDeps(params: {
   const runSystemAgentChat = vi.fn<NonNullable<GuidedOnboardingDeps["runSystemAgentChat"]>>(
     params.runSystemAgentChat ?? (async () => {}),
   );
+  const runSetupMemoryImportStep = vi.fn<
+    NonNullable<GuidedOnboardingDeps["runSetupMemoryImportStep"]>
+  >(params.runSetupMemoryImportStep ?? (async () => ({ status: "skipped", providers: [] })));
   return {
     createPrompter: () => params.prompter,
     persistAccessMode: vi.fn(async () => undefined),
@@ -145,7 +148,7 @@ function setupDeps(params: {
         lines: ["Workspace: /tmp/work", "Gateway: running"],
       })),
     persistRiskAcknowledgement: params.persistRiskAcknowledgement ?? vi.fn(async () => undefined),
-    runSetupMemoryImportStep: params.runSetupMemoryImportStep ?? vi.fn(async () => undefined),
+    runSetupMemoryImportStep,
     runAppRecommendations:
       params.runAppRecommendations ??
       vi.fn(async ({ config }) => ({ config, commitResult: vi.fn() })),

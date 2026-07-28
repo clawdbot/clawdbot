@@ -10460,6 +10460,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Review past sessions manually
   - H2: What OpenClaw can learn
   - H2: When experience review runs
+  - H2: Runtime support
   - H2: What the reviewer receives
   - H2: Proposal safety
   - H2: Review learned proposals
