@@ -141,12 +141,22 @@ function contentParts(value: unknown): Record<string, unknown>[] {
   return parts;
 }
 
+const INTERNAL_REASONING_MESSAGE_FIELDS = [
+  "reasoning",
+  "reasoning_content",
+  "reasoning_details",
+  "reasoning_text",
+] as const;
+
 function redactInternalReasoningParts(value: unknown): unknown {
   if (!Array.isArray(value)) {
     return value;
   }
   return value.map((part) => {
-    if (isRecord(part) && (part.type === "thinking" || part.type === "redacted_thinking")) {
+    if (
+      isRecord(part) &&
+      (part.type === "thinking" || part.type === "redacted_thinking" || part.type === "reasoning")
+    ) {
       return { type: "reasoning", redacted: true };
     }
     return part;
@@ -157,16 +167,22 @@ function redactInternalReasoningFromMessage(value: unknown): unknown {
   if (!isRecord(value)) {
     return value;
   }
+  const redacted = { ...value };
+  // Compatible provider replay payloads can attach reasoning beside `content`
+  // instead of using OpenClaw's normalized thinking blocks. Those fields are
+  // transport-private too and must not survive compatibility serialization.
+  for (const field of INTERNAL_REASONING_MESSAGE_FIELDS) {
+    delete redacted[field];
+  }
   const hasContentParts = Array.isArray(value.content);
   const hasExplicitParts = Array.isArray(value.parts);
-  if (!hasContentParts && !hasExplicitParts) {
-    return value;
+  if (hasContentParts) {
+    redacted.content = redactInternalReasoningParts(value.content);
   }
-  return {
-    ...value,
-    ...(hasContentParts ? { content: redactInternalReasoningParts(value.content) } : {}),
-    ...(hasExplicitParts ? { parts: redactInternalReasoningParts(value.parts) } : {}),
-  };
+  if (hasExplicitParts) {
+    redacted.parts = redactInternalReasoningParts(value.parts);
+  }
+  return redacted;
 }
 
 function redactInternalReasoningFromMessages(value: unknown): unknown {

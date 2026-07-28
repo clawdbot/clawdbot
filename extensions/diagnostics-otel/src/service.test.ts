@@ -4373,8 +4373,11 @@ describe("diagnostics-otel service", () => {
         inputMessages: [
           {
             role: "assistant",
+            reasoning_content: "input-message-internal-canary",
+            reasoning_details: [{ text: "input-details-internal-canary" }],
             content: [
               { type: "thinking", thinking: "input-internal-canary" },
+              { type: "reasoning", content: "input-part-internal-canary" },
               { type: "text", text: "visible input" },
             ],
           },
@@ -4382,6 +4385,8 @@ describe("diagnostics-otel service", () => {
         outputMessages: [
           {
             role: "assistant",
+            reasoning: "output-message-internal-canary",
+            reasoning_text: "output-text-internal-canary",
             content: [
               { type: "redacted_thinking", data: "output-internal-canary" },
               { type: "text", text: "visible output" },
@@ -4393,6 +4398,15 @@ describe("diagnostics-otel service", () => {
     await flushDiagnosticEvents();
 
     const attrs = startedSpanOptions("openclaw.model.call")?.attributes;
+    const internalCanaries = [
+      "input-internal-canary",
+      "input-message-internal-canary",
+      "input-details-internal-canary",
+      "input-part-internal-canary",
+      "output-internal-canary",
+      "output-message-internal-canary",
+      "output-text-internal-canary",
+    ];
     for (const key of [
       "gen_ai.input.messages",
       "gen_ai.output.messages",
@@ -4400,8 +4414,9 @@ describe("diagnostics-otel service", () => {
       "openclaw.content.output_messages",
     ]) {
       const value = stringAttribute(attrs, key);
-      expect(value).not.toContain("input-internal-canary");
-      expect(value).not.toContain("output-internal-canary");
+      for (const canary of internalCanaries) {
+        expect(value).not.toContain(canary);
+      }
     }
     expect(JSON.parse(stringAttribute(attrs, "gen_ai.input.messages"))[0]?.parts).toEqual([
       { type: "text", content: "visible input" },
@@ -4411,6 +4426,9 @@ describe("diagnostics-otel service", () => {
     ]);
     expect(
       JSON.parse(stringAttribute(attrs, "openclaw.content.input_messages"))[0]?.content[0],
+    ).toEqual({ type: "reasoning", redacted: true });
+    expect(
+      JSON.parse(stringAttribute(attrs, "openclaw.content.input_messages"))[0]?.content[1],
     ).toEqual({ type: "reasoning", redacted: true });
     expect(
       JSON.parse(stringAttribute(attrs, "openclaw.content.output_messages"))[0]?.content[0],
