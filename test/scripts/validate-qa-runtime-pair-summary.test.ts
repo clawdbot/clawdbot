@@ -224,19 +224,19 @@ describe("frozen QA runtime-pair summary validation", () => {
     );
   });
 
-  it.each([
-    "311047822ecdde24e824d839ab105ef08f17be00",
-    "c37af96b18776fecc9e24268f27fc89b563481bf",
-  ])("accepts the exact frozen core manifest for %s", (targetSha) => {
-    const fixture = frozenCoreSummary();
-    expect(
-      validateQaRuntimePairSummary(fixture, {
-        requireExplicitGap: true,
-        targetSha,
-        lane: "core",
-      }),
-    ).toMatchObject({ skipped: 8 });
-  });
+  it.each(["311047822ecdde24e824d839ab105ef08f17be00", "c37af96b18776fecc9e24268f27fc89b563481bf"])(
+    "accepts the exact frozen core manifest for %s",
+    (targetSha) => {
+      const fixture = frozenCoreSummary();
+      expect(
+        validateQaRuntimePairSummary(fixture, {
+          requireExplicitGap: true,
+          targetSha,
+          lane: "core",
+        }),
+      ).toMatchObject({ skipped: 8 });
+    },
+  );
 
   it("rejects an arbitrary target with otherwise identical frozen evidence", () => {
     expect(() =>
