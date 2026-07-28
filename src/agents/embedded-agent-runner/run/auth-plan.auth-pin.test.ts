@@ -43,7 +43,7 @@ describe("embedded run auth plan provider pin", () => {
     const config = {
       models: {
         providers: {
-          openai: { auth: "api-key" },
+          openai: { auth: "api-key", baseUrl: "", models: [] },
         },
       },
     } as OpenClawConfig;
