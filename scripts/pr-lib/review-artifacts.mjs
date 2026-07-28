@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
 
 const REVIEW_ARTIFACT_ENUMS = Object.freeze({
@@ -533,6 +534,154 @@ function readJson(filePath) {
   }
 }
 
+function skipJsonWhitespace(source, start) {
+  let index = start;
+  while (/\s/u.test(source[index] ?? "")) {
+    index += 1;
+  }
+  return index;
+}
+
+function jsonStringEnd(source, start) {
+  for (let index = start + 1; index < source.length; index += 1) {
+    if (source[index] === "\\") {
+      index += 1;
+    } else if (source[index] === '"') {
+      return index + 1;
+    }
+  }
+  throw new Error("Invalid JSON string while locating review identity");
+}
+
+function jsonValueEnd(source, start) {
+  const first = source[start];
+  if (first === '"') {
+    return jsonStringEnd(source, start);
+  }
+  if (first === "{" || first === "[") {
+    const openings = [first];
+    for (let index = start + 1; index < source.length; index += 1) {
+      const character = source[index];
+      if (character === '"') {
+        index = jsonStringEnd(source, index) - 1;
+      } else if (character === "{" || character === "[") {
+        openings.push(character);
+      } else if (character === "}" || character === "]") {
+        openings.pop();
+        if (openings.length === 0) {
+          return index + 1;
+        }
+      }
+    }
+    throw new Error("Invalid JSON container while locating review identity");
+  }
+  let index = start;
+  while (index < source.length && !/[\s,}\]]/u.test(source[index])) {
+    index += 1;
+  }
+  return index;
+}
+
+function findJsonPropertyValue(source, objectStart, property) {
+  let index = skipJsonWhitespace(source, objectStart + 1);
+  let found;
+  while (source[index] !== "}") {
+    const keyStart = index;
+    const keyEnd = jsonStringEnd(source, keyStart);
+    const key = JSON.parse(source.slice(keyStart, keyEnd));
+    index = skipJsonWhitespace(source, keyEnd);
+    if (source[index] !== ":") {
+      throw new Error("Invalid JSON object while locating review identity");
+    }
+    const valueStart = skipJsonWhitespace(source, index + 1);
+    const valueEnd = jsonValueEnd(source, valueStart);
+    if (key === property) {
+      found = { start: valueStart, end: valueEnd };
+    }
+    index = skipJsonWhitespace(source, valueEnd);
+    if (source[index] === ",") {
+      index = skipJsonWhitespace(source, index + 1);
+    }
+  }
+  if (found) {
+    return found;
+  }
+  throw new Error(`Missing ${property} while locating review identity`);
+}
+
+function repinReviewArtifacts({ expectedPrNumber, reviewPath, reviewMarkdownPath, prMetaPath }) {
+  if (!existsSync(prMetaPath)) {
+    throw new Error(`Missing ${prMetaPath}; run scripts/pr review-init <PR>.`);
+  }
+  for (const artifactPath of [reviewPath, reviewMarkdownPath]) {
+    if (!existsSync(artifactPath)) {
+      throw new Error(`Missing ${artifactPath}; run scripts/pr review-artifacts-init <PR>.`);
+    }
+  }
+
+  const prMeta = readJson(prMetaPath);
+  if (
+    !isObject(prMeta) ||
+    prMeta.number !== expectedPrNumber ||
+    typeof prMeta.headRefOid !== "string" ||
+    !/^[0-9a-f]{40}$/u.test(prMeta.headRefOid)
+  ) {
+    throw new Error(
+      `Invalid PR identity in ${prMetaPath}; run scripts/pr review-init ${expectedPrNumber}.`,
+    );
+  }
+
+  const reviewSource = readFileSync(reviewPath, "utf8");
+  const review = readJson(reviewPath);
+  if (!isObject(review) || !isObject(review.pr)) {
+    throw new Error(
+      `Invalid PR identity in ${reviewPath}; run scripts/pr review-artifacts-init ${expectedPrNumber}.`,
+    );
+  }
+  const objectStart = skipJsonWhitespace(reviewSource, 0);
+  const prSpan = findJsonPropertyValue(reviewSource, objectStart, "pr");
+  const numberSpan = findJsonPropertyValue(reviewSource, prSpan.start, "number");
+  const headShaSpan = findJsonPropertyValue(reviewSource, prSpan.start, "headSha");
+  const replacements = [
+    { ...numberSpan, value: String(prMeta.number) },
+    { ...headShaSpan, value: JSON.stringify(prMeta.headRefOid) },
+  ].toSorted((left, right) => right.start - left.start);
+  let nextReviewSource = reviewSource;
+  for (const replacement of replacements) {
+    nextReviewSource =
+      nextReviewSource.slice(0, replacement.start) +
+      replacement.value +
+      nextReviewSource.slice(replacement.end);
+  }
+
+  const markdownSource = readFileSync(reviewMarkdownPath, "utf8");
+  const firstNewline = markdownSource.indexOf("\n");
+  const currentIdentityLine =
+    firstNewline === -1 ? markdownSource : markdownSource.slice(0, firstNewline);
+  if (!/^Review artifact for PR #[1-9][0-9]* at [0-9a-f]{40}$/u.test(currentIdentityLine)) {
+    throw new Error(
+      `Invalid review identity line in ${reviewMarkdownPath}; run scripts/pr review-artifacts-init ${expectedPrNumber}.`,
+    );
+  }
+  const markdownBody = firstNewline === -1 ? "" : markdownSource.slice(firstNewline + 1);
+  const nextMarkdownSource = `${reviewIdentityLine({
+    number: prMeta.number,
+    headSha: prMeta.headRefOid,
+  })}${firstNewline === -1 ? "" : `\n${markdownBody}`}`;
+
+  const temporaryDir = mkdtempSync(join(dirname(reviewPath), ".review-artifacts-repin-"));
+  try {
+    const temporaryReviewPath = join(temporaryDir, "review.json");
+    const temporaryMarkdownPath = join(temporaryDir, "review.md");
+    writeFileSync(temporaryReviewPath, nextReviewSource, "utf8");
+    writeFileSync(temporaryMarkdownPath, nextMarkdownSource, "utf8");
+    renameSync(temporaryReviewPath, reviewPath);
+    renameSync(temporaryMarkdownPath, reviewMarkdownPath);
+  } finally {
+    rmSync(temporaryDir, { recursive: true, force: true });
+  }
+}
+
 function main(argv = process.argv.slice(2)) {
   const [command, ...args] = argv;
   if ((command === "template" || command === "markdown") && args.length === 2) {
@@ -568,8 +717,25 @@ function main(argv = process.argv.slice(2)) {
     }
     return;
   }
+  if (command === "repin" && args.length === 4) {
+    const [prNumber, reviewPath, reviewMarkdownPath, prMetaPath] = args;
+    if (!/^[1-9][0-9]*$/u.test(prNumber)) {
+      console.error(
+        "Usage: review-artifacts.mjs repin <pr-number> <review.json> <review.md> <pr-meta.json>",
+      );
+      process.exitCode = 2;
+      return;
+    }
+    repinReviewArtifacts({
+      expectedPrNumber: Number(prNumber),
+      reviewPath,
+      reviewMarkdownPath,
+      prMetaPath,
+    });
+    return;
+  }
   console.error(
-    "Usage: review-artifacts.mjs template|markdown <pr-number> <head-sha> | validate <review.json> <review.md> <pr-meta.json>",
+    "Usage: review-artifacts.mjs template|markdown <pr-number> <head-sha> | validate <review.json> <review.md> <pr-meta.json> | repin <pr-number> <review.json> <review.md> <pr-meta.json>",
   );
   process.exitCode = 2;
 }

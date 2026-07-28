@@ -168,12 +168,14 @@ describe("scripts/pr wrappers", () => {
     expect(script).toContain("OPENCLAW_GH_BIN=");
     expect(script).toContain("gh_plain");
     expect(script).toContain("scripts/pr review-init <PR>");
+    expect(script).toContain("scripts/pr review-artifacts-repin <PR>");
     expect(script).toContain("scripts/pr prepare-run <PR>");
     expect(script).toContain("scripts/pr ci-dispatch <PR>");
     expect(script).toContain("scripts/pr merge-run <PR> [--auto-merge]");
     expect(script).toContain("OPENCLAW_PR_AUTO_MERGE=1 is equivalent");
     expect(script).toContain("Required commands: git, gh, jq, rg (ripgrep), pnpm, node.");
     expect(script).toContain('review_init "$pr"');
+    expect(script).toContain('review_artifacts_repin "$pr"');
     expect(script).toContain('prepare_run "$pr"');
     expect(script).toContain('ci_dispatch "$pr"');
     expect(script).toContain('merge_run "$pr" "$auto_merge"');

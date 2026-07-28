@@ -12,6 +12,8 @@ const describePosix = process.platform === "win32" ? describe.skip : describe;
 
 const REVIEWED_PR = 42;
 const REVIEWED_HEAD = "b".repeat(40);
+const SUPERSEDED_PR = 7;
+const SUPERSEDED_HEAD = "a".repeat(40);
 const REVIEWED_IDENTITY_LINE = `Review artifact for PR #${REVIEWED_PR} at ${REVIEWED_HEAD}`;
 const REVIEW_SHELL_COMMAND_SURFACE = [
   "rg() {",
@@ -182,6 +184,77 @@ function runArtifactsInit(existing: { review?: unknown; markdown?: string } = {}
 
   const result = runReviewShellFunction(fixtureRoot, `review_artifacts_init ${REVIEWED_PR}`);
   return { result, localDir };
+}
+
+function runArtifactsRepin(
+  options: {
+    invalidMarkdownIdentity?: boolean;
+    missing?: "review.json" | "review.md" | "pr-meta.json";
+  } = {},
+) {
+  const fixtureRoot = tempDirs.make("openclaw-pr-review-artifacts-repin-");
+  const localDir = join(fixtureRoot, ".local");
+  mkdirSync(localDir);
+  const review = validReadyReview();
+  review.pr.number = SUPERSEDED_PR;
+  review.pr.headSha = SUPERSEDED_HEAD;
+  review.findings.push({
+    id: "authored-nit",
+    title: "Preserve this authored finding",
+    area: "tooling",
+    fix: "Keep the nested authored content byte-identical.",
+    severity: "NIT",
+  });
+  review.nitSweep.status = "has_nits";
+  review.issueValidation.summary = "Authored nested summary.";
+  const reviewSource = `${JSON.stringify(review, null, 4)}\n`;
+  const markdownBody = [
+    "",
+    "A) Authored recommendation",
+    "",
+    "B) Authored details stay byte-identical.",
+    "",
+    "C) Security",
+    "D) Intent",
+    "E) Concerns",
+    "F) Tests",
+    "G) Docs",
+    "H) Changelog",
+    "I) Follow ups",
+    "J) Suggested comment",
+    "",
+  ].join("\n");
+  const markdownSource = options.invalidMarkdownIdentity
+    ? `A) Authored recommendation without an identity header\n${markdownBody}`
+    : `Review artifact for PR #${SUPERSEDED_PR} at ${SUPERSEDED_HEAD}\n${markdownBody}`;
+  const prMetaSource = `${JSON.stringify({
+    number: REVIEWED_PR,
+    headRefOid: REVIEWED_HEAD,
+    files: [],
+  })}\n`;
+  const sources = {
+    "review.json": reviewSource,
+    "review.md": markdownSource,
+    "pr-meta.json": prMetaSource,
+  };
+  for (const [name, source] of Object.entries(sources)) {
+    if (name !== options.missing) {
+      writeFileSync(join(localDir, name), source);
+    }
+  }
+  const result = spawnSync(
+    process.execPath,
+    [
+      reviewArtifactsScript,
+      "repin",
+      String(REVIEWED_PR),
+      join(localDir, "review.json"),
+      join(localDir, "review.md"),
+      join(localDir, "pr-meta.json"),
+    ],
+    { encoding: "utf8" },
+  );
+  return { result, localDir, reviewSource, markdownBody };
 }
 
 function runMergeVerification(checks: "api-error" | "invalid-json" | "no-required" | "pending") {
@@ -358,6 +431,66 @@ describePosix("scripts/pr review artifact validation", () => {
     expect(
       JSON.parse(readFileSync(join(localDir, "review.json"), "utf8")).issueValidation.summary,
     ).toBe("Half-written review worth keeping.");
+  });
+
+  it("repins both artifacts without changing authored content", () => {
+    const { result, localDir, reviewSource, markdownBody } = runArtifactsRepin();
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    const repinnedReview = readFileSync(join(localDir, "review.json"), "utf8");
+    const expectedReview = reviewSource
+      .replace(`"number": ${SUPERSEDED_PR}`, `"number": ${REVIEWED_PR}`)
+      .replace(`"headSha": "${SUPERSEDED_HEAD}"`, `"headSha": "${REVIEWED_HEAD}"`);
+    expect(repinnedReview).toBe(expectedReview);
+    expect(readFileSync(join(localDir, "review.md"), "utf8")).toBe(
+      `${REVIEWED_IDENTITY_LINE}\n${markdownBody}`,
+    );
+
+    const validation = spawnSync(
+      process.execPath,
+      [
+        reviewArtifactsScript,
+        "validate",
+        join(localDir, "review.json"),
+        join(localDir, "review.md"),
+        join(localDir, "pr-meta.json"),
+      ],
+      { encoding: "utf8" },
+    );
+    expect(validation.status, `${validation.stdout}\n${validation.stderr}`).toBe(0);
+  });
+
+  it.each([
+    {
+      missing: "review.json" as const,
+      message: "review.json; run scripts/pr review-artifacts-init <PR>",
+    },
+    {
+      missing: "review.md" as const,
+      message: "review.md; run scripts/pr review-artifacts-init <PR>",
+    },
+    {
+      missing: "pr-meta.json" as const,
+      message: "pr-meta.json; run scripts/pr review-init <PR>",
+    },
+  ])("refuses repin when $missing is missing", ({ missing, message }) => {
+    const { result } = runArtifactsRepin({ missing });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(message);
+  });
+
+  it("refuses to discard a malformed Markdown first line", () => {
+    const { result, localDir } = runArtifactsRepin({ invalidMarkdownIdentity: true });
+    const markdownPath = join(localDir, "review.md");
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(
+      `Invalid review identity line in ${markdownPath}; run scripts/pr review-artifacts-init ${REVIEWED_PR}.`,
+    );
+    expect(readFileSync(markdownPath, "utf8")).toContain(
+      "A) Authored recommendation without an identity header",
+    );
   });
 
   it("rejects a review guard whose PR metadata describes another PR", () => {
