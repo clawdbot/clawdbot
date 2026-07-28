@@ -11,10 +11,6 @@ enum AppTerminationTiming {
 final class TerminationSignalWatcher {
     static let shared = TerminationSignalWatcher()
 
-    private static let exitFailsafeQueue = DispatchQueue(
-        label: "ai.openclaw.signal-exit-failsafe",
-        qos: .userInitiated)
-
     private let logger = Logger(subsystem: "ai.openclaw", category: "lifecycle")
     private var sources: [DispatchSourceSignal] = []
     private var terminationRequested = false
@@ -52,28 +48,11 @@ final class TerminationSignalWatcher {
         // Ensure any pairing prompt can't accidentally approve during shutdown.
         NodePairingApprovalPrompter.shared.stop()
         DevicePairingApprovalPrompter.shared.stop()
-        Self.requestTermination()
-    }
+        NSApp.terminate(nil)
 
-    @MainActor
-    static func requestTermination(
-        armFailsafe: () -> Void = { TerminationSignalWatcher.armExitFailsafe() },
-        terminateApplication: () -> Void = { NSApp.terminate(nil) })
-    {
-        // AppKit may synchronously wait for a terminate-later reply. Arm the safety net
-        // before entering that wait so stalled cleanup cannot prevent a bounded exit.
-        armFailsafe()
-        terminateApplication()
-    }
-
-    static func armExitFailsafe(
-        after seconds: TimeInterval = AppTerminationTiming.signalExitFailsafeSeconds,
-        exitProcess: @escaping @Sendable () -> Void = { exit(0) })
-    {
-        // NSApp.terminate can block the main dispatch queue while awaiting a
-        // terminate-later reply, so this deadline must remain queue-independent.
-        self.exitFailsafeQueue.asyncAfter(
-            deadline: .now() + seconds,
-            execute: exitProcess)
+        // Safety net: don't hang forever if something blocks termination.
+        DispatchQueue.main.asyncAfter(deadline: .now() + AppTerminationTiming.signalExitFailsafeSeconds) {
+            exit(0)
+        }
     }
 }
