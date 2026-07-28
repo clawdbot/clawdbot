@@ -1,10 +1,7 @@
 import { t } from "../../../i18n/index.ts";
-import {
-  isActiveTask,
-  taskStatusLabel,
-  taskTimestampMs,
-  type TaskSummary,
-} from "../../../lib/tasks/data.ts";
+import { isActiveTask, taskStatusLabel, type TaskSummary } from "../../../lib/tasks/data.ts";
+
+export { newestTaskSnapshot } from "../../../lib/tasks/data.ts";
 
 // Status tone drives the meta line's colored word and the running pulse dot;
 // pill chips read too heavy at rail width, so tone is typographic only.
@@ -27,22 +24,4 @@ export function backgroundTaskStatusLabel(task: TaskSummary): string {
   return task.status === "completed"
     ? t("tasksPage.status.completed")
     : t("tasksPage.status.failed");
-}
-
-export function newestTaskSnapshot(
-  current: TaskSummary,
-  lookup: TaskSummary | undefined,
-): TaskSummary {
-  if (!lookup) {
-    return current;
-  }
-  const currentAt = taskTimestampMs(current.updatedAt ?? current.endedAt ?? current.createdAt);
-  const lookupAt = taskTimestampMs(lookup.updatedAt ?? lookup.endedAt ?? lookup.createdAt);
-  if (
-    lookupAt > currentAt ||
-    (lookupAt === currentAt && isActiveTask(current) && !isActiveTask(lookup))
-  ) {
-    return lookup;
-  }
-  return current;
 }

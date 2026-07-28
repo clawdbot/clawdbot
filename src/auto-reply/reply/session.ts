@@ -364,6 +364,22 @@ export function resolveReplySessionPreprocessingState(
 }
 
 /** Initializes or reuses the reply session state for one inbound turn. */
+type SessionModelOverrideSelection = Pick<
+  SessionEntry,
+  "modelOverride" | "providerOverride" | "modelOverrideSource" | "modelOverrideRouteResolution"
+>;
+
+function selectSessionModelOverride(
+  entry: Partial<SessionModelOverrideSelection>,
+): SessionModelOverrideSelection {
+  return {
+    modelOverride: entry.modelOverride,
+    providerOverride: entry.providerOverride,
+    modelOverrideSource: entry.modelOverrideSource,
+    modelOverrideRouteResolution: entry.modelOverrideRouteResolution,
+  };
+}
+
 export async function initSessionState(params: InitSessionStateParams): Promise<SessionInitResult> {
   return await runWithSessionInitConflictRetry(
     async () => await initSessionStateAttempt(params, false),
@@ -483,9 +499,7 @@ async function initSessionStateAttemptLocked(
   let persistedReasoning: string | undefined;
   let persistedTtsAuto: TtsAutoMode | undefined;
   let persistedResponseUsage: SessionEntry["responseUsage"];
-  let persistedModelOverride: string | undefined;
-  let persistedProviderOverride: string | undefined;
-  let persistedModelOverrideSource: SessionEntry["modelOverrideSource"];
+  let persistedModelSelection: SessionModelOverrideSelection | undefined;
   let persistedAuthProfileOverride: string | undefined;
   let persistedAuthProfileOverrideSource: SessionEntry["authProfileOverrideSource"];
   let persistedAuthProfileOverrideCompactionCount: number | undefined;
@@ -664,6 +678,7 @@ async function initSessionStateAttemptLocked(
   const lifecycleTimestamps = resolveSessionLifecycleTimestamps({
     entry,
     agentId,
+    sessionKey,
     storePath,
   });
   const entryFreshness = entry
@@ -776,9 +791,7 @@ async function initSessionStateAttemptLocked(
     persistedReasoning = reusableEntry.reasoningLevel;
     persistedTtsAuto = reusableEntry.ttsAuto;
     persistedResponseUsage = reusableEntry.responseUsage;
-    persistedModelOverride = reusableEntry.modelOverride;
-    persistedProviderOverride = reusableEntry.providerOverride;
-    persistedModelOverrideSource = reusableEntry.modelOverrideSource;
+    persistedModelSelection = selectSessionModelOverride(reusableEntry);
     persistedAuthProfileOverride = reusableEntry.authProfileOverride;
     persistedAuthProfileOverrideSource = reusableEntry.authProfileOverrideSource;
     persistedAuthProfileOverrideCompactionCount = reusableEntry.authProfileOverrideCompactionCount;
@@ -804,9 +817,7 @@ async function initSessionStateAttemptLocked(
     // despite the `Model set to ... for this session` ack (#90119, #69301).
     if (entry) {
       const preservedSelection = resolveResetPreservedSelection({ entry });
-      persistedModelOverride = preservedSelection.modelOverride;
-      persistedProviderOverride = preservedSelection.providerOverride;
-      persistedModelOverrideSource = preservedSelection.modelOverrideSource;
+      persistedModelSelection = selectSessionModelOverride(preservedSelection);
       persistedAuthProfileOverride = preservedSelection.authProfileOverride;
       persistedAuthProfileOverrideSource = preservedSelection.authProfileOverrideSource;
       persistedAuthProfileOverrideCompactionCount =
@@ -843,6 +854,8 @@ async function initSessionStateAttemptLocked(
   }
 
   const baseEntry = !isNewSession && effectiveFreshEntry ? reusableEntry : undefined;
+  const modelSelection =
+    persistedModelSelection ?? (baseEntry ? selectSessionModelOverride(baseEntry) : undefined);
   const usageFamilyKey = previousSessionEntry
     ? (previousSessionEntry.usageFamilyKey ?? sessionKey)
     : baseEntry?.usageFamilyKey;
@@ -943,9 +956,10 @@ async function initSessionStateAttemptLocked(
     usageFamilyKey,
     usageFamilySessionIds,
     previousSessionId: baseEntry?.previousSessionId,
-    modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
-    providerOverride: persistedProviderOverride ?? baseEntry?.providerOverride,
-    modelOverrideSource: persistedModelOverrideSource ?? baseEntry?.modelOverrideSource,
+    modelOverride: modelSelection?.modelOverride,
+    providerOverride: modelSelection?.providerOverride,
+    modelOverrideSource: modelSelection?.modelOverrideSource,
+    modelOverrideRouteResolution: modelSelection?.modelOverrideRouteResolution,
     authProfileOverride: persistedAuthProfileOverride ?? baseEntry?.authProfileOverride,
     authProfileOverrideSource:
       persistedAuthProfileOverrideSource ?? baseEntry?.authProfileOverrideSource,
@@ -1162,7 +1176,7 @@ async function initSessionStateAttemptLocked(
       agentId,
       sessionId: previousSessionEntry.sessionId,
       sessionKey,
-      sessionFile: previousSessionEntry.sessionFile,
+      sessionFile: sessionKey,
       reason: previousSessionEndReason ?? "unknown",
     });
     // Direct-message browser tabs use a peer-scoped runtime identity even when
@@ -1226,7 +1240,7 @@ async function initSessionStateAttemptLocked(
         sessionKey,
         sessionId: effectiveSessionId,
         storePath,
-        sessionFile: sessionEntry?.sessionFile,
+        sessionFile: sessionKey,
         agentId,
       });
     }

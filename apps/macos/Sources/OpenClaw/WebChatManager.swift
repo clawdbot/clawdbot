@@ -145,6 +145,28 @@ final class WebChatManager {
         controller.show()
     }
 
+    #if DEBUG
+    func showSwarmFixture() {
+        self.closePanel()
+        self.windowController?.close()
+        let transport = MacSwarmFixtureChatTransport()
+        let controller = WebChatSwiftUIWindowController(
+            sessionKey: transport.sessionKey,
+            presentation: .window,
+            transport: transport,
+            windowTitle: "OpenClaw Swarm Fixture",
+            windowAutosaveName: "OpenClawSwarmFixture")
+        controller.onClosed = { [weak self, weak controller] in
+            guard let self, let controller, self.windowController === controller else { return }
+            self.windowController = nil
+            self.windowRoute = nil
+        }
+        self.windowController = controller
+        self.windowRoute = WebChatRoute(sessionKey: transport.sessionKey, agentID: nil)
+        controller.show()
+    }
+    #endif
+
     func newGatewayWindow() {
         Task { @MainActor [weak self] in
             guard let self else { return }

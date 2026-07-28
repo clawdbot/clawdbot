@@ -72,21 +72,113 @@ async function startRuntime() {
 
 function holdInvoke() {
   let io: OpenClawPluginNodeHostCommandIo | undefined;
+  let signal: AbortSignal | undefined;
   let release: (() => void) | undefined;
   const held = new Promise<void>((resolve) => {
     release = resolve;
   });
   mocks.handleInvoke.mockImplementationOnce(async (...args: unknown[]) => {
-    io = (args[4] as { pluginCommandIo?: OpenClawPluginNodeHostCommandIo }).pluginCommandIo;
+    const runtime = args[4] as {
+      pluginCommandIo?: OpenClawPluginNodeHostCommandIo;
+      signal?: AbortSignal;
+    };
+    io = runtime.pluginCommandIo;
+    signal = runtime.signal;
     await held;
   });
   return {
     get io() {
       return io;
     },
+    get signal() {
+      return signal;
+    },
     release: () => release?.(),
   };
 }
+
+describe("node-host invocation cancellation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("cancels ordinary node invocations", async () => {
+    const held = holdInvoke();
+    const runtime = await startRuntime();
+    const invoking = runtime.invoke({ ...frame, command: "system.run" });
+    await vi.waitFor(() => expect(held.signal).toBeDefined());
+
+    runtime.cancel(frame.id);
+
+    expect(held.signal?.aborted).toBe(true);
+    expect(held.io).toBeUndefined();
+    held.release();
+    await invoking;
+    await runtime.close();
+  });
+
+  it("cancels a superseded invocation without orphaning its replacement", async () => {
+    const first = holdInvoke();
+    const second = holdInvoke();
+    const runtime = await startRuntime();
+    const firstInvoke = runtime.invoke({ ...frame, command: "system.run" });
+    await vi.waitFor(() => expect(first.signal).toBeDefined());
+
+    const secondInvoke = runtime.invoke({ ...frame, command: "system.run" });
+    await vi.waitFor(() => expect(second.signal).toBeDefined());
+
+    expect(first.signal?.aborted).toBe(true);
+    expect(second.signal?.aborted).toBe(false);
+
+    first.release();
+    await firstInvoke;
+    expect(second.signal?.aborted).toBe(false);
+    runtime.cancel(frame.id);
+
+    expect(second.signal?.aborted).toBe(true);
+    second.release();
+    await secondInvoke;
+    await runtime.close();
+  });
+
+  it("cancels every ordinary invocation when the gateway disconnects", async () => {
+    const first = holdInvoke();
+    const second = holdInvoke();
+    const runtime = await startRuntime();
+    const firstInvoke = runtime.invoke({ ...frame, command: "system.run" });
+    const secondInvoke = runtime.invoke({
+      ...frame,
+      id: "invoke-2",
+      command: "system.run",
+    });
+    await vi.waitFor(() => {
+      expect(first.signal).toBeDefined();
+      expect(second.signal).toBeDefined();
+    });
+
+    runtime.cancelAll();
+
+    expect(first.signal?.aborted).toBe(true);
+    expect(second.signal?.aborted).toBe(true);
+    first.release();
+    second.release();
+    await Promise.all([firstInvoke, secondInvoke]);
+    await runtime.close();
+  });
+
+  it("cancels ordinary invocations when the node runtime closes", async () => {
+    const held = holdInvoke();
+    const runtime = await startRuntime();
+    const invoking = runtime.invoke({ ...frame, command: "system.run" });
+    await vi.waitFor(() => expect(held.signal).toBeDefined());
+
+    await runtime.close();
+
+    expect(held.signal?.aborted).toBe(true);
+    held.release();
+    await invoking;
+  });
+});
 
 describe("node-host invoke input dispatch", () => {
   beforeEach(() => {

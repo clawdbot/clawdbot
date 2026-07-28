@@ -12,10 +12,8 @@ import {
 } from "../infra/diagnostic-events.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
-import {
-  clearCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -33,12 +31,10 @@ import {
 import { clearAgentHarnesses, registerAgentHarness } from "./harness/registry.js";
 import type { AgentHarness } from "./harness/types.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
-import {
-  isFallbackSummaryError,
-  resolveModelCandidateChain,
-  runWithImageModelFallback,
-  runWithModelFallback as runWithModelFallbackBase,
-} from "./model-fallback.js";
+import { isFallbackSummaryError } from "./model-fallback-attempt.js";
+import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
+import { runWithImageModelFallback } from "./model-fallback-image.js";
+import { runWithModelFallback as runWithModelFallbackBase } from "./model-fallback-runner.js";
 import { shouldDiscardDeferredSessionSuspension } from "./model-fallback.test-support.js";
 import {
   createAgentRunDirectAbortError,
@@ -49,8 +45,13 @@ import { resolveSessionSuspensionReason } from "./session-suspension.js";
 import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
+function resolveFallbackCandidateRefs(params: Parameters<typeof resolveModelCandidateChain>[0]) {
+  return resolveModelCandidateChain(params).map(({ provider, model }) => ({ provider, model }));
+}
+
 const testing = {
-  resolveFallbackCandidates: resolveModelCandidateChain,
+  resolveFallbackCandidates: resolveFallbackCandidateRefs,
+  resolveFallbackCandidateRoutes: resolveModelCandidateChain,
   resolveSessionSuspensionReason,
   shouldDiscardDeferredSessionSuspension,
 };
@@ -892,7 +893,7 @@ describe("runWithModelFallback", () => {
     });
   });
 
-  it("resolves primary model aliases before running", () => {
+  it("preserves prepared primary model routes before running", () => {
     const cases = [
       {
         name: "keeps openai gpt-5.4 on provider",
@@ -902,7 +903,7 @@ describe("runWithModelFallback", () => {
         expected: ["openai", "gpt-5.4"],
       },
       {
-        name: "resolves bare alias",
+        name: "resolves a raw bare alias",
         cfg: makeCfg({
           agents: {
             defaults: {
@@ -921,7 +922,7 @@ describe("runWithModelFallback", () => {
         expected: ["anthropic", "claude-sonnet-4-6"],
       },
       {
-        name: "resolves slash-form alias before provider parsing",
+        name: "resolves a raw slash-form alias before provider parsing",
         cfg: makeCfg({
           agents: {
             defaults: {
@@ -959,11 +960,59 @@ describe("runWithModelFallback", () => {
         model: "deepseek-v4-pro",
         expected: ["opencode-go", "deepseek-v4-pro"],
       },
+      {
+        name: "keeps a custom default-provider route when another provider owns the bare alias",
+        cfg: {
+          ...makeProviderOrderFallbackCfg([["cloudflare-ai-gateway", "gemini-2.5-flash-lite"]]),
+          agents: {
+            defaults: {
+              model: {
+                primary: "cloudflare-ai-gateway/gemini-3.1-flash-lite",
+                fallbacks: [],
+              },
+              models: {
+                "cloudflare-ai-gateway/gemini-2.5-flash-lite": {
+                  alias: "cf-gemini-2.5-flash-lite",
+                },
+                "google/gemini-2.5-flash-lite": { alias: "gemini-2.5-flash-lite" },
+              },
+            },
+          },
+        },
+        provider: "cloudflare-ai-gateway",
+        model: "gemini-2.5-flash-lite",
+        requestedRouteResolution: "resolved",
+        expected: ["cloudflare-ai-gateway", "gemini-2.5-flash-lite"],
+      },
+      {
+        name: "keeps a built-in default-provider route when another provider owns the bare alias",
+        cfg: makeCfg({
+          agents: {
+            defaults: {
+              model: {
+                primary: "google/gemini-3.1-pro-preview",
+                fallbacks: [],
+              },
+              models: {
+                "google/gemini-2.5-flash-lite": { alias: "google-flash-lite" },
+                "openrouter/google/gemini-2.5-flash-lite": {
+                  alias: "gemini-2.5-flash-lite",
+                },
+              },
+            },
+          },
+        }),
+        provider: "google",
+        model: "gemini-2.5-flash-lite",
+        requestedRouteResolution: "resolved",
+        expected: ["google", "gemini-2.5-flash-lite"],
+      },
     ] satisfies Array<{
       name: string;
       cfg: OpenClawConfig;
       provider: string;
       model: string;
+      requestedRouteResolution?: "raw" | "resolved";
       expected: [string, string];
     }>;
 
@@ -972,6 +1021,7 @@ describe("runWithModelFallback", () => {
         cfg: testCase.cfg,
         provider: testCase.provider,
         model: testCase.model,
+        requestedRouteResolution: testCase.requestedRouteResolution,
       });
 
       expect(candidates[0], testCase.name).toEqual({
@@ -979,6 +1029,70 @@ describe("runWithModelFallback", () => {
         model: testCase.expected[1],
       });
     }
+  });
+
+  it("carries the route origin for every fallback candidate", () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+        },
+      },
+    });
+
+    expect(
+      testing.resolveFallbackCandidateRoutes({
+        cfg,
+        provider: "google",
+        model: "gemini-2.5-flash-lite",
+      }),
+    ).toEqual([
+      {
+        provider: "google",
+        model: "gemini-2.5-flash-lite",
+        routeOrigin: "requested",
+        routeResolution: "raw",
+      },
+      {
+        provider: "anthropic",
+        model: "claude-haiku-3-5",
+        routeOrigin: "configured-fallback",
+        routeResolution: "resolved",
+      },
+      {
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        routeOrigin: "configured-primary",
+        routeResolution: "resolved",
+      },
+    ]);
+  });
+
+  it("keeps an unmarked canonical built-in route ahead of a colliding alias", () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: { primary: "google/gemini-3.1-pro-preview", fallbacks: [] },
+          models: {
+            "google/gemini-2.5-flash-lite": { alias: "google-flash-lite" },
+            "openrouter/google/gemini-2.5-flash-lite": {
+              alias: "gemini-2.5-flash-lite",
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      testing.resolveFallbackCandidates({
+        cfg,
+        provider: "google",
+        model: "gemini-2.5-flash-lite",
+      })[0],
+    ).toEqual({ provider: "google", model: "gemini-2.5-flash-lite" });
   });
 
   it("falls back on unrecognized errors when candidates remain", async () => {
@@ -1798,6 +1912,42 @@ describe("runWithModelFallback", () => {
     expect(result.result).toBe("ok");
     expect(run).toHaveBeenCalledTimes(2);
     expect(result.provider).toBe("anthropic");
+  });
+
+  it("continues to the next model after a Google invalid-key response (#114784)", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "google/gemini-3.1-pro-preview",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+      },
+    });
+    const googleInvalidKey = new Error(
+      "Google Generative AI API error (400): API key not valid. Please pass a valid API key. [code=INVALID_ARGUMENT]",
+    );
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(googleInvalidKey)
+      .mockResolvedValueOnce("fallback ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+      run,
+    });
+
+    expect(result.result).toBe("fallback ok");
+    expect(result.provider).toBe("anthropic");
+    expect(result.attempts[0]).toMatchObject({
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+      reason: "auth",
+    });
+    expect(run).toHaveBeenCalledTimes(2);
   });
 
   it("keeps provider failover metadata authoritative over nested session locks", async () => {
@@ -3713,7 +3863,7 @@ describe("runWithModelFallback", () => {
       });
     });
 
-    it("probes alias-resolved primary models during rate-limit cooldowns", async () => {
+    it("probes raw alias targets during rate-limit cooldowns", async () => {
       const { dir } = await makeAuthStoreWithCooldown("anthropic", "rate_limit");
       const cfg = makeCfg({
         agents: {

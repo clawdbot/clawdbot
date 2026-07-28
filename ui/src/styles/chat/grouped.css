@@ -515,7 +515,7 @@ img.chat-avatar {
   max-width: 100%;
   box-sizing: border-box;
   min-width: 0;
-  word-wrap: break-word;
+  overflow-wrap: break-word;
 }
 
 .chat-group.workspace-conflict .chat-group-messages {

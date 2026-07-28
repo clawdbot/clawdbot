@@ -11,6 +11,7 @@
       "tencent-tokenhub": {
         "baseUrl": "https://tokenhub.tencentmaas.com/v1",
         "api": "openai-completions",
+        "defaultModel": "hy3",
         "models": [
           {
             "id": "hy3-preview",
@@ -80,6 +81,7 @@
       "tencent-tokenplan": {
         "baseUrl": "https://api.lkeap.cloud.tencent.com/plan/v3",
         "api": "openai-completions",
+        "defaultModel": "hy3",
         "models": [
           {
             "id": "hy3",

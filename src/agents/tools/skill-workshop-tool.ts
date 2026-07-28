@@ -166,10 +166,15 @@ type SkillWorkshopToolOptions = {
   proposalReviewCompletion?: SkillWorkshopProposalReviewCompletion;
 };
 
-function buildSkillWorkshopToolDescription(proposalOnly: boolean): string {
-  return proposalOnly
-    ? "Inspect reusable-procedure proposals and create or revise pending proposals. Live-skill updates and lifecycle actions are unavailable."
-    : "Create/update/revise/list/inspect/apply/reject/quarantine reusable-procedure proposals.";
+function buildSkillWorkshopToolDescription(
+  proposalOnly: boolean,
+  supportsCompletion: boolean,
+): string {
+  if (!proposalOnly) {
+    return "Create/update/revise/list/inspect/apply/reject/quarantine reusable-procedure skill proposals.";
+  }
+  const completion = supportsCompletion ? " complete = durably finish this review." : "";
+  return `Inspect reusable-procedure skill proposals and create or revise pending proposals.${completion} Live-skill updates and lifecycle actions are unavailable.`;
 }
 
 /** Create the Skill Workshop tool for proposal discovery and lifecycle actions. */
@@ -178,7 +183,10 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
     label: "Skill Workshop",
     name: "skill_workshop",
     displaySummary: "Propose a reusable skill",
-    description: buildSkillWorkshopToolDescription(options.proposalOnly === true),
+    description: buildSkillWorkshopToolDescription(
+      options.proposalOnly === true,
+      options.proposalReviewCompletion !== undefined,
+    ),
     parameters: buildSkillWorkshopToolSchema(
       options.proposalOnly === true,
       options.proposalReviewCompletion !== undefined,

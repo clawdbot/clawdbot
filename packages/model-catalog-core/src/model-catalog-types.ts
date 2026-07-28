@@ -61,6 +61,8 @@ export type ModelCatalogCompatConfig = {
   supportsLongCacheRetention?: boolean;
   supportsPromptCacheKey?: boolean;
   supportsTools?: boolean;
+  /** Code-mode tier consumed by `tools.codeMode.enabled: "auto"`; absent means "capable". */
+  codeMode?: "preferred" | "capable";
   requiresStringContent?: boolean;
   strictMessageKeys?: boolean;
   toolSchemaProfile?: string;
@@ -245,6 +247,8 @@ export type ModelCatalogProvider = {
   baseUrl?: string;
   api?: ModelCatalogApi;
   headers?: Record<string, string>;
+  /** Provider-recommended primary model id. */
+  defaultModel?: string;
   /** Provider-recommended small model id for short internal utility tasks. */
   defaultUtilityModel?: string;
   models: ModelCatalogModel[];

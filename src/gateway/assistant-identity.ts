@@ -24,17 +24,17 @@ const ASSISTANT_IDENTITY_LIMITS = {
 } as const;
 type AssistantIdentityField = keyof typeof ASSISTANT_IDENTITY_LIMITS;
 
-export const DEFAULT_ASSISTANT_IDENTITY: AssistantIdentity = {
-  agentId: "main",
-  name: "Assistant",
-  avatar: "A",
-};
-
 type AssistantIdentity = {
-  agentId: string;
   name: string;
   avatar: string;
   emoji?: string;
+};
+
+type ResolvedAssistantIdentity = AssistantIdentity & { agentId: string };
+
+export const DEFAULT_ASSISTANT_IDENTITY: AssistantIdentity = {
+  name: "Assistant",
+  avatar: "A",
 };
 
 function normalizeIdentityValue(
@@ -100,7 +100,7 @@ export function resolveAssistantIdentity(params: {
   cfg: OpenClawConfig;
   agentId?: string | null;
   workspaceDir?: string | null;
-}): AssistantIdentity {
+}): ResolvedAssistantIdentity {
   const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(params.cfg));
   const agentId = normalizeAgentId(params.agentId ?? defaultAgentId);
   const isDefaultAgent = agentId === defaultAgentId;

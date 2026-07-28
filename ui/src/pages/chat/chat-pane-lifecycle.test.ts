@@ -11,14 +11,16 @@ import type {
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { createTestChatPane } from "./chat-pane.test-support.ts";
-import type { ChatPageHost } from "./chat-state.ts";
+import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   dismissConfirmedActionPopovers,
   openChatRewindConfirmation,
 } from "./components/chat-message.ts";
 import * as chatThread from "./components/chat-thread.ts";
+import { prepareInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
 
 const SKIP_REWIND_CONFIRM_PREFERENCE = "openclaw:skip-rewind-confirm";
 const confirmationOwners = new Set<HTMLElement>();
@@ -32,6 +34,72 @@ function createDeferred<T>() {
   });
   return { promise, reject, resolve };
 }
+
+describe("chat pane first-turn attachment lifecycle", () => {
+  it("claims the connected client's first message before attaching the pane", () => {
+    const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
+    const targetSessionKey = "agent:main:created-session";
+    const client = {
+      addEventListener: vi.fn(() => vi.fn()),
+      request: vi.fn(),
+    } as unknown as GatewayBrowserClient;
+    const context = {
+      basePath: "",
+      gateway: { snapshot: { client, hello: null } },
+      config: {
+        current: {
+          assistantIdentity: {
+            agentId: null,
+            name: "Assistant",
+            avatar: null,
+            avatarSource: null,
+            avatarStatus: null,
+            avatarReason: null,
+          },
+          serverVersion: null,
+          localMediaPreviewRoots: [],
+          embedSandboxMode: "strict",
+          allowExternalEmbedUrls: false,
+          terminalEnabled: false,
+        },
+      },
+      agentSelection: { state: { selectedId: "main" } },
+      agents: { state: { agentsList: null } },
+      initialUserMessage: createInitialUserMessageHandoff(),
+      sessions: {},
+    } as unknown as ApplicationContext;
+    prepareInitialUserMessageHandoff(
+      context.initialUserMessage,
+      targetSessionKey,
+      { attachments: [], createdAt: 1, text: "keep the first prompt visible" },
+      client,
+    );
+    pane.sessionKey = targetSessionKey;
+    pane.chatMessagesBySession = new Map();
+    pane.context = context;
+    const stopAfterAttach = new Error("stop after attach");
+    let attachedState: ChatPageHost | undefined;
+    vi.spyOn(pane.chatState, "attach").mockImplementation((state) => {
+      attachedState = state;
+      throw stopAfterAttach;
+    });
+
+    try {
+      expect(() => pane.connectedCallback()).toThrow(stopAfterAttach);
+      expect(attachedState?.client).toBe(client);
+      expect(attachedState?.chatMessages).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: [
+            expect.objectContaining({ type: "text", text: "keep the first prompt visible" }),
+          ],
+        }),
+      ]);
+    } finally {
+      pane.disconnectedCallback();
+    }
+  });
+});
 
 describe("chat pane session suggestion lifecycle", () => {
   it("does not let a stale add completion clear a newer session operation", async () => {
@@ -701,6 +769,24 @@ describe("chat pane presentation teardown", () => {
 });
 
 describe("chat pane connection lifecycle", () => {
+  it("rehydrates secondary session state after a same-client logical reconnect", () => {
+    const client = {
+      request: vi.fn(() => new Promise<never>(() => {})),
+    } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const deferHydration = vi.spyOn(pane, "deferSessionHydrationUntilTranscript");
+    state.connected = false;
+    pane.connectedClient = client;
+
+    pane.applyGatewaySnapshot({
+      ...pane.context.gateway.snapshot,
+      client,
+      phase: "connected",
+    });
+
+    expect(deferHydration).toHaveBeenCalledWith(state.sessionKey, expect.any(Promise));
+  });
+
   it("replays a pending exact-run stop when the gateway reconnects", async () => {
     const request = vi.fn((method: string) =>
       method === "chat.abort" ? Promise.resolve({ aborted: true }) : new Promise<never>(() => {}),

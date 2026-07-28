@@ -33,7 +33,7 @@ import {
   type SessionCreateOutcome,
   type SessionCreateParams,
 } from "./create.ts";
-import { readSessionCustomGroupNames } from "./custom-groups.ts";
+import { readSessionCustomGroupNames, readSidebarSectionOrder } from "./custom-groups.ts";
 import { scopedAgentListParamsForSession, type SessionArchivedFilter } from "./navigation.ts";
 import type { SessionPatch, SessionPatchOptions, SessionPatchRoute } from "./patch.ts";
 import {
@@ -69,6 +69,8 @@ type SessionState = {
   deletedSessions: readonly SessionDeleteTarget[];
   /** Gateway-owned custom group catalog in display order. */
   groups: readonly string[];
+  /** Gateway-owned sidebar section order; pinned is intentionally absent. */
+  sectionOrder: readonly string[];
 };
 
 type SessionGroupMutationResult = "completed" | "stale";
@@ -78,6 +80,7 @@ export type { SessionArchivedFilter } from "./navigation.ts";
 export type SessionListOptions = {
   agentId?: string;
   spawnedBy?: string;
+  boardFace?: "chat" | "dashboard";
   activeMinutes?: number;
   search?: string;
   creatorId?: string;
@@ -210,6 +213,8 @@ export type SessionCapability = {
   create: (params?: SessionCreateParams) => Promise<string | null>;
   patch: SessionPatchRoute;
   setModelOverride: (key: string, value: string | null | undefined) => void;
+  /** True while a just-created work session is waiting for its canonical placement row. */
+  isPreparedWorkSession: (key: string) => boolean;
   pullRequestSummary: (key: string) => SessionCatalogPullRequestSummary | undefined;
   capturePullRequestEpoch: (key: string) => symbol;
   setPullRequestSummary: (
@@ -279,7 +284,10 @@ export type SessionCapability = {
   /** Loads the gateway-owned group catalog, coalescing successful connection attempts. */
   groupsLoad: () => Promise<void>;
   /** Replaces the group catalog; stale means the initiating connection retired. */
-  groupsPut: (names: readonly string[]) => Promise<SessionGroupMutationResult>;
+  groupsPut: (
+    names: readonly string[],
+    sectionOrder?: readonly string[],
+  ) => Promise<SessionGroupMutationResult>;
   /** Renames a group; stale means the initiating connection retired before reconciliation. */
   groupsRename: (from: string, to: string) => Promise<SessionGroupMutationResult>;
   /** Deletes a group; stale means the initiating connection retired before reconciliation. */
@@ -302,7 +310,6 @@ export {
   scopedAgentListParamsForRefreshTarget,
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
-  searchForSession,
   visibleSessionMatches,
 } from "./navigation.ts";
 export type {
@@ -380,6 +387,9 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
   const spawnedBy = options.spawnedBy?.trim();
   const search = options.search?.trim();
   const creatorId = options.creatorId?.trim();
+  if (options.boardFace) {
+    params.boardFace = options.boardFace;
+  }
   if (agentId) {
     params.agentId = agentId;
   }
@@ -822,6 +832,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     error: null,
     deletedSessions: [],
     groups: [],
+    sectionOrder: [],
   };
   let inFlight: Promise<void> | null = null;
   let queuedRefresh: SessionRefreshOptions | null = null;
@@ -834,6 +845,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     string,
     { token: symbol; previous: string | null | undefined }
   >();
+  const preparedWorkSessionKeys = new Set<string>();
   const swarmActivity = new SwarmActivityTracker();
   const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
   const pullRequestEpochs = new Map<string, symbol>();
@@ -894,6 +906,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     const normalizedKey = key.trim();
     pullRequestEpochs.delete(normalizedKey);
     pullRequestSummaries.delete(normalizedKey);
+  };
+
+  // A deleted key stays reusable for a later ordinary thread, so a leftover
+  // prepared entry would keep classifying that new session as Coding forever.
+  const retirePreparedWorkSession = (key: string) => {
+    preparedWorkSessionKeys.delete(key.trim());
   };
 
   const setPullRequestSummary = (
@@ -1010,6 +1028,11 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         }
       }
       nextResult = swarmActivity.decorate(nextResult);
+      for (const row of nextResult?.sessions ?? []) {
+        if (row.worktree || row.execNode) {
+          preparedWorkSessionKeys.delete(row.key);
+        }
+      }
       canonicalListRevision += 1;
       publish({
         result: nextResult,
@@ -1019,6 +1042,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         error: null,
         deletedSessions: [],
         groups: state.groups,
+        sectionOrder: state.sectionOrder,
       });
     } catch (error) {
       if (isCurrentConnection(scope)) {
@@ -1069,7 +1093,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   };
 
   const refreshReplacement = (agentId?: string | null) => {
-    const options = { ...lastListOptions };
+    // Mutation refreshes replace the visible sidebar rows. A foreground probe
+    // that omitted derived titles must not turn readable names back into ids.
+    const options = {
+      ...lastListOptions,
+      includeDerivedTitles: lastListOptions.includeDerivedTitles ?? true,
+    };
     const normalizedAgentId = agentId?.trim();
     if (normalizedAgentId) {
       options.agentId = normalizedAgentId;
@@ -1099,6 +1128,16 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       });
       if (!isCurrentConnection(scope)) {
         return null;
+      }
+      // The create response precedes list reconciliation. Carry submitted facts
+      // across that gap so a partial history row cannot briefly lose its zone/model.
+      if (requestParams.worktree === true || Boolean(requestParams.execNode?.trim())) {
+        preparedWorkSessionKeys.add(result.key.trim());
+      }
+      if (requestParams.model?.trim()) {
+        setModelOverride(result.key, requestParams.model);
+      } else if (preparedWorkSessionKeys.has(result.key)) {
+        publish({ ...state });
       }
       const reconcileCreatedSession = async () => {
         await refreshReplacement(params.agentId);
@@ -1168,11 +1207,17 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return Math.min(Math.max(requested, GROUPS_RETRY_MIN_MS), GROUPS_RETRY_MAX_MS);
   };
 
-  const publishGroups = (groups: readonly string[]) => {
-    if (groups.length === state.groups.length && groups.every((g, i) => g === state.groups[i])) {
+  const publishGroupCatalog = (groups: readonly string[], sectionOrder: readonly string[]) => {
+    const groupsUnchanged =
+      groups.length === state.groups.length &&
+      groups.every((group, i) => group === state.groups[i]);
+    const orderUnchanged =
+      sectionOrder.length === state.sectionOrder.length &&
+      sectionOrder.every((sectionId, i) => sectionId === state.sectionOrder[i]);
+    if (groupsUnchanged && orderUnchanged) {
       return;
     }
-    publish({ ...state, groups: [...groups] });
+    publish({ ...state, groups: [...groups], sectionOrder: [...sectionOrder] });
   };
 
   const finishGroupMutationFailure = (
@@ -1216,6 +1261,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         return;
       }
       let names = readSessionCustomGroupNames(listed);
+      let sectionOrder = readSidebarSectionOrder(listed);
       // One-time migration: browser-local catalogs predate the gateway store.
       const legacy = readLegacyStoredGroups();
       if (names.length === 0 && legacy.length > 0) {
@@ -1224,6 +1270,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
           return;
         }
         names = readSessionCustomGroupNames(put);
+        sectionOrder = readSidebarSectionOrder(put);
       }
       if (legacy.length > 0) {
         try {
@@ -1232,7 +1279,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
           // The gateway catalog is canonical either way.
         }
       }
-      publishGroups(names);
+      publishGroupCatalog(names, sectionOrder);
     } catch (error) {
       if (
         !isCurrentConnection(scope) ||
@@ -1269,23 +1316,29 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     const generation = ++groupsLoadGeneration;
     groupsLoadedEpoch = scope.epoch;
     if (advertised === false) {
-      publishGroups([]);
+      publishGroupCatalog([], []);
       return;
     }
     await loadGroups(scope, generation, advertised);
   };
 
-  const groupsPut = async (names: readonly string[]): Promise<SessionGroupMutationResult> => {
+  const groupsPut = async (
+    names: readonly string[],
+    sectionOrder?: readonly string[],
+  ): Promise<SessionGroupMutationResult> => {
     const scope = captureConnection();
     if (!scope) {
       return "stale";
     }
     try {
-      const result = await scope.client.request("sessions.groups.put", { names: [...names] });
+      const result = await scope.client.request("sessions.groups.put", {
+        names: [...names],
+        ...(sectionOrder === undefined ? {} : { sectionOrder: [...sectionOrder] }),
+      });
       if (!isCurrentConnection(scope)) {
         return "stale";
       }
-      publishGroups(readSessionCustomGroupNames(result));
+      publishGroupCatalog(readSessionCustomGroupNames(result), readSidebarSectionOrder(result));
       return "completed";
     } catch (error) {
       return finishGroupMutationFailure(isCurrentConnection(scope), error);
@@ -1302,7 +1355,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (!isCurrentConnection(scope)) {
         return "stale";
       }
-      publishGroups(readSessionCustomGroupNames(result));
+      publishGroupCatalog(readSessionCustomGroupNames(result), readSidebarSectionOrder(result));
       // The mutation response is the commit point. Reconcile member rows in
       // the background so a later disconnect cannot downgrade confirmed work.
       void refresh({ ...lastListOptions, force: true });
@@ -1322,7 +1375,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (!isCurrentConnection(scope)) {
         return "stale";
       }
-      publishGroups(readSessionCustomGroupNames(result));
+      publishGroupCatalog(readSessionCustomGroupNames(result), readSidebarSectionOrder(result));
       // See groupsRename: collapsed-state consumers must observe confirmed
       // completion before an unrelated refresh can outlive the connection.
       void refresh({ ...lastListOptions, force: true });
@@ -1477,6 +1530,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         return { deleted: false };
       }
       retirePullRequestSummary(key);
+      retirePreparedWorkSession(key);
       publish({ ...state, deletedSessions: [{ key, agentId: options.agentId }] });
       setModelOverride(key, undefined);
       await refreshReplacement(options.agentId);
@@ -1526,6 +1580,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (deleted.length > 0 && isCurrentConnection(scope)) {
       for (const key of deleted) {
         retirePullRequestSummary(key);
+        retirePreparedWorkSession(key);
       }
       publish({
         ...state,
@@ -1788,6 +1843,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       inFlight = null;
       queuedRefresh = null;
       rollbackPendingModelPatches();
+      preparedWorkSessionKeys.clear();
       pullRequestSummaries.clear();
       pullRequestEpochs.clear();
       // A connected client replacement needs its own invalidation publish;
@@ -1806,6 +1862,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         error: null,
         deletedSessions: [],
         groups: state.groups,
+        sectionOrder: state.sectionOrder,
       });
       return;
     }
@@ -1825,8 +1882,11 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         } finally {
           if (isCurrentConnection(scope)) {
             const sessionKey = gateway.snapshot.sessionKey?.trim();
+            const agentScope = sessionKey
+              ? scopedAgentListParamsForSession(gateway.snapshot, sessionKey)
+              : { agentId: resolveUiSelectedGlobalAgentId(gateway.snapshot) };
             await refresh({
-              ...(sessionKey ? scopedAgentListParamsForSession(gateway.snapshot, sessionKey) : {}),
+              ...agentScope,
               includeDerivedTitles: true,
               backgroundHydrate: true,
               force: true,
@@ -1902,6 +1962,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     create,
     patch,
     setModelOverride,
+    isPreparedWorkSession(key) {
+      return preparedWorkSessionKeys.has(key.trim());
+    },
     pullRequestSummary,
     capturePullRequestEpoch,
     setPullRequestSummary,
@@ -1946,6 +2009,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       queuedRefresh = null;
       subscribedClient = null;
       pendingModelPatches.clear();
+      preparedWorkSessionKeys.clear();
       swarmActivity.clear();
       pullRequestSummaries.clear();
       pullRequestEpochs.clear();

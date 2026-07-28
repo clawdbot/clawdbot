@@ -288,18 +288,22 @@ vi.mock("../plugins/enable.js", () => ({
     )) as (typeof import("../plugins/enable.js"))["enablePluginInConfig"],
 }));
 
-vi.mock("../plugins/installs.js", () => ({
-  recordPluginInstall: ((
-    ...args: Parameters<(typeof import("../plugins/installs.js"))["recordPluginInstall"]>
-  ) =>
-    invokeMock<
-      Parameters<(typeof import("../plugins/installs.js"))["recordPluginInstall"]>,
-      ReturnType<(typeof import("../plugins/installs.js"))["recordPluginInstall"]>
-    >(
-      recordPluginInstall,
-      ...args,
-    )) as (typeof import("../plugins/installs.js"))["recordPluginInstall"],
-}));
+vi.mock("../plugins/installs.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/installs.js")>();
+  return {
+    ...actual,
+    recordPluginInstall: ((
+      ...args: Parameters<(typeof import("../plugins/installs.js"))["recordPluginInstall"]>
+    ) =>
+      invokeMock<
+        Parameters<(typeof import("../plugins/installs.js"))["recordPluginInstall"]>,
+        ReturnType<(typeof import("../plugins/installs.js"))["recordPluginInstall"]>
+      >(
+        recordPluginInstall,
+        ...args,
+      )) as (typeof import("../plugins/installs.js"))["recordPluginInstall"],
+  };
+});
 
 vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) => {
   const actual =

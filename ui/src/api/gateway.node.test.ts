@@ -608,6 +608,263 @@ describe("GatewayBrowserClient", () => {
     });
   });
 
+  it("latches unavailable session PR refreshes until the connection is replaced", async () => {
+    useNodeFakeTimers();
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+
+    try {
+      const { ws: firstWs, connectFrame: firstConnect } = await startConnect(client);
+      firstWs.emitMessage({
+        type: "res",
+        id: firstConnect.id,
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          protocol: 4,
+          auth: { role: "operator", scopes: [] },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(client.connected).toBe(true);
+
+      const firstRefresh = client.requestSessionPullRequests({
+        sessionKey: "agent:main:first",
+      });
+      const firstRequest = JSON.parse(firstWs.sent.at(-1) ?? "{}") as {
+        id?: string;
+        method?: string;
+      };
+      expect(firstRequest.method).toBe("controlUi.sessionPullRequests");
+      firstWs.emitMessage({
+        type: "res",
+        id: firstRequest.id,
+        ok: false,
+        error: {
+          code: "UNAVAILABLE",
+          message: "session pull requests unavailable",
+          retryable: false,
+        },
+      });
+      await expect(firstRefresh).rejects.toMatchObject({ gatewayCode: "UNAVAILABLE" });
+
+      const sentAfterFailure = firstWs.sent.length;
+      await expect(
+        client.requestSessionPullRequests({ sessionKey: "agent:main:second" }),
+      ).resolves.toBeNull();
+      await expect(
+        client.requestSessionPullRequests({ sessionKey: "agent:main:third" }),
+      ).resolves.toBeNull();
+      expect(firstWs.sent).toHaveLength(sentAfterFailure);
+
+      firstWs.emitClose(1006, "socket lost");
+      await vi.advanceTimersByTimeAsync(800);
+      const secondWs = getLatestWebSocket();
+      expect(secondWs).not.toBe(firstWs);
+      const { connectFrame: secondConnect } = await continueConnect(secondWs, "nonce-2");
+      secondWs.emitMessage({
+        type: "res",
+        id: secondConnect.id,
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          protocol: 4,
+          auth: { role: "operator", scopes: [] },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(client.connected).toBe(true);
+
+      const reconnectedRefresh = client.requestSessionPullRequests({
+        sessionKey: "agent:main:second",
+      });
+      const reconnectedRequest = JSON.parse(secondWs.sent.at(-1) ?? "{}") as {
+        id?: string;
+        method?: string;
+      };
+      expect(reconnectedRequest.method).toBe("controlUi.sessionPullRequests");
+      secondWs.emitMessage({
+        type: "res",
+        id: reconnectedRequest.id,
+        ok: true,
+        payload: { pullRequests: [], rateLimited: false },
+      });
+      await expect(reconnectedRefresh).resolves.toEqual({
+        pullRequests: [],
+        rateLimited: false,
+      });
+    } finally {
+      client.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("backs off once for concurrent retryable session PR failures", async () => {
+    useNodeFakeTimers();
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+
+    try {
+      const { ws, connectFrame } = await startConnect(client);
+      ws.emitMessage({
+        type: "res",
+        id: connectFrame.id,
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          protocol: 4,
+          auth: { role: "operator", scopes: [] },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(client.connected).toBe(true);
+
+      const firstRefresh = client.requestSessionPullRequests({ sessionKey: "agent:main:first" });
+      const firstRequest = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string };
+      const parallelRefresh = client.requestSessionPullRequests({
+        sessionKey: "agent:main:parallel",
+      });
+      const parallelRequest = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string };
+      expect(firstRequest.id).toBeTypeOf("string");
+      expect(parallelRequest.id).toBeTypeOf("string");
+      expect(parallelRequest.id).not.toBe(firstRequest.id);
+      const retryWindowStartedAt = Date.now();
+      const unavailable = (id: string | undefined) =>
+        ws.emitMessage({
+          type: "res",
+          id,
+          ok: false,
+          error: {
+            code: "UNAVAILABLE",
+            message: "session pull requests unavailable",
+            retryable: true,
+            retryAfterMs: 1_000,
+          },
+        });
+      unavailable(firstRequest.id);
+      await expect(firstRefresh).rejects.toMatchObject({
+        gatewayCode: "UNAVAILABLE",
+        retryable: true,
+      });
+      unavailable(parallelRequest.id);
+      await expect(parallelRefresh).rejects.toMatchObject({
+        gatewayCode: "UNAVAILABLE",
+        retryable: true,
+      });
+
+      const sentAfterFailure = ws.sent.length;
+      vi.setSystemTime(retryWindowStartedAt + 29_999);
+      await expect(
+        client.requestSessionPullRequests({ sessionKey: "agent:main:second" }),
+      ).resolves.toBeNull();
+      expect(ws.sent).toHaveLength(sentAfterFailure);
+
+      vi.setSystemTime(retryWindowStartedAt + 30_000);
+      const retriedRefresh = client.requestSessionPullRequests({
+        sessionKey: "agent:main:second",
+      });
+      const retriedRequest = JSON.parse(ws.sent.at(-1) ?? "{}") as {
+        id?: string;
+        method?: string;
+      };
+      expect(retriedRequest.method).toBe("controlUi.sessionPullRequests");
+      ws.emitMessage({
+        type: "res",
+        id: retriedRequest.id,
+        ok: true,
+        payload: { pullRequests: [], rateLimited: false },
+      });
+      await expect(retriedRefresh).resolves.toEqual({
+        pullRequests: [],
+        rateLimited: false,
+      });
+    } finally {
+      client.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["success-first", "failure-first"] as const)(
+    "keeps a concurrent session PR failure latched with %s completion",
+    async (order) => {
+      useNodeFakeTimers();
+      const client = new GatewayBrowserClient({
+        url: "ws://127.0.0.1:18789",
+        token: "shared-auth-token",
+      });
+
+      try {
+        const { ws, connectFrame } = await startConnect(client);
+        ws.emitMessage({
+          type: "res",
+          id: connectFrame.id,
+          ok: true,
+          payload: {
+            type: "hello-ok",
+            protocol: 4,
+            auth: { role: "operator", scopes: [] },
+          },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(client.connected).toBe(true);
+
+        const successfulRefresh = client.requestSessionPullRequests({
+          sessionKey: "agent:main:success",
+        });
+        const successfulRequest = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string };
+        const failedRefresh = client.requestSessionPullRequests({
+          sessionKey: "agent:main:failure",
+        });
+        const failedRequest = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string };
+        const succeed = async () => {
+          ws.emitMessage({
+            type: "res",
+            id: successfulRequest.id,
+            ok: true,
+            payload: { pullRequests: [], rateLimited: false },
+          });
+          await expect(successfulRefresh).resolves.toEqual({
+            pullRequests: [],
+            rateLimited: false,
+          });
+        };
+        const fail = async () => {
+          ws.emitMessage({
+            type: "res",
+            id: failedRequest.id,
+            ok: false,
+            error: {
+              code: "UNAVAILABLE",
+              message: "session pull requests unavailable",
+              retryable: false,
+            },
+          });
+          await expect(failedRefresh).rejects.toMatchObject({ gatewayCode: "UNAVAILABLE" });
+        };
+        if (order === "success-first") {
+          await succeed();
+          await fail();
+        } else {
+          await fail();
+          await succeed();
+        }
+
+        const sentAfterWave = ws.sent.length;
+        await expect(
+          client.requestSessionPullRequests({ sessionKey: "agent:main:next" }),
+        ).resolves.toBeNull();
+        expect(ws.sent).toHaveLength(sentAfterWave);
+      } finally {
+        client.stop();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("tracks inbound activity and delegates forced reconnect to the shared socket", async () => {
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",

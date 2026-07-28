@@ -27,6 +27,7 @@
       "meta": {
         "baseUrl": "https://api.meta.ai/v1",
         "api": "openai-responses",
+        "defaultModel": "muse-spark-1.1",
         "models": [
           {
             "id": "muse-spark-1.1",

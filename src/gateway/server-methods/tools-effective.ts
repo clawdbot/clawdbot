@@ -4,7 +4,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateToolsEffectiveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
@@ -40,6 +39,7 @@ import {
   resolveSessionModelRef,
 } from "./tools-effective.runtime.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 const TOOLS_EFFECTIVE_FRESH_TTL_MS = 10_000;
 const TOOLS_EFFECTIVE_STALE_TTL_MS = 120_000;
@@ -554,15 +554,14 @@ async function handleToolsEffectiveRequest(params: {
   respond: RespondFn;
   context: Parameters<GatewayRequestHandlers[string]>[0]["context"];
 }) {
-  if (!validateToolsEffectiveParams(params.rawParams)) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `invalid tools.effective params: ${formatValidationErrors(validateToolsEffectiveParams.errors)}`,
-      ),
-    );
+  if (
+    !assertValidParams(
+      params.rawParams,
+      validateToolsEffectiveParams,
+      "tools.effective",
+      params.respond,
+    )
+  ) {
     return;
   }
   const cfg = params.context.getRuntimeConfig();

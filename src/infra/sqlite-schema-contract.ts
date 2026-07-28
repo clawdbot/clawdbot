@@ -68,6 +68,12 @@ export type CanonicalSqliteNamedIndexContract = {
 
 export type SqliteSchemaCompatibility = {
   /**
+   * Canonical additive tables that may be absent until their owning feature
+   * performs its one-time lazy ensure. Present tables still require the exact
+   * canonical shape.
+   */
+  allowedMissingTables?: readonly string[];
+  /**
    * Exact definitions produced by supported additive migrations when SQLite
    * requires a temporary default that the clean schema does not retain.
    */
@@ -99,11 +105,15 @@ export function assertSqliteSchemaContains(
   compatibility: SqliteSchemaCompatibility = {},
 ): void {
   const expected = getSqliteSchemaContract(schemaSql);
+  const allowedMissingTables = new Set(compatibility.allowedMissingTables ?? []);
 
   const mismatches: string[] = [];
   for (const [tableName, expectedTable] of expected) {
     const actualTable = collectSqliteTableContract(database, tableName);
     if (!actualTable) {
+      if (allowedMissingTables.has(tableName)) {
+        continue;
+      }
       mismatches.push(`missing table ${tableName}`);
       continue;
     }

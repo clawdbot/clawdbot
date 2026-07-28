@@ -101,7 +101,7 @@ describe("session transcript inbound context", () => {
         historyLimit: 3,
         senderLabels: { assistant: "OpenClaw", user: "User" },
       },
-      UntrustedStructuredContext: [
+      ChannelStructuredContext: [
         {
           label: "Conversation context",
           source: "telegram",
@@ -132,7 +132,7 @@ describe("session transcript inbound context", () => {
       storePath: "/tmp/sessions.json",
     });
 
-    expect(ctx.UntrustedStructuredContext?.[0]).toMatchObject({
+    expect(ctx.ChannelStructuredContext?.[0]).toMatchObject({
       source: "session",
       payload: {
         messages: [
@@ -150,7 +150,7 @@ describe("session transcript inbound context", () => {
     ]);
     const ctx = context({
       SessionTranscriptContext: { chatWindow: true, historyLimit: 1 },
-      UntrustedStructuredContext: [
+      ChannelStructuredContext: [
         {
           label: "Conversation context",
           type: "chat_window",
@@ -165,7 +165,7 @@ describe("session transcript inbound context", () => {
       storePath: "/tmp/sessions.json",
     });
 
-    expect(ctx.UntrustedStructuredContext?.[0]?.payload).toEqual({
+    expect(ctx.ChannelStructuredContext?.[0]?.payload).toEqual({
       messages: [{ body: "target", is_reply_target: true }],
     });
   });

@@ -53,6 +53,13 @@ const sampleTask = createWorkboardTask();
 let host: object;
 let state: ReturnType<typeof getWorkboardState>;
 
+function loadBoard(
+  client: WorkboardTestClient,
+  options: Omit<Parameters<typeof loadWorkboard>[0], "host" | "client" | "force"> = {},
+) {
+  return loadWorkboard({ host, client, force: true, ...options });
+}
+
 function syncLifecycle(
   client: WorkboardTestClient,
   sessions: GatewaySessionRow[] = [],
@@ -61,7 +68,10 @@ function syncLifecycle(
   return syncWorkboardLifecycle({ host, client, sessions, ...options });
 }
 
-function refreshBoard(client: WorkboardTestClient, source: "live" | "manual") {
+function refreshBoard(
+  client: Parameters<typeof refreshWorkboard>[0]["client"],
+  source: "live" | "manual",
+) {
   return refreshWorkboard({ host, client, source });
 }
 
@@ -189,7 +199,7 @@ describe("workboard controller", () => {
         },
       });
 
-      await loadWorkboard({ host, client: client as never, force: true });
+      await loadBoard(client);
 
       expect(getWorkboardState(host).boards).toEqual([
         {
@@ -225,10 +235,10 @@ describe("workboard controller", () => {
         return {};
       });
 
-      const staleLoad = loadWorkboard({ host, client: client as never, force: true });
+      const staleLoad = loadBoard(client);
       await Promise.resolve();
       stopWorkboardLifecycleRefresh(host);
-      await loadWorkboard({ host, client: client as never, force: true });
+      await loadBoard(client);
 
       staleList.resolve({
         cards: [{ ...sampleCard, title: "Stale generation" }],
@@ -258,11 +268,7 @@ describe("workboard controller", () => {
         return {};
       });
 
-      const syncing = syncWorkboardLifecycle({
-        host,
-        client: client as never,
-        sessions: [sampleSession],
-      });
+      const syncing = syncLifecycle(client, [sampleSession]);
       await waitForFast(() => {
         expect(client.request).toHaveBeenCalledWith(
           "workboard.cards.update",
@@ -293,7 +299,7 @@ describe("workboard controller", () => {
       "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "done"] },
     });
 
-    await loadWorkboard({ host, client: client as never, force: true });
+    await loadBoard(client);
 
     expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
     expect(getWorkboardState(host).cards).toEqual([sampleCard]);
@@ -305,12 +311,7 @@ describe("workboard controller", () => {
       "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "done"] },
     });
 
-    await loadWorkboard({
-      host,
-      client: client as never,
-      force: true,
-      refreshDiagnostics: true,
-    });
+    await loadBoard(client, { refreshDiagnostics: true });
 
     expect(client.request).toHaveBeenNthCalledWith(1, "workboard.cards.diagnostics.refresh", {});
     expect(client.request).toHaveBeenNthCalledWith(2, "workboard.cards.list", {});
@@ -324,12 +325,7 @@ describe("workboard controller", () => {
       return { cards: [sampleCard], statuses: ["todo", "done"] };
     });
 
-    await loadWorkboard({
-      host,
-      client: client as never,
-      force: true,
-      refreshDiagnostics: true,
-    });
+    await loadBoard(client, { refreshDiagnostics: true });
 
     expect(client.request).toHaveBeenNthCalledWith(1, "workboard.cards.diagnostics.refresh", {});
     expect(client.request).toHaveBeenNthCalledWith(2, "workboard.cards.list", {});
@@ -349,7 +345,7 @@ describe("workboard controller", () => {
       "tasks.list": { tasks: [sampleTask] },
     });
 
-    await loadWorkboard({ host, client: client as never, force: true });
+    await loadBoard(client);
 
     expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
     expect(state.cards[0]).toMatchObject({ id: "card-1", taskId: "task-1" });
@@ -377,7 +373,7 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await loadWorkboard({ host, client: client as never, force: true });
+    await loadBoard(client);
 
     expect(state.cards[0]).toMatchObject({ id: sampleCard.id, taskId: sampleTask.taskId });
     expect(state.tasksByCardId.get(sampleCard.id)).toEqual(sampleTask);
@@ -409,7 +405,7 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await loadWorkboard({ host, client: client as never, force: true });
+    await loadBoard(client);
 
     expect(client.request).toHaveBeenCalledWith("tasks.get", { taskId: sampleTask.taskId });
     expect(state.cards[0]).toMatchObject({ taskId: sampleTask.taskId });
@@ -429,7 +425,7 @@ describe("workboard controller", () => {
       "tasks.get": { task: sampleTask },
     });
 
-    await loadWorkboard({ host, client: client as never, force: true });
+    await loadBoard(client);
 
     expect(client.request).toHaveBeenCalledWith("tasks.get", { taskId: sampleTask.taskId });
     expect(state.cards[0]).toMatchObject({ taskId: sampleTask.taskId });
@@ -458,13 +454,13 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await loadWorkboard({ host, client: client as never, force: true });
+    await loadBoard(client);
 
     expect(state.lifecycleTaskRefreshFailed).toBe(true);
     expect(state.lastRefreshError).toBe("task confirmation unavailable");
     vi.clearAllMocks();
 
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
+    await syncLifecycle(client);
 
     expect(client.request).not.toHaveBeenCalled();
   });
@@ -491,7 +487,7 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await loadWorkboard({ host, client: client as never, force: true });
+    await loadBoard(client);
 
     expect(state.cards[0]).toMatchObject({ taskId: sampleTask.taskId });
     expect(state.tasksByCardId.get(linked.id)).toEqual(sampleTask);
@@ -537,20 +533,20 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await loadWorkboard({ host, client: client as never, force: true, taskRefresh: "linked" });
+    await loadBoard(client, { taskRefresh: "linked" });
     const retryAt = state.lifecycleTaskRefreshRetryAt;
     expect(state.lifecycleTaskRefreshFailed).toBe(true);
     expect(state.lifecycleTasksPrepared).toBe(false);
     expect(state.lastRefreshError).toBe("task-31 unavailable");
 
-    await loadWorkboard({ host, client: client as never, force: true, taskRefresh: "linked" });
+    await loadBoard(client, { taskRefresh: "linked" });
     expect(failedTaskRequests).toBe(1);
     expect(state.lifecycleTaskRefreshFailed).toBe(true);
     expect(state.lifecycleTaskRefreshRetryAt).toBe(retryAt);
     expect(state.lifecycleTasksPrepared).toBe(false);
     expect(state.lastRefreshError).toBe("task-31 unavailable");
 
-    await loadWorkboard({ host, client: client as never, force: true, taskRefresh: "all" });
+    await loadBoard(client, { taskRefresh: "all" });
     expect(state.lifecycleTaskRefreshFailed).toBe(false);
     expect(state.lifecycleTasksPrepared).toBe(true);
     expect(state.lastRefreshError).toBeNull();
@@ -568,7 +564,7 @@ describe("workboard controller", () => {
       "workboard.cards.list": { cards, statuses: ["todo", "running", "done"] },
     });
 
-    await loadWorkboard({ host, client: client as never, force: true, taskRefresh: "linked" });
+    await loadBoard(client, { taskRefresh: "linked" });
 
     expect(state.lifecycleTaskRefreshFailed).toBe(false);
     expect(state.lifecycleTaskRefreshRetryAt).toBeNull();
@@ -590,12 +586,12 @@ describe("workboard controller", () => {
       "tasks.get": { task: sampleTask },
     });
 
-    await loadWorkboard({ host, client: client as never, force: true });
+    await loadBoard(client);
 
     expect(state.lifecycleTasksPrepared).toBe(true);
     vi.clearAllMocks();
 
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
+    await syncLifecycle(client);
 
     expect(client.request).not.toHaveBeenCalled();
     expect(state.tasksByCardId.get(sampleCard.id)).toEqual(sampleTask);
@@ -619,7 +615,7 @@ describe("workboard controller", () => {
       "tasks.list": { tasks: [sampleTask, unrelated] },
     });
 
-    await loadWorkboard({ host, client: client as never, force: true });
+    await loadBoard(client);
 
     expect(state.cards[0]).toMatchObject({ taskId: sampleTask.taskId });
     expect(state.tasksByCardId.get(sampleCard.id)).toEqual(sampleTask);
@@ -630,11 +626,7 @@ describe("workboard controller", () => {
       "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "done"] },
       "tasks.list": { tasks: [] },
     });
-    await refreshWorkboard({
-      host,
-      client: client as never,
-      source: "live",
-    });
+    await refreshBoard(client, "live");
 
     expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
     expect(state.lastRefreshSource).toBe("live");
@@ -650,11 +642,7 @@ describe("workboard controller", () => {
       "tasks.list": { tasks: [] },
     });
 
-    await refreshWorkboard({
-      host,
-      client: client as never,
-      source: "live",
-    });
+    await refreshBoard(client, "live");
 
     expect(state.error).toBe("move denied");
     expect(state.lastRefreshError).toBeNull();
@@ -676,7 +664,7 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await loadWorkboard({ host, client: client as never, force: true });
+    await loadBoard(client);
 
     expect(state.loaded).toBe(false);
     expect(state.error).toBe("cards unavailable");
@@ -685,11 +673,7 @@ describe("workboard controller", () => {
     expect(state.loadAttempted).toBe(false);
 
     cardsAvailable = true;
-    await refreshWorkboard({
-      host,
-      client: client as never,
-      source: "live",
-    });
+    await refreshBoard(client, "live");
 
     expect(state.loaded).toBe(true);
     expect(state.cards).toEqual([sampleCard]);
@@ -713,16 +697,12 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await loadWorkboard({ host, client: client as never, force: true });
+    await loadBoard(client);
 
     state.error = "move denied";
     cardsAvailable = true;
 
-    await refreshWorkboard({
-      host,
-      client: client as never,
-      source: "live",
-    });
+    await refreshBoard(client, "live");
 
     expect(state.loaded).toBe(true);
     expect(state.cards).toEqual([sampleCard]);
@@ -736,11 +716,7 @@ describe("workboard controller", () => {
       throw new Error("refresh unavailable");
     });
 
-    await refreshWorkboard({
-      host,
-      client: client as never,
-      source: "live",
-    });
+    await refreshBoard(client, "live");
 
     expect(state.error).toBe("move denied");
     expect(state.lastRefreshError).toBe("refresh unavailable");
@@ -763,17 +739,13 @@ describe("workboard controller", () => {
   });
 
   it("clears stale refresh errors after a later direct load succeeds", async () => {
-    await refreshWorkboard({
-      host,
-      client: null,
-      source: "manual",
-    });
+    await refreshBoard(null, "manual");
 
     const client = createClient({
       "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "done"] },
       "tasks.list": { tasks: [] },
     });
-    await loadWorkboard({ host, client: client as never, force: true });
+    await loadBoard(client);
 
     expect(state.loaded).toBe(true);
     expect(state.error).toBeNull();
@@ -792,11 +764,7 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await refreshWorkboard({
-      host,
-      client: client as never,
-      source: "manual",
-    });
+    await refreshBoard(client, "manual");
 
     expect(state.cards).toMatchObject([{ title: "Refreshed card" }]);
     expect(state.error).toBeNull();
@@ -826,24 +794,19 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await loadWorkboard({
-      host,
-      client: client as never,
-      force: true,
-      requestUpdate,
-    });
+    await loadBoard(client, { requestUpdate });
     vi.clearAllMocks();
 
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+    await syncLifecycle(client, [], { requestUpdate });
+    await syncLifecycle(client, [], { requestUpdate });
 
     expect(client.request).not.toHaveBeenCalled();
     expect(requestUpdate).not.toHaveBeenCalled();
 
     tasksAvailable = true;
-    await loadWorkboard({ host, client: client as never, force: true });
+    await loadBoard(client);
     vi.clearAllMocks();
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
+    await syncLifecycle(client);
 
     expect(client.request).not.toHaveBeenCalledWith("tasks.list", { limit: 500 });
     expect(getWorkboardState(host).tasksByCardId.get(sampleCard.id)).toEqual(sampleTask);
@@ -866,11 +829,7 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await refreshWorkboard({
-      host,
-      client: client as never,
-      source: "live",
-    });
+    await refreshBoard(client, "live");
 
     expect(state.tasksByCardId.get(sampleCard.id)).toEqual(sampleTask);
     expect(state.lifecycleTasksPrepared).toBe(false);
@@ -898,11 +857,7 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await refreshWorkboard({
-      host,
-      client: client as never,
-      source: "live",
-    });
+    await refreshBoard(client, "live");
 
     expect(client.request).toHaveBeenCalledWith("tasks.get", { taskId: sampleTask.taskId });
     expect(state.cards[0]).toMatchObject({ taskId: sampleTask.taskId });
@@ -911,11 +866,7 @@ describe("workboard controller", () => {
     expect(state.lastRefreshError).toBeNull();
 
     vi.clearAllMocks();
-    await refreshWorkboard({
-      host,
-      client: client as never,
-      source: "live",
-    });
+    await refreshBoard(client, "live");
 
     expect(client.request).not.toHaveBeenCalledWith("tasks.get", { taskId: sampleTask.taskId });
   });
@@ -926,11 +877,7 @@ describe("workboard controller", () => {
       "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "done"] },
     });
 
-    await refreshWorkboard({
-      host,
-      client: client as never,
-      source: "live",
-    });
+    await refreshBoard(client, "live");
 
     expect(state.cards[0]).not.toHaveProperty("taskId");
     expect(state.tasksByCardId.has(sampleCard.id)).toBe(false);
@@ -974,11 +921,7 @@ describe("workboard controller", () => {
     state.tasksByCardId.set(sampleCard.id, sampleTask);
     state.tasksByCardId.set(olderCard.id, olderTask);
 
-    await refreshWorkboard({
-      host,
-      client: client as never,
-      source: "live",
-    });
+    await refreshBoard(client, "live");
 
     expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
     expect(client.request).not.toHaveBeenCalledWith(
@@ -1018,7 +961,7 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await refreshWorkboard({ host, client: client as never, source: "live" });
+    await refreshBoard(client, "live");
 
     expect(client.request).toHaveBeenCalledWith("tasks.get", { taskId: "task-2" });
     expect(client.request).not.toHaveBeenCalledWith("tasks.get", { taskId: "task-1" });
@@ -1046,12 +989,12 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await refreshWorkboard({ host, client: client as never, source: "live" });
+    await refreshBoard(client, "live");
     const firstBatch = client.request.mock.calls
       .filter(([method]) => method === "tasks.get")
       .map(([, params]) => (params as { taskId: string }).taskId);
     vi.clearAllMocks();
-    await refreshWorkboard({ host, client: client as never, source: "live" });
+    await refreshBoard(client, "live");
     const secondBatch = client.request.mock.calls
       .filter(([method]) => method === "tasks.get")
       .map(([, params]) => (params as { taskId: string }).taskId);
@@ -1087,11 +1030,11 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await refreshWorkboard({ host, client: client as never, source: "live" });
+    await refreshBoard(client, "live");
 
     expect(getWorkboardState(host).lifecycleTasksPrepared).toBe(false);
     vi.clearAllMocks();
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
+    await syncLifecycle(client);
 
     expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
     expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
@@ -1127,7 +1070,7 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await refreshWorkboard({ host, client: client as never, source: "live" });
+    await refreshBoard(client, "live");
     const firstDiscoveryCalls = client.request.mock.calls.filter(
       ([method]) => method === "tasks.list",
     );
@@ -1139,7 +1082,7 @@ describe("workboard controller", () => {
     expect(getWorkboardState(host).lifecycleTasksPrepared).toBe(false);
 
     vi.clearAllMocks();
-    await refreshWorkboard({ host, client: client as never, source: "live" });
+    await refreshBoard(client, "live");
     const secondDiscoveryCalls = client.request.mock.calls.filter(
       ([method]) => method === "tasks.list",
     );
@@ -1166,7 +1109,7 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await refreshWorkboard({ host, client: client as never, source: "live" });
+    await refreshBoard(client, "live");
 
     expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
     expect(getWorkboardState(host).cards[0]).toMatchObject({ taskId: sampleTask.taskId });
@@ -1209,7 +1152,7 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await refreshWorkboard({ host, client: client as never, source: "live" });
+    await refreshBoard(client, "live");
 
     expect(client.request).not.toHaveBeenCalledWith("tasks.get", { taskId: missingTaskId });
     expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
@@ -1218,7 +1161,7 @@ describe("workboard controller", () => {
     expect(state.missingTaskIds).toEqual(new Set([missingTaskId]));
 
     vi.clearAllMocks();
-    await refreshWorkboard({ host, client: client as never, source: "live" });
+    await refreshBoard(client, "live");
 
     expect(client.request).toHaveBeenCalledWith("tasks.get", { taskId: replacementTaskId });
     expect(client.request).not.toHaveBeenCalledWith("tasks.get", { taskId: missingTaskId });
@@ -1247,11 +1190,11 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await refreshWorkboard({ host, client: client as never, source: "live" });
+    await refreshBoard(client, "live");
     expect(getWorkboardState(host).cards[0]).not.toHaveProperty("taskId");
 
     vi.clearAllMocks();
-    await refreshWorkboard({ host, client: client as never, source: "live" });
+    await refreshBoard(client, "live");
 
     expect(client.request).toHaveBeenCalledWith("tasks.list", {
       limit: 500,
@@ -1279,9 +1222,9 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await refreshWorkboard({ host, client: client as never, source: "live" });
-    await refreshWorkboard({ host, client: client as never, source: "live" });
-    await refreshWorkboard({ host, client: client as never, source: "live" });
+    await refreshBoard(client, "live");
+    await refreshBoard(client, "live");
+    await refreshBoard(client, "live");
 
     const discoveryCalls = client.request.mock.calls.filter(([method]) => method === "tasks.list");
     expect(discoveryCalls.map(([, params]) => params)).toEqual([
@@ -1359,6 +1302,26 @@ describe("workboard controller", () => {
     expect(state.lifecycleTaskRefreshFailed).toBe(false);
     expect(state.lifecycleTaskRefreshError).toBeNull();
     expect(client.request).toHaveBeenCalledWith("workboard.cards.dispatch", {});
+  });
+
+  it("limits dispatch to the selected named board", async () => {
+    state.boardFilter = "ops";
+    state.boards = [{ id: "ops", total: 1, active: 1, archived: 0, byStatus: { ready: 1 } }];
+    const client = createClient({
+      "workboard.cards.dispatch": {
+        promoted: [],
+        reclaimed: [],
+        blocked: [],
+        orchestrated: [],
+        count: 0,
+      },
+      "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "done"] },
+      "tasks.list": { tasks: [] },
+    });
+
+    await dispatchWorkboard({ host, client: client as never });
+
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.dispatch", { boardId: "ops" });
   });
 
   it("clears stale refresh errors after a successful dispatch reload", async () => {
@@ -1486,7 +1449,7 @@ describe("workboard controller", () => {
         "tasks.list": { tasks: [] },
       });
 
-      await refreshWorkboard({ host, client: client as never, source: "manual" });
+      await refreshBoard(client, "manual");
 
       expect(client.request).not.toHaveBeenCalled();
       if (mutation === "dispatch") {
@@ -1538,9 +1501,7 @@ describe("workboard controller", () => {
         "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "done"] },
       });
 
-      await expect(loadWorkboard({ host, client: client as never, force: true })).resolves.toBe(
-        false,
-      );
+      await expect(loadBoard(client)).resolves.toBe(false);
 
       expect(client.request).not.toHaveBeenCalled();
     },
@@ -1711,7 +1672,7 @@ describe("workboard controller", () => {
     state.editingCardId = sampleCard.id;
     state.draftTitle = "Saved title";
 
-    const refresh = loadWorkboard({ host, client: client as never, force: true });
+    const refresh = loadBoard(client);
     await Promise.resolve();
     const save = saveWorkboardCardDraft({ host, client: client as never });
     await waitForFast(() => {
@@ -1753,20 +1714,9 @@ describe("workboard controller", () => {
       return {};
     });
 
-    const poll = loadWorkboard({
-      host,
-      client: client as never,
-      force: true,
-      taskRefresh: "linked",
-    });
+    const poll = loadBoard(client, { taskRefresh: "linked" });
     await Promise.resolve();
-    const forced = loadWorkboard({
-      host,
-      client: client as never,
-      force: true,
-      refreshDiagnostics: true,
-      taskRefresh: "all",
-    });
+    const forced = loadBoard(client, { refreshDiagnostics: true, taskRefresh: "all" });
     pollList.resolve({ cards: [sampleCard], statuses: ["todo", "done"] });
     await Promise.all([poll, forced]);
 
@@ -1800,26 +1750,10 @@ describe("workboard controller", () => {
       return {};
     });
 
-    const initial = loadWorkboard({
-      host,
-      client: client as never,
-      force: true,
-      taskRefresh: "linked",
-    });
+    const initial = loadBoard(client, { taskRefresh: "linked" });
     await Promise.resolve();
-    const weaker = loadWorkboard({
-      host,
-      client: client as never,
-      force: true,
-      taskRefresh: "linked",
-    });
-    const stronger = loadWorkboard({
-      host,
-      client: client as never,
-      force: true,
-      refreshDiagnostics: true,
-      taskRefresh: "all",
-    });
+    const weaker = loadBoard(client, { taskRefresh: "linked" });
+    const stronger = loadBoard(client, { refreshDiagnostics: true, taskRefresh: "all" });
     initialList.resolve({ cards: [sampleCard], statuses: ["todo", "done"] });
     await Promise.all([initial, weaker, stronger]);
 
@@ -1840,20 +1774,9 @@ describe("workboard controller", () => {
       return {};
     });
 
-    const poll = loadWorkboard({
-      host,
-      client: client as never,
-      force: true,
-      taskRefresh: "linked",
-    });
+    const poll = loadBoard(client, { taskRefresh: "linked" });
     await Promise.resolve();
-    const forced = loadWorkboard({
-      host,
-      client: client as never,
-      force: true,
-      refreshDiagnostics: true,
-      taskRefresh: "all",
-    });
+    const forced = loadBoard(client, { refreshDiagnostics: true, taskRefresh: "all" });
     stopWorkboardLifecycleRefresh(host);
     pollList.resolve({ cards: [sampleCard], statuses: ["todo", "done"] });
     await Promise.all([poll, forced]);
@@ -2024,20 +1947,9 @@ describe("workboard controller", () => {
       return {};
     });
 
-    const initial = loadWorkboard({
-      host,
-      client: client as never,
-      force: true,
-      taskRefresh: "linked",
-    });
+    const initial = loadBoard(client, { taskRefresh: "linked" });
     await Promise.resolve();
-    const forced = loadWorkboard({
-      host,
-      client: client as never,
-      force: true,
-      refreshDiagnostics: true,
-      taskRefresh: "all",
-    });
+    const forced = loadBoard(client, { refreshDiagnostics: true, taskRefresh: "all" });
     stopWorkboardLifecycleRefresh(host);
     const reopened = loadWorkboard({ host, client: client as never });
 
@@ -2094,20 +2006,9 @@ describe("workboard controller", () => {
       return {};
     });
 
-    const poll = loadWorkboard({
-      host,
-      client: client as never,
-      force: true,
-      taskRefresh: "linked",
-    });
+    const poll = loadBoard(client, { taskRefresh: "linked" });
     await Promise.resolve();
-    const forced = loadWorkboard({
-      host,
-      client: client as never,
-      force: true,
-      refreshDiagnostics: true,
-      taskRefresh: "all",
-    });
+    const forced = loadBoard(client, { refreshDiagnostics: true, taskRefresh: "all" });
     getWorkboardState(host).busyCardIds.add(sampleCard.id);
     pollList.resolve({ cards: [sampleCard], statuses: ["todo", "done"] });
     await Promise.all([poll, forced]);
@@ -2183,7 +2084,7 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await loadWorkboard({ host, client: client as never, force: true });
+    await loadBoard(client);
 
     expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
     expect(client.request).toHaveBeenCalledWith("tasks.list", {
@@ -2493,7 +2394,7 @@ describe("workboard controller", () => {
       },
     });
 
-    await loadWorkboard({ host, client: client as never, force: true });
+    await loadBoard(client);
 
     expect(getWorkboardState(host).cards[0]).toMatchObject({ taskId: "task-1" });
   });
@@ -2517,7 +2418,7 @@ describe("workboard controller", () => {
       },
     });
 
-    await loadWorkboard({ host, client: client as never, force: true });
+    await loadBoard(client);
 
     expect(state.cards[0]).not.toHaveProperty("taskId");
     expect(state.tasksByCardId.has("card-1")).toBe(false);
@@ -2594,7 +2495,7 @@ describe("workboard controller", () => {
       },
     });
 
-    await loadWorkboard({ host, client: client as never, force: true });
+    await loadBoard(client);
 
     expect(getWorkboardState(host).cards[0]?.metadata).toMatchObject({
       automation: {
@@ -2691,6 +2592,36 @@ describe("workboard controller", () => {
     expect(state.draftSessionKey).toBe("");
   });
 
+  it("creates cards on the selected named board", async () => {
+    state.boardFilter = "ops";
+    state.boards = [{ id: "ops", total: 0, active: 0, archived: 0, byStatus: {} }];
+    state.draftTitle = "Investigate operations alert";
+    const created = {
+      ...sampleCard,
+      id: "card-ops",
+      title: "Investigate operations alert",
+      metadata: { automation: { boardId: "ops" } },
+    } satisfies WorkboardCard;
+    const client = createClient({ "workboard.cards.create": { card: created } });
+
+    await saveWorkboardCardDraft({ host, client: client as never });
+
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.create", {
+      title: "Investigate operations alert",
+      notes: "",
+      status: "todo",
+      priority: "normal",
+      labels: [],
+      agentId: "",
+      sessionKey: "",
+      boardId: "ops",
+    });
+    expect(state.cards[0]).toMatchObject({
+      id: "card-ops",
+      metadata: { automation: { boardId: "ops" } },
+    });
+  });
+
   it("creates template-backed cards through the save action", async () => {
     state.draftTitle = "Fix: flaky worker";
     state.draftTemplateId = "bugfix";
@@ -2783,6 +2714,58 @@ describe("workboard controller", () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 
+  it("does not poll tasks or reconcile archived session cards", async () => {
+    state.loaded = true;
+    const archived = createWorkboardCard({
+      status: "running",
+      sessionKey: sampleSession.key,
+      taskId: "archived-task",
+      metadata: { archivedAt: 10 },
+    });
+    state.cards = [archived];
+    const client = createClient({});
+
+    await syncLifecycle(client, [
+      { ...sampleSession, status: "done", hasActiveRun: false, updatedAt: 20 },
+    ]);
+
+    expect(client.request).not.toHaveBeenCalled();
+    expect(state.cards).toEqual([archived]);
+    expect(state.tasksByCardId.size).toBe(0);
+  });
+
+  it("reconciles active session cards without rewriting an archived sibling", async () => {
+    state.loaded = true;
+    const archived = createWorkboardCard({
+      id: "archived-session-card",
+      status: "running",
+      sessionKey: sampleSession.key,
+      taskId: "archived-task",
+      metadata: { archivedAt: 10 },
+    });
+    const active = createWorkboardCard({
+      id: "active-session-card",
+      status: "todo",
+      sessionKey: sampleSession.key,
+    });
+    state.cards = [archived, active];
+    const updated = { ...active, status: "review" as const };
+    const client = createClient((method) =>
+      method === "workboard.cards.update" ? { card: updated } : {},
+    );
+
+    await syncLifecycle(client, [
+      { ...sampleSession, status: "done", hasActiveRun: false, updatedAt: 20 },
+    ]);
+
+    expect(client.request).toHaveBeenCalledOnce();
+    expect(client.request).toHaveBeenCalledWith(
+      "workboard.cards.update",
+      expect.objectContaining({ id: active.id }),
+    );
+    expect(state.cards.find((card) => card.id === archived.id)).toEqual(archived);
+  });
+
   it.each(["editing", "dragging"] as const)(
     "does not start lifecycle writes while a card is %s",
     async (interaction) => {
@@ -2798,11 +2781,7 @@ describe("workboard controller", () => {
         "workboard.cards.update": { card: { ...sampleCard, status: "running" } },
       });
 
-      await syncWorkboardLifecycle({
-        host,
-        client: client as never,
-        sessions: [{ ...sampleSession, status: "running", hasActiveRun: true }],
-      });
+      await syncLifecycle(client, [{ ...sampleSession, status: "running", hasActiveRun: true }]);
 
       expect(client.request).not.toHaveBeenCalled();
     },
@@ -2822,7 +2801,7 @@ describe("workboard controller", () => {
       return {};
     });
 
-    const loading = loadWorkboard({ host, client: client as never, force: true });
+    const loading = loadBoard(client);
     await Promise.resolve();
     await syncLifecycle(client, [{ ...sampleSession, status: "running", hasActiveRun: true }]);
 
@@ -2968,6 +2947,37 @@ describe("workboard controller", () => {
     expect(getWorkboardState(host).cards[0]).toMatchObject({ sessionKey: sampleSession.key });
   });
 
+  it("captures a session on the selected named board", async () => {
+    state.loaded = true;
+    state.boardFilter = "ops";
+    state.boards = [{ id: "ops", total: 0, active: 0, archived: 0, byStatus: {} }];
+    const created = createWorkboardCard({
+      id: "captured-ops-card",
+      sessionKey: sampleSession.key,
+      metadata: { automation: { boardId: "ops" } },
+    });
+    const client = createClient((method) => {
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      if (method === "workboard.cards.create") {
+        return { card: created };
+      }
+      return {};
+    });
+
+    await expect(captureSession(client, sampleSession)).resolves.toMatchObject({
+      id: "captured-ops-card",
+      metadata: { automation: { boardId: "ops" } },
+    });
+
+    expect(client.request).toHaveBeenCalledWith(
+      "workboard.cards.create",
+      expect.objectContaining({ boardId: "ops", sessionKey: sampleSession.key }),
+    );
+    expect(state.cards).toContainEqual(created);
+  });
+
   it("does not duplicate existing captured sessions", async () => {
     const existing = createWorkboardCard({
       execution: createWorkboardExecution({ sessionKey: sampleSession.key }),
@@ -2979,6 +2989,90 @@ describe("workboard controller", () => {
 
     expect(card).toBe(existing);
     expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it("reuses an active captured session before an older archived match", async () => {
+    const archived = {
+      ...sampleCard,
+      id: "archived-session-card",
+      sessionKey: sampleSession.key,
+      metadata: { archivedAt: 10 },
+    } satisfies WorkboardCard;
+    const active = {
+      ...sampleCard,
+      id: "active-session-card",
+      sessionKey: sampleSession.key,
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [archived, active];
+    const client = createClient({});
+
+    await expect(captureSession(client, sampleSession)).resolves.toBe(active);
+    expect(client.request).not.toHaveBeenCalled();
+    expect(state.cards).toEqual([archived, active]);
+  });
+
+  it.each([
+    { name: "reuses the newest active captured session", inFlight: false },
+    {
+      name: "returns the newest active captured session while a capture is in flight",
+      inFlight: true,
+    },
+  ])("$name", async ({ inFlight }) => {
+    const archived = {
+      ...sampleCard,
+      id: "archived-newest-session-card",
+      sessionKey: sampleSession.key,
+      position: 0,
+      updatedAt: 30,
+      metadata: { archivedAt: 40 },
+    } satisfies WorkboardCard;
+    const older = {
+      ...sampleCard,
+      id: "older-active-session-card",
+      sessionKey: sampleSession.key,
+      position: 1000,
+      updatedAt: 10,
+    } satisfies WorkboardCard;
+    const newest = {
+      ...sampleCard,
+      id: "newest-active-session-card",
+      sessionKey: sampleSession.key,
+      position: 2000,
+      updatedAt: 20,
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [archived, older, newest];
+    if (inFlight) {
+      state.capturingSessionKeys.add(sampleSession.key);
+    }
+    const client = createClient({});
+
+    await expect(captureSession(client, sampleSession)).resolves.toBe(newest);
+    expect(client.request).not.toHaveBeenCalled();
+    expect(state.cards).toEqual([archived, older, newest]);
+  });
+
+  it("returns the active captured session while a duplicate capture is in flight", async () => {
+    const archived = {
+      ...sampleCard,
+      id: "archived-inflight-session-card",
+      sessionKey: sampleSession.key,
+      metadata: { archivedAt: 10 },
+    } satisfies WorkboardCard;
+    const active = {
+      ...sampleCard,
+      id: "active-inflight-session-card",
+      sessionKey: sampleSession.key,
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [archived, active];
+    state.capturingSessionKeys.add(sampleSession.key);
+    const client = createClient({});
+
+    await expect(captureSession(client, sampleSession)).resolves.toBe(active);
+    expect(client.request).not.toHaveBeenCalled();
+    expect(state.cards).toEqual([archived, active]);
   });
 
   it("restores archived captured sessions instead of leaving them hidden", async () => {
@@ -3139,7 +3233,7 @@ describe("workboard controller", () => {
       return {};
     });
 
-    const loading = loadWorkboard({ host, client: client as never, force: true });
+    const loading = loadBoard(client);
     const captured = captureSession(client, sampleSession);
 
     await Promise.resolve();
@@ -3470,7 +3564,7 @@ describe("workboard controller", () => {
       }
       return { card: running };
     });
-    await loadWorkboard({ host, client: client as never, force: true });
+    await loadBoard(client);
     client.request.mockClear();
 
     const sessionKey = await startWorkboardCard({
@@ -3620,7 +3714,7 @@ describe("workboard controller", () => {
     const client = createClient({
       "workboard.cards.list": { cards: [scheduled], statuses: ["scheduled", "running", "done"] },
     });
-    await loadWorkboard({ host, client: client as never, force: true });
+    await loadBoard(client);
     client.request.mockClear();
 
     const sessionKey = await startWorkboardCard({
@@ -3745,7 +3839,7 @@ describe("workboard controller", () => {
       }
       return {};
     });
-    await loadWorkboard({ host, client: dueClient as never, force: true });
+    await loadBoard(dueClient);
     dueClient.request.mockClear();
 
     const dueSessionKey = await startWorkboardCard({
@@ -4675,7 +4769,7 @@ describe("workboard controller", () => {
       return {};
     });
 
-    const sync = syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
+    const sync = syncLifecycle(client);
     await waitForFast(() => {
       expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
     });
@@ -4743,11 +4837,11 @@ describe("workboard controller", () => {
       return {};
     });
 
-    const first = syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
+    const first = syncLifecycle(client);
     await waitForFast(() => {
       expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
     });
-    const second = syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
+    const second = syncLifecycle(client);
     await Promise.resolve();
 
     expect(client.request.mock.calls.filter(([method]) => method === "tasks.list")).toHaveLength(1);
@@ -4784,12 +4878,7 @@ describe("workboard controller", () => {
     });
     const requestUpdate = vi.fn();
 
-    const first = syncWorkboardLifecycle({
-      host,
-      client: client as never,
-      sessions: [],
-      requestUpdate,
-    });
+    const first = syncLifecycle(client, [], { requestUpdate });
     await waitForFast(() => {
       expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
     });
@@ -4802,24 +4891,14 @@ describe("workboard controller", () => {
     });
     vi.clearAllMocks();
 
-    const second = syncWorkboardLifecycle({
-      host,
-      client: client as never,
-      sessions: [],
-      requestUpdate,
-    });
+    const second = syncLifecycle(client, [], { requestUpdate });
     firstTaskList.resolve({ tasks: [sampleTask] });
     await Promise.all([first, second]);
 
     expect(requestUpdate).toHaveBeenCalledOnce();
     vi.clearAllMocks();
 
-    await syncWorkboardLifecycle({
-      host,
-      client: client as never,
-      sessions: [],
-      requestUpdate,
-    });
+    await syncLifecycle(client, [], { requestUpdate });
 
     expect(client.request).toHaveBeenNthCalledWith(1, "tasks.list", { limit: 500 });
     expect(client.request).toHaveBeenNthCalledWith(2, "workboard.cards.update", {
@@ -4843,7 +4922,7 @@ describe("workboard controller", () => {
       "tasks.list": { tasks: [] },
     });
 
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
+    await syncLifecycle(client);
 
     expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
     expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
@@ -4916,7 +4995,7 @@ describe("workboard controller", () => {
       "tasks.get": { task: sampleTask },
     });
 
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
+    await syncLifecycle(client);
 
     expect(client.request).toHaveBeenNthCalledWith(1, "tasks.list", { limit: 500 });
     expect(client.request).toHaveBeenNthCalledWith(2, "tasks.get", {
@@ -4943,7 +5022,7 @@ describe("workboard controller", () => {
     });
     const requestUpdate = vi.fn();
 
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+    await syncLifecycle(client, [], { requestUpdate });
 
     expect(state.tasksByCardId.get(linked.id)).toEqual(confirmedTask);
     expect(state.lifecycleTasksPrepared).toBe(true);
@@ -4974,7 +5053,7 @@ describe("workboard controller", () => {
     });
     const requestUpdate = vi.fn();
 
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+    await syncLifecycle(client, [], { requestUpdate });
 
     expect(client.request.mock.calls.filter(([method]) => method === "tasks.get")).toHaveLength(32);
     expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
@@ -4984,7 +5063,7 @@ describe("workboard controller", () => {
     await vi.advanceTimersByTimeAsync(100);
     expect(requestUpdate).toHaveBeenCalledOnce();
     vi.clearAllMocks();
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+    await syncLifecycle(client, [], { requestUpdate });
 
     expect(client.request.mock.calls.filter(([method]) => method === "tasks.get")).toHaveLength(32);
     expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
@@ -4992,7 +5071,7 @@ describe("workboard controller", () => {
 
     vi.clearAllMocks();
     await vi.advanceTimersByTimeAsync(100);
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+    await syncLifecycle(client, [], { requestUpdate });
 
     expect(client.request.mock.calls.filter(([method]) => method === "tasks.get")).toHaveLength(1);
     expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
@@ -5021,14 +5100,14 @@ describe("workboard controller", () => {
     });
     const requestUpdate = vi.fn();
 
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+    await syncLifecycle(client, [], { requestUpdate });
 
     expect(client.request.mock.calls.filter(([method]) => method === "tasks.get")).toHaveLength(32);
     expect(state.lifecycleTaskRefreshContinueAt).not.toBeNull();
 
     vi.clearAllMocks();
     await vi.advanceTimersByTimeAsync(5001);
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+    await syncLifecycle(client, [], { requestUpdate });
 
     expect(client.request).not.toHaveBeenCalled();
     expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
@@ -5065,7 +5144,7 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
+    await syncLifecycle(client);
 
     expect(client.request.mock.calls.filter(([method]) => method === "tasks.get")).toHaveLength(32);
     expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
@@ -5108,7 +5187,7 @@ describe("workboard controller", () => {
       return { task: replacementTask };
     });
 
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
+    await syncLifecycle(client);
 
     expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
     if (failure !== "tasks unavailable") {
@@ -5140,7 +5219,7 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
+    await syncLifecycle(client);
 
     expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
     expect(state.lifecycleTaskRefreshFailed).toBe(true);
@@ -5169,7 +5248,7 @@ describe("workboard controller", () => {
     });
     const requestUpdate = vi.fn();
 
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+    await syncLifecycle(client, [], { requestUpdate });
 
     expect(state.missingTaskIds).toEqual(new Set([sampleTask.taskId]));
     expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
@@ -5183,8 +5262,8 @@ describe("workboard controller", () => {
       "tasks.list": { tasks: [sampleTask] },
     });
 
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
+    await syncLifecycle(client);
+    await syncLifecycle(client);
 
     expect(client.request).not.toHaveBeenCalled();
     expect(state.lifecycleTasksPrepared).toBe(true);
@@ -5200,13 +5279,13 @@ describe("workboard controller", () => {
     });
     const requestUpdate = vi.fn();
 
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+    await syncLifecycle(client, [], { requestUpdate });
     expect(client.request).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(5000);
     expect(requestUpdate).toHaveBeenCalledOnce();
     vi.clearAllMocks();
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+    await syncLifecycle(client, [], { requestUpdate });
 
     expect(client.request).toHaveBeenNthCalledWith(1, "tasks.list", { limit: 500 });
     expect(client.request).toHaveBeenNthCalledWith(2, "workboard.cards.update", expect.anything());
@@ -5227,14 +5306,14 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+    await syncLifecycle(client, [], { requestUpdate });
     expect(client.request).toHaveBeenCalledOnce();
     expect(requestUpdate).toHaveBeenCalledOnce();
     expect(state.lifecycleTaskRefreshError).toBe("tasks unavailable");
     state.lastRefreshError = "tasks unavailable";
     vi.clearAllMocks();
 
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+    await syncLifecycle(client, [], { requestUpdate });
 
     expect(client.request).not.toHaveBeenCalled();
     expect(requestUpdate).not.toHaveBeenCalled();
@@ -5245,7 +5324,7 @@ describe("workboard controller", () => {
     vi.clearAllMocks();
     state.error = "unrelated write error";
     state.lastRefreshError = "newer cards refresh failure";
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+    await syncLifecycle(client, [], { requestUpdate });
 
     expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
     expect(state.lifecycleTaskRefreshFailed).toBe(false);
@@ -5481,12 +5560,7 @@ describe("workboard controller", () => {
       throw new Error("write denied");
     });
 
-    await syncWorkboardLifecycle({
-      host,
-      client: client as never,
-      sessions: [sampleSession],
-      canWrite: false,
-    });
+    await syncLifecycle(client, [sampleSession], { canWrite: false });
 
     expect(client.request).not.toHaveBeenCalled();
     expect(state.error).toBeNull();
@@ -5506,12 +5580,7 @@ describe("workboard controller", () => {
     state.lastRefreshError = "tasks unavailable";
     const client = createClient({ "tasks.list": { tasks: [sampleTask] } });
 
-    await syncWorkboardLifecycle({
-      host,
-      client: client as never,
-      sessions: [],
-      canWrite: false,
-    });
+    await syncLifecycle(client, [], { canWrite: false });
 
     expect(client.request).toHaveBeenCalledOnce();
     expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });

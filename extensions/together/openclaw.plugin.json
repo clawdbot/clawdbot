@@ -44,6 +44,7 @@
       "together": {
         "baseUrl": "https://api.together.xyz/v1",
         "api": "openai-completions",
+        "defaultModel": "moonshotai/Kimi-K2.6",
         "models": [
           {
             "id": "moonshotai/Kimi-K2.6",

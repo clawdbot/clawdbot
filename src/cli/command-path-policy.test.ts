@@ -169,6 +169,15 @@ describe("command-path-policy", () => {
       }),
     ).toBe("default");
 
+    expectResolvedPolicy(["agent", "exec"], {
+      bypassConfigGuard: true,
+      loadPlugins: "never",
+      pluginRegistry: { scope: "all" },
+      ownsProtocolStdout: true,
+      hideBanner: true,
+      networkProxy: "default",
+    });
+
     for (const commandPath of [
       ["agents"],
       ["agents", "list"],
@@ -204,6 +213,12 @@ describe("command-path-policy", () => {
     });
     expectResolvedPolicy(["config"], {
       bypassConfigGuard: true,
+      loadPlugins: "never",
+      networkProxy: "bypass",
+    });
+    expectResolvedPolicy(["config", "file"], {
+      bypassConfigGuard: true,
+      ensureCliPath: false,
       loadPlugins: "never",
       networkProxy: "bypass",
     });
@@ -273,6 +288,16 @@ describe("command-path-policy", () => {
     }
     expectResolvedPolicy(["cron", "list"], {
       bypassConfigGuard: true,
+      loadPlugins: "never",
+      networkProxy: "bypass",
+    });
+  });
+
+  it("keeps routed and Commander config reads ahead of observing startup guards", () => {
+    expectResolvedPolicy(["config", "get"], {
+      bypassConfigGuard: true,
+      routeConfigGuard: "always",
+      ensureCliPath: false,
       loadPlugins: "never",
       networkProxy: "bypass",
     });

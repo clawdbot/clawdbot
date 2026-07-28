@@ -1,5 +1,6 @@
-// Covers approval resolution over the gateway client.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+// Covers approval resolution over the gateway client.
+import type { ApprovalResolveResult } from "../../packages/gateway-protocol/src/index.js";
 import { resolveApprovalOverGateway } from "./approval-gateway-resolver.js";
 import { withGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
 import type { GatewayNativeApprovalRuntime } from "./approval-gateway-runtime.types.js";
@@ -23,7 +24,7 @@ const recordedApproval = {
   decision: "allow-once",
   resolvedAtMs: 1_500,
   reason: "user",
-} as const;
+} satisfies ApprovalResolveResult["approval"];
 
 vi.mock("../gateway/operator-approvals-client.js", () => ({
   withOperatorApprovalsGatewayClient: hoisted.withOperatorApprovalsGatewayClient,
@@ -121,6 +122,26 @@ describe("resolveApprovalOverGateway", () => {
       { clientDisplayName: "Approval (unknown)" },
     );
     expect(result).toEqual({ applied: true, approval: recordedApproval });
+    expect(hoisted.withOperatorApprovalsGatewayClient).not.toHaveBeenCalled();
+  });
+
+  it("uses an explicitly injected channel approval runtime", async () => {
+    const request = vi.fn(async () => ({ applied: true, approval: recordedApproval }));
+    await expect(
+      resolveApprovalOverGateway({
+        cfg: {} as never,
+        approvalId: "approval-1",
+        approvalKind: "exec",
+        decision: "deny",
+        gatewayRuntime: { request },
+      }),
+    ).resolves.toEqual({ applied: true, approval: recordedApproval });
+
+    expect(request).toHaveBeenCalledWith(
+      "approval.resolve",
+      { id: "approval-1", kind: "exec", decision: "deny" },
+      { clientDisplayName: "Approval (unknown)" },
+    );
     expect(hoisted.withOperatorApprovalsGatewayClient).not.toHaveBeenCalled();
   });
 
@@ -265,6 +286,7 @@ describe("resolveApprovalOverGateway", () => {
     { approvalId: "approval-1", approvalKind: "bogus", decision: "deny" },
     { approvalId: "approval-1", resolveMethod: "bogus", decision: "deny" },
     { approvalId: "approval-1", allowPluginFallback: "yes", decision: "deny" },
+    { approvalId: "approval-1", gatewayRuntime: { request: vi.fn() }, decision: "deny" },
     {
       approvalId: "approval-1",
       approvalKind: "exec",

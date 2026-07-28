@@ -8,7 +8,8 @@ type PersistDigest = NonNullable<SessionObserverDeps["persistDigest"]>;
 export function createSessionObserverDigestPersister(params: {
   now: () => number;
   persistDigest: PersistDigest;
-  stillCurrent: (runId: string, sessionKey: string) => () => boolean;
+  stillCurrent: (runId: string, sessionKey: string, agentId: string) => () => boolean;
+  onMissingEntry: (state: SessionObserverState) => void;
   onError: (state: SessionObserverState, error: unknown) => void;
 }) {
   const preamblePersistedAt = new WeakMap<SessionObserverState, number>();
@@ -34,8 +35,12 @@ export function createSessionObserverDigestPersister(params: {
           sessionId: state.sessionId,
           agentId: state.agentId,
           digest,
-          stillCurrent: params.stillCurrent(state.runId, state.sessionKey),
+          stillCurrent: params.stillCurrent(state.runId, state.sessionKey, state.agentId),
         });
+        if (accepted === null) {
+          params.onMissingEntry(state);
+          return;
+        }
         if (accepted) {
           if (kind === "preamble") {
             preamblePersistedAt.set(state, params.now());

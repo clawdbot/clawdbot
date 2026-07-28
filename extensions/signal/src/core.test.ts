@@ -4,6 +4,7 @@ import {
   createMessageReceiptFromOutboundResults,
   verifyChannelMessageAdapterCapabilityProofs,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { installChannelDmPolicyContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createPluginSetupWizardStatus,
@@ -1270,84 +1271,18 @@ describe("signal setup parsing", () => {
     ]);
   });
 
-  it("reads the named-account DM policy instead of the channel root", () => {
-    expect(
-      signalDmPolicy.getCurrent(
-        {
-          channels: {
-            signal: {
-              dmPolicy: "disabled",
-              accounts: {
-                work: {
-                  account: "+15555550123",
-                  dmPolicy: "allowlist",
-                },
-              },
-            },
-          },
-        },
-        "work",
-      ),
-    ).toBe("allowlist");
-  });
-
-  it("reports account-scoped config keys for named accounts", () => {
-    expect(signalDmPolicy.resolveConfigKeys?.({ channels: { signal: {} } }, "work")).toEqual({
-      policyKey: "channels.signal.accounts.work.dmPolicy",
-      allowFromKey: "channels.signal.accounts.work.allowFrom",
-    });
-  });
-
-  it("uses configured defaultAccount for omitted DM policy account context", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        signal: {
-          defaultAccount: "work",
-          dmPolicy: "disabled",
-          allowFrom: ["+15555550123"],
-          accounts: {
-            work: {
-              account: "+15555550999",
-              dmPolicy: "allowlist",
-            },
-          },
-        },
+  installChannelDmPolicyContractSuite({
+    dmPolicy: signalDmPolicy,
+    cases: [
+      {
+        name: "Signal named accounts",
+        channel: "signal",
+        accountId: "work",
+        accountConfig: { account: "+15555550999" },
+        inheritedAllowFrom: ["+15555550123"],
+        defaultAccount: { rootAllowFrom: ["+15555550123"] },
       },
-    };
-
-    expect(signalDmPolicy.getCurrent(cfg)).toBe("allowlist");
-    expect(signalDmPolicy.resolveConfigKeys?.(cfg)).toEqual({
-      policyKey: "channels.signal.accounts.work.dmPolicy",
-      allowFromKey: "channels.signal.accounts.work.allowFrom",
-    });
-
-    const next = signalDmPolicy.setPolicy(cfg, "open");
-    expect(next.channels?.signal?.dmPolicy).toBe("disabled");
-    expect(next.channels?.signal?.allowFrom).toEqual(["+15555550123"]);
-    expect(next.channels?.signal?.accounts?.work?.dmPolicy).toBe("open");
-    expect(next.channels?.signal?.accounts?.work?.allowFrom).toEqual(["+15555550123", "*"]);
-  });
-
-  it('writes open policy state to the named account and stores inherited allowFrom with "*"', () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        signal: {
-          allowFrom: ["+15555550123"],
-          accounts: {
-            work: {
-              account: "+15555550999",
-            },
-          },
-        },
-      },
-    };
-
-    const next = signalDmPolicy.setPolicy(cfg, "open", "work");
-
-    expect(next.channels?.signal?.dmPolicy).toBeUndefined();
-    expect(next.channels?.signal?.allowFrom).toEqual(["+15555550123"]);
-    expect(next.channels?.signal?.accounts?.work?.dmPolicy).toBe("open");
-    expect(next.channels?.signal?.accounts?.work?.allowFrom).toEqual(["+15555550123", "*"]);
+    ],
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

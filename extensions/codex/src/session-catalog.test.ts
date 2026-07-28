@@ -19,7 +19,10 @@ import {
 } from "./app-server/session-binding.test-helpers.js";
 import { listPairedNode } from "./session-catalog-node-continue.js";
 import { catalogError, parseCatalogPage } from "./session-catalog-parsing.js";
-import { CODEX_TERMINAL_RESUME_COMMAND } from "./session-catalog-terminal.js";
+import {
+  CODEX_TERMINAL_RESUME_COMMAND,
+  requireCatalogEligibleThread,
+} from "./session-catalog-terminal.js";
 import {
   CODEX_LOCAL_SESSION_HOST_ID,
   codexSessionCatalogRuntime,
@@ -534,6 +537,67 @@ describe("Codex supervision catalog", () => {
     });
   });
 
+  it("memoizes cloned request options until runtime config identity changes", async () => {
+    let runtimeConfig = { agents: { defaults: { workspace: "/workspace/a" } } } as OpenClawConfig;
+    commandRpcMocks.codexControlRequest.mockResolvedValue({ thread: idleThread() });
+    const control = createCodexSessionCatalogControl({
+      getPluginConfig: () => ({ supervision: { enabled: true } }),
+      getRuntimeConfig: () => runtimeConfig,
+    });
+    const cloneSpy = vi.spyOn(globalThis, "structuredClone");
+
+    await control.readThread("thread-1");
+    await control.readThread("thread-1");
+    expect(cloneSpy).toHaveBeenCalledTimes(2);
+
+    runtimeConfig = { agents: { defaults: { workspace: "/workspace/b" } } } as OpenClawConfig;
+    await control.readThread("thread-1");
+    expect(cloneSpy).toHaveBeenCalledTimes(4);
+  });
+
+  it("briefly memoizes thread lists and invalidates on TTL or config identity", async () => {
+    let now = 1_000;
+    let runtimeConfig = {} as OpenClawConfig;
+    commandRpcMocks.codexControlRequest.mockResolvedValue({
+      data: [idleThread({ source: "cli" })],
+    });
+    const control = createCodexSessionCatalogControl({
+      getPluginConfig: () => ({ supervision: { enabled: true } }),
+      getRuntimeConfig: () => runtimeConfig,
+      now: () => now,
+    });
+
+    await control.listPage({ limit: 25 });
+    await control.listPage({ limit: 25 });
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
+
+    now += 3_001;
+    await control.listPage({ limit: 25 });
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
+
+    runtimeConfig = { agents: {} } as OpenClawConfig;
+    await control.listPage({ limit: 25 });
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(3);
+  });
+
+  it("force-refreshes after a cached specific-thread miss", async () => {
+    let includeThread = false;
+    commandRpcMocks.codexControlRequest.mockImplementation(async () => ({
+      data: includeThread ? [idleThread({ id: "thread-new", source: "cli" })] : [],
+    }));
+    const control = createCodexSessionCatalogControl({
+      getPluginConfig: () => ({ supervision: { enabled: true } }),
+      getRuntimeConfig: () => config,
+    });
+    await control.listPage({ limit: 100 });
+    includeThread = true;
+
+    await expect(requireCatalogEligibleThread(control, "thread-new")).resolves.toMatchObject({
+      threadId: "thread-new",
+    });
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
+  });
+
   it("scans bounded native pages for complete title-only search results", async () => {
     const pluginConfig = { supervision: { enabled: true } };
     commandRpcMocks.codexControlRequest.mockImplementation(
@@ -773,14 +837,16 @@ describe("Codex supervision catalog", () => {
 
   it("keeps catalog reads and writes available when supervision is disabled live", async () => {
     let pluginConfig: unknown = { supervision: { enabled: true } };
+    let runtimeConfig = {} as OpenClawConfig;
     commandRpcMocks.codexControlRequest.mockResolvedValue({ data: [] });
     const control = createCodexSessionCatalogControl({
       getPluginConfig: () => pluginConfig,
-      getRuntimeConfig: () => config,
+      getRuntimeConfig: () => runtimeConfig,
     });
 
     await expect(control.listPage({})).resolves.toEqual({ sessions: [] });
     pluginConfig = { supervision: { enabled: false } };
+    runtimeConfig = { plugins: {} } as OpenClawConfig;
 
     await expect(control.listPage({})).resolves.toEqual({ sessions: [] });
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
@@ -1386,6 +1452,29 @@ describe("Codex supervision catalog", () => {
     await expect(getProvider()?.list(requestParams as never)).rejects.toThrow(error);
     expect(control.listPage).not.toHaveBeenCalled();
     expect(runtime.nodes.list).not.toHaveBeenCalled();
+  });
+
+  it("prefers the request node snapshot and retains the plugin runtime fallback", async () => {
+    const control = createControl();
+    const { runtime } = createRuntime();
+    const { api, getProvider } = createGatewayApi(runtime);
+    registerCodexSessionCatalog({
+      api,
+      bindingStore: createCodexTestBindingStore(),
+      control,
+      getRuntimeConfig: () => config,
+    });
+    const provider = getProvider();
+    const requestListNodes = vi.fn(async () => ({ nodes: [] }));
+
+    await expect(
+      provider?.list({ hostIds: ["node:missing"], listNodes: requestListNodes }),
+    ).resolves.toEqual([]);
+    expect(requestListNodes).toHaveBeenCalledOnce();
+    expect(runtime.nodes.list).not.toHaveBeenCalled();
+
+    await expect(provider?.list({ hostIds: ["node:missing"] })).resolves.toEqual([]);
+    expect(runtime.nodes.list).toHaveBeenCalledOnce();
   });
 
   it("enriches only the local source row with its adopted OpenClaw session", async () => {
@@ -3369,6 +3458,8 @@ describe("Codex supervision actions", () => {
     const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-terminal-"));
     tempDirs.push(binDir);
     process.env.PATH = binDir;
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => now);
     const executable = path.join(binDir, process.platform === "win32" ? "codex.cmd" : "codex");
     const control = createEligibleControl({
       listPage: vi.fn(async () => ({
@@ -3445,6 +3536,7 @@ describe("Codex supervision actions", () => {
     if (process.platform !== "win32") {
       await fs.chmod(executable, 0o755);
     }
+    now += 60_001;
     await expect(getProvider()?.list({})).resolves.toEqual(
       expect.arrayContaining([
         expect.objectContaining({

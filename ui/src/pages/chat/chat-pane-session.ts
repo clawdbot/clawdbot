@@ -1,3 +1,4 @@
+import { selectApplicationSession } from "../../app/agent-selection.ts";
 import {
   CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
   buildCatalogSessionKey,
@@ -7,6 +8,7 @@ import {
   flushChatQueueAfterIdleSessionReconciliation,
   flushChatQueueForEvent,
   loadChatComposerSnapshot,
+  loadChatBranches,
   loadChatHistory,
   lookupCatalogSession,
   parseAgentSessionKey,
@@ -40,6 +42,43 @@ import {
 import { ChatPaneSuggestions } from "./chat-pane-suggestions.ts";
 
 export abstract class ChatPaneSession extends ChatPaneSuggestions {
+  protected deferSessionHydrationUntilTranscript(
+    sessionKey: string,
+    transcriptLoad: Promise<unknown>,
+  ): void {
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    const requestVersion = ++this.deferredSessionHydrationRequestVersion;
+    const connectionGeneration = this.connectionGeneration;
+    const client = state.client;
+    const isCurrent = () =>
+      this.deferredSessionHydrationRequestVersion === requestVersion &&
+      this.connectionGeneration === connectionGeneration &&
+      this.state === state &&
+      state.connected &&
+      state.client === client &&
+      state.sessionKey === sessionKey;
+    const scheduleAfterTranscript = () => {
+      if (!isCurrent()) {
+        return;
+      }
+      // These affordances do not shape the transcript. Start them together only
+      // after the authoritative history has committed so they cannot delay chat paint.
+      state.renderLifecycle.afterCommit((complete) => {
+        if (isCurrent()) {
+          void loadChatBranches(state);
+          void this.probeSessionDiscussion(sessionKey);
+          this.hydrateSessionCompanion(sessionKey);
+          void this.refreshSessionPullRequests();
+        }
+        complete();
+      });
+    };
+    void transcriptLoad.then(scheduleAfterTranscript, scheduleAfterTranscript);
+  }
+
   protected markSessionRead(row: GatewaySessionRow | undefined) {
     const state = this.state;
     if (!state?.connected || !row) {
@@ -120,11 +159,11 @@ export abstract class ChatPaneSession extends ChatPaneSuggestions {
     }
     const nextSessionKey = state.sessionKey;
     saveRouteSessionSettings(state, nextSessionKey);
-    this.context.gateway.setSessionKey(nextSessionKey);
-    const agentId = parseAgentSessionKey(nextSessionKey)?.agentId;
-    if (agentId) {
-      this.context.agentSelection.set(agentId);
-    }
+    selectApplicationSession({
+      selection: this.context.agentSelection,
+      gateway: this.context.gateway,
+      sessionKey: nextSessionKey,
+    });
   }
 
   protected switchPaneSession(nextSessionKey: string) {
@@ -143,6 +182,7 @@ export abstract class ChatPaneSession extends ChatPaneSuggestions {
     this.cancelHeaderRename();
     this.resetOlderMessagesViewport();
     const catalogKey = parseCatalogSessionKey(nextSessionKey);
+    const previousAgentId = resolveChatAgentId(state);
     const previousSessionsResult = state.sessionsResult;
     const nextSessionRow = state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey);
     const nextSessionLabel = resolveSessionDisplayName(nextSessionKey, nextSessionRow);
@@ -202,10 +242,15 @@ export abstract class ChatPaneSession extends ChatPaneSuggestions {
     }
     void state.loadAssistantIdentity();
     void refreshChatAvatar(state).finally(() => this.requestUpdate());
-    void refreshChatMetadata(state).finally(() => state.requestUpdate?.());
+    const nextAgentId = resolveChatAgentId(state);
+    // Agent-scoped catalogs remain valid across same-agent sessions. Cross-agent
+    // failures must clear instead of retaining models owned by the previous agent.
+    void refreshChatMetadata(state, {
+      preserveModelCatalogOnFallback: Boolean(previousAgentId && previousAgentId === nextAgentId),
+    }).finally(() => state.requestUpdate?.());
     const subscriptionSync = syncSelectedSessionMessageSubscription(state);
     const composerStorageError = state.chatError === CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
-    const historyLoad = loadChatHistory(state);
+    const historyLoad = loadChatHistory(state, { deferBranches: true });
     if (composerStorageError) {
       // History loading clears the shared error slot synchronously. Restore the
       // pane-local storage warning unless the retry above made the draft durable.
@@ -215,7 +260,7 @@ export abstract class ChatPaneSession extends ChatPaneSuggestions {
     state.requestUpdate();
     void this.refreshTaskSuggestions();
     void this.refreshSessionSuggestions();
-    void this.refreshSessionPullRequests();
+    this.deferSessionHydrationUntilTranscript(nextSessionKey, historyLoad);
     const scheduleHistoryScroll = () => {
       if (state.sessionKey !== nextSessionKey) {
         return;

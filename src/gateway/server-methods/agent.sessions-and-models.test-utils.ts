@@ -692,6 +692,109 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it.each([
+    {
+      label: "completed stop",
+      meta: { stopReason: "stop", providerStarted: true },
+      outcome: { reason: "completed", status: "ok", stopReason: "stop", providerStarted: true },
+      payload: { status: "ok", summary: "completed" },
+    },
+    {
+      label: "completed stop with unknown timeout metadata",
+      meta: {
+        stopReason: "stop",
+        providerStarted: true,
+        timeoutPhase: "unrecognized_timeout_phase",
+      },
+      outcome: { reason: "completed", status: "ok", stopReason: "stop", providerStarted: true },
+      payload: { status: "ok", summary: "completed" },
+    },
+    {
+      label: "external cancellation",
+      meta: {
+        aborted: true,
+        stopReason: "rpc",
+        timeoutPhase: "queue",
+        providerStarted: false,
+      },
+      outcome: {
+        reason: "cancelled",
+        status: "error",
+        stopReason: "rpc",
+        timeoutPhase: "queue",
+        providerStarted: false,
+      },
+      payload: {
+        status: "timeout",
+        summary: "aborted",
+        stopReason: "rpc",
+        timeoutPhase: "queue",
+        providerStarted: false,
+      },
+    },
+    {
+      label: "provider timeout",
+      meta: {
+        aborted: true,
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+      outcome: {
+        reason: "hard_timeout",
+        status: "timeout",
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+      payload: {
+        status: "timeout",
+        summary: "aborted",
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+    },
+  ])("settles $label from the canonical outcome without changing Gateway status", async (test) => {
+    mocks.agentCommand.mockResolvedValueOnce({
+      payloads: [],
+      meta: { durationMs: 1, ...test.meta },
+    });
+    const context = makeContext();
+    const onSettled = vi.fn(() => true);
+    const respond = vi.fn();
+    const runId = `agent-run-terminal-${test.label.replaceAll(" ", "-")}`;
+
+    dispatchAgentRunFromGateway({
+      ingressOpts: {
+        message: "characterize terminal ownership",
+        sessionKey: "agent:main:main",
+        allowModelOverride: false,
+      },
+      runId,
+      dedupeKeys: [`agent:${runId}`],
+      abortController: new AbortController(),
+      cleanupAbortController: vi.fn(),
+      respond,
+      context,
+      taskTrackingMode: "none",
+      onSettled,
+    });
+
+    await waitForAssertion(() => {
+      expect(onSettled).toHaveBeenCalledWith({
+        terminalOutcome: test.outcome,
+        onRecovered: expect.any(Function),
+      });
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ runId, ...test.payload }),
+        undefined,
+        { runId },
+      );
+    });
+  });
+
   it("settles ordinary async gateway agent rejections as failed", async () => {
     const providerError = new Error("provider request failed");
     mocks.agentCommand.mockRejectedValueOnce(providerError);

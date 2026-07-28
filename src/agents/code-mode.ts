@@ -22,6 +22,7 @@ import { createHeadlessAbortScope, runCodeModeScriptHeadless } from "./code-mode
 import { describeCodeModeNamespacesForPrompt } from "./code-mode-namespaces.js";
 import {
   codeModeRuntimeTesting,
+  isCodeModeEngagedForModel,
   readCode,
   readRunId,
   resolveCodeModeConfig,
@@ -40,6 +41,7 @@ import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { optionalStringEnum } from "./schema/typebox.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { resolveSwarmConfig } from "./swarm-config.js";
+import { isDirectVisibleCatalogTool } from "./tool-search-catalog.js";
 import {
   addClientToolsToToolCatalog,
   applyToolCatalogCompaction,
@@ -58,6 +60,7 @@ export { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME };
 export {
   CodeModeHeadlessAbortError,
   CodeModeHeadlessTimeoutError,
+  isCodeModeEngagedForModel,
   runCodeModeScriptHeadless,
   resolveCodeModeConfig,
 };
@@ -74,10 +77,10 @@ function renderCodeModeCatalogIndex(lines: readonly string[], total: number): st
       ? `${omitted} additional OpenClaw/plugin tools omitted from this prompt index. Use ALL_TOOLS or tools.search inside exec to find them.`
       : "Use these exact ids with tools.callValue; use ALL_TOOLS or tools.search inside exec when lookup is ambiguous.";
   return [
-    "OpenClaw/plugin tool quick index (exact ids plus compact input and declared output hints; descriptions are intentionally deferred):",
-    "Each line is `id input -> output`; `-> ?` means the output shape is unknown.",
-    "OUTPUT DECLARED RULE: use the named fields in the first exec; keep dependent reads, checks, and follow-up calls in that exec instead of returning a raw value only to inspect an already-declared shape.",
-    "OUTPUT UNKNOWN RULE: when the needed tool is `-> ?`, including a final dependent call after declared-output calls, return that tool's raw value unchanged. Do not wrap it in the requested answer shape or read guessed fields; filter or map only in a later exec after observing its shape.",
+    "OpenClaw/plugin tool quick index (exact ids; descriptions are intentionally deferred):",
+    "Each line is `id input -> output`; `-> ?` means unknown.",
+    "OUTPUT DECLARED RULE: use declared fields for dependent calls in the first exec.",
+    "OUTPUT UNKNOWN RULE: return the raw tool value unchanged; inspect or map it only in a later exec.",
     ...lines,
     "",
     footer,
@@ -141,13 +144,22 @@ function createCodeModeExecDescription(
   const swarmGuidance = swarmEnabled
     ? " Swarm globals `agents.run`, `phase`, and `log` are available; read `agents.d.ts` for types and orchestration idioms."
     : "";
+  const nodesGuidance =
+    "\n- nodes: paired Gateway nodes; nodes.list(), (await nodes.get(id)).invoke(command, params)\n";
+  const skillsGuidance = ctx.codeModeSkills?.length
+    ? " Skills are available through the async `skills` global: use `await skills.list()` and `await skills.read(name)`."
+    : "";
   const catalogIndex = catalog ? formatCodeModeCatalogIndex(catalog) : "";
   return (
-    "Run JavaScript or TypeScript in OpenClaw code mode. Use `return` to pass the final value back to the agent; awaited calls without a returned value complete as `null`. Quick-index arrows show trusted declared output hints; `-> ?` means never guess result field names. When the needed tool has an unknown output, including a final dependent call after declared-output calls, the first exec must return the raw tool value unchanged with `return await tools.callValue(id, args);`; do not wrap it in the requested answer shape or read guessed fields; filter or map it only in a later exec after observing its shape. When the arrow declares the fields you need, select, call, and process them in the first exec; do not spend another exec inspecting that declared shape. Within that exec, perform dependent reads, checks, and follow-up calls in order; nested calls still enforce normal tool policy and approvals. Parallelize only independent work. `ALL_TOOLS` is the complete compact catalog with exact ids, input hints, and declared output hints. Select from it directly when practical, use `tools.search(query: string, options?)` when lookup is ambiguous, and use `tools.describe(id: string)` only when the compact input hint is insufficient. Never invent or transform a tool id. `tools.callValue(id: string, args?)` executes a tool and returns its JSON value directly; `tools.call(id: string, args?)` preserves the raw `{ tool, result }` envelope. Example: `const hit = ALL_TOOLS.find((entry) => entry.description.includes('weather')) ?? (await tools.search('weather'))[0]; return await tools.callValue(hit.id, {});`. Node.js modules and `require`/`import` are NOT available; for any shell, file, network, or external action, use enabled catalog tools allowed by policy from inside your code." +
+    "Run JavaScript or TypeScript in OpenClaw code mode. Use `return` to pass the final value back; otherwise the result is `null`. Quick-index arrows show trusted declared output hints; `-> ?` means never guess result field names. For declared fields, process them in the first exec; do not spend another exec inspecting them. Perform dependent reads, checks, and follow-up calls in order; parallelize independent work only. For an unknown output, including a final dependent call after declared-output calls, return the raw tool value unchanged; do not wrap it in the requested answer shape or guess fields; filter or map it only in a later exec. Nested calls enforce normal tool policy and approvals. `ALL_TOOLS` is the complete compact catalog. Select exact ids directly or with `tools.search(query: string, options?)`; use `tools.describe(id: string)` only when needed. Never invent or transform a tool id. `tools.callValue(id: string, args?)` returns its JSON value directly; `tools.call(id: string, args?)` preserves `{ tool, result }`. Example: `const hit = ALL_TOOLS.find((entry) => entry.description.includes('weather')) ?? (await tools.search('weather'))[0]; return await tools.callValue(hit.id, {});`. Node.js modules and `require`/`import` are NOT available; use enabled catalog tools allowed by policy for shell, file, network, or external actions." +
     apiGuidance +
     mcpGuidance +
     swarmGuidance +
+    nodesGuidance +
+    skillsGuidance +
     ' The `language` field accepts only "javascript" or "typescript"; do not pass "bash", "shell", or other values.' +
+    " Both `code` and `command` contain JavaScript or TypeScript, never a shell command. " +
+    "For shell or file operations, call the exact catalog tool from guest JavaScript; do not retry failed shell source." +
     (namespacePrompt ? `\n\n${namespacePrompt}` : "") +
     (catalogIndex ? `\n\n${catalogIndex}` : "")
   );
@@ -162,12 +174,13 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       code: Type.Optional(
         Type.String({
           description:
-            "JavaScript or TypeScript source for one complete workflow. Select exact ids from `ALL_TOOLS` or `tools.search`; never invent ids. `tools.search` takes a query string, not an object. Keep dependent operations in this program, never put dependent calls in Promise.all, and return the final value. `API` virtual declaration files and MCP namespace globals are also available in scope; Node built-in modules are not.",
+            "JavaScript or TypeScript for one complete workflow. Select exact ids from `ALL_TOOLS` or `tools.search`; never invent ids. `tools.search` takes a query string, not an object. Keep dependent calls in order; never put dependent calls in Promise.all. Return the final value. Node built-in modules are not available.",
         }),
       ),
       command: Type.Optional(
         Type.String({
-          description: "Alias for code, provided for exec-compatible hook policies.",
+          description:
+            "Alias for JavaScript or TypeScript code, provided for exec-compatible hook policies. Not a shell command.",
         }),
       ),
       language: optionalStringEnum(["javascript", "typescript"] as const, {
@@ -246,9 +259,13 @@ export function applyCodeModeCatalog(params: {
   runId?: string;
   catalogRef?: ToolSearchCatalogRef;
   toolHookContext?: HookContext;
+  directToolNames?: Iterable<string>;
+  codeModeSkills?: CodeModeToolContext["codeModeSkills"];
 }) {
   const config = resolveCodeModeConfig(params.config, params.agentId);
-  if (!config.enabled) {
+  // Engagement (including "auto" per-model resolution) is decided by the run
+  // gates before this is called; only a hard `false` may disable compaction.
+  if (config.enabled === false) {
     return applyToolCatalogCompaction({
       ...params,
       enabled: false,
@@ -263,11 +280,16 @@ export function applyCodeModeCatalog(params: {
         tool.name !== TOOL_DESCRIBE_RAW_TOOL_NAME &&
         tool.name !== TOOL_CALL_RAW_TOOL_NAME),
   );
+  const directToolNames = new Set(params.directToolNames);
   const compacted = applyToolCatalogCompaction({
     ...params,
     tools,
     enabled: true,
     isVisibleControlTool: isCodeModeControlTool,
+    // Code mode never exposes core shell/file tools just because structured
+    // search does; only explicitly required, trusted direct tools may remain.
+    isVisibleCatalogTool: (tool) =>
+      directToolNames.has(tool.name) && isDirectVisibleCatalogTool(tool, directToolNames),
     shouldCatalogTool: (tool) => !isCodeModeControlTool(tool),
   });
   // Only the catalog ref reflects the freshly compacted run catalog. Without it
@@ -286,6 +308,7 @@ export function applyCodeModeCatalog(params: {
           sessionKey: params.sessionKey,
           runId: params.runId,
           catalogRef: params.catalogRef,
+          codeModeSkills: params.codeModeSkills,
         },
         visibleCatalog,
       );
@@ -306,11 +329,10 @@ export function addClientToolsToCodeModeCatalog(params: {
 }) {
   return addClientToolsToToolCatalog({
     ...params,
-    enabled: resolveCodeModeConfig(params.config, params.agentId).enabled,
+    // Callers gate on run engagement; "auto" counts as enabled here.
+    enabled: resolveCodeModeConfig(params.config, params.agentId).enabled !== false,
   });
 }
-
-/** Test-only hooks and state accessors for Code Mode worker orchestration. */
 
 /** Test-only hooks and state accessors for Code Mode worker orchestration. */
 const testing = {

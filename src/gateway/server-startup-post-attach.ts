@@ -28,12 +28,14 @@ import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js"
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
 import { scheduleContextCachePrewarm } from "./server-startup-context-cache-prewarm.js";
+import { scheduleGatewayHandlerPrewarm } from "./server-startup-handler-prewarm.js";
 import type { logGatewayStartup } from "./server-startup-log.js";
 import {
   createGatewayStartupOutcomeRecorder,
   formatGatewayStartupOutcomes,
   type GatewayStartupOutcomeRecorder,
 } from "./server-startup-outcomes.js";
+import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
 import { warmMacOSSystemCaOffMainThread } from "./system-ca-warmup.js";
 const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
@@ -45,11 +47,6 @@ const DEFERRED_SIDECAR_START_DELAY_MS = 100;
 const SESSION_LOCK_CLEANUP_CONCURRENCY = 4;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
 type Awaitable<T> = T | Promise<T>;
-type GatewayStartupTrace = {
-  detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
-  mark: (name: string) => void;
-  measure: <T>(name: string, run: () => Awaitable<T>) => Promise<T>;
-};
 
 type GatewayMemoryStartupPolicy =
   | { mode: "off" }
@@ -85,15 +82,6 @@ export function stopPostReadySidecarsAfterCloseStarted(params: {
   for (const postReadySidecar of params.postReadySidecars) {
     void postReadySidecar.stop();
   }
-}
-
-/** Measure a post-attach startup step when tracing is active. */
-async function measureStartup<T>(
-  startupTrace: GatewayStartupTrace | undefined,
-  name: string,
-  run: () => Awaitable<T>,
-): Promise<T> {
-  return startupTrace ? startupTrace.measure(name, run) : await run();
 }
 
 /** Measure provider-auth warming without letting event-loop stalls hide in wall time. */
@@ -1243,7 +1231,10 @@ export async function startGatewayPostAttachRuntime(
           reportPluginServices(result.pluginServices);
         }
         const postReadySidecars = [...result.postReadySidecars];
-        const gatewayLifetimeSidecars = [scheduleContextCachePrewarm(params)];
+        const gatewayLifetimeSidecars = [
+          scheduleContextCachePrewarm(params),
+          scheduleGatewayHandlerPrewarm(params),
+        ];
         if (workerEnvironmentSidecar) {
           gatewayLifetimeSidecars.push(workerEnvironmentSidecar);
         }

@@ -7,14 +7,16 @@ import type {
 } from "openai/resources/responses/responses.js";
 import {
   normalizeOpenAIReasoningEffort,
-  normalizeOpenAIStrictToolParameters,
-  projectOpenAITools,
-  reconcileOpenAIResponsesToolChoice,
   resolveOpenAIReasoningEffortForModel,
   type OpenAIApiReasoningEffort,
+} from "../providers/openai-reasoning-effort.js";
+import {
+  projectOpenAITools,
+  reconcileOpenAIResponsesToolChoice,
   type OpenAIToolProjection,
-} from "../internal/openai.js";
-import { stripSystemPromptCacheBoundary } from "../internal/shared.js";
+} from "../providers/openai-tool-projection.js";
+import { normalizeOpenAIStrictToolParameters } from "../providers/openai-tool-schema.js";
+import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { resolveOpenAIStrictToolSetting } from "./host-policy.js";
 import {
   OPENAI_CODEX_RESPONSES_DEFAULT_INSTRUCTIONS,

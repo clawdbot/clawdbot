@@ -2,24 +2,16 @@
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateLogsTailParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { readConfiguredLogTail } from "../../logging/log-tail.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 /** Gateway handler for bounded reads from the configured gateway log. */
 export const logsHandlers: GatewayRequestHandlers = {
   "logs.tail": async ({ params, respond }) => {
-    if (!validateLogsTailParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid logs.tail params: ${formatValidationErrors(validateLogsTailParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateLogsTailParams, "logs.tail", respond)) {
       return;
     }
 

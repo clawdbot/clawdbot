@@ -70,6 +70,22 @@ struct ChatGatewayRequestTests {
         #expect(request.params["archived"]?.value as? Bool == true)
     }
 
+    @Test func `child session request encodes focused pagination filters`() {
+        let request = OpenClawChatGatewayRequests.sessionsList(
+            limit: 10000,
+            search: nil,
+            archived: false,
+            includeGlobal: false,
+            spawnedBy: " agent:main:parent ",
+            offset: 10000,
+            configuredAgentsOnly: true)
+
+        #expect(request.params["includeGlobal"]?.value as? Bool == false)
+        #expect(request.params["spawnedBy"]?.value as? String == "agent:main:parent")
+        #expect(request.params["offset"]?.value as? Int == 10000)
+        #expect(request.params["configuredAgentsOnly"]?.value as? Bool == true)
+    }
+
     @Test func `session patch request preserves explicit null clearing`() {
         let request = OpenClawChatGatewayRequests.patchSession(
             sessionKey: "global",
@@ -250,6 +266,19 @@ struct ChatGatewayRequestTests {
         #expect(fork.params["fork"]?.value as? Bool == true)
     }
 
+    @Test func `chat metadata request selects session agent before fallback`() {
+        let scoped = OpenClawChatGatewayRequests.chatMetadata(
+            sessionKey: "agent:reviewer:main",
+            fallbackAgentID: "fallback")
+        #expect(scoped.method == "chat.metadata")
+        #expect(scoped.params["agentId"]?.value as? String == "reviewer")
+
+        let global = OpenClawChatGatewayRequests.chatMetadata(
+            sessionKey: "global",
+            fallbackAgentID: "reviewer")
+        #expect(global.params["agentId"]?.value as? String == "reviewer")
+    }
+
     @Test func `commands request selects session agent before fallback`() {
         let scoped = OpenClawChatGatewayRequests.commandsList(
             sessionKey: "agent:reviewer:main",
@@ -395,6 +424,25 @@ struct ChatGatewayPayloadCodecTests {
             agentId: "main",
             reason: "command-metadata"))
 
+        let swarmNote = EventFrame(
+            type: "event",
+            event: "sessions.changed",
+            payload: AnyCodable([
+                "sessionKey": AnyCodable("agent:main:main"),
+                "reason": AnyCodable("swarm-note"),
+                "swarmGroupId": AnyCodable("swarm:agent:main:main:run-1"),
+                "kind": AnyCodable("phase"),
+                "text": AnyCodable("Research"),
+            ]))
+        guard case let .sessionsChanged(note) = OpenClawChatGatewayPayloadCodec.event(from: swarmNote)
+        else {
+            Issue.record("expected swarm sessionsChanged")
+            return
+        }
+        #expect(note.swarmGroupId == "swarm:agent:main:main:run-1")
+        #expect(note.kind == "phase")
+        #expect(note.text == "Research")
+
         let chat = EventFrame(
             type: "event",
             event: "chat",
@@ -471,6 +519,36 @@ struct ChatGatewayPayloadCodecTests {
         #expect(cleared?.observerDigestPresent == true)
         #expect(cleared?.statusPresent == true)
         #expect(cleared?.lastRunErrorPresent == true)
+    }
+
+    @Test func `session change decodes nested fallback with outer null precedence and no reason`() throws {
+        let data = Data("""
+        {
+          "sessionKey": null,
+          "status": null,
+          "session": {
+            "key": "agent:main:child",
+            "agentId": "main",
+            "parentSessionKey": "agent:main:parent",
+            "status": "running",
+            "lastRunError": null,
+            "hasActiveRun": true,
+            "swarmGroupId": "swarm:agent:main:parent:turn-1"
+          }
+        }
+        """.utf8)
+
+        let event = try JSONDecoder().decode(OpenClawChatSessionsChangedEvent.self, from: data)
+        #expect(event.reason.isEmpty)
+        #expect(event.sessionKey == nil)
+        #expect(event.agentId == "main")
+        #expect(event.parentSessionKey == "agent:main:parent")
+        #expect(event.status == nil)
+        #expect(event.statusPresent)
+        #expect(event.lastRunError == nil)
+        #expect(event.lastRunErrorPresent)
+        #expect(event.hasActiveRun == true)
+        #expect(event.swarmGroupId == "swarm:agent:main:parent:turn-1")
     }
 
     @Test func `session change remains codable without exposing presence flags`() throws {

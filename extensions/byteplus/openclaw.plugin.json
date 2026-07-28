@@ -114,6 +114,7 @@
       "byteplus-plan": {
         "baseUrl": "https://ark.ap-southeast.bytepluses.com/api/coding/v3",
         "api": "openai-completions",
+        "defaultModel": "ark-code-latest",
         "models": [
           {
             "id": "ark-code-latest",

@@ -1,30 +1,22 @@
-/**
- * Chutes onboarding config helpers for OAuth and API-key setup.
- */
+import { readManifestProviderDefaultModelRef } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   applyAgentDefaultModelPrimary,
-  applyProviderConfigWithModelCatalogPreset,
+  createModelCatalogPresetAppliers,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
-import {
-  CHUTES_BASE_URL,
-  CHUTES_DEFAULT_MODEL_REF,
-  CHUTES_MODEL_CATALOG,
-  buildChutesModelDefinition,
-} from "./models.js";
+import { CHUTES_BASE_URL, CHUTES_MODEL_CATALOG } from "./models.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-export { CHUTES_DEFAULT_MODEL_REF };
+export const CHUTES_DEFAULT_MODEL_ID = manifest.modelCatalog.providers.chutes.defaultModel;
+export const CHUTES_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(manifest, "chutes")!;
 
-/**
- * Apply Chutes provider configuration without changing the default model.
- * Registers all catalog models and convenience aliases.
- */
-export function applyChutesProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return applyProviderConfigWithModelCatalogPreset(cfg, {
+const chutesPresetAppliers = createModelCatalogPresetAppliers({
+  primaryModelRef: CHUTES_DEFAULT_MODEL_REF,
+  resolveParams: (_cfg: OpenClawConfig) => ({
     providerId: "chutes",
     api: "openai-completions",
     baseUrl: CHUTES_BASE_URL,
-    catalogModels: CHUTES_MODEL_CATALOG.map(buildChutesModelDefinition),
+    catalogModels: structuredClone(CHUTES_MODEL_CATALOG),
     aliases: [
       ...CHUTES_MODEL_CATALOG.map((model) => `chutes/${model.id}`),
       {
@@ -33,12 +25,13 @@ export function applyChutesProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
       },
       { modelRef: "chutes-pro", alias: "chutes/deepseek-ai/DeepSeek-V3.2-TEE" },
     ],
-  });
+  }),
+});
+
+export function applyChutesProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  return chutesPresetAppliers.applyProviderConfig(cfg);
 }
 
-/**
- * Apply Chutes provider configuration AND set Chutes as the default model.
- */
 export function applyChutesConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyChutesProviderConfig(cfg);
   return {
@@ -60,7 +53,6 @@ export function applyChutesConfig(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
-/** Applies Chutes provider config and sets the default model for API-key auth. */
 export function applyChutesApiKeyConfig(cfg: OpenClawConfig): OpenClawConfig {
   return applyAgentDefaultModelPrimary(applyChutesProviderConfig(cfg), CHUTES_DEFAULT_MODEL_REF);
 }

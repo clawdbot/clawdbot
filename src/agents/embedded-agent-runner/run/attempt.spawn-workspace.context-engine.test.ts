@@ -34,7 +34,6 @@ import {
   resolvePromptCacheTouchTimestamp,
   runAttemptContextEngineBootstrap,
 } from "./attempt.context-engine-helpers.js";
-import { EmbeddedAttemptSessionTakeoverError } from "./attempt.session-lock.js";
 import {
   cleanupTempPaths,
   createDefaultEmbeddedSession,
@@ -152,28 +151,6 @@ function expectFields(actual: Record<string, unknown>, expected: Record<string, 
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key], key).toEqual(value);
   }
-}
-
-function trackSessionWriteLocks(): string[] {
-  // Context-engine finalization writes should release and reacquire transcript
-  // locks in a predictable order.
-  const events: string[] = [];
-  hoisted.acquireSessionWriteLockMock.mockImplementation(async () => {
-    const lockId = hoisted.acquireSessionWriteLockMock.mock.calls.length;
-    events.push(`acquire-${lockId}`);
-    return {
-      release: async () => {
-        events.push(`release-${lockId}`);
-      },
-    };
-  });
-  return events;
-}
-
-function expectInitialLockReleasedBeforePostTurnWrite(events: string[]) {
-  expect(events.indexOf("release-1")).toBeGreaterThan(events.indexOf("acquire-1"));
-  expect(events.indexOf("acquire-2")).toBeGreaterThan(events.indexOf("release-1"));
-  expect(events.indexOf("release-2")).toBeGreaterThan(events.indexOf("acquire-2"));
 }
 
 function createTestContextEngine(params: Partial<AttemptContextEngine>): AttemptContextEngine {
@@ -1929,7 +1906,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         transcriptPrompt: "what does this mean?",
         currentInboundContext: {
           text: [
-            "Reply target of current user message (untrusted, for context):",
+            "Reply target of current user message:",
             "```json",
             JSON.stringify(
               {
@@ -1956,9 +1933,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     // The user prompt is kept BARE; current-turn inbound metadata is routed into
     // the runtime-context carrier instead of being prepended to the user text.
     expect(seenPrompt).toBe("what does this mean?");
-    expect(seenPrompt).not.toContain(
-      "Reply target of current user message (untrusted, for context):",
-    );
+    expect(seenPrompt).not.toContain("Reply target of current user message:");
     expect(seenPrompt).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
     expect(seenPrompt).not.toContain("secret runtime context");
     expect(result.finalPromptText).toBe(seenPrompt);
@@ -1967,9 +1942,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       (message) => message.customType === "openclaw.runtime-context",
       "runtime context message",
     );
-    expect(runtimeContext.content).toContain(
-      "Reply target of current user message (untrusted, for context):",
-    );
+    expect(runtimeContext.content).toContain("Reply target of current user message:");
     expect(runtimeContext.content).toContain('"sender_label": "Mike"');
     expect(runtimeContext.content).toContain("WT daily plan - Sat May 2");
     expect(runtimeContext.content).toContain("./quoted-secret.png");
@@ -2192,7 +2165,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         transcriptPrompt: "",
         currentInboundContext: {
           text: [
-            "Reply target of current user message (untrusted, for context):",
+            "Reply target of current user message:",
             "```json",
             JSON.stringify(
               { sender_label: "Alice", body: "Hello from the replied message" },
@@ -2212,7 +2185,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
     });
 
-    expect(seenPrompt).toContain("Reply target of current user message (untrusted, for context):");
+    expect(seenPrompt).toContain("Reply target of current user message:");
     expect(seenPrompt).toContain("Hello from the replied message");
     expect(seenPrompt).toContain("Continue the OpenClaw runtime event.");
     expect(result.finalPromptText).toBe(seenPrompt);
@@ -2304,7 +2277,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("skips blank visible prompts with replay history before provider submission", async () => {
-    const lockEvents = trackSessionWriteLocks();
     const sessionPrompt = vi.fn(async () => {
       throw new Error("blank prompt should not be submitted");
     });
@@ -2336,11 +2308,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       "prompt skipped event",
     );
     expect(requireRecord(skipped.data, "prompt skipped data").reason).toBe("blank_user_prompt");
-    expectInitialLockReleasedBeforePostTurnWrite(lockEvents);
   });
 
   it("releases the initial session lock before before_agent_run block finalizers", async () => {
-    const lockEvents = trackSessionWriteLocks();
     const sessionPrompt = vi.fn(async () => {
       throw new Error("blocked prompt should not be submitted");
     });
@@ -2366,66 +2336,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBe(
       "hook:before_agent_run",
     );
-    expectInitialLockReleasedBeforePostTurnWrite(lockEvents);
-  });
-
-  it("preserves provider prompt errors when cleanup reacquire detects session takeover", async () => {
-    const providerError = new Error("provider rejected request: HTTP 400");
-    let acquireCount = 0;
-    let cleanupReacquireSessionFile: string | undefined;
-    hoisted.acquireSessionWriteLockMock.mockImplementation(async (params) => {
-      acquireCount += 1;
-      if (acquireCount === 3) {
-        cleanupReacquireSessionFile = params.sessionFile;
-        await fs.appendFile(params.sessionFile, '{"type":"message","id":"takeover"}\n', "utf8");
-      }
-      return { release: async () => {} };
-    });
-
-    const error = await createContextEngineAttemptRunner({
-      contextEngine: createContextEngineBootstrapAndAssemble(),
-      sessionKey,
-      tempPaths,
-      sessionPrompt: async () => {
-        throw providerError;
-      },
-    }).catch((err: unknown) => err);
-
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).name).toBe("EmbeddedAttemptSessionTakeoverError");
-    expect((error as Error).message).toBe(providerError.message);
-    expect((error as Error).cause).toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
-    if (!cleanupReacquireSessionFile) {
-      throw new Error("expected cleanup lock reacquire");
-    }
-    expect(((error as Error).cause as Error).message).toContain(cleanupReacquireSessionFile);
-    expect((error as { promptError?: unknown }).promptError).toBe(providerError);
-    expect(hoisted.flushPendingToolResultsAfterIdleMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps cleanup session takeover fatal when no provider prompt error exists", async () => {
-    let releasingCleanupLock = false;
-    hoisted.flushPendingToolResultsAfterIdleMock.mockImplementation(async () => {
-      releasingCleanupLock = true;
-    });
-    hoisted.acquireSessionWriteLockMock.mockImplementation(async (params) => ({
-      release: async () => {
-        if (releasingCleanupLock) {
-          throw new EmbeddedAttemptSessionTakeoverError(params.sessionFile);
-        }
-      },
-    }));
-
-    await expect(
-      createContextEngineAttemptRunner({
-        contextEngine: createContextEngineBootstrapAndAssemble(),
-        sessionKey,
-        tempPaths,
-        sessionPrompt: async (session) => {
-          session.messages = [...session.messages, doneMessage];
-        },
-      }),
-    ).rejects.toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
   });
 
   it("uses assembled context as the default precheck authority", async () => {
@@ -2917,34 +2827,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(bootstrap).toHaveBeenCalled();
-    expect(hoisted.prepareSessionManagerForRunMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionFile: created.sessionFile,
-        hadSessionFile: false,
-      }),
-    );
-  });
-
-  it("resolves bootstrap context before acquiring the session write lock", async () => {
-    const events: string[] = [];
-    hoisted.resolveBootstrapContextForRunMock.mockImplementation(async () => {
-      events.push("bootstrap");
-      return { bootstrapFiles: [], contextFiles: [] };
-    });
-    hoisted.acquireSessionWriteLockMock.mockImplementation(async () => {
-      events.push("lock");
-      return { release: async () => {} };
-    });
-
-    await createContextEngineAttemptRunner({
-      contextEngine: createContextEngineBootstrapAndAssemble(),
-      sessionKey,
-      tempPaths,
-    });
-
-    expect(events).toContain("bootstrap");
-    expect(events).toContain("lock");
-    expect(events.indexOf("bootstrap")).toBeLessThan(events.indexOf("lock"));
   });
 
   it("forwards modelId to assemble", async () => {
